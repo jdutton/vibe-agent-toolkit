@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "files": [],
+  "references": [
+    { "path": "./packages/dev-tools" },
+    { "path": "./packages/example-utils" }
+  ]
+}

@@ -1,0 +1,68 @@
+{
+  "name": "ts-monorepo-template",
+  "version": "0.1.0",
+  "type": "module",
+  "private": true,
+  "description": "Production-ready TypeScript monorepo template with strict linting, testing, and quality controls",
+  "keywords": [
+    "typescript",
+    "monorepo",
+    "template",
+    "bun",
+    "vitest",
+    "eslint",
+    "strict"
+  ],
+  "author": "Jeff Dutton",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "bun run build:packages",
+    "build:packages": "tsx packages/dev-tools/src/run-in-packages.ts build",
+    "build:clean": "bun run clean && bun run build",
+    "test": "vibe-validate run \"vitest run\"",
+    "test:watch": "vitest",
+    "test:coverage": "vibe-validate run \"vitest run --coverage\"",
+    "test:integration": "vibe-validate run \"vitest run --config vitest.integration.config.ts\"",
+    "test:system": "vibe-validate run \"vitest run --config vitest.system.config.ts\"",
+    "lint": "eslint . --max-warnings=0",
+    "lint:fix": "eslint . --fix",
+    "typecheck": "tsc --noEmit && tsx packages/dev-tools/src/run-in-packages.ts typecheck",
+    "duplication-check": "tsx packages/dev-tools/src/duplication-check.ts",
+    "duplication-update-baseline": "tsx packages/dev-tools/src/jscpd-update-baseline.ts",
+    "validate": "vibe-validate validate",
+    "pre-commit": "vibe-validate pre-commit",
+    "clean": "tsx packages/dev-tools/src/run-in-packages.ts clean && rimraf node_modules",
+    "prepare": "husky",
+    "bump-version": "tsx packages/dev-tools/src/bump-version.ts",
+    "pre-publish": "tsx packages/dev-tools/src/pre-publish-check.ts",
+    "determine-publish-tags": "tsx packages/dev-tools/src/determine-publish-tags.ts"
+  },
+  "devDependencies": {
+    "@secretlint/secretlint-rule-preset-recommend": "^11.2.5",
+    "@types/node": "^22.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.50.1",
+    "@typescript-eslint/parser": "^8.50.1",
+    "@vitest/coverage-v8": "^3.2.4",
+    "eslint": "^9.39.2",
+    "eslint-plugin-import": "^2.32.0",
+    "eslint-plugin-n": "^17.23.1",
+    "eslint-plugin-security": "^3.0.1",
+    "eslint-plugin-sonarjs": "^3.0.5",
+    "eslint-plugin-unicorn": "^62.0.0",
+    "husky": "^9.1.7",
+    "jscpd": "^4.0.5",
+    "rimraf": "^6.0.1",
+    "secretlint": "^11.2.5",
+    "semver": "^7.7.3",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vibe-validate": "^0.18.1",
+    "vitest": "^3.2.4"
+  }
+}

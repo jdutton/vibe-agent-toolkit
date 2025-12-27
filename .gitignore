@@ -1,0 +1,76 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+package-lock.json  # Using Bun, not npm
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+*.tgz
+
+# Testing
+coverage/
+.vitest/
+.nyc_output/
+
+# Code quality reports
+jscpd-report/
+.jscpd/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+bun-debug.log*
+pnpm-debug.log*
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# Backup files from editors/tools
+*.backup
+
+# IDE
+.vscode/
+.idea/
+
+# Claude Code - user-specific settings
+.claude/settings.local.json
+.claude/commands/
+
+# Temporary files
+*.tmp
+*.temp
+.cache/
+tmp/
+
+# Debug
+.vscode-test/
+*.cpuprofile
+*.heapsnapshot
+
+# Ignore ALL root-level markdown files (catches Claude Code and other AI-generated temporary files)
+/*.md
+
+# Explicitly include critical documentation (negation patterns MUST come after the ignore)
+!README.md
+!CHANGELOG.md
+!LICENSE
+!CONTRIBUTING.md
+!CODE_OF_CONDUCT.md
+
+# Misc
+.turbo/

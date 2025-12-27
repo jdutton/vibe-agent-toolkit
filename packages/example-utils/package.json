@@ -1,0 +1,40 @@
+{
+  "name": "@ts-monorepo-template/example-utils",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Example utility package demonstrating monorepo patterns",
+  "keywords": [
+    "typescript",
+    "utilities",
+    "example"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist *.tsbuildinfo"
+  },
+  "devDependencies": {
+    "rimraf": "^6.0.1",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
