@@ -43,11 +43,11 @@ describe('System Test: Project Link Validation (Dogfooding)', () => {
     console.log(`  Total markdown files: ${stats.totalResources}`);
     console.log(`  Total links found: ${stats.totalLinks}`);
     console.log(`\n🔍 Links by Type:`);
-    console.log(`  - local_file: ${stats.linksByType.local_file ?? 0} (links to other files in repo)`);
-    console.log(`  - anchor: ${stats.linksByType.anchor ?? 0} (heading anchors in current file)`);
-    console.log(`  - external: ${stats.linksByType.external ?? 0} (HTTP/HTTPS links - not validated)`);
-    console.log(`  - email: ${stats.linksByType.email ?? 0} (mailto links)`);
-    console.log(`  - unknown: ${stats.linksByType.unknown ?? 0} (unrecognized link types)`);
+    console.log(`  - local_file: ${stats.linksByType['local_file'] ?? 0} (links to other files in repo)`);
+    console.log(`  - anchor: ${stats.linksByType['anchor'] ?? 0} (heading anchors in current file)`);
+    console.log(`  - external: ${stats.linksByType['external'] ?? 0} (HTTP/HTTPS links - not validated)`);
+    console.log(`  - email: ${stats.linksByType['email'] ?? 0} (mailto links)`);
+    console.log(`  - unknown: ${stats.linksByType['unknown'] ?? 0} (unrecognized link types)`);
 
     // Validate all resources
     const validationResult = await registry.validate();

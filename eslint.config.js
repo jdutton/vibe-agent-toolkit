@@ -44,7 +44,7 @@ export default [
       parserOptions: {
         ecmaVersion: 2024,
         sourceType: 'module',
-        project: true,
+        project: './tsconfig.eslint.json',
       },
       globals: {
         NodeJS: 'readonly',
@@ -66,6 +66,7 @@ export default [
       'local/no-child-process-execSync': 'error',
 
       // TypeScript
+      'no-unused-vars': 'off', // Use @typescript-eslint/no-unused-vars instead
       '@typescript-eslint/no-unused-vars': ['error', {
         argsIgnorePattern: '^_',
         varsIgnorePattern: '^_',
@@ -84,12 +85,14 @@ export default [
         fixStyle: 'inline-type-imports',
       }],
       '@typescript-eslint/switch-exhaustiveness-check': 'error',
+      '@typescript-eslint/prefer-readonly': 'error',
 
       // General
       'no-console': 'off',
       'no-undef': 'off',
       'prefer-const': 'error',
       'no-var': 'error',
+      'max-depth': ['error', 4],
 
       // Security
       'security/detect-object-injection': 'off',
@@ -125,6 +128,7 @@ export default [
       'unicorn/no-instanceof-array': 'error',
       'unicorn/prefer-date-now': 'error',
       'unicorn/prefer-ternary': 'off',
+      'unicorn/prefer-string-raw': 'error',
     },
   },
 ];

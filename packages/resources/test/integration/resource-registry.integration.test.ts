@@ -10,11 +10,28 @@ import path from 'node:path';
 import { describe, expect, it, beforeEach } from 'vitest';
 
 import { ResourceRegistry } from '../../src/resource-registry.js';
+import type { ResourceMetadata } from '../../src/types.js';
 import { findPackageRoot } from '../test-helpers.js';
 
 // Get test fixtures directory
 const packageRoot = findPackageRoot(import.meta.dirname);
 const fixturesDir = path.join(packageRoot, 'test-fixtures');
+
+// Constants for commonly used file names and patterns (avoid string duplication)
+const BROKEN_FILE_MD = 'broken-file.md';
+const BROKEN_FILE_ID = 'broken-file';
+const EXTERNAL_MD = 'external.md';
+const VALID_MD_PATTERN = '**/valid.md';
+
+// Helper to extract resource IDs (avoids nested arrow functions in tests)
+function extractResourceIds(resources: ResourceMetadata[]): string[] {
+  return resources.map((r) => r.id);
+}
+
+// Helper to check if all resources have required properties
+function allResourcesHaveIdAndPath(resources: ResourceMetadata[]): boolean {
+  return resources.every((r) => Boolean(r.id && r.filePath));
+}
 
 describe('ResourceRegistry - Integration Tests', () => {
   let registry: ResourceRegistry;
@@ -53,13 +70,13 @@ describe('ResourceRegistry - Integration Tests', () => {
 
     it('should generate correct IDs from file paths', async () => {
       const validPath = path.join(fixturesDir, 'valid.md');
-      const brokenPath = path.join(fixturesDir, 'broken-file.md');
+      const brokenPath = path.join(fixturesDir, BROKEN_FILE_MD);
 
       const resource1 = await registry.addResource(validPath);
       const resource2 = await registry.addResource(brokenPath);
 
       expect(resource1.id).toBe('valid');
-      expect(resource2.id).toBe('broken-file');
+      expect(resource2.id).toBe(BROKEN_FILE_ID);
     });
 
     it('should handle ID collisions by appending suffix', async () => {
@@ -121,8 +138,8 @@ describe('ResourceRegistry - Integration Tests', () => {
     it('should add multiple resources at once', async () => {
       const paths = [
         path.join(fixturesDir, 'valid.md'),
-        path.join(fixturesDir, 'broken-file.md'),
-        path.join(fixturesDir, 'external.md'),
+        path.join(fixturesDir, BROKEN_FILE_MD),
+        path.join(fixturesDir, EXTERNAL_MD),
       ];
 
       const resources = await registry.addResources(paths);
@@ -155,14 +172,14 @@ describe('ResourceRegistry - Integration Tests', () => {
 
       const ids = resources.map((r) => r.id);
       expect(ids).toContain('valid');
-      expect(ids).toContain('broken-file');
+      expect(ids).toContain(BROKEN_FILE_ID);
       expect(ids).toContain('target');
     });
 
     it('should respect include patterns', async () => {
       const resources = await registry.crawl({
         baseDir: fixturesDir,
-        include: ['**/valid.md'],
+        include: [VALID_MD_PATTERN],
       });
 
       expect(resources).toHaveLength(1);
@@ -219,7 +236,7 @@ describe('ResourceRegistry - Integration Tests', () => {
     });
 
     it('should detect broken file links', async () => {
-      const brokenPath = path.join(fixturesDir, 'broken-file.md');
+      const brokenPath = path.join(fixturesDir, BROKEN_FILE_MD);
       await registry.addResource(brokenPath);
 
       const result = await registry.validate();
@@ -266,7 +283,7 @@ describe('ResourceRegistry - Integration Tests', () => {
     });
 
     it('should report external links as info', async () => {
-      await registry.addResource(path.join(fixturesDir, 'external.md'));
+      await registry.addResource(path.join(fixturesDir, EXTERNAL_MD));
 
       const result = await registry.validate();
 
@@ -302,11 +319,13 @@ describe('ResourceRegistry - Integration Tests', () => {
 
       const localFileLinks = validResource?.links.filter((link) => link.type === 'local_file');
       expect(localFileLinks).toBeDefined();
-      expect(localFileLinks!.length).toBeGreaterThan(0);
+      expect(localFileLinks).not.toBeUndefined();
+      if (!localFileLinks) throw new Error('localFileLinks is undefined');
+      expect(localFileLinks.length).toBeGreaterThan(0);
 
       // Check that at least one link has resolvedId set
-      const resolvedLinks = localFileLinks?.filter((link) => link.resolvedId);
-      expect(resolvedLinks!.length).toBeGreaterThan(0);
+      const resolvedLinks = localFileLinks.filter((link) => link.resolvedId);
+      expect(resolvedLinks.length).toBeGreaterThan(0);
 
       // Verify resolved IDs are correct
       const targetLink = localFileLinks?.find((link) => link.href.includes('target.md'));
@@ -314,16 +333,18 @@ describe('ResourceRegistry - Integration Tests', () => {
     });
 
     it('should not set resolvedId for non-existent targets', async () => {
-      await registry.addResource(path.join(fixturesDir, 'broken-file.md'));
+      await registry.addResource(path.join(fixturesDir, BROKEN_FILE_MD));
 
       registry.resolveLinks();
 
-      const brokenResource = registry.getResourceById('broken-file');
+      const brokenResource = registry.getResourceById(BROKEN_FILE_ID);
       const localFileLinks = brokenResource?.links.filter((link) => link.type === 'local_file');
 
       // Links to non-existent files should not have resolvedId
-      const unresolvedLinks = localFileLinks?.filter((link) => !link.resolvedId);
-      expect(unresolvedLinks!.length).toBeGreaterThan(0);
+      expect(localFileLinks).toBeDefined();
+      if (!localFileLinks) throw new Error('localFileLinks is undefined');
+      const unresolvedLinks = localFileLinks.filter((link) => !link.resolvedId);
+      expect(unresolvedLinks.length).toBeGreaterThan(0);
     });
 
     it('should mutate links in place', async () => {
@@ -394,7 +415,8 @@ describe('ResourceRegistry - Integration Tests', () => {
         const resources = registry.getAllResources();
 
         expect(resources.length).toBeGreaterThanOrEqual(6);
-        expect(resources.every((r) => r.id && r.filePath)).toBe(true);
+        // Use helper to avoid nested arrow function
+        expect(allResourcesHaveIdAndPath(resources)).toBe(true);
       });
 
       it('should return empty array for empty registry', () => {
@@ -405,7 +427,7 @@ describe('ResourceRegistry - Integration Tests', () => {
 
     describe('getResourcesByPattern()', () => {
       it('should match resources by glob pattern', () => {
-        const resources = registry.getResourcesByPattern('**/valid.md');
+        const resources = registry.getResourcesByPattern(VALID_MD_PATTERN);
 
         expect(resources.length).toBe(1);
         expect(resources[0]?.id).toBe('valid');
@@ -415,9 +437,10 @@ describe('ResourceRegistry - Integration Tests', () => {
         const resources = registry.getResourcesByPattern('**/broken*.md');
 
         expect(resources.length).toBeGreaterThanOrEqual(2);
-        const ids = resources.map((r) => r.id);
-        expect(ids).toContain('broken-file');
-        expect(ids).toContain('broken-anchor');
+        // Extract ids mapping to avoid nested arrow function
+        const resourceIds = extractResourceIds(resources);
+        expect(resourceIds).toContain(BROKEN_FILE_ID);
+        expect(resourceIds).toContain('broken-anchor');
       });
 
       it('should match nested files', () => {
@@ -436,7 +459,7 @@ describe('ResourceRegistry - Integration Tests', () => {
         // This test verifies that glob matching works even when stored paths use backslashes
         // On Unix: paths stored with forward slashes → no change needed
         // On Windows: paths stored with backslashes → converted to forward slashes for matching
-        const resources = registry.getResourcesByPattern('**/valid.md');
+        const resources = registry.getResourcesByPattern(VALID_MD_PATTERN);
 
         expect(resources.length).toBeGreaterThanOrEqual(1);
         // Should find valid.md regardless of platform path separator
@@ -447,7 +470,7 @@ describe('ResourceRegistry - Integration Tests', () => {
   describe('getStats()', () => {
     it('should return correct statistics', async () => {
       await registry.addResource(path.join(fixturesDir, 'valid.md'));
-      await registry.addResource(path.join(fixturesDir, 'external.md'));
+      await registry.addResource(path.join(fixturesDir, EXTERNAL_MD));
 
       const stats = registry.getStats();
 
@@ -535,7 +558,7 @@ describe('ResourceRegistry - Integration Tests', () => {
 
     it('should handle resources with no headings', async () => {
       // Any file should work, as headings are optional
-      await registry.addResource(path.join(fixturesDir, 'external.md'));
+      await registry.addResource(path.join(fixturesDir, EXTERNAL_MD));
 
       const resource = registry.getResourceById('external');
       expect(resource).toBeDefined();

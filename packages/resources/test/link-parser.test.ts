@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { parseMarkdown } from '../src/link-parser.js';
+
 import { expectHeadingStructure, findPackageRoot, writeAndParse } from './test-helpers.js';
 
 describe('link-parser', () => {

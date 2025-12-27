@@ -38,7 +38,7 @@ describe('path-utils', () => {
 
     it('should normalize mixed separators on Windows', () => {
       // This test behavior depends on platform but should always return consistent separators
-      const result = normalizePath(`${TEST_DOCS_PATH}\\README.md`);
+      const result = normalizePath(String.raw`${TEST_DOCS_PATH}\README.md`);
       expect(result).toBeTruthy();
       expect(typeof result).toBe('string');
     });
@@ -62,14 +62,14 @@ describe('path-utils', () => {
 
     if (process.platform === 'win32') {
       it('should return true for Windows absolute paths', () => {
-        expect(isAbsolutePath('C:\\Windows')).toBe(true);
+        expect(isAbsolutePath(String.raw`C:\Windows`)).toBe(true);
         expect(isAbsolutePath('C:/Windows')).toBe(true);
-        expect(isAbsolutePath('D:\\Program Files')).toBe(true);
+        expect(isAbsolutePath(String.raw`D:\Program Files`)).toBe(true);
       });
 
       it('should return false for Windows relative paths', () => {
-        expect(isAbsolutePath('.\\relative')).toBe(false);
-        expect(isAbsolutePath('..\\parent')).toBe(false);
+        expect(isAbsolutePath(String.raw`.\relative`)).toBe(false);
+        expect(isAbsolutePath(String.raw`..\parent`)).toBe(false);
       });
     }
   });
@@ -156,7 +156,7 @@ describe('path-utils', () => {
 
   describe('toUnixPath', () => {
     it('should convert Windows backslashes to forward slashes', () => {
-      const result = toUnixPath('C:\\Users\\docs\\README.md');
+      const result = toUnixPath(String.raw`C:\Users\docs\README.md`);
       expect(result).toBe('C:/Users/docs/README.md');
     });
 
@@ -166,12 +166,12 @@ describe('path-utils', () => {
     });
 
     it('should handle mixed separators', () => {
-      const result = toUnixPath('C:\\Users/docs\\README.md');
+      const result = toUnixPath(String.raw`C:\Users/docs\README.md`);
       expect(result).toBe('C:/Users/docs/README.md');
     });
 
     it('should handle paths with multiple consecutive backslashes', () => {
-      const result = toUnixPath('C:\\\\Users\\\\docs\\\\README.md');
+      const result = toUnixPath(String.raw`C:\\Users\\docs\\README.md`);
       expect(result).toBe('C://Users//docs//README.md');
     });
 
@@ -181,7 +181,7 @@ describe('path-utils', () => {
     });
 
     it('should handle UNC paths on Windows', () => {
-      const result = toUnixPath('\\\\server\\share\\file.md');
+      const result = toUnixPath(String.raw`\\server\share\file.md`);
       expect(result).toBe('//server/share/file.md');
     });
   });

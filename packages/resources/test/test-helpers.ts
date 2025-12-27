@@ -26,7 +26,7 @@ export function findPackageRoot(
   while (currentDir !== path.dirname(currentDir)) {
     try {
       const pkgPath = path.join(currentDir, 'package.json');
-      // eslint-disable-next-line @typescript-eslint/no-require-imports -- Dynamic require for package.json
+      // eslint-disable-next-line security/detect-non-literal-require -- Dynamic path is safe in test helper, pkgPath constructed from trusted directory traversal
       const pkg = require(pkgPath);
       if (pkg.name === packageName) {
         return currentDir;
@@ -52,7 +52,7 @@ export function findMonorepoRoot(
   while (currentDir !== path.dirname(currentDir)) {
     try {
       const pkgPath = path.join(currentDir, 'package.json');
-      // eslint-disable-next-line @typescript-eslint/no-require-imports -- Dynamic require for package.json
+      // eslint-disable-next-line security/detect-non-literal-require -- Dynamic path is safe in test helper, pkgPath constructed from trusted directory traversal
       const pkg = require(pkgPath);
       // Check if this is the monorepo root (has workspaces)
       if (pkg.workspaces && pkg.name === 'vibe-agent-toolkit') {
@@ -123,12 +123,59 @@ export interface ValidateLinkOptions {
 }
 
 /**
+ * Assert message contains expected text fragments
+ */
+function assertMessageContains(
+  result: ValidationIssue | null,
+  messageContains: string | string[],
+  expectFn: (_: unknown) => Assertion<unknown>,
+): void {
+  const messageFragments = Array.isArray(messageContains)
+    ? messageContains
+    : [messageContains];
+
+  for (const fragment of messageFragments) {
+    expectFn(result?.message).toContain(fragment);
+  }
+}
+
+/**
+ * Assert validation error properties
+ */
+function assertValidationError(
+  result: ValidationIssue | null,
+  expected: NonNullable<ValidateLinkOptions['expected']>,
+  expectFn: (_: unknown) => Assertion<unknown>,
+): void {
+  // Assert severity and type
+  expectFn(result?.severity).toBe(expected.severity);
+  expectFn(result?.type).toBe(expected.type);
+
+  // Assert message contains expected text(s)
+  if (expected.messageContains !== undefined) {
+    assertMessageContains(result, expected.messageContains, expectFn);
+  }
+
+  // Assert suggestion presence (avoid selector parameter anti-pattern)
+  if (expected.hasSuggestion === true) {
+    expectFn(result?.suggestion).toBeDefined();
+  } else if (expected.hasSuggestion === false) {
+    expectFn(result?.suggestion).toBeUndefined();
+  }
+
+  // Assert link property value
+  if (expected.link !== undefined) {
+    expectFn(result?.link).toBe(expected.link);
+  }
+}
+
+/**
  * Validate a link and assert expected results
  * Eliminates duplication in validation test patterns
  */
 export async function assertValidation(
   options: ValidateLinkOptions,
-  expectFn: (value: ValidationIssue | null) => Assertion<ValidationIssue | null>,
+  expectFn: (_: ValidationIssue | null) => Assertion<ValidationIssue | null>,
 ): Promise<void> {
   const { sourceFile, link, headingsMap, expected } = options;
 
@@ -137,37 +184,8 @@ export async function assertValidation(
   if (expected === null) {
     expectFn(result).toBeNull();
   } else {
-    const assertion = expectFn(result);
-    assertion.not.toBeNull();
-
-    // Assert severity and type
-    expectFn(result?.severity).toBe(expected.severity);
-    expectFn(result?.type).toBe(expected.type);
-
-    // Assert message contains expected text(s)
-    if (expected.messageContains !== undefined) {
-      const messageFragments = Array.isArray(expected.messageContains)
-        ? expected.messageContains
-        : [expected.messageContains];
-
-      for (const fragment of messageFragments) {
-        expectFn(result?.message).toContain(fragment);
-      }
-    }
-
-    // Assert suggestion presence
-    if (expected.hasSuggestion !== undefined) {
-      if (expected.hasSuggestion) {
-        expectFn(result?.suggestion).toBeDefined();
-      } else {
-        expectFn(result?.suggestion).toBeUndefined();
-      }
-    }
-
-    // Assert link property value
-    if (expected.link !== undefined) {
-      expectFn(result?.link).toBe(expected.link);
-    }
+    expectFn(result).not.toBeNull();
+    assertValidationError(result, expected, expectFn as (_: unknown) => Assertion<unknown>);
   }
 }
 
@@ -184,7 +202,7 @@ export interface WriteAndParseOptions {
   /** Markdown content to write */
   content: string;
   /** Assertions to run on parse result */
-  assertions: (result: Awaited<ReturnType<typeof parseMarkdown>>) => Promise<void> | void;
+  assertions: (_: Awaited<ReturnType<typeof parseMarkdown>>) => Promise<void> | void;
 }
 
 /**
@@ -196,11 +214,12 @@ export async function writeAndParse(
 ): Promise<Awaited<ReturnType<typeof parseMarkdown>>> {
   const { filePath, content, assertions } = options;
 
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is provided by test caller, safe in test context
   await writeFile(filePath, content, 'utf-8');
-  const result = await parseMarkdown(filePath);
-  await assertions(result);
+  const parsedResult = await parseMarkdown(filePath);
+  await assertions(parsedResult);
 
-  return result;
+  return parsedResult;
 }
 
 /**
@@ -214,7 +233,7 @@ export function expectHeadingStructure(
     level?: number;
     children?: Array<{ text: string; level?: number }>;
   },
-  expectFn: (value: unknown) => Assertion<unknown>,
+  expectFn: (_: unknown) => Assertion<unknown>,
 ): void {
   expectFn(heading.text).toBe(expected.text);
 

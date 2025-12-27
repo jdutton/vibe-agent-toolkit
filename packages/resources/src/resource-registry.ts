@@ -80,9 +80,9 @@ export interface RegistryStats {
  * ```
  */
 export class ResourceRegistry {
-  private resourcesByPath: Map<string, ResourceMetadata> = new Map();
-  private resourcesById: Map<string, ResourceMetadata> = new Map();
-  private validateOnAdd: boolean;
+  private readonly resourcesByPath: Map<string, ResourceMetadata> = new Map();
+  private readonly resourcesById: Map<string, ResourceMetadata> = new Map();
+  private readonly validateOnAdd: boolean;
 
   constructor(options?: ResourceRegistryOptions) {
     this.validateOnAdd = options?.validateOnAdd ?? false;
