@@ -1,5 +1,5 @@
 /**
- * Custom ESLint rules for ts-monorepo-template
+ * Custom ESLint rules for vibe-agent-toolkit
  *
  * Security and Cross-Platform Compatibility Rules:
  * - no-child-process-execSync: Enforce safeExecSync() instead of execSync() (security + cross-platform)

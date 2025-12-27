@@ -1,22 +1,27 @@
-# TypeScript Monorepo Template
+# Vibe Agent Toolkit
 
-[![CI](https://github.com/jdutton/ts-monorepo-template/actions/workflows/validate.yml/badge.svg)](https://github.com/jdutton/ts-monorepo-template/actions) [![codecov](https://codecov.io/gh/jdutton/ts-monorepo-template/branch/main/graph/badge.svg)](https://codecov.io/gh/jdutton/ts-monorepo-template) [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=jdutton_ts-monorepo-template&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=jdutton_ts-monorepo-template) [![Node](https://img.shields.io/badge/node-22%20%7C%2024-brightgreen.svg)](https://nodejs.org/) [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue.svg)](https://www.typescriptlang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![CI](https://github.com/jdutton/vibe-agent-toolkit/actions/workflows/validate.yml/badge.svg)](https://github.com/jdutton/vibe-agent-toolkit/actions) [![codecov](https://codecov.io/gh/jdutton/vibe-agent-toolkit/branch/main/graph/badge.svg)](https://codecov.io/gh/jdutton/vibe-agent-toolkit) [![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=jdutton_vibe-agent-toolkit&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=jdutton_vibe-agent-toolkit) [![Node](https://img.shields.io/badge/node-22%20%7C%2024-brightgreen.svg)](https://nodejs.org/) [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-blue.svg)](https://www.typescriptlang.org/) [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-A production-ready TypeScript monorepo template with strict linting, comprehensive testing, and quality controls built-in.
+A toolkit for testing and packaging portable AI agents that work across various LLMs, frameworks, deployment targets, and orchestrators.
 
 ## Features
 
+### Agent Development
+- 🤖 **Multi-LLM Support** - Build agents that work with Claude, GPT, and other LLMs
+- 🔌 **Framework Agnostic** - Support for various agent frameworks
+- 📦 **Portable Packaging** - Deploy across different orchestrators and platforms
+- ✅ **Agent Testing** - Comprehensive testing for agent behaviors and interactions
+
+### Development Infrastructure
 - 🚀 **Bun** - Fast package manager and runtime
-- 📦 **Monorepo** - Workspace-based package management
+- 📦 **Monorepo** - Workspace-based package management for agent components
 - 🔒 **TypeScript** - Strict type checking with composite projects
 - ✅ **Vitest** - Fast unit, integration, and system testing
 - 🔍 **ESLint** - Maximum strictness with sonarjs, unicorn, and security plugins
 - 📊 **Code Coverage** - 80% minimum threshold with Codecov integration
-- 🔄 **Code Duplication** - Baseline approach with jscpd
 - 🎯 **vibe-validate** - Git-aware validation orchestration
 - 🔧 **Cross-Platform** - Tested on Windows, macOS, and Linux
 - 🤖 **CI/CD** - GitHub Actions with Node 22/24 matrix testing
-- 📝 **Pre-commit Hooks** - Husky integration for quality gates
 
 ## Quick Start
 
@@ -30,8 +35,8 @@ A production-ready TypeScript monorepo template with strict linting, comprehensi
 
 ```bash
 # Clone the repository
-git clone https://github.com/jdutton/ts-monorepo-template.git
-cd ts-monorepo-template
+git clone https://github.com/jdutton/vibe-agent-toolkit.git
+cd vibe-agent-toolkit
 
 # Install dependencies
 bun install
@@ -62,7 +67,7 @@ bun run validate
 ## Project Structure
 
 ```
-ts-monorepo-template/
+vibe-agent-toolkit/
 ├── packages/              # Published packages
 │   └── example-utils/    # Example package (replace with your packages)
 │       ├── src/          # Source code
@@ -173,7 +178,7 @@ bun run build
 
 ### Test Types
 
-The template supports three levels of testing:
+The toolkit supports three levels of testing:
 
 #### Unit Tests (`*.test.ts`)
 - Test individual functions/classes
@@ -212,7 +217,7 @@ packages/my-package/
 
 ### ESLint
 
-This template enforces strict linting rules:
+The toolkit enforces strict linting rules:
 
 - **Zero warnings policy**: `--max-warnings=0`
 - **SonarJS**: Catches code smells and bugs
@@ -246,7 +251,7 @@ Strict mode enabled with additional checks:
 
 ## Validation Pipeline
 
-The template uses [vibe-validate](https://github.com/jdutton/vibe-validate) for git-aware validation:
+The toolkit uses [vibe-validate](https://github.com/jdutton/vibe-validate) for git-aware validation:
 
 ```bash
 # Run all validation checks
@@ -315,7 +320,7 @@ When you're ready to publish to npm:
 
 ### Changing the Organization Scope
 
-Replace `@ts-monorepo-template` with your org name:
+Replace `@vibe-agent-toolkit` with your org name:
 
 ```bash
 # Update package names in:
@@ -332,29 +337,29 @@ Edit these files:
 
 ### Adding Tools
 
-Add scripts to `tools/` directory:
+Add scripts to `packages/dev-tools/src/` directory:
 - Use TypeScript (cross-platform)
-- Import from `tools/common.ts`
+- Import from `common.ts`
 - Add to package.json scripts
 
-## Validating the Template
+## Validation
 
-The template includes an example package to validate everything works:
+The project includes comprehensive validation checks:
 
 ```bash
 # Run all validation checks
 bun run validate
 
-# See full validation checklist
-cat docs/template-validation.md
+# Run pre-commit checks
+bun run pre-commit
 ```
 
-The example package (`packages/example-utils/`) has 100% test coverage and demonstrates all patterns. **Delete it** when you start your own project.
+The example package (`packages/example-utils/`) demonstrates testing patterns and will be replaced with agent-specific packages.
 
 ## Learn More
 
-- [CLAUDE.md](./CLAUDE.md) - Detailed development guidelines
-- [Template Validation](./docs/template-validation.md) - Validate the template setup
+- [Getting Started](./docs/getting-started.md) - Detailed setup guide
+- [Documentation](./docs/README.md) - Full documentation index
 - [Bun Documentation](https://bun.sh/docs)
 - [Vitest Documentation](https://vitest.dev/)
 - [vibe-validate](https://github.com/jdutton/vibe-validate)

@@ -1,5 +1,5 @@
 {
-  "name": "@ts-monorepo-template/example-utils",
+  "name": "@vibe-agent-toolkit/example-utils",
   "version": "0.1.0",
   "type": "module",
   "description": "Example utility package demonstrating monorepo patterns",

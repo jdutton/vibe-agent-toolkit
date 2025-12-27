@@ -1,11 +1,11 @@
 # Documentation
 
-Welcome to the TypeScript Monorepo Template documentation.
+Welcome to the Vibe Agent Toolkit documentation.
 
 ## Getting Started
 
-- **[Getting Started Guide](./getting-started.md)** - Set up your development environment and create your first package
-- **[Main README](../README.md)** - Overview of the template and quick reference
+- **[Getting Started Guide](./getting-started.md)** - Set up your development environment and start building agents
+- **[Main README](../README.md)** - Overview of the toolkit and quick reference
 
 ## Development
 
@@ -23,9 +23,9 @@ Welcome to the TypeScript Monorepo Template documentation.
 
 - **[Example Package](../packages/example-utils/)** - Reference implementation demonstrating patterns
 
-## Tools
+## Development Tools
 
-All development tools are in the `tools/` directory:
+All development tools are in the `packages/dev-tools/src/` directory:
 - `common.ts` - Shared utilities for tools
 - `duplication-check.ts` - Code duplication detection
 - `jscpd-check-new.ts` - Smart duplication checking with baseline
@@ -67,7 +67,7 @@ bun run test:coverage      # Coverage report
 ### File Locations
 
 - **Packages**: `packages/*/`
-- **Tools**: `tools/`
+- **Development Tools**: `packages/dev-tools/`
 - **Docs**: `docs/`
 - **CI/CD**: `.github/workflows/`
 - **Config**: Root directory

@@ -1,17 +1,20 @@
 {
-  "name": "ts-monorepo-template",
+  "name": "vibe-agent-toolkit",
   "version": "0.1.0",
   "type": "module",
   "private": true,
-  "description": "Production-ready TypeScript monorepo template with strict linting, testing, and quality controls",
+  "description": "Toolkit for testing and packaging portable AI agents across various LLMs, frameworks, and deployment targets",
   "keywords": [
+    "ai-agents",
+    "llm",
+    "agent-framework",
+    "testing",
+    "packaging",
     "typescript",
     "monorepo",
-    "template",
-    "bun",
-    "vitest",
-    "eslint",
-    "strict"
+    "portable",
+    "claude",
+    "openai"
   ],
   "author": "Jeff Dutton",
   "license": "MIT",
@@ -44,10 +47,12 @@
     "determine-publish-tags": "tsx packages/dev-tools/src/determine-publish-tags.ts"
   },
   "devDependencies": {
+    "@eslint/js": "^9.39.2",
     "@secretlint/secretlint-rule-preset-recommend": "^11.2.5",
     "@types/node": "^22.0.0",
     "@typescript-eslint/eslint-plugin": "^8.50.1",
     "@typescript-eslint/parser": "^8.50.1",
+    "@vibe-validate/cli": "0.18.1",
     "@vitest/coverage-v8": "^3.2.4",
     "eslint": "^9.39.2",
     "eslint-plugin-import": "^2.32.0",

@@ -8,7 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Initial monorepo template setup
+- Agent testing framework for multi-LLM support
+- Agent packaging utilities for portable deployment
+- Support for various agent frameworks
 - TypeScript configuration with strict mode
 - ESLint with sonarjs, unicorn, and security plugins
 - Vitest for unit, integration, and system testing
@@ -17,7 +19,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CI/CD with GitHub Actions (Node 22/24, Ubuntu/Windows)
 - Pre-commit hooks with Husky
 - Cross-platform development tools
-- Example package demonstrating patterns
 
 ### Changed
 - Nothing yet
@@ -37,4 +38,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [0.1.0] - 2025-12-26
 
 ### Added
-- Initial release of TypeScript Monorepo Template
+- Initial release of Vibe Agent Toolkit
+- Foundation for building portable AI agents

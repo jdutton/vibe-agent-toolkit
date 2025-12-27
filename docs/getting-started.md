@@ -1,6 +1,6 @@
-# Getting Started with TypeScript Monorepo Template
+# Getting Started with Vibe Agent Toolkit
 
-This guide will help you set up and start developing with this template.
+This guide will help you set up and start developing portable AI agents with the toolkit.
 
 ## Prerequisites
 
@@ -15,9 +15,9 @@ Before you begin, ensure you have the following installed:
 ### 1. Clone and Install
 
 ```bash
-# Clone your repository (or create from template)
-git clone https://github.com/yourusername/your-project.git
-cd your-project
+# Clone the repository
+git clone https://github.com/jdutton/vibe-agent-toolkit.git
+cd vibe-agent-toolkit
 
 # Install dependencies
 bun install
@@ -72,9 +72,9 @@ rm -rf packages/example-utils
 mkdir -p packages/my-package/src packages/my-package/test
 ```
 
-3. **Copy package template files**:
+3. **Add package configuration**:
 
-See [Adding a New Package](../README.md#adding-a-new-package) in the main README.
+See [Adding a New Package](../README.md#adding-a-new-package) in the main README for details.
 
 4. **Update root tsconfig.json**:
 
@@ -225,7 +225,7 @@ Settings will be automatically applied from `.editorconfig`.
 
 ### Other IDEs
 
-This template uses `.editorconfig` which is supported by most modern IDEs:
+The project uses `.editorconfig` which is supported by most modern IDEs:
 - IntelliJ IDEA / WebStorm
 - Sublime Text
 - Atom

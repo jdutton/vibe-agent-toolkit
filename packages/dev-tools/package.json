@@ -1,5 +1,5 @@
 {
-  "name": "@ts-monorepo-template/dev-tools",
+  "name": "@vibe-agent-toolkit/dev-tools",
   "version": "0.1.0",
   "private": true,
   "type": "module",

@@ -1,4 +1,4 @@
-# @ts-monorepo-template/example-utils
+# @vibe-agent-toolkit/example-utils
 
 > **⚠️ EXAMPLE PACKAGE - DELETE WHEN USING THIS TEMPLATE**
 >
@@ -9,15 +9,15 @@ Example utility package demonstrating TypeScript monorepo patterns.
 ## Installation
 
 ```bash
-npm install @ts-monorepo-template/example-utils
+npm install @vibe-agent-toolkit/example-utils
 # or
-bun add @ts-monorepo-template/example-utils
+bun add @vibe-agent-toolkit/example-utils
 ```
 
 ## Usage
 
 ```typescript
-import { capitalize, isEmpty, truncate } from '@ts-monorepo-template/example-utils';
+import { capitalize, isEmpty, truncate } from '@vibe-agent-toolkit/example-utils';
 
 // Capitalize strings
 capitalize('hello'); // 'Hello'
