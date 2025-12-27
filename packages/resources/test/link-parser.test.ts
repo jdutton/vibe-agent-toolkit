@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { parseMarkdown } from '../src/link-parser.js';
-import { expectHeadingStructure, writeAndParse } from './test-helpers.js';
+import { expectHeadingStructure, findPackageRoot, writeAndParse } from './test-helpers.js';
 
 describe('link-parser', () => {
   let tempDir: string;
@@ -511,7 +511,7 @@ Content
   });
 
   describe('test fixtures', () => {
-    const FIXTURES_DIR = '/Users/jeff/Workspaces/vibe-agent-toolkit/packages/resources/test-fixtures';
+    const FIXTURES_DIR = join(findPackageRoot(), 'test-fixtures');
 
     it('should parse valid.md fixture', async () => {
       const fixturePath = join(FIXTURES_DIR, 'valid.md');
