@@ -18,6 +18,9 @@ validation:
     - name: 'Fast Checks & Build'
       parallel: false
       steps:
+        - name: 'Build packages'
+          command: 'bun run build'
+
         - name: 'TypeScript type checking'
           command: 'bun run typecheck'
 
@@ -26,9 +29,6 @@ validation:
 
         - name: 'Code duplication check'
           command: 'bun run duplication-check'
-
-        - name: 'Build packages'
-          command: 'bun run build'
 
         - name: 'Unit tests with coverage'
           command: 'bun run test:coverage'
