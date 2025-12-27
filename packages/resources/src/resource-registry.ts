@@ -10,7 +10,7 @@
 
 import path from 'node:path';
 
-import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, toUnixPath, type CrawlOptions as UtilsCrawlOptions } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
 import { parseMarkdown } from './link-parser.js';
@@ -372,6 +372,10 @@ export class ResourceRegistry {
   /**
    * Get resources matching a glob pattern.
    *
+   * Normalizes paths to Unix-style (forward slashes) before matching
+   * to ensure consistent behavior across platforms. On Windows,
+   * path.resolve() returns backslashes but glob patterns expect forward slashes.
+   *
    * @param pattern - Glob pattern (e.g., 'docs/**', '**\/README.md')
    * @returns Array of matching resources
    *
@@ -384,7 +388,7 @@ export class ResourceRegistry {
   getResourcesByPattern(pattern: string): ResourceMetadata[] {
     const matcher = picomatch(pattern);
     return [...this.resourcesByPath.values()].filter((resource) =>
-      matcher(resource.filePath)
+      matcher(toUnixPath(resource.filePath))
     );
   }
 

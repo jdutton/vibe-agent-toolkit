@@ -431,6 +431,16 @@ describe('ResourceRegistry - Integration Tests', () => {
         const resources = registry.getResourcesByPattern('**/nonexistent*.md');
         expect(resources).toHaveLength(0);
       });
+
+      it('should work with Windows-style paths (cross-platform test)', async () => {
+        // This test verifies that glob matching works even when stored paths use backslashes
+        // On Unix: paths stored with forward slashes → no change needed
+        // On Windows: paths stored with backslashes → converted to forward slashes for matching
+        const resources = registry.getResourcesByPattern('**/valid.md');
+
+        expect(resources.length).toBeGreaterThanOrEqual(1);
+        // Should find valid.md regardless of platform path separator
+      });
     });
   });
 

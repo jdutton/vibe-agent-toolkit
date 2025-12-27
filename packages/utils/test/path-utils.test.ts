@@ -2,7 +2,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { getRelativePath, isAbsolutePath, normalizePath, toAbsolutePath } from '../src/path-utils.js';
+import { getRelativePath, isAbsolutePath, normalizePath, toAbsolutePath, toUnixPath } from '../src/path-utils.js';
 
 describe('path-utils', () => {
   const TEST_PROJECT_PATH = '/project';
@@ -151,6 +151,38 @@ describe('path-utils', () => {
       // Result should be a valid relative path on current platform
       expect(result).toBeTruthy();
       expect(typeof result).toBe('string');
+    });
+  });
+
+  describe('toUnixPath', () => {
+    it('should convert Windows backslashes to forward slashes', () => {
+      const result = toUnixPath('C:\\Users\\docs\\README.md');
+      expect(result).toBe('C:/Users/docs/README.md');
+    });
+
+    it('should leave forward slashes unchanged', () => {
+      const result = toUnixPath('/project/docs/README.md');
+      expect(result).toBe('/project/docs/README.md');
+    });
+
+    it('should handle mixed separators', () => {
+      const result = toUnixPath('C:\\Users/docs\\README.md');
+      expect(result).toBe('C:/Users/docs/README.md');
+    });
+
+    it('should handle paths with multiple consecutive backslashes', () => {
+      const result = toUnixPath('C:\\\\Users\\\\docs\\\\README.md');
+      expect(result).toBe('C://Users//docs//README.md');
+    });
+
+    it('should handle empty string', () => {
+      const result = toUnixPath('');
+      expect(result).toBe('');
+    });
+
+    it('should handle UNC paths on Windows', () => {
+      const result = toUnixPath('\\\\server\\share\\file.md');
+      expect(result).toBe('//server/share/file.md');
     });
   });
 
