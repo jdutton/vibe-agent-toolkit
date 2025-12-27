@@ -1,0 +1,240 @@
+# vibe-agent-toolkit Architecture
+
+## Package Structure & Evolution
+
+### Phase 1: Foundation (Start Here)
+
+#### `@vibe-agent-toolkit/utils`
+**Purpose**: Core shared utilities with no dependencies on other packages
+
+**Responsibilities**:
+- Utilities added as needed by other packages
+- **Schema utilities** (JSON Schema validation, conversion, runtime checking)
+- Cross-platform helpers (process spawning, file system operations, etc.)
+- Common type guards and assertions
+
+**Note**: Add utilities as problems arise, not speculatively. Example: vibe-validate has cross-platform process spawning utilities.
+
+**Dependencies**: None (may have external npm dependencies, but no internal package dependencies)
+**Status**: ✅ Created
+
+---
+
+#### `@vibe-agent-toolkit/cli`
+**Purpose**: Command-line interface for toolkit features
+
+**Responsibilities**:
+- CLI commands for validating resources, checking links, building skills, etc.
+- Orchestrates other packages (resources, rag, claude-skills)
+- User-facing error messages and output formatting
+- Configuration file loading and management
+
+**Example commands**:
+```bash
+vibe-agent validate docs/          # Validate resources
+vibe-agent check-links docs/       # Check link integrity
+vibe-agent build-skill ./skill/    # Build Claude skill
+vibe-agent embed docs/ --output db.json  # Generate embeddings
+```
+
+**Dependencies**: All other packages (orchestrator)
+**Status**: 📋 Planned
+
+**Note**: Can be used as a library or CLI. Entry point for end users.
+
+---
+
+#### `@vibe-agent-toolkit/resources`
+**Purpose**: Parse and validate markdown/HTML resources
+
+**Responsibilities**:
+- Parse markdown (frontmatter, headings, links, code blocks)
+- Parse HTML (metadata, headings, links)
+- **Link integrity validation** (broken links, missing anchors, relative paths)
+- Document structure validation
+- Extract metadata and structure
+- **Defines resource schemas** (metadata format, document structure)
+
+**Explicitly NOT responsible for**:
+- Chunking (that's RAG concern)
+- Embeddings (that's RAG concern)
+- Claude-specific conventions (that's claude-skills concern)
+
+**Dependencies**: `utils`, markdown/HTML parsing libraries
+**Status**: 📋 Planned
+
+**Key insight**: Link integrity is general-purpose, useful for any markdown project (docs/, README files, etc.), not Claude-specific.
+
+---
+
+### Phase 2: Specialized Concerns (Build Next)
+
+#### `@vibe-agent-toolkit/rag`
+**Purpose**: Document chunking, embedding, and retrieval
+
+**Responsibilities**:
+- **Chunking strategies** (semantic, fixed-size, by-heading, recursive)
+- Embedding generation (via LLM APIs)
+- Vector storage abstraction (support multiple backends)
+- Similarity search and retrieval
+- Context building for LLM prompts
+- **Defines RAG schemas** (chunk metadata, retrieval results, embedding configs)
+
+**Boundary with resources**:
+- Resources provides: "Here's what's in this document (parsed structure)"
+- RAG provides: "Here's how to chunk, embed, and retrieve relevant context"
+
+**Dependencies**: `utils`, `resources`, vector DB clients, LLM SDKs
+**Status**: 📋 Planned
+
+---
+
+#### `@vibe-agent-toolkit/claude-skills`
+**Purpose**: Claude-specific skill packaging, validation, and testing
+
+**Responsibilities**:
+- **Skill format validation** (Claude skill conventions and structure)
+- **Skill testing framework** (test skills work with Claude API)
+- **Skill packaging/bundling** (package for distribution to Claude)
+- Claude-specific link conventions and organization patterns
+- Skill metadata requirements
+- **Defines claude-skill schemas** (skill manifest, configuration, metadata)
+
+**Reuses from resources**: Link integrity checking, document parsing (general capabilities)
+**Adds on top**: Claude-specific rules, testing harness, packaging workflows
+
+**Dependencies**: `utils`, `resources`, Claude SDK
+**Status**: 📋 Planned
+
+---
+
+### Phase 3: Future Packages (Build When Needed)
+
+#### `@vibe-agent-toolkit/agents` (Future)
+**Purpose**: Agent runtime and execution framework
+- Agent lifecycle management
+- Tool/function calling abstractions
+- State management and persistence
+- Execution tracing and debugging
+
+#### `@vibe-agent-toolkit/llm-providers` (Future)
+**Purpose**: Multi-LLM abstraction layer
+- Unified interface across Claude, OpenAI, Gemini, etc.
+- Provider-specific optimizations
+- Retry logic and error handling
+- Cost tracking and monitoring
+
+#### `@vibe-agent-toolkit/deploy` (Future)
+**Purpose**: Deployment tooling for agents
+- Package agents for various targets (Claude Desktop, API, serverless, etc.)
+- Environment configuration management
+- Pre-deployment validation
+
+---
+
+## Schema Strategy
+
+### Schemas as First-Class Citizens
+
+Schemas are critical for:
+- Agent input/output validation
+- Resource metadata validation
+- Configuration file validation (YAML, JSON)
+- Runtime type safety
+- Interoperability between packages
+
+### Schema Distribution
+
+**Schemas live with their packages**:
+- `resources/` defines resource schemas (metadata, document structure)
+- `claude-skills/` defines skill schemas (manifest, configuration)
+- `rag/` defines RAG schemas (chunk metadata, retrieval configs)
+
+**Schema utilities live in `utils`**:
+- JSON Schema validation
+- Schema-to-TypeScript type conversion
+- Runtime validation helpers
+- Schema composition and extension
+
+**Format**: Use JSON Schema (supports both JSON and YAML validation)
+
+### Example Structure
+```
+packages/resources/
+  src/
+    schemas/
+      metadata.schema.json      # Resource metadata JSON Schema
+      document.schema.json       # Document structure schema
+    types.ts                     # TypeScript types (derived from schemas)
+    validator.ts                 # Uses utils schema validation
+```
+
+---
+
+## Architectural Principles
+
+### 1. Clear Package Boundaries
+Each package has a single, well-defined purpose. When a concern grows complex enough or serves multiple packages, consider extracting it.
+
+### 2. Progressive Dependencies
+```
+utils (no package deps)
+  ↓
+resources (→ utils)
+  ↓
+├─ rag (→ utils, resources)
+├─ claude-skills (→ utils, resources)
+└─ cli (→ all packages, orchestrator)
+```
+
+### 3. Start Minimal, Evolve As Needed
+- Don't build Phase 2 until Phase 1 proves its worth
+- Don't build Phase 3 until real use cases emerge
+- Prefer extracting packages from working code over speculative design
+
+### 4. Schemas Co-located, Utilities Shared
+- Each package owns its schemas (domain knowledge)
+- Utils provides schema validation (technical capability)
+- Enables strong contracts between packages
+
+### 5. Link Integrity is General, Not Claude-Specific
+- Useful for any markdown: docs/, README, tutorials, etc.
+- Lives in `resources` as general capability
+- `claude-skills` can add skill-specific conventions on top
+
+---
+
+## Current Status
+
+- ✅ **utils**: Foundation created (add utilities as needed)
+- 📋 **cli**: Command-line interface (build after resources)
+- 📋 **resources**: Next to build
+- 📋 **rag**: Phase 2
+- 📋 **claude-skills**: Phase 2
+
+---
+
+## Next Steps
+
+1. **Add utilities as needed**:
+   - Don't pre-populate with string/array functions we don't need
+   - Add schema validation when resources package needs it
+   - Add cross-platform helpers when CLI needs them
+   - Let real problems drive utility creation
+
+2. **Build minimal resources package**:
+   - Basic markdown parser (frontmatter, headings, links)
+   - Link integrity checker
+   - Resource schemas (JSON Schema)
+   - No complex validation yet, no chunking
+
+3. **Build CLI package**:
+   - Commands for validating docs/, checking links
+   - Demonstrates resources package in action
+   - User-facing entry point
+
+4. **Evaluate before Phase 2**:
+   - Is resources API ergonomic?
+   - Is CLI intuitive?
+   - What's missing?
+   - Then build RAG or claude-skills based on priority

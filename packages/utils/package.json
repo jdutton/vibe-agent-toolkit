@@ -1,14 +1,14 @@
 {
-  "name": "@vibe-agent-toolkit/example-utils",
+  "name": "@vibe-agent-toolkit/utils",
   "version": "0.1.0",
   "type": "module",
-  "description": "Example utility package demonstrating monorepo patterns",
+  "description": "Core utility functions with no external dependencies",
   "keywords": [
     "typescript",
     "utilities",
-    "example"
+    "toolkit"
   ],
-  "author": "Your Name",
+  "author": "Jeff Dutton",
   "license": "MIT",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",

@@ -3,6 +3,6 @@
   "files": [],
   "references": [
     { "path": "./packages/dev-tools" },
-    { "path": "./packages/example-utils" }
+    { "path": "./packages/utils" }
   ]
 }

@@ -13,6 +13,7 @@ export default defineConfig({
       '**/dist/**',
     ],
     testTimeout: 60000, // Integration tests may take longer
+    passWithNoTests: true, // Allow passing when no integration tests exist yet
     pool: 'forks',
     poolOptions: {
       forks: {
