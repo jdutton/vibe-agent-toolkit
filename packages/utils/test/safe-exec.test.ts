@@ -253,18 +253,18 @@ describe('isToolAvailable', () => {
 
   it.skipIf(process.platform === 'win32')('should handle multiple concurrent checks', () => {
     // Test DRY principle - multiple tools checked efficiently
-    // Use pnpm instead of npm - guaranteed to be available in our CI (pnpm monorepo)
+    // Use bun instead of npm - guaranteed to be available in our CI (bun monorepo)
     // npm is npm.cmd on Windows which causes which.sync() issues
-    // Skipped on Windows: pnpm detection needs .cmd script handling fix
+    // Skipped on Windows: bun detection needs .cmd script handling fix
     const results = [
       isToolAvailable('node'),
-      isToolAvailable('pnpm'),
+      isToolAvailable('bun'),
       isToolAvailable('nonexistent-1'),
       isToolAvailable('nonexistent-2'),
     ];
 
     expect(results[0]).toBe(true); // node exists
-    expect(results[1]).toBe(true); // pnpm exists (we're using pnpm)
+    expect(results[1]).toBe(true); // bun exists (we're using bun)
     expect(results[2]).toBe(false); // doesn't exist
     expect(results[3]).toBe(false); // doesn't exist
   });
@@ -317,16 +317,16 @@ describe('getToolVersion', () => {
 
   it.skipIf(process.platform === 'win32')('should handle multiple version queries efficiently (DRY)', () => {
     // Test that multiple version checks work correctly
-    // Use pnpm instead of npm (npm.cmd on Windows causes which.sync issues)
-    // Skipped on Windows: pnpm version detection needs .cmd script execution fix
+    // Use bun instead of npm (npm.cmd on Windows causes which.sync issues)
+    // Skipped on Windows: bun version detection needs .cmd script execution fix
     const versions = [
       getToolVersion('node'),
-      getToolVersion('pnpm'),
+      getToolVersion('bun'),
       getToolVersion('nonexistent-tool'),
     ];
 
     expect(versions[0]).toMatch(/^v\d+/); // node version
-    expect(versions[1]).toBeTruthy(); // pnpm version exists (we're using pnpm)
+    expect(versions[1]).toBeTruthy(); // bun version exists (we're using bun)
     expect(versions[2]).toBeNull(); // doesn't exist
   });
 });
