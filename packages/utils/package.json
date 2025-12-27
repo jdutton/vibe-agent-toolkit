@@ -29,7 +29,13 @@
     "typecheck": "tsc --noEmit",
     "clean": "rimraf dist *.tsbuildinfo"
   },
+  "dependencies": {
+    "picomatch": "^4.0.3",
+    "which": "^5.0.0"
+  },
   "devDependencies": {
+    "@types/picomatch": "^4.0.2",
+    "@types/which": "^3.0.4",
     "rimraf": "^6.0.1",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"

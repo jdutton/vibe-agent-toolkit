@@ -5,4 +5,11 @@
  * Utilities are added as needed by other packages, not speculatively.
  */
 
-// Utilities will be added here as real needs arise from other packages
+// Safe command execution (cross-platform, no shell injection)
+export * from './safe-exec.js';
+
+// Cross-platform path utilities
+export * from './path-utils.js';
+
+// Directory crawling with glob patterns
+export * from './file-crawler.js';

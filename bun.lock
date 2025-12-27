@@ -44,10 +44,16 @@
         "typescript": "^5.9.3",
       },
     },
-    "packages/example-utils": {
-      "name": "@vibe-agent-toolkit/example-utils",
+    "packages/utils": {
+      "name": "@vibe-agent-toolkit/utils",
       "version": "0.1.0",
+      "dependencies": {
+        "picomatch": "^4.0.3",
+        "which": "^5.0.0",
+      },
       "devDependencies": {
+        "@types/picomatch": "^4.0.2",
+        "@types/which": "^3.0.4",
         "rimraf": "^6.0.1",
         "typescript": "^5.9.3",
         "vitest": "^3.2.4",
@@ -277,6 +283,8 @@
 
     "@types/normalize-package-data": ["@types/normalize-package-data@2.4.4", "", {}, "sha512-37i+OaWTh9qeK4LSHPsyRC7NahnGotNuZvjLSgcPzblpHB3rrCJxAOgI5gCdKm7coonsaX1Of0ILiTcnZjbfxA=="],
 
+    "@types/picomatch": ["@types/picomatch@4.0.2", "", {}, "sha512-qHHxQ+P9PysNEGbALT8f8YOSHW0KJu6l2xU8DYY0fu/EmGxXdVnuTLvFUvBgPJMSqXq29SYHveejeAha+4AYgA=="],
+
     "@types/sarif": ["@types/sarif@2.1.7", "", {}, "sha512-kRz0VEkJqWLf1LLVN4pT1cg1Z9wAuvI6L97V3m2f5B76Tg8d413ddvLBPTEHAZJlnn4XSvu0FkZtViCQGVyrXQ=="],
 
     "@types/semver": ["@types/semver@7.7.1", "", {}, "sha512-FmgJfu+MOcQ370SD0ev7EI8TlCAfKYU+B4m5T3yXc1CiRN94g/SZPtsCkk506aUDtlMnFZvasDwHHUcZUEaYuA=="],
@@ -305,7 +313,7 @@
 
     "@vibe-agent-toolkit/dev-tools": ["@vibe-agent-toolkit/dev-tools@workspace:packages/dev-tools"],
 
-    "@vibe-agent-toolkit/example-utils": ["@vibe-agent-toolkit/example-utils@workspace:packages/example-utils"],
+    "@vibe-agent-toolkit/utils": ["@vibe-agent-toolkit/utils@workspace:packages/utils"],
 
     "@vibe-validate/cli": ["@vibe-validate/cli@0.18.1", "", { "dependencies": { "@vibe-validate/config": "0.18.1", "@vibe-validate/core": "0.18.1", "@vibe-validate/extractors": "0.18.1", "@vibe-validate/git": "0.18.1", "@vibe-validate/history": "0.18.1", "chalk": "^5.6.2", "commander": "^12.1.0", "prompts": "^2.4.2", "semver": "^7.7.3", "yaml": "^2.8.2", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" }, "bin": { "vv": "dist/bin/vv", "vibe-validate": "dist/bin/vibe-validate" } }, "sha512-JVQifRtPdi/wfxnRSRBc6V/160Pgr47dwORESgkaBhdrE2yxiNqCNp1pf5qoXaIpqL+GLD0e5JbmqxYUCoyrGw=="],
 
