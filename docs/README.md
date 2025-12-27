@@ -19,9 +19,10 @@ Welcome to the Vibe Agent Toolkit documentation.
 - **[Vitest Configs](../vitest.config.ts)** - Test configurations (unit, integration, system)
 - **[vibe-validate Config](../vibe-validate.config.yaml)** - Validation orchestration
 
-## Examples
+## Example Packages
 
-- **[Example Package](../packages/example-utils/)** - Reference implementation demonstrating patterns
+- **[Utils Package](../packages/utils/)** - Shared utilities (path-utils, file-crawler, safe-exec)
+- **[Resources Package](../packages/resources/)** - Resource registry and link validation
 
 ## Development Tools
 

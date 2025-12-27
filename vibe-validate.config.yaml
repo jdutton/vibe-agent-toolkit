@@ -38,3 +38,10 @@ validation:
       steps:
         - name: 'Integration tests'
           command: 'bun run test:integration'
+
+    - name: 'System Tests'
+      parallel: false
+      steps:
+        - name: 'Link validation (dogfooding)'
+          command: 'bun run test:system'
+          description: 'Validates all markdown links in the project using our own ResourceRegistry'

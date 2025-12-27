@@ -61,8 +61,28 @@ bun run lint
 bun run typecheck
 
 # Run full validation (like CI)
-bun run validate
+bunx vv validate
+
+# Validate all markdown links (dogfooding)
+bun run validate-links
 ```
+
+### 🔗 Dogfooding: Link Validation
+
+This project uses its own `@vibe-agent-toolkit/resources` package to validate all markdown links in the repository. This ensures our documentation stays accurate and all links remain valid.
+
+**Run link validation:**
+```bash
+bun run validate-links
+```
+
+**What it checks:**
+- ✅ All local file links (relative paths to other markdown files)
+- ✅ All heading anchor links (links to sections within files)
+- ℹ️  External URLs are noted but not validated
+- 🚫 Test fixtures with intentionally broken links are excluded
+
+**Runs automatically in CI/CD** as part of the System Tests phase, ensuring broken links are caught before merge.
 
 ## Project Structure
 

@@ -7,12 +7,12 @@ export default defineConfig({
     include: [
       'packages/*/src/**/*.test.ts',
       'packages/*/test/**/*.test.ts',
+      'packages/*/test/**/*.integration.test.ts', // Include integration tests for coverage
     ],
     exclude: [
       '**/node_modules/**',
       '**/dist/**',
-      '**/*.integration.test.ts', // Integration tests run separately
-      '**/*.system.test.ts', // System tests run separately
+      '**/*.system.test.ts', // System tests run separately (e2e, longer running)
     ],
     // Prevent worker timeouts by limiting concurrency
     maxConcurrency: 1,
@@ -39,6 +39,7 @@ export default defineConfig({
         '**/*.spec.ts',
         '**/index.ts', // Re-exports
         '**/types.ts', // Type definitions
+        '**/schemas/**', // Zod schema definitions (type definitions, not logic)
         'packages/dev-tools/**', // Exclude dev-tools (infrastructure)
       ],
       thresholds: {
