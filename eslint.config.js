@@ -28,6 +28,7 @@ export default [
       '**/*.d.ts',
       'vitest.config.ts',
       'vitest.*.config.ts',
+      '.worktrees/',  // Git worktrees
     ],
   },
 

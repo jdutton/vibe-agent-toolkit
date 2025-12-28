@@ -27,8 +27,8 @@ export const JSCPD_CONFIG = {
   MIN_TOKENS: '50',
   /** File formats to check */
   FORMATS: 'typescript,javascript',
-  /** Patterns to ignore (node_modules, dist, coverage, reports, config files) */
-  IGNORE_PATTERNS: '**/node_modules/**,**/dist/**,**/coverage/**,**/jscpd-report/**,**/*.json,**/*.yaml,**/*.md',
+  /** Patterns to ignore (node_modules, dist, coverage, reports, config files, worktrees) */
+  IGNORE_PATTERNS: '**/node_modules/**,**/dist/**,**/coverage/**,**/jscpd-report/**,**/.worktrees/**,**/*.json,**/*.yaml,**/*.md',
   /** Output directory for jscpd reports */
   OUTPUT_DIR: 'jscpd-report',
 } as const;
