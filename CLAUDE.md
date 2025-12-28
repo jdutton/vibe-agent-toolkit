@@ -6,7 +6,7 @@ This document provides guidance for AI assistants and developers working on vibe
 
 The vibe-agent-toolkit is a modular toolkit for building, testing, and deploying portable AI agents that work across various LLMs, frameworks, and deployment targets.
 
-See [docs/architecture.md](docs/architecture.md) for detailed package architecture and evolution plan.
+See [docs/architecture/README.md](docs/architecture/README.md) for detailed package architecture and evolution plan.
 
 ## Project-Specific Technical Principles
 
@@ -377,7 +377,7 @@ GitHub Actions runs on every push/PR:
 
 ## Architecture Principles
 
-See [docs/architecture.md](docs/architecture.md) for complete details:
+See [docs/architecture/README.md](docs/architecture/README.md) for complete details:
 
 1. **Clear Package Boundaries** - Single, well-defined purpose per package
 2. **Progressive Dependencies** - utils → resources → rag/claude-skills → cli
@@ -568,7 +568,7 @@ With custom rules:
 
 ## Questions?
 
-- [Architecture](./docs/architecture.md) - Package structure and evolution plan
+- [Architecture](./docs/architecture/README.md) - Package structure and evolution plan
 - [Getting Started](./docs/getting-started.md) - Detailed setup guide
 - [Documentation](./docs/README.md) - Full documentation index
 - vibe-validate docs: https://github.com/jdutton/vibe-validate

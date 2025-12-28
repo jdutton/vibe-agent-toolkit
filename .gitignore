@@ -47,6 +47,9 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Git worktrees
+.worktrees/
+
 # Claude Code - user-specific settings
 .claude/settings.local.json
 .claude/commands/
@@ -62,8 +65,9 @@ tmp/
 *.cpuprofile
 *.heapsnapshot
 
-# Ignore ALL root-level markdown files (catches Claude Code and other AI-generated temporary files)
+# Ignore ALL root-level markdown files and planning files (catches Claude Code and other AI-generated temporary files)
 /*.md
+docs/plans/
 
 # Explicitly include critical documentation (negation patterns MUST come after the ignore)
 !README.md

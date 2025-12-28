@@ -639,7 +639,7 @@ Planned features for future releases:
 ## Documentation
 
 - [Project Documentation](../../docs)
-- [Architecture](../../docs/architecture.md)
+- [Architecture](../../docs/architecture/README.md)
 
 ## License
 
