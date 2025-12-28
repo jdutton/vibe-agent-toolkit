@@ -41,6 +41,8 @@ export default defineConfig({
         '**/types.ts', // Type definitions
         '**/schemas/**', // Zod schema definitions (type definitions, not logic)
         'packages/dev-tools/**', // Exclude dev-tools (infrastructure)
+        'packages/cli/src/bin/**', // CLI entry points (integration test only)
+        'packages/cli/src/commands/**', // CLI commands (integration test only)
       ],
       thresholds: {
         statements: 80,

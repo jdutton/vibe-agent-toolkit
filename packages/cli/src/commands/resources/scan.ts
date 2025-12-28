@@ -9,6 +9,8 @@ import { createLogger } from '../../utils/logger.js';
 import { writeYamlOutput } from '../../utils/output.js';
 import { findProjectRoot } from '../../utils/project-root.js';
 
+import { handleCommandError } from './command-helpers.js';
+
 interface ScanOptions {
   debug?: boolean;
 }
@@ -84,15 +86,6 @@ export async function scanCommand(
 
     process.exit(0);
   } catch (error) {
-    const duration = Date.now() - startTime;
-    logger.error(`Scan failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-
-    writeYamlOutput({
-      status: 'error',
-      error: error instanceof Error ? error.message : 'Unknown error',
-      duration: `${duration}ms`,
-    });
-
-    process.exit(2);
+    handleCommandError(error, logger, startTime, 'Scan');
   }
 }
