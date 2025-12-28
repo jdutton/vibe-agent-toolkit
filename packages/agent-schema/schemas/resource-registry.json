@@ -1,0 +1,59 @@
+{
+  "$ref": "#/definitions/resource-registry",
+  "definitions": {
+    "resource-registry": {
+      "type": "object",
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Path to resource file or glob pattern"
+              },
+              "type": {
+                "type": "string",
+                "enum": [
+                  "prompt",
+                  "schema",
+                  "documentation",
+                  "data",
+                  "template"
+                ],
+                "description": "Resource type"
+              },
+              "template": {
+                "type": "string",
+                "enum": [
+                  "mustache",
+                  "handlebars",
+                  "none"
+                ],
+                "description": "Template engine (if applicable)"
+              },
+              "fragment": {
+                "type": "boolean",
+                "description": "Whether resource can be included/referenced by other resources"
+              }
+            },
+            "required": [
+              "path",
+              "type"
+            ],
+            "additionalProperties": false,
+            "description": "Resource definition"
+          },
+          {
+            "type": "object",
+            "additionalProperties": {
+              "$ref": "#/definitions/resource-registry/additionalProperties/anyOf/0"
+            }
+          }
+        ]
+      },
+      "description": "Resource registry mapping resource names to definitions"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

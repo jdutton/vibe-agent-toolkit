@@ -1,0 +1,519 @@
+{
+  "$ref": "#/definitions/agent-manifest",
+  "definitions": {
+    "agent-manifest": {
+      "type": "object",
+      "properties": {
+        "apiVersion": {
+          "type": "string",
+          "const": "vat.dev/v1",
+          "description": "VAT API version"
+        },
+        "kind": {
+          "type": "string",
+          "const": "Agent",
+          "description": "Manifest kind"
+        },
+        "metadata": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^[a-z0-9-]+$",
+              "description": "Agent identifier (kebab-case)"
+            },
+            "version": {
+              "type": "string",
+              "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[a-z0-9]+(?:\\.[a-z0-9]+)*)?(?:\\+[a-z0-9]+(?:\\.[a-z0-9]+)*)?$",
+              "description": "Agent version (semver format, optional - can come from package.json)"
+            },
+            "description": {
+              "type": "string",
+              "description": "Human-readable description of agent purpose"
+            },
+            "author": {
+              "type": "string",
+              "description": "Agent author or organization"
+            },
+            "license": {
+              "type": "string",
+              "description": "License identifier (e.g., MIT, Apache-2.0)"
+            },
+            "tags": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Tags for categorization and discovery"
+            },
+            "build": {
+              "type": "object",
+              "properties": {
+                "timestamp": {
+                  "type": "string",
+                  "format": "date-time",
+                  "description": "Build timestamp (ISO 8601)"
+                },
+                "vatVersion": {
+                  "type": "string",
+                  "description": "VAT toolkit version used"
+                },
+                "commit": {
+                  "type": "string",
+                  "description": "Git commit hash"
+                }
+              },
+              "required": [
+                "timestamp",
+                "vatVersion"
+              ],
+              "additionalProperties": false,
+              "description": "Build metadata (added by build process)"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "additionalProperties": false,
+          "description": "Agent metadata"
+        },
+        "spec": {
+          "type": "object",
+          "properties": {
+            "interface": {
+              "type": "object",
+              "properties": {
+                "input": {
+                  "type": "object",
+                  "properties": {
+                    "$ref": {
+                      "type": "string",
+                      "description": "Path to JSON Schema file (relative or absolute)"
+                    }
+                  },
+                  "required": [
+                    "$ref"
+                  ],
+                  "additionalProperties": false,
+                  "description": "Input schema (what data agent accepts)"
+                },
+                "output": {
+                  "$ref": "#/definitions/agent-manifest/properties/spec/properties/interface/properties/input",
+                  "description": "Output schema (what data agent produces)"
+                }
+              },
+              "additionalProperties": false,
+              "description": "Agent input/output interface"
+            },
+            "llm": {
+              "type": "object",
+              "properties": {
+                "provider": {
+                  "type": "string",
+                  "description": "LLM provider (e.g., anthropic, openai, google)"
+                },
+                "model": {
+                  "type": "string",
+                  "description": "Model identifier (e.g., claude-sonnet-4.5, gpt-4o)"
+                },
+                "temperature": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 2,
+                  "description": "Sampling temperature (0-2, default varies by provider)"
+                },
+                "maxTokens": {
+                  "type": "integer",
+                  "exclusiveMinimum": 0,
+                  "description": "Maximum tokens in response"
+                },
+                "topP": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1,
+                  "description": "Nucleus sampling parameter"
+                },
+                "alternatives": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "provider": {
+                        "$ref": "#/definitions/agent-manifest/properties/spec/properties/llm/properties/provider"
+                      },
+                      "model": {
+                        "$ref": "#/definitions/agent-manifest/properties/spec/properties/llm/properties/model"
+                      },
+                      "temperature": {
+                        "$ref": "#/definitions/agent-manifest/properties/spec/properties/llm/properties/temperature"
+                      },
+                      "maxTokens": {
+                        "$ref": "#/definitions/agent-manifest/properties/spec/properties/llm/properties/maxTokens"
+                      },
+                      "topP": {
+                        "$ref": "#/definitions/agent-manifest/properties/spec/properties/llm/properties/topP"
+                      }
+                    },
+                    "required": [
+                      "provider",
+                      "model"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "description": "Alternative LLM configurations (not just fallbacks - choices)"
+                }
+              },
+              "required": [
+                "provider",
+                "model"
+              ],
+              "additionalProperties": false,
+              "description": "LLM configuration (required)"
+            },
+            "prompts": {
+              "type": "object",
+              "properties": {
+                "system": {
+                  "type": "object",
+                  "properties": {
+                    "$ref": {
+                      "type": "string",
+                      "description": "Reference to resource in ResourceRegistry"
+                    },
+                    "variables": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "description": "Template variables required by this prompt"
+                    }
+                  },
+                  "required": [
+                    "$ref"
+                  ],
+                  "additionalProperties": false,
+                  "description": "System prompt"
+                },
+                "user": {
+                  "$ref": "#/definitions/agent-manifest/properties/spec/properties/prompts/properties/system",
+                  "description": "User prompt template"
+                }
+              },
+              "additionalProperties": false,
+              "description": "Agent prompts"
+            },
+            "tools": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "enum": [
+                      "mcp",
+                      "library",
+                      "builtin"
+                    ],
+                    "description": "Tool type"
+                  },
+                  "server": {
+                    "type": "string",
+                    "description": "MCP server name (for type=mcp)"
+                  },
+                  "package": {
+                    "type": "string",
+                    "description": "Library package name (for type=library)"
+                  },
+                  "function": {
+                    "type": "string",
+                    "description": "Function to call (for type=library)"
+                  },
+                  "llmMapping": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "description": "LLM-specific tool names (for type=builtin)"
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "Tool identifier"
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Human-readable tool description"
+                  },
+                  "alternatives": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "$ref": "#/definitions/agent-manifest/properties/spec/properties/tools/items/properties/type"
+                        },
+                        "server": {
+                          "$ref": "#/definitions/agent-manifest/properties/spec/properties/tools/items/properties/server"
+                        },
+                        "package": {
+                          "$ref": "#/definitions/agent-manifest/properties/spec/properties/tools/items/properties/package"
+                        },
+                        "function": {
+                          "$ref": "#/definitions/agent-manifest/properties/spec/properties/tools/items/properties/function"
+                        },
+                        "llmMapping": {
+                          "$ref": "#/definitions/agent-manifest/properties/spec/properties/tools/items/properties/llmMapping"
+                        }
+                      },
+                      "required": [
+                        "type"
+                      ],
+                      "additionalProperties": false,
+                      "description": "Alternative tool implementation"
+                    },
+                    "description": "Alternative tool implementations"
+                  }
+                },
+                "required": [
+                  "type",
+                  "name"
+                ],
+                "additionalProperties": false,
+                "description": "Tool definition"
+              },
+              "description": "Tools available to agent"
+            },
+            "memory": {
+              "type": "object",
+              "properties": {
+                "shortTerm": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string"
+                    },
+                    "maxMessages": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "type"
+                  ],
+                  "additionalProperties": true
+                },
+                "longTerm": {
+                  "type": "object",
+                  "properties": {
+                    "type": {
+                      "type": "string"
+                    },
+                    "store": {}
+                  },
+                  "required": [
+                    "type"
+                  ],
+                  "additionalProperties": true
+                }
+              },
+              "additionalProperties": true,
+              "description": "Memory configuration"
+            },
+            "rag": {
+              "type": "object",
+              "additionalProperties": {
+                "type": "object",
+                "properties": {
+                  "sources": {},
+                  "chunking": {},
+                  "embedding": {},
+                  "retrieval": {}
+                },
+                "additionalProperties": true
+              },
+              "description": "RAG configuration"
+            },
+            "composition": {
+              "type": "object",
+              "properties": {
+                "subAgents": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "agent": {
+                        "type": "string",
+                        "description": "Agent package name"
+                      },
+                      "version": {
+                        "type": "string",
+                        "description": "Agent version requirement"
+                      },
+                      "role": {
+                        "type": "string",
+                        "description": "Role identifier"
+                      },
+                      "description": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "agent",
+                      "role"
+                    ],
+                    "additionalProperties": true
+                  }
+                },
+                "coordination": {
+                  "type": "object",
+                  "properties": {
+                    "strategy": {
+                      "type": "string"
+                    },
+                    "errorHandling": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": true
+                }
+              },
+              "additionalProperties": true,
+              "description": "Multi-agent composition"
+            },
+            "resources": {
+              "type": "object",
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "path": {
+                        "type": "string",
+                        "description": "Path to resource file or glob pattern"
+                      },
+                      "type": {
+                        "type": "string",
+                        "enum": [
+                          "prompt",
+                          "schema",
+                          "documentation",
+                          "data",
+                          "template"
+                        ],
+                        "description": "Resource type"
+                      },
+                      "template": {
+                        "type": "string",
+                        "enum": [
+                          "mustache",
+                          "handlebars",
+                          "none"
+                        ],
+                        "description": "Template engine (if applicable)"
+                      },
+                      "fragment": {
+                        "type": "boolean",
+                        "description": "Whether resource can be included/referenced by other resources"
+                      }
+                    },
+                    "required": [
+                      "path",
+                      "type"
+                    ],
+                    "additionalProperties": false,
+                    "description": "Resource definition"
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": {
+                      "$ref": "#/definitions/agent-manifest/properties/spec/properties/resources/additionalProperties/anyOf/0"
+                    }
+                  }
+                ]
+              },
+              "description": "Resource registry"
+            },
+            "credentials": {
+              "type": "object",
+              "properties": {
+                "agent": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "description": "Credential name (e.g., env var name)"
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "required": {
+                        "type": "boolean"
+                      },
+                      "source": {
+                        "type": "string",
+                        "enum": [
+                          "env",
+                          "vault",
+                          "config"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name"
+                    ],
+                    "additionalProperties": false
+                  },
+                  "description": "Agent-level credentials"
+                }
+              },
+              "additionalProperties": false,
+              "description": "Credentials requirements"
+            }
+          },
+          "required": [
+            "llm"
+          ],
+          "additionalProperties": false,
+          "description": "Agent specification"
+        },
+        "tests": {
+          "type": "object",
+          "properties": {
+            "goldenDatasets": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "path": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "path"
+                ],
+                "additionalProperties": true
+              }
+            },
+            "evaluationMetrics": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          },
+          "additionalProperties": true,
+          "description": "Test configuration"
+        }
+      },
+      "required": [
+        "apiVersion",
+        "kind",
+        "metadata",
+        "spec"
+      ],
+      "additionalProperties": false,
+      "description": "VAT Agent Manifest"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

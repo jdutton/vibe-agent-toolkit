@@ -1,0 +1,69 @@
+{
+  "$ref": "#/definitions/agent-metadata",
+  "definitions": {
+    "agent-metadata": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9-]+$",
+          "description": "Agent identifier (kebab-case)"
+        },
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+\\.\\d+(?:-[a-z0-9]+(?:\\.[a-z0-9]+)*)?(?:\\+[a-z0-9]+(?:\\.[a-z0-9]+)*)?$",
+          "description": "Agent version (semver format, optional - can come from package.json)"
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of agent purpose"
+        },
+        "author": {
+          "type": "string",
+          "description": "Agent author or organization"
+        },
+        "license": {
+          "type": "string",
+          "description": "License identifier (e.g., MIT, Apache-2.0)"
+        },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Tags for categorization and discovery"
+        },
+        "build": {
+          "type": "object",
+          "properties": {
+            "timestamp": {
+              "type": "string",
+              "format": "date-time",
+              "description": "Build timestamp (ISO 8601)"
+            },
+            "vatVersion": {
+              "type": "string",
+              "description": "VAT toolkit version used"
+            },
+            "commit": {
+              "type": "string",
+              "description": "Git commit hash"
+            }
+          },
+          "required": [
+            "timestamp",
+            "vatVersion"
+          ],
+          "additionalProperties": false,
+          "description": "Build metadata (added by build process)"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "additionalProperties": false,
+      "description": "Agent metadata"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

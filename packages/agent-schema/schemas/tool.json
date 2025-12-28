@@ -1,0 +1,82 @@
+{
+  "$ref": "#/definitions/tool",
+  "definitions": {
+    "tool": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "mcp",
+            "library",
+            "builtin"
+          ],
+          "description": "Tool type"
+        },
+        "server": {
+          "type": "string",
+          "description": "MCP server name (for type=mcp)"
+        },
+        "package": {
+          "type": "string",
+          "description": "Library package name (for type=library)"
+        },
+        "function": {
+          "type": "string",
+          "description": "Function to call (for type=library)"
+        },
+        "llmMapping": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          },
+          "description": "LLM-specific tool names (for type=builtin)"
+        },
+        "name": {
+          "type": "string",
+          "description": "Tool identifier"
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable tool description"
+        },
+        "alternatives": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "$ref": "#/definitions/tool/properties/type"
+              },
+              "server": {
+                "$ref": "#/definitions/tool/properties/server"
+              },
+              "package": {
+                "$ref": "#/definitions/tool/properties/package"
+              },
+              "function": {
+                "$ref": "#/definitions/tool/properties/function"
+              },
+              "llmMapping": {
+                "$ref": "#/definitions/tool/properties/llmMapping"
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": false,
+            "description": "Alternative tool implementation"
+          },
+          "description": "Alternative tool implementations"
+        }
+      },
+      "required": [
+        "type",
+        "name"
+      ],
+      "additionalProperties": false,
+      "description": "Tool definition"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

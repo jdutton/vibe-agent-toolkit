@@ -18,11 +18,12 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && bun run generate:schemas",
+    "generate:schemas": "tsx scripts/generate-json-schemas.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "clean": "rm -rf dist *.tsbuildinfo"
+    "clean": "rm -rf dist *.tsbuildinfo schemas/"
   },
   "keywords": [
     "vat",
@@ -37,6 +38,7 @@
   },
   "devDependencies": {
     "@vibe-agent-toolkit/utils": "workspace:*",
+    "tsx": "^4.21.0",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
   }
