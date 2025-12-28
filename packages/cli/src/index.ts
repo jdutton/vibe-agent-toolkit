@@ -6,4 +6,9 @@
  */
 
 // Public API exports (for programmatic use)
-// Version will be added in next task
+export { version, getVersionString, type VersionContext } from './version.js';
+
+// Utilities (for programmatic use)
+export { createLogger, type Logger, type LoggerOptions } from './utils/logger.js';
+export { findProjectRoot } from './utils/project-root.js';
+export { writeYamlOutput, flushStdout, writeTestFormatError } from './utils/output.js';
