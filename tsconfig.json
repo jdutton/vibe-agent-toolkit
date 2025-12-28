@@ -5,6 +5,7 @@
     { "path": "./packages/dev-tools" },
     { "path": "./packages/utils" },
     { "path": "./packages/resources" },
+    { "path": "./packages/agent-schema" },
     { "path": "./packages/cli" },
     { "path": "./packages/vibe-agent-toolkit" }
   ]

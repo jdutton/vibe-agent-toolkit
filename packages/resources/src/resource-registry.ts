@@ -386,28 +386,33 @@ export class ResourceRegistry {
    * ```
    */
   getResourcesByPattern(pattern: string): ResourceMetadata[] {
+    // Create matchers:
+    // 1. matchBase: true for simple filename patterns (e.g., '*.md', '**/file.md')
+    const matcherWithBase = picomatch(pattern, { matchBase: true });
+    // 2. matchBase: false for testing against path segments
+    const matcher = picomatch(pattern);
+
     return [...this.resourcesByPath.values()].filter((resource) => {
       const unixPath = toUnixPath(resource.filePath);
 
-      // For patterns starting with **, try matching from every position in the path
-      if (pattern.startsWith('**/')) {
-        const patternWithoutLeading = pattern.slice(3);
-        const matcher = picomatch(patternWithoutLeading);
-
-        // Split path into segments and try matching from each position
-        const segments = unixPath.split('/');
-        for (let i = 0; i < segments.length; i++) {
-          const pathFromSegment = segments.slice(i).join('/');
-          if (matcher(pathFromSegment)) {
-            return true;
-          }
-        }
-        return false;
+      // Strategy 1: Try with matchBase for simple filename matching
+      if (matcherWithBase(unixPath)) {
+        return true;
       }
 
-      // For other patterns, match normally
-      const matcher = picomatch(pattern);
-      return matcher(unixPath);
+      // Strategy 2: For directory patterns like '**/subdir/**', try matching
+      // against progressively longer path segments from the end
+      const segments = unixPath.split('/');
+      // Try matching the last 10, 9, 8, ... segments
+      // This allows patterns like '**/subdir/**' to match paths ending in '.../subdir/file.md'
+      for (let i = Math.min(10, segments.length); i > 0; i--) {
+        const partialPath = segments.slice(-i).join('/');
+        if (matcher(partialPath)) {
+          return true;
+        }
+      }
+
+      return false;
     });
   }
 
