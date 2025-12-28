@@ -14,10 +14,10 @@ const program = new Command();
 
 // Context detection from environment
 const context: VersionContext | null = process.env['VAT_CONTEXT']
-  ? {
+  ? ({
       type: process.env['VAT_CONTEXT'] as 'dev' | 'local' | 'global',
-      ...(process.env['VAT_CONTEXT_PATH'] ? { path: process.env['VAT_CONTEXT_PATH'] } : {}),
-    }
+      path: process.env['VAT_CONTEXT_PATH'],
+    } as VersionContext)
   : null;
 
 program

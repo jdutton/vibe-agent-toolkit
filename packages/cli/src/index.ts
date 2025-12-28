@@ -12,3 +12,6 @@ export { version, getVersionString, type VersionContext } from './version.js';
 export { createLogger, type Logger, type LoggerOptions } from './utils/logger.js';
 export { findProjectRoot } from './utils/project-root.js';
 export { writeYamlOutput, flushStdout, writeTestFormatError } from './utils/output.js';
+export { loadConfig } from './utils/config-loader.js';
+export { ProjectConfigSchema, ResourceConfigSchema, DEFAULT_CONFIG } from './schemas/config.js';
+export type { ProjectConfig, ResourceConfig } from './schemas/config.js';
