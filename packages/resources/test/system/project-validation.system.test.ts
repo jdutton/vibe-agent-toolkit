@@ -29,6 +29,7 @@ describe('System Test: Project Link Validation (Dogfooding)', () => {
         '**/dist/**',
         '**/coverage/**',
         '**/test-fixtures/**', // Exclude test fixtures with intentionally broken links
+        '**/docs/plans/**', // Exclude implementation plans (reference code that doesn't exist yet)
       ],
     });
 

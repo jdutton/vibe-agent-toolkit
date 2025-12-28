@@ -1,0 +1,56 @@
+{
+  "name": "@vibe-agent-toolkit/cli",
+  "version": "0.1.0",
+  "description": "Command-line interface for vibe-agent-toolkit",
+  "type": "module",
+  "bin": {
+    "vat": "./dist/bin/vat"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config ../../vitest.integration.config.ts",
+    "test:system": "vitest run --config ../../vitest.system.config.ts",
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist *.tsbuildinfo"
+  },
+  "keywords": [
+    "cli",
+    "command-line",
+    "agent-toolkit",
+    "markdown",
+    "validation"
+  ],
+  "author": "Jeff Dutton",
+  "license": "MIT",
+  "dependencies": {
+    "@vibe-agent-toolkit/resources": "workspace:*",
+    "@vibe-agent-toolkit/utils": "workspace:*",
+    "commander": "^12.1.0",
+    "js-yaml": "^4.1.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^22.10.5",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

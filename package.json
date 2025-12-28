@@ -27,8 +27,10 @@
   "scripts": {
     "build": "bun run build:packages",
     "build:packages": "tsx packages/dev-tools/src/run-in-packages.ts build",
+    "build:cli": "bun --filter @vibe-agent-toolkit/cli run build",
     "build:clean": "bun run clean && bun run build",
     "test": "vibe-validate run \"vitest run\"",
+    "test:cli": "bun --filter @vibe-agent-toolkit/cli run test",
     "test:watch": "vitest",
     "test:coverage": "vibe-validate run \"vitest run --coverage\"",
     "test:integration": "vibe-validate run \"vitest run --config vitest.integration.config.ts\"",
