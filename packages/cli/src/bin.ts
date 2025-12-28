@@ -7,6 +7,7 @@
 
 import { Command } from 'commander';
 
+import { createResourcesCommand } from './commands/resources/index.js';
 import { createLogger } from './utils/logger.js';
 import { version, getVersionString, type VersionContext } from './version.js';
 
@@ -40,8 +41,8 @@ program.on('option:verbose', () => {
   }
 });
 
-// Placeholder for commands (will be added in next tasks)
-// program.command('resources')...
+// Add command groups
+program.addCommand(createResourcesCommand());
 
 // Handle unknown commands
 program.on('command:*', (operands) => {
