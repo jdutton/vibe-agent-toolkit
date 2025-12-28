@@ -193,12 +193,10 @@ function formatSkipReason(reason: string, version?: string): string {
 }
 
 // Type-only aliases for callback signatures
-/* eslint-disable no-unused-vars -- Type signatures only, not implementations */
 type ProcessorFn<T> = (pkgPath: string, pkgName: string) => T;
 type SuccessHandler<T> = (result: T) => void;
 type SkipHandler<T> = (result: T) => void;
 type ErrorHandler = (pkgName: string, error: Error) => void;
-/* eslint-enable no-unused-vars */
 
 /**
  * Process all workspace packages with a custom processor function

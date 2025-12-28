@@ -280,7 +280,7 @@ bun --version
 ## Next Steps
 
 - Read [CLAUDE.md](../CLAUDE.md) for detailed development guidelines
-- Review the [example package](../packages/example-utils/) for patterns
+- Review the [utils package](../packages/utils/) for reference patterns
 - Check out [vibe-validate documentation](https://github.com/jdutton/vibe-validate)
 - Set up your CI/CD pipeline on GitHub
 - Enable Codecov for your repository (see README.md for setup instructions)

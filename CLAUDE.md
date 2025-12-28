@@ -163,8 +163,30 @@ vibe-agent-toolkit/
 ### Code Quality Thresholds
 
 - **Test Coverage**: 80% minimum (statements, branches, functions, lines)
-- **Code Duplication**: Baseline approach - no NEW duplication allowed
+- **Code Duplication**: **ZERO TOLERANCE** - See Critical Duplication Policy below
 - **SonarQube**: Configured for free tier (sonarway) - ESLint catches issues first
+
+### **CRITICAL: Code Duplication Policy**
+
+**Goal: ZERO duplicates. The baseline must remain at 0.**
+
+**For Claude Code and AI assistants:**
+- ❌ **NEVER** run `bun run duplication-update-baseline` without explicit user permission
+- ❌ **NEVER** update `.github/.jscpd-baseline.json` without explicit user permission
+- ❌ **NEVER** accept or ignore duplication failures
+- ✅ **ALWAYS** fix duplication by refactoring when `duplication-check` fails
+- ✅ **ALWAYS** extract duplicated code to shared utilities
+- ✅ **ALWAYS** ask the user for permission if you believe updating the baseline is necessary
+
+**If duplication check fails:**
+1. Analyze the duplicated code
+2. Refactor to eliminate duplication (extract to utils, create shared functions, etc.)
+3. Re-run `duplication-check` to verify it passes
+4. If you cannot fix it, explain why and ask the user for guidance
+
+**The baseline is for tracking progress towards zero duplication, not for accepting new duplication.**
+
+Only the project owner can approve baseline updates. This is non-negotiable.
 
 ## Testing Conventions
 
@@ -216,6 +238,40 @@ packages/my-package/
 - One assertion per test when practical
 - Prefer `toThrow()` over try-catch blocks for error testing
 
+### Preventing Test Duplication
+
+**Test code is the most common source of duplication.** Follow these patterns to avoid it:
+
+**1. Extract Test Helpers Early (not after duplication accumulates)**
+- Create `test/test-helpers.ts` when starting a new package
+- Extract patterns after writing 2-3 similar tests (not 10+)
+
+**2. Common Test Helper Patterns**
+```typescript
+// Factory functions for test data
+export function createTestEntity(overrides?: Partial<Entity>): Entity { ... }
+
+// Assertion helpers for common validation patterns
+export async function assertValidation(options: {...}, expectFn: ...) { ... }
+
+// Workflow helpers (setup → action → assert)
+export async function setupAndExecute(options: {...}) { ... }
+```
+
+**3. When Writing Tests, Ask:**
+- "Have I written similar setup code before?" → Extract factory function
+- "Am I repeating the same assertions?" → Extract assertion helper
+- "Is this a common workflow?" → Extract workflow helper
+
+**4. Review Tests After Writing**
+- After completing a test file, scan for repeated patterns
+- Run `bun run duplication-check` before committing
+- Extract helpers immediately when duplication is detected
+
+**Example from resources package:**
+- ❌ **Before**: 9 duplicates from repeated validation + assertion patterns
+- ✅ **After**: 0 duplicates using `createLink()`, `assertValidation()`, `writeAndParse()` helpers
+
 ### Running Tests
 
 ```bash
@@ -243,10 +299,12 @@ Before committing, ensure:
 1. `bun run lint` passes with zero warnings
 2. `bun run typecheck` passes
 3. `bun run test` passes
-4. `bun run duplication-check` passes (or baseline updated)
+4. `bun run duplication-check` passes (**MUST pass - see Critical Duplication Policy above**)
 5. All files formatted correctly (enforced by .editorconfig)
 
 Pre-commit hooks via Husky will enforce these automatically.
+
+**IMPORTANT**: If `duplication-check` fails, refactor to eliminate duplication. Never update the baseline without explicit permission.
 
 ### Adding New Packages
 
@@ -392,10 +450,16 @@ Use these approaches:
 
 ### Technical Debt Management
 
-**Duplication Baseline Approach** (already configured):
-- Baseline existing duplication
-- Prevent NEW duplication (zero tolerance)
-- Gradually reduce baseline through refactoring
+**Duplication Management - ZERO TOLERANCE**:
+- **Goal**: Maintain 0 duplicates in `.github/.jscpd-baseline.json`
+- **Policy**: See "CRITICAL: Code Duplication Policy" section above
+- **For AI assistants**: NEVER update baseline without explicit user permission
+- **Workflow**: When duplication is detected → refactor to eliminate → re-run check
+- **Rationale**: Baseline exists to track progress towards zero, not to accept new duplication
+
+Tools available:
+- `bun run duplication-check` - Verify no new duplication (run this)
+- `bun run duplication-update-baseline` - Update baseline (REQUIRES USER PERMISSION)
 
 **TODO Format**:
 ```typescript

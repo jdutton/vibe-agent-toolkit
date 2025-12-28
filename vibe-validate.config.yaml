@@ -18,6 +18,9 @@ validation:
     - name: 'Fast Checks & Build'
       parallel: false
       steps:
+        - name: 'Build packages'
+          command: 'bun run build'
+
         - name: 'TypeScript type checking'
           command: 'bun run typecheck'
 
@@ -27,9 +30,6 @@ validation:
         - name: 'Code duplication check'
           command: 'bun run duplication-check'
 
-        - name: 'Build packages'
-          command: 'bun run build'
-
         - name: 'Unit tests with coverage'
           command: 'bun run test:coverage'
 
@@ -38,3 +38,10 @@ validation:
       steps:
         - name: 'Integration tests'
           command: 'bun run test:integration'
+
+    - name: 'System Tests'
+      parallel: false
+      steps:
+        - name: 'Link validation (dogfooding)'
+          command: 'bun run test:system'
+          description: 'Validates all markdown links in the project using our own ResourceRegistry'
