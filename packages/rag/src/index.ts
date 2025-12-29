@@ -35,3 +35,6 @@ export {
   IndexResultJsonSchema,
   jsonSchemas,
 } from './schemas/json-schema.js';
+
+// Token Counters
+export { ApproximateTokenCounter, FastTokenCounter } from './token-counters/index.js';

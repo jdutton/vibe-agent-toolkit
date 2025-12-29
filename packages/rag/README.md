@@ -9,12 +9,12 @@ This package provides the core interfaces and schemas for RAG functionality in V
 **What's included:**
 - **Interfaces**: `RAGQueryProvider`, `RAGAdminProvider`, `EmbeddingProvider`, `TokenCounter`
 - **Schemas**: Zod schemas with TypeScript types and JSON Schema exports
-- **Shared implementations**: Token counters, embedding providers, chunking utilities (coming in Phase 2-4)
+- **Token counters**: `FastTokenCounter` (bytes/4 heuristic), `ApproximateTokenCounter` (gpt-tokenizer)
+- **Shared implementations**: Embedding providers, chunking utilities (coming in Phase 3-4)
 
 **What's NOT included:**
 - Vector database implementations (see `@vibe-agent-toolkit/rag-lancedb`)
 - Concrete embedding providers (coming in Phase 3)
-- Token counter implementations (coming in Phase 2)
 
 ## Installation
 
@@ -83,6 +83,70 @@ const schema = jsonSchemas.RAGChunk;
 // Use for documentation, validation, code generation, etc.
 console.log(JSON.stringify(schema, null, 2));
 ```
+
+## Token Counters
+
+Token counters are used for accurate chunking and embedding token limit management.
+
+### Available Implementations
+
+#### FastTokenCounter
+
+Fast but inaccurate token estimation using bytes/4 heuristic.
+
+```typescript
+import { FastTokenCounter } from '@vibe-agent-toolkit/rag';
+
+const counter = new FastTokenCounter();
+const tokens = counter.count('Hello world'); // ~3 tokens (bytes/4)
+```
+
+**Characteristics:**
+- **Speed**: Very fast (< 1ms for long text)
+- **Accuracy**: ~75% accurate for English text
+- **Recommended padding factor**: 0.8 (80% of target)
+- **Use case**: Quick validation, ResourceRegistry estimation
+
+#### ApproximateTokenCounter
+
+Accurate token counting using gpt-tokenizer library.
+
+```typescript
+import { ApproximateTokenCounter } from '@vibe-agent-toolkit/rag';
+
+const counter = new ApproximateTokenCounter();
+const tokens = counter.count('Hello world'); // 2 tokens (accurate)
+```
+
+**Characteristics:**
+- **Speed**: Fast (< 10ms for long text)
+- **Accuracy**: ~95% accurate (GPT-3.5/GPT-4 tokenization)
+- **Recommended padding factor**: 0.9 (90% of target)
+- **Use case**: RAG chunking, embedding preparation
+
+### Choosing a Token Counter
+
+| Counter | Speed | Accuracy | Padding Factor | Use Case |
+|---------|-------|----------|----------------|----------|
+| FastTokenCounter | Very Fast | ~75% | 0.8 | Quick estimation |
+| ApproximateTokenCounter | Fast | ~95% | 0.9 | RAG chunking |
+
+### Padding Factor
+
+The padding factor provides a safety margin to avoid exceeding embedding model token limits:
+
+```typescript
+const targetChunkSize = 512; // tokens
+const paddingFactor = 0.9; // 90%
+const effectiveTarget = targetChunkSize * paddingFactor; // 460 tokens
+
+// Chunk to effective target to avoid splits from estimation error
+```
+
+**Why padding matters:**
+- Token estimation may be imperfect
+- Targeting exact limit might exceed it, forcing inefficient splits
+- Lower accuracy = lower padding factor (more safety margin)
 
 ## API Reference
 

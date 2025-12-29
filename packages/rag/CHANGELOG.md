@@ -1,5 +1,16 @@
 # @vibe-agent-toolkit/rag Changelog
 
+## [0.2.0] - 2025-12-29
+
+### Added
+
+- Token counter implementations:
+  - `FastTokenCounter` - Fast bytes/4 heuristic (recommended padding: 0.8)
+  - `ApproximateTokenCounter` - Accurate gpt-tokenizer (recommended padding: 0.9)
+- Comparison tests demonstrating accuracy vs speed tradeoffs
+- Comprehensive documentation for choosing token counters
+- Padding factor recommendations for chunking strategies
+
 ## [0.1.0] - 2025-12-29
 
 ### Added
