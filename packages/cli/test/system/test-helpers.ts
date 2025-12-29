@@ -214,3 +214,31 @@ export function testConfigError(
     cwd: projectDir,
   });
 }
+
+/**
+ * Setup RAG test project with markdown files
+ * Creates project with docs directory and sample markdown files
+ */
+export function setupRagTestProject(
+  baseTempDir: string,
+  projectName: string
+): string {
+  const projectDir = setupTestProject(baseTempDir, {
+    name: projectName,
+    withDocs: true,
+  });
+
+  // Create test markdown files
+  const docsDir = join(projectDir, 'docs');
+  fs.writeFileSync(
+    join(docsDir, 'README.md'),
+    '# Documentation\n\n## Getting Started\n\nWelcome to the documentation.\n\n## API Reference\n\nAPI docs here.'
+  );
+
+  fs.writeFileSync(
+    join(docsDir, 'guide.md'),
+    '# User Guide\n\n## Installation\n\nInstall the package.\n\n## Usage\n\nUse it like this.'
+  );
+
+  return projectDir;
+}

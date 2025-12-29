@@ -5,6 +5,7 @@
 import { Command } from 'commander';
 
 import { indexCommand } from './index-command.js';
+import { queryCommand } from './query-command.js';
 
 export function createRagCommand(): Command {
   const rag = new Command('rag');
@@ -46,6 +47,33 @@ Exit Codes:
 Example:
   $ vat rag index docs/                # Index docs directory
   $ vat rag index --db custom.db       # Custom database path
+`
+    );
+
+  rag
+    .command('query <text>')
+    .description('Search RAG database with semantic query')
+    .option('--db <path>', 'Database path (default: .rag-db in project root)')
+    .option('--limit <n>', 'Maximum results to return (default: 10)', parseInt)
+    .option('--debug', 'Enable debug logging')
+    .action(queryCommand)
+    .addHelpText(
+      'after',
+      `
+Description:
+  Searches vector database using semantic similarity. Returns ranked
+  results with truncated content (200 chars max per result).
+
+Output Fields:
+  status, query, totalMatches, searchDurationMs, embeddingModel, results, duration
+  Each result: rank, score, resourceId, filePath, content, headingPath, title
+
+Exit Codes:
+  0 - Success  |  2 - System error (no database)
+
+Example:
+  $ vat rag query "RAG architecture"   # Search for RAG architecture
+  $ vat rag query "API" --limit 5      # Limit to 5 results
 `
     );
 

@@ -13,7 +13,7 @@ import {
   getBinPath,
   join,
 } from './test-common.js';
-import { setupTestProject } from './test-helpers.js';
+import { setupRagTestProject, setupTestProject } from './test-helpers.js';
 
 const binPath = getBinPath(import.meta.url);
 
@@ -23,24 +23,7 @@ describe('RAG index command (system test)', () => {
 
   beforeAll(() => {
     tempDir = createTestTempDir('vat-rag-index-test-');
-
-    // Setup project with markdown files
-    projectDir = setupTestProject(tempDir, {
-      name: 'test-project',
-      withDocs: true,
-    });
-
-    // Create test markdown files
-    const docsDir = join(projectDir, 'docs');
-    fs.writeFileSync(
-      join(docsDir, 'README.md'),
-      '# Documentation\n\n## Getting Started\n\nWelcome to the documentation.\n\n## API Reference\n\nAPI docs here.'
-    );
-
-    fs.writeFileSync(
-      join(docsDir, 'guide.md'),
-      '# User Guide\n\n## Installation\n\nInstall the package.\n\n## Usage\n\nUse it like this.'
-    );
+    projectDir = setupRagTestProject(tempDir, 'test-project');
   });
 
   afterAll(() => {
