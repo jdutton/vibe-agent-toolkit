@@ -66,17 +66,7 @@ export async function validateCommand(
     );
     const hasErrors = actualErrors.length > 0;
 
-    if (!hasErrors) {
-      // Success output
-      writeYamlOutput({
-        status: 'success',
-        filesScanned: stats.totalResources,
-        linksChecked: stats.totalLinks,
-        duration: `${duration}ms`,
-      });
-
-      process.exit(0);
-    } else {
+    if (hasErrors) {
       // Failure - write YAML first, then test-format errors
       const errors = actualErrors.map(issue => ({
         file: issue.resourcePath,
@@ -104,6 +94,16 @@ export async function validateCommand(
       }
 
       process.exit(1);
+    } else {
+      // Success output
+      writeYamlOutput({
+        status: 'success',
+        filesScanned: stats.totalResources,
+        linksChecked: stats.totalLinks,
+        duration: `${duration}ms`,
+      });
+
+      process.exit(0);
     }
   } catch (error) {
     handleCommandError(error, logger, startTime, 'Validation');

@@ -3,37 +3,28 @@
  * Extracts common setup to reduce duplication across test files
  */
 
-import { spawnSync } from 'node:child_process';
-import * as fs from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
-
-import { describe, expect } from 'vitest';
+import { dirname as pathDirname, resolve as pathResolve } from 'node:path';
+import { fileURLToPath as urlFileURLToPath } from 'node:url';
 
 // Re-export commonly used functions
-export {
-  spawnSync,
-  fs,
-  join,
-  resolve,
-  dirname,
-  fileURLToPath,
-  describe,
-  expect,
-};
+export { spawnSync } from 'node:child_process';
+export * as fs from 'node:fs';
+export { join, resolve, dirname } from 'node:path';
+export { fileURLToPath } from 'node:url';
+export { describe, expect } from 'vitest';
 
 /**
  * Get bin path from current test file location
  */
 export function getBinPath(testFileUrl: string): string {
-  const testDir = dirname(fileURLToPath(testFileUrl));
-  return resolve(testDir, '../../dist/bin.js');
+  const testDir = pathDirname(urlFileURLToPath(testFileUrl));
+  return pathResolve(testDir, '../../dist/bin.js');
 }
 
 /**
  * Get wrapper path from current test file location
  */
 export function getWrapperPath(testFileUrl: string): string {
-  const testDir = dirname(fileURLToPath(testFileUrl));
-  return resolve(testDir, '../../dist/bin/vat.js');
+  const testDir = pathDirname(urlFileURLToPath(testFileUrl));
+  return pathResolve(testDir, '../../dist/bin/vat.js');
 }

@@ -4,7 +4,6 @@
 
 import { Command } from 'commander';
 
-import { showResourcesVerboseHelp } from './help.js';
 import { scanCommand } from './scan.js';
 import { validateCommand } from './validate.js';
 
@@ -72,4 +71,4 @@ Example:
   return resources;
 }
 
-export { showResourcesVerboseHelp };
+export { showResourcesVerboseHelp } from './help.js';
