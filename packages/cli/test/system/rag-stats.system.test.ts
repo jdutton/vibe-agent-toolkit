@@ -52,15 +52,16 @@ describe('RAG stats command (system test)', () => {
     expect(parsed.duration).toBeDefined();
   });
 
-  it('should error when database does not exist', () => {
+  it('should return empty stats when database has no data', () => {
     const { result, parsed } = executeRagCommandInEmptyProject(
       tempDir,
       binPath,
       ['rag', 'stats']
     );
 
-    expect(result.status).toBe(2); // System error
-    expect(parsed.status).toBe('error');
-    expect(result.stderr).toContain('not found in readonly mode');
+    expect(result.status).toBe(0); // Success (empty is valid)
+    expect(parsed.status).toBe('success');
+    expect(parsed.totalChunks).toBe(0);
+    expect(parsed.totalResources).toBe(0);
   });
 });

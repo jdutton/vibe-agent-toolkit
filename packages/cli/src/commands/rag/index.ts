@@ -4,6 +4,7 @@
 
 import { Command } from 'commander';
 
+import { clearCommand } from './clear-command.js';
 import { indexCommand } from './index-command.js';
 import { queryCommand } from './query-command.js';
 import { statsCommand } from './stats-command.js';
@@ -103,6 +104,34 @@ Exit Codes:
 
 Example:
   $ vat rag stats                      # Show database statistics
+`
+    );
+
+  rag
+    .command('clear')
+    .description('Clear all data from RAG database')
+    .option(DB_PATH_OPTION, DB_PATH_DESC)
+    .option('--debug', DEBUG_OPTION_DESC)
+    .action(clearCommand)
+    .addHelpText(
+      'after',
+      `
+Description:
+  Removes all indexed data from database. Database structure is preserved.
+  Use this when changing embedding models or starting fresh.
+
+Warning:
+  This operation cannot be undone. Re-run 'vat rag index' to rebuild.
+
+Output Fields:
+  status, message, duration
+
+Exit Codes:
+  0 - Success  |  2 - System error
+
+Example:
+  $ vat rag clear                      # Clear default database
+  $ vat rag clear --db custom.db       # Clear specific database
 `
     );
 

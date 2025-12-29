@@ -91,12 +91,11 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
     const tableNames = await this.connection.tableNames();
     if (tableNames.includes(TABLE_NAME)) {
       this.table = await this.connection.openTable(TABLE_NAME);
-    } else if (!this.config.readonly) {
-      // Create table if in admin mode
-      // Table will be created on first insert
-      this.table = null;
     } else {
-      throw new Error(`Table "${TABLE_NAME}" not found in readonly mode`);
+      // Table doesn't exist
+      // In admin mode: will be created on first insert
+      // In readonly mode: operations that require table will fail gracefully
+      this.table = null;
     }
   }
 
@@ -373,7 +372,11 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
     }
 
     if (this.connection) {
-      await this.connection.dropTable(TABLE_NAME);
+      const tableNames = await this.connection.tableNames();
+      if (tableNames.includes(TABLE_NAME)) {
+        // Drop table (it will be recreated on next insert)
+        await this.connection.dropTable(TABLE_NAME);
+      }
       this.table = null;
     }
   }

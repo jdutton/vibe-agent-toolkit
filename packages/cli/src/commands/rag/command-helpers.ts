@@ -2,7 +2,7 @@
  * Shared helper functions for RAG commands
  */
 
-import type { RAGQueryProvider } from '@vibe-agent-toolkit/rag';
+import type { RAGAdminProvider, RAGQueryProvider } from '@vibe-agent-toolkit/rag';
 import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
 
 import { createLogger, type Logger } from '../../utils/logger.js';
@@ -35,14 +35,14 @@ export function resolveDbPath(
 
 /**
  * Execute a RAG operation with standard setup/teardown pattern
- * @param options - Command options (db path, debug flag)
+ * @param options - Command options (db path, debug flag, readonly mode)
  * @param operation - The operation to execute with the RAG provider
  * @param commandName - Name of the command (for error reporting)
  * @returns Result of the operation
  */
 export async function executeRagOperation<T>(
-  options: { db?: string; debug?: boolean },
-  operation: (provider: RAGQueryProvider, logger: Logger) => Promise<T>,
+  options: { db?: string; debug?: boolean; readonly?: boolean },
+  operation: (provider: RAGQueryProvider | RAGAdminProvider, logger: Logger) => Promise<T>,
   commandName: string
 ): Promise<T> {
   const logger = createLogger({ debug: options.debug ?? false });
@@ -54,10 +54,10 @@ export async function executeRagOperation<T>(
     const dbPath = resolveDbPath(options.db, projectRoot ?? undefined);
     logger.debug(`Database path: ${dbPath}`);
 
-    // Create RAG provider in readonly mode
+    // Create RAG provider (readonly mode by default, can be overridden)
     const ragProvider = await LanceDBRAGProvider.create({
       dbPath,
-      readonly: true,
+      readonly: options.readonly ?? true,
     });
 
     // Execute operation

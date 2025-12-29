@@ -75,7 +75,7 @@ describe('RAG query command (system test)', () => {
     expect((parsed.results as unknown[]).length).toBeLessThanOrEqual(2);
   });
 
-  it('should error when database does not exist', () => {
+  it('should error when database has no data', () => {
     const { result, parsed } = executeRagCommandInEmptyProject(
       tempDir,
       binPath,
@@ -84,6 +84,6 @@ describe('RAG query command (system test)', () => {
 
     expect(result.status).toBe(2); // System error
     expect(parsed.status).toBe('error');
-    expect(result.stderr).toContain('not found in readonly mode');
+    expect(result.stderr).toContain('No data indexed yet');
   });
 });
