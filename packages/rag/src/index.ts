@@ -16,3 +16,22 @@ export type {
   EmbeddingProvider,
   TokenCounter,
 } from './interfaces/index.js';
+
+// Schemas (Zod)
+export {
+  RAGChunkSchema,
+  RAGQuerySchema,
+  RAGResultSchema,
+  RAGStatsSchema,
+  IndexResultSchema,
+} from './schemas/index.js';
+
+// JSON Schemas
+export {
+  RAGChunkJsonSchema,
+  RAGQueryJsonSchema,
+  RAGResultJsonSchema,
+  RAGStatsJsonSchema,
+  IndexResultJsonSchema,
+  jsonSchemas,
+} from './schemas/json-schema.js';
