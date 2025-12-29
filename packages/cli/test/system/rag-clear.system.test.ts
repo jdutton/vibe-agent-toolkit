@@ -5,10 +5,9 @@
  * the vector database while preserving database structure.
  */
 
-import { afterAll, beforeAll, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { executeCliAndParseYaml, getBinPath, setupIndexedRagTest } from './rag-test-setup.js';
-import { describe, expect, fs } from './test-common.js';
+import { executeCliAndParseYaml, fs, getBinPath, setupIndexedRagTest } from './rag-test-setup.js';
 
 const binPath = getBinPath(import.meta.url);
 
