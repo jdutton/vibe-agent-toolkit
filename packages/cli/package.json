@@ -1,51 +1,53 @@
 {
-  "name": "@vibe-agent-toolkit/resources",
+  "name": "@vibe-agent-toolkit/cli",
   "version": "0.1.0",
-  "description": "Markdown resource parsing, validation, and link integrity checking",
+  "description": "Command-line interface for vibe-agent-toolkit",
   "type": "module",
+  "bin": {
+    "vat": "./dist/bin/vat"
+  },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    }
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
-    "src",
+    "docs",
     "README.md"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && tsx ../dev-tools/src/prepare-bin.ts",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:integration": "vitest run --config ../../vitest.integration.config.ts",
+    "test:system": "vitest run --config ../../vitest.system.config.ts",
     "typecheck": "tsc --noEmit",
     "clean": "rimraf dist *.tsbuildinfo"
   },
   "keywords": [
+    "cli",
+    "command-line",
+    "agent-toolkit",
     "markdown",
-    "validation",
-    "links",
-    "resources",
-    "agent-toolkit"
+    "validation"
   ],
   "author": "Jeff Dutton",
   "license": "MIT",
   "dependencies": {
+    "@vibe-agent-toolkit/resources": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
-    "picomatch": "^4.0.3",
-    "remark-frontmatter": "^5.0.0",
-    "remark-gfm": "^4.0.0",
-    "remark-parse": "^11.0.0",
-    "unified": "^11.0.5",
-    "unist-util-visit": "^5.0.0",
+    "commander": "^12.1.0",
+    "js-yaml": "^4.1.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@types/mdast": "^4.0.4",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.10.5",
-    "@types/picomatch": "^4.0.2",
     "rimraf": "^6.0.1",
     "typescript": "^5.7.3",
     "vitest": "^2.1.8"

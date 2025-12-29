@@ -1,0 +1,33 @@
+{
+  "name": "vibe-agent-toolkit",
+  "version": "0.1.0",
+  "description": "Modular toolkit for building, testing, and deploying portable AI agents",
+  "bin": {
+    "vat": "./bin/vat"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "cli",
+    "toolkit",
+    "markdown",
+    "validation",
+    "llm"
+  ],
+  "author": "Jeff Dutton",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jdutton/vibe-agent-toolkit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/jdutton/vibe-agent-toolkit/issues"
+  },
+  "homepage": "https://github.com/jdutton/vibe-agent-toolkit#readme",
+  "dependencies": {
+    "@vibe-agent-toolkit/cli": "workspace:*"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

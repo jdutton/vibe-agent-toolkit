@@ -27,8 +27,10 @@
   "scripts": {
     "build": "bun run build:packages",
     "build:packages": "tsx packages/dev-tools/src/run-in-packages.ts build",
+    "build:cli": "bun --filter @vibe-agent-toolkit/cli run build",
     "build:clean": "bun run clean && bun run build",
     "test": "vibe-validate run \"vitest run\"",
+    "test:cli": "bun --filter @vibe-agent-toolkit/cli run test",
     "test:watch": "vitest",
     "test:coverage": "vibe-validate run \"vitest run --coverage\"",
     "test:integration": "vibe-validate run \"vitest run --config vitest.integration.config.ts\"",
@@ -45,7 +47,9 @@
     "prepare": "husky",
     "bump-version": "tsx packages/dev-tools/src/bump-version.ts",
     "pre-publish": "tsx packages/dev-tools/src/pre-publish-check.ts",
-    "determine-publish-tags": "tsx packages/dev-tools/src/determine-publish-tags.ts"
+    "determine-publish-tags": "tsx packages/dev-tools/src/determine-publish-tags.ts",
+    "prepare-cli-bin": "cd packages/cli && tsx ../dev-tools/src/prepare-bin.ts",
+    "vat": "node packages/cli/dist/bin/vat.js"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",

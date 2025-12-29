@@ -284,23 +284,25 @@ const verboseHelpRegistry: Record<string, VerboseHelpLoader> = {
 
 Each command group exports its verbose help function.
 
-### Auto-Generated Documentation
+### Markdown-Based Documentation
 
-**Tool:** `packages/dev-tools/src/generate-cli-docs.ts`
+**Location:** `packages/cli/docs/*.md`
 
-**Process:**
-1. Ensure CLI is built
-2. Execute: `node packages/cli/dist/bin.js --help --verbose`
-3. Capture markdown output
-4. Write to: `docs/cli-reference.md`
-5. Skip write if unchanged
+**Architecture:**
+- Markdown files are the single source of truth for verbose help
+- Loaded at runtime by `help-loader.ts` utility
+- Included in published npm package via `files` array
+- No code generation or duplication needed
 
-**Usage:**
-```bash
-bun run generate-cli-docs
-```
+**Files:**
+- `packages/cli/docs/index.md` - Root verbose help (`vat --help --verbose`)
+- `packages/cli/docs/resources.md` - Resources verbose help (`vat resources --help --verbose`)
 
-Guarantees documentation stays synchronized with actual CLI behavior.
+**Benefits:**
+- Documentation never drifts from CLI behavior (single source)
+- Easy to edit without rebuilding
+- Browsable on GitHub and npm
+- No build-time documentation generation needed
 
 ## Resources Commands
 
@@ -397,9 +399,10 @@ errors:
 - Makes CLI binaries executable
 - Cross-platform (fs.copyFileSync, fs.chmodSync)
 
-**`packages/dev-tools/src/generate-cli-docs.ts`**
-- Syncs `--help --verbose` → `docs/cli-reference.md`
-- Run manually after CLI changes
+**`packages/cli/src/utils/help-loader.ts`**
+- Loads markdown documentation from `packages/cli/docs/` at runtime
+- Single source of truth for CLI help
+- No build-time generation needed
 
 ## Design Patterns from vibe-validate
 
@@ -412,8 +415,7 @@ errors:
 ✅ Logs/errors on stderr
 ✅ Explicit stdout flushing before stderr
 ✅ `--help --verbose` → markdown documentation
-✅ Dynamic help registry (async loaders)
-✅ Auto-generated cli-reference.md
+✅ Runtime markdown loading (no build-time generation)
 ✅ Cross-platform build tools (Node.js APIs)
 ✅ Test-format error output (file:line:column: message)
 

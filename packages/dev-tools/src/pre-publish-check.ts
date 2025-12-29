@@ -33,6 +33,37 @@ function isCI(): boolean {
   return !!(process.env['CI'] || process.env['GITHUB_ACTIONS'] || process.env['GITLAB_CI'] || process.env['CIRCLECI'] || process.env['TRAVIS'] || process.env['JENKINS_URL']);
 }
 
+/**
+ * Get all publishable packages (non-private packages in packages/)
+ */
+function getPublishablePackages(packagesDir: string): Array<{ name: string; pkgJson: Record<string, unknown> }> {
+  const result: Array<{ name: string; pkgJson: Record<string, unknown> }> = [];
+
+  if (!existsSync(packagesDir)) {
+    return result;
+  }
+
+  const packages = readdirSync(packagesDir, { withFileTypes: true })
+    .filter(dirent => dirent.isDirectory())
+    .map(dirent => dirent.name);
+
+  for (const pkg of packages) {
+    const pkgJsonPath = join(packagesDir, pkg, 'package.json');
+    if (existsSync(pkgJsonPath)) {
+      const pkgJson = JSON.parse(readFileSync(pkgJsonPath, 'utf8')) as Record<string, unknown>;
+
+      // Skip private packages
+      if (pkgJson['private']) {
+        continue;
+      }
+
+      result.push({ name: pkg, pkgJson });
+    }
+  }
+
+  return result;
+}
+
 const IS_CI = isCI();
 
 // Parse command-line arguments
@@ -52,12 +83,12 @@ while (i < args.length) {
 Pre-Publish Validation Check
 
 Usage:
-  tsx tools/pre-publish-check.ts [--allow-branch BRANCH]
-  bun run pre-publish [--allow-branch BRANCH]
+  tsx tools/pre-publish-check.ts [OPTIONS]
+  bun run pre-publish [OPTIONS]
 
 Options:
   --allow-branch BRANCH  Allow publishing from a specific branch (default: main)
-  --help, -h            Show this help message
+  --help, -h             Show this help message
 
 Exit codes:
   0 - Ready to publish
@@ -66,7 +97,7 @@ Exit codes:
     process.exit(0);
   } else {
     console.error(`Unknown option: ${args[i]}`);
-    console.error('Usage: tsx tools/pre-publish-check.ts [--allow-branch BRANCH]');
+    console.error('Usage: tsx tools/pre-publish-check.ts [OPTIONS]');
     process.exit(1);
   }
   i++;
@@ -226,27 +257,19 @@ const packagesDir = join(PROJECT_ROOT, 'packages');
 const missingBuilds: string[] = [];
 
 try {
-  if (existsSync(packagesDir)) {
-    const packages = readdirSync(packagesDir, { withFileTypes: true })
-      .filter(dirent => dirent.isDirectory())
-      .map(dirent => dirent.name);
+  const publishablePackages = getPublishablePackages(packagesDir);
 
-    for (const pkg of packages) {
-      // Check if package is private (skip build check for private packages)
-      const pkgJsonPath = join(packagesDir, pkg, 'package.json');
-      if (existsSync(pkgJsonPath)) {
-        const pkgJson = JSON.parse(readFileSync(pkgJsonPath, 'utf8'));
+  for (const { name: pkg, pkgJson } of publishablePackages) {
+    // Only check for dist/ if package has a build script
+    const scripts = pkgJson['scripts'] as Record<string, string> | undefined;
+    const hasBuildScript = scripts?.['build'];
+    if (!hasBuildScript) {
+      continue;
+    }
 
-        // Skip private packages
-        if (pkgJson.private) {
-          continue;
-        }
-      }
-
-      const distDir = join(packagesDir, pkg, 'dist');
-      if (!existsSync(distDir)) {
-        missingBuilds.push(join('packages', pkg, ''));
-      }
+    const distDir = join(packagesDir, pkg, 'dist');
+    if (!existsSync(distDir)) {
+      missingBuilds.push(join('packages', pkg, ''));
     }
   }
 } catch (error) {
@@ -265,6 +288,46 @@ if (missingBuilds.length > 0) {
   process.exit(1);
 }
 log('✓ All packages built', 'green');
+
+// Check 7: Workspace dependencies resolved
+console.log('');
+console.log('Checking workspace dependencies...');
+
+const unresolvedDeps: string[] = [];
+try {
+  const publishablePackages = getPublishablePackages(packagesDir);
+
+  for (const { name: pkg, pkgJson } of publishablePackages) {
+    // Check dependencies for workspace:* references
+    const allDeps = {
+      ...(pkgJson['dependencies'] as Record<string, string> | undefined),
+      ...(pkgJson['devDependencies'] as Record<string, string> | undefined),
+      ...(pkgJson['peerDependencies'] as Record<string, string> | undefined),
+    };
+
+    for (const [depName, depVersion] of Object.entries(allDeps)) {
+      if (typeof depVersion === 'string' && depVersion.startsWith('workspace:')) {
+        unresolvedDeps.push(`${pkg}: ${depName}@${depVersion}`);
+      }
+    }
+  }
+} catch (error) {
+  log('✗ Failed to check workspace dependencies', 'red');
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(message);
+  process.exit(1);
+}
+
+if (unresolvedDeps.length > 0) {
+  log('✗ Unresolved workspace dependencies', 'red');
+  for (const dep of unresolvedDeps) {
+    console.log(`  ${dep}`);
+  }
+  console.log('');
+  console.log('  Run version bump script to resolve workspace dependencies before publishing');
+  process.exit(1);
+}
+log('✓ No workspace dependencies', 'green');
 
 // Success!
 console.log('');

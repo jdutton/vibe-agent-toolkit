@@ -25,13 +25,31 @@ A toolkit for testing and packaging portable AI agents that work across various 
 
 ## Quick Start
 
-### Prerequisites
+### CLI Installation
 
+Install the CLI globally:
+
+```bash
+npm install -g vibe-agent-toolkit
+```
+
+Scan and validate markdown resources:
+
+```bash
+vat resources scan docs/
+vat resources validate docs/
+```
+
+See [CLI Reference](./packages/cli/docs/) for complete documentation (or run `vat --help --verbose`).
+
+### Development Setup
+
+**Prerequisites:**
 - [Bun](https://bun.sh/) (latest version)
 - Node.js 22 or 24
 - Git
 
-### Installation
+**Installation:**
 
 ```bash
 # Clone the repository

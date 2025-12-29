@@ -386,10 +386,29 @@ export class ResourceRegistry {
    * ```
    */
   getResourcesByPattern(pattern: string): ResourceMetadata[] {
-    const matcher = picomatch(pattern);
-    return [...this.resourcesByPath.values()].filter((resource) =>
-      matcher(toUnixPath(resource.filePath))
-    );
+    return [...this.resourcesByPath.values()].filter((resource) => {
+      const unixPath = toUnixPath(resource.filePath);
+
+      // For patterns starting with **, try matching from every position in the path
+      if (pattern.startsWith('**/')) {
+        const patternWithoutLeading = pattern.slice(3);
+        const matcher = picomatch(patternWithoutLeading);
+
+        // Split path into segments and try matching from each position
+        const segments = unixPath.split('/');
+        for (let i = 0; i < segments.length; i++) {
+          const pathFromSegment = segments.slice(i).join('/');
+          if (matcher(pathFromSegment)) {
+            return true;
+          }
+        }
+        return false;
+      }
+
+      // For other patterns, match normally
+      const matcher = picomatch(pattern);
+      return matcher(unixPath);
+    });
   }
 
   /**
