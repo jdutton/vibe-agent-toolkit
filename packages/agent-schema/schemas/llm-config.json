@@ -1,0 +1,71 @@
+{
+  "$ref": "#/definitions/llm-config",
+  "definitions": {
+    "llm-config": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": "string",
+          "description": "LLM provider (e.g., anthropic, openai, google)"
+        },
+        "model": {
+          "type": "string",
+          "description": "Model identifier (e.g., claude-sonnet-4.5, gpt-4o)"
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 2,
+          "description": "Sampling temperature (0-2, default varies by provider)"
+        },
+        "maxTokens": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Maximum tokens in response"
+        },
+        "topP": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Nucleus sampling parameter"
+        },
+        "alternatives": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "$ref": "#/definitions/llm-config/properties/provider"
+              },
+              "model": {
+                "$ref": "#/definitions/llm-config/properties/model"
+              },
+              "temperature": {
+                "$ref": "#/definitions/llm-config/properties/temperature"
+              },
+              "maxTokens": {
+                "$ref": "#/definitions/llm-config/properties/maxTokens"
+              },
+              "topP": {
+                "$ref": "#/definitions/llm-config/properties/topP"
+              }
+            },
+            "required": [
+              "provider",
+              "model"
+            ],
+            "additionalProperties": false
+          },
+          "description": "Alternative LLM configurations (not just fallbacks - choices)"
+        }
+      },
+      "required": [
+        "provider",
+        "model"
+      ],
+      "additionalProperties": false,
+      "description": "LLM configuration"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

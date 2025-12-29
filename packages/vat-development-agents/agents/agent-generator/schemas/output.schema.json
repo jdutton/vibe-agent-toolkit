@@ -1,0 +1,137 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vat.dev/schemas/agent-generator/output.v1.json",
+  "title": "Generated Agent Package",
+  "description": "Output schema for agent-generator: complete agent package with validation",
+  "type": "object",
+  "properties": {
+    "agentYaml": {
+      "type": "object",
+      "description": "Complete agent.yaml content as parsed YAML object (will be validated against AgentManifestSchema)",
+      "properties": {
+        "apiVersion": {
+          "type": "string",
+          "const": "vat.dev/v1"
+        },
+        "kind": {
+          "type": "string",
+          "const": "Agent"
+        },
+        "metadata": {
+          "type": "object"
+        },
+        "spec": {
+          "type": "object"
+        }
+      },
+      "required": ["apiVersion", "kind", "metadata", "spec"]
+    },
+    "files": {
+      "type": "array",
+      "description": "All generated files with content (wrapper writes to disk)",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "description": "Relative path for file (e.g., 'prompts/system.md')",
+            "examples": [
+              "prompts/system.md",
+              "prompts/user.md",
+              "schemas/input.schema.json",
+              "README.md"
+            ]
+          },
+          "content": {
+            "type": "string",
+            "description": "Complete file content"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["prompt", "schema", "readme", "example", "template", "documentation", "other"],
+            "description": "File type classification"
+          }
+        },
+        "required": ["path", "content", "type"],
+        "additionalProperties": false
+      },
+      "minItems": 1
+    },
+    "validationResults": {
+      "type": "object",
+      "description": "Validation results from @vibe-agent-toolkit/agent-schema",
+      "properties": {
+        "valid": {
+          "type": "boolean",
+          "description": "Whether agent.yaml passed schema validation"
+        },
+        "errors": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Validation errors (if any)"
+        },
+        "warnings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Non-blocking validation warnings"
+        }
+      },
+      "required": ["valid"],
+      "additionalProperties": false
+    },
+    "summary": {
+      "type": "string",
+      "description": "Human-readable summary of what was created and next steps",
+      "minLength": 50,
+      "examples": [
+        "Created PR review agent with Claude Sonnet 4.5. Files: agent.yaml, system/user prompts, I/O schemas, README. Next: Customize prompts, test with sample PRs, deploy."
+      ]
+    },
+    "architecture": {
+      "type": "object",
+      "description": "Architecture decisions made during DESIGN phase",
+      "properties": {
+        "llm": {
+          "type": "string",
+          "description": "LLM chosen and justification",
+          "examples": [
+            "Claude Sonnet 4.5: Balances code understanding quality with cost for PR reviews"
+          ]
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Tools included and why",
+          "examples": [
+            "file-reader: Read source files and git diffs",
+            "github-api: Optional for direct PR integration"
+          ]
+        },
+        "promptStrategy": {
+          "type": "string",
+          "description": "Prompt design approach",
+          "examples": [
+            "System prompt: Expert code reviewer identity, focus on bugs/security/style. User template: Structured PR diff input with severity levels."
+          ]
+        },
+        "resourcesPlan": {
+          "type": "string",
+          "description": "Resources planned for agent context",
+          "examples": [
+            "coding-standards.md, security-checklist.md as reference docs. Input/output JSON schemas for validation."
+          ]
+        }
+      },
+      "required": ["llm", "tools", "promptStrategy", "resourcesPlan"],
+      "additionalProperties": false
+    }
+  },
+  "required": ["agentYaml", "files", "validationResults", "summary", "architecture"],
+  "additionalProperties": false
+}

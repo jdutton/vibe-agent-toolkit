@@ -29,6 +29,7 @@ export default [
       'vitest.config.ts',
       'vitest.*.config.ts',
       '.worktrees/',  // Git worktrees
+      'docs/**/*.ts',  // Documentation scripts (not part of build)
     ],
   },
 
