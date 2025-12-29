@@ -7,6 +7,7 @@
 
 import { Command } from 'commander';
 
+import { createRagCommand } from './commands/rag/index.js';
 import { createResourcesCommand, showResourcesVerboseHelp } from './commands/resources/index.js';
 import { loadVerboseHelp } from './utils/help-loader.js';
 import { createLogger } from './utils/logger.js';
@@ -73,6 +74,7 @@ if (process.argv.includes('resources') && process.argv.includes('--verbose')) {
 
 // Add command groups
 program.addCommand(createResourcesCommand());
+program.addCommand(createRagCommand());
 
 // Handle unknown commands
 program.on('command:*', (operands) => {
