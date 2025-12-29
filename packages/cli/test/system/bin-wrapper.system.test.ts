@@ -5,15 +5,12 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { spawnSync } from './test-common.js';
+import { executeBunVat } from './test-common.js';
 
 describe('Bin wrapper (vat command)', () => {
   it('should execute vat command with bun run', () => {
     // Test the dev convenience script
-    const result = spawnSync('bun', ['run', 'vat', '--version'], {
-      encoding: 'utf-8',
-      cwd: process.cwd(),
-    });
+    const result = executeBunVat(['--version']);
 
     expect(result.status).toBe(0);
     // Version format matching is safe despite backtracking potential
@@ -22,10 +19,7 @@ describe('Bin wrapper (vat command)', () => {
   });
 
   it('should handle --help flag', () => {
-    const result = spawnSync('bun', ['run', 'vat', '--help'], {
-      encoding: 'utf-8',
-      cwd: process.cwd(),
-    });
+    const result = executeBunVat(['--help']);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('Vibe Agent Toolkit');
@@ -33,10 +27,7 @@ describe('Bin wrapper (vat command)', () => {
   });
 
   it('should handle --help --verbose flag', () => {
-    const result = spawnSync('bun', ['run', 'vat', '--help', '--verbose'], {
-      encoding: 'utf-8',
-      cwd: process.cwd(),
-    });
+    const result = executeBunVat(['--help', '--verbose']);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('# vat - Vibe Agent Toolkit CLI');
@@ -44,10 +35,7 @@ describe('Bin wrapper (vat command)', () => {
   });
 
   it('should pass through subcommands correctly', () => {
-    const result = spawnSync('bun', ['run', 'vat', 'resources', '--help'], {
-      encoding: 'utf-8',
-      cwd: process.cwd(),
-    });
+    const result = executeBunVat(['resources', '--help']);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('Markdown resource scanning');

@@ -101,3 +101,18 @@ export function executeCliAndParseYaml(
 
   return { result, parsed };
 }
+
+/**
+ * Execute bun run vat command (for testing the wrapper)
+ * Used specifically for bin-wrapper tests
+ */
+export function executeBunVat(
+  args: string[],
+  options?: { cwd?: string }
+): SpawnSyncReturns<string> {
+  // eslint-disable-next-line sonarjs/no-os-command-from-path -- bun is required for wrapper tests
+  return nodeSpawnSync('bun', ['run', 'vat', ...args], {
+    encoding: 'utf-8',
+    cwd: options?.cwd ?? process.cwd(),
+  });
+}
