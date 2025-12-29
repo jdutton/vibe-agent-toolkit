@@ -6,7 +6,9 @@
   "description": "Development tools for the monorepo",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "clean": "rimraf dist *.tsbuildinfo"
+    "clean": "rimraf dist *.tsbuildinfo",
+    "prepare-bin": "tsx src/prepare-bin.ts",
+    "generate-cli-docs": "tsx src/generate-cli-docs.ts"
   },
   "dependencies": {
     "semver": "^7.7.3",

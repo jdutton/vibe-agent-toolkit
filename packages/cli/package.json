@@ -19,7 +19,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && tsx ../dev-tools/src/prepare-bin.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config ../../vitest.integration.config.ts",
