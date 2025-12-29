@@ -10,11 +10,11 @@ This package provides the core interfaces and schemas for RAG functionality in V
 - **Interfaces**: `RAGQueryProvider`, `RAGAdminProvider`, `EmbeddingProvider`, `TokenCounter`
 - **Schemas**: Zod schemas with TypeScript types and JSON Schema exports
 - **Token counters**: `FastTokenCounter` (bytes/4 heuristic), `ApproximateTokenCounter` (gpt-tokenizer)
-- **Shared implementations**: Embedding providers, chunking utilities (coming in Phase 3-4)
+- **Embedding providers**: `TransformersEmbeddingProvider` (local, transformers.js), `OpenAIEmbeddingProvider` (cloud, OpenAI API)
+- **Shared implementations**: Chunking utilities (coming in Phase 4)
 
 **What's NOT included:**
 - Vector database implementations (see `@vibe-agent-toolkit/rag-lancedb`)
-- Concrete embedding providers (coming in Phase 3)
 
 ## Installation
 
@@ -147,6 +147,93 @@ const effectiveTarget = targetChunkSize * paddingFactor; // 460 tokens
 - Token estimation may be imperfect
 - Targeting exact limit might exceed it, forcing inefficient splits
 - Lower accuracy = lower padding factor (more safety margin)
+
+## Embedding Providers
+
+Embedding providers convert text to vector embeddings for semantic search.
+
+### Available Implementations
+
+#### TransformersEmbeddingProvider (Default)
+
+Local embedding generation using transformers.js - no API key required.
+
+```typescript
+import { TransformersEmbeddingProvider } from '@vibe-agent-toolkit/rag';
+
+const provider = new TransformersEmbeddingProvider();
+// Default model: Xenova/all-MiniLM-L6-v2 (384 dimensions)
+
+const embedding = await provider.embed('Search query text');
+console.log(embedding.length); // 384
+
+// Batch embedding for efficiency
+const embeddings = await provider.embedBatch(['text1', 'text2', 'text3']);
+```
+
+**Characteristics:**
+- **Speed**: Fast (local inference)
+- **Quality**: Good (suitable for most use cases)
+- **Cost**: Free (no API calls)
+- **API Key**: Not required
+- **Dimensions**: 384 (all-MiniLM-L6-v2)
+- **Use case**: Default choice for most projects
+
+**First run**: Downloads model (~20MB for all-MiniLM-L6-v2)
+
+#### OpenAIEmbeddingProvider (Optional)
+
+Cloud-based embedding using OpenAI API - requires API key.
+
+```typescript
+import { OpenAIEmbeddingProvider } from '@vibe-agent-toolkit/rag';
+
+const provider = new OpenAIEmbeddingProvider({
+  apiKey: process.env.OPENAI_API_KEY!,
+  model: 'text-embedding-3-small', // or 'text-embedding-3-large'
+});
+
+const embedding = await provider.embed('Search query text');
+console.log(embedding.length); // 1536
+
+// Custom dimensions (text-embedding-3-* models only)
+const customProvider = new OpenAIEmbeddingProvider({
+  apiKey: process.env.OPENAI_API_KEY!,
+  model: 'text-embedding-3-small',
+  dimensions: 512, // Reduce dimensions for faster search
+});
+```
+
+**Characteristics:**
+- **Speed**: Medium (network latency)
+- **Quality**: Excellent (state-of-art)
+- **Cost**: Paid (per token)
+- **API Key**: Required
+- **Dimensions**: 1536 (small) or 3072 (large)
+- **Use case**: Production agents requiring highest quality
+
+**Installation**: `bun add openai` (optional dependency)
+
+### Choosing an Embedding Provider
+
+| Provider | Speed | Quality | Cost | Dimensions | Use Case |
+|----------|-------|---------|------|------------|----------|
+| TransformersEmbeddingProvider | Fast | Good | Free | 384 | Default choice |
+| OpenAIEmbeddingProvider | Medium | Excellent | Paid | 1536-3072 | Production, high quality |
+
+### Model Selection Guidelines
+
+**Use TransformersEmbeddingProvider when:**
+- Building locally or in development
+- Budget-conscious or high-volume scenarios
+- Good quality is sufficient (most use cases)
+- Want to avoid API dependencies
+
+**Use OpenAIEmbeddingProvider when:**
+- Deploying production agents with budget
+- Need highest quality search results
+- Working with complex or nuanced queries
+- Want proven, well-tested models
 
 ## API Reference
 

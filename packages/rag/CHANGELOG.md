@@ -1,5 +1,21 @@
 # @vibe-agent-toolkit/rag Changelog
 
+## [0.3.0] - 2025-12-29
+
+### Added
+
+- Embedding provider implementations:
+  - `TransformersEmbeddingProvider` - Local embeddings with transformers.js (default)
+  - `OpenAIEmbeddingProvider` - Cloud embeddings with OpenAI API (optional)
+- Batch embedding support for efficient processing
+- Comparison tests and model selection guidelines
+- Comprehensive documentation for choosing embedding providers
+
+### Dependencies
+
+- Added: `@xenova/transformers@^2.17.0` (required)
+- Added: `openai@^4.67.0` (optional)
+
 ## [0.2.0] - 2025-12-29
 
 ### Added

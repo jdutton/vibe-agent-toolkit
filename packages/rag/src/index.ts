@@ -38,3 +38,11 @@ export {
 
 // Token Counters
 export { ApproximateTokenCounter, FastTokenCounter } from './token-counters/index.js';
+
+// Embedding Providers
+export {
+  OpenAIEmbeddingProvider,
+  TransformersEmbeddingProvider,
+  type OpenAIEmbeddingConfig,
+  type TransformersEmbeddingConfig,
+} from './embedding-providers/index.js';
