@@ -103,6 +103,16 @@
         "vitest": "^3.2.4",
       },
     },
+    "packages/vibe-agent-toolkit": {
+      "name": "vibe-agent-toolkit",
+      "version": "0.1.0",
+      "bin": {
+        "vat": "./bin/vat",
+      },
+      "dependencies": {
+        "@vibe-agent-toolkit/cli": "workspace:*",
+      },
+    },
   },
   "packages": {
     "@ampproject/remapping": ["@ampproject/remapping@2.3.0", "", { "dependencies": { "@jridgewell/gen-mapping": "^0.3.5", "@jridgewell/trace-mapping": "^0.3.24" } }, "sha512-30iZtAPgz+LTIYoeivqYo853f02jBYSd5uGnGpkFV0M3xOt9aN73erkgYAmZU43x4VfqcnLxW9Kpg3R5LC4YYw=="],
@@ -1288,6 +1298,8 @@
     "vfile": ["vfile@6.0.3", "", { "dependencies": { "@types/unist": "^3.0.0", "vfile-message": "^4.0.0" } }, "sha512-KzIbH/9tXat2u30jf+smMwFCsno4wHVdNmzFyL+T/L3UGqqk6JKfVqOFOZEpZSHADH1k40ab6NUIXZq422ov3Q=="],
 
     "vfile-message": ["vfile-message@4.0.3", "", { "dependencies": { "@types/unist": "^3.0.0", "unist-util-stringify-position": "^4.0.0" } }, "sha512-QTHzsGd1EhbZs4AsQ20JX1rC3cOlt/IWJruk893DfLRr57lcnOeMaWG4K0JrRta4mIJZKth2Au3mM3u03/JWKw=="],
+
+    "vibe-agent-toolkit": ["vibe-agent-toolkit@workspace:packages/vibe-agent-toolkit"],
 
     "vibe-validate": ["vibe-validate@0.18.1", "", { "dependencies": { "@vibe-validate/cli": "0.18.1" }, "bin": { "vv": "bin/vv", "vibe-validate": "bin/vibe-validate" } }, "sha512-jAC+ho0oDj0275F4ri2AMuTp9NmUISGzoSNKtUAKqeLblE7qEQzD585Sx+qeBSEUYzK7bPzn8THSGEsByD6kSw=="],
 
