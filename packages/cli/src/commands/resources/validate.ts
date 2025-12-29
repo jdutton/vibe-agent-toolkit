@@ -60,7 +60,13 @@ export async function validateCommand(
     const stats = registry.getStats();
     const duration = Date.now() - startTime;
 
-    if (validationResult.passed) {
+    // Filter out external_url issues (informational only, not actual errors)
+    const actualErrors = validationResult.issues.filter(
+      issue => issue.type !== 'external_url'
+    );
+    const hasErrors = actualErrors.length > 0;
+
+    if (!hasErrors) {
       // Success output
       writeYamlOutput({
         status: 'success',
@@ -72,7 +78,7 @@ export async function validateCommand(
       process.exit(0);
     } else {
       // Failure - write YAML first, then test-format errors
-      const errors = validationResult.issues.map(issue => ({
+      const errors = actualErrors.map(issue => ({
         file: issue.resourcePath,
         line: issue.line ?? 1,
         column: 1,

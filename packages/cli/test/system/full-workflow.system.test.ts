@@ -105,9 +105,9 @@ resources:
     });
 
     expect(result.status).toBe(0);
-    expect(result.stderr).toContain('# vat - Vibe Agent Toolkit CLI');
-    expect(result.stderr).toContain('resources');
-    expect(result.stderr).toContain('Exit Codes');
+    expect(result.stdout).toContain('# vat - Vibe Agent Toolkit CLI');
+    expect(result.stdout).toContain('resources');
+    expect(result.stdout).toContain('Exit Codes');
   });
 
   it('should show resources verbose help', () => {
@@ -116,8 +116,29 @@ resources:
     });
 
     expect(result.status).toBe(0);
-    expect(result.stderr).toContain('vat resources');
-    expect(result.stderr).toContain('scan');
-    expect(result.stderr).toContain('validate');
+    expect(result.stdout).toContain('vat resources');
+    expect(result.stdout).toContain('scan');
+    expect(result.stdout).toContain('validate');
+  });
+
+  it('should ignore external URLs and not report them as errors', () => {
+    // Create a file with only external URLs (no broken internal links)
+    fs.writeFileSync(
+      join(projectDir, 'docs/external.md'),
+      '# External Links\n\n[GitHub](https://github.com)\n[NPM](https://npmjs.com)\n[Docs](https://example.com/docs)'
+    );
+
+    const { result, parsed } = executeValidateAndParse(binPath, projectDir);
+
+    // Should pass validation (external URLs are not validated)
+    expect(result.status).toBe(0);
+    expect(parsed.status).toBe('success');
+
+    // Should not have any errors
+    expect(parsed.errorsFound).toBeUndefined();
+
+    // Stdout should not contain "External URL" messages
+    expect(result.stdout).not.toContain('External URL');
+    expect(result.stdout).not.toContain('external_url');
   });
 });

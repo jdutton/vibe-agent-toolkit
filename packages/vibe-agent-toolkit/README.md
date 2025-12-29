@@ -32,7 +32,7 @@ vat resources validate docs/
 
 ## Documentation
 
-- [CLI Reference](../../docs/cli-reference.md) - Complete command documentation
+- [CLI Reference](../cli/docs/) - Complete command documentation (or run `vat --help --verbose`)
 - [Architecture](../../docs/architecture/README.md) - Package structure
 - [Getting Started](../../docs/getting-started.md) - Detailed guide
 

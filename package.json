@@ -49,7 +49,7 @@
     "pre-publish": "tsx packages/dev-tools/src/pre-publish-check.ts",
     "determine-publish-tags": "tsx packages/dev-tools/src/determine-publish-tags.ts",
     "prepare-cli-bin": "cd packages/cli && tsx ../dev-tools/src/prepare-bin.ts",
-    "generate-cli-docs": "tsx packages/dev-tools/src/generate-cli-docs.ts"
+    "vat": "node packages/cli/dist/bin/vat.js"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",

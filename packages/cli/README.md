@@ -74,7 +74,8 @@ vat --version  # Shows: 0.1.0-dev (/path/to/vibe-agent-toolkit)
 
 ## Documentation
 
-- [CLI Reference](../../docs/cli-reference.md) - Complete command documentation
+- [CLI Reference](./docs/) - Complete command documentation (markdown source)
+- Run `vat --help --verbose` for the same documentation at runtime
 - [Architecture](../../docs/architecture/README.md) - Package structure
 
 ## Development

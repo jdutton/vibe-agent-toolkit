@@ -1,0 +1,19 @@
+# vibe-agent-toolkit configuration
+# Configuration for vat CLI tool
+
+version: 1
+
+resources:
+  include:
+    - "docs/**/*.md"
+    - "packages/**/*.md"
+    - "*.md"
+  exclude:
+    - "node_modules/**"
+    - "**/test-fixtures/**"
+    - "**/dist/**"
+    - "docs/plans/**"
+  validation:
+    checkLinks: true
+    checkAnchors: true
+    allowExternal: true

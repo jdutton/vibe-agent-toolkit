@@ -1,8 +1,10 @@
 /**
  * Version Bump Script
  *
- * Updates version in ALL package.json files (root + all workspace packages).
- * This ensures consistent versioning across the monorepo.
+ * Updates version in ALL package.json files (root + all workspace packages) AND
+ * resolves workspace:* dependencies to actual version numbers for npm publishing.
+ *
+ * This ensures consistent versioning across the monorepo and prepares packages for publishing.
  *
  * Usage:
  *   tsx tools/bump-version.ts <version|increment>
@@ -13,6 +15,10 @@
  *   tsx tools/bump-version.ts patch        # Increment patch (1.0.0 -> 1.0.1)
  *   tsx tools/bump-version.ts minor        # Increment minor (1.0.0 -> 1.1.0)
  *   tsx tools/bump-version.ts major        # Increment major (1.0.0 -> 2.0.0)
+ *
+ * What it does:
+ *   1. Updates "version" field in all package.json files
+ *   2. Resolves "workspace:*" → actual version for @vibe-agent-toolkit/* packages
  *
  * Exit codes:
  *   0 - Success
@@ -165,9 +171,16 @@ function updatePackageVersion(filePath: string, newVersion: string): VersionUpda
     pkg.version = newVersion;
 
     // Preserve original formatting by replacing only the version line
-    const updatedContent = content.replace(
+    let updatedContent = content.replace(
       /"version":\s*"[^"]+"/,
       `"version": "${newVersion}"`
+    );
+
+    // Resolve workspace:* dependencies to actual version
+    // Replace "workspace:*" with the new version for @vibe-agent-toolkit/* packages
+    updatedContent = updatedContent.replaceAll(
+      /("@vibe-agent-toolkit\/[^"]+"):\s*"workspace:\*"/g,
+      `$1: "${newVersion}"`
     );
 
     writeFileSync(filePath, updatedContent, 'utf8');

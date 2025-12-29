@@ -8,6 +8,7 @@
 import { Command } from 'commander';
 
 import { createResourcesCommand, showResourcesVerboseHelp } from './commands/resources/index.js';
+import { loadVerboseHelp } from './utils/help-loader.js';
 import { createLogger } from './utils/logger.js';
 import { version, getVersionString, type VersionContext } from './version.js';
 
@@ -27,10 +28,21 @@ program
   .version(getVersionString(version, context), '-v, --version', 'Output version number')
   .option('--debug', 'Enable debug logging')
   .option('--verbose', 'Show verbose help (markdown format)')
+  .helpCommand(false) // Disable redundant 'help' command, use --help instead
   .showHelpAfterError()
   .configureOutput({
-    writeErr: (str) => process.stderr.write(str),
-  });
+    writeOut: (str) => process.stdout.write(str), // Help goes to stdout (pipeable)
+    writeErr: (str) => process.stderr.write(str), // Errors go to stderr
+  })
+  .addHelpText(
+    'after',
+    `
+Example:
+  $ vat resources validate docs/       # Validate markdown links
+
+For command details: vat resources --help
+`
+  );
 
 // Handle --help --verbose at root level only
 // Don't handle --verbose if a subcommand was specified
@@ -73,71 +85,7 @@ program.on('command:*', (operands) => {
 program.parse();
 
 function showVerboseHelp(): void {
-  const logger = createLogger();
-  logger.info(`# vat - Vibe Agent Toolkit CLI
-
-## Overview
-
-The \`vat\` command-line tool provides access to toolkit capabilities for building,
-testing, and deploying portable AI agents.
-
-## Usage
-
-\`\`\`bash
-vat [command] [options]
-\`\`\`
-
-## Commands
-
-### resources
-Markdown resource scanning and validation
-
-- \`vat resources --help --verbose\` - Show detailed resources help
-- \`vat resources scan [path]\` - Discover markdown resources
-- \`vat resources validate [path]\` - Validate link integrity
-
-## Options
-
-- \`--version\` - Show version number
-- \`--help\` - Show help
-- \`--help --verbose\` - Show comprehensive help (this output)
-- \`--debug\` - Enable debug logging
-
-## Exit Codes
-
-- \`0\` - Success
-- \`1\` - Validation errors (expected failures)
-- \`2\` - System errors (unexpected failures)
-
-## Examples
-
-\`\`\`bash
-# Show version
-vat --version
-
-# Scan markdown resources
-vat resources scan docs/
-
-# Validate all links
-vat resources validate docs/
-\`\`\`
-
-## Configuration
-
-Place \`vibe-agent-toolkit.config.yaml\` at project root:
-
-\`\`\`yaml
-version: 1
-resources:
-  include:
-    - "docs/**/*.md"
-  exclude:
-    - "node_modules/**"
-\`\`\`
-
-## More Information
-
-- Documentation: https://github.com/jdutton/vibe-agent-toolkit
-- Issues: https://github.com/jdutton/vibe-agent-toolkit/issues
-`);
+  const helpContent = loadVerboseHelp(); // Loads from docs/cli/index.md
+  process.stdout.write(helpContent);
+  process.stdout.write('\n');
 }

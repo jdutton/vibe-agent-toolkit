@@ -40,7 +40,7 @@ vat resources scan docs/
 vat resources validate docs/
 ```
 
-See [CLI Reference](./docs/cli-reference.md) for complete documentation.
+See [CLI Reference](./packages/cli/docs/) for complete documentation (or run `vat --help --verbose`).
 
 ### Development Setup
 

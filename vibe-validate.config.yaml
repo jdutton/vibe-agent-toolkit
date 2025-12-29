@@ -30,6 +30,10 @@ validation:
         - name: 'Code duplication check'
           command: 'bun run duplication-check'
 
+        - name: 'Documentation validation'
+          command: 'bun run vat resources validate'
+          description: 'Validates markdown link integrity across entire project'
+
         - name: 'Unit tests with coverage'
           command: 'bun run test:coverage'
 
@@ -42,6 +46,6 @@ validation:
     - name: 'System Tests'
       parallel: false
       steps:
-        - name: 'Link validation (dogfooding)'
+        - name: 'End-to-end system tests'
           command: 'bun run test:system'
-          description: 'Validates all markdown links in the project using our own ResourceRegistry'
+          description: 'Runs complete end-to-end workflows testing the entire system'
