@@ -41,7 +41,6 @@ export async function queryCommand(
   // Format results with truncated content
   const results = result.chunks.map((chunk: RAGChunk, index: number) => ({
     rank: index + 1,
-    score: chunk.embedding ? chunk.embedding[0] : 0, // Use first embedding dimension as score placeholder
     resourceId: chunk.resourceId,
     filePath: chunk.filePath,
     content: truncateContent(chunk.content, 200),

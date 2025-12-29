@@ -56,7 +56,6 @@ describe('RAG query command (system test)', () => {
     expect(firstResult?.resourceId).toBeDefined();
     expect(firstResult?.filePath).toBeDefined();
     expect(firstResult?.content).toBeDefined();
-    expect(typeof firstResult?.score).toBe('number');
 
     // Verify content is truncated (max 200 chars)
     const content = firstResult?.content as string;

@@ -72,14 +72,13 @@ Description:
 
 Output Fields:
   status, query, totalMatches, searchDurationMs, embeddingModel, results, duration
-  Each result: rank, score, resourceId, filePath, content, headingPath, title
+  Each result: rank, resourceId, filePath, content, headingPath, title
 
 Exit Codes:
   0 - Success  |  2 - System error (no database)
 
 Example:
-  $ vat rag query "RAG architecture"   # Search for RAG architecture
-  $ vat rag query "API" --limit 5      # Limit to 5 results
+  $ vat rag query "RAG architecture"   # Search for relevant content
 `
     );
 
@@ -97,7 +96,7 @@ Description:
   and embedding model information.
 
 Output Fields:
-  status, totalChunks, totalResources, embeddingModel, duration
+  totalChunks, totalResources, dbSizeBytes, embeddingModel, lastIndexed, duration
 
 Exit Codes:
   0 - Success  |  2 - System error (no database)
