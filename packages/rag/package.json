@@ -1,0 +1,44 @@
+{
+  "name": "@vibe-agent-toolkit/rag",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Abstract RAG (Retrieval-Augmented Generation) interfaces and shared implementations",
+  "keywords": [
+    "rag",
+    "vector-search",
+    "embeddings",
+    "retrieval"
+  ],
+  "author": "Jeff Dutton",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rimraf dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@vibe-agent-toolkit/resources": "workspace:*",
+    "@vibe-agent-toolkit/utils": "workspace:*",
+    "zod": "^3.22.0",
+    "zod-to-json-schema": "^3.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

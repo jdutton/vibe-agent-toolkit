@@ -81,6 +81,21 @@
         "typescript": "^5.9.3",
       },
     },
+    "packages/rag": {
+      "name": "@vibe-agent-toolkit/rag",
+      "version": "0.1.0",
+      "dependencies": {
+        "@vibe-agent-toolkit/resources": "workspace:*",
+        "@vibe-agent-toolkit/utils": "workspace:*",
+        "zod": "^3.22.0",
+        "zod-to-json-schema": "^3.22.0",
+      },
+      "devDependencies": {
+        "@types/node": "^25.0.0",
+        "typescript": "^5.9.0",
+        "vitest": "^3.2.0",
+      },
+    },
     "packages/resources": {
       "name": "@vibe-agent-toolkit/resources",
       "version": "0.1.0",
@@ -406,6 +421,8 @@
     "@vibe-agent-toolkit/cli": ["@vibe-agent-toolkit/cli@workspace:packages/cli"],
 
     "@vibe-agent-toolkit/dev-tools": ["@vibe-agent-toolkit/dev-tools@workspace:packages/dev-tools"],
+
+    "@vibe-agent-toolkit/rag": ["@vibe-agent-toolkit/rag@workspace:packages/rag"],
 
     "@vibe-agent-toolkit/resources": ["@vibe-agent-toolkit/resources@workspace:packages/resources"],
 
