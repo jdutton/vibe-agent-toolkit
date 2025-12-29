@@ -1,0 +1,86 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://vat.dev/schemas/agent-generator/input.v1.json",
+  "title": "Agent Design Request",
+  "description": "Input schema for agent-generator: describes what agent to create",
+  "type": "object",
+  "properties": {
+    "agentPurpose": {
+      "type": "string",
+      "description": "What problem does this agent solve? Who will use it and why?",
+      "examples": [
+        "Help developers validate agent.yaml files before deployment",
+        "Review pull requests for security vulnerabilities and suggest fixes"
+      ]
+    },
+    "successCriteria": {
+      "type": "string",
+      "description": "How will you know the agent did a good job? What does success look like?",
+      "examples": [
+        "Agent catches schema errors and suggests fixes before they cause runtime failures",
+        "Identifies 100% of critical security issues with <10% false positive rate"
+      ]
+    },
+    "typicalInputs": {
+      "type": "string",
+      "description": "What kind of data/requests will the agent receive? Include examples.",
+      "examples": [
+        "Path to agent.yaml file, or raw YAML content to validate",
+        "GitHub PR URL with diff to review"
+      ]
+    },
+    "expectedOutputs": {
+      "type": "string",
+      "description": "What should the agent produce? What format?",
+      "examples": [
+        "Validation report with errors, warnings, and specific line numbers with suggestions",
+        "Structured feedback with severity levels: { file, line, severity, message, suggestion }"
+      ]
+    },
+    "domainContext": {
+      "type": "string",
+      "description": "What domain knowledge or constraints should the agent understand?",
+      "examples": [
+        "VAT agent schema format, common validation pitfalls, best practices for agent design",
+        "OWASP Top 10, secure coding standards for Python and JavaScript"
+      ]
+    },
+    "performanceRequirements": {
+      "type": "object",
+      "properties": {
+        "latency": {
+          "type": "string",
+          "description": "How fast should it respond?",
+          "examples": ["Under 5 seconds for typical files", "Real-time for simple queries"]
+        },
+        "accuracy": {
+          "type": "string",
+          "description": "How accurate must it be?",
+          "examples": [
+            "Must catch 100% of schema violations, false positives OK",
+            "Prefer high recall over precision"
+          ]
+        },
+        "cost": {
+          "type": "string",
+          "description": "Any budget constraints?",
+          "examples": [
+            "Prefer cheaper models, accuracy matters more than speed",
+            "Cost-sensitive: use smallest model that meets accuracy requirements"
+          ]
+        }
+      },
+      "description": "Performance constraints and priorities"
+    },
+    "additionalContext": {
+      "type": "string",
+      "description": "Anything else relevant? Similar tools, specific use cases, edge cases to handle?",
+      "examples": [
+        "Similar to ESLint but for agent manifests",
+        "Must work in CI/CD pipelines"
+      ]
+    }
+  },
+  "required": ["agentPurpose", "successCriteria"],
+  "additionalProperties": false
+}

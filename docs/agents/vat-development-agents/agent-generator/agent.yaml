@@ -1,0 +1,79 @@
+apiVersion: vat.dev/v1
+kind: Agent
+
+metadata:
+  name: agent-generator
+  version: 0.1.0
+  description: Generates complete VAT agent packages from user requirements through a structured 4-phase design process (GATHER, ANALYZE, DESIGN, GENERATE)
+  author: vibe-agent-toolkit contributors
+  license: MIT
+  tags:
+    - agent-design
+    - code-generation
+    - meta-agent
+    - development-tool
+    - vat-toolkit
+  build:
+    timestamp: "2025-12-28T00:00:00Z"
+    vatVersion: 0.1.0
+
+spec:
+  interface:
+    input:
+      $ref: ./schemas/input.schema.json
+    output:
+      $ref: ./schemas/output.schema.json
+
+  llm:
+    provider: anthropic
+    model: claude-sonnet-4.5
+    temperature: 0.7
+    maxTokens: 16000
+    alternatives:
+      - provider: anthropic
+        model: claude-opus-4.5
+      - provider: anthropic
+        model: claude-haiku-3.5
+
+  prompts:
+    system:
+      $ref: ./prompts/system.md
+    user:
+      $ref: ./prompts/user.md
+
+  tools:
+    - name: validate_agent_schema
+      type: library
+      description: Validates generated agent.yaml against @vibe-agent-toolkit/agent-schema
+
+  resources:
+    system_prompt:
+      path: ./prompts/system.md
+      type: template
+    user_prompt:
+      path: ./prompts/user.md
+      type: template
+    input_schema:
+      path: ./schemas/input.schema.json
+      type: schema
+    output_schema:
+      path: ./schemas/output.schema.json
+      type: schema
+    readme:
+      path: ./README.md
+      type: documentation
+    example_input:
+      path: ./examples/example-input.md
+      type: documentation
+    vat_architecture:
+      path: ../../README.md
+      type: documentation
+    schema_reference:
+      path: ../../../../packages/agent-schema/README.md
+      type: documentation
+
+  credentials:
+    agent:
+      - name: ANTHROPIC_API_KEY
+        description: Anthropic API key for Claude access
+        required: true
