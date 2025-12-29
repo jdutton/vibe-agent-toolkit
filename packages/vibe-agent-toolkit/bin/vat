@@ -1,0 +1,21 @@
+#!/usr/bin/env node
+
+/**
+ * Lightweight wrapper that delegates to @vibe-agent-toolkit/cli
+ * This file is the entry point when installed globally via npm
+ */
+
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
+
+// Resolve CLI package
+const cliPkg = require.resolve('@vibe-agent-toolkit/cli/package.json');
+const cliRoot = dirname(cliPkg);
+const wrapperPath = join(cliRoot, 'dist/bin/vat.js');
+
+// Execute CLI wrapper
+import(wrapperPath);
