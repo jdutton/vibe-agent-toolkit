@@ -1,5 +1,22 @@
 # @vibe-agent-toolkit/rag Changelog
 
+## [0.4.0] - 2025-12-29
+
+### Added
+
+- Chunking utilities:
+  - `chunkResource()` - Chunk ResourceMetadata using hybrid strategy
+  - `chunkByTokens()` - Token-aware text splitting
+  - `enrichChunks()` - Enrich raw chunks with RAGChunk metadata
+  - Utility functions for hashing, chunk IDs, and text splitting
+- Hybrid chunking strategy:
+  - Respects markdown heading boundaries (from ResourceRegistry)
+  - Splits large sections by token count (paragraphs)
+  - Applies padding factor for estimation error
+  - Links chunks with previousChunkId/nextChunkId for context expansion
+- Comprehensive tests for chunking logic
+- Documentation with usage examples and configuration guidelines
+
 ## [0.3.0] - 2025-12-29
 
 ### Added

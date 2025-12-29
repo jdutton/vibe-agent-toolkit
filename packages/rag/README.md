@@ -11,7 +11,7 @@ This package provides the core interfaces and schemas for RAG functionality in V
 - **Schemas**: Zod schemas with TypeScript types and JSON Schema exports
 - **Token counters**: `FastTokenCounter` (bytes/4 heuristic), `ApproximateTokenCounter` (gpt-tokenizer)
 - **Embedding providers**: `TransformersEmbeddingProvider` (local, transformers.js), `OpenAIEmbeddingProvider` (cloud, OpenAI API)
-- **Shared implementations**: Chunking utilities (coming in Phase 4)
+- **Chunking utilities**: Hybrid heading-based + token-aware chunking with ResourceRegistry integration
 
 **What's NOT included:**
 - Vector database implementations (see `@vibe-agent-toolkit/rag-lancedb`)
@@ -234,6 +234,104 @@ const customProvider = new OpenAIEmbeddingProvider({
 - Need highest quality search results
 - Working with complex or nuanced queries
 - Want proven, well-tested models
+
+## Chunking
+
+Chunking utilities split documents into semantic chunks for embedding and retrieval.
+
+### Strategy
+
+**Hybrid Approach:**
+1. **Heading boundaries** - Primary split points (respects markdown structure)
+2. **Token-aware splitting** - Splits large sections by paragraphs to fit token limits
+3. **Padding factor** - Safety margin to avoid exceeding model limits
+4. **Context linking** - previousChunkId/nextChunkId for context expansion
+
+### Usage
+
+```typescript
+import { chunkResource, enrichChunks } from '@vibe-agent-toolkit/rag';
+import { ApproximateTokenCounter } from '@vibe-agent-toolkit/rag';
+import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
+
+// 1. Get resource from ResourceRegistry
+const registry = new ResourceRegistry();
+await registry.crawl({ baseDir: './docs' });
+const metadata = registry.getResourceById('resource-id');
+
+// 2. Read file content and parse frontmatter (not included in ResourceMetadata)
+const content = await fs.readFile(metadata.filePath, 'utf-8');
+const frontmatter = /* parse frontmatter */;
+const resource = { ...metadata, content, frontmatter };
+
+// 3. Configure chunking
+const config = {
+  targetChunkSize: 512,         // Ideal chunk size
+  modelTokenLimit: 8191,         // Hard limit (embedding model)
+  paddingFactor: 0.9,            // 90% of target (safety margin)
+  tokenCounter: new ApproximateTokenCounter(),
+};
+
+// 4. Chunk the resource
+const result = chunkResource(resource, config);
+console.log(`Created ${result.stats.totalChunks} chunks`);
+console.log(`Average tokens: ${result.stats.averageTokens}`);
+
+// 5. Enrich with embeddings (after embedding)
+const embeddings = await embeddingProvider.embedBatch(
+  result.chunks.map(c => c.content)
+);
+
+const ragChunks = enrichChunks(
+  result.chunks,
+  resource,
+  embeddings,
+  'text-embedding-3-small'
+);
+```
+
+### Configuration
+
+| Option | Description | Example |
+|--------|-------------|---------|
+| `targetChunkSize` | Ideal chunk size in tokens | 512 |
+| `modelTokenLimit` | Hard limit (embedding model) | 8191 (OpenAI) |
+| `paddingFactor` | Safety margin (0.8-1.0) | 0.9 (ApproximateTokenCounter) |
+| `tokenCounter` | Token counter to use | ApproximateTokenCounter |
+| `minChunkSize` | Minimum chunk size (optional) | 50 |
+
+### Padding Factor Guidelines
+
+See [Token Counters](#token-counters) for padding factor recommendations:
+- **FastTokenCounter**: 0.8 (80% of target)
+- **ApproximateTokenCounter**: 0.9 (90% of target)
+
+Lower accuracy = lower padding factor (more safety margin)
+
+### Utilities
+
+```typescript
+import {
+  chunkByTokens,
+  splitByParagraphs,
+  splitBySentences,
+  generateContentHash,
+  generateChunkId,
+  calculateEffectiveTarget,
+} from '@vibe-agent-toolkit/rag';
+
+// Split text by token count
+const chunks = chunkByTokens('long text...', config);
+
+// Split by paragraphs
+const paragraphs = splitByParagraphs(text);
+
+// Generate content hash for change detection
+const hash = generateContentHash(content);
+
+// Calculate effective target with padding
+const effectiveTarget = calculateEffectiveTarget(512, 0.9); // 460
+```
 
 ## API Reference
 

@@ -46,3 +46,19 @@ export {
   type OpenAIEmbeddingConfig,
   type TransformersEmbeddingConfig,
 } from './embedding-providers/index.js';
+
+// Chunking
+export {
+  calculateEffectiveTarget,
+  chunkByTokens,
+  chunkResource,
+  enrichChunks,
+  generateChunkId,
+  generateContentHash,
+  splitByParagraphs,
+  splitBySentences,
+  type ChunkableResource,
+  type ChunkingConfig,
+  type ChunkingResult,
+  type RawChunk,
+} from './chunking/index.js';
