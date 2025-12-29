@@ -79,3 +79,4 @@ docs/plans/
 
 # Misc
 .turbo/
+.rag-db/
