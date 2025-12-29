@@ -1,18 +1,22 @@
 /**
  * System tests for rag query command
+ *
+ * Tests the `vat rag query` command which searches the vector database
+ * for relevant content chunks based on semantic similarity.
  */
 
-import { afterAll, beforeAll, it } from 'vitest';
-
 import {
-  createTestTempDir,
+  afterAll,
+  beforeAll,
   describe,
   executeCliAndParseYaml,
+  executeRagCommandInEmptyProject,
   expect,
   fs,
   getBinPath,
-} from './test-common.js';
-import { setupRagTestProject, setupTestProject } from './test-helpers.js';
+  it,
+  setupIndexedRagTest,
+} from './rag-test-setup.js';
 
 const binPath = getBinPath(import.meta.url);
 
@@ -21,20 +25,11 @@ describe('RAG query command (system test)', () => {
   let projectDir: string;
 
   beforeAll(() => {
-    tempDir = createTestTempDir('vat-rag-query-test-');
-    projectDir = setupRagTestProject(tempDir, 'test-project');
-
-    // Index the files first
-    const { result } = executeCliAndParseYaml(
-      binPath,
-      ['rag', 'index', projectDir],
-      { cwd: projectDir }
-    );
-
-    // Ensure indexing succeeded before running query tests
-    if (result.status !== 0) {
-      throw new Error('Failed to index files for query tests');
-    }
+    ({ tempDir, projectDir } = setupIndexedRagTest(
+      'vat-rag-query-test-',
+      'test-project',
+      binPath
+    ));
   });
 
   afterAll(() => {
@@ -82,16 +77,10 @@ describe('RAG query command (system test)', () => {
   });
 
   it('should error when database does not exist', () => {
-    // Create a new project without indexing
-    const emptyProjectDir = setupTestProject(tempDir, {
-      name: 'empty-project',
-      withDocs: true,
-    });
-
-    const { result, parsed } = executeCliAndParseYaml(
+    const { result, parsed } = executeRagCommandInEmptyProject(
+      tempDir,
       binPath,
-      ['rag', 'query', 'test'],
-      { cwd: emptyProjectDir }
+      ['rag', 'query', 'test']
     );
 
     expect(result.status).toBe(2); // System error

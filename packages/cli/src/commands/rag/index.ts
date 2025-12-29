@@ -6,6 +6,12 @@ import { Command } from 'commander';
 
 import { indexCommand } from './index-command.js';
 import { queryCommand } from './query-command.js';
+import { statsCommand } from './stats-command.js';
+
+// Common option descriptions
+const DB_PATH_OPTION = '--db <path>';
+const DB_PATH_DESC = 'Database path (default: .rag-db in project root)';
+const DEBUG_OPTION_DESC = 'Enable debug logging';
 
 export function createRagCommand(): Command {
   const rag = new Command('rag');
@@ -27,8 +33,8 @@ Configuration:
   rag
     .command('index [path]')
     .description('Index markdown resources into vector database')
-    .option('--db <path>', 'Database path (default: .rag-db in project root)')
-    .option('--debug', 'Enable debug logging')
+    .option(DB_PATH_OPTION, DB_PATH_DESC)
+    .option('--debug', DEBUG_OPTION_DESC)
     .action(indexCommand)
     .addHelpText(
       'after',
@@ -53,9 +59,9 @@ Example:
   rag
     .command('query <text>')
     .description('Search RAG database with semantic query')
-    .option('--db <path>', 'Database path (default: .rag-db in project root)')
+    .option(DB_PATH_OPTION, DB_PATH_DESC)
     .option('--limit <n>', 'Maximum results to return (default: 10)', parseInt)
-    .option('--debug', 'Enable debug logging')
+    .option('--debug', DEBUG_OPTION_DESC)
     .action(queryCommand)
     .addHelpText(
       'after',
@@ -74,6 +80,30 @@ Exit Codes:
 Example:
   $ vat rag query "RAG architecture"   # Search for RAG architecture
   $ vat rag query "API" --limit 5      # Limit to 5 results
+`
+    );
+
+  rag
+    .command('stats')
+    .description('Show RAG database statistics')
+    .option(DB_PATH_OPTION, DB_PATH_DESC)
+    .option('--debug', DEBUG_OPTION_DESC)
+    .action(statsCommand)
+    .addHelpText(
+      'after',
+      `
+Description:
+  Displays database statistics including total chunks, resources,
+  and embedding model information.
+
+Output Fields:
+  status, totalChunks, totalResources, embeddingModel, duration
+
+Exit Codes:
+  0 - Success  |  2 - System error (no database)
+
+Example:
+  $ vat rag stats                      # Show database statistics
 `
     );
 

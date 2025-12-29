@@ -8,7 +8,7 @@ import { createLogger } from '../../utils/logger.js';
 import { writeYamlOutput } from '../../utils/output.js';
 import { loadResourcesWithConfig } from '../../utils/resource-loader.js';
 
-import { formatDuration, handleRagCommandError, resolveDbPath } from './command-helpers.js';
+import { formatDuration, handleCommandError, resolveDbPath } from './command-helpers.js';
 
 interface IndexOptions {
   db?: string;
@@ -63,6 +63,6 @@ export async function indexCommand(
 
     process.exit(0);
   } catch (error) {
-    handleRagCommandError(error, logger, startTime, 'Index');
+    handleCommandError(error, logger, startTime, 'Index');
   }
 }

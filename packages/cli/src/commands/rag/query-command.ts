@@ -2,13 +2,11 @@
  * RAG query command - search the vector database
  */
 
-import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
+import type { RAGChunk } from '@vibe-agent-toolkit/rag';
 
-import { createLogger } from '../../utils/logger.js';
 import { writeYamlOutput } from '../../utils/output.js';
-import { findProjectRoot } from '../../utils/project-root.js';
 
-import { formatDuration, handleRagCommandError, resolveDbPath } from './command-helpers.js';
+import { executeRagOperation, formatDuration } from './command-helpers.js';
 
 interface QueryOptions {
   db?: string;
@@ -20,58 +18,49 @@ export async function queryCommand(
   queryText: string,
   options: QueryOptions
 ): Promise<void> {
-  const logger = createLogger({ debug: options.debug ?? false });
   const startTime = Date.now();
 
-  try {
-    // Resolve database path
-    const projectRoot = findProjectRoot(process.cwd());
-    const dbPath = resolveDbPath(options.db, projectRoot ?? undefined);
-    logger.debug(`Database path: ${dbPath}`);
+  const result = await executeRagOperation(
+    options,
+    async (ragProvider, logger) => {
+      logger.debug(`Querying for: "${queryText}"`);
 
-    // Create RAG provider in readonly mode
-    const ragProvider = await LanceDBRAGProvider.create({
-      dbPath,
-      readonly: true,
-    });
+      // Execute query
+      const queryResult = await ragProvider.query({
+        text: queryText,
+        limit: options.limit ?? 10,
+      });
 
-    // Execute query
-    const queryResult = await ragProvider.query({
-      text: queryText,
-      limit: options.limit ?? 10,
-    });
+      return queryResult;
+    },
+    'Query'
+  );
 
-    // Close provider
-    await ragProvider.close();
+  const duration = Date.now() - startTime;
 
-    const duration = Date.now() - startTime;
+  // Format results with truncated content
+  const results = result.chunks.map((chunk: RAGChunk, index: number) => ({
+    rank: index + 1,
+    score: chunk.embedding ? chunk.embedding[0] : 0, // Use first embedding dimension as score placeholder
+    resourceId: chunk.resourceId,
+    filePath: chunk.filePath,
+    content: truncateContent(chunk.content, 200),
+    ...(chunk.headingPath ? { headingPath: chunk.headingPath } : {}),
+    ...(chunk.title ? { title: chunk.title } : {}),
+  }));
 
-    // Format results with truncated content
-    const results = queryResult.chunks.map((chunk, index) => ({
-      rank: index + 1,
-      score: chunk.embedding ? chunk.embedding[0] : 0, // Use first embedding dimension as score placeholder
-      resourceId: chunk.resourceId,
-      filePath: chunk.filePath,
-      content: truncateContent(chunk.content, 200),
-      ...(chunk.headingPath ? { headingPath: chunk.headingPath } : {}),
-      ...(chunk.title ? { title: chunk.title } : {}),
-    }));
+  // Output results as YAML
+  writeYamlOutput({
+    status: 'success',
+    query: queryText,
+    totalMatches: result.stats.totalMatches,
+    searchDurationMs: result.stats.searchDurationMs,
+    embeddingModel: result.stats.embedding?.model,
+    results,
+    duration: formatDuration(duration),
+  });
 
-    // Output results as YAML
-    writeYamlOutput({
-      status: 'success',
-      query: queryText,
-      totalMatches: queryResult.stats.totalMatches,
-      searchDurationMs: queryResult.stats.searchDurationMs,
-      embeddingModel: queryResult.stats.embedding?.model,
-      results,
-      duration: formatDuration(duration),
-    });
-
-    process.exit(0);
-  } catch (error) {
-    handleRagCommandError(error, logger, startTime, 'Query');
-  }
+  process.exit(0);
 }
 
 /**

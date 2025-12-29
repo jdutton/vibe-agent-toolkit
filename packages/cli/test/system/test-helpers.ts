@@ -242,3 +242,49 @@ export function setupRagTestProject(
 
   return projectDir;
 }
+
+/**
+ * Test helper: Executes a RAG command in an empty project and returns result
+ * Used for testing "database does not exist" scenarios
+ */
+export function executeRagCommandInEmptyProject(
+  baseTempDir: string,
+  binPath: string,
+  command: string[]
+): { result: CliResult; parsed: Record<string, unknown> } {
+  // Create a new project without indexing
+  const emptyProjectDir = setupTestProject(baseTempDir, {
+    name: 'empty-project-rag-db-test',
+    withDocs: true,
+  });
+
+  return executeAndParseYaml(binPath, command, { cwd: emptyProjectDir });
+}
+
+/**
+ * Setup test environment for RAG commands with indexed database
+ * Creates temp dir, sets up project, creates markdown files, and indexes them
+ * @returns Object with tempDir, projectDir, and binPath for use in tests
+ */
+export function setupIndexedRagTest(
+  testPrefix: string,
+  projectName: string,
+  binPath: string
+): { tempDir: string; projectDir: string } {
+  const tempDir = createTestTempDir(testPrefix);
+  const projectDir = setupRagTestProject(tempDir, projectName);
+
+  // Index the files
+  const { result } = executeAndParseYaml(
+    binPath,
+    ['rag', 'index', projectDir],
+    { cwd: projectDir }
+  );
+
+  // Ensure indexing succeeded
+  if (result.status !== 0) {
+    throw new Error(`Failed to index files for ${testPrefix} tests`);
+  }
+
+  return { tempDir, projectDir };
+}

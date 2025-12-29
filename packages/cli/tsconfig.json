@@ -9,6 +9,8 @@
   "include": ["src/**/*"],
   "references": [
     { "path": "../utils" },
-    { "path": "../resources" }
+    { "path": "../resources" },
+    { "path": "../rag" },
+    { "path": "../rag-lancedb" }
   ]
 }
