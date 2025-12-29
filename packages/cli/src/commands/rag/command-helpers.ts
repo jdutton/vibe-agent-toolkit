@@ -2,7 +2,7 @@
  * Shared helper functions for RAG commands
  */
 
-import type { RAGAdminProvider, RAGQueryProvider } from '@vibe-agent-toolkit/rag';
+import type { RAGQueryProvider } from '@vibe-agent-toolkit/rag';
 import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
 
 import { createLogger, type Logger } from '../../utils/logger.js';
@@ -42,7 +42,7 @@ export function resolveDbPath(
  */
 export async function executeRagOperation<T>(
   options: { db?: string; debug?: boolean; readonly?: boolean },
-  operation: (provider: RAGQueryProvider | RAGAdminProvider, logger: Logger) => Promise<T>,
+  operation: (provider: RAGQueryProvider, logger: Logger) => Promise<T>,
   commandName: string
 ): Promise<T> {
   const logger = createLogger({ debug: options.debug ?? false });
