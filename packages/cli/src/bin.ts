@@ -7,7 +7,7 @@
 
 import { Command } from 'commander';
 
-import { createResourcesCommand } from './commands/resources/index.js';
+import { createResourcesCommand, showResourcesVerboseHelp } from './commands/resources/index.js';
 import { createLogger } from './utils/logger.js';
 import { version, getVersionString, type VersionContext } from './version.js';
 
@@ -32,14 +32,32 @@ program
     writeErr: (str) => process.stderr.write(str),
   });
 
-// Handle --help --verbose
+// Handle --help --verbose at root level only
+// Don't handle --verbose if a subcommand was specified
+const hasSubcommand = process.argv.slice(2).some(arg => !arg.startsWith('-'));
+
 program.on('option:verbose', () => {
   const opts = program.opts();
-  if (opts['verbose'] && program.args.length === 0) {
+  // Only show root verbose help if no subcommand is present
+  if (opts['verbose'] && !hasSubcommand && program.args.length === 0) {
     showVerboseHelp();
     process.exit(0);
   }
 });
+
+// Special handling for "resources --verbose" before parsing
+if (process.argv.includes('resources') && process.argv.includes('--verbose')) {
+  const argv = process.argv.slice(2);
+  const resourcesIndex = argv.indexOf('resources');
+  // Check if there's no subcommand after 'resources'
+  const afterResources = argv.slice(resourcesIndex + 1);
+  const hasSubcommand = afterResources.some(arg => !arg.startsWith('-'));
+
+  if (!hasSubcommand) {
+    showResourcesVerboseHelp();
+    process.exit(0);
+  }
+}
 
 // Add command groups
 program.addCommand(createResourcesCommand());
@@ -74,6 +92,7 @@ vat [command] [options]
 ### resources
 Markdown resource scanning and validation
 
+- \`vat resources --help --verbose\` - Show detailed resources help
 - \`vat resources scan [path]\` - Discover markdown resources
 - \`vat resources validate [path]\` - Validate link integrity
 

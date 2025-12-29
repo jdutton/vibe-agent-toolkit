@@ -4,6 +4,7 @@
 
 import { Command } from 'commander';
 
+import { showResourcesVerboseHelp } from './help.js';
 import { scanCommand } from './scan.js';
 import { validateCommand } from './validate.js';
 
@@ -11,7 +12,8 @@ export function createResourcesCommand(): Command {
   const resources = new Command('resources');
 
   resources
-    .description('Markdown resource scanning and validation');
+    .description('Markdown resource scanning and validation')
+    .option('--verbose', 'Show verbose help');
 
   resources
     .command('scan [path]')
@@ -27,3 +29,5 @@ export function createResourcesCommand(): Command {
 
   return resources;
 }
+
+export { showResourcesVerboseHelp };
