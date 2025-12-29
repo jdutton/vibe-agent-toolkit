@@ -30,7 +30,9 @@ export async function statsCommand(options: StatsOptions): Promise<void> {
     status: 'success',
     totalChunks: stats.totalChunks,
     totalResources: stats.totalResources,
+    dbSizeBytes: stats.dbSizeBytes,
     embeddingModel: stats.embeddingModel,
+    lastIndexed: stats.lastIndexed.toISOString(),
     duration: formatDuration(duration),
   });
 
