@@ -125,8 +125,8 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
           ? query.filters.resourceId
           : [query.filters.resourceId];
         const idList = ids.map((id) => `'${id}'`).join(', ');
-        // Use quoted column name for camelCase field
-        conditions.push(`"resourceId" IN (${idList})`);
+        // Use backticks for column names
+        conditions.push(`\`resourceId\` IN (${idList})`);
       }
 
       if (query.filters.type) {
@@ -134,8 +134,8 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
       }
 
       if (query.filters.headingPath) {
-        // Use quoted column name for camelCase field
-        conditions.push(`"headingPath" = '${query.filters.headingPath}'`);
+        // Use backticks for column names
+        conditions.push(`\`headingPath\` = '${query.filters.headingPath}'`);
       }
 
       if (conditions.length > 0) {
@@ -233,6 +233,15 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
     resource: ResourceMetadata,
     result: IndexResult
   ): Promise<void> {
+    // Reopen table to ensure we see latest data
+    // LanceDB requires reopening after modifications to avoid stale reads
+    if (this.table && this.connection) {
+      const tableNames = await this.connection.tableNames();
+      if (tableNames.includes(TABLE_NAME)) {
+        this.table = (await this.connection.openTable(TABLE_NAME)) as unknown as Table<LanceDBRow>;
+      }
+    }
+
     // Read file content using parseMarkdown
     const parseResult = await parseMarkdown(resource.filePath);
 
@@ -242,8 +251,7 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
     // Check if resource already exists with same content hash
     if (this.table) {
       let existing: LanceDBRow[] = [];
-      // LanceDB requires quoted column names for camelCase fields
-      const existingRows = await this.table.filter(`"resourceId" = '${resource.id}'`).execute();
+      const existingRows = await this.table.filter(`\`resourceId\` = '${resource.id}'`).execute();
 
       // Deep clone to detach from Arrow buffers (workaround for "Buffer is already detached")
       existing = JSON.parse(JSON.stringify(existingRows)) as LanceDBRow[];
@@ -340,8 +348,8 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
       return;
     }
 
-    // Delete chunks (use quoted column name for camelCase field)
-    await this.table.delete(`"resourceId" = '${resourceId}'`);
+    // Delete chunks (use backticks for column names)
+    await this.table.delete(`\`resourceId\` = '${resourceId}'`);
 
     // Reopen table after modification to avoid Arrow buffer issues
     if (this.connection) {
@@ -360,7 +368,7 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
       return 0;
     }
 
-    const rows = await this.table.filter(`"resourceId" = '${resourceId}'`).execute();
+    const rows = await this.table.filter(`\`resourceId\` = '${resourceId}'`).execute();
     return (rows as unknown as LanceDBRow[]).length;
   }
 
