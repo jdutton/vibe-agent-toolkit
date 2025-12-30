@@ -25,6 +25,10 @@ export interface ResourceLoadResult {
  * 2. Find project root and load config
  * 3. Create registry and crawl
  *
+ * Behavior:
+ * - When path argument provided: use as baseDir, ignore config patterns (use defaults)
+ * - When no path argument: use project root/cwd as baseDir, apply config patterns
+ *
  * @param pathArg - Path argument from CLI (optional)
  * @param logger - Logger instance
  * @returns Resource load result with registry and metadata
@@ -33,12 +37,8 @@ export async function loadResourcesWithConfig(
   pathArg: string | undefined,
   logger: Logger
 ): Promise<ResourceLoadResult> {
-  // Determine scan path
-  const scanPath = pathArg ?? process.cwd();
-  logger.debug(`Scan path: ${scanPath}`);
-
   // Find project root and load config
-  const projectRoot = findProjectRoot(scanPath);
+  const projectRoot = findProjectRoot(process.cwd());
   const config = projectRoot ? loadConfig(projectRoot) : undefined;
 
   if (config) {
@@ -48,16 +48,34 @@ export async function loadResourcesWithConfig(
   // Create registry and crawl
   const registry = new ResourceRegistry();
 
-  const crawlOptions = {
-    baseDir: scanPath,
-    ...(config?.resources?.include ? { include: config.resources.include } : {}),
-    ...(config?.resources?.exclude ? { exclude: config.resources.exclude } : {}),
-  };
+  let crawlOptions;
+
+  if (pathArg) {
+    // Path argument provided: crawl from that directory with default patterns
+    // Ignore config patterns because they're relative to project root
+    logger.debug(`Path argument provided: ${pathArg}`);
+    logger.debug('Using default patterns (ignoring config)');
+
+    crawlOptions = {
+      baseDir: pathArg,
+      // Use defaults from ResourceRegistry.crawl (will use **/*.md)
+    };
+  } else {
+    // No path argument: crawl from project root (or cwd) with config patterns
+    const scanPath = projectRoot ?? process.cwd();
+    logger.debug(`No path argument, using: ${scanPath}`);
+
+    crawlOptions = {
+      baseDir: scanPath,
+      ...(config?.resources?.include ? { include: config.resources.include } : {}),
+      ...(config?.resources?.exclude ? { exclude: config.resources.exclude } : {}),
+    };
+  }
 
   await registry.crawl(crawlOptions);
 
   return {
-    scanPath,
+    scanPath: pathArg ?? (projectRoot ?? process.cwd()),
     projectRoot,
     config,
     registry,

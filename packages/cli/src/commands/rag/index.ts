@@ -35,7 +35,7 @@ Workflow:
   4. Clear → Reset database when needed
 
 Example:
-  $ vat rag index docs/                # Index markdown into vector DB
+  $ vat rag index docs/                # Recursively index all *.md under docs/
   $ vat rag query "error handling"     # Search for relevant content
 
 Configuration:
@@ -59,8 +59,9 @@ Description:
   transformer models, and storing in a local vector database. Supports
   incremental updates (skips unchanged files).
 
-  Default path: current directory
-  Respects: vibe-agent-toolkit.config.yaml include/exclude patterns
+  Path argument: base directory to crawl (defaults to current directory)
+  When path specified: recursively finds all *.md files (ignores config)
+  When no path: uses vibe-agent-toolkit.config.yaml include/exclude patterns
 
 Output Structure (YAML):
   status: success/error
@@ -75,8 +76,8 @@ Exit Codes:
   0 - Success  |  2 - System error
 
 Example:
-  $ vat rag index docs/                # Index docs directory
-  $ vat rag index                      # Index current directory
+  $ vat rag index docs/                # Recursively index all *.md under docs/
+  $ vat rag index                      # Recursively index from current directory
   $ vat rag index --db custom.db       # Use custom database path
 `
     );

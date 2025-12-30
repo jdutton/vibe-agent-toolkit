@@ -9,7 +9,7 @@ back the most relevant content based on meaning, not just keyword matching.
 ## Quick Start
 
 ```bash
-# 1. Index your documentation
+# 1. Index your documentation (recursively finds all *.md under docs/)
 vat rag index docs/
 
 # 2. Query for relevant content
@@ -29,14 +29,20 @@ vat rag clear
 **Purpose:** Index markdown files into vector database for semantic search
 
 **What it does:**
-1. Discovers markdown files (respects config include/exclude patterns)
+1. Discovers markdown files recursively (respects config include/exclude patterns)
 2. Chunks documents into smaller pieces for efficient embedding
 3. Generates vector embeddings using transformer models (Xenova/all-MiniLM-L6-v2)
 4. Stores chunks and embeddings in LanceDB vector database
 5. Supports incremental updates (skips files with unchanged content)
 
+**Path Argument Behavior:**
+- `[path]` specifies the **base directory** to start crawling from
+- Recursively finds all `*.md` files under that directory (default pattern: `**/*.md`)
+- When path is specified, **config patterns are ignored** (to avoid pattern conflicts)
+- To use config patterns, run without path argument: `vat rag index`
+
 **Options:**
-- `[path]` - Directory to index (defaults to current directory)
+- `[path]` - Base directory to crawl (defaults to current directory)
 - `--db <path>` - Database path (default: `.rag-db` in project root)
 - `--debug` - Enable debug logging
 
@@ -48,7 +54,9 @@ vat rag clear
 
 **Example:**
 ```bash
+# Index all *.md files recursively under docs/
 vat rag index docs/
+# Equivalent to: find all files matching docs/**/*.md pattern
 
 # Output:
 # ---
@@ -70,10 +78,10 @@ The index command is idempotent - run it multiple times and it will:
 - Add new files that weren't previously indexed
 
 ```bash
-# First run: indexes all files
+# First run: indexes all *.md files recursively under docs/
 vat rag index docs/
 
-# Second run (no changes): skips all files
+# Second run (no changes): skips all files (content hash match)
 vat rag index docs/
 # resourcesSkipped: 12, chunksCreated: 0
 
