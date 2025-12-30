@@ -13,8 +13,8 @@ import type { EmbeddingProvider } from '../interfaces/embedding.js';
 export interface OpenAIEmbeddingConfig {
   /** OpenAI API key */
   apiKey: string;
-  /** Model name (default: text-embedding-3-small) */
-  model?: 'text-embedding-3-small' | 'text-embedding-3-large' | string;
+  /** Model name (default: text-embedding-3-small). Supports text-embedding-3-small, text-embedding-3-large, text-embedding-ada-002, etc. */
+  model?: string;
   /** Custom dimensions (only for text-embedding-3-* models) */
   dimensions?: number;
 }

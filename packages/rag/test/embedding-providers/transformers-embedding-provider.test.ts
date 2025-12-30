@@ -46,7 +46,7 @@ describe('TransformersEmbeddingProvider', () => {
       embedding.reduce((sum, val) => sum + val * val, 0)
     );
 
-    expect(magnitude).toBeCloseTo(1.0, 2);
+    expect(magnitude).toBeCloseTo(1, 2);
   });
 
   it('should produce different embeddings for different texts', async () => {
@@ -65,7 +65,7 @@ describe('TransformersEmbeddingProvider', () => {
     const cosineSimilarity = (a: number[], b: number[]): number => {
       const dotProduct = a.reduce((sum, val, i) => {
         const bVal = b[i];
-        return bVal !== undefined ? sum + val * bVal : sum;
+        return bVal === undefined ? sum : sum + val * bVal;
       }, 0);
       return dotProduct; // Already normalized, so dot product = cosine similarity
     };

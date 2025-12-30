@@ -86,7 +86,7 @@ Example:
     .command('query <text>')
     .description('Search RAG database with semantic query')
     .option(DB_PATH_OPTION, DB_PATH_DESC)
-    .option('--limit <n>', 'Maximum results to return (default: 10)', parseInt)
+    .option('--limit <n>', 'Maximum results to return (default: 10)', Number.parseInt)
     .option('--debug', DEBUG_OPTION_DESC)
     .action(queryCommand)
     .addHelpText(

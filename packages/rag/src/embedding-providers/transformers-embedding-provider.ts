@@ -68,11 +68,9 @@ export class TransformersEmbeddingProvider implements EmbeddingProvider {
    * @returns Vector embedding (normalized)
    */
   async embed(text: string): Promise<number[]> {
-    const extractor = (await this.getPipeline()) as {
-      (text: string, options: { pooling: string; normalize: boolean }): Promise<{
+    const extractor = (await this.getPipeline()) as (text: string, options: { pooling: string; normalize: boolean }) => Promise<{
         data: Float32Array;
       }>;
-    };
 
     const output = await extractor(text, {
       pooling: 'mean',

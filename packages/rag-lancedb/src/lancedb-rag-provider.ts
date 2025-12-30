@@ -254,7 +254,7 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
       const existingRows = await this.table.filter(`\`resourceId\` = '${resource.id}'`).execute();
 
       // Deep clone to detach from Arrow buffers (workaround for "Buffer is already detached")
-      existing = JSON.parse(JSON.stringify(existingRows)) as LanceDBRow[];
+      existing = structuredClone(existingRows) as LanceDBRow[];
 
       if (existing.length > 0 && existing[0]?.resourceContentHash === resourceContentHash) {
         result.resourcesSkipped++;

@@ -45,9 +45,9 @@ export async function queryCommand(
     // Location metadata (short)
     filePath: chunk.filePath,
     ...(chunk.headingPath ? { headingPath: chunk.headingPath } : {}),
-    ...(chunk.headingLevel !== undefined ? { headingLevel: chunk.headingLevel } : {}),
-    ...(chunk.startLine !== undefined ? { startLine: chunk.startLine } : {}),
-    ...(chunk.endLine !== undefined ? { endLine: chunk.endLine } : {}),
+    ...(chunk.headingLevel === undefined ? {} : { headingLevel: chunk.headingLevel }),
+    ...(chunk.startLine === undefined ? {} : { startLine: chunk.startLine }),
+    ...(chunk.endLine === undefined ? {} : { endLine: chunk.endLine }),
 
     // Resource metadata (short)
     ...(chunk.title ? { title: chunk.title } : {}),

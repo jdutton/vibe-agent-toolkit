@@ -37,7 +37,7 @@ describe('Embedding Provider Comparison', () => {
     );
 
     // Should be close to 1 for normalized vectors
-    expect(magnitude).toBeCloseTo(1.0, 2);
+    expect(magnitude).toBeCloseTo(1, 2);
   });
 
   it('should document model selection tradeoffs', () => {
