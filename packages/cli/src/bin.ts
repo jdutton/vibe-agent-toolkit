@@ -7,7 +7,7 @@
 
 import { Command } from 'commander';
 
-import { createRagCommand } from './commands/rag/index.js';
+import { createRagCommand, showRagVerboseHelp } from './commands/rag/index.js';
 import { createResourcesCommand, showResourcesVerboseHelp } from './commands/resources/index.js';
 import { loadVerboseHelp } from './utils/help-loader.js';
 import { createLogger } from './utils/logger.js';
@@ -68,6 +68,20 @@ if (process.argv.includes('resources') && process.argv.includes('--verbose')) {
 
   if (!hasSubcommand) {
     showResourcesVerboseHelp();
+    process.exit(0);
+  }
+}
+
+// Special handling for "rag --verbose" before parsing
+if (process.argv.includes('rag') && process.argv.includes('--verbose')) {
+  const argv = process.argv.slice(2);
+  const ragIndex = argv.indexOf('rag');
+  // Check if there's no subcommand after 'rag'
+  const afterRag = argv.slice(ragIndex + 1);
+  const hasSubcommand = afterRag.some(arg => !arg.startsWith('-'));
+
+  if (!hasSubcommand) {
+    showRagVerboseHelp();
     process.exit(0);
   }
 }

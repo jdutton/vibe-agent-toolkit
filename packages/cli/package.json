@@ -21,7 +21,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc && tsx ../dev-tools/src/prepare-bin.ts",
+    "build": "tsx src/utils/validate-help-files.ts && tsc && tsx ../dev-tools/src/prepare-bin.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config ../../vitest.integration.config.ts",
