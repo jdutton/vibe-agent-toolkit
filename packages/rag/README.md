@@ -400,8 +400,6 @@ All schemas are defined with Zod and exported as both TypeScript types and JSON 
 
 ## Architecture
 
-See the [RAG Design Document](../../docs/plans/2025-12-29-rag-design.md) for complete architecture details.
-
 **Key principles:**
 - **Interface-first**: Define contracts before implementations
 - **Pluggable components**: All providers are swappable
