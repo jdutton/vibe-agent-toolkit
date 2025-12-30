@@ -34,14 +34,16 @@ Configuration:
       'after',
       `
 Description:
-  Scans for markdown files and reports statistics. Outputs YAML to stdout.
-  Default: current directory. Respects config include/exclude patterns.
+  Recursively scans for markdown files and reports statistics. Outputs YAML to stdout.
+  Path argument: base directory (defaults to current directory)
+  When path specified: recursively finds all *.md files (ignores config)
+  When no path: uses vibe-agent-toolkit.config.yaml include/exclude patterns
 
 Output Fields:
   status, filesScanned, linksFound, duration
 
 Example:
-  $ vat resources scan docs/           # Scan docs directory
+  $ vat resources scan docs/           # Recursively scan all *.md under docs/
 `
     );
 
@@ -54,8 +56,12 @@ Example:
       'after',
       `
 Description:
-  Validates internal links and anchors in markdown files. Outputs YAML to stdout,
-  errors to stderr. External URLs are NOT validated (by design).
+  Recursively validates internal links and anchors in markdown files.
+  Path argument: base directory (defaults to current directory)
+  When path specified: recursively finds all *.md files (ignores config)
+  When no path: uses vibe-agent-toolkit.config.yaml include/exclude patterns
+  Outputs YAML to stdout, errors to stderr.
+  External URLs are NOT validated (by design).
 
 Checks:
   Internal file links, anchor links (#heading), cross-file anchors (file.md#heading)
@@ -64,7 +70,7 @@ Exit Codes:
   0 - Success  |  1 - Validation errors  |  2 - System error
 
 Example:
-  $ vat resources validate docs/        # Validate docs directory
+  $ vat resources validate docs/        # Recursively validate all *.md under docs/
 `
     );
 

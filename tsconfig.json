@@ -5,6 +5,8 @@
     { "path": "./packages/dev-tools" },
     { "path": "./packages/utils" },
     { "path": "./packages/resources" },
+    { "path": "./packages/rag" },
+    { "path": "./packages/rag-lancedb" },
     { "path": "./packages/agent-schema" },
     { "path": "./packages/cli" },
     { "path": "./packages/vibe-agent-toolkit" }

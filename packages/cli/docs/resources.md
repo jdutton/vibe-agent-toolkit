@@ -12,13 +12,19 @@ including link integrity checking and anchor validation.
 **Purpose:** Discover markdown resources in a directory
 
 **What it does:**
-1. Scans directory for markdown files (respects config include/exclude)
+1. Recursively scans for markdown files
 2. Parses each file to extract links and headings
 3. Shows statistics about discovered resources
 4. Exits 0 always (informational only)
 
+**Path Argument:**
+- `[path]` specifies the **base directory** to start crawling from
+- Recursively finds all `*.md` files under that directory (default pattern: `**/*.md`)
+- When path is specified, **config patterns are ignored** (to avoid pattern conflicts)
+- To use config patterns, run without path argument: `vat resources scan`
+
 **Options:**
-- `[path]` - Directory to scan (defaults to current directory)
+- `[path]` - Base directory to crawl (defaults to current directory)
 - `--debug` - Enable debug logging
 
 **Exit Codes:**
@@ -29,7 +35,9 @@ including link integrity checking and anchor validation.
 
 **Example:**
 ```bash
+# Recursively scan all *.md files under docs/
 vat resources scan docs/
+# Equivalent to: find all files matching docs/**/*.md pattern
 
 # Output:
 # ---
@@ -50,13 +58,19 @@ vat resources scan docs/
 **Purpose:** Validate markdown resources with strict error reporting
 
 **What it does:**
-1. Scans directory for markdown resources
+1. Recursively scans for markdown resources
 2. Validates all links (internal, anchors, external if configured)
 3. Reports errors in dual format (YAML + test format)
 4. Exits 0 if valid, 1 if errors found
 
+**Path Argument:**
+- `[path]` specifies the **base directory** to start crawling from
+- Recursively finds all `*.md` files under that directory (default pattern: `**/*.md`)
+- When path is specified, **config patterns are ignored** (to avoid pattern conflicts)
+- To use config patterns, run without path argument: `vat resources validate`
+
 **Options:**
-- `[path]` - Directory to validate (defaults to current directory)
+- `[path]` - Base directory to crawl (defaults to current directory)
 - `--debug` - Enable debug logging
 
 **Exit Codes:**
@@ -70,7 +84,9 @@ vat resources scan docs/
 
 **Example (success):**
 ```bash
+# Recursively validate all *.md files under docs/
 vat resources validate docs/
+# Equivalent to: find all files matching docs/**/*.md pattern
 
 # Output:
 # ---

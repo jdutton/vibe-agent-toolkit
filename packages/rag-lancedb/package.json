@@ -1,0 +1,45 @@
+{
+  "name": "@vibe-agent-toolkit/rag-lancedb",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "LanceDB implementation of RAG interfaces for vibe-agent-toolkit",
+  "keywords": [
+    "rag",
+    "vector-search",
+    "lancedb",
+    "embeddings"
+  ],
+  "author": "Jeff Dutton",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "clean": "rimraf dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@vibe-agent-toolkit/rag": "workspace:*",
+    "@vibe-agent-toolkit/resources": "workspace:*",
+    "@vibe-agent-toolkit/utils": "workspace:*",
+    "vectordb": "^0.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.0.0",
+    "typescript": "^5.9.0",
+    "vitest": "^3.2.0"
+  }
+}

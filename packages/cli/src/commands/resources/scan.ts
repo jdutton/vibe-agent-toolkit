@@ -2,12 +2,9 @@
  * Resources scan command - discover markdown resources
  */
 
-import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
-
-import { loadConfig } from '../../utils/config-loader.js';
 import { createLogger } from '../../utils/logger.js';
 import { writeYamlOutput } from '../../utils/output.js';
-import { findProjectRoot } from '../../utils/project-root.js';
+import { loadResourcesWithConfig } from '../../utils/resource-loader.js';
 
 import { handleCommandError } from './command-helpers.js';
 
@@ -23,29 +20,8 @@ export async function scanCommand(
   const startTime = Date.now();
 
   try {
-    // Determine scan path
-    const scanPath = pathArg ?? process.cwd();
-    logger.debug(`Scanning path: ${scanPath}`);
-
-    // Find project root and load config
-    const projectRoot = findProjectRoot(scanPath);
-    const config = projectRoot ? loadConfig(projectRoot) : undefined;
-
-    if (config && options.debug) {
-      logger.debug(`Loaded config from ${projectRoot ?? 'unknown'}`);
-    }
-
-    // Create registry and crawl
-    const registry = new ResourceRegistry();
-
-    // Build crawl options with explicit undefined handling
-    const crawlOptions = {
-      baseDir: scanPath,
-      ...(config?.resources?.include ? { include: config.resources.include } : {}),
-      ...(config?.resources?.exclude ? { exclude: config.resources.exclude } : {}),
-    };
-
-    await registry.crawl(crawlOptions);
+    // Load resources with config support
+    const { registry } = await loadResourcesWithConfig(pathArg, logger);
 
     const stats = registry.getStats();
     const duration = Date.now() - startTime;

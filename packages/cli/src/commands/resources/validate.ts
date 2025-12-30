@@ -2,12 +2,9 @@
  * Resources validate command - strict validation with error reporting
  */
 
-import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
-
-import { loadConfig } from '../../utils/config-loader.js';
 import { createLogger } from '../../utils/logger.js';
 import { flushStdout, writeTestFormatError, writeYamlOutput } from '../../utils/output.js';
-import { findProjectRoot } from '../../utils/project-root.js';
+import { loadResourcesWithConfig } from '../../utils/resource-loader.js';
 
 import { handleCommandError } from './command-helpers.js';
 
@@ -23,37 +20,8 @@ export async function validateCommand(
   const startTime = Date.now();
 
   try {
-    // Determine validation path
-    const validatePath = pathArg ?? process.cwd();
-    logger.debug(`Validating path: ${validatePath}`);
-
-    // Find project root and load config
-    const projectRoot = findProjectRoot(validatePath);
-    const config = projectRoot ? loadConfig(projectRoot) : undefined;
-
-    if (config && options.debug) {
-      logger.debug(`Loaded config from ${projectRoot}`);
-    }
-
-    // Create registry and crawl
-    const registry = new ResourceRegistry();
-    const crawlOptions: {
-      baseDir: string;
-      include?: string[];
-      exclude?: string[];
-    } = {
-      baseDir: validatePath,
-    };
-
-    if (config?.resources?.include !== undefined) {
-      crawlOptions.include = config.resources.include;
-    }
-
-    if (config?.resources?.exclude !== undefined) {
-      crawlOptions.exclude = config.resources.exclude;
-    }
-
-    await registry.crawl(crawlOptions);
+    // Load resources with config support
+    const { registry } = await loadResourcesWithConfig(pathArg, logger);
 
     // Validate all resources
     const validationResult = await registry.validate();

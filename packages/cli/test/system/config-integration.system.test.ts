@@ -112,7 +112,7 @@ resources:
     fs.mkdirSync(excludedDir);
     fs.writeFileSync(join(excludedDir, 'test.md'), '# Excluded');
 
-    // Run from nested directory
+    // Run from nested directory with explicit path
     const { result, parsed } = executeAndParseYaml(
       binPath,
       ['resources', 'scan', projectDir],
@@ -120,8 +120,42 @@ resources:
     );
 
     expect(result.status).toBe(0);
-    // Should find config in parent and apply exclude
-    expect(parsed.filesScanned).toBe(1); // Only docs/guides/test.md
+    // When path argument is provided, config is ignored (uses defaults)
+    // Finds all *.md files recursively: docs/guides/test.md + excluded/test.md
+    expect(parsed.filesScanned).toBe(2);
+  });
+
+  it('should respect config exclude patterns when no path argument provided', () => {
+    const projectDir = setupTestProject(tempDir, {
+      name: 'config-exclude-test',
+      config: `version: 1
+resources:
+  include:
+    - "**/*.md"
+  exclude:
+    - "excluded/**"
+`,
+    });
+
+    // Create files
+    const docsDir = join(projectDir, 'docs');
+    fs.mkdirSync(docsDir, { recursive: true });
+    fs.writeFileSync(join(docsDir, 'included.md'), '# Included');
+
+    const excludedDir = join(projectDir, 'excluded');
+    fs.mkdirSync(excludedDir);
+    fs.writeFileSync(join(excludedDir, 'test.md'), '# Excluded');
+
+    // Run WITHOUT path argument - should use config
+    const { result, parsed } = executeAndParseYaml(
+      binPath,
+      ['resources', 'scan'], // No path argument
+      { cwd: projectDir }
+    );
+
+    expect(result.status).toBe(0);
+    // Config exclude should be respected: only finds docs/included.md (not excluded/test.md)
+    expect(parsed.filesScanned).toBe(1);
   });
 
   it('should handle validation config options', () => {
