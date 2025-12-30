@@ -2,8 +2,10 @@
  * System tests for rag clear command
  *
  * Tests the `vat rag clear` command which removes all indexed data from
- * the vector database while preserving database structure.
+ * the vector database and deletes the database directory.
  */
+
+import path from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -14,6 +16,7 @@ const binPath = getBinPath(import.meta.url);
 describe('RAG clear command (system test)', () => {
   let tempDir: string;
   let projectDir: string;
+  let dbPath: string;
 
   beforeAll(() => {
     ({ tempDir, projectDir } = setupIndexedRagTest(
@@ -21,13 +24,18 @@ describe('RAG clear command (system test)', () => {
       'test-project',
       binPath
     ));
+    // Use path.join for cross-platform path handling
+    dbPath = path.join(projectDir, '.rag-db');
   });
 
   afterAll(() => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('should clear RAG database', () => {
+  it('should clear RAG database and delete directory', () => {
+    // Verify database directory exists before clear
+    expect(fs.existsSync(dbPath)).toBe(true);
+
     // Verify database has data
     const { parsed: statsBefore } = executeCliAndParseYaml(
       binPath,
@@ -50,14 +58,7 @@ describe('RAG clear command (system test)', () => {
     expect(parsed.message).toBe('Database cleared');
     expect(parsed.duration).toBeDefined();
 
-    // Verify database is empty
-    const { parsed: statsAfter } = executeCliAndParseYaml(
-      binPath,
-      ['rag', 'stats'],
-      { cwd: projectDir }
-    );
-
-    expect(statsAfter.status).toBe('success');
-    expect(statsAfter.totalChunks).toBe(0);
+    // Verify database directory is deleted
+    expect(fs.existsSync(dbPath)).toBe(false);
   });
 });

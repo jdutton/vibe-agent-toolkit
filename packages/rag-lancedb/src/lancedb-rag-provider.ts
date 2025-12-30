@@ -4,6 +4,7 @@
  * Implements both RAGQueryProvider and RAGAdminProvider using LanceDB.
  */
 
+import fs from 'node:fs';
 
 import type {
   EmbeddingProvider,
@@ -365,19 +366,22 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
 
   /**
    * Clear the entire database
+   *
+   * Deletes all data and removes the database directory.
+   * This is a destructive operation that cannot be undone.
    */
   async clear(): Promise<void> {
     if (this.config.readonly) {
       throw new Error('Cannot clear in readonly mode');
     }
 
-    if (this.connection) {
-      const tableNames = await this.connection.tableNames();
-      if (tableNames.includes(TABLE_NAME)) {
-        // Drop table (it will be recreated on next insert)
-        await this.connection.dropTable(TABLE_NAME);
-      }
-      this.table = null;
+    // Close connection first
+    await this.close();
+
+    // Delete entire database directory
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dbPath comes from validated config
+    if (fs.existsSync(this.config.dbPath)) {
+      fs.rmSync(this.config.dbPath, { recursive: true, force: true });
     }
   }
 

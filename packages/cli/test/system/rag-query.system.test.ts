@@ -43,23 +43,30 @@ describe('RAG query command (system test)', () => {
       { cwd: projectDir }
     );
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const output = parsed as any;
+
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
-    expect(parsed.totalMatches).toBeGreaterThan(0);
-    expect(parsed.searchDurationMs).toBeGreaterThan(0);
-    expect(parsed.embeddingModel).toBeDefined();
-    expect(Array.isArray(parsed.results)).toBe(true);
-    expect((parsed.results as unknown[]).length).toBeGreaterThan(0);
+    expect(output.status).toBe('success');
+    expect(output.stats).toBeDefined();
+    expect(output.stats.totalMatches).toBeGreaterThan(0);
+    expect(output.stats.searchDurationMs).toBeGreaterThan(0);
+    expect(output.stats.embedding.model).toBeDefined();
+    expect(Array.isArray(output.chunks)).toBe(true);
+    expect(output.chunks.length).toBeGreaterThan(0);
 
-    // Verify each result has expected fields
-    const firstResult = (parsed.results as Array<Record<string, unknown>>)[0];
-    expect(firstResult?.resourceId).toBeDefined();
-    expect(firstResult?.filePath).toBeDefined();
-    expect(firstResult?.content).toBeDefined();
+    // Verify each chunk has expected fields
+    const firstChunk = output.chunks[0];
+    expect(firstChunk?.chunkId).toBeDefined();
+    expect(firstChunk?.resourceId).toBeDefined();
+    expect(firstChunk?.filePath).toBeDefined();
+    expect(firstChunk?.content).toBeDefined();
+    expect(firstChunk?.contentHash).toBeDefined();
+    expect(firstChunk?.embeddingModel).toBeDefined();
 
-    // Verify content is truncated (max 200 chars)
-    const content = firstResult?.content as string;
-    expect(content.length).toBeLessThanOrEqual(200 + 3); // +3 for "..." suffix
+    // Verify content is full (not truncated)
+    const content = firstChunk?.content as string;
+    expect(content.length).toBeGreaterThan(0);
   });
 
   it('should limit results with --limit flag', () => {
@@ -69,10 +76,13 @@ describe('RAG query command (system test)', () => {
       { cwd: projectDir }
     );
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const output = parsed as any;
+
     expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
-    expect(Array.isArray(parsed.results)).toBe(true);
-    expect((parsed.results as unknown[]).length).toBeLessThanOrEqual(2);
+    expect(output.status).toBe('success');
+    expect(Array.isArray(output.chunks)).toBe(true);
+    expect(output.chunks.length).toBeLessThanOrEqual(2);
   });
 
   it('should error when database has no data', () => {

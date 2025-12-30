@@ -2,8 +2,6 @@
  * RAG query command - search the vector database
  */
 
-import type { RAGChunk } from '@vibe-agent-toolkit/rag';
-
 import { writeYamlOutput } from '../../utils/output.js';
 
 import { executeRagOperation, formatDuration } from './command-helpers.js';
@@ -38,36 +36,46 @@ export async function queryCommand(
 
   const duration = Date.now() - startTime;
 
-  // Format results with truncated content
-  const results = result.chunks.map((chunk: RAGChunk, index: number) => ({
-    rank: index + 1,
+  // Format chunks with explicit field order: short fields first, content last
+  const formattedChunks = result.chunks.map((chunk) => ({
+    // Identifiers
+    chunkId: chunk.chunkId,
     resourceId: chunk.resourceId,
+
+    // Location metadata (short)
     filePath: chunk.filePath,
-    content: truncateContent(chunk.content, 200),
     ...(chunk.headingPath ? { headingPath: chunk.headingPath } : {}),
+    ...(chunk.headingLevel !== undefined ? { headingLevel: chunk.headingLevel } : {}),
+    ...(chunk.startLine !== undefined ? { startLine: chunk.startLine } : {}),
+    ...(chunk.endLine !== undefined ? { endLine: chunk.endLine } : {}),
+
+    // Resource metadata (short)
     ...(chunk.title ? { title: chunk.title } : {}),
+    ...(chunk.type ? { type: chunk.type } : {}),
+    ...(chunk.tags && chunk.tags.length > 0 ? { tags: chunk.tags } : {}),
+
+    // Technical metadata (short)
+    contentHash: chunk.contentHash,
+    tokenCount: chunk.tokenCount,
+    embeddingModel: chunk.embeddingModel,
+    embeddedAt: chunk.embeddedAt,
+
+    // Context links (short)
+    ...(chunk.previousChunkId ? { previousChunkId: chunk.previousChunkId } : {}),
+    ...(chunk.nextChunkId ? { nextChunkId: chunk.nextChunkId } : {}),
+
+    // Content (long, last)
+    content: chunk.content,
   }));
 
-  // Output results as YAML
+  // Output with stats/duration before chunks (short fields first)
   writeYamlOutput({
     status: 'success',
     query: queryText,
-    totalMatches: result.stats.totalMatches,
-    searchDurationMs: result.stats.searchDurationMs,
-    embeddingModel: result.stats.embedding?.model,
-    results,
+    stats: result.stats,
     duration: formatDuration(duration),
+    chunks: formattedChunks,
   });
 
   process.exit(0);
-}
-
-/**
- * Truncate content to max length with ellipsis
- */
-function truncateContent(content: string, maxLength: number): string {
-  if (content.length <= maxLength) {
-    return content;
-  }
-  return content.slice(0, maxLength) + '...';
 }
