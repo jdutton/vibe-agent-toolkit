@@ -5,11 +5,21 @@
 import { Command } from 'commander';
 
 import { buildCommand } from './build.js';
+import { installAgent } from './install.js';
+import { installedCommand } from './installed.js';
 import { listCommand } from './list.js';
 import { runCommand } from './run.js';
+import { uninstallAgent } from './uninstall.js';
 import { validateCommand } from './validate.js';
 
 const DEBUG_OPTION_DESC = 'Enable debug logging';
+const SCOPE_OPTION = '--scope <scope>';
+const SCOPE_OPTION_DESC = 'Installation scope (user, project)';
+const SCOPE_DEFAULT = 'user';
+const RUNTIME_OPTION = '--runtime <name>';
+const RUNTIME_OPTION_DESC = 'Target runtime';
+const RUNTIME_DEFAULT = 'claude-skill';
+const DEV_MODE_DESC = 'Development mode (symlink instead of copy)';
 
 export function createAgentCommand(): Command {
   const agent = new Command('agent');
@@ -149,6 +159,100 @@ Examples:
   $ vat agent validate agent-generator          # Validate by name
   $ vat agent validate ./my-agent               # Validate by path
   $ vat agent validate ./agent.yaml             # Validate specific file
+`
+    );
+
+  agent
+    .command('install <agentName>')
+    .description('Install agent to Claude Skills directory')
+    .option(SCOPE_OPTION, SCOPE_OPTION_DESC, SCOPE_DEFAULT)
+    .option('--dev', DEV_MODE_DESC)
+    .option('--force', 'Overwrite existing installation')
+    .option(RUNTIME_OPTION, RUNTIME_OPTION_DESC, RUNTIME_DEFAULT)
+    .option('--debug', DEBUG_OPTION_DESC)
+    .action(installAgent)
+    .addHelpText(
+      'after',
+      `
+Description:
+  Installs a built agent skill to Claude Skills directory. By default,
+  copies to user scope (~/.claude/skills/). Use --dev for symlink mode
+  (rapid development iteration).
+
+Scopes:
+  - user: ~/.claude/skills/ (default, personal skills)
+  - project: ./.claude/skills/ (project-local skills)
+
+Exit Codes:
+  0 - Success  |  1 - Installation error  |  2 - System error
+
+Examples:
+  $ vat agent install agent-generator                  # Install to user scope
+  $ vat agent install agent-generator --scope project  # Install to project
+  $ vat agent install agent-generator --dev            # Symlink for dev mode
+  $ vat agent install agent-generator --force          # Overwrite existing
+
+Note: --dev (symlink) not supported on Windows. Use WSL for development.
+`
+    );
+
+  agent
+    .command('uninstall <agentName>')
+    .description('Uninstall agent from Claude Skills directory')
+    .option(SCOPE_OPTION, SCOPE_OPTION_DESC, SCOPE_DEFAULT)
+    .option(RUNTIME_OPTION, RUNTIME_OPTION_DESC, RUNTIME_DEFAULT)
+    .option('--debug', DEBUG_OPTION_DESC)
+    .action(uninstallAgent)
+    .addHelpText(
+      'after',
+      `
+Description:
+  Removes an installed agent skill from Claude Skills directory.
+  Handles both copied installations and symlinks.
+
+Scopes:
+  - user: ~/.claude/skills/ (default)
+  - project: ./.claude/skills/
+
+Exit Codes:
+  0 - Success  |  1 - Not installed  |  2 - System error
+
+Examples:
+  $ vat agent uninstall agent-generator                  # Remove from user scope
+  $ vat agent uninstall agent-generator --scope project  # Remove from project
+`
+    );
+
+  agent
+    .command('installed')
+    .description('List installed agent skills')
+    .option(SCOPE_OPTION, 'Filter by scope (user, project, all)', 'all')
+    .option(RUNTIME_OPTION, RUNTIME_OPTION_DESC, RUNTIME_DEFAULT)
+    .option('--debug', DEBUG_OPTION_DESC)
+    .action(installedCommand)
+    .addHelpText(
+      'after',
+      `
+Description:
+  Lists all installed agent skills across scopes. Shows installation
+  type (copied or symlinked) and location.
+
+Scopes:
+  - all: Scan all scopes (default)
+  - user: Only ~/.claude/skills/
+  - project: Only ./.claude/skills/
+
+Output:
+  YAML summary → stdout (for programmatic parsing)
+  Human-readable list → stderr
+
+Exit Codes:
+  0 - Success  |  2 - System error
+
+Examples:
+  $ vat agent installed                    # List all installed skills
+  $ vat agent installed --scope user       # Only user scope
+  $ vat agent installed --scope project    # Only project scope
 `
     );
 

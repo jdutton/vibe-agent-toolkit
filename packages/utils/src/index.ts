@@ -11,5 +11,8 @@ export * from './safe-exec.js';
 // Cross-platform path utilities
 export * from './path-utils.js';
 
+// Filesystem utilities
+export * from './fs-utils.js';
+
 // Directory crawling with glob patterns
 export * from './file-crawler.js';
