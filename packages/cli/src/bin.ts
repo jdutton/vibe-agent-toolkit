@@ -7,6 +7,7 @@
 
 import { Command } from 'commander';
 
+import { createAgentCommand, showAgentVerboseHelp } from './commands/agent/index.js';
 import { createRagCommand, showRagVerboseHelp } from './commands/rag/index.js';
 import { createResourcesCommand, showResourcesVerboseHelp } from './commands/resources/index.js';
 import { loadVerboseHelp } from './utils/help-loader.js';
@@ -86,9 +87,24 @@ if (process.argv.includes('rag') && process.argv.includes('--verbose')) {
   }
 }
 
+// Special handling for "agent --verbose" before parsing
+if (process.argv.includes('agent') && process.argv.includes('--verbose')) {
+  const argv = process.argv.slice(2);
+  const agentIndex = argv.indexOf('agent');
+  // Check if there's no subcommand after 'agent'
+  const afterAgent = argv.slice(agentIndex + 1);
+  const hasSubcommand = afterAgent.some(arg => !arg.startsWith('-'));
+
+  if (!hasSubcommand) {
+    showAgentVerboseHelp();
+    process.exit(0);
+  }
+}
+
 // Add command groups
 program.addCommand(createResourcesCommand());
 program.addCommand(createRagCommand());
+program.addCommand(createAgentCommand());
 
 // Handle unknown commands
 program.on('command:*', (operands) => {

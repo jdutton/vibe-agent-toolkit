@@ -1,0 +1,45 @@
+{
+  "name": "@vibe-agent-toolkit/agent-config",
+  "version": "0.1.0",
+  "description": "Agent manifest loading and validation",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "build:watch": "tsc --build --watch",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:watch": "vitest watch",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@vibe-agent-toolkit/agent-schema": "workspace:*",
+    "@vibe-agent-toolkit/utils": "workspace:*",
+    "@vibe-agent-toolkit/rag": "workspace:*",
+    "yaml": "^2.3.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "~5.7.2",
+    "vitest": "^3.0.3"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "config",
+    "validation",
+    "manifest"
+  ]
+}
