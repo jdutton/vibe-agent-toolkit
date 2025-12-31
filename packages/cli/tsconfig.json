@@ -11,6 +11,8 @@
     { "path": "../utils" },
     { "path": "../resources" },
     { "path": "../rag" },
-    { "path": "../rag-lancedb" }
+    { "path": "../rag-lancedb" },
+    { "path": "../agent-config" },
+    { "path": "../runtime-claude-skills" }
   ]
 }

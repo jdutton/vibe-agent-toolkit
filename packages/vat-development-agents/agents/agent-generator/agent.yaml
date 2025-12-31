@@ -1,6 +1,3 @@
-apiVersion: vat.dev/v1
-kind: Agent
-
 metadata:
   name: agent-generator
   version: 0.1.0

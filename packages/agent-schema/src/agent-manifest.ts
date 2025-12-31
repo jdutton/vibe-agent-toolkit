@@ -164,12 +164,6 @@ export type TestConfig = z.infer<typeof TestConfigSchema>;
  * Complete agent manifest
  */
 export const AgentManifestSchema = z.object({
-  apiVersion: z.literal('vat.dev/v1')
-    .describe('VAT API version'),
-
-  kind: z.literal('Agent')
-    .describe('Manifest kind'),
-
   metadata: AgentMetadataSchema
     .describe('Agent metadata'),
 

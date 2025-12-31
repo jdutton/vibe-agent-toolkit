@@ -27,9 +27,7 @@ describe('agent validate command (integration)', () => {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
     fs.writeFileSync(
       join(agentDir, 'agent.yaml'),
-      `apiVersion: vat.dev/v1
-kind: Agent
-metadata:
+      `metadata:
   name: test-agent
   version: 0.1.0
   description: Test agent
@@ -58,9 +56,7 @@ spec:
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
     fs.writeFileSync(
       join(agentDir, 'agent.yaml'),
-      `apiVersion: vat.dev/v1
-kind: Agent
-metadata:
+      `metadata:
   name: invalid-agent
 spec:
   llm:

@@ -110,9 +110,12 @@ export function executeBunVat(
   args: string[],
   options?: { cwd?: string }
 ): SpawnSyncReturns<string> {
+  // Find the monorepo root (where the vat script is defined)
+  const monorepoRoot = pathResolve(process.cwd(), '../..');
+
   // eslint-disable-next-line sonarjs/no-os-command-from-path -- bun is required for wrapper tests
   return nodeSpawnSync('bun', ['run', 'vat', ...args], {
     encoding: 'utf-8',
-    cwd: options?.cwd ?? process.cwd(),
+    cwd: options?.cwd ?? monorepoRoot,
   });
 }

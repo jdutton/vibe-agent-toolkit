@@ -27,8 +27,6 @@ describe('agent-validator', () => {
       fs.writeFileSync(
         path.join(agentDir, AGENT_YAML),
         `
-apiVersion: vat.dev/v1
-kind: Agent
 metadata:
   name: simple-agent
   version: 0.1.0
@@ -52,8 +50,6 @@ spec:
       fs.writeFileSync(
         path.join(agentDir, AGENT_YAML),
         `
-apiVersion: vat.dev/v1
-kind: Agent
 metadata:
   name: rag-agent
   version: 0.1.0
@@ -80,8 +76,6 @@ spec:
       fs.writeFileSync(
         path.join(agentDir, AGENT_YAML),
         `
-apiVersion: vat.dev/v1
-kind: Agent
 metadata:
   name: rag-agent
   version: 0.1.0
@@ -107,8 +101,6 @@ spec:
       fs.writeFileSync(
         path.join(agentDir, AGENT_YAML),
         `
-apiVersion: vat.dev/v1
-kind: Agent
 metadata:
   name: resource-agent
   version: 0.1.0
@@ -141,8 +133,6 @@ spec:
       fs.writeFileSync(
         path.join(agentDir, AGENT_YAML),
         `
-apiVersion: vat.dev/v1
-kind: Agent
 metadata:
   name: resource-agent
   version: 0.1.0
@@ -172,8 +162,6 @@ spec:
       fs.writeFileSync(
         path.join(agentDir, AGENT_YAML),
         `
-apiVersion: vat.dev/v1
-kind: Agent
 metadata:
   name: info-agent
   version: 1.2.3

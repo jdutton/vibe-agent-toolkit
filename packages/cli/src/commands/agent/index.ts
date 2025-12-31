@@ -4,6 +4,7 @@
 
 import { Command } from 'commander';
 
+import { buildCommand } from './build.js';
 import { listCommand } from './list.js';
 import { runCommand } from './run.js';
 import { validateCommand } from './validate.js';
@@ -27,6 +28,7 @@ Description:
 Example:
   $ vat agent list                      # List discovered agents
   $ vat agent validate agent-generator  # Validate by name
+  $ vat agent build agent-generator     # Build as Claude Skill
   $ vat agent run agent-generator "Create a PR review agent"  # Execute agent
 
 Configuration:
@@ -53,6 +55,39 @@ Description:
 Example:
   $ vat agent list                      # List all agents
   $ vat agent list --debug              # Show discovery details
+`
+    );
+
+  agent
+    .command('build <pathOrName>')
+    .description('Build agent for deployment target')
+    .option('--target <type>', 'Build target (skill, langchain, etc.)', 'skill')
+    .option('--output <path>', 'Output directory (default: dist/vat-bundles/<target>/<agent>)')
+    .option('--debug', DEBUG_OPTION_DESC)
+    .action(buildCommand)
+    .addHelpText(
+      'after',
+      `
+Description:
+  Packages an agent for a specific deployment target. Converts agent manifest,
+  prompts, and resources into target-specific format.
+
+  Argument: agent name OR path to agent directory/manifest file
+
+Targets:
+  - skill: Claude Skills (for Claude Desktop/Code)
+  - More targets coming soon (langchain, etc.)
+
+Output:
+  Default location: dist/vat-bundles/<target>/<agent-name>/
+
+Exit Codes:
+  0 - Success  |  1 - Build error  |  2 - System error
+
+Examples:
+  $ vat agent build agent-generator                    # Build as Claude Skill
+  $ vat agent build agent-generator --target skill     # Explicit target
+  $ vat agent build ./my-agent --output ./my-skill     # Custom output path
 `
     );
 

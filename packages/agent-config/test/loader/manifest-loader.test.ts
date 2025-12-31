@@ -71,8 +71,6 @@ describe('manifest-loader', () => {
       fs.writeFileSync(
         path.join(agentDir, AGENT_YAML),
         `
-apiVersion: vat.dev/v1
-kind: Agent
 metadata:
   name: test-agent
   version: 0.1.0
@@ -104,8 +102,6 @@ spec:
       fs.writeFileSync(
         path.join(agentDir, AGENT_YAML),
         `
-apiVersion: vat.dev/v1
-kind: Agent
 metadata:
   name: INVALID_NAME_WITH_CAPS
   version: 0.1.0
@@ -126,8 +122,6 @@ spec:
       fs.writeFileSync(
         manifestPath,
         `
-apiVersion: vat.dev/v1
-kind: Agent
 metadata:
   name: test-agent
   version: 0.1.0
