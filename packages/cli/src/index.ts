@@ -13,5 +13,19 @@ export { createLogger, type Logger, type LoggerOptions } from './utils/logger.js
 export { findProjectRoot } from './utils/project-root.js';
 export { writeYamlOutput, flushStdout, writeTestFormatError } from './utils/output.js';
 export { loadConfig } from './utils/config-loader.js';
-export { ProjectConfigSchema, ResourceConfigSchema, DEFAULT_CONFIG } from './schemas/config.js';
-export type { ProjectConfig, ResourceConfig } from './schemas/config.js';
+export {
+  ProjectConfigSchema,
+  ResourcesConfigSchema,
+  ResourceCollectionSchema,
+  AgentsConfigSchema,
+  RAGConfigSchema,
+  DEFAULT_CONFIG,
+} from './schemas/config.js';
+export type {
+  ProjectConfig,
+  ResourcesConfig,
+  ResourceCollection,
+  AgentsConfig,
+  RAGConfig,
+  RAGStore,
+} from './schemas/config.js';

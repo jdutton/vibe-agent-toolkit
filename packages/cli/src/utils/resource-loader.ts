@@ -67,7 +67,9 @@ export async function loadResourcesWithConfig(
 
     crawlOptions = {
       baseDir: scanPath,
+      // Apply include patterns from config (if specified)
       ...(config?.resources?.include ? { include: config.resources.include } : {}),
+      // Apply exclude patterns from config (if specified)
       ...(config?.resources?.exclude ? { exclude: config.resources.exclude } : {}),
     };
   }

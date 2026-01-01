@@ -16,3 +16,6 @@ export * from './fs-utils.js';
 
 // Directory crawling with glob patterns
 export * from './file-crawler.js';
+
+// Git ignore checking
+export * from './gitignore-checker.js';
