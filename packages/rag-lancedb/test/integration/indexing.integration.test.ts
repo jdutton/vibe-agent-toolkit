@@ -1,51 +1,50 @@
 /**
- * Integration tests for LanceDB indexing
+ * Integration tests for LanceDB RAG provider
  *
- * These tests use real LanceDB and verify the full indexing workflow.
+ * These tests use real LanceDB and TransformersEmbeddingProvider to verify:
+ * - Admin operations (indexing, deletion, clearing)
+ * - Query operations (semantic search, filtering)
+ * - Statistics and database management
+ * - Error handling and edge cases
+ *
+ * NOTE: Tests for multi-resource indexing and change detection are covered by
+ * CLI system tests in test/system/cli-dogfooding.system.test.ts, which use
+ * Node.js runtime to avoid Bun + Apache Arrow buffer issues.
+ *
+ * Related Issues:
+ * - Apache Arrow buffer issues: https://github.com/apache/arrow/issues/35355
+ * - LanceDB JS issues: https://github.com/lancedb/lancedb/issues/882
+ * - Arrow memory docs: https://arrow.apache.org/docs/python/api/memory.html
+ *
+ * The "Buffer is already detached" error occurs in Bun when querying LanceDB
+ * after table modifications. This is a Bun-specific runtime issue, not a logic
+ * error. The code works correctly in Node.js and in production where provider
+ * connections are long-lived.
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
+import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
-
-import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
-import { parseMarkdown } from '@vibe-agent-toolkit/resources';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
-
-// Test helper to create ResourceMetadata from parse result
-async function createTestResource(
-  filePath: string,
-  resourceId = 'test-1'
-): Promise<ResourceMetadata> {
-  const parseResult = await parseMarkdown(filePath);
-  return {
-    id: resourceId,
-    filePath,
-    links: [],
-    headings: parseResult.headings,
-    sizeBytes: parseResult.sizeBytes,
-    estimatedTokenCount: parseResult.estimatedTokenCount,
-  };
-}
+import { createTempDir, createTestMarkdownFile, createTestResource } from '../test-helpers.js';
 
 describe('LanceDB Indexing Integration', () => {
+  let tempDir: string;
   let dbPath: string;
   let testFilePath: string;
   let provider: LanceDBRAGProvider;
 
   beforeEach(async () => {
     // Create temporary directory for test database and files
-    const tempDir = await mkdtemp(join(tmpdir(), 'lancedb-test-'));
+    tempDir = await createTempDir();
     dbPath = join(tempDir, 'db');
-    testFilePath = join(tempDir, 'test.md');
 
     // Create a test markdown file
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- testFilePath is a controlled temp path
-    await writeFile(
-      testFilePath,
+    testFilePath = await createTestMarkdownFile(
+      tempDir,
+      'test.md',
       `# Test Document
 
 This is a test document for RAG indexing.
@@ -65,7 +64,6 @@ More content in section 2.`
       await provider.close();
     }
     // Clean up temporary directory
-    const tempDir = join(dbPath, '..');
     await rm(tempDir, { recursive: true, force: true });
   });
 
@@ -105,87 +103,6 @@ More content in section 2.`
     expect(queryResult.stats.totalMatches).toBeGreaterThan(0);
   });
 
-  it.skip('should skip unchanged resources (skipped: Bun + LanceDB Arrow buffer issue)', async () => {
-    // NOTE: This test is skipped due to a known issue with Bun runtime and Apache Arrow buffers
-    // The error "Buffer is already detached" occurs when querying LanceDB after table modifications
-    // This is a Bun-specific issue, not a logic error in our code
-    // Works correctly in Node.js and in production usage where provider connections are long-lived
-    provider = await LanceDBRAGProvider.create({ dbPath });
-
-    // Create test resource
-    const resource = await createTestResource(testFilePath);
-
-    // Index first time
-    const result1 = await provider.indexResources([resource]);
-    expect(result1.resourcesIndexed).toBe(1);
-    expect(result1.chunksCreated).toBeGreaterThan(0);
-
-    // Close and reopen provider
-    await provider.close();
-    provider = await LanceDBRAGProvider.create({ dbPath });
-
-    // Index again with same file (unchanged)
-    const result2 = await provider.indexResources([resource]);
-    expect(result2.resourcesSkipped).toBe(1);
-    expect(result2.resourcesIndexed).toBe(0);
-    expect(result2.chunksCreated).toBe(0);
-  });
-
-  it.skip('should update changed resources (skipped: Bun + LanceDB Arrow buffer issue)', async () => {
-    // NOTE: This test is skipped due to a known issue with Bun runtime and Apache Arrow buffers
-    // The error "Buffer is already detached" occurs when querying LanceDB after table modifications
-    // This is a Bun-specific issue, not a logic error in our code
-    // Works correctly in Node.js and in production usage where provider connections are long-lived
-    provider = await LanceDBRAGProvider.create({ dbPath });
-
-    // Parse and index original
-    let parseResult = await parseMarkdown(testFilePath);
-    const resource: ResourceMetadata = {
-      id: 'test-1',
-      filePath: testFilePath,
-      links: [],
-      headings: parseResult.headings,
-      sizeBytes: parseResult.sizeBytes,
-      estimatedTokenCount: parseResult.estimatedTokenCount,
-    };
-
-    const result1 = await provider.indexResources([resource]);
-    expect(result1.resourcesIndexed).toBe(1);
-    const originalChunkCount = result1.chunksCreated;
-
-    // Modify the file
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- testFilePath is a controlled temp path
-    await writeFile(
-      testFilePath,
-      `# Test Document
-
-This is a modified test document.
-
-## New Section
-
-Brand new content here.`
-    );
-
-    // Close and reopen provider
-    await provider.close();
-    provider = await LanceDBRAGProvider.create({ dbPath });
-
-    // Re-parse and index
-    parseResult = await parseMarkdown(testFilePath);
-    const updatedResource: ResourceMetadata = {
-      id: 'test-1',
-      filePath: testFilePath,
-      links: [],
-      headings: parseResult.headings,
-      sizeBytes: parseResult.sizeBytes,
-      estimatedTokenCount: parseResult.estimatedTokenCount,
-    };
-
-    const result2 = await provider.indexResources([updatedResource]);
-    expect(result2.resourcesUpdated).toBe(1);
-    expect(result2.chunksDeleted).toBe(originalChunkCount);
-    expect(result2.chunksCreated).toBeGreaterThan(0);
-  });
 
   it('should get database statistics', async () => {
     provider = await LanceDBRAGProvider.create({ dbPath });
@@ -231,5 +148,61 @@ Brand new content here.`
 
     // Should not be able to clear
     await expect(provider.clear()).rejects.toThrow('readonly mode');
+  });
+
+
+  it('should clear database', async () => {
+    provider = await LanceDBRAGProvider.create({ dbPath });
+
+    // Index a resource
+    const resource = await createTestResource(testFilePath);
+    await provider.indexResources([resource]);
+
+    // Verify data exists
+    let stats = await provider.getStats();
+    expect(stats.totalChunks).toBeGreaterThan(0);
+    expect(stats.totalResources).toBe(1);
+
+    // Clear database
+    await provider.clear();
+
+    // Verify empty
+    stats = await provider.getStats();
+    expect(stats.totalChunks).toBe(0);
+    expect(stats.totalResources).toBe(0);
+
+    // Query should fail on empty DB
+    await expect(provider.query({ text: 'test' })).rejects.toThrow('No data indexed yet');
+  });
+
+
+  it('should respect limit parameter in queries', async () => {
+    provider = await LanceDBRAGProvider.create({ dbPath });
+
+    // Create a document with multiple chunks
+    const largePath = await createTestMarkdownFile(
+      tempDir,
+      'large.md',
+      `# Large Document
+
+## Section 1
+Content for section 1 with lots of text to create multiple chunks.
+
+## Section 2
+Content for section 2 with more text.
+
+## Section 3
+Content for section 3 with additional text.
+
+## Section 4
+Content for section 4 with even more text.`
+    );
+
+    const resource = await createTestResource(largePath);
+    await provider.indexResources([resource]);
+
+    // Query with limit
+    const result = await provider.query({ text: 'content', limit: 2 });
+    expect(result.chunks.length).toBeLessThanOrEqual(2);
   });
 });
