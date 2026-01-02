@@ -12,13 +12,6 @@ describe('Bin wrapper (vat command)', () => {
     // Test the dev convenience script
     const result = executeBunVat(['--version']);
 
-    // Debug output for CI troubleshooting
-    if (result.status !== 0) {
-      console.error('Command failed with exit code:', result.status);
-      console.error('stdout:', result.stdout);
-      console.error('stderr:', result.stderr);
-    }
-
     expect(result.status).toBe(0);
     // Version format matching is safe despite backtracking potential
     // eslint-disable-next-line sonarjs/slow-regex
