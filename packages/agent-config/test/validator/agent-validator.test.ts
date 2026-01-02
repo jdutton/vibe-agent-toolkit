@@ -9,11 +9,15 @@ import { validateAgent } from '../../src/validator/agent-validator.js';
 import {
   assertValidationFailedWithUnknownManifest,
   assertValidationHasError,
+  createTestAgent,
 } from '../test-helpers.js';
 
 describe('agent-validator', () => {
   let tempDir: string;
   const AGENT_YAML = 'agent.yaml';
+  const DOCUMENTATION = 'documentation';
+  const DOCS_GUIDE_MD = './docs/guide.md';
+  const INFO_AGENT = 'info-agent';
 
   beforeAll(() => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vat-validator-test-'));
@@ -25,21 +29,11 @@ describe('agent-validator', () => {
 
   describe('validateAgent', () => {
     it('should validate agent with no tools', async () => {
-      const agentDir = path.join(tempDir, 'no-tools-agent');
-      fs.mkdirSync(agentDir);
-      fs.writeFileSync(
-        path.join(agentDir, AGENT_YAML),
-        `
-metadata:
-  name: simple-agent
-  version: 0.1.0
-  description: Simple agent
-spec:
-  llm:
-    provider: anthropic
-    model: claude-sonnet-4.5
-`
-      );
+      const agentDir = createTestAgent(tempDir, 'no-tools-agent', {
+        name: 'simple-agent',
+        version: '0.1.0',
+        description: 'Simple agent',
+      });
 
       const result = await validateAgent(agentDir);
       expect(result.valid).toBe(true);
@@ -48,50 +42,28 @@ spec:
     });
 
     it('should detect missing RAG database', async () => {
-      const agentDir = path.join(tempDir, 'missing-rag-agent');
-      fs.mkdirSync(agentDir);
-      fs.writeFileSync(
-        path.join(agentDir, AGENT_YAML),
-        `
-metadata:
-  name: rag-agent
-  version: 0.1.0
-  description: RAG agent
-spec:
-  llm:
-    provider: anthropic
-    model: claude-sonnet-4.5
-  rag:
-    default:
-      sources:
-        - path: ./docs
-`
-      );
+      const agentDir = createTestAgent(tempDir, 'missing-rag-agent', {
+        name: 'rag-agent',
+        version: '0.1.0',
+        description: 'RAG agent',
+        rag: { sources: [{ path: './docs' }] },
+      });
 
       const result = await validateAgent(agentDir);
       assertValidationHasError(result, ['RAG', 'database']);
     });
 
     it('should validate agent with existing RAG database', async () => {
-      const agentDir = path.join(tempDir, 'valid-rag-agent');
-      fs.mkdirSync(agentDir);
-      fs.mkdirSync(path.join(agentDir, '.rag-db')); // Create RAG database
-      fs.writeFileSync(
-        path.join(agentDir, AGENT_YAML),
-        `
-metadata:
-  name: rag-agent
-  version: 0.1.0
-  description: RAG agent
-spec:
-  llm:
-    provider: anthropic
-    model: claude-sonnet-4.5
-  rag:
-    default:
-      sources:
-        - path: ./docs
-`
+      const agentDir = createTestAgent(
+        tempDir,
+        'valid-rag-agent',
+        {
+          name: 'rag-agent',
+          version: '0.1.0',
+          description: 'RAG agent',
+          rag: { sources: [{ path: './docs' }] },
+        },
+        { '.rag-db/.keep': '' }
       );
 
       const result = await validateAgent(agentDir);
@@ -99,59 +71,33 @@ spec:
     });
 
     it('should detect missing resource files', async () => {
-      const agentDir = path.join(tempDir, 'missing-resource-agent');
-      fs.mkdirSync(agentDir);
-      fs.writeFileSync(
-        path.join(agentDir, AGENT_YAML),
-        `
-metadata:
-  name: resource-agent
-  version: 0.1.0
-  description: Agent with resources
-spec:
-  llm:
-    provider: anthropic
-    model: claude-sonnet-4.5
-  prompts:
-    system:
-      $ref: ./prompts/system.md
-  resources:
-    docs:
-      path: ./docs/guide.md
-      type: documentation
-`
-      );
+      const agentDir = createTestAgent(tempDir, 'missing-resource-agent', {
+        name: 'resource-agent',
+        version: '0.1.0',
+        description: 'Agent with resources',
+        prompts: { system: './prompts/system.md' },
+        resources: { docs: { path: DOCS_GUIDE_MD, type: DOCUMENTATION } },
+      });
 
       const result = await validateAgent(agentDir);
       assertValidationHasError(result, ['prompts/system.md', 'guide.md']);
     });
 
     it('should validate agent with existing resources', async () => {
-      const agentDir = path.join(tempDir, 'valid-resource-agent');
-      fs.mkdirSync(agentDir);
-      fs.mkdirSync(path.join(agentDir, 'prompts'));
-      fs.mkdirSync(path.join(agentDir, 'docs'));
-      fs.writeFileSync(path.join(agentDir, 'prompts', 'system.md'), '# System');
-      fs.writeFileSync(path.join(agentDir, 'docs', 'guide.md'), '# Guide');
-      fs.writeFileSync(
-        path.join(agentDir, AGENT_YAML),
-        `
-metadata:
-  name: resource-agent
-  version: 0.1.0
-  description: Agent with resources
-spec:
-  llm:
-    provider: anthropic
-    model: claude-sonnet-4.5
-  prompts:
-    system:
-      $ref: ./prompts/system.md
-  resources:
-    docs:
-      path: ./docs/guide.md
-      type: documentation
-`
+      const agentDir = createTestAgent(
+        tempDir,
+        'valid-resource-agent',
+        {
+          name: 'resource-agent',
+          version: '0.1.0',
+          description: 'Agent with resources',
+          prompts: { system: './prompts/system.md' },
+          resources: { docs: { path: DOCS_GUIDE_MD, type: DOCUMENTATION } },
+        },
+        {
+          'prompts/system.md': '# System',
+          'docs/guide.md': '# Guide',
+        }
       );
 
       const result = await validateAgent(agentDir);
@@ -160,66 +106,38 @@ spec:
     });
 
     it('should return validation result with manifest info', async () => {
-      const agentDir = path.join(tempDir, 'info-agent');
-      fs.mkdirSync(agentDir);
-      fs.writeFileSync(
-        path.join(agentDir, AGENT_YAML),
-        `
-metadata:
-  name: info-agent
-  version: 1.2.3
-  description: Test agent
-spec:
-  llm:
-    provider: anthropic
-    model: claude-sonnet-4.5
-`
-      );
+      const agentDir = createTestAgent(tempDir, INFO_AGENT, {
+        name: INFO_AGENT,
+        version: '1.2.3',
+        description: 'Test agent',
+      });
 
       const result = await validateAgent(agentDir);
-      expect(result.manifest.name).toBe('info-agent');
+      expect(result.manifest.name).toBe(INFO_AGENT);
       expect(result.manifest.version).toBe('1.2.3');
       expect(result.manifest.path).toContain(AGENT_YAML);
     });
 
     it('should handle agent without version', async () => {
-      const agentDir = path.join(tempDir, 'no-version-agent');
-      fs.mkdirSync(agentDir);
-      fs.writeFileSync(
-        path.join(agentDir, AGENT_YAML),
-        `
-metadata:
-  name: no-version-agent
-  description: Agent without version
-spec:
-  llm:
-    provider: anthropic
-    model: claude-sonnet-4.5
-`
-      );
+      const agentDir = createTestAgent(tempDir, 'no-version-agent', {
+        name: 'no-version-agent',
+        description: 'Agent without version',
+      });
 
       const result = await validateAgent(agentDir);
       expect(result.manifest.version).toBe('unknown');
     });
 
     it('should warn when RAG config has no sources', async () => {
-      const agentDir = path.join(tempDir, 'rag-no-sources-agent');
-      fs.mkdirSync(agentDir);
-      fs.mkdirSync(path.join(agentDir, '.rag-db')); // Create RAG database
-      fs.writeFileSync(
-        path.join(agentDir, AGENT_YAML),
-        `
-metadata:
-  name: rag-agent
-  version: 0.1.0
-spec:
-  llm:
-    provider: anthropic
-    model: claude-sonnet-4.5
-  rag:
-    default:
-      provider: lancedb
-`
+      const agentDir = createTestAgent(
+        tempDir,
+        'rag-no-sources-agent',
+        {
+          name: 'rag-agent',
+          version: '0.1.0',
+          rag: { provider: 'lancedb' },
+        },
+        { '.rag-db/.keep': '' }
       );
 
       const result = await validateAgent(agentDir);
@@ -228,30 +146,23 @@ spec:
     });
 
     it('should validate nested resources', async () => {
-      const agentDir = path.join(tempDir, 'nested-resources-agent');
-      fs.mkdirSync(agentDir);
-      fs.mkdirSync(path.join(agentDir, 'docs'));
-      fs.writeFileSync(path.join(agentDir, 'docs', 'api.md'), '# API');
-      fs.writeFileSync(path.join(agentDir, 'docs', 'guide.md'), '# Guide');
-      fs.writeFileSync(
-        path.join(agentDir, AGENT_YAML),
-        `
-metadata:
-  name: nested-agent
-  version: 0.1.0
-spec:
-  llm:
-    provider: anthropic
-    model: claude-sonnet-4.5
-  resources:
-    documentation:
-      api:
-        path: ./docs/api.md
-        type: documentation
-      guide:
-        path: ./docs/guide.md
-        type: documentation
-`
+      const agentDir = createTestAgent(
+        tempDir,
+        'nested-resources-agent',
+        {
+          name: 'nested-agent',
+          version: '0.1.0',
+          resources: {
+            [DOCUMENTATION]: {
+              api: { path: './docs/api.md', type: DOCUMENTATION },
+              guide: { path: DOCS_GUIDE_MD, type: DOCUMENTATION },
+            },
+          },
+        },
+        {
+          'docs/api.md': '# API',
+          'docs/guide.md': '# Guide',
+        }
       );
 
       const result = await validateAgent(agentDir);
@@ -260,49 +171,30 @@ spec:
     });
 
     it('should detect missing nested resources', async () => {
-      const agentDir = path.join(tempDir, 'missing-nested-agent');
-      fs.mkdirSync(agentDir);
-      fs.writeFileSync(
-        path.join(agentDir, AGENT_YAML),
-        `
-metadata:
-  name: nested-agent
-  version: 0.1.0
-spec:
-  llm:
-    provider: anthropic
-    model: claude-sonnet-4.5
-  resources:
-    documentation:
-      api:
-        path: ./docs/api.md
-        type: documentation
-`
-      );
+      const agentDir = createTestAgent(tempDir, 'missing-nested-agent', {
+        name: 'nested-agent',
+        version: '0.1.0',
+        resources: {
+          [DOCUMENTATION]: {
+            api: { path: './docs/api.md', type: DOCUMENTATION },
+          },
+        },
+      });
 
       const result = await validateAgent(agentDir);
-      assertValidationHasError(result, ['documentation.api', 'docs/api.md']);
+      assertValidationHasError(result, [`${DOCUMENTATION}.api`, 'docs/api.md']);
     });
 
     it('should validate user prompt', async () => {
-      const agentDir = path.join(tempDir, 'user-prompt-agent');
-      fs.mkdirSync(agentDir);
-      fs.mkdirSync(path.join(agentDir, 'prompts'));
-      fs.writeFileSync(path.join(agentDir, 'prompts', 'user.md'), '# User Prompt');
-      fs.writeFileSync(
-        path.join(agentDir, AGENT_YAML),
-        `
-metadata:
-  name: user-prompt-agent
-  version: 0.1.0
-spec:
-  llm:
-    provider: anthropic
-    model: claude-sonnet-4.5
-  prompts:
-    user:
-      $ref: ./prompts/user.md
-`
+      const agentDir = createTestAgent(
+        tempDir,
+        'user-prompt-agent',
+        {
+          name: 'user-prompt-agent',
+          version: '0.1.0',
+          prompts: { user: './prompts/user.md' },
+        },
+        { 'prompts/user.md': '# User Prompt' }
       );
 
       const result = await validateAgent(agentDir);
@@ -310,23 +202,11 @@ spec:
     });
 
     it('should detect missing user prompt', async () => {
-      const agentDir = path.join(tempDir, 'missing-user-prompt-agent');
-      fs.mkdirSync(agentDir);
-      fs.writeFileSync(
-        path.join(agentDir, AGENT_YAML),
-        `
-metadata:
-  name: missing-user-prompt-agent
-  version: 0.1.0
-spec:
-  llm:
-    provider: anthropic
-    model: claude-sonnet-4.5
-  prompts:
-    user:
-      $ref: ./prompts/user.md
-`
-      );
+      const agentDir = createTestAgent(tempDir, 'missing-user-prompt-agent', {
+        name: 'missing-user-prompt-agent',
+        version: '0.1.0',
+        prompts: { user: './prompts/user.md' },
+      });
 
       const result = await validateAgent(agentDir);
       assertValidationHasError(result, ['User prompt', 'user.md']);
