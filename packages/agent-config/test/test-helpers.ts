@@ -16,3 +16,18 @@ export function assertValidationHasError(
   );
   expect(hasExpectedError).toBe(true);
 }
+
+/**
+ * Assert that validation failed with unknown manifest info
+ */
+export function assertValidationFailedWithUnknownManifest(
+  result: ValidationResult,
+  options: { checkVersion?: boolean } = {}
+): void {
+  expect(result.valid).toBe(false);
+  expect(result.errors.length).toBeGreaterThan(0);
+  expect(result.manifest.name).toBe('unknown');
+  if (options.checkVersion !== false) {
+    expect(result.manifest.version).toBe('unknown');
+  }
+}

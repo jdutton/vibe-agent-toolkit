@@ -31,6 +31,8 @@ import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
 import { createTempDir, createTestMarkdownFile, createTestResource } from '../test-helpers.js';
 
 describe('LanceDB Indexing Integration', () => {
+  const SPECIFIC_RESOURCE_ID = 'specific-resource-id';
+
   let tempDir: string;
   let dbPath: string;
   let testFilePath: string;
@@ -204,5 +206,139 @@ Content for section 4 with even more text.`
     // Query with limit
     const result = await provider.query({ text: 'content', limit: 2 });
     expect(result.chunks.length).toBeLessThanOrEqual(2);
+  });
+
+  it('should filter queries by single resourceId', async () => {
+    provider = await LanceDBRAGProvider.create({ dbPath });
+
+    const resource = await createTestResource(testFilePath, SPECIFIC_RESOURCE_ID);
+    await provider.indexResources([resource]);
+
+    // Query with resourceId filter
+    const result = await provider.query({
+      text: 'content',
+      filters: { resourceId: SPECIFIC_RESOURCE_ID },
+    });
+
+    expect(result.chunks.every(chunk => chunk.resourceId === SPECIFIC_RESOURCE_ID)).toBe(true);
+  });
+
+  it.skipIf(typeof Bun !== 'undefined')(
+    'should handle empty resourceId filter array',
+    async () => {
+      provider = await LanceDBRAGProvider.create({ dbPath });
+
+      const resource = await createTestResource(testFilePath);
+      await provider.indexResources([resource]);
+
+      // Close and reopen to avoid Bun + Arrow buffer detachment
+      await provider.close();
+      provider = await LanceDBRAGProvider.create({ dbPath });
+
+      // Query with empty resourceId array (should match nothing via "1 = 0" clause)
+      const result = await provider.query({
+        text: 'content',
+        filters: { resourceId: [] },
+      });
+
+      expect(result.chunks).toHaveLength(0);
+    }
+  );
+
+  it.skipIf(typeof Bun !== 'undefined')('should delete specific resource', async () => {
+    provider = await LanceDBRAGProvider.create({ dbPath });
+
+    const resource = await createTestResource(testFilePath, 'resource-to-delete');
+    await provider.indexResources([resource]);
+
+    // Close and reopen to avoid Bun + Arrow buffer detachment after indexing
+    await provider.close();
+    provider = await LanceDBRAGProvider.create({ dbPath });
+
+    // Verify resource exists
+    let stats = await provider.getStats();
+    expect(stats.totalChunks).toBeGreaterThan(0);
+
+    // Delete the resource
+    await provider.deleteResource('resource-to-delete');
+
+    // Close and reopen again after deletion
+    await provider.close();
+    provider = await LanceDBRAGProvider.create({ dbPath });
+
+    // Verify empty after deletion
+    stats = await provider.getStats();
+    expect(stats.totalChunks).toBe(0);
+  });
+
+  it('should skip indexing unchanged resources', async () => {
+    provider = await LanceDBRAGProvider.create({ dbPath });
+
+    const resource = await createTestResource(testFilePath);
+
+    // Index first time
+    const result1 = await provider.indexResources([resource]);
+    expect(result1.resourcesIndexed).toBe(1);
+    expect(result1.resourcesSkipped).toBe(0);
+
+    // Index again (should skip)
+    const result2 = await provider.indexResources([resource]);
+    expect(result2.resourcesIndexed).toBe(0);
+    expect(result2.resourcesSkipped).toBe(1);
+  });
+
+  it('should update changed resources', async () => {
+    provider = await LanceDBRAGProvider.create({ dbPath });
+
+    const resource = await createTestResource(testFilePath);
+
+    // Index first time
+    await provider.indexResources([resource]);
+
+    // Modify file content
+    const modifiedPath = await createTestMarkdownFile(
+      tempDir,
+      'test-modified.md',
+      '# Modified Document\n\nThis is completely different content.'
+    );
+    const modifiedResource = await createTestResource(modifiedPath, resource.id);
+
+    // Index again (should update)
+    const result = await provider.indexResources([modifiedResource]);
+    expect(result.resourcesUpdated).toBe(1);
+    expect(result.chunksDeleted).toBeGreaterThan(0);
+    expect(result.chunksCreated).toBeGreaterThan(0);
+  });
+
+  it('should handle indexing errors gracefully', async () => {
+    provider = await LanceDBRAGProvider.create({ dbPath });
+
+    // Create resource with non-existent file
+    const badResource = {
+      id: 'bad-resource',
+      title: 'Bad Resource',
+      type: 'documentation' as const,
+      filePath: join(tempDir, 'nonexistent.md'),
+      relativePath: 'nonexistent.md',
+    };
+
+    const result = await provider.indexResources([badResource]);
+    expect(result.errors?.length).toBeGreaterThan(0);
+    expect(result.errors?.[0]?.resourceId).toBe('bad-resource');
+  });
+
+  it('should get stats for empty database', async () => {
+    provider = await LanceDBRAGProvider.create({ dbPath });
+
+    const stats = await provider.getStats();
+    expect(stats.totalChunks).toBe(0);
+    expect(stats.totalResources).toBe(0);
+    expect(stats.embeddingModel).toBeTruthy();
+  });
+
+  it('should throw error for updateResource', async () => {
+    provider = await LanceDBRAGProvider.create({ dbPath });
+
+    await expect(provider.updateResource('test-id')).rejects.toThrow('Not implemented');
   });
 });

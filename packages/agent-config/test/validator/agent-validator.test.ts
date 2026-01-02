@@ -6,7 +6,10 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { validateAgent } from '../../src/validator/agent-validator.js';
-import { assertValidationHasError } from '../test-helpers.js';
+import {
+  assertValidationFailedWithUnknownManifest,
+  assertValidationHasError,
+} from '../test-helpers.js';
 
 describe('agent-validator', () => {
   let tempDir: string;
@@ -177,6 +180,176 @@ spec:
       expect(result.manifest.name).toBe('info-agent');
       expect(result.manifest.version).toBe('1.2.3');
       expect(result.manifest.path).toContain(AGENT_YAML);
+    });
+
+    it('should handle agent without version', async () => {
+      const agentDir = path.join(tempDir, 'no-version-agent');
+      fs.mkdirSync(agentDir);
+      fs.writeFileSync(
+        path.join(agentDir, AGENT_YAML),
+        `
+metadata:
+  name: no-version-agent
+  description: Agent without version
+spec:
+  llm:
+    provider: anthropic
+    model: claude-sonnet-4.5
+`
+      );
+
+      const result = await validateAgent(agentDir);
+      expect(result.manifest.version).toBe('unknown');
+    });
+
+    it('should warn when RAG config has no sources', async () => {
+      const agentDir = path.join(tempDir, 'rag-no-sources-agent');
+      fs.mkdirSync(agentDir);
+      fs.mkdirSync(path.join(agentDir, '.rag-db')); // Create RAG database
+      fs.writeFileSync(
+        path.join(agentDir, AGENT_YAML),
+        `
+metadata:
+  name: rag-agent
+  version: 0.1.0
+spec:
+  llm:
+    provider: anthropic
+    model: claude-sonnet-4.5
+  rag:
+    default:
+      provider: lancedb
+`
+      );
+
+      const result = await validateAgent(agentDir);
+      expect(result.valid).toBe(true);
+      expect(result.warnings).toContain('RAG configuration defined but no sources specified');
+    });
+
+    it('should validate nested resources', async () => {
+      const agentDir = path.join(tempDir, 'nested-resources-agent');
+      fs.mkdirSync(agentDir);
+      fs.mkdirSync(path.join(agentDir, 'docs'));
+      fs.writeFileSync(path.join(agentDir, 'docs', 'api.md'), '# API');
+      fs.writeFileSync(path.join(agentDir, 'docs', 'guide.md'), '# Guide');
+      fs.writeFileSync(
+        path.join(agentDir, AGENT_YAML),
+        `
+metadata:
+  name: nested-agent
+  version: 0.1.0
+spec:
+  llm:
+    provider: anthropic
+    model: claude-sonnet-4.5
+  resources:
+    documentation:
+      api:
+        path: ./docs/api.md
+        type: documentation
+      guide:
+        path: ./docs/guide.md
+        type: documentation
+`
+      );
+
+      const result = await validateAgent(agentDir);
+      expect(result.valid).toBe(true);
+      expect(result.errors).toEqual([]);
+    });
+
+    it('should detect missing nested resources', async () => {
+      const agentDir = path.join(tempDir, 'missing-nested-agent');
+      fs.mkdirSync(agentDir);
+      fs.writeFileSync(
+        path.join(agentDir, AGENT_YAML),
+        `
+metadata:
+  name: nested-agent
+  version: 0.1.0
+spec:
+  llm:
+    provider: anthropic
+    model: claude-sonnet-4.5
+  resources:
+    documentation:
+      api:
+        path: ./docs/api.md
+        type: documentation
+`
+      );
+
+      const result = await validateAgent(agentDir);
+      assertValidationHasError(result, ['documentation.api', 'docs/api.md']);
+    });
+
+    it('should validate user prompt', async () => {
+      const agentDir = path.join(tempDir, 'user-prompt-agent');
+      fs.mkdirSync(agentDir);
+      fs.mkdirSync(path.join(agentDir, 'prompts'));
+      fs.writeFileSync(path.join(agentDir, 'prompts', 'user.md'), '# User Prompt');
+      fs.writeFileSync(
+        path.join(agentDir, AGENT_YAML),
+        `
+metadata:
+  name: user-prompt-agent
+  version: 0.1.0
+spec:
+  llm:
+    provider: anthropic
+    model: claude-sonnet-4.5
+  prompts:
+    user:
+      $ref: ./prompts/user.md
+`
+      );
+
+      const result = await validateAgent(agentDir);
+      expect(result.valid).toBe(true);
+    });
+
+    it('should detect missing user prompt', async () => {
+      const agentDir = path.join(tempDir, 'missing-user-prompt-agent');
+      fs.mkdirSync(agentDir);
+      fs.writeFileSync(
+        path.join(agentDir, AGENT_YAML),
+        `
+metadata:
+  name: missing-user-prompt-agent
+  version: 0.1.0
+spec:
+  llm:
+    provider: anthropic
+    model: claude-sonnet-4.5
+  prompts:
+    user:
+      $ref: ./prompts/user.md
+`
+      );
+
+      const result = await validateAgent(agentDir);
+      assertValidationHasError(result, ['User prompt', 'user.md']);
+    });
+
+    it('should handle invalid manifest file', async () => {
+      const agentDir = path.join(tempDir, 'invalid-manifest-agent');
+      fs.mkdirSync(agentDir);
+      fs.writeFileSync(
+        path.join(agentDir, AGENT_YAML),
+        'invalid: yaml: [[[{'
+      );
+
+      const result = await validateAgent(agentDir);
+      assertValidationFailedWithUnknownManifest(result);
+    });
+
+    it('should handle nonexistent manifest file', async () => {
+      const agentDir = path.join(tempDir, 'nonexistent-agent');
+      fs.mkdirSync(agentDir);
+
+      const result = await validateAgent(agentDir);
+      assertValidationFailedWithUnknownManifest(result, { checkVersion: false });
     });
   });
 });
