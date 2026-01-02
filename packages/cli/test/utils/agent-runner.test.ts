@@ -1,8 +1,18 @@
 /**
  * Tests for agent-runner utility
+ *
+ * Uses real temp files instead of mocking node:fs/promises to avoid
+ * global mock leakage that affects other test files.
+ *
+ * @vitest-environment node
+ * @vitest-pool forks
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as agentRunner from '../../src/utils/agent-runner.js';
 
@@ -24,28 +34,9 @@ vi.mock('@anthropic-ai/sdk', () => {
   };
 });
 
-// Mock the agent-config module
+// Mock the agent-config module - will be configured per-test with real temp paths
 vi.mock('@vibe-agent-toolkit/agent-config', () => ({
-  loadAgentManifest: vi.fn().mockResolvedValue({
-    // eslint-disable-next-line sonarjs/publicly-writable-directories -- Test mock path
-    __manifestPath: '/tmp/test-agent/agent.yaml',
-    metadata: {
-      name: 'test-agent',
-      version: '0.1.0',
-    },
-    spec: {
-      llm: {
-        provider: 'anthropic',
-        model: 'claude-sonnet-4.5',
-        temperature: 0.7,
-        maxTokens: 4096,
-      },
-      prompts: {
-        system: { $ref: './prompts/system.md' },
-        user: { $ref: './prompts/user.md' },
-      },
-    },
-  }),
+  loadAgentManifest: vi.fn(),
 }));
 
 // Test constants - defined after mocks due to hoisting
@@ -53,39 +44,75 @@ const TEST_AGENT_NAME = 'test-agent';
 const TEST_AGENT_VERSION = '0.1.0';
 const TEST_MODEL = 'claude-sonnet-4.5';
 const TEST_PROVIDER = 'anthropic';
-// eslint-disable-next-line sonarjs/publicly-writable-directories -- Test mock path, not used for actual file operations
-const TEST_MANIFEST_PATH = '/tmp/test-agent/agent.yaml';
 const SYSTEM_PROMPT_REF = './prompts/system.md';
 const USER_PROMPT_REF = './prompts/user.md';
 const MOCK_RESPONSE_TEXT = 'Mocked response';
-
-// Mock fs promises
-vi.mock('node:fs/promises', () => ({
-  readFile: vi.fn().mockImplementation((path: string) => {
-    if (path.includes('system.md')) {
-      return Promise.resolve('You are a helpful assistant.');
-    }
-    if (path.includes('user.md')) {
-      return Promise.resolve('User input: {{userInput}}');
-    }
-    return Promise.reject(new Error('File not found'));
-  }),
-}));
-
-// Helper to mock loadAgentManifest with custom manifest
-async function mockAgentManifestOnce(partialManifest: Record<string, unknown>): Promise<void> {
-  const agentConfig = await import('@vibe-agent-toolkit/agent-config');
-  const mockLoadAgentManifest = agentConfig.loadAgentManifest as ReturnType<typeof vi.fn>;
-  mockLoadAgentManifest.mockResolvedValueOnce(partialManifest as never);
-}
+const SYSTEM_PROMPT_CONTENT = 'You are a helpful assistant.';
+const USER_PROMPT_CONTENT = 'User input: {{userInput}}';
 
 describe('agent-runner', () => {
+  let tempDir: string;
+  let manifestPath: string;
   const originalEnv = process.env;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.clearAllMocks();
     process.env = { ...originalEnv };
+
+    // Create temp directory structure for test agent
+    tempDir = await mkdtemp(join(tmpdir(), 'agent-runner-test-'));
+    manifestPath = join(tempDir, 'agent.yaml');
+
+    // Create prompts directory and files
+    const promptsDir = join(tempDir, 'prompts');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtemp (safe)
+    await mkdir(promptsDir, { recursive: true });
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- promptsDir is from mkdtemp (safe)
+    await writeFile(join(promptsDir, 'system.md'), SYSTEM_PROMPT_CONTENT);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- promptsDir is from mkdtemp (safe)
+    await writeFile(join(promptsDir, 'user.md'), USER_PROMPT_CONTENT);
+
+    // Setup default mock for loadAgentManifest
+    const agentConfig = await import('@vibe-agent-toolkit/agent-config');
+    const mockLoadAgentManifest = agentConfig.loadAgentManifest as ReturnType<typeof vi.fn>;
+    mockLoadAgentManifest.mockResolvedValue({
+      __manifestPath: manifestPath,
+      metadata: {
+        name: TEST_AGENT_NAME,
+        version: TEST_AGENT_VERSION,
+      },
+      spec: {
+        llm: {
+          provider: TEST_PROVIDER,
+          model: TEST_MODEL,
+          temperature: 0.7,
+          maxTokens: 4096,
+        },
+        prompts: {
+          system: { $ref: SYSTEM_PROMPT_REF },
+          user: { $ref: USER_PROMPT_REF },
+        },
+      },
+    });
   });
+
+  afterAll(async () => {
+    // Clean up temp directory
+    if (tempDir) {
+      await rm(tempDir, { recursive: true, force: true });
+    }
+    vi.restoreAllMocks();
+  });
+
+  // Helper to mock loadAgentManifest with custom manifest for a single test
+  async function mockAgentManifestOnce(partialManifest: Record<string, unknown>): Promise<void> {
+    const agentConfig = await import('@vibe-agent-toolkit/agent-config');
+    const mockLoadAgentManifest = agentConfig.loadAgentManifest as ReturnType<typeof vi.fn>;
+    mockLoadAgentManifest.mockResolvedValueOnce({
+      __manifestPath: manifestPath,
+      ...partialManifest,
+    } as never);
+  }
 
   describe('runAgent', () => {
     it('should run agent successfully with valid inputs', async () => {
@@ -118,7 +145,6 @@ describe('agent-runner', () => {
       process.env['ANTHROPIC_API_KEY'] = 'test-key';
 
       await mockAgentManifestOnce({
-        __manifestPath: TEST_MANIFEST_PATH,
         metadata: { name: TEST_AGENT_NAME, version: TEST_AGENT_VERSION },
         spec: {
           llm: {
@@ -157,7 +183,6 @@ describe('agent-runner', () => {
       process.env['ANTHROPIC_API_KEY'] = 'test-key';
 
       await mockAgentManifestOnce({
-        __manifestPath: TEST_MANIFEST_PATH,
         metadata: { name: TEST_AGENT_NAME, version: TEST_AGENT_VERSION },
         spec: {
           llm: {
