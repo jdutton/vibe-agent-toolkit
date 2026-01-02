@@ -12,7 +12,7 @@ describe('Bin wrapper (vat command)', () => {
     // Test the dev convenience script
     const result = executeBunVat(import.meta.url, ['--version']);
 
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status).toBe(0);
     // Version format matching is safe despite backtracking potential
     // eslint-disable-next-line sonarjs/slow-regex
     expect(result.stdout).toMatch(/\d+\.\d+\.\d+/);
@@ -21,7 +21,7 @@ describe('Bin wrapper (vat command)', () => {
   it('should handle --help flag', () => {
     const result = executeBunVat(import.meta.url, ['--help']);
 
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status).toBe(0);
     expect(result.stdout).toContain('Vibe Agent Toolkit');
     expect(result.stdout).toContain('resources');
   });
@@ -29,7 +29,7 @@ describe('Bin wrapper (vat command)', () => {
   it('should handle --help --verbose flag', () => {
     const result = executeBunVat(import.meta.url, ['--help', '--verbose']);
 
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status).toBe(0);
     expect(result.stdout).toContain('# vat - Vibe Agent Toolkit CLI');
     expect(result.stdout).toContain('## Overview');
   });
@@ -37,7 +37,7 @@ describe('Bin wrapper (vat command)', () => {
   it('should pass through subcommands correctly', () => {
     const result = executeBunVat(import.meta.url, ['resources', '--help']);
 
-    expect(result.status, result.stderr).toBe(0);
+    expect(result.status).toBe(0);
     expect(result.stdout).toContain('Markdown resource scanning');
   });
 });

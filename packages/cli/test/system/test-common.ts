@@ -119,29 +119,8 @@ export function executeBunVat(
   const monorepoRoot = pathResolve(testDir, '../../../..');
 
   // eslint-disable-next-line sonarjs/no-os-command-from-path -- bun is required for wrapper tests
-  const result = nodeSpawnSync('bun', ['run', 'vat', ...args], {
+  return nodeSpawnSync('bun', ['run', 'vat', ...args], {
     encoding: 'utf-8',
     cwd: options?.cwd ?? monorepoRoot,
   });
-
-  // DIAGNOSTIC: If command fails, augment result with diagnostic info
-  if (result.status !== 0) {
-    const diagnostics = `
-DIAGNOSTIC INFO:
-  Test file: ${testFileUrl}
-  Test dir: ${testDir}
-  Resolved monorepo root: ${monorepoRoot}
-  Command: bun run vat ${args.join(' ')}
-  Working directory: ${options?.cwd ?? monorepoRoot}
-  Exit code: ${result.status}
-  Signal: ${result.signal}
-  Error: ${result.error?.message ?? 'none'}
-  stdout: ${result.stdout}
-  stderr: ${result.stderr}
-`;
-    // Prepend diagnostics to stderr for visibility in test output
-    result.stderr = diagnostics + result.stderr;
-  }
-
-  return result;
 }
