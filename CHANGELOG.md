@@ -8,32 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Agent testing framework for multi-LLM support
-- Agent packaging utilities for portable deployment
-- Support for various agent frameworks
-- TypeScript configuration with strict mode
-- ESLint with sonarjs, unicorn, and security plugins
-- Vitest for unit, integration, and system testing
-- vibe-validate for git-aware validation
-- Code duplication checking with jscpd
-- CI/CD with GitHub Actions (Node 22/24, Ubuntu/Windows)
-- Pre-commit hooks with Husky
-- Cross-platform development tools
+- **Agent Runtime**: Execute agents with `vat agent run <name> "input"` using Anthropic API
+- **Agent Discovery**: List all agents in your project with `vat agent list`
+- **Agent Validation**: Validate manifests and resources with `vat agent validate <name>`
+- **Claude Skills Packaging**: Build agents as Claude Skills with `vat agent build <name>`
+- **Installation Management**: Install/uninstall Claude Skills locally with `vat agent install/uninstall <name>`
+- **Installation Scopes**: Control installation location with `--scope user|project`
+- **Dev Mode**: Symlink-based development workflow with `--dev` flag
+- **Gitignore Support**: File crawler and link validator now respect `.gitignore` patterns
+- **RAG System**: Document indexing and semantic search with LanceDB
+- New package: `@vibe-agent-toolkit/agent-config` - agent manifest loading and validation
+- New package: `@vibe-agent-toolkit/runtime-claude-skills` - Claude Skills builder and installer
 
 ### Changed
-- Nothing yet
-
-### Deprecated
-- Nothing yet
-
-### Removed
-- Nothing yet
-
-### Fixed
-- Nothing yet
-
-### Security
-- Nothing yet
+- Simplified agent manifest schema - removed `apiVersion` and `kind` fields
+- Simplified config schema - `resources.exclude` instead of `resources.defaults.exclude`
+- Link validator now warns when links point to gitignored files
 
 ## [0.1.0] - 2025-12-26
 
