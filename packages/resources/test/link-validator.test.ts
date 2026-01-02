@@ -11,7 +11,7 @@
 
 import path from 'node:path';
 
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { validateLink } from '../src/link-validator.js';
 import type { HeadingNode } from '../src/types.js';
@@ -33,12 +33,13 @@ const HEADING_ANCHOR_HEADING = { text: 'Heading Anchor', slug: 'heading-anchor' 
 // Common test links
 const NONEXISTENT_FILE_LINK = './nonexistent.md';
 const NONEXISTENT_ANCHOR = '#nonexistent';
+const TARGET_FILE_LINK = './target.md';
 
 describe('validateLink', () => {
   describe('local_file links', () => {
     it('should validate valid relative path', async () => {
       const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
-      const link = createLink('local_file', './target.md', 'Link to target', 3);
+      const link = createLink('local_file', TARGET_FILE_LINK, 'Link to target', 3);
       const headingsMap = new Map<string, HeadingNode[]>();
 
       const result = await validateLink(link, sourceFile, headingsMap);
@@ -310,7 +311,7 @@ describe('validateLink', () => {
   describe('cross-platform path handling', () => {
     it('should handle Unix-style paths', async () => {
       const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
-      const link = createLink('local_file', './target.md', 'Unix path');
+      const link = createLink('local_file', TARGET_FILE_LINK, 'Unix path');
       const headingsMap = new Map<string, HeadingNode[]>();
 
       const result = await validateLink(link, sourceFile, headingsMap);
@@ -465,6 +466,123 @@ describe('validateLink', () => {
 
       expect(result?.suggestion).toBeDefined();
       expect(result?.suggestion).toContain('heading');
+    });
+  });
+
+  describe('gitignored files', () => {
+    let tempDir: string;
+    let gitRoot: string;
+    const GITIGNORE_FILE = '.gitignore';
+
+    beforeEach(async () => {
+      const fs = await import('node:fs');
+      const os = await import('node:os');
+
+      // Create temp directory with git repo
+      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'link-validator-gitignore-'));
+      gitRoot = tempDir;
+
+      // Create .git directory
+      fs.mkdirSync(path.join(gitRoot, '.git'));
+    });
+
+    afterEach(async () => {
+      const fs = await import('node:fs');
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    });
+
+    /**
+     * Helper to test that a link to a gitignored file returns an error
+     */
+    async function assertGitignoreError(linkHref: string, linkText: string): Promise<void> {
+      const sourceFile = path.join(gitRoot, 'source.md');
+      const link = createLink('local_file', linkHref, linkText, 1);
+      const headingsMap = new Map<string, HeadingNode[]>();
+
+      await assertValidation(
+        {
+          sourceFile,
+          link,
+          headingsMap,
+          expected: {
+            severity: 'error',
+            type: 'broken_file',
+            messageContains: 'gitignored',
+            hasSuggestion: true,
+          },
+        },
+        expect
+      );
+    }
+
+    // eslint-disable-next-line sonarjs/assertions-in-tests -- assertValidation helper contains assertions
+    it('should return error for links to gitignored files', async () => {
+      const fs = await import('node:fs');
+
+      // Create .gitignore file
+      const gitignorePath = path.join(gitRoot, GITIGNORE_FILE);
+      fs.writeFileSync(gitignorePath, 'ignored.md\n');
+
+      // Create gitignored file
+      const ignoredFile = path.join(gitRoot, 'ignored.md');
+      fs.writeFileSync(ignoredFile, '# Ignored');
+
+      // Create source file
+      const sourceFile = path.join(gitRoot, 'source.md');
+      fs.writeFileSync(sourceFile, '# Source');
+
+      await assertGitignoreError('./ignored.md', 'Link to ignored');
+    });
+
+    // eslint-disable-next-line sonarjs/assertions-in-tests -- assertValidation helper contains assertions
+    it('should pass for links to non-gitignored files in git repo', async () => {
+      const fs = await import('node:fs');
+
+      // Create .gitignore file (ignoring other files)
+      const gitignorePath = path.join(gitRoot, GITIGNORE_FILE);
+      fs.writeFileSync(gitignorePath, 'other.md\n');
+
+      // Create non-gitignored file
+      const targetFile = path.join(gitRoot, 'target.md');
+      fs.writeFileSync(targetFile, '# Target');
+
+      // Create source file
+      const sourceFile = path.join(gitRoot, 'source.md');
+      fs.writeFileSync(sourceFile, '# Source');
+
+      const link = createLink('local_file', TARGET_FILE_LINK, 'Link to target', 1);
+      const headingsMap = new Map<string, HeadingNode[]>();
+
+      await assertValidation(
+        {
+          sourceFile,
+          link,
+          headingsMap,
+          expected: null,
+        },
+        expect
+      );
+    });
+
+    // eslint-disable-next-line sonarjs/assertions-in-tests -- assertValidation helper contains assertions
+    it('should return error for links to gitignored directories', async () => {
+      const fs = await import('node:fs');
+
+      // Create .gitignore file
+      const gitignorePath = path.join(gitRoot, GITIGNORE_FILE);
+      fs.writeFileSync(gitignorePath, 'private/\n');
+
+      // Create gitignored directory with file
+      const privateDir = path.join(gitRoot, 'private');
+      fs.mkdirSync(privateDir);
+      const ignoredFile = path.join(privateDir, 'secret.md');
+      fs.writeFileSync(ignoredFile, '# Secret');
+
+      // Create source file
+      const sourceFile = path.join(gitRoot, 'source.md');
+      fs.writeFileSync(sourceFile, '# Source');
+
+      await assertGitignoreError('./private/secret.md', 'Link to secret');
     });
   });
 });

@@ -328,4 +328,50 @@ describe('file-crawler', () => {
       expect(files.every((f) => f.startsWith(testDir))).toBe(true);
     });
   });
+
+  describe('gitignore integration', () => {
+    it('should respect .gitignore by default', () => {
+      createTestStructure();
+
+      // Create .git directory to make it a git repo
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is controlled temp directory
+      mkdirSync(path.join(testDir, '.git'));
+
+      // Create .gitignore file
+      const gitignorePath = path.join(testDir, '.gitignore');
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is controlled temp directory
+      writeFileSync(gitignorePath, 'docs/\n*.log\n');
+
+      const files = crawlDirectorySync({
+        baseDir: testDir,
+        include: ['**/*'],
+      });
+
+      // Should not include docs/ directory or *.log files
+      expect(files.every((f) => !f.includes('docs'))).toBe(true);
+      expect(files.every((f) => !f.endsWith('.log'))).toBe(true);
+    });
+
+    it('should allow disabling gitignore', () => {
+      createTestStructure();
+
+      // Create .git directory
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is controlled temp directory
+      mkdirSync(path.join(testDir, '.git'));
+
+      // Create .gitignore file
+      const gitignorePath = path.join(testDir, '.gitignore');
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is controlled temp directory
+      writeFileSync(gitignorePath, 'docs/\n');
+
+      const files = crawlDirectorySync({
+        baseDir: testDir,
+        include: ['**/*.md'],
+        respectGitignore: false,
+      });
+
+      // Should include docs/ files since gitignore is disabled
+      expect(files.some((f) => f.includes('docs'))).toBe(true);
+    });
+  });
 });

@@ -1,0 +1,43 @@
+{
+  "name": "@vibe-agent-toolkit/runtime-claude-skills",
+  "version": "0.1.0",
+  "description": "Build and package VAT agents as Claude Skills",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "build:watch": "tsc --build --watch",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:watch": "vitest watch",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@vibe-agent-toolkit/agent-config": "workspace:*",
+    "@vibe-agent-toolkit/utils": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "~5.7.2",
+    "vitest": "^3.0.3"
+  },
+  "keywords": [
+    "ai",
+    "agent",
+    "claude",
+    "skills",
+    "runtime"
+  ]
+}

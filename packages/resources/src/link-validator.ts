@@ -12,6 +12,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+import { isGitignored } from '@vibe-agent-toolkit/utils';
+
 import type { ValidationIssue } from './schemas/validation-result.js';
 import type { HeadingNode, ResourceLink } from './types.js';
 import { splitHrefAnchor } from './utils.js';
@@ -103,6 +105,20 @@ async function validateLocalFileLink(
     };
   }
 
+  // Check if the file is gitignored
+  if (fileResult.isGitignored) {
+    return {
+      severity: 'error',
+      resourcePath: sourceFilePath,
+      line: link.line,
+      type: 'broken_file',
+      link: link.href,
+      message: `File is gitignored: ${fileResult.resolvedPath}`,
+      suggestion:
+        'Gitignored files are local-only and will not exist in the repository. Remove this link or unignore the target file.',
+    };
+  }
+
   // If there's an anchor, validate it too
   if (anchor) {
     const anchorValid = await validateAnchor(
@@ -158,16 +174,16 @@ async function validateAnchorLink(
 
 
 /**
- * Validate that a local file exists.
+ * Validate that a local file exists and is not gitignored.
  *
  * @param href - The href to the file (relative or absolute)
  * @param sourceFilePath - Absolute path to the source file
- * @returns Object with exists flag and resolved absolute path
+ * @returns Object with exists flag, resolved absolute path, and gitignored flag
  *
  * @example
  * ```typescript
  * const result = await validateLocalFile('./docs/guide.md', '/project/README.md');
- * if (result.exists) {
+ * if (result.exists && !result.isGitignored) {
  *   console.log('File exists at:', result.resolvedPath);
  * }
  * ```
@@ -175,18 +191,24 @@ async function validateAnchorLink(
 async function validateLocalFile(
   href: string,
   sourceFilePath: string
-): Promise<{ exists: boolean; resolvedPath: string }> {
+): Promise<{ exists: boolean; resolvedPath: string; isGitignored: boolean }> {
   // Resolve the path relative to the source file's directory
   const sourceDir = path.dirname(sourceFilePath);
   const resolvedPath = path.resolve(sourceDir, href);
 
   // Check if file exists
+  let exists = false;
   try {
     await fs.access(resolvedPath, fs.constants.F_OK);
-    return { exists: true, resolvedPath };
+    exists = true;
   } catch {
-    return { exists: false, resolvedPath };
+    exists = false;
   }
+
+  // Check if file is gitignored (only if it exists)
+  const gitignored = exists && isGitignored(resolvedPath);
+
+  return { exists, resolvedPath, isGitignored: gitignored };
 }
 
 /**

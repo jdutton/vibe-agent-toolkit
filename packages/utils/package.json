@@ -30,6 +30,7 @@
     "clean": "rimraf dist *.tsbuildinfo"
   },
   "dependencies": {
+    "ignore": "^7.0.5",
     "picomatch": "^4.0.3",
     "which": "^5.0.0"
   },

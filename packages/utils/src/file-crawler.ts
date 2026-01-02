@@ -1,7 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import type { Ignore } from 'ignore';
 import picomatch from 'picomatch';
+
+import { findGitRoot, loadGitignoreRules } from './gitignore-checker.js';
 
 /**
  * Options for directory crawling
@@ -19,6 +22,8 @@ export interface CrawlOptions {
   absolute?: boolean;
   /** Only return files (not directories) - default: true */
   filesOnly?: boolean;
+  /** Respect .gitignore files (default: true) */
+  respectGitignore?: boolean;
 }
 
 /**
@@ -70,6 +75,7 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     followSymlinks = false,
     absolute = true,
     filesOnly = true,
+    respectGitignore = true,
   } = options;
 
   // Resolve base directory to absolute path
@@ -88,6 +94,17 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     throw new Error(`Base path is not a directory: ${resolvedBaseDir}`);
   }
 
+  // Load gitignore rules if requested
+  let gitignoreChecker: Ignore | null = null;
+  let gitRoot: string | null = null;
+
+  if (respectGitignore) {
+    gitRoot = findGitRoot(resolvedBaseDir);
+    if (gitRoot) {
+      gitignoreChecker = loadGitignoreRules(gitRoot, resolvedBaseDir);
+    }
+  }
+
   // Compile glob patterns using picomatch
   const isIncluded = picomatch(include);
   const isExcluded = exclude.length > 0 ? picomatch(exclude) : (): boolean => false;
@@ -95,10 +112,26 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
   const results: string[] = [];
 
   /**
-   * Check if a path should be excluded based on patterns
+   * Check if a path should be excluded based on patterns and gitignore
    */
-  function shouldExclude(normalizedPath: string): boolean {
-    return isExcluded(normalizedPath) || isExcluded(normalizedPath + '/');
+  function shouldExclude(normalizedPath: string, fullPath: string): boolean {
+    // Check explicit exclude patterns
+    if (isExcluded(normalizedPath) || isExcluded(normalizedPath + '/')) {
+      return true;
+    }
+
+    // Check gitignore rules if enabled
+    if (gitignoreChecker && gitRoot) {
+      // Get path relative to git root for gitignore checking
+      const relativeToGitRoot = path.relative(gitRoot, fullPath);
+      const normalizedGitPath = relativeToGitRoot.split(path.sep).join('/');
+
+      if (gitignoreChecker.ignores(normalizedGitPath)) {
+        return true;
+      }
+    }
+
+    return false;
   }
 
   /**
@@ -175,7 +208,7 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
       const normalizedPath = relativePath.split(path.sep).join('/');
 
       // Skip excluded paths
-      if (shouldExclude(normalizedPath)) {
+      if (shouldExclude(normalizedPath, fullPath)) {
         continue;
       }
 

@@ -29,6 +29,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:system": "vitest run --config vitest.system.config.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

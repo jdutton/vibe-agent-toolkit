@@ -2,6 +2,91 @@
 
 This document provides guidance specific to developing the vat CLI tool.
 
+## CLI Package Architecture Principles
+
+### The CLI Must Remain "Dumb"
+
+**Critical Rule**: The CLI package sits at the top of the dependency chain. No other package can depend on it. This means:
+
+✅ **CLI SHOULD contain**:
+- Command definitions and argument parsing (Commander.js)
+- User-facing help text and documentation
+- Orchestration logic (calling other packages in sequence)
+- Error handling and user-friendly error messages
+- Output formatting (YAML, progress indicators)
+
+❌ **CLI SHOULD NOT contain**:
+- Business logic that other packages might need
+- Path resolution algorithms
+- File system utilities
+- Validation logic
+- Build/conversion logic
+- Any reusable functionality
+
+### Why This Matters
+
+If you put logic in the CLI that other packages need, you create an impossible dependency situation:
+- Other packages can't depend on CLI (circular dependency)
+- Logic gets duplicated across packages (DRY violation)
+- Changes require coordinating multiple packages
+
+### The Right Place for Logic
+
+| Logic Type | Wrong Place | Right Place | Why |
+|------------|-------------|-------------|-----|
+| Find agent's package root | CLI | runtime-claude-skills or utils | Other runtimes (langchain, etc.) will need this |
+| Determine default output path | CLI | runtime-claude-skills | Each runtime knows where its bundles should go |
+| Validate agent manifest | CLI | agent-config | Validation used by all consumers |
+| Parse YAML | CLI | utils or agent-config | Common across many packages |
+| Format user messages | CLI | ✅ CLI is fine | This is CLI-specific UX |
+
+### Example: Agent Build Command
+
+**Before (WRONG)** - Logic in CLI:
+```typescript
+// packages/cli/src/commands/agent/build.ts
+function findAgentPackageRoot(agentPath: string): string {
+  // 50 lines of path-walking logic...
+  // ❌ This belongs elsewhere!
+}
+
+function determineOutputPath(target: string, agentPath: string): string {
+  const packageRoot = findAgentPackageRoot(agentPath);
+  return path.join(packageRoot, 'dist', 'vat-bundles', target);
+}
+```
+
+**After (CORRECT)** - Logic in runtime package:
+```typescript
+// packages/cli/src/commands/agent/build.ts
+const buildOptions = options.output
+  ? { agentPath, target, outputPath: options.output }
+  : { agentPath, target };
+// ✅ CLI just passes options, runtime figures out the rest
+result = await buildClaudeSkill(buildOptions);
+```
+
+```typescript
+// packages/runtime-claude-skills/src/builder.ts
+function getDefaultOutputPath(manifestPath: string, target: string): string {
+  const agentPackageRoot = findAgentPackageRoot(manifestPath);
+  return path.join(agentPackageRoot, 'dist', 'vat-bundles', target);
+}
+// ✅ Logic lives where it can be reused by other runtimes
+```
+
+### Quick Check: Does This Belong in CLI?
+
+Ask yourself:
+1. **"Could another package need this logic?"** → If yes, move to utils or the specific runtime package
+2. **"Is this about user interaction?"** → If yes, CLI is probably fine
+3. **"Does this involve file paths/resolution?"** → Probably belongs in utils or the consumer package
+4. **"Is this domain logic?"** → Belongs in the domain package (agent-config, rag, runtime-*, etc.)
+
+### Self-Hosting Consideration
+
+Remember: **Other agent repos won't have packages/cli/**. If an agent package needs to build itself, it can depend on `@vibe-agent-toolkit/runtime-claude-skills` directly. The CLI is just one convenient way to invoke the build - not the only way.
+
 ## Writing Useful CLI Help Documentation
 
 **Golden Rule**: Help text should answer "What does this do?" and "How do I use it?" without requiring users to read external documentation.

@@ -104,6 +104,15 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
    * Query the RAG database
    */
   async query(query: RAGQuery): Promise<RAGResult> {
+    // Workaround for vectordb@0.4.20 + Bun Arrow buffer lifecycle bug
+    // After table modifications, we need to recreate the connection entirely
+    this.connection = await connect(this.config.dbPath);
+    const tableNames = await this.connection.tableNames();
+    if (!tableNames.includes(TABLE_NAME)) {
+      throw new Error('No data indexed yet');
+    }
+    this.table = (await this.connection.openTable(TABLE_NAME)) as unknown as Table<LanceDBRow>;
+
     if (!this.table) {
       throw new Error('No data indexed yet');
     }
@@ -118,35 +127,20 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
 
     // Apply filters if provided
     if (query.filters) {
-      const conditions: string[] = [];
-
-      if (query.filters.resourceId) {
-        const ids = Array.isArray(query.filters.resourceId)
-          ? query.filters.resourceId
-          : [query.filters.resourceId];
-        const idList = ids.map((id) => `'${id}'`).join(', ');
-        // Use backticks for column names
-        conditions.push(`\`resourceId\` IN (${idList})`);
-      }
-
-      if (query.filters.type) {
-        conditions.push(`type = '${query.filters.type}'`);
-      }
-
-      if (query.filters.headingPath) {
-        // Use backticks for column names
-        conditions.push(`\`headingPath\` = '${query.filters.headingPath}'`);
-      }
-
-      if (conditions.length > 0) {
-        search = search.where(conditions.join(' AND '));
+      const whereClause = this.buildWhereClause(query.filters);
+      if (whereClause) {
+        search = search.where(whereClause);
       }
     }
 
     const results = await search.execute();
 
+    // Convert results to plain objects immediately to avoid Arrow buffer issues
+    // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
+    const materializedResults = JSON.parse(JSON.stringify(results)) as LanceDBRow[];
+
     // Convert results to RAGChunks
-    const chunks = results.map((row) => lanceRowToChunk(row as unknown as LanceDBRow));
+    const chunks = materializedResults.map((row) => lanceRowToChunk(row));
 
     const searchDurationMs = Date.now() - startTime;
 
@@ -163,9 +157,52 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
   }
 
   /**
+   * Build WHERE clause from filters
+   */
+  private buildWhereClause(filters: RAGQuery['filters']): string | null {
+    if (!filters) {
+      return null;
+    }
+
+    const conditions: string[] = [];
+
+    if (filters.resourceId !== undefined) {
+      const ids = Array.isArray(filters.resourceId) ? filters.resourceId : [filters.resourceId];
+
+      // Handle empty array case - should match nothing
+      if (ids.length === 0) {
+        conditions.push('1 = 0'); // Always false condition
+      } else {
+        const idList = ids.map((id) => `'${id}'`).join(', ');
+        // Use backticks for column names
+        conditions.push(`\`resourceId\` IN (${idList})`);
+      }
+    }
+
+    if (filters.type) {
+      conditions.push(`type = '${filters.type}'`);
+    }
+
+    if (filters.headingPath) {
+      // Use backticks for column names
+      conditions.push(`\`headingPath\` = '${filters.headingPath}'`);
+    }
+
+    return conditions.length > 0 ? conditions.join(' AND ') : null;
+  }
+
+  /**
    * Get database statistics
    */
   async getStats(): Promise<RAGStats> {
+    // Workaround for vectordb@0.4.20 + Bun Arrow buffer lifecycle bug
+    // After table modifications, we need to recreate the connection entirely
+    this.connection = await connect(this.config.dbPath);
+    const tableNames = await this.connection.tableNames();
+    if (tableNames.includes(TABLE_NAME)) {
+      this.table = (await this.connection.openTable(TABLE_NAME)) as unknown as Table<LanceDBRow>;
+    }
+
     if (!this.table) {
       return {
         totalChunks: 0,
@@ -180,7 +217,9 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
 
     // Get unique resource count (use a condition that matches all rows)
     const allRows = await this.table.filter('1 = 1').execute();
-    const rows = allRows as unknown as LanceDBRow[];
+    // Materialize immediately to avoid Arrow buffer issues
+    // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
+    const rows = JSON.parse(JSON.stringify(allRows)) as LanceDBRow[];
     const uniqueResources = new Set(rows.map((r) => r.resourceId)).size;
 
     return {
@@ -233,15 +272,6 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
     resource: ResourceMetadata,
     result: IndexResult
   ): Promise<void> {
-    // Reopen table to ensure we see latest data
-    // LanceDB requires reopening after modifications to avoid stale reads
-    if (this.table && this.connection) {
-      const tableNames = await this.connection.tableNames();
-      if (tableNames.includes(TABLE_NAME)) {
-        this.table = (await this.connection.openTable(TABLE_NAME)) as unknown as Table<LanceDBRow>;
-      }
-    }
-
     // Read file content using parseMarkdown
     const parseResult = await parseMarkdown(resource.filePath);
 
@@ -249,25 +279,41 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
     const resourceContentHash = generateContentHash(parseResult.content);
 
     // Check if resource already exists with same content hash
+    // Extract all needed data BEFORE any table modifications to avoid Arrow buffer issues
+    let shouldSkip = false;
+    let deleteCount = 0;
+    let shouldUpdate = false;
+
     if (this.table) {
-      let existing: LanceDBRow[] = [];
       const existingRows = await this.table.filter(`\`resourceId\` = '${resource.id}'`).execute();
+      // Materialize immediately to avoid Arrow buffer issues
+      // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
+      const existing = JSON.parse(JSON.stringify(existingRows)) as LanceDBRow[];
 
-      // Deep clone to detach from Arrow buffers (workaround for "Buffer is already detached")
-      existing = structuredClone(existingRows) as LanceDBRow[];
-
-      if (existing.length > 0 && existing[0]?.resourceContentHash === resourceContentHash) {
-        result.resourcesSkipped++;
-        return;
-      }
-
-      // Delete old chunks for this resource if it exists
+      // Extract data immediately while Arrow buffers are valid
       if (existing.length > 0) {
-        const deleteCount = await this.countResourceChunks(resource.id);
-        await this.deleteResource(resource.id);
-        result.chunksDeleted += deleteCount;
-        result.resourcesUpdated++;
+        const existingHash = existing[0]?.resourceContentHash;
+        deleteCount = existing.length;
+
+        if (existingHash === resourceContentHash) {
+          shouldSkip = true;
+        } else {
+          shouldUpdate = true;
+        }
       }
+    }
+
+    // Handle skip case
+    if (shouldSkip) {
+      result.resourcesSkipped++;
+      return;
+    }
+
+    // Delete old chunks if updating
+    if (shouldUpdate) {
+      await this.deleteResource(resource.id);
+      result.chunksDeleted += deleteCount;
+      result.resourcesUpdated++;
     }
 
     // Chunk the resource
@@ -317,10 +363,6 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
       )) as unknown as Table<LanceDBRow>;
     } else if (this.table) {
       await this.table.add(rows);
-      // Reopen table after modification to avoid Arrow buffer issues
-      if (this.connection) {
-        this.table = (await this.connection.openTable(TABLE_NAME)) as unknown as Table<LanceDBRow>;
-      }
     }
 
     result.resourcesIndexed++;
@@ -350,26 +392,6 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
 
     // Delete chunks (use backticks for column names)
     await this.table.delete(`\`resourceId\` = '${resourceId}'`);
-
-    // Reopen table after modification to avoid Arrow buffer issues
-    if (this.connection) {
-      this.table = (await this.connection.openTable(TABLE_NAME)) as unknown as Table<LanceDBRow>;
-    }
-  }
-
-  /**
-   * Count chunks for a resource (internal helper)
-   *
-   * @param resourceId - ID of resource
-   * @returns Number of chunks
-   */
-  private async countResourceChunks(resourceId: string): Promise<number> {
-    if (!this.table) {
-      return 0;
-    }
-
-    const rows = await this.table.filter(`\`resourceId\` = '${resourceId}'`).execute();
-    return (rows as unknown as LanceDBRow[]).length;
   }
 
   /**

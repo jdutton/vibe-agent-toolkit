@@ -105,14 +105,22 @@ export function executeCliAndParseYaml(
 /**
  * Execute bun run vat command (for testing the wrapper)
  * Used specifically for bin-wrapper tests
+ * @param testFileUrl - import.meta.url from the calling test file
+ * @param args - Arguments to pass to vat command
+ * @param options - Optional execution options
  */
 export function executeBunVat(
+  testFileUrl: string,
   args: string[],
   options?: { cwd?: string }
 ): SpawnSyncReturns<string> {
+  // Find the monorepo root relative to test file location (like getBinPath does)
+  const testDir = pathDirname(urlFileURLToPath(testFileUrl));
+  const monorepoRoot = pathResolve(testDir, '../../../..');
+
   // eslint-disable-next-line sonarjs/no-os-command-from-path -- bun is required for wrapper tests
   return nodeSpawnSync('bun', ['run', 'vat', ...args], {
     encoding: 'utf-8',
-    cwd: options?.cwd ?? process.cwd(),
+    cwd: options?.cwd ?? monorepoRoot,
   });
 }

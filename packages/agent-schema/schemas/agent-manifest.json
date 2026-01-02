@@ -4,16 +4,6 @@
     "agent-manifest": {
       "type": "object",
       "properties": {
-        "apiVersion": {
-          "type": "string",
-          "const": "vat.dev/v1",
-          "description": "VAT API version"
-        },
-        "kind": {
-          "type": "string",
-          "const": "Agent",
-          "description": "Manifest kind"
-        },
         "metadata": {
           "type": "object",
           "properties": {
@@ -506,8 +496,6 @@
         }
       },
       "required": [
-        "apiVersion",
-        "kind",
         "metadata",
         "spec"
       ],
