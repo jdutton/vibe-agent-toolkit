@@ -19,3 +19,6 @@ export * from './file-crawler.js';
 
 // Git ignore checking
 export * from './gitignore-checker.js';
+
+// Git utilities (using git commands directly)
+export * from './git-utils.js';
