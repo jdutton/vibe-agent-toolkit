@@ -22,7 +22,7 @@ describe('Bin wrapper (vat command)', () => {
     const result = executeBunVat(import.meta.url, ['--help']);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('Vibe Agent Toolkit');
+    expect(result.stdout).toContain('Agent-friendly toolkit');
     expect(result.stdout).toContain('resources');
   });
 
@@ -31,7 +31,7 @@ describe('Bin wrapper (vat command)', () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('# vat - Vibe Agent Toolkit CLI');
-    expect(result.stdout).toContain('## Overview');
+    expect(result.stdout).toContain('## Commands');
   });
 
   it('should pass through subcommands correctly', () => {

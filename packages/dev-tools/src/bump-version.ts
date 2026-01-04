@@ -171,17 +171,14 @@ function updatePackageVersion(filePath: string, newVersion: string): VersionUpda
     pkg.version = newVersion;
 
     // Preserve original formatting by replacing only the version line
-    let updatedContent = content.replace(
+    const updatedContent = content.replace(
       /"version":\s*"[^"]+"/,
       `"version": "${newVersion}"`
     );
 
-    // Resolve workspace:* dependencies to actual version
-    // Replace "workspace:*" with the new version for @vibe-agent-toolkit/* packages
-    updatedContent = updatedContent.replaceAll(
-      /("@vibe-agent-toolkit\/[^"]+"):\s*"workspace:\*"/g,
-      `$1: "${newVersion}"`
-    );
+    // NOTE: workspace:* dependencies are NOT replaced here
+    // They remain as workspace:* in git for CI compatibility
+    // Bun automatically replaces workspace:* with actual versions during npm publish
 
     writeFileSync(filePath, updatedContent, 'utf8');
 

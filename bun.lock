@@ -91,6 +91,7 @@
       "name": "@vibe-agent-toolkit/dev-tools",
       "version": "0.1.0",
       "dependencies": {
+        "@vibe-agent-toolkit/utils": "workspace:*",
         "semver": "^7.7.3",
         "which": "^5.0.0",
       },
@@ -115,7 +116,7 @@
     },
     "packages/rag": {
       "name": "@vibe-agent-toolkit/rag",
-      "version": "0.4.0",
+      "version": "0.1.0",
       "dependencies": {
         "@vibe-agent-toolkit/resources": "workspace:*",
         "@vibe-agent-toolkit/utils": "workspace:*",

@@ -289,27 +289,32 @@ if (missingBuilds.length > 0) {
 }
 log('✓ All packages built', 'green');
 
-// Check 7: Workspace dependencies resolved
+// Check 7: Workspace dependencies (workspace:* is expected and handled by Bun during publish)
 console.log('');
 console.log('Checking workspace dependencies...');
 
-const unresolvedDeps: string[] = [];
 try {
   const publishablePackages = getPublishablePackages(packagesDir);
+  let workspaceCount = 0;
 
-  for (const { name: pkg, pkgJson } of publishablePackages) {
-    // Check dependencies for workspace:* references
+  for (const { pkgJson } of publishablePackages) {
     const allDeps = {
       ...(pkgJson['dependencies'] as Record<string, string> | undefined),
       ...(pkgJson['devDependencies'] as Record<string, string> | undefined),
       ...(pkgJson['peerDependencies'] as Record<string, string> | undefined),
     };
 
-    for (const [depName, depVersion] of Object.entries(allDeps)) {
+    for (const depVersion of Object.values(allDeps)) {
       if (typeof depVersion === 'string' && depVersion.startsWith('workspace:')) {
-        unresolvedDeps.push(`${pkg}: ${depName}@${depVersion}`);
+        workspaceCount++;
       }
     }
+  }
+
+  if (workspaceCount > 0) {
+    log(`✓ Found ${workspaceCount} workspace dependencies (Bun will resolve during publish)`, 'green');
+  } else {
+    log('✓ No workspace dependencies', 'green');
   }
 } catch (error) {
   log('✗ Failed to check workspace dependencies', 'red');
@@ -318,16 +323,81 @@ try {
   process.exit(1);
 }
 
-if (unresolvedDeps.length > 0) {
-  log('✗ Unresolved workspace dependencies', 'red');
-  for (const dep of unresolvedDeps) {
-    console.log(`  ${dep}`);
+// Check 8: Packages have proper "files" field for npm publish
+console.log('');
+console.log('Checking package "files" fields...');
+
+try {
+  const publishablePackages = getPublishablePackages(packagesDir);
+  const missingFiles: string[] = [];
+  const missingDist: string[] = [];
+
+  for (const { name: pkg, pkgJson } of publishablePackages) {
+    const files = pkgJson['files'] as string[] | undefined;
+
+    // Check if files field exists
+    if (!files || files.length === 0) {
+      missingFiles.push(pkg);
+      continue;
+    }
+
+    // For packages with build scripts, verify dist is included
+    const scripts = pkgJson['scripts'] as Record<string, string> | undefined;
+    const hasBuildScript = scripts?.['build'];
+    if (hasBuildScript) {
+      const hasDistEntry = files.some(f => f === 'dist' || f === 'dist/');
+      if (!hasDistEntry) {
+        missingDist.push(pkg);
+      }
+    }
+
+    // For packages with bin field, verify bin path is covered by files array
+    const bin = pkgJson['bin'];
+    if (bin) {
+      const binPaths = typeof bin === 'string' ? [bin] : Object.values(bin);
+      for (const binPath of binPaths) {
+        // Check if bin path is covered by any entry in files array
+        const isCovered = files.some(fileEntry => {
+          // Normalize paths (remove leading ./)
+          const normalizedBin = binPath.replace(/^\.\//, '');
+          const normalizedFile = fileEntry.replace(/^\.\//, '');
+          return normalizedBin.startsWith(normalizedFile + '/');
+        });
+
+        if (!isCovered && !files.includes('bin')) {
+          missingFiles.push(`${pkg} (bin "${binPath}" not covered by files array)`);
+          break; // Only report once per package
+        }
+      }
+    }
   }
-  console.log('');
-  console.log('  Run version bump script to resolve workspace dependencies before publishing');
+
+  if (missingFiles.length > 0 || missingDist.length > 0) {
+    log('✗ Some packages missing "files" configuration', 'red');
+    if (missingFiles.length > 0) {
+      console.log('\nPackages without "files" field:');
+      for (const pkg of missingFiles) {
+        console.log(`  ${pkg}`);
+      }
+    }
+    if (missingDist.length > 0) {
+      console.log('\nPackages missing "dist" in files field:');
+      for (const pkg of missingDist) {
+        console.log(`  ${pkg}`);
+      }
+    }
+    console.log('\nAdd "files" field to package.json:');
+    console.log('  "files": ["dist", "README.md"]');
+    process.exit(1);
+  }
+
+  log('✓ All packages have proper "files" configuration', 'green');
+} catch (error) {
+  log('✗ Failed to check package files configuration', 'red');
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(message);
   process.exit(1);
 }
-log('✓ No workspace dependencies', 'green');
 
 // Success!
 console.log('');

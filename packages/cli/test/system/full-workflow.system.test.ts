@@ -96,7 +96,8 @@ resources:
     });
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toMatch(/\d+\.\d+\.\d+-dev \(\/test\/path\)/);
+    // eslint-disable-next-line security/detect-unsafe-regex -- Simple semver pattern for test validation
+    expect(result.stdout).toMatch(/\d+\.\d+\.\d+(-[a-z0-9.]+)?-dev \(\/test\/path\)/);
   });
 
   it('should show comprehensive help with --help --verbose', () => {
@@ -107,7 +108,7 @@ resources:
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('# vat - Vibe Agent Toolkit CLI');
     expect(result.stdout).toContain('resources');
-    expect(result.stdout).toContain('Exit Codes');
+    expect(result.stdout).toContain('Exit Code Summary');
   });
 
   it('should show resources verbose help', () => {

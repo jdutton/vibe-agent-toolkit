@@ -11,7 +11,6 @@
     { "path": "./packages/agent-schema" },
     { "path": "./packages/agent-config" },
     { "path": "./packages/runtime-claude-skills" },
-    { "path": "./packages/cli" },
-    { "path": "./packages/vibe-agent-toolkit" }
+    { "path": "./packages/cli" }
   ]
 }

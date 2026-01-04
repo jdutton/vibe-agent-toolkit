@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/resources",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.10",
   "description": "Markdown resource parsing, validation, and link integrity checking",
   "type": "module",
   "main": "./dist/index.js",
@@ -52,5 +52,9 @@
   },
   "publishConfig": {
     "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jdutton/vibe-agent-toolkit.git"
   }
 }

@@ -115,6 +115,184 @@ packages/resources/
 - Commit generated JSON Schema files to git (for external tools)
 - TypeScript types are always derived from Zod schemas (never manually written)
 
+### TypeScript Monorepo Build System
+
+**Critical: Use `tsc --build` for all TypeScript compilation.** This is the standard TypeScript solution for monorepos with dependencies between packages.
+
+#### Why `tsc --build`?
+
+TypeScript's `--build` mode (project references) provides:
+- **Dependency Order**: Automatically builds packages in the correct order based on `references` in tsconfig.json
+- **Incremental Builds**: Only rebuilds packages that changed (uses `.tsbuildinfo` files)
+- **Type Safety**: TypeScript validates cross-package imports at build time
+- **Standard Solution**: This is TypeScript's official monorepo build approach
+
+Without `--build`, builds fail on clean checkouts because dependent packages try to import from unbuilt packages.
+
+#### Required Configuration
+
+Every package **must** have `composite: true` in its tsconfig.json:
+
+```json
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "./dist",
+    "rootDir": "./src"
+  },
+  "references": [
+    { "path": "../utils" }
+  ]
+}
+```
+
+The `references` array tells TypeScript which packages this package depends on.
+
+#### Build Scripts
+
+```bash
+# Standard build (respects dependency order)
+bun run build
+
+# Clean build (removes all build artifacts and rebuilds)
+bun run build:clean
+
+# Type check without emitting files (fast)
+bun run typecheck
+```
+
+These scripts map to:
+- `build`: `tsc --build && cd packages/agent-schema && bun run generate:schemas`
+- `build:clean`: `tsc --build --clean && tsc --build && cd packages/agent-schema && bun run generate:schemas`
+- `typecheck`: `tsc --build --dry --force`
+
+#### How It Works
+
+1. **Root tsconfig.json** lists all packages in `references`:
+   ```json
+   {
+     "files": [],
+     "references": [
+       { "path": "./packages/utils" },
+       { "path": "./packages/resources" },
+       { "path": "./packages/rag" },
+       // ... etc
+     ]
+   }
+   ```
+
+2. **Each package tsconfig.json** declares its dependencies:
+   ```json
+   {
+     "references": [
+       { "path": "../utils" },
+       { "path": "../resources" }
+     ]
+   }
+   ```
+
+3. **`tsc --build`** walks the dependency graph and builds packages in order:
+   - Builds `utils` (no dependencies)
+   - Builds `resources` (depends on `utils`)
+   - Builds `rag` (depends on `utils` and `resources`)
+   - etc.
+
+#### Adding New Packages
+
+When creating a new package:
+1. Add `"composite": true` to its tsconfig.json
+2. Add `references` for packages it depends on
+3. Add the package to root tsconfig.json `references` array
+4. Run `bun install` to update workspace links
+
+#### Troubleshooting
+
+**"Cannot find module '@vibe-agent-toolkit/utils'" during build**:
+- Missing `references` in tsconfig.json
+- Package not built yet (run `bun run build:clean`)
+
+**"Project references may not form a circular dependency"**:
+- Check for circular imports between packages
+- Packages must form a directed acyclic graph (DAG)
+
+#### Workspace Protocol for Internal Dependencies
+
+**Critical: Use `workspace:*` for all internal package dependencies.**
+
+Internal dependencies in package.json must use the workspace protocol, **not specific version numbers**:
+
+```json
+{
+  "dependencies": {
+    "@vibe-agent-toolkit/utils": "workspace:*",
+    "@vibe-agent-toolkit/resources": "workspace:*"
+  }
+}
+```
+
+**Why `workspace:*`?**
+
+1. **CI Compatibility**: `bun install` in CI uses local workspace packages, not npm
+2. **Auto-Resolution**: Publishing workflow runs `resolve-workspace-deps` to replace `workspace:*` with actual versions before `npm publish`
+3. **Single Source of Truth**: Version is managed by `bump-version` script, not individual package.json files
+
+**Without `workspace:*`**, CI builds fail because `bun install` tries to fetch packages from npm that don't exist yet:
+
+```bash
+# ❌ WRONG - CI tries to fetch from npm
+"@vibe-agent-toolkit/utils": "0.1.0-rc.2"
+
+# ✅ CORRECT - CI uses local workspace
+"@vibe-agent-toolkit/utils": "workspace:*"
+```
+
+**Publishing Workflow**:
+1. Developer commits code with `workspace:*` in package.json
+2. Developer runs `bump-version` to create git tag (workspace:* unchanged)
+3. GitHub Actions workflow triggers on tag:
+   - `bun install` uses local workspace packages
+   - `build` compiles all packages
+   - `resolve-workspace-deps` replaces `workspace:*` with actual version
+   - `npm publish` publishes with resolved dependencies
+4. Published packages on npm have actual version numbers (e.g., "0.1.0-rc.7")
+5. Workspace files in git remain unchanged with `workspace:*`
+
+**Why not use `bun publish`?** Bun automatically replaces `workspace:*`, but doesn't support `--provenance` flag needed for supply chain security. We use `npm publish` with manual resolution instead.
+
+**Fixing Incorrect Dependencies**:
+
+If dependencies get out of sync (e.g., after manual edits), run:
+
+```bash
+bun run fix-workspace-deps
+bun install
+```
+
+This ensures all internal dependencies use `workspace:*` protocol.
+
+**For AI assistants**: When adding new internal dependencies, ALWAYS use `workspace:*`. Never use specific version numbers for @vibe-agent-toolkit packages.
+
+**Build succeeds but types are wrong**:
+- Delete `.tsbuildinfo` files: `tsc --build --clean`
+- Rebuild: `bun run build:clean`
+
+#### Why Not Custom Scripts?
+
+We previously used a custom `run-in-packages.ts` script to run builds. This had problems:
+- ❌ Didn't respect dependency order → failed on clean builds
+- ❌ Required custom code to maintain
+- ❌ Slower (no incremental builds)
+- ❌ Not standard TypeScript
+
+Using `tsc --build`:
+- ✅ Respects dependency order automatically
+- ✅ Zero custom code to maintain
+- ✅ Faster with incremental builds
+- ✅ Standard TypeScript solution
+
+**Rule**: Never manually run `tsc` in individual packages. Always use `tsc --build` from the root.
+
 ## Project Structure
 
 This is a TypeScript monorepo using:
@@ -346,7 +524,180 @@ Pre-commit hooks via Husky will enforce these automatically.
 - Document public APIs with JSDoc comments
 - Commit messages follow conventional commits format
 
-## Build & Publish
+## Publishing & Version Management
+
+### Unified Versioning
+
+**CRITICAL**: All packages in this monorepo share the same version. When any package changes, all packages are bumped together. This ensures compatibility and simplifies dependency management.
+
+Current packages (11 published, 1 private):
+- @vibe-agent-toolkit/agent-schema
+- @vibe-agent-toolkit/utils
+- @vibe-agent-toolkit/discovery
+- @vibe-agent-toolkit/resources
+- @vibe-agent-toolkit/rag
+- @vibe-agent-toolkit/rag-lancedb
+- @vibe-agent-toolkit/agent-config
+- @vibe-agent-toolkit/runtime-claude-skills
+- @vibe-agent-toolkit/cli
+- vibe-agent-toolkit (umbrella package)
+- @vibe-agent-toolkit/vat-development-agents
+- @vibe-agent-toolkit/dev-tools (PRIVATE - not published)
+
+### Version Bump Workflow
+
+**Always use the `bump-version` script:**
+
+```bash
+# Explicit version
+bun run bump-version 0.2.0-rc.1
+
+# Semantic increment
+bun run bump-version patch    # 0.1.0 → 0.1.1
+bun run bump-version minor    # 0.1.0 → 0.2.0
+bun run bump-version major    # 0.1.0 → 1.0.0
+```
+
+The script updates all 11 publishable packages atomically.
+
+### CHANGELOG.md Format
+
+**CRITICAL - Read This Carefully:**
+
+CHANGELOG.md uses a strict format. **RC/prerelease versions NEVER get their own section.**
+
+```markdown
+## [Unreleased]
+
+### Added
+- New feature descriptions here
+
+### Changed
+- Change descriptions here
+
+### Fixed
+- Bug fix descriptions here
+
+## [0.1.0] - 2026-01-15
+
+### Added
+- Previous release features...
+```
+
+**Rules:**
+- **RC versions (0.1.0-rc.1, 0.1.0-rc.2, etc.)**: Changes stay in `[Unreleased]` section
+- **Stable versions (0.1.0, 0.2.0, etc.)**: Move `[Unreleased]` content to new `## [X.Y.Z] - YYYY-MM-DD` section
+- **NEVER create sections like `## [0.1.0-rc.1]`** - these will break the release process
+
+**For AI assistants:** Never ask about creating CHANGELOG sections for RC versions. They don't exist.
+
+### Publishing Process (Automated)
+
+**CRITICAL**: Publishing is automated via GitHub Actions. **DO NOT manually publish** unless automation fails.
+
+**Normal Release Workflow:**
+
+1. **Update CHANGELOG.md** (if needed)
+   - **RC releases**: Ensure changes are documented in `[Unreleased]` section
+   - **Stable releases**: Move `[Unreleased]` → `## [X.Y.Z] - YYYY-MM-DD`
+
+2. **Bump version**:
+   ```bash
+   bun run bump-version 0.1.0-rc.1  # For RC
+   bun run bump-version 0.1.0       # For stable
+   ```
+
+3. **Build and verify**:
+   ```bash
+   bun run build
+   bun run validate-version
+   ```
+
+4. **Commit and tag**:
+   ```bash
+   git add -A && git commit -m "chore: Release vX.Y.Z"
+   git tag vX.Y.Z
+   git push origin main vX.Y.Z
+   ```
+
+5. **Monitor GitHub Actions**:
+   - Visit: https://github.com/jdutton/vibe-agent-toolkit/actions
+   - Workflow automatically publishes to npm
+
+### Publishing Behavior
+
+**RC versions** (e.g., `v0.1.0-rc.1`):
+- Publish to `@next` tag
+- NO GitHub release
+- CHANGELOG stays in `[Unreleased]`
+- Use for: risky changes, pre-release testing
+
+**Stable versions** (e.g., `v0.1.0`):
+- Publish to `@latest` tag
+- Also update `@next` tag (if newest)
+- Create GitHub release with changelog
+- Move CHANGELOG `[Unreleased]` → `[Version]`
+
+### Manual Publishing (Fallback Only)
+
+**Use only if automated publishing fails:**
+
+```bash
+# Ensure versions are correct
+bun run bump-version <version>
+
+# Build all packages
+bun run build
+
+# Run pre-publish checks
+bun run pre-publish-check
+
+# Publish with rollback safety
+bun run publish-with-rollback <version>
+```
+
+### CLI Wrapper Behavior
+
+The `vat` command uses smart wrapper with context detection:
+
+**Dev Mode** (in this repo):
+- Uses: `packages/cli/dist/bin.js`
+- Shows version: `0.1.0-rc.1-dev`
+
+**Local Install** (project has @vibe-agent-toolkit/cli):
+- Uses: `node_modules/@vibe-agent-toolkit/cli/dist/bin.js`
+- Shows version: project's version
+
+**Global Install** (fallback):
+- Uses: globally installed version
+- Shows version: global version
+
+**Installation:**
+```bash
+npm install -g @vibe-agent-toolkit/cli    # Just CLI
+npm install -g vibe-agent-toolkit          # Everything
+```
+
+### Package Publishing Order
+
+Packages are published in dependency order:
+
+1. agent-schema, utils (parallel - no deps)
+2. discovery, resources (parallel - depend on utils)
+3. rag (depends on resources, utils)
+4. rag-lancedb, agent-config (parallel)
+5. runtime-claude-skills
+6. cli
+7. vat-development-agents
+8. vibe-agent-toolkit (umbrella - published last)
+
+### Rollback Safety
+
+Publishing uses rollback protection:
+- Tracks progress in `.publish-manifest.json`
+- On failure: attempts `npm unpublish --force`
+- Fallback: `npm deprecate` with warning message
+- Use RC testing to minimize stable release failures
 
 ### Building
 
@@ -357,16 +708,6 @@ bun run build
 # Clean build
 bun run build:clean
 ```
-
-### Publishing (when ready)
-
-Packages are published to npm with:
-- Automatic version management
-- Changelog generation
-- GitHub releases
-- npm provenance
-
-Release tools will be added when packages are ready for publication.
 
 ## CI/CD
 
@@ -485,7 +826,6 @@ Located in `packages/dev-tools/src/`:
 - `bump-version.ts` - Version management for monorepo
 - `pre-publish-check.ts` - Pre-publish validation
 - `determine-publish-tags.ts` - npm dist-tag determination
-- `run-in-packages.ts` - Run commands across all workspace packages
 
 Custom ESLint rules in `packages/dev-tools/eslint-local-rules/`.
 
