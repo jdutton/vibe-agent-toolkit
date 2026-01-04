@@ -70,3 +70,13 @@ export interface ValidateOptions {
   /** Treat as VAT-generated skill (stricter validation) */
   isVATGenerated?: boolean;
 }
+
+/**
+ * Discriminated union representing different resource formats that can be validated
+ */
+export type ResourceFormat =
+  | { type: 'claude-plugin'; path: string }
+  | { type: 'marketplace'; path: string }
+  | { type: 'installed-plugins-registry'; path: string; filename: string }
+  | { type: 'known-marketplaces-registry'; path: string; filename: string }
+  | { type: 'unknown'; path: string; reason?: string };

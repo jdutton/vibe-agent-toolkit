@@ -29,7 +29,13 @@ export {
 } from './parsers/frontmatter-parser.js';
 
 export { validateSkill } from './validators/skill-validator.js';
-export type { ValidationResult, ValidationIssue, ValidateOptions } from './validators/types.js';
+export { detectResourceFormat } from './validators/format-detection.js';
+export type {
+  ValidationResult,
+  ValidationIssue,
+  ValidateOptions,
+  ResourceFormat,
+} from './validators/types.js';
 
 export {
   importSkillToAgent,
