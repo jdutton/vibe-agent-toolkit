@@ -5,7 +5,11 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { detectResourceFormat } from '../../src/validators/format-detection.js';
-import { createTestPlugin, setupTempDir } from '../test-helpers.js';
+import {
+	createAmbiguousDirectory,
+	createTestPlugin,
+	setupTempDir,
+} from '../test-helpers.js';
 
 describe('detectResourceFormat', () => {
 	const { getTempDir } = setupTempDir('format-detection-test-');
@@ -69,19 +73,12 @@ describe('detectResourceFormat', () => {
 	describe('Ambiguous detection', () => {
 		it('should return unknown when directory has both plugin.json and marketplace.json', async () => {
 			const tempDir = getTempDir();
-			const ambiguousDir = path.join(tempDir, 'ambiguous');
-			const claudePluginDir = path.join(ambiguousDir, '.claude-plugin');
-			fs.mkdirSync(claudePluginDir, { recursive: true });
+			const ambiguousDir = createAmbiguousDirectory(
+				tempDir,
+				{ id: 'test' },
+				{ id: 'test' },
+			);
 
-			// Create both files
-			fs.writeFileSync(
-				path.join(claudePluginDir, 'plugin.json'),
-				JSON.stringify({ id: 'test' }, null, 2),
-			);
-			fs.writeFileSync(
-				path.join(claudePluginDir, 'marketplace.json'),
-				JSON.stringify({ id: 'test' }, null, 2),
-			);
 
 			const result = await detectResourceFormat(ambiguousDir);
 

@@ -29,6 +29,7 @@ export {
 } from './parsers/frontmatter-parser.js';
 
 export { validateSkill } from './validators/skill-validator.js';
+export { validate } from './validators/unified-validator.js';
 export { detectResourceFormat } from './validators/format-detection.js';
 export type {
   ValidationResult,

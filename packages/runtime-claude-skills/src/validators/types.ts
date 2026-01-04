@@ -25,6 +25,8 @@ export type IssueCode =
   | 'REGISTRY_MISSING_FILE'
   | 'REGISTRY_INVALID_JSON'
   | 'REGISTRY_INVALID_SCHEMA'
+  // Critical errors - Format detection
+  | 'UNKNOWN_FORMAT'
   // Warnings
   | 'SKILL_TOO_LONG'
   | 'REFERENCE_DEPTH_EXCEEDED'
@@ -47,7 +49,7 @@ export interface ValidationIssue {
 
 export interface ValidationResult {
   path: string;
-  type: 'claude-skill' | 'vat-agent' | 'claude-plugin' | 'marketplace' | 'registry';
+  type: 'claude-skill' | 'vat-agent' | 'claude-plugin' | 'marketplace' | 'registry' | 'unknown';
   status: 'success' | 'warning' | 'error';
   summary: string;
   issues: ValidationIssue[];

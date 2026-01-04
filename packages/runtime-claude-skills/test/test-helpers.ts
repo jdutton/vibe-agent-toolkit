@@ -188,6 +188,8 @@ export function assertSingleError(
 	expect(result.issues[0]?.severity).toBe('error');
 }
 
+const CLAUDE_PLUGIN_DIR = '.claude-plugin';
+
 /**
  * Create a test plugin directory structure
  * Returns the path to the created plugin directory
@@ -198,7 +200,7 @@ export function createTestPlugin(
 	pluginName = 'test-plugin',
 ): string {
 	const pluginDir = path.join(baseDir, pluginName);
-	const claudePluginDir = path.join(pluginDir, '.claude-plugin');
+	const claudePluginDir = path.join(pluginDir, CLAUDE_PLUGIN_DIR);
 
 	fs.mkdirSync(claudePluginDir, { recursive: true });
 
@@ -206,4 +208,54 @@ export function createTestPlugin(
 	fs.writeFileSync(pluginJsonPath, JSON.stringify(pluginData, null, 2));
 
 	return pluginDir;
+}
+
+/**
+ * Create a test marketplace directory structure
+ * Returns the path to the created marketplace directory
+ */
+export function createTestMarketplace(
+	baseDir: string,
+	marketplaceData: Record<string, unknown>,
+	marketplaceName = 'test-marketplace',
+): string {
+	const marketplaceDir = path.join(baseDir, marketplaceName);
+	const claudePluginDir = path.join(marketplaceDir, CLAUDE_PLUGIN_DIR);
+
+	fs.mkdirSync(claudePluginDir, { recursive: true });
+
+	const marketplaceJsonPath = path.join(claudePluginDir, 'marketplace.json');
+	fs.writeFileSync(
+		marketplaceJsonPath,
+		JSON.stringify(marketplaceData, null, 2),
+	);
+
+	return marketplaceDir;
+}
+
+/**
+ * Create an ambiguous directory with both plugin.json and marketplace.json
+ * Returns the path to the created directory
+ */
+export function createAmbiguousDirectory(
+	baseDir: string,
+	pluginData: Record<string, unknown>,
+	marketplaceData: Record<string, unknown>,
+	dirName = 'ambiguous',
+): string {
+	const ambiguousDir = path.join(baseDir, dirName);
+	const claudePluginDir = path.join(ambiguousDir, CLAUDE_PLUGIN_DIR);
+	fs.mkdirSync(claudePluginDir, { recursive: true });
+
+	// Create both plugin.json and marketplace.json
+	fs.writeFileSync(
+		path.join(claudePluginDir, 'plugin.json'),
+		JSON.stringify(pluginData, null, 2),
+	);
+	fs.writeFileSync(
+		path.join(claudePluginDir, 'marketplace.json'),
+		JSON.stringify(marketplaceData, null, 2),
+	);
+
+	return ambiguousDir;
 }

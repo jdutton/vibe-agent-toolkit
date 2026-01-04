@@ -6,6 +6,7 @@ export {
 	validateKnownMarketplacesRegistry,
 } from './registry-validator.js';
 export { validateSkill } from './skill-validator.js';
+export { validate } from './unified-validator.js';
 export type {
 	IssueCode,
 	IssueSeverity,
