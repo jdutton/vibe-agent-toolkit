@@ -29,8 +29,8 @@ const PACKAGES = [
   'agent-config',
   'runtime-claude-skills',
   'cli',
-  UMBRELLA_PACKAGE_NAME,
   'vat-development-agents',
+  UMBRELLA_PACKAGE_NAME,
 ];
 
 interface Manifest {

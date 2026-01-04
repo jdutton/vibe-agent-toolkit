@@ -115,6 +115,127 @@ packages/resources/
 - Commit generated JSON Schema files to git (for external tools)
 - TypeScript types are always derived from Zod schemas (never manually written)
 
+### TypeScript Monorepo Build System
+
+**Critical: Use `tsc --build` for all TypeScript compilation.** This is the standard TypeScript solution for monorepos with dependencies between packages.
+
+#### Why `tsc --build`?
+
+TypeScript's `--build` mode (project references) provides:
+- **Dependency Order**: Automatically builds packages in the correct order based on `references` in tsconfig.json
+- **Incremental Builds**: Only rebuilds packages that changed (uses `.tsbuildinfo` files)
+- **Type Safety**: TypeScript validates cross-package imports at build time
+- **Standard Solution**: This is TypeScript's official monorepo build approach
+
+Without `--build`, builds fail on clean checkouts because dependent packages try to import from unbuilt packages.
+
+#### Required Configuration
+
+Every package **must** have `composite: true` in its tsconfig.json:
+
+```json
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "./dist",
+    "rootDir": "./src"
+  },
+  "references": [
+    { "path": "../utils" }
+  ]
+}
+```
+
+The `references` array tells TypeScript which packages this package depends on.
+
+#### Build Scripts
+
+```bash
+# Standard build (respects dependency order)
+bun run build
+
+# Clean build (removes all build artifacts and rebuilds)
+bun run build:clean
+
+# Type check without emitting files (fast)
+bun run typecheck
+```
+
+These scripts map to:
+- `build`: `tsc --build && cd packages/agent-schema && bun run generate:schemas`
+- `build:clean`: `tsc --build --clean && tsc --build && cd packages/agent-schema && bun run generate:schemas`
+- `typecheck`: `tsc --build --dry --force`
+
+#### How It Works
+
+1. **Root tsconfig.json** lists all packages in `references`:
+   ```json
+   {
+     "files": [],
+     "references": [
+       { "path": "./packages/utils" },
+       { "path": "./packages/resources" },
+       { "path": "./packages/rag" },
+       // ... etc
+     ]
+   }
+   ```
+
+2. **Each package tsconfig.json** declares its dependencies:
+   ```json
+   {
+     "references": [
+       { "path": "../utils" },
+       { "path": "../resources" }
+     ]
+   }
+   ```
+
+3. **`tsc --build`** walks the dependency graph and builds packages in order:
+   - Builds `utils` (no dependencies)
+   - Builds `resources` (depends on `utils`)
+   - Builds `rag` (depends on `utils` and `resources`)
+   - etc.
+
+#### Adding New Packages
+
+When creating a new package:
+1. Add `"composite": true` to its tsconfig.json
+2. Add `references` for packages it depends on
+3. Add the package to root tsconfig.json `references` array
+4. Run `bun install` to update workspace links
+
+#### Troubleshooting
+
+**"Cannot find module '@vibe-agent-toolkit/utils'" during build**:
+- Missing `references` in tsconfig.json
+- Package not built yet (run `bun run build:clean`)
+
+**"Project references may not form a circular dependency"**:
+- Check for circular imports between packages
+- Packages must form a directed acyclic graph (DAG)
+
+**Build succeeds but types are wrong**:
+- Delete `.tsbuildinfo` files: `tsc --build --clean`
+- Rebuild: `bun run build:clean`
+
+#### Why Not Custom Scripts?
+
+We previously used a custom `run-in-packages.ts` script to run builds. This had problems:
+- ❌ Didn't respect dependency order → failed on clean builds
+- ❌ Required custom code to maintain
+- ❌ Slower (no incremental builds)
+- ❌ Not standard TypeScript
+
+Using `tsc --build`:
+- ✅ Respects dependency order automatically
+- ✅ Zero custom code to maintain
+- ✅ Faster with incremental builds
+- ✅ Standard TypeScript solution
+
+**Rule**: Never manually run `tsc` in individual packages. Always use `tsc --build` from the root.
+
 ## Project Structure
 
 This is a TypeScript monorepo using:
@@ -510,8 +631,8 @@ Packages are published in dependency order:
 4. rag-lancedb, agent-config (parallel)
 5. runtime-claude-skills
 6. cli
-7. vibe-agent-toolkit (umbrella)
-8. vat-development-agents
+7. vat-development-agents
+8. vibe-agent-toolkit (umbrella - published last)
 
 ### Rollback Safety
 
@@ -648,7 +769,6 @@ Located in `packages/dev-tools/src/`:
 - `bump-version.ts` - Version management for monorepo
 - `pre-publish-check.ts` - Pre-publish validation
 - `determine-publish-tags.ts` - npm dist-tag determination
-- `run-in-packages.ts` - Run commands across all workspace packages
 
 Custom ESLint rules in `packages/dev-tools/eslint-local-rules/`.
 
