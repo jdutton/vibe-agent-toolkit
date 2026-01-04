@@ -51,6 +51,7 @@
     "determine-publish-tags": "tsx packages/dev-tools/src/determine-publish-tags.ts",
     "publish-with-rollback": "tsx packages/dev-tools/src/publish-with-rollback.ts",
     "extract-changelog": "tsx packages/dev-tools/src/extract-changelog.ts",
+    "fix-workspace-deps": "tsx packages/dev-tools/src/fix-workspace-deps.ts",
     "prepare-cli-bin": "cd packages/cli && tsx ../dev-tools/src/prepare-bin.ts",
     "vat": "node packages/cli/dist/bin/vat.js"
   },

@@ -18,7 +18,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@vibe-agent-toolkit/utils": "0.1.0-rc.1",
+    "@vibe-agent-toolkit/utils": "workspace:*",
     "picomatch": "^4.0.2"
   },
   "devDependencies": {

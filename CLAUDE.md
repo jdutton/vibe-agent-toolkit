@@ -216,6 +216,50 @@ When creating a new package:
 - Check for circular imports between packages
 - Packages must form a directed acyclic graph (DAG)
 
+#### Workspace Protocol for Internal Dependencies
+
+**Critical: Use `workspace:*` for all internal package dependencies.**
+
+Internal dependencies in package.json must use the workspace protocol, **not specific version numbers**:
+
+```json
+{
+  "dependencies": {
+    "@vibe-agent-toolkit/utils": "workspace:*",
+    "@vibe-agent-toolkit/resources": "workspace:*"
+  }
+}
+```
+
+**Why `workspace:*`?**
+
+1. **CI Compatibility**: `bun install` in CI uses local workspace packages, not npm
+2. **Auto-Replacement**: During publishing, Bun automatically replaces `workspace:*` with the actual version
+3. **Single Source of Truth**: Version is managed by `bump-version` script, not package.json
+
+**Without `workspace:*`**, CI builds fail because `bun install` tries to fetch packages from npm that don't exist yet:
+
+```bash
+# ❌ WRONG - CI tries to fetch from npm
+"@vibe-agent-toolkit/utils": "0.1.0-rc.2"
+
+# ✅ CORRECT - CI uses local workspace
+"@vibe-agent-toolkit/utils": "workspace:*"
+```
+
+**Fixing Incorrect Dependencies**:
+
+If dependencies get out of sync (e.g., after manual edits), run:
+
+```bash
+bun run fix-workspace-deps
+bun install
+```
+
+This ensures all internal dependencies use `workspace:*` protocol.
+
+**For AI assistants**: When adding new internal dependencies, ALWAYS use `workspace:*`. Never use specific version numbers for @vibe-agent-toolkit packages.
+
 **Build succeeds but types are wrong**:
 - Delete `.tsbuildinfo` files: `tsc --build --clean`
 - Rebuild: `bun run build:clean`

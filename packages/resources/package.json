@@ -33,7 +33,7 @@
   "author": "Jeff Dutton",
   "license": "MIT",
   "dependencies": {
-    "@vibe-agent-toolkit/utils": "0.1.0-rc.1",
+    "@vibe-agent-toolkit/utils": "workspace:*",
     "picomatch": "^4.0.3",
     "remark-frontmatter": "^5.0.0",
     "remark-gfm": "^4.0.0",
