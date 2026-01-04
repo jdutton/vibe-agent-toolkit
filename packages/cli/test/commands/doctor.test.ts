@@ -8,6 +8,7 @@ import { beforeEach, describe, it, vi } from 'vitest';
 
 import {
   checkConfigFile,
+  checkConfigValid,
   checkGitInstalled,
   checkGitRepository,
   checkNodeVersion,
@@ -15,6 +16,7 @@ import {
 import {
   assertCheckFailed,
   assertCheckPassed,
+  mockDoctorConfig,
   mockDoctorEnvironment,
   mockDoctorFileSystem,
 } from '../helpers/vat-doctor-test-helpers.js';
@@ -32,10 +34,12 @@ vi.mock('node:fs', () => ({
 }));
 vi.mock('../../src/utils/config-loader.js', () => ({
   findConfigPath: vi.fn(),
+  loadConfig: vi.fn(),
 }));
 
 // Constants
 const CHECK_NODE_VERSION = 'Node.js version';
+const CHECK_CONFIG_VALID = 'Configuration valid';
 
 describe('doctor command - unit tests', () => {
   beforeEach(() => {
@@ -149,6 +153,49 @@ describe('doctor command - unit tests', () => {
         'Configuration file',
         'not found',
         'vibe-agent-toolkit.config.yaml',
+      );
+    });
+  });
+
+  describe('checkConfigValid', () => {
+    it('passes when config is valid', async () => {
+      await mockDoctorFileSystem({ configExists: true });
+      const cleanup = await mockDoctorConfig({ valid: true });
+
+      const result = checkConfigValid();
+
+      assertCheckPassed(result, CHECK_CONFIG_VALID, 'valid');
+      cleanup();
+    });
+
+    it('fails when config has errors', async () => {
+      await mockDoctorFileSystem({ configExists: true });
+      const cleanup = await mockDoctorConfig({
+        valid: false,
+        errors: ['YAML syntax error'],
+      });
+
+      const result = checkConfigValid();
+
+      assertCheckFailed(
+        result,
+        CHECK_CONFIG_VALID,
+        'errors',
+        'Fix YAML syntax',
+      );
+      cleanup();
+    });
+
+    it('fails when config not found', async () => {
+      await mockDoctorFileSystem({ configExists: false });
+
+      const result = checkConfigValid();
+
+      assertCheckFailed(
+        result,
+        CHECK_CONFIG_VALID,
+        'not found',
+        'Create vibe-agent-toolkit.config.yaml',
       );
     });
   });

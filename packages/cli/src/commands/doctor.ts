@@ -13,7 +13,7 @@ import { join } from 'node:path';
 import { getToolVersion } from '@vibe-agent-toolkit/utils';
 import type { Command } from 'commander';
 
-import { findConfigPath } from '../utils/config-loader.js';
+import { findConfigPath, loadConfig } from '../utils/config-loader.js';
 
 /**
  * Result of a single doctor check
@@ -82,6 +82,8 @@ const CHECK_NAME_GIT_INSTALLED = 'Git installed';
 const GIT_INSTALL_URL = 'Install Git: https://git-scm.com/';
 const CHECK_NAME_GIT_REPOSITORY = 'Git repository';
 const CHECK_NAME_CONFIG_FILE = 'Configuration file';
+const CHECK_NAME_CONFIG_VALID = 'Configuration valid';
+const CREATE_CONFIG_SUGGESTION = 'Create vibe-agent-toolkit.config.yaml in project root';
 
 /**
  * Check Node.js version meets requirements
@@ -223,7 +225,7 @@ export function checkConfigFile(): DoctorCheckResult {
         name: CHECK_NAME_CONFIG_FILE,
         passed: false,
         message: 'Configuration file not found',
-        suggestion: 'Create vibe-agent-toolkit.config.yaml in project root',
+        suggestion: CREATE_CONFIG_SUGGESTION,
       };
     }
   } catch (error) {
@@ -232,7 +234,49 @@ export function checkConfigFile(): DoctorCheckResult {
       name: CHECK_NAME_CONFIG_FILE,
       passed: false,
       message: `Error checking configuration: ${errorMessage}`,
-      suggestion: 'Create vibe-agent-toolkit.config.yaml in project root',
+      suggestion: CREATE_CONFIG_SUGGESTION,
+    };
+  }
+}
+
+/**
+ * Check if configuration is valid
+ */
+export function checkConfigValid(): DoctorCheckResult {
+  try {
+    const configPath = findConfigPath();
+    if (!configPath) {
+      return {
+        name: CHECK_NAME_CONFIG_VALID,
+        passed: false,
+        message: 'Configuration file not found',
+        suggestion: CREATE_CONFIG_SUGGESTION,
+      };
+    }
+
+    try {
+      loadConfig(configPath);
+      return {
+        name: CHECK_NAME_CONFIG_VALID,
+        passed: true,
+        message: 'Configuration is valid',
+      };
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return {
+        name: CHECK_NAME_CONFIG_VALID,
+        passed: false,
+        message: `Configuration contains errors: ${errorMessage}`,
+        suggestion: 'Fix YAML syntax or schema errors in vibe-agent-toolkit.config.yaml',
+      };
+    }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return {
+      name: CHECK_NAME_CONFIG_VALID,
+      passed: false,
+      message: `Failed to check configuration: ${errorMessage}`,
+      suggestion: 'Check configuration file',
     };
   }
 }

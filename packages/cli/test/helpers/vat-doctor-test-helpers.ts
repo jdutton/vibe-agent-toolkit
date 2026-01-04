@@ -217,15 +217,32 @@ export async function mockDoctorFileSystem(
 }
 
 /**
- * Mock doctor configuration validation
- *
- * @param _config - Config mock configuration
- * @returns Cleanup function to restore original config state
+ * Setup config mocks for doctor tests
  */
 export async function mockDoctorConfig(
-  _config?: DoctorConfigMockConfig,
+  config?: DoctorConfigMockConfig,
 ): Promise<() => void> {
-  return () => {};
+  const opts = {
+    valid: true,
+    config: { version: '1.0', agents: {} },
+    errors: [],
+    ...config,
+  };
+
+  const { loadConfig } = await import('../../src/utils/config-loader.js');
+
+  if (opts.valid) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Mock config can be any shape
+    (loadConfig as ReturnType<typeof vi.fn>).mockReturnValue(opts.config as any);
+  } else {
+    (loadConfig as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error(opts.errors.join(', ') || 'Invalid config');
+    });
+  }
+
+  return () => {
+    vi.restoreAllMocks();
+  };
 }
 
 // ============================================================================
