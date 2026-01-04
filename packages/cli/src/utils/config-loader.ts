@@ -12,6 +12,27 @@ import { ProjectConfigSchema, DEFAULT_CONFIG, type ProjectConfig } from '../sche
 const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 
 /**
+ * Find configuration file by walking up directory tree
+ * @param startDir - Starting directory (defaults to cwd)
+ * @returns Path to config file, or null if not found
+ */
+export function findConfigPath(startDir?: string): string | null {
+  let currentDir = startDir ?? process.cwd();
+  const root = '/';
+
+  while (currentDir !== root) {
+    const configPath = join(currentDir, CONFIG_FILENAME);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path walking is required for config file search
+    if (existsSync(configPath)) {
+      return configPath;
+    }
+    currentDir = join(currentDir, '..');
+  }
+
+  return null;
+}
+
+/**
  * Load and validate project configuration
  * @param projectRoot - Project root directory
  * @returns Validated configuration or default if not found

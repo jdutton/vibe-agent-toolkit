@@ -72,7 +72,11 @@ export class OpenAIEmbeddingProvider implements EmbeddingProvider {
     this.dimensions = config.dimensions ?? MODEL_DIMENSIONS[this.model] ?? 1536;
 
     // Lazy load OpenAI SDK (optional dependency)
+    // Using dynamic import in constructor requires synchronous initialization,
+    // so we throw an error if the import fails and provide installation instructions
     try {
+      // Dynamic import in constructor context - this will fail at runtime if openai isn't installed
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
       const { OpenAI } = require('openai');
       this.client = new OpenAI({ apiKey: config.apiKey });
     } catch {

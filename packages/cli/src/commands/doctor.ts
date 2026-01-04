@@ -7,8 +7,13 @@
  * - Version checks
  */
 
+import { existsSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { getToolVersion } from '@vibe-agent-toolkit/utils';
 import type { Command } from 'commander';
+
+import { findConfigPath } from '../utils/config-loader.js';
 
 /**
  * Result of a single doctor check
@@ -73,6 +78,10 @@ export interface DoctorOptions {
 // Constants for check names and URLs
 const CHECK_NAME_NODE_VERSION = 'Node.js version';
 const NODEJS_INSTALL_URL = 'Install Node.js: https://nodejs.org/';
+const CHECK_NAME_GIT_INSTALLED = 'Git installed';
+const GIT_INSTALL_URL = 'Install Git: https://git-scm.com/';
+const CHECK_NAME_GIT_REPOSITORY = 'Git repository';
+const CHECK_NAME_CONFIG_FILE = 'Configuration file';
 
 /**
  * Check Node.js version meets requirements
@@ -120,6 +129,110 @@ export function checkNodeVersion(): DoctorCheckResult {
       passed: false,
       message: `Failed to detect: ${errorMessage}`,
       suggestion: NODEJS_INSTALL_URL,
+    };
+  }
+}
+
+/**
+ * Check if git is installed
+ */
+export function checkGitInstalled(): DoctorCheckResult {
+  try {
+    const version = getToolVersion('git');
+
+    if (!version) {
+      return {
+        name: CHECK_NAME_GIT_INSTALLED,
+        passed: false,
+        message: 'Git is not installed',
+        suggestion: GIT_INSTALL_URL,
+      };
+    }
+
+    return {
+      name: CHECK_NAME_GIT_INSTALLED,
+      passed: true,
+      message: version,
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return {
+      name: CHECK_NAME_GIT_INSTALLED,
+      passed: false,
+      message: `Git is not installed: ${errorMessage}`,
+      suggestion: GIT_INSTALL_URL,
+    };
+  }
+}
+
+/**
+ * Check if current directory is a git repository
+ */
+export function checkGitRepository(): DoctorCheckResult {
+  try {
+    // Walk up directory tree looking for .git
+    let currentDir = process.cwd();
+    const root = '/';
+
+    while (currentDir !== root) {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path walking is required for git repo detection
+      if (existsSync(join(currentDir, '.git'))) {
+        return {
+          name: CHECK_NAME_GIT_REPOSITORY,
+          passed: true,
+          message: 'Current directory is a git repository',
+        };
+      }
+      currentDir = join(currentDir, '..');
+    }
+
+    return {
+      name: CHECK_NAME_GIT_REPOSITORY,
+      passed: false,
+      message: 'Current directory is not a git repository',
+      suggestion: 'Run: git init',
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return {
+      name: CHECK_NAME_GIT_REPOSITORY,
+      passed: false,
+      message: `Error checking git repository: ${errorMessage}`,
+      suggestion: 'Run: git init',
+    };
+  }
+}
+
+/**
+ * Check if configuration file exists
+ *
+ * Uses findConfigPath() to walk up directory tree.
+ */
+export function checkConfigFile(): DoctorCheckResult {
+  try {
+    const configPath = findConfigPath();
+
+    if (configPath) {
+      return {
+        name: CHECK_NAME_CONFIG_FILE,
+        passed: true,
+        message: `Found: ${configPath}`,
+      };
+    } else {
+      return {
+        name: CHECK_NAME_CONFIG_FILE,
+        passed: false,
+        message: 'Configuration file not found',
+        suggestion: 'Create vibe-agent-toolkit.config.yaml in project root',
+      };
+    }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return {
+      name: CHECK_NAME_CONFIG_FILE,
+      passed: false,
+      message: `Error checking configuration: ${errorMessage}`,
+      suggestion: 'Create vibe-agent-toolkit.config.yaml in project root',
     };
   }
 }

@@ -5,6 +5,7 @@
  * Test helpers for system tests
  */
 
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import { join } from 'node:path';
@@ -107,7 +108,6 @@ export function executeCli(
   args: string[],
   options?: { cwd?: string; env?: NodeJS.ProcessEnv }
 ): CliResult {
-  const { spawnSync } = require('node:child_process');
   // eslint-disable-next-line sonarjs/no-os-command-from-path
   return spawnSync('node', [binPath, ...args], {
     encoding: 'utf-8',
@@ -207,7 +207,6 @@ export function testConfigError(
 
   fs.writeFileSync(join(projectDir, 'docs/test.md'), '# Test');
 
-  const { spawnSync } = require('node:child_process');
   // eslint-disable-next-line sonarjs/no-os-command-from-path
   return spawnSync('node', [binPath, 'resources', 'scan'], {
     encoding: 'utf-8',
