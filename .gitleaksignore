@@ -1,0 +1,4 @@
+# False positives for gitleaks secret scanning
+
+# Example API key in best practices documentation (showing what NOT to do)
+docs/guides/claude-skills-best-practices.md:generic-api-key:534

@@ -6,6 +6,7 @@ import { Command } from 'commander';
 
 import { auditCommand } from './audit.js';
 import { buildCommand } from './build.js';
+import { importCommand } from './import.js';
 import { installAgent } from './install.js';
 import { installedCommand } from './installed.js';
 import { listCommand } from './list.js';
@@ -200,6 +201,40 @@ Examples:
   $ vat agent audit                          # Audit current directory
   $ vat agent audit ./my-skill/SKILL.md      # Audit single skill
   $ vat agent audit ./skills --recursive     # Audit all skills recursively
+`
+    );
+
+  agent
+    .command('import <skillPath>')
+    .description('Import Claude Skill (SKILL.md) to VAT agent format (agent.yaml)')
+    .option('-o, --output <path>', 'Output path for agent.yaml (default: same directory as SKILL.md)')
+    .option('-f, --force', 'Overwrite existing agent.yaml')
+    .option('--debug', DEBUG_OPTION_DESC)
+    .action(importCommand)
+    .addHelpText(
+      'after',
+      `
+Description:
+  Converts a third-party Claude Skill (SKILL.md) to VAT agent format
+  (agent.yaml). Validates the skill frontmatter and creates a proper VAT
+  agent manifest with the claude-skills runtime.
+
+  Use this to import existing Claude Skills into your VAT project for
+  further customization or to use with VAT's build and deployment tools.
+
+Conversion:
+  - Extracts name, description, license from SKILL.md frontmatter
+  - Creates agent.yaml with runtime: claude-skills
+  - Preserves version from metadata.version or defaults to 0.1.0
+  - Validates frontmatter before conversion
+
+Exit Codes:
+  0 - Success  |  1 - Validation/conversion error  |  2 - System error
+
+Examples:
+  $ vat agent import ./my-skill/SKILL.md              # Import to same directory
+  $ vat agent import ./SKILL.md -o ./agent.yaml       # Custom output path
+  $ vat agent import ./SKILL.md --force               # Overwrite existing
 `
     );
 

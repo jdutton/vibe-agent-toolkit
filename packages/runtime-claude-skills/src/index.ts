@@ -19,3 +19,9 @@ export {
 
 export { validateSkill } from './validators/skill-validator.js';
 export type { ValidationResult, ValidationIssue, ValidateOptions } from './validators/types.js';
+
+export {
+  importSkillToAgent,
+  type ImportOptions,
+  type ImportResult,
+} from './import.js';
