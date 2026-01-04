@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Publishing System**: Automated npm publishing with rollback safety
+  - `validate-version`: Ensures all packages have unified version
+  - `publish-with-rollback`: Publishes 11 packages in dependency order with automatic rollback/deprecation on failure
+  - `extract-changelog`: Extracts version-specific changelog for GitHub releases
+  - GitHub Actions workflow triggered by version tags (v*)
+  - Smart npm dist-tag handling: RC versions → @next, stable versions → @latest
+  - Manifest tracking for publish progress and rollback capability
+  - Cross-platform test helpers with security validation
 - **Agent Runtime**: Execute agents with `vat agent run <name> "input"` using Anthropic API
 - **Agent Discovery**: List all agents in your project with `vat agent list`
 - **Agent Validation**: Validate manifests and resources with `vat agent validate <name>`

@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/rag",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "type": "module",
   "description": "Abstract RAG (Retrieval-Augmented Generation) interfaces and shared implementations",
   "keywords": [
@@ -31,8 +31,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@vibe-agent-toolkit/resources": "workspace:*",
-    "@vibe-agent-toolkit/utils": "workspace:*",
+    "@vibe-agent-toolkit/resources": "0.1.0-rc.1",
+    "@vibe-agent-toolkit/utils": "0.1.0-rc.1",
     "@xenova/transformers": "^2.17.0",
     "gpt-tokenizer": "^2.6.0",
     "zod": "^3.22.0",

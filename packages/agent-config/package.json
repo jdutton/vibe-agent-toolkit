@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/agent-config",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "description": "Agent manifest loading and validation",
   "type": "module",
   "main": "./dist/index.js",
@@ -25,9 +25,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@vibe-agent-toolkit/agent-schema": "workspace:*",
-    "@vibe-agent-toolkit/utils": "workspace:*",
-    "@vibe-agent-toolkit/rag": "workspace:*",
+    "@vibe-agent-toolkit/agent-schema": "0.1.0-rc.1",
+    "@vibe-agent-toolkit/utils": "0.1.0-rc.1",
+    "@vibe-agent-toolkit/rag": "0.1.0-rc.1",
     "yaml": "^2.3.4"
   },
   "devDependencies": {

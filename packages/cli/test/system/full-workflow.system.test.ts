@@ -96,7 +96,8 @@ resources:
     });
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toMatch(/\d+\.\d+\.\d+-dev \(\/test\/path\)/);
+    // eslint-disable-next-line security/detect-unsafe-regex -- Simple semver pattern for test validation
+    expect(result.stdout).toMatch(/\d+\.\d+\.\d+(-[a-z0-9.]+)?-dev \(\/test\/path\)/);
   });
 
   it('should show comprehensive help with --help --verbose', () => {

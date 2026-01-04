@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/runtime-claude-skills",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "description": "Build and package VAT agents as Claude Skills",
   "type": "module",
   "main": "./dist/index.js",
@@ -25,8 +25,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@vibe-agent-toolkit/agent-config": "workspace:*",
-    "@vibe-agent-toolkit/utils": "workspace:*",
+    "@vibe-agent-toolkit/agent-config": "0.1.0-rc.1",
+    "@vibe-agent-toolkit/utils": "0.1.0-rc.1",
     "yaml": "^2.6.1",
     "zod": "^3.24.1"
   },

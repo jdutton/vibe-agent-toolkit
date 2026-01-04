@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/vat-development-agents",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "description": "VAT development agents - dogfooding the vibe-agent-toolkit",
   "type": "module",
   "keywords": [
@@ -25,7 +25,7 @@
     "validate": "bun run agents/agent-generator/validate-agent.ts"
   },
   "dependencies": {
-    "@vibe-agent-toolkit/agent-schema": "workspace:*",
+    "@vibe-agent-toolkit/agent-schema": "0.1.0-rc.1",
     "yaml": "^2.8.2"
   },
   "devDependencies": {

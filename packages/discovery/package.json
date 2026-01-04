@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/discovery",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "description": "Intelligent file discovery for VAT agents and Claude Skills",
   "type": "module",
   "main": "./dist/index.js",
@@ -18,7 +18,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@vibe-agent-toolkit/utils": "workspace:*",
+    "@vibe-agent-toolkit/utils": "0.1.0-rc.1",
     "picomatch": "^4.0.2"
   },
   "devDependencies": {

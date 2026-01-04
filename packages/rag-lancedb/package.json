@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/rag-lancedb",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "type": "module",
   "description": "LanceDB implementation of RAG interfaces for vibe-agent-toolkit",
   "keywords": [
@@ -33,9 +33,9 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@vibe-agent-toolkit/rag": "workspace:*",
-    "@vibe-agent-toolkit/resources": "workspace:*",
-    "@vibe-agent-toolkit/utils": "workspace:*",
+    "@vibe-agent-toolkit/rag": "0.1.0-rc.1",
+    "@vibe-agent-toolkit/resources": "0.1.0-rc.1",
+    "@vibe-agent-toolkit/utils": "0.1.0-rc.1",
     "vectordb": "^0.4.0"
   },
   "devDependencies": {

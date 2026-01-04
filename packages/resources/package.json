@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/resources",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "description": "Markdown resource parsing, validation, and link integrity checking",
   "type": "module",
   "main": "./dist/index.js",
@@ -33,7 +33,7 @@
   "author": "Jeff Dutton",
   "license": "MIT",
   "dependencies": {
-    "@vibe-agent-toolkit/utils": "workspace:*",
+    "@vibe-agent-toolkit/utils": "0.1.0-rc.1",
     "picomatch": "^4.0.3",
     "remark-frontmatter": "^5.0.0",
     "remark-gfm": "^4.0.0",

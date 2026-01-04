@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/cli",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "description": "Command-line interface for vibe-agent-toolkit",
   "type": "module",
   "bin": {
@@ -40,13 +40,13 @@
   "license": "MIT",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
-    "@vibe-agent-toolkit/agent-config": "workspace:*",
-    "@vibe-agent-toolkit/discovery": "workspace:*",
-    "@vibe-agent-toolkit/rag": "workspace:*",
-    "@vibe-agent-toolkit/rag-lancedb": "workspace:*",
-    "@vibe-agent-toolkit/resources": "workspace:*",
-    "@vibe-agent-toolkit/runtime-claude-skills": "workspace:*",
-    "@vibe-agent-toolkit/utils": "workspace:*",
+    "@vibe-agent-toolkit/agent-config": "0.1.0-rc.1",
+    "@vibe-agent-toolkit/discovery": "0.1.0-rc.1",
+    "@vibe-agent-toolkit/rag": "0.1.0-rc.1",
+    "@vibe-agent-toolkit/rag-lancedb": "0.1.0-rc.1",
+    "@vibe-agent-toolkit/resources": "0.1.0-rc.1",
+    "@vibe-agent-toolkit/runtime-claude-skills": "0.1.0-rc.1",
+    "@vibe-agent-toolkit/utils": "0.1.0-rc.1",
     "commander": "^12.1.0",
     "js-yaml": "^4.1.0",
     "zod": "^3.24.1"
