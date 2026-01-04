@@ -11,7 +11,7 @@ export function createResourcesCommand(): Command {
   const resources = new Command('resources');
 
   resources
-    .description('Markdown resource scanning and validation')
+    .description('Markdown resource scanning and link validation (run before commit)')
     .option('--verbose', 'Show verbose help')
     .helpCommand(false) // Disable redundant 'help' command, use --help instead
     .addHelpText(

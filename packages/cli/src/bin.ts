@@ -26,7 +26,7 @@ const context: VersionContext | null = process.env['VAT_CONTEXT']
 
 program
   .name('vat')
-  .description('Vibe Agent Toolkit - Build, test, and deploy portable AI agents')
+  .description('Agent-friendly toolkit for building, testing, and deploying portable AI agents')
   .version(getVersionString(version, context), '-v, --version', 'Output version number')
   .option('--debug', 'Enable debug logging')
   .option('--verbose', 'Show verbose help (markdown format)')
@@ -40,9 +40,14 @@ program
     'after',
     `
 Example:
-  $ vat resources validate docs/       # Validate markdown links
+  $ vat resources validate docs/       # Validate markdown links (run before commit)
+
+Environment:
+  VAT_DEBUG=1                          # Show context detection details
 
 For command details: vat resources --help
+For comprehensive help: vat --help --verbose
+For agent guidance: docs/cli/CLAUDE.md
 `
   );
 

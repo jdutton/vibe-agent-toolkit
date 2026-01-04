@@ -108,7 +108,7 @@ resources:
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('# vat - Vibe Agent Toolkit CLI');
     expect(result.stdout).toContain('resources');
-    expect(result.stdout).toContain('Exit Codes');
+    expect(result.stdout).toContain('Exit Code Summary');
   });
 
   it('should show resources verbose help', () => {
