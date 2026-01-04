@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-01-04
+
 ### Added
 - **Publishing System**: Automated npm publishing with rollback safety
   - `validate-version`: Ensures all packages have unified version
@@ -42,14 +44,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New documentation: [Claude Skills Best Practices Guide](./docs/guides/claude-skills-best-practices.md)
 - New documentation: [Audit Command Reference](./docs/cli/audit.md)
 - New documentation: [Import Command Reference](./docs/cli/import.md)
-
-### Changed
-- Simplified agent manifest schema - removed `apiVersion` and `kind` fields
-- Simplified config schema - `resources.exclude` instead of `resources.defaults.exclude`
-- Link validator now warns when links point to gitignored files
-
-## [0.1.0] - 2025-12-26
-
-### Added
-- Initial release of Vibe Agent Toolkit
-- Foundation for building portable AI agents
+- **Resources System**: Markdown resource scanning and validation of link integrity
