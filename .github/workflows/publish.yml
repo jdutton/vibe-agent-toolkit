@@ -50,7 +50,7 @@ jobs:
         run: bun run build
 
       - name: Pre-publish checks
-        run: bun run pre-publish-check
+        run: bun run pre-publish
 
       - name: Publish to npm
         run: bun run publish-with-rollback ${{ steps.version.outputs.version }}
