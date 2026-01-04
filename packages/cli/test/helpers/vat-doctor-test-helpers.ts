@@ -5,6 +5,11 @@
  * Prevents duplication across test cases.
  */
 
+import { execSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+
+import { vi, expect } from 'vitest';
+
 // ============================================================================
 // Type Definitions
 // ============================================================================
@@ -47,32 +52,172 @@ export interface DoctorConfigMockConfig {
   errors?: string[];
 }
 
+/**
+ * Doctor check result structure
+ */
+export interface DoctorCheckResult {
+  /** Name of the check */
+  name: string;
+  /** Whether the check passed */
+  passed: boolean;
+  /** Message describing the result */
+  message: string;
+  /** Optional suggestion for fixing the issue */
+  suggestion?: string;
+}
+
+/**
+ * Doctor result with checks array
+ */
+export interface DoctorResult {
+  /** Array of check results */
+  checks: DoctorCheckResult[];
+}
+
 // ============================================================================
 // Mock Functions (Placeholders)
 // ============================================================================
 
 /**
- * Mock doctor environment (Node.js, Git, npm versions)
+ * Setup environment mocks for doctor tests
  *
- * @param _config - Environment configuration
- * @returns Cleanup function to restore original environment
+ * Mocks execSync calls for version checks and system commands.
+ *
+ * @example
+ * ```typescript
+ * // Healthy environment
+ * await mockDoctorEnvironment();
+ *
+ * // Old Node version
+ * await mockDoctorEnvironment({ nodeVersion: 'v18.0.0' });
+ *
+ * // Missing git
+ * await mockDoctorEnvironment({ gitVersion: null });
+ * ```
  */
 export async function mockDoctorEnvironment(
-  _config?: DoctorEnvironmentConfig,
+  config?: DoctorEnvironmentConfig,
 ): Promise<() => void> {
-  return () => {};
+  const opts = {
+    nodeVersion: 'v22.0.0',
+    gitVersion: 'git version 2.43.0',
+    vatVersion: '0.1.0',
+    ...config,
+  };
+
+  const mockedExecSync = vi.mocked(execSync);
+  mockedExecSync.mockImplementation((cmd: string): Buffer => {
+    const cmdStr = cmd.toString();
+
+    if (cmdStr.includes('npm view vibe-agent-toolkit version')) {
+      return Buffer.from(opts.vatVersion ?? '');
+    }
+    if (cmdStr.includes('node --version')) {
+      if (opts.nodeVersion === null) throw new Error('node not found');
+      return Buffer.from(opts.nodeVersion);
+    }
+    if (cmdStr.includes('git --version')) {
+      if (opts.gitVersion === null) throw new Error('git not found');
+      return Buffer.from(opts.gitVersion);
+    }
+
+    return Buffer.from('');
+  });
+
+  // Also mock getToolVersion from utils
+  const { getToolVersion } = await import('@vibe-agent-toolkit/utils');
+  const mockedGetToolVersion = vi.mocked(getToolVersion);
+  mockedGetToolVersion.mockImplementation((toolName: string) => {
+    if (toolName === 'node') return opts.nodeVersion;
+    if (toolName === 'git') return opts.gitVersion;
+    return null;
+  });
+
+  return () => {
+    vi.restoreAllMocks();
+  };
 }
 
 /**
- * Mock doctor file system (package.json, config files)
+ * Setup file system mocks for doctor tests
  *
- * @param _config - File system configuration
- * @returns Cleanup function to restore original file system state
+ * Mocks readFileSync and existsSync for common files.
+ *
+ * @example
+ * ```typescript
+ * // Healthy file system
+ * await mockDoctorFileSystem();
+ *
+ * // Missing config
+ * await mockDoctorFileSystem({ configExists: false });
+ *
+ * // In VAT source tree
+ * await mockDoctorFileSystem({ isVatSourceTree: true });
+ * ```
  */
 export async function mockDoctorFileSystem(
-  _config?: DoctorFileSystemConfig,
+  config?: DoctorFileSystemConfig,
 ): Promise<() => void> {
-  return () => {};
+  const opts = {
+    packageVersion: '0.1.0',
+    configExists: true,
+    configContent: 'version: "1.0"\nagents: {}\n',
+    isVatSourceTree: false,
+    ...config,
+  };
+
+  const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
+
+  const mockedReadFileSync = vi.mocked(readFileSync);
+  mockedReadFileSync.mockImplementation((path: string | Buffer | URL): string => {
+    const pathStr = path.toString();
+
+    // package.json
+    if (pathStr.includes('package.json')) {
+      const isCliPackage = pathStr.includes('packages/cli/package.json');
+      const name = isCliPackage
+        ? '@vibe-agent-toolkit/cli'
+        : 'vibe-agent-toolkit';
+      return JSON.stringify({
+        name,
+        version: opts.packageVersion,
+      });
+    }
+
+    // Config file
+    if (pathStr.includes(CONFIG_FILENAME)) {
+      return opts.configContent;
+    }
+
+    return '';
+  });
+
+  const mockedExistsSync = vi.mocked(existsSync);
+  mockedExistsSync.mockImplementation((path: string | Buffer | URL): boolean => {
+    const pathStr = path.toString();
+
+    if (pathStr.includes(CONFIG_FILENAME)) {
+      return opts.configExists;
+    }
+
+    if (pathStr.includes('packages/cli/package.json')) {
+      return opts.isVatSourceTree;
+    }
+
+    // Assume git repo exists and other files exist by default
+    return true;
+  });
+
+  // Mock findConfigPath
+  const { findConfigPath } = await import('../../src/utils/config-loader.js');
+  const mockedFindConfigPath = vi.mocked(findConfigPath);
+  mockedFindConfigPath.mockReturnValue(
+    opts.configExists ? CONFIG_FILENAME : null,
+  );
+
+  return () => {
+    vi.restoreAllMocks();
+  };
 }
 
 /**
@@ -85,4 +230,94 @@ export async function mockDoctorConfig(
   _config?: DoctorConfigMockConfig,
 ): Promise<() => void> {
   return () => {};
+}
+
+// ============================================================================
+// Assertion Helpers
+// ============================================================================
+
+const SUGGESTION_FIELD = 'suggestion';
+
+/**
+ * Find a specific doctor check result
+ */
+export function findCheck(
+  result: DoctorResult,
+  checkName: string,
+): DoctorCheckResult {
+  const check = result.checks.find((c) => c.name === checkName);
+  if (!check) {
+    const available = result.checks.map((c) => c.name).join(', ');
+    throw new Error(
+      `Check "${checkName}" not found. Available: ${available}`,
+    );
+  }
+  return check;
+}
+
+/**
+ * Assert check passed with optional message matching
+ */
+export function assertCheckPassed(
+  result: DoctorResult,
+  checkName: string,
+  messageContains?: string,
+): void {
+  const check = findCheck(result, checkName);
+  expect(check.passed).toBe(true);
+  if (messageContains) {
+    expect(check.message).toContain(messageContains);
+  }
+}
+
+/**
+ * Assert check failed with message and suggestion matching
+ */
+export function assertCheckFailed(
+  result: DoctorResult,
+  checkName: string,
+  messageContains: string,
+  suggestionContains: string,
+): void {
+  const check = findCheck(result, checkName);
+  expect(check.passed).toBe(false);
+  expect(check.message).toContain(messageContains);
+  expect(check[SUGGESTION_FIELD]).toBeDefined();
+  expect(check[SUGGESTION_FIELD]).toContain(suggestionContains);
+}
+
+/**
+ * Assert check with flexible assertions
+ */
+export function assertCheck(
+  result: DoctorResult,
+  checkName: string,
+  assertions: {
+    passed: boolean;
+    messageContains?: string | string[];
+    suggestionContains?: string | string[];
+  },
+): void {
+  const check = findCheck(result, checkName);
+
+  expect(check.passed).toBe(assertions.passed);
+
+  if (assertions.messageContains) {
+    const messages = Array.isArray(assertions.messageContains)
+      ? assertions.messageContains
+      : [assertions.messageContains];
+    for (const msg of messages) {
+      expect(check.message).toContain(msg);
+    }
+  }
+
+  if (assertions.suggestionContains) {
+    expect(check[SUGGESTION_FIELD]).toBeDefined();
+    const suggestions = Array.isArray(assertions.suggestionContains)
+      ? assertions.suggestionContains
+      : [assertions.suggestionContains];
+    for (const sug of suggestions) {
+      expect(check[SUGGESTION_FIELD]).toContain(sug);
+    }
+  }
 }
