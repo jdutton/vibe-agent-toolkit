@@ -464,18 +464,47 @@ export function checkCliBuildSync(): DoctorCheckResult {
  * @param options - Doctor options
  * @returns Doctor result
  */
-export async function runDoctor(_options: DoctorOptions = {}): Promise<DoctorResult> {
-  // Placeholder - will implement in later tasks
+export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResult> {
+  const { verbose = false, versionChecker } = options;
+
+  // 1. Detect project context
+  const currentDir = process.cwd();
+  const projectRoot = findProjectRoot();
+  const configPath = findConfigPath();
+
+  const projectContext: ProjectContext = {
+    currentDir,
+    projectRoot,
+    configPath,
+  };
+
+  // 2. Run all checks (mix of sync and async)
+  const checks: DoctorCheckResult[] = [
+    await checkVatVersion(versionChecker),
+    checkNodeVersion(),
+    checkGitInstalled(),
+    checkGitRepository(),
+    checkConfigFile(),
+    checkConfigValid(),
+    checkCliBuildSync(),
+  ];
+
+  // 3. Filter output based on verbose mode
+  const displayChecks = verbose
+    ? checks
+    : checks.filter(c => !c.passed || c.suggestion);
+
+  // 4. Calculate summary
+  const allPassed = checks.every(c => c.passed);
+  const totalChecks = checks.length;
+  const passedChecks = checks.filter(c => c.passed).length;
+
   return {
-    allPassed: true,
-    checks: [],
-    totalChecks: 0,
-    passedChecks: 0,
-    projectContext: {
-      currentDir: process.cwd(),
-      projectRoot: null,
-      configPath: null,
-    },
+    allPassed,
+    checks: displayChecks,
+    totalChecks,
+    passedChecks,
+    projectContext,
   };
 }
 
