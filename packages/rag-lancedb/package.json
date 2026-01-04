@@ -42,5 +42,9 @@
     "@types/node": "^25.0.0",
     "typescript": "^5.9.0",
     "vitest": "^3.2.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jdutton/vibe-agent-toolkit.git"
   }
 }

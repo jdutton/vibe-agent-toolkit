@@ -41,5 +41,9 @@
     "claude",
     "skills",
     "runtime"
-  ]
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jdutton/vibe-agent-toolkit.git"
+  }
 }

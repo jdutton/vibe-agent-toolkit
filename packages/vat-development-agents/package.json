@@ -35,7 +35,6 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/jdutton/vibe-agent-toolkit.git",
-    "directory": "packages/vat-development-agents"
+    "url": "https://github.com/jdutton/vibe-agent-toolkit.git"
   }
 }
