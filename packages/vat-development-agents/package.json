@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/vat-development-agents",
-  "version": "0.1.0-rc.6",
+  "version": "0.1.0-rc.7",
   "description": "VAT development agents - dogfooding the vibe-agent-toolkit",
   "type": "module",
   "keywords": [
