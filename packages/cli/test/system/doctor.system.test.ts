@@ -5,18 +5,21 @@
  * to verify self-hosting works correctly. No mocks - real execution.
  */
 
-import { execSync } from 'node:child_process';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
+import { executeCli, getBinPath } from './test-common.js';
+
 // Get the project root (VAT repo root)
-const PROJECT_ROOT = join(__dirname, '../../../..');
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = join(__dirname, '../../../..'); // from packages/cli/test/system/ to project root
 const PACKAGES_DIR = join(PROJECT_ROOT, 'packages');
 const CLI_DIR = join(PROJECT_ROOT, 'packages/cli');
 
 // Use the built CLI binary directly
-const CLI_BIN = join(PROJECT_ROOT, 'packages/cli/dist/bin.js');
+const CLI_BIN = getBinPath(import.meta.url);
 
 /**
  * Execute vat doctor command and return parsed result
@@ -26,28 +29,18 @@ function runVatDoctor(cwd: string, options?: { verbose?: boolean }): {
   output: string;
   allPassed: boolean;
 } {
-  try {
-    const verboseFlag = options?.verbose ? ' --verbose' : '';
-    // eslint-disable-next-line sonarjs/os-command, local/no-child-process-execSync -- System test requires running real CLI with execSync
-    const output = execSync(`node ${CLI_BIN} doctor${verboseFlag}`, {
-      cwd,
-      encoding: 'utf8',
-      stdio: 'pipe',
-    });
+  const args = options?.verbose ? ['doctor', '--verbose'] : ['doctor'];
+  const result = executeCli(CLI_BIN, args, { cwd });
 
-    return {
-      exitCode: 0,
-      output,
-      allPassed: !output.includes('❌') && output.includes('All checks passed'),
-    };
-  } catch (error: unknown) {
-    const err = error as { status?: number; stdout?: string; stderr?: string };
-    return {
-      exitCode: err.status ?? 1,
-      output: (err.stdout ?? '') + (err.stderr ?? ''),
-      allPassed: false,
-    };
-  }
+  const output = (result.stdout ?? '') + (result.stderr ?? '');
+  const exitCode = result.status ?? 1;
+
+  return {
+    exitCode,
+    output,
+    allPassed:
+      exitCode === 0 && !output.includes('❌') && output.includes('All checks passed'),
+  };
 }
 
 describe('vat doctor - system tests (self-hosting)', () => {
@@ -64,8 +57,8 @@ describe('vat doctor - system tests (self-hosting)', () => {
     it('reports correct summary counts', () => {
       const result = runVatDoctor(PROJECT_ROOT);
 
-      // Simple regex is safe - just matching digit/digit pattern
-      // eslint-disable-next-line sonarjs/slow-regex -- Simple pattern, not vulnerable
+      // Simple digit/digit pattern - not vulnerable to ReDoS
+      // eslint-disable-next-line sonarjs/slow-regex -- Safe pattern: \d+\/\d+ has no backtracking
       expect(result.output).toMatch(/\d+\/\d+ checks passed/);
     });
   });
