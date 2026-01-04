@@ -1,0 +1,79 @@
+name: Publish Packages
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+          # Determine if stable
+          if [[ "$VERSION" == *"-"* ]]; then
+            echo "is_stable=false" >> $GITHUB_OUTPUT
+          else
+            echo "is_stable=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Validate version
+        run: bun run validate-version
+
+      - name: Build all packages
+        run: bun run build
+
+      - name: Pre-publish checks
+        run: bun run pre-publish-check
+
+      - name: Publish to npm
+        run: bun run publish-with-rollback ${{ steps.version.outputs.version }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Extract changelog
+        if: steps.version.outputs.is_stable == 'true'
+        id: changelog
+        run: |
+          CHANGELOG=$(bun run extract-changelog ${{ steps.version.outputs.version }})
+          echo "changelog<<EOF" >> $GITHUB_OUTPUT
+          echo "$CHANGELOG" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Create GitHub Release
+        if: steps.version.outputs.is_stable == 'true'
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ steps.version.outputs.version }}
+          release_name: Release v${{ steps.version.outputs.version }}
+          body: ${{ steps.changelog.outputs.changelog }}
+          draft: false
+          prerelease: false

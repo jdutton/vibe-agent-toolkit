@@ -11,6 +11,7 @@
     "generate-cli-docs": "tsx src/generate-cli-docs.ts"
   },
   "dependencies": {
+    "@vibe-agent-toolkit/utils": "workspace:*",
     "semver": "^7.7.3",
     "which": "^5.0.0"
   },
