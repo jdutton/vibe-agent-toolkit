@@ -2,11 +2,13 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import type { z } from 'zod';
-
 import { PluginSchema } from '../schemas/plugin.js';
 
 import type { ValidationIssue, ValidationResult } from './types.js';
+import {
+	calculateValidationStatus,
+	generateFixSuggestion,
+} from './validation-utils.js';
 
 const PLUGIN_TYPE = 'claude-plugin' as const;
 
@@ -76,14 +78,7 @@ export async function validatePlugin(pluginPath: string): Promise<ValidationResu
 		}
 	}
 
-	let status: 'success' | 'warning' | 'error';
-	if (issues.length === 0) {
-		status = 'success';
-	} else if (issues.some((i) => i.severity === 'error')) {
-		status = 'error';
-	} else {
-		status = 'warning';
-	}
+	const status = calculateValidationStatus(issues);
 
 	const validationResult: ValidationResult = {
 		path: pluginPath,
@@ -102,25 +97,4 @@ export async function validatePlugin(pluginPath: string): Promise<ValidationResu
 	}
 
 	return validationResult;
-}
-
-/**
- * Generate fix suggestion from Zod error
- */
-function generateFixSuggestion(zodIssue: z.ZodIssue): string {
-	const field = zodIssue.path.join('.');
-
-	if (zodIssue.code === 'invalid_type') {
-		return `Change '${field}' to ${zodIssue.expected} type`;
-	}
-
-	if (zodIssue.code === 'too_small' && zodIssue.type === 'string') {
-		return `Provide a value for '${field}'`;
-	}
-
-	if (zodIssue.code === 'invalid_string' && zodIssue.validation === 'regex') {
-		return `Fix '${field}' format to match expected pattern`;
-	}
-
-	return `Fix '${field}' to meet schema requirements`;
 }
