@@ -2,11 +2,12 @@
  * Unit tests for doctor command
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  checkCliBuildSync,
   checkConfigFile,
   checkConfigValid,
   checkGitInstalled,
@@ -257,6 +258,65 @@ describe('doctor command - unit tests', () => {
         passed: true,
         messageContains: 'Unable to check',
       });
+    });
+  });
+
+  describe('checkCliBuildSync', () => {
+    it('passes when CLI version matches source', async () => {
+      await mockDoctorFileSystem({
+        isVatSourceTree: true,
+        packageVersion: '0.1.0',
+      });
+
+      const result = checkCliBuildSync();
+
+      assertCheckPassed(result, 'CLI build status', 'up to date');
+    });
+
+    it('fails when CLI is stale', async () => {
+      // Mock: source has v0.2.0, running CLI has v0.1.0
+      // The challenge is that both paths read the same file in reality,
+      // but we need to differentiate them for testing.
+      // Running version is read via file:// URL, source is read via path.join()
+      let readCallCount = 0;
+      (readFileSync as ReturnType<typeof vi.fn>).mockImplementation((path: string | Buffer | URL): string => {
+        const pathStr = path.toString();
+        readCallCount++;
+
+        // First call: running CLI version (via URL - contains file://)
+        // Second call: source version (via join - no file://)
+        if (readCallCount === 1 || pathStr.startsWith('file://')) {
+          // Running CLI has old version
+          return JSON.stringify({
+            name: '@vibe-agent-toolkit/cli',
+            version: '0.1.0'
+          });
+        }
+        // Source has newer version
+        return JSON.stringify({
+          name: '@vibe-agent-toolkit/cli',
+          version: '0.2.0'
+        });
+      });
+      (existsSync as ReturnType<typeof vi.fn>).mockReturnValue(true);
+
+      const result = checkCliBuildSync();
+
+      assertCheckFailed(
+        result,
+        'CLI build status',
+        'stale',
+        'bun run build'
+      );
+    });
+
+    it('skips when not in VAT source tree', async () => {
+      await mockDoctorFileSystem({ isVatSourceTree: false });
+
+      const result = checkCliBuildSync();
+
+      expect(result.passed).toBe(true);
+      expect(result.message).toContain('Skipped');
     });
   });
 });

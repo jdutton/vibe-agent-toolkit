@@ -86,6 +86,7 @@ const CHECK_NAME_CONFIG_FILE = 'Configuration file';
 const CHECK_NAME_CONFIG_VALID = 'Configuration valid';
 const CREATE_CONFIG_SUGGESTION = 'Create vibe-agent-toolkit.config.yaml in project root';
 const CHECK_NAME_VAT_VERSION = 'vat version';
+const CHECK_NAME_CLI_BUILD_STATUS = 'CLI build status';
 
 /**
  * Check Node.js version meets requirements
@@ -176,9 +177,10 @@ export function checkGitRepository(): DoctorCheckResult {
   try {
     // Walk up directory tree looking for .git
     let currentDir = process.cwd();
-    const root = '/';
+    let previousDir = '';
 
-    while (currentDir !== root) {
+    // Loop until we reach root (works on both Unix / and Windows C:\)
+    while (currentDir !== previousDir) {
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path walking is required for git repo detection
       if (existsSync(join(currentDir, '.git'))) {
         return {
@@ -187,6 +189,7 @@ export function checkGitRepository(): DoctorCheckResult {
           message: 'Current directory is a git repository',
         };
       }
+      previousDir = currentDir;
       currentDir = join(currentDir, '..');
     }
 
@@ -350,6 +353,107 @@ export async function checkVatVersion(
       name: CHECK_NAME_VAT_VERSION,
       passed: true,
       message: `Unable to determine version: ${errorMessage}`,
+    };
+  }
+}
+
+/**
+ * Find project root by walking up directory tree
+ */
+function findProjectRoot(): string | null {
+  let currentDir = process.cwd();
+  let previousDir = '';
+
+  // Loop until we reach root (works on both Unix / and Windows C:\)
+  while (currentDir !== previousDir) {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path walking is required for project root detection
+    const hasConfig = existsSync(join(currentDir, 'vibe-agent-toolkit.config.yaml'));
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path walking is required for project root detection
+    const hasGit = existsSync(join(currentDir, '.git'));
+
+    if (hasConfig || hasGit) {
+      return currentDir;
+    }
+    previousDir = currentDir;
+    currentDir = join(currentDir, '..');
+  }
+
+  return null;
+}
+
+/**
+ * Detect if running in VAT source tree
+ */
+function isVatSourceTree(): boolean {
+  try {
+    const projectRoot = findProjectRoot();
+    if (!projectRoot) return false;
+
+    const cliPackagePath = join(projectRoot, 'packages/cli/package.json');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path for VAT source detection
+    if (!existsSync(cliPackagePath)) return false;
+
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path for VAT source detection
+    const pkg = JSON.parse(readFileSync(cliPackagePath, 'utf8')) as { name?: string };
+    return pkg.name === '@vibe-agent-toolkit/cli';
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if CLI build is in sync with source code (development mode only)
+ */
+export function checkCliBuildSync(): DoctorCheckResult {
+  try {
+    if (!isVatSourceTree()) {
+      return {
+        name: CHECK_NAME_CLI_BUILD_STATUS,
+        passed: true,
+        message: 'Skipped (not in VAT source tree)',
+      };
+    }
+
+    const projectRoot = findProjectRoot();
+    if (!projectRoot) {
+      return {
+        name: CHECK_NAME_CLI_BUILD_STATUS,
+        passed: true,
+        message: 'Skipped',
+      };
+    }
+
+    // Get running version
+    const runningPackagePath = new URL('../../package.json', import.meta.url);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Static import path is safe
+    const runningPackage = JSON.parse(readFileSync(runningPackagePath, 'utf8'));
+    const runningVersion = runningPackage.version;
+
+    // Get source version
+    const sourcePackagePath = join(projectRoot, 'packages/cli/package.json');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Project root path construction
+    const sourcePackage = JSON.parse(readFileSync(sourcePackagePath, 'utf8'));
+    const sourceVersion = sourcePackage.version;
+
+    if (runningVersion !== sourceVersion) {
+      return {
+        name: CHECK_NAME_CLI_BUILD_STATUS,
+        passed: false,
+        message: `Build is stale: running v${runningVersion}, source v${sourceVersion}`,
+        suggestion: 'Rebuild packages: bun run build',
+      };
+    }
+
+    return {
+      name: CHECK_NAME_CLI_BUILD_STATUS,
+      passed: true,
+      message: `Build is up to date (v${runningVersion})`,
+    };
+  } catch {
+    return {
+      name: CHECK_NAME_CLI_BUILD_STATUS,
+      passed: true,
+      message: 'Skipped (could not determine build status)',
     };
   }
 }
