@@ -12,6 +12,17 @@ export {
   type VATClaudeSkillFrontmatter,
 } from './schemas/claude-skill-frontmatter.js';
 
+export { PluginJsonSchema, PluginSchema, type Plugin } from './schemas/plugin.js';
+
+export {
+  MarketplaceJsonSchema,
+  MarketplaceSchema,
+  type LspServerConfig,
+  type Marketplace,
+  type MarketplacePlugin,
+  type PluginSource,
+} from './schemas/marketplace.js';
+
 export {
   parseFrontmatter,
   type FrontmatterResult,

@@ -3,7 +3,8 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { afterEach, beforeEach } from 'vitest';
+import { afterEach, beforeEach, expect } from 'vitest';
+import type { z } from 'zod';
 
 import { validateSkill } from '../src/validators/skill-validator.js';
 import type { ValidationResult } from '../src/validators/types.js';
@@ -99,4 +100,110 @@ export function createSkillFile(tempDir: string, content: string): string {
   const skillPath = path.join(tempDir, 'SKILL.md');
   fs.writeFileSync(skillPath, content);
   return skillPath;
+}
+
+// ============================================================================
+// Schema Testing Helpers
+// ============================================================================
+
+/**
+ * Load a registry fixture file from test/fixtures/registries/
+ */
+export function loadRegistryFixture(name: string): unknown {
+	const fixturePath = path.resolve(__dirname, 'fixtures/registries', name);
+	return JSON.parse(fs.readFileSync(fixturePath, 'utf-8'));
+}
+
+/**
+ * List to track temporary files created during tests
+ */
+const tempFiles: string[] = [];
+
+/**
+ * Clean up all temporary test files
+ * Call this in afterEach() hooks
+ */
+export function cleanupTestFiles(): void {
+	for (const file of tempFiles) {
+		try {
+			fs.unlinkSync(file);
+		} catch {
+			// Ignore errors - file may not exist
+		}
+	}
+	tempFiles.length = 0;
+}
+
+/**
+ * Assert that a Zod schema validation fails with expected error
+ *
+ * @param schema - Zod schema to validate against
+ * @param data - Invalid data to test
+ * @param expectedPath - Expected error path (field name)
+ * @param expectedMessage - Expected error message substring
+ */
+export function assertValidationError<T extends z.ZodTypeAny>(
+	schema: T,
+	data: unknown,
+	expectedPath: string,
+	expectedMessage: string,
+): void {
+	const result = schema.safeParse(data);
+
+	expect(result.success).toBe(false);
+
+	if (!result.success) {
+		// Find error matching expected path
+		const pathError = result.error.issues.find((issue) =>
+			issue.path.join('.').includes(expectedPath),
+		);
+
+		expect(pathError).toBeDefined();
+		expect(pathError?.message).toContain(expectedMessage);
+	}
+}
+
+// ============================================================================
+// Plugin Testing Helpers
+// ============================================================================
+
+/**
+ * Assert that validation result is successful (no errors)
+ */
+export function assertValidationSuccess(result: ValidationResult): void {
+	expect(result.status).toBe('success');
+	expect(result.issues.filter((i) => i.severity === 'error')).toHaveLength(0);
+}
+
+/**
+ * Assert that validation result has a single error with specified code
+ */
+export function assertSingleError(
+	result: ValidationResult,
+	code: string,
+): void {
+	expect(result.status).toBe('error');
+	expect(result.issues).toHaveLength(1);
+	expect(result.issues[0]?.code).toBe(code);
+	expect(result.issues[0]?.severity).toBe('error');
+}
+
+/**
+ * Create a test plugin directory structure
+ * Returns the path to the created plugin directory
+ */
+export function createTestPlugin(
+	baseDir: string,
+	pluginData: Record<string, unknown>,
+	pluginName = 'test-plugin',
+): string {
+	const pluginDir = path.join(baseDir, pluginName);
+	const claudePluginDir = path.join(pluginDir, '.claude-plugin');
+
+	fs.mkdirSync(claudePluginDir, { recursive: true });
+
+	const pluginJsonPath = path.join(claudePluginDir, 'plugin.json');
+	fs.writeFileSync(pluginJsonPath, JSON.stringify(pluginData, null, 2));
+
+	return pluginDir;
 }

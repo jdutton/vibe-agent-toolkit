@@ -1,7 +1,7 @@
 export type IssueSeverity = 'error' | 'warning' | 'info';
 
 export type IssueCode =
-  // Critical errors
+  // Critical errors - Skills
   | 'SKILL_MISSING_FRONTMATTER'
   | 'SKILL_MISSING_NAME'
   | 'SKILL_MISSING_DESCRIPTION'
@@ -13,6 +13,10 @@ export type IssueCode =
   | 'SKILL_DESCRIPTION_EMPTY'
   | 'LINK_INTEGRITY_BROKEN'
   | 'PATH_STYLE_WINDOWS'
+  // Critical errors - Plugins
+  | 'PLUGIN_MISSING_MANIFEST'
+  | 'PLUGIN_INVALID_JSON'
+  | 'PLUGIN_INVALID_SCHEMA'
   // Warnings
   | 'SKILL_TOO_LONG'
   | 'REFERENCE_DEPTH_EXCEEDED'
@@ -35,13 +39,14 @@ export interface ValidationIssue {
 
 export interface ValidationResult {
   path: string;
-  type: 'claude-skill' | 'vat-agent';
+  type: 'claude-skill' | 'vat-agent' | 'claude-plugin' | 'marketplace' | 'registry';
   status: 'success' | 'warning' | 'error';
   summary: string;
   issues: ValidationIssue[];
   metadata?: {
     name?: string;
     description?: string;
+    version?: string;
     lineCount?: number;
     referenceFiles?: number;
   };
