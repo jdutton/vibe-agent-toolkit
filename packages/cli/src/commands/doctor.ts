@@ -529,9 +529,45 @@ export function doctorCommand(program: Command): void {
 }
 
 /**
- * Display doctor results
+ * Display doctor results in human-friendly format
  */
-function displayResults(_result: DoctorResult): void {
+function displayResults(result: DoctorResult): void {
   console.log('🩺 vat doctor\n');
-  console.log('✨ All checks passed!\n');
+
+  // Show project context if in subdirectory
+  const { currentDir, projectRoot, configPath } = result.projectContext;
+  const isSubdirectory = projectRoot && projectRoot !== currentDir;
+
+  if (isSubdirectory) {
+    console.log('📍 Project Context');
+    console.log(`   Current directory: ${currentDir}`);
+    console.log(`   Project root:      ${projectRoot}`);
+    if (configPath) {
+      console.log(`   Configuration:     ${configPath}`);
+    }
+    console.log('');
+  }
+
+  console.log('Running diagnostic checks...\n');
+
+  // Show checks
+  for (const check of result.checks) {
+    const icon = check.passed ? '✅' : '❌';
+    console.log(`${icon} ${check.name}`);
+    console.log(`   ${check.message}`);
+    if (check.suggestion) {
+      console.log(`   💡 ${check.suggestion}`);
+    }
+    console.log('');
+  }
+
+  // Summary
+  console.log(`📊 Results: ${result.passedChecks}/${result.totalChecks} checks passed\n`);
+
+  if (result.allPassed) {
+    console.log('✨ All checks passed! Your vat setup looks healthy.');
+  } else {
+    console.log('⚠️  Some checks failed. See suggestions above to fix.');
+    process.exit(1);
+  }
 }
