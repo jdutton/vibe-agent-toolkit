@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/dev-tools",
-  "version": "0.1.0-rc.2",
+  "version": "0.1.0-rc.3",
   "private": true,
   "type": "module",
   "description": "Development tools for the monorepo",
@@ -11,7 +11,7 @@
     "generate-cli-docs": "tsx src/generate-cli-docs.ts"
   },
   "dependencies": {
-    "@vibe-agent-toolkit/utils": "workspace:*",
+    "@vibe-agent-toolkit/utils": "0.1.0-rc.3",
     "semver": "^7.7.3",
     "which": "^5.0.0"
   },
