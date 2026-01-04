@@ -234,8 +234,8 @@ Internal dependencies in package.json must use the workspace protocol, **not spe
 **Why `workspace:*`?**
 
 1. **CI Compatibility**: `bun install` in CI uses local workspace packages, not npm
-2. **Auto-Replacement**: During publishing, Bun automatically replaces `workspace:*` with the actual version
-3. **Single Source of Truth**: Version is managed by `bump-version` script, not package.json
+2. **Auto-Resolution**: Publishing workflow runs `resolve-workspace-deps` to replace `workspace:*` with actual versions before `npm publish`
+3. **Single Source of Truth**: Version is managed by `bump-version` script, not individual package.json files
 
 **Without `workspace:*`**, CI builds fail because `bun install` tries to fetch packages from npm that don't exist yet:
 
@@ -246,6 +246,19 @@ Internal dependencies in package.json must use the workspace protocol, **not spe
 # ✅ CORRECT - CI uses local workspace
 "@vibe-agent-toolkit/utils": "workspace:*"
 ```
+
+**Publishing Workflow**:
+1. Developer commits code with `workspace:*` in package.json
+2. Developer runs `bump-version` to create git tag (workspace:* unchanged)
+3. GitHub Actions workflow triggers on tag:
+   - `bun install` uses local workspace packages
+   - `build` compiles all packages
+   - `resolve-workspace-deps` replaces `workspace:*` with actual version
+   - `npm publish` publishes with resolved dependencies
+4. Published packages on npm have actual version numbers (e.g., "0.1.0-rc.7")
+5. Workspace files in git remain unchanged with `workspace:*`
+
+**Why not use `bun publish`?** Bun automatically replaces `workspace:*`, but doesn't support `--provenance` flag needed for supply chain security. We use `npm publish` with manual resolution instead.
 
 **Fixing Incorrect Dependencies**:
 

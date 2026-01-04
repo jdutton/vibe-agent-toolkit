@@ -52,6 +52,9 @@ jobs:
       - name: Pre-publish checks
         run: bun run pre-publish
 
+      - name: Resolve workspace dependencies
+        run: bun run resolve-workspace-deps ${{ steps.version.outputs.version }}
+
       - name: Publish to npm
         run: bun run publish-with-rollback ${{ steps.version.outputs.version }}
         env:
