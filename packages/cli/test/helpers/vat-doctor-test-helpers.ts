@@ -105,8 +105,8 @@ export async function mockDoctorEnvironment(
     ...config,
   };
 
-  const mockedExecSync = vi.mocked(execSync);
-  mockedExecSync.mockImplementation((cmd: string): Buffer => {
+  // Cast to vi.Mock type (mocked modules return Mock types)
+  (execSync as ReturnType<typeof vi.fn>).mockImplementation((cmd: string): Buffer => {
     const cmdStr = cmd.toString();
 
     if (cmdStr.includes('npm view vibe-agent-toolkit version')) {
@@ -126,8 +126,7 @@ export async function mockDoctorEnvironment(
 
   // Also mock getToolVersion from utils
   const { getToolVersion } = await import('@vibe-agent-toolkit/utils');
-  const mockedGetToolVersion = vi.mocked(getToolVersion);
-  mockedGetToolVersion.mockImplementation((toolName: string) => {
+  (getToolVersion as ReturnType<typeof vi.fn>).mockImplementation((toolName: string) => {
     if (toolName === 'node') return opts.nodeVersion;
     if (toolName === 'git') return opts.gitVersion;
     return null;
@@ -168,8 +167,7 @@ export async function mockDoctorFileSystem(
 
   const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 
-  const mockedReadFileSync = vi.mocked(readFileSync);
-  mockedReadFileSync.mockImplementation((path: string | Buffer | URL): string => {
+  (readFileSync as ReturnType<typeof vi.fn>).mockImplementation((path: string | Buffer | URL): string => {
     const pathStr = path.toString();
 
     // package.json
@@ -192,8 +190,7 @@ export async function mockDoctorFileSystem(
     return '';
   });
 
-  const mockedExistsSync = vi.mocked(existsSync);
-  mockedExistsSync.mockImplementation((path: string | Buffer | URL): boolean => {
+  (existsSync as ReturnType<typeof vi.fn>).mockImplementation((path: string | Buffer | URL): boolean => {
     const pathStr = path.toString();
 
     if (pathStr.includes(CONFIG_FILENAME)) {
@@ -210,8 +207,7 @@ export async function mockDoctorFileSystem(
 
   // Mock findConfigPath
   const { findConfigPath } = await import('../../src/utils/config-loader.js');
-  const mockedFindConfigPath = vi.mocked(findConfigPath);
-  mockedFindConfigPath.mockReturnValue(
+  (findConfigPath as ReturnType<typeof vi.fn>).mockReturnValue(
     opts.configExists ? CONFIG_FILENAME : null,
   );
 
@@ -240,11 +236,24 @@ const SUGGESTION_FIELD = 'suggestion';
 
 /**
  * Find a specific doctor check result
+ *
+ * Supports both individual DoctorCheckResult (for unit tests) and DoctorResult (for integration tests)
  */
 export function findCheck(
-  result: DoctorResult,
+  result: DoctorResult | DoctorCheckResult,
   checkName: string,
 ): DoctorCheckResult {
+  // If result is already a DoctorCheckResult, verify name matches and return it
+  if ('name' in result && 'passed' in result && 'message' in result) {
+    if (result.name !== checkName) {
+      throw new Error(
+        `Check name mismatch: expected "${checkName}" but got "${result.name}"`,
+      );
+    }
+    return result;
+  }
+
+  // Otherwise it's a DoctorResult with checks array
   const check = result.checks.find((c) => c.name === checkName);
   if (!check) {
     const available = result.checks.map((c) => c.name).join(', ');
@@ -257,9 +266,11 @@ export function findCheck(
 
 /**
  * Assert check passed with optional message matching
+ *
+ * Supports both individual DoctorCheckResult (for unit tests) and DoctorResult (for integration tests)
  */
 export function assertCheckPassed(
-  result: DoctorResult,
+  result: DoctorResult | DoctorCheckResult,
   checkName: string,
   messageContains?: string,
 ): void {
@@ -272,9 +283,11 @@ export function assertCheckPassed(
 
 /**
  * Assert check failed with message and suggestion matching
+ *
+ * Supports both individual DoctorCheckResult (for unit tests) and DoctorResult (for integration tests)
  */
 export function assertCheckFailed(
-  result: DoctorResult,
+  result: DoctorResult | DoctorCheckResult,
   checkName: string,
   messageContains: string,
   suggestionContains: string,
@@ -288,9 +301,11 @@ export function assertCheckFailed(
 
 /**
  * Assert check with flexible assertions
+ *
+ * Supports both individual DoctorCheckResult (for unit tests) and DoctorResult (for integration tests)
  */
 export function assertCheck(
-  result: DoctorResult,
+  result: DoctorResult | DoctorCheckResult,
   checkName: string,
   assertions: {
     passed: boolean;
