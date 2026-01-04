@@ -11,6 +11,7 @@ A toolkit for testing and packaging portable AI agents that work across various 
 - 🔌 **Framework Agnostic** - Support for various agent frameworks
 - 📦 **Portable Packaging** - Deploy across different orchestrators and platforms
 - ✅ **Agent Testing** - Comprehensive testing for agent behaviors and interactions
+- 🔍 **Claude Skills Validation** - Audit skills for quality, compatibility, and best practices
 
 ### Development Infrastructure
 - 🚀 **Bun** - Fast package manager and runtime
@@ -38,6 +39,13 @@ Scan and validate markdown resources:
 ```bash
 vat resources scan docs/
 vat resources validate docs/
+```
+
+Audit and import Claude Skills:
+
+```bash
+vat agent audit my-skill/SKILL.md
+vat agent import my-skill/SKILL.md
 ```
 
 See [CLI Reference](./packages/cli/docs/) for complete documentation (or run `vat --help --verbose`).

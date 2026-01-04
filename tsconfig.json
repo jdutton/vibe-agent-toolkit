@@ -4,6 +4,7 @@
   "references": [
     { "path": "./packages/dev-tools" },
     { "path": "./packages/utils" },
+    { "path": "./packages/discovery" },
     { "path": "./packages/resources" },
     { "path": "./packages/rag" },
     { "path": "./packages/rag-lancedb" },
