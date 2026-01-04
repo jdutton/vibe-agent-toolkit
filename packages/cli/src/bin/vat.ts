@@ -32,6 +32,26 @@ function spawnCli(binPath: string, context: Context, contextPath?: string): neve
   process.exit(result.status ?? 1);
 }
 
+/**
+ * Check if we're in vibe-agent-toolkit repo (developer mode)
+ * Simple detection: both wrapper and bin.js must exist in project structure
+ *
+ * @param projectRoot - Root directory of the project
+ * @returns Path to bin.js if detected, null otherwise
+ */
+function getDevModeBinary(projectRoot: string): string | null {
+  const wrapperPath = join(projectRoot, 'packages/cli/dist/bin/vat.js');
+  const binPath = join(projectRoot, 'packages/cli/dist/bin.js');
+
+  // Both files must exist to confirm we're in vibe-agent-toolkit repo
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- checking project structure files
+  if (existsSync(wrapperPath) && existsSync(binPath)) {
+    return binPath;
+  }
+
+  return null;
+}
+
 // 1. Explicit override via VAT_ROOT_DIR
 if (process.env['VAT_ROOT_DIR']) {
   const binPath = join(process.env['VAT_ROOT_DIR'], 'packages/cli/dist/bin.js');
@@ -41,17 +61,18 @@ if (process.env['VAT_ROOT_DIR']) {
   }
 }
 
-// 2. Dev mode detection (running inside vibe-agent-toolkit repo)
-// Check if both wrapper (this file) and bin.js exist - confirms we're in dev
-const devBinPath = resolve(__dirname, '../bin.js');
-const thisWrapperPath = resolve(__dirname, './vat.js');
-if (existsSync(devBinPath) && existsSync(thisWrapperPath)) {
-  const repoRoot = resolve(__dirname, '../../../..');
-  spawnCli(devBinPath, 'dev', repoRoot);
+// Get project root from current working directory
+const projectRoot = findProjectRoot(process.cwd());
+
+// 2. Dev mode detection (running inside vibe-agent-toolkit repo from any location)
+if (projectRoot) {
+  const devBinPath = getDevModeBinary(projectRoot);
+  if (devBinPath) {
+    spawnCli(devBinPath, 'dev', projectRoot);
+  }
 }
 
 // 3. Local project install
-const projectRoot = findProjectRoot(process.cwd());
 if (projectRoot) {
   const localBinPath = join(
     projectRoot,
