@@ -289,27 +289,32 @@ if (missingBuilds.length > 0) {
 }
 log('✓ All packages built', 'green');
 
-// Check 7: Workspace dependencies resolved
+// Check 7: Workspace dependencies (workspace:* is expected and handled by Bun during publish)
 console.log('');
 console.log('Checking workspace dependencies...');
 
-const unresolvedDeps: string[] = [];
 try {
   const publishablePackages = getPublishablePackages(packagesDir);
+  let workspaceCount = 0;
 
-  for (const { name: pkg, pkgJson } of publishablePackages) {
-    // Check dependencies for workspace:* references
+  for (const { pkgJson } of publishablePackages) {
     const allDeps = {
       ...(pkgJson['dependencies'] as Record<string, string> | undefined),
       ...(pkgJson['devDependencies'] as Record<string, string> | undefined),
       ...(pkgJson['peerDependencies'] as Record<string, string> | undefined),
     };
 
-    for (const [depName, depVersion] of Object.entries(allDeps)) {
+    for (const depVersion of Object.values(allDeps)) {
       if (typeof depVersion === 'string' && depVersion.startsWith('workspace:')) {
-        unresolvedDeps.push(`${pkg}: ${depName}@${depVersion}`);
+        workspaceCount++;
       }
     }
+  }
+
+  if (workspaceCount > 0) {
+    log(`✓ Found ${workspaceCount} workspace dependencies (Bun will resolve during publish)`, 'green');
+  } else {
+    log('✓ No workspace dependencies', 'green');
   }
 } catch (error) {
   log('✗ Failed to check workspace dependencies', 'red');
@@ -317,17 +322,6 @@ try {
   console.error(message);
   process.exit(1);
 }
-
-if (unresolvedDeps.length > 0) {
-  log('✗ Unresolved workspace dependencies', 'red');
-  for (const dep of unresolvedDeps) {
-    console.log(`  ${dep}`);
-  }
-  console.log('');
-  console.log('  Run version bump script to resolve workspace dependencies before publishing');
-  process.exit(1);
-}
-log('✓ No workspace dependencies', 'green');
 
 // Success!
 console.log('');
