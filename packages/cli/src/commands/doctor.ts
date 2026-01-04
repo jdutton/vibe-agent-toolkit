@@ -7,11 +7,12 @@
  * - Version checks
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { getToolVersion } from '@vibe-agent-toolkit/utils';
 import type { Command } from 'commander';
+import * as semver from 'semver';
 
 import { findConfigPath, loadConfig } from '../utils/config-loader.js';
 
@@ -84,6 +85,7 @@ const CHECK_NAME_GIT_REPOSITORY = 'Git repository';
 const CHECK_NAME_CONFIG_FILE = 'Configuration file';
 const CHECK_NAME_CONFIG_VALID = 'Configuration valid';
 const CREATE_CONFIG_SUGGESTION = 'Create vibe-agent-toolkit.config.yaml in project root';
+const CHECK_NAME_VAT_VERSION = 'vat version';
 
 /**
  * Check Node.js version meets requirements
@@ -277,6 +279,77 @@ export function checkConfigValid(): DoctorCheckResult {
       passed: false,
       message: `Failed to check configuration: ${errorMessage}`,
       suggestion: 'Check configuration file',
+    };
+  }
+}
+
+/**
+ * Default version checker - uses npm registry
+ */
+const defaultVersionChecker: VersionChecker = {
+  async fetchLatestVersion(): Promise<string> {
+    const { safeExecSync } = await import('@vibe-agent-toolkit/utils');
+    const version = safeExecSync('npm', ['view', 'vibe-agent-toolkit', 'version'], {
+      encoding: 'utf8',
+      stdio: 'pipe',
+    });
+    return (version as string).trim();
+  },
+};
+
+/**
+ * Check if vat version is up to date (advisory only)
+ */
+export async function checkVatVersion(
+  versionChecker: VersionChecker = defaultVersionChecker,
+): Promise<DoctorCheckResult> {
+  try {
+    // Get current version from package.json
+    const packageJsonPath = new URL('../../package.json', import.meta.url);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Package.json path is trusted static import
+    const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8'));
+    const currentVersion = packageJson.version;
+
+    // Fetch latest version from npm registry
+    try {
+      const latestVersion = await versionChecker.fetchLatestVersion();
+
+      const isOutdated = semver.lt(currentVersion, latestVersion);
+
+      if (currentVersion === latestVersion) {
+        return {
+          name: CHECK_NAME_VAT_VERSION,
+          passed: true,
+          message: `Current: ${currentVersion} — up to date`,
+        };
+      } else if (isOutdated) {
+        return {
+          name: CHECK_NAME_VAT_VERSION,
+          passed: true, // Advisory only
+          message: `Current: ${currentVersion}, Latest: ${latestVersion} available`,
+          suggestion: 'Upgrade: npm install -g vibe-agent-toolkit@latest',
+        };
+      } else {
+        return {
+          name: CHECK_NAME_VAT_VERSION,
+          passed: true,
+          message: `Current: ${currentVersion} (ahead of npm: ${latestVersion})`,
+        };
+      }
+    } catch (npmError) {
+      const errorMessage = npmError instanceof Error ? npmError.message : String(npmError);
+      return {
+        name: CHECK_NAME_VAT_VERSION,
+        passed: true,
+        message: `Unable to check for updates: ${errorMessage}`,
+      };
+    }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return {
+      name: CHECK_NAME_VAT_VERSION,
+      passed: true,
+      message: `Unable to determine version: ${errorMessage}`,
     };
   }
 }

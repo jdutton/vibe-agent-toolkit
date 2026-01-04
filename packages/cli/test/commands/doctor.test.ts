@@ -4,7 +4,7 @@
 
 import { existsSync } from 'node:fs';
 
-import { beforeEach, describe, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   checkConfigFile,
@@ -12,8 +12,10 @@ import {
   checkGitInstalled,
   checkGitRepository,
   checkNodeVersion,
+  checkVatVersion,
 } from '../../src/commands/doctor.js';
 import {
+  assertCheck,
   assertCheckFailed,
   assertCheckPassed,
   mockDoctorConfig,
@@ -40,6 +42,7 @@ vi.mock('../../src/utils/config-loader.js', () => ({
 // Constants
 const CHECK_NODE_VERSION = 'Node.js version';
 const CHECK_CONFIG_VALID = 'Configuration valid';
+const CHECK_VAT_VERSION = 'vat version';
 
 describe('doctor command - unit tests', () => {
   beforeEach(() => {
@@ -197,6 +200,63 @@ describe('doctor command - unit tests', () => {
         'not found',
         'Create vibe-agent-toolkit.config.yaml',
       );
+    });
+  });
+
+  describe('checkVatVersion', () => {
+    it('shows up to date when current equals latest', async () => {
+      await mockDoctorFileSystem({ packageVersion: '0.1.0' });
+      const versionChecker = {
+        fetchLatestVersion: vi.fn().mockResolvedValue('0.1.0'),
+      };
+
+      const result = await checkVatVersion(versionChecker);
+
+      assertCheckPassed(result, CHECK_VAT_VERSION, 'up to date');
+      expect(versionChecker.fetchLatestVersion).toHaveBeenCalled();
+    });
+
+    it('shows advisory when update available', async () => {
+      await mockDoctorFileSystem({ packageVersion: '0.1.0' });
+      const versionChecker = {
+        fetchLatestVersion: vi.fn().mockResolvedValue('0.2.0'),
+      };
+
+      const result = await checkVatVersion(versionChecker);
+
+      assertCheck(result, CHECK_VAT_VERSION, {
+        passed: true, // Advisory only
+        messageContains: ['0.1.0', '0.2.0', 'available'],
+        suggestionContains: 'npm install -g',
+      });
+    });
+
+    it('shows ahead when current is newer', async () => {
+      await mockDoctorFileSystem({ packageVersion: '0.3.0' });
+      const versionChecker = {
+        fetchLatestVersion: vi.fn().mockResolvedValue('0.2.0'),
+      };
+
+      const result = await checkVatVersion(versionChecker);
+
+      assertCheck(result, CHECK_VAT_VERSION, {
+        passed: true,
+        messageContains: ['0.3.0', 'ahead'],
+      });
+    });
+
+    it('handles network errors gracefully', async () => {
+      await mockDoctorFileSystem({ packageVersion: '0.1.0' });
+      const versionChecker = {
+        fetchLatestVersion: vi.fn().mockRejectedValue(new Error('Network error')),
+      };
+
+      const result = await checkVatVersion(versionChecker);
+
+      assertCheck(result, CHECK_VAT_VERSION, {
+        passed: true,
+        messageContains: 'Unable to check',
+      });
     });
   });
 });
