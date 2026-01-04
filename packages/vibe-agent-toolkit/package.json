@@ -5,6 +5,10 @@
   "bin": {
     "vat": "./bin/vat"
   },
+  "files": [
+    "bin",
+    "README.md"
+  ],
   "keywords": [
     "ai",
     "agents",

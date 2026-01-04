@@ -21,6 +21,10 @@
     "./agents/agent-generator": "./agents/agent-generator/agent.yaml",
     "./agents/resource-optimizer": "./agents/resource-optimizer/SCOPE.md"
   },
+  "files": [
+    "agents",
+    "README.md"
+  ],
   "scripts": {
     "validate": "bun run agents/agent-generator/validate-agent.ts"
   },
