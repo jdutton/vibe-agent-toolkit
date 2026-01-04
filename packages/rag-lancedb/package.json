@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/rag-lancedb",
-  "version": "0.1.0-rc.7",
+  "version": "0.1.0-rc.8",
   "type": "module",
   "description": "LanceDB implementation of RAG interfaces for vibe-agent-toolkit",
   "keywords": [
