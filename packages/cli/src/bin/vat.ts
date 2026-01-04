@@ -42,11 +42,10 @@ if (process.env['VAT_ROOT_DIR']) {
 }
 
 // 2. Dev mode detection (running inside vibe-agent-toolkit repo)
+// Check if both wrapper (this file) and bin.js exist - confirms we're in dev
 const devBinPath = resolve(__dirname, '../bin.js');
-const wrapperExists = existsSync(
-  resolve(__dirname, '../../../../vibe-agent-toolkit/bin/vat')
-);
-if (existsSync(devBinPath) && wrapperExists) {
+const thisWrapperPath = resolve(__dirname, './vat.js');
+if (existsSync(devBinPath) && existsSync(thisWrapperPath)) {
   const repoRoot = resolve(__dirname, '../../../..');
   spawnCli(devBinPath, 'dev', repoRoot);
 }
