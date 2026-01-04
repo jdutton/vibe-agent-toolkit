@@ -2,14 +2,14 @@ import { describe, it, expect } from 'vitest';
 
 import { parseFrontmatter } from '../src/parsers/frontmatter-parser.js';
 
+import { createFrontmatter, createSkillContent } from './test-helpers.js';
+
 describe('parseFrontmatter', () => {
   it('should extract frontmatter from SKILL.md', () => {
-    const content = `---
-name: my-skill
-description: Does something useful
----
-
-# Content here`;
+    const content = createSkillContent(
+      { name: 'my-skill', description: 'Does something useful' },
+      '# Content here',
+    );
 
     const result = parseFrontmatter(content);
 
@@ -17,15 +17,12 @@ description: Does something useful
     if (result.success) {
       expect(result.frontmatter.name).toBe('my-skill');
       expect(result.frontmatter.description).toBe('Does something useful');
-      expect(result.body).toBe('\n# Content here');
+      expect(result.body).toBe('# Content here');
     }
   });
 
   it('should handle frontmatter with no trailing content', () => {
-    const content = `---
-name: my-skill
-description: Test
----`;
+    const content = createFrontmatter({ name: 'my-skill', description: 'Test' });
 
     const result = parseFrontmatter(content);
 
@@ -36,13 +33,14 @@ description: Test
   });
 
   it('should handle frontmatter with metadata', () => {
-    const content = `---
-name: my-skill
-description: Test
-metadata:
-  version: 1.0.0
-  author: Jeff
----`;
+    const content = createFrontmatter({
+      name: 'my-skill',
+      description: 'Test',
+      metadata: {
+        version: '1.0.0',
+        author: 'Jeff',
+      },
+    });
 
     const result = parseFrontmatter(content);
 
