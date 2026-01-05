@@ -2,6 +2,7 @@
  * Shared test helpers for resources package tests
  */
 
+import { readFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
@@ -10,6 +11,37 @@ import type { Assertion } from 'vitest';
 import { parseMarkdown } from '../src/link-parser.js';
 import { validateLink } from '../src/link-validator.js';
 import type { HeadingNode, ResourceLink, ValidationIssue } from '../src/types.js';
+
+/**
+ * Walk up directories looking for package.json that matches a predicate
+ *
+ * @param startDir - Directory to start searching from
+ * @param predicate - Function to test if package.json matches criteria
+ * @param errorMessage - Error message if not found
+ * @returns Absolute path to matching directory
+ */
+function findPackageDirectory(
+  startDir: string,
+  predicate: (pkg: { name: string; workspaces?: unknown }) => boolean,
+  errorMessage: string,
+): string {
+  let currentDir = startDir;
+  while (currentDir !== path.dirname(currentDir)) {
+    try {
+      const pkgPath = path.join(currentDir, 'package.json');
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path is safe in test helper, pkgPath constructed from trusted directory traversal
+      const pkgContent = readFileSync(pkgPath, 'utf-8');
+      const pkg = JSON.parse(pkgContent) as { name: string; workspaces?: unknown };
+      if (predicate(pkg)) {
+        return currentDir;
+      }
+    } catch {
+      // Keep searching upward
+    }
+    currentDir = path.dirname(currentDir);
+  }
+  throw new Error(errorMessage);
+}
 
 /**
  * Find the package root directory by looking for package.json with specific name
@@ -22,21 +54,11 @@ export function findPackageRoot(
   startDir: string = import.meta.dirname,
   packageName: string = '@vibe-agent-toolkit/resources',
 ): string {
-  let currentDir = startDir;
-  while (currentDir !== path.dirname(currentDir)) {
-    try {
-      const pkgPath = path.join(currentDir, 'package.json');
-      // eslint-disable-next-line security/detect-non-literal-require -- Dynamic path is safe in test helper, pkgPath constructed from trusted directory traversal
-      const pkg = require(pkgPath);
-      if (pkg.name === packageName) {
-        return currentDir;
-      }
-    } catch {
-      // Keep searching upward
-    }
-    currentDir = path.dirname(currentDir);
-  }
-  throw new Error(`Could not find package root for ${packageName}`);
+  return findPackageDirectory(
+    startDir,
+    (pkg) => pkg.name === packageName,
+    `Could not find package root for ${packageName}`,
+  );
 }
 
 /**
@@ -48,22 +70,11 @@ export function findPackageRoot(
 export function findMonorepoRoot(
   startDir: string = import.meta.dirname,
 ): string {
-  let currentDir = startDir;
-  while (currentDir !== path.dirname(currentDir)) {
-    try {
-      const pkgPath = path.join(currentDir, 'package.json');
-      // eslint-disable-next-line security/detect-non-literal-require -- Dynamic path is safe in test helper, pkgPath constructed from trusted directory traversal
-      const pkg = require(pkgPath);
-      // Check if this is the monorepo root (has workspaces)
-      if (pkg.workspaces && pkg.name === 'vibe-agent-toolkit') {
-        return currentDir;
-      }
-    } catch {
-      // Keep searching upward
-    }
-    currentDir = path.dirname(currentDir);
-  }
-  throw new Error('Could not find monorepo root');
+  return findPackageDirectory(
+    startDir,
+    (pkg) => Boolean(pkg.workspaces) && pkg.name === 'vibe-agent-toolkit',
+    'Could not find monorepo root',
+  );
 }
 
 // ============================================================================

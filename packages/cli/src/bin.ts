@@ -8,6 +8,7 @@
 import { Command } from 'commander';
 
 import { createAgentCommand, showAgentVerboseHelp } from './commands/agent/index.js';
+import { doctorCommand } from './commands/doctor.js';
 import { createRagCommand, showRagVerboseHelp } from './commands/rag/index.js';
 import { createResourcesCommand, showResourcesVerboseHelp } from './commands/resources/index.js';
 import { loadVerboseHelp } from './utils/help-loader.js';
@@ -110,6 +111,9 @@ if (process.argv.includes('agent') && process.argv.includes('--verbose')) {
 program.addCommand(createResourcesCommand());
 program.addCommand(createRagCommand());
 program.addCommand(createAgentCommand());
+
+// Add standalone commands
+doctorCommand(program);
 
 // Handle unknown commands
 program.on('command:*', (operands) => {

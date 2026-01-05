@@ -90,6 +90,7 @@ export default [
       '@typescript-eslint/prefer-readonly': 'error',
       '@typescript-eslint/no-redundant-type-constituents': 'error',
       '@typescript-eslint/prefer-function-type': 'error',
+      '@typescript-eslint/no-require-imports': 'error', // Enforce ESM imports, ban require()
 
       // General
       'no-console': 'off',

@@ -49,11 +49,13 @@
     "@vibe-agent-toolkit/utils": "workspace:*",
     "commander": "^12.1.0",
     "js-yaml": "^4.1.0",
+    "semver": "^7.7.3",
     "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.10.5",
+    "@types/semver": "^7.7.1",
     "rimraf": "^6.0.1",
     "typescript": "^5.7.3",
     "vitest": "^2.1.8"
