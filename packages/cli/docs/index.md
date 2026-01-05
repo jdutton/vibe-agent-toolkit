@@ -85,11 +85,11 @@ Diagnose vat setup and environment health
 
 **What it does:**
 
-1. Checks Node.js version (>=20 required)
-2. Checks Git installation and repository
-3. Validates configuration file exists and is valid
-4. Checks vat version and available updates
-5. Verifies CLI build status (in VAT source tree)
+- Checks Node.js version (>=20 required)
+- Checks Git installation and repository
+- Validates configuration file exists and is valid
+- Checks vat version and available updates
+- Verifies CLI build status (in VAT source tree)
 
 **When to use:** Before starting development, after updates, or debugging issues
 

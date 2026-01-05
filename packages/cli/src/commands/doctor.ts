@@ -516,6 +516,23 @@ export function doctorCommand(program: Command): void {
     .command('doctor')
     .description('Diagnose vat setup and environment')
     .option('--verbose', 'Show all checks including passing ones')
+    .addHelpText('after', `
+When to run:
+  • Before starting development (ensure environment is ready)
+  • After installing or updating vat
+  • When debugging setup issues
+  • In CI/CD pipelines (validate build environment)
+
+Exit Codes:
+  0 - All checks passed
+  1 - One or more checks failed (see output for suggested fixes)
+
+Example:
+  $ vat doctor                  # Check environment, show only issues
+  $ vat doctor --verbose        # Show all checks including passing ones
+
+More details: vat --help --verbose or see packages/cli/docs/doctor.md
+`)
     .action(async function (this: Command) {
       // Check both command-level and parent (global) options for --verbose flag
       const localOptions = this.opts<{ verbose?: boolean }>();
