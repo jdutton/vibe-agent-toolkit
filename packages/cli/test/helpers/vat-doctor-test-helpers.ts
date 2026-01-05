@@ -191,7 +191,8 @@ export async function mockDoctorFileSystem(
   });
 
   (existsSync as ReturnType<typeof vi.fn>).mockImplementation((path: string | Buffer | URL): boolean => {
-    const pathStr = path.toString();
+    // Normalize path separators for cross-platform compatibility (Windows uses backslashes)
+    const pathStr = path.toString().replaceAll('\\', '/');
 
     if (pathStr.includes(CONFIG_FILENAME)) {
       return opts.configExists;
