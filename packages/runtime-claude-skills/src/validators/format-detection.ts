@@ -2,6 +2,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { MarketplaceSchema } from '../schemas/marketplace.js';
+
 import type { ResourceFormat } from './types.js';
 
 /**
@@ -12,11 +14,17 @@ import type { ResourceFormat } from './types.js';
  * 2. If directory:
  *    - Check for .claude-plugin/plugin.json → plugin
  *    - Check for .claude-plugin/marketplace.json → marketplace
- *    - If both exist → unknown (ambiguous)
+ *    - If both exist:
+ *      • Check if marketplace has plugin with source: "./" (co-located pattern) → marketplace
+ *      • Otherwise → unknown (truly ambiguous)
  * 3. If file:
  *    - Must have .json extension
  *    - Check filename: installed_plugins.json or known_marketplaces.json
  * 4. Otherwise → unknown
+ *
+ * Co-located plugin pattern: A marketplace that contains a plugin in the same directory
+ * (source: "./" or ".") rather than in a subdirectory. This is valid for single-plugin
+ * marketplaces and avoids unnecessary directory nesting.
  *
  * @param resourcePath - Path to the resource to detect
  * @returns ResourceFormat discriminated union
@@ -87,13 +95,48 @@ function detectDirectoryFormat(dirPath: string): ResourceFormat {
 	const hasPlugin = fs.existsSync(pluginJsonPath);
 	const hasMarketplace = fs.existsSync(marketplaceJsonPath);
 
-	// Ambiguous: both files exist
+	// Both files exist - check if this is a co-located plugin pattern
 	if (hasPlugin && hasMarketplace) {
+		// Read marketplace.json to check for co-located plugin pattern
+		try {
+			const marketplaceContent = fs.readFileSync(marketplaceJsonPath, 'utf-8');
+			const marketplaceData = JSON.parse(marketplaceContent);
+			const parseResult = MarketplaceSchema.safeParse(marketplaceData);
+
+			if (parseResult.success) {
+				// Check if marketplace contains a plugin with source pointing to current directory
+				const hasColocatedPlugin = parseResult.data.plugins.some((plugin) => {
+					const source =
+						typeof plugin.source === 'string'
+							? plugin.source
+							: plugin.source.url;
+					// Check for various forms of "current directory" references
+					return (
+						source === './' ||
+						source === '.' ||
+						source === '.\\' ||
+						source === ''
+					);
+				});
+
+				// If marketplace has co-located plugin, treat as marketplace
+				if (hasColocatedPlugin) {
+					return {
+						type: 'marketplace',
+						path: dirPath,
+					};
+				}
+			}
+		} catch {
+			// If we can't read/parse marketplace.json, fall through to ambiguous error
+		}
+
+		// Truly ambiguous - both files exist but not co-located pattern
 		return {
 			type: 'unknown',
 			path: dirPath,
 			reason:
-				'Ambiguous: directory contains both plugin.json and marketplace.json',
+				'Ambiguous: directory contains both plugin.json and marketplace.json (not co-located pattern)',
 		};
 	}
 

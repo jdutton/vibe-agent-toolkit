@@ -14,6 +14,10 @@ import {
 describe('detectResourceFormat', () => {
 	const { getTempDir } = setupTempDir('format-detection-test-');
 
+	const TEST_PLUGIN_NAME = 'test-plugin';
+	const TEST_MARKETPLACE_NAME = 'test-marketplace';
+	const CLAUDE_PLUGIN_DIR = '.claude-plugin';
+
 	describe('Plugin detection', () => {
 		it('should detect a valid plugin directory', async () => {
 			const tempDir = getTempDir();
@@ -47,12 +51,12 @@ describe('detectResourceFormat', () => {
 	describe('Marketplace detection', () => {
 		it('should detect a valid marketplace directory', async () => {
 			const tempDir = getTempDir();
-			const marketplaceDir = path.join(tempDir, 'test-marketplace');
-			const claudePluginDir = path.join(marketplaceDir, '.claude-plugin');
+			const marketplaceDir = path.join(tempDir, TEST_MARKETPLACE_NAME);
+			const claudePluginDir = path.join(marketplaceDir, CLAUDE_PLUGIN_DIR);
 			fs.mkdirSync(claudePluginDir, { recursive: true });
 
 			const marketplaceData = {
-				id: 'test-marketplace',
+				id: TEST_MARKETPLACE_NAME,
 				name: 'Test Marketplace',
 				version: '1.0.0',
 				description: 'Test marketplace',
@@ -71,7 +75,48 @@ describe('detectResourceFormat', () => {
 	});
 
 	describe('Ambiguous detection', () => {
-		it('should return unknown when directory has both plugin.json and marketplace.json', async () => {
+		it('should detect co-located plugin as marketplace (valid pattern)', async () => {
+			const tempDir = getTempDir();
+			const colocatedDir = path.join(tempDir, 'colocated-marketplace');
+			const claudePluginDir = path.join(colocatedDir, CLAUDE_PLUGIN_DIR);
+			fs.mkdirSync(claudePluginDir, { recursive: true });
+
+			// Create plugin.json
+			const pluginData = {
+				name: TEST_PLUGIN_NAME,
+				description: 'A test plugin',
+				version: '1.0.0',
+			};
+			fs.writeFileSync(
+				path.join(claudePluginDir, 'plugin.json'),
+				JSON.stringify(pluginData, null, 2),
+			);
+
+			// Create marketplace.json with co-located plugin (source: "./")
+			const marketplaceData = {
+				name: TEST_MARKETPLACE_NAME,
+				owner: { name: 'Test' },
+				metadata: { description: 'Test', version: '1.0.0' },
+				plugins: [
+					{
+						name: TEST_PLUGIN_NAME,
+						description: 'A test plugin',
+						source: './', // Co-located plugin
+					},
+				],
+			};
+			fs.writeFileSync(
+				path.join(claudePluginDir, 'marketplace.json'),
+				JSON.stringify(marketplaceData, null, 2),
+			);
+
+			const result = await detectResourceFormat(colocatedDir);
+
+			expect(result.type).toBe('marketplace');
+			expect(result.path).toBe(colocatedDir);
+		});
+
+		it('should return unknown when directory has both plugin.json and marketplace.json (not co-located)', async () => {
 			const tempDir = getTempDir();
 			const ambiguousDir = createAmbiguousDirectory(
 				tempDir,
