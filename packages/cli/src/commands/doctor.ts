@@ -516,7 +516,15 @@ export function doctorCommand(program: Command): void {
     .command('doctor')
     .description('Diagnose vat setup and environment')
     .option('--verbose', 'Show all checks including passing ones')
-    .action(async (options: { verbose?: boolean }) => {
+    .action(async function (this: Command) {
+      // Check both command-level and parent (global) options for --verbose flag
+      const localOptions = this.opts<{ verbose?: boolean }>();
+      const parentOptions = this.parent?.opts<{ verbose?: boolean }>();
+
+      const options = {
+        verbose: localOptions.verbose ?? parentOptions?.verbose ?? false,
+      };
+
       try {
         const result = await runDoctor(options);
         displayResults(result);
