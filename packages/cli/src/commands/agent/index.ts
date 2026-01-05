@@ -166,41 +166,50 @@ Examples:
 
   agent
     .command('audit [path]')
-    .description('Audit Claude Skills for quality and compatibility')
-    .option('-r, --recursive', 'Scan directories recursively for SKILL.md files')
+    .description('Audit Claude plugins, marketplaces, registries, and skills')
+    .option('-r, --recursive', 'Scan directories recursively for all resource types')
     .option('--debug', DEBUG_OPTION_DESC)
     .action(auditCommand)
     .addHelpText(
       'after',
       `
 Description:
-  Audits Claude Skills (SKILL.md files) for quality, correctness, and
-  console compatibility. Validates frontmatter, links, naming conventions,
-  and warns about console-incompatible features. Outputs YAML report to
-  stdout, errors/warnings to stderr.
+  Audits Claude plugins, marketplaces, registries, and Claude Skills for
+  quality, correctness, and compatibility. Automatically detects resource
+  type and validates accordingly. Outputs YAML report to stdout,
+  errors/warnings to stderr.
 
-  Path can be: directory, single SKILL.md file, or VAT agent directory
+  Supported resource types:
+  - Plugin directories (.claude-plugin/plugin.json)
+  - Marketplace directories (.claude-plugin/marketplace.json)
+  - Registry files (installed_plugins.json, known_marketplaces.json)
+  - Claude Skills (SKILL.md files)
+  - VAT agents (agent.yaml + SKILL.md)
+
+  Path can be: resource directory, registry file, SKILL.md file, or scan directory
   Default: current directory
 
 Validation Checks:
   Errors (must fix):
-  - Missing or invalid frontmatter (name, description)
-  - Broken links to other files
-  - Reserved words in names (anthropic, claude)
-  - XML tags in frontmatter fields
-  - Windows-style backslashes in paths
+  - Missing or invalid manifests/frontmatter
+  - Schema validation failures
+  - Broken links to other files (Skills only)
+  - Reserved words in names (Skills only)
+  - XML tags in frontmatter fields (Skills only)
+  - Windows-style backslashes in paths (Skills only)
 
   Warnings (should fix):
   - Skill exceeds recommended length (>5000 lines)
-  - References console-incompatible tools (Write, Edit, Bash)
+  - References console-incompatible tools (Skills only)
 
 Exit Codes:
   0 - Success  |  1 - Errors found  |  2 - System error
 
 Examples:
   $ vat agent audit                          # Audit current directory
-  $ vat agent audit ./my-skill/SKILL.md      # Audit single skill
-  $ vat agent audit ./skills --recursive     # Audit all skills recursively
+  $ vat agent audit ./my-plugin              # Audit plugin directory
+  $ vat agent audit installed_plugins.json   # Audit registry file
+  $ vat agent audit ./resources --recursive  # Audit all resources recursively
 `
     );
 

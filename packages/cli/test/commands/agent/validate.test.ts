@@ -1,13 +1,10 @@
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const binPath = resolve(__dirname, '../../../dist/bin.js');
+import { runCliCommand } from '../../test-helpers.js';
 
 describe('agent validate command (integration)', () => {
   let tempDir: string;
@@ -38,10 +35,7 @@ spec:
 `
     );
 
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- node is required for CLI integration tests
-    const result = spawnSync('node', [binPath, 'agent', 'validate', agentDir], {
-      encoding: 'utf-8',
-    });
+    const result = runCliCommand('agent', 'validate', agentDir);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('status: success');
@@ -64,10 +58,7 @@ spec:
 `
     );
 
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- node is required for CLI integration tests
-    const result = spawnSync('node', [binPath, 'agent', 'validate', agentDir], {
-      encoding: 'utf-8',
-    });
+    const result = runCliCommand('agent', 'validate', agentDir);
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain('status: error');

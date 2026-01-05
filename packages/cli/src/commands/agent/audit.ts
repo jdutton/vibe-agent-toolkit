@@ -1,11 +1,16 @@
 /**
- * Agent audit command - audits Claude Skills for quality and compatibility
+ * Agent audit command - audits plugins, marketplaces, registries, and Claude Skills
  */
 
 import * as path from 'node:path';
 
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
-import { validateSkill, type ValidationResult } from '@vibe-agent-toolkit/runtime-claude-skills';
+import {
+  detectResourceFormat,
+  validate,
+  validateSkill,
+  type ValidationResult,
+} from '@vibe-agent-toolkit/runtime-claude-skills';
 
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
@@ -25,7 +30,7 @@ export async function auditCommand(
 
   try {
     const scanPath = targetPath ? path.resolve(targetPath) : process.cwd();
-    logger.debug(`Auditing Claude Skills at: ${scanPath}`);
+    logger.debug(`Auditing resources at: ${scanPath}`);
 
     // Get validation results
     const results = await getValidationResults(scanPath, options.recursive ?? false, logger);
@@ -48,12 +53,14 @@ async function getValidationResults(
 ): Promise<ValidationResult[]> {
   const format = detectFormat(scanPath);
 
+  // Special handling for direct SKILL.md file
   if (format === 'claude-skill') {
     logger.debug('Detected single Claude Skill');
     const result = await validateSkill({ skillPath: scanPath });
     return [result];
   }
 
+  // Special handling for VAT agent: validate its SKILL.md
   if (format === 'vat-agent') {
     const skillPath = path.join(scanPath, 'SKILL.md');
     logger.debug('Detected VAT agent, validating SKILL.md');
@@ -61,8 +68,31 @@ async function getValidationResults(
     return [result];
   }
 
-  logger.debug('Scanning directory for Claude Skills');
-  return scanDirectory(scanPath, recursive, logger);
+  // For plugin/marketplace directories or registry files, use unified validator
+  const resourceFormat = await detectResourceFormat(scanPath);
+
+  if (resourceFormat.type !== 'unknown') {
+    logger.debug(`Detected ${resourceFormat.type} at: ${scanPath}`);
+    const result = await validate(scanPath);
+    return [result];
+  }
+
+  // If unknown format, check if it's a directory we can scan
+  const fs = await import('node:fs/promises');
+  try {
+    const stat = await fs.stat(scanPath);
+    if (stat.isDirectory()) {
+      logger.debug('Scanning directory for resources');
+      return scanDirectory(scanPath, recursive, logger);
+    }
+  } catch {
+    // Path doesn't exist or not accessible, let validate() handle it
+  }
+
+  // Unknown resource type - use unified validator which will return appropriate error
+  logger.debug(`Unknown resource type at: ${scanPath}`);
+  const result = await validate(scanPath);
+  return [result];
 }
 
 function calculateSummary(results: ValidationResult[], startTime: number) {
@@ -186,13 +216,31 @@ async function scanDirectory(
   for (const entry of entries) {
     const fullPath = path.join(dirPath, entry.name);
 
-    if (entry.isFile() && entry.name === 'SKILL.md') {
-      logger.debug(`Validating: ${fullPath}`);
-      const result = await validateSkill({ skillPath: fullPath });
-      results.push(result);
-    } else if (entry.isDirectory() && recursive) {
-      const subResults = await scanDirectory(fullPath, recursive, logger);
-      results.push(...subResults);
+    if (entry.isFile()) {
+      // Check for registry files or SKILL.md
+      if (entry.name === 'installed_plugins.json' || entry.name === 'known_marketplaces.json') {
+        logger.debug(`Validating registry: ${fullPath}`);
+        const result = await validate(fullPath);
+        results.push(result);
+      } else if (entry.name === 'SKILL.md') {
+        logger.debug(`Validating Claude Skill: ${fullPath}`);
+        const result = await validateSkill({ skillPath: fullPath });
+        results.push(result);
+      }
+    } else if (entry.isDirectory()) {
+      // Check if directory contains a plugin or marketplace
+      const claudePluginDir = path.join(fullPath, '.claude-plugin');
+      const hasClaudePlugin = await fs.access(claudePluginDir).then(() => true).catch(() => false);
+
+      if (hasClaudePlugin) {
+        logger.debug(`Validating resource directory: ${fullPath}`);
+        const result = await validate(fullPath);
+        results.push(result);
+      } else if (recursive) {
+        // Continue scanning subdirectories
+        const subResults = await scanDirectory(fullPath, recursive, logger);
+        results.push(...subResults);
+      }
     }
   }
 
