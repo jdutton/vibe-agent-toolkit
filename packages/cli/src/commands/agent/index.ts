@@ -168,6 +168,7 @@ Examples:
     .command('audit [path]')
     .description('Audit Claude plugins, marketplaces, registries, and skills')
     .option('-r, --recursive', 'Scan directories recursively for all resource types')
+    .option('--user', 'Audit user-level Claude plugins installation (~/.claude/plugins)')
     .option('--debug', DEBUG_OPTION_DESC)
     .action(auditCommand)
     .addHelpText(
@@ -188,6 +189,7 @@ Description:
 
   Path can be: resource directory, registry file, SKILL.md file, or scan directory
   Default: current directory
+  Use --user to audit user-level installation (~/.claude/plugins) automatically
 
 Validation Checks:
   Errors (must fix):
@@ -206,6 +208,7 @@ Exit Codes:
   0 - Success  |  1 - Errors found  |  2 - System error
 
 Examples:
+  $ vat agent audit --user                   # Audit user-level plugins installation
   $ vat agent audit                          # Audit current directory
   $ vat agent audit ./my-plugin              # Audit plugin directory
   $ vat agent audit installed_plugins.json   # Audit registry file

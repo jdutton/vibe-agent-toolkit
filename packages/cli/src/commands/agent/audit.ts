@@ -2,6 +2,8 @@
  * Agent audit command - audits plugins, marketplaces, registries, and Claude Skills
  */
 
+import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
@@ -19,6 +21,16 @@ import { writeYamlOutput } from '../../utils/output.js';
 export interface AuditCommandOptions {
   debug?: boolean;
   recursive?: boolean;
+  user?: boolean;
+}
+
+/**
+ * Get the user-level Claude plugins directory
+ * Cross-platform: ~/.claude/plugins on macOS/Linux, %USERPROFILE%\.claude\plugins on Windows
+ */
+function getUserPluginsDir(): string {
+  const homeDir = os.homedir();
+  return path.join(homeDir, '.claude', 'plugins');
 }
 
 export async function auditCommand(
@@ -29,11 +41,28 @@ export async function auditCommand(
   const startTime = Date.now();
 
   try {
-    const scanPath = targetPath ? path.resolve(targetPath) : process.cwd();
-    logger.debug(`Auditing resources at: ${scanPath}`);
+    let scanPath: string;
+    let recursive: boolean = options.recursive ?? false;
+
+    // Handle --user flag
+    if (options.user) {
+      const userPluginsDir = getUserPluginsDir();
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: path constructed from os.homedir()
+      if (!fs.existsSync(userPluginsDir)) {
+        logger.error(`User plugins directory not found: ${userPluginsDir}`);
+        logger.error('Claude plugins have not been installed yet.');
+        process.exit(2);
+      }
+      scanPath = userPluginsDir;
+      recursive = true; // Always recursive for user-level audit
+      logger.debug(`Auditing user-level plugins at: ${scanPath}`);
+    } else {
+      scanPath = targetPath ? path.resolve(targetPath) : process.cwd();
+      logger.debug(`Auditing resources at: ${scanPath}`);
+    }
 
     // Get validation results
-    const results = await getValidationResults(scanPath, options.recursive ?? false, logger);
+    const results = await getValidationResults(scanPath, recursive, logger);
 
     // Calculate and output summary
     const summary = calculateSummary(results, startTime);
