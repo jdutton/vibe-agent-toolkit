@@ -79,6 +79,38 @@ vat resources scan docs/                  # Scan specific directory
 
 ---
 
+### `doctor`
+
+Diagnose vat setup and environment health
+
+**What it does:**
+
+1. Checks Node.js version (>=20 required)
+2. Checks Git installation and repository
+3. Validates configuration file exists and is valid
+4. Checks vat version and available updates
+5. Verifies CLI build status (in VAT source tree)
+
+**When to use:** Before starting development, after updates, or debugging issues
+
+**Exit codes:**
+
+- `0` - All checks passed
+- `1` - One or more checks failed
+
+**Creates/modifies:** None (read-only diagnostics)
+
+**Examples:**
+
+```bash
+vat doctor                                # Run diagnostic checks
+vat doctor --verbose                      # Show all checks (including passing)
+```
+
+**More details:** `vat doctor --help` or see `packages/cli/docs/doctor.md`
+
+---
+
 ### `agent build`
 
 Build agent for deployment to target runtime

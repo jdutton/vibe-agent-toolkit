@@ -168,7 +168,8 @@ export async function mockDoctorFileSystem(
   const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 
   (readFileSync as ReturnType<typeof vi.fn>).mockImplementation((path: string | Buffer | URL): string => {
-    const pathStr = path.toString();
+    // Normalize path separators for cross-platform compatibility (Windows uses backslashes)
+    const pathStr = path.toString().replaceAll('\\', '/');
 
     // package.json
     if (pathStr.includes('package.json')) {
