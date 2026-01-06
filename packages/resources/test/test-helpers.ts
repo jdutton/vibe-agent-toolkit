@@ -78,6 +78,32 @@ export function findMonorepoRoot(
 }
 
 // ============================================================================
+// Cross-platform path helpers
+// ============================================================================
+
+/**
+ * Normalize file path to use forward slashes
+ *
+ * Converts Windows backslashes to forward slashes for consistent
+ * path comparisons. This ensures code works consistently on both
+ * Windows (which uses \) and Unix-like systems (which use /).
+ *
+ * @param filePath - File path to normalize
+ * @returns Path with forward slashes only
+ *
+ * @example
+ * ```typescript
+ * // Windows path: "docs\api\guide.md"
+ * // Unix path: "docs/api/guide.md"
+ * // Both normalize to: "docs/api/guide.md"
+ * expect(normalizePathToForwardSlash(resource.filePath)).toContain('/api/')
+ * ```
+ */
+export function normalizePathToForwardSlash(filePath: string): string {
+  return filePath.replaceAll('\\', '/');
+}
+
+// ============================================================================
 // Link validation helpers
 // ============================================================================
 

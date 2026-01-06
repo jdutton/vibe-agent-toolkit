@@ -415,6 +415,7 @@ packages/my-package/
 - Use descriptive test names: `it('should [expected behavior] when [condition]')`
 - One assertion per test when practical
 - Prefer `toThrow()` over try-catch blocks for error testing
+- **Cross-platform path comparisons**: Use `normalizePathToForwardSlash()` from test-helpers when comparing file paths with directory separators (e.g., `normalizePathToForwardSlash(resource.filePath).includes('/api/')`) to ensure tests pass on both Windows (`\`) and Unix (`/`) systems
 
 ### Preventing Test Duplication
 
