@@ -46,16 +46,25 @@ export async function scanCommand(
       0
     );
 
+    // Get duplicate statistics
+    const duplicates = registry.getDuplicates();
+    const duplicateFileCount = duplicates.reduce((sum, group) => sum + group.length, 0);
+    const uniqueResources = registry.getUniqueByChecksum();
+
     // Output results as YAML
     writeYamlOutput({
       status: 'success',
       filesScanned: stats.totalResources,
+      uniqueFiles: uniqueResources.length,
+      duplicateGroups: duplicates.length,
+      duplicateFiles: duplicateFileCount,
       linksFound: stats.totalLinks,
       anchorsFound: totalHeadings,
       files: allResources.map(resource => ({
         path: resource.filePath,
         links: resource.links.length,
         anchors: countHeadings(resource.headings),
+        checksum: resource.checksum,
       })),
       duration: `${duration}ms`,
     });

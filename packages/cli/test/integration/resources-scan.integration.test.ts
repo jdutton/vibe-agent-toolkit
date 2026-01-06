@@ -55,4 +55,39 @@ describe('vat resources scan (integration)', () => {
 
     expect(result.status).toBe(0);
   });
+
+  it('should detect duplicate files', () => {
+    // Create duplicate content
+    writeTestFile(join(tempDir, 'doc1.md'), '# Same Content\nThis is identical.');
+    writeTestFile(join(tempDir, 'doc2.md'), '# Same Content\nThis is identical.');
+    writeTestFile(join(tempDir, 'unique.md'), '# Different Content');
+
+    const { result, parsed } = executeCliAndParseYaml(binPath, [
+      'resources',
+      'scan',
+      tempDir,
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(parsed.filesScanned).toBe(3);
+    expect(parsed.uniqueFiles).toBe(2); // 2 unique (1 duplicate group + 1 unique)
+    expect(parsed.duplicateGroups).toBe(1); // 1 group of duplicates
+    expect(parsed.duplicateFiles).toBe(2); // 2 files that are duplicates
+  });
+
+  it('should include checksums in file output', () => {
+    writeTestFile(join(tempDir, 'test.md'), '# Test');
+
+    const { result, parsed } = executeCliAndParseYaml(binPath, [
+      'resources',
+      'scan',
+      tempDir,
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(parsed.files).toBeDefined();
+    expect(parsed.files.length).toBeGreaterThan(0);
+    expect(parsed.files[0]).toHaveProperty('checksum');
+    expect(parsed.files[0]?.checksum).toMatch(/^[a-f0-9]{64}$/); // SHA-256 format
+  });
 });
