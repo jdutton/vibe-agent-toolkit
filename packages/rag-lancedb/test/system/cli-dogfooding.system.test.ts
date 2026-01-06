@@ -18,6 +18,7 @@ import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
+import { getTestOutputDir } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
@@ -62,7 +63,8 @@ function executeCliCommand(
 describe('RAG CLI (Node.js dogfooding)', () => {
   const projectRoot = resolve(__dirname, '../../../..');
   const binPath = join(projectRoot, 'packages/cli/dist/bin.js');
-  const testDbPath = join(projectRoot, '.rag-db-test');
+  // Use isolated test output directory to avoid conflicts in parallel test execution
+  const testDbPath = getTestOutputDir('rag-lancedb', 'system', 'test-db');
   const docsPath = join(projectRoot, 'docs');
 
   beforeAll(async () => {

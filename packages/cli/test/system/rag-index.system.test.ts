@@ -2,6 +2,7 @@
  * System tests for rag index command
  */
 
+import { getTestOutputDir } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, it } from 'vitest';
 
 import {
@@ -20,10 +21,13 @@ const binPath = getBinPath(import.meta.url);
 describe('RAG index command (system test)', () => {
   let tempDir: string;
   let projectDir: string;
+  let dbPath: string;
 
   beforeAll(() => {
     tempDir = createTestTempDir('vat-rag-index-test-');
     projectDir = setupRagTestProject(tempDir, 'test-project');
+    // Use isolated test output directory to avoid conflicts in parallel test execution
+    dbPath = getTestOutputDir('cli', 'system', 'rag-index-db');
   });
 
   afterAll(() => {
@@ -33,7 +37,7 @@ describe('RAG index command (system test)', () => {
   it('should index markdown files into RAG database', () => {
     const { result, parsed } = executeCliAndParseYaml(
       binPath,
-      ['rag', 'index', projectDir],
+      ['rag', 'index', projectDir, '--db', dbPath],
       { cwd: projectDir }
     );
 
@@ -44,16 +48,16 @@ describe('RAG index command (system test)', () => {
     expect(parsed.duration).toBeDefined();
 
     // Verify database was created
-    const dbPath = join(projectDir, '.rag-db');
     expect(fs.existsSync(dbPath)).toBe(true);
   });
 
   it('should index successfully on re-run', () => {
-    // Create a new project for this test
+    // Create a new project for this test with isolated database
     const reindexProjectDir = setupTestProject(tempDir, {
       name: 'reindex-test-project',
       withDocs: true,
     });
+    const reindexDbPath = getTestOutputDir('cli', 'system', 'rag-index-reindex-db');
 
     const docsDir = join(reindexProjectDir, 'docs');
     fs.writeFileSync(
@@ -64,7 +68,7 @@ describe('RAG index command (system test)', () => {
     // First index
     const { result: result1, parsed: parsed1 } = executeCliAndParseYaml(
       binPath,
-      ['rag', 'index', reindexProjectDir],
+      ['rag', 'index', reindexProjectDir, '--db', reindexDbPath],
       { cwd: reindexProjectDir }
     );
 
@@ -77,7 +81,7 @@ describe('RAG index command (system test)', () => {
     // it re-indexes them. This is a known limitation.
     const { result: result2, parsed: parsed2 } = executeCliAndParseYaml(
       binPath,
-      ['rag', 'index', reindexProjectDir],
+      ['rag', 'index', reindexProjectDir, '--db', reindexDbPath],
       { cwd: reindexProjectDir }
     );
 

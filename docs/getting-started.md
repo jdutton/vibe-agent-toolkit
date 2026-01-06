@@ -29,8 +29,9 @@ bun install
 # Build all packages
 bun run build
 
-# Run tests
-bun test
+# Run tests (do NOT use 'bun test' - use commands below)
+vv validate            # Full validation (recommended)
+# OR: bun run test:unit  # Unit tests only
 
 # Run linting
 bun run lint
@@ -47,7 +48,7 @@ If all commands pass, you're ready to start developing!
 
 ```bash
 # Start development with watch mode
-bun test:watch
+bun run test:watch
 
 # In another terminal, make changes to your code
 # Tests will automatically re-run
@@ -180,15 +181,17 @@ bun outdated
 
 ### Debugging Tests
 
+**Note:** Do NOT use `bun test` directly - use the commands below instead.
+
 ```bash
 # Run a specific test file
-bun test packages/my-package/test/mytest.test.ts
+bunx vitest packages/my-package/test/mytest.test.ts
 
 # Run with verbose output
-bun test --reporter=verbose
+bun run test:unit --reporter=verbose
 
 # Run tests matching a pattern
-bun test --grep "my test pattern"
+bun run test:unit --grep "my test pattern"
 ```
 
 ### Fixing Linting Issues
@@ -248,10 +251,10 @@ bun install
 
 ```bash
 # Run tests with more detail
-bun test --reporter=verbose
+bun run test:unit --reporter=verbose
 
 # Update snapshots if needed
-bun test -u
+bunx vitest -u
 ```
 
 ### Pre-commit Hook Issues

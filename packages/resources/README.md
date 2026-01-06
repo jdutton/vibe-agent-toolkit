@@ -8,7 +8,9 @@ Markdown resource parsing, validation, and link integrity checking for AI agent 
 - **Validate link integrity** - Check local file links, anchor links, and detect broken references
 - **Track resource collections** - Manage multiple markdown files with automatic ID generation
 - **Resolve cross-references** - Link resources together and track dependencies
-- **Query capabilities** - Find resources by path, ID, or glob patterns
+- **Query capabilities** - Find resources by path, ID, or glob patterns with lazy evaluation
+- **Duplicate detection** - Identify duplicate content using SHA-256 checksums
+- **Collection operations** - Filter, transform, and materialize resource collections efficiently
 - **GitHub Flavored Markdown** - Full support for GFM including tables, task lists, and autolinks
 
 ## Installation
@@ -237,6 +239,226 @@ Clear all resources from the registry.
 ```typescript
 registry.clear();
 console.log(registry.getAllResources().length); // 0
+```
+
+##### size(): number
+
+Get the number of resources in the registry.
+
+```typescript
+console.log(`Registry has ${registry.size()} resources`);
+```
+
+##### isEmpty(): boolean
+
+Check if the registry is empty.
+
+```typescript
+if (registry.isEmpty()) {
+  console.log('No resources yet');
+}
+```
+
+##### getDuplicates(): ResourceMetadata[][]
+
+Get groups of duplicate resources based on content checksum.
+
+Returns an array where each element is an array of resources that have identical content. Only groups with 2+ resources are included.
+
+```typescript
+const duplicates = registry.getDuplicates();
+for (const group of duplicates) {
+  console.log(`Found ${group.length} duplicates:`);
+  for (const resource of group) {
+    console.log(`  - ${resource.filePath}`);
+  }
+}
+```
+
+##### getUniqueByChecksum(): ResourceMetadata[]
+
+Get one representative resource for each unique checksum.
+
+When multiple resources have identical content, only the first one encountered is included.
+
+```typescript
+const unique = registry.getUniqueByChecksum();
+console.log(`${unique.length} unique resources by content`);
+```
+
+##### getResourcesByName(name: string): ResourceMetadata[]
+
+Get resources by filename (basename).
+
+Returns all resources with the given filename, regardless of directory. Useful for finding duplicate filenames across the project.
+
+```typescript
+const readmeFiles = registry.getResourcesByName('README.md');
+console.log(`Found ${readmeFiles.length} README.md files`);
+```
+
+##### getResourcesByChecksum(checksum: SHA256): ResourceMetadata[]
+
+Get resources by SHA-256 checksum.
+
+Returns all resources with the given content checksum (i.e., identical content).
+
+```typescript
+const resource = registry.getResourceById('readme');
+if (resource) {
+  const sameContent = registry.getResourcesByChecksum(resource.checksum);
+  console.log(`Found ${sameContent.length} files with identical content`);
+}
+```
+
+### ResourceQuery
+
+Lazy query builder for filtering and transforming resource collections.
+
+Operations are stored and only executed when `execute()` or `toCollection()` is called, allowing for efficient chaining and optimization.
+
+#### Creating Queries
+
+```typescript
+import { ResourceQuery } from '@vibe-agent-toolkit/resources';
+
+const query = ResourceQuery.from(registry.getAllResources());
+```
+
+#### Methods
+
+##### filter(predicate: (resource: ResourceMetadata) => boolean): this
+
+Filter resources by a predicate function.
+
+```typescript
+const query = ResourceQuery.from(resources)
+  .filter(r => r.links.length > 0)
+  .filter(r => r.sizeBytes < 10000);
+```
+
+##### map(transformer: (resource: ResourceMetadata) => ResourceMetadata): this
+
+Transform resources with a mapping function.
+
+```typescript
+const query = ResourceQuery.from(resources)
+  .map(r => ({ ...r, id: r.id.toUpperCase() }));
+```
+
+##### matchesPattern(pattern: string): this
+
+Filter resources by glob pattern matching their file paths.
+
+```typescript
+const query = ResourceQuery.from(resources)
+  .matchesPattern('docs/**/*.md')
+  .matchesPattern('*.ts');
+```
+
+##### execute(): ResourceMetadata[]
+
+Execute the query and return the results as an array.
+
+```typescript
+const results = query.execute();
+console.log(`Found ${results.length} resources`);
+```
+
+##### toCollection(): ResourceCollection
+
+Execute the query and return a ResourceCollection.
+
+```typescript
+const collection = query.toCollection();
+const duplicates = collection.getDuplicates();
+```
+
+#### Example Workflows
+
+**Find all docs with links:**
+
+```typescript
+const docsWithLinks = ResourceQuery.from(registry.getAllResources())
+  .matchesPattern('docs/**/*.md')
+  .filter(r => r.links.length > 0)
+  .execute();
+```
+
+**Get unique API docs:**
+
+```typescript
+const uniqueApiDocs = ResourceQuery.from(registry.getAllResources())
+  .matchesPattern('**/api/**')
+  .toCollection()
+  .getUniqueByChecksum();
+```
+
+### ResourceCollection
+
+Immutable collection of resources with lazy duplicate detection.
+
+ResourceCollection wraps an array of resources and provides efficient duplicate detection. Duplicate detection is performed lazily - checksum indexes are only built when `getDuplicates()` or `getUniqueByChecksum()` is first called.
+
+#### Creating Collections
+
+```typescript
+import { ResourceCollection } from '@vibe-agent-toolkit/resources';
+
+const collection = new ResourceCollection([resource1, resource2, resource3]);
+
+// Or from a query
+const collection = ResourceQuery.from(registry.getAllResources())
+  .filter(r => r.sizeBytes > 1000)
+  .toCollection();
+```
+
+#### Methods
+
+##### size(): number
+
+Get the number of resources in the collection.
+
+```typescript
+console.log(`Collection has ${collection.size()} resources`);
+```
+
+##### isEmpty(): boolean
+
+Check if the collection is empty.
+
+```typescript
+if (collection.isEmpty()) {
+  console.log('Empty collection');
+}
+```
+
+##### getAllResources(): ResourceMetadata[]
+
+Get all resources in the collection.
+
+```typescript
+const all = collection.getAllResources();
+```
+
+##### getDuplicates(): ResourceMetadata[][]
+
+Get groups of duplicate resources based on checksum.
+
+```typescript
+const duplicates = collection.getDuplicates();
+for (const group of duplicates) {
+  console.log(`${group.length} files with identical content`);
+}
+```
+
+##### getUniqueByChecksum(): ResourceMetadata[]
+
+Get one representative resource for each unique checksum.
+
+```typescript
+const unique = collection.getUniqueByChecksum();
+console.log(`${unique.length} unique resources`);
 ```
 
 ## Type Definitions

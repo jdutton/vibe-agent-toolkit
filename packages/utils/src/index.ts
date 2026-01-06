@@ -22,3 +22,6 @@ export * from './gitignore-checker.js';
 
 // Git utilities (using git commands directly)
 export * from './git-utils.js';
+
+// Test helpers for isolated test output directories
+export * from './test-helpers.js';

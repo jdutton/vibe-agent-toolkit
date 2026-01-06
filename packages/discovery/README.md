@@ -385,8 +385,8 @@ The package includes comprehensive tests:
 
 Run tests:
 ```bash
-bun test
-bun test:integration
+bun run test:unit
+bun run test:integration
 ```
 
 ## Related Packages

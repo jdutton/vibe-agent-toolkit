@@ -6,48 +6,29 @@
  */
 
 import {
-  afterAll,
-  beforeAll,
   describe,
-  executeCliAndParseYaml,
   executeRagCommandInEmptyProject,
+  executeRagQueryAndExpectSuccess,
   expect,
-  fs,
   getBinPath,
+  getTestOutputDir,
   it,
-  setupIndexedRagTest,
+  setupRagTestSuite,
 } from './rag-test-setup.js';
 
 const binPath = getBinPath(import.meta.url);
+const suite = setupRagTestSuite('query', binPath, getTestOutputDir);
 
 describe('RAG query command (system test)', () => {
-  let tempDir: string;
-  let projectDir: string;
-
-  beforeAll(() => {
-    ({ tempDir, projectDir } = setupIndexedRagTest(
-      'vat-rag-query-test-',
-      'test-project',
-      binPath
-    ));
-  });
-
-  afterAll(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
   it('should query RAG database and return results', () => {
-    const { result, parsed } = executeCliAndParseYaml(
+    const { output } = executeRagQueryAndExpectSuccess(
       binPath,
-      ['rag', 'query', 'documentation'],
-      { cwd: projectDir }
+      ['rag', 'query', 'documentation', '--db', suite.dbPath],
+      suite.projectDir
     );
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const output = parsed as any;
-
-    expect(result.status).toBe(0);
-    expect(output.status).toBe('success');
     expect(output.stats).toBeDefined();
     expect(output.stats.totalMatches).toBeGreaterThan(0);
     expect(output.stats.searchDurationMs).toBeGreaterThan(0);
@@ -70,24 +51,18 @@ describe('RAG query command (system test)', () => {
   });
 
   it('should limit results with --limit flag', () => {
-    const { result, parsed } = executeCliAndParseYaml(
+    const { output } = executeRagQueryAndExpectSuccess(
       binPath,
-      ['rag', 'query', 'documentation', '--limit', '2'],
-      { cwd: projectDir }
+      ['rag', 'query', 'documentation', '--limit', '2', '--db', suite.dbPath],
+      suite.projectDir
     );
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const output = parsed as any;
-
-    expect(result.status).toBe(0);
-    expect(output.status).toBe('success');
     expect(Array.isArray(output.chunks)).toBe(true);
     expect(output.chunks.length).toBeLessThanOrEqual(2);
   });
 
   it('should error when database has no data', () => {
     const { result, parsed } = executeRagCommandInEmptyProject(
-      tempDir,
+      suite.tempDir,
       binPath,
       ['rag', 'query', 'test']
     );

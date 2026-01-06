@@ -6,41 +6,28 @@
  */
 
 import {
-  afterAll,
-  beforeAll,
   describe,
   executeCliAndParseYaml,
   executeRagCommandInEmptyProject,
   expect,
-  fs,
   getBinPath,
+  getTestOutputDir,
   it,
-  setupIndexedRagTest,
+  setupRagTestSuite,
 } from './rag-test-setup.js';
 
 const binPath = getBinPath(import.meta.url);
+const suite = setupRagTestSuite('stats', binPath, getTestOutputDir);
 
 describe('RAG stats command (system test)', () => {
-  let tempDir: string;
-  let projectDir: string;
-
-  beforeAll(() => {
-    ({ tempDir, projectDir } = setupIndexedRagTest(
-      'vat-rag-stats-test-',
-      'test-project',
-      binPath
-    ));
-  });
-
-  afterAll(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
   it('should show RAG database statistics', () => {
     const { result, parsed } = executeCliAndParseYaml(
       binPath,
-      ['rag', 'stats'],
-      { cwd: projectDir }
+      ['rag', 'stats', '--db', suite.dbPath],
+      { cwd: suite.projectDir }
     );
 
     expect(result.status).toBe(0);
@@ -54,7 +41,7 @@ describe('RAG stats command (system test)', () => {
 
   it('should return empty stats when database has no data', () => {
     const { result, parsed } = executeRagCommandInEmptyProject(
-      tempDir,
+      suite.tempDir,
       binPath,
       ['rag', 'stats']
     );
