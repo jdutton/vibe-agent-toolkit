@@ -10,14 +10,16 @@
 
 import path from 'node:path';
 
-import { crawlDirectory, toUnixPath, type CrawlOptions as UtilsCrawlOptions } from '@vibe-agent-toolkit/utils';
-import picomatch from 'picomatch';
+import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions } from '@vibe-agent-toolkit/utils';
 
+import { calculateChecksum } from './checksum.js';
 import { parseMarkdown } from './link-parser.js';
 import { validateLink } from './link-validator.js';
+import type { ResourceCollectionInterface } from './resource-collection-interface.js';
+import type { SHA256 } from './schemas/checksum.js';
 import type { HeadingNode, ResourceMetadata } from './schemas/resource-metadata.js';
 import type { ValidationIssue, ValidationResult } from './schemas/validation-result.js';
-import { splitHrefAnchor } from './utils.js';
+import { matchesGlobPattern, splitHrefAnchor } from './utils.js';
 
 /**
  * Options for crawling directories to add resources.
@@ -79,9 +81,11 @@ export interface RegistryStats {
  * const docs = registry.getResourcesByPattern('docs/**');
  * ```
  */
-export class ResourceRegistry {
+export class ResourceRegistry implements ResourceCollectionInterface {
   private readonly resourcesByPath: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesById: Map<string, ResourceMetadata> = new Map();
+  private readonly resourcesByName: Map<string, ResourceMetadata[]> = new Map();
+  private readonly resourcesByChecksum: Map<SHA256, ResourceMetadata[]> = new Map();
   private readonly validateOnAdd: boolean;
 
   constructor(options?: ResourceRegistryOptions) {
@@ -118,6 +122,9 @@ export class ResourceRegistry {
     const fs = await import('node:fs/promises');
     const stats = await fs.stat(absolutePath);
 
+    // Calculate checksum eagerly
+    const checksum = await calculateChecksum(absolutePath);
+
     // Create resource metadata
     const resource: ResourceMetadata = {
       id,
@@ -127,11 +134,11 @@ export class ResourceRegistry {
       sizeBytes: parseResult.sizeBytes,
       estimatedTokenCount: parseResult.estimatedTokenCount,
       modifiedAt: stats.mtime,
+      checksum,
     };
 
-    // Store in both maps
-    this.resourcesByPath.set(absolutePath, resource);
-    this.resourcesById.set(id, resource);
+    // Index the resource
+    this.indexResource(resource);
 
     // Validate if requested
     if (this.validateOnAdd) {
@@ -370,6 +377,49 @@ export class ResourceRegistry {
   }
 
   /**
+   * Get resources by filename (basename).
+   *
+   * Returns all resources with the given filename, regardless of directory.
+   * Useful for finding duplicate filenames or locating files by name.
+   *
+   * @param name - Filename to search for (e.g., 'README.md')
+   * @returns Array of resources with matching filename (empty if none found)
+   *
+   * @example
+   * ```typescript
+   * // Find all README.md files
+   * const readmes = registry.getResourcesByName('README.md');
+   * console.log(`Found ${readmes.length} README files`);
+   * ```
+   */
+  getResourcesByName(name: string): ResourceMetadata[] {
+    return this.resourcesByName.get(name) ?? [];
+  }
+
+  /**
+   * Get resources by checksum.
+   *
+   * Returns all resources with identical content (same SHA-256 hash).
+   * Useful for detecting duplicate content across different files.
+   *
+   * @param checksum - SHA-256 checksum to search for
+   * @returns Array of resources with matching checksum (empty if none found)
+   *
+   * @example
+   * ```typescript
+   * const resource = registry.getResource('./docs/README.md');
+   * const duplicates = registry.getResourcesByChecksum(resource.checksum);
+   * if (duplicates.length > 1) {
+   *   console.log('Found duplicate content in:');
+   *   duplicates.forEach(r => console.log(`  ${r.filePath}`));
+   * }
+   * ```
+   */
+  getResourcesByChecksum(checksum: SHA256): ResourceMetadata[] {
+    return this.resourcesByChecksum.get(checksum) ?? [];
+  }
+
+  /**
    * Get resources matching a glob pattern.
    *
    * Normalizes paths to Unix-style (forward slashes) before matching
@@ -386,34 +436,9 @@ export class ResourceRegistry {
    * ```
    */
   getResourcesByPattern(pattern: string): ResourceMetadata[] {
-    // Create matchers:
-    // 1. matchBase: true for simple filename patterns (e.g., '*.md', '**/file.md')
-    const matcherWithBase = picomatch(pattern, { matchBase: true });
-    // 2. matchBase: false for testing against path segments
-    const matcher = picomatch(pattern);
-
-    return [...this.resourcesByPath.values()].filter((resource) => {
-      const unixPath = toUnixPath(resource.filePath);
-
-      // Strategy 1: Try with matchBase for simple filename matching
-      if (matcherWithBase(unixPath)) {
-        return true;
-      }
-
-      // Strategy 2: For directory patterns like '**/subdir/**', try matching
-      // against progressively longer path segments from the end
-      const segments = unixPath.split('/');
-      // Try matching the last 10, 9, 8, ... segments
-      // This allows patterns like '**/subdir/**' to match paths ending in '.../subdir/file.md'
-      for (let i = Math.min(10, segments.length); i > 0; i--) {
-        const partialPath = segments.slice(-i).join('/');
-        if (matcher(partialPath)) {
-          return true;
-        }
-      }
-
-      return false;
-    });
+    return [...this.resourcesByPath.values()].filter((resource) =>
+      matchesGlobPattern(resource.filePath, pattern)
+    );
   }
 
   /**
@@ -428,6 +453,92 @@ export class ResourceRegistry {
   clear(): void {
     this.resourcesByPath.clear();
     this.resourcesById.clear();
+    this.resourcesByName.clear();
+    this.resourcesByChecksum.clear();
+  }
+
+  /**
+   * Get the number of resources in the registry.
+   *
+   * @returns Number of resources
+   *
+   * @example
+   * ```typescript
+   * console.log(`Registry has ${registry.size()} resources`);
+   * ```
+   */
+  size(): number {
+    return this.resourcesByPath.size;
+  }
+
+  /**
+   * Check if the registry is empty.
+   *
+   * @returns True if the registry has no resources
+   *
+   * @example
+   * ```typescript
+   * if (registry.isEmpty()) {
+   *   console.log('No resources yet');
+   * }
+   * ```
+   */
+  isEmpty(): boolean {
+    return this.resourcesByPath.size === 0;
+  }
+
+  /**
+   * Get groups of duplicate resources based on checksum.
+   *
+   * Returns an array where each element is an array of resources
+   * that have the same checksum (i.e., identical content).
+   * Only groups with 2+ resources are included.
+   *
+   * @returns Array of duplicate groups
+   *
+   * @example
+   * ```typescript
+   * const duplicates = registry.getDuplicates();
+   * for (const group of duplicates) {
+   *   console.log(`Found ${group.length} duplicates:`);
+   *   for (const resource of group) {
+   *     console.log(`  - ${resource.filePath}`);
+   *   }
+   * }
+   * ```
+   */
+  getDuplicates(): ResourceMetadata[][] {
+    const duplicateGroups: ResourceMetadata[][] = [];
+    for (const group of this.resourcesByChecksum.values()) {
+      if (group.length >= 2) {
+        duplicateGroups.push(group);
+      }
+    }
+    return duplicateGroups;
+  }
+
+  /**
+   * Get one representative resource for each unique checksum.
+   *
+   * When multiple resources have the same checksum, only the first
+   * one encountered is included in the result.
+   *
+   * @returns Array of unique resources (one per checksum)
+   *
+   * @example
+   * ```typescript
+   * const unique = registry.getUniqueByChecksum();
+   * console.log(`${unique.length} unique resources by content`);
+   * ```
+   */
+  getUniqueByChecksum(): ResourceMetadata[] {
+    const unique: ResourceMetadata[] = [];
+    for (const group of this.resourcesByChecksum.values()) {
+      if (group[0]) {
+        unique.push(group[0]);
+      }
+    }
+    return unique;
   }
 
   /**
@@ -501,6 +612,42 @@ export class ResourceRegistry {
       map.set(resource.filePath, resource.headings);
     }
     return map;
+  }
+
+  /**
+   * Add a resource to all indexes.
+   *
+   * Indexes maintained:
+   * - byPath: Single resource per absolute path (Map)
+   * - byId: Single resource per unique ID (Map)
+   * - byName: Multiple resources per filename (Map<string, Array>)
+   * - byChecksum: Multiple resources per content hash (Map<SHA256, Array>)
+   *
+   * @param resource - Resource to index
+   */
+  private indexResource(resource: ResourceMetadata): void {
+    // Index by path (1:1)
+    this.resourcesByPath.set(resource.filePath, resource);
+
+    // Index by ID (1:1)
+    this.resourcesById.set(resource.id, resource);
+
+    // Index by name (1:many)
+    const name = path.basename(resource.filePath);
+    const nameArray = this.resourcesByName.get(name);
+    if (nameArray) {
+      nameArray.push(resource);
+    } else {
+      this.resourcesByName.set(name, [resource]);
+    }
+
+    // Index by checksum (1:many)
+    const checksumArray = this.resourcesByChecksum.get(resource.checksum);
+    if (checksumArray) {
+      checksumArray.push(resource);
+    } else {
+      this.resourcesByChecksum.set(resource.checksum, [resource]);
+    }
   }
 
   /**

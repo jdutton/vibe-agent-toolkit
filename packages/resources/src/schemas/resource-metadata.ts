@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { SHA256Schema } from './checksum.js';
+
 /**
  * Type of link found in markdown resources.
  *
@@ -81,6 +83,7 @@ export const ResourceMetadataSchema = z.object({
   sizeBytes: z.number().int().nonnegative().describe('File size in bytes'),
   estimatedTokenCount: z.number().int().nonnegative().describe('Estimated token count for LLM context (roughly 1 token per 4 chars)'),
   modifiedAt: z.date().describe('Last modified timestamp'),
+  checksum: SHA256Schema.describe('SHA-256 checksum of file content'),
 }).describe('Complete metadata for a markdown resource');
 
 export type ResourceMetadata = z.infer<typeof ResourceMetadataSchema>;

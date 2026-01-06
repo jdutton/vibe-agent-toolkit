@@ -34,6 +34,15 @@ export {
   type RegistryStats,
 } from './resource-registry.js';
 
+// Export ResourceQuery for lazy evaluation and filtering
+export { ResourceQuery } from './resource-query.js';
+
+// Export ResourceCollection for immutable collections with lazy duplicate detection
+export { ResourceCollection } from './resource-collection.js';
+
+// Export ResourceCollectionInterface for collection behavior
+export type { ResourceCollectionInterface } from './resource-collection-interface.js';
+
 // Export all type definitions (from schemas)
 export type {
   LinkType,
