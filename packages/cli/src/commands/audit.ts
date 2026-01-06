@@ -20,6 +20,8 @@ import { handleCommandError } from '../utils/command-error.js';
 import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 
+import { buildHierarchicalOutput } from './audit/hierarchical-output.js';
+
 export interface AuditCommandOptions {
   debug?: boolean;
   recursive?: boolean;
@@ -128,12 +130,18 @@ export async function auditCommand(
     // Get validation results
     const results = await getValidationResults(scanPath, recursive, logger);
 
-    // Calculate and output summary
-    const summary = calculateSummary(results, startTime);
-    writeYamlOutput(summary);
-
-    // Log human-readable output and exit
-    handleAuditResults(results, summary, logger);
+    // Use hierarchical output for --user flag, flat output otherwise
+    if (options.user) {
+      const hierarchical = buildHierarchicalOutput(results);
+      const summary = calculateHierarchicalSummary(results, hierarchical, startTime);
+      writeYamlOutput(summary);
+      logHierarchicalSummary(results, hierarchical, logger);
+    } else {
+      // Standard flat output
+      const summary = calculateSummary(results, startTime);
+      writeYamlOutput(summary);
+      handleAuditResults(results, summary, logger);
+    }
   } catch (error) {
     handleCommandError(error, logger, startTime, 'AgentAudit');
   }
@@ -189,44 +197,10 @@ async function getValidationResults(
 }
 
 function calculateSummary(results: ValidationResult[], startTime: number) {
-  const successCount = results.filter((r: ValidationResult) => r.status === 'success').length;
-  const warningCount = results.filter((r: ValidationResult) => r.status === 'warning').length;
-  const errorCount = results.filter((r: ValidationResult) => r.status === 'error').length;
-
-  const totalErrors = results.reduce((sum: number, r: ValidationResult) =>
-    sum + r.issues.filter(i => i.severity === 'error').length, 0
-  );
-  const totalWarnings = results.reduce((sum: number, r: ValidationResult) =>
-    sum + r.issues.filter(i => i.severity === 'warning').length, 0
-  );
-  const totalInfo = results.reduce((sum: number, r: ValidationResult) =>
-    sum + r.issues.filter(i => i.severity === 'info').length, 0
-  );
-
-  let status: string;
-  if (errorCount > 0) {
-    status = 'error';
-  } else if (warningCount > 0) {
-    status = 'warning';
-  } else {
-    status = 'success';
-  }
-
+  const base = buildBaseSummary(results, startTime);
   return {
-    status,
-    summary: {
-      filesScanned: results.length,
-      success: successCount,
-      warnings: warningCount,
-      errors: errorCount,
-    },
-    issues: {
-      errors: totalErrors,
-      warnings: totalWarnings,
-      info: totalInfo,
-    },
+    ...base,
     files: results,
-    duration: `${Date.now() - startTime}ms`,
   };
 }
 
@@ -338,4 +312,154 @@ async function scanDirectory(
   }
 
   return results;
+}
+
+/**
+ * Calculate overall status from validation results
+ */
+function calculateOverallStatus(results: ValidationResult[]): 'success' | 'warning' | 'error' {
+  const errorCount = results.filter((r: ValidationResult) => r.status === 'error').length;
+  const warningCount = results.filter((r: ValidationResult) => r.status === 'warning').length;
+
+  if (errorCount > 0) {
+    return 'error';
+  }
+  if (warningCount > 0) {
+    return 'warning';
+  }
+  return 'success';
+}
+
+/**
+ * Count all skills in hierarchical output
+ */
+function countAllSkills(hierarchical: ReturnType<typeof buildHierarchicalOutput>): number {
+  let total = 0;
+
+  // Count marketplace skills
+  for (const marketplace of hierarchical.marketplaces) {
+    for (const plugin of marketplace.plugins) {
+      total += plugin.skills.length;
+    }
+  }
+
+  // Count standalone plugin skills
+  for (const plugin of hierarchical.standalonePlugins) {
+    total += plugin.skills.length;
+  }
+
+  // Count standalone skills
+  total += hierarchical.standaloneSkills.length;
+
+  return total;
+}
+
+/**
+ * Calculate issue counts from validation results
+ */
+function calculateIssueCounts(results: ValidationResult[]) {
+  const successCount = results.filter((r: ValidationResult) => r.status === 'success').length;
+  const warningCount = results.filter((r: ValidationResult) => r.status === 'warning').length;
+  const errorCount = results.filter((r: ValidationResult) => r.status === 'error').length;
+
+  const totalErrors = results.reduce((sum: number, r: ValidationResult) =>
+    sum + r.issues.filter(i => i.severity === 'error').length, 0
+  );
+  const totalWarnings = results.reduce((sum: number, r: ValidationResult) =>
+    sum + r.issues.filter(i => i.severity === 'warning').length, 0
+  );
+  const totalInfo = results.reduce((sum: number, r: ValidationResult) =>
+    sum + r.issues.filter(i => i.severity === 'info').length, 0
+  );
+
+  return {
+    successCount,
+    warningCount,
+    errorCount,
+    totalErrors,
+    totalWarnings,
+    totalInfo,
+  };
+}
+
+/**
+ * Build base summary structure (used by both flat and hierarchical)
+ */
+function buildBaseSummary(
+  results: ValidationResult[],
+  startTime: number
+): {
+  status: string;
+  summary: { filesScanned: number; success: number; warnings: number; errors: number };
+  issues: { errors: number; warnings: number; info: number };
+  duration: string;
+} {
+  const counts = calculateIssueCounts(results);
+  const status = calculateOverallStatus(results);
+
+  return {
+    status,
+    summary: {
+      filesScanned: results.length,
+      success: counts.successCount,
+      warnings: counts.warningCount,
+      errors: counts.errorCount,
+    },
+    issues: {
+      errors: counts.totalErrors,
+      warnings: counts.totalWarnings,
+      info: counts.totalInfo,
+    },
+    duration: `${Date.now() - startTime}ms`,
+  };
+}
+
+/**
+ * Calculate summary for hierarchical output
+ */
+function calculateHierarchicalSummary(
+  results: ValidationResult[],
+  hierarchical: ReturnType<typeof buildHierarchicalOutput>,
+  startTime: number
+) {
+  const base = buildBaseSummary(results, startTime);
+
+  return {
+    ...base,
+    summary: {
+      ...base.summary,
+      marketplaces: hierarchical.marketplaces.length,
+      standalonePlugins: hierarchical.standalonePlugins.length,
+      standaloneSkills: hierarchical.standaloneSkills.length,
+    },
+    hierarchical,
+  };
+}
+
+/**
+ * Log hierarchical summary to stderr
+ */
+function logHierarchicalSummary(
+  results: ValidationResult[],
+  hierarchical: ReturnType<typeof buildHierarchicalOutput>,
+  logger: ReturnType<typeof createLogger>
+): void {
+  const status = calculateOverallStatus(results);
+  const skillsWithIssues = countAllSkills(hierarchical);
+  const totalSkills = results.length;
+
+  if (status === 'error') {
+    const errorCount = results.filter((r: ValidationResult) => r.status === 'error').length;
+    logger.error(`Audit failed: ${errorCount} skill(s) with errors (${totalSkills} scanned, ${skillsWithIssues} with issues)`);
+    process.exit(1);
+  }
+
+  if (status === 'warning') {
+    const warningCount = results.filter((r: ValidationResult) => r.status === 'warning').length;
+    logger.info(`Audit passed with warnings: ${warningCount} skill(s) (${totalSkills} scanned, ${skillsWithIssues} with issues)`);
+  } else {
+    logger.info(`Audit successful: ${totalSkills} skill(s) passed`);
+  }
+
+  process.exit(0);
 }
