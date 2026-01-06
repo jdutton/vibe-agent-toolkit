@@ -4,49 +4,31 @@
  * Tests that RAG correctly detects unchanged files and skips re-indexing.
  */
 
-import { getTestOutputDir } from '@vibe-agent-toolkit/utils';
-
 import {
-  afterAll,
-  beforeAll,
   describe,
   executeCliAndParseYaml,
   expect,
   fs,
   getBinPath,
+  getTestOutputDir,
   it,
-  setupIndexedRagTest,
+  setupRagTestSuite,
 } from './rag-test-setup.js';
 
 const binPath = getBinPath(import.meta.url);
+const suite = setupRagTestSuite('caching', binPath, getTestOutputDir);
 
 describe('RAG caching and incremental updates (system test)', () => {
-  let tempDir: string;
-  let projectDir: string;
-  let dbPath: string;
-
-  beforeAll(() => {
-    // Use isolated test output directory to avoid conflicts in parallel test execution
-    dbPath = getTestOutputDir('cli', 'system', 'rag-caching-db');
-    ({ tempDir, projectDir } = setupIndexedRagTest(
-      'vat-rag-caching-test-',
-      'test-project',
-      binPath,
-      dbPath
-    ));
-  });
-
-  afterAll(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
   it('should skip unchanged files on re-index', () => {
     // setupIndexedRagTest already indexed files once
     // First re-index should skip all files (no changes)
     const { result: firstResult, parsed: firstParsed } = executeCliAndParseYaml(
       binPath,
-      ['rag', 'index', '--db', dbPath],
-      { cwd: projectDir }
+      ['rag', 'index', '--db', suite.dbPath],
+      { cwd: suite.projectDir }
     );
 
     expect(firstResult.status).toBe(0);
@@ -62,8 +44,8 @@ describe('RAG caching and incremental updates (system test)', () => {
     // Second re-index should also skip all files
     const { result: secondResult, parsed: secondParsed } = executeCliAndParseYaml(
       binPath,
-      ['rag', 'index', '--db', dbPath],
-      { cwd: projectDir }
+      ['rag', 'index', '--db', suite.dbPath],
+      { cwd: suite.projectDir }
     );
 
     expect(secondResult.status).toBe(0);
@@ -77,7 +59,7 @@ describe('RAG caching and incremental updates (system test)', () => {
   });
 
   it('should detect and re-index changed files', () => {
-    const testFile = `${projectDir}/docs/test-change.md`;
+    const testFile = `${suite.projectDir}/docs/test-change.md`;
 
     // Create a test file
     fs.writeFileSync(testFile, '# Original Content\n\nThis is the original content.');
@@ -85,8 +67,8 @@ describe('RAG caching and incremental updates (system test)', () => {
     // Index it
     const { parsed: firstParsed } = executeCliAndParseYaml(
       binPath,
-      ['rag', 'index', '--db', dbPath],
-      { cwd: projectDir }
+      ['rag', 'index', '--db', suite.dbPath],
+      { cwd: suite.projectDir }
     );
 
     expect(firstParsed.resourcesIndexed).toBeGreaterThanOrEqual(1);
@@ -94,8 +76,8 @@ describe('RAG caching and incremental updates (system test)', () => {
     // Re-index without changes - should skip
     const { parsed: secondParsed } = executeCliAndParseYaml(
       binPath,
-      ['rag', 'index', '--db', dbPath],
-      { cwd: projectDir }
+      ['rag', 'index', '--db', suite.dbPath],
+      { cwd: suite.projectDir }
     );
 
     expect(secondParsed.resourcesSkipped).toBeGreaterThan(0);
@@ -107,8 +89,8 @@ describe('RAG caching and incremental updates (system test)', () => {
     // Re-index - should detect change and update
     const { parsed: thirdParsed } = executeCliAndParseYaml(
       binPath,
-      ['rag', 'index', '--db', dbPath],
-      { cwd: projectDir }
+      ['rag', 'index', '--db', suite.dbPath],
+      { cwd: suite.projectDir }
     );
 
     expect(thirdParsed.resourcesUpdated).toBe(1);

@@ -5,48 +5,29 @@
  * including total chunks, resources, and embedding model information.
  */
 
-import { getTestOutputDir } from '@vibe-agent-toolkit/utils';
-
 import {
-  afterAll,
-  beforeAll,
   describe,
   executeCliAndParseYaml,
   executeRagCommandInEmptyProject,
   expect,
-  fs,
   getBinPath,
+  getTestOutputDir,
   it,
-  setupIndexedRagTest,
+  setupRagTestSuite,
 } from './rag-test-setup.js';
 
 const binPath = getBinPath(import.meta.url);
+const suite = setupRagTestSuite('stats', binPath, getTestOutputDir);
 
 describe('RAG stats command (system test)', () => {
-  let tempDir: string;
-  let projectDir: string;
-  let dbPath: string;
-
-  beforeAll(() => {
-    // Use isolated test output directory to avoid conflicts in parallel test execution
-    dbPath = getTestOutputDir('cli', 'system', 'rag-stats-db');
-    ({ tempDir, projectDir } = setupIndexedRagTest(
-      'vat-rag-stats-test-',
-      'test-project',
-      binPath,
-      dbPath
-    ));
-  });
-
-  afterAll(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
   it('should show RAG database statistics', () => {
     const { result, parsed } = executeCliAndParseYaml(
       binPath,
-      ['rag', 'stats', '--db', dbPath],
-      { cwd: projectDir }
+      ['rag', 'stats', '--db', suite.dbPath],
+      { cwd: suite.projectDir }
     );
 
     expect(result.status).toBe(0);
@@ -60,7 +41,7 @@ describe('RAG stats command (system test)', () => {
 
   it('should return empty stats when database has no data', () => {
     const { result, parsed } = executeRagCommandInEmptyProject(
-      tempDir,
+      suite.tempDir,
       binPath,
       ['rag', 'stats']
     );

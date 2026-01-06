@@ -12,7 +12,7 @@
 
 // Re-export everything for convenience
 
-
+export {getTestOutputDir} from '@vibe-agent-toolkit/utils';
 export {afterAll, beforeAll, it} from 'vitest';
 export {describe, executeCliAndParseYaml, expect, fs, getBinPath} from './test-common.js';
-export {executeRagCommandInEmptyProject, setupIndexedRagTest} from './test-helpers.js';
+export {executeRagCommandInEmptyProject, executeRagQueryAndExpectSuccess, setupIndexedRagTest, setupRagTestSuite} from './test-helpers.js';

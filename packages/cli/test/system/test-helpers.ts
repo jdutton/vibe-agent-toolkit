@@ -296,3 +296,97 @@ export function setupIndexedRagTest(
 
   return { tempDir, projectDir };
 }
+
+/**
+ * Setup RAG test suite with standard lifecycle hooks
+ * Eliminates duplication of beforeAll/afterAll setup across RAG system tests
+ *
+ * @param testName - Name of the test suite (e.g., 'stats', 'query', 'clear')
+ * @param binPath - Path to CLI binary
+ * @param getTestOutputDir - Function from @vibe-agent-toolkit/utils
+ * @returns Object with refs that will be populated during beforeAll
+ *
+ * @example
+ * ```typescript
+ * import { getTestOutputDir } from '@vibe-agent-toolkit/utils';
+ * const binPath = getBinPath(import.meta.url);
+ * const suite = setupRagTestSuite('stats', binPath, getTestOutputDir);
+ *
+ * it('should work', () => {
+ *   const { result } = executeCliAndParseYaml(
+ *     binPath,
+ *     ['rag', 'stats', '--db', suite.dbPath],
+ *     { cwd: suite.projectDir }
+ *   );
+ *   expect(result.status).toBe(0);
+ * });
+ * ```
+ */
+export function setupRagTestSuite(
+  testName: string,
+  binPath: string,
+  getTestOutputDir: (pkg: string, ...segments: string[]) => string
+): {
+  tempDir: string;
+  projectDir: string;
+  dbPath: string;
+  beforeAll: () => void;
+  afterAll: () => void;
+} {
+  const suite = {
+    tempDir: '',
+    projectDir: '',
+    dbPath: '',
+    beforeAll: () => {
+      suite.dbPath = getTestOutputDir('cli', 'system', `rag-${testName}-db`);
+      const result = setupIndexedRagTest(
+        `vat-rag-${testName}-test-`,
+        'test-project',
+        binPath,
+        suite.dbPath
+      );
+      suite.tempDir = result.tempDir;
+      suite.projectDir = result.projectDir;
+    },
+    afterAll: () => {
+      fs.rmSync(suite.tempDir, { recursive: true, force: true });
+    },
+  };
+
+  return suite;
+}
+
+/**
+ * Execute RAG query command and verify basic success response
+ * Eliminates duplication in RAG query tests
+ *
+ * @param binPath - Path to CLI binary
+ * @param args - Command arguments (e.g., ['rag', 'query', 'term', '--limit', '5'])
+ * @param cwd - Working directory
+ * @returns Object with result and typed output
+ */
+export function executeRagQueryAndExpectSuccess(
+  binPath: string,
+  args: string[],
+  cwd: string
+): {
+  result: CliResult;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  output: any;
+} {
+  const { result, parsed } = executeAndParseYaml(binPath, args, { cwd });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const output = parsed as any;
+
+  // Common assertions for successful RAG query
+  if (result.status !== 0) {
+    throw new Error(`Expected status 0, got ${result.status}`);
+  }
+
+  if (output.status !== 'success') {
+    throw new Error(`Expected success status, got ${output.status}`);
+  }
+
+  return { result, output };
+}
