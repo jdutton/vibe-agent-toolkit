@@ -39,6 +39,8 @@ export interface CrawlOptions {
  * Options for ResourceRegistry constructor.
  */
 export interface ResourceRegistryOptions {
+  /** Root directory for resources (optional) */
+  rootDir?: string;
   /** Validate resources when they are added (default: false) */
   validateOnAdd?: boolean;
 }
@@ -82,6 +84,9 @@ export interface RegistryStats {
  * ```
  */
 export class ResourceRegistry implements ResourceCollectionInterface {
+  /** Optional root directory for resources */
+  readonly rootDir?: string;
+
   private readonly resourcesByPath: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesById: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesByName: Map<string, ResourceMetadata[]> = new Map();
@@ -89,7 +94,101 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private readonly validateOnAdd: boolean;
 
   constructor(options?: ResourceRegistryOptions) {
+    if (options?.rootDir !== undefined) {
+      this.rootDir = options.rootDir;
+    }
     this.validateOnAdd = options?.validateOnAdd ?? false;
+  }
+
+  /**
+   * Create an empty registry with a root directory.
+   *
+   * @param rootDir - Root directory for resources
+   * @param options - Additional options
+   * @returns New empty registry
+   *
+   * @example
+   * ```typescript
+   * const registry = ResourceRegistry.empty('/project/docs');
+   * console.log(registry.rootDir); // '/project/docs'
+   * console.log(registry.size()); // 0
+   * ```
+   */
+  static empty(rootDir: string, options?: Omit<ResourceRegistryOptions, 'rootDir'>): ResourceRegistry {
+    return new ResourceRegistry({ ...options, rootDir });
+  }
+
+  /**
+   * Create a registry from an existing array of resources.
+   *
+   * Initializes all indexes (by path, ID, name, checksum) from the provided resources.
+   *
+   * @param rootDir - Root directory for resources
+   * @param resources - Array of resource metadata
+   * @param options - Additional options
+   * @returns New registry with resources
+   *
+   * @example
+   * ```typescript
+   * const resources = [resource1, resource2];
+   * const registry = ResourceRegistry.fromResources('/project', resources);
+   * console.log(`Created registry with ${registry.size()} resources`);
+   * ```
+   */
+  static fromResources(
+    rootDir: string,
+    resources: ResourceMetadata[],
+    options?: Omit<ResourceRegistryOptions, 'rootDir'>,
+  ): ResourceRegistry {
+    const registry = new ResourceRegistry({ ...options, rootDir });
+
+    // Add all resources to indexes
+    for (const resource of resources) {
+      // Add to path index
+      registry.resourcesByPath.set(resource.filePath, resource);
+
+      // Add to ID index
+      registry.resourcesById.set(resource.id, resource);
+
+      // Add to name index
+      const filename = path.basename(resource.filePath);
+      const existingByName = registry.resourcesByName.get(filename) ?? [];
+      registry.resourcesByName.set(filename, [...existingByName, resource]);
+
+      // Add to checksum index
+      const existingByChecksum = registry.resourcesByChecksum.get(resource.checksum) ?? [];
+      registry.resourcesByChecksum.set(resource.checksum, [...existingByChecksum, resource]);
+    }
+
+    return registry;
+  }
+
+  /**
+   * Create a registry by crawling a directory.
+   *
+   * Combines registry creation and directory crawling in a single operation.
+   *
+   * @param crawlOptions - Crawl options including baseDir
+   * @param registryOptions - Additional registry options
+   * @returns New registry with crawled resources
+   *
+   * @example
+   * ```typescript
+   * const registry = await ResourceRegistry.fromCrawl({
+   *   baseDir: '/project/docs',
+   *   include: ['**.md'],
+   *   exclude: ['node_modules'],
+   * });
+   * console.log(`Crawled ${registry.size()} resources`);
+   * ```
+   */
+  static async fromCrawl(
+    crawlOptions: CrawlOptions,
+    registryOptions?: Omit<ResourceRegistryOptions, 'rootDir'>,
+  ): Promise<ResourceRegistry> {
+    const registry = new ResourceRegistry({ ...registryOptions, rootDir: crawlOptions.baseDir });
+    await registry.crawl(crawlOptions);
+    return registry;
   }
 
   /**
