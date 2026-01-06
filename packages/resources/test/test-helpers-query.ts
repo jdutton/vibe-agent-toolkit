@@ -61,28 +61,36 @@ export async function createAndAddTwoResources(
  * Create three test files and add them to the registry.
  *
  * @param tempDir - Temporary directory path
- * @param file1Name - First filename
- * @param file1Content - First file content
- * @param file2Name - Second filename
- * @param file2Content - Second file content
- * @param file3Name - Third filename
- * @param file3Content - Third file content
+ * @param files - Array of [filename, content] tuples for the three files
  * @param registry - ResourceRegistry to add the files to
  * @returns Tuple of the three created resource metadata objects
+ *
+ * @example
+ * ```typescript
+ * const [r1, r2, r3] = await createAndAddThreeResources(
+ *   tempDir,
+ *   [
+ *     ['readme.md', '# README'],
+ *     ['guide.md', '# Guide'],
+ *     ['api.md', '# API']
+ *   ],
+ *   registry
+ * );
+ * ```
  */
 export async function createAndAddThreeResources(
   tempDir: string,
-  file1Name: string,
-  file1Content: string,
-  file2Name: string,
-  file2Content: string,
-  file3Name: string,
-  file3Content: string,
+  files: [string, string][],
   registry: ResourceRegistry
 ): Promise<[ResourceMetadata, ResourceMetadata, ResourceMetadata]> {
-  const resource1 = await createAndAddResource(tempDir, file1Name, file1Content, registry);
-  const resource2 = await createAndAddResource(tempDir, file2Name, file2Content, registry);
-  const resource3 = await createAndAddResource(tempDir, file3Name, file3Content, registry);
+  const [file1, file2, file3] = files;
+  if (!file1 || !file2 || !file3) {
+    throw new Error('createAndAddThreeResources requires exactly 3 file specifications');
+  }
+
+  const resource1 = await createAndAddResource(tempDir, file1[0], file1[1], registry);
+  const resource2 = await createAndAddResource(tempDir, file2[0], file2[1], registry);
+  const resource3 = await createAndAddResource(tempDir, file3[0], file3[1], registry);
   return [resource1, resource2, resource3];
 }
 

@@ -98,6 +98,7 @@ export default [
       'prefer-const': 'error',
       'no-var': 'error',
       'max-depth': ['error', 4],
+      'max-params': ['error', 7], // Matches SonarQube threshold
 
       // Security
       'security/detect-object-injection': 'off',

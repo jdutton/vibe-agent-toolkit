@@ -62,12 +62,11 @@ describe('ResourceQuery filter()', () => {
   it('should support multiple filters', async () => {
     const [resource1, resource2, resource3] = await createAndAddThreeResources(
       suite.tempDir,
-      'readme.md',
-      '# README\n\n[Link](./guide.md)',
-      'guide.md',
-      '# Guide\n\n[Link1](./api.md)\n[Link2](./readme.md)',
-      'api.md',
-      '# API',
+      [
+        ['readme.md', '# README\n\n[Link](./guide.md)'],
+        ['guide.md', '# Guide\n\n[Link1](./api.md)\n[Link2](./readme.md)'],
+        ['api.md', '# API'],
+      ],
       suite.registry
     );
 
@@ -131,12 +130,11 @@ describe('ResourceQuery matchesPattern()', () => {
   it('should filter resources by glob pattern', async () => {
     const [resource1, resource2, resource3] = await createAndAddThreeResources(
       suite.tempDir,
-      'docs/README.md',
-      '# README',
-      'docs/guide.md',
-      '# Guide',
-      'src/index.ts',
-      '// Code',
+      [
+        ['docs/README.md', '# README'],
+        ['docs/guide.md', '# Guide'],
+        ['src/index.ts', '// Code'],
+      ],
       suite.registry
     );
 
@@ -153,12 +151,11 @@ describe('ResourceQuery matchesPattern()', () => {
   it('should support filename patterns', async () => {
     const [resource1, resource2, resource3] = await createAndAddThreeResources(
       suite.tempDir,
-      'README.md',
-      '# README',
-      'guide.md',
-      '# Guide',
-      'test.txt',
-      'Test',
+      [
+        ['README.md', '# README'],
+        ['guide.md', '# Guide'],
+        ['test.txt', 'Test'],
+      ],
       suite.registry
     );
 
@@ -175,12 +172,11 @@ describe('ResourceQuery matchesPattern()', () => {
   it('should combine pattern matching with other operations', async () => {
     const [resource1, resource2, resource3] = await createAndAddThreeResources(
       suite.tempDir,
-      'docs/api.md',
-      '# API\n\n[Link](./guide.md)',
-      'docs/guide.md',
-      '# Guide',
-      'src/index.ts',
-      '// Code',
+      [
+        ['docs/api.md', '# API\n\n[Link](./guide.md)'],
+        ['docs/guide.md', '# Guide'],
+        ['src/index.ts', '// Code'],
+      ],
       suite.registry
     );
 
