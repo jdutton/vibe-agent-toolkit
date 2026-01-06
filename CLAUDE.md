@@ -368,88 +368,70 @@ Only the project owner can approve baseline updates. This is non-negotiable.
 
 ## Testing Conventions
 
-All packages must follow these testing patterns for consistency:
+**CRITICAL**: See [docs/writing-tests.md](docs/writing-tests.md) for comprehensive testing guidance.
 
-### Test File Naming
+**You MUST follow the testing guide when writing ANY tests.** Code duplication in tests will block commits and PR merges.
 
-1. **Unit Tests**: `*.test.ts` or `*.spec.ts`
-   - Location: `test/` directory (NOT co-located with source)
-   - Purpose: Test individual functions/classes in isolation
-   - Mock external dependencies
-   - Fast execution (< 100ms per test)
+### Quick Rules
 
-2. **Integration Tests**: `*.integration.test.ts`
-   - Location: `test/integration/` directory
-   - Purpose: Test multiple modules working together
-   - May use real dependencies (file system, databases)
-   - Medium execution time (< 5s per test)
-   - Run with: `bun test:integration`
+1. **Always extract test helpers early** - After writing 2-3 similar tests, create a `setupXTestSuite()` helper
+2. **Use `normalizePathToForwardSlash()`** - For cross-platform path comparisons on Windows/Unix
+3. **Run `bun run duplication-check`** - Before every commit (CI will fail if duplication detected)
+4. **Zero tolerance for duplication** - Refactor to eliminate, never update the baseline
 
-3. **System Tests**: `*.system.test.ts`
-   - Location: `test/system/` directory
-   - Purpose: End-to-end testing of complete workflows
-   - Use real external services when possible
-   - Longer execution time (< 30s per test)
-   - Run with: `bun test:system`
+### Test Types
 
-### Test Organization Example
+| Type | Location | Command | Speed |
+|------|----------|---------|-------|
+| Unit | `test/*.test.ts` | `bun run test:unit` | < 100ms |
+| Integration | `test/integration/*.integration.test.ts` | `bun run test:integration` | < 5s |
+| System | `test/system/*.system.test.ts` | `bun run test:system` | < 30s |
 
-```
-packages/my-package/
-├── src/
-│   └── utils.ts               # Source code only
-├── test/
-│   ├── utils.test.ts          # Unit tests
-│   ├── integration/
-│   │   └── workflow.integration.test.ts
-│   └── system/
-│       └── e2e.system.test.ts
-└── package.json
-```
+### The Test Suite Helper Pattern (Required)
 
-### Test Standards
+**After writing 2-3 similar describe blocks**, extract a suite helper:
 
-- All tests must be **cross-platform** (Windows, macOS, Linux)
-- Use absolute paths with `path.resolve()` for file operations
-- Clean up temp files/directories in `afterEach` hooks
-- Use descriptive test names: `it('should [expected behavior] when [condition]')`
-- One assertion per test when practical
-- Prefer `toThrow()` over try-catch blocks for error testing
-- **Cross-platform path comparisons**: Use `normalizePathToForwardSlash()` from test-helpers when comparing file paths with directory separators (e.g., `normalizePathToForwardSlash(resource.filePath).includes('/api/')`) to ensure tests pass on both Windows (`\`) and Unix (`/`) systems
-
-### Preventing Test Duplication
-
-**Test code is the most common source of duplication.** Follow these patterns to avoid it:
-
-**1. Extract Test Helpers Early (not after duplication accumulates)**
-- Create `test/test-helpers.ts` when starting a new package
-- Extract patterns after writing 2-3 similar tests (not 10+)
-
-**2. Common Test Helper Patterns**
 ```typescript
-// Factory functions for test data
-export function createTestEntity(overrides?: Partial<Entity>): Entity { ... }
+// test/test-helpers.ts
+export function setupMyTestSuite(testPrefix: string) {
+  const suite = {
+    tempDir: '',
+    registry: null as unknown as MyRegistry,
+    beforeEach: async () => {
+      suite.tempDir = await mkdtemp(join(tmpdir(), testPrefix));
+      suite.registry = new MyRegistry();
+    },
+    afterEach: async () => {
+      await rm(suite.tempDir, { recursive: true, force: true });
+    },
+  };
+  return suite;
+}
 
-// Assertion helpers for common validation patterns
-export async function assertValidation(options: {...}, expectFn: ...) { ... }
+// my-module.test.ts
+const suite = setupMyTestSuite('my-test-');
 
-// Workflow helpers (setup → action → assert)
-export async function setupAndExecute(options: {...}) { ... }
+describe('Feature A', () => {
+  beforeEach(suite.beforeEach);
+  afterEach(suite.afterEach);
+
+  it('should work', () => {
+    // Use suite.tempDir, suite.registry
+  });
+});
 ```
 
-**3. When Writing Tests, Ask:**
-- "Have I written similar setup code before?" → Extract factory function
-- "Am I repeating the same assertions?" → Extract assertion helper
-- "Is this a common workflow?" → Extract workflow helper
+**Why this matters:**
+- ❌ **Without helper**: 8-10 lines duplicated per describe block → 41-62% duplication
+- ✅ **With helper**: 2 lines per describe block → 0% duplication
 
-**4. Review Tests After Writing**
-- After completing a test file, scan for repeated patterns
-- Run `bun run duplication-check` before committing
-- Extract helpers immediately when duplication is detected
-
-**Example from resources package:**
-- ❌ **Before**: 9 duplicates from repeated validation + assertion patterns
-- ✅ **After**: 0 duplicates using `createLink()`, `assertValidation()`, `writeAndParse()` helpers
+See [docs/writing-tests.md](docs/writing-tests.md) for:
+- Complete suite helper examples (resources, RAG, CLI)
+- Factory function patterns
+- Assertion helper patterns
+- Cross-platform path handling
+- When to extract (the 2-3 rule)
+- Anti-patterns to avoid
 
 ### Running Tests
 

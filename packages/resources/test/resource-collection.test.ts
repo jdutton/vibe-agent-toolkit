@@ -1,41 +1,30 @@
-import { promises as fs } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { ResourceCollection } from '../src/resource-collection.js';
-import { ResourceRegistry } from '../src/resource-registry.js';
 
 import { createAndAddResource, createAndAddTwoResources } from './test-helpers-query.js';
+import { setupResourceTestSuite } from './test-helpers.js';
+
+const suite = setupResourceTestSuite('resource-collection-');
 
 describe('ResourceCollection', () => {
-  let tempDir: string;
-  let registry: ResourceRegistry;
-
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(join(tmpdir(), 'resource-collection-'));
-    registry = new ResourceRegistry();
-  });
-
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
-  });
+  beforeEach(suite.beforeEach);
+  afterEach(suite.afterEach);
 
   it('should create collection from array', async () => {
-    const resource = await createAndAddResource(tempDir, 'test.md', '# Test', registry);
+    const resource = await createAndAddResource(suite.tempDir, 'test.md', '# Test', suite.registry);
     const collection = new ResourceCollection([resource]);
     expect(collection.size()).toBe(1);
   });
 
   it('should report size correctly', async () => {
     const [resource1, resource2] = await createAndAddTwoResources(
-      tempDir,
+      suite.tempDir,
       'file1.md',
       '# File 1',
       'file2.md',
       '# File 2',
-      registry
+      suite.registry
     );
     const collection = new ResourceCollection([resource1, resource2]);
     expect(collection.size()).toBe(2);
@@ -47,19 +36,19 @@ describe('ResourceCollection', () => {
   });
 
   it('should detect when not empty', async () => {
-    const resource = await createAndAddResource(tempDir, 'test.md', '# Test', registry);
+    const resource = await createAndAddResource(suite.tempDir, 'test.md', '# Test', suite.registry);
     const collection = new ResourceCollection([resource]);
     expect(collection.isEmpty()).toBe(false);
   });
 
   it('should return all resources', async () => {
     const [resource1, resource2] = await createAndAddTwoResources(
-      tempDir,
+      suite.tempDir,
       'file1.md',
       '# File 1',
       'file2.md',
       '# File 2',
-      registry
+      suite.registry
     );
     const collection = new ResourceCollection([resource1, resource2]);
     const all = collection.getAllResources();
@@ -70,8 +59,8 @@ describe('ResourceCollection', () => {
 
   it('should detect duplicates by checksum', async () => {
     // Create two files with identical content
-    const resource1 = await createAndAddResource(tempDir, 'file1.md', '# Same', registry);
-    const resource2 = await createAndAddResource(tempDir, 'file2.md', '# Same', registry);
+    const resource1 = await createAndAddResource(suite.tempDir, 'file1.md', '# Same', suite.registry);
+    const resource2 = await createAndAddResource(suite.tempDir, 'file2.md', '# Same', suite.registry);
 
     const collection = new ResourceCollection([resource1, resource2]);
     const duplicates = collection.getDuplicates();
@@ -84,12 +73,12 @@ describe('ResourceCollection', () => {
 
   it('should return empty array when no duplicates', async () => {
     const [resource1, resource2] = await createAndAddTwoResources(
-      tempDir,
+      suite.tempDir,
       'file1.md',
       '# File 1',
       'file2.md',
       '# File 2',
-      registry
+      suite.registry
     );
     const collection = new ResourceCollection([resource1, resource2]);
     const duplicates = collection.getDuplicates();
@@ -98,9 +87,9 @@ describe('ResourceCollection', () => {
 
   it('should return unique resources by checksum', async () => {
     // Create three files: two with identical content, one unique
-    const resource1 = await createAndAddResource(tempDir, 'file1.md', '# Same', registry);
-    const resource2 = await createAndAddResource(tempDir, 'file2.md', '# Same', registry);
-    const resource3 = await createAndAddResource(tempDir, 'file3.md', '# Different', registry);
+    const resource1 = await createAndAddResource(suite.tempDir, 'file1.md', '# Same', suite.registry);
+    const resource2 = await createAndAddResource(suite.tempDir, 'file2.md', '# Same', suite.registry);
+    const resource3 = await createAndAddResource(suite.tempDir, 'file3.md', '# Different', suite.registry);
 
     const collection = new ResourceCollection([resource1, resource2, resource3]);
     const unique = collection.getUniqueByChecksum();

@@ -1,26 +1,15 @@
-import { promises as fs } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { ResourceQuery } from '../src/resource-query.js';
-import { ResourceRegistry } from '../src/resource-registry.js';
 
-import { createAndAddResource, createAndAddTwoResources, createAndAddThreeResources, createTwoResourcesWithLink } from './test-helpers-query.js';
+import { createAndAddResource, createAndAddThreeResources, createAndAddTwoResources, createTwoResourcesWithLink } from './test-helpers-query.js';
+import { setupResourceTestSuite } from './test-helpers.js';
+
+const suite = setupResourceTestSuite('resource-query-');
 
 describe('ResourceQuery basic usage', () => {
-  let tempDir: string;
-  let registry: ResourceRegistry;
-
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(join(tmpdir(), 'resource-query-'));
-    registry = new ResourceRegistry();
-  });
-
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
-  });
+  beforeEach(suite.beforeEach);
+  afterEach(suite.afterEach);
 
   it('should create query from array of resources', () => {
     const query = ResourceQuery.from([]);
@@ -28,7 +17,7 @@ describe('ResourceQuery basic usage', () => {
   });
 
   it('should lazily evaluate and return resources', async () => {
-    const resource = await createAndAddResource(tempDir, 'test.md', '# Test', registry);
+    const resource = await createAndAddResource(suite.tempDir, 'test.md', '# Test', suite.registry);
 
     const query = ResourceQuery.from([resource]);
     const results = query.execute();
@@ -38,12 +27,12 @@ describe('ResourceQuery basic usage', () => {
 
   it('should support chaining operations', async () => {
     const [resource1, resource2] = await createAndAddTwoResources(
-      tempDir,
+      suite.tempDir,
       'file1.md',
       '# File 1',
       'file2.md',
       '# File 2',
-      registry
+      suite.registry
     );
 
     const query = ResourceQuery.from([resource1, resource2]);
@@ -56,25 +45,15 @@ describe('ResourceQuery basic usage', () => {
 });
 
 describe('ResourceQuery filter()', () => {
-  let tempDir: string;
-  let registry: ResourceRegistry;
-
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(join(tmpdir(), 'resource-query-filter-'));
-    registry = new ResourceRegistry();
-  });
-
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
-  });
+  beforeEach(suite.beforeEach);
+  afterEach(suite.afterEach);
 
   it('should filter resources by predicate', async () => {
-    const [resource1, resource2] = await createTwoResourcesWithLink(tempDir, registry);
+    const [resource1, resource2] = await createTwoResourcesWithLink(suite.tempDir, suite.registry);
 
-    const query = ResourceQuery.from([resource1, resource2])
-      .filter((r) => r.links.length > 0);
-
-    const results = query.execute();
+    const results = ResourceQuery.from([resource1, resource2])
+      .filter((r) => r.links.length > 0)
+      .execute();
 
     expect(results).toHaveLength(1);
     expect(results[0]).toBe(resource1);
@@ -82,14 +61,14 @@ describe('ResourceQuery filter()', () => {
 
   it('should support multiple filters', async () => {
     const [resource1, resource2, resource3] = await createAndAddThreeResources(
-      tempDir,
+      suite.tempDir,
       'readme.md',
       '# README\n\n[Link](./guide.md)',
       'guide.md',
       '# Guide\n\n[Link1](./api.md)\n[Link2](./readme.md)',
       'api.md',
       '# API',
-      registry
+      suite.registry
     );
 
     const query = ResourceQuery.from([resource1, resource2, resource3])
@@ -103,7 +82,7 @@ describe('ResourceQuery filter()', () => {
   });
 
   it('should return empty array when no resources match', async () => {
-    const resource = await createAndAddResource(tempDir, 'test.md', '# Test', registry);
+    const resource = await createAndAddResource(suite.tempDir, 'test.md', '# Test', suite.registry);
 
     const query = ResourceQuery.from([resource])
       .filter((r) => r.links.length > 10);
@@ -115,20 +94,11 @@ describe('ResourceQuery filter()', () => {
 });
 
 describe('ResourceQuery map()', () => {
-  let tempDir: string;
-  let registry: ResourceRegistry;
-
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(join(tmpdir(), 'resource-query-map-'));
-    registry = new ResourceRegistry();
-  });
-
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
-  });
+  beforeEach(suite.beforeEach);
+  afterEach(suite.afterEach);
 
   it('should transform resources with map', async () => {
-    const resource = await createAndAddResource(tempDir, 'test.md', '# Test', registry);
+    const resource = await createAndAddResource(suite.tempDir, 'test.md', '# Test', suite.registry);
     const originalPath = resource.filePath;
 
     const query = ResourceQuery.from([resource])
@@ -141,7 +111,7 @@ describe('ResourceQuery map()', () => {
   });
 
   it('should support chaining map and filter', async () => {
-    const [resource1, resource2] = await createTwoResourcesWithLink(tempDir, registry);
+    const [resource1, resource2] = await createTwoResourcesWithLink(suite.tempDir, suite.registry);
 
     const query = ResourceQuery.from([resource1, resource2])
       .filter((r) => r.links.length > 0)
@@ -155,28 +125,19 @@ describe('ResourceQuery map()', () => {
 });
 
 describe('ResourceQuery matchesPattern()', () => {
-  let tempDir: string;
-  let registry: ResourceRegistry;
-
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(join(tmpdir(), 'resource-query-pattern-'));
-    registry = new ResourceRegistry();
-  });
-
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
-  });
+  beforeEach(suite.beforeEach);
+  afterEach(suite.afterEach);
 
   it('should filter resources by glob pattern', async () => {
     const [resource1, resource2, resource3] = await createAndAddThreeResources(
-      tempDir,
+      suite.tempDir,
       'docs/README.md',
       '# README',
       'docs/guide.md',
       '# Guide',
       'src/index.ts',
       '// Code',
-      registry
+      suite.registry
     );
 
     const query = ResourceQuery.from([resource1, resource2, resource3])
@@ -191,14 +152,14 @@ describe('ResourceQuery matchesPattern()', () => {
 
   it('should support filename patterns', async () => {
     const [resource1, resource2, resource3] = await createAndAddThreeResources(
-      tempDir,
+      suite.tempDir,
       'README.md',
       '# README',
       'guide.md',
       '# Guide',
       'test.txt',
       'Test',
-      registry
+      suite.registry
     );
 
     const query = ResourceQuery.from([resource1, resource2, resource3])
@@ -213,14 +174,14 @@ describe('ResourceQuery matchesPattern()', () => {
 
   it('should combine pattern matching with other operations', async () => {
     const [resource1, resource2, resource3] = await createAndAddThreeResources(
-      tempDir,
+      suite.tempDir,
       'docs/api.md',
       '# API\n\n[Link](./guide.md)',
       'docs/guide.md',
       '# Guide',
       'src/index.ts',
       '// Code',
-      registry
+      suite.registry
     );
 
     const query = ResourceQuery.from([resource1, resource2, resource3])
@@ -235,26 +196,17 @@ describe('ResourceQuery matchesPattern()', () => {
 });
 
 describe('ResourceQuery toCollection()', () => {
-  let tempDir: string;
-  let registry: ResourceRegistry;
-
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(join(tmpdir(), 'resource-query-collection-'));
-    registry = new ResourceRegistry();
-  });
-
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
-  });
+  beforeEach(suite.beforeEach);
+  afterEach(suite.afterEach);
 
   it('should convert query results to ResourceCollection', async () => {
     const [resource1, resource2] = await createAndAddTwoResources(
-      tempDir,
+      suite.tempDir,
       'file1.md',
       '# File 1',
       'file2.md',
       '# File 2',
-      registry
+      suite.registry
     );
 
     const collection = ResourceQuery.from([resource1, resource2]).toCollection();
@@ -264,7 +216,7 @@ describe('ResourceQuery toCollection()', () => {
   });
 
   it('should create collection from filtered results', async () => {
-    const [resource1, resource2] = await createTwoResourcesWithLink(tempDir, registry);
+    const [resource1, resource2] = await createTwoResourcesWithLink(suite.tempDir, suite.registry);
 
     const collection = ResourceQuery.from([resource1, resource2])
       .filter((r) => r.links.length > 0)
@@ -276,8 +228,8 @@ describe('ResourceQuery toCollection()', () => {
 
   it('should support duplicate detection in collection', async () => {
     // Create two files with identical content
-    const resource1 = await createAndAddResource(tempDir, 'file1.md', '# Same', registry);
-    const resource2 = await createAndAddResource(tempDir, 'file2.md', '# Same', registry);
+    const resource1 = await createAndAddResource(suite.tempDir, 'file1.md', '# Same', suite.registry);
+    const resource2 = await createAndAddResource(suite.tempDir, 'file2.md', '# Same', suite.registry);
 
     const collection = ResourceQuery.from([resource1, resource2]).toCollection();
 

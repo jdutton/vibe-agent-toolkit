@@ -3,13 +3,15 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { writeFile } from 'node:fs/promises';
-import path from 'node:path';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path, { join } from 'node:path';
 
 import type { Assertion } from 'vitest';
 
 import { parseMarkdown } from '../src/link-parser.js';
 import { validateLink } from '../src/link-validator.js';
+import { ResourceRegistry } from '../src/resource-registry.js';
 import type { HeadingNode, ResourceLink, ValidationIssue } from '../src/types.js';
 
 /**
@@ -101,6 +103,61 @@ export function findMonorepoRoot(
  */
 export function normalizePathToForwardSlash(filePath: string): string {
   return filePath.replaceAll('\\', '/');
+}
+
+// ============================================================================
+// Test suite setup helpers
+// ============================================================================
+
+/**
+ * Setup resource test suite with standard lifecycle hooks
+ * Eliminates duplication of beforeEach/afterEach setup across resource tests
+ *
+ * Creates a temporary directory and ResourceRegistry for each test,
+ * and cleans up after each test completes.
+ *
+ * @param testPrefix - Prefix for temp directory (e.g., 'resource-query-')
+ * @returns Object with refs that will be populated during beforeEach
+ *
+ * @example
+ * ```typescript
+ * const suite = setupResourceTestSuite('resource-query-');
+ *
+ * describe('My test suite', () => {
+ *   beforeEach(suite.beforeEach);
+ *   afterEach(suite.afterEach);
+ *
+ *   it('should work', async () => {
+ *     const resource = await createAndAddResource(
+ *       suite.tempDir,
+ *       'test.md',
+ *       '# Test',
+ *       suite.registry
+ *     );
+ *     expect(resource).toBeDefined();
+ *   });
+ * });
+ * ```
+ */
+export function setupResourceTestSuite(testPrefix: string): {
+  tempDir: string;
+  registry: ResourceRegistry;
+  beforeEach: () => Promise<void>;
+  afterEach: () => Promise<void>;
+} {
+  const suite = {
+    tempDir: '',
+    registry: null as unknown as ResourceRegistry,
+    beforeEach: async () => {
+      suite.tempDir = await mkdtemp(join(tmpdir(), testPrefix));
+      suite.registry = new ResourceRegistry();
+    },
+    afterEach: async () => {
+      await rm(suite.tempDir, { recursive: true, force: true });
+    },
+  };
+
+  return suite;
 }
 
 // ============================================================================
