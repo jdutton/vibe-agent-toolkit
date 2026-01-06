@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { runCliCommand } from '../../test-helpers.js';
+import { runCliCommand } from '../test-helpers.js';
 
 // Constants for test fixtures
 const CLAUDE_PLUGIN_DIRNAME = '.claude-plugin';
@@ -16,12 +16,12 @@ const STATUS_SUCCESS = 'status: success';
 const TEST_OWNER_NAME = 'Test Owner';
 const MY_MARKETPLACE_NAME = 'my-marketplace';
 
-// Helper to run audit command
+// Helper to run audit command (top-level command)
 function runAuditCommand(...args: string[]) {
-  return runCliCommand('agent', 'audit', ...args);
+  return runCliCommand('audit', ...args);
 }
 
-describe('agent audit command (integration)', () => {
+describe('audit command (integration)', () => {
   let tempDir: string;
 
   beforeAll(() => {

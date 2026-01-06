@@ -1,5 +1,6 @@
 /**
- * Agent audit command - audits plugins, marketplaces, registries, and Claude Skills
+ * Audit command - audits plugins, marketplaces, registries, and Claude Skills
+ * Top-level command: vat audit [path]
  */
 
 import * as fs from 'node:fs';
@@ -13,15 +14,78 @@ import {
   validateSkill,
   type ValidationResult,
 } from '@vibe-agent-toolkit/runtime-claude-skills';
+import { Command } from 'commander';
 
-import { handleCommandError } from '../../utils/command-error.js';
-import { createLogger } from '../../utils/logger.js';
-import { writeYamlOutput } from '../../utils/output.js';
+import { handleCommandError } from '../utils/command-error.js';
+import { createLogger } from '../utils/logger.js';
+import { writeYamlOutput } from '../utils/output.js';
 
 export interface AuditCommandOptions {
   debug?: boolean;
   recursive?: boolean;
   user?: boolean;
+}
+
+/**
+ * Create audit command
+ * Top-level command: vat audit [path]
+ */
+export function createAuditCommand(): Command {
+  const audit = new Command('audit');
+
+  audit
+    .description('Audit Claude plugins, marketplaces, registries, and skills')
+    .argument('[path]', 'Path to audit (default: current directory)')
+    .option('-r, --recursive', 'Scan directories recursively for all resource types')
+    .option('--user', 'Audit user-level Claude plugins installation (~/.claude/plugins)')
+    .option('--debug', 'Enable debug logging')
+    .action(auditCommand)
+    .addHelpText(
+      'after',
+      `
+Description:
+  Audits Claude plugins, marketplaces, registries, and Claude Skills for
+  quality, correctness, and compatibility. Automatically detects resource
+  type and validates accordingly. Outputs YAML report to stdout,
+  errors/warnings to stderr.
+
+  Supported resource types:
+  - Plugin directories (.claude-plugin/plugin.json)
+  - Marketplace directories (.claude-plugin/marketplace.json)
+  - Registry files (installed_plugins.json, known_marketplaces.json)
+  - Claude Skills (SKILL.md files)
+  - VAT agents (agent.yaml + SKILL.md)
+
+  Path can be: resource directory, registry file, SKILL.md file, or scan directory
+  Default: current directory
+  Use --user to audit user-level installation (~/.claude/plugins) automatically
+
+Validation Checks:
+  Errors (must fix):
+  - Missing or invalid manifests/frontmatter
+  - Schema validation failures
+  - Broken links to other files (Skills only)
+  - Reserved words in names (Skills only)
+  - XML tags in frontmatter fields (Skills only)
+  - Windows-style backslashes in paths (Skills only)
+
+  Warnings (should fix):
+  - Skill exceeds recommended length (>5000 lines)
+  - References console-incompatible tools (Skills only)
+
+Exit Codes:
+  0 - Success  |  1 - Errors found  |  2 - System error
+
+Examples:
+  $ vat audit --user                   # Audit user-level plugins installation
+  $ vat audit                          # Audit current directory
+  $ vat audit ./my-plugin              # Audit plugin directory
+  $ vat audit installed_plugins.json   # Audit registry file
+  $ vat audit ./resources --recursive  # Audit all resources recursively
+`
+    );
+
+  return audit;
 }
 
 /**
