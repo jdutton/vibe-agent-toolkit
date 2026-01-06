@@ -46,12 +46,17 @@ All development tools are in the `packages/dev-tools/src/` directory:
 
 ```bash
 # Development
-bun install          # Install dependencies
-bun run build        # Build all packages
-bun test             # Run unit tests
-bun test:watch       # Watch mode
-bun run lint         # Lint code
-bun run typecheck    # Type checking
+bun install               # Install dependencies
+bun run build             # Build all packages
+bun run lint              # Lint code
+bun run typecheck         # Type checking
+
+# Testing (do NOT use 'bun test' directly)
+vv validate               # Full validation (recommended)
+bun run test:unit         # Unit tests only
+bun run test:watch        # Watch mode for development
+bun run test:integration  # Integration tests
+bun run test:system       # System tests
 
 # Quality Checks
 bun run validate     # Run full validation

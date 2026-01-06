@@ -5,6 +5,8 @@
  * including total chunks, resources, and embedding model information.
  */
 
+import { getTestOutputDir } from '@vibe-agent-toolkit/utils';
+
 import {
   afterAll,
   beforeAll,
@@ -23,12 +25,16 @@ const binPath = getBinPath(import.meta.url);
 describe('RAG stats command (system test)', () => {
   let tempDir: string;
   let projectDir: string;
+  let dbPath: string;
 
   beforeAll(() => {
+    // Use isolated test output directory to avoid conflicts in parallel test execution
+    dbPath = getTestOutputDir('cli', 'system', 'rag-stats-db');
     ({ tempDir, projectDir } = setupIndexedRagTest(
       'vat-rag-stats-test-',
       'test-project',
-      binPath
+      binPath,
+      dbPath
     ));
   });
 
@@ -39,7 +45,7 @@ describe('RAG stats command (system test)', () => {
   it('should show RAG database statistics', () => {
     const { result, parsed } = executeCliAndParseYaml(
       binPath,
-      ['rag', 'stats'],
+      ['rag', 'stats', '--db', dbPath],
       { cwd: projectDir }
     );
 

@@ -5,8 +5,7 @@
  * the vector database and deletes the database directory.
  */
 
-import path from 'node:path';
-
+import { getTestOutputDir } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { executeCliAndParseYaml, fs, getBinPath, setupIndexedRagTest } from './rag-test-setup.js';
@@ -19,13 +18,14 @@ describe('RAG clear command (system test)', () => {
   let dbPath: string;
 
   beforeAll(() => {
+    // Use isolated test output directory to avoid conflicts in parallel test execution
+    dbPath = getTestOutputDir('cli', 'system', 'rag-clear-db');
     ({ tempDir, projectDir } = setupIndexedRagTest(
       'vat-rag-clear-test-',
       'test-project',
-      binPath
+      binPath,
+      dbPath
     ));
-    // Use path.join for cross-platform path handling
-    dbPath = path.join(projectDir, '.rag-db');
   });
 
   afterAll(() => {
@@ -39,7 +39,7 @@ describe('RAG clear command (system test)', () => {
     // Verify database has data
     const { parsed: statsBefore } = executeCliAndParseYaml(
       binPath,
-      ['rag', 'stats'],
+      ['rag', 'stats', '--db', dbPath],
       { cwd: projectDir }
     );
 
@@ -49,7 +49,7 @@ describe('RAG clear command (system test)', () => {
     // Clear database
     const { result, parsed } = executeCliAndParseYaml(
       binPath,
-      ['rag', 'clear'],
+      ['rag', 'clear', '--db', dbPath],
       { cwd: projectDir }
     );
 

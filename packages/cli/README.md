@@ -174,10 +174,10 @@ vat --version  # Shows: 0.1.0-dev (/path/to/vibe-agent-toolkit)
 # Build
 bun run build
 
-# Test
-bun test
-bun test:integration
-bun test:system
+# Test (do NOT use 'bun test' directly)
+bun run test:unit
+bun run test:integration
+bun run test:system
 
 # Prepare binaries after build
 bun run prepare-cli-bin

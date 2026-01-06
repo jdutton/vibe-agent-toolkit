@@ -81,20 +81,20 @@ bun run build
 ### Development
 
 ```bash
-# Run tests
-bun test
+# Run full validation (recommended)
+bunx vv validate
 
-# Run tests in watch mode
-bun test:watch
+# Or run test suites individually:
+bun run test:unit          # Unit tests only
+bun run test:watch         # Watch mode for development
+bun run test:integration   # Integration tests
+bun run test:system        # System/e2e tests
 
 # Lint code
 bun run lint
 
 # Type check
 bun run typecheck
-
-# Run full validation (like CI)
-bunx vv validate
 
 # Validate all markdown links (dogfooding)
 bun run validate-links

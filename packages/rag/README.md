@@ -413,7 +413,7 @@ All schemas are defined with Zod and exported as both TypeScript types and JSON 
 bun run build
 
 # Test
-bun test
+bun run test:unit
 
 # Type check
 bun run typecheck

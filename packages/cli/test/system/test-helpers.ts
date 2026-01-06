@@ -263,20 +263,29 @@ export function executeRagCommandInEmptyProject(
 /**
  * Setup test environment for RAG commands with indexed database
  * Creates temp dir, sets up project, creates markdown files, and indexes them
+ * @param testPrefix - Prefix for temp directory name
+ * @param projectName - Name of test project to create
+ * @param binPath - Path to CLI binary
+ * @param dbPath - Optional isolated database path (recommended for parallel test execution)
  * @returns Object with tempDir, projectDir, and binPath for use in tests
  */
 export function setupIndexedRagTest(
   testPrefix: string,
   projectName: string,
-  binPath: string
+  binPath: string,
+  dbPath?: string
 ): { tempDir: string; projectDir: string } {
   const tempDir = createTestTempDir(testPrefix);
   const projectDir = setupRagTestProject(tempDir, projectName);
 
-  // Index the files
+  // Index the files with optional isolated database path
+  const indexArgs = dbPath
+    ? ['rag', 'index', projectDir, '--db', dbPath]
+    : ['rag', 'index', projectDir];
+
   const { result } = executeAndParseYaml(
     binPath,
-    ['rag', 'index', projectDir],
+    indexArgs,
     { cwd: projectDir }
   );
 

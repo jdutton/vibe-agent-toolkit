@@ -5,6 +5,8 @@
  * for relevant content chunks based on semantic similarity.
  */
 
+import { getTestOutputDir } from '@vibe-agent-toolkit/utils';
+
 import {
   afterAll,
   beforeAll,
@@ -23,12 +25,16 @@ const binPath = getBinPath(import.meta.url);
 describe('RAG query command (system test)', () => {
   let tempDir: string;
   let projectDir: string;
+  let dbPath: string;
 
   beforeAll(() => {
+    // Use isolated test output directory to avoid conflicts in parallel test execution
+    dbPath = getTestOutputDir('cli', 'system', 'rag-query-db');
     ({ tempDir, projectDir } = setupIndexedRagTest(
       'vat-rag-query-test-',
       'test-project',
-      binPath
+      binPath,
+      dbPath
     ));
   });
 
@@ -39,7 +45,7 @@ describe('RAG query command (system test)', () => {
   it('should query RAG database and return results', () => {
     const { result, parsed } = executeCliAndParseYaml(
       binPath,
-      ['rag', 'query', 'documentation'],
+      ['rag', 'query', 'documentation', '--db', dbPath],
       { cwd: projectDir }
     );
 
@@ -72,7 +78,7 @@ describe('RAG query command (system test)', () => {
   it('should limit results with --limit flag', () => {
     const { result, parsed } = executeCliAndParseYaml(
       binPath,
-      ['rag', 'query', 'documentation', '--limit', '2'],
+      ['rag', 'query', 'documentation', '--limit', '2', '--db', dbPath],
       { cwd: projectDir }
     );
 

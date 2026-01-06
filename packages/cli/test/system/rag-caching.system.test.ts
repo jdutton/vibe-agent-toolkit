@@ -4,6 +4,8 @@
  * Tests that RAG correctly detects unchanged files and skips re-indexing.
  */
 
+import { getTestOutputDir } from '@vibe-agent-toolkit/utils';
+
 import {
   afterAll,
   beforeAll,
@@ -21,12 +23,16 @@ const binPath = getBinPath(import.meta.url);
 describe('RAG caching and incremental updates (system test)', () => {
   let tempDir: string;
   let projectDir: string;
+  let dbPath: string;
 
   beforeAll(() => {
+    // Use isolated test output directory to avoid conflicts in parallel test execution
+    dbPath = getTestOutputDir('cli', 'system', 'rag-caching-db');
     ({ tempDir, projectDir } = setupIndexedRagTest(
       'vat-rag-caching-test-',
       'test-project',
-      binPath
+      binPath,
+      dbPath
     ));
   });
 
@@ -39,7 +45,7 @@ describe('RAG caching and incremental updates (system test)', () => {
     // First re-index should skip all files (no changes)
     const { result: firstResult, parsed: firstParsed } = executeCliAndParseYaml(
       binPath,
-      ['rag', 'index'],
+      ['rag', 'index', '--db', dbPath],
       { cwd: projectDir }
     );
 
@@ -56,7 +62,7 @@ describe('RAG caching and incremental updates (system test)', () => {
     // Second re-index should also skip all files
     const { result: secondResult, parsed: secondParsed } = executeCliAndParseYaml(
       binPath,
-      ['rag', 'index'],
+      ['rag', 'index', '--db', dbPath],
       { cwd: projectDir }
     );
 
@@ -79,7 +85,7 @@ describe('RAG caching and incremental updates (system test)', () => {
     // Index it
     const { parsed: firstParsed } = executeCliAndParseYaml(
       binPath,
-      ['rag', 'index'],
+      ['rag', 'index', '--db', dbPath],
       { cwd: projectDir }
     );
 
@@ -88,7 +94,7 @@ describe('RAG caching and incremental updates (system test)', () => {
     // Re-index without changes - should skip
     const { parsed: secondParsed } = executeCliAndParseYaml(
       binPath,
-      ['rag', 'index'],
+      ['rag', 'index', '--db', dbPath],
       { cwd: projectDir }
     );
 
@@ -101,7 +107,7 @@ describe('RAG caching and incremental updates (system test)', () => {
     // Re-index - should detect change and update
     const { parsed: thirdParsed } = executeCliAndParseYaml(
       binPath,
-      ['rag', 'index'],
+      ['rag', 'index', '--db', dbPath],
       { cwd: projectDir }
     );
 

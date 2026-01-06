@@ -579,13 +579,13 @@ The package includes comprehensive tests:
 
 ```bash
 # Unit tests
-bun test
+bun run test:unit
 
 # Integration tests
-bun test:integration
+bun run test:integration
 
 # Watch mode
-bun test:watch
+bun run test:watch
 ```
 
 ## License

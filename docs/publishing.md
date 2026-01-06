@@ -267,7 +267,7 @@ jobs:
         run: bun run build
 
       - name: Run tests
-        run: bun test
+        run: bunx vv validate
 
       - name: Publish to npm
         run: |

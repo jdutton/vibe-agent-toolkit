@@ -452,22 +452,29 @@ export async function setupAndExecute(options: {...}) { ... }
 
 ### Running Tests
 
+**CRITICAL: Do NOT use `bun test` in this repository.** It runs tests incorrectly and will fail.
+
+**Why `bun test` doesn't work:**
+- `bun test` runs vitest but ignores `vitest.config.ts`
+- This causes system tests to run together with unit/integration tests
+- Tests interfere with each other when run in a single process
+- Results in false failures despite tests being properly isolated
+
+**Use these commands instead:**
+
 ```bash
-# Unit tests only (default)
-bun test
+# Recommended: Full validation (what CI uses)
+vv validate
 
-# Watch mode for development
-bun test:watch
-
-# Integration tests
-bun test:integration
-
-# System tests
-bun test:system
-
-# All tests with coverage
-bun test:coverage
+# Or run test suites individually:
+bun run test:unit          # Unit tests only
+bun run test:watch         # Watch mode for development
+bun run test:integration   # Integration tests only
+bun run test:system        # System tests only (e2e)
+bun run test:coverage      # All tests with coverage report
 ```
+
+**For AI assistants:** Never suggest `bun test`. Always use `vv validate` or `bun run test:*` commands.
 
 ## Development Workflow
 
@@ -476,7 +483,7 @@ bun test:coverage
 Before committing, ensure:
 1. `bun run lint` passes with zero warnings
 2. `bun run typecheck` passes
-3. `bun run test` passes
+3. `vv validate` passes (or `bun run test:unit && bun run test:integration && bun run test:system`)
 4. `bun run duplication-check` passes (**MUST pass - see Critical Duplication Policy above**)
 5. All files formatted correctly (enforced by .editorconfig)
 
