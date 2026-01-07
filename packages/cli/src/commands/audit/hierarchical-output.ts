@@ -1,5 +1,4 @@
 import * as os from 'node:os';
-import * as path from 'node:path';
 
 import type { ValidationIssue, ValidationResult } from '@vibe-agent-toolkit/runtime-claude-skills';
 import { toUnixPath } from '@vibe-agent-toolkit/utils';
@@ -58,7 +57,9 @@ function parsePathStructure(filePath: string): {
   plugin?: string;
   skill: string;
 } {
-  const parts = filePath.split(path.sep);
+  // Normalize to forward slashes for cross-platform parsing
+  const normalizedPath = toUnixPath(filePath);
+  const parts = normalizedPath.split('/');
 
   // Find key indices
   const marketplacesIdx = parts.indexOf('marketplaces');
@@ -93,7 +94,7 @@ function parsePathStructure(filePath: string): {
   }
 
   // Fallback: use directory name before SKILL.md
-  const skill = parts[parts.length - 2] ?? 'unknown';
+  const skill = parts.at(-2) ?? 'unknown';
   return { skill };
 }
 
