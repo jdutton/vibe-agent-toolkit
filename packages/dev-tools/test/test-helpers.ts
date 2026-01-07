@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
-import { normalizePath } from '@vibe-agent-toolkit/utils';
+import { normalizePath, toUnixPath } from '@vibe-agent-toolkit/utils';
 
 export interface TestTempDirOptions {
   prefix?: string;
@@ -22,8 +22,8 @@ export function createTestTempDir(options: TestTempDirOptions = {}): string {
 
 export function cleanupTestTempDir(dir: string): void {
   // Security: Ensure the directory is actually in the system temp directory
-  const normalizedDir = normalizePath(dir);
-  const normalizedTempBase = normalizePath(tmpdir());
+  const normalizedDir = toUnixPath(normalizePath(dir));
+  const normalizedTempBase = toUnixPath(normalizePath(tmpdir()));
 
   if (!normalizedDir.startsWith(normalizedTempBase)) {
     throw new Error(`Security: Refusing to delete directory outside temp: ${dir}`);

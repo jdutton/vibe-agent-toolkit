@@ -66,6 +66,7 @@ export default [
     rules: {
       // Local rules - agentic code safety
       'local/no-child-process-execSync': 'error',
+      'local/no-path-startswith': 'error',
 
       // TypeScript
       'no-unused-vars': 'off', // Use @typescript-eslint/no-unused-vars instead

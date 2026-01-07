@@ -2,6 +2,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 
 import type { ValidationIssue, ValidationResult } from '@vibe-agent-toolkit/runtime-claude-skills';
+import { toUnixPath } from '@vibe-agent-toolkit/utils';
 
 export interface HierarchicalOutput {
   marketplaces: MarketplaceGroup[];
@@ -34,8 +35,8 @@ function replaceHomeDir(filePath: string): string {
   const homeDir = os.homedir();
 
   // Normalize both paths to forward slashes for comparison
-  const normalizedFilePath = filePath.replaceAll('\\', '/');
-  const normalizedHomeDir = homeDir.replaceAll('\\', '/');
+  const normalizedFilePath = toUnixPath(filePath);
+  const normalizedHomeDir = toUnixPath(homeDir);
 
   if (normalizedFilePath.startsWith(normalizedHomeDir)) {
     // Replace using original paths to preserve platform separators in output

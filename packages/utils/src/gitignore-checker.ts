@@ -8,6 +8,8 @@ import path from 'node:path';
 
 import ignore, { type Ignore } from 'ignore';
 
+import { toUnixPath } from './path-utils.js';
+
 /**
  * Find the git repository root by walking up from the given directory.
  *
@@ -51,7 +53,10 @@ export function loadGitignoreRules(gitRoot: string, baseDir?: string): Ignore | 
   let currentDir = path.resolve(baseDir ?? gitRoot);
   const resolvedGitRoot = path.resolve(gitRoot);
 
-  while (currentDir.startsWith(resolvedGitRoot)) {
+  // Normalize for cross-platform path comparison
+  const normalizedGitRoot = toUnixPath(resolvedGitRoot);
+
+  while (toUnixPath(currentDir).startsWith(normalizedGitRoot)) {
     dirsToCheck.unshift(currentDir);
     if (currentDir === resolvedGitRoot) {
       break;
