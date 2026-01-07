@@ -28,10 +28,17 @@ export interface SkillEntry {
 
 /**
  * Replace home directory with ~ for cleaner paths
+ * Normalizes paths for cross-platform comparison (handles Windows backslashes)
  */
 function replaceHomeDir(filePath: string): string {
   const homeDir = os.homedir();
-  if (filePath.startsWith(homeDir)) {
+
+  // Normalize both paths to forward slashes for comparison
+  const normalizedFilePath = filePath.replaceAll('\\', '/');
+  const normalizedHomeDir = homeDir.replaceAll('\\', '/');
+
+  if (normalizedFilePath.startsWith(normalizedHomeDir)) {
+    // Replace using original paths to preserve platform separators in output
     return filePath.replace(homeDir, '~');
   }
   return filePath;
