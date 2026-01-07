@@ -97,22 +97,22 @@ export function getRelativePath(from: string, to: string): string {
 }
 
 /**
- * Convert a path to Unix-style forward slashes
+ * Convert a path to forward slashes
  *
- * Useful for glob pattern matching, which expects forward slashes.
- * On Windows, path.resolve() and path.normalize() return backslashes,
- * but glob matchers like picomatch expect forward slashes by default.
+ * Windows accepts both forward slashes and backslashes as path separators.
+ * This function normalizes all paths to use forward slashes for consistency.
+ * Useful for glob pattern matching, cross-platform comparisons, and string operations.
  *
  * @param p - Path to convert
  * @returns Path with forward slashes
  *
  * @example
- * toUnixPath('C:\\Users\\docs\\README.md')
+ * toForwardSlash('C:\\Users\\docs\\README.md')
  * // Returns: 'C:/Users/docs/README.md'
  *
- * toUnixPath('/project/docs/README.md')
- * // Returns: '/project/docs/README.md' (unchanged on Unix)
+ * toForwardSlash('/project/docs/README.md')
+ * // Returns: '/project/docs/README.md' (unchanged)
  */
-export function toUnixPath(p: string): string {
+export function toForwardSlash(p: string): string {
   return p.replaceAll('\\', '/');
 }

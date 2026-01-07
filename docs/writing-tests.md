@@ -7,7 +7,7 @@
 **When writing ANY new test file:**
 1. Create `test/test-helpers.ts` if it doesn't exist
 2. After writing 2-3 similar tests, extract a `setupXTestSuite()` helper
-3. Use `normalizePathToForwardSlash()` for cross-platform path comparisons
+3. Use `toForwardSlash()` from `@vibe-agent-toolkit/utils` for cross-platform path comparisons
 4. Run `bun run duplication-check` before committing
 
 ## Test File Organization
@@ -260,38 +260,27 @@ export async function createAndAddResource(
 
 **CRITICAL**: Path comparisons must work on Windows (`\`) and Unix (`/`).
 
-**Always use `normalizePathToForwardSlash()` when comparing paths**:
+**Always use `toForwardSlash()` from utils when comparing paths**:
 
 ```typescript
 // ❌ WRONG - fails on Windows
 expect(resource.filePath.includes('/docs/')).toBe(true);
 
 // ✅ CORRECT - works everywhere
-import { normalizePathToForwardSlash } from './test-helpers.js';
-expect(normalizePathToForwardSlash(resource.filePath).includes('/docs/')).toBe(true);
+import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+expect(toForwardSlash(resource.filePath).includes('/docs/')).toBe(true);
 ```
 
-**Helper implementation** (add to `test/test-helpers.ts`):
+**Why this works**: Windows accepts both forward slashes and backslashes as path separators.
+`toForwardSlash()` normalizes all paths to use forward slashes for consistent string comparisons.
 
+**Example**:
 ```typescript
-/**
- * Normalize file path to use forward slashes
- *
- * Converts Windows backslashes to forward slashes for consistent
- * path comparisons. This ensures code works consistently on both
- * Windows (which uses \) and Unix-like systems (which use /).
- *
- * @example
- * ```typescript
- * // Windows path: "docs\\api\\guide.md"
- * // Unix path: "docs/api/guide.md"
- * // Both normalize to: "docs/api/guide.md"
- * expect(normalizePathToForwardSlash(resource.filePath)).toContain('/api/')
- * ```
- */
-export function normalizePathToForwardSlash(filePath: string): string {
-  return filePath.replaceAll('\\', '/');
-}
+// Windows path: "docs\\api\\guide.md"
+// Unix path: "docs/api/guide.md"
+// Both normalize to: "docs/api/guide.md"
+import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+expect(toForwardSlash(resource.filePath)).toContain('/api/')
 ```
 
 ### Path Construction
@@ -417,7 +406,7 @@ expect(resource.filePath.includes('/docs/')).toBe(true);
 
 ```typescript
 // GOOD - Works everywhere
-expect(normalizePathToForwardSlash(resource.filePath)).toContain('/docs/');
+expect(toForwardSlash(resource.filePath)).toContain('/docs/');
 ```
 
 ### ❌ Don't: Write 10 tests before extracting
@@ -445,7 +434,7 @@ When writing tests:
 
 - [ ] Created `test/test-helpers.ts` for the package
 - [ ] Extracted `setupXTestSuite()` helper after 2-3 similar describe blocks
-- [ ] Used `normalizePathToForwardSlash()` for path comparisons
+- [ ] Used `toForwardSlash()` from utils for path comparisons
 - [ ] Created factory functions for common test entities
 - [ ] Extracted assertion helpers for repeated validation patterns
 - [ ] Ran `bun run duplication-check` before committing

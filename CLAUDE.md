@@ -375,7 +375,7 @@ Only the project owner can approve baseline updates. This is non-negotiable.
 ### Quick Rules
 
 1. **Always extract test helpers early** - After writing 2-3 similar tests, create a `setupXTestSuite()` helper
-2. **Use `normalizePathToForwardSlash()`** - For cross-platform path comparisons on Windows/Unix
+2. **Use `toForwardSlash()` from `@vibe-agent-toolkit/utils`** - For cross-platform path comparisons on Windows/Unix (production and tests)
 3. **Run `bun run duplication-check`** - Before every commit (CI will fail if duplication detected)
 4. **Zero tolerance for duplication** - Refactor to eliminate, never update the baseline
 

@@ -3,7 +3,7 @@
  *
  * Security and Cross-Platform Compatibility Rules:
  * - no-child-process-execSync: Enforce safeExecSync() instead of execSync() (security + cross-platform)
- * - no-path-startswith: Enforce normalizePathToForwardSlash() before path.startsWith() (cross-platform)
+ * - no-path-startswith: Enforce toForwardSlash() before path.startsWith() (cross-platform)
  *
  * ## Why Custom Rules?
  *

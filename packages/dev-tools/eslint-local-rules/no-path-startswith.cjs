@@ -1,16 +1,17 @@
 /**
- * ESLint rule to enforce using normalizePathToForwardSlash() before path.startsWith()
+ * ESLint rule to enforce using toForwardSlash() before path.startsWith()
  *
  * Cross-platform path comparisons fail on Windows when mixing backslashes and forward slashes.
- * This rule enforces using the normalizePathToForwardSlash() helper for consistent behavior.
+ * This rule enforces using toForwardSlash() from @vibe-agent-toolkit/utils for consistent behavior.
  *
  * @example
  * // ❌ BAD - fails on Windows
  * if (pluginDir.startsWith(marketplaceDir)) { ... }
  *
  * // ✅ GOOD - works cross-platform
- * const normalizedPlugin = normalizePathToForwardSlash(pluginDir);
- * const normalizedMarketplace = normalizePathToForwardSlash(marketplaceDir);
+ * import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+ * const normalizedPlugin = toForwardSlash(pluginDir);
+ * const normalizedMarketplace = toForwardSlash(marketplaceDir);
  * if (normalizedPlugin.startsWith(normalizedMarketplace)) { ... }
  */
 
@@ -67,7 +68,7 @@ module.exports = {
     },
     messages: {
       useNormalizeHelper:
-        'Use normalizePathToForwardSlash() before path.startsWith() for cross-platform compatibility. ' +
+        'Use toForwardSlash() from @vibe-agent-toolkit/utils before path.startsWith() for cross-platform compatibility. ' +
         'Direct string comparison fails on Windows with mixed separators.',
     },
     schema: [],

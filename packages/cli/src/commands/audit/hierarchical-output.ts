@@ -1,7 +1,7 @@
 import * as os from 'node:os';
 
 import type { ValidationIssue, ValidationResult } from '@vibe-agent-toolkit/runtime-claude-skills';
-import { toUnixPath } from '@vibe-agent-toolkit/utils';
+import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 export interface HierarchicalOutput {
   marketplaces: MarketplaceGroup[];
@@ -34,8 +34,8 @@ function replaceHomeDir(filePath: string): string {
   const homeDir = os.homedir();
 
   // Normalize both paths to forward slashes for comparison
-  const normalizedFilePath = toUnixPath(filePath);
-  const normalizedHomeDir = toUnixPath(homeDir);
+  const normalizedFilePath = toForwardSlash(filePath);
+  const normalizedHomeDir = toForwardSlash(homeDir);
 
   if (normalizedFilePath.startsWith(normalizedHomeDir)) {
     // Replace using original paths to preserve platform separators in output
@@ -58,7 +58,7 @@ function parsePathStructure(filePath: string): {
   skill: string;
 } {
   // Normalize to forward slashes for cross-platform parsing
-  const normalizedPath = toUnixPath(filePath);
+  const normalizedPath = toForwardSlash(filePath);
   const parts = normalizedPath.split('/');
 
   // Find key indices

@@ -2,7 +2,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { getRelativePath, isAbsolutePath, normalizePath, toAbsolutePath, toUnixPath } from '../src/path-utils.js';
+import { getRelativePath, isAbsolutePath, normalizePath, toAbsolutePath, toForwardSlash } from '../src/path-utils.js';
 
 describe('path-utils', () => {
   const TEST_PROJECT_PATH = '/project';
@@ -154,34 +154,34 @@ describe('path-utils', () => {
     });
   });
 
-  describe('toUnixPath', () => {
+  describe('toForwardSlash', () => {
     it('should convert Windows backslashes to forward slashes', () => {
-      const result = toUnixPath(String.raw`C:\Users\docs\README.md`);
+      const result = toForwardSlash(String.raw`C:\Users\docs\README.md`);
       expect(result).toBe('C:/Users/docs/README.md');
     });
 
     it('should leave forward slashes unchanged', () => {
-      const result = toUnixPath('/project/docs/README.md');
+      const result = toForwardSlash('/project/docs/README.md');
       expect(result).toBe('/project/docs/README.md');
     });
 
     it('should handle mixed separators', () => {
-      const result = toUnixPath(String.raw`C:\Users/docs\README.md`);
+      const result = toForwardSlash(String.raw`C:\Users/docs\README.md`);
       expect(result).toBe('C:/Users/docs/README.md');
     });
 
     it('should handle paths with multiple consecutive backslashes', () => {
-      const result = toUnixPath(String.raw`C:\\Users\\docs\\README.md`);
+      const result = toForwardSlash(String.raw`C:\\Users\\docs\\README.md`);
       expect(result).toBe('C://Users//docs//README.md');
     });
 
     it('should handle empty string', () => {
-      const result = toUnixPath('');
+      const result = toForwardSlash('');
       expect(result).toBe('');
     });
 
     it('should handle UNC paths on Windows', () => {
-      const result = toUnixPath(String.raw`\\server\share\file.md`);
+      const result = toForwardSlash(String.raw`\\server\share\file.md`);
       expect(result).toBe('//server/share/file.md');
     });
   });
