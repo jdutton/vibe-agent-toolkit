@@ -1,7 +1,9 @@
+
 /* eslint-disable security/detect-non-literal-fs-filename -- Test files use controlled temp directories */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { validate } from '../../src/validators/unified-validator.js';
@@ -103,7 +105,7 @@ describe('validate (unified validator)', () => {
 		it('should return error for directory without .claude-plugin', async () => {
 			const tempDir = getTempDir();
 			const emptyDir = path.join(tempDir, 'empty-dir');
-			fs.mkdirSync(emptyDir, { recursive: true });
+			mkdirSyncReal(emptyDir, { recursive: true });
 
 			const result = await validate(emptyDir);
 

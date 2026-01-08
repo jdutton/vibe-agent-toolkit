@@ -1,22 +1,10 @@
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { crawlDirectory, crawlDirectorySync } from '../src/file-crawler.js';
-
-/**
- * Get normalized temp directory path (handles Windows short paths)
- */
-function normalizedTmpdir(): string {
-  try {
-    return realpathSync.native(tmpdir());
-  } catch {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tmpdir() is from Node.js os module, safe
-    return realpathSync(tmpdir());
-  }
-}
+import { mkdirSyncReal, normalizedTmpdir } from '../src/path-utils.js';
 
 describe('file-crawler', () => {
   let testDir: string;
@@ -45,21 +33,21 @@ describe('file-crawler', () => {
     writeFileSync(path.join(testDir, 'package.json'), '{}');
 
     // docs directory
-    mkdirSync(path.join(testDir, 'docs'));
+    mkdirSyncReal(path.join(testDir, 'docs'));
     writeFileSync(path.join(testDir, 'docs', 'guide.md'), '# Guide');
     writeFileSync(path.join(testDir, 'docs', 'api.md'), '# API');
 
     // docs/advanced subdirectory
-    mkdirSync(path.join(testDir, 'docs', 'advanced'));
+    mkdirSyncReal(path.join(testDir, 'docs', 'advanced'));
     writeFileSync(path.join(testDir, 'docs', 'advanced', 'performance.md'), '# Performance');
 
     // src directory
-    mkdirSync(path.join(testDir, 'src'));
+    mkdirSyncReal(path.join(testDir, 'src'));
     writeFileSync(path.join(testDir, 'src', 'index.ts'), '// code');
     writeFileSync(path.join(testDir, 'src', 'utils.ts'), '// utils');
 
     // node_modules (should be excluded by default)
-    mkdirSync(path.join(testDir, 'node_modules'));
+    mkdirSyncReal(path.join(testDir, 'node_modules'));
     writeFileSync(path.join(testDir, 'node_modules', 'package.md'), '# Should be excluded');
     /* eslint-enable security/detect-non-literal-fs-filename */
   }
@@ -146,8 +134,8 @@ describe('file-crawler', () => {
 
     it('should handle empty directory', () => {
       const emptyDir = path.join(testDir, 'empty');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is controlled temp directory
-      mkdirSync(emptyDir);
+       
+      mkdirSyncReal(emptyDir);
 
       const files = crawlDirectorySync({
         baseDir: emptyDir,
@@ -334,8 +322,8 @@ describe('file-crawler', () => {
       createTestStructure();
 
       // Create .git directory to make it a git repo
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is controlled temp directory
-      mkdirSync(path.join(testDir, '.git'));
+       
+      mkdirSyncReal(path.join(testDir, '.git'));
 
       // Create .gitignore file
       const gitignorePath = path.join(testDir, '.gitignore');
@@ -356,8 +344,8 @@ describe('file-crawler', () => {
       createTestStructure();
 
       // Create .git directory
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is controlled temp directory
-      mkdirSync(path.join(testDir, '.git'));
+       
+      mkdirSyncReal(path.join(testDir, '.git'));
 
       // Create .gitignore file
       const gitignorePath = path.join(testDir, '.gitignore');

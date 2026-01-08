@@ -1,8 +1,9 @@
+
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code using temp directories */
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -25,7 +26,7 @@ describe('agent-discovery', () => {
     originalCwd = process.cwd();
 
     // Create temp directory for test
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'agent-discovery-test-'));
+    tempDir = await fs.mkdtemp(path.join(normalizedTmpdir(), 'agent-discovery-test-'));
     process.chdir(tempDir);
   });
 

@@ -1,3 +1,6 @@
+
+import path from 'node:path';
+
 /**
  * Integration tests for ResourceRegistry
  *
@@ -5,7 +8,6 @@
  * using real test fixtures.
  */
 
-import path from 'node:path';
 
 import { describe, expect, it, beforeEach } from 'vitest';
 

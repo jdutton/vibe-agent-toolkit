@@ -1,8 +1,7 @@
 import { promises as fs } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { ResourceCollection } from '../../src/resource-collection.js';
@@ -14,7 +13,7 @@ describe('Resource Collection System - End to End', () => {
   let registry: ResourceRegistry;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(join(tmpdir(), 'e2e-collections-'));
+    tempDir = await fs.mkdtemp(join(normalizedTmpdir(), 'e2e-collections-'));
     registry = new ResourceRegistry();
 
     // Create test directory structure

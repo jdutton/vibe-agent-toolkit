@@ -1,7 +1,9 @@
+
 /* eslint-disable security/detect-non-literal-fs-filename -- test file uses controlled temp directory */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect } from 'vitest';
 
 import {
@@ -139,7 +141,7 @@ describe('link validation', () => {
 
   it('should handle absolute links to rootDir', async () => {
     const docsDir = path.join(getTempDir(), 'docs');
-    fs.mkdirSync(docsDir, { recursive: true });
+    mkdirSyncReal(docsDir, { recursive: true });
     fs.writeFileSync(path.join(docsDir, 'reference.md'), '# Reference');
 
     const skillPath = path.join(getTempDir(), 'SKILL.md');

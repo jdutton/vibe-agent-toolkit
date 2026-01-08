@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+
 import { formatDuration, handleCommandError } from '../../src/utils/command-error.js';
 import type { Logger } from '../../src/utils/logger.js';
 

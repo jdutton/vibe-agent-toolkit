@@ -3,11 +3,10 @@
 /* eslint-disable security/detect-unsafe-regex */
 // Simple semver validation regex for test purposes only
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-import { normalizePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizePath, normalizedTmpdir, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 export interface TestTempDirOptions {
   prefix?: string;
@@ -15,7 +14,7 @@ export interface TestTempDirOptions {
 
 export function createTestTempDir(options: TestTempDirOptions = {}): string {
   const prefix = options.prefix ?? 'vat-test-';
-  const tempBase = tmpdir();
+  const tempBase = normalizedTmpdir();
   const tempDir = mkdtempSync(join(tempBase, prefix));
   return resolve(tempDir);
 }
@@ -23,7 +22,7 @@ export function createTestTempDir(options: TestTempDirOptions = {}): string {
 export function cleanupTestTempDir(dir: string): void {
   // Security: Ensure the directory is actually in the system temp directory
   const normalizedDir = toForwardSlash(normalizePath(dir));
-  const normalizedTempBase = toForwardSlash(normalizePath(tmpdir()));
+  const normalizedTempBase = toForwardSlash(normalizePath(normalizedTmpdir()));
 
   if (!normalizedDir.startsWith(normalizedTempBase)) {
     throw new Error(`Security: Refusing to delete directory outside temp: ${dir}`);
@@ -48,7 +47,7 @@ export function createMockPackageJson(
 ): string {
   // Ensure directory exists with normalized path
   const normalizedDir = resolve(dir);
-  mkdirSync(normalizedDir, { recursive: true });
+  mkdirSyncReal(normalizedDir, { recursive: true });
 
   const packageJson = {
     name: options.name,

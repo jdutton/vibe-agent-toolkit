@@ -1,7 +1,7 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import { join } from 'node:path';
 
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { runCliCommand } from '../../test-helpers.js';
@@ -10,7 +10,7 @@ describe('agent validate command (integration)', () => {
   let tempDir: string;
 
   beforeAll(() => {
-    tempDir = fs.mkdtempSync(join(os.tmpdir(), 'vat-agent-validate-'));
+    tempDir = fs.mkdtempSync(join(normalizedTmpdir(), 'vat-agent-validate-'));
   });
 
   afterAll(() => {

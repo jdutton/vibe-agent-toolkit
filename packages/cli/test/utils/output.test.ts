@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+
 import { writeYamlOutput, flushStdout } from '../../src/utils/output.js';
 
 describe('output utilities', () => {

@@ -1,7 +1,9 @@
+
 /* eslint-disable security/detect-non-literal-fs-filename -- Test helpers using temp directories */
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
 import { expect } from 'vitest';
 
 import { type ValidationResult } from '../src/validator/agent-validator.js';
@@ -126,7 +128,7 @@ export function createTestAgent(
   additionalFiles?: Record<string, string>
 ): string {
   const agentDir = path.join(tempDir, dirName);
-  fs.mkdirSync(agentDir, { recursive: true });
+  mkdirSyncReal(agentDir, { recursive: true });
 
   // Create additional files first (may include nested directories)
   if (additionalFiles) {
@@ -134,7 +136,7 @@ export function createTestAgent(
       const fullPath = path.join(agentDir, filePath);
       const dir = path.dirname(fullPath);
       if (dir !== agentDir) {
-        fs.mkdirSync(dir, { recursive: true });
+        mkdirSyncReal(dir, { recursive: true });
       }
       fs.writeFileSync(fullPath, content);
     }

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
+
 import { AgentMetadataSchema } from '../src/metadata';
 
 const TEST_AGENT_NAME = 'test-agent';

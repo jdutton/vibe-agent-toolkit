@@ -1,8 +1,9 @@
+
 /* eslint-disable security/detect-non-literal-fs-filename -- test helpers use controlled temp directories */
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { mkdirSyncReal,normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, expect } from 'vitest';
 import type { z } from 'zod';
 
@@ -17,7 +18,7 @@ export function setupTempDir(prefix: string): { getTempDir: () => string } {
   let tempDir: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), prefix));
   });
 
   afterEach(() => {
@@ -202,7 +203,7 @@ export function createTestPlugin(
 	const pluginDir = path.join(baseDir, pluginName);
 	const claudePluginDir = path.join(pluginDir, CLAUDE_PLUGIN_DIR);
 
-	fs.mkdirSync(claudePluginDir, { recursive: true });
+	mkdirSyncReal(claudePluginDir, { recursive: true });
 
 	const pluginJsonPath = path.join(claudePluginDir, 'plugin.json');
 	fs.writeFileSync(pluginJsonPath, JSON.stringify(pluginData, null, 2));
@@ -222,7 +223,7 @@ export function createTestMarketplace(
 	const marketplaceDir = path.join(baseDir, marketplaceName);
 	const claudePluginDir = path.join(marketplaceDir, CLAUDE_PLUGIN_DIR);
 
-	fs.mkdirSync(claudePluginDir, { recursive: true });
+	mkdirSyncReal(claudePluginDir, { recursive: true });
 
 	const marketplaceJsonPath = path.join(claudePluginDir, 'marketplace.json');
 	fs.writeFileSync(
@@ -245,7 +246,7 @@ export function createAmbiguousDirectory(
 ): string {
 	const ambiguousDir = path.join(baseDir, dirName);
 	const claudePluginDir = path.join(ambiguousDir, CLAUDE_PLUGIN_DIR);
-	fs.mkdirSync(claudePluginDir, { recursive: true });
+	mkdirSyncReal(claudePluginDir, { recursive: true });
 
 	// Create both plugin.json and marketplace.json
 	fs.writeFileSync(

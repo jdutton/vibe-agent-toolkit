@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
+
 import { ResourceQuery } from '../src/resource-query.js';
 
 import { createAndAddResource, createAndAddThreeResources, createAndAddTwoResources, createTwoResourcesWithLink } from './test-helpers-query.js';

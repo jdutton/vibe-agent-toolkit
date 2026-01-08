@@ -7,9 +7,9 @@
 
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import { join } from 'node:path';
 
+import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
 
 /**
@@ -34,7 +34,7 @@ export function parseYamlOutput(stdout: string): Record<string, unknown> {
  */
 export function createTempProject(baseTempDir: string, name: string): string {
   const projectDir = join(baseTempDir, name);
-  fs.mkdirSync(projectDir);
+  mkdirSyncReal(projectDir);
   return projectDir;
 }
 
@@ -43,7 +43,7 @@ export function createTempProject(baseTempDir: string, name: string): string {
  */
 export function setupProjectRoot(projectDir: string, config?: string): void {
   // Create .git to mark as project root
-  fs.mkdirSync(join(projectDir, '.git'));
+  mkdirSyncReal(join(projectDir, '.git'));
 
   if (config) {
     fs.writeFileSync(join(projectDir, 'vibe-agent-toolkit.config.yaml'), config);
@@ -56,7 +56,7 @@ export function setupProjectRoot(projectDir: string, config?: string): void {
 export function createMarkdownFile(dir: string, filename: string, content: string): void {
   const docsDir = join(dir, 'docs');
   if (!fs.existsSync(docsDir)) {
-    fs.mkdirSync(docsDir, { recursive: true });
+    mkdirSyncReal(docsDir, { recursive: true });
   }
   fs.writeFileSync(join(docsDir, filename), content);
 }
@@ -78,7 +78,7 @@ export function setupTestProject(
   setupProjectRoot(projectDir, options.config);
 
   if (options.withDocs) {
-    fs.mkdirSync(join(projectDir, 'docs'));
+    mkdirSyncReal(join(projectDir, 'docs'));
   }
 
   return projectDir;
@@ -88,7 +88,7 @@ export function setupTestProject(
  * Create a temporary directory for tests
  */
 export function createTestTempDir(prefix: string): string {
-  return fs.mkdtempSync(join(os.tmpdir(), prefix));
+  return fs.mkdtempSync(join(normalizedTmpdir(), prefix));
 }
 
 /**

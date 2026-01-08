@@ -1,3 +1,4 @@
+
 /**
  * Tests for agent-runner utility
  *
@@ -9,9 +10,9 @@
  */
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as agentRunner from '../../src/utils/agent-runner.js';
@@ -60,7 +61,7 @@ describe('agent-runner', () => {
     process.env = { ...originalEnv };
 
     // Create temp directory structure for test agent
-    tempDir = await mkdtemp(join(tmpdir(), 'agent-runner-test-'));
+    tempDir = await mkdtemp(join(normalizedTmpdir(), 'agent-runner-test-'));
     manifestPath = join(tempDir, 'agent.yaml');
 
     // Create prompts directory and files

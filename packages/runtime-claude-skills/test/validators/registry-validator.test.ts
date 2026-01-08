@@ -1,3 +1,4 @@
+
 /* eslint-disable sonarjs/no-duplicate-string -- Test descriptions naturally repeat */
 /* eslint-disable security/detect-non-literal-fs-filename -- Test files use controlled temp directories */
 import * as fs from 'node:fs';

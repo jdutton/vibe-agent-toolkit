@@ -1,11 +1,11 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code using temp directories */
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { copyDirectory } from '../src/fs-utils.js';
+import { normalizedTmpdir } from '../src/path-utils.js';
 
 import { setupNestedDirectory } from './test-helpers.js';
 
@@ -17,7 +17,7 @@ describe('fs-utils', () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'fs-utils-test-'));
+    tempDir = await fs.mkdtemp(path.join(normalizedTmpdir(), 'fs-utils-test-'));
   });
 
   afterEach(async () => {

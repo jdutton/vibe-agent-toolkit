@@ -1,10 +1,11 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- test file uses controlled temp directory */
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+
 
 import { scan } from '../src/scanners/local-scanner.js';
 
@@ -12,7 +13,7 @@ describe('scan', () => {
   let tempDir: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'discovery-test-'));
+    tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'discovery-test-'));
   });
 
   afterEach(() => {

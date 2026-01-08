@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+
 import { ResourceRegistrySchema } from '../src/resource-registry';
 
 describe('ResourceRegistrySchema', () => {

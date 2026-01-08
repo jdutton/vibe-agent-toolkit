@@ -6,10 +6,10 @@
 import type { SpawnSyncReturns } from 'node:child_process';
 import { spawnSync as nodeSpawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import { dirname as pathDirname, join as pathJoin, resolve as pathResolve } from 'node:path';
 import { fileURLToPath as urlFileURLToPath } from 'node:url';
 
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
 
 // Re-export commonly used functions
@@ -40,7 +40,7 @@ export function getWrapperPath(testFileUrl: string): string {
  * Automatically generates a unique directory name
  */
 export function createTestTempDir(prefix: string): string {
-  return fs.mkdtempSync(pathJoin(os.tmpdir(), prefix));
+  return fs.mkdtempSync(pathJoin(normalizedTmpdir(), prefix));
 }
 
 /**

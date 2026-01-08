@@ -1,8 +1,9 @@
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+
 
 import { prepareBinaries } from '../src/prepare-bin.js';
 
@@ -12,7 +13,7 @@ describe('prepareBinaries', () => {
   let tempDir: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'prepare-bin-test-'));
+    tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'prepare-bin-test-'));
   });
 
   afterEach(() => {

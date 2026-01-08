@@ -1,7 +1,9 @@
+
 /* eslint-disable security/detect-non-literal-fs-filename -- test helpers use controlled temp directories */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { detectResourceFormat } from '../../src/validators/format-detection.js';
@@ -38,7 +40,7 @@ describe('detectResourceFormat', () => {
 		it('should detect directory without .claude-plugin as unknown', async () => {
 			const tempDir = getTempDir();
 			const emptyDir = path.join(tempDir, 'empty');
-			fs.mkdirSync(emptyDir);
+			mkdirSyncReal(emptyDir);
 
 			const result = await detectResourceFormat(emptyDir);
 
@@ -53,7 +55,7 @@ describe('detectResourceFormat', () => {
 			const tempDir = getTempDir();
 			const marketplaceDir = path.join(tempDir, TEST_MARKETPLACE_NAME);
 			const claudePluginDir = path.join(marketplaceDir, CLAUDE_PLUGIN_DIR);
-			fs.mkdirSync(claudePluginDir, { recursive: true });
+			mkdirSyncReal(claudePluginDir, { recursive: true });
 
 			const marketplaceData = {
 				id: TEST_MARKETPLACE_NAME,
@@ -79,7 +81,7 @@ describe('detectResourceFormat', () => {
 			const tempDir = getTempDir();
 			const colocatedDir = path.join(tempDir, 'colocated-marketplace');
 			const claudePluginDir = path.join(colocatedDir, CLAUDE_PLUGIN_DIR);
-			fs.mkdirSync(claudePluginDir, { recursive: true });
+			mkdirSyncReal(claudePluginDir, { recursive: true });
 
 			// Create plugin.json
 			const pluginData = {
@@ -222,7 +224,7 @@ describe('detectResourceFormat', () => {
 
 			const tempDir = getTempDir();
 			const restrictedDir = path.join(tempDir, 'restricted');
-			fs.mkdirSync(restrictedDir);
+			mkdirSyncReal(restrictedDir);
 			fs.chmodSync(restrictedDir, 0o000);
 
 			try {

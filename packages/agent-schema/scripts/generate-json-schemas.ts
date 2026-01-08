@@ -6,10 +6,11 @@
  * documentation generators, and other non-TypeScript consumers.
  */
 
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
 // Import all Zod schemas
@@ -26,7 +27,7 @@ const __dirname = dirname(__filename);
 const SCHEMAS_DIR = join(__dirname, '..', 'schemas');
 
 // Ensure schemas directory exists
-mkdirSync(SCHEMAS_DIR, { recursive: true });
+mkdirSyncReal(SCHEMAS_DIR, { recursive: true });
 
 /**
  * Write JSON Schema to file

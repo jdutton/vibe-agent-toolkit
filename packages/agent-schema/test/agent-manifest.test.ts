@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+
 import { AgentManifestSchema } from '../src/agent-manifest';
 
 const ANTHROPIC_PROVIDER = 'anthropic';

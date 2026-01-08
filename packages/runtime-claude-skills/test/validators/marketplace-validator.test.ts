@@ -1,8 +1,10 @@
+
 /* eslint-disable sonarjs/no-duplicate-string -- Test literals are descriptive, duplication acceptable */
 /* eslint-disable security/detect-non-literal-fs-filename -- test helpers use controlled temp directories */
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { validateMarketplace } from '../../src/validators/marketplace-validator.js';
@@ -200,7 +202,7 @@ function createTestMarketplace(
 	const marketplaceDir = `${baseDir}/${marketplaceName}`;
 	const claudePluginDir = `${marketplaceDir}/.claude-plugin`;
 
-	fs.mkdirSync(claudePluginDir, { recursive: true });
+	mkdirSyncReal(claudePluginDir, { recursive: true });
 
 	const marketplaceJsonPath = path.join(claudePluginDir, 'marketplace.json');
 	fs.writeFileSync(marketplaceJsonPath, JSON.stringify(marketplaceData, null, 2));
@@ -218,7 +220,7 @@ function createTestMarketplaceWithInvalidJson(
 	const marketplaceDir = `${baseDir}/invalid-json-marketplace`;
 	const claudePluginDir = `${marketplaceDir}/.claude-plugin`;
 
-	fs.mkdirSync(claudePluginDir, { recursive: true });
+	mkdirSyncReal(claudePluginDir, { recursive: true });
 
 	const marketplaceJsonPath = path.join(claudePluginDir, 'marketplace.json');
 	fs.writeFileSync(marketplaceJsonPath, invalidJsonContent);

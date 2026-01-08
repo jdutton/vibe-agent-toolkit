@@ -1,8 +1,9 @@
+
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import fs from 'node:fs/promises';
-import os from 'node:os';
 import path from 'node:path';
 
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildClaudeSkill } from '../src/builder.js';
@@ -21,7 +22,7 @@ describe('buildClaudeSkill', () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'claude-skill-test-'));
+    tempDir = await fs.mkdtemp(path.join(normalizedTmpdir(), 'claude-skill-test-'));
   });
 
   afterEach(async () => {

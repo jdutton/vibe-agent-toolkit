@@ -1,10 +1,10 @@
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { findGitRoot, isGitignored, loadGitignoreRules } from '../src/gitignore-checker.js';
+import { mkdirSyncReal, normalizedTmpdir } from '../src/path-utils.js';
 
 // Test constants
 const GITIGNORE_FILENAME = '.gitignore';
@@ -16,12 +16,12 @@ describe('gitignore-checker', () => {
 
   beforeEach(() => {
     // Create temp directory structure with git repo
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'gitignore-test-'));
+    tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'gitignore-test-'));
     gitRoot = tempDir;
 
     // Create .git directory
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
-    fs.mkdirSync(path.join(gitRoot, '.git'));
+     
+    mkdirSyncReal(path.join(gitRoot, '.git'));
   });
 
   afterEach(() => {
@@ -53,7 +53,7 @@ describe('gitignore-checker', () => {
     });
 
     it('should return null when not in a git repository', () => {
-      const nonGitDir = fs.mkdtempSync(path.join(os.tmpdir(), 'non-git-'));
+      const nonGitDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'non-git-'));
       try {
         const result = findGitRoot(nonGitDir);
         expect(result).toBeNull();
@@ -128,7 +128,7 @@ describe('gitignore-checker', () => {
 
   describe('isGitignored', () => {
     it('should return false for files not in a git repository', () => {
-      const nonGitDir = fs.mkdtempSync(path.join(os.tmpdir(), 'non-git-'));
+      const nonGitDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'non-git-'));
       try {
         const filePath = path.join(nonGitDir, 'test.txt');
         const result = isGitignored(filePath);

@@ -1,11 +1,10 @@
-/* eslint-disable security/detect-non-literal-fs-filename */
+ 
 // Test file - paths are controlled by test code, not user input
 
-import { mkdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { safeExecSync } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safeExecSync } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { createTestTempDir, cleanupTestTempDir, createMockPackageJson } from './test-helpers.js';
@@ -29,9 +28,9 @@ describe('validate-version', () => {
 
   function setupPackages(versions: { pkg1: string; pkg2: string }): void {
     const packagesDir = join(tempDir, 'packages');
-    mkdirSync(packagesDir, { recursive: true });
-    mkdirSync(join(packagesDir, 'pkg1'), { recursive: true });
-    mkdirSync(join(packagesDir, 'pkg2'), { recursive: true });
+    mkdirSyncReal(packagesDir, { recursive: true });
+    mkdirSyncReal(join(packagesDir, 'pkg1'), { recursive: true });
+    mkdirSyncReal(join(packagesDir, 'pkg2'), { recursive: true });
     createMockPackageJson(join(packagesDir, 'pkg1'), { name: 'pkg1', version: versions.pkg1 });
     createMockPackageJson(join(packagesDir, 'pkg2'), { name: 'pkg2', version: versions.pkg2 });
   }

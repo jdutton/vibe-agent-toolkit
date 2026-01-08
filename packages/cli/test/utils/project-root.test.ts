@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { findProjectRoot } from '../../src/utils/project-root.js';
@@ -10,7 +10,7 @@ describe('findProjectRoot', () => {
   let tempDir: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vat-test-'));
+    tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'vat-test-'));
   });
 
   afterEach(() => {

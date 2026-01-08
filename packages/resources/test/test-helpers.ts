@@ -1,12 +1,13 @@
+
 /**
  * Shared test helpers for resources package tests
  */
 
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import path, { join } from 'node:path';
 
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import type { Assertion } from 'vitest';
 
 import { parseMarkdown } from '../src/link-parser.js';
@@ -123,7 +124,7 @@ export function setupResourceTestSuite(testPrefix: string): {
     tempDir: '',
     registry: null as unknown as ResourceRegistry,
     beforeEach: async () => {
-      suite.tempDir = await mkdtemp(join(tmpdir(), testPrefix));
+      suite.tempDir = await mkdtemp(join(normalizedTmpdir(), testPrefix));
       suite.registry = new ResourceRegistry();
     },
     afterEach: async () => {
