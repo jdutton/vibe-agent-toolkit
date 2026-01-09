@@ -319,6 +319,10 @@ vibe-agent-toolkit/
 └── [config files]    # Root-level configuration
 ```
 
+### Test Fixtures Convention
+
+Test data for system/integration tests belongs in `packages/X/test/test-fixtures/` directories. These fixtures are committed to git (needed for CI) but excluded from resource validation scanning. Use this for real-world test data like cloned plugin installations, not for simple unit test mocks.
+
 ## Coding Standards
 
 ### TypeScript Configuration
