@@ -5,6 +5,7 @@ import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 export interface HierarchicalOutput {
   marketplaces: MarketplaceGroup[];
+  cachedPlugins: PluginGroup[];
   standalonePlugins: PluginGroup[];
   standaloneSkills: SkillEntry[];
 }
@@ -19,11 +20,14 @@ export interface PluginGroup {
   skills: SkillEntry[];
 }
 
+export type CacheStatus = 'stale' | 'orphaned' | 'fresh';
+
 export interface SkillEntry {
   name: string;
   path: string;
   status: 'success' | 'warning' | 'error';
   issues: ValidationIssue[];
+  cacheStatus?: CacheStatus;
 }
 
 /**
@@ -56,10 +60,14 @@ function parsePathStructure(filePath: string): {
   marketplace?: string;
   plugin?: string;
   skill: string;
+  isCached: boolean;
 } {
   // Normalize to forward slashes for cross-platform parsing
   const normalizedPath = toForwardSlash(filePath);
   const parts = normalizedPath.split('/');
+
+  // Detect if this is a cached resource
+  const isCached = parts.includes('cache');
 
   // Find key indices
   const marketplacesIdx = parts.indexOf('marketplaces');
@@ -72,7 +80,7 @@ function parsePathStructure(filePath: string): {
     const plugin = parts[marketplacesIdx + 2];
     const skill = parts[skillsIdx + 1];
     if (marketplace !== undefined && plugin !== undefined && skill !== undefined) {
-      return { marketplace, plugin, skill };
+      return { marketplace, plugin, skill, isCached };
     }
   }
 
@@ -81,7 +89,7 @@ function parsePathStructure(filePath: string): {
     const plugin = parts[skillsIdx - 1]; // Plugin name is before /skills/
     const skill = parts[skillsIdx + 1];
     if (plugin !== undefined && skill !== undefined) {
-      return { plugin, skill };
+      return { plugin, skill, isCached };
     }
   }
 
@@ -89,13 +97,13 @@ function parsePathStructure(filePath: string): {
   if (pluginsIdx >= 0) {
     const skill = parts[pluginsIdx + 1];
     if (skill !== undefined) {
-      return { skill };
+      return { skill, isCached };
     }
   }
 
   // Fallback: use directory name before SKILL.md
   const skill = parts.at(-2) ?? 'unknown';
-  return { skill };
+  return { skill, isCached };
 }
 
 /**
@@ -122,6 +130,20 @@ function addToMarketplaceMap(
 }
 
 /**
+ * Add skill entry to cached plugin map
+ */
+function addToCachedPluginMap(
+  cachedPluginsMap: Map<string, SkillEntry[]>,
+  plugin: string,
+  entry: SkillEntry
+): void {
+  if (!cachedPluginsMap.has(plugin)) {
+    cachedPluginsMap.set(plugin, []);
+  }
+  cachedPluginsMap.get(plugin)?.push(entry);
+}
+
+/**
  * Add skill entry to standalone plugin map
  */
 function addToStandalonePluginMap(
@@ -136,52 +158,141 @@ function addToStandalonePluginMap(
 }
 
 /**
- * Build hierarchical output structure from validation results.
+ * Filter out duplicate cache results that match their source
  *
- * Groups skills by:
- * 1. Marketplace -> Plugin -> Skills (for marketplace-installed plugins)
- * 2. Standalone Plugins -> Skills (for non-marketplace plugins)
- * 3. Standalone Skills (for skills without plugins)
+ * Suppresses cache entries when:
+ * - A matching source (marketplace/plugin) exists
+ * - Same validation status (success/warning/error)
+ * - Same issues (count and content)
  *
- * Only includes skills with issues (terse principle).
- * Replaces home directory with ~ for cleaner display.
+ * Keeps cache entries when:
+ * - No matching source found (orphaned cache)
+ * - Different validation status or issues (stale/different)
  *
- * @param results - Validation results from audit command
- * @returns Hierarchical structure for display
+ * @returns Filtered results and cache status map
  */
-export function buildHierarchicalOutput(results: ValidationResult[]): HierarchicalOutput {
-  const marketplacesMap = new Map<string, Map<string, SkillEntry[]>>();
-  const standalonePluginsMap = new Map<string, SkillEntry[]>();
-  const standaloneSkills: SkillEntry[] = [];
+function filterCacheDuplicates(results: ValidationResult[]): {
+  filtered: ValidationResult[];
+  cacheStatusMap: Map<string, 'stale' | 'orphaned' | 'fresh'>;
+} {
+  const sourceBySkillName = new Map<string, ValidationResult>();
+  const cacheResults: ValidationResult[] = [];
+  const nonCacheResults: ValidationResult[] = [];
+  const cacheStatusMap = new Map<string, 'stale' | 'orphaned' | 'fresh'>();
 
+  // First pass: categorize results and build source index
   for (const result of results) {
-    // Only include results with issues (terse principle)
-    if (result.status === 'success') {
-      continue;
-    }
+    const { skill, isCached } = parsePathStructure(result.path);
 
-    const { marketplace, plugin, skill } = parsePathStructure(result.path);
-
-    const entry: SkillEntry = {
-      name: skill,
-      path: replaceHomeDir(result.path),
-      status: result.status,
-      issues: result.issues,
-    };
-
-    if (marketplace !== undefined && plugin !== undefined) {
-      // Marketplace plugin skill
-      addToMarketplaceMap(marketplacesMap, marketplace, plugin, entry);
-    } else if (plugin === undefined) {
-      // Standalone skill
-      standaloneSkills.push(entry);
+    if (isCached) {
+      cacheResults.push(result);
     } else {
-      // Standalone plugin skill
-      addToStandalonePluginMap(standalonePluginsMap, plugin, entry);
+      nonCacheResults.push(result);
+      // Index source results by skill name for matching
+      sourceBySkillName.set(skill, result);
     }
   }
 
-  // Convert maps to arrays
+  // Second pass: filter cache results and track status
+  const filteredCache: ValidationResult[] = [];
+  for (const cacheResult of cacheResults) {
+    const { skill } = parsePathStructure(cacheResult.path);
+    const sourceResult = sourceBySkillName.get(skill);
+
+    if (!sourceResult) {
+      // Orphaned cache - no matching source, keep it
+      filteredCache.push(cacheResult);
+      cacheStatusMap.set(cacheResult.path, 'orphaned');
+      continue;
+    }
+
+    // Check if cache and source have identical validation results
+    const statusMatches = cacheResult.status === sourceResult.status;
+    const issuesMatch =
+      cacheResult.issues.length === sourceResult.issues.length &&
+      cacheResult.issues.every((issue, idx) =>
+        issue.code === sourceResult.issues[idx]?.code &&
+        issue.severity === sourceResult.issues[idx]?.severity
+      );
+
+    if (!statusMatches || !issuesMatch) {
+      // Different validation results - keep both (stale or different)
+      filteredCache.push(cacheResult);
+      cacheStatusMap.set(cacheResult.path, 'stale');
+    } else {
+      // Fresh cache - matches source, will be suppressed
+      cacheStatusMap.set(cacheResult.path, 'fresh');
+    }
+    // If they match exactly, suppress the cache copy (don't add to filteredCache)
+  }
+
+  return {
+    filtered: [...nonCacheResults, ...filteredCache],
+    cacheStatusMap,
+  };
+}
+
+/**
+ * Create skill entry from validation result
+ */
+function createSkillEntry(
+  result: ValidationResult,
+  cacheStatusMap: Map<string, CacheStatus>
+): SkillEntry {
+  const { skill, isCached } = parsePathStructure(result.path);
+
+  const entry: SkillEntry = {
+    name: skill,
+    path: replaceHomeDir(result.path),
+    status: result.status,
+    issues: result.issues,
+  };
+
+  // Add cache status if this is a cached resource
+  if (isCached) {
+    const cacheStatus = cacheStatusMap.get(result.path);
+    if (cacheStatus !== undefined) {
+      entry.cacheStatus = cacheStatus;
+    }
+  }
+
+  return entry;
+}
+
+interface CategoryMaps {
+  marketplacesMap: Map<string, Map<string, SkillEntry[]>>;
+  cachedPluginsMap: Map<string, SkillEntry[]>;
+  standalonePluginsMap: Map<string, SkillEntry[]>;
+  standaloneSkills: SkillEntry[];
+}
+
+/**
+ * Categorize entry into appropriate map
+ */
+function categorizeEntry(
+  entry: SkillEntry,
+  marketplace: string | undefined,
+  plugin: string | undefined,
+  isCached: boolean,
+  maps: CategoryMaps
+): void {
+  if (marketplace !== undefined && plugin !== undefined) {
+    addToMarketplaceMap(maps.marketplacesMap, marketplace, plugin, entry);
+  } else if (plugin === undefined) {
+    maps.standaloneSkills.push(entry);
+  } else if (isCached) {
+    addToCachedPluginMap(maps.cachedPluginsMap, plugin, entry);
+  } else {
+    addToStandalonePluginMap(maps.standalonePluginsMap, plugin, entry);
+  }
+}
+
+/**
+ * Convert marketplace map to array structure
+ */
+function convertMarketplacesMapToArray(
+  marketplacesMap: Map<string, Map<string, SkillEntry[]>>
+): MarketplaceGroup[] {
   const marketplaces: MarketplaceGroup[] = [];
   for (const [marketplaceName, pluginsMap] of marketplacesMap) {
     const plugins: PluginGroup[] = [];
@@ -190,11 +301,67 @@ export function buildHierarchicalOutput(results: ValidationResult[]): Hierarchic
     }
     marketplaces.push({ name: marketplaceName, plugins });
   }
+  return marketplaces;
+}
 
-  const standalonePlugins: PluginGroup[] = [];
-  for (const [pluginName, skills] of standalonePluginsMap) {
-    standalonePlugins.push({ name: pluginName, skills });
+/**
+ * Convert plugin map to array structure
+ */
+function convertPluginMapToArray(pluginMap: Map<string, SkillEntry[]>): PluginGroup[] {
+  const plugins: PluginGroup[] = [];
+  for (const [pluginName, skills] of pluginMap) {
+    plugins.push({ name: pluginName, skills });
+  }
+  return plugins;
+}
+
+/**
+ * Build hierarchical output structure from validation results.
+ *
+ * Groups skills by:
+ * 1. Marketplace -> Plugin -> Skills (for marketplace-installed plugins)
+ * 2. Standalone Plugins -> Skills (for non-marketplace plugins)
+ * 3. Standalone Skills (for skills without plugins)
+ *
+ * By default, only includes skills with issues (terse principle).
+ * With verbose=true, includes all scanned skills regardless of status.
+ * Replaces home directory with ~ for cleaner display.
+ *
+ * @param results - Validation results from audit command
+ * @param verbose - If true, include all results; if false, only show results with issues
+ * @returns Hierarchical structure for display
+ */
+export function buildHierarchicalOutput(results: ValidationResult[], verbose: boolean = false): HierarchicalOutput {
+  // Filter out cache duplicates that match their source
+  const { filtered: filteredResults, cacheStatusMap } = filterCacheDuplicates(results);
+
+  const marketplacesMap = new Map<string, Map<string, SkillEntry[]>>();
+  const cachedPluginsMap = new Map<string, SkillEntry[]>();
+  const standalonePluginsMap = new Map<string, SkillEntry[]>();
+  const standaloneSkills: SkillEntry[] = [];
+
+  const maps: CategoryMaps = {
+    marketplacesMap,
+    cachedPluginsMap,
+    standalonePluginsMap,
+    standaloneSkills,
+  };
+
+  for (const result of filteredResults) {
+    // Only include results with issues (terse principle), unless verbose mode
+    if (!verbose && result.status === 'success') {
+      continue;
+    }
+
+    const { marketplace, plugin, isCached } = parsePathStructure(result.path);
+    const entry = createSkillEntry(result, cacheStatusMap);
+    categorizeEntry(entry, marketplace, plugin, isCached, maps);
   }
 
-  return { marketplaces, standalonePlugins, standaloneSkills };
+  return {
+    marketplaces: convertMarketplacesMapToArray(marketplacesMap),
+    cachedPlugins: convertPluginMapToArray(cachedPluginsMap),
+    standalonePlugins: convertPluginMapToArray(standalonePluginsMap),
+    standaloneSkills,
+  };
 }

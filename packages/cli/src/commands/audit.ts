@@ -26,6 +26,7 @@ export interface AuditCommandOptions {
   debug?: boolean;
   recursive?: boolean;
   user?: boolean;
+  verbose?: boolean; // Commander sets this for --verbose
 }
 
 /**
@@ -40,6 +41,7 @@ export function createAuditCommand(): Command {
     .argument('[path]', 'Path to audit (default: current directory)')
     .option('-r, --recursive', 'Scan directories recursively for all resource types')
     .option('--user', 'Audit user-level Claude plugins installation (~/.claude/plugins)')
+    .option('--verbose', 'Show all scanned resources, including those without issues')
     .option('--debug', 'Enable debug logging')
     .action(auditCommand)
     .addHelpText(
@@ -132,7 +134,9 @@ export async function auditCommand(
 
     // Use hierarchical output for --user flag, flat output otherwise
     if (options.user) {
-      const hierarchical = buildHierarchicalOutput(results);
+      // Filter to only include claude-skill type for hierarchical output
+      const skillResults = results.filter((r: ValidationResult) => r.type === 'claude-skill');
+      const hierarchical = buildHierarchicalOutput(skillResults, options.verbose ?? false);
       const summary = calculateHierarchicalSummary(results, hierarchical, startTime);
       writeYamlOutput(summary);
       logHierarchicalSummary(results, hierarchical, logger);
@@ -270,6 +274,59 @@ function logIssues(
   }
 }
 
+/**
+ * Handle file entry during directory scan
+ */
+async function handleFileEntry(
+  entry: { name: string },
+  fullPath: string,
+  logger: ReturnType<typeof createLogger>
+): Promise<ValidationResult | null> {
+  // Check for registry files
+  if (entry.name === 'installed_plugins.json' || entry.name === 'known_marketplaces.json') {
+    logger.debug(`Validating registry: ${fullPath}`);
+    return validate(fullPath);
+  }
+
+  // Check for SKILL.md
+  if (entry.name === 'SKILL.md') {
+    logger.debug(`Validating Claude Skill: ${fullPath}`);
+    return validateSkill({ skillPath: fullPath });
+  }
+
+  return null;
+}
+
+/**
+ * Handle directory entry during directory scan
+ */
+async function handleDirectoryEntry(
+  fullPath: string,
+  recursive: boolean,
+  logger: ReturnType<typeof createLogger>
+): Promise<ValidationResult[]> {
+  const fs = await import('node:fs/promises');
+  const results: ValidationResult[] = [];
+
+  // Check if directory contains a plugin or marketplace
+  const claudePluginDir = path.join(fullPath, '.claude-plugin');
+  const hasClaudePlugin = await fs.access(claudePluginDir).then(() => true).catch(() => false);
+
+  if (hasClaudePlugin) {
+    logger.debug(`Validating resource directory: ${fullPath}`);
+    const result = await validate(fullPath);
+    results.push(result);
+  }
+
+  // Recurse into subdirectories (both plugin/marketplace dirs and regular dirs)
+  if (recursive) {
+    const subResults = await scanDirectory(fullPath, recursive, logger);
+    results.push(...subResults);
+  }
+
+  return results;
+}
+
 async function scanDirectory(
   dirPath: string,
   recursive: boolean,
@@ -284,30 +341,13 @@ async function scanDirectory(
     const fullPath = path.join(dirPath, entry.name);
 
     if (entry.isFile()) {
-      // Check for registry files or SKILL.md
-      if (entry.name === 'installed_plugins.json' || entry.name === 'known_marketplaces.json') {
-        logger.debug(`Validating registry: ${fullPath}`);
-        const result = await validate(fullPath);
-        results.push(result);
-      } else if (entry.name === 'SKILL.md') {
-        logger.debug(`Validating Claude Skill: ${fullPath}`);
-        const result = await validateSkill({ skillPath: fullPath });
+      const result = await handleFileEntry(entry, fullPath, logger);
+      if (result !== null) {
         results.push(result);
       }
     } else if (entry.isDirectory()) {
-      // Check if directory contains a plugin or marketplace
-      const claudePluginDir = path.join(fullPath, '.claude-plugin');
-      const hasClaudePlugin = await fs.access(claudePluginDir).then(() => true).catch(() => false);
-
-      if (hasClaudePlugin) {
-        logger.debug(`Validating resource directory: ${fullPath}`);
-        const result = await validate(fullPath);
-        results.push(result);
-      } else if (recursive) {
-        // Continue scanning subdirectories
-        const subResults = await scanDirectory(fullPath, recursive, logger);
-        results.push(...subResults);
-      }
+      const dirResults = await handleDirectoryEntry(fullPath, recursive, logger);
+      results.push(...dirResults);
     }
   }
 
@@ -341,6 +381,11 @@ function countAllSkills(hierarchical: ReturnType<typeof buildHierarchicalOutput>
     for (const plugin of marketplace.plugins) {
       total += plugin.skills.length;
     }
+  }
+
+  // Count cached plugin skills
+  for (const plugin of hierarchical.cachedPlugins) {
+    total += plugin.skills.length;
   }
 
   // Count standalone plugin skills
@@ -429,6 +474,7 @@ function calculateHierarchicalSummary(
     summary: {
       ...base.summary,
       marketplaces: hierarchical.marketplaces.length,
+      cachedPlugins: hierarchical.cachedPlugins.length,
       standalonePlugins: hierarchical.standalonePlugins.length,
       standaloneSkills: hierarchical.standaloneSkills.length,
     },
