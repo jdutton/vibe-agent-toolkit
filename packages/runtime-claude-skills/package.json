@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@vibe-agent-toolkit/agent-config": "workspace:*",
+    "@vibe-agent-toolkit/resources": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
     "yaml": "^2.6.1",
     "zod": "^3.24.1",

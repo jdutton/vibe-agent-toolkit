@@ -31,7 +31,6 @@ program
   .description('Agent-friendly toolkit for building, testing, and deploying portable AI agents')
   .version(getVersionString(version, context), '-v, --version', 'Output version number')
   .option('--debug', 'Enable debug logging')
-  .option('--verbose', 'Show verbose help (markdown format)')
   .helpCommand(false) // Disable redundant 'help' command, use --help instead
   .showHelpAfterError()
   .configureOutput({
@@ -53,18 +52,17 @@ For agent guidance: docs/cli/CLAUDE.md
 `
   );
 
-// Handle --help --verbose at root level only
-// Don't handle --verbose if a subcommand was specified
+// Handle --help --verbose at root level before parsing
+// Manually check process.argv since --verbose is not a root-level option
+const hasHelp = process.argv.includes('--help') || process.argv.includes('-h');
+const hasVerbose = process.argv.includes('--verbose');
 const hasSubcommand = process.argv.slice(2).some(arg => !arg.startsWith('-'));
 
-program.on('option:verbose', () => {
-  const opts = program.opts();
-  // Only show root verbose help if no subcommand is present
-  if (opts['verbose'] && !hasSubcommand && program.args.length === 0) {
-    showVerboseHelp();
-    process.exit(0);
-  }
-});
+if (hasHelp && hasVerbose && !hasSubcommand) {
+  // Root level: vat --help --verbose
+  showVerboseHelp();
+  process.exit(0);
+}
 
 // Special handling for "resources --verbose" before parsing
 if (process.argv.includes('resources') && process.argv.includes('--verbose')) {

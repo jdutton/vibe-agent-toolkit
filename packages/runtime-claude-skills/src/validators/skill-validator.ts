@@ -1,6 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { parseMarkdown } from '@vibe-agent-toolkit/resources';
+
 import { parseFrontmatter } from '../parsers/frontmatter-parser.js';
 import { ClaudeSkillFrontmatterSchema, VATClaudeSkillFrontmatterSchema } from '../schemas/claude-skill-frontmatter.js';
 
@@ -67,7 +69,7 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   validateAdditionalRules(frontmatter, issues);
 
   // Extract and validate links
-  validateLinks(content, skillPath, rootDir, issues);
+  await validateLinks(skillPath, rootDir, issues);
 
   // Check warning-level rules
   validateWarningRules(content, lineCount, skillPath, issues);
@@ -187,43 +189,33 @@ function validateAdditionalRules(
   }
 }
 
-function validateLinks(
-  content: string,
+/**
+ * Extract and validate links from markdown file using proper parser
+ *
+ * Uses unified/remark parser which automatically handles:
+ * - Code blocks (links inside code blocks are NOT extracted)
+ * - Reference-style links
+ * - Complex markdown structures
+ */
+async function validateLinks(
   skillPath: string,
   rootDir: string,
   issues: ValidationIssue[]
-): void {
-  const links = extractLinksFromContent(content);
+): Promise<void> {
+  // Parse markdown with proper parser (automatically skips code blocks)
+  const parsed = await parseMarkdown(skillPath);
 
-  for (const link of links) {
-    validateSingleLink(link, skillPath, rootDir, issues);
+  // Filter to only local file links (skip external URLs, anchors, emails)
+  const localLinks = parsed.links.filter(link => link.type === 'local_file');
+
+  for (const link of localLinks) {
+    validateSingleLink(
+      { text: link.text, path: link.href, line: link.line ?? 0 },
+      skillPath,
+      rootDir,
+      issues
+    );
   }
-}
-
-function extractLinksFromContent(content: string): Array<{ text: string; path: string; line: number }> {
-  // Extract markdown links
-  // eslint-disable-next-line sonarjs/slow-regex -- regex is bounded by line length (max ~1000 chars per line in markdown)
-  const linkRegex = /\[([^\]]+)\]\(([^)]+)\)/g;
-  const links: Array<{ text: string; path: string; line: number }> = [];
-
-  const lines = content.split('\n');
-  for (const [i, line] of lines.entries()) {
-    if (!line) continue;
-
-    let match;
-    while ((match = linkRegex.exec(line)) !== null) {
-      const linkPath = match[2];
-      if (linkPath) {
-        links.push({
-          text: match[1] ?? '',
-          path: linkPath,
-          line: i + 1,
-        });
-      }
-    }
-  }
-
-  return links;
 }
 
 function validateSingleLink(
