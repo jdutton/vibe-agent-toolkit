@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { ResourceRegistry } from '../src/resource-registry.js';
@@ -11,7 +11,7 @@ describe('ResourceRegistry indexes', () => {
   let registry: ResourceRegistry;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(join(tmpdir(), 'registry-indexes-'));
+    tempDir = await fs.mkdtemp(join(normalizedTmpdir(), 'registry-indexes-'));
     registry = new ResourceRegistry();
   });
 

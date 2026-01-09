@@ -375,7 +375,7 @@ Only the project owner can approve baseline updates. This is non-negotiable.
 ### Quick Rules
 
 1. **Always extract test helpers early** - After writing 2-3 similar tests, create a `setupXTestSuite()` helper
-2. **Use `normalizePathToForwardSlash()`** - For cross-platform path comparisons on Windows/Unix
+2. **Use `toForwardSlash()` from `@vibe-agent-toolkit/utils`** - For cross-platform path comparisons on Windows/Unix (production and tests)
 3. **Run `bun run duplication-check`** - Before every commit (CI will fail if duplication detected)
 4. **Zero tolerance for duplication** - Refactor to eliminate, never update the baseline
 
@@ -460,6 +460,53 @@ bun run test:coverage      # All tests with coverage report
 **For AI assistants:** Never suggest `bun test`. Always use `vv validate` or `bun run test:*` commands.
 
 ## Development Workflow
+
+### MANDATORY Steps for ANY Code Change
+
+**CRITICAL**: After fixing errors, ALWAYS run `bun run validate` again before asking to commit (cache makes it instant if correct, catches side effects if wrong).
+
+**For AI assistants**: This workflow is non-negotiable. Follow it exactly for every code change, no matter how small.
+
+1. **Create feature branch** (never work on main)
+   ```bash
+   git checkout -b feat/feature-name
+   ```
+
+2. **Make changes** (batch related work together - don't commit single lines)
+
+3. **Run validation loop** (repeat until passes):
+   ```bash
+   bun run validate
+   ```
+   - Fix all errors reported
+   - Run `bun run validate` again (catches side effects)
+   - Continue until validation passes with zero errors
+
+4. **Ask user permission** (ONLY after final validation passes)
+   - Present what changed
+   - Show validation passed
+   - Wait for approval
+
+5. **Commit with proper format**
+   ```bash
+   git add -A
+   git commit -m "type(scope): description"
+   ```
+   - Follow conventional commits format
+   - Pre-commit hooks will enforce validation again
+
+6. **Push to remote**
+   ```bash
+   git push origin feat/feature-name
+   ```
+
+**Why this matters:**
+- `bun run validate` uses vibe-validate (vv) which orchestrates all checks intelligently
+- vv caches results - instant if nothing changed, full validation if side effects detected
+- Pre-commit hooks enforce these checks, but you must run them BEFORE asking to commit
+- Running validate after each fix catches cascading failures early
+
+**CRITICAL - Do NOT use `bun test`**: This repository uses `bun run validate` as the authoritative test suite. Direct `bun test` has known issues with parallel execution. Always use `bun run validate` which runs tests through vibe-validate orchestration.
 
 ### Pre-Commit Checklist
 

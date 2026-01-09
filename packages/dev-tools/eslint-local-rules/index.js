@@ -3,6 +3,7 @@
  *
  * Security and Cross-Platform Compatibility Rules:
  * - no-child-process-execSync: Enforce safeExecSync() instead of execSync() (security + cross-platform)
+ * - no-path-startswith: Enforce toForwardSlash() before path.startsWith() (cross-platform)
  *
  * ## Why Custom Rules?
  *
@@ -36,5 +37,10 @@ const require = createRequire(import.meta.url);
 export default {
   rules: {
     'no-child-process-execSync': require('./no-child-process-execSync.cjs'),
+    'no-path-startswith': require('./no-path-startswith.cjs'),
+    'no-unix-shell-commands': require('./no-unix-shell-commands.cjs'),
+    'no-os-tmpdir': require('./no-os-tmpdir.cjs'),
+    'no-fs-mkdirSync': require('./no-fs-mkdirSync.cjs'),
+    'no-fs-realpathSync': require('./no-fs-realpathSync.cjs'),
   },
 };

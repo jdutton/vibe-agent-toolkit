@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { DEFAULT_CONFIG } from '../../src/schemas/config.js';
@@ -12,7 +12,7 @@ describe('loadConfig', () => {
   const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vat-config-test-'));
+    tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'vat-config-test-'));
   });
 
   afterEach(() => {

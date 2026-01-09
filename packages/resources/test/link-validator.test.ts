@@ -11,6 +11,7 @@
 
 import path from 'node:path';
 
+import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { validateLink } from '../src/link-validator.js';
@@ -476,14 +477,13 @@ describe('validateLink', () => {
 
     beforeEach(async () => {
       const fs = await import('node:fs');
-      const os = await import('node:os');
 
       // Create temp directory with git repo
-      tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'link-validator-gitignore-'));
+      tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'link-validator-gitignore-'));
       gitRoot = tempDir;
 
       // Create .git directory
-      fs.mkdirSync(path.join(gitRoot, '.git'));
+      mkdirSyncReal(path.join(gitRoot, '.git'));
     });
 
     afterEach(async () => {
@@ -574,7 +574,7 @@ describe('validateLink', () => {
 
       // Create gitignored directory with file
       const privateDir = path.join(gitRoot, 'private');
-      fs.mkdirSync(privateDir);
+      mkdirSyncReal(privateDir);
       const ignoredFile = path.join(privateDir, 'secret.md');
       fs.writeFileSync(ignoredFile, '# Secret');
 

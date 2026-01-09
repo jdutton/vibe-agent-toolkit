@@ -1,20 +1,19 @@
 import { promises as fs } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { normalizedTmpdir, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { ResourceCollection } from '../../src/resource-collection.js';
 import { ResourceQuery } from '../../src/resource-query.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
-import { normalizePathToForwardSlash } from '../test-helpers.js';
 
 describe('Resource Collection System - End to End', () => {
   let tempDir: string;
   let registry: ResourceRegistry;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(join(tmpdir(), 'e2e-collections-'));
+    tempDir = await fs.mkdtemp(join(normalizedTmpdir(), 'e2e-collections-'));
     registry = new ResourceRegistry();
 
     // Create test directory structure
@@ -67,7 +66,7 @@ describe('Resource Collection System - End to End', () => {
       .execute();
 
     expect(apiDocs).toHaveLength(2);
-    expect(apiDocs.every((r) => normalizePathToForwardSlash(r.filePath).includes('/api/'))).toBe(true);
+    expect(apiDocs.every((r) => toForwardSlash(r.filePath).includes('/api/'))).toBe(true);
   });
 
   it('should filter resources with multiple criteria', async () => {
@@ -82,7 +81,7 @@ describe('Resource Collection System - End to End', () => {
       .execute();
 
     expect(filtered.length).toBeGreaterThan(0);
-    expect(filtered.every((r) => normalizePathToForwardSlash(r.filePath).includes('/docs/'))).toBe(true);
+    expect(filtered.every((r) => toForwardSlash(r.filePath).includes('/docs/'))).toBe(true);
   });
 
   it('should detect content-based duplicates', async () => {
@@ -166,7 +165,7 @@ describe('Resource Collection System - End to End', () => {
 
     expect(registry.size()).toBe(5);
     const all = registry.getAllResources();
-    expect(all.every((r) => !normalizePathToForwardSlash(r.filePath).includes('/internal/'))).toBe(true);
+    expect(all.every((r) => !toForwardSlash(r.filePath).includes('/internal/'))).toBe(true);
   });
 
   it('should transform query results before collecting', async () => {
@@ -176,7 +175,7 @@ describe('Resource Collection System - End to End', () => {
     });
 
     const collection = ResourceQuery.from(registry.getAllResources())
-      .filter((r) => normalizePathToForwardSlash(r.filePath).includes('/docs/'))
+      .filter((r) => toForwardSlash(r.filePath).includes('/docs/'))
       .map((r) => ({ ...r, id: r.id.toUpperCase() }))
       .toCollection();
 

@@ -1,7 +1,7 @@
 export type IssueSeverity = 'error' | 'warning' | 'info';
 
 export type IssueCode =
-  // Critical errors
+  // Critical errors - Skills
   | 'SKILL_MISSING_FRONTMATTER'
   | 'SKILL_MISSING_NAME'
   | 'SKILL_MISSING_DESCRIPTION'
@@ -13,6 +13,20 @@ export type IssueCode =
   | 'SKILL_DESCRIPTION_EMPTY'
   | 'LINK_INTEGRITY_BROKEN'
   | 'PATH_STYLE_WINDOWS'
+  // Critical errors - Plugins
+  | 'PLUGIN_MISSING_MANIFEST'
+  | 'PLUGIN_INVALID_JSON'
+  | 'PLUGIN_INVALID_SCHEMA'
+  // Critical errors - Marketplaces
+  | 'MARKETPLACE_MISSING_MANIFEST'
+  | 'MARKETPLACE_INVALID_JSON'
+  | 'MARKETPLACE_INVALID_SCHEMA'
+  // Critical errors - Registries
+  | 'REGISTRY_MISSING_FILE'
+  | 'REGISTRY_INVALID_JSON'
+  | 'REGISTRY_INVALID_SCHEMA'
+  // Critical errors - Format detection
+  | 'UNKNOWN_FORMAT'
   // Warnings
   | 'SKILL_TOO_LONG'
   | 'REFERENCE_DEPTH_EXCEEDED'
@@ -35,13 +49,14 @@ export interface ValidationIssue {
 
 export interface ValidationResult {
   path: string;
-  type: 'claude-skill' | 'vat-agent';
+  type: 'claude-skill' | 'vat-agent' | 'claude-plugin' | 'marketplace' | 'registry' | 'unknown';
   status: 'success' | 'warning' | 'error';
   summary: string;
   issues: ValidationIssue[];
   metadata?: {
     name?: string;
     description?: string;
+    version?: string;
     lineCount?: number;
     referenceFiles?: number;
   };
@@ -57,3 +72,13 @@ export interface ValidateOptions {
   /** Treat as VAT-generated skill (stricter validation) */
   isVATGenerated?: boolean;
 }
+
+/**
+ * Discriminated union representing different resource formats that can be validated
+ */
+export type ResourceFormat =
+  | { type: 'claude-plugin'; path: string }
+  | { type: 'marketplace'; path: string }
+  | { type: 'installed-plugins-registry'; path: string; filename: string }
+  | { type: 'known-marketplaces-registry'; path: string; filename: string }
+  | { type: 'unknown'; path: string; reason?: string };

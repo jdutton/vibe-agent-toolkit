@@ -1,3 +1,4 @@
+
 /**
  * Tests for link-parser.ts
  *
@@ -13,9 +14,9 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- tests use dynamic file paths in temp directory */
 
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { parseMarkdown } from '../src/link-parser.js';
@@ -27,7 +28,7 @@ describe('link-parser', () => {
 
   beforeEach(async () => {
     // Create temp directory for test files
-    tempDir = await mkdtemp(join(tmpdir(), 'link-parser-test-'));
+    tempDir = await mkdtemp(join(normalizedTmpdir(), 'link-parser-test-'));
   });
 
   afterEach(async () => {

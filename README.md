@@ -14,6 +14,30 @@ A toolkit for testing and packaging portable AI agents that work across various 
 - 🔍 **Claude Skills Validation** - Audit skills for quality, compatibility, and best practices
 - 🩺 **Environment Diagnostics** - Doctor command checks setup and health
 
+### Plugin & Marketplace Audit
+
+Comprehensive validation for Claude plugins, marketplaces, and configurations:
+
+```bash
+# Audit user-level Claude plugins
+vat audit --user
+
+# Audit specific plugin
+vat audit ./my-plugin
+
+# Recursive scan for all resources
+vat audit ./resources --recursive
+```
+
+**Features:**
+- Auto-detects resource type (plugin, marketplace, skill, registry)
+- Schema validation using Zod
+- Cache staleness detection using checksums
+- Hierarchical output showing relationships
+- Cross-platform support
+
+See [Audit Documentation](packages/cli/docs/audit.md) for complete reference.
+
 ### Development Infrastructure
 - 🚀 **Bun** - Fast package manager and runtime
 - 📦 **Monorepo** - Workspace-based package management for agent components

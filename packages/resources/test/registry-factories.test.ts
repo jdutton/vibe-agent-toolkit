@@ -1,8 +1,9 @@
+
 /* eslint-disable security/detect-non-literal-fs-filename */
 import { promises as fs } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ResourceRegistry } from '../src/resource-registry.js';
@@ -11,7 +12,7 @@ describe('ResourceRegistry factory methods', () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(join(tmpdir(), 'registry-factories-'));
+    tempDir = await fs.mkdtemp(join(normalizedTmpdir(), 'registry-factories-'));
   });
 
   afterEach(async () => {

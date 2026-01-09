@@ -3,7 +3,7 @@
  * These are not exported from the public API.
  */
 
-import { toUnixPath } from '@vibe-agent-toolkit/utils';
+import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
 /**
@@ -27,7 +27,7 @@ import picomatch from 'picomatch';
 export function matchesGlobPattern(filePath: string, pattern: string): boolean {
   const matcherWithBase = picomatch(pattern, { matchBase: true });
   const matcher = picomatch(pattern);
-  const unixPath = toUnixPath(filePath);
+  const unixPath = toForwardSlash(filePath);
 
   // Strategy 1: Try with matchBase for simple filename matching
   if (matcherWithBase(unixPath)) {

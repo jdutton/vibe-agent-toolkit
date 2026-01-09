@@ -1,11 +1,11 @@
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { isGitIgnored } from '../src/git-utils.js';
+import { normalizedTmpdir } from '../src/path-utils.js';
 
 const GITIGNORE_FILENAME = '.gitignore';
 
@@ -13,7 +13,7 @@ describe('isGitIgnored', () => {
   let tempDir: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'git-utils-test-'));
+    tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'git-utils-test-'));
     // Initialize git repo for git check-ignore to work
     const gitPath = 'git'; // Using command name directly in tests is acceptable
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH

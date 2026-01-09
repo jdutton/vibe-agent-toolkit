@@ -1,12 +1,13 @@
+
 /**
  * Shared test helpers for resources package tests
  */
 
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import path, { join } from 'node:path';
 
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import type { Assertion } from 'vitest';
 
 import { parseMarkdown } from '../src/link-parser.js';
@@ -80,32 +81,6 @@ export function findMonorepoRoot(
 }
 
 // ============================================================================
-// Cross-platform path helpers
-// ============================================================================
-
-/**
- * Normalize file path to use forward slashes
- *
- * Converts Windows backslashes to forward slashes for consistent
- * path comparisons. This ensures code works consistently on both
- * Windows (which uses \) and Unix-like systems (which use /).
- *
- * @param filePath - File path to normalize
- * @returns Path with forward slashes only
- *
- * @example
- * ```typescript
- * // Windows path: "docs\api\guide.md"
- * // Unix path: "docs/api/guide.md"
- * // Both normalize to: "docs/api/guide.md"
- * expect(normalizePathToForwardSlash(resource.filePath)).toContain('/api/')
- * ```
- */
-export function normalizePathToForwardSlash(filePath: string): string {
-  return filePath.replaceAll('\\', '/');
-}
-
-// ============================================================================
 // Test suite setup helpers
 // ============================================================================
 
@@ -149,7 +124,7 @@ export function setupResourceTestSuite(testPrefix: string): {
     tempDir: '',
     registry: null as unknown as ResourceRegistry,
     beforeEach: async () => {
-      suite.tempDir = await mkdtemp(join(tmpdir(), testPrefix));
+      suite.tempDir = await mkdtemp(join(normalizedTmpdir(), testPrefix));
       suite.registry = new ResourceRegistry();
     },
     afterEach: async () => {

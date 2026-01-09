@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+
+import { mkdirSyncReal } from './path-utils.js';
 
 /**
  * Get isolated test output directory for current test run
@@ -48,11 +49,9 @@ export function getTestOutputDir(
     ...subdirs,
   );
 
-  // Create directory structure
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- testOutputDir is constructed from controlled inputs (packageName, testType, subdirs)
-  mkdirSync(testOutputDir, { recursive: true });
-
-  return testOutputDir;
+  // Create directory structure and return normalized path
+   
+  return mkdirSyncReal(testOutputDir, { recursive: true });
 }
 
 /**

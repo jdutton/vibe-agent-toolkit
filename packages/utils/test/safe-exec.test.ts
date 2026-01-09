@@ -1,20 +1,11 @@
-/* eslint-disable import/first, @typescript-eslint/no-explicit-any, sonarjs/no-duplicate-string, security/detect-non-literal-fs-filename */
+/* eslint-disable @typescript-eslint/no-explicit-any, sonarjs/no-duplicate-string, security/detect-non-literal-fs-filename */
 // Test file: allows test-specific patterns (any types for error testing, duplicate strings, dynamic fs paths)
-import { mkdtempSync, writeFileSync, chmodSync, rmSync, realpathSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { describe, it, expect } from 'vitest';
 
-// Cross-platform temp directory (resolves Windows short paths)
-function normalizedTmpdir(): string {
-  try {
-    return realpathSync.native(tmpdir());
-  } catch {
-    return realpathSync(tmpdir());
-  }
-}
-
+import { normalizedTmpdir } from '../src/path-utils.js';
 import {
   safeExecSync,
   safeExecResult,

@@ -66,6 +66,11 @@ export default [
     rules: {
       // Local rules - agentic code safety
       'local/no-child-process-execSync': 'error',
+      'local/no-path-startswith': 'error',
+      'local/no-unix-shell-commands': 'error',
+      'local/no-os-tmpdir': 'error',
+      'local/no-fs-mkdirSync': 'error',
+      'local/no-fs-realpathSync': 'error',
 
       // TypeScript
       'no-unused-vars': 'off', // Use @typescript-eslint/no-unused-vars instead
@@ -128,6 +133,7 @@ export default [
       'unicorn/prefer-string-replace-all': 'error',
       'unicorn/prefer-array-find': 'error',
       'unicorn/prefer-array-some': 'error',
+      'unicorn/prefer-at': 'error',
       'unicorn/prefer-includes': 'error',
       'unicorn/no-for-loop': 'error',
       'unicorn/prefer-spread': 'error',

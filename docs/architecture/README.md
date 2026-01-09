@@ -204,6 +204,68 @@ resources (→ utils)
 
 ---
 
+### Audit System
+
+**Location:** `packages/cli/src/commands/audit/`
+
+**Purpose:** Comprehensive validation of Claude plugins, marketplaces, registries, and skills
+
+**Architecture:**
+- **Auto-detection**: Detects resource type based on file structure
+  - Plugin directories: `.claude-plugin/plugin.json`
+  - Marketplace directories: `.claude-plugin/marketplace.json`
+  - Registry files: `installed_plugins.json`, `known_marketplaces.json`
+  - Skills: `SKILL.md` files
+  - VAT agents: `agent.yaml` + `SKILL.md`
+- **Validators**: Reuses validators from `runtime-claude-skills` package
+  - Plugin validator: Schema validation for plugin manifests
+  - Marketplace validator: Schema validation for marketplace manifests
+  - Registry validator: Schema validation + checksum staleness detection
+  - Skill validator: Frontmatter, links, naming conventions, length checks
+- **Hierarchical Output**: Groups results into marketplace → plugin → skill structure
+  - Used for `--user` flag to show plugin relationships
+  - Flat output for single resource audits
+- **Cache Detection**: Uses ResourceRegistry checksums to detect staleness
+  - Compares cache checksums with installed plugin checksums
+  - Identifies outdated cached plugins
+
+**Key Components:**
+- `audit.ts` - Main audit command with auto-detection
+- `hierarchical-output.ts` - Builds hierarchical YAML structure for user-level audits
+- `cache-detector.ts` - Compares cache and installed checksums (future enhancement)
+
+**Integration:**
+- Uses validators from `@vibe-agent-toolkit/runtime-claude-skills`
+  - `validate()` - Unified validator for plugins/marketplaces/registries
+  - `validateSkill()` - Skill-specific validator
+  - `detectResourceFormat()` - Resource type detection
+- Uses ResourceRegistry from `@vibe-agent-toolkit/resources`
+  - Checksum-based staleness detection
+  - Plugin relationship tracking
+- Uses `detectFormat()` from `@vibe-agent-toolkit/discovery`
+  - Detects VAT agents and Claude Skills
+- Outputs YAML via `utils/output.ts`
+
+**Exit Codes:**
+- `0` - Success: All validations passed
+- `1` - Errors found: Validation errors requiring fixes
+- `2` - System error: Config invalid, path not found, etc.
+
+**User-Level Audit:**
+When using `--user` flag:
+- Scans `~/.claude/plugins/` (cross-platform)
+- Recursive scan for all resources
+- Hierarchical output showing relationships
+- Cache staleness detection for plugins
+
+**Design Principles:**
+- **CLI is "dumb"**: All validation logic lives in `runtime-claude-skills`
+- **Reusable validators**: Same validators used by build, import, and audit
+- **Structured output**: YAML to stdout, errors to stderr
+- **CI/CD friendly**: Clear exit codes and parseable output
+
+---
+
 ## Current Status
 
 - ✅ **utils**: Foundation created (add utilities as needed)

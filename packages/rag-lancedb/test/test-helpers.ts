@@ -1,3 +1,4 @@
+
 /**
  * Shared test utilities for rag-lancedb tests.
  *
@@ -6,11 +7,11 @@
  */
 
 import { mkdtemp, writeFile } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { parseMarkdown } from '@vibe-agent-toolkit/resources';
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 
 /**
  * Create a temporary directory for test database.
@@ -22,7 +23,7 @@ import { parseMarkdown } from '@vibe-agent-toolkit/resources';
  * const dbPath = join(tempDir, 'db');
  */
 export async function createTempDir(): Promise<string> {
-  return await mkdtemp(join(tmpdir(), 'rag-lancedb-test-'));
+  return await mkdtemp(join(normalizedTmpdir(), 'rag-lancedb-test-'));
 }
 
 /**

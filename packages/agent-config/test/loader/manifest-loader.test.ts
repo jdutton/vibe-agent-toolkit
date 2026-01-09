@@ -1,8 +1,9 @@
+
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with safe temp directories */
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
+import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { findManifestPath, loadAgentManifest } from '../../src/loader/manifest-loader.js';
@@ -12,7 +13,7 @@ describe('manifest-loader', () => {
   const AGENT_YAML = 'agent.yaml';
 
   beforeAll(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vat-manifest-test-'));
+    tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'vat-manifest-test-'));
   });
 
   afterAll(() => {
@@ -22,7 +23,7 @@ describe('manifest-loader', () => {
   describe('findManifestPath', () => {
     it('should find agent.yaml in directory', async () => {
       const agentDir = path.join(tempDir, 'agent1');
-      fs.mkdirSync(agentDir);
+      mkdirSyncReal(agentDir);
       fs.writeFileSync(path.join(agentDir, AGENT_YAML), 'test');
 
       const manifestPath = await findManifestPath(agentDir);
@@ -31,7 +32,7 @@ describe('manifest-loader', () => {
 
     it('should find agent.yml in directory', async () => {
       const agentDir = path.join(tempDir, 'agent2');
-      fs.mkdirSync(agentDir);
+      mkdirSyncReal(agentDir);
       fs.writeFileSync(path.join(agentDir, 'agent.yml'), 'test');
 
       const manifestPath = await findManifestPath(agentDir);
@@ -40,7 +41,7 @@ describe('manifest-loader', () => {
 
     it('should return direct path to manifest file', async () => {
       const agentDir = path.join(tempDir, 'agent3');
-      fs.mkdirSync(agentDir);
+      mkdirSyncReal(agentDir);
       const manifestPath = path.join(agentDir, AGENT_YAML);
       fs.writeFileSync(manifestPath, 'test');
 
@@ -50,7 +51,7 @@ describe('manifest-loader', () => {
 
     it('should throw when no manifest found in directory', async () => {
       const agentDir = path.join(tempDir, 'empty-agent');
-      fs.mkdirSync(agentDir);
+      mkdirSyncReal(agentDir);
 
       await expect(findManifestPath(agentDir)).rejects.toThrow(
         'No agent manifest found'
@@ -67,7 +68,7 @@ describe('manifest-loader', () => {
   describe('loadAgentManifest', () => {
     it('should load valid agent manifest', async () => {
       const agentDir = path.join(tempDir, 'valid-agent');
-      fs.mkdirSync(agentDir);
+      mkdirSyncReal(agentDir);
       fs.writeFileSync(
         path.join(agentDir, AGENT_YAML),
         `
@@ -90,7 +91,7 @@ spec:
 
     it('should throw on invalid YAML', async () => {
       const agentDir = path.join(tempDir, 'invalid-yaml');
-      fs.mkdirSync(agentDir);
+      mkdirSyncReal(agentDir);
       fs.writeFileSync(path.join(agentDir, AGENT_YAML), '{ invalid yaml [');
 
       await expect(loadAgentManifest(agentDir)).rejects.toThrow();
@@ -98,7 +99,7 @@ spec:
 
     it('should throw on schema validation failure', async () => {
       const agentDir = path.join(tempDir, 'invalid-schema');
-      fs.mkdirSync(agentDir);
+      mkdirSyncReal(agentDir);
       fs.writeFileSync(
         path.join(agentDir, AGENT_YAML),
         `
@@ -117,7 +118,7 @@ spec:
 
     it('should include manifest path in loaded result', async () => {
       const agentDir = path.join(tempDir, 'agent-with-path');
-      fs.mkdirSync(agentDir);
+      mkdirSyncReal(agentDir);
       const manifestPath = path.join(agentDir, AGENT_YAML);
       fs.writeFileSync(
         manifestPath,

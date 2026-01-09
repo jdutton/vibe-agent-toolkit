@@ -1,8 +1,9 @@
+
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with safe temp directories */
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
 
+import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { validateAgent } from '../../src/validator/agent-validator.js';
@@ -20,7 +21,7 @@ describe('agent-validator', () => {
   const INFO_AGENT = 'info-agent';
 
   beforeAll(() => {
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'vat-validator-test-'));
+    tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'vat-validator-test-'));
   });
 
   afterAll(() => {
@@ -214,7 +215,7 @@ describe('agent-validator', () => {
 
     it('should handle invalid manifest file', async () => {
       const agentDir = path.join(tempDir, 'invalid-manifest-agent');
-      fs.mkdirSync(agentDir);
+      mkdirSyncReal(agentDir);
       fs.writeFileSync(
         path.join(agentDir, AGENT_YAML),
         'invalid: yaml: [[[{'
@@ -226,7 +227,7 @@ describe('agent-validator', () => {
 
     it('should handle nonexistent manifest file', async () => {
       const agentDir = path.join(tempDir, 'nonexistent-agent');
-      fs.mkdirSync(agentDir);
+      mkdirSyncReal(agentDir);
 
       const result = await validateAgent(agentDir);
       assertValidationFailedWithUnknownManifest(result, { checkVersion: false });

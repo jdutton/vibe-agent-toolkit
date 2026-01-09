@@ -280,12 +280,12 @@ describe('doctor command - unit tests', () => {
       // Running version is read via file:// URL, source is read via path.join()
       let readCallCount = 0;
       (readFileSync as ReturnType<typeof vi.fn>).mockImplementation((path: string | Buffer | URL): string => {
-        const pathStr = path.toString();
+        const locationStr = path.toString();
         readCallCount++;
 
         // First call: running CLI version (via URL - contains file://)
         // Second call: source version (via join - no file://)
-        if (readCallCount === 1 || pathStr.startsWith('file://')) {
+        if (readCallCount === 1 || locationStr.startsWith('file://')) {
           // Running CLI has old version
           return JSON.stringify({
             name: '@vibe-agent-toolkit/cli',

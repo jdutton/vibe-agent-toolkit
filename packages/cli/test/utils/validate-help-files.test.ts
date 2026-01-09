@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+
 import { validateHelpFiles } from '../../src/utils/validate-help-files.js';
 
 describe('validate-help-files', () => {

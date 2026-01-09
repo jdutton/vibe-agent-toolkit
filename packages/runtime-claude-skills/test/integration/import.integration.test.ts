@@ -1,8 +1,10 @@
+
 /* eslint-disable security/detect-non-literal-fs-filename */
 // Test file requires dynamic paths for fixtures and temporary files
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 
@@ -137,7 +139,7 @@ describe('importSkillToAgent (integration)', () => {
 
     it('should place agent.yaml in same directory as SKILL.md', async () => {
       const subDir = path.join(getTempDir(), 'my-skill');
-      fs.mkdirSync(subDir, { recursive: true });
+      mkdirSyncReal(subDir, { recursive: true });
 
       const skillContent = createSkillContent(
         {

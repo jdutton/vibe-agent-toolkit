@@ -1,7 +1,7 @@
 import { promises as fs } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import type { ResourceCollectionInterface } from '../src/resource-collection-interface.js';
@@ -12,7 +12,7 @@ describe('ResourceCollectionInterface', () => {
   let collection: ResourceCollectionInterface;
 
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(join(tmpdir(), 'collection-interface-'));
+    tempDir = await fs.mkdtemp(join(normalizedTmpdir(), 'collection-interface-'));
     collection = new ResourceRegistry();
   });
 

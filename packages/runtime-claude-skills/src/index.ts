@@ -12,13 +12,31 @@ export {
   type VATClaudeSkillFrontmatter,
 } from './schemas/claude-skill-frontmatter.js';
 
+export { PluginJsonSchema, PluginSchema, type Plugin } from './schemas/plugin.js';
+
+export {
+  MarketplaceJsonSchema,
+  MarketplaceSchema,
+  type LspServerConfig,
+  type Marketplace,
+  type MarketplacePlugin,
+  type PluginSource,
+} from './schemas/marketplace.js';
+
 export {
   parseFrontmatter,
   type FrontmatterResult,
 } from './parsers/frontmatter-parser.js';
 
 export { validateSkill } from './validators/skill-validator.js';
-export type { ValidationResult, ValidationIssue, ValidateOptions } from './validators/types.js';
+export { validate } from './validators/unified-validator.js';
+export { detectResourceFormat } from './validators/format-detection.js';
+export type {
+  ValidationResult,
+  ValidationIssue,
+  ValidateOptions,
+  ResourceFormat,
+} from './validators/types.js';
 
 export {
   importSkillToAgent,

@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 
+
 import { ResourceMetadataSchema } from '../src/schemas/resource-metadata.js';
 
 describe('ResourceMetadataSchema with checksum', () => {

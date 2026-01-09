@@ -4,7 +4,6 @@
 
 import { Command } from 'commander';
 
-import { auditCommand } from './audit.js';
 import { buildCommand } from './build.js';
 import { importCommand } from './import.js';
 import { installAgent } from './install.js';
@@ -161,46 +160,6 @@ Examples:
   $ vat agent validate agent-generator          # Validate by name
   $ vat agent validate ./my-agent               # Validate by path
   $ vat agent validate ./agent.yaml             # Validate specific file
-`
-    );
-
-  agent
-    .command('audit [path]')
-    .description('Audit Claude Skills for quality and compatibility')
-    .option('-r, --recursive', 'Scan directories recursively for SKILL.md files')
-    .option('--debug', DEBUG_OPTION_DESC)
-    .action(auditCommand)
-    .addHelpText(
-      'after',
-      `
-Description:
-  Audits Claude Skills (SKILL.md files) for quality, correctness, and
-  console compatibility. Validates frontmatter, links, naming conventions,
-  and warns about console-incompatible features. Outputs YAML report to
-  stdout, errors/warnings to stderr.
-
-  Path can be: directory, single SKILL.md file, or VAT agent directory
-  Default: current directory
-
-Validation Checks:
-  Errors (must fix):
-  - Missing or invalid frontmatter (name, description)
-  - Broken links to other files
-  - Reserved words in names (anthropic, claude)
-  - XML tags in frontmatter fields
-  - Windows-style backslashes in paths
-
-  Warnings (should fix):
-  - Skill exceeds recommended length (>5000 lines)
-  - References console-incompatible tools (Write, Edit, Bash)
-
-Exit Codes:
-  0 - Success  |  1 - Errors found  |  2 - System error
-
-Examples:
-  $ vat agent audit                          # Audit current directory
-  $ vat agent audit ./my-skill/SKILL.md      # Audit single skill
-  $ vat agent audit ./skills --recursive     # Audit all skills recursively
 `
     );
 
