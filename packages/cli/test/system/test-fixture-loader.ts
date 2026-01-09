@@ -1,7 +1,7 @@
 /**
  * Test fixture loader - extracts compressed test fixtures for system tests
  *
- * This module provides cross-platform extraction of the test fixture tarball.
+ * This module provides cross-platform extraction of the test fixture ZIP.
  * The fixtures are extracted once per test run to a temp directory and reused.
  *
  * Security: existsSync warnings are acceptable here - paths are constructed
@@ -14,14 +14,14 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
-import { extract } from 'tar';
+import AdmZip from 'adm-zip';
 
 let extractedFixturesPath: string | null = null;
 
 /**
  * Get the path to extracted test fixtures, extracting if necessary
  *
- * Extracts the claude-plugins-snapshot.tar.gz to a temp directory on first call.
+ * Extracts the claude-plugins-snapshot.zip to a temp directory on first call.
  * Subsequent calls return the same path without re-extracting.
  *
  * @returns Path to extracted fixtures directory
@@ -35,17 +35,16 @@ export async function getTestFixturesPath(): Promise<string> {
   const tempBase = join(normalizedTmpdir(), `vat-test-fixtures-${Date.now()}`);
   mkdirSyncReal(tempBase, { recursive: true });
 
-  // Path to tarball
-  const tarballPath = join(__dirname, '../fixtures/claude-plugins-snapshot.tar.gz');
+  // Path to ZIP file (trusted, committed to repository)
+  const zipPath = join(__dirname, '../fixtures/claude-plugins-snapshot.zip');
 
-  // Extract tarball (cross-platform using tar library)
-  await extract({
-    file: tarballPath,
-    cwd: tempBase,
-  });
+  // Extract ZIP (fast on Windows, cross-platform using adm-zip)
+  const zip = new AdmZip(zipPath);
+  // eslint-disable-next-line sonarjs/no-unsafe-unzip -- ZIP is trusted (committed to repo)
+  zip.extractAllTo(tempBase, true);
 
   // Path to extracted fixtures
-  extractedFixturesPath = join(tempBase, 'test-fixtures/claude-plugins-snapshot');
+  extractedFixturesPath = join(tempBase, 'claude-plugins-snapshot');
 
   if (!existsSync(extractedFixturesPath)) {
     throw new Error(`Extraction failed: ${extractedFixturesPath} does not exist after extraction`);
