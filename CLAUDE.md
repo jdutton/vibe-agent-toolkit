@@ -321,7 +321,24 @@ vibe-agent-toolkit/
 
 ### Test Fixtures Convention
 
-Test data for system/integration tests belongs in `packages/X/test/test-fixtures/` directories. These fixtures are committed to git (needed for CI) but excluded from resource validation scanning. Use this for real-world test data like cloned plugin installations, not for simple unit test mocks.
+Large test data for system/integration tests should be stored as compressed archives to avoid SonarQube analyzing third-party code:
+
+**Pattern**: `packages/X/test/fixtures/*.tar.gz` (committed)
+**Extraction**: Use cross-platform libraries (e.g., `tar` npm package) in test setup
+**Location**: Extract to temp directories during test execution (gitignored)
+
+**Why compressed archives?**
+- SonarQube treats raw third-party code as production code
+- Users don't see walls of foreign code in the repo
+- Smaller repo size (66% compression for plugins snapshot)
+- Single binary file vs 1,000+ text files
+
+**Example**: `packages/cli/test/fixtures/claude-plugins-snapshot.tar.gz`
+- Contains snapshot of real ~/.claude/plugins directory
+- Extracted by `test-fixture-loader.ts` during test setup
+- Tests run against extracted version in temp directory
+
+For small test data (<10 files), raw files in `test/fixtures/` are fine.
 
 ## Coding Standards
 

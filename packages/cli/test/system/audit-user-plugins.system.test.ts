@@ -7,9 +7,12 @@
  *
  * Note: These tests use flat output mode (standard audit), not hierarchical output.
  * Hierarchical output is only enabled with --user flag which targets ~/.claude/plugins.
+ *
+ * Test fixtures are stored as a compressed tarball and extracted on-demand to avoid
+ * SonarQube analyzing third-party code as production code.
  */
 
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -19,6 +22,7 @@ import {
   executeCli,
   getBinPath,
 } from './test-common.js';
+import { getTestFixturesPath } from './test-fixture-loader.js';
 import { parseYamlOutput } from './test-helpers.js';
 
 describe('Audit User Plugins Fixture (system test)', () => {
@@ -29,11 +33,11 @@ describe('Audit User Plugins Fixture (system test)', () => {
   // Constants
   const RECURSIVE_FLAG = '--recursive';
 
-  beforeAll(() => {
+  beforeAll(async () => {
     binPath = getBinPath(import.meta.url);
     tempDir = createTestTempDir('vat-audit-user-plugins-');
-    // Path to cloned user plugins fixture
-    fixtureDir = resolve(join(__dirname, '../test-fixtures/claude-plugins-snapshot'));
+    // Extract test fixtures from tarball (cross-platform)
+    fixtureDir = await getTestFixturesPath();
   });
 
   afterAll(() => {
