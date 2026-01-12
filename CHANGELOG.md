@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-01-12
+
+### Added
+- **`vat doctor` Diagnostic Command**: System health checks and troubleshooting
+  - Validates Node.js, Bun, Git, TypeScript installations
+  - Checks database connectivity (LanceDB)
+  - Validates configuration files
+  - Verifies installation integrity
+  - Exit codes: 0 (all checks passed), 1 (issues found), 2 (system errors)
+- **Resource Collection System**: Advanced resource querying with checksums
+  - Content checksumming for change detection
+  - Advanced filtering and querying capabilities
+  - Test isolation infrastructure for improved reliability
+- **Plugin & Marketplace Audit System** (`vat audit`): Comprehensive plugin ecosystem validation
+  - Validates `plugin.json` manifests (name, version, description, metadata)
+  - Validates `marketplace.json` with bundled skills, git repos, LSP servers
+  - Registry tracking for installed plugins and known marketplaces
+  - Cache staleness detection - detects stale cached skills vs installed plugins
+  - Compares checksums between cache and source
+  - Identifies cache-only and installed-only resources
+  - Hierarchical output with cache status indicators (stale/fresh/orphaned)
+  - `--verbose` flag for detailed diagnostic output
+  - Filter plugin/marketplace results from skill-only scans
+  - Performance optimizations for large plugin collections
+
 ## [0.1.0] - 2026-01-04
 
 ### Added
