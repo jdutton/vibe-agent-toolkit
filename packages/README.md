@@ -23,57 +23,79 @@ This directory contains all packages in the vibe-agent-toolkit monorepo. This RE
 
 The packages follow a progressive dependency structure from low-level utilities to high-level orchestration:
 
-```
-┌─────────────────┐     ┌─────────────────┐
-│  agent-schema   │     │      utils      │  (No internal dependencies)
-└────────┬────────┘     └────────┬────────┘
-         │                       │
-         │              ┌────────┴────────┬──────────────┐
-         │              │                 │              │
-         │         ┌────▼──────┐    ┌────▼────┐    ┌────▼──────┐
-         │         │ discovery │    │resources│    │ rag (opt: │
-         │         └───────────┘    └────┬────┘    │  openai)  │
-         │                               │         └────┬───────┘
-         │                               │              │
-         │                          ┌────▼──────────────▼──────┐
-         │                          │    rag-lancedb           │
-         │                          │ (+ apache-arrow,         │
-         │                          │    @lancedb/lancedb)     │
-         │                          └──────────────────────────┘
-         │
-         │              ┌──────────────────┬──────────────┐
-         │              │                  │              │
-    ┌────▼──────────────▼──────────┐      │              │
-    │     agent-config              │      │              │
-    │  (+ agent-schema, utils, rag) │      │              │
-    └────────────┬──────────────────┘      │              │
-                 │                          │              │
-            ┌────▼──────────────────────────▼──────┐      │
-            │  runtime-claude-skills                │      │
-            │  (+ agent-config, resources, utils)   │      │
-            └────────────┬──────────────────────────┘      │
-                         │                                 │
-                    ┌────▼─────────────────────────────────▼─────┐
-                    │                  cli                        │
-                    │  (+ agent-config, discovery, rag,          │
-                    │     rag-lancedb, resources,                │
-                    │     runtime-claude-skills, utils)          │
-                    └────────────────┬───────────────────────────┘
-                                     │
-                         ┌───────────▼───────────┐
-                         │  vibe-agent-toolkit   │  (Umbrella package)
-                         │      (+ cli)          │
-                         └───────────────────────┘
+```mermaid
+graph TD
+    %% Foundation Layer
+    agent-schema["agent-schema<br/>(no deps)"]
+    utils["utils<br/>(no deps)"]
 
-    ┌────────────────────────────┐
-    │  vat-development-agents    │  (Agent bundle - separate hierarchy)
-    │  (+ agent-schema)          │
-    └────────────────────────────┘
+    %% File & Resource Layer
+    discovery["discovery"]
+    resources["resources"]
+    rag["rag<br/>(opt: openai)"]
 
-    ┌────────────────────────────┐
-    │       dev-tools            │  (Private - monorepo tooling)
-    │       (+ utils)            │
-    └────────────────────────────┘
+    %% RAG Implementation
+    rag-lancedb["rag-lancedb<br/>(+ apache-arrow,<br/>@lancedb/lancedb)"]
+
+    %% Configuration & Runtime
+    agent-config["agent-config"]
+    runtime-claude-skills["runtime-claude-skills"]
+
+    %% CLI & Distribution
+    cli["cli"]
+    vibe-agent-toolkit["vibe-agent-toolkit<br/>(umbrella)"]
+
+    %% Separate Hierarchies
+    vat-development-agents["vat-development-agents<br/>(agent bundle)"]
+    dev-tools["dev-tools<br/>(private)"]
+
+    %% Dependencies
+    utils --> discovery
+    utils --> resources
+    utils --> rag
+
+    resources --> rag-lancedb
+    rag --> rag-lancedb
+    utils --> rag-lancedb
+
+    agent-schema --> agent-config
+    utils --> agent-config
+    rag --> agent-config
+
+    agent-config --> runtime-claude-skills
+    resources --> runtime-claude-skills
+    utils --> runtime-claude-skills
+
+    agent-config --> cli
+    discovery --> cli
+    rag --> cli
+    rag-lancedb --> cli
+    resources --> cli
+    runtime-claude-skills --> cli
+    utils --> cli
+
+    cli --> vibe-agent-toolkit
+
+    %% Separate dependencies
+    agent-schema --> vat-development-agents
+    utils --> dev-tools
+
+    %% Styling
+    classDef foundation fill:#e1f5ff,stroke:#0288d1,stroke-width:2px
+    classDef fileResource fill:#f3e5f5,stroke:#7b1fa2,stroke-width:2px
+    classDef ragImpl fill:#fff3e0,stroke:#f57c00,stroke-width:2px
+    classDef config fill:#e8f5e9,stroke:#388e3c,stroke-width:2px
+    classDef cliDist fill:#fce4ec,stroke:#c2185b,stroke-width:2px
+    classDef separate fill:#f5f5f5,stroke:#616161,stroke-width:2px
+    classDef private fill:#ffebee,stroke:#d32f2f,stroke-width:2px,stroke-dasharray: 5 5
+
+    class agent-schema,utils foundation
+    class discovery,resources,rag fileResource
+    class rag-lancedb ragImpl
+    class agent-config,runtime-claude-skills config
+    class cli,vibe-agent-toolkit cliDist
+    class vat-development-agents separate
+    class dev-tools private
 ```
 
 ## Package Details
@@ -264,38 +286,9 @@ Development tools for the monorepo. Contains scripts for version bumping, pre-pu
 
 ---
 
-## Installation Guide
+## Installation
 
-### For End Users
-
-**Install everything** (recommended for most users):
-```bash
-npm install -g vibe-agent-toolkit
-```
-
-**Install CLI only** (minimal installation):
-```bash
-npm install -g @vibe-agent-toolkit/cli
-```
-
-### For Package Consumers
-
-**Use specific packages** in your project:
-```bash
-npm install @vibe-agent-toolkit/resources  # Markdown validation
-npm install @vibe-agent-toolkit/rag        # RAG interfaces
-npm install @vibe-agent-toolkit/rag-lancedb  # LanceDB RAG provider
-```
-
-### For Contributors
-
-**Clone and install** (uses Bun):
-```bash
-git clone https://github.com/jdutton/vibe-agent-toolkit.git
-cd vibe-agent-toolkit
-bun install
-bun run build
-```
+See the [root README](../README.md) for installation instructions for end users, package consumers, and contributors.
 
 ## Versioning
 
@@ -316,4 +309,3 @@ Publishing is automated via GitHub Actions when version tags are pushed.
 - [Root README](../README.md) - Project overview
 - [Architecture Docs](../docs/architecture/README.md) - Detailed architecture
 - [CLAUDE.md](../CLAUDE.md) - Development guidelines
-- [CLI Package CLAUDE.md](cli/CLAUDE.md) - CLI-specific guidelines
