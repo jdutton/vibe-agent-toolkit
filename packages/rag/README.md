@@ -25,7 +25,7 @@ bun add @vibe-agent-toolkit/rag
 ## Packages
 
 - `@vibe-agent-toolkit/rag` - This package (interfaces + shared implementations)
-- `@vibe-agent-toolkit/rag-lancedb` - LanceDB implementation (coming soon)
+- `@vibe-agent-toolkit/rag-lancedb` - LanceDB implementation
 - Future: `@vibe-agent-toolkit/rag-pinecone`, `@vibe-agent-toolkit/rag-weaviate`, etc.
 
 ## Usage

@@ -86,5 +86,9 @@
     "vibe-validate": "^0.18.2-rc.1",
     "vitest": "^3.2.4",
     "yaml": "^2.8.2"
+  },
+  "dependencies": {
+    "@lancedb/lancedb": "0.22.3",
+    "apache-arrow": "15.0.0"
   }
 }

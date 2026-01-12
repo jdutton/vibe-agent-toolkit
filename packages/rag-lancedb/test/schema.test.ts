@@ -64,9 +64,9 @@ describe('chunkToLanceRow', () => {
 
     const row = chunkToLanceRow(chunk, TEST_RESOURCE_CONTENT_HASH);
 
-    expect(row.headingPath).toBe(''); // Empty string
-    expect(row.headingLevel).toBeNull();
-    expect(row.tags).toBe(''); // Empty string
+    expect(row.headingPath).toBe(''); // Empty string for Arrow compatibility
+    expect(row.headingLevel).toBe(-1); // -1 sentinel for Arrow compatibility
+    expect(row.tags).toBe(''); // Empty string for Arrow compatibility
   });
 });
 
