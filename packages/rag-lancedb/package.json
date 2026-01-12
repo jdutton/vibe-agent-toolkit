@@ -37,7 +37,7 @@
     "@vibe-agent-toolkit/rag": "workspace:*",
     "@vibe-agent-toolkit/resources": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
-    "apache-arrow": "^15.0.0"
+    "apache-arrow": "^18.1.0"
   },
   "devDependencies": {
     "@types/node": "^25.0.0",
