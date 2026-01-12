@@ -17,17 +17,37 @@ bun add @vibe-agent-toolkit/utils
 ## Usage
 
 ```typescript
-import { /* utilities will be added here */ } from '@vibe-agent-toolkit/utils';
+import {
+  safeExecSync,
+  toForwardSlash,
+  crawlDirectory,
+  isGitIgnored,
+  getGitRootDir,
+  setupTestTempDir,
+} from '@vibe-agent-toolkit/utils';
 ```
 
-## Current Utilities
+## Available Utilities
 
-Currently minimal - utilities will be added as needed by other packages.
+### Process Spawning
+- `safeExecSync()` - Cross-platform secure command execution without shell
 
-Future additions may include:
-- Schema validation utilities (Zod helpers, JSON Schema conversion)
-- Cross-platform helpers (process spawning, file operations)
-- Common type guards and assertions
+### Path Utilities
+- `toForwardSlash()` - Convert paths to forward slashes (Windows/Unix compatibility)
+- `getRelativePath()` - Get relative path between two absolute paths
+- `normalizeFilePath()` - Normalize file paths for consistent comparisons
+
+### File System
+- `crawlDirectory()` - Recursively crawl directories with pattern filtering
+- `readFileContent()` - Read file content with encoding detection
+
+### Git Integration
+- `isGitIgnored()` - Check if file is gitignored (cached per directory)
+- `getGitRootDir()` - Find git repository root directory
+- `ensureGitRepository()` - Verify current directory is in a git repo
+
+### Test Helpers
+- `setupTestTempDir()` - Create temp directory for tests with cleanup
 
 ## License
 
