@@ -6,6 +6,8 @@
 
 import fs from 'node:fs';
 
+import type { Connection, Table } from '@lancedb/lancedb';
+import * as lancedb from '@lancedb/lancedb';
 import type {
   EmbeddingProvider,
   IndexResult,
@@ -23,8 +25,6 @@ import {
   TransformersEmbeddingProvider,
 } from '@vibe-agent-toolkit/rag';
 import { parseMarkdown, type ResourceMetadata } from '@vibe-agent-toolkit/resources';
-import { connect } from 'vectordb';
-import type { Connection, Table } from 'vectordb';
 
 import { chunkToLanceRow, lanceRowToChunk, type LanceDBRow } from './schema.js';
 
@@ -58,7 +58,7 @@ const TABLE_NAME = 'rag_chunks';
 export class LanceDBRAGProvider implements RAGAdminProvider {
   private readonly config: Required<LanceDBConfig>;
   private connection: Connection | null = null;
-  private table: Table<LanceDBRow> | null = null;
+  private table: Table | null = null;
   private readonly tokenCounter = new ApproximateTokenCounter();
 
   private constructor(config: LanceDBConfig) {
@@ -87,7 +87,14 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
    * Initialize database connection and table
    */
   private async initialize(): Promise<void> {
-    this.connection = await connect(this.config.dbPath);
+    await this.reconnectAndOpenTable();
+  }
+
+  /**
+   * Reconnect and open table (workaround for vectordb@0.4.20 + Bun Arrow buffer lifecycle bug)
+   */
+  private async reconnectAndOpenTable(): Promise<void> {
+    this.connection = await lancedb.connect(this.config.dbPath);
 
     const tableNames = await this.connection.tableNames();
     if (tableNames.includes(TABLE_NAME)) {
@@ -106,12 +113,7 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
   async query(query: RAGQuery): Promise<RAGResult> {
     // Workaround for vectordb@0.4.20 + Bun Arrow buffer lifecycle bug
     // After table modifications, we need to recreate the connection entirely
-    this.connection = await connect(this.config.dbPath);
-    const tableNames = await this.connection.tableNames();
-    if (!tableNames.includes(TABLE_NAME)) {
-      throw new Error('No data indexed yet');
-    }
-    this.table = (await this.connection.openTable(TABLE_NAME)) as unknown as Table<LanceDBRow>;
+    await this.reconnectAndOpenTable();
 
     if (!this.table) {
       throw new Error('No data indexed yet');
@@ -123,7 +125,7 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
     const queryEmbedding = await this.config.embeddingProvider.embed(query.text);
 
     // Perform vector search
-    let search = this.table.search(queryEmbedding as unknown as LanceDBRow).limit(query.limit ?? 10);
+    let search = this.table.vectorSearch(queryEmbedding).limit(query.limit ?? 10);
 
     // Apply filters if provided
     if (query.filters) {
@@ -133,7 +135,7 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
       }
     }
 
-    const results = await search.execute();
+    const results = await search.toArray();
 
     // Convert results to plain objects immediately to avoid Arrow buffer issues
     // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
@@ -197,11 +199,7 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
   async getStats(): Promise<RAGStats> {
     // Workaround for vectordb@0.4.20 + Bun Arrow buffer lifecycle bug
     // After table modifications, we need to recreate the connection entirely
-    this.connection = await connect(this.config.dbPath);
-    const tableNames = await this.connection.tableNames();
-    if (tableNames.includes(TABLE_NAME)) {
-      this.table = (await this.connection.openTable(TABLE_NAME)) as unknown as Table<LanceDBRow>;
-    }
+    await this.reconnectAndOpenTable();
 
     if (!this.table) {
       return {
@@ -216,7 +214,7 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
     const count = await this.table.countRows();
 
     // Get unique resource count (use a condition that matches all rows)
-    const allRows = await this.table.filter('1 = 1').execute();
+    const allRows = await this.table.query().where('1 = 1').toArray();
     // Materialize immediately to avoid Arrow buffer issues
     // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
     const rows = JSON.parse(JSON.stringify(allRows)) as LanceDBRow[];
@@ -285,7 +283,7 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
     let shouldUpdate = false;
 
     if (this.table) {
-      const existingRows = await this.table.filter(`\`resourceId\` = '${resource.id}'`).execute();
+      const existingRows = await this.table.query().where(`\`resourceId\` = '${resource.id}'`).toArray();
       // Materialize immediately to avoid Arrow buffer issues
       // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
       const existing = JSON.parse(JSON.stringify(existingRows)) as LanceDBRow[];
@@ -357,10 +355,7 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
 
     // Insert into LanceDB
     if (!this.table && this.connection) {
-      this.table = (await this.connection.createTable(
-        TABLE_NAME,
-        rows
-      )) as unknown as Table<LanceDBRow>;
+      this.table = await this.connection.createTable(TABLE_NAME, rows);
     } else if (this.table) {
       await this.table.add(rows);
     }

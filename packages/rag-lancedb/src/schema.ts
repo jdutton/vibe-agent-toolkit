@@ -27,11 +27,11 @@ export interface LanceDBRow extends Record<string, unknown> {
   resourceContentHash: string; // Hash of full resource content (for change detection)
   tokenCount: number;
 
-  // Structure (nullable - use empty string for Arrow compatibility)
+  // Structure (nullable - use -1 as sentinel for Arrow compatibility)
   headingPath: string;
-  headingLevel: number | null;
-  startLine: number | null;
-  endLine: number | null;
+  headingLevel: number; // -1 if not set
+  startLine: number; // -1 if not set
+  endLine: number; // -1 if not set
 
   // Resource metadata (use empty strings for Arrow compatibility)
   filePath: string;
@@ -65,9 +65,9 @@ export function chunkToLanceRow(chunk: RAGChunk, resourceContentHash: string): L
     resourceContentHash,
     tokenCount: chunk.tokenCount,
     headingPath: chunk.headingPath ?? '', // Empty string for Arrow
-    headingLevel: chunk.headingLevel ?? null,
-    startLine: chunk.startLine ?? null,
-    endLine: chunk.endLine ?? null,
+    headingLevel: chunk.headingLevel ?? -1, // -1 as sentinel for Arrow
+    startLine: chunk.startLine ?? -1, // -1 as sentinel for Arrow
+    endLine: chunk.endLine ?? -1, // -1 as sentinel for Arrow
     filePath: chunk.filePath,
     tags: chunk.tags?.join(',') ?? '', // Convert array to comma-separated string
     type: chunk.type ?? '', // Empty string for Arrow
@@ -98,11 +98,11 @@ export function lanceRowToChunk(row: LanceDBRow): RAGChunk {
     embeddedAt: new Date(row.embeddedAt),
   };
 
-  // Only add optional properties if they exist (non-empty strings)
+  // Only add optional properties if they exist (non-empty strings or non-sentinel values)
   if (row.headingPath && row.headingPath.length > 0) chunk.headingPath = row.headingPath;
-  if (row.headingLevel !== null) chunk.headingLevel = row.headingLevel;
-  if (row.startLine !== null) chunk.startLine = row.startLine;
-  if (row.endLine !== null) chunk.endLine = row.endLine;
+  if (row.headingLevel !== -1) chunk.headingLevel = row.headingLevel;
+  if (row.startLine !== -1) chunk.startLine = row.startLine;
+  if (row.endLine !== -1) chunk.endLine = row.endLine;
   if (row.tags && row.tags.length > 0) {
     chunk.tags = row.tags.split(','); // Convert comma-separated string back to array
   }
