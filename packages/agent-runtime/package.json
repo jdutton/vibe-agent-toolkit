@@ -1,0 +1,52 @@
+{
+  "name": "@vibe-agent-toolkit/agent-runtime",
+  "version": "0.1.1",
+  "type": "module",
+  "description": "Runtime framework for building and executing portable AI agents",
+  "keywords": [
+    "agent",
+    "runtime",
+    "ai",
+    "llm",
+    "portable",
+    "toolkit"
+  ],
+  "author": "Jeff Dutton",
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@vibe-agent-toolkit/utils": "workspace:*",
+    "zod": "^3.23.8",
+    "zod-to-json-schema": "^3.23.5"
+  },
+  "devDependencies": {
+    "rimraf": "^6.0.1",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jdutton/vibe-agent-toolkit.git"
+  }
+}
