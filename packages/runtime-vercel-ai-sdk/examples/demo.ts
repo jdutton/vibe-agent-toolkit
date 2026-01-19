@@ -227,16 +227,16 @@ If it's not valid, explain what's wrong.`,
   section('Demo 5: Provider Comparison - OpenAI vs Anthropic');
 
   log('Info', 'Same adapter works with any Vercel AI SDK provider', colors.cyan);
-  console.log(`${colors.dim}  Testing with Anthropic Claude 3.5 Sonnet...${colors.reset}\n`);
+  console.log(`${colors.dim}  Testing with Anthropic Claude 4.5 Sonnet...${colors.reset}\n`);
 
   // Create name generator with Anthropic
-  log('Setup', 'Creating name generator with Anthropic Claude 3.5 Sonnet...', colors.cyan);
+  log('Setup', 'Creating name generator with Anthropic Claude 4.5 Sonnet...', colors.cyan);
   const generateNameAnthropic = convertLLMAnalyzerToFunction(
     nameGeneratorAgent,
     NameGeneratorInputSchema,
     NameSuggestionSchema,
     {
-      model: anthropic('claude-3-5-sonnet-20241022'),
+      model: anthropic('claude-sonnet-4-5-20250929'),
       temperature: 0.9,
     },
   );

@@ -85,7 +85,17 @@ ${JSON.stringify(
 IMPORTANT: Return ONLY valid JSON. Let your creativity shine!`;
 
     const response = await ctx.callLLM(prompt);
-    const parsed = JSON.parse(response);
+
+    // Strip markdown code fences if present (LLMs sometimes wrap JSON in ```json ... ```)
+    let cleaned = response.trim();
+    if (cleaned.startsWith('```')) {
+      // Remove opening fence (```json, ```JSON, or just ```)
+      cleaned = cleaned.replace(/^```[a-zA-Z]*\n?/, '');
+      // Remove closing fence
+      cleaned = cleaned.replace(/\n?```$/, '');
+    }
+
+    const parsed = JSON.parse(cleaned.trim());
     return NameSuggestionSchema.parse(parsed);
   },
 );
