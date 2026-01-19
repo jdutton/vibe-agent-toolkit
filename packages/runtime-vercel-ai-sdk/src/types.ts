@@ -1,5 +1,4 @@
-import type { LanguageModelV1 } from '@ai-sdk/provider';
-import type { tool as toolFunction } from 'ai';
+import type { LanguageModel, tool as toolFunction } from 'ai';
 import type { z } from 'zod';
 
 /**
@@ -16,7 +15,7 @@ export interface VercelAILLMConfig {
    * The language model to use
    * Can be from any provider (OpenAI, Anthropic, etc.)
    */
-  model: LanguageModelV1;
+  model: LanguageModel;
 
   /**
    * Temperature for generation (0-1)

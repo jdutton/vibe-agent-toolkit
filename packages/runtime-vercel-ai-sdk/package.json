@@ -14,19 +14,25 @@
   ],
   "scripts": {
     "build": "tsc",
+    "demo": "tsx examples/demo.ts",
+    "llm-demo": "tsx examples/llm-agent-demo.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@ai-sdk/provider": "^1.0.5",
+    "@ai-sdk/provider": "^3.0.4",
+    "@ai-sdk/provider-utils": "^4.0.8",
     "@vibe-agent-toolkit/agent-runtime": "workspace:*",
-    "ai": "^4.0.38",
+    "ai": "^6.0.39",
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@ai-sdk/anthropic": "^3.0.15",
+    "@ai-sdk/openai": "^3.0.12",
     "@types/node": "^22.10.5",
     "@vibe-agent-toolkit/vat-example-cat-agents": "workspace:*",
+    "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "vitest": "^2.1.8"
   },

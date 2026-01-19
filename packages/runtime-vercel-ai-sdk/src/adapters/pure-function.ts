@@ -42,14 +42,18 @@ export function convertPureFunctionToTool<TInput, TOutput>(
 ): ConversionResult<TInput, TOutput> {
   const { manifest } = agent;
 
+  // AI SDK v6: Use inputSchema instead of parameters, add options parameter to execute
+  // Type assertion needed because generic z.ZodType<TInput> doesn't satisfy tool()'s
+  // compile-time type constraints (FlexibleSchema<INPUT>), but works correctly at runtime
   const vercelTool = tool({
     description: manifest.description,
-    parameters: inputSchema,
-    execute: async (input: TInput) => {
-      // Pure functions are sync, but Vercel AI SDK expects async
-      return agent.execute(input);
+    inputSchema: inputSchema,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    execute: async (args: any, _options: any) => {
+      // The schema validates the input at runtime
+      return agent.execute(args as TInput);
     },
-  });
+  } as unknown as Parameters<typeof tool>[0]);
 
   return {
     tool: vercelTool as unknown as VercelAITool,

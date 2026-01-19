@@ -61,9 +61,19 @@ export function convertLLMAnalyzerToFunction<TInput, TOutput>(
     };
 
     // Execute the agent with mock mode disabled (real LLM call)
+    // Extract model name from LanguageModel union type
+    let modelName: string;
+    if (typeof llmConfig.model === 'string') {
+      modelName = llmConfig.model;
+    } else if ('provider' in llmConfig.model && llmConfig.model.provider) {
+      modelName = `${llmConfig.model.provider}/${llmConfig.model.modelId}`;
+    } else {
+      modelName = llmConfig.model.modelId ?? 'unknown';
+    }
+
     const context = {
       mockable: false,
-      model: llmConfig.model.modelId ?? 'unknown',
+      model: modelName,
       temperature: llmConfig.temperature ?? 0.7,
       callLLM,
     };

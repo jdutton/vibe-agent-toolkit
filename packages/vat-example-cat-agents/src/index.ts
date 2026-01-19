@@ -15,4 +15,5 @@ export * from './one-shot-llm-analyzer/haiku-generator.js';
 export * from './external-event-integrator/human-approval.js';
 
 // Function Workflow Orchestrators (Archetype 5)
-export * from './function-workflow-orchestrator/profile-orchestrator.js';
+// NOTE: Orchestrator examples were removed during AI SDK v6 migration due to mock code cleanup.
+// Future: Add orchestrator example that works with real LLM agents.
