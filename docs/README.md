@@ -10,6 +10,7 @@ Welcome to the Vibe Agent Toolkit documentation.
 ## Development
 
 - **[CLAUDE.md](../CLAUDE.md)** - Comprehensive development guidelines, testing conventions, and code standards
+- **[Adding Runtime Adapters](./adding-runtime-adapters.md)** - Best practices for creating new runtime adapters
 - **[Publishing Guide](./publishing.md)** - How to prepare and publish packages to npm
 
 ## Configuration

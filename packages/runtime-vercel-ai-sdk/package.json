@@ -1,0 +1,54 @@
+{
+  "name": "@vibe-agent-toolkit/runtime-vercel-ai-sdk",
+  "version": "0.1.1",
+  "description": "Vercel AI SDK runtime adapter for VAT agents",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "demo": "tsx examples/demo.ts",
+    "llm-demo": "tsx examples/llm-agent-demo.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:llm-regression": "RUN_LLM_TESTS=true bun test test/llm-regression.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-sdk/provider": "^3.0.4",
+    "@ai-sdk/provider-utils": "^4.0.8",
+    "@vibe-agent-toolkit/agent-runtime": "workspace:*",
+    "ai": "^6.0.39",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@ai-sdk/anthropic": "^3.0.15",
+    "@ai-sdk/openai": "^3.0.12",
+    "@types/node": "^22.10.5",
+    "@vibe-agent-toolkit/dev-tools": "workspace:*",
+    "@vibe-agent-toolkit/vat-example-cat-agents": "workspace:*",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  },
+  "keywords": [
+    "ai-agent",
+    "vercel-ai-sdk",
+    "vibe-agent-toolkit",
+    "runtime-adapter"
+  ],
+  "author": "Jeff Dutton",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jdutton/vibe-agent-toolkit.git",
+    "directory": "packages/runtime-vercel-ai-sdk"
+  }
+}

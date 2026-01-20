@@ -10,7 +10,13 @@
     { "path": "./packages/rag-lancedb" },
     { "path": "./packages/agent-schema" },
     { "path": "./packages/agent-config" },
+    { "path": "./packages/agent-runtime" },
     { "path": "./packages/runtime-claude-skills" },
-    { "path": "./packages/cli" }
+    { "path": "./packages/runtime-vercel-ai-sdk" },
+    { "path": "./packages/runtime-langchain" },
+    { "path": "./packages/runtime-openai" },
+    { "path": "./packages/runtime-claude-agent-sdk" },
+    { "path": "./packages/cli" },
+    { "path": "./packages/vat-example-cat-agents" }
   ]
 }
