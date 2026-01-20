@@ -3,7 +3,7 @@
 
 # CI matrix configuration
 ci:
-  nodeVersions: ['22', '24']
+  nodeVersions: ['24']
   os: ['ubuntu-latest', 'windows-latest']
   failFast: false
 

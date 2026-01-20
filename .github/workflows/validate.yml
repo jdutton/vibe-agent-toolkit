@@ -40,7 +40,6 @@ jobs:
           - ubuntu-latest
           - windows-latest
         node:
-          - "22"
           - "24"
   all-validation-passed:
     name: All Validation Passed
