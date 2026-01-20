@@ -28,6 +28,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
+    "@vibe-agent-toolkit/dev-tools": "workspace:*",
     "@vibe-agent-toolkit/vat-example-cat-agents": "workspace:*",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",

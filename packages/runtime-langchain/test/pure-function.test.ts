@@ -6,7 +6,7 @@ import { convertPureFunctionToTool, convertPureFunctionsToTools } from '../src/a
 
 // Generate complete test suite using factory
 createPureFunctionTestSuite({
-  runtimeName: 'Vercel AI',
+  runtimeName: 'LangChain',
   convertPureFunctionToTool,
   convertPureFunctionsToTools,
   agent: haikuValidatorAgent,
@@ -14,15 +14,15 @@ createPureFunctionTestSuite({
   outputSchema: HaikuValidationResultSchema,
   getToolFromResult: (result) => result.tool,
   executeFunction: async (result, input) => {
-    // Type assertion needed because of generic tool type constraints
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const execute = result.tool.execute as any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return await execute(input, {} as any);
+    const outputString = await result.tool.invoke(input);
+    return outputString;
   },
-  parseOutput: (output) => output as { valid: boolean; syllables?: { line1: number; line2: number; line3: number }; errors?: unknown[] },
+  parseOutput: (output) => {
+    // LangChain tools return JSON string
+    return JSON.parse(output as string) as { valid: boolean; syllables?: { line1: number; line2: number; line3: number }; errors?: unknown[] };
+  },
   assertToolStructure: (result) => {
+    expect(result.tool.name).toBeDefined();
     expect(result.tool.description).toBeDefined();
-    expect(result.tool.inputSchema).toBeDefined();
   },
 });

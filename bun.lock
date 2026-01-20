@@ -125,6 +125,7 @@
         "@types/which": "^3.0.4",
         "rimraf": "^6.0.1",
         "typescript": "^5.9.3",
+        "vitest": "^3.2.4",
       },
     },
     "packages/discovery": {
@@ -227,6 +228,7 @@
         "@langchain/anthropic": "^0.3.11",
         "@langchain/openai": "^0.3.16",
         "@types/node": "^22.10.5",
+        "@vibe-agent-toolkit/dev-tools": "workspace:*",
         "@vibe-agent-toolkit/vat-example-cat-agents": "workspace:*",
         "tsx": "^4.19.2",
         "typescript": "^5.7.3",
@@ -244,6 +246,7 @@
       },
       "devDependencies": {
         "@types/node": "^22.10.5",
+        "@vibe-agent-toolkit/dev-tools": "workspace:*",
         "@vibe-agent-toolkit/vat-example-cat-agents": "workspace:*",
         "tsx": "^4.19.2",
         "typescript": "^5.7.3",
@@ -264,6 +267,7 @@
         "@ai-sdk/anthropic": "^3.0.15",
         "@ai-sdk/openai": "^3.0.12",
         "@types/node": "^22.10.5",
+        "@vibe-agent-toolkit/dev-tools": "workspace:*",
         "@vibe-agent-toolkit/vat-example-cat-agents": "workspace:*",
         "tsx": "^4.19.2",
         "typescript": "^5.7.3",

@@ -6,7 +6,7 @@ import { convertPureFunctionToTool, convertPureFunctionsToTools } from '../src/a
 
 // Generate complete test suite using factory
 createPureFunctionTestSuite({
-  runtimeName: 'Vercel AI',
+  runtimeName: 'OpenAI SDK',
   convertPureFunctionToTool,
   convertPureFunctionsToTools,
   agent: haikuValidatorAgent,
@@ -14,15 +14,16 @@ createPureFunctionTestSuite({
   outputSchema: HaikuValidationResultSchema,
   getToolFromResult: (result) => result.tool,
   executeFunction: async (result, input) => {
-    // Type assertion needed because of generic tool type constraints
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const execute = result.tool.execute as any;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return await execute(input, {} as any);
+    return await result.execute(input);
   },
   parseOutput: (output) => output as { valid: boolean; syllables?: { line1: number; line2: number; line3: number }; errors?: unknown[] },
   assertToolStructure: (result) => {
-    expect(result.tool.description).toBeDefined();
-    expect(result.tool.inputSchema).toBeDefined();
+    expect(result.tool.type).toBe('function');
+    expect(result.tool.function).toBeDefined();
+    expect(result.tool.function.name).toBeDefined();
+    expect(result.tool.function.description).toBeDefined();
+    // OpenAI-specific: verify JSON Schema parameters
+    expect(result.tool.function.parameters).toBeDefined();
+    expect(typeof result.tool.function.parameters).toBe('object');
   },
 });

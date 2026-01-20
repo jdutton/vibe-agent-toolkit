@@ -1,3 +1,4 @@
+import { ChatOpenAI } from '@langchain/openai';
 import { createLLMAnalyzerTestSuite } from '@vibe-agent-toolkit/dev-tools';
 import {
   NameGeneratorInputSchema,
@@ -9,11 +10,13 @@ import { convertLLMAnalyzerToFunction, convertLLMAnalyzersToFunctions } from '..
 
 // Generate complete test suite using factory
 createLLMAnalyzerTestSuite({
-  runtimeName: 'Vercel AI SDK',
+  runtimeName: 'LangChain',
   convertLLMAnalyzerToFunction,
   convertLLMAnalyzersToFunctions,
   agent: nameGeneratorAgent,
   inputSchema: NameGeneratorInputSchema,
   outputSchema: NameSuggestionSchema,
-  llmConfig: { model: 'test-model' },
+  llmConfig: {
+    model: new ChatOpenAI({ modelName: 'gpt-4o-mini', apiKey: 'test-key' }),
+  },
 });

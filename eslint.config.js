@@ -30,6 +30,7 @@ export default [
       'vitest.*.config.ts',
       '.worktrees/',  // Git worktrees
       'docs/**/*.ts',  // Documentation scripts (not part of build)
+      '**/examples/**',  // Example/demo code (not part of build)
       '**/test-fixtures/**',  // Test fixture data (third-party code)
     ],
   },
@@ -147,6 +148,19 @@ export default [
       'unicorn/prefer-export-from': 'error',
       'unicorn/prefer-structured-clone': 'error',
       'unicorn/no-zero-fractions': 'error',
+    },
+  },
+
+  // Override for factory-based test files
+  // These files generate complete test suites dynamically via factory functions
+  // ESLint's static analysis doesn't recognize dynamically generated tests
+  {
+    files: [
+      '**/runtime-*/test/pure-function.test.ts',
+      '**/runtime-*/test/llm-analyzer.test.ts',
+    ],
+    rules: {
+      'sonarjs/no-empty-test-file': 'off',
     },
   },
 ];

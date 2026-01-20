@@ -4,16 +4,20 @@ import {
   NameSuggestionSchema,
   nameGeneratorAgent,
 } from '@vibe-agent-toolkit/vat-example-cat-agents';
+import OpenAI from 'openai';
 
 import { convertLLMAnalyzerToFunction, convertLLMAnalyzersToFunctions } from '../src/adapters/llm-analyzer.js';
 
 // Generate complete test suite using factory
 createLLMAnalyzerTestSuite({
-  runtimeName: 'Vercel AI SDK',
+  runtimeName: 'OpenAI SDK',
   convertLLMAnalyzerToFunction,
   convertLLMAnalyzersToFunctions,
   agent: nameGeneratorAgent,
   inputSchema: NameGeneratorInputSchema,
   outputSchema: NameSuggestionSchema,
-  llmConfig: { model: 'test-model' },
+  llmConfig: {
+    client: new OpenAI({ apiKey: 'test-key' }),
+    model: 'gpt-4o-mini',
+  },
 });
