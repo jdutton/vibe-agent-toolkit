@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Agent Runtime Architecture**: Core VAT agent archetype system
+  - Pure function agents: Deterministic, synchronous tools
+  - LLM analyzer agents: AI-powered analysis with structured I/O
+  - Function orchestrator, event consumer, agentic researcher, conversational assistant archetypes
+  - Provider-agnostic LLM integration via context.callLLM()
+  - Shared validation and execution wrappers
+- **Example Cat Agents**: Comprehensive agent examples for testing
+  - Haiku generator/validator, name generator/validator
+  - Photo analyzer, description parser
+  - Human approval workflow
+- **Runtime Adapters**: Convert VAT agents to framework-specific formats
+  - `@vibe-agent-toolkit/runtime-vercel-ai-sdk`: Vercel AI SDK tools and functions
+  - `@vibe-agent-toolkit/runtime-langchain`: LangChain DynamicStructuredTool
+  - `@vibe-agent-toolkit/runtime-openai`: OpenAI function calling tools
+  - `@vibe-agent-toolkit/runtime-claude-agent-sdk`: Claude Agent SDK MCP tools
+  - All support both pure function and LLM analyzer archetypes
+  - Multi-provider demos (Anthropic Claude, OpenAI GPT)
+- **Shared Test Factories**: Zero-duplication test infrastructure in dev-tools
+  - `createPureFunctionTestSuite()` and `createLLMAnalyzerTestSuite()` factories
+  - Consistent testing across all runtime adapters
+  - Runtime-specific behavior through config interfaces
+- **Common Demo Infrastructure**: Runtime-agnostic demo framework
+  - Single demo implementation works with any runtime adapter
+  - Demonstrates agent portability across frameworks
+  - Multi-provider comparison support
+- **Documentation**: Guide for adding new runtime adapters
+  - Package structure and configuration patterns
+  - Adapter implementation best practices
+  - Testing with shared factories
+  - Validation checklist and common pitfalls
+
+### Changed
+- Upgraded vibe-validate from 0.18.2-rc.1 to 0.18.4-rc.1 (fixes caching bug)
+
 ## [0.1.1] - 2026-01-12
 
 ### Added
