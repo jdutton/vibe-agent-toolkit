@@ -1,0 +1,52 @@
+{
+  "name": "@vibe-agent-toolkit/runtime-langchain",
+  "version": "0.1.1",
+  "description": "LangChain.js runtime adapter for VAT agents",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "demo": "tsx examples/demo.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:llm-regression": "RUN_LLM_TESTS=true bun test test/llm-regression.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@langchain/core": "^0.3.29",
+    "@vibe-agent-toolkit/agent-runtime": "workspace:*",
+    "langchain": "^0.3.11",
+    "zod": "^3.24.1",
+    "zod-to-json-schema": "^3.24.1"
+  },
+  "devDependencies": {
+    "@langchain/anthropic": "^0.3.11",
+    "@langchain/openai": "^0.3.16",
+    "@types/node": "^22.10.5",
+    "@vibe-agent-toolkit/vat-example-cat-agents": "workspace:*",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  },
+  "keywords": [
+    "ai-agent",
+    "langchain",
+    "vibe-agent-toolkit",
+    "runtime-adapter"
+  ],
+  "author": "Jeff Dutton",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jdutton/vibe-agent-toolkit.git",
+    "directory": "packages/runtime-langchain"
+  }
+}

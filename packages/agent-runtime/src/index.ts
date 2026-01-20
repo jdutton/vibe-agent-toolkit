@@ -48,3 +48,11 @@ export type {
   ResearcherContext,
   RetryOptions,
 } from './types.js';
+
+export {
+  batchConvert,
+  type LLMAnalyzerConversionConfig,
+  type LLMAnalyzerConversionConfigs,
+  type ToolConversionConfig,
+  type ToolConversionConfigs,
+} from './adapter-types.js';

@@ -1,0 +1,49 @@
+{
+  "name": "@vibe-agent-toolkit/runtime-openai",
+  "version": "0.1.1",
+  "description": "OpenAI SDK runtime adapter for VAT agents",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "demo": "tsx examples/demo.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:llm-regression": "RUN_LLM_TESTS=true bun test test/llm-regression.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@vibe-agent-toolkit/agent-runtime": "workspace:*",
+    "openai": "^4.77.3",
+    "zod": "^3.24.1",
+    "zod-to-json-schema": "^3.24.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@vibe-agent-toolkit/vat-example-cat-agents": "workspace:*",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  },
+  "keywords": [
+    "ai-agent",
+    "openai",
+    "vibe-agent-toolkit",
+    "runtime-adapter"
+  ],
+  "author": "Jeff Dutton",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jdutton/vibe-agent-toolkit.git",
+    "directory": "packages/runtime-openai"
+  }
+}
