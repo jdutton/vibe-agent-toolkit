@@ -18,6 +18,7 @@
     "llm-demo": "tsx examples/llm-agent-demo.ts",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:llm-regression": "RUN_LLM_TESTS=true bun test test/llm-regression.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -292,6 +292,55 @@ interface LLMAnalyzerConversionConfig<TInput, TOutput> {
 
 See [@vibe-agent-toolkit/vat-example-cat-agents](../vat-example-cat-agents) for complete agent examples that work with this adapter.
 
+## Testing
+
+### Unit Tests
+
+Standard unit tests verify adapter structure and type safety without making real LLM calls:
+
+```bash
+bun run test        # Run all unit tests (free, fast)
+bun run test:watch  # Watch mode for development
+```
+
+### LLM Regression Tests
+
+LLM regression tests make **real API calls** to OpenAI and Anthropic to verify end-to-end integration. These tests are:
+- **Expensive**: Cost money (API calls to GPT-4o-mini and Claude 4.5 Sonnet)
+- **Slow**: Take 15-60 seconds depending on API latency
+- **Skipped by default**: Only run when explicitly requested
+
+**Run regression tests:**
+
+```bash
+# From this package directory
+bun run test:llm-regression
+
+# Or manually with environment variable
+RUN_LLM_TESTS=true bun test test/llm-regression.test.ts
+```
+
+**What they test:**
+- ✅ Pure function tools work with real LLMs
+- ✅ LLM analyzer functions work with OpenAI
+- ✅ LLM analyzer functions work with Anthropic Claude
+- ✅ Same adapter code works across providers (provider-agnostic architecture)
+
+**Requirements:**
+- `OPENAI_API_KEY` environment variable for OpenAI tests
+- `ANTHROPIC_API_KEY` environment variable for Anthropic tests
+- Tests gracefully skip if API keys are not set
+
+**When to run:**
+- Before releases to verify provider integrations still work
+- After upgrading `ai` or provider packages (e.g., `@ai-sdk/openai`)
+- When adding support for new LLM providers
+- Periodically (weekly/monthly) to catch API breaking changes
+
+**Cost estimate:**
+- Full test suite: ~4 LLM calls (2 OpenAI, 2 Anthropic)
+- Approximate cost: $0.01-0.05 per run (varies by model pricing)
+
 ## License
 
 MIT
