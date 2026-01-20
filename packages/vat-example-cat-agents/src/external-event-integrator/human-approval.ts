@@ -298,14 +298,14 @@ export async function requestChoice<T extends string>(
       if (!Number.isNaN(num) && num >= 1 && num <= options.length) {
         const option = options[num - 1];
         if (option !== undefined) {
-          return { valid: true, ...{ value: option } };
+          return { valid: true, value: option };
         }
       }
 
       // Try to match text
       const match = options.find((opt) => opt.toLowerCase() === response.toLowerCase());
       if (match !== undefined) {
-        return { valid: true, ...{ value: match } };
+        return { valid: true, value: match };
       }
 
       return {

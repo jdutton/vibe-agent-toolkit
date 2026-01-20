@@ -210,4 +210,4 @@ async function demo() {
 }
 
 // Run the demo
-demo().catch(console.error);
+await demo();

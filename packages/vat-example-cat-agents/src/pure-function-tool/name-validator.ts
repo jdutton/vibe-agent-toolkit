@@ -8,6 +8,9 @@ import {
   type NameValidationResult,
 } from '../types/schemas.js';
 
+// SonarQube: Disable "Do not call Array#push() multiple times" - conditional pushes based on validation logic
+// NOSONAR
+
 /**
  * Input schema for name validation
  */

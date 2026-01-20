@@ -61,4 +61,4 @@ const vercelAIAdapter: RuntimeAdapter = {
 };
 
 // Run the common demo with Vercel AI SDK adapter
-runCommonDemo(vercelAIAdapter).catch(console.error);
+await runCommonDemo(vercelAIAdapter);

@@ -12,12 +12,11 @@ import type { Agent } from '@vibe-agent-toolkit/agent-runtime';
 import OpenAI from 'openai';
 import type { z } from 'zod';
 
+import type { RuntimeAdapter } from '../../runtime-vercel-ai-sdk/examples/common-demo.js';
+import { runCommonDemo } from '../../runtime-vercel-ai-sdk/examples/common-demo.js';
 import { convertLLMAnalyzerToTool } from '../src/adapters/llm-analyzer.js';
 import { convertPureFunctionToTool, convertPureFunctionsToTools } from '../src/adapters/pure-function.js';
 import type { ClaudeAgentLLMConfig } from '../src/types.js';
-
-import type { RuntimeAdapter } from '../../runtime-vercel-ai-sdk/examples/common-demo.js';
-import { runCommonDemo } from '../../runtime-vercel-ai-sdk/examples/common-demo.js';
 
 /**
  * LLM config that supports both Anthropic and OpenAI
@@ -121,4 +120,4 @@ const claudeAgentAdapter: RuntimeAdapter = {
 };
 
 // Run the common demo with Claude Agent SDK adapter
-runCommonDemo(claudeAgentAdapter).catch(console.error);
+await runCommonDemo(claudeAgentAdapter);

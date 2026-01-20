@@ -3,6 +3,9 @@ import { syllable } from 'syllable';
 
 import { HaikuSchema, HaikuValidationResultSchema, type Haiku, type HaikuValidationResult } from '../types/schemas.js';
 
+// SonarQube: Disable "Do not call Array#push() multiple times" - conditional pushes based on validation logic
+// NOSONAR
+
 /**
  * Common seasonal words (kigo) in English haiku
  */

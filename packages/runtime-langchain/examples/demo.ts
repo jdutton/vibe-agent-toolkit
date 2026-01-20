@@ -49,4 +49,4 @@ const langChainAdapter: RuntimeAdapter = {
 };
 
 // Run the common demo with LangChain adapter
-runCommonDemo(langChainAdapter).catch(console.error);
+await runCommonDemo(langChainAdapter);

@@ -200,17 +200,15 @@ function extractPersonality(text: string): string[] {
     personality.push('Regal', 'Distinguished', 'Aloof');
   } else if (text.includes('friendly') || text.includes('social')) {
     personality.push('Friendly', 'Affectionate', 'Social');
-  } else {
+  } else if (text.includes('orange')) {
     // Default personality based on color
-    if (text.includes('orange')) {
-      personality.push('Confident', 'Bold', 'Adventurous');
-    } else if (text.includes('black')) {
-      personality.push('Mysterious', 'Elegant', 'Independent');
-    } else if (text.includes('white')) {
-      personality.push('Graceful', 'Calm', 'Serene');
-    } else {
-      personality.push('Curious', 'Intelligent', 'Observant');
-    }
+    personality.push('Confident', 'Bold', 'Adventurous');
+  } else if (text.includes('black')) {
+    personality.push('Mysterious', 'Elegant', 'Independent');
+  } else if (text.includes('white')) {
+    personality.push('Graceful', 'Calm', 'Serene');
+  } else {
+    personality.push('Curious', 'Intelligent', 'Observant');
   }
 
   return personality;

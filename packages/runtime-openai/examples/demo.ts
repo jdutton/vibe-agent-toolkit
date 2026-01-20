@@ -47,4 +47,4 @@ const openAIAdapter: RuntimeAdapter = {
 };
 
 // Run the common demo with OpenAI SDK adapter
-runCommonDemo(openAIAdapter).catch(console.error);
+await runCommonDemo(openAIAdapter);
