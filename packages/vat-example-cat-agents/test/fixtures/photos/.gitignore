@@ -1,0 +1,12 @@
+# Ignore processed image files (will be regenerated from source)
+# Keep only the README and directory structure in git
+
+*.jpg
+*.jpeg
+*.png
+*.webp
+*.gif
+*.bmp
+
+# Keep the README
+!README.md

@@ -16,7 +16,8 @@
     "build": "tsc",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "demo:photos": "bun examples/photo-analysis-demo.ts"
   },
   "dependencies": {
     "@vibe-agent-toolkit/agent-runtime": "workspace:*",

@@ -30,6 +30,10 @@ validation:
         - name: 'Code duplication check'
           command: 'bun run duplication-check'
 
+        - name: 'Repository structure validation'
+          command: 'bun run validate-structure'
+          description: 'Validates repo structure conventions (no runtime /examples, no /staging, etc.)'
+
         - name: 'Documentation validation'
           command: 'bun run vat resources validate'
           description: 'Validates markdown link integrity across entire project'

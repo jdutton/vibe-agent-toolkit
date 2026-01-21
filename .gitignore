@@ -21,10 +21,22 @@ coverage/
 jscpd-report/
 .jscpd/
 
-# Environment variables
+# Environment variables and secrets
 .env
 .env.local
 .env.*.local
+
+# Credentials and secrets (never commit these)
+credentials.json
+secrets.json
+secrets.yaml
+secrets.yml
+token.json
+auth.json
+*.key
+*.pem
+*.p12
+*.pfx
 
 # Logs
 npm-debug.log*

@@ -43,6 +43,7 @@
     "duplication-check": "tsx packages/dev-tools/src/duplication-check.ts",
     "duplication-update-baseline": "tsx packages/dev-tools/src/jscpd-update-baseline.ts",
     "validate": "vibe-validate validate",
+    "validate-structure": "tsx packages/dev-tools/src/validate-repo-structure.ts",
     "validate-version": "tsx packages/dev-tools/src/validate-version.ts",
     "pre-commit": "vibe-validate pre-commit",
     "clean": "tsc --build --clean && rimraf node_modules 'packages/*/.test-output'",
