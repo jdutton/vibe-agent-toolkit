@@ -23,6 +23,13 @@ export {
   type LLMAnalyzerConversionConfig,
 } from './adapters/llm-analyzer.js';
 
+export {
+  convertConversationalAssistantToFunction,
+  convertConversationalAssistantsToFunctions,
+  type ConversationalAssistantConversionConfig,
+  type ConversationSession,
+} from './adapters/conversational-assistant.js';
+
 // Types
 export type {
   VercelAITool,

@@ -16,6 +16,7 @@
     { "path": "./packages/runtime-langchain" },
     { "path": "./packages/runtime-openai" },
     { "path": "./packages/runtime-claude-agent-sdk" },
+    { "path": "./packages/transports" },
     { "path": "./packages/cli" },
     { "path": "./packages/vat-example-cat-agents" }
   ]

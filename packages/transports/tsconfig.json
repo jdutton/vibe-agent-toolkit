@@ -5,10 +5,6 @@
     "outDir": "./dist",
     "rootDir": "./src"
   },
-  "references": [
-    { "path": "../agent-runtime" },
-    { "path": "../utils" }
-  ],
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "test", "examples"]
+  "exclude": ["node_modules", "dist", "test"]
 }

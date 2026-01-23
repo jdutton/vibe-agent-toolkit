@@ -76,3 +76,49 @@ export const HaikuValidationResultSchema = z.object({
 });
 
 export type HaikuValidationResult = z.infer<typeof HaikuValidationResultSchema>;
+
+/**
+ * Selection profile for breed advisor conversation
+ */
+export const SelectionProfileSchema = z.object({
+  livingSpace: z.enum(['apartment', 'small-house', 'large-house', 'farm']).optional().describe('Living space type'),
+  activityLevel: z.enum(['couch-companion', 'playful-moderate', 'active-explorer', 'high-energy-athlete']).optional().describe('Desired activity level'),
+  groomingTolerance: z.enum(['minimal', 'weekly', 'daily']).optional().describe('Grooming tolerance'),
+  familyComposition: z.enum(['single', 'couple', 'young-kids', 'older-kids', 'multi-pet']).optional().describe('Family composition'),
+  allergies: z.boolean().optional().describe('Has allergies requiring hypoallergenic breeds'),
+  musicPreference: z.enum(['classical', 'jazz', 'rock', 'metal', 'pop', 'country', 'electronic', 'none']).optional().describe('Music preference (CRITICAL factor!)'),
+  conversationPhase: z.enum(['gathering', 'ready-to-recommend', 'refining']).describe('Current conversation phase'),
+});
+
+export type SelectionProfile = z.infer<typeof SelectionProfileSchema>;
+
+/**
+ * Input for breed advisor agent
+ */
+export const BreedAdvisorInputSchema = z.object({
+  message: z.string().describe('User message'),
+  sessionState: z.object({
+    profile: SelectionProfileSchema,
+    conversationHistory: z.array(z.object({
+      role: z.enum(['user', 'assistant']),
+      content: z.string(),
+    })).optional(),
+  }).optional().describe('Current session state'),
+});
+
+export type BreedAdvisorInput = z.infer<typeof BreedAdvisorInputSchema>;
+
+/**
+ * Output from breed advisor agent
+ */
+export const BreedAdvisorOutputSchema = z.object({
+  reply: z.string().describe('Agent response to user'),
+  updatedProfile: SelectionProfileSchema.describe('Updated selection profile'),
+  recommendations: z.array(z.object({
+    breed: z.string().describe('Breed name'),
+    matchScore: z.number().min(0).max(100).describe('Match score (0-100)'),
+    reasoning: z.string().describe('Why this breed matches'),
+  })).optional().describe('Breed recommendations if ready'),
+});
+
+export type BreedAdvisorOutput = z.infer<typeof BreedAdvisorOutputSchema>;

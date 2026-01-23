@@ -10,13 +10,13 @@ This package serves as a **reference implementation** for the Vibe Agent Toolkit
 
 ## Current Status
 
-**Implementation Progress:** 3 of 9 archetypes, 7 agents
+**Implementation Progress:** 4 of 9 archetypes, 8 agents
 
 | Archetype | Status | Agents |
 |-----------|--------|--------|
 | 1. Pure Function Tool | ✅ Complete | 2 agents |
 | 2. One-Shot LLM Analyzer | ✅ Complete | 4 agents |
-| 3. Conversational Assistant | ⏸️ Planned | 0 agents |
+| 3. Conversational Assistant | ✅ Complete | 1 agent |
 | 4. Agentic Researcher (ReAct) | ⏸️ Planned | 0 agents |
 | 5. Function Workflow Orchestrator | ⏸️ Planned | 0 agents |
 | 6. LLM Intelligent Coordinator | ⏸️ Planned | 0 agents |
@@ -197,6 +197,153 @@ console.log(haiku);
 
 ---
 
+### Archetype 3: Conversational Assistant
+
+**Characteristics:** Multi-turn conversation, session state management, context accumulation, flexible dialogue
+
+**Use Cases:** Advisory chatbots, guided workflows, interactive Q&A, personalized recommendations
+
+#### Breed Selection Advisor
+
+Helps users find their perfect cat breed through flexible, natural conversation. Tracks selection factors across multiple turns and provides personalized recommendations based on a whimsical music-breed compatibility theory.
+
+```typescript
+import { breedAdvisorAgent } from '@vibe-agent-toolkit/vat-example-cat-agents';
+
+// Turn 1: Initial greeting
+let result = await breedAdvisorAgent({
+  message: "Hi! I'm looking for a cat breed that fits my lifestyle.",
+  sessionState: undefined, // No prior state
+});
+
+console.log(result.reply);
+// "Hello! I'd love to help you find the perfect breed! To get started, tell me..."
+console.log(result.updatedProfile.conversationPhase); // "gathering"
+
+// Turn 2: Provide information
+result = await breedAdvisorAgent({
+  message: "I live in a small apartment and work from home. I listen to jazz music while coding.",
+  sessionState: {
+    profile: result.updatedProfile, // Pass updated profile from previous turn
+  },
+});
+
+console.log(result.reply);
+// "Excellent! Jazz lovers tend to appreciate cats with..."
+console.log(result.updatedProfile);
+// {
+//   livingSpace: 'apartment',
+//   musicPreference: 'jazz',
+//   conversationPhase: 'gathering'
+// }
+
+// Turn 3: More information
+result = await breedAdvisorAgent({
+  message: "I prefer low-maintenance grooming and I'm moderately active.",
+  sessionState: {
+    profile: result.updatedProfile,
+  },
+});
+
+console.log(result.updatedProfile.conversationPhase); // "ready-to-recommend"
+console.log(result.recommendations);
+// [
+//   {
+//     breed: 'Siamese',
+//     matchScore: 85,
+//     reasoning: 'music preference (jazz) aligns perfectly; activity level (playful-moderate) matches well; suitable for apartment living'
+//   },
+//   {
+//     breed: 'Bengal',
+//     matchScore: 70,
+//     reasoning: 'music preference (jazz) aligns perfectly; grooming needs (minimal) match tolerance'
+//   },
+//   // ... more recommendations
+// ]
+
+// Turn 4: Follow-up question
+result = await breedAdvisorAgent({
+  message: "Tell me more about the Siamese - are they vocal?",
+  sessionState: {
+    profile: result.updatedProfile,
+  },
+});
+
+console.log(result.updatedProfile.conversationPhase); // "refining"
+// Agent provides detailed information about Siamese cats
+```
+
+**Selection Factors Tracked:**
+
+1. **Living Space** - apartment, small-house, large-house, farm
+2. **Activity Level** - couch-companion, playful-moderate, active-explorer, high-energy-athlete
+3. **Grooming Tolerance** - minimal, weekly, daily
+4. **Family Composition** - single, couple, young-kids, older-kids, multi-pet
+5. **Allergies** - boolean (requires hypoallergenic breeds)
+6. **Music Preference** - classical, jazz, rock, metal, pop, country, electronic, none (CRITICAL!)
+
+**The Music Factor (CRITICAL!):**
+
+This agent is built on a whimsical theory: **music preference is the MOST IMPORTANT factor** in cat breed selection!
+
+Each music genre aligns with specific breed temperaments through "vibrational frequency compatibility":
+
+- **Classical** → Calm, regal breeds (Persian, Ragdoll) - harmonic resonance
+- **Jazz** → Intelligent, unpredictable breeds (Siamese, Bengal) - improvisational energy
+- **Rock/Metal** → High-energy, bold breeds (Maine Coon, Abyssinian) - intensity matching
+- **Pop** → Social, adaptable breeds (Domestic Shorthair) - mainstream compatibility
+- **Electronic** → Modern, quirky breeds (Sphynx, Devon Rex) - synthetic-natural balance
+- **Country** → Traditional, loyal breeds (American Shorthair) - heartland values
+- **None/Silence** → Independent, mysterious breeds (Russian Blue) - zen alignment
+
+Music preference receives **30 points (30% weight)** in the matching algorithm - more than any other factor!
+
+**Conversation Phases:**
+
+The agent automatically transitions through three phases based on information gathered:
+
+1. **Gathering** (<4 factors): Asks questions to collect missing factors, prioritizes music preference
+2. **Ready-to-Recommend** (4-6 factors): Can provide initial recommendations, still gathering more info
+3. **Refining** (6+ factors or recommendations made): Explores alternatives, answers detailed questions
+
+**State Management:**
+
+Each turn receives the updated profile from the previous turn via `sessionState.profile`. The profile accumulates information across the conversation:
+
+```typescript
+{
+  livingSpace?: 'apartment' | 'small-house' | 'large-house' | 'farm',
+  activityLevel?: 'couch-companion' | 'playful-moderate' | 'active-explorer' | 'high-energy-athlete',
+  groomingTolerance?: 'minimal' | 'weekly' | 'daily',
+  familyComposition?: 'single' | 'couple' | 'young-kids' | 'older-kids' | 'multi-pet',
+  allergies?: boolean,
+  musicPreference?: 'classical' | 'jazz' | 'rock' | 'metal' | 'pop' | 'country' | 'electronic' | 'none',
+  conversationPhase: 'gathering' | 'ready-to-recommend' | 'refining'
+}
+```
+
+**Breed Matching Algorithm:**
+
+Scores breeds based on profile factors:
+- Music preference: 30 points (2x weight - CRITICAL!)
+- Activity level: 20 points
+- Living space: 15 points
+- Grooming tolerance: 15 points
+- Family composition: 10 points
+- Hard filters: Allergies require hypoallergenic, young kids require good-with-kids
+
+Returns top 5 breeds with match scores (0-100) and reasoning.
+
+**Knowledge Base:**
+
+The agent uses a curated database of 12 breeds with comprehensive trait profiles:
+- Persian, Ragdoll, Siamese, Bengal, Maine Coon, Abyssinian
+- Sphynx, Devon Rex, Russian Blue, Domestic Shorthair, American Shorthair, Scottish Fold
+
+Each breed profile includes: activity levels, grooming needs, apartment suitability, kid/pet compatibility, hypoallergenic status, **music alignment**, temperament, and size.
+
+---
+
 ### Archetype 9: External Event Integrator
 
 **Characteristics:** Emits events to external systems, blocks waiting for response, timeout handling
@@ -231,12 +378,6 @@ console.log(decision);
 ---
 
 ## Planned Agents (Coming Soon)
-
-### Archetype 3: Conversational Assistant
-
-**Target:** Breed selection advisor with turn-based conversation and session memory.
-
-**Use Case:** Help users select cat breeds through multi-turn Q&A.
 
 ### Archetype 4: Agentic Researcher (ReAct)
 

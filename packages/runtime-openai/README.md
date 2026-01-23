@@ -61,6 +61,12 @@ Converts LLM-powered VAT agents to executable async functions using OpenAI chat 
 
 **Use cases:** Content generation, analysis, transformation, structured output from LLMs.
 
+### Conversational Assistant → Multi-Turn Chat
+
+Converts conversational assistant agents to stateful chat functions with conversation history management.
+
+**Use cases:** Interactive assistants, multi-turn dialogues, context-aware conversations, customer support bots.
+
 #### Example: Name Generator
 
 ```typescript
@@ -93,6 +99,55 @@ const result = await generateName({
 
 console.log(result.name);      // "Sir Whiskersworth III"
 console.log(result.reasoning); // "This name captures..."
+```
+
+#### Example: Breed Advisor (Multi-Turn)
+
+```typescript
+import OpenAI from 'openai';
+import { breedAdvisorAgent, BreedAdvisorInputSchema, BreedAdvisorOutputSchema } from '@vibe-agent-toolkit/vat-example-cat-agents';
+import { convertConversationalAssistantToFunction, type ConversationalSessionState } from '@vibe-agent-toolkit/runtime-openai';
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// Convert VAT agent to executable function
+const chat = convertConversationalAssistantToFunction(
+  breedAdvisorAgent,
+  BreedAdvisorInputSchema,
+  BreedAdvisorOutputSchema,
+  {
+    client: openai,
+    model: 'gpt-4o',
+    temperature: 0.8,
+  }
+);
+
+// Initialize session state (persists across turns)
+const session: ConversationalSessionState = { history: [] };
+let profile = { conversationPhase: 'gathering' };
+
+// Turn 1
+const result1 = await chat(
+  { message: 'I need help finding a cat breed', sessionState: { profile } },
+  session
+);
+console.log(result1.reply); // "I'd love to help! ..."
+profile = result1.updatedProfile;
+
+// Turn 2 (uses accumulated history)
+const result2 = await chat(
+  { message: 'I live in an apartment and love classical music', sessionState: { profile } },
+  session
+);
+console.log(result2.reply); // "Classical music! That's wonderful..."
+profile = result2.updatedProfile;
+
+// Turn 3 (recommendations appear when ready)
+const result3 = await chat(
+  { message: "I prefer calm cats and don't mind grooming", sessionState: { profile } },
+  session
+);
+console.log(result3.recommendations); // [{ breed: 'Persian', matchScore: 95, ... }]
 ```
 
 ## Why Direct OpenAI SDK?
@@ -158,6 +213,27 @@ Batch converts multiple LLM Analyzer agents with shared OpenAI config.
 - `openaiConfig: OpenAIConfig` - Shared OpenAI configuration
 
 **Returns:** `Record<string, (input: any) => Promise<any>>` - Map of executable functions
+
+### `convertConversationalAssistantToFunction()`
+
+Converts a VAT Conversational Assistant agent to an executable async function with session state management.
+
+**Parameters:**
+- `agent: Agent<TInput, TOutput>` - The VAT conversational assistant agent to convert
+- `inputSchema: z.ZodType<TInput>` - Zod schema for input validation
+- `outputSchema: z.ZodType<TOutput>` - Zod schema for output validation
+- `openaiConfig: OpenAIConfig` - OpenAI configuration
+- `systemPrompt?: string` - Optional system prompt (overrides agent's system prompt)
+
+**Returns:** `(input: TInput, session: ConversationalSessionState) => Promise<TOutput>` - Executable async function with session state
+
+**Session State:**
+```typescript
+interface ConversationalSessionState {
+  history: Message[];              // Conversation history
+  state?: Record<string, unknown>; // Custom state data
+}
+```
 
 ## Type Definitions
 

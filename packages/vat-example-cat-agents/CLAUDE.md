@@ -6,7 +6,7 @@ This file provides technical navigation details for AI assistants working on `va
 
 **Package Purpose:** Reference implementation demonstrating VAT agent patterns across 9 archetypes using cat breeding domain.
 
-**Current Status:** 3 of 9 archetypes implemented (7 agents total)
+**Current Status:** 4 of 9 archetypes implemented (8 agents total)
 
 **Key Principle:** Agents are plain TypeScript functions. No framework dependencies in agent code.
 
@@ -26,6 +26,10 @@ packages/vat-example-cat-agents/
 │   │   ├── description-parser.ts      # Text → CatCharacteristics (same schema as photo)
 │   │   ├── name-generator.ts          # CatCharacteristics → NameSuggestion
 │   │   └── haiku-generator.ts         # CatCharacteristics → Haiku
+│   │
+│   ├── conversational-assistant/      # Archetype 3 (1 agent)
+│   │   ├── breed-advisor.ts           # Multi-turn breed selection advisor
+│   │   └── breed-knowledge.ts         # Breed database and matching algorithm
 │   │
 │   ├── external-event-integrator/     # Archetype 9 (1 agent)
 │   │   └── human-approval.ts          # HITL approval gate (mockable)
@@ -78,6 +82,13 @@ packages/vat-example-cat-agents/
   - `name-generator.ts` - Creative name generation
   - `haiku-generator.ts` - Haiku creation
 
+**Archetype 3: Conversational Assistant**
+- Location: `src/conversational-assistant/`
+- Characteristics: Multi-turn conversation, session state, context accumulation
+- Agents:
+  - `breed-advisor.ts` - Breed selection advisor with music-based matching
+  - `breed-knowledge.ts` - Breed database with 12 breeds and matching algorithm
+
 **Archetype 9: External Event Integrator**
 - Location: `src/external-event-integrator/`
 - Characteristics: Emits events, blocks waiting, timeout handling
@@ -85,10 +96,6 @@ packages/vat-example-cat-agents/
   - `human-approval.ts` - HITL approval (mockable)
 
 ### Missing Archetypes (Planned)
-
-**Archetype 3: Conversational Assistant** ⏸️
-- Needs: Turn-based conversation, session memory
-- Target: Breed selection advisor
 
 **Archetype 4: Agentic Researcher (ReAct)** ⏸️
 - Needs: Tool calling, iterative reasoning

@@ -56,3 +56,5 @@ export {
   type ToolConversionConfig,
   type ToolConversionConfigs,
 } from './adapter-types.js';
+
+export { createConversationalContext } from './conversational-helpers.js';
