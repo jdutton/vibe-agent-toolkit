@@ -183,11 +183,15 @@ export const breedAdvisorAgent: Agent<BreedAdvisorInput, BreedAdvisorOutput> =
     async (input, ctx) => {
       // Status constants for result envelopes
       const STATUS_IN_PROGRESS = 'in-progress' as const;
+      const PHASE_READY_TO_RECOMMEND = 'ready-to-recommend' as const;
 
       // Initialize profile from session state
       const currentProfile: SelectionProfile = input.sessionState?.profile ?? {
         conversationPhase: 'gathering',
       };
+
+      // Check if this is the very first turn (no session state, no history)
+      const isFirstTurn = ctx.history.length === 0 && !input.sessionState;
 
       // Add gathering prompt on first turn
       const hasGatheringPrompt = ctx.history.some(
@@ -196,6 +200,33 @@ export const breedAdvisorAgent: Agent<BreedAdvisorInput, BreedAdvisorOutput> =
 
       if (!hasGatheringPrompt) {
         ctx.addToHistory('system', GATHERING_SYSTEM_PROMPT);
+      }
+
+      // First turn: provide welcoming introduction
+      if (isFirstTurn) {
+        const greeting = `Hello! I'm your cat breed advisor. I'll help you find the perfect cat breed based on your lifestyle and preferences.
+
+To give you the best recommendation, I'll ask you a few questions about:
+- Your music taste (surprisingly important for breed compatibility!)
+- Your living space
+- Activity level preferences
+- Grooming tolerance
+- Household composition
+
+Let's start: What's your favorite type of music?`;
+
+        return {
+          reply: greeting,
+          sessionState: currentProfile,
+          result: {
+            status: STATUS_IN_PROGRESS,
+            metadata: {
+              factorsCollected: 0,
+              requiredFactors: 4,
+              conversationPhase: 'gathering',
+            },
+          },
+        };
       }
 
       // Build conversation context
@@ -209,6 +240,7 @@ export const breedAdvisorAgent: Agent<BreedAdvisorInput, BreedAdvisorOutput> =
         ctx.addToHistory('assistant', conversationalResponse);
 
         // Extract factors from conversation history so far
+        // IMPORTANT: Use separate history for extraction to avoid polluting conversation
         const extractionPrompt = `Based on the conversation above, extract any information about the user's preferences into JSON format.
 
 Only include fields where you have confident information. Set fields to null if mentioned but unclear.
@@ -225,8 +257,9 @@ Return JSON in this exact format:
 
 Return ONLY the JSON object, nothing else.`;
 
-        ctx.addToHistory('system', extractionPrompt);
-        const extractionResponse = await ctx.callLLM(ctx.history);
+        // Create temporary history for extraction (don't pollute main conversation)
+        const extractionHistory = [...ctx.history, { role: 'system' as const, content: extractionPrompt }];
+        const extractionResponse = await ctx.callLLM(extractionHistory);
 
         // Parse extracted factors
         let extractedFactors;
@@ -259,7 +292,24 @@ Return ONLY the JSON object, nothing else.`;
         const isReady = factorCount >= 4 && updatedProfile.musicPreference != null;
 
         if (isReady) {
-          updatedProfile.conversationPhase = 'ready-to-recommend';
+          updatedProfile.conversationPhase = PHASE_READY_TO_RECOMMEND;
+
+          // Add transition message to let user know we're ready
+          const transitionMessage = `\n\nPerfect! I have enough information to provide breed recommendations. Would you like to see my suggestions now, or is there anything else you'd like to tell me about your preferences?`;
+
+          return {
+            reply: conversationalResponse + transitionMessage,
+            sessionState: updatedProfile,
+            result: {
+              status: STATUS_IN_PROGRESS,
+              metadata: {
+                factorsCollected: factorCount,
+                requiredFactors: 4,
+                conversationPhase: PHASE_READY_TO_RECOMMEND,
+                message: 'Ready to provide recommendations',
+              },
+            },
+          };
         }
 
         return {
@@ -278,7 +328,7 @@ Return ONLY the JSON object, nothing else.`;
 
       // PHASE 2: EXTRACTION & RECOMMENDATIONS (triggered when ready)
       if (
-        currentProfile.conversationPhase === 'ready-to-recommend' ||
+        currentProfile.conversationPhase === PHASE_READY_TO_RECOMMEND ||
         currentProfile.conversationPhase === 'refining'
       ) {
         // Check if user is selecting a breed (concluding the conversation)
@@ -303,7 +353,8 @@ Return ONLY the JSON object, nothing else.`;
 - Congratulate them on their choice
 - Remind them of 1-2 key traits that make this a great match
 - Wish them well with their new cat
-- Keep it to 2-3 sentences
+- End with: "Type /quit to exit when you're ready."
+- Keep it to 2-3 sentences plus the exit instruction
 
 DO NOT repeat all the recommendations. DO NOT ask more questions. This is the END of the conversation.`;
 
@@ -342,7 +393,9 @@ DO NOT repeat all the recommendations. DO NOT ask more questions. This is the EN
 Present these recommendations conversationally and enthusiastically:
 ${JSON.stringify(recommendations, null, 2)}
 
-Make it feel personal and explain why these breeds match their preferences. Keep it concise (2-3 sentences per breed).`;
+Make it feel personal and explain why these breeds match their preferences. Keep it concise (2-3 sentences per breed).
+
+After presenting the recommendations, ask if any of these breeds sound appealing, or if they'd like to hear more details. Let them know they can type /quit to exit if they need time to think.`;
 
         ctx.addToHistory('system', presentationPrompt);
         const conversationalResponse = await ctx.callLLM(ctx.history);

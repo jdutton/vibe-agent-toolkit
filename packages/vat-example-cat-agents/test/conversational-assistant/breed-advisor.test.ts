@@ -25,14 +25,18 @@ function createMockContext(
     addToHistory: (role: string, content: string) => {
       history.push({ role, content });
     },
-    callLLM: async () => {
+    callLLM: async (historyParam?: Array<{ role: string; content: string }>) => {
+      // Use the passed history parameter (for extraction calls with separate history)
+      // or fall back to the context's history
+      const historyToCheck = historyParam ?? history;
+
       // Check if this is an extraction call (history contains extraction prompt)
-      const isExtractionCall = history.some((msg) =>
+      const isExtractionCall = historyToCheck.some((msg) =>
         msg.content.includes('extract any information about the user'),
       );
 
       // Check if this is a presentation call (history contains presentation prompt)
-      const isPresentationCall = history.some((msg) =>
+      const isPresentationCall = historyToCheck.some((msg) =>
         msg.content.includes('ready for cat breed recommendations'),
       );
 
