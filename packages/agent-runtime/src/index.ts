@@ -72,6 +72,7 @@ export { andThen, mapResult, match, unwrap } from './result-helpers.js';
 export {
   createPureFunctionAgent,
   createSafePureFunctionAgent,
+  executeLLMAnalyzer,
   executeLLMCall,
 } from './agent-helpers.js';
 

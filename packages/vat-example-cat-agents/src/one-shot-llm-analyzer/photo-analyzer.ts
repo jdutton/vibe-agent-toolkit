@@ -1,4 +1,4 @@
-import { executeLLMCall } from '@vibe-agent-toolkit/agent-runtime';
+import { executeLLMAnalyzer } from '@vibe-agent-toolkit/agent-runtime';
 import type { Agent, LLMError, OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
 import { z } from 'zod';
 
@@ -315,59 +315,27 @@ export const photoAnalyzerAgent: Agent<
     },
   },
   execute: async (input: PhotoAnalyzerInput) => {
-    try {
-      // Validate input
-      const parsed = PhotoAnalyzerInputSchema.safeParse(input);
-      if (!parsed.success) {
-        return {
-          result: { status: 'error', error: 'llm-invalid-output' as const },
-        };
-      }
-
-      const { imagePathOrBase64, mockable = true } = parsed.data;
-
-      // Mock mode: use filename pattern matching
-      if (mockable) {
-        const data = mockAnalyzePhoto(imagePathOrBase64);
-        return {
-          result: { status: 'success', data },
-          metadata: {
-            mode: 'mock',
-            executedAt: new Date().toISOString(),
-          },
-        };
-      }
-
-      // Real mode: use vision LLM
-      const result = await executeLLMCall(
-        async () => {
-          // This would be replaced with actual LLM SDK call
-          // For now, throw error since not implemented
-          throw new Error('Real vision API not implemented yet. Use mockable: true for testing.');
-        },
-        {
-          parseOutput: (raw) => {
-            const parsed = JSON.parse(raw as string);
-            return CatCharacteristicsSchema.parse(parsed);
-          },
-        },
-      );
-
+    // Validate input
+    const parsed = PhotoAnalyzerInputSchema.safeParse(input);
+    if (!parsed.success) {
       return {
-        result,
-        metadata: {
-          mode: 'real',
-          executedAt: new Date().toISOString(),
-        },
-      };
-    } catch (err) {
-      // Unexpected errors
-      if (err instanceof Error) {
-        console.warn('Photo analysis error:', err.message);
-      }
-      return {
-        result: { status: 'error', error: 'llm-unavailable' as const },
+        result: { status: 'error', error: 'llm-invalid-output' as const },
       };
     }
+
+    const { imagePathOrBase64, mockable = true } = parsed.data;
+
+    return executeLLMAnalyzer({
+      mockable,
+      mockFn: () => mockAnalyzePhoto(imagePathOrBase64),
+      realFn: async () => {
+        throw new Error('Real vision API not implemented yet. Use mockable: true for testing.');
+      },
+      parseOutput: (raw) => {
+        const parsed = JSON.parse(raw as string);
+        return CatCharacteristicsSchema.parse(parsed);
+      },
+      errorContext: 'Photo analysis',
+    });
   },
 };

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { parseDescription } from '../../src/one-shot-llm-analyzer/description-parser.js';
+import { descriptionParserAgent, parseDescription } from '../../src/one-shot-llm-analyzer/description-parser.js';
+import { expectAgentSuccess } from '../test-helpers.js';
 
 describe('parseDescription', () => {
   it('should parse structured description', async () => {
@@ -153,5 +154,40 @@ describe('parseDescription', () => {
     await expect(
       parseDescription('test', { mockable: false }),
     ).rejects.toThrow('Real LLM parsing not implemented yet');
+  });
+});
+
+describe('descriptionParserAgent', () => {
+  it('should have correct manifest', () => {
+    expect(descriptionParserAgent.name).toBe('description-parser');
+    expect(descriptionParserAgent.manifest.name).toBe('description-parser');
+    expect(descriptionParserAgent.manifest.description).toBe(
+      'Parses text descriptions and extracts structured cat characteristics',
+    );
+    expect(descriptionParserAgent.manifest.version).toBe('1.0.0');
+    expect(descriptionParserAgent.manifest.archetype).toBe('one-shot-llm-analyzer');
+  });
+
+  it('should parse description via agent.execute() in mock mode', async () => {
+    const data = await expectAgentSuccess(
+      descriptionParserAgent,
+      { description: 'Orange tabby cat, playful, loves boxes' },
+      expect,
+    );
+
+    expect(data.physical.furColor).toBe('Orange');
+    expect(data.physical.furPattern).toBe('Tabby');
+    expect(data.behavioral.personality).toContain('Playful');
+  });
+
+  it('should handle mockable option via agent.execute()', async () => {
+    const data = await expectAgentSuccess(
+      descriptionParserAgent,
+      { description: 'Black cat with green eyes', mockable: true },
+      expect,
+    );
+
+    expect(data.physical.furColor).toBe('Black');
+    expect(data.physical.eyeColor).toBe('Green');
   });
 });

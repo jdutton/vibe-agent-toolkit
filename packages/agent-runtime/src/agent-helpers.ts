@@ -10,6 +10,12 @@ import type {
 } from '@vibe-agent-toolkit/agent-schema';
 
 /**
+ * Default LLM error for unknown failures.
+ * @internal
+ */
+const LLM_UNAVAILABLE_ERROR: LLMError = 'llm-unavailable';
+
+/**
  * Agent manifest metadata (simplified runtime version).
  */
 export interface AgentManifest {
@@ -162,6 +168,74 @@ export async function executeLLMCall<T>(
 }
 
 /**
+ * Execute an LLM analyzer agent with mock/real mode support.
+ *
+ * Eliminates boilerplate for LLM analyzer agents by handling:
+ * - Mock vs real mode switching
+ * - Metadata generation
+ * - Error handling with llm-unavailable fallback
+ * - Consistent return envelope structure
+ *
+ * @example
+ * execute: async (input) => {
+ *   return executeLLMAnalyzer({
+ *     mockable: input.mockable ?? true,
+ *     mockFn: () => mockParseDescription(input.description),
+ *     realFn: async () => {
+ *       throw new Error('Not implemented');
+ *     },
+ *     parseOutput: (raw) => CatCharacteristicsSchema.parse(JSON.parse(raw)),
+ *     errorContext: 'Description parsing',
+ *   });
+ * }
+ */
+export async function executeLLMAnalyzer<TData>(config: {
+  mockable: boolean;
+  mockFn: () => TData;
+  realFn: () => Promise<unknown>;
+  parseOutput: (raw: unknown) => TData;
+  errorContext: string;
+}): Promise<OneShotAgentOutput<TData, LLMError>> {
+  try {
+    // Mock mode: return mock data immediately
+    if (config.mockable) {
+      const data = config.mockFn();
+      return {
+        result: { status: 'success', data },
+        metadata: {
+          mode: 'mock',
+          executedAt: new Date().toISOString(),
+        },
+      };
+    }
+
+    // Real mode: use LLM
+    const result = await executeLLMCall<TData>(
+      config.realFn as () => Promise<TData>,
+      {
+        parseOutput: config.parseOutput,
+      },
+    );
+
+    return {
+      result,
+      metadata: {
+        mode: 'real',
+        executedAt: new Date().toISOString(),
+      },
+    };
+  } catch (err) {
+    // Unexpected errors
+    if (err instanceof Error) {
+      console.warn(`${config.errorContext} error:`, err.message);
+    }
+    return {
+      result: { status: 'error', error: LLM_UNAVAILABLE_ERROR },
+    };
+  }
+}
+
+/**
  * Map common LLM SDK exceptions to standard error codes.
  *
  * @internal
@@ -192,10 +266,10 @@ function mapLLMException(err: unknown): LLMError {
 
     // Service unavailable
     if (message.includes('503') || message.includes('502')) {
-      return 'llm-unavailable';
+      return LLM_UNAVAILABLE_ERROR;
     }
   }
 
   // Default to unavailable for unknown errors
-  return 'llm-unavailable';
+  return LLM_UNAVAILABLE_ERROR;
 }
