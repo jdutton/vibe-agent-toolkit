@@ -7,6 +7,9 @@
 // JSON Schema utilities
 export { toJsonSchema, type JsonSchemaOptions } from './schema-utils.js';
 
+// Result types
+export * from './result-types.js';
+
 // Core schemas
 export {
   AgentMetadataSchema,
