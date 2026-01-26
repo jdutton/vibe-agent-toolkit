@@ -109,16 +109,50 @@ export const BreedAdvisorInputSchema = z.object({
 export type BreedAdvisorInput = z.infer<typeof BreedAdvisorInputSchema>;
 
 /**
+ * Breed match result for recommendations
+ */
+export const BreedMatchSchema = z.object({
+  breed: z.string().describe('Breed name'),
+  matchScore: z.number().min(0).max(100).describe('Match score (0-100)'),
+  reasoning: z.string().describe('Why this breed matches'),
+});
+
+export type BreedMatch = z.infer<typeof BreedMatchSchema>;
+
+/**
+ * Conversational agent error types for breed advisor
+ */
+export type BreedAdvisorError = 'user-abandoned' | 'no-suitable-match' | 'timeout';
+
+/**
  * Output from breed advisor agent
+ * Follows ConversationalAgentOutput envelope pattern
  */
 export const BreedAdvisorOutputSchema = z.object({
   reply: z.string().describe('Agent response to user'),
-  updatedProfile: SelectionProfileSchema.describe('Updated selection profile'),
-  recommendations: z.array(z.object({
-    breed: z.string().describe('Breed name'),
-    matchScore: z.number().min(0).max(100).describe('Match score (0-100)'),
-    reasoning: z.string().describe('Why this breed matches'),
-  })).optional().describe('Breed recommendations if ready'),
+  sessionState: SelectionProfileSchema.describe('Updated selection profile for next turn'),
+  result: z.discriminatedUnion('status', [
+    z.object({
+      status: z.literal('in-progress'),
+      metadata: z.object({
+        recommendations: z.array(BreedMatchSchema).optional(),
+        factorsCollected: z.number().optional(),
+        requiredFactors: z.number().optional(),
+        conversationPhase: z.string().optional(),
+      }).optional(),
+    }),
+    z.object({
+      status: z.literal('success'),
+      data: z.object({
+        selectedBreed: z.string().describe('The breed the user selected'),
+        finalProfile: SelectionProfileSchema.describe('Complete selection profile'),
+      }),
+    }),
+    z.object({
+      status: z.literal('error'),
+      error: z.enum(['user-abandoned', 'no-suitable-match', 'timeout'] as const),
+    }),
+  ]).describe('Machine-readable result for orchestration'),
 });
 
 export type BreedAdvisorOutput = z.infer<typeof BreedAdvisorOutputSchema>;

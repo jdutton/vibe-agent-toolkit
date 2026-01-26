@@ -181,6 +181,9 @@ export const breedAdvisorAgent: Agent<BreedAdvisorInput, BreedAdvisorOutput> =
 
     // Custom handler implementing TRUE two-phase logic
     async (input, ctx) => {
+      // Status constants for result envelopes
+      const STATUS_IN_PROGRESS = 'in-progress' as const;
+
       // Initialize profile from session state
       const currentProfile: SelectionProfile = input.sessionState?.profile ?? {
         conversationPhase: 'gathering',
@@ -261,8 +264,15 @@ Return ONLY the JSON object, nothing else.`;
 
         return {
           reply: conversationalResponse,
-          updatedProfile,
-          recommendations: undefined,
+          sessionState: updatedProfile,
+          result: {
+            status: STATUS_IN_PROGRESS,
+            metadata: {
+              factorsCollected: factorCount,
+              requiredFactors: 4,
+              conversationPhase: updatedProfile.conversationPhase ?? 'gathering',
+            },
+          },
         };
       }
 
@@ -301,13 +311,24 @@ DO NOT repeat all the recommendations. DO NOT ask more questions. This is the EN
           const conclusionResponse = await ctx.callLLM(ctx.history);
           ctx.addToHistory('assistant', conclusionResponse);
 
+          // Find which breed was mentioned
+          const selectedBreed = BREED_DATABASE.find((breed) =>
+            userMessage.includes(breed.name.toLowerCase()),
+          )?.name ?? 'Unknown';
+
           return {
             reply: conclusionResponse,
-            updatedProfile: {
+            sessionState: {
               ...currentProfile,
               conversationPhase: 'completed',
             },
-            recommendations: undefined,
+            result: {
+              status: 'success' as const,
+              data: {
+                selectedBreed,
+                finalProfile: currentProfile,
+              },
+            },
           };
         }
 
@@ -329,11 +350,17 @@ Make it feel personal and explain why these breeds match their preferences. Keep
 
         return {
           reply: conversationalResponse,
-          updatedProfile: {
+          sessionState: {
             ...currentProfile,
             conversationPhase: 'refining',
           },
-          recommendations,
+          result: {
+            status: STATUS_IN_PROGRESS,
+            metadata: {
+              recommendations,
+              conversationPhase: 'refining',
+            },
+          },
         };
       }
 
@@ -342,8 +369,13 @@ Make it feel personal and explain why these breeds match their preferences. Keep
       ctx.addToHistory('assistant', fallbackResponse);
       return {
         reply: fallbackResponse,
-        updatedProfile: currentProfile,
-        recommendations: undefined,
+        sessionState: currentProfile,
+        result: {
+          status: STATUS_IN_PROGRESS,
+          metadata: {
+            conversationPhase: currentProfile.conversationPhase ?? 'gathering',
+          },
+        },
       };
     },
   );

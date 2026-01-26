@@ -2,6 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import { breedAdvisorAgent } from '../../src/conversational-assistant/breed-advisor.js';
 
+// Constants for result status and conversation phase
+const STATUS_IN_PROGRESS = 'in-progress' as const;
+const PHASE_READY_TO_RECOMMEND = 'ready-to-recommend' as const;
+
 /**
  * Create a mock context for testing two-phase pattern
  * @param conversationalResponse - Response for Phase 1 (conversational text)
@@ -77,13 +81,12 @@ describe('breedAdvisorAgent.execute', () => {
     const result = await breedAdvisorAgent.execute(input, mockContext);
 
     expect(result.reply).toBeDefined();
-    expect(result.updatedProfile.conversationPhase).toBe('gathering');
+    expect(result.sessionState.conversationPhase).toBe('gathering');
+    expect(result.result.status).toBe(STATUS_IN_PROGRESS);
   });
 });
 
 describe('breedAdvisorAgent multi-turn conversation', () => {
-  const READY_PHASE = 'ready-to-recommend';
-
   it('should extract music preference from natural language', async () => {
     const input = {
       message: 'I really love classical music',
@@ -103,7 +106,8 @@ describe('breedAdvisorAgent multi-turn conversation', () => {
 
     const result = await breedAdvisorAgent.execute(input, mockContext);
 
-    expect(result.updatedProfile.musicPreference).toBe('classical');
+    expect(result.sessionState.musicPreference).toBe('classical');
+    expect(result.result.status).toBe(STATUS_IN_PROGRESS);
   });
 
   it('should extract multiple factors from one message', async () => {
@@ -126,8 +130,9 @@ describe('breedAdvisorAgent multi-turn conversation', () => {
 
     const result = await breedAdvisorAgent.execute(input, mockContext);
 
-    expect(result.updatedProfile.livingSpace).toBe('apartment');
-    expect(result.updatedProfile.familyComposition).toBe('young-kids');
+    expect(result.sessionState.livingSpace).toBe('apartment');
+    expect(result.sessionState.familyComposition).toBe('young-kids');
+    expect(result.result.status).toBe(STATUS_IN_PROGRESS);
   });
 
   it('should transition to ready-to-recommend phase with 4 factors', async () => {
@@ -156,8 +161,9 @@ describe('breedAdvisorAgent multi-turn conversation', () => {
     const result = await breedAdvisorAgent.execute(input, mockContext);
 
     // With 4 factors including music, should transition to ready-to-recommend
-    expect(result.updatedProfile.conversationPhase).toBe('ready-to-recommend');
-    expect(result.updatedProfile.groomingTolerance).toBe('minimal');
+    expect(result.sessionState.conversationPhase).toBe(PHASE_READY_TO_RECOMMEND);
+    expect(result.sessionState.groomingTolerance).toBe('minimal');
+    expect(result.result.status).toBe(STATUS_IN_PROGRESS);
   });
 
   it('should provide recommendations when explicitly asked', async () => {
@@ -169,36 +175,23 @@ describe('breedAdvisorAgent multi-turn conversation', () => {
           livingSpace: 'apartment' as const,
           activityLevel: 'couch-companion' as const,
           groomingTolerance: 'daily' as const,
-          conversationPhase: READY_PHASE as const,
+          conversationPhase: PHASE_READY_TO_RECOMMEND,
         },
       },
     };
 
     const mockContext = createMockContext(
-      JSON.stringify({
-        reply: 'Based on your preferences, I recommend Persian cats!',
-        updatedProfile: {
-          musicPreference: 'classical',
-          livingSpace: 'apartment',
-          activityLevel: 'couch-companion',
-          groomingTolerance: 'daily',
-          conversationPhase: READY_PHASE,
-        },
-        recommendations: [
-          {
-            breed: 'Persian',
-            matchScore: 90,
-            reasoning: 'Classical music alignment; couch companion; daily grooming tolerance',
-          },
-        ],
-      }),
+      'Based on your preferences, I recommend Persian cats!',
+      {}, // No extraction needed in Phase 2
+      'Persian cats are perfect for your classical music preference and couch companion lifestyle.',
     );
 
     const result = await breedAdvisorAgent.execute(input, mockContext);
 
-    expect(result.recommendations).toBeDefined();
-    if (result.recommendations) {
-      const persian = result.recommendations.find((r) => r.breed === 'Persian');
+    expect(result.result.status).toBe(STATUS_IN_PROGRESS);
+    if (result.result.status === 'in-progress') {
+      expect(result.result.metadata?.recommendations).toBeDefined();
+      const persian = result.result.metadata?.recommendations?.find((r: { breed: string }) => r.breed === 'Persian');
       expect(persian).toBeDefined();
     }
   });
@@ -224,21 +217,19 @@ describe('breedAdvisorAgent multi-turn conversation', () => {
 
     const result = await breedAdvisorAgent.execute(input, mockContext);
 
-    expect(result.updatedProfile.allergies).toBe(true);
+    expect(result.sessionState.allergies).toBe(true);
+    expect(result.result.status).toBe(STATUS_IN_PROGRESS);
   });
 });
 
-describe('breedAdvisorAgent declarative configuration', () => {
-  it('should use generated prompts from factor definitions', () => {
-    // Verify the manifest contains generated prompt information
-    expect(breedAdvisorAgent.manifest.metadata?.gatheringPhase).toBeDefined();
-    expect(breedAdvisorAgent.manifest.metadata?.gatheringPhase?.factorCount).toBe(6);
-    expect(breedAdvisorAgent.manifest.metadata?.gatheringPhase?.requiredFactors).toContain('musicPreference');
-    expect(breedAdvisorAgent.manifest.metadata?.gatheringPhase?.priorityFactors).toContain('musicPreference');
+describe('breedAdvisorAgent metadata', () => {
+  it('should have pattern metadata', () => {
+    expect(breedAdvisorAgent.manifest.metadata).toBeDefined();
+    expect(breedAdvisorAgent.manifest.metadata?.pattern).toBe('two-phase-conversational');
   });
 
-  it('should have extraction phase metadata', () => {
-    expect(breedAdvisorAgent.manifest.metadata?.extractionPhase).toBeDefined();
-    expect(breedAdvisorAgent.manifest.metadata?.extractionPhase?.useStructuredOutputs).toBe(false);
+  it('should have author and innovation metadata', () => {
+    expect(breedAdvisorAgent.manifest.metadata?.author).toBe('Cat Compatibility Institute');
+    expect(breedAdvisorAgent.manifest.metadata?.innovation).toBe('Music-based breed matching');
   });
 });

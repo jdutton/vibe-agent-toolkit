@@ -8,6 +8,7 @@ import {
 
 const CONVERSATION_PHASE_GATHERING = 'gathering';
 const CONVERSATION_PHASE_READY_TO_RECOMMEND = 'ready-to-recommend';
+const RESULT_STATUS_IN_PROGRESS = 'in-progress';
 
 describe('SelectionProfileSchema', () => {
   it('should validate minimal profile with only phase', () => {
@@ -78,32 +79,46 @@ describe('BreedAdvisorInputSchema', () => {
 });
 
 describe('BreedAdvisorOutputSchema', () => {
-  it('should validate reply with updated profile', () => {
+  it('should validate reply with in-progress result', () => {
     const result = BreedAdvisorOutputSchema.safeParse({
       reply: 'Great! Tell me about your living space.',
-      updatedProfile: {
+      sessionState: {
         conversationPhase: CONVERSATION_PHASE_GATHERING,
+      },
+      result: {
+        status: RESULT_STATUS_IN_PROGRESS,
+        metadata: {
+          factorsCollected: 1,
+          requiredFactors: 4,
+          conversationPhase: CONVERSATION_PHASE_GATHERING,
+        },
       },
     });
 
     expect(result.success).toBe(true);
   });
 
-  it('should validate reply with recommendations', () => {
+  it('should validate reply with recommendations in metadata', () => {
     const result = BreedAdvisorOutputSchema.safeParse({
       reply: 'Based on your preferences, here are my recommendations:',
-      updatedProfile: {
+      sessionState: {
         conversationPhase: CONVERSATION_PHASE_READY_TO_RECOMMEND,
         musicPreference: 'classical',
         livingSpace: 'apartment',
       },
-      recommendations: [
-        {
-          breed: 'Persian',
-          matchScore: 95,
-          reasoning: 'Classical music aligns with calm temperament',
+      result: {
+        status: RESULT_STATUS_IN_PROGRESS,
+        metadata: {
+          recommendations: [
+            {
+              breed: 'Persian',
+              matchScore: 95,
+              reasoning: 'Classical music aligns with calm temperament',
+            },
+          ],
+          conversationPhase: 'refining',
         },
-      ],
+      },
     });
 
     expect(result.success).toBe(true);
@@ -112,14 +127,19 @@ describe('BreedAdvisorOutputSchema', () => {
   it('should reject invalid match score', () => {
     const result = BreedAdvisorOutputSchema.safeParse({
       reply: 'Here are recommendations',
-      updatedProfile: { conversationPhase: 'ready-to-recommend' },
-      recommendations: [
-        {
-          breed: 'Persian',
-          matchScore: 150, // Invalid: > 100
-          reasoning: 'Great match',
+      sessionState: { conversationPhase: 'ready-to-recommend' },
+      result: {
+        status: RESULT_STATUS_IN_PROGRESS,
+        metadata: {
+          recommendations: [
+            {
+              breed: 'Persian',
+              matchScore: 150, // Invalid: > 100
+              reasoning: 'Great match',
+            },
+          ],
         },
-      ],
+      },
     });
 
     expect(result.success).toBe(false);

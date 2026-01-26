@@ -3,7 +3,7 @@
  * Contains comprehensive breed profiles with traits aligned to music preferences.
  */
 
-import type { SelectionProfile } from '../types/schemas.js';
+import type { BreedMatch, SelectionProfile } from '../types/schemas.js';
 
 export type ActivityLevel = 'couch-companion' | 'playful-moderate' | 'active-explorer' | 'high-energy-athlete';
 export type GroomingNeeds = 'minimal' | 'weekly' | 'daily';
@@ -214,12 +214,6 @@ export const BREED_DATABASE: BreedProfile[] = [
     description: 'Recognized by their distinctive folded ears, Scottish Folds are gentle, sweet-natured cats. They enjoy both calm classical music and sophisticated jazz. They adapt well to different living situations and get along with everyone. Known for sitting in unusual positions.',
   },
 ];
-
-export interface BreedMatch {
-  breed: string;
-  matchScore: number;
-  reasoning: string;
-}
 
 interface ScoringResult {
   score: number;
