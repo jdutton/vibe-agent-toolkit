@@ -57,7 +57,7 @@ export function createClaudeAgentSDKAdapter(): ConversationalRuntimeAdapter<
 
       // Update session state
       const updatedState: BreedAdvisorState = {
-        profile: result.updatedProfile,
+        profile: result.sessionState,
       };
 
       return {

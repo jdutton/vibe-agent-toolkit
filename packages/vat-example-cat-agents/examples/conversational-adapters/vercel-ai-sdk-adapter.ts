@@ -50,7 +50,7 @@ export function createVercelAISDKAdapter(): ConversationalRuntimeAdapter<
 
       // Update session state
       const updatedState: BreedAdvisorState = {
-        profile: agentOutput.updatedProfile,
+        profile: agentOutput.sessionState,
       };
 
       return {

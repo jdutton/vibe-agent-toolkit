@@ -174,8 +174,11 @@ async function runDemo() {
   const breedAdvisorFn = async (userMessage: string, session: Session<BreedAdvisorState>) => {
     const result = await adapter.convertToFunction(userMessage, session);
 
-    // Check if conversation is complete
-    if (result.output.updatedProfile.conversationPhase === 'completed') {
+    // Check if conversation is complete (user selected a breed)
+    const isComplete = result.output.sessionState.conversationPhase === 'completed' ||
+                       result.output.result.status === 'success';
+
+    if (isComplete) {
       // Agent has concluded - add goodbye message and signal to exit
       const output = result.output.reply + '\n\n' + colors.yellow + 'Session complete. Thanks for using the breed advisor!' + colors.reset;
 
