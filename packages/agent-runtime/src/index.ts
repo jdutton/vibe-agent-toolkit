@@ -68,7 +68,7 @@ export {
 
 export { createConversationalContext } from './conversational-helpers.js';
 
-export { andThen, mapResult, match, unwrap } from './result-helpers.js';
+export { andThen, mapResult, match, unwrap, withRetry, withTiming } from './result-helpers.js';
 export {
   createPureFunctionAgent,
   createSafePureFunctionAgent,

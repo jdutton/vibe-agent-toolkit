@@ -1,5 +1,6 @@
 import { createPureFunctionAgent } from '@vibe-agent-toolkit/agent-runtime';
 import type { AgentResult } from '@vibe-agent-toolkit/agent-schema';
+import { createSuccess, createError } from '@vibe-agent-toolkit/agent-schema';
 import { z } from 'zod';
 
 import {
@@ -10,6 +11,12 @@ import {
 
 // SonarQube: Disable "Do not call Array#push() multiple times" - conditional pushes based on validation logic
 // NOSONAR
+
+/**
+ * Error constant for name validator agent.
+ * Used when validation fails due to invalid input format or unexpected errors.
+ */
+const VALIDATION_ERROR = 'invalid-format' as const;
 
 /**
  * Input schema for name validation
@@ -287,22 +294,22 @@ export function critiqueCatName(
  * distinguished titles, and appropriateness based on cat characteristics.
  */
 export const nameValidatorAgent = createPureFunctionAgent(
-  (input: NameValidationInput): AgentResult<NameValidationResult, 'invalid-format'> => {
+  (input: NameValidationInput): AgentResult<NameValidationResult, typeof VALIDATION_ERROR> => {
     try {
       // Validate input schema
       const parsed = NameValidationInputSchema.safeParse(input);
       if (!parsed.success) {
-        return { status: 'error', error: 'invalid-format' };
+        return createError(VALIDATION_ERROR);
       }
 
       const validationResult = validateCatName(parsed.data.name, parsed.data.characteristics);
-      return { status: 'success', data: validationResult };
+      return createSuccess(validationResult);
     } catch (err) {
       // Unexpected errors (e.g., pattern matching failure)
       if (err instanceof Error) {
         console.warn('Name validation error:', err.message);
       }
-      return { status: 'error', error: 'invalid-format' };
+      return createError(VALIDATION_ERROR);
     }
   },
   {

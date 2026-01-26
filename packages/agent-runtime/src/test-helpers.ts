@@ -20,7 +20,7 @@ export const resultMatchers = {
    * // TypeScript knows output.result.data exists here
    * expect(output.result.data.field).toBe('value');
    */
-  expectSuccess<T, E>(
+  expectSuccess<T, E extends string>(
     result: AgentResult<T, E>
   ): asserts result is { status: 'success'; data: T } {
     expect(result.status).toBe('success');
@@ -35,7 +35,7 @@ export const resultMatchers = {
    * // TypeScript knows output.result.error exists here
    * expect(output.result.error).toBe('invalid-input');
    */
-  expectError<T, E>(
+  expectError<T, E extends string>(
     result: AgentResult<T, E>
   ): asserts result is { status: 'error'; error: E } {
     expect(result.status).toBe('error');
@@ -49,7 +49,7 @@ export const resultMatchers = {
    * resultMatchers.expectInProgress(output.result);
    * // TypeScript knows output.result.metadata might exist
    */
-  expectInProgress<T, E, M>(
+  expectInProgress<T, E extends string, M>(
     result: StatefulAgentResult<T, E, M>
   ): asserts result is { status: 'in-progress'; metadata?: M } {
     expect(result.status).toBe('in-progress');

@@ -1,5 +1,6 @@
 import { executeLLMAnalyzer } from '@vibe-agent-toolkit/agent-runtime';
 import type { Agent, LLMError, OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
+import { LLM_INVALID_OUTPUT, RESULT_ERROR } from '@vibe-agent-toolkit/agent-schema';
 import { z } from 'zod';
 
 import { CatCharacteristicsSchema, type CatCharacteristics } from '../types/schemas.js';
@@ -319,7 +320,7 @@ export const photoAnalyzerAgent: Agent<
     const parsed = PhotoAnalyzerInputSchema.safeParse(input);
     if (!parsed.success) {
       return {
-        result: { status: 'error', error: 'llm-invalid-output' as const },
+        result: { status: RESULT_ERROR, error: LLM_INVALID_OUTPUT },
       };
     }
 

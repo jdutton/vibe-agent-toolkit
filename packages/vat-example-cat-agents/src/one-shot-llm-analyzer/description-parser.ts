@@ -1,8 +1,10 @@
 import { executeLLMAnalyzer } from '@vibe-agent-toolkit/agent-runtime';
 import type { Agent, LLMError, OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
+import { LLM_INVALID_OUTPUT, RESULT_ERROR } from '@vibe-agent-toolkit/agent-schema';
 import { z } from 'zod';
 
 import { CatCharacteristicsSchema, type CatCharacteristics } from '../types/schemas.js';
+// Extract fur color from text descriptions
 import { extractFurColor as extractFurColorUtil } from '../utils/color-extraction.js';
 
 /**
@@ -385,7 +387,7 @@ export const descriptionParserAgent: Agent<
     const parsed = DescriptionParserInputSchema.safeParse(input);
     if (!parsed.success) {
       return {
-        result: { status: 'error', error: 'llm-invalid-output' as const },
+        result: { status: RESULT_ERROR, error: LLM_INVALID_OUTPUT },
       };
     }
 

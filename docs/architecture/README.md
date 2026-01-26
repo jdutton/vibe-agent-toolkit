@@ -219,6 +219,96 @@ const message = match(result, {
 const data = unwrap(result);
 ```
 
+### Optional Observability Fields
+
+Result envelopes support optional fields for production observability and intelligent orchestration:
+
+#### Confidence (0-1 scale)
+
+Indicates certainty in the result, enabling intelligent orchestration decisions:
+
+```typescript
+{
+  status: 'success',
+  data: { breed: 'Maine Coon' },
+  confidence: 0.65  // 65% confident → maybe verify with another agent
+}
+```
+
+**Use cases:**
+- Orchestration decisions (retry if confidence < threshold)
+- Chain validation (verify uncertain results)
+- User transparency (show uncertainty to user)
+- Stopping criteria (iterate until confidence > 0.9)
+
+#### Warnings (non-fatal issues)
+
+Success with caveats - graceful degradation:
+
+```typescript
+{
+  status: 'success',
+  data: { breed: 'Persian' },
+  warnings: [
+    'Image quality was poor, confidence may be lower',
+    'Breed database last updated 6 months ago'
+  ]
+}
+```
+
+#### Execution Metadata (observability)
+
+Performance and cost tracking for production systems:
+
+```typescript
+interface ExecutionMetadata {
+  durationMs?: number;      // Performance monitoring
+  tokensUsed?: number;      // LLM cost tracking
+  cost?: number;            // Estimated cost in USD
+  model?: string;           // Which model (for A/B testing)
+  provider?: string;        // 'openai' | 'anthropic' | etc
+  retryCount?: number;      // Set by orchestrator's retry wrapper
+}
+```
+
+**Example:**
+```typescript
+{
+  status: 'success',
+  data: { characteristics: {...} },
+  execution: {
+    durationMs: 1234,
+    tokensUsed: 450,
+    cost: 0.0045,
+    model: 'gpt-4o-mini',
+    provider: 'openai',
+    retryCount: 0  // No retries needed
+  }
+}
+```
+
+**Use cases:**
+- Performance optimization (identify slow agents)
+- Cost attribution (multi-tenant systems)
+- Usage analytics (tokens per request)
+- Debugging (view retry behavior)
+
+### Error Classification & Retryability
+
+Error types implicitly convey retryability - orchestrators encode retry policy based on error type:
+
+**Retryable errors** (transient failures):
+- `llm-rate-limit` - Exponential backoff
+- `llm-timeout` - Quick retry
+- `llm-unavailable` - Long wait
+
+**Non-retryable errors** (permanent failures):
+- `llm-refusal` - Model refused to comply
+- `llm-invalid-output` - Output parsing failed
+- `invalid-input` - Bad user input
+
+**Separation of concerns:** Agents classify errors, orchestrators decide retry policy.
+
 ### Learn More
 
 See [Orchestration Guide](../orchestration.md) for detailed patterns and examples.

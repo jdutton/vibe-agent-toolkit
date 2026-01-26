@@ -321,40 +321,60 @@ async function analyzeMultipleSources(
 }
 ```
 
-### Retry with Fallback
+### Intelligent Retry with Tracking
 
-Retry operations with exponential backoff:
+Use the built-in `withRetry` helper for automatic retry with exponential backoff:
 
 ```typescript
-async function analyzeWithRetry(
-  imagePath: string,
-  maxRetries = 3
-): Promise<AgentResult<CatCharacteristics, LLMError>> {
-  let lastError: LLMError = 'llm-unavailable';
+import { withRetry } from '@vibe-agent-toolkit/agent-runtime';
+import {
+  LLM_TIMEOUT,
+  LLM_RATE_LIMIT,
+  LLM_UNAVAILABLE,
+  RETRYABLE_LLM_ERRORS,
+  RETRYABLE_EVENT_ERRORS,
+} from '@vibe-agent-toolkit/agent-schema';
 
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    const output = await photoAnalyzer.execute({ imagePath });
+// Use the withRetry helper (built into agent-runtime)
+const output = await withRetry(
+  () => photoAnalyzer.execute({ imagePath }),
+  5  // max attempts
+);
 
-    if (output.result.status === 'success') {
-      return output.result;
-    }
+if (output.result.status === 'success') {
+  console.log('Success after', output.result.execution?.retryCount ?? 0, 'retries');
+  console.log('Total duration:', output.result.execution?.durationMs, 'ms');
+  console.log('Total cost:', output.result.execution?.cost);
+} else {
+  console.error('Failed after', output.result.execution?.retryCount ?? 0, 'retries');
+  console.error('Error type:', output.result.error);
+}
+```
 
-    lastError = output.result.error;
+**How it works:**
 
-    // Retry on transient errors
-    if (lastError === 'llm-timeout' ||
-        lastError === 'llm-rate-limit' ||
-        lastError === 'llm-unavailable') {
-      const delay = Math.pow(2, attempt) * 1000;
-      await new Promise(resolve => setTimeout(resolve, delay));
-      continue;
-    }
+1. **Error classification**: Agents return error constants (e.g., `LLM_TIMEOUT`, `LLM_RATE_LIMIT`)
+2. **Retryability**: Error types imply retryability via exported sets:
+   - `RETRYABLE_LLM_ERRORS`: `[LLM_TIMEOUT, LLM_RATE_LIMIT, LLM_UNAVAILABLE]`
+   - `RETRYABLE_EVENT_ERRORS`: `[EVENT_TIMEOUT, EVENT_UNAVAILABLE]`
+3. **Backoff delays**: Different error types have different base delays:
+   - `LLM_RATE_LIMIT`: 5000ms (rate limits need longer waits)
+   - `LLM_TIMEOUT`: 1000ms (timeouts can retry quickly)
+   - `LLM_UNAVAILABLE`: 10000ms (service issues need long waits)
+4. **Exponential backoff**: Each retry doubles the delay (capped at 30 seconds)
+5. **Accumulated metrics**: The helper accumulates `durationMs`, `tokensUsed`, and `cost` across all attempts
+6. **Retry count injection**: The orchestrator injects `retryCount` into `ExecutionMetadata`
 
-    // Don't retry on permanent errors
-    return output.result;
-  }
+**Custom retry logic:**
 
-  return { status: 'error', error: lastError };
+If you need custom retry behavior, you can use the standard error sets:
+
+```typescript
+import { RETRYABLE_LLM_ERRORS } from '@vibe-agent-toolkit/agent-schema';
+
+function isRetryable(error: string): boolean {
+  return RETRYABLE_LLM_ERRORS.has(error as LLMError) ||
+         RETRYABLE_EVENT_ERRORS.has(error as ExternalEventError);
 }
 ```
 
@@ -524,6 +544,136 @@ async function generateWithApproval(
       status: 'error' as const,
       error: 'rejected-by-human' as const,
     };
+  }
+}
+```
+
+## Observability and Production Monitoring
+
+Result envelopes support optional observability fields for production monitoring, intelligent orchestration, and debugging.
+
+### Confidence
+
+Indicates certainty in the result (0-1 scale), enabling intelligent orchestration decisions:
+
+```typescript
+import { RESULT_SUCCESS } from '@vibe-agent-toolkit/agent-schema';
+
+// Agent returns confidence
+const output = await photoAnalyzer.execute({ imagePath });
+
+if (output.result.status === RESULT_SUCCESS) {
+  const confidence = output.result.confidence ?? 1.0;
+
+  if (confidence < 0.8) {
+    // Low confidence - verify with another agent
+    const secondOpinion = await backupAnalyzer.execute({ imagePath });
+    // Compare results...
+  }
+}
+```
+
+**Use cases:**
+- **Orchestration decisions**: Retry if confidence < threshold
+- **Chain validation**: Verify uncertain results with another agent
+- **User transparency**: Show uncertainty to users ("I'm 70% confident")
+- **Stopping criteria**: Iterate until confidence > 0.9
+
+### Warnings
+
+Non-fatal issues array for graceful degradation:
+
+```typescript
+const output = await photoAnalyzer.execute({ imagePath });
+
+if (output.result.status === RESULT_SUCCESS) {
+  // Check for warnings
+  if (output.result.warnings && output.result.warnings.length > 0) {
+    console.warn('Warnings:', output.result.warnings);
+    // Example: ['Image quality was poor, confidence may be lower']
+  }
+
+  // Use data despite warnings
+  console.log('Characteristics:', output.result.data);
+}
+```
+
+**Use cases:**
+- **User transparency**: Show quality issues or caveats
+- **Context for downstream agents**: Pass warnings along pipeline
+- **Logging/debugging**: Track degraded but successful operations
+
+### Execution Metadata
+
+Performance and cost tracking for production systems:
+
+```typescript
+import { withTiming } from '@vibe-agent-toolkit/agent-runtime';
+
+// Wrap with timing helper
+const output = await withTiming(() =>
+  photoAnalyzer.execute({ imagePath })
+);
+
+if (output.result.execution) {
+  console.log('Duration:', output.result.execution.durationMs, 'ms');
+  console.log('Tokens:', output.result.execution.tokensUsed);
+  console.log('Cost:', output.result.execution.cost, 'USD');
+  console.log('Model:', output.result.execution.model);
+  console.log('Provider:', output.result.execution.provider);
+  console.log('Retry count:', output.result.execution.retryCount ?? 0);
+  console.log('Timestamp:', output.result.execution.timestamp);
+}
+```
+
+**Fields:**
+- `durationMs`: Total execution duration (including retries)
+- `tokensUsed`: LLM tokens consumed (sum across all LLM calls)
+- `cost`: Estimated cost in USD
+- `model`: Model identifier for A/B testing
+- `provider`: Provider for cost attribution
+- `retryCount`: Set by orchestrator's retry wrapper (0 = no retries)
+- `timestamp`: Execution start time (ISO 8601)
+
+**Use cases:**
+- **Performance optimization**: Identify slow agents
+- **Cost attribution**: Multi-tenant systems
+- **Usage analytics**: Tokens per request
+- **Debugging**: View retry behavior
+
+### Combining Observability Features
+
+```typescript
+import { withRetry, withTiming } from '@vibe-agent-toolkit/agent-runtime';
+import { RESULT_SUCCESS } from '@vibe-agent-toolkit/agent-schema';
+
+// Combine timing and retry
+const output = await withRetry(
+  () => withTiming(() => photoAnalyzer.execute({ imagePath })),
+  5
+);
+
+if (output.result.status === RESULT_SUCCESS) {
+  const { confidence, warnings, execution } = output.result;
+
+  // Log comprehensive observability data
+  console.log({
+    confidence: confidence ?? 1.0,
+    warnings: warnings ?? [],
+    duration: execution?.durationMs,
+    retries: execution?.retryCount ?? 0,
+    cost: execution?.cost,
+    tokens: execution?.tokensUsed,
+  });
+
+  // Make orchestration decisions based on confidence
+  if (confidence && confidence < 0.7) {
+    console.warn('Low confidence result, consider verification');
+  }
+
+  // Alert on excessive retries
+  if (execution?.retryCount && execution.retryCount > 3) {
+    console.error('Agent required excessive retries, investigate');
   }
 }
 ```

@@ -38,7 +38,7 @@ const LLM_UNAVAILABLE_ERROR: LLMError = 'llm-unavailable';
  * );
  */
 // eslint-disable-next-line sonarjs/function-return-type -- Intentional discriminated union pattern
-export function validateAgentInput<TInput, TData, TError = LLMError>(
+export function validateAgentInput<TInput, TData, TError extends string = LLMError>(
   input: unknown,
   schema: { safeParse: (data: unknown) => { success: boolean; data?: TInput } },
   invalidInputError: TError = 'llm-invalid-output' as TError
@@ -80,7 +80,7 @@ export interface AgentManifest {
  *   { name: 'haiku-validator', archetype: 'pure-function-tool' }
  * );
  */
-export function createPureFunctionAgent<TInput, TData, TError = string>(
+export function createPureFunctionAgent<TInput, TData, TError extends string = string>(
   fn: (input: TInput) => AgentResult<TData, TError>,
   manifest?: Partial<AgentManifest>
 ): Agent<TInput, OneShotAgentOutput<TData, TError>> {

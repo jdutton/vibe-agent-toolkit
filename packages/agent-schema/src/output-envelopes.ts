@@ -10,7 +10,7 @@ import type { AgentResult, StatefulAgentResult } from './result-types.js';
  * Simpler envelope for synchronous, single-execution agents.
  * Used by archetypes: Pure Function Tool, One-Shot LLM Analyzer
  */
-export interface OneShotAgentOutput<TData, TError = string> {
+export interface OneShotAgentOutput<TData, TError extends string = string> {
   /** Machine-readable result for orchestration */
   result: AgentResult<TData, TError>;
 
@@ -25,7 +25,7 @@ export interface OneShotAgentOutput<TData, TError = string> {
  * machine-readable result for orchestration.
  * Used by archetype: Conversational Assistant
  */
-export interface ConversationalAgentOutput<TData, TError = string, TSessionState = unknown> {
+export interface ConversationalAgentOutput<TData, TError extends string = string, TSessionState = unknown> {
   /** Human-readable response for display */
   reply: string;
 

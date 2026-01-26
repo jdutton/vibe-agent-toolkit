@@ -12,6 +12,10 @@ import {
   type Agent,
   type GatheringPhaseConfig,
 } from '@vibe-agent-toolkit/agent-runtime';
+import {
+  RESULT_IN_PROGRESS,
+  RESULT_SUCCESS,
+} from '@vibe-agent-toolkit/agent-schema';
 
 import {
   type BreedAdvisorInput,
@@ -182,7 +186,6 @@ export const breedAdvisorAgent: Agent<BreedAdvisorInput, BreedAdvisorOutput> =
     // Custom handler implementing TRUE two-phase logic
     async (input, ctx) => {
       // Status constants for result envelopes
-      const STATUS_IN_PROGRESS = 'in-progress' as const;
       const PHASE_READY_TO_RECOMMEND = 'ready-to-recommend' as const;
 
       // Initialize profile from session state
@@ -219,7 +222,7 @@ Let's start: What's your favorite type of music?`;
           reply: greeting,
           sessionState: currentProfile,
           result: {
-            status: STATUS_IN_PROGRESS,
+            status: RESULT_IN_PROGRESS,
             metadata: {
               factorsCollected: 0,
               requiredFactors: 4,
@@ -301,7 +304,7 @@ Return ONLY the JSON object, nothing else.`;
             reply: conversationalResponse + transitionMessage,
             sessionState: updatedProfile,
             result: {
-              status: STATUS_IN_PROGRESS,
+              status: RESULT_IN_PROGRESS,
               metadata: {
                 factorsCollected: factorCount,
                 requiredFactors: 4,
@@ -316,7 +319,7 @@ Return ONLY the JSON object, nothing else.`;
           reply: conversationalResponse,
           sessionState: updatedProfile,
           result: {
-            status: STATUS_IN_PROGRESS,
+            status: RESULT_IN_PROGRESS,
             metadata: {
               factorsCollected: factorCount,
               requiredFactors: 4,
@@ -374,7 +377,7 @@ DO NOT repeat all the recommendations. DO NOT ask more questions. This is the EN
               conversationPhase: 'completed',
             },
             result: {
-              status: 'success' as const,
+              status: RESULT_SUCCESS,
               data: {
                 selectedBreed,
                 finalProfile: currentProfile,
@@ -408,7 +411,7 @@ After presenting the recommendations, ask if any of these breeds sound appealing
             conversationPhase: 'refining',
           },
           result: {
-            status: STATUS_IN_PROGRESS,
+            status: RESULT_IN_PROGRESS,
             metadata: {
               recommendations,
               conversationPhase: 'refining',
@@ -424,7 +427,7 @@ After presenting the recommendations, ask if any of these breeds sound appealing
         reply: fallbackResponse,
         sessionState: currentProfile,
         result: {
-          status: STATUS_IN_PROGRESS,
+          status: RESULT_IN_PROGRESS,
           metadata: {
             conversationPhase: currentProfile.conversationPhase ?? 'gathering',
           },

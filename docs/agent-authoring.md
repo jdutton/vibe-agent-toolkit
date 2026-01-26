@@ -485,69 +485,171 @@ export const myEventAgent = defineAgent({
 
 ### Principle: Errors are Data
 
-Errors are part of the result envelope, not exceptions:
+Errors are part of the result envelope, not exceptions. **Always use exported constants**, not string literals:
 
 ```typescript
-// ✅ GOOD - Error as data
+import {
+  RESULT_ERROR,
+  LLM_TIMEOUT,
+  LLM_RATE_LIMIT,
+  LLM_INVALID_OUTPUT,
+} from '@vibe-agent-toolkit/agent-schema';
+
+// ✅ GOOD - Error as data with constants
+return {
+  result: { status: RESULT_ERROR, error: LLM_TIMEOUT },
+};
+
+// ❌ BAD - String literals (no autocomplete, typo-prone)
 return {
   result: { status: 'error', error: 'llm-timeout' },
 };
 
-// ❌ BAD - Throwing exceptions
+// ❌ WORSE - Throwing exceptions
 throw new Error('LLM timeout');
 ```
 
-### Standard Error Types
+### Standard Error Constants
 
-Use standard error enums when possible:
+**Always import and use constants** for error types and status values:
 
 ```typescript
-import { type LLMError, type ExternalEventError } from '@vibe-agent-toolkit/agent-schema';
+import {
+  // Status constants
+  RESULT_SUCCESS,
+  RESULT_ERROR,
+  RESULT_IN_PROGRESS,
+  // LLM error constants
+  LLM_REFUSAL,
+  LLM_INVALID_OUTPUT,
+  LLM_TIMEOUT,
+  LLM_RATE_LIMIT,
+  LLM_TOKEN_LIMIT,
+  LLM_UNAVAILABLE,
+  // Event error constants
+  EVENT_TIMEOUT,
+  EVENT_UNAVAILABLE,
+  EVENT_REJECTED,
+  EVENT_INVALID_RESPONSE,
+  // Types
+  type LLMError,
+  type ExternalEventError,
+} from '@vibe-agent-toolkit/agent-schema';
 
-// LLM-based agents
+// LLM-based agents use LLM error constants
 type MyError = LLMError;
 
-// Event-based agents
+// Event-based agents use Event error constants
 type MyError = ExternalEventError;
 
-// Custom domain errors
+// Custom domain errors (for pure function agents)
+// ✅ GOOD - Define constants first
+const VALIDATION_ERROR = 'invalid-format' as const;
+const PROCESSING_ERROR = 'processing-failed' as const;
+
 type MyError =
-  | LLMError
-  | 'domain-specific-error'
-  | 'another-domain-error';
+  | typeof VALIDATION_ERROR
+  | typeof PROCESSING_ERROR;
+
+// ❌ BAD - String literals in type (no single source of truth)
+type MyError =
+  | 'invalid-format'
+  | 'processing-failed';
+```
+
+**Benefits of constants:**
+- Autocomplete in IDEs
+- Typo prevention at compile time
+- Easy refactoring (change once, update everywhere)
+- Consistent error strings across codebase
+
+### Result Constructor Pattern
+
+Use `createSuccess()` and `createError()` helpers to reduce boilerplate:
+
+```typescript
+import { createSuccess, createError } from '@vibe-agent-toolkit/agent-schema';
+
+// Define domain-specific error constants
+const VALIDATION_ERROR = 'invalid-format' as const;
+
+export const myAgent = createPureFunctionAgent(
+  (input: MyInput): AgentResult<MyOutput, typeof VALIDATION_ERROR> => {
+    try {
+      const parsed = MyInputSchema.safeParse(input);
+      if (!parsed.success) {
+        return createError(VALIDATION_ERROR);
+      }
+
+      const result = processData(parsed.data);
+      return createSuccess(result);
+    } catch (err) {
+      return createError(VALIDATION_ERROR);
+    }
+  }
+);
+```
+
+**Complete example from vat-example-cat-agents:**
+
+```typescript
+import { createSuccess, createError } from '@vibe-agent-toolkit/agent-schema';
+
+// Error constant (single source of truth)
+const VALIDATION_ERROR = 'invalid-format' as const;
+
+export const nameValidatorAgent = createPureFunctionAgent(
+  (input: NameValidationInput): AgentResult<NameValidationResult, typeof VALIDATION_ERROR> => {
+    try {
+      const parsed = NameValidationInputSchema.safeParse(input);
+      if (!parsed.success) {
+        return createError(VALIDATION_ERROR);  // ✅ Uses constant
+      }
+
+      const validationResult = validateCatName(parsed.data.name);
+      return createSuccess(validationResult);  // ✅ Clean constructor
+    } catch (err) {
+      return createError(VALIDATION_ERROR);  // ✅ Consistent error handling
+    }
+  }
+);
 ```
 
 ### Mapping Exceptions
 
-Catch exceptions and map to error types:
+Catch exceptions and map to error constants:
 
 ```typescript
+import { RESULT_ERROR, LLM_TIMEOUT, LLM_RATE_LIMIT, LLM_UNAVAILABLE } from '@vibe-agent-toolkit/agent-schema';
+
 async execute(input, context) {
   try {
     const response = await context.callLLM(/* ... */);
     // ... process response
   } catch (error) {
-    // Map to standard error types
+    // Map to standard error constants
     if (error instanceof Error) {
       if (error.message.includes('timeout')) {
-        return { result: { status: 'error', error: 'llm-timeout' } };
+        return { result: { status: RESULT_ERROR, error: LLM_TIMEOUT } };
       }
       if (error.message.includes('rate limit')) {
-        return { result: { status: 'error', error: 'llm-rate-limit' } };
+        return { result: { status: RESULT_ERROR, error: LLM_RATE_LIMIT } };
       }
     }
 
     // Default to generic error
-    return { result: { status: 'error', error: 'llm-unavailable' } };
+    return { result: { status: RESULT_ERROR, error: LLM_UNAVAILABLE } };
   }
 }
 ```
 
 ### Validation Errors
 
-Use Zod for input/output validation:
+Use Zod for input/output validation with error constants:
 
 ```typescript
+import { RESULT_SUCCESS, RESULT_ERROR, LLM_INVALID_OUTPUT } from '@vibe-agent-toolkit/agent-schema';
+
 async execute(input) {
   // Validate input (automatic with schemas)
   const validated = InputSchema.parse(input);
@@ -557,9 +659,9 @@ async execute(input) {
   // Validate output before returning
   try {
     const data = OutputDataSchema.parse(computedData);
-    return { result: { status: 'success', data } };
+    return { result: { status: RESULT_SUCCESS, data } };
   } catch (error) {
-    return { result: { status: 'error', error: 'llm-invalid-output' } };
+    return { result: { status: RESULT_ERROR, error: LLM_INVALID_OUTPUT } };
   }
 }
 ```

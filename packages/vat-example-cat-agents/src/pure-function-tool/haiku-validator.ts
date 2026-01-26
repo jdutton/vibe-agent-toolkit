@@ -1,8 +1,15 @@
 import { createPureFunctionAgent } from '@vibe-agent-toolkit/agent-runtime';
 import type { AgentResult } from '@vibe-agent-toolkit/agent-schema';
+import { createSuccess, createError } from '@vibe-agent-toolkit/agent-schema';
 import { syllable } from 'syllable';
 
 import type { Haiku, HaikuValidationResult } from '../types/schemas.js';
+
+/**
+ * Error constant for haiku validator agent.
+ * Used when validation fails due to unexpected errors.
+ */
+const VALIDATION_ERROR = 'invalid-format' as const;
 
 // SonarQube: Disable "Do not call Array#push() multiple times" - conditional pushes based on validation logic
 // NOSONAR
@@ -161,16 +168,16 @@ export function critiqueHaiku(haiku: Haiku): string {
  * - result.data: HaikuValidationResult (includes valid boolean, syllable counts, errors)
  */
 export const haikuValidatorAgent = createPureFunctionAgent(
-  (haiku: Haiku): AgentResult<HaikuValidationResult, 'invalid-format'> => {
+  (haiku: Haiku): AgentResult<HaikuValidationResult, typeof VALIDATION_ERROR> => {
     try {
       const validationResult = validateHaikuLogic(haiku);
-      return { status: 'success', data: validationResult };
+      return createSuccess(validationResult);
     } catch (err) {
       // Unexpected errors (e.g., syllable library failure)
       if (err instanceof Error) {
         console.warn('Haiku validation error:', err.message);
       }
-      return { status: 'error', error: 'invalid-format' };
+      return createError(VALIDATION_ERROR);
     }
   },
   {
