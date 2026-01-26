@@ -1,4 +1,5 @@
-import { defineLLMAnalyzer, type Agent } from '@vibe-agent-toolkit/agent-runtime';
+import { executeLLMCall } from '@vibe-agent-toolkit/agent-runtime';
+import type { Agent, LLMError, OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
 import { z } from 'zod';
 
 import { CatCharacteristicsSchema, type CatCharacteristics } from '../types/schemas.js';
@@ -9,6 +10,7 @@ import { extractFurColor as extractFurColorUtil } from '../utils/color-extractio
  */
 export const PhotoAnalyzerInputSchema = z.object({
   imagePathOrBase64: z.string().describe('Path to image file or base64-encoded image'),
+  mockable: z.boolean().optional().describe('Whether to use mock mode (default: true)'),
 });
 
 export type PhotoAnalyzerInput = z.infer<typeof PhotoAnalyzerInputSchema>;
@@ -295,94 +297,77 @@ function generateDescription(
  *
  * In mock mode, analyzes filename patterns. In real mode, uses vision LLM to analyze actual images.
  */
-export const photoAnalyzerAgent: Agent<PhotoAnalyzerInput, CatCharacteristics> = defineLLMAnalyzer(
-  {
+export const photoAnalyzerAgent: Agent<
+  PhotoAnalyzerInput,
+  OneShotAgentOutput<CatCharacteristics, LLMError>
+> = {
+  name: 'photo-analyzer',
+  manifest: {
     name: 'photo-analyzer',
-    description: 'Analyzes cat photos and extracts detailed physical and behavioral characteristics',
     version: '1.0.0',
-    inputSchema: PhotoAnalyzerInputSchema,
-    outputSchema: CatCharacteristicsSchema,
-    mockable: true,
-    model: 'claude-3-haiku',
+    description: 'Analyzes cat photos and extracts detailed physical and behavioral characteristics',
+    archetype: 'one-shot-llm-analyzer',
     metadata: {
       author: 'Pixel',
       personality: 'Tech-savvy cat who speaks in computer vision terminology',
       requiresVision: true,
+      model: 'claude-3-haiku',
     },
   },
-  async (input, ctx) => {
-    // Mock mode: use filename pattern matching
-    if (ctx.mockable) {
-      return mockAnalyzePhoto(input.imagePathOrBase64);
+  execute: async (input: PhotoAnalyzerInput) => {
+    try {
+      // Validate input
+      const parsed = PhotoAnalyzerInputSchema.safeParse(input);
+      if (!parsed.success) {
+        return {
+          result: { status: 'error', error: 'llm-invalid-output' as const },
+        };
+      }
+
+      const { imagePathOrBase64, mockable = true } = parsed.data;
+
+      // Mock mode: use filename pattern matching
+      if (mockable) {
+        const data = mockAnalyzePhoto(imagePathOrBase64);
+        return {
+          result: { status: 'success', data },
+          metadata: {
+            mode: 'mock',
+            executedAt: new Date().toISOString(),
+          },
+        };
+      }
+
+      // Real mode: use vision LLM
+      const result = await executeLLMCall(
+        async () => {
+          // This would be replaced with actual LLM SDK call
+          // For now, throw error since not implemented
+          throw new Error('Real vision API not implemented yet. Use mockable: true for testing.');
+        },
+        {
+          parseOutput: (raw) => {
+            const parsed = JSON.parse(raw as string);
+            return CatCharacteristicsSchema.parse(parsed);
+          },
+        },
+      );
+
+      return {
+        result,
+        metadata: {
+          mode: 'real',
+          executedAt: new Date().toISOString(),
+        },
+      };
+    } catch (err) {
+      // Unexpected errors
+      if (err instanceof Error) {
+        console.warn('Photo analysis error:', err.message);
+      }
+      return {
+        result: { status: 'error', error: 'llm-unavailable' as const },
+      };
     }
-
-    // Real mode: use vision LLM
-    const OPTIONAL_LABEL = 'string (optional)';
-    const REQUIRED_LABEL = 'string (required)';
-
-    const prompt = `*Adjusts smart glasses with one paw*
-
-Greetings! I am Pixel, a technologically advanced feline with expertise in computer vision and pattern recognition.
-
-MISSION: Analyze this photograph using my superior feline visual cortex combined with machine learning algorithms.
-
-I need you to extract the following characteristics from the cat in this image:
-
-PHYSICAL ATTRIBUTES (Primary Data):
-- furColor: The RGB-adjacent description of their coat (e.g., "Orange tabby", "Black", "Calico")
-- furPattern: Pattern type if applicable (e.g., "Tabby", "Striped", "Spotted", "Tuxedo")
-- eyeColor: Ocular pigmentation (e.g., "Blue", "Green", "Amber")
-- breed: Genetic classification if identifiable (e.g., "Persian", "Maine Coon", "Mixed")
-- size: Volumetric classification ("tiny", "small", "medium", "large", "extra-large")
-
-BEHAVIORAL INDICATORS (Secondary Data via Visual Heuristics):
-- personality: Array of traits inferred from posture, expression, body language (e.g., ["Confident", "Playful", "Regal"])
-- quirks: Observable unique features (e.g., ["Cross-eyed stare", "Extra toes", "Fluffy tail"])
-- vocalizations: Predicted sound patterns based on breed and expression (optional)
-
-METADATA (Contextual Information):
-- origin: Environmental context if visible (e.g., "Indoor cat", "Street cat")
-- age: Age estimate based on size/features (e.g., "Kitten", "Adult", "Senior")
-
-DESCRIPTION: Generate a comprehensive prose description combining all findings.
-
-*Boots up neural network processors*
-
-Please return a JSON object matching this schema:
-
-${JSON.stringify(
-  {
-    physical: {
-      furColor: REQUIRED_LABEL,
-      furPattern: OPTIONAL_LABEL,
-      eyeColor: OPTIONAL_LABEL,
-      breed: OPTIONAL_LABEL,
-      size: 'tiny | small | medium | large | extra-large (optional)',
-    },
-    behavioral: {
-      personality: ['array of personality traits (required)'],
-      quirks: ['array of unique features (optional)'],
-      vocalizations: ['array of predicted sounds (optional)'],
-    },
-    metadata: {
-      origin: OPTIONAL_LABEL,
-      age: OPTIONAL_LABEL,
-      occupation: OPTIONAL_LABEL,
-    },
-    description: 'Full prose description (required)',
   },
-  null,
-  2,
-)}
-
-*Tail swishes as algorithms process*
-
-IMPORTANT: Return ONLY valid JSON. No markdown, no explanations, just the JSON object.
-
-Image to analyze: ${input.imagePathOrBase64}`;
-
-    const response = await ctx.callLLM(prompt);
-    const parsed = JSON.parse(response);
-    return CatCharacteristicsSchema.parse(parsed);
-  },
-);
+};
