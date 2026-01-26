@@ -563,57 +563,70 @@ type MyError =
 - Easy refactoring (change once, update everywhere)
 - Consistent error strings across codebase
 
-### Result Constructor Pattern
+### Pure Function Agent Pattern
 
-Use `createSuccess()` and `createError()` helpers to reduce boilerplate:
+Use `definePureFunction()` to create agents with automatic input/output validation:
 
 ```typescript
-import { createSuccess, createError } from '@vibe-agent-toolkit/agent-schema';
+import { definePureFunction } from '@vibe-agent-toolkit/agent-runtime';
+import { z } from 'zod';
 
-// Define domain-specific error constants
-const VALIDATION_ERROR = 'invalid-format' as const;
+// Define schemas
+const MyInputSchema = z.object({ value: z.string() });
+const MyOutputSchema = z.object({ result: z.boolean() });
 
-export const myAgent = createPureFunctionAgent(
-  (input: MyInput): AgentResult<MyOutput, typeof VALIDATION_ERROR> => {
-    try {
-      const parsed = MyInputSchema.safeParse(input);
-      if (!parsed.success) {
-        return createError(VALIDATION_ERROR);
-      }
-
-      const result = processData(parsed.data);
-      return createSuccess(result);
-    } catch (err) {
-      return createError(VALIDATION_ERROR);
-    }
+// Define agent with declarative config
+export const myAgent = definePureFunction(
+  {
+    name: 'my-validator',
+    version: '1.0.0',
+    description: 'Validates input data',
+    inputSchema: MyInputSchema,
+    outputSchema: MyOutputSchema,
+  },
+  (input) => {
+    // Input is already validated by wrapper
+    // Just return the output - wrapper handles validation
+    return processData(input.value);
   }
 );
+
+// Usage
+const result = myAgent.execute({ value: 'test' });  // Returns MyOutput directly
+// Throws exception if input is invalid
 ```
 
 **Complete example from vat-example-cat-agents:**
 
 ```typescript
-import { createSuccess, createError } from '@vibe-agent-toolkit/agent-schema';
+import { definePureFunction } from '@vibe-agent-toolkit/agent-runtime';
+import { NameValidationInputSchema, NameValidationResultSchema } from './schemas.js';
 
-// Error constant (single source of truth)
-const VALIDATION_ERROR = 'invalid-format' as const;
-
-export const nameValidatorAgent = createPureFunctionAgent(
-  (input: NameValidationInput): AgentResult<NameValidationResult, typeof VALIDATION_ERROR> => {
-    try {
-      const parsed = NameValidationInputSchema.safeParse(input);
-      if (!parsed.success) {
-        return createError(VALIDATION_ERROR);  // ✅ Uses constant
-      }
-
-      const validationResult = validateCatName(parsed.data.name);
-      return createSuccess(validationResult);  // ✅ Clean constructor
-    } catch (err) {
-      return createError(VALIDATION_ERROR);  // ✅ Consistent error handling
-    }
+export const nameValidatorAgent = definePureFunction(
+  {
+    name: 'name-validator',
+    version: '1.0.0',
+    description: 'Validates cat names for proper nobility conventions',
+    inputSchema: NameValidationInputSchema,      // ✅ Declarative validation
+    outputSchema: NameValidationResultSchema,    // ✅ Output validation too
+  },
+  (input) => {
+    // Input is already validated - just implement logic
+    return validateCatName(input.name, input.characteristics);  // ✅ Clean handler
   }
 );
+
+// Usage
+const result = nameValidatorAgent.execute({ name: 'Duke Sterling III' });
+// result = { status: 'valid', reason: '...' }
 ```
+
+**Key benefits of `definePureFunction`:**
+- ✅ Automatic input validation (throws on invalid input)
+- ✅ Automatic output validation (throws on invalid output)
+- ✅ No manual result envelope wrapping needed
+- ✅ Synchronous execution (returns directly, not wrapped in Promise)
+- ✅ Manifest auto-generated from schemas
 
 ### Mapping Exceptions
 

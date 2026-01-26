@@ -77,32 +77,20 @@ export function createMcpServerWithTool<TInput, TOutput>(
         inputSchema as any, // Claude Agent SDK accepts Zod schemas
         async (args, _extra) => {
           const validatedInput = inputSchema.parse(args);
-          // handler is agent.execute which returns OneShotAgentOutput with envelope
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const output = (await handler(validatedInput)) as any;
+          // handler is agent.execute which returns output directly (unwrapped)
+          // The agent's execute wrapper validates input/output schemas and throws on error
+          const output = await handler(validatedInput);
 
-          // Unwrap envelope
-          if (output.result.status === 'success') {
-            const validatedOutput = outputSchema.parse(output.result.data);
-            return {
-              content: [
-                {
-                  type: 'text' as const,
-                  text: JSON.stringify(validatedOutput, null, 2),
-                },
-              ],
-            };
-          }
+          // Validate the output with schema (redundant but explicit)
+          const validatedOutput = outputSchema.parse(output);
 
-          // Error case
           return {
             content: [
               {
                 type: 'text' as const,
-                text: JSON.stringify({ error: output.result.error }, null, 2),
+                text: JSON.stringify(validatedOutput, null, 2),
               },
             ],
-            isError: true,
           };
         },
       ),

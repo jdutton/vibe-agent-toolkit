@@ -54,20 +54,15 @@ export function convertPureFunctionToTool<TInput, TOutput>(
     description: manifest.description,
     schema: inputSchema,
     func: async (input: TInput) => {
-      // Execute the agent - returns OneShotAgentOutput with envelope
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const output = (await agent.execute(input)) as any;
+      // Execute the agent - returns output directly (unwrapped)
+      // The agent's execute wrapper validates input/output schemas and throws on error
+      const output = agent.execute(input);
 
-      // Unwrap envelope
-      if (output.result.status === 'success') {
-        // Validate the unwrapped data with schema
-        const validated = outputSchema.parse(output.result.data);
-        // LangChain tools must return string or object that can be JSON stringified
-        return JSON.stringify(validated);
-      }
+      // Validate the output with schema (redundant but explicit)
+      const validated = outputSchema.parse(output);
 
-      // Error case - return error as JSON string
-      return JSON.stringify({ error: output.result.error });
+      // LangChain tools must return string or object that can be JSON stringified
+      return JSON.stringify(validated);
     },
   });
 

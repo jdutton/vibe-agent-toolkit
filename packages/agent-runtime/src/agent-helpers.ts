@@ -3,7 +3,6 @@
  */
 
 import type {
-  Agent,
   AgentResult,
   ExternalEventError,
   LLMError,
@@ -50,103 +49,6 @@ export function validateAgentInput<TInput, TData, TError extends string = LLMErr
     } as OneShotAgentOutput<TData, TError>;
   }
   return parsed.data as TInput;
-}
-
-/**
- * Agent manifest metadata (simplified runtime version).
- */
-export interface AgentManifest {
-  name: string;
-  version: string;
-  description: string;
-  archetype: string;
-  metadata?: Record<string, unknown>;
-}
-
-/**
- * Wrap a synchronous pure function as an agent.
- *
- * Use for deterministic functions that don't do I/O.
- * The wrapper makes them async-compatible with all other agents.
- *
- * @example
- * const validator = createPureFunctionAgent(
- *   (haiku: Haiku) => {
- *     if (isValid(haiku)) {
- *       return { status: 'success', data: { valid: true } };
- *     }
- *     return { status: 'error', error: 'invalid-format' };
- *   },
- *   { name: 'haiku-validator', archetype: 'pure-function-tool' }
- * );
- */
-export function createPureFunctionAgent<TInput, TData, TError extends string = string>(
-  fn: (input: TInput) => AgentResult<TData, TError>,
-  manifest?: Partial<AgentManifest>
-): Agent<TInput, OneShotAgentOutput<TData, TError>> {
-  return {
-    name: manifest?.name ?? 'pure-function-agent',
-    manifest: {
-      name: manifest?.name ?? 'pure-function-agent',
-      version: manifest?.version ?? '1.0.0',
-      description: manifest?.description ?? 'Pure function agent',
-      archetype: manifest?.archetype ?? 'pure-function-tool',
-    },
-    execute: async (input: TInput) => {
-      const result = fn(input);
-      return {
-        result,
-        metadata: {
-          synchronous: true,
-          executedAt: new Date().toISOString(),
-        },
-      };
-    },
-  };
-}
-
-/**
- * Wrap a synchronous function that throws as an agent.
- *
- * Converts exceptions into error results automatically.
- *
- * @example
- * const parser = createSafePureFunctionAgent(
- *   (text: string) => JSON.parse(text),
- *   { name: 'json-parser' }
- * );
- */
-export function createSafePureFunctionAgent<TInput, TData>(
-  fn: (input: TInput) => TData,
-  manifest?: Partial<AgentManifest>
-): Agent<TInput, OneShotAgentOutput<TData, 'execution-error'>> {
-  return {
-    name: manifest?.name ?? 'safe-pure-function-agent',
-    manifest: {
-      name: manifest?.name ?? 'safe-pure-function-agent',
-      version: manifest?.version ?? '1.0.0',
-      description: manifest?.description ?? 'Safe pure function agent',
-      archetype: manifest?.archetype ?? 'pure-function-tool',
-    },
-    execute: async (input: TInput) => {
-      try {
-        const data = fn(input);
-        return {
-          result: { status: 'success', data },
-        };
-      } catch (err) {
-        return {
-          result: {
-            status: 'error',
-            error: 'execution-error' as const,
-          },
-          metadata: {
-            errorMessage: err instanceof Error ? err.message : String(err),
-          },
-        };
-      }
-    },
-  };
 }
 
 /**

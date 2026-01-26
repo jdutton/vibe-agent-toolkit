@@ -81,17 +81,12 @@ export function convertPureFunctionToTool<TInput, TOutput>(
     // Validate input
     const validatedInput = inputSchema.parse(args);
 
-    // Execute agent - returns OneShotAgentOutput with envelope
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const output = (await agent.execute(validatedInput)) as any;
+    // Execute agent - returns output directly (unwrapped)
+    // The agent's execute wrapper validates input/output schemas and throws on error
+    const output = agent.execute(validatedInput);
 
-    // Unwrap envelope and validate the data
-    if (output.result.status === 'success') {
-      return outputSchema.parse(output.result.data) as TOutput;
-    }
-
-    // Error case - throw to let caller handle
-    throw new Error(`Agent execution failed: ${String(output.result.error)}`);
+    // Validate the output with schema (redundant but explicit)
+    return outputSchema.parse(output) as TOutput;
   };
 
   return {

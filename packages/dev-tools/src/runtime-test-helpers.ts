@@ -95,7 +95,7 @@ export function createPureFunctionTestSuite<TAgent, TSchema, TResult>(
       expect(tool).toBeDefined();
       assertToolStructure(result);
       expect((result as { metadata: { name: string; archetype: string } }).metadata.name).toBe('haiku-validator');
-      expect((result as { metadata: { archetype: string } }).metadata.archetype).toBe('pure-function-tool');
+      expect((result as { metadata: { archetype: string } }).metadata.archetype).toBe('pure-function');
     });
 
     it('should preserve agent metadata', () => {

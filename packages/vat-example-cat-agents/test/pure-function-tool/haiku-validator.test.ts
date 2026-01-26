@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { critiqueHaiku, haikuValidatorAgent, validateHaiku } from '../../src/pure-function-tool/haiku-validator.js';
 import type { Haiku } from '../../src/types/schemas.js';
-import { expectError } from '../test-helpers.js';
 
 const VALID_LINE1 = 'Autumn moon rises';
 const VALID_LINE2 = 'Silver light on quiet waves';
@@ -112,41 +111,31 @@ describe('haikuValidatorAgent', () => {
       'Validates haiku syllable structure and traditional elements',
     );
     expect(haikuValidatorAgent.manifest.version).toBe('1.0.0');
-    expect(haikuValidatorAgent.manifest.archetype).toBe('pure-function-tool');
+    expect(haikuValidatorAgent.manifest.archetype).toBe('pure-function');
   });
 
-  it('should validate a correct haiku via agent.execute()', async () => {
+  it('should validate a correct haiku via agent.execute()', () => {
     const haiku = createValidHaiku();
-    const output = await haikuValidatorAgent.execute(haiku);
+    const result = haikuValidatorAgent.execute(haiku);
 
-    expect(output.result.status).toBe('success');
-    if (output.result.status === 'success') {
-      expectValidHaikuResult(output.result.data);
-      expect(output.metadata).toBeDefined();
-    }
+    expectValidHaikuResult(result);
   });
 
-  it('should detect incorrect syllable count via agent.execute()', async () => {
+  it('should detect incorrect syllable count via agent.execute()', () => {
     const haiku: Haiku = {
       line1: 'The big cat',
       line2: VALID_LINE2,
       line3: VALID_LINE3,
     };
 
-    const output = await haikuValidatorAgent.execute(haiku);
+    const result = haikuValidatorAgent.execute(haiku);
 
-    expect(output.result.status).toBe('success');
-    if (output.result.status === 'success') {
-      expect(output.result.data.valid).toBe(false);
-      expect(output.result.data.syllables.line1).toBe(3);
-      expect(output.result.data.errors).toContain('Line 1 has 3 syllables, expected 5');
-    }
+    expect(result.valid).toBe(false);
+    expect(result.syllables.line1).toBe(3);
+    expect(result.errors).toContain('Line 1 has 3 syllables, expected 5');
   });
 
-  it('should return error for invalid input', async () => {
-    const output = await haikuValidatorAgent.execute({ line1: 'test' } as never);
-
-    expectError(output, 'invalid-format', expect);
-    expect(output.result.status).toBe('error'); // SonarJS: explicit assertion required
+  it('should throw error for invalid input', () => {
+    expect(() => haikuValidatorAgent.execute({ line1: 'test' } as never)).toThrow('Invalid input');
   });
 });

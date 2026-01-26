@@ -1,15 +1,7 @@
-import { createPureFunctionAgent } from '@vibe-agent-toolkit/agent-runtime';
-import type { AgentResult } from '@vibe-agent-toolkit/agent-schema';
-import { createSuccess, createError } from '@vibe-agent-toolkit/agent-schema';
+import { definePureFunction } from '@vibe-agent-toolkit/agent-runtime';
 import { syllable } from 'syllable';
 
-import type { Haiku, HaikuValidationResult } from '../types/schemas.js';
-
-/**
- * Error constant for haiku validator agent.
- * Used when validation fails due to unexpected errors.
- */
-const VALIDATION_ERROR = 'invalid-format' as const;
+import { HaikuSchema, HaikuValidationResultSchema, type Haiku, type HaikuValidationResult } from '../types/schemas.js';
 
 // SonarQube: Disable "Do not call Array#push() multiple times" - conditional pushes based on validation logic
 // NOSONAR
@@ -156,34 +148,22 @@ export function critiqueHaiku(haiku: Haiku): string {
 }
 
 /**
- * Haiku validator agent (wrapped with result envelope)
+ * Haiku validator agent
  *
  * Validates haiku structure (5-7-5 syllable pattern) and checks for
  * traditional elements like seasonal references (kigo) and cutting words (kireji).
  *
  * This is Professor Whiskers' domain - he's extremely strict about syllable counts.
  *
- * Returns OneShotAgentOutput with:
- * - result.status: 'success' (validation result) or 'error' (unexpected failure)
- * - result.data: HaikuValidationResult (includes valid boolean, syllable counts, errors)
+ * Returns HaikuValidationResult directly (includes valid boolean, syllable counts, errors)
  */
-export const haikuValidatorAgent = createPureFunctionAgent(
-  (haiku: Haiku): AgentResult<HaikuValidationResult, typeof VALIDATION_ERROR> => {
-    try {
-      const validationResult = validateHaikuLogic(haiku);
-      return createSuccess(validationResult);
-    } catch (err) {
-      // Unexpected errors (e.g., syllable library failure)
-      if (err instanceof Error) {
-        console.warn('Haiku validation error:', err.message);
-      }
-      return createError(VALIDATION_ERROR);
-    }
-  },
+export const haikuValidatorAgent = definePureFunction(
   {
     name: 'haiku-validator',
     version: '1.0.0',
     description: 'Validates haiku syllable structure and traditional elements',
-    archetype: 'pure-function-tool',
-  }
+    inputSchema: HaikuSchema,
+    outputSchema: HaikuValidationResultSchema,
+  },
+  validateHaikuLogic,
 );

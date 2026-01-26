@@ -1,22 +1,15 @@
-import { createPureFunctionAgent } from '@vibe-agent-toolkit/agent-runtime';
-import type { AgentResult } from '@vibe-agent-toolkit/agent-schema';
-import { createSuccess, createError } from '@vibe-agent-toolkit/agent-schema';
+import { definePureFunction } from '@vibe-agent-toolkit/agent-runtime';
 import { z } from 'zod';
 
 import {
   CatCharacteristicsSchema,
   type CatCharacteristics,
+  NameValidationResultSchema,
   type NameValidationResult,
 } from '../types/schemas.js';
 
 // SonarQube: Disable "Do not call Array#push() multiple times" - conditional pushes based on validation logic
 // NOSONAR
-
-/**
- * Error constant for name validator agent.
- * Used when validation fails due to invalid input format or unexpected errors.
- */
-const VALIDATION_ERROR = 'invalid-format' as const;
 
 /**
  * Input schema for name validation
@@ -293,29 +286,16 @@ export function critiqueCatName(
  * feline nobility and proper nomenclature. Checks for forbidden patterns,
  * distinguished titles, and appropriateness based on cat characteristics.
  */
-export const nameValidatorAgent = createPureFunctionAgent(
-  (input: NameValidationInput): AgentResult<NameValidationResult, typeof VALIDATION_ERROR> => {
-    try {
-      // Validate input schema
-      const parsed = NameValidationInputSchema.safeParse(input);
-      if (!parsed.success) {
-        return createError(VALIDATION_ERROR);
-      }
-
-      const validationResult = validateCatName(parsed.data.name, parsed.data.characteristics);
-      return createSuccess(validationResult);
-    } catch (err) {
-      // Unexpected errors (e.g., pattern matching failure)
-      if (err instanceof Error) {
-        console.warn('Name validation error:', err.message);
-      }
-      return createError(VALIDATION_ERROR);
-    }
-  },
+export const nameValidatorAgent = definePureFunction(
   {
     name: 'name-validator',
     version: '1.0.0',
     description: 'Validates cat names for proper nobility conventions and appropriateness',
-    archetype: 'pure-function-tool',
+    inputSchema: NameValidationInputSchema,
+    outputSchema: NameValidationResultSchema,
+  },
+  (input) => {
+    // Input is already validated by wrapper
+    return validateCatName(input.name, input.characteristics);
   }
 );
