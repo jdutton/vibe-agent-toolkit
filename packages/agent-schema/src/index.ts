@@ -27,6 +27,7 @@ export {
 export {
   AgentInterfaceSchema,
   SchemaRefSchema,
+  type Agent,
   type AgentInterface,
   type SchemaRef,
 } from './interface.js';
