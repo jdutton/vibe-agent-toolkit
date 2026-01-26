@@ -74,3 +74,6 @@ export {
   createSafePureFunctionAgent,
   executeLLMCall,
 } from './agent-helpers.js';
+
+// NOTE: resultMatchers is NOT exported from main index to avoid importing vitest
+// in production code. Import directly from './test-helpers.js' in test files.
