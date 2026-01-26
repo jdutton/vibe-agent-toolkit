@@ -1,4 +1,4 @@
-import { createPureFunctionTestSuite } from '@vibe-agent-toolkit/dev-tools';
+import { createPureFunctionTestSuite, parseUnwrappedOutput } from '@vibe-agent-toolkit/dev-tools';
 import { HaikuSchema, HaikuValidationResultSchema, haikuValidatorAgent } from '@vibe-agent-toolkit/vat-example-cat-agents';
 import { expect } from 'vitest';
 
@@ -25,7 +25,7 @@ createPureFunctionTestSuite({
     const executor = createToolExecutor(result.server, result.metadata.name);
     return executor(input);
   },
-  parseOutput: (output) => output as { valid: boolean; syllables?: { line1: number; line2: number; line3: number }; errors?: unknown[] },
+  parseOutput: parseUnwrappedOutput,
   assertToolStructure: (result) => {
     expect(result.server).toBeDefined();
     expect(result.server.name).toBeDefined();

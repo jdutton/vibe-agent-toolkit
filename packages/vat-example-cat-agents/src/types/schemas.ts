@@ -81,13 +81,13 @@ export type HaikuValidationResult = z.infer<typeof HaikuValidationResultSchema>;
  * Selection profile for breed advisor conversation
  */
 export const SelectionProfileSchema = z.object({
-  livingSpace: z.enum(['apartment', 'small-house', 'large-house', 'farm']).optional().describe('Living space type'),
-  activityLevel: z.enum(['couch-companion', 'playful-moderate', 'active-explorer', 'high-energy-athlete']).optional().describe('Desired activity level'),
-  groomingTolerance: z.enum(['minimal', 'weekly', 'daily']).optional().describe('Grooming tolerance'),
-  familyComposition: z.enum(['single', 'couple', 'young-kids', 'older-kids', 'multi-pet']).optional().describe('Family composition'),
-  allergies: z.boolean().optional().describe('Has allergies requiring hypoallergenic breeds'),
-  musicPreference: z.enum(['classical', 'jazz', 'rock', 'metal', 'pop', 'country', 'electronic', 'none']).optional().describe('Music preference (CRITICAL factor!)'),
-  conversationPhase: z.enum(['gathering', 'ready-to-recommend', 'refining']).describe('Current conversation phase'),
+  livingSpace: z.enum(['apartment', 'small-house', 'large-house', 'farm']).nullable().optional().describe('Living space type'),
+  activityLevel: z.enum(['couch-companion', 'playful-moderate', 'active-explorer', 'high-energy-athlete']).nullable().optional().describe('Desired activity level'),
+  groomingTolerance: z.enum(['minimal', 'weekly', 'daily']).nullable().optional().describe('Grooming tolerance'),
+  familyComposition: z.enum(['single', 'couple', 'young-kids', 'older-kids', 'multi-pet']).nullable().optional().describe('Family composition'),
+  allergies: z.boolean().nullable().optional().describe('Has allergies requiring hypoallergenic breeds'),
+  musicPreference: z.enum(['classical', 'jazz', 'rock', 'metal', 'pop', 'country', 'electronic', 'none']).nullable().optional().describe('Music preference (CRITICAL factor!)'),
+  conversationPhase: z.enum(['gathering', 'ready-to-recommend', 'refining', 'completed']).optional().describe('Current conversation phase (set by agent)'),
 });
 
 export type SelectionProfile = z.infer<typeof SelectionProfileSchema>;

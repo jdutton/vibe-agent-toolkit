@@ -41,12 +41,12 @@ describe('SelectionProfileSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('should reject missing conversation phase', () => {
+  it('should accept missing conversation phase (optional, set by agent)', () => {
     const result = SelectionProfileSchema.safeParse({
       livingSpace: 'apartment',
     });
 
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 });
 

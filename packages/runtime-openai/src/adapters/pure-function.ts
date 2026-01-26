@@ -81,11 +81,17 @@ export function convertPureFunctionToTool<TInput, TOutput>(
     // Validate input
     const validatedInput = inputSchema.parse(args);
 
-    // Execute agent
-    const result = await agent.execute(validatedInput);
+    // Execute agent - returns OneShotAgentOutput with envelope
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const output = (await agent.execute(validatedInput)) as any;
 
-    // Validate output
-    return outputSchema.parse(result);
+    // Unwrap envelope and validate the data
+    if (output.result.status === 'success') {
+      return outputSchema.parse(output.result.data) as TOutput;
+    }
+
+    // Error case - throw to let caller handle
+    throw new Error(`Agent execution failed: ${String(output.result.error)}`);
   };
 
   return {
@@ -95,7 +101,7 @@ export function convertPureFunctionToTool<TInput, TOutput>(
       name: manifest.name,
       description: manifest.description,
       version: manifest.version,
-      archetype: 'pure-function',
+      archetype: manifest.archetype,
     },
     inputSchema,
     outputSchema,

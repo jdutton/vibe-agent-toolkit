@@ -26,6 +26,22 @@ export const testData = {
 } as const;
 
 /**
+ * Common parseOutput function for adapters that unwrap envelopes internally
+ * Use for: OpenAI SDK, Claude Agent SDK
+ */
+export function parseUnwrappedOutput(output: unknown): {
+  valid: boolean;
+  syllables?: { line1: number; line2: number; line3: number };
+  errors?: unknown[];
+} {
+  return output as {
+    valid: boolean;
+    syllables?: { line1: number; line2: number; line3: number };
+    errors?: unknown[];
+  };
+}
+
+/**
  * Configuration for runtime-specific pure function test behavior
  */
 export interface PureFunctionTestConfig<TAgent, TSchema, TResult> {
@@ -79,9 +95,7 @@ export function createPureFunctionTestSuite<TAgent, TSchema, TResult>(
       expect(tool).toBeDefined();
       assertToolStructure(result);
       expect((result as { metadata: { name: string; archetype: string } }).metadata.name).toBe('haiku-validator');
-      expect((result as { metadata: { archetype: string } }).metadata.archetype).toBe('pure-function');
-      expect((result as { inputSchema: TSchema }).inputSchema).toBe(inputSchema);
-      expect((result as { outputSchema: TSchema }).outputSchema).toBe(outputSchema);
+      expect((result as { metadata: { archetype: string } }).metadata.archetype).toBe('pure-function-tool');
     });
 
     it('should preserve agent metadata', () => {

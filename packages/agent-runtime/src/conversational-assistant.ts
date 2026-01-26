@@ -1,6 +1,10 @@
 import { type z } from 'zod';
 
-import { buildManifest, createAsyncExecuteWrapperWithContext } from './execute-wrapper.js';
+import {
+  buildManifest,
+  createAsyncExecuteWrapperWithContext,
+  createConversationalContextMapper,
+} from './execute-wrapper.js';
 import type { Agent, ConversationalContext } from './types.js';
 
 /**
@@ -78,12 +82,7 @@ export function defineConversationalAssistant<TInput, TOutput>(
   const execute = createAsyncExecuteWrapperWithContext(
     config,
     handler,
-    (ctx: ConversationalContext): ConversationalContext => ({
-      mockable: config.mockable ?? true,
-      history: ctx.history,
-      addToHistory: ctx.addToHistory,
-      callLLM: ctx.callLLM,
-    }),
+    createConversationalContextMapper(config.mockable ?? true),
   );
 
   return {

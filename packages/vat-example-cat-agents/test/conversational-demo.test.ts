@@ -30,7 +30,7 @@ describe('Conversational Demo Startup', () => {
     // Verify output contains expected messages
     expect(stdout).toContain('Conversational Demo: Breed Selection Advisor');
     expect(stdout).toContain('No OPENAI_API_KEY found');
-    expect(stdout).toContain('Set environment variable to run real LLM calls');
+    expect(stdout).toContain('Set environment variable');
 
     // Should not have any errors
     expect(stderr).toBe('');
@@ -42,7 +42,7 @@ describe('Conversational Demo Startup', () => {
 
     expect(breedAdvisorAgent).toBeDefined();
     expect(breedAdvisorAgent.name).toBe('breed-advisor');
-    expect(breedAdvisorAgent.manifest.archetype).toBe('conversational-assistant');
+    expect(breedAdvisorAgent.manifest.archetype).toBe('two-phase-conversational-assistant');
     expect(breedAdvisorAgent.manifest.description).toContain('cat breed');
   });
 

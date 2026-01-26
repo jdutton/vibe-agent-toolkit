@@ -390,8 +390,8 @@ export function matchBreeds(profile: SelectionProfile): BreedMatch[] {
     };
   });
 
-  // Sort by score descending and return top 5
+  // Sort by score descending and return top 3
   return scored
     .toSorted((a, b) => b.matchScore - a.matchScore)
-    .slice(0, 5);
+    .slice(0, 3);
 }

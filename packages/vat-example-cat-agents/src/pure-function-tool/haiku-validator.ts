@@ -1,7 +1,8 @@
-import { definePureFunction, type PureFunctionAgent } from '@vibe-agent-toolkit/agent-runtime';
+import { createPureFunctionAgent } from '@vibe-agent-toolkit/agent-runtime';
+import type { AgentResult } from '@vibe-agent-toolkit/agent-schema';
 import { syllable } from 'syllable';
 
-import { HaikuSchema, HaikuValidationResultSchema, type Haiku, type HaikuValidationResult } from '../types/schemas.js';
+import type { Haiku, HaikuValidationResult } from '../types/schemas.js';
 
 // SonarQube: Disable "Do not call Array#push() multiple times" - conditional pushes based on validation logic
 // NOSONAR
@@ -45,9 +46,9 @@ const KIREJI_PATTERNS = [
  * This is Professor Whiskers' domain - he's extremely strict about syllable counts.
  *
  * @param haiku - The haiku to validate
- * @returns Validation result with syllable counts and errors
+ * @returns Validation result with syllable counts and errors (wrapped in success)
  */
-export function validateHaiku(haiku: Haiku): HaikuValidationResult {
+function validateHaikuLogic(haiku: Haiku): HaikuValidationResult {
   const line1Count = syllable(haiku.line1);
   const line2Count = syllable(haiku.line2);
   const line3Count = syllable(haiku.line3);
@@ -89,6 +90,14 @@ export function validateHaiku(haiku: Haiku): HaikuValidationResult {
 }
 
 /**
+ * Validates a haiku (public API for direct use).
+ * Returns the validation result directly without the envelope.
+ */
+export function validateHaiku(haiku: Haiku): HaikuValidationResult {
+  return validateHaikuLogic(haiku);
+}
+
+/**
  * Generates a detailed critique of a haiku.
  * This is what Professor Whiskers would say.
  *
@@ -96,7 +105,7 @@ export function validateHaiku(haiku: Haiku): HaikuValidationResult {
  * @returns A detailed critique string
  */
 export function critiqueHaiku(haiku: Haiku): string {
-  const result = validateHaiku(haiku);
+  const result = validateHaikuLogic(haiku);
   const lines: string[] = [];
 
   lines.push('=== Professor Whiskers\' Haiku Critique ===\n');
@@ -140,25 +149,34 @@ export function critiqueHaiku(haiku: Haiku): string {
 }
 
 /**
- * Haiku validator agent
+ * Haiku validator agent (wrapped with result envelope)
  *
  * Validates haiku structure (5-7-5 syllable pattern) and checks for
  * traditional elements like seasonal references (kigo) and cutting words (kireji).
  *
  * This is Professor Whiskers' domain - he's extremely strict about syllable counts.
+ *
+ * Returns OneShotAgentOutput with:
+ * - result.status: 'success' (validation result) or 'error' (unexpected failure)
+ * - result.data: HaikuValidationResult (includes valid boolean, syllable counts, errors)
  */
-export const haikuValidatorAgent: PureFunctionAgent<Haiku, HaikuValidationResult> = definePureFunction(
+export const haikuValidatorAgent = createPureFunctionAgent(
+  (haiku: Haiku): AgentResult<HaikuValidationResult, 'invalid-format'> => {
+    try {
+      const validationResult = validateHaikuLogic(haiku);
+      return { status: 'success', data: validationResult };
+    } catch (err) {
+      // Unexpected errors (e.g., syllable library failure)
+      if (err instanceof Error) {
+        console.warn('Haiku validation error:', err.message);
+      }
+      return { status: 'error', error: 'invalid-format' };
+    }
+  },
   {
     name: 'haiku-validator',
-    description: 'Validates haiku syllable structure and traditional elements',
     version: '1.0.0',
-    inputSchema: HaikuSchema,
-    outputSchema: HaikuValidationResultSchema,
-    metadata: {
-      author: 'Professor Whiskers',
-      strict: true,
-      checks: ['syllables', 'kigo', 'kireji'],
-    },
-  },
-  validateHaiku,
+    description: 'Validates haiku syllable structure and traditional elements',
+    archetype: 'pure-function-tool',
+  }
 );

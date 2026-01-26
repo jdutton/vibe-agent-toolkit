@@ -1,7 +1,7 @@
 import { type z } from 'zod';
 
 import { convertToJsonSchema, validateInput, validateOutput } from './shared-validation.js';
-import type { AgentManifest } from './types.js';
+import type { AgentManifest, ConversationalContext } from './types.js';
 
 /**
  * Configuration for execute wrappers
@@ -136,4 +136,19 @@ export function createAsyncExecuteWrapperWithContext<TInput, TOutput, TContext>(
       handler(validatedInput, fullContext),
     );
   };
+}
+
+/**
+ * Creates a standard context mapper for conversational agents
+ * (shared to avoid duplication across conversational agent types)
+ */
+export function createConversationalContextMapper(
+  mockable: boolean,
+): (ctx: ConversationalContext) => ConversationalContext {
+  return (ctx: ConversationalContext): ConversationalContext => ({
+    mockable,
+    history: ctx.history,
+    addToHistory: ctx.addToHistory,
+    callLLM: ctx.callLLM,
+  });
 }

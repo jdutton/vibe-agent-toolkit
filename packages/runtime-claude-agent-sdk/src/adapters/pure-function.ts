@@ -73,7 +73,7 @@ export function convertPureFunctionToTool<TInput, TOutput>(
 
   return {
     server,
-    metadata: createSingleToolMetadata(manifest, 'pure-function', mcpServerName),
+    metadata: createSingleToolMetadata(manifest, manifest.archetype, mcpServerName),
     inputSchema,
     outputSchema,
   };

@@ -20,7 +20,15 @@ createPureFunctionTestSuite({
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return await execute(input, {} as any);
   },
-  parseOutput: (output) => output as { valid: boolean; syllables?: { line1: number; line2: number; line3: number }; errors?: unknown[] },
+  parseOutput: (output) => {
+    // Unwrap OneShotAgentOutput envelope
+    const envelope = output as { result: { status: string; data?: unknown; error?: string }; metadata?: unknown };
+    if (envelope.result.status === 'success') {
+      return envelope.result.data as { valid: boolean; syllables?: { line1: number; line2: number; line3: number }; errors?: unknown[] };
+    }
+    // Return error as invalid result
+    return { valid: false, errors: [envelope.result.error] };
+  },
   assertToolStructure: (result) => {
     expect(result.tool.description).toBeDefined();
     expect(result.tool.inputSchema).toBeDefined();
