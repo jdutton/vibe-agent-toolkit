@@ -9,6 +9,7 @@ export { toJsonSchema, type JsonSchemaOptions } from './schema-utils.js';
 
 // Result types
 export * from './result-types.js';
+export * from './output-envelopes.js';
 
 // Core schemas
 export {
