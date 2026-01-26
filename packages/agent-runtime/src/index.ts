@@ -72,8 +72,10 @@ export { andThen, mapResult, match, unwrap } from './result-helpers.js';
 export {
   createPureFunctionAgent,
   createSafePureFunctionAgent,
+  executeExternalEvent,
   executeLLMAnalyzer,
   executeLLMCall,
+  validateAgentInput,
 } from './agent-helpers.js';
 
 // NOTE: resultMatchers is NOT exported from main index to avoid importing vitest

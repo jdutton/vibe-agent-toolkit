@@ -1,3 +1,4 @@
+import { executeLLMAnalyzer, validateAgentInput } from '@vibe-agent-toolkit/agent-runtime';
 import type { Agent, LLMError, OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
 import { z } from 'zod';
 
@@ -124,40 +125,20 @@ export const nameGeneratorAgent: Agent<
     },
   },
   execute: async (input: NameGeneratorInput) => {
-    // Validate input
-    const parsed = NameGeneratorInputSchema.safeParse(input);
-    if (!parsed.success) {
-      return {
-        result: { status: 'error', error: 'llm-invalid-output' as const },
-      };
+    const validatedOrError = validateAgentInput<NameGeneratorInput, NameSuggestion>(
+      input,
+      NameGeneratorInputSchema
+    );
+    if ('result' in validatedOrError) {
+      return validatedOrError;
     }
 
-    const { characteristics, mockable = true } = parsed.data;
+    const { characteristics, mockable = true } = validatedOrError;
 
-    // Mock mode: use deterministic generation
-    if (mockable) {
-      const data = mockGenerateName(characteristics);
-      return {
-        result: { status: 'success', data },
-        metadata: {
-          mode: 'mock',
-          executedAt: new Date().toISOString(),
-        },
-      };
-    }
-
-    // Real mode: use LLM (not implemented - requires runtime context)
-    // This would need to be wrapped by a runtime adapter to provide ctx.callLLM
-    return {
-      result: {
-        status: 'error',
-        error: 'llm-unavailable' as const,
-      },
-      metadata: {
-        mode: 'real',
-        message: 'Real LLM name generation requires runtime adapter with callLLM context',
-        executedAt: new Date().toISOString(),
-      },
-    };
+    return executeLLMAnalyzer({
+      mockable,
+      mockFn: () => mockGenerateName(characteristics),
+      notImplementedMessage: 'Real LLM name generation requires runtime adapter with callLLM context',
+    });
   },
 };

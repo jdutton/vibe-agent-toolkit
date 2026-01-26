@@ -179,3 +179,28 @@ export async function expectAgentSuccess<TInput, TData, TError>(
   expectSuccess(output, expectFn);
   return output.result.data;
 }
+
+/**
+ * Factory function to create test cat characteristics with defaults
+ */
+export function createTestCat(overrides: {
+  furColor: string;
+  furPattern?: string;
+  size?: 'tiny' | 'small' | 'medium' | 'large' | 'extra-large';
+  breed?: string;
+  personality: string[];
+  description: string;
+}): CatCharacteristics {
+  return {
+    physical: {
+      furColor: overrides.furColor,
+      furPattern: overrides.furPattern,
+      size: overrides.size ?? ('large' as const),
+      breed: overrides.breed,
+    },
+    behavioral: {
+      personality: overrides.personality,
+    },
+    description: overrides.description,
+  };
+}

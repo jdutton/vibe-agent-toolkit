@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { nameGeneratorAgent } from '../../src/one-shot-llm-analyzer/name-generator.js';
-import type { CatCharacteristics } from '../../src/types/schemas.js';
-import { expectAgentSuccess } from '../test-helpers.js';
+import { createTestCat, expectAgentSuccess } from '../test-helpers.js';
 
 describe('nameGeneratorAgent', () => {
   it('should have correct manifest', () => {
@@ -16,17 +15,12 @@ describe('nameGeneratorAgent', () => {
   });
 
   it('should generate name for orange tabby via agent.execute() in mock mode', async () => {
-    const characteristics: CatCharacteristics = {
-      physical: {
-        furColor: 'Orange',
-        furPattern: 'Tabby',
-        size: 'large',
-      },
-      behavioral: {
-        personality: ['Playful', 'Energetic'],
-      },
+    const characteristics = createTestCat({
+      furColor: 'Orange',
+      furPattern: 'Tabby',
+      personality: ['Playful', 'Energetic'],
       description: 'A large orange tabby cat',
-    };
+    });
 
     const data = await expectAgentSuccess(
       nameGeneratorAgent,
@@ -43,16 +37,12 @@ describe('nameGeneratorAgent', () => {
   });
 
   it('should generate name for black cat via agent.execute() in mock mode', async () => {
-    const characteristics: CatCharacteristics = {
-      physical: {
-        furColor: 'Black',
-        size: 'medium',
-      },
-      behavioral: {
-        personality: ['Mysterious', 'Independent'],
-      },
+    const characteristics = createTestCat({
+      furColor: 'Black',
+      size: 'medium',
+      personality: ['Mysterious', 'Independent'],
       description: 'A mysterious black cat',
-    };
+    });
 
     const data = await expectAgentSuccess(
       nameGeneratorAgent,
@@ -65,17 +55,13 @@ describe('nameGeneratorAgent', () => {
   });
 
   it('should generate name for white persian via agent.execute() in mock mode', async () => {
-    const characteristics: CatCharacteristics = {
-      physical: {
-        furColor: 'White',
-        breed: 'Persian',
-        size: 'small',
-      },
-      behavioral: {
-        personality: ['Calm', 'Graceful'],
-      },
+    const characteristics = createTestCat({
+      furColor: 'White',
+      breed: 'Persian',
+      size: 'small',
+      personality: ['Calm', 'Graceful'],
       description: 'A calm white Persian cat',
-    };
+    });
 
     const data = await expectAgentSuccess(
       nameGeneratorAgent,

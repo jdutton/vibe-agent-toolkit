@@ -1,16 +1,38 @@
-import { defineLLMAnalyzer, type Agent } from '@vibe-agent-toolkit/agent-runtime';
+import { executeLLMAnalyzer, validateAgentInput } from '@vibe-agent-toolkit/agent-runtime';
+import type { Agent, LLMError, OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
 import { z } from 'zod';
 
-import { CatCharacteristicsSchema, HaikuSchema, type Haiku } from '../types/schemas.js';
+import { CatCharacteristicsSchema, type Haiku } from '../types/schemas.js';
 
 /**
  * Input schema for haiku generation
  */
 export const HaikuGeneratorInputSchema = z.object({
   characteristics: CatCharacteristicsSchema.describe('Cat characteristics to inspire the haiku'),
+  mockable: z.boolean().optional().describe('Whether to use mock mode (default: true)'),
 });
 
 export type HaikuGeneratorInput = z.infer<typeof HaikuGeneratorInputSchema>;
+
+/**
+ * Mock implementation that generates simple haikus based on characteristics.
+ */
+function mockGenerateHaiku(characteristics: z.infer<typeof CatCharacteristicsSchema>): Haiku {
+  const { physical, behavioral } = characteristics;
+  const color = physical.furColor.toLowerCase();
+  const personality = (behavioral.personality[0] ?? 'mysterious').toLowerCase();
+
+  // Generate simple 5-7-5 haikus based on characteristics
+  return {
+    line1: `${capitalizeFirst(color)} fur gleams bright`,
+    line2: `${capitalizeFirst(personality)} cat sits watching`,
+    line3: 'Autumn leaves drift down',
+  };
+}
+
+function capitalizeFirst(str: string): string {
+  return str.charAt(0).toUpperCase() + str.slice(1);
+}
 
 /**
  * Haiku generator agent
@@ -18,77 +40,43 @@ export type HaikuGeneratorInput = z.infer<typeof HaikuGeneratorInputSchema>;
  * Ms. Haiku is a zen cat poet who sometimes ignores syllable rules for artistic expression.
  * About 60% of her haikus follow proper 5-7-5 structure, but 40% bend the rules in pursuit
  * of deeper meaning. This is why Professor Whiskers' validation is needed.
+ *
+ * In mock mode, generates simple valid haikus based on characteristics.
+ * In real mode, uses LLM for creative poetic generation.
  */
-export const haikuGeneratorAgent: Agent<HaikuGeneratorInput, Haiku> = defineLLMAnalyzer(
-  {
+export const haikuGeneratorAgent: Agent<
+  HaikuGeneratorInput,
+  OneShotAgentOutput<Haiku, LLMError>
+> = {
+  name: 'haiku-generator',
+  manifest: {
     name: 'haiku-generator',
-    description: 'Generates contemplative haikus about cats based on their characteristics',
     version: '1.0.0',
-    inputSchema: HaikuGeneratorInputSchema,
-    outputSchema: HaikuSchema,
-    mockable: false,
-    model: 'claude-3-haiku',
-    temperature: 0.8, // Moderate temperature for poetic creativity
+    description: 'Generates contemplative haikus about cats based on their characteristics',
+    archetype: 'one-shot-llm-analyzer',
     metadata: {
       author: 'Ms. Haiku',
       personality: 'Zen cat poet, sometimes ignores syllable rules for artistic expression',
       validRate: '60%',
+      model: 'claude-3-haiku',
+      temperature: 0.8,
     },
   },
-  async (input, ctx) => {
-    const { physical, behavioral } = input.characteristics;
+  execute: async (input: HaikuGeneratorInput) => {
+    const validatedOrError = validateAgentInput<HaikuGeneratorInput, Haiku>(
+      input,
+      HaikuGeneratorInputSchema
+    );
+    if ('result' in validatedOrError) {
+      return validatedOrError;
+    }
 
-    const prompt = `*Sits in meditation pose, tail wrapped around paws*
+    const { characteristics, mockable = true } = validatedOrError;
 
-I am Ms. Haiku, a zen poet cat. I compose haiku that capture the essence of feline existence.
-
-The art of haiku is subtle. The traditional form is 5-7-5 syllables, but sometimes...
-the poem's soul requires breaking the rules. Professor Whiskers disagrees with this philosophy.
-He is very strict. But poetry is about feeling, not just counting.
-
-CAT TO CONTEMPLATE:
-- Fur: ${physical.furColor}${physical.furPattern ? ` (${physical.furPattern})` : ''}
-${physical.breed ? `- Breed: ${physical.breed}` : ''}
-${physical.size ? `- Size: ${physical.size}` : ''}
-- Personality: ${behavioral.personality.join(', ')}
-${behavioral.quirks ? `- Quirks: ${behavioral.quirks.join(', ')}` : ''}
-
-HAIKU GUIDELINES:
-Traditional haiku structure is:
-- Line 1: 5 syllables
-- Line 2: 7 syllables
-- Line 3: 5 syllables
-
-Elements to consider:
-- Kigo (seasonal reference): Include imagery of seasons (spring blossoms, autumn leaves, winter snow)
-- Kireji (cutting word): Use punctuation (—, ..., !) to create pause or juxtaposition
-- Present tense, immediate observation
-- Nature and the moment
-- Capture the cat's essence
-
-*Tail swishes contemplatively*
-
-IMPORTANT: Aim for proper 5-7-5 structure MOST of the time, but if artistic expression demands it,
-you may occasionally adjust syllables. About 60% should be valid, 40% can bend the rules for deeper meaning.
-
-Return JSON with three lines:
-
-${JSON.stringify(
-  {
-    line1: 'First line - aim for 5 syllables',
-    line2: 'Second line - aim for 7 syllables',
-    line3: 'Third line - aim for 5 syllables',
+    return executeLLMAnalyzer({
+      mockable,
+      mockFn: () => mockGenerateHaiku(characteristics),
+      notImplementedMessage: 'Real LLM haiku generation requires runtime adapter with callLLM context',
+    });
   },
-  null,
-  2,
-)}
-
-*Breathes deeply*
-
-Let the poem flow. Return ONLY valid JSON.`;
-
-    const response = await ctx.callLLM(prompt);
-    const parsed = JSON.parse(response);
-    return HaikuSchema.parse(parsed);
-  },
-);
+};

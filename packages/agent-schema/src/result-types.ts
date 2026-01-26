@@ -37,3 +37,17 @@ export type LLMError =
   | 'llm-timeout'           // API timeout
   | 'llm-rate-limit'        // Rate limited
   | 'llm-unavailable';      // Service down/unreachable
+
+/**
+ * Standard external event error types for agents that integrate with
+ * external systems or humans.
+ *
+ * These represent expected integration failure modes that should be
+ * handled gracefully by orchestrators (retry, fallback, escalation)
+ * rather than treated as system failures.
+ */
+export type ExternalEventError =
+  | 'event-timeout'         // Timeout waiting for response
+  | 'event-unavailable'     // External system unreachable
+  | 'event-rejected'        // Request explicitly rejected
+  | 'event-invalid-response'; // Invalid response from external system
