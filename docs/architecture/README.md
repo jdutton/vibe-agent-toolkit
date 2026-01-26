@@ -171,6 +171,60 @@ packages/resources/
 
 ---
 
+## Result Envelopes & Railway-Oriented Programming
+
+### Overview
+
+All VAT agents return standardized result envelopes following Railway-Oriented Programming (ROP) principles. This provides consistent error handling, type-safe result processing, and clear orchestration patterns.
+
+### Core Concepts
+
+**Result Types** (`@vibe-agent-toolkit/agent-schema`):
+- `AgentResult<T, E>` - Success/error discriminated union for single-execution agents
+- `StatefulAgentResult<T, E, M>` - Adds "in-progress" state for multi-turn conversational agents
+- `LLMError` - Standard error types for LLM-related failures
+- `ExternalEventError` - Standard error types for external system integration
+
+**Output Envelopes**:
+- `OneShotAgentOutput<TData, TError>` - For pure functions and one-shot LLM analyzers
+- `ConversationalAgentOutput<TData, TError, TState>` - For multi-turn conversational agents
+
+**Result Helpers** (`@vibe-agent-toolkit/agent-runtime`):
+- `mapResult()` - Transform success data
+- `andThen()` - Chain operations (only if success)
+- `match()` - Pattern match on result status
+- `unwrap()` - Extract data (throws on error)
+
+### Benefits
+
+1. **Type Safety**: TypeScript discriminated unions ensure compile-time correctness
+2. **Consistent Error Handling**: Standard error types across all agents
+3. **Composability**: Result helpers enable clean agent chaining
+4. **Observability**: Machine-readable status enables monitoring and debugging
+5. **Testability**: Test helpers simplify assertion patterns
+
+### Example
+
+```typescript
+// Agent returns envelope
+const result = await haikuValidator.execute({ text, syllables, kigo, kireji });
+
+// Type-safe pattern matching
+const message = match(result, {
+  success: (data) => `Valid haiku: ${data.valid}`,
+  error: (err) => `Validation failed: ${err}`,
+});
+
+// Or extract directly (throws on error)
+const data = unwrap(result);
+```
+
+### Learn More
+
+See [Orchestration Guide](../orchestration.md) for detailed patterns and examples.
+
+---
+
 ## Architectural Principles
 
 ### 1. Clear Package Boundaries

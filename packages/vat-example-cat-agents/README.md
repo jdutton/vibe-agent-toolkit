@@ -32,6 +32,71 @@ This package serves as a **reference implementation** for the Vibe Agent Toolkit
 npm install @vibe-agent-toolkit/vat-example-cat-agents
 ```
 
+## Result Envelopes
+
+All VAT agents return standardized result envelopes following Railway-Oriented Programming (ROP) principles. This provides consistent error handling, type-safe result processing, and clear orchestration patterns.
+
+### OneShotAgentOutput (Pure Functions & One-Shot LLM)
+
+Pure function tools and one-shot LLM analyzers return `OneShotAgentOutput<TData, TError>`:
+
+```typescript
+interface OneShotAgentOutput<TData, TError> {
+  result: AgentResult<TData, TError>;
+}
+
+type AgentResult<TData, TError> =
+  | { status: 'success'; data: TData }
+  | { status: 'error'; error: TError };
+```
+
+**Example:**
+```typescript
+const output = await haikuValidator.execute({ text, syllables, kigo, kireji });
+
+if (output.result.status === 'success') {
+  console.log('Valid:', output.result.data.valid);
+} else {
+  console.error('Invalid:', output.result.error);
+}
+```
+
+### ConversationalAgentOutput (Multi-Turn Agents)
+
+Conversational assistants return `ConversationalAgentOutput<TData, TError, TState>`:
+
+```typescript
+interface ConversationalAgentOutput<TData, TError, TState> {
+  reply: string;                // Natural language response
+  sessionState: TState;         // Updated session state
+  result: StatefulAgentResult<TData, TError, TMetadata>;
+}
+
+type StatefulAgentResult<TData, TError, TMetadata> =
+  | { status: 'in-progress'; metadata?: TMetadata }
+  | { status: 'success'; data: TData }
+  | { status: 'error'; error: TError };
+```
+
+**Example:**
+```typescript
+const output = await breedAdvisor.execute({
+  message: 'I love classical music',
+  sessionState: { profile: { conversationPhase: 'gathering' } },
+});
+
+console.log('Agent says:', output.reply);           // For user
+const nextState = output.sessionState;              // Carry to next turn
+
+if (output.result.status === 'in-progress') {
+  console.log('Gathering info:', output.result.metadata);
+} else if (output.result.status === 'success') {
+  console.log('Recommendation:', output.result.data);
+}
+```
+
+See [Orchestration Guide](../../docs/orchestration.md) for detailed patterns and examples.
+
 ## Agent Catalog
 
 ### Archetype 1: Pure Function Tool
