@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import { critiqueCatName, validateCatName, type CatCharacteristics } from '../../src/pure-function-tool/name-validator.js';
+import { critiqueCatName, nameValidatorAgent, validateCatName } from '../../src/pure-function-tool/name-validator.js';
+import type { CatCharacteristics } from '../../src/types/schemas.js';
+import { expectAgentSuccess, expectError } from '../test-helpers.js';
 
 describe('validateCatName', () => {
   it('should approve noble titles', () => {
@@ -122,5 +124,61 @@ describe('critiqueCatName', () => {
     expect(critique).toContain('VALID');
     expect(critique).toContain('purrs contentedly');
     expect(critique).toContain('I approve');
+  });
+});
+
+describe('nameValidatorAgent', () => {
+  it('should have correct manifest', () => {
+    expect(nameValidatorAgent.name).toBe('name-validator');
+    expect(nameValidatorAgent.manifest.name).toBe('name-validator');
+    expect(nameValidatorAgent.manifest.description).toBe(
+      'Validates cat names for proper nobility conventions and appropriateness',
+    );
+    expect(nameValidatorAgent.manifest.version).toBe('1.0.0');
+    expect(nameValidatorAgent.manifest.archetype).toBe('pure-function-tool');
+  });
+
+  it('should validate a noble name via agent.execute()', async () => {
+    const data = await expectAgentSuccess(nameValidatorAgent, { name: 'Duke Sterling III' }, expect);
+
+    expect(data.status).toBe('valid');
+    expect(data.reason).toContain('nobility');
+  });
+
+  it('should reject a vulgar name via agent.execute()', async () => {
+    const data = await expectAgentSuccess(nameValidatorAgent, { name: 'Poopface' }, expect);
+
+    expect(data.status).toBe('invalid');
+    expect(data.reason).toContain('VULGAR');
+  });
+
+  it('should consider cat characteristics via agent.execute()', async () => {
+    const cat: CatCharacteristics = {
+      physical: {
+        furColor: 'Orange',
+        furPattern: 'Tabby',
+        size: 'large',
+      },
+      behavioral: {
+        personality: ['Playful', 'Energetic'],
+      },
+      description: 'A large orange tabby cat',
+    };
+
+    const data = await expectAgentSuccess(
+      nameValidatorAgent,
+      { name: 'Sir Marmalade', characteristics: cat },
+      expect,
+    );
+
+    expect(data.status).toBe('valid');
+    expect(data.reason).toContain('nobility');
+  });
+
+  it('should return error for invalid input', async () => {
+    const output = await nameValidatorAgent.execute({ invalid: 'data' } as never);
+
+    expectError(output, 'invalid-format', expect);
+    expect(output.result.status).toBe('error'); // SonarJS: explicit assertion required
   });
 });

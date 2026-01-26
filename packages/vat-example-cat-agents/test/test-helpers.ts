@@ -1,3 +1,6 @@
+import type { OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
+import type { expect } from 'vitest';
+
 import type { CatCharacteristics } from '../src/types/schemas.js';
 
 /**
@@ -131,4 +134,48 @@ export async function findInvalidSyllableLine(
   }
 
   return false;
+}
+
+/**
+ * Helper to assert and extract successful agent result
+ * Eliminates duplication in envelope testing pattern
+ */
+export function expectSuccess<TData, TError>(
+  output: OneShotAgentOutput<TData, TError>,
+  expectFn: typeof expect,
+): asserts output is OneShotAgentOutput<TData, TError> & {
+  result: { status: 'success'; data: TData };
+} {
+  expectFn(output.result.status).toBe('success');
+}
+
+/**
+ * Helper to assert and extract error agent result
+ * Eliminates duplication in envelope testing pattern
+ */
+export function expectError<TData, TError>(
+  output: OneShotAgentOutput<TData, TError>,
+  expectedError: TError,
+  expectFn: typeof expect,
+): asserts output is OneShotAgentOutput<TData, TError> & {
+  result: { status: 'error'; error: TError };
+} {
+  expectFn(output.result.status).toBe('error');
+  if (output.result.status === 'error') {
+    expectFn(output.result.error).toBe(expectedError);
+  }
+}
+
+/**
+ * Helper to execute agent and verify success result
+ * Returns the unwrapped data for further assertions
+ */
+export async function expectAgentSuccess<TInput, TData, TError>(
+  agent: { execute: (input: TInput) => Promise<OneShotAgentOutput<TData, TError>> },
+  input: TInput,
+  expectFn: typeof expect,
+): Promise<TData> {
+  const output = await agent.execute(input);
+  expectSuccess(output, expectFn);
+  return output.result.data;
 }

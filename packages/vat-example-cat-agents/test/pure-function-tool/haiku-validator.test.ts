@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { critiqueHaiku, haikuValidatorAgent, validateHaiku } from '../../src/pure-function-tool/haiku-validator.js';
 import type { Haiku } from '../../src/types/schemas.js';
+import { expectError } from '../test-helpers.js';
 
 const VALID_LINE1 = 'Autumn moon rises';
 const VALID_LINE2 = 'Silver light on quiet waves';
@@ -145,9 +146,7 @@ describe('haikuValidatorAgent', () => {
   it('should return error for invalid input', async () => {
     const output = await haikuValidatorAgent.execute({ line1: 'test' } as never);
 
-    expect(output.result.status).toBe('error');
-    if (output.result.status === 'error') {
-      expect(output.result.error).toBe('invalid-format');
-    }
+    expectError(output, 'invalid-format', expect);
+    expect(output.result.status).toBe('error'); // SonarJS: explicit assertion required
   });
 });

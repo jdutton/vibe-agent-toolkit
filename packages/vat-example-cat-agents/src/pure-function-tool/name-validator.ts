@@ -1,9 +1,9 @@
-import { definePureFunction, type PureFunctionAgent } from '@vibe-agent-toolkit/agent-runtime';
+import { createPureFunctionAgent } from '@vibe-agent-toolkit/agent-runtime';
+import type { AgentResult } from '@vibe-agent-toolkit/agent-schema';
 import { z } from 'zod';
 
 import {
   CatCharacteristicsSchema,
-  NameValidationResultSchema,
   type CatCharacteristics,
   type NameValidationResult,
 } from '../types/schemas.js';
@@ -280,33 +280,35 @@ export function critiqueCatName(
 }
 
 /**
- * Wrapper function for the name validator agent that takes structured input
- */
-function validateNameWrapper(input: NameValidationInput): NameValidationResult {
-  return validateCatName(input.name, input.characteristics);
-}
-
-/**
  * Name validator agent
  *
  * Validates cat names according to Madam Fluffington's strict standards of
  * feline nobility and proper nomenclature. Checks for forbidden patterns,
  * distinguished titles, and appropriateness based on cat characteristics.
  */
-export const nameValidatorAgent: PureFunctionAgent<NameValidationInput, NameValidationResult> = definePureFunction(
+export const nameValidatorAgent = createPureFunctionAgent(
+  (input: NameValidationInput): AgentResult<NameValidationResult, 'invalid-format'> => {
+    try {
+      // Validate input schema
+      const parsed = NameValidationInputSchema.safeParse(input);
+      if (!parsed.success) {
+        return { status: 'error', error: 'invalid-format' };
+      }
+
+      const validationResult = validateCatName(parsed.data.name, parsed.data.characteristics);
+      return { status: 'success', data: validationResult };
+    } catch (err) {
+      // Unexpected errors (e.g., pattern matching failure)
+      if (err instanceof Error) {
+        console.warn('Name validation error:', err.message);
+      }
+      return { status: 'error', error: 'invalid-format' };
+    }
+  },
   {
     name: 'name-validator',
-    description: 'Validates cat names for proper nobility conventions and appropriateness',
     version: '1.0.0',
-    inputSchema: NameValidationInputSchema,
-    outputSchema: NameValidationResultSchema,
-    metadata: {
-      author: 'Madam Fluffington',
-      strict: true,
-      checksForbidden: true,
-      checksDistinguished: true,
-      checksCharacteristics: true,
-    },
-  },
-  validateNameWrapper,
+    description: 'Validates cat names for proper nobility conventions and appropriateness',
+    archetype: 'pure-function-tool',
+  }
 );
