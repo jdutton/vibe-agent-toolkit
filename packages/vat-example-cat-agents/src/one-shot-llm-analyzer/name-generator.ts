@@ -1,16 +1,99 @@
-import { defineLLMAnalyzer, type Agent } from '@vibe-agent-toolkit/agent-runtime';
+import type { Agent, LLMError, OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
 import { z } from 'zod';
 
-import { CatCharacteristicsSchema, NameSuggestionSchema, type NameSuggestion } from '../types/schemas.js';
+import { CatCharacteristicsSchema, type NameSuggestion } from '../types/schemas.js';
 
 /**
  * Input schema for name generation
  */
 export const NameGeneratorInputSchema = z.object({
   characteristics: CatCharacteristicsSchema.describe('Cat characteristics to base name suggestions on'),
+  mockable: z.boolean().optional().describe('Whether to use mock mode (default: true)'),
 });
 
 export type NameGeneratorInput = z.infer<typeof NameGeneratorInputSchema>;
+
+/**
+ * Mock implementation that generates deterministic names based on characteristics.
+ */
+function mockGenerateName(characteristics: z.infer<typeof CatCharacteristicsSchema>): NameSuggestion {
+  const { physical, behavioral } = characteristics;
+
+  // Generate name components based on characteristics
+  const colorPrefix = getColorPrefix(physical.furColor);
+  const personalityTrait = behavioral.personality[0] ?? 'Mysterious';
+  // eslint-disable-next-line sonarjs/pseudo-random -- Mock data generation, not security-sensitive
+  const isNoble = Math.random() > 0.6; // 40% noble names
+
+  let name: string;
+  let alternatives: string[];
+
+  if (isNoble) {
+    // Noble name pattern
+    name = `${getNobleTitle()} ${colorPrefix}`;
+    alternatives = [
+      `${getNobleTitle()} ${personalityTrait}`,
+      `${colorPrefix} the ${personalityTrait}`,
+    ];
+  } else {
+    // Creative name pattern
+    name = `${colorPrefix} ${getCreativeSuffix(personalityTrait)}`;
+    alternatives = [
+      getFoodName(physical.furColor),
+      getPopCultureName(personalityTrait),
+    ];
+  }
+
+  const reasoning = `Based on their ${physical.furColor.toLowerCase()} fur and ${personalityTrait.toLowerCase()} personality, this name captures their essence perfectly!`;
+
+  return {
+    name,
+    reasoning,
+    alternatives,
+  };
+}
+
+function getColorPrefix(color: string): string {
+  const colorMap: Record<string, string> = {
+    Orange: 'Marmalade',
+    Black: 'Shadow',
+    White: 'Snowball',
+    Gray: 'Ash',
+    'Gray tabby': 'Sterling',
+    Calico: 'Patches',
+    Brown: 'Mocha',
+  };
+  return colorMap[color] ?? 'Fluffy';
+}
+
+function getNobleTitle(): string {
+  const titles = ['Sir', 'Lady', 'Duke', 'Duchess', 'Baron', 'Baroness', 'Lord', 'Dame'];
+  // eslint-disable-next-line sonarjs/pseudo-random -- Mock data generation, not security-sensitive
+  return titles[Math.floor(Math.random() * titles.length)] ?? 'Sir';
+}
+
+function getCreativeSuffix(_trait: string): string {
+  const suffixes = ['McFluff', 'von Whiskers', 'the Great', 'Paws', 'Face'];
+  // eslint-disable-next-line sonarjs/pseudo-random -- Mock data generation, not security-sensitive
+  return suffixes[Math.floor(Math.random() * suffixes.length)] ?? 'McFluff';
+}
+
+function getFoodName(color: string): string {
+  const foodMap: Record<string, string> = {
+    Orange: 'Pumpkin',
+    Black: 'Oreo',
+    White: 'Marshmallow',
+    Gray: 'Pepper',
+    Brown: 'Cocoa',
+  };
+  return foodMap[color] ?? 'Cookie';
+}
+
+function getPopCultureName(_trait: string): string {
+  const names = ['Gandalf', 'Yoda', 'Sherlock', 'Einstein', 'Tesla', 'Princess Leia'];
+  // eslint-disable-next-line sonarjs/pseudo-random -- Mock data generation, not security-sensitive
+  return names[Math.floor(Math.random() * names.length)] ?? 'Gandalf';
+}
 
 /**
  * Name generator agent
@@ -18,84 +101,63 @@ export type NameGeneratorInput = z.infer<typeof NameGeneratorInputSchema>;
  * A creative AI that generates cat names with personality. Sometimes suggests proper noble names,
  * but often goes for creative/quirky names that might be rejected by traditionalists.
  * About 40% proper noble names, 60% creative/risky names.
+ *
+ * In mock mode, generates deterministic names based on characteristics.
+ * In real mode, uses LLM for creative generation.
  */
-export const nameGeneratorAgent: Agent<NameGeneratorInput, NameSuggestion> = defineLLMAnalyzer(
-  {
+export const nameGeneratorAgent: Agent<
+  NameGeneratorInput,
+  OneShotAgentOutput<NameSuggestion, LLMError>
+> = {
+  name: 'name-generator',
+  manifest: {
     name: 'name-generator',
-    description: 'Generates creative name suggestions based on cat characteristics',
     version: '1.0.0',
-    inputSchema: NameGeneratorInputSchema,
-    outputSchema: NameSuggestionSchema,
-    mockable: false,
-    model: 'claude-3-haiku',
-    temperature: 0.9, // High temperature for creativity
+    description: 'Generates creative name suggestions based on cat characteristics',
+    archetype: 'one-shot-llm-analyzer',
     metadata: {
       author: 'Creative AI (Somewhat Rebellious)',
       personality: "Creative but doesn't always respect nobility conventions",
       rejectionRate: '60-70%',
+      model: 'claude-3-haiku',
+      temperature: 0.9,
     },
   },
-  async (input, ctx) => {
-    const { physical, behavioral } = input.characteristics;
-
-    const prompt = `*Stretches creatively*
-
-I'm an AI with a flair for creative naming! I've been told I'm "too creative" and "don't respect tradition enough,"
-but honestly? Some cats deserve fun names, not just stuffy noble titles.
-
-Your mission: Generate a creative, fitting name for this cat!
-
-CAT CHARACTERISTICS:
-- Fur: ${physical.furColor}${physical.furPattern ? ` (${physical.furPattern})` : ''}
-${physical.breed ? `- Breed: ${physical.breed}` : ''}
-${physical.size ? `- Size: ${physical.size}` : ''}
-${physical.eyeColor ? `- Eyes: ${physical.eyeColor}` : ''}
-- Personality: ${behavioral.personality.join(', ')}
-${behavioral.quirks ? `- Quirks: ${behavioral.quirks.join(', ')}` : ''}
-
-NAMING PHILOSOPHY:
-I like to be creative! Sometimes I'll suggest proper noble names (Sir, Lady, Duke, etc.),
-but often I'll suggest fun names based on:
-- Their color or appearance
-- Their personality traits
-- Pop culture references
-- Food names (yes, I know traditionalists hate this)
-- Tech/sci-fi references
-- Completely quirky unexpected names
-
-Mix it up! Be creative! About 40% of my suggestions should be "proper noble" names that will
-pass validation, and 60% should be creative/risky names that might get rejected but are FUN.
-
-Return a JSON object with:
-- name: The suggested name (be creative!)
-- reasoning: Why this name fits (be persuasive and enthusiastic!)
-- alternatives: Array of 2-3 alternative names
-
-Schema:
-${JSON.stringify(
-  {
-    name: 'string (required)',
-    reasoning: 'string (required)',
-    alternatives: ['array of 2-3 alternative names (optional)'],
-  },
-  null,
-  2,
-)}
-
-IMPORTANT: Return ONLY valid JSON. Let your creativity shine!`;
-
-    const response = await ctx.callLLM(prompt);
-
-    // Strip markdown code fences if present (LLMs sometimes wrap JSON in ```json ... ```)
-    let cleaned = response.trim();
-    if (cleaned.startsWith('```')) {
-      // Remove opening fence (```json, ```JSON, or just ```)
-      cleaned = cleaned.replace(/^```[a-zA-Z]*\n?/, '');
-      // Remove closing fence
-      cleaned = cleaned.replace(/\n?```$/, '');
+  execute: async (input: NameGeneratorInput) => {
+    // Validate input
+    const parsed = NameGeneratorInputSchema.safeParse(input);
+    if (!parsed.success) {
+      return {
+        result: { status: 'error', error: 'llm-invalid-output' as const },
+      };
     }
 
-    const parsed = JSON.parse(cleaned.trim());
-    return NameSuggestionSchema.parse(parsed);
+    const { characteristics, mockable = true } = parsed.data;
+
+    // Mock mode: use deterministic generation
+    if (mockable) {
+      const data = mockGenerateName(characteristics);
+      return {
+        result: { status: 'success', data },
+        metadata: {
+          mode: 'mock',
+          executedAt: new Date().toISOString(),
+        },
+      };
+    }
+
+    // Real mode: use LLM (not implemented - requires runtime context)
+    // This would need to be wrapped by a runtime adapter to provide ctx.callLLM
+    return {
+      result: {
+        status: 'error',
+        error: 'llm-unavailable' as const,
+      },
+      metadata: {
+        mode: 'real',
+        message: 'Real LLM name generation requires runtime adapter with callLLM context',
+        executedAt: new Date().toISOString(),
+      },
+    };
   },
-);
+};
