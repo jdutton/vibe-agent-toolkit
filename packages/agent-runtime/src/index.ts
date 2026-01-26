@@ -12,6 +12,15 @@ export {
   type ConversationalAssistantConfig,
 } from './conversational-assistant.js';
 export {
+  defineTwoPhaseConversationalAssistant,
+  generateGatheringPrompt,
+  generateExtractionPrompt,
+  type TwoPhaseConversationalConfig,
+  type GatheringPhaseConfig,
+  type ExtractionPhaseConfig,
+  type FactorDefinition,
+} from './two-phase-conversational.js';
+export {
   defineAgenticResearcher,
   type AgenticResearcherConfig,
 } from './agentic-researcher.js';
@@ -58,3 +67,5 @@ export {
 } from './adapter-types.js';
 
 export { createConversationalContext } from './conversational-helpers.js';
+
+export { andThen, mapResult, match, unwrap } from './result-helpers.js';
