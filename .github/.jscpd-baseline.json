@@ -2,53 +2,17 @@
   "duplicates": [
     {
       "format": "typescript",
-      "lines": 49,
-      "fragment": "{\n  return {\n    name: 'breed-advisor',\n    manifest: {\n      name: 'breed-advisor',\n      archetype: 'two-phase-conversational-assistant',\n      description: 'Test agent',\n      version: '1.0.0',\n    },\n    execute: vi.fn().mockImplementation((input: { message: string; sessionState?: { profile?: Record<string, unknown> } }, context: { addToHistory: (role: string, content: string) => void }) => {\n      const { message, sessionState } = input;\n      const currentState = sessionState?.profile ?? {};\n\n      // Add user message to history\n      context.addToHistory('user', message);\n\n      // Extract info from user message (simple pattern matching)\n      const newState = { ...currentState };\n\n      if (/apartment|small.*apartment/i.test(message)) {\n        newState.livingSpace = 'apartment';\n      }\n      if (/jazz/i.test(message)) {\n        newState.musicPreference = 'jazz';\n      }\n      if (/classical/i.test(message)) {\n        newState.musicPreference = 'classical';\n      }\n      if (/calm|low.energy|lazy/i.test(message)) {\n        newState.activityLevel = 'couch-companion';\n      }\n\n      const reply = 'Mocked agent response';\n\n      // Add assistant response to history\n      context.addToHistory('assistant', reply);\n\n      return Promise.resolve({\n        reply,\n        sessionState: newState,\n        result: { status: 'in-progress' },\n      });\n    }),\n  };\n}\n\n/**\n * Test that an adapter creation function doesn't throw when an API key is missing\n */",
-      "tokens": 0,
-      "firstFile": {
-        "name": "packages/vat-example-cat-agents/test/conversational-adapters/test-helpers.ts",
-        "start": 41,
-        "end": 89,
-        "startLoc": {
-          "line": 41,
-          "column": 2,
-          "position": 205
-        },
-        "endLoc": {
-          "line": 89,
-          "column": 4,
-          "position": 595
-        }
-      },
-      "secondFile": {
-        "name": "packages/vat-example-cat-agents/test/conversational-adapters/vercel-ai-sdk-adapter.test.ts",
-        "start": 14,
-        "end": 60,
-        "startLoc": {
-          "line": 14,
-          "column": 2,
-          "position": 62
-        },
-        "endLoc": {
-          "line": 60,
-          "column": 22,
-          "position": 452
-        }
-      }
-    },
-    {
-      "format": "typescript",
-      "lines": 50,
-      "fragment": ";\n\n// Factory function for creating mock agent (must be defined before vi.mock() for hoisting)\nfunction createMockAgent() {\n  return {\n    name: 'breed-advisor',\n    manifest: {\n      name: 'breed-advisor',\n      archetype: 'two-phase-conversational-assistant',\n      description: 'Test agent',\n      version: '1.0.0',\n    },\n    execute: vi.fn().mockImplementation((input: { message: string; sessionState?: { profile?: Record<string, unknown> } }, context: { addToHistory: (role: string, content: string) => void }) => {\n      const { message, sessionState } = input;\n      const currentState = sessionState?.profile ?? {};\n\n      // Add user message to history\n      context.addToHistory('user', message);\n\n      // Extract info from user message (simple pattern matching)\n      const newState = { ...currentState };\n\n      if (/apartment|small.*apartment/i.test(message)) {\n        newState.livingSpace = 'apartment';\n      }\n      if (/jazz/i.test(message)) {\n        newState.musicPreference = 'jazz';\n      }\n      if (/classical/i.test(message)) {\n        newState.musicPreference = 'classical';\n      }\n      if (/calm|low.energy|lazy/i.test(message)) {\n        newState.activityLevel = 'couch-companion';\n      }\n\n      const reply = 'Mocked agent response';\n\n      // Add assistant response to history\n      context.addToHistory('assistant', reply);\n\n      return Promise.resolve({\n        reply,\n        sessionState: newState,\n        result: { status: 'in-progress' },\n      });\n    }),\n  };\n}\n\n// Mock OpenAI SDK",
+      "lines": 47,
+      "fragment": "function createMockAgent() {\n  return {\n    name: 'breed-advisor',\n    manifest: {\n      name: 'breed-advisor',\n      archetype: 'two-phase-conversational-assistant',\n      description: 'Test agent',\n      version: '1.0.0',\n    },\n    execute: vi.fn().mockImplementation((input: { message: string; sessionState?: { profile?: Record<string, unknown> } }, context: { addToHistory: (role: string, content: string) => void }) => {\n      const { message, sessionState } = input;\n      const currentState = sessionState?.profile ?? {};\n\n      // Add user message to history\n      context.addToHistory('user', message);\n\n      // Extract info from user message (simple pattern matching)\n      const newState = { ...currentState };\n\n      if (/apartment|small.*apartment/i.test(message)) {\n        newState.livingSpace = 'apartment';\n      }\n      if (/jazz/i.test(message)) {\n        newState.musicPreference = 'jazz';\n      }\n      if (/classical/i.test(message)) {\n        newState.musicPreference = 'classical';\n      }\n      if (/calm|low.energy|lazy/i.test(message)) {\n        newState.activityLevel = 'couch-companion';\n      }\n\n      const reply = 'Mocked agent response';\n\n      // Add assistant response to history\n      context.addToHistory('assistant', reply);\n\n      return Promise.resolve({\n        reply,\n        sessionState: newState,\n        result: { status: 'in-progress' },\n      });\n    }),\n  };\n}\n\n// Mock OpenAI SDK",
       "tokens": 0,
       "firstFile": {
         "name": "packages/vat-example-cat-agents/test/conversational-adapters/openai-adapter.test.ts",
-        "start": 12,
+        "start": 15,
         "end": 61,
         "startLoc": {
-          "line": 12,
-          "column": 20,
-          "position": 64
+          "line": 15,
+          "column": 1,
+          "position": 69
         },
         "endLoc": {
           "line": 61,
@@ -58,17 +22,17 @@
       },
       "secondFile": {
         "name": "packages/vat-example-cat-agents/test/conversational-adapters/vercel-ai-sdk-adapter.test.ts",
-        "start": 11,
-        "end": 60,
+        "start": 17,
+        "end": 63,
         "startLoc": {
-          "line": 11,
-          "column": 29,
-          "position": 51
+          "line": 17,
+          "column": 1,
+          "position": 70
         },
         "endLoc": {
-          "line": 60,
+          "line": 63,
           "column": 22,
-          "position": 452
+          "position": 466
         }
       }
     },
@@ -94,53 +58,53 @@
       },
       "secondFile": {
         "name": "packages/vat-example-cat-agents/test/conversational-adapters/vercel-ai-sdk-adapter.test.ts",
-        "start": 21,
-        "end": 60,
+        "start": 24,
+        "end": 63,
         "startLoc": {
-          "line": 21,
+          "line": 24,
           "column": 8,
-          "position": 108
+          "position": 122
         },
         "endLoc": {
-          "line": 60,
+          "line": 63,
           "column": 22,
-          "position": 452
+          "position": 466
         }
       }
     },
     {
       "format": "typescript",
-      "lines": 52,
-      "fragment": ";\n\nimport { testConversationalAdapterContract } from './shared-contract-tests.js';\n\n// Factory function for creating mock agent (must be defined before vi.mock() for hoisting)\nfunction createMockAgent() {\n  return {\n    name: 'breed-advisor',\n    manifest: {\n      name: 'breed-advisor',\n      archetype: 'two-phase-conversational-assistant',\n      description: 'Test agent',\n      version: '1.0.0',\n    },\n    execute: vi.fn().mockImplementation((input: { message: string; sessionState?: { profile?: Record<string, unknown> } }, context: { addToHistory: (role: string, content: string) => void }) => {\n      const { message, sessionState } = input;\n      const currentState = sessionState?.profile ?? {};\n\n      // Add user message to history\n      context.addToHistory('user', message);\n\n      // Extract info from user message (simple pattern matching)\n      const newState = { ...currentState };\n\n      if (/apartment|small.*apartment/i.test(message)) {\n        newState.livingSpace = 'apartment';\n      }\n      if (/jazz/i.test(message)) {\n        newState.musicPreference = 'jazz';\n      }\n      if (/classical/i.test(message)) {\n        newState.musicPreference = 'classical';\n      }\n      if (/calm|low.energy|lazy/i.test(message)) {\n        newState.activityLevel = 'couch-companion';\n      }\n\n      const reply = 'Mocked agent response';\n\n      // Add assistant response to history\n      context.addToHistory('assistant', reply);\n\n      return Promise.resolve({\n        reply,\n        sessionState: newState,\n        result: { status: 'in-progress' },\n      });\n    }),\n  };\n}\n\n// Mock Anthropic SDK",
+      "lines": 53,
+      "fragment": ";\n\nimport { testConversationalAdapterContract } from './shared-contract-tests.js';\nimport { testAdapterCreation, testMissingAPIKey } from './test-helpers.js';\n\n// Factory function for creating mock agent (must be defined before vi.mock() for hoisting)\nfunction createMockAgent() {\n  return {\n    name: 'breed-advisor',\n    manifest: {\n      name: 'breed-advisor',\n      archetype: 'two-phase-conversational-assistant',\n      description: 'Test agent',\n      version: '1.0.0',\n    },\n    execute: vi.fn().mockImplementation((input: { message: string; sessionState?: { profile?: Record<string, unknown> } }, context: { addToHistory: (role: string, content: string) => void }) => {\n      const { message, sessionState } = input;\n      const currentState = sessionState?.profile ?? {};\n\n      // Add user message to history\n      context.addToHistory('user', message);\n\n      // Extract info from user message (simple pattern matching)\n      const newState = { ...currentState };\n\n      if (/apartment|small.*apartment/i.test(message)) {\n        newState.livingSpace = 'apartment';\n      }\n      if (/jazz/i.test(message)) {\n        newState.musicPreference = 'jazz';\n      }\n      if (/classical/i.test(message)) {\n        newState.musicPreference = 'classical';\n      }\n      if (/calm|low.energy|lazy/i.test(message)) {\n        newState.activityLevel = 'couch-companion';\n      }\n\n      const reply = 'Mocked agent response';\n\n      // Add assistant response to history\n      context.addToHistory('assistant', reply);\n\n      return Promise.resolve({\n        reply,\n        sessionState: newState,\n        result: { status: 'in-progress' },\n      });\n    }),\n  };\n}\n\n// Mock Anthropic SDK",
       "tokens": 0,
       "firstFile": {
         "name": "packages/vat-example-cat-agents/test/conversational-adapters/claude-agent-sdk-adapter.test.ts",
         "start": 9,
-        "end": 60,
+        "end": 61,
         "startLoc": {
           "line": 9,
           "column": 69,
           "position": 37
         },
         "endLoc": {
-          "line": 60,
+          "line": 61,
           "column": 22,
-          "position": 452
+          "position": 468
         }
       },
       "secondFile": {
-        "name": "packages/vat-example-cat-agents/test/conversational-adapters/vercel-ai-sdk-adapter.test.ts",
+        "name": "packages/vat-example-cat-agents/test/conversational-adapters/openai-adapter.test.ts",
         "start": 9,
-        "end": 60,
+        "end": 63,
         "startLoc": {
           "line": 9,
-          "column": 66,
-          "position": 37
+          "column": 59,
+          "position": 34
         },
         "endLoc": {
-          "line": 60,
+          "line": 63,
           "column": 22,
-          "position": 452
+          "position": 466
         }
       }
     }

@@ -4,12 +4,12 @@
  * Runs shared contract tests plus LangChain-specific tests.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { describe, it, vi } from 'vitest';
 
 import { createLangChainAdapter } from '../../examples/conversational-adapters/langchain-adapter.js';
 
 import { testConversationalAdapterContract } from './shared-contract-tests.js';
-import { testMissingAPIKey } from './test-helpers.js';
+import { testAdapterCreation, testMissingAPIKey } from './test-helpers.js';
 
 // Factory function for creating mock agent (must be defined before vi.mock() for hoisting)
 function createMockAgent() {
@@ -80,12 +80,7 @@ testConversationalAdapterContract('LangChain', createLangChainAdapter);
 
 describe('LangChain Adapter - LangChain-Specific Tests', () => {
   it('should create adapter successfully', () => {
-    const adapter = createLangChainAdapter();
-
-    expect(adapter).toBeDefined();
-    expect(adapter.name).toBe('LangChain');
-    expect(adapter.convertToFunction).toBeDefined();
-    expect(typeof adapter.convertToFunction).toBe('function');
+    testAdapterCreation('LangChain', createLangChainAdapter);
   });
 
   it('should not throw when OPENAI_API_KEY is not set', () => {

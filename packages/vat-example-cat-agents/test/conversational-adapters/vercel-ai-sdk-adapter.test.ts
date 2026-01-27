@@ -4,13 +4,16 @@
  * Runs shared contract tests plus Vercel-specific tests.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { describe, it, vi } from 'vitest';
 
 import { createVercelAISDKAdapter } from '../../examples/conversational-adapters/vercel-ai-sdk-adapter.js';
 
 import { testConversationalAdapterContract } from './shared-contract-tests.js';
+import { testAdapterCreation } from './test-helpers.js';
 
 // Factory function for creating mock agent (must be defined before vi.mock() for hoisting)
+// NOTE: This function is duplicated across all adapter tests due to vitest hoisting constraints.
+// Mock factories cannot reference imported functions. See test-helpers.ts for explanation.
 function createMockAgent() {
   return {
     name: 'breed-advisor',
@@ -79,11 +82,6 @@ testConversationalAdapterContract('Vercel AI SDK', createVercelAISDKAdapter);
 
 describe('Vercel AI SDK Adapter - Vercel-Specific Tests', () => {
   it('should create adapter successfully', () => {
-    const adapter = createVercelAISDKAdapter();
-
-    expect(adapter).toBeDefined();
-    expect(adapter.name).toBe('Vercel AI SDK');
-    expect(adapter.convertToFunction).toBeDefined();
-    expect(typeof adapter.convertToFunction).toBe('function');
+    testAdapterCreation('Vercel AI SDK', createVercelAISDKAdapter);
   });
 });

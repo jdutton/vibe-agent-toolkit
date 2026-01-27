@@ -4,12 +4,12 @@
  * Runs shared contract tests plus OpenAI-specific tests.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { describe, it, vi } from 'vitest';
 
 import { createOpenAIAdapter } from '../../examples/conversational-adapters/openai-adapter.js';
 
 import { testConversationalAdapterContract } from './shared-contract-tests.js';
-import { testMissingAPIKey } from './test-helpers.js';
+import { testAdapterCreation, testMissingAPIKey } from './test-helpers.js';
 
 // Factory function for creating mock agent (must be defined before vi.mock() for hoisting)
 function createMockAgent() {
@@ -81,12 +81,7 @@ testConversationalAdapterContract('OpenAI SDK', createOpenAIAdapter);
 
 describe('OpenAI SDK Adapter - OpenAI-Specific Tests', () => {
   it('should create adapter successfully', () => {
-    const adapter = createOpenAIAdapter();
-
-    expect(adapter).toBeDefined();
-    expect(adapter.name).toBe('OpenAI SDK');
-    expect(adapter.convertToFunction).toBeDefined();
-    expect(typeof adapter.convertToFunction).toBe('function');
+    testAdapterCreation('OpenAI SDK', createOpenAIAdapter);
   });
 
   it('should not throw when OPENAI_API_KEY is not set', () => {

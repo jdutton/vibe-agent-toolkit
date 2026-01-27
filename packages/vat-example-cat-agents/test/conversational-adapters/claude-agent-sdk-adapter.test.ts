@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createClaudeAgentSDKAdapter } from '../../examples/conversational-adapters/claude-agent-sdk-adapter.js';
 
 import { testConversationalAdapterContract } from './shared-contract-tests.js';
+import { testAdapterCreation, testMissingAPIKey } from './test-helpers.js';
 
 // Factory function for creating mock agent (must be defined before vi.mock() for hoisting)
 function createMockAgent() {
@@ -78,27 +79,11 @@ testConversationalAdapterContract('Claude Agent SDK', createClaudeAgentSDKAdapte
 
 describe('Claude Agent SDK Adapter - Claude-Specific Tests', () => {
   it('should create adapter successfully', () => {
-    const adapter = createClaudeAgentSDKAdapter();
-
-    expect(adapter).toBeDefined();
-    expect(adapter.name).toBe('Claude Agent SDK');
-    expect(adapter.convertToFunction).toBeDefined();
-    expect(typeof adapter.convertToFunction).toBe('function');
+    testAdapterCreation('Claude Agent SDK', createClaudeAgentSDKAdapter);
   });
 
   it('should not throw when ANTHROPIC_API_KEY is not set', () => {
-    // Save original env var
-    const originalKey = process.env.ANTHROPIC_API_KEY;
-    delete process.env.ANTHROPIC_API_KEY;
-
-    expect(() => {
-      createClaudeAgentSDKAdapter();
-    }).not.toThrow();
-
-    // Restore env var
-    if (originalKey) {
-      process.env.ANTHROPIC_API_KEY = originalKey;
-    }
+    testMissingAPIKey('ANTHROPIC_API_KEY', createClaudeAgentSDKAdapter);
   });
 
   it('should not access internal MCP server properties', async () => {
