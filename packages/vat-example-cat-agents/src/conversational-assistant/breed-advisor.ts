@@ -261,7 +261,9 @@ Return JSON in this exact format:
 Return ONLY the JSON object, nothing else.`;
 
         // Create temporary history for extraction (don't pollute main conversation)
-        const extractionHistory = [...ctx.history, { role: 'system' as const, content: extractionPrompt }];
+        // IMPORTANT: Use 'user' role for extraction prompt so Claude API sees it as the last message
+        // (Claude requires alternating user/assistant messages, last must be user)
+        const extractionHistory = [...ctx.history, { role: 'user' as const, content: extractionPrompt }];
         const extractionResponse = await ctx.callLLM(extractionHistory);
 
         // Parse extracted factors

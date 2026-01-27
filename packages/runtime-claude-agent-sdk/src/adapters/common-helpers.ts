@@ -269,12 +269,51 @@ export function createToolsFromConfigs<TInput, TOutput>(
 
 /**
  * Helper to extract text from Anthropic API response
+ *
+ * @param response - Anthropic API response
+ * @returns Extracted text content
  */
-function extractTextFromResponse(response: Anthropic.Messages.Message): string {
+export function extractTextFromResponse(response: Anthropic.Messages.Message): string {
   const textBlock = response.content.find(
     (block): block is Anthropic.Messages.TextBlock => block.type === 'text',
   );
   return textBlock?.text ?? '';
+}
+
+/**
+ * Format messages for Anthropic API
+ *
+ * Extracts system prompt and filters/maps remaining messages to Anthropic format
+ *
+ * @param messages - Array of messages to format
+ * @returns Object with systemPrompt (if any) and conversationMessages in Anthropic format
+ */
+export function formatMessagesForAnthropic(messages: Message[]): {
+  systemPrompt?: string;
+  conversationMessages: Array<{ role: 'user' | 'assistant'; content: string }>;
+} {
+  // Collect all system messages and combine them
+  const systemMessages = messages.filter((m) => m.role === 'system');
+  const conversationMessages = messages
+    .filter((m) => m.role !== 'system')
+    .map((m) => ({
+      role: m.role as 'user' | 'assistant',
+      content: m.content,
+    }));
+
+  const result: {
+    systemPrompt?: string;
+    conversationMessages: Array<{ role: 'user' | 'assistant'; content: string }>;
+  } = {
+    conversationMessages,
+  };
+
+  // Combine all system messages with double newlines
+  if (systemMessages.length > 0) {
+    result.systemPrompt = systemMessages.map((m) => m.content).join('\n\n');
+  }
+
+  return result;
 }
 
 /**
@@ -333,14 +372,8 @@ export function createAnthropicConversationalContext(llmConfig: ClaudeAgentLLMCo
   const { anthropic, model, temperature, maxTokens } = createAnthropicClient(llmConfig);
 
   const callLLM = async (messages: Message[], modelOverride?: string, tempOverride?: number): Promise<string> => {
-    // System prompt from manifest
-    const systemPrompt = messages.find((m) => m.role === 'system')?.content;
-    const conversationMessages = messages
-      .filter((m) => m.role !== 'system')
-      .map((m) => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content,
-      }));
+    // Format messages for Anthropic API using shared helper
+    const { systemPrompt, conversationMessages } = formatMessagesForAnthropic(messages);
 
     const response = await anthropic.messages.create({
       model: modelOverride ?? model,

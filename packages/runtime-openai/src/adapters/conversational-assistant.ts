@@ -63,8 +63,12 @@ export function convertConversationalAssistantToFunction<TInput, TOutput>(
   systemPrompt?: string,
 ): (input: TInput, session: ConversationalSessionState) => Promise<TOutput> {
   // Extract system prompt from agent manifest if not provided
+  const metadataSystemPrompt = agent.manifest.metadata?.['systemPrompt'];
   const effectiveSystemPrompt =
-    systemPrompt ?? (agent.manifest.metadata?.['systemPrompt'] as string | undefined);
+    systemPrompt ??
+    (typeof metadataSystemPrompt === 'string'
+      ? metadataSystemPrompt
+      : (metadataSystemPrompt as { gathering?: string })?.gathering);
 
   // Create base callLLM function
   const baseCallLLM = createConversationalCallLLM(openaiConfig);

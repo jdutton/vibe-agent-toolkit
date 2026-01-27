@@ -3,14 +3,14 @@
  */
 
 import { openai } from '@ai-sdk/openai';
-import { createConversationalContext, type Message } from '@vibe-agent-toolkit/agent-runtime';
+import type { Message } from '@vibe-agent-toolkit/agent-runtime';
 import type { Session } from '@vibe-agent-toolkit/transports';
 import { streamText } from 'ai';
 
-import { breedAdvisorAgent } from '../../src/conversational-assistant/breed-advisor.js';
-import type { BreedAdvisorInput, BreedAdvisorOutput } from '../../src/types/schemas.js';
+import type { BreedAdvisorOutput } from '../../src/types/schemas.js';
 import type { ConversationalRuntimeAdapter } from '../conversational-runtime-adapter.js';
 
+import { createAdapterContext, executeBreedAdvisor } from './shared-helpers.js';
 import type { BreedAdvisorState } from './shared-types.js';
 
 /**
@@ -23,8 +23,8 @@ export function createVercelAISDKAdapter(): ConversationalRuntimeAdapter<
   return {
     name: 'Vercel AI SDK',
     convertToFunction: async (userMessage: string, session: Session<BreedAdvisorState>) => {
-      // Create conversation context for the agent using helper
-      const context = createConversationalContext(session.history, async (messages: Message[]) => {
+      // Create conversation context using shared helper
+      const context = createAdapterContext(session.history, async (messages: Message[]) => {
         const vercelMessages = messages.map((msg) => ({
           role: msg.role as 'system' | 'user' | 'assistant',
           content: msg.content,
@@ -39,27 +39,8 @@ export function createVercelAISDKAdapter(): ConversationalRuntimeAdapter<
         return await result.text;
       });
 
-      // Create agent input
-      const agentInput: BreedAdvisorInput = {
-        message: userMessage,
-        sessionState: session.state ? { profile: session.state.profile } : undefined,
-      };
-
-      // Execute agent
-      const agentOutput: BreedAdvisorOutput = await breedAdvisorAgent.execute(agentInput, context);
-
-      // Update session state
-      const updatedState: BreedAdvisorState = {
-        profile: agentOutput.sessionState,
-      };
-
-      return {
-        output: agentOutput,
-        session: {
-          history: session.history,
-          state: updatedState,
-        },
-      };
+      // Execute breed advisor with shared helper
+      return executeBreedAdvisor(userMessage, session, context);
     },
   };
 }

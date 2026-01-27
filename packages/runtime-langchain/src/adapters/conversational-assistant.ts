@@ -113,7 +113,13 @@ export function convertConversationalAssistantToFunction<
 
     // Add system prompt to history if this is the first turn
     if (currentSession.history.length === 0) {
-      const prompt = systemPrompt ?? agent.manifest['metadata']?.['systemPrompt'];
+      const metadataPrompt = agent.manifest['metadata']?.['systemPrompt'];
+      const prompt =
+        systemPrompt ??
+        (typeof metadataPrompt === 'string'
+          ? metadataPrompt
+          : (metadataPrompt as { gathering?: string })?.gathering);
+
       if (typeof prompt === 'string') {
         currentSession.history.push({
           role: 'system',

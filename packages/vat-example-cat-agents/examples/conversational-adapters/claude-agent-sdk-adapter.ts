@@ -2,18 +2,15 @@
  * Claude Agent SDK adapter for conversational demo
  */
 
-import { convertConversationalAssistantToTool } from '@vibe-agent-toolkit/runtime-claude-agent-sdk';
+import Anthropic from '@anthropic-ai/sdk';
+import type { Message } from '@vibe-agent-toolkit/agent-runtime';
+import { extractTextFromResponse, formatMessagesForAnthropic } from '@vibe-agent-toolkit/runtime-claude-agent-sdk';
 import type { Session } from '@vibe-agent-toolkit/transports';
 
-import { breedAdvisorAgent } from '../../src/conversational-assistant/breed-advisor.js';
-import {
-  BreedAdvisorInputSchema,
-  type BreedAdvisorInput,
-  type BreedAdvisorOutput,
-  BreedAdvisorOutputSchema,
-} from '../../src/types/schemas.js';
+import type { BreedAdvisorOutput } from '../../src/types/schemas.js';
 import type { ConversationalRuntimeAdapter } from '../conversational-runtime-adapter.js';
 
+import { createAdapterContext, executeBreedAdvisor } from './shared-helpers.js';
 import type { BreedAdvisorState } from './shared-types.js';
 
 /**
@@ -23,50 +20,31 @@ export function createClaudeAgentSDKAdapter(): ConversationalRuntimeAdapter<
   BreedAdvisorOutput,
   BreedAdvisorState
 > {
-  const { server } = convertConversationalAssistantToTool(
-    breedAdvisorAgent,
-    BreedAdvisorInputSchema,
-    BreedAdvisorOutputSchema,
-    {
-      apiKey: process.env.ANTHROPIC_API_KEY ?? '',
-      model: 'claude-3-5-haiku-20241022',
-      temperature: 0.7,
-    },
-  );
+  const anthropic = new Anthropic({
+    apiKey: process.env.ANTHROPIC_API_KEY,
+  });
 
   return {
     name: 'Claude Agent SDK',
     convertToFunction: async (userMessage: string, session: Session<BreedAdvisorState>) => {
-      // Claude Agent SDK uses MCP tool pattern
-      // For demo purposes, we'll use the tool's handler function directly
-      const tool = server.tools[0]; // Get the breed-advisor tool
-      if (!tool) {
-        throw new Error('Tool not found in MCP server');
-      }
+      // Create conversation context using shared helper
+      const context = createAdapterContext(session.history, async (messages: Message[]) => {
+        // Format messages using shared helper
+        const { systemPrompt, conversationMessages } = formatMessagesForAnthropic(messages);
 
-      // Create agent input
-      const agentInput: BreedAdvisorInput = {
-        message: userMessage,
-        sessionState: session.state ? { profile: session.state.profile } : undefined,
-      };
+        const response = await anthropic.messages.create({
+          model: 'claude-3-5-haiku-20241022',
+          max_tokens: 4096,
+          temperature: 0.7,
+          ...(systemPrompt && { system: systemPrompt }),
+          messages: conversationMessages,
+        });
 
-      // Execute tool handler with session
-      const result = (await tool.handler({ ...agentInput, session })) as BreedAdvisorOutput & {
-        session: { history: typeof session.history; state?: unknown };
-      };
+        return extractTextFromResponse(response);
+      });
 
-      // Update session state
-      const updatedState: BreedAdvisorState = {
-        profile: result.sessionState,
-      };
-
-      return {
-        output: result,
-        session: {
-          history: result.session?.history ?? session.history,
-          state: updatedState,
-        },
-      };
+      // Execute breed advisor with shared helper
+      return executeBreedAdvisor(userMessage, session, context);
     },
   };
 }

@@ -53,17 +53,17 @@ export function createLangChainAdapter(): ConversationalRuntimeAdapter<BreedAdvi
       };
 
       // Execute via LangChain adapter
-      const agentOutput = await chatFn(agentInput, langchainSession);
+      const result = await chatFn(agentInput, langchainSession);
 
-      // Update session state
+      // Update session state from the agent's output
       const updatedState: BreedAdvisorState = {
-        profile: agentOutput.sessionState,
+        profile: result.output.sessionState,
       };
 
       return {
-        output: agentOutput,
+        output: result.output,
         session: {
-          history: langchainSession.history,
+          history: result.session.history,
           state: updatedState,
         },
       };
