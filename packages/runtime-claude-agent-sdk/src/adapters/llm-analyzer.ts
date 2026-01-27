@@ -1,19 +1,14 @@
-import { createSdkMcpServer, tool } from '@anthropic-ai/claude-agent-sdk';
-import Anthropic from '@anthropic-ai/sdk';
+import { createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
 import { type Agent } from '@vibe-agent-toolkit/agent-runtime';
 import type { z } from 'zod';
 
-import type { AgentConversionResult, BatchConversionResult, ClaudeAgentLLMConfig } from '../types.js';
+import type { BatchConversionResult, ClaudeAgentLLMConfig, SingleAgentConverter } from '../types.js';
 
 import {
-  type BatchToolMetadata,
-  createBatchToolMetadata,
-  createMcpServerWithTool,
-  createSingleToolMetadata,
-  createToolHandler,
+  createAnthropicLLMContext,
+  createSingleConverterFunction,
+  createToolsFromConfigs,
 } from './common-helpers.js';
-
-const DEFAULT_MODEL = 'claude-3-5-haiku-20241022';
 
 /**
  * Converts a VAT LLM Analyzer agent to Claude Agent SDK MCP tool
@@ -59,71 +54,19 @@ const DEFAULT_MODEL = 'claude-3-5-haiku-20241022';
  * }
  * ```
  */
-export function convertLLMAnalyzerToTool<TInput, TOutput>(
-  agent: Agent<TInput, TOutput>,
-  inputSchema: z.ZodType<TInput>,
-  outputSchema: z.ZodType<TOutput>,
-  llmConfig: ClaudeAgentLLMConfig,
-  serverName?: string,
-): AgentConversionResult<TInput, TOutput> {
-  const { manifest } = agent;
-  const mcpServerName = serverName ?? manifest.name;
-
-  // Create Anthropic client and callLLM function
-  const { callLLM, model, temperature } = createLLMContext(llmConfig);
-
-  // Create MCP server with the agent as a tool
-  const server = createMcpServerWithTool(
-    manifest,
-    mcpServerName,
-    inputSchema,
-    outputSchema,
-    async (input: TInput) => {
-      const context = {
-        mockable: false,
-        model,
-        temperature,
-        callLLM,
-      };
-      return agent.execute(input, context);
-    },
-  );
-
-  return {
-    server,
-    metadata: createSingleToolMetadata(manifest, 'llm-analyzer', mcpServerName),
-    inputSchema,
-    outputSchema,
-  };
-}
-
-/**
- * Helper to create LLM context with Anthropic client
- */
-function createLLMContext(llmConfig: ClaudeAgentLLMConfig) {
-  const anthropic = new Anthropic({
-    apiKey: llmConfig.apiKey ?? process.env['ANTHROPIC_API_KEY'],
-  });
-
-  const model = llmConfig.model ?? DEFAULT_MODEL;
-  const temperature = llmConfig.temperature ?? 0.7;
-
-  const callLLM = async (prompt: string): Promise<string> => {
-    const response = await anthropic.messages.create({
+export const convertLLMAnalyzerToTool: SingleAgentConverter = createSingleConverterFunction(
+  'llm-analyzer',
+  createAnthropicLLMContext,
+  (agent, callLLM, model, temperature) => async (input) => {
+    const context = {
+      mockable: false,
       model,
-      max_tokens: llmConfig.maxTokens ?? 4096,
       temperature,
-      messages: [{ role: 'user', content: prompt }],
-    });
-
-    const textBlock = response.content.find(
-      (block): block is Anthropic.Messages.TextBlock => block.type === 'text',
-    );
-    return textBlock?.text ?? '';
-  };
-
-  return { callLLM, model, temperature };
-}
+      callLLM,
+    };
+    return agent.execute(input, context);
+  },
+) as never;
 
 /**
  * Batch converts multiple VAT LLM Analyzer agents to Claude Agent SDK MCP servers
@@ -183,33 +126,15 @@ export function convertLLMAnalyzersToTools(
   serverName = 'vat-llm-agents',
 ): BatchConversionResult {
   // Create shared LLM context
-  const { callLLM, model, temperature } = createLLMContext(llmConfig);
+  const { callLLM, model, temperature } = createAnthropicLLMContext(llmConfig);
 
-  const tools: ReturnType<typeof tool>[] = [];
-  const toolsMetadata: BatchToolMetadata = {};
-
-  // Convert each agent to a tool
-  for (const [key, config] of Object.entries(configs)) {
-    const agent = config.agent;
-    const { manifest } = agent;
-
-    tools.push(
-      tool(
-        key, // Use the key as the tool name
-        manifest.description,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        config.inputSchema as any, // Claude Agent SDK accepts Zod schemas
-        createToolHandler(agent, config.inputSchema, config.outputSchema, () => ({
-          mockable: false,
-          model,
-          temperature,
-          callLLM,
-        })),
-      ),
-    );
-
-    toolsMetadata[key] = createBatchToolMetadata(key, manifest, 'llm-analyzer', serverName);
-  }
+  // Create tools from configs using helper
+  const { tools, toolsMetadata } = createToolsFromConfigs(configs, 'llm-analyzer', serverName, () => ({
+    mockable: false,
+    model,
+    temperature,
+    callLLM,
+  }));
 
   // Create combined MCP server
   const server = createSdkMcpServer({

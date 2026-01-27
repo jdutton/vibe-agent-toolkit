@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { analyzePhoto } from '../../src/one-shot-llm-analyzer/photo-analyzer.js';
+import { analyzePhoto, photoAnalyzerAgent } from '../../src/one-shot-llm-analyzer/photo-analyzer.js';
+import { expectAgentSuccess } from '../test-helpers.js';
 
 describe('analyzePhoto', () => {
   it('should extract orange color from filename', async () => {
@@ -106,5 +107,38 @@ describe('analyzePhoto', () => {
     await expect(
       analyzePhoto('test.jpg', { mockable: false }),
     ).rejects.toThrow('Real vision API not implemented yet');
+  });
+});
+
+describe('photoAnalyzerAgent', () => {
+  it('should have correct manifest', () => {
+    expect(photoAnalyzerAgent.name).toBe('photo-analyzer');
+    expect(photoAnalyzerAgent.manifest.name).toBe('photo-analyzer');
+    expect(photoAnalyzerAgent.manifest.description).toBe(
+      'Analyzes cat photos and extracts detailed physical and behavioral characteristics',
+    );
+    expect(photoAnalyzerAgent.manifest.version).toBe('1.0.0');
+    expect(photoAnalyzerAgent.manifest.archetype).toBe('one-shot-llm-analyzer');
+  });
+
+  it('should analyze photo via agent.execute() in mock mode', async () => {
+    const data = await expectAgentSuccess(
+      photoAnalyzerAgent,
+      { imagePathOrBase64: 'orange-tabby-cat.jpg' },
+      expect,
+    );
+
+    expect(data.physical.furColor).toBe('Orange');
+    expect(data.physical.furPattern).toBe('Tabby');
+  });
+
+  it('should handle mockable option via agent.execute()', async () => {
+    const data = await expectAgentSuccess(
+      photoAnalyzerAgent,
+      { imagePathOrBase64: 'black-cat-photo.jpg', mockable: true },
+      expect,
+    );
+
+    expect(data.physical.furColor).toBe('Black');
   });
 });

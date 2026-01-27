@@ -39,6 +39,18 @@ export interface AgentConversionResult<TInput, TOutput> {
 }
 
 /**
+ * Type for single agent converter functions
+ * Eliminates duplication in converter function signatures
+ */
+export type SingleAgentConverter = <TInput, TOutput>(
+  agent: { manifest: { name: string; description: string; version: string } },
+  inputSchema: z.ZodType<TInput>,
+  outputSchema: z.ZodType<TOutput>,
+  llmConfig: ClaudeAgentLLMConfig,
+  serverName?: string,
+) => AgentConversionResult<TInput, TOutput>;
+
+/**
  * Standard return type for batch agent conversion
  */
 export interface BatchConversionResult {

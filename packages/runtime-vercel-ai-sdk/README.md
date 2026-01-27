@@ -26,6 +26,8 @@ Converts synchronous, deterministic VAT agents to Vercel AI SDK tools that can b
 
 **Use cases:** Validation, transformation, computation, structured data operations.
 
+**Archetypes:** Pure Function Tool (Archetype 1)
+
 #### Example: Haiku Validator
 
 ```typescript
@@ -84,11 +86,91 @@ const result = await generateText({
 });
 ```
 
+### Conversational Assistants → `streamText()` with History
+
+Converts multi-turn conversational agents to executable functions that maintain conversation history.
+
+**Use cases:** Interactive dialogs, multi-turn decision-making, stateful conversations, progressive information gathering.
+
+**Archetypes:** Conversational Assistant (Archetype 3)
+
+#### Example: Breed Advisor
+
+```typescript
+import { openai } from '@ai-sdk/openai';
+import { breedAdvisorAgent } from '@vibe-agent-toolkit/vat-example-cat-agents';
+import { BreedAdvisorInputSchema, BreedAdvisorOutputSchema } from '@vibe-agent-toolkit/vat-example-cat-agents';
+import { convertConversationalAssistantToFunction, type ConversationSession } from '@vibe-agent-toolkit/runtime-vercel-ai-sdk';
+
+// Convert VAT agent to executable function
+const breedAdvisor = convertConversationalAssistantToFunction(
+  breedAdvisorAgent,
+  BreedAdvisorInputSchema,
+  BreedAdvisorOutputSchema,
+  {
+    model: openai('gpt-4'),
+    temperature: 0.8,
+  }
+);
+
+// Initialize conversation session
+const session: ConversationSession = { history: [] };
+
+// Turn 1: Initial inquiry
+const turn1 = await breedAdvisor(
+  { message: "I'm looking for a cat", sessionState: {} },
+  session
+);
+console.log(turn1.reply); // "Great! What's your living situation?"
+
+// Turn 2: Continue conversation (history is maintained)
+const turn2 = await breedAdvisor(
+  { message: "Small apartment, love jazz music", sessionState: turn1.sessionState },
+  session
+);
+console.log(turn2.recommendations); // Breed recommendations based on profile
+```
+
+#### Batch Conversion with Independent Sessions
+
+```typescript
+import { convertConversationalAssistantsToFunctions } from '@vibe-agent-toolkit/runtime-vercel-ai-sdk';
+import { breedAdvisorAgent, petCareAdvisorAgent } from '@vibe-agent-toolkit/vat-example-cat-agents';
+
+const assistants = convertConversationalAssistantsToFunctions(
+  {
+    breedAdvisor: {
+      agent: breedAdvisorAgent,
+      inputSchema: BreedAdvisorInputSchema,
+      outputSchema: BreedAdvisorOutputSchema,
+    },
+    petCareAdvisor: {
+      agent: petCareAdvisorAgent,
+      inputSchema: PetCareInputSchema,
+      outputSchema: PetCareOutputSchema,
+    },
+  },
+  {
+    model: openai('gpt-4'),
+    temperature: 0.8,
+  }
+);
+
+// Each assistant maintains its own independent session
+const breedSession: ConversationSession = { history: [] };
+const careSession: ConversationSession = { history: [] };
+
+const breedResponse = await assistants.breedAdvisor({ message: "I want a cat" }, breedSession);
+const careResponse = await assistants.petCareAdvisor({ message: "Feeding schedule?" }, careSession);
+```
+
 ### LLM Analyzers → `generateText()`
 
 Converts single-shot LLM analysis agents to executable functions powered by Vercel AI SDK.
 
 **Use cases:** Classification, extraction, generation, summarization, sentiment analysis.
+
+**Archetypes:** One-Shot LLM Analyzer (Archetype 2)
 
 #### Example: Cat Name Generator
 
@@ -209,6 +291,36 @@ const generateName = convertLLMAnalyzerToFunction(
 
 ## API Reference
 
+### `convertConversationalAssistantToFunction<TInput, TOutput>`
+
+Converts a Conversational Assistant agent to an executable async function with conversation history.
+
+**Parameters:**
+- `agent: Agent<TInput, TOutput>` - The VAT conversational assistant agent
+- `inputSchema: z.ZodType<TInput>` - Input Zod schema
+- `outputSchema: z.ZodType<TOutput>` - Output Zod schema
+- `llmConfig: VercelAILLMConfig` - LLM configuration (model, temperature, etc.)
+
+**Returns:** `(input: TInput, session: ConversationSession) => Promise<TOutput>` - Executable async function that requires a session parameter
+
+**Session Management:**
+```typescript
+interface ConversationSession {
+  history: Message[];      // Maintained across turns
+  state?: Record<string, unknown>;  // Agent-specific state
+}
+```
+
+### `convertConversationalAssistantsToFunctions`
+
+Batch converts multiple Conversational Assistant agents with shared LLM config.
+
+**Parameters:**
+- `configs: Record<string, ConversationalAssistantConversionConfig>` - Map of assistant names to conversion configs
+- `llmConfig: VercelAILLMConfig` - Shared LLM configuration
+
+**Returns:** `Record<string, (input: any, session: ConversationSession) => Promise<any>>` - Map of assistant names to executable functions
+
 ### `convertPureFunctionToTool<TInput, TOutput>`
 
 Converts a PureFunctionAgent to a Vercel AI SDK tool.
@@ -273,6 +385,16 @@ interface VercelAILLMConfig {
 ```typescript
 interface ToolConversionConfig<TInput, TOutput> {
   agent: PureFunctionAgent<TInput, TOutput>;
+  inputSchema: z.ZodType<TInput>;
+  outputSchema: z.ZodType<TOutput>;
+}
+```
+
+### `ConversationalAssistantConversionConfig<TInput, TOutput>`
+
+```typescript
+interface ConversationalAssistantConversionConfig<TInput, TOutput> {
+  agent: Agent<TInput, TOutput>;
   inputSchema: z.ZodType<TInput>;
   outputSchema: z.ZodType<TOutput>;
 }

@@ -1,6 +1,24 @@
 import { describe, expect, it } from 'vitest';
 
-import { critiqueCatName, validateCatName, type CatCharacteristics } from '../../src/pure-function-tool/name-validator.js';
+import { critiqueCatName, nameValidatorAgent, validateCatName } from '../../src/pure-function-tool/name-validator.js';
+import type { CatCharacteristics } from '../../src/types/schemas.js';
+
+/**
+ * Creates an orange tabby cat for testing
+ */
+function createOrangeTabby(): CatCharacteristics {
+  return {
+    physical: {
+      furColor: 'Orange',
+      furPattern: 'Tabby',
+      size: 'large',
+    },
+    behavioral: {
+      personality: ['Playful', 'Energetic'],
+    },
+    description: 'A large orange tabby cat',
+  };
+}
 
 describe('validateCatName', () => {
   it('should approve noble titles', () => {
@@ -40,18 +58,7 @@ describe('validateCatName', () => {
   });
 
   it('should consider cat characteristics for orange cats', () => {
-    const cat: CatCharacteristics = {
-      physical: {
-        furColor: 'Orange',
-        furPattern: 'Tabby',
-        size: 'large',
-      },
-      behavioral: {
-        personality: ['Playful', 'Energetic'],
-      },
-      description: 'A large orange tabby cat',
-    };
-
+    const cat = createOrangeTabby();
     const result = validateCatName('Sir Marmalade', cat);
 
     expect(result.status).toBe('valid');
@@ -122,5 +129,43 @@ describe('critiqueCatName', () => {
     expect(critique).toContain('VALID');
     expect(critique).toContain('purrs contentedly');
     expect(critique).toContain('I approve');
+  });
+});
+
+describe('nameValidatorAgent', () => {
+  it('should have correct manifest', () => {
+    expect(nameValidatorAgent.name).toBe('name-validator');
+    expect(nameValidatorAgent.manifest.name).toBe('name-validator');
+    expect(nameValidatorAgent.manifest.description).toBe(
+      'Validates cat names for proper nobility conventions and appropriateness',
+    );
+    expect(nameValidatorAgent.manifest.version).toBe('1.0.0');
+    expect(nameValidatorAgent.manifest.archetype).toBe('pure-function');
+  });
+
+  it('should validate a noble name via agent.execute()', () => {
+    const result = nameValidatorAgent.execute({ name: 'Duke Sterling III' });
+
+    expect(result.status).toBe('valid');
+    expect(result.reason).toContain('nobility');
+  });
+
+  it('should reject a vulgar name via agent.execute()', () => {
+    const result = nameValidatorAgent.execute({ name: 'Poopface' });
+
+    expect(result.status).toBe('invalid');
+    expect(result.reason).toContain('VULGAR');
+  });
+
+  it('should consider cat characteristics via agent.execute()', () => {
+    const cat = createOrangeTabby();
+    const result = nameValidatorAgent.execute({ name: 'Sir Marmalade', characteristics: cat });
+
+    expect(result.status).toBe('valid');
+    expect(result.reason).toContain('nobility');
+  });
+
+  it('should throw error for invalid input', () => {
+    expect(() => nameValidatorAgent.execute({ invalid: 'data' } as never)).toThrow('Invalid input');
   });
 });

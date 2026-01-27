@@ -11,6 +11,10 @@ export * from './one-shot-llm-analyzer/description-parser.js';
 export * from './one-shot-llm-analyzer/name-generator.js';
 export * from './one-shot-llm-analyzer/haiku-generator.js';
 
+// Conversational Assistants (Archetype 3)
+export * from './conversational-assistant/breed-advisor.js';
+export * from './conversational-assistant/breed-knowledge.js';
+
 // External Event Integrators (Archetype 9)
 export * from './external-event-integrator/human-approval.js';
 

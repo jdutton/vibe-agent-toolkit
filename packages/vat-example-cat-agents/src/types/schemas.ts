@@ -76,3 +76,83 @@ export const HaikuValidationResultSchema = z.object({
 });
 
 export type HaikuValidationResult = z.infer<typeof HaikuValidationResultSchema>;
+
+/**
+ * Selection profile for breed advisor conversation
+ */
+export const SelectionProfileSchema = z.object({
+  livingSpace: z.enum(['apartment', 'small-house', 'large-house', 'farm']).nullable().optional().describe('Living space type'),
+  activityLevel: z.enum(['couch-companion', 'playful-moderate', 'active-explorer', 'high-energy-athlete']).nullable().optional().describe('Desired activity level'),
+  groomingTolerance: z.enum(['minimal', 'weekly', 'daily']).nullable().optional().describe('Grooming tolerance'),
+  familyComposition: z.enum(['single', 'couple', 'young-kids', 'older-kids', 'multi-pet']).nullable().optional().describe('Family composition'),
+  allergies: z.boolean().nullable().optional().describe('Has allergies requiring hypoallergenic breeds'),
+  musicPreference: z.enum(['classical', 'jazz', 'rock', 'metal', 'pop', 'country', 'electronic', 'none']).nullable().optional().describe('Music preference (CRITICAL factor!)'),
+  conversationPhase: z.enum(['gathering', 'ready-to-recommend', 'refining', 'completed']).optional().describe('Current conversation phase (set by agent)'),
+});
+
+export type SelectionProfile = z.infer<typeof SelectionProfileSchema>;
+
+/**
+ * Input for breed advisor agent
+ */
+export const BreedAdvisorInputSchema = z.object({
+  message: z.string().describe('User message'),
+  sessionState: z.object({
+    profile: SelectionProfileSchema,
+    conversationHistory: z.array(z.object({
+      role: z.enum(['user', 'assistant']),
+      content: z.string(),
+    })).optional(),
+  }).optional().describe('Current session state'),
+});
+
+export type BreedAdvisorInput = z.infer<typeof BreedAdvisorInputSchema>;
+
+/**
+ * Breed match result for recommendations
+ */
+export const BreedMatchSchema = z.object({
+  breed: z.string().describe('Breed name'),
+  matchScore: z.number().min(0).max(100).describe('Match score (0-100)'),
+  reasoning: z.string().describe('Why this breed matches'),
+});
+
+export type BreedMatch = z.infer<typeof BreedMatchSchema>;
+
+/**
+ * Conversational agent error types for breed advisor
+ */
+export type BreedAdvisorError = 'user-abandoned' | 'no-suitable-match' | 'timeout';
+
+/**
+ * Output from breed advisor agent
+ * Follows ConversationalAgentOutput envelope pattern
+ */
+export const BreedAdvisorOutputSchema = z.object({
+  reply: z.string().describe('Agent response to user'),
+  sessionState: SelectionProfileSchema.describe('Updated selection profile for next turn'),
+  result: z.discriminatedUnion('status', [
+    z.object({
+      status: z.literal('in-progress'),
+      metadata: z.object({
+        recommendations: z.array(BreedMatchSchema).optional(),
+        factorsCollected: z.number().optional(),
+        requiredFactors: z.number().optional(),
+        conversationPhase: z.string().optional(),
+      }).optional(),
+    }),
+    z.object({
+      status: z.literal('success'),
+      data: z.object({
+        selectedBreed: z.string().describe('The breed the user selected'),
+        finalProfile: SelectionProfileSchema.describe('Complete selection profile'),
+      }),
+    }),
+    z.object({
+      status: z.literal('error'),
+      error: z.enum(['user-abandoned', 'no-suitable-match', 'timeout'] as const),
+    }),
+  ]).describe('Machine-readable result for orchestration'),
+});
+
+export type BreedAdvisorOutput = z.infer<typeof BreedAdvisorOutputSchema>;

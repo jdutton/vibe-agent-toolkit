@@ -1,7 +1,10 @@
-import { defineLLMAnalyzer, type Agent } from '@vibe-agent-toolkit/agent-runtime';
+import { executeLLMAnalyzer } from '@vibe-agent-toolkit/agent-runtime';
+import type { Agent, LLMError, OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
+import { LLM_INVALID_OUTPUT, RESULT_ERROR } from '@vibe-agent-toolkit/agent-schema';
 import { z } from 'zod';
 
 import { CatCharacteristicsSchema, type CatCharacteristics } from '../types/schemas.js';
+// Extract fur color from text descriptions
 import { extractFurColor as extractFurColorUtil } from '../utils/color-extraction.js';
 
 /**
@@ -9,6 +12,7 @@ import { extractFurColor as extractFurColorUtil } from '../utils/color-extractio
  */
 export const DescriptionParserInputSchema = z.object({
   description: z.string().describe('Text description of the cat (structured or unstructured)'),
+  mockable: z.boolean().optional().describe('Whether to use mock mode (default: true)'),
 });
 
 export type DescriptionParserInput = z.infer<typeof DescriptionParserInputSchema>;
@@ -361,100 +365,45 @@ function extractOccupation(text: string): string | undefined {
  *
  * In mock mode, uses keyword extraction. In real mode, uses LLM to parse natural language.
  */
-export const descriptionParserAgent: Agent<DescriptionParserInput, CatCharacteristics> = defineLLMAnalyzer(
-  {
+export const descriptionParserAgent: Agent<
+  DescriptionParserInput,
+  OneShotAgentOutput<CatCharacteristics, LLMError>
+> = {
+  name: 'description-parser',
+  manifest: {
     name: 'description-parser',
-    description: 'Parses text descriptions and extracts structured cat characteristics',
     version: '1.0.0',
-    inputSchema: DescriptionParserInputSchema,
-    outputSchema: CatCharacteristicsSchema,
-    mockable: true,
-    model: 'claude-3-haiku',
+    description: 'Parses text descriptions and extracts structured cat characteristics',
+    archetype: 'one-shot-llm-analyzer',
     metadata: {
       author: 'Captain Obvious',
       personality: 'States the obvious, extracts characteristics literally',
       handlesUnstructured: true,
+      model: 'claude-3-haiku',
     },
   },
-  async (input, ctx) => {
-    // Mock mode: use keyword pattern matching
-    if (ctx.mockable) {
-      return mockParseDescription(input.description);
+  execute: async (input: DescriptionParserInput) => {
+    // Validate input
+    const parsed = DescriptionParserInputSchema.safeParse(input);
+    if (!parsed.success) {
+      return {
+        result: { status: RESULT_ERROR, error: LLM_INVALID_OUTPUT },
+      };
     }
 
-    // Real mode: use LLM to parse natural language
-    const OPTIONAL_LABEL = 'string (optional)';
-    const REQUIRED_LABEL = 'string (required)';
+    const { description, mockable = true } = parsed.data;
 
-    const prompt = `*Sits up importantly*
-
-I am Captain Obvious, and I'm here to state the obvious: you have provided a description, and I shall extract ALL the information from it. OBVIOUSLY.
-
-TASK: Parse this text description and extract structured characteristics. The description might be:
-- Well-structured: "Orange tabby, playful, loves boxes"
-- Complete word vomit: "So there's this cat right and he's like super orange and has stripes and he knocks stuff off tables"
-
-Either way, I shall extract EVERYTHING. Because that's what we do with descriptions. We extract from them.
-
-Here is the description to parse (obviously):
-"""
-${input.description}
-"""
-
-I need you to extract these characteristics (because that's what parsing means):
-
-PHYSICAL CHARACTERISTICS:
-- furColor: The color of their fur (obviously)
-- furPattern: Pattern like tabby, striped, spotted, etc. (if mentioned)
-- eyeColor: Eye color (if mentioned)
-- breed: Cat breed (if mentioned)
-- size: Size category - "tiny", "small", "medium", "large", "extra-large" (if mentioned)
-
-BEHAVIORAL CHARACTERISTICS:
-- personality: Array of personality traits (things like playful, grumpy, lazy, friendly, etc.)
-- quirks: Unique behaviors or habits (like "knocks things off tables", "loves boxes", etc.)
-- vocalizations: Types of sounds they make (if mentioned)
-
-METADATA:
-- origin: Where they're from (shelter, stray, breeder, etc.)
-- age: Age or age range (if mentioned)
-- occupation: What they do (mouser, therapy cat, office cat, etc.)
-
-And obviously, generate a comprehensive description field that summarizes everything.
-
-Return a JSON object matching this schema (obviously):
-
-${JSON.stringify(
-  {
-    physical: {
-      furColor: REQUIRED_LABEL,
-      furPattern: OPTIONAL_LABEL,
-      eyeColor: OPTIONAL_LABEL,
-      breed: OPTIONAL_LABEL,
-      size: 'tiny | small | medium | large | extra-large (optional)',
-    },
-    behavioral: {
-      personality: ['array of personality traits (required)'],
-      quirks: ['array of unique quirks (optional)'],
-      vocalizations: ['array of sounds (optional)'],
-    },
-    metadata: {
-      origin: OPTIONAL_LABEL,
-      age: OPTIONAL_LABEL,
-      occupation: OPTIONAL_LABEL,
-    },
-    description: 'Full prose description (required)',
+    return executeLLMAnalyzer({
+      mockable,
+      mockFn: () => mockParseDescription(description),
+      realFn: async () => {
+        throw new Error('Real LLM parsing not implemented yet. Use mockable: true for testing.');
+      },
+      parseOutput: (raw) => {
+        const parsed = JSON.parse(raw as string);
+        return CatCharacteristicsSchema.parse(parsed);
+      },
+      errorContext: 'Description parsing',
+    });
   },
-  null,
-  2,
-)}
-
-*Nods with absolute certainty*
-
-IMPORTANT (and this should be obvious): Return ONLY valid JSON. No markdown, no explanations, just JSON.`;
-
-    const response = await ctx.callLLM(prompt);
-    const parsed = JSON.parse(response);
-    return CatCharacteristicsSchema.parse(parsed);
-  },
-);
+};

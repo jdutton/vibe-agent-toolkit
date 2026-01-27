@@ -1,10 +1,10 @@
-import { definePureFunction, type PureFunctionAgent } from '@vibe-agent-toolkit/agent-runtime';
+import { definePureFunction } from '@vibe-agent-toolkit/agent-runtime';
 import { z } from 'zod';
 
 import {
   CatCharacteristicsSchema,
-  NameValidationResultSchema,
   type CatCharacteristics,
+  NameValidationResultSchema,
   type NameValidationResult,
 } from '../types/schemas.js';
 
@@ -280,33 +280,22 @@ export function critiqueCatName(
 }
 
 /**
- * Wrapper function for the name validator agent that takes structured input
- */
-function validateNameWrapper(input: NameValidationInput): NameValidationResult {
-  return validateCatName(input.name, input.characteristics);
-}
-
-/**
  * Name validator agent
  *
  * Validates cat names according to Madam Fluffington's strict standards of
  * feline nobility and proper nomenclature. Checks for forbidden patterns,
  * distinguished titles, and appropriateness based on cat characteristics.
  */
-export const nameValidatorAgent: PureFunctionAgent<NameValidationInput, NameValidationResult> = definePureFunction(
+export const nameValidatorAgent = definePureFunction(
   {
     name: 'name-validator',
-    description: 'Validates cat names for proper nobility conventions and appropriateness',
     version: '1.0.0',
+    description: 'Validates cat names for proper nobility conventions and appropriateness',
     inputSchema: NameValidationInputSchema,
     outputSchema: NameValidationResultSchema,
-    metadata: {
-      author: 'Madam Fluffington',
-      strict: true,
-      checksForbidden: true,
-      checksDistinguished: true,
-      checksCharacteristics: true,
-    },
   },
-  validateNameWrapper,
+  (input) => {
+    // Input is already validated by wrapper
+    return validateCatName(input.name, input.characteristics);
+  }
 );

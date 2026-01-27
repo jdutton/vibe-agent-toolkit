@@ -81,11 +81,12 @@ export function convertPureFunctionToTool<TInput, TOutput>(
     // Validate input
     const validatedInput = inputSchema.parse(args);
 
-    // Execute agent
-    const result = await agent.execute(validatedInput);
+    // Execute agent - returns output directly (unwrapped)
+    // The agent's execute wrapper validates input/output schemas and throws on error
+    const output = agent.execute(validatedInput);
 
-    // Validate output
-    return outputSchema.parse(result);
+    // Validate the output with schema (redundant but explicit)
+    return outputSchema.parse(output) as TOutput;
   };
 
   return {
@@ -95,7 +96,7 @@ export function convertPureFunctionToTool<TInput, TOutput>(
       name: manifest.name,
       description: manifest.description,
       version: manifest.version,
-      archetype: 'pure-function',
+      archetype: manifest.archetype,
     },
     inputSchema,
     outputSchema,

@@ -1,7 +1,26 @@
 import * as readline from 'node:readline';
 
-import { defineExternalEventIntegrator, type Agent } from '@vibe-agent-toolkit/agent-runtime';
+import { executeExternalEvent, validateAgentInput } from '@vibe-agent-toolkit/agent-runtime';
+import type {
+  Agent,
+  ExternalEventError,
+  OneShotAgentOutput,
+} from '@vibe-agent-toolkit/agent-schema';
 import { z } from 'zod';
+
+/**
+ * Constants for duplicated strings
+ * @internal
+ */
+const EVENT_INVALID_RESPONSE: ExternalEventError = 'event-invalid-response';
+const AUTO_APPROVED_MESSAGE = 'Auto-approved (test mode)';
+const AUTO_REJECTED_MESSAGE = 'Auto-rejected (test mode)';
+const AUTO_SELECTED_MESSAGE = 'Auto-selected (test mode)';
+const APPROVAL_REQUEST_CONTEXT = 'Approval request';
+const CHOICE_REQUEST_CONTEXT = 'Choice request';
+const CUSTOM_APPROVAL_REQUEST_CONTEXT = 'Custom approval request';
+const EXTERNAL_EVENT_INTEGRATOR_ARCHETYPE = 'external-event-integrator';
+const TIMEOUT_MS_DESCRIPTION = 'Timeout in milliseconds';
 
 /**
  * Input schema for approval requests
@@ -9,6 +28,8 @@ import { z } from 'zod';
 export const ApprovalRequestInputSchema = z.object({
   prompt: z.string().describe('The question to ask the human'),
   context: z.record(z.unknown()).optional().describe('Additional context to display'),
+  autoResponse: z.union([z.literal('approve'), z.literal('reject')]).optional().describe('Auto-response for testing'),
+  timeoutMs: z.number().optional().describe(TIMEOUT_MS_DESCRIPTION),
 });
 
 export type ApprovalRequestInput = z.infer<typeof ApprovalRequestInputSchema>;
@@ -30,6 +51,8 @@ export type ApprovalResult = z.infer<typeof ApprovalResultSchema>;
 export const ChoiceRequestInputSchema = z.object({
   prompt: z.string().describe('The question to ask'),
   options: z.array(z.string()).describe('Array of options to choose from'),
+  autoResponse: z.string().optional().describe('Auto-response for testing (option value)'),
+  timeoutMs: z.number().optional().describe(TIMEOUT_MS_DESCRIPTION),
 });
 
 export type ChoiceRequestInput = z.infer<typeof ChoiceRequestInputSchema>;
@@ -50,6 +73,8 @@ export type ChoiceResult = z.infer<typeof ChoiceResultSchema>;
  */
 export const CustomApprovalRequestInputSchema = z.object({
   prompt: z.string().describe('The question to ask'),
+  autoResponse: z.string().optional().describe('Auto-response for testing'),
+  timeoutMs: z.number().optional().describe(TIMEOUT_MS_DESCRIPTION),
 });
 
 export type CustomApprovalRequestInput = z.infer<typeof CustomApprovalRequestInputSchema>;
@@ -118,7 +143,7 @@ export async function requestApproval(
   if (autoResponse) {
     return {
       approved: autoResponse === 'approve',
-      reason: autoResponse === 'approve' ? 'Auto-approved (test mode)' : 'Auto-rejected (test mode)',
+      reason: autoResponse === 'approve' ? AUTO_APPROVED_MESSAGE : AUTO_REJECTED_MESSAGE,
     };
   }
 
@@ -197,7 +222,7 @@ export async function requestCustomApproval<T>(
     return {
       approved: validation.valid,
       ...(validation.value !== undefined && { value: validation.value }),
-      reason: validation.valid ? 'Auto-approved (test mode)' : validation.error ?? 'Auto-rejected (test mode)',
+      reason: validation.valid ? AUTO_APPROVED_MESSAGE : validation.error ?? AUTO_REJECTED_MESSAGE,
     };
   }
 
@@ -263,7 +288,7 @@ export async function requestChoice<T extends string>(
       return {
         approved: true,
         choice: autoResponse,
-        reason: 'Auto-selected (test mode)',
+        reason: AUTO_SELECTED_MESSAGE,
       };
     }
 
@@ -273,7 +298,7 @@ export async function requestChoice<T extends string>(
       return {
         approved: true,
         choice: match,
-        reason: 'Auto-selected (test mode)',
+        reason: AUTO_SELECTED_MESSAGE,
       };
     }
 
@@ -323,65 +348,103 @@ export async function requestChoice<T extends string>(
  * Integrates with external human approval system (CLI in this implementation).
  * In production, this could integrate with Slack, email, web UI, or ticketing systems.
  */
-export const requestApprovalAgent: Agent<ApprovalRequestInput, ApprovalResult> = defineExternalEventIntegrator(
-  {
+export const requestApprovalAgent: Agent<
+  ApprovalRequestInput,
+  OneShotAgentOutput<ApprovalResult, ExternalEventError>
+> = {
+  name: 'request-approval',
+  manifest: {
     name: 'request-approval',
-    description: 'Requests human approval for a yes/no decision',
     version: '1.0.0',
-    inputSchema: ApprovalRequestInputSchema,
-    outputSchema: ApprovalResultSchema,
-    timeoutMs: 60000, // 1 minute default
-    onTimeout: 'reject',
+    description: 'Requests human approval for a yes/no decision',
+    archetype: EXTERNAL_EVENT_INTEGRATOR_ARCHETYPE,
     metadata: {
       integrationTypes: ['CLI', 'Slack', 'Email', 'Web UI'],
       blocking: true,
+      timeoutMs: 60000,
     },
   },
-  async (input, ctx) => {
-    // In a real implementation, ctx.emit would send to external system
-    // and ctx.waitFor would wait for response via webhooks/polling
+  execute: async (input: ApprovalRequestInput) => {
+    const validatedOrError = validateAgentInput<ApprovalRequestInput, ApprovalResult, ExternalEventError>(
+      input,
+      ApprovalRequestInputSchema,
+      EVENT_INVALID_RESPONSE
+    );
+    if ('result' in validatedOrError) {
+      return validatedOrError;
+    }
 
-    // For now, use the existing CLI implementation
-    const options: HumanApprovalOptions = {
-      ...(ctx.timeoutMs !== undefined && { timeoutMs: ctx.timeoutMs }),
-      onTimeout: (ctx.onTimeout as 'approve' | 'reject') ?? 'reject',
-    };
+    const { prompt, context, autoResponse, timeoutMs = 60000 } = validatedOrError;
 
-    const result = await requestApproval(input.prompt, input.context, options);
+    // Convert autoResponse to ApprovalResult for executeExternalEvent
+    const autoResponseData: ApprovalResult = autoResponse
+      ? {
+          approved: autoResponse === 'approve',
+          reason: autoResponse === 'approve' ? AUTO_APPROVED_MESSAGE : AUTO_REJECTED_MESSAGE,
+        }
+      : ({} as ApprovalResult); // Placeholder, will be handled by executeExternalEvent
 
-    return result;
+    return executeExternalEvent<ApprovalResult>({
+      ...(autoResponse && { autoResponse: autoResponseData }),
+      handler: async () => requestApproval(prompt, context, autoResponse ? { autoResponse } : { timeoutMs }),
+      timeoutMs,
+      errorContext: APPROVAL_REQUEST_CONTEXT,
+    });
   },
-);
+};
 
 /**
  * Request choice agent
  *
  * Presents multiple options and asks human to choose one.
  */
-export const requestChoiceAgent: Agent<ChoiceRequestInput, ChoiceResult> = defineExternalEventIntegrator(
-  {
+export const requestChoiceAgent: Agent<
+  ChoiceRequestInput,
+  OneShotAgentOutput<ChoiceResult, ExternalEventError>
+> = {
+  name: 'request-choice',
+  manifest: {
     name: 'request-choice',
-    description: 'Presents multiple options and asks human to choose one',
     version: '1.0.0',
-    inputSchema: ChoiceRequestInputSchema,
-    outputSchema: ChoiceResultSchema,
-    timeoutMs: 60000,
-    onTimeout: 'reject',
+    description: 'Presents multiple options and asks human to choose one',
+    archetype: EXTERNAL_EVENT_INTEGRATOR_ARCHETYPE,
     metadata: {
       integrationTypes: ['CLI', 'Slack', 'Email', 'Web UI'],
       blocking: true,
+      timeoutMs: 60000,
     },
   },
-  async (input, ctx) => {
-    const options: Omit<HumanApprovalOptions, 'autoResponse'> & { autoResponse?: string } = {
-      ...(ctx.timeoutMs !== undefined && { timeoutMs: ctx.timeoutMs }),
-    };
+  execute: async (input: ChoiceRequestInput) => {
+    const validatedOrError = validateAgentInput<ChoiceRequestInput, ChoiceResult, ExternalEventError>(
+      input,
+      ChoiceRequestInputSchema,
+      EVENT_INVALID_RESPONSE
+    );
+    if ('result' in validatedOrError) {
+      return validatedOrError;
+    }
 
-    const result = await requestChoice(input.prompt, input.options as string[], options);
+    const { prompt, options, autoResponse, timeoutMs = 60000 } = validatedOrError;
 
-    return result;
+    // Convert autoResponse to ChoiceResult for executeExternalEvent
+    const autoResponseData: ChoiceResult = autoResponse
+      ? {
+          approved: options.includes(autoResponse),
+          choice: autoResponse,
+          reason: options.includes(autoResponse)
+            ? AUTO_SELECTED_MESSAGE
+            : `Invalid auto-response: ${autoResponse}`,
+        }
+      : ({} as ChoiceResult); // Placeholder, will be handled by executeExternalEvent
+
+    return executeExternalEvent<ChoiceResult>({
+      ...(autoResponse && { autoResponse: autoResponseData }),
+      handler: async () => requestChoice(prompt, options, autoResponse ? { autoResponse } : { timeoutMs }),
+      timeoutMs,
+      errorContext: CHOICE_REQUEST_CONTEXT,
+    });
   },
-);
+};
 
 /**
  * Request custom approval agent
@@ -389,34 +452,59 @@ export const requestChoiceAgent: Agent<ChoiceRequestInput, ChoiceResult> = defin
  * Requests approval with custom validation logic.
  * Note: This is a simplified version - full implementation would need validator function.
  */
-export const requestCustomApprovalAgent: Agent<CustomApprovalRequestInput, CustomApprovalResult> = defineExternalEventIntegrator(
-  {
+export const requestCustomApprovalAgent: Agent<
+  CustomApprovalRequestInput,
+  OneShotAgentOutput<CustomApprovalResult, ExternalEventError>
+> = {
+  name: 'request-custom-approval',
+  manifest: {
     name: 'request-custom-approval',
-    description: 'Requests approval with custom validation logic',
     version: '1.0.0',
-    inputSchema: CustomApprovalRequestInputSchema,
-    outputSchema: CustomApprovalResultSchema,
-    timeoutMs: 60000,
-    onTimeout: 'error',
+    description: 'Requests approval with custom validation logic',
+    archetype: EXTERNAL_EVENT_INTEGRATOR_ARCHETYPE,
     metadata: {
       integrationTypes: ['CLI', 'Slack', 'Email', 'Web UI'],
       blocking: true,
       requiresValidator: true,
+      timeoutMs: 60000,
     },
   },
-  async (input, ctx) => {
+  execute: async (input: CustomApprovalRequestInput) => {
+    const validatedOrError = validateAgentInput<CustomApprovalRequestInput, CustomApprovalResult, ExternalEventError>(
+      input,
+      CustomApprovalRequestInputSchema,
+      EVENT_INVALID_RESPONSE
+    );
+    if ('result' in validatedOrError) {
+      return validatedOrError;
+    }
+
+    const { prompt, autoResponse, timeoutMs = 60000 } = validatedOrError;
+
     // Simplified implementation - just do yes/no approval
     // Full implementation would need validator function passed through context
-    const options: HumanApprovalOptions = {
-      ...(ctx.timeoutMs !== undefined && { timeoutMs: ctx.timeoutMs }),
-    };
+    const autoResponseData: CustomApprovalResult = autoResponse
+      ? {
+          approved: autoResponse.toLowerCase() === 'yes' || autoResponse.toLowerCase() === 'y',
+          value: autoResponse,
+          reason: autoResponse.toLowerCase() === 'yes' || autoResponse.toLowerCase() === 'y'
+            ? AUTO_APPROVED_MESSAGE
+            : AUTO_REJECTED_MESSAGE,
+        }
+      : ({} as CustomApprovalResult); // Placeholder
 
-    const result = await requestApproval(input.prompt, undefined, options);
-
-    return {
-      approved: result.approved,
-      reason: result.reason ?? 'No reason provided',
-      value: result.approved ? 'approved' : undefined,
-    };
+    return executeExternalEvent<CustomApprovalResult>({
+      ...(autoResponse && { autoResponse: autoResponseData }),
+      handler: async () => {
+        const result = await requestApproval(prompt, undefined, autoResponse ? { autoResponse: autoResponse as 'approve' | 'reject' } : { timeoutMs });
+        return {
+          approved: result.approved,
+          reason: result.reason ?? 'No reason provided',
+          value: result.approved ? 'approved' : undefined,
+        };
+      },
+      timeoutMs,
+      errorContext: CUSTOM_APPROVAL_REQUEST_CONTEXT,
+    });
   },
-);
+};

@@ -171,6 +171,150 @@ packages/resources/
 
 ---
 
+## Result Envelopes & Railway-Oriented Programming
+
+### Overview
+
+All VAT agents return standardized result envelopes following Railway-Oriented Programming (ROP) principles. This provides consistent error handling, type-safe result processing, and clear orchestration patterns.
+
+### Core Concepts
+
+**Result Types** (`@vibe-agent-toolkit/agent-schema`):
+- `AgentResult<T, E>` - Success/error discriminated union for single-execution agents
+- `StatefulAgentResult<T, E, M>` - Adds "in-progress" state for multi-turn conversational agents
+- `LLMError` - Standard error types for LLM-related failures
+- `ExternalEventError` - Standard error types for external system integration
+
+**Output Envelopes**:
+- `OneShotAgentOutput<TData, TError>` - For pure functions and one-shot LLM analyzers
+- `ConversationalAgentOutput<TData, TError, TState>` - For multi-turn conversational agents
+
+**Result Helpers** (`@vibe-agent-toolkit/agent-runtime`):
+- `mapResult()` - Transform success data
+- `andThen()` - Chain operations (only if success)
+- `match()` - Pattern match on result status
+- `unwrap()` - Extract data (throws on error)
+
+### Benefits
+
+1. **Type Safety**: TypeScript discriminated unions ensure compile-time correctness
+2. **Consistent Error Handling**: Standard error types across all agents
+3. **Composability**: Result helpers enable clean agent chaining
+4. **Observability**: Machine-readable status enables monitoring and debugging
+5. **Testability**: Test helpers simplify assertion patterns
+
+### Example
+
+```typescript
+// Agent returns envelope
+const result = await haikuValidator.execute({ text, syllables, kigo, kireji });
+
+// Type-safe pattern matching
+const message = match(result, {
+  success: (data) => `Valid haiku: ${data.valid}`,
+  error: (err) => `Validation failed: ${err}`,
+});
+
+// Or extract directly (throws on error)
+const data = unwrap(result);
+```
+
+### Optional Observability Fields
+
+Result envelopes support optional fields for production observability and intelligent orchestration:
+
+#### Confidence (0-1 scale)
+
+Indicates certainty in the result, enabling intelligent orchestration decisions:
+
+```typescript
+{
+  status: 'success',
+  data: { breed: 'Maine Coon' },
+  confidence: 0.65  // 65% confident → maybe verify with another agent
+}
+```
+
+**Use cases:**
+- Orchestration decisions (retry if confidence < threshold)
+- Chain validation (verify uncertain results)
+- User transparency (show uncertainty to user)
+- Stopping criteria (iterate until confidence > 0.9)
+
+#### Warnings (non-fatal issues)
+
+Success with caveats - graceful degradation:
+
+```typescript
+{
+  status: 'success',
+  data: { breed: 'Persian' },
+  warnings: [
+    'Image quality was poor, confidence may be lower',
+    'Breed database last updated 6 months ago'
+  ]
+}
+```
+
+#### Execution Metadata (observability)
+
+Performance and cost tracking for production systems:
+
+```typescript
+interface ExecutionMetadata {
+  durationMs?: number;      // Performance monitoring
+  tokensUsed?: number;      // LLM cost tracking
+  cost?: number;            // Estimated cost in USD
+  model?: string;           // Which model (for A/B testing)
+  provider?: string;        // 'openai' | 'anthropic' | etc
+  retryCount?: number;      // Set by orchestrator's retry wrapper
+}
+```
+
+**Example:**
+```typescript
+{
+  status: 'success',
+  data: { characteristics: {...} },
+  execution: {
+    durationMs: 1234,
+    tokensUsed: 450,
+    cost: 0.0045,
+    model: 'gpt-4o-mini',
+    provider: 'openai',
+    retryCount: 0  // No retries needed
+  }
+}
+```
+
+**Use cases:**
+- Performance optimization (identify slow agents)
+- Cost attribution (multi-tenant systems)
+- Usage analytics (tokens per request)
+- Debugging (view retry behavior)
+
+### Error Classification & Retryability
+
+Error types implicitly convey retryability - orchestrators encode retry policy based on error type:
+
+**Retryable errors** (transient failures):
+- `llm-rate-limit` - Exponential backoff
+- `llm-timeout` - Quick retry
+- `llm-unavailable` - Long wait
+
+**Non-retryable errors** (permanent failures):
+- `llm-refusal` - Model refused to comply
+- `llm-invalid-output` - Output parsing failed
+- `invalid-input` - Bad user input
+
+**Separation of concerns:** Agents classify errors, orchestrators decide retry policy.
+
+### Learn More
+
+See [Orchestration Guide](../orchestration.md) for detailed patterns and examples.
+
+---
+
 ## Architectural Principles
 
 ### 1. Clear Package Boundaries

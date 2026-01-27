@@ -3,6 +3,8 @@ import type { z } from 'zod';
 
 import type { LLMAnalyzerConversionConfigs, OpenAIConfig } from '../types.js';
 
+import { createLLMAnalyzerCallLLM } from './common-helpers.js';
+
 /**
  * Converts a VAT LLM Analyzer agent to an executable async function with OpenAI
  *
@@ -48,32 +50,7 @@ export function convertLLMAnalyzerToFunction<TInput, TOutput>(
   openaiConfig: OpenAIConfig,
 ): (input: TInput) => Promise<TOutput> {
   // Create callLLM function that uses OpenAI chat completions
-  const callLLM = async (prompt: string): Promise<string> => {
-    const params: {
-      model: string;
-      messages: Array<{ role: 'user'; content: string }>;
-      temperature?: number;
-      max_tokens?: number;
-    } = {
-      model: openaiConfig.model,
-      messages: [{ role: 'user', content: prompt }],
-    };
-
-    // Only add optional parameters if defined
-    if (openaiConfig.temperature !== undefined) {
-      params.temperature = openaiConfig.temperature;
-    }
-    if (openaiConfig.maxTokens !== undefined) {
-      params.max_tokens = openaiConfig.maxTokens;
-    }
-
-    const response = await openaiConfig.client.chat.completions.create({
-      ...params,
-      ...openaiConfig.additionalSettings,
-    });
-
-    return response.choices[0]?.message.content ?? '';
-  };
+  const callLLM = createLLMAnalyzerCallLLM(openaiConfig);
 
   // Return wrapped function
   return async (input: TInput): Promise<TOutput> => {

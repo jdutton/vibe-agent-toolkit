@@ -5,6 +5,7 @@
 export {
   createLLMAnalyzerTestSuite,
   createPureFunctionTestSuite,
+  parseUnwrappedOutput,
   testData,
   type LLMAnalyzerTestConfig,
   type PureFunctionTestConfig,

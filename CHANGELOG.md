@@ -38,9 +38,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Adapter implementation best practices
   - Testing with shared factories
   - Validation checklist and common pitfalls
+- **Result Constructors Re-exported**: Convenience exports from `@vibe-agent-toolkit/agent-runtime`
+  - `createSuccess`, `createError`, `createInProgress`
+  - Error constants: `LLM_REFUSAL`, `LLM_INVALID_OUTPUT`, `LLM_TIMEOUT`, etc.
+  - All result types and metadata types re-exported for single-package convenience
 
 ### Changed
 - Upgraded vibe-validate from 0.18.2-rc.1 to 0.18.4-rc.1 (fixes caching bug)
+- **BREAKING: Pure Function Agent API Simplified** - Consolidated to single `definePureFunction` API
+  - **Removed**: `createPureFunctionAgent` and `createSafePureFunctionAgent` (use `definePureFunction` instead)
+  - **API Change**: Agents now return output directly (unwrapped) instead of `OneShotAgentOutput` envelopes
+  - **API Change**: Pure function agents are now synchronous (`execute(input): TOutput`) instead of async
+  - **API Change**: Invalid input throws exceptions instead of returning error envelopes
+  - **API Change**: Handler function receives validated input, returns output directly (no manual wrapping)
+  - **Archetype renamed**: `pure-function-tool` → `pure-function` for consistency
+  - **Migration Path**: Replace `createPureFunctionAgent((input) => createSuccess(output), manifest)` with `definePureFunction(config, (input) => output)`
+  - **Runtime adapters updated**: All four runtime packages handle new unwrapped API
+  - **Documentation updated**: `docs/agent-authoring.md` shows only `definePureFunction` pattern
 
 ## [0.1.1] - 2026-01-12
 

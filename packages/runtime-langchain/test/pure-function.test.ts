@@ -18,7 +18,7 @@ createPureFunctionTestSuite({
     return outputString;
   },
   parseOutput: (output) => {
-    // LangChain tools return JSON string
+    // LangChain tools return JSON string - adapter already unwraps envelope
     return JSON.parse(output as string) as { valid: boolean; syllables?: { line1: number; line2: number; line3: number }; errors?: unknown[] };
   },
   assertToolStructure: (result) => {

@@ -1,0 +1,34 @@
+{
+  "name": "@vibe-agent-toolkit/transports",
+  "version": "0.1.0",
+  "description": "Transport adapters for VAT conversational agents",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "@types/ws": "^8.5.13",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.9"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "transport",
+    "cli",
+    "websocket"
+  ],
+  "license": "MIT"
+}

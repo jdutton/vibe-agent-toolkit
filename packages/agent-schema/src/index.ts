@@ -4,7 +4,12 @@
  * JSON Schema definitions and TypeScript types for VAT agent manifest format.
  */
 
-export const VERSION = '0.1.0';
+// JSON Schema utilities
+export { toJsonSchema, type JsonSchemaOptions } from './schema-utils.js';
+
+// Result types
+export * from './result-types.js';
+export * from './output-envelopes.js';
 
 // Core schemas
 export {
@@ -22,6 +27,7 @@ export {
 export {
   AgentInterfaceSchema,
   SchemaRefSchema,
+  type Agent,
   type AgentInterface,
   type SchemaRef,
 } from './interface.js';

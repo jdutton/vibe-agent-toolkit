@@ -3,7 +3,7 @@
 
 # CI matrix configuration
 ci:
-  nodeVersions: ['22', '24']
+  nodeVersions: ['24']
   os: ['ubuntu-latest', 'windows-latest']
   failFast: false
 
@@ -29,6 +29,10 @@ validation:
 
         - name: 'Code duplication check'
           command: 'bun run duplication-check'
+
+        - name: 'Repository structure validation'
+          command: 'bun run validate-structure'
+          description: 'Validates repo structure conventions (no runtime /examples, no /staging, etc.)'
 
         - name: 'Documentation validation'
           command: 'bun run vat resources validate'

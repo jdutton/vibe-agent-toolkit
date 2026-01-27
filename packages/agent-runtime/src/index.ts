@@ -12,6 +12,15 @@ export {
   type ConversationalAssistantConfig,
 } from './conversational-assistant.js';
 export {
+  defineTwoPhaseConversationalAssistant,
+  generateGatheringPrompt,
+  generateExtractionPrompt,
+  type TwoPhaseConversationalConfig,
+  type GatheringPhaseConfig,
+  type ExtractionPhaseConfig,
+  type FactorDefinition,
+} from './two-phase-conversational.js';
+export {
   defineAgenticResearcher,
   type AgenticResearcherConfig,
 } from './agentic-researcher.js';
@@ -56,3 +65,42 @@ export {
   type ToolConversionConfig,
   type ToolConversionConfigs,
 } from './adapter-types.js';
+
+export { createConversationalContext } from './conversational-helpers.js';
+
+export { andThen, mapResult, match, unwrap, withRetry, withTiming } from './result-helpers.js';
+export {
+  executeExternalEvent,
+  executeLLMAnalyzer,
+  executeLLMCall,
+  validateAgentInput,
+} from './agent-helpers.js';
+
+// Re-export result constructors and constants from agent-schema for convenience
+// This allows users to import everything they need from agent-runtime
+export {
+  createSuccess,
+  createError,
+  createInProgress,
+  RESULT_SUCCESS,
+  RESULT_ERROR,
+  RESULT_IN_PROGRESS,
+  LLM_REFUSAL,
+  LLM_INVALID_OUTPUT,
+  LLM_TIMEOUT,
+  LLM_RATE_LIMIT,
+  LLM_TOKEN_LIMIT,
+  LLM_UNAVAILABLE,
+  EVENT_TIMEOUT,
+  EVENT_UNAVAILABLE,
+  EVENT_REJECTED,
+  EVENT_INVALID_RESPONSE,
+  type AgentResult,
+  type StatefulAgentResult,
+  type ExecutionMetadata,
+  type LLMError,
+  type ExternalEventError,
+} from '@vibe-agent-toolkit/agent-schema';
+
+// NOTE: resultMatchers is NOT exported from main index to avoid importing vitest
+// in production code. Import directly from './test-helpers.js' in test files.

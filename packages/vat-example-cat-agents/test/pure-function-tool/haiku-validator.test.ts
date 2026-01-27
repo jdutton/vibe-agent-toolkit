@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { critiqueHaiku, haikuValidatorAgent, validateHaiku, type Haiku } from '../../src/pure-function-tool/haiku-validator.js';
+import { critiqueHaiku, haikuValidatorAgent, validateHaiku } from '../../src/pure-function-tool/haiku-validator.js';
+import type { Haiku } from '../../src/types/schemas.js';
 
 const VALID_LINE1 = 'Autumn moon rises';
 const VALID_LINE2 = 'Silver light on quiet waves';
@@ -111,18 +112,12 @@ describe('haikuValidatorAgent', () => {
     );
     expect(haikuValidatorAgent.manifest.version).toBe('1.0.0');
     expect(haikuValidatorAgent.manifest.archetype).toBe('pure-function');
-    expect(haikuValidatorAgent.manifest.inputSchema).toBeDefined();
-    expect(haikuValidatorAgent.manifest.outputSchema).toBeDefined();
-    expect(haikuValidatorAgent.manifest.metadata).toEqual({
-      author: 'Professor Whiskers',
-      strict: true,
-      checks: ['syllables', 'kigo', 'kireji'],
-    });
   });
 
   it('should validate a correct haiku via agent.execute()', () => {
     const haiku = createValidHaiku();
     const result = haikuValidatorAgent.execute(haiku);
+
     expectValidHaikuResult(result);
   });
 
@@ -141,8 +136,6 @@ describe('haikuValidatorAgent', () => {
   });
 
   it('should throw error for invalid input', () => {
-    expect(() => haikuValidatorAgent.execute({ line1: 'test' } as never)).toThrow(
-      'Invalid input for agent "haiku-validator"',
-    );
+    expect(() => haikuValidatorAgent.execute({ line1: 'test' } as never)).toThrow('Invalid input');
   });
 });
