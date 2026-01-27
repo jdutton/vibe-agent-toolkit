@@ -85,11 +85,11 @@ export async function executeLLMCall<T>(
       try {
         const parsed = options.parseOutput(result);
         return { status: 'success', data: parsed };
-      } catch (parseErr) {
+      } catch (error_) {
         // Convert parse errors to llm-invalid-output
         // Log the error for debugging but don't expose details in result
-        if (parseErr instanceof Error) {
-          console.warn('LLM output parse error:', parseErr.message);
+        if (error_ instanceof Error) {
+          console.warn('LLM output parse error:', error_.message);
         }
         return {
           status: 'error',
@@ -279,7 +279,7 @@ function mapExternalEventException(err: unknown, context?: string): ExternalEven
     const message = err.message.toLowerCase();
 
     // Timeouts
-    if (message.includes('timeout') || message.includes('timed out') || message.includes('ETIMEDOUT')) {
+    if (message.includes('timeout') || message.includes('timed out') || message.includes('etimedout')) {
       return 'event-timeout';
     }
 
@@ -323,7 +323,7 @@ function mapLLMException(err: unknown): LLMError {
     }
 
     // Timeouts
-    if (message.includes('timeout') || message.includes('ETIMEDOUT')) {
+    if (message.includes('timeout') || message.includes('etimedout')) {
       return 'llm-timeout';
     }
 

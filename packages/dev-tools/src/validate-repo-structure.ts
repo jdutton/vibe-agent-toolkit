@@ -326,7 +326,7 @@ async function validateSourceFileLocations(): Promise<void> {
       }
 
       // Allow agent-schema/scripts (build tooling for JSON Schema generation)
-      if (/^packages\/agent-schema\/scripts\//.test(normalizedPath)) {
+      if (normalizedPath.startsWith('packages/agent-schema/scripts/')) {
         return;
       }
 
@@ -335,7 +335,7 @@ async function validateSourceFileLocations(): Promise<void> {
       const isInPackageTest = /^packages\/[^/]+\/test\//.test(normalizedPath);
       const isInPackageExamples = /^packages\/[^/]+\/examples\//.test(normalizedPath);
       const isInPackageAgents = /^packages\/[^/]+\/agents\//.test(normalizedPath); // For vat-development-agents
-      const isInDocs = /^docs\//.test(normalizedPath);
+      const isInDocs = normalizedPath.startsWith('docs/');
 
       if (!isInPackageSrc && !isInPackageTest && !isInPackageExamples && !isInPackageAgents && !isInDocs) {
         errors.push({
