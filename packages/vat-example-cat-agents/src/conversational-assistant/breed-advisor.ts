@@ -11,6 +11,7 @@ import {
   generateGatheringPrompt,
   type Agent,
   type GatheringPhaseConfig,
+  type Message,
 } from '@vibe-agent-toolkit/agent-runtime';
 import {
   RESULT_IN_PROGRESS,
@@ -145,6 +146,69 @@ Ask about music preference EARLY in the conversation!`,
 const GATHERING_SYSTEM_PROMPT = generateGatheringPrompt(gatheringPhaseConfig);
 
 /**
+ * Extract factors from conversation during gathering phase
+ */
+async function extractFactorsFromConversation(
+  history: Message[],
+  callLLM: (messages: Message[]) => Promise<string>,
+): Promise<Partial<SelectionProfile>> {
+  const extractionPrompt = `Based on the conversation above, extract any information about the user's preferences into JSON format.
+
+Only include fields where you have confident information. Set fields to null if mentioned but unclear.
+
+Return JSON in this exact format:
+{
+  "musicPreference": "classical" | "jazz" | "rock" | "metal" | "pop" | "country" | "electronic" | "none" | null,
+  "livingSpace": "apartment" | "small-house" | "large-house" | "farm" | null,
+  "activityLevel": "couch-companion" | "playful-moderate" | "active-explorer" | "high-energy-athlete" | null,
+  "groomingTolerance": "minimal" | "weekly" | "daily" | null,
+  "familyComposition": "single" | "couple" | "young-kids" | "older-kids" | "multi-pet" | null,
+  "allergies": true | false | null
+}
+
+Return ONLY the JSON object, nothing else.`;
+
+  const extractionHistory: Message[] = [...history, { role: 'user', content: extractionPrompt }];
+  const extractionResponse = await callLLM(extractionHistory);
+
+  try {
+    const cleaned = stripMarkdownFences(extractionResponse);
+    return JSON.parse(cleaned);
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Extract selected breed from Phase 2 conversation
+ */
+async function extractSelectedBreed(
+  history: Message[],
+  callLLM: (messages: Message[]) => Promise<string>,
+): Promise<{ selectedBreed: string | null }> {
+  const extractionPrompt = `Based on the conversation above, extract:
+1. If the user made a FINAL breed selection (phrases like "I'll take", "I want", "sounds good")
+2. The breed name they selected
+
+Return JSON in this exact format:
+{
+  "selectedBreed": "breed name" or null
+}
+
+Return ONLY the JSON object, nothing else.`;
+
+  const extractionHistory: Message[] = [...history, { role: 'user', content: extractionPrompt }];
+  const extractionResponse = await callLLM(extractionHistory);
+
+  try {
+    const cleaned = stripMarkdownFences(extractionResponse);
+    return JSON.parse(cleaned);
+  } catch {
+    return { selectedBreed: null };
+  }
+}
+
+/**
  * Breed Selection Advisor - Two-Phase Pattern
  *
  * Uses declarative factor definitions instead of manual prompt engineering.
@@ -242,39 +306,8 @@ Let's start: What's your favorite type of music?`;
         const conversationalResponse = await ctx.callLLM(ctx.history);
         ctx.addToHistory('assistant', conversationalResponse);
 
-        // Extract factors from conversation history so far
-        // IMPORTANT: Use separate history for extraction to avoid polluting conversation
-        const extractionPrompt = `Based on the conversation above, extract any information about the user's preferences into JSON format.
-
-Only include fields where you have confident information. Set fields to null if mentioned but unclear.
-
-Return JSON in this exact format:
-{
-  "musicPreference": "classical" | "jazz" | "rock" | "metal" | "pop" | "country" | "electronic" | "none" | null,
-  "livingSpace": "apartment" | "small-house" | "large-house" | "farm" | null,
-  "activityLevel": "couch-companion" | "playful-moderate" | "active-explorer" | "high-energy-athlete" | null,
-  "groomingTolerance": "minimal" | "weekly" | "daily" | null,
-  "familyComposition": "single" | "couple" | "young-kids" | "older-kids" | "multi-pet" | null,
-  "allergies": true | false | null
-}
-
-Return ONLY the JSON object, nothing else.`;
-
-        // Create temporary history for extraction (don't pollute main conversation)
-        // IMPORTANT: Use 'user' role for extraction prompt so Claude API sees it as the last message
-        // (Claude requires alternating user/assistant messages, last must be user)
-        const extractionHistory = [...ctx.history, { role: 'user' as const, content: extractionPrompt }];
-        const extractionResponse = await ctx.callLLM(extractionHistory);
-
-        // Parse extracted factors
-        let extractedFactors;
-        try {
-          const cleaned = stripMarkdownFences(extractionResponse);
-          extractedFactors = JSON.parse(cleaned);
-        } catch {
-          // If extraction fails, keep current profile
-          extractedFactors = {};
-        }
+        // Extract factors from conversation history
+        const extractedFactors = await extractFactorsFromConversation(ctx.history, ctx.callLLM);
 
         // Merge extracted factors with current profile
         const updatedProfile: SelectionProfile = {
@@ -336,25 +369,13 @@ Return ONLY the JSON object, nothing else.`;
         currentProfile.conversationPhase === PHASE_READY_TO_RECOMMEND ||
         currentProfile.conversationPhase === 'refining'
       ) {
-        // Check if user is selecting a breed (concluding the conversation)
-        const userMessage = input.message.toLowerCase();
-        const breedMentioned = BREED_DATABASE.some((breed) =>
-          userMessage.includes(breed.name.toLowerCase()),
-        );
-        const conclusionKeywords = [
-          "i'll take",
-          "i want",
-          "sounds good",
-          "let's go with",
-          "that one",
-          "perfect",
-          "great choice",
-        ];
-        const isConcluding = breedMentioned && conclusionKeywords.some((keyword) => userMessage.includes(keyword));
+        // First, extract if user made a breed selection
+        const extractedData = await extractSelectedBreed(ctx.history, ctx.callLLM);
 
-        if (isConcluding) {
-          // User has made a decision - conclude the conversation
-          const conclusionPrompt = `The user has selected a breed. Provide a brief, enthusiastic conclusion:
+        // Check if user made a selection
+        if (extractedData.selectedBreed) {
+          // User selected a breed - generate completion message
+          const conclusionPrompt = `The user has selected ${extractedData.selectedBreed}. Provide a brief, enthusiastic conclusion:
 - Congratulate them on their choice
 - Remind them of 1-2 key traits that make this a great match
 - Wish them well with their new cat
@@ -367,10 +388,15 @@ DO NOT repeat all the recommendations. DO NOT ask more questions. This is the EN
           const conclusionResponse = await ctx.callLLM(ctx.history);
           ctx.addToHistory('assistant', conclusionResponse);
 
-          // Find which breed was mentioned
-          const selectedBreed = BREED_DATABASE.find((breed) =>
-            userMessage.includes(breed.name.toLowerCase()),
-          )?.name ?? 'Unknown';
+          // Normalize breed name against database
+          let selectedBreed = extractedData.selectedBreed;
+          const normalizedBreed = BREED_DATABASE.find((breed) =>
+            breed.name.toLowerCase() === selectedBreed.toLowerCase() ||
+            breed.name.toLowerCase().replaceAll(/\s/g, '') === selectedBreed.toLowerCase().replaceAll(/\s/g, '')
+          )?.name;
+          if (normalizedBreed) {
+            selectedBreed = normalizedBreed;
+          }
 
           return {
             reply: conclusionResponse,
@@ -388,11 +414,9 @@ DO NOT repeat all the recommendations. DO NOT ask more questions. This is the EN
           };
         }
 
-        // User wants recommendations or is refining
-        // Generate them from current profile
+        // No selection yet - generate recommendations and continue conversation
         const recommendations = matchBreeds(currentProfile);
 
-        // Get conversational presentation
         const presentationPrompt = `The user is ready for cat breed recommendations based on their profile.
 
 Present these recommendations conversationally and enthusiastically:
@@ -403,11 +427,11 @@ Make it feel personal and explain why these breeds match their preferences. Keep
 After presenting the recommendations, ask if any of these breeds sound appealing, or if they'd like to hear more details. Let them know they can type /quit to exit if they need time to think.`;
 
         ctx.addToHistory('system', presentationPrompt);
-        const conversationalResponse = await ctx.callLLM(ctx.history);
-        ctx.addToHistory('assistant', conversationalResponse);
+        const presentationResponse = await ctx.callLLM(ctx.history);
+        ctx.addToHistory('assistant', presentationResponse);
 
         return {
-          reply: conversationalResponse,
+          reply: presentationResponse,
           sessionState: {
             ...currentProfile,
             conversationPhase: 'refining',

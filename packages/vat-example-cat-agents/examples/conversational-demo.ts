@@ -73,67 +73,22 @@ function getRuntimeAdapter(runtimeType?: RuntimeType): ConversationalRuntimeAdap
 }
 
 /**
- * Main demo function
+ * Display runtime usage instructions
  */
-async function runDemo() {
-  console.log(`${colors.bright}${colors.magenta}`);
-  console.log('╔══════════════════════════════════════════════════════════════════════╗');
-  console.log('║   Conversational Demo: Breed Selection Advisor (Multi-Runtime)      ║');
-  console.log('╚══════════════════════════════════════════════════════════════════════╝');
-  console.log(colors.reset);
+function showRuntimeUsage() {
+  console.log(`${colors.yellow}Usage:${colors.reset}`);
+  console.log(`  source ~/.secrets.env && bun run demo:conversation [runtime]`);
+  console.log(`\n${colors.yellow}Available runtimes:${colors.reset}`);
+  console.log(`  vercel    - Vercel AI SDK (default)`);
+  console.log(`  openai    - OpenAI SDK`);
+  console.log(`  langchain - LangChain`);
+  console.log(`  claude    - Claude Agent SDK`);
+}
 
-  // Get runtime adapter
-  let adapter: ConversationalRuntimeAdapter<BreedAdvisorOutput, BreedAdvisorState>;
-  try {
-    adapter = getRuntimeAdapter();
-  } catch (error) {
-    console.log(
-      `${colors.red}Error: ${error instanceof Error ? error.message : String(error)}${colors.reset}\n`,
-    );
-    console.log(`${colors.yellow}Usage:${colors.reset}`);
-    console.log(`  source ~/.secrets.env && bun run demo:conversation [runtime]`);
-    console.log(`\n${colors.yellow}Available runtimes:${colors.reset}`);
-    console.log(`  vercel    - Vercel AI SDK (default)`);
-    console.log(`  openai    - OpenAI SDK`);
-    console.log(`  langchain - LangChain`);
-    console.log(`  claude    - Claude Agent SDK`);
-    return;
-  }
-
-  // Check for API keys
-  const needsOpenAI = adapter.name !== 'Claude Agent SDK';
-  const needsClaude = adapter.name === 'Claude Agent SDK';
-
-  if (needsOpenAI && !process.env.OPENAI_API_KEY) {
-    console.log(
-      `${colors.yellow}⚠️  No OPENAI_API_KEY found. Set environment variable to run ${adapter.name}.${colors.reset}\n`,
-    );
-    console.log(
-      `${colors.dim}   Example: source ~/.secrets.env && bun run demo:conversation${colors.reset}\n`,
-    );
-    return;
-  }
-
-  if (needsClaude && !process.env.ANTHROPIC_API_KEY) {
-    console.log(
-      `${colors.yellow}⚠️  No ANTHROPIC_API_KEY found. Set environment variable to run ${adapter.name}.${colors.reset}\n`,
-    );
-    console.log(
-      `${colors.dim}   Example: source ~/.secrets.env && bun run demo:conversation claude${colors.reset}\n`,
-    );
-    return;
-  }
-
-  section(`Using Runtime: ${adapter.name}`);
-
-  console.log(`${colors.green}✓ Runtime loaded successfully${colors.reset}`);
-  console.log(
-    `${colors.dim}  This demo uses ${adapter.name} to execute the breed advisor agent.${colors.reset}`,
-  );
-  console.log(
-    `${colors.dim}  The same agent code works with all 4 runtimes - portability!${colors.reset}`,
-  );
-
+/**
+ * Display agent information
+ */
+function showAgentInfo() {
   section('Understanding the Breed Advisor Agent');
 
   log('Agent', breedAdvisorAgent.name, colors.cyan);
@@ -162,6 +117,76 @@ async function runDemo() {
   console.log(
     `${colors.dim}  refining            → 6+ factors, exploring alternatives${colors.reset}`,
   );
+}
+
+/**
+ * Check API keys and show warning if missing
+ */
+function checkAPIKeys(adapter: ConversationalRuntimeAdapter<BreedAdvisorOutput, BreedAdvisorState>): boolean {
+  const needsOpenAI = adapter.name !== 'Claude Agent SDK';
+  const needsClaude = adapter.name === 'Claude Agent SDK';
+
+  if (needsOpenAI && !process.env.OPENAI_API_KEY) {
+    console.log(
+      `${colors.yellow}⚠️  No OPENAI_API_KEY found. Set environment variable to run ${adapter.name}.${colors.reset}\n`,
+    );
+    console.log(
+      `${colors.dim}   Example: source ~/.secrets.env && bun run demo:conversation${colors.reset}\n`,
+    );
+    return false;
+  }
+
+  if (needsClaude && !process.env.ANTHROPIC_API_KEY) {
+    console.log(
+      `${colors.yellow}⚠️  No ANTHROPIC_API_KEY found. Set environment variable to run ${adapter.name}.${colors.reset}\n`,
+    );
+    console.log(
+      `${colors.dim}   Example: source ~/.secrets.env && bun run demo:conversation claude${colors.reset}\n`,
+    );
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Main demo function
+ */
+async function runDemo() {
+  console.log(`${colors.bright}${colors.magenta}`);
+  console.log('╔══════════════════════════════════════════════════════════════════════╗');
+  console.log('║   Conversational Demo: Breed Selection Advisor (Multi-Runtime)      ║');
+  console.log('╚══════════════════════════════════════════════════════════════════════╝');
+  console.log(colors.reset);
+
+  // Get runtime adapter
+  let adapter: ConversationalRuntimeAdapter<BreedAdvisorOutput, BreedAdvisorState>;
+  try {
+    adapter = getRuntimeAdapter();
+  } catch (error) {
+    console.log(
+      `${colors.red}Error: ${error instanceof Error ? error.message : String(error)}${colors.reset}\n`,
+    );
+    showRuntimeUsage();
+    return;
+  }
+
+  // Check for API keys
+  if (!checkAPIKeys(adapter)) {
+    return;
+  }
+
+  section(`Using Runtime: ${adapter.name}`);
+
+  console.log(`${colors.green}✓ Runtime loaded successfully${colors.reset}`);
+  console.log(
+    `${colors.dim}  This demo uses ${adapter.name} to execute the breed advisor agent.${colors.reset}`,
+  );
+  console.log(
+    `${colors.dim}  The same agent code works with all 4 runtimes - portability!${colors.reset}`,
+  );
+
+  showAgentInfo();
 
   section('Interactive Conversation Mode');
 
@@ -170,26 +195,32 @@ async function runDemo() {
   console.log(`${colors.dim}  Commands: /help, /state, /restart, /quit${colors.reset}`);
   console.log();
 
+  // Store the last result for display after quit
+  let lastResult: BreedAdvisorOutput | undefined;
+
   // Wrap adapter's convertToFunction to format output for CLI
   const breedAdvisorFn = async (userMessage: string, session: Session<BreedAdvisorState>) => {
     const result = await adapter.convertToFunction(userMessage, session);
+    lastResult = result.output;
 
     // Check if conversation is complete (user selected a breed)
     const isComplete = result.output.sessionState.conversationPhase === 'completed' ||
                        result.output.result.status === 'success';
 
     if (isComplete) {
-      // Agent has concluded - add goodbye message and signal to exit
-      const output = result.output.reply + '\n\n' + colors.yellow + 'Session complete. Thanks for using the breed advisor!' + colors.reset;
+      // Show clear visual indicator that breed was selected
+      const indicator = `\n${colors.green}${colors.bright}✨ BREED SELECTED! ✨${colors.reset}`;
+      let selectedBreed = 'Unknown';
 
-      // Return the output, then exit gracefully after a short delay
-      setTimeout(() => {
-        console.log(); // Empty line for spacing
-        process.exit(0);
-      }, 500);
+      if (result.output.result?.status === 'success' && result.output.result.data?.selectedBreed) {
+        selectedBreed = result.output.result.data.selectedBreed;
+      }
+
+      const selectionInfo = `${colors.cyan}${colors.bright}Your choice: ${selectedBreed}${colors.reset}`;
+      const quitPrompt = `${colors.dim}Type /quit to see full results and exit${colors.reset}\n`;
 
       return {
-        output,
+        output: result.output.reply + '\n' + indicator + '\n' + selectionInfo + '\n' + quitPrompt,
         session: result.session,
       };
     }
@@ -200,6 +231,36 @@ async function runDemo() {
       session: result.session,
     };
   };
+
+  // Hook into process exit to show results before CLI transport kills process
+  // Must use 'exit' event which fires when process.exit() is called
+  const separator = '═══════════════════════════════════════════════════════════\n';
+
+  process.once('exit', () => {
+    if (lastResult) {
+      // Synchronous output only in exit handler
+      process.stdout.write('\n\n');
+      process.stdout.write(separator);
+      process.stdout.write('               FINAL RESULTS\n');
+      process.stdout.write(separator + '\n');
+      process.stdout.write(`Conversation Phase: ${lastResult.sessionState.conversationPhase}\n`);
+      process.stdout.write(`Status: ${lastResult.result.status}\n`);
+
+      if (lastResult.result.status === 'success' && lastResult.result.data?.selectedBreed) {
+        process.stdout.write(`\nSelected Breed: ${lastResult.result.data.selectedBreed}\n`);
+      }
+
+      process.stdout.write('\nYour Profile:\n');
+      if (lastResult.sessionState.livingSpace) process.stdout.write(`  🏠 Living Space: ${lastResult.sessionState.livingSpace}\n`);
+      if (lastResult.sessionState.musicPreference) process.stdout.write(`  🎵 Music: ${lastResult.sessionState.musicPreference}\n`);
+      if (lastResult.sessionState.activityLevel) process.stdout.write(`  ⚡ Activity Level: ${lastResult.sessionState.activityLevel}\n`);
+      if (lastResult.sessionState.groomingTolerance) process.stdout.write(`  ✂️  Grooming: ${lastResult.sessionState.groomingTolerance}\n`);
+
+      process.stdout.write('\nRaw JSON Output:\n');
+      process.stdout.write(JSON.stringify(lastResult, null, 2) + '\n');
+      process.stdout.write('\n' + separator + '\n');
+    }
+  });
 
   // Create CLI transport
   const transport = new CLITransport<BreedAdvisorState>({
