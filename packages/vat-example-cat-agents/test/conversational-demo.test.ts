@@ -6,11 +6,18 @@
  */
 
 import { exec } from 'node:child_process';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 
 import { describe, expect, it } from 'vitest';
 
 const execAsync = promisify(exec);
+
+// Get the path to the examples directory
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+const demoPath = join(__dirname, '..', 'examples', 'conversational-demo.ts');
 
 describe('Conversational Demo Startup', () => {
   it('should start without errors and show API key warning when key is missing', async () => {
@@ -20,7 +27,7 @@ describe('Conversational Demo Startup', () => {
 
     // Run the demo with a short timeout (it should exit quickly without API key)
     const { stdout, stderr } = await execAsync(
-      'bun run /Users/jeff/Workspaces/vibe-agent-toolkit/packages/vat-example-cat-agents/examples/conversational-demo.ts',
+      `bun run ${demoPath}`,
       {
         env,
         timeout: 5000, // 5 second timeout
