@@ -4,5 +4,12 @@
  * MCP Gateway for exposing VAT agents through Model Context Protocol.
  */
 
-// Placeholder export - actual exports will be added as modules are implemented
-export const VERSION = '0.1.0';
+// Core types
+export * from './types.js';
+
+// Observability (Task 3)
+export * from './observability/interfaces.js';
+export { NoOpObservabilityProvider } from './observability/no-op-provider.js';
+export { ConsoleLogger } from './observability/console-logger.js';
+
+// Server and adapters will be added in future tasks
