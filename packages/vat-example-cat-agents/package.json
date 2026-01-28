@@ -7,6 +7,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./mcp-collections": {
+      "types": "./dist/mcp-collections.d.ts",
+      "default": "./dist/mcp-collections.js"
     }
   },
   "files": [

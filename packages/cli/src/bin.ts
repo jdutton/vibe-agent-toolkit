@@ -10,6 +10,7 @@ import { Command } from 'commander';
 import { createAgentCommand, showAgentVerboseHelp } from './commands/agent/index.js';
 import { createAuditCommand } from './commands/audit.js';
 import { doctorCommand } from './commands/doctor.js';
+import { createMCPCommand } from './commands/mcp/index.js';
 import { createRagCommand, showRagVerboseHelp } from './commands/rag/index.js';
 import { createResourcesCommand, showResourcesVerboseHelp } from './commands/resources/index.js';
 import { loadVerboseHelp } from './utils/help-loader.js';
@@ -111,6 +112,7 @@ program.addCommand(createAuditCommand());
 program.addCommand(createResourcesCommand());
 program.addCommand(createRagCommand());
 program.addCommand(createAgentCommand());
+program.addCommand(createMCPCommand());
 
 // Add standalone commands
 doctorCommand(program);

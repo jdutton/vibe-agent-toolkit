@@ -107,6 +107,14 @@ Add to `~/.claude/config.json`:
 
 ## Architecture Overview
 
+### Design Principles
+
+1. **MCP is an interface, not a runtime** - Gateway exposes agents but doesn't execute them
+2. **Gateway discovers configured agents** - System startup registers agents, gateway provides access
+3. **Respect runtime patterns** - Each runtime manages state its own way (LangGraph checkpointers, OpenAI threads, etc.)
+4. **Archetype-aware** - Different agent types need different interface patterns (stateless vs stateful)
+5. **Separation of concerns** - MCP handles protocol translation and routing, runtimes handle execution and state
+
 ### Layers
 
 ```
@@ -126,6 +134,44 @@ Add to `~/.claude/config.json`:
 │  └─ One-Shot LLM Analyzers                      │
 └─────────────────────────────────────────────────┘
 ```
+
+### Stdio Protocol Compliance
+
+**Critical constraint for Claude Desktop integration:**
+
+- **stdout** - JSON-RPC protocol messages ONLY (MCP spec requirement)
+- **stderr** - All logs, debug output, errors
+- **Process lifetime** - Server runs until stdin closes (natural stdio connection lifetime)
+
+Violating stdout purity breaks MCP clients with JSON parse errors. All logging infrastructure must write to stderr.
+
+### Package-Scoped Collections (Phase 1)
+
+Agents are discovered via npm package exports:
+
+```typescript
+// Package: @my-scope/my-agents
+// Export: /mcp-collections
+
+export const myAgents: MCPCollection = {
+  name: 'my-agents',
+  description: 'My agent collection',
+  agents: [
+    { name: 'agent-1', agent: agent1, description: '...' },
+    { name: 'agent-2', agent: agent2, description: '...' },
+  ],
+};
+
+export const collections: Record<string, MCPCollection> = {
+  'my-agents': myAgents,
+};
+
+export const defaultCollection = myAgents;
+```
+
+CLI command: `vat mcp serve @my-scope/my-agents`
+
+**Phase 2+** will add global discovery registry with versioning.
 
 ### Key Concepts
 
@@ -161,12 +207,29 @@ Single LLM call to analyze input and return structured output.
 
 **Example:** Photo analyzer
 
-## Coming in Phase 2+
+## Phase 1 Scope (Current)
+
+**Delivered:**
+- ✅ Stdio transport for Claude Desktop
+- ✅ Stateless agent support (Pure Function Tools, One-Shot LLM Analyzers)
+- ✅ Multi-agent servers (multiple tools per server)
+- ✅ Package-scoped collections
+- ✅ CLI integration (`vat mcp serve <package>`)
+- ✅ Observability hooks (console logger included)
+- ✅ System tests for protocol compliance
+
+**Limitations:**
+- Process-per-server model (no multi-tenancy)
+- Single stdio connection (Claude Desktop spawns dedicated process)
+- No session state management (stateless agents only)
+
+## Phase 2+ Roadmap
 
 - **Conversational Assistants** - Multi-turn conversations with session state
 - **HTTP Transport** - Remote MCP servers with multiple concurrent connections
 - **Orchestrations** - Workflow coordination with sub-agents
 - **Event Integrators (HITL)** - Human-in-the-loop approval patterns
+- **Global Discovery Registry** - Namespace management and versioning
 - **Full OpenTelemetry Integration** - Traces, metrics, and structured logs
 
 ## API Reference
@@ -279,11 +342,21 @@ bun run test:watch
 bun run test:coverage
 ```
 
+## CLI Integration
+
+See [CLI MCP Commands Documentation](../cli/docs/mcp.md) for:
+- `vat mcp list-collections` - List available agent packages
+- `vat mcp serve <package>` - Start MCP server for a package
+- Claude Desktop configuration generation
+- Local development setup with `VAT_ROOT_DIR`
+
 ## Design Documentation
 
-For complete architecture, session management, and future phases, see:
+For complete architecture and future phases, see:
 - [State Persistence Patterns](../../docs/research/state-persistence-patterns.md)
 - [VAT Architecture](../../docs/architecture/README.md)
+
+**Note:** Detailed design documents (requirements, implementation plans) are kept in `docs/plans/` (gitignored). Architectural decisions and constraints are documented here in the README.
 
 ## License
 

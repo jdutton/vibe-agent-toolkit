@@ -6,9 +6,9 @@ import type { Logger } from '../types.js';
 export class ConsoleLogger implements Logger {
   info(message: string, context?: Record<string, unknown>): void {
     if (context) {
-      console.log(`[INFO] ${message}`, context);
+      console.error(`[INFO] ${message}`, context);
     } else {
-      console.log(`[INFO] ${message}`);
+      console.error(`[INFO] ${message}`);
     }
   }
 
@@ -34,9 +34,9 @@ export class ConsoleLogger implements Logger {
 
   debug(message: string, context?: Record<string, unknown>): void {
     if (context) {
-      console.debug(`[DEBUG] ${message}`, context);
+      console.error(`[DEBUG] ${message}`, context);
     } else {
-      console.debug(`[DEBUG] ${message}`);
+      console.error(`[DEBUG] ${message}`);
     }
   }
 }

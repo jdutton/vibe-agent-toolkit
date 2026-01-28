@@ -3,8 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { ConsoleLogger } from '../../src/observability/console-logger.js';
 
 describe('ConsoleLogger', () => {
-  it('should log info messages', () => {
-    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  it('should log info messages to stderr', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const logger = new ConsoleLogger();
 
     logger.info('test message');
@@ -13,8 +13,8 @@ describe('ConsoleLogger', () => {
     spy.mockRestore();
   });
 
-  it('should log with context', () => {
-    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  it('should log with context to stderr', () => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const logger = new ConsoleLogger();
 
     logger.info('test', { key: 'value' });
