@@ -5,7 +5,7 @@
  * for use in Claude Desktop.
  *
  * Note: Currently uses mock mode (analyzes filename patterns).
- * Real vision API integration coming in Phase 2.
+ * Real vision API integration planned for future enhancement.
  *
  * Usage:
  *   bun run examples/photo-analyzer-server.ts

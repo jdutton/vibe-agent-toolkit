@@ -5,7 +5,7 @@ MCP Gateway for exposing VAT agents through the Model Context Protocol, enabling
 ## Features
 
 - **Stdio Transport** - Native integration with Claude Desktop and other MCP clients
-- **Stateless Agent Support** - Pure Function Tools and One-Shot LLM Analyzers (Phase 1)
+- **Stateless Agent Support** - Pure Function Tools and One-Shot LLM Analyzers
 - **Multi-Agent Servers** - Expose multiple agents through a single MCP server
 - **Runtime Agnostic** - Works with any VAT runtime adapter (Vercel AI SDK, OpenAI, LangChain, Claude Agent SDK)
 - **Type-Safe** - Full TypeScript support with branded session IDs
@@ -125,7 +125,7 @@ Add to `~/.claude/config.json`:
 ┌─────────────────────────────────────────────────┐
 │  Interface Layer (Gateway)                      │
 │  ├─ MCP Server (stdio/HTTP)                     │
-│  └─ Stateless Adapter (Phase 1)                 │
+│  └─ Stateless Adapter                           │
 └─────────────────────────────────────────────────┘
                       ↓
 ┌─────────────────────────────────────────────────┐
@@ -145,7 +145,7 @@ Add to `~/.claude/config.json`:
 
 Violating stdout purity breaks MCP clients with JSON parse errors. All logging infrastructure must write to stderr.
 
-### Package-Scoped Collections (Phase 1)
+### Package-Scoped Collections
 
 Agents are discovered via npm package exports:
 
@@ -171,7 +171,7 @@ export const defaultCollection = myAgents;
 
 CLI command: `vat mcp serve @my-scope/my-agents`
 
-**Phase 2+** will add global discovery registry with versioning.
+**Future Enhancement**: Global discovery registry with versioning.
 
 ### Key Concepts
 
@@ -181,7 +181,7 @@ CLI command: `vat mcp serve @my-scope/my-agents`
 
 **Runtime Separation** - MCP handles protocol translation and routing. Runtimes handle execution and state management.
 
-## Supported Archetypes (Phase 1)
+## Supported Archetypes
 
 ### Pure Function Tool
 **Archetype:** `pure-function-tool`
@@ -207,9 +207,9 @@ Single LLM call to analyze input and return structured output.
 
 **Example:** Photo analyzer
 
-## Phase 1 Scope (Current)
+## Current Features
 
-**Delivered:**
+**Implemented:**
 - ✅ Stdio transport for Claude Desktop
 - ✅ Stateless agent support (Pure Function Tools, One-Shot LLM Analyzers)
 - ✅ Multi-agent servers (multiple tools per server)
@@ -218,18 +218,23 @@ Single LLM call to analyze input and return structured output.
 - ✅ Observability hooks (console logger included)
 - ✅ System tests for protocol compliance
 
-**Limitations:**
+**Current Limitations:**
 - Process-per-server model (no multi-tenancy)
 - Single stdio connection (Claude Desktop spawns dedicated process)
 - No session state management (stateless agents only)
 
-## Phase 2+ Roadmap
+## Planned Features
 
+**Stateful Agents:**
 - **Conversational Assistants** - Multi-turn conversations with session state
-- **HTTP Transport** - Remote MCP servers with multiple concurrent connections
 - **Orchestrations** - Workflow coordination with sub-agents
 - **Event Integrators (HITL)** - Human-in-the-loop approval patterns
+
+**Transport & Discovery:**
+- **HTTP Transport** - Remote MCP servers with multiple concurrent connections
 - **Global Discovery Registry** - Namespace management and versioning
+
+**Observability:**
 - **Full OpenTelemetry Integration** - Traces, metrics, and structured logs
 
 ## API Reference

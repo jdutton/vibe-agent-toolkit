@@ -293,22 +293,22 @@ All implementations must:
 - Handle stdio cleanup properly
 - Support graceful shutdown on SIGINT
 
-## Phase 1 Limitations
+## Current Implementation
 
-Current implementation supports:
+**Supported:**
 - ✅ Stateless agents (pure function tools, one-shot LLM analyzers)
 - ✅ Package-scoped collections
 - ✅ Claude Desktop integration
 - ✅ Local development with VAT_ROOT_DIR
 
-Not yet supported:
+**Not Yet Supported:**
 - ❌ Stateful agents (conversational assistants)
 - ❌ Global discovery registry
 - ❌ HTTP transport
 - ❌ WebSocket transport
 - ❌ Multi-session management
 
-See [MCP Gateway README](../../gateway-mcp/README.md) for Phase 2+ roadmap.
+See [MCP Gateway README](../../gateway-mcp/README.md) for planned features.
 
 ## See Also
 

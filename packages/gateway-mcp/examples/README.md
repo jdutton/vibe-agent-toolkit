@@ -66,7 +66,7 @@ Claude: Your haiku is valid! It follows the traditional 5-7-5 syllable
 
 Exposes the photo-analyzer agent (One-Shot LLM Analyzer) via MCP stdio transport.
 
-**Note:** Currently uses mock mode (analyzes filename patterns). Real vision API integration coming in Phase 2.
+**Note:** Currently uses mock mode (analyzes filename patterns). Real vision API integration planned for future enhancement.
 
 **Run locally:**
 ```bash
@@ -169,6 +169,6 @@ Claude: Let me create a haiku first:
         distinctive color-point pattern and blue eyes I mentioned in the haiku!
 ```
 
-## Phase 2 Examples (Coming Soon)
+## Future Examples (Conversational Agents)
 
 - Conversational breed advisor (Multi-turn conversation with state management)
