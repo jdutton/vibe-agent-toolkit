@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **MCP Gateway**: Expose VAT agents through Model Context Protocol (`@vibe-agent-toolkit/gateway-mcp`)
+  - Stdio transport for Claude Desktop integration
+  - Stateless agent support (Pure Function Tools, One-Shot LLM Analyzers)
+  - Multi-agent server support (expose multiple agents through single gateway)
+  - Runtime-agnostic architecture with adapter pattern
+  - Observability hooks (console logger, OpenTelemetry-aligned interfaces)
+  - Error classification (retryable vs non-retryable)
+  - Complete documentation and examples (haiku-validator, photo-analyzer, combined server)
+  - Integration and system tests
 - **Agent Runtime Architecture**: Core VAT agent archetype system
   - Pure function agents: Deterministic, synchronous tools
   - LLM analyzer agents: AI-powered analysis with structured I/O
