@@ -12,4 +12,9 @@ export * from './observability/interfaces.js';
 export { NoOpObservabilityProvider } from './observability/no-op-provider.js';
 export { ConsoleLogger } from './observability/console-logger.js';
 
-// Server and adapters will be added in future tasks
+// Server (Tasks 4-7)
+export { MCPGateway } from './server/mcp-gateway.js';
+export { StdioMCPGateway } from './server/stdio-transport.js';
+
+// Adapters (Tasks 5-6)
+export { StatelessAdapter } from './adapters/stateless-adapter.js';
