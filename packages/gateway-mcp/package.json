@@ -21,6 +21,7 @@
     "@modelcontextprotocol/sdk": "^1.0.4",
     "@vibe-agent-toolkit/agent-schema": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
+    "@vibe-agent-toolkit/vat-example-cat-agents": "workspace:*",
     "zod": "^3.24.1"
   },
   "devDependencies": {
