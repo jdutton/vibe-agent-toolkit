@@ -14,7 +14,7 @@ const FRONTMATTER_NAME_LOC = 'frontmatter.name';
 const FRONTMATTER_DESC_LOC = 'frontmatter.description';
 
 // Directories to ignore when checking for unreferenced files
-const IGNORED_DIRS = [
+const IGNORED_DIRS = new Set([
   // Dependencies
   'node_modules',
   'venv', '.venv', 'env', '.env',
@@ -33,17 +33,17 @@ const IGNORED_DIRS = [
 
   // IDE
   '.vscode', '.idea', '.vs',
-];
+]);
 
 // Files to ignore when checking for unreferenced files
-const IGNORED_FILES = [
+const IGNORED_FILES = new Set([
   '.DS_Store', 'Thumbs.db',
   '.gitignore', '.dockerignore',
   '.eslintrc', '.prettierrc',
   'package-lock.json', 'bun.lockb',
   'poetry.lock', 'Pipfile.lock',
   '.tsbuildinfo',
-];
+]);
 
 /**
  * Validate a Claude Skill (SKILL.md file) with transitive validation of linked markdown files
@@ -642,13 +642,13 @@ async function detectUnreferencedFiles(
     const pathParts = relativePath.split(path.sep);
 
     // Check if any part of the path is an ignored directory
-    if (pathParts.some(part => IGNORED_DIRS.includes(part))) {
+    if (pathParts.some(part => IGNORED_DIRS.has(part))) {
       return false;
     }
 
     // Check if filename is ignored
     const fileName = path.basename(filePath);
-    if (IGNORED_FILES.includes(fileName)) {
+    if (IGNORED_FILES.has(fileName)) {
       return false;
     }
 
