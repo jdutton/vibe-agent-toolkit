@@ -7,7 +7,7 @@ import {
   convertConversationalAssistantToFunction,
   type ConversationalSession,
 } from '@vibe-agent-toolkit/runtime-langchain';
-import type { Session } from '@vibe-agent-toolkit/transports';
+import type { TransportSessionContext } from '@vibe-agent-toolkit/transports';
 
 import { breedAdvisorAgent } from '../../src/conversational-assistant/breed-advisor.js';
 import {
@@ -39,34 +39,34 @@ export function createLangChainAdapter(): ConversationalRuntimeAdapter<BreedAdvi
 
   return {
     name: 'LangChain',
-    convertToFunction: async (userMessage: string, session: Session<BreedAdvisorState>) => {
-      // Convert Session<BreedAdvisorState> to ConversationalSession
+    convertToFunction: async (userMessage: string, sessionContext: TransportSessionContext<BreedAdvisorState>) => {
+      // Add user message to session history (transport responsibility)
+      sessionContext.conversationHistory.push({ role: 'user', content: userMessage });
+
+      // Convert TransportSessionContext to ConversationalSession
       const langchainSession: ConversationalSession = {
-        history: session.history,
-        state: session.state,
+        history: sessionContext.conversationHistory,
+        state: sessionContext.state,
       };
 
       // Create agent input
       const agentInput: BreedAdvisorInput = {
         message: userMessage,
-        sessionState: session.state ? { profile: session.state.profile } : undefined,
+        sessionState: sessionContext.state ? { profile: sessionContext.state.profile } : undefined,
       };
 
       // Execute via LangChain adapter
       const result = await chatFn(agentInput, langchainSession);
 
-      // Update session state from the agent's output
-      const updatedState: BreedAdvisorState = {
+      // Add assistant response to session history (transport responsibility)
+      sessionContext.conversationHistory.push({ role: 'assistant', content: result.output.reply });
+
+      // Update session context state (mutate in place for transport)
+      sessionContext.state = {
         profile: result.output.sessionState,
       };
 
-      return {
-        output: result.output,
-        session: {
-          history: result.session.history,
-          state: updatedState,
-        },
-      };
+      return result.output;
     },
   };
 }

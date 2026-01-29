@@ -7,9 +7,10 @@
  * - Automatic session cleanup on disconnect
  */
 
+import type { Message } from '@vibe-agent-toolkit/agent-runtime';
 import { WebSocketServer, type WebSocket } from 'ws';
 
-import type { ConversationalFunction, Session, Transport } from './types.js';
+import type { ConversationalFunction, Transport, TransportSessionContext } from './types.js';
 
 /**
  * Options for WebSocket transport.
@@ -22,8 +23,10 @@ export interface WebSocketTransportOptions<TState = any> {
   port?: number;
   /** Host to bind to (default: 'localhost') */
   host?: string;
+  /** Session ID generator (default: crypto.randomUUID) */
+  generateSessionId?: () => string;
   /** Factory for initial session state per connection */
-  createInitialSession?: () => Session<TState>;
+  createInitialState?: () => TState;
 }
 
 /**
@@ -46,24 +49,36 @@ export interface WebSocketOutgoingMessage<TState = any> {
 }
 
 /**
+ * WebSocket session data (in-memory for MVP)
+ */
+interface WebSocketSession<TState> {
+  sessionId: string;
+  conversationHistory: Message[];
+  state: TState;
+}
+
+/**
  * WebSocket transport implementation.
  *
  * Each connection maintains its own isolated session.
+ * Uses in-memory session management for MVP.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export class WebSocketTransport<TState = any> implements Transport {
   private readonly fn: ConversationalFunction<string, string, TState>;
   private readonly port: number;
   private readonly host: string;
-  private readonly createInitialSession: () => Session<TState>;
+  private readonly generateSessionId: () => string;
+  private readonly createInitialState: () => TState;
   private server: WebSocketServer | null = null;
-  private readonly sessions = new WeakMap<WebSocket, Session<TState>>();
+  private readonly sessions = new WeakMap<WebSocket, WebSocketSession<TState>>();
 
   constructor(options: WebSocketTransportOptions<TState>) {
     this.fn = options.fn;
     this.port = options.port ?? 8080;
     this.host = options.host ?? 'localhost';
-    this.createInitialSession = options.createInitialSession ?? (() => ({ history: [], state: undefined as TState }));
+    this.generateSessionId = options.generateSessionId ?? (() => crypto.randomUUID());
+    this.createInitialState = options.createInitialState ?? (() => undefined as TState);
   }
 
   /**
@@ -119,11 +134,16 @@ export class WebSocketTransport<TState = any> implements Transport {
    * Handle a new WebSocket connection.
    */
   private handleConnection(ws: WebSocket): void {
-    // Initialize session for this connection
-    const session = this.createInitialSession();
+    // Create session for this connection
+    const sessionId = this.generateSessionId();
+    const session: WebSocketSession<TState> = {
+      sessionId,
+      conversationHistory: [],
+      state: this.createInitialState(),
+    };
     this.sessions.set(ws, session);
 
-    console.log('Client connected');
+    console.log(`Client connected (session: ${sessionId})`);
 
     ws.on('message', (data: Buffer) => {
       void this.handleMessage(ws, data);
@@ -131,7 +151,7 @@ export class WebSocketTransport<TState = any> implements Transport {
 
     ws.on('close', () => {
       // Session cleanup happens automatically via WeakMap
-      console.log('Client disconnected');
+      console.log(`Client disconnected (session: ${sessionId})`);
     });
 
     ws.on('error', (error: Error) => {
@@ -153,24 +173,37 @@ export class WebSocketTransport<TState = any> implements Transport {
       }
 
       // Get session for this connection
-      let session = this.sessions.get(ws);
+      const session = this.sessions.get(ws);
       if (!session) {
         // Session lost (shouldn't happen, but handle gracefully)
-        session = this.createInitialSession();
-        this.sessions.set(ws, session);
+        this.sendError(ws, 'Session not found');
+        return;
       }
 
-      // Process message through conversational function
-      const result = await this.fn(message.content, session);
+      // Add user message to history
+      session.conversationHistory.push({ role: 'user', content: message.content });
 
-      // Update session
-      this.sessions.set(ws, result.session);
+      // Pass session context
+      const context: TransportSessionContext<TState> = {
+        sessionId: session.sessionId,
+        conversationHistory: session.conversationHistory,
+        state: session.state,
+      };
+
+      // Process message through conversational function
+      const output = await this.fn(message.content, context);
+
+      // Update session state (function may have mutated context.state)
+      session.state = context.state;
+
+      // Add assistant response to history
+      session.conversationHistory.push({ role: 'assistant', content: output });
 
       // Send response
       const response: WebSocketOutgoingMessage<TState> = {
         type: 'message',
-        reply: result.output,
-        state: result.session.state,
+        reply: output,
+        state: session.state,
       };
 
       ws.send(JSON.stringify(response));

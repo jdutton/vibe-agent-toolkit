@@ -4,7 +4,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-import type { ConversationalFunction, Session } from '../src/types.js';
+import type { ConversationalFunction } from '../src/types.js';
 import { WebSocketTransport, type WebSocketIncomingMessage } from '../src/websocket.js';
 
 import { createConnectedClient, startTransport, waitForClose, waitForResponse } from './test-helpers.js';
@@ -16,17 +16,10 @@ describe('WebSocketTransport', () => {
 
   beforeEach(() => {
     // Mock conversational function that tracks message count
-    mockFn = vi.fn(async (input: string, session: Session<{ count: number }>) => {
-      const count = (session.state?.count ?? 0) + 1;
-      const newHistory = [
-        ...session.history,
-        { role: 'user' as const, content: input },
-        { role: 'assistant' as const, content: `Message #${count}: ${input}` },
-      ];
-      return {
-        output: `Message #${count}: ${input}`,
-        session: { history: newHistory, state: { count } },
-      };
+    mockFn = vi.fn(async (input: string, context) => {
+      const count = (context.state?.count ?? 0) + 1;
+      context.state = { count };
+      return `Message #${count}: ${input}`;
     });
   });
 
@@ -46,7 +39,7 @@ describe('WebSocketTransport', () => {
       fn: mockFn,
       port: testPort,
       host: '127.0.0.1',
-      createInitialSession: () => ({ history: [], state: { count: 0 } }),
+      createInitialState: () => ({ count: 0 }),
     });
     expect(transport).toBeDefined();
   });
@@ -63,7 +56,7 @@ describe('WebSocketTransport', () => {
     transport = await startTransport({
       fn: mockFn,
       port: testPort,
-      createInitialSession: () => ({ history: [], state: { count: 0 } }),
+      createInitialState: () => ({ count: 0 }),
     });
 
     const client = await createConnectedClient(testPort);
@@ -93,7 +86,7 @@ describe('WebSocketTransport', () => {
     transport = await startTransport({
       fn: mockFn,
       port: testPort,
-      createInitialSession: () => ({ history: [], state: { count: 0 } }),
+      createInitialState: () => ({ count: 0 }),
     });
 
     // Create two client connections

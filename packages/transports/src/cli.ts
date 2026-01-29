@@ -10,7 +10,9 @@
 
 import * as readline from 'node:readline';
 
-import type { ConversationalFunction, Session, Transport } from './types.js';
+import type { Message } from '@vibe-agent-toolkit/agent-runtime';
+
+import type { ConversationalFunction, Transport, TransportSessionContext } from './types.js';
 
 /**
  * Options for CLI transport.
@@ -19,8 +21,12 @@ import type { ConversationalFunction, Session, Transport } from './types.js';
 export interface CLITransportOptions<TState = any> {
   /** The conversational function to run */
   fn: ConversationalFunction<string, string, TState>;
-  /** Initial session state (default: { history: [], state: undefined }) */
-  initialSession?: Session<TState>;
+  /** Session identifier (default: "cli-singleton") */
+  sessionId?: string;
+  /** Initial conversation history (default: []) */
+  initialHistory?: Message[];
+  /** Initial session state (default: undefined) */
+  initialState?: TState;
   /** Enable colored output (default: true) */
   colors?: boolean;
   /** Show state after each interaction (default: false) */
@@ -35,11 +41,14 @@ export interface CLITransportOptions<TState = any> {
  * CLI transport implementation.
  *
  * Manages a single local session and provides an interactive REPL.
+ * Uses in-memory session management for MVP.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export class CLITransport<TState = any> implements Transport {
   private readonly fn: ConversationalFunction<string, string, TState>;
-  private session: Session<TState>;
+  private readonly sessionId: string;
+  private conversationHistory: Message[];
+  private state: TState;
   private readonly colors: boolean;
   private readonly showState: boolean;
   private readonly prompt: string;
@@ -48,7 +57,9 @@ export class CLITransport<TState = any> implements Transport {
 
   constructor(options: CLITransportOptions<TState>) {
     this.fn = options.fn;
-    this.session = options.initialSession ?? { history: [], state: undefined as TState };
+    this.sessionId = options.sessionId ?? 'cli-singleton';
+    this.conversationHistory = options.initialHistory ?? [];
+    this.state = options.initialState ?? (undefined as TState);
     this.colors = options.colors ?? true;
     this.showState = options.showState ?? false;
     this.prompt = options.prompt ?? 'You: ';
@@ -85,10 +96,25 @@ export class CLITransport<TState = any> implements Transport {
 
       // Process user input
       try {
-        const result = await this.fn(input, this.session);
-        this.session = result.session;
+        // Add user message to history
+        this.conversationHistory.push({ role: 'user', content: input });
 
-        console.log(this.colorize(this.assistantPrefix, 'green') + result.output);
+        // Pass session context (just ID and current state)
+        const context: TransportSessionContext<TState> = {
+          sessionId: this.sessionId,
+          conversationHistory: this.conversationHistory,
+          state: this.state,
+        };
+
+        const output = await this.fn(input, context);
+
+        // Update session state (function may have mutated context.state)
+        this.state = context.state;
+
+        // Add assistant response to history
+        this.conversationHistory.push({ role: 'assistant', content: output });
+
+        console.log(this.colorize(this.assistantPrefix, 'green') + output);
 
         if (this.showState) {
           this.printState();
@@ -134,7 +160,8 @@ export class CLITransport<TState = any> implements Transport {
         break;
 
       case '/restart':
-        this.session = { history: [], state: undefined as TState };
+        this.conversationHistory = [];
+        this.state = undefined as TState;
         console.log(this.colorize('Session restarted.', 'yellow'));
         break;
 
@@ -174,8 +201,9 @@ export class CLITransport<TState = any> implements Transport {
    */
   private printState(): void {
     console.log(this.colorize('\n--- Session State ---', 'cyan'));
-    console.log(this.colorize('History length: ', 'yellow') + this.session.history.length);
-    console.log(this.colorize('State: ', 'yellow') + JSON.stringify(this.session.state, null, 2));
+    console.log(this.colorize('Session ID: ', 'yellow') + this.sessionId);
+    console.log(this.colorize('History length: ', 'yellow') + this.conversationHistory.length);
+    console.log(this.colorize('State: ', 'yellow') + JSON.stringify(this.state, null, 2));
     console.log();
   }
 

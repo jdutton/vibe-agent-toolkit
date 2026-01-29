@@ -8,19 +8,26 @@
 import type { Message } from '@vibe-agent-toolkit/agent-runtime';
 
 /**
- * Session state for a conversation.
+ * Transport-level session context.
+ *
+ * Contains session identification only - not storage.
+ * Runtime adapters are responsible for loading/saving session data.
  *
  * @template TState - Custom state type (application-specific)
  */
-export type Session<TState = unknown> = {
-  /** Conversation history */
-  history: Message[];
-  /** Application-specific state */
+export interface TransportSessionContext<TState = unknown> {
+  /** Session identifier (opaque to transport) */
+  sessionId: string;
+  /** Conversation history (loaded by runtime) */
+  conversationHistory: Message[];
+  /** Application-specific state (loaded by runtime) */
   state: TState;
-};
+}
 
 /**
- * A conversational function that processes input and maintains session state.
+ * A conversational function that uses session context.
+ *
+ * The runtime adapter is responsible for loading/saving session data.
  *
  * @template TInput - Input type (e.g., string for text, object for structured)
  * @template TOutput - Output type (e.g., string for text, object for structured)
@@ -29,11 +36,23 @@ export type Session<TState = unknown> = {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type ConversationalFunction<TInput = any, TOutput = any, TState = any> = (
   input: TInput,
-  session: Session<TState>
-) => Promise<{
-  output: TOutput;
-  session: Session<TState>;
-}>;
+  context: TransportSessionContext<TState>
+) => Promise<TOutput>;
+
+/**
+ * DEPRECATED: Old Session type for backward compatibility.
+ *
+ * Use RuntimeSession from @vibe-agent-toolkit/agent-runtime instead.
+ *
+ * @deprecated Use TransportSessionContext instead
+ * @template TState - Custom state type (application-specific)
+ */
+export type Session<TState = unknown> = {
+  /** Conversation history */
+  history: Message[];
+  /** Application-specific state */
+  state: TState;
+};
 
 /**
  * Transport interface for running conversational agents.

@@ -5,7 +5,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { CLITransport } from '../src/cli.js';
-import type { ConversationalFunction, Session } from '../src/types.js';
+import type { ConversationalFunction } from '../src/types.js';
 
 describe('CLITransport', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -14,17 +14,8 @@ describe('CLITransport', () => {
 
   beforeEach(() => {
     // Mock conversational function that echoes input
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    mockFn = vi.fn(async (input: string, session: Session<any>) => {
-      const newHistory = [
-        ...session.history,
-        { role: 'user' as const, content: input },
-        { role: 'assistant' as const, content: `Echo: ${input}` },
-      ];
-      return {
-        output: `Echo: ${input}`,
-        session: { ...session, history: newHistory },
-      };
+    mockFn = vi.fn(async (input: string, _context) => {
+      return `Echo: ${input}`;
     });
   });
 
@@ -42,7 +33,9 @@ describe('CLITransport', () => {
   it('should create transport with custom options', () => {
     transport = new CLITransport({
       fn: mockFn,
-      initialSession: { history: [], state: { count: 0 } },
+      sessionId: 'test-session',
+      initialHistory: [],
+      initialState: { count: 0 },
       colors: false,
       showState: true,
       prompt: 'User: ',
@@ -65,14 +58,10 @@ describe('CLITransport', () => {
   });
 
   it('should accept initial session state', () => {
-    const initialSession: Session<{ count: number }> = {
-      history: [{ role: 'system', content: 'System message' }],
-      state: { count: 42 },
-    };
-
     transport = new CLITransport({
       fn: mockFn,
-      initialSession,
+      initialHistory: [{ role: 'system', content: 'System message' }],
+      initialState: { count: 42 },
     });
 
     expect(transport).toBeDefined();

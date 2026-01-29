@@ -4,17 +4,20 @@
  * Reduces duplication across adapter test files by providing common setup and utilities.
  */
 
-import type { Session } from '@vibe-agent-toolkit/transports';
+import type { TransportSessionContext } from '@vibe-agent-toolkit/transports';
 import { expect } from 'vitest';
 
 import type { BreedAdvisorState } from '../../examples/conversational-adapters/shared-types.js';
 
 /**
- * Helper to create a test session with default values
+ * Helper to create a test session context with default values
  */
-export function createTestSession(overrides?: Partial<Session<BreedAdvisorState>>): Session<BreedAdvisorState> {
+export function createTestSessionContext(
+  overrides?: Partial<TransportSessionContext<BreedAdvisorState>>
+): TransportSessionContext<BreedAdvisorState> {
   return {
-    history: [],
+    sessionId: 'test-session',
+    conversationHistory: [],
     state: {
       profile: {
         conversationPhase: 'gathering',

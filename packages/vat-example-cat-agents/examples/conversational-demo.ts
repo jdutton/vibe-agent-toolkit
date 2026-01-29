@@ -23,7 +23,7 @@
  *   source ~/.secrets.env && bun run demo:conversation claude
  */
 
-import { CLITransport, type Session } from '@vibe-agent-toolkit/transports';
+import { CLITransport, type TransportSessionContext } from '@vibe-agent-toolkit/transports';
 
 import { breedAdvisorAgent } from '../src/conversational-assistant/breed-advisor.js';
 import type { BreedAdvisorOutput, SelectionProfile } from '../src/types/schemas.js';
@@ -199,37 +199,31 @@ async function runDemo() {
   let lastResult: BreedAdvisorOutput | undefined;
 
   // Wrap adapter's convertToFunction to format output for CLI
-  const breedAdvisorFn = async (userMessage: string, session: Session<BreedAdvisorState>) => {
-    const result = await adapter.convertToFunction(userMessage, session);
-    lastResult = result.output;
+  const breedAdvisorFn = async (userMessage: string, context: TransportSessionContext<BreedAdvisorState>) => {
+    const result = await adapter.convertToFunction(userMessage, context);
+    lastResult = result;
 
     // Check if conversation is complete (user selected a breed)
-    const isComplete = result.output.sessionState.conversationPhase === 'completed' ||
-                       result.output.result.status === 'success';
+    const isComplete = result.sessionState.conversationPhase === 'completed' ||
+                       result.result.status === 'success';
 
     if (isComplete) {
       // Show clear visual indicator that breed was selected
       const indicator = `\n${colors.green}${colors.bright}✨ BREED SELECTED! ✨${colors.reset}`;
       let selectedBreed = 'Unknown';
 
-      if (result.output.result?.status === 'success' && result.output.result.data?.selectedBreed) {
-        selectedBreed = result.output.result.data.selectedBreed;
+      if (result.result?.status === 'success' && result.result.data?.selectedBreed) {
+        selectedBreed = result.result.data.selectedBreed;
       }
 
       const selectionInfo = `${colors.cyan}${colors.bright}Your choice: ${selectedBreed}${colors.reset}`;
       const quitPrompt = `${colors.dim}Type /quit to see full results and exit${colors.reset}\n`;
 
-      return {
-        output: result.output.reply + '\n' + indicator + '\n' + selectionInfo + '\n' + quitPrompt,
-        session: result.session,
-      };
+      return result.reply + '\n' + indicator + '\n' + selectionInfo + '\n' + quitPrompt;
     }
 
     // Normal conversation - agent presents recommendations conversationally
-    return {
-      output: result.output.reply,
-      session: result.session,
-    };
+    return result.reply;
   };
 
   // Hook into process exit to show results before CLI transport kills process
@@ -265,12 +259,11 @@ async function runDemo() {
   // Create CLI transport
   const transport = new CLITransport<BreedAdvisorState>({
     fn: breedAdvisorFn,
-    initialSession: {
-      history: [],
-      state: {
-        profile: {
-          conversationPhase: 'gathering',
-        },
+    sessionId: 'breed-advisor-demo',
+    initialHistory: [],
+    initialState: {
+      profile: {
+        conversationPhase: 'gathering',
       },
     },
     colors: true,
