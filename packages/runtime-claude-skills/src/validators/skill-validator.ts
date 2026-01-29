@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { parseMarkdown } from '@vibe-agent-toolkit/resources';
+import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { parseFrontmatter } from '../parsers/frontmatter-parser.js';
 import { ClaudeSkillFrontmatterSchema, VATClaudeSkillFrontmatterSchema } from '../schemas/claude-skill-frontmatter.js';
@@ -639,7 +640,7 @@ async function detectUnreferencedFiles(
   // Filter files through smart filtering
   const candidateFiles = allFiles.filter(filePath => {
     const relativePath = path.relative(skillDir, filePath);
-    const pathParts = relativePath.split(path.sep);
+    const pathParts = toForwardSlash(relativePath).split('/');
 
     // Check if any part of the path is an ignored directory
     if (pathParts.some(part => IGNORED_DIRS.has(part))) {
@@ -710,16 +711,20 @@ function enumerateFiles(dir: string): string[] {
  * @returns True if path appears in content
  */
 function isReferencedInContent(relativePath: string, content: string): boolean {
+  // Normalize path to forward slashes for cross-platform compatibility
+  // (markdown always uses forward slashes, but path.relative() uses OS separators)
+  const normalizedPath = toForwardSlash(relativePath);
+
   // Generate variations of the path to check
   const variations = [
-    relativePath,                    // bare: scripts/build.sh
-    `\`${relativePath}\``,          // backtick: `scripts/build.sh`
-    `"${relativePath}"`,            // double quote
-    `'${relativePath}'`,            // single quote
-    `./${relativePath}`,            // relative prefix
-    ` ${relativePath} `,            // with spaces
-    ` ${relativePath}`,
-    `${relativePath} `,
+    normalizedPath,                    // bare: scripts/build.sh
+    `\`${normalizedPath}\``,          // backtick: `scripts/build.sh`
+    `"${normalizedPath}"`,            // double quote
+    `'${normalizedPath}'`,            // single quote
+    `./${normalizedPath}`,            // relative prefix
+    ` ${normalizedPath} `,            // with spaces
+    ` ${normalizedPath}`,
+    `${normalizedPath} `,
   ];
 
   return variations.some(v => content.includes(v));

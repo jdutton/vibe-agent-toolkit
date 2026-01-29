@@ -108,7 +108,7 @@ export function isGitignored(filePath: string, gitRoot?: string): boolean {
 
   // Get path relative to git root
   const relativePath = path.relative(root, resolvedPath);
-  const normalizedPath = relativePath.split(path.sep).join('/');
+  const normalizedPath = toForwardSlash(relativePath);
 
   return ig.ignores(normalizedPath);
 }

@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { crawlDirectory, crawlDirectorySync } from '../src/file-crawler.js';
-import { mkdirSyncReal, normalizedTmpdir } from '../src/path-utils.js';
+import { mkdirSyncReal, normalizedTmpdir, toForwardSlash } from '../src/path-utils.js';
 
 describe('file-crawler', () => {
   let testDir: string;
@@ -63,7 +63,7 @@ describe('file-crawler', () => {
       // Should find all files except node_modules
       expect(files.length).toBeGreaterThan(0);
       expect(files.every((f) => f.startsWith(testDir))).toBe(true); // absolute paths
-      expect(files.includes(path.join(testDir, 'node_modules', 'package.md'))).toBe(false); // excluded by default
+      expect(files.map(toForwardSlash).includes(toForwardSlash(path.join(testDir, 'node_modules', 'package.md')))).toBe(false); // excluded by default
     });
 
     it('should find markdown files with include pattern', () => {
