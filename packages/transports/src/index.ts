@@ -10,6 +10,6 @@
  * @packageDocumentation
  */
 
-export type { Message, Session, ConversationalFunction, Transport } from './types.js';
+export type { Session, ConversationalFunction, Transport } from './types.js';
 export { CLITransport, type CLITransportOptions } from './cli.js';
 export { WebSocketTransport, type WebSocketTransportOptions, type WebSocketIncomingMessage, type WebSocketOutgoingMessage } from './websocket.js';

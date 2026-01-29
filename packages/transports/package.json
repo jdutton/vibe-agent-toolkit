@@ -15,6 +15,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@vibe-agent-toolkit/agent-runtime": "workspace:*",
     "ws": "^8.18.0"
   },
   "devDependencies": {

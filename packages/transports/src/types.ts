@@ -5,13 +5,7 @@
  * (CLI, WebSocket, HTTP, etc.) without coupling to specific runtime implementations.
  */
 
-/**
- * A message in the conversation history.
- */
-export type Message = {
-  role: 'user' | 'assistant' | 'system';
-  content: string;
-};
+import type { Message } from '@vibe-agent-toolkit/agent-runtime';
 
 /**
  * Session state for a conversation.

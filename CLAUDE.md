@@ -8,6 +8,23 @@ The vibe-agent-toolkit is a modular toolkit for building, testing, and deploying
 
 See [docs/architecture/README.md](docs/architecture/README.md) for detailed package architecture and evolution plan.
 
+## ⚠️ CRITICAL: Pre-1.0 Development Policy
+
+**BACKWARD COMPATIBILITY IS A BUG DURING v0.1.x**
+
+While this project is in v0.1.x (pre-1.0):
+- ❌ **DO NOT** add backward compatibility layers
+- ❌ **DO NOT** create deprecation wrappers or shims
+- ❌ **DO NOT** re-export types for "convenience"
+- ❌ **DO NOT** maintain old APIs alongside new ones
+- ✅ **DO** make breaking changes freely to improve the API
+- ✅ **DO** remove old code completely when replacing it
+- ✅ **DO** force consumers to update (it's pre-1.0!)
+
+**Rationale**: Pre-1.0 is the time to iterate rapidly and find the right abstractions. Backward compatibility adds complexity, maintenance burden, and prevents us from fixing design mistakes. Users expect breaking changes in v0.x releases.
+
+**After v1.0**: We'll follow semantic versioning strictly with proper deprecation cycles.
+
 ## Project-Specific Technical Principles
 
 ### Schema Strategy

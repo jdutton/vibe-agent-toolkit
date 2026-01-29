@@ -23,6 +23,7 @@
     "@anthropic-ai/claude-agent-sdk": "^0.1.5",
     "@anthropic-ai/sdk": "^0.37.0",
     "@vibe-agent-toolkit/agent-runtime": "workspace:*",
+    "@vibe-agent-toolkit/utils": "workspace:*",
     "zod": "^3.24.1"
   },
   "devDependencies": {
