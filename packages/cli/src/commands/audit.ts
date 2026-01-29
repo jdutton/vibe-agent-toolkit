@@ -12,6 +12,7 @@ import {
   detectResourceFormat,
   validate,
   validateSkill,
+  type ValidateOptions,
   type ValidationResult,
 } from '@vibe-agent-toolkit/runtime-claude-skills';
 import { Command } from 'commander';
@@ -27,6 +28,7 @@ export interface AuditCommandOptions {
   recursive?: boolean;
   user?: boolean;
   verbose?: boolean; // Commander sets this for --verbose
+  warnUnreferencedFiles?: boolean; // Commander sets this for --warn-unreferenced-files
 }
 
 /**
@@ -42,6 +44,7 @@ export function createAuditCommand(): Command {
     .option('-r, --recursive', 'Scan directories recursively for all resource types')
     .option('--user', 'Audit user-level Claude plugins installation (~/.claude/plugins)')
     .option('--verbose', 'Show all scanned resources, including those without issues')
+    .option('--warn-unreferenced-files', 'Warn about files not referenced in skill markdown')
     .option('--debug', 'Enable debug logging')
     .action(auditCommand)
     .addHelpText(
@@ -64,6 +67,10 @@ Description:
   Default: current directory
   Use --user to audit user-level installation (~/.claude/plugins) automatically
 
+Validation Behavior:
+  Default: Validates SKILL.md and all transitively linked markdown files
+  --warn-unreferenced-files: Also detect files not referenced in skill
+
 Validation Checks:
   Errors (must fix):
   - Missing or invalid manifests/frontmatter
@@ -76,6 +83,7 @@ Validation Checks:
   Warnings (should fix):
   - Skill exceeds recommended length (>5000 lines)
   - References console-incompatible tools (Skills only)
+  - Unreferenced files detected (with --warn-unreferenced-files)
 
 Exit Codes:
   0 - Success  |  1 - Errors found  |  2 - System error
@@ -130,7 +138,7 @@ export async function auditCommand(
     }
 
     // Get validation results
-    const results = await getValidationResults(scanPath, recursive, logger);
+    const results = await getValidationResults(scanPath, recursive, options, logger);
 
     // Use hierarchical output for --user flag, flat output otherwise
     if (options.user) {
@@ -154,6 +162,7 @@ export async function auditCommand(
 async function getValidationResults(
   scanPath: string,
   recursive: boolean,
+  options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>
 ): Promise<ValidationResult[]> {
   const format = detectFormat(scanPath);
@@ -161,7 +170,11 @@ async function getValidationResults(
   // Special handling for direct SKILL.md file
   if (format === 'claude-skill') {
     logger.debug('Detected single Claude Skill');
-    const result = await validateSkill({ skillPath: scanPath });
+    const validateOptions: ValidateOptions = { skillPath: scanPath };
+    if (options.warnUnreferencedFiles) {
+      validateOptions.checkUnreferencedFiles = true;
+    }
+    const result = await validateSkill(validateOptions);
     return [result];
   }
 
@@ -169,7 +182,11 @@ async function getValidationResults(
   if (format === 'vat-agent') {
     const skillPath = path.join(scanPath, 'SKILL.md');
     logger.debug('Detected VAT agent, validating SKILL.md');
-    const result = await validateSkill({ skillPath, isVATGenerated: true });
+    const validateOptions: ValidateOptions = { skillPath, isVATGenerated: true };
+    if (options.warnUnreferencedFiles) {
+      validateOptions.checkUnreferencedFiles = true;
+    }
+    const result = await validateSkill(validateOptions);
     return [result];
   }
 
@@ -188,7 +205,7 @@ async function getValidationResults(
     const stat = await fs.stat(scanPath);
     if (stat.isDirectory()) {
       logger.debug('Scanning directory for resources');
-      return scanDirectory(scanPath, recursive, logger);
+      return scanDirectory(scanPath, recursive, options, logger);
     }
   } catch {
     // Path doesn't exist or not accessible, let validate() handle it
@@ -280,6 +297,7 @@ function logIssues(
 async function handleFileEntry(
   entry: { name: string },
   fullPath: string,
+  options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>
 ): Promise<ValidationResult | null> {
   // Check for registry files
@@ -291,7 +309,11 @@ async function handleFileEntry(
   // Check for SKILL.md
   if (entry.name === 'SKILL.md') {
     logger.debug(`Validating Claude Skill: ${fullPath}`);
-    return validateSkill({ skillPath: fullPath });
+    const validateOptions: ValidateOptions = { skillPath: fullPath };
+    if (options.warnUnreferencedFiles) {
+      validateOptions.checkUnreferencedFiles = true;
+    }
+    return validateSkill(validateOptions);
   }
 
   return null;
@@ -303,6 +325,7 @@ async function handleFileEntry(
 async function handleDirectoryEntry(
   fullPath: string,
   recursive: boolean,
+  options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>
 ): Promise<ValidationResult[]> {
   const fs = await import('node:fs/promises');
@@ -320,7 +343,7 @@ async function handleDirectoryEntry(
 
   // Recurse into subdirectories (both plugin/marketplace dirs and regular dirs)
   if (recursive) {
-    const subResults = await scanDirectory(fullPath, recursive, logger);
+    const subResults = await scanDirectory(fullPath, recursive, options, logger);
     results.push(...subResults);
   }
 
@@ -330,6 +353,7 @@ async function handleDirectoryEntry(
 async function scanDirectory(
   dirPath: string,
   recursive: boolean,
+  options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>
 ): Promise<ValidationResult[]> {
   const fs = await import('node:fs/promises');
@@ -341,12 +365,12 @@ async function scanDirectory(
     const fullPath = path.join(dirPath, entry.name);
 
     if (entry.isFile()) {
-      const result = await handleFileEntry(entry, fullPath, logger);
+      const result = await handleFileEntry(entry, fullPath, options, logger);
       if (result !== null) {
         results.push(result);
       }
     } else if (entry.isDirectory()) {
-      const dirResults = await handleDirectoryEntry(fullPath, recursive, logger);
+      const dirResults = await handleDirectoryEntry(fullPath, recursive, options, logger);
       results.push(...dirResults);
     }
   }
