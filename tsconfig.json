@@ -17,6 +17,7 @@
     { "path": "./packages/runtime-openai" },
     { "path": "./packages/runtime-claude-agent-sdk" },
     { "path": "./packages/transports" },
+    { "path": "./packages/gateway-mcp" },
     { "path": "./packages/cli" },
     { "path": "./packages/vat-example-cat-agents" }
   ]
