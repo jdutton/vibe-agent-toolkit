@@ -1,3 +1,13 @@
+/**
+ * No-op observability provider
+ *
+ * This file implements the Null Object pattern for observability.
+ * All methods are intentionally empty - they satisfy the interface
+ * contract without performing any operations.
+ *
+ * SonarQube: Empty methods are intentional (no-op pattern)
+ */
+
 import type {
   Counter,
   Histogram,
@@ -9,17 +19,17 @@ import type {
 } from '../types.js';
 
 class NoOpLogger implements Logger {
-  info(): void {}
-  error(): void {}
-  warn(): void {}
-  debug(): void {}
+  info(): void {} // NOSONAR - intentional no-op
+  error(): void {} // NOSONAR - intentional no-op
+  warn(): void {} // NOSONAR - intentional no-op
+  debug(): void {} // NOSONAR - intentional no-op
 }
 
 class NoOpSpan implements Span {
-  setAttribute(): void {}
-  recordException(): void {}
-  setStatus(): void {}
-  end(): void {}
+  setAttribute(): void {} // NOSONAR - intentional no-op
+  recordException(): void {} // NOSONAR - intentional no-op
+  setStatus(): void {} // NOSONAR - intentional no-op
+  end(): void {} // NOSONAR - intentional no-op
 }
 
 class NoOpTracer implements Tracer {
@@ -30,11 +40,11 @@ class NoOpTracer implements Tracer {
 }
 
 class NoOpCounter implements Counter {
-  add(): void {}
+  add(): void {} // NOSONAR - intentional no-op
 }
 
 class NoOpHistogram implements Histogram {
-  record(): void {}
+  record(): void {} // NOSONAR - intentional no-op
 }
 
 class NoOpMeter implements Meter {
