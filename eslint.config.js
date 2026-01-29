@@ -72,6 +72,9 @@ export default [
       'local/no-os-tmpdir': 'error',
       'local/no-fs-mkdirSync': 'error',
       'local/no-fs-realpathSync': 'error',
+      'local/no-manual-path-normalize': 'error',
+      'local/no-path-sep-in-strings': 'error',
+      'local/no-path-operations-in-comparisons': 'error',
 
       // TypeScript
       'no-unused-vars': 'off', // Use @typescript-eslint/no-unused-vars instead

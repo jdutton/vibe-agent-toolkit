@@ -2,25 +2,58 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { parseMarkdown } from '@vibe-agent-toolkit/resources';
+import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { parseFrontmatter } from '../parsers/frontmatter-parser.js';
 import { ClaudeSkillFrontmatterSchema, VATClaudeSkillFrontmatterSchema } from '../schemas/claude-skill-frontmatter.js';
 
-import type { ValidateOptions, ValidationIssue, ValidationResult } from './types.js';
+import type { LinkedFileValidationResult, ValidateOptions, ValidationIssue, ValidationResult } from './types.js';
 
 // Location constants for validation messages
 const FRONTMATTER_LOC = 'frontmatter';
 const FRONTMATTER_NAME_LOC = 'frontmatter.name';
 const FRONTMATTER_DESC_LOC = 'frontmatter.description';
 
+// Directories to ignore when checking for unreferenced files
+const IGNORED_DIRS = new Set([
+  // Dependencies
+  'node_modules',
+  'venv', '.venv', 'env', '.env',
+  '__pycache__',
+  'site-packages',
+  '.tox',
+
+  // Build artifacts
+  'dist', 'build', '.next', 'out',
+  'target',
+  '.turbo', '.parcel-cache',
+
+  // Version control
+  '.git', '.github', '.gitlab',
+  '.svn', '.hg',
+
+  // IDE
+  '.vscode', '.idea', '.vs',
+]);
+
+// Files to ignore when checking for unreferenced files
+const IGNORED_FILES = new Set([
+  '.DS_Store', 'Thumbs.db',
+  '.gitignore', '.dockerignore',
+  '.eslintrc', '.prettierrc',
+  'package-lock.json', 'bun.lockb',
+  'poetry.lock', 'Pipfile.lock',
+  '.tsbuildinfo',
+]);
+
 /**
- * Validate a Claude Skill (SKILL.md file)
+ * Validate a Claude Skill (SKILL.md file) with transitive validation of linked markdown files
  *
  * @param options - Validation options
- * @returns Validation result with issues
+ * @returns Validation result with issues from SKILL.md and all transitively linked markdown files
  */
 export async function validateSkill(options: ValidateOptions): Promise<ValidationResult> {
-  const { skillPath, rootDir = path.dirname(skillPath), isVATGenerated = false } = options;
+  const { skillPath, rootDir = path.dirname(skillPath), isVATGenerated = false, checkUnreferencedFiles = false } = options;
 
   const issues: ValidationIssue[] = [];
 
@@ -68,16 +101,43 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   // Additional validation rules
   validateAdditionalRules(frontmatter, issues);
 
-  // Extract and validate links
-  await validateLinks(skillPath, rootDir, issues);
+  // Extract and validate links transitively
+  const linkedFiles = await validateLinksTransitively(skillPath, rootDir, issues);
 
   // Check warning-level rules
   validateWarningRules(content, lineCount, skillPath, issues);
 
+  // Check for unreferenced files if enabled
+  if (checkUnreferencedFiles) {
+    const skillDir = path.dirname(skillPath);
+    // Collect all markdown content for reference detection
+    const allMarkdownContent = [content];
+    for (const linkedFile of linkedFiles) {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- linkedFile.path comes from validated links
+      if (fs.existsSync(linkedFile.path)) {
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- linkedFile.path validated above
+        allMarkdownContent.push(fs.readFileSync(linkedFile.path, 'utf-8'));
+      }
+    }
+    await detectUnreferencedFiles(skillDir, allMarkdownContent.join('\n'), issues);
+  }
+
   // Build metadata object
   const metadata = buildMetadata(frontmatter, lineCount);
 
-  return buildResult(skillPath, isVATGenerated, issues, metadata);
+  // Update metadata with reference file count
+  if (linkedFiles.length > 0 && metadata) {
+    metadata.referenceFiles = linkedFiles.length;
+  }
+
+  const result = buildResult(skillPath, isVATGenerated, issues, metadata);
+
+  // Add linked files if any were validated
+  if (linkedFiles.length > 0) {
+    result.linkedFiles = linkedFiles;
+  }
+
+  return result;
 }
 
 function validateFrontmatterSchema(
@@ -190,32 +250,239 @@ function validateAdditionalRules(
 }
 
 /**
- * Extract and validate links from markdown file using proper parser
- *
- * Uses unified/remark parser which automatically handles:
- * - Code blocks (links inside code blocks are NOT extracted)
- * - Reference-style links
- * - Complex markdown structures
+ * Process links from the main SKILL.md file.
+ * Validates each link and adds valid markdown files to the processing queue.
  */
-async function validateLinks(
+async function processSkillFileLinks(
   skillPath: string,
   rootDir: string,
-  issues: ValidationIssue[]
+  issues: ValidationIssue[],
+  queue: string[]
 ): Promise<void> {
-  // Parse markdown with proper parser (automatically skips code blocks)
   const parsed = await parseMarkdown(skillPath);
-
-  // Filter to only local file links (skip external URLs, anchors, emails)
   const localLinks = parsed.links.filter(link => link.type === 'local_file');
 
   for (const link of localLinks) {
+    const resolvedPath = resolveLinkPath(link.href, skillPath, rootDir);
+
     validateSingleLink(
       { text: link.text, path: link.href, line: link.line ?? 0 },
       skillPath,
       rootDir,
       issues
     );
+
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolvedPath is constructed from validated inputs
+    if (resolvedPath && isMarkdownFile(resolvedPath) && fs.existsSync(resolvedPath)) {
+      queue.push(resolvedPath);
+    }
   }
+}
+
+/**
+ * Process the queue of linked markdown files using BFS traversal.
+ * Validates each file and collects links for further processing.
+ */
+async function processLinkedFilesQueue(
+  queue: string[],
+  validatedFiles: Set<string>,
+  linkedFileResults: LinkedFileValidationResult[],
+  rootDir: string
+): Promise<void> {
+  while (queue.length > 0) {
+    const currentFilePath = queue.shift();
+    if (!currentFilePath || validatedFiles.has(currentFilePath)) {
+      continue;
+    }
+
+    validatedFiles.add(currentFilePath);
+
+    const fileResult = await validateLinkedMarkdownFile(currentFilePath, rootDir);
+    linkedFileResults.push(fileResult);
+
+    await collectLinksFromFile(currentFilePath, rootDir, queue);
+  }
+}
+
+/**
+ * Extract and collect links from a linked markdown file.
+ * Adds valid markdown file links to the processing queue.
+ */
+async function collectLinksFromFile(
+  filePath: string,
+  rootDir: string,
+  queue: string[]
+): Promise<void> {
+  try {
+    const parsed = await parseMarkdown(filePath);
+    const localLinks = parsed.links.filter(link => link.type === 'local_file');
+
+    for (const link of localLinks) {
+      const resolvedPath = resolveLinkPath(link.href, filePath, rootDir);
+
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolvedPath is constructed from validated inputs
+      if (resolvedPath && isMarkdownFile(resolvedPath) && fs.existsSync(resolvedPath)) {
+        queue.push(resolvedPath);
+      }
+    }
+  } catch {
+    // If we can't parse the file, skip collecting its links
+    // (error already recorded in file validation)
+  }
+}
+
+/**
+ * Validate links transitively, starting from SKILL.md and following all local markdown links.
+ *
+ * Uses BFS to traverse the link graph and validates each linked markdown file.
+ * Tracks validated files to avoid re-processing and handle circular references.
+ *
+ * @param skillPath - Path to SKILL.md
+ * @param rootDir - Root directory for resolving links
+ * @issues - Issues array to append SKILL.md link validation issues
+ * @returns Array of validation results for all linked markdown files
+ */
+async function validateLinksTransitively(
+  skillPath: string,
+  rootDir: string,
+  issues: ValidationIssue[]
+): Promise<LinkedFileValidationResult[]> {
+  const linkedFileResults: LinkedFileValidationResult[] = [];
+  const validatedFiles = new Set<string>(); // Track validated files by absolute path
+  const queue: string[] = []; // Queue of markdown files to process
+
+  // Parse SKILL.md and validate/collect its links
+  await processSkillFileLinks(skillPath, rootDir, issues, queue);
+
+  // BFS traversal of linked markdown files
+  await processLinkedFilesQueue(queue, validatedFiles, linkedFileResults, rootDir);
+
+  return linkedFileResults;
+}
+
+/**
+ * Validate a single linked markdown file (not SKILL.md).
+ *
+ * Checks link integrity and collects statistics about the file.
+ *
+ * @param filePath - Absolute path to the markdown file
+ * @param rootDir - Root directory for resolving links
+ * @returns Validation result with issues and metadata
+ */
+async function validateLinkedMarkdownFile(
+  filePath: string,
+  rootDir: string
+): Promise<LinkedFileValidationResult> {
+  const fileIssues: ValidationIssue[] = [];
+
+  // Read file
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is validated before calling
+  if (!fs.existsSync(filePath)) {
+    return {
+      path: filePath,
+      lineCount: 0,
+      linksFound: 0,
+      linksValidated: 0,
+      issues: [{
+        severity: 'error',
+        code: 'LINK_INTEGRITY_BROKEN',
+        message: 'File does not exist',
+        location: filePath,
+      }],
+    };
+  }
+
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath validated above
+  const content = fs.readFileSync(filePath, 'utf-8');
+  const lineCount = content.split('\n').length;
+
+  // Parse markdown
+  let parsed;
+  try {
+    parsed = await parseMarkdown(filePath);
+  } catch (error) {
+    return {
+      path: filePath,
+      lineCount,
+      linksFound: 0,
+      linksValidated: 0,
+      issues: [{
+        severity: 'error',
+        code: 'LINK_INTEGRITY_BROKEN',
+        message: `Failed to parse markdown: ${error instanceof Error ? error.message : String(error)}`,
+        location: filePath,
+      }],
+    };
+  }
+
+  // Filter to local file links
+  const localLinks = parsed.links.filter(link => link.type === 'local_file');
+  const linksFound = localLinks.length;
+  let linksValidated = 0;
+
+  // Validate each link
+  for (const link of localLinks) {
+    const beforeCount = fileIssues.length;
+    validateSingleLink(
+      { text: link.text, path: link.href, line: link.line ?? 0 },
+      filePath,
+      rootDir,
+      fileIssues
+    );
+    // If no issue was added, the link is valid
+    if (fileIssues.length === beforeCount) {
+      linksValidated++;
+    }
+  }
+
+  // Check warning-level rules
+  validateWarningRules(content, lineCount, filePath, fileIssues);
+
+  return {
+    path: filePath,
+    lineCount,
+    linksFound,
+    linksValidated,
+    issues: fileIssues,
+  };
+}
+
+/**
+ * Resolve a link path to an absolute path.
+ *
+ * @param linkHref - The raw href from the markdown link
+ * @param sourceFile - The file containing the link
+ * @param rootDir - Root directory for absolute links
+ * @returns Resolved absolute path, or undefined if the link is not a local file
+ */
+function resolveLinkPath(linkHref: string, sourceFile: string, rootDir: string): string | undefined {
+  // Skip external and anchor links
+  if (linkHref.startsWith('http://') || linkHref.startsWith('https://') || linkHref.startsWith('#')) {
+    return undefined;
+  }
+
+  // Skip Windows-style paths (they'll be caught by validation)
+  if (linkHref.includes('\\')) {
+    return undefined;
+  }
+
+  // Resolve absolute or relative path
+  if (linkHref.startsWith('/')) {
+    return path.join(rootDir, linkHref);
+  }
+
+  return path.resolve(path.dirname(sourceFile), linkHref);
+}
+
+/**
+ * Check if a file path is a markdown file.
+ *
+ * @param filePath - File path to check
+ * @returns True if the file has a markdown extension
+ */
+function isMarkdownFile(filePath: string): boolean {
+  const ext = path.extname(filePath).toLowerCase();
+  return ext === '.md' || ext === '.markdown';
 }
 
 function validateSingleLink(
@@ -353,4 +620,112 @@ function buildResult(
   }
 
   return result;
+}
+
+/**
+ * Detect files in skill directory that aren't referenced in any markdown content
+ *
+ * @param skillDir - Root directory of the skill
+ * @param markdownContent - All validated markdown content
+ * @param issues - Array to append issues to
+ */
+async function detectUnreferencedFiles(
+  skillDir: string,
+  markdownContent: string,
+  issues: ValidationIssue[]
+): Promise<void> {
+  // Get all files in skill directory recursively
+  const allFiles = enumerateFiles(skillDir);
+
+  // Filter files through smart filtering
+  const candidateFiles = allFiles.filter(filePath => {
+    const relativePath = path.relative(skillDir, filePath);
+    const pathParts = toForwardSlash(relativePath).split('/');
+
+    // Check if any part of the path is an ignored directory
+    if (pathParts.some(part => IGNORED_DIRS.has(part))) {
+      return false;
+    }
+
+    // Check if filename is ignored
+    const fileName = path.basename(filePath);
+    if (IGNORED_FILES.has(fileName)) {
+      return false;
+    }
+
+    return true;
+  });
+
+  // Check each candidate file for references in markdown content
+  for (const filePath of candidateFiles) {
+    const relativePath = path.relative(skillDir, filePath);
+
+    if (!isReferencedInContent(relativePath, markdownContent)) {
+      issues.push({
+        severity: 'info',
+        code: 'SKILL_UNREFERENCED_FILE',
+        message: `File not referenced in any skill markdown: ${relativePath}`,
+        location: filePath,
+        fix: 'Add reference to file or remove if unused',
+      });
+    }
+  }
+}
+
+/**
+ * Recursively enumerate all files in a directory
+ *
+ * @param dir - Directory to enumerate
+ * @returns Array of absolute file paths
+ */
+function enumerateFiles(dir: string): string[] {
+  const results: string[] = [];
+
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- dir is from validated skill path
+  if (!fs.existsSync(dir)) {
+    return results;
+  }
+
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- dir validated above
+  const entries = fs.readdirSync(dir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const fullPath = path.join(dir, entry.name);
+
+    if (entry.isDirectory()) {
+      // Recursively enumerate subdirectory
+      results.push(...enumerateFiles(fullPath));
+    } else if (entry.isFile()) {
+      results.push(fullPath);
+    }
+  }
+
+  return results;
+}
+
+/**
+ * Check if a file path is referenced in markdown content
+ *
+ * @param relativePath - Relative path from skill directory
+ * @param content - Markdown content to search
+ * @returns True if path appears in content
+ */
+function isReferencedInContent(relativePath: string, content: string): boolean {
+  // Normalize path to forward slashes for cross-platform compatibility
+  // (markdown always uses forward slashes, but path.relative() uses OS separators)
+  const normalizedPath = toForwardSlash(relativePath);
+
+  // Generate variations of the path to check
+  const variations = [
+    normalizedPath,                    // bare: scripts/build.sh
+    `\`${normalizedPath}\``,          // backtick: `scripts/build.sh`
+    `"${normalizedPath}"`,            // double quote
+    `'${normalizedPath}'`,            // single quote
+    `./${normalizedPath}`,            // relative prefix
+    ` ${normalizedPath} `,            // with spaces
+    ` ${normalizedPath}`,
+    `${normalizedPath} `,
+  ];
+
+  return variations.some(v => content.includes(v));
 }

@@ -10,6 +10,7 @@ export { validate } from './unified-validator.js';
 export type {
 	IssueCode,
 	IssueSeverity,
+	LinkedFileValidationResult,
 	ResourceFormat,
 	ValidateOptions,
 	ValidationIssue,

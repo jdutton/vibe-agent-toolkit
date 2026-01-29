@@ -37,7 +37,8 @@ export type IssueCode =
   // Info
   | 'FILE_STRUCTURE_REPORT'
   | 'RESOURCE_INVENTORY'
-  | 'METADATA_SUMMARY';
+  | 'METADATA_SUMMARY'
+  | 'SKILL_UNREFERENCED_FILE';
 
 export interface ValidationIssue {
   severity: IssueSeverity;
@@ -60,6 +61,24 @@ export interface ValidationResult {
     lineCount?: number;
     referenceFiles?: number;
   };
+  /** Validation results for transitively linked markdown files */
+  linkedFiles?: LinkedFileValidationResult[];
+}
+
+/**
+ * Validation result for a single linked markdown file (not SKILL.md)
+ */
+export interface LinkedFileValidationResult {
+  /** Absolute path to the linked file */
+  path: string;
+  /** Line count of the file */
+  lineCount: number;
+  /** Number of links found in this file */
+  linksFound: number;
+  /** Number of links successfully validated */
+  linksValidated: number;
+  /** Issues found in this file */
+  issues: ValidationIssue[];
 }
 
 export interface ValidateOptions {
@@ -71,6 +90,9 @@ export interface ValidateOptions {
 
   /** Treat as VAT-generated skill (stricter validation) */
   isVATGenerated?: boolean;
+
+  /** Check for files in skill directory that aren't referenced in markdown content */
+  checkUnreferencedFiles?: boolean;
 }
 
 /**

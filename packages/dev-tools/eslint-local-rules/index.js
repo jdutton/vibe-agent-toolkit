@@ -42,5 +42,8 @@ export default {
     'no-os-tmpdir': require('./no-os-tmpdir.cjs'),
     'no-fs-mkdirSync': require('./no-fs-mkdirSync.cjs'),
     'no-fs-realpathSync': require('./no-fs-realpathSync.cjs'),
+    'no-manual-path-normalize': require('./no-manual-path-normalize.cjs'),
+    'no-path-sep-in-strings': require('./no-path-sep-in-strings.cjs'),
+    'no-path-operations-in-comparisons': require('./no-path-operations-in-comparisons.cjs'),
   },
 };

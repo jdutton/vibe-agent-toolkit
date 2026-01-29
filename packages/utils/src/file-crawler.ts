@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import type { Ignore } from 'ignore';
 import picomatch from 'picomatch';
 
@@ -124,7 +125,7 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     if (gitignoreChecker && gitRoot) {
       // Get path relative to git root for gitignore checking
       const relativeToGitRoot = path.relative(gitRoot, fullPath);
-      const normalizedGitPath = relativeToGitRoot.split(path.sep).join('/');
+      const normalizedGitPath = toForwardSlash(relativeToGitRoot);
 
       if (gitignoreChecker.ignores(normalizedGitPath)) {
         return true;
@@ -205,7 +206,7 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     for (const entry of entries) {
       const fullPath = path.join(currentDir, entry.name);
       const relativePath = path.relative(resolvedBaseDir, fullPath);
-      const normalizedPath = relativePath.split(path.sep).join('/');
+      const normalizedPath = toForwardSlash(relativePath);
 
       // Skip excluded paths
       if (shouldExclude(normalizedPath, fullPath)) {
