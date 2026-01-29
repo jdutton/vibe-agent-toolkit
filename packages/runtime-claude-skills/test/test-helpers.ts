@@ -8,7 +8,7 @@ import { afterEach, beforeEach, expect } from 'vitest';
 import type { z } from 'zod';
 
 import { validateSkill } from '../src/validators/skill-validator.js';
-import type { ValidationResult } from '../src/validators/types.js';
+import type { LinkedFileValidationResult, ValidationResult } from '../src/validators/types.js';
 
 /**
  * Setup temporary directory for tests
@@ -40,6 +40,134 @@ export async function createSkillAndValidate(
   const skillPath = path.join(tempDir, 'SKILL.md');
   fs.writeFileSync(skillPath, content);
   return validateSkill({ skillPath });
+}
+
+/**
+ * Create a transitive skill structure with linked markdown files
+ *
+ * @param tempDir - Base directory for skill
+ * @param files - Map of relative paths to file contents
+ * @param skillBody - Body content for SKILL.md (will auto-generate frontmatter)
+ * @returns Object with paths to created files
+ */
+export function createTransitiveSkillStructure(
+  tempDir: string,
+  files: Record<string, string>,
+  skillBody: string,
+): { skillPath: string; filePaths: Record<string, string> } {
+  // Create directories and files
+  const filePaths: Record<string, string> = {};
+
+  for (const [relativePath, content] of Object.entries(files)) {
+    const fullPath = path.join(tempDir, relativePath);
+    const dir = path.dirname(fullPath);
+
+    if (dir !== tempDir) {
+      mkdirSyncReal(dir, { recursive: true });
+    }
+
+    fs.writeFileSync(fullPath, content);
+    filePaths[relativePath] = fullPath;
+  }
+
+  // Create SKILL.md
+  const skillPath = path.join(tempDir, 'SKILL.md');
+  fs.writeFileSync(skillPath, skillBody);
+
+  return { skillPath, filePaths };
+}
+
+/**
+ * Validate a skill with transitive link validation enabled
+ *
+ * @param skillPath - Path to SKILL.md
+ * @param rootDir - Root directory for resolving links
+ * @returns Validation result
+ */
+export async function validateSkillWithTransitiveChecking(
+  skillPath: string,
+  rootDir?: string,
+): Promise<ValidationResult> {
+  return validateSkill({
+    skillPath,
+    rootDir: rootDir ?? path.dirname(skillPath),
+  });
+}
+
+/**
+ * Validate a skill with unreferenced file detection enabled
+ *
+ * @param skillPath - Path to SKILL.md
+ * @param rootDir - Root directory for scanning files
+ * @returns Validation result
+ */
+export async function validateSkillWithUnreferencedFileCheck(
+  skillPath: string,
+  rootDir: string,
+): Promise<ValidationResult> {
+  return validateSkill({
+    skillPath,
+    rootDir,
+    checkUnreferencedFiles: true,
+  });
+}
+
+/**
+ * Create and validate a transitive skill structure (convenience method)
+ *
+ * @param tempDir - Base directory for skill
+ * @param files - Map of relative paths to file contents
+ * @param skillBody - Body content for SKILL.md
+ * @returns Validation result and file paths
+ */
+export async function createAndValidateTransitiveSkill(
+  tempDir: string,
+  files: Record<string, string>,
+  skillBody: string,
+): Promise<{ result: ValidationResult; skillPath: string; filePaths: Record<string, string> }> {
+  const { skillPath, filePaths } = createTransitiveSkillStructure(tempDir, files, skillBody);
+  const result = await validateSkillWithTransitiveChecking(skillPath, tempDir);
+  return { result, skillPath, filePaths };
+}
+
+/**
+ * Create and validate a simple single-resource skill structure
+ * All of these tests follow the pattern: SKILL.md → resources/core.md
+ *
+ * @param tempDir - Base directory for skill
+ * @param coreContent - Content for resources/core.md
+ * @param skillName - Skill name (defaults to TEST_SKILL_NAME from tests)
+ * @param skillDesc - Skill description (defaults to TEST_SKILL_DESC from tests)
+ * @returns Validation result, first linked file result, and file paths
+ */
+export async function createAndValidateSingleResourceSkill(
+  tempDir: string,
+  coreContent: string,
+  additionalFiles: Record<string, string> = {},
+  skillName = 'test-skill',
+  skillDesc = 'Test skill',
+): Promise<{
+  result: ValidationResult;
+  coreResult: LinkedFileValidationResult | undefined;
+  filePaths: Record<string, string>;
+}> {
+  const files = {
+    'resources/core.md': coreContent,
+    ...additionalFiles,
+  };
+
+  const skillBody = createSkillContent(
+    { name: skillName, description: skillDesc },
+    `\n# Test Skill\n\nSee [core](./resources/core.md).`,
+  );
+
+  const { result, filePaths } = await createAndValidateTransitiveSkill(tempDir, files, skillBody);
+
+  return {
+    result,
+    coreResult: result.linkedFiles?.[0],
+    filePaths,
+  };
 }
 
 /**
