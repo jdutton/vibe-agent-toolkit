@@ -34,6 +34,10 @@ validation:
           command: 'bun run validate-structure'
           description: 'Validates repo structure conventions (no runtime /examples, no /staging, etc.)'
 
+        - name: 'Package publish readiness'
+          command: 'bun run pre-publish -- --skip-git-checks'
+          description: 'Validates packages are ready for publishing (metadata, files, workspace deps, etc.)'
+
         - name: 'Documentation validation'
           command: 'bun run vat resources validate'
           description: 'Validates markdown link integrity across entire project'

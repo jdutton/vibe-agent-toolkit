@@ -35,5 +35,11 @@
     "cli",
     "websocket"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jdutton/vibe-agent-toolkit.git",
+    "directory": "packages/transports"
+  },
+  "author": "Jeff Dutton",
   "license": "MIT"
 }

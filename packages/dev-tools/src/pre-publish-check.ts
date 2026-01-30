@@ -11,10 +11,11 @@
  * 7. All packages are built
  * 8. Workspace dependencies are correct
  * 9. All packages have proper "files" field
+ * 10. All packages have required metadata (repository, author, license)
  *
  * Usage:
- *   tsx tools/pre-publish-check.ts [--allow-branch BRANCH]
- *   bun run pre-publish [--allow-branch BRANCH]
+ *   tsx tools/pre-publish-check.ts [--allow-branch BRANCH] [--skip-git-checks]
+ *   bun run pre-publish [--allow-branch BRANCH] [--skip-git-checks]
  *
  * Exit codes:
  *   0 - Ready to publish
@@ -76,6 +77,7 @@ const IS_CI = isCI();
 const args = process.argv.slice(2);
 let allowedBranch = 'main';
 let allowCustomBranch = false;
+let skipGitChecks = false;
 
 let i = 0;
 while (i < args.length) {
@@ -84,6 +86,9 @@ while (i < args.length) {
     allowedBranch = nextArg;
     allowCustomBranch = true;
     i += 2;
+  } else if (args[i] === '--skip-git-checks') {
+    skipGitChecks = true;
+    i += 1;
   } else if (args[i] === '--help' || args[i] === '-h') {
     console.log(`
 Pre-Publish Validation Check
@@ -94,6 +99,8 @@ Usage:
 
 Options:
   --allow-branch BRANCH  Allow publishing from a specific branch (default: main)
+  --skip-git-checks      Skip git-related checks (branch, uncommitted changes, untracked files)
+                         Use this when running in vibe-validate during development
   --help, -h             Show this help message
 
 Exit codes:
@@ -130,8 +137,8 @@ try {
 }
 
 // Check 2: Current branch (skip in CI - uses detached HEAD on tag checkout)
-if (IS_CI) {
-  log('⊘ Branch check skipped (CI mode)', 'yellow');
+if (IS_CI || skipGitChecks) {
+  log('⊘ Branch check skipped (CI mode or --skip-git-checks)', 'yellow');
 } else {
   let currentBranch: string;
   try {
@@ -166,8 +173,8 @@ if (IS_CI) {
 }
 
 // Check 3: Working tree is clean (skip in CI - always starts with clean checkout)
-if (IS_CI) {
-  log('⊘ Uncommitted changes check skipped (CI mode)', 'yellow');
+if (IS_CI || skipGitChecks) {
+  log('⊘ Uncommitted changes check skipped (CI mode or --skip-git-checks)', 'yellow');
 } else {
   const result = safeExecResult('git', ['diff-index', '--quiet', 'HEAD', '--'], { stdio: 'pipe' });
   const hasUncommittedChanges = !result.success;
@@ -194,8 +201,8 @@ if (IS_CI) {
 }
 
 // Check 4: No untracked files (skip in CI - not applicable)
-if (IS_CI) {
-  log('⊘ Untracked files check skipped (CI mode)', 'yellow');
+if (IS_CI || skipGitChecks) {
+  log('⊘ Untracked files check skipped (CI mode or --skip-git-checks)', 'yellow');
 } else {
   const untrackedResult = safeExecResult('git', ['ls-files', '--others', '--exclude-standard'], {
     encoding: 'utf8',
@@ -237,22 +244,26 @@ if (IS_CI) {
   log('✓ No untracked files', 'green');
 }
 
-// Check 5: Run validation
-console.log('');
-console.log('Running validation checks...');
-
-try {
-  safeExecSync('bun', ['run', 'validate'], { stdio: 'inherit', cwd: PROJECT_ROOT });
-  log('✓ All validation checks passed', 'green');
-} catch (error) {
+// Check 5: Run validation (skip when called from within vibe-validate)
+if (skipGitChecks) {
+  log('⊘ Validation check skipped (already running in vibe-validate)', 'yellow');
+} else {
   console.log('');
-  log('✗ Validation failed', 'red');
-  console.log('  Check the output above and fix all issues before publishing');
-  const message = error instanceof Error ? error.message : '';
-  if (message.includes('ENOENT')) {
-    console.log('  (bun not found - install bun to run validation)');
+  console.log('Running validation checks...');
+
+  try {
+    safeExecSync('bun', ['run', 'validate'], { stdio: 'inherit', cwd: PROJECT_ROOT });
+    log('✓ All validation checks passed', 'green');
+  } catch (error) {
+    console.log('');
+    log('✗ Validation failed', 'red');
+    console.log('  Check the output above and fix all issues before publishing');
+    const message = error instanceof Error ? error.message : '';
+    if (message.includes('ENOENT')) {
+      console.log('  (bun not found - install bun to run validation)');
+    }
+    process.exit(1);
   }
-  process.exit(1);
 }
 
 // Check 6: Package list synchronization
@@ -430,6 +441,73 @@ try {
   log('✓ All packages have proper "files" configuration', 'green');
 } catch (error) {
   log('✗ Failed to check package files configuration', 'red');
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(message);
+  process.exit(1);
+}
+
+// Check 10: Required package metadata (repository, author, license)
+console.log('');
+console.log('Checking required package metadata...');
+
+try {
+  const publishablePackages = getPublishablePackages(packagesDir);
+  const missingMetadata: Array<{ pkg: string; missing: string[] }> = [];
+
+  for (const { name: pkg, pkgJson } of publishablePackages) {
+    const missing: string[] = [];
+
+    // Check for repository field
+    const repository = pkgJson['repository'];
+    if (!repository) {
+      missing.push('repository');
+    } else if (typeof repository === 'object') {
+      const repoObj = repository as Record<string, unknown>;
+      if (!repoObj['url']) {
+        missing.push('repository.url');
+      }
+    }
+
+    // Check for author field
+    if (!pkgJson['author']) {
+      missing.push('author');
+    }
+
+    // Check for license field
+    if (!pkgJson['license']) {
+      missing.push('license');
+    }
+
+    if (missing.length > 0) {
+      missingMetadata.push({ pkg, missing });
+    }
+  }
+
+  if (missingMetadata.length > 0) {
+    log('✗ Some packages missing required metadata', 'red');
+    console.log('');
+    console.log('  Packages with missing fields:');
+    for (const { pkg, missing } of missingMetadata) {
+      console.log(`    ${pkg}:`);
+      for (const field of missing) {
+        console.log(`      - ${field}`);
+      }
+    }
+    console.log('');
+    console.log('  Add these fields to package.json:');
+    console.log('    "repository": {');
+    console.log('      "type": "git",');
+    console.log('      "url": "https://github.com/jdutton/vibe-agent-toolkit.git",');
+    console.log('      "directory": "packages/PACKAGE_NAME"');
+    console.log('    },');
+    console.log('    "author": "Jeff Dutton",');
+    console.log('    "license": "MIT"');
+    process.exit(1);
+  }
+
+  log('✓ All packages have required metadata', 'green');
+} catch (error) {
+  log('✗ Failed to check package metadata', 'red');
   const message = error instanceof Error ? error.message : String(error);
   console.error(message);
   process.exit(1);
