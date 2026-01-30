@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/discovery",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Intelligent file discovery for VAT agents and Claude Skills",
   "type": "module",
   "main": "./dist/index.js",
@@ -30,6 +30,9 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/jdutton/vibe-agent-toolkit.git"
-  }
+    "url": "https://github.com/jdutton/vibe-agent-toolkit.git",
+    "directory": "packages/discovery"
+  },
+  "author": "Jeff Dutton",
+  "license": "MIT"
 }

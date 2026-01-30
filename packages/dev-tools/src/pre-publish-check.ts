@@ -2,14 +2,20 @@
  * Pre-Publish Validation Check
  *
  * This script ensures the repository is in a publishable state:
- * 1. No uncommitted changes (clean working tree)
- * 2. No untracked files (except allowed patterns)
- * 3. All validation checks pass
- * 4. On main branch (or explicitly allow other branches)
+ * 1. Git repository exists
+ * 2. On main branch (or explicitly allow other branches)
+ * 3. No uncommitted changes (clean working tree)
+ * 4. No untracked files (except allowed patterns)
+ * 5. All validation checks pass
+ * 6. Package list synchronized with publish script
+ * 7. All packages are built
+ * 8. Workspace dependencies are correct
+ * 9. All packages have proper "files" field
+ * 10. All packages have required metadata (repository, author, license)
  *
  * Usage:
- *   tsx tools/pre-publish-check.ts [--allow-branch BRANCH]
- *   bun run pre-publish [--allow-branch BRANCH]
+ *   tsx tools/pre-publish-check.ts [--allow-branch BRANCH] [--skip-git-checks]
+ *   bun run pre-publish [--allow-branch BRANCH] [--skip-git-checks]
  *
  * Exit codes:
  *   0 - Ready to publish
@@ -23,6 +29,7 @@ import { readdirSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { PROJECT_ROOT, log, safeExecSync, safeExecResult } from './common.js';
+import { getMissingPackages } from './validate-package-list.js';
 
 /**
  * Detect if running in CI environment
@@ -70,6 +77,7 @@ const IS_CI = isCI();
 const args = process.argv.slice(2);
 let allowedBranch = 'main';
 let allowCustomBranch = false;
+let skipGitChecks = false;
 
 let i = 0;
 while (i < args.length) {
@@ -78,6 +86,9 @@ while (i < args.length) {
     allowedBranch = nextArg;
     allowCustomBranch = true;
     i += 2;
+  } else if (args[i] === '--skip-git-checks') {
+    skipGitChecks = true;
+    i += 1;
   } else if (args[i] === '--help' || args[i] === '-h') {
     console.log(`
 Pre-Publish Validation Check
@@ -88,6 +99,8 @@ Usage:
 
 Options:
   --allow-branch BRANCH  Allow publishing from a specific branch (default: main)
+  --skip-git-checks      Skip git-related checks (branch, uncommitted changes, untracked files)
+                         Use this when running in vibe-validate during development
   --help, -h             Show this help message
 
 Exit codes:
@@ -124,8 +137,8 @@ try {
 }
 
 // Check 2: Current branch (skip in CI - uses detached HEAD on tag checkout)
-if (IS_CI) {
-  log('⊘ Branch check skipped (CI mode)', 'yellow');
+if (IS_CI || skipGitChecks) {
+  log('⊘ Branch check skipped (CI mode or --skip-git-checks)', 'yellow');
 } else {
   let currentBranch: string;
   try {
@@ -160,8 +173,8 @@ if (IS_CI) {
 }
 
 // Check 3: Working tree is clean (skip in CI - always starts with clean checkout)
-if (IS_CI) {
-  log('⊘ Uncommitted changes check skipped (CI mode)', 'yellow');
+if (IS_CI || skipGitChecks) {
+  log('⊘ Uncommitted changes check skipped (CI mode or --skip-git-checks)', 'yellow');
 } else {
   const result = safeExecResult('git', ['diff-index', '--quiet', 'HEAD', '--'], { stdio: 'pipe' });
   const hasUncommittedChanges = !result.success;
@@ -188,8 +201,8 @@ if (IS_CI) {
 }
 
 // Check 4: No untracked files (skip in CI - not applicable)
-if (IS_CI) {
-  log('⊘ Untracked files check skipped (CI mode)', 'yellow');
+if (IS_CI || skipGitChecks) {
+  log('⊘ Untracked files check skipped (CI mode or --skip-git-checks)', 'yellow');
 } else {
   const untrackedResult = safeExecResult('git', ['ls-files', '--others', '--exclude-standard'], {
     encoding: 'utf8',
@@ -231,29 +244,63 @@ if (IS_CI) {
   log('✓ No untracked files', 'green');
 }
 
-// Check 5: Run validation
+// Check 5: Run validation (skip when called from within vibe-validate)
+if (skipGitChecks) {
+  log('⊘ Validation check skipped (already running in vibe-validate)', 'yellow');
+} else {
+  console.log('');
+  console.log('Running validation checks...');
+
+  try {
+    safeExecSync('bun', ['run', 'validate'], { stdio: 'inherit', cwd: PROJECT_ROOT });
+    log('✓ All validation checks passed', 'green');
+  } catch (error) {
+    console.log('');
+    log('✗ Validation failed', 'red');
+    console.log('  Check the output above and fix all issues before publishing');
+    const message = error instanceof Error ? error.message : '';
+    if (message.includes('ENOENT')) {
+      console.log('  (bun not found - install bun to run validation)');
+    }
+    process.exit(1);
+  }
+}
+
+// Check 6: Package list synchronization
 console.log('');
-console.log('Running validation checks...');
+console.log('Checking package list synchronization...');
+
+const packagesDir = join(PROJECT_ROOT, 'packages');
 
 try {
-  safeExecSync('bun', ['run', 'validate'], { stdio: 'inherit', cwd: PROJECT_ROOT });
-  log('✓ All validation checks passed', 'green');
-} catch (error) {
-  console.log('');
-  log('✗ Validation failed', 'red');
-  console.log('  Check the output above and fix all issues before publishing');
-  const message = error instanceof Error ? error.message : '';
-  if (message.includes('ENOENT')) {
-    console.log('  (bun not found - install bun to run validation)');
+  const missingPackages = getMissingPackages(PROJECT_ROOT);
+
+  if (missingPackages.length > 0) {
+    log('✗ Package list out of sync!', 'red');
+    console.log('');
+    console.log('  The following packages exist in packages/ but are not declared:');
+    for (const pkg of missingPackages) {
+      console.log(`    ${pkg}`);
+    }
+    console.log('');
+    console.log('  Update packages/dev-tools/src/package-lists.ts:');
+    console.log('    - Add to PUBLISHED_PACKAGES array if it should be published');
+    console.log('    - Add to SKIP_PACKAGES array if it should not be published');
+    process.exit(1);
   }
+
+  log('✓ All packages accounted for', 'green');
+} catch (error) {
+  log('✗ Failed to check package list', 'red');
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(message);
   process.exit(1);
 }
 
-// Check 6: Packages are built
+// Check 7: Packages are built
 console.log('');
 console.log('Checking package builds...');
 
-const packagesDir = join(PROJECT_ROOT, 'packages');
 const missingBuilds: string[] = [];
 
 try {
@@ -289,7 +336,7 @@ if (missingBuilds.length > 0) {
 }
 log('✓ All packages built', 'green');
 
-// Check 7: Workspace dependencies (workspace:* is expected and handled by Bun during publish)
+// Check 8: Workspace dependencies (workspace:* is expected and handled by Bun during publish)
 console.log('');
 console.log('Checking workspace dependencies...');
 
@@ -323,7 +370,7 @@ try {
   process.exit(1);
 }
 
-// Check 8: Packages have proper "files" field for npm publish
+// Check 9: Packages have proper "files" field for npm publish
 console.log('');
 console.log('Checking package "files" fields...');
 
@@ -394,6 +441,73 @@ try {
   log('✓ All packages have proper "files" configuration', 'green');
 } catch (error) {
   log('✗ Failed to check package files configuration', 'red');
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(message);
+  process.exit(1);
+}
+
+// Check 10: Required package metadata (repository, author, license)
+console.log('');
+console.log('Checking required package metadata...');
+
+try {
+  const publishablePackages = getPublishablePackages(packagesDir);
+  const missingMetadata: Array<{ pkg: string; missing: string[] }> = [];
+
+  for (const { name: pkg, pkgJson } of publishablePackages) {
+    const missing: string[] = [];
+
+    // Check for repository field
+    const repository = pkgJson['repository'];
+    if (!repository) {
+      missing.push('repository');
+    } else if (typeof repository === 'object') {
+      const repoObj = repository as Record<string, unknown>;
+      if (!repoObj['url']) {
+        missing.push('repository.url');
+      }
+    }
+
+    // Check for author field
+    if (!pkgJson['author']) {
+      missing.push('author');
+    }
+
+    // Check for license field
+    if (!pkgJson['license']) {
+      missing.push('license');
+    }
+
+    if (missing.length > 0) {
+      missingMetadata.push({ pkg, missing });
+    }
+  }
+
+  if (missingMetadata.length > 0) {
+    log('✗ Some packages missing required metadata', 'red');
+    console.log('');
+    console.log('  Packages with missing fields:');
+    for (const { pkg, missing } of missingMetadata) {
+      console.log(`    ${pkg}:`);
+      for (const field of missing) {
+        console.log(`      - ${field}`);
+      }
+    }
+    console.log('');
+    console.log('  Add these fields to package.json:');
+    console.log('    "repository": {');
+    console.log('      "type": "git",');
+    console.log('      "url": "https://github.com/jdutton/vibe-agent-toolkit.git",');
+    console.log('      "directory": "packages/PACKAGE_NAME"');
+    console.log('    },');
+    console.log('    "author": "Jeff Dutton",');
+    console.log('    "license": "MIT"');
+    process.exit(1);
+  }
+
+  log('✓ All packages have required metadata', 'green');
+} catch (error) {
+  log('✗ Failed to check package metadata', 'red');
   const message = error instanceof Error ? error.message : String(error);
   console.error(message);
   process.exit(1);

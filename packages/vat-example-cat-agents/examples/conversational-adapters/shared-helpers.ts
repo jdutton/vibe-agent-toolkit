@@ -5,7 +5,7 @@
  */
 
 import { createConversationalContext, type Message } from '@vibe-agent-toolkit/agent-runtime';
-import type { Session } from '@vibe-agent-toolkit/transports';
+import type { TransportSessionContext } from '@vibe-agent-toolkit/transports';
 
 import { breedAdvisorAgent } from '../../src/conversational-assistant/breed-advisor.js';
 import type { BreedAdvisorInput, BreedAdvisorOutput } from '../../src/types/schemas.js';
@@ -23,42 +23,39 @@ export interface BreedAdvisorContext {
 }
 
 /**
- * Execute the breed advisor agent with the given context and session
+ * Execute the breed advisor agent with the given context
  *
  * @param userMessage - User's message
- * @param session - Current session state
- * @param context - Conversational context with callLLM function
- * @returns Updated output and session
+ * @param sessionContext - Transport session context
+ * @param agentContext - Conversational context with callLLM function
+ * @returns Agent output
  */
 export async function executeBreedAdvisor(
   userMessage: string,
-  session: Session<BreedAdvisorState>,
-  context: BreedAdvisorContext,
-): Promise<{
-  output: BreedAdvisorOutput;
-  session: Session<BreedAdvisorState>;
-}> {
+  sessionContext: TransportSessionContext<BreedAdvisorState>,
+  agentContext: BreedAdvisorContext,
+): Promise<BreedAdvisorOutput> {
+  // Add user message to session history (transport responsibility)
+  sessionContext.conversationHistory.push({ role: 'user', content: userMessage });
+
   // Create agent input
   const agentInput: BreedAdvisorInput = {
     message: userMessage,
-    sessionState: session.state ? { profile: session.state.profile } : undefined,
+    sessionState: sessionContext.state ? { profile: sessionContext.state.profile } : undefined,
   };
 
   // Execute agent
-  const agentOutput: BreedAdvisorOutput = await breedAdvisorAgent.execute(agentInput, context);
+  const agentOutput: BreedAdvisorOutput = await breedAdvisorAgent.execute(agentInput, agentContext);
 
-  // Update session state
-  const updatedState: BreedAdvisorState = {
+  // Add assistant response to session history (transport responsibility)
+  sessionContext.conversationHistory.push({ role: 'assistant', content: agentOutput.reply });
+
+  // Update session context state (mutate in place for transport)
+  sessionContext.state = {
     profile: agentOutput.sessionState,
   };
 
-  return {
-    output: agentOutput,
-    session: {
-      history: session.history,
-      state: updatedState,
-    },
-  };
+  return agentOutput;
 }
 
 /**

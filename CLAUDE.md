@@ -8,6 +8,23 @@ The vibe-agent-toolkit is a modular toolkit for building, testing, and deploying
 
 See [docs/architecture/README.md](docs/architecture/README.md) for detailed package architecture and evolution plan.
 
+## ⚠️ CRITICAL: Pre-1.0 Development Policy
+
+**BACKWARD COMPATIBILITY IS A BUG DURING v0.1.x**
+
+While this project is in v0.1.x (pre-1.0):
+- ❌ **DO NOT** add backward compatibility layers
+- ❌ **DO NOT** create deprecation wrappers or shims
+- ❌ **DO NOT** re-export types for "convenience"
+- ❌ **DO NOT** maintain old APIs alongside new ones
+- ✅ **DO** make breaking changes freely to improve the API
+- ✅ **DO** remove old code completely when replacing it
+- ✅ **DO** force consumers to update (it's pre-1.0!)
+
+**Rationale**: Pre-1.0 is the time to iterate rapidly and find the right abstractions. Backward compatibility adds complexity, maintenance burden, and prevents us from fixing design mistakes. Users expect breaking changes in v0.x releases.
+
+**After v1.0**: We'll follow semantic versioning strictly with proper deprecation cycles.
+
 ## Project-Specific Technical Principles
 
 ### Schema Strategy
@@ -593,7 +610,7 @@ Pre-commit hooks via Husky will enforce these automatically.
 
 **CRITICAL**: All packages in this monorepo share the same version. When any package changes, all packages are bumped together. This ensures compatibility and simplifies dependency management.
 
-Current packages (11 published, 1 private):
+Current packages (19 published, 1 private):
 - @vibe-agent-toolkit/agent-schema
 - @vibe-agent-toolkit/utils
 - @vibe-agent-toolkit/discovery
@@ -601,10 +618,18 @@ Current packages (11 published, 1 private):
 - @vibe-agent-toolkit/rag
 - @vibe-agent-toolkit/rag-lancedb
 - @vibe-agent-toolkit/agent-config
+- @vibe-agent-toolkit/agent-runtime
+- @vibe-agent-toolkit/runtime-claude-agent-sdk
 - @vibe-agent-toolkit/runtime-claude-skills
+- @vibe-agent-toolkit/runtime-langchain
+- @vibe-agent-toolkit/runtime-openai
+- @vibe-agent-toolkit/runtime-vercel-ai-sdk
+- @vibe-agent-toolkit/transports
 - @vibe-agent-toolkit/cli
-- vibe-agent-toolkit (umbrella package)
+- @vibe-agent-toolkit/gateway-mcp
 - @vibe-agent-toolkit/vat-development-agents
+- @vibe-agent-toolkit/vat-example-cat-agents
+- vibe-agent-toolkit (umbrella package)
 - @vibe-agent-toolkit/dev-tools (PRIVATE - not published)
 
 ### Version Bump Workflow
@@ -749,10 +774,14 @@ Packages are published in dependency order:
 2. discovery, resources (parallel - depend on utils)
 3. rag (depends on resources, utils)
 4. rag-lancedb, agent-config (parallel)
-5. runtime-claude-skills
-6. cli
-7. vat-development-agents
-8. vibe-agent-toolkit (umbrella - published last)
+5. agent-runtime (depends on utils)
+6. runtime-claude-agent-sdk, runtime-claude-skills, runtime-langchain, runtime-openai, runtime-vercel-ai-sdk (parallel - runtime adapters)
+7. transports (depends on agent-runtime)
+8. cli
+9. gateway-mcp (depends on agent-schema, utils, vat-example-cat-agents)
+10. vat-development-agents
+11. vat-example-cat-agents
+12. vibe-agent-toolkit (umbrella - published last)
 
 ### Rollback Safety
 

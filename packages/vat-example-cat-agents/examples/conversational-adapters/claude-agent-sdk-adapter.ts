@@ -5,7 +5,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { Message } from '@vibe-agent-toolkit/agent-runtime';
 import { extractTextFromResponse, formatMessagesForAnthropic } from '@vibe-agent-toolkit/runtime-claude-agent-sdk';
-import type { Session } from '@vibe-agent-toolkit/transports';
+import type { TransportSessionContext } from '@vibe-agent-toolkit/transports';
 
 import type { BreedAdvisorOutput } from '../../src/types/schemas.js';
 import type { ConversationalRuntimeAdapter } from '../conversational-runtime-adapter.js';
@@ -26,9 +26,9 @@ export function createClaudeAgentSDKAdapter(): ConversationalRuntimeAdapter<
 
   return {
     name: 'Claude Agent SDK',
-    convertToFunction: async (userMessage: string, session: Session<BreedAdvisorState>) => {
+    convertToFunction: async (userMessage: string, sessionContext: TransportSessionContext<BreedAdvisorState>) => {
       // Create conversation context using shared helper
-      const context = createAdapterContext(session.history, async (messages: Message[]) => {
+      const agentContext = createAdapterContext(sessionContext.conversationHistory, async (messages: Message[]) => {
         // Format messages using shared helper
         const { systemPrompt, conversationMessages } = formatMessagesForAnthropic(messages);
 
@@ -44,7 +44,7 @@ export function createClaudeAgentSDKAdapter(): ConversationalRuntimeAdapter<
       });
 
       // Execute breed advisor with shared helper
-      return executeBreedAdvisor(userMessage, session, context);
+      return executeBreedAdvisor(userMessage, sessionContext, agentContext);
     },
   };
 }

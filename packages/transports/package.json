@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/transports",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "description": "Transport adapters for VAT conversational agents",
   "type": "module",
   "main": "./dist/index.js",
@@ -8,6 +8,10 @@
   "exports": {
     ".": "./dist/index.js"
   },
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "scripts": {
     "build": "tsc",
     "test": "vitest run",
@@ -15,6 +19,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@vibe-agent-toolkit/agent-runtime": "workspace:*",
     "ws": "^8.18.0"
   },
   "devDependencies": {
@@ -30,5 +35,11 @@
     "cli",
     "websocket"
   ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jdutton/vibe-agent-toolkit.git",
+    "directory": "packages/transports"
+  },
+  "author": "Jeff Dutton",
   "license": "MIT"
 }

@@ -23,7 +23,8 @@
  *   source ~/.secrets.env && bun run demo:conversation claude
  */
 
-import { CLITransport, type Session } from '@vibe-agent-toolkit/transports';
+import { MemorySessionStore, FileSessionStore } from '@vibe-agent-toolkit/agent-runtime';
+import { CLITransport, type TransportSessionContext } from '@vibe-agent-toolkit/transports';
 
 import { breedAdvisorAgent } from '../src/conversational-assistant/breed-advisor.js';
 import type { BreedAdvisorOutput, SelectionProfile } from '../src/types/schemas.js';
@@ -46,6 +47,89 @@ interface BreedAdvisorState {
  * Available runtime options
  */
 type RuntimeType = 'vercel' | 'openai' | 'langchain' | 'claude';
+
+/**
+ * Available session store options
+ */
+type SessionStoreType = 'memory' | 'file';
+
+/**
+ * CLI arguments
+ */
+interface CLIArgs {
+  runtime: RuntimeType;
+  sessionStore: SessionStoreType;
+  sessionId?: string;
+}
+
+/**
+ * Parse CLI arguments
+ */
+function parseCLIArgs(): CLIArgs {
+  const args: CLIArgs = {
+    runtime: 'vercel',
+    sessionStore: 'memory',
+  };
+
+  // Parse process.argv (skip first 2: node and script path)
+  const argv = process.argv.slice(2);
+  let skipNext = false;
+
+  for (let i = 0; i < argv.length; i++) {
+    if (skipNext) {
+      skipNext = false;
+      continue;
+    }
+
+    const arg = argv[i];
+    const nextArg = argv[i + 1];
+
+    // Runtime selection (positional or --runtime flag)
+    if (!arg?.startsWith('--') && ['vercel', 'openai', 'langchain', 'claude'].includes(arg ?? '')) {
+      args.runtime = arg as RuntimeType;
+    } else if (arg === '--runtime' && nextArg) {
+      args.runtime = nextArg as RuntimeType;
+      skipNext = true;
+    }
+
+    // Session store flag
+    else if (arg === '--session-store' && nextArg) {
+      args.sessionStore = nextArg as SessionStoreType;
+      skipNext = true;
+    }
+
+    // Session ID flag
+    else if (arg === '--session-id' && nextArg) {
+      args.sessionId = nextArg;
+      skipNext = true;
+    }
+  }
+
+  return args;
+}
+
+/**
+ * Create session store based on CLI arguments
+ */
+function createSessionStore(
+  storeType: SessionStoreType,
+  sessionId: string | undefined
+): { store: MemorySessionStore<BreedAdvisorState> | FileSessionStore<BreedAdvisorState>; sessionId: string } {
+  const finalSessionId = sessionId ?? `breed-advisor-${Date.now()}`;
+
+  if (storeType === 'file') {
+    return {
+      store: new FileSessionStore<BreedAdvisorState>(),
+      sessionId: finalSessionId,
+    };
+  }
+
+  // Default: memory store
+  return {
+    store: new MemorySessionStore<BreedAdvisorState>(),
+    sessionId: finalSessionId,
+  };
+}
 
 /**
  * Get runtime adapter based on command line argument or environment
@@ -159,10 +243,13 @@ async function runDemo() {
   console.log('╚══════════════════════════════════════════════════════════════════════╝');
   console.log(colors.reset);
 
+  // Parse CLI arguments
+  const cliArgs = parseCLIArgs();
+
   // Get runtime adapter
   let adapter: ConversationalRuntimeAdapter<BreedAdvisorOutput, BreedAdvisorState>;
   try {
-    adapter = getRuntimeAdapter();
+    adapter = getRuntimeAdapter(cliArgs.runtime);
   } catch (error) {
     console.log(
       `${colors.red}Error: ${error instanceof Error ? error.message : String(error)}${colors.reset}\n`,
@@ -170,6 +257,9 @@ async function runDemo() {
     showRuntimeUsage();
     return;
   }
+
+  // Create session store
+  const { store: sessionStore, sessionId } = createSessionStore(cliArgs.sessionStore, cliArgs.sessionId);
 
   // Check for API keys
   if (!checkAPIKeys(adapter)) {
@@ -186,50 +276,49 @@ async function runDemo() {
     `${colors.dim}  The same agent code works with all 4 runtimes - portability!${colors.reset}`,
   );
 
+  section('Session Configuration');
+  console.log(`${colors.cyan}Session Store:${colors.reset} ${cliArgs.sessionStore}`);
+  console.log(`${colors.cyan}Session ID:${colors.reset} ${sessionId}`);
+  if (cliArgs.sessionStore === 'file') {
+    console.log(`${colors.dim}  Sessions saved to: ~/.vat-sessions/${sessionId}/${colors.reset}`);
+  }
+
   showAgentInfo();
 
   section('Interactive Conversation Mode');
 
   console.log(`${colors.yellow}Starting interactive CLI...${colors.reset}`);
-  console.log(`${colors.dim}  Type your messages to chat with the breed advisor${colors.reset}`);
-  console.log(`${colors.dim}  Commands: /help, /state, /restart, /quit${colors.reset}`);
   console.log();
 
   // Store the last result for display after quit
   let lastResult: BreedAdvisorOutput | undefined;
 
   // Wrap adapter's convertToFunction to format output for CLI
-  const breedAdvisorFn = async (userMessage: string, session: Session<BreedAdvisorState>) => {
-    const result = await adapter.convertToFunction(userMessage, session);
-    lastResult = result.output;
+  const breedAdvisorFn = async (userMessage: string, context: TransportSessionContext<BreedAdvisorState>) => {
+    const result = await adapter.convertToFunction(userMessage, context);
+    lastResult = result;
 
     // Check if conversation is complete (user selected a breed)
-    const isComplete = result.output.sessionState.conversationPhase === 'completed' ||
-                       result.output.result.status === 'success';
+    const isComplete = result.sessionState.conversationPhase === 'completed' ||
+                       result.result.status === 'success';
 
     if (isComplete) {
       // Show clear visual indicator that breed was selected
       const indicator = `\n${colors.green}${colors.bright}✨ BREED SELECTED! ✨${colors.reset}`;
       let selectedBreed = 'Unknown';
 
-      if (result.output.result?.status === 'success' && result.output.result.data?.selectedBreed) {
-        selectedBreed = result.output.result.data.selectedBreed;
+      if (result.result?.status === 'success' && result.result.data?.selectedBreed) {
+        selectedBreed = result.result.data.selectedBreed;
       }
 
       const selectionInfo = `${colors.cyan}${colors.bright}Your choice: ${selectedBreed}${colors.reset}`;
       const quitPrompt = `${colors.dim}Type /quit to see full results and exit${colors.reset}\n`;
 
-      return {
-        output: result.output.reply + '\n' + indicator + '\n' + selectionInfo + '\n' + quitPrompt,
-        session: result.session,
-      };
+      return result.reply + '\n' + indicator + '\n' + selectionInfo + '\n' + quitPrompt;
     }
 
     // Normal conversation - agent presents recommendations conversationally
-    return {
-      output: result.output.reply,
-      session: result.session,
-    };
+    return result.reply;
   };
 
   // Hook into process exit to show results before CLI transport kills process
@@ -265,12 +354,12 @@ async function runDemo() {
   // Create CLI transport
   const transport = new CLITransport<BreedAdvisorState>({
     fn: breedAdvisorFn,
-    initialSession: {
-      history: [],
-      state: {
-        profile: {
-          conversationPhase: 'gathering',
-        },
+    sessionId,
+    sessionStore,
+    initialHistory: [],
+    initialState: {
+      profile: {
+        conversationPhase: 'gathering',
       },
     },
     colors: true,

@@ -5,7 +5,7 @@
  * the conversational demo with breed advisor agent.
  */
 
-import type { Session } from '@vibe-agent-toolkit/transports';
+import type { TransportSessionContext } from '@vibe-agent-toolkit/transports';
 
 /**
  * Runtime adapter for conversational assistants
@@ -19,10 +19,7 @@ export interface ConversationalRuntimeAdapter<TOutput, TState> {
 
   /**
    * Convert a conversational assistant agent to an executable function
-   * that works with the CLI transport's Session type.
+   * that works with the transport's session context.
    */
-  convertToFunction: (userMessage: string, session: Session<TState>) => Promise<{
-    output: TOutput;
-    session: Session<TState>;
-  }>;
+  convertToFunction: (userMessage: string, context: TransportSessionContext<TState>) => Promise<TOutput>;
 }

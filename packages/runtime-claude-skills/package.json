@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/runtime-claude-skills",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Build and package VAT agents as Claude Skills",
   "type": "module",
   "main": "./dist/index.js",
@@ -46,6 +46,9 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/jdutton/vibe-agent-toolkit.git"
-  }
+    "url": "https://github.com/jdutton/vibe-agent-toolkit.git",
+    "directory": "packages/runtime-claude-skills"
+  },
+  "author": "Jeff Dutton",
+  "license": "MIT"
 }

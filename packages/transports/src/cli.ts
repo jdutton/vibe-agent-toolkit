@@ -10,7 +10,9 @@
 
 import * as readline from 'node:readline';
 
-import type { ConversationalFunction, Session, Transport } from './types.js';
+import type { Message, RuntimeSession, SessionStore } from '@vibe-agent-toolkit/agent-runtime';
+
+import type { ConversationalFunction, Transport, TransportSessionContext } from './types.js';
 
 /**
  * Options for CLI transport.
@@ -19,8 +21,14 @@ import type { ConversationalFunction, Session, Transport } from './types.js';
 export interface CLITransportOptions<TState = any> {
   /** The conversational function to run */
   fn: ConversationalFunction<string, string, TState>;
-  /** Initial session state (default: { history: [], state: undefined }) */
-  initialSession?: Session<TState>;
+  /** Session identifier (default: "cli-singleton") */
+  sessionId?: string;
+  /** Session store for persistence (optional, enables durable sessions) */
+  sessionStore?: SessionStore<TState>;
+  /** Initial conversation history (default: [], fallback if session not found) */
+  initialHistory?: Message[];
+  /** Initial session state (default: undefined, fallback if session not found) */
+  initialState?: TState;
   /** Enable colored output (default: true) */
   colors?: boolean;
   /** Show state after each interaction (default: false) */
@@ -35,11 +43,16 @@ export interface CLITransportOptions<TState = any> {
  * CLI transport implementation.
  *
  * Manages a single local session and provides an interactive REPL.
+ * Supports pluggable session stores for persistence.
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export class CLITransport<TState = any> implements Transport {
   private readonly fn: ConversationalFunction<string, string, TState>;
-  private session: Session<TState>;
+  private readonly sessionId: string;
+  private readonly sessionStore: SessionStore<TState> | undefined;
+  private sessionLoaded = false;
+  private conversationHistory: Message[];
+  private state: TState;
   private readonly colors: boolean;
   private readonly showState: boolean;
   private readonly prompt: string;
@@ -48,7 +61,10 @@ export class CLITransport<TState = any> implements Transport {
 
   constructor(options: CLITransportOptions<TState>) {
     this.fn = options.fn;
-    this.session = options.initialSession ?? { history: [], state: undefined as TState };
+    this.sessionId = options.sessionId ?? 'cli-singleton';
+    this.sessionStore = options.sessionStore;
+    this.conversationHistory = options.initialHistory ?? [];
+    this.state = options.initialState ?? (undefined as TState);
     this.colors = options.colors ?? true;
     this.showState = options.showState ?? false;
     this.prompt = options.prompt ?? 'You: ';
@@ -59,6 +75,9 @@ export class CLITransport<TState = any> implements Transport {
    * Start the CLI transport.
    */
   async start(): Promise<void> {
+    // Lazy load session from store if available
+    await this.loadSessionIfNeeded();
+
     this.rl = readline.createInterface({
       input: process.stdin,
       output: process.stdout,
@@ -85,14 +104,32 @@ export class CLITransport<TState = any> implements Transport {
 
       // Process user input
       try {
-        const result = await this.fn(input, this.session);
-        this.session = result.session;
+        // Add user message to history
+        this.conversationHistory.push({ role: 'user', content: input });
 
-        console.log(this.colorize(this.assistantPrefix, 'green') + result.output);
+        // Pass session context (just ID and current state)
+        const context: TransportSessionContext<TState> = {
+          sessionId: this.sessionId,
+          conversationHistory: this.conversationHistory,
+          state: this.state,
+        };
+
+        const output = await this.fn(input, context);
+
+        // Update session state (function may have mutated context.state)
+        this.state = context.state;
+
+        // Add assistant response to history
+        this.conversationHistory.push({ role: 'assistant', content: output });
+
+        console.log(this.colorize(this.assistantPrefix, 'green') + output);
 
         if (this.showState) {
           this.printState();
         }
+
+        // Save session after successful interaction
+        await this.saveSessionIfNeeded();
       } catch (error) {
         console.error(this.colorize('Error: ', 'red') + (error instanceof Error ? error.message : String(error)));
       }
@@ -113,8 +150,70 @@ export class CLITransport<TState = any> implements Transport {
    * Stop the CLI transport.
    */
   async stop(): Promise<void> {
+    // Save final session state before stopping
+    await this.saveSessionIfNeeded();
     this.rl?.close();
     this.rl = null;
+  }
+
+  /**
+   * Load session from store if available.
+   * Falls back to initial history/state if session not found.
+   */
+  private async loadSessionIfNeeded(): Promise<void> {
+    if (this.sessionLoaded || !this.sessionStore) {
+      return;
+    }
+
+    try {
+      const session = await this.sessionStore.load(this.sessionId);
+      this.conversationHistory = session.history;
+      this.state = session.state;
+      console.log(this.colorize(`✓ Resumed session: ${this.sessionId}`, 'green'));
+      console.log(this.colorize(`  ${session.history.length} messages in history`, 'gray'));
+    } catch {
+      // Session not found or error loading - use initial values
+      // This is expected for new sessions
+    }
+
+    this.sessionLoaded = true;
+  }
+
+  /**
+   * Save current session to store if available.
+   */
+  private async saveSessionIfNeeded(): Promise<void> {
+    if (!this.sessionStore) {
+      return;
+    }
+
+    try {
+      // Check if session exists first
+      const exists = await this.sessionStore.exists(this.sessionId);
+
+      if (exists) {
+        // Load existing session to preserve metadata
+        const session = await this.sessionStore.load(this.sessionId);
+        session.history = this.conversationHistory;
+        session.state = this.state;
+        await this.sessionStore.save(session);
+      } else {
+        // Create new session with our sessionId (not a generated UUID)
+        const session: RuntimeSession<TState> = {
+          id: this.sessionId,
+          history: this.conversationHistory,
+          state: this.state,
+          metadata: {
+            createdAt: new Date(),
+            lastAccessedAt: new Date(),
+          },
+        };
+        await this.sessionStore.save(session);
+      }
+    } catch (error) {
+      // Log error but don't crash - session persistence is optional
+      console.error(this.colorize('Warning: Failed to save session: ', 'yellow') + (error instanceof Error ? error.message : String(error)));
+    }
   }
 
   /**
@@ -133,9 +232,20 @@ export class CLITransport<TState = any> implements Transport {
         this.printState();
         break;
 
-      case '/restart':
-        this.session = { history: [], state: undefined as TState };
-        console.log(this.colorize('Session restarted.', 'yellow'));
+      case '/clear':
+      case '/restart': // Alias for backward compatibility
+        // Delete session from store if available
+        if (this.sessionStore) {
+          try {
+            await this.sessionStore.delete(this.sessionId);
+            console.log(this.colorize('✓ Session deleted from store', 'green'));
+          } catch (error) {
+            console.error(this.colorize('Warning: Failed to delete session: ', 'yellow') + (error instanceof Error ? error.message : String(error)));
+          }
+        }
+        this.conversationHistory = [];
+        this.state = undefined as TState;
+        console.log(this.colorize('Session cleared.', 'yellow'));
         break;
 
       case '/help':
@@ -153,7 +263,7 @@ export class CLITransport<TState = any> implements Transport {
    */
   private printWelcome(): void {
     console.log(this.colorize('=== CLI Transport ===', 'cyan'));
-    console.log(this.colorize('Type /help for commands, /quit to exit', 'gray'));
+    console.log(this.colorize('Commands: /help /state /clear /quit', 'gray'));
     console.log();
   }
 
@@ -164,7 +274,7 @@ export class CLITransport<TState = any> implements Transport {
     console.log(this.colorize('\nAvailable commands:', 'cyan'));
     console.log(this.colorize('  /help     ', 'yellow') + '- Show this help message');
     console.log(this.colorize('  /state    ', 'yellow') + '- Display current session state');
-    console.log(this.colorize('  /restart  ', 'yellow') + '- Restart session (clear history and state)');
+    console.log(this.colorize('  /clear    ', 'yellow') + '- Clear session (delete history and state)');
     console.log(this.colorize('  /quit     ', 'yellow') + '- Exit the CLI');
     console.log();
   }
@@ -174,8 +284,9 @@ export class CLITransport<TState = any> implements Transport {
    */
   private printState(): void {
     console.log(this.colorize('\n--- Session State ---', 'cyan'));
-    console.log(this.colorize('History length: ', 'yellow') + this.session.history.length);
-    console.log(this.colorize('State: ', 'yellow') + JSON.stringify(this.session.state, null, 2));
+    console.log(this.colorize('Session ID: ', 'yellow') + this.sessionId);
+    console.log(this.colorize('History length: ', 'yellow') + this.conversationHistory.length);
+    console.log(this.colorize('State: ', 'yellow') + JSON.stringify(this.state, null, 2));
     console.log();
   }
 

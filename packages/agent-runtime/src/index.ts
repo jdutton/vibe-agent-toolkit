@@ -68,6 +68,25 @@ export {
 
 export { createConversationalContext } from './conversational-helpers.js';
 
+// Session management
+export type {
+  Message as SessionMessage,
+  RuntimeSession,
+  SessionMetadata,
+  SessionStore,
+  SessionStoreOptions,
+  FileSessionStoreOptions,
+} from './session/index.js';
+export {
+  SessionNotFoundError,
+  MemorySessionStore,
+  FileSessionStore,
+  createInitialSession,
+  isSessionExpired,
+  updateSessionAccess,
+  validateSessionId,
+} from './session/index.js';
+
 export { andThen, mapResult, match, unwrap, withRetry, withTiming } from './result-helpers.js';
 export {
   executeExternalEvent,

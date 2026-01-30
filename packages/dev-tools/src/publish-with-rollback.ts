@@ -11,6 +11,8 @@ import { join } from 'node:path';
 import semver from 'semver';
 
 import { log, safeExecResult, safeExecSync } from './common.js';
+import { PUBLISHED_PACKAGES } from './package-lists.js';
+import { getMissingPackages } from './validate-package-list.js';
 
 const PROJECT_ROOT = process.cwd();
 const MANIFEST_PATH = join(PROJECT_ROOT, '.publish-manifest.json');
@@ -18,20 +20,36 @@ const VIBE_AGENT_TOOLKIT_SCOPE = '@vibe-agent-toolkit/';
 const PACKAGES_DIR = 'packages';
 const UMBRELLA_PACKAGE_NAME = 'vibe-agent-toolkit';
 
-// Publishing order (dependency-order)
-const PACKAGES = [
-  'agent-schema',
-  'utils',
-  'discovery',
-  'resources',
-  'rag',
-  'rag-lancedb',
-  'agent-config',
-  'runtime-claude-skills',
-  'cli',
-  'vat-development-agents',
-  UMBRELLA_PACKAGE_NAME,
-];
+// Use published packages list as PACKAGES for compatibility with existing code
+const PACKAGES: readonly string[] = PUBLISHED_PACKAGES;
+
+/**
+ * Validate that all packages are accounted for in either PACKAGES or SKIP_PACKAGES
+ */
+function validatePackageList(): void {
+  try {
+    const missingPackages = getMissingPackages(PROJECT_ROOT);
+
+    if (missingPackages.length > 0) {
+      log('✗ Package list out of sync!', 'red');
+      log('  The following packages exist in packages/ but are not declared:', 'red');
+      for (const pkg of missingPackages) {
+        log(`    - ${pkg}`, 'red');
+      }
+      log('\n  Update packages/dev-tools/src/package-lists.ts:', 'yellow');
+      log('    - Add to PUBLISHED_PACKAGES array if it should be published', 'yellow');
+      log('    - Add to SKIP_PACKAGES array if it should not be published', 'yellow');
+      process.exit(1);
+    }
+
+    log('✓ All packages accounted for in publish script', 'green');
+  } catch (error) {
+    log('✗ Failed to validate package list', 'red');
+    const message = error instanceof Error ? error.message : String(error);
+    log(message, 'red');
+    process.exit(1);
+  }
+}
 
 interface Manifest {
   version: string;
@@ -199,6 +217,9 @@ Examples:
     log(`✗ Invalid semver version: ${version}`, 'red');
     process.exit(1);
   }
+
+  // Validate package list is in sync
+  validatePackageList();
 
   const isStable = semver.prerelease(version) === null;
   const primaryTag = isStable ? 'latest' : 'next';
