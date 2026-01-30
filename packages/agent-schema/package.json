@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/agent-schema",
-  "version": "0.1.2-rc.2",
+  "version": "0.1.2-rc.3",
   "description": "JSON Schema definitions and TypeScript types for VAT agent manifest format",
   "type": "module",
   "main": "./dist/index.js",
