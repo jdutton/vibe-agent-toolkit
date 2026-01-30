@@ -10,7 +10,7 @@
 
 import * as readline from 'node:readline';
 
-import type { Message, SessionStore } from '@vibe-agent-toolkit/agent-runtime';
+import type { Message, RuntimeSession, SessionStore } from '@vibe-agent-toolkit/agent-runtime';
 
 import type { ConversationalFunction, Transport, TransportSessionContext } from './types.js';
 
@@ -198,12 +198,16 @@ export class CLITransport<TState = any> implements Transport {
         session.state = this.state;
         await this.sessionStore.save(session);
       } else {
-        // Create new session
-        const sessionId = await this.sessionStore.create(this.state);
-        // Load the created session and update with current data
-        const session = await this.sessionStore.load(sessionId);
-        session.history = this.conversationHistory;
-        session.state = this.state;
+        // Create new session with our sessionId (not a generated UUID)
+        const session: RuntimeSession<TState> = {
+          id: this.sessionId,
+          history: this.conversationHistory,
+          state: this.state,
+          metadata: {
+            createdAt: new Date(),
+            lastAccessedAt: new Date(),
+          },
+        };
         await this.sessionStore.save(session);
       }
     } catch (error) {

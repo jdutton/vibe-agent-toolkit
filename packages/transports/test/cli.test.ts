@@ -10,6 +10,7 @@ import type { ConversationalFunction } from '../src/types.js';
 
 // Test constants
 const TEST_SESSION_ID = 'test-session';
+const SESSION_NOT_FOUND_ERROR = 'Session not found';
 
 describe('CLITransport', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -123,7 +124,7 @@ describe('CLITransport with SessionStore', () => {
   ): SessionStore<TState> {
     return {
       create: vi.fn().mockResolvedValue('mock-session-id'),
-      load: vi.fn().mockRejectedValue(new Error('Not found')),
+      load: vi.fn().mockRejectedValue(new Error(SESSION_NOT_FOUND_ERROR)),
       save: vi.fn().mockResolvedValue(undefined),
       delete: vi.fn().mockResolvedValue(undefined),
       exists: vi.fn().mockResolvedValue(false),
@@ -153,17 +154,24 @@ describe('CLITransport with SessionStore', () => {
   }
 
   /**
+   * Helper to verify saved session structure
+   */
+  function expectSavedSessionStructure(mockStore: SessionStore<unknown>, expectedSessionId: string): void {
+    const savedSession = (mockStore.save as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as RuntimeSession<unknown>;
+    expect(savedSession).toBeDefined();
+    expect(savedSession.id).toBe(expectedSessionId);
+    expect(savedSession.metadata).toBeDefined();
+  }
+
+  /**
    * Helper to create a transport with a new session (not found in store)
    */
   async function createTransportWithNewSession<TState>(
     initialState: TState
   ): Promise<{ transport: CLITransport<TState>; mockStore: SessionStore<TState> }> {
-    const mockStore = createMockStore({
+    const mockStore = createMockStore<TState>({
       exists: vi.fn().mockResolvedValue(false),
-      create: vi.fn().mockResolvedValue(TEST_SESSION_ID),
-      load: vi.fn().mockResolvedValue(
-        createMockSession(TEST_SESSION_ID, [], initialState)
-      ),
+      load: vi.fn().mockRejectedValue(new Error(SESSION_NOT_FOUND_ERROR)),
     });
 
     const newTransport = new CLITransport({
@@ -238,7 +246,7 @@ describe('CLITransport with SessionStore', () => {
   describe('High Priority #2: Fallback to initial state', () => {
     it('should fall back to initial state when session not found', async () => {
       const mockStore = createMockStore({
-        load: vi.fn().mockRejectedValue(new Error('Session not found')),
+        load: vi.fn().mockRejectedValue(new Error(SESSION_NOT_FOUND_ERROR)),
         exists: vi.fn().mockResolvedValue(false),
       });
 
@@ -264,7 +272,7 @@ describe('CLITransport with SessionStore', () => {
 
     it('should handle various error types gracefully', async () => {
       const errorTypes = [
-        new Error('Session not found'),
+        new Error(SESSION_NOT_FOUND_ERROR),
         new Error('File not found'),
         new Error('Permission denied'),
         { code: 'ENOENT' } as NodeJS.ErrnoException,
@@ -295,9 +303,11 @@ describe('CLITransport with SessionStore', () => {
       await transport.start();
       await transport.stop();
 
-      // Should create new session and save it
-      expect(mockStore.create).toHaveBeenCalledWith({ count: 0 });
+      // Should save session
       expect(mockStore.save).toHaveBeenCalled();
+
+      // Verify saved session has correct structure
+      expectSavedSessionStructure(mockStore, TEST_SESSION_ID);
     });
 
     it('should update existing session on stop()', async () => {
@@ -324,10 +334,7 @@ describe('CLITransport with SessionStore', () => {
       expect(mockStore.save).toHaveBeenCalled();
 
       // Verify saved session preserves data
-      const savedSession = (mockStore.save as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as RuntimeSession<unknown>;
-      expect(savedSession).toBeDefined();
-      expect(savedSession.id).toBe(TEST_SESSION_ID);
-      expect(savedSession.metadata).toBeDefined();
+      expectSavedSessionStructure(mockStore, TEST_SESSION_ID);
     });
 
     it('should handle multiple stops safely', async () => {
@@ -419,7 +426,7 @@ describe('CLITransport with SessionStore', () => {
 
     it('should handle missing sessionId gracefully', async () => {
       const mockStore = createMockStore({
-        load: vi.fn().mockRejectedValue(new Error('Not found')),
+        load: vi.fn().mockRejectedValue(new Error(SESSION_NOT_FOUND_ERROR)),
       });
 
       transport = new CLITransport({
