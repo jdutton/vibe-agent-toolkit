@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/runtime-claude-skills",
-  "version": "0.1.2-rc.1",
+  "version": "0.1.2-rc.2",
   "description": "Build and package VAT agents as Claude Skills",
   "type": "module",
   "main": "./dist/index.js",

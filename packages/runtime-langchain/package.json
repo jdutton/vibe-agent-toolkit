@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/runtime-langchain",
-  "version": "0.1.2-rc.1",
+  "version": "0.1.2-rc.2",
   "description": "LangChain.js runtime adapter for VAT agents",
   "type": "module",
   "exports": {
