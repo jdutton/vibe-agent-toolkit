@@ -12,6 +12,53 @@ import type { ConversationalFunction } from '../src/types.js';
 const TEST_SESSION_ID = 'test-session';
 const SESSION_NOT_FOUND_ERROR = 'Session not found';
 
+/**
+ * Helper to create a mock session store
+ */
+function createMockStore<TState>(
+  options: Partial<SessionStore<TState>> = {}
+): SessionStore<TState> {
+  return {
+    create: vi.fn().mockResolvedValue('mock-session-id'),
+    load: vi.fn().mockRejectedValue(new Error(SESSION_NOT_FOUND_ERROR)),
+    save: vi.fn().mockResolvedValue(undefined),
+    delete: vi.fn().mockResolvedValue(undefined),
+    exists: vi.fn().mockResolvedValue(false),
+    list: vi.fn().mockResolvedValue([]),
+    cleanup: vi.fn().mockResolvedValue(0),
+    ...options,
+  };
+}
+
+/**
+ * Helper to create a mock session
+ */
+function createMockSession<TState>(
+  sessionId: string,
+  history: RuntimeSession<TState>['history'],
+  state: TState
+): RuntimeSession<TState> {
+  return {
+    id: sessionId,
+    history,
+    state,
+    metadata: {
+      createdAt: new Date(),
+      lastAccessedAt: new Date(),
+    },
+  };
+}
+
+/**
+ * Helper to verify saved session structure
+ */
+function expectSavedSessionStructure(mockStore: SessionStore<unknown>, expectedSessionId: string): void {
+  const savedSession = (mockStore.save as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as RuntimeSession<unknown>;
+  expect(savedSession).toBeDefined();
+  expect(savedSession.id).toBe(expectedSessionId);
+  expect(savedSession.metadata).toBeDefined();
+}
+
 describe('CLITransport', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let mockFn: ConversationalFunction<string, string, any>;
@@ -115,53 +162,6 @@ describe('CLITransport with SessionStore', () => {
     consoleErrorSpy.mockRestore();
     vi.restoreAllMocks();
   });
-
-  /**
-   * Helper to create a mock session store
-   */
-  function createMockStore<TState>(
-    options: Partial<SessionStore<TState>> = {}
-  ): SessionStore<TState> {
-    return {
-      create: vi.fn().mockResolvedValue('mock-session-id'),
-      load: vi.fn().mockRejectedValue(new Error(SESSION_NOT_FOUND_ERROR)),
-      save: vi.fn().mockResolvedValue(undefined),
-      delete: vi.fn().mockResolvedValue(undefined),
-      exists: vi.fn().mockResolvedValue(false),
-      list: vi.fn().mockResolvedValue([]),
-      cleanup: vi.fn().mockResolvedValue(0),
-      ...options,
-    };
-  }
-
-  /**
-   * Helper to create a mock session
-   */
-  function createMockSession<TState>(
-    sessionId: string,
-    history: RuntimeSession<TState>['history'],
-    state: TState
-  ): RuntimeSession<TState> {
-    return {
-      id: sessionId,
-      history,
-      state,
-      metadata: {
-        createdAt: new Date(),
-        lastAccessedAt: new Date(),
-      },
-    };
-  }
-
-  /**
-   * Helper to verify saved session structure
-   */
-  function expectSavedSessionStructure(mockStore: SessionStore<unknown>, expectedSessionId: string): void {
-    const savedSession = (mockStore.save as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as RuntimeSession<unknown>;
-    expect(savedSession).toBeDefined();
-    expect(savedSession.id).toBe(expectedSessionId);
-    expect(savedSession.metadata).toBeDefined();
-  }
 
   /**
    * Helper to create a transport with a new session (not found in store)
