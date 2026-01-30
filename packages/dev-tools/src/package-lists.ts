@@ -27,11 +27,16 @@ export const PUBLISHED_PACKAGES = [
   'rag-lancedb',
   'agent-config',
   'agent-runtime',
+  'runtime-claude-agent-sdk',
   'runtime-claude-skills',
+  'runtime-langchain',
+  'runtime-openai',
+  'runtime-vercel-ai-sdk',
   'transports',
   'cli',
   'gateway-mcp',
   'vat-development-agents',
+  'vat-example-cat-agents',
   'vibe-agent-toolkit', // Umbrella package
 ] as const;
 
