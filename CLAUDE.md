@@ -610,7 +610,7 @@ Pre-commit hooks via Husky will enforce these automatically.
 
 **CRITICAL**: All packages in this monorepo share the same version. When any package changes, all packages are bumped together. This ensures compatibility and simplifies dependency management.
 
-Current packages (11 published, 1 private):
+Current packages (14 published, 1 private):
 - @vibe-agent-toolkit/agent-schema
 - @vibe-agent-toolkit/utils
 - @vibe-agent-toolkit/discovery
@@ -618,8 +618,11 @@ Current packages (11 published, 1 private):
 - @vibe-agent-toolkit/rag
 - @vibe-agent-toolkit/rag-lancedb
 - @vibe-agent-toolkit/agent-config
+- @vibe-agent-toolkit/agent-runtime
 - @vibe-agent-toolkit/runtime-claude-skills
+- @vibe-agent-toolkit/transports
 - @vibe-agent-toolkit/cli
+- @vibe-agent-toolkit/gateway-mcp
 - vibe-agent-toolkit (umbrella package)
 - @vibe-agent-toolkit/vat-development-agents
 - @vibe-agent-toolkit/dev-tools (PRIVATE - not published)
@@ -766,10 +769,13 @@ Packages are published in dependency order:
 2. discovery, resources (parallel - depend on utils)
 3. rag (depends on resources, utils)
 4. rag-lancedb, agent-config (parallel)
-5. runtime-claude-skills
-6. cli
-7. vat-development-agents
-8. vibe-agent-toolkit (umbrella - published last)
+5. agent-runtime (depends on utils)
+6. runtime-claude-skills
+7. transports (depends on agent-runtime)
+8. cli
+9. gateway-mcp (depends on agent-schema, utils, vat-example-cat-agents)
+10. vat-development-agents
+11. vibe-agent-toolkit (umbrella - published last)
 
 ### Rollback Safety
 

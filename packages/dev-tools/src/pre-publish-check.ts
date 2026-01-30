@@ -2,10 +2,15 @@
  * Pre-Publish Validation Check
  *
  * This script ensures the repository is in a publishable state:
- * 1. No uncommitted changes (clean working tree)
- * 2. No untracked files (except allowed patterns)
- * 3. All validation checks pass
- * 4. On main branch (or explicitly allow other branches)
+ * 1. Git repository exists
+ * 2. On main branch (or explicitly allow other branches)
+ * 3. No uncommitted changes (clean working tree)
+ * 4. No untracked files (except allowed patterns)
+ * 5. All validation checks pass
+ * 6. Package list synchronized with publish script
+ * 7. All packages are built
+ * 8. Workspace dependencies are correct
+ * 9. All packages have proper "files" field
  *
  * Usage:
  *   tsx tools/pre-publish-check.ts [--allow-branch BRANCH]
@@ -23,6 +28,7 @@ import { readdirSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { PROJECT_ROOT, log, safeExecSync, safeExecResult } from './common.js';
+import { getMissingPackages } from './validate-package-list.js';
 
 /**
  * Detect if running in CI environment
@@ -249,11 +255,41 @@ try {
   process.exit(1);
 }
 
-// Check 6: Packages are built
+// Check 6: Package list synchronization
+console.log('');
+console.log('Checking package list synchronization...');
+
+const packagesDir = join(PROJECT_ROOT, 'packages');
+
+try {
+  const missingPackages = getMissingPackages(PROJECT_ROOT);
+
+  if (missingPackages.length > 0) {
+    log('✗ Package list out of sync!', 'red');
+    console.log('');
+    console.log('  The following packages exist in packages/ but are not declared:');
+    for (const pkg of missingPackages) {
+      console.log(`    ${pkg}`);
+    }
+    console.log('');
+    console.log('  Update packages/dev-tools/src/package-lists.ts:');
+    console.log('    - Add to PUBLISHED_PACKAGES array if it should be published');
+    console.log('    - Add to SKIP_PACKAGES array if it should not be published');
+    process.exit(1);
+  }
+
+  log('✓ All packages accounted for', 'green');
+} catch (error) {
+  log('✗ Failed to check package list', 'red');
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(message);
+  process.exit(1);
+}
+
+// Check 7: Packages are built
 console.log('');
 console.log('Checking package builds...');
 
-const packagesDir = join(PROJECT_ROOT, 'packages');
 const missingBuilds: string[] = [];
 
 try {
@@ -289,7 +325,7 @@ if (missingBuilds.length > 0) {
 }
 log('✓ All packages built', 'green');
 
-// Check 7: Workspace dependencies (workspace:* is expected and handled by Bun during publish)
+// Check 8: Workspace dependencies (workspace:* is expected and handled by Bun during publish)
 console.log('');
 console.log('Checking workspace dependencies...');
 
@@ -323,7 +359,7 @@ try {
   process.exit(1);
 }
 
-// Check 8: Packages have proper "files" field for npm publish
+// Check 9: Packages have proper "files" field for npm publish
 console.log('');
 console.log('Checking package "files" fields...');
 
