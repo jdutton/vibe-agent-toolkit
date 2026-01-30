@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Session Management System**: Pluggable session persistence for stateful agents
+  - `RuntimeSession<TState>` type with id, history, state, and metadata
+  - `SessionStore<TState>` interface for pluggable persistence strategies
+  - `MemorySessionStore` - in-memory sessions with TTL support and sliding window expiration
+  - `FileSessionStore` - file-based persistence in `~/.vat-sessions/` (runtime-agnostic)
+  - CLI transport integration with `--session-store` and `--session-id` flags
+  - Session management commands: `/clear` (or `/restart`), `/state`
+  - Commands shown upfront in CLI welcome message for better UX
+  - Conversational demo supports session resumption across restarts
+  - Session helpers: `validateSessionId`, `createInitialSession`, `updateSessionAccess`, `isSessionExpired`
+  - Reusable test helpers to eliminate duplication across store implementations
+- **Audit Command Enhancements**: Comprehensive validation of Claude skills
+  - Transitive link validation - recursively follows and validates all linked markdown files
+  - Unreferenced file detection with `--check-unreferenced` flag
+  - BFS traversal to discover entire skill structure
+  - Comprehensive statistics for all files in skill
+  - Handles circular references gracefully
 - **MCP Gateway**: Expose VAT agents through Model Context Protocol (`@vibe-agent-toolkit/gateway-mcp`)
   - Stdio transport for Claude Desktop integration
   - Stateless agent support (Pure Function Tools, One-Shot LLM Analyzers)
@@ -54,6 +71,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Upgraded vibe-validate from 0.18.2-rc.1 to 0.18.4-rc.1 (fixes caching bug)
+- Migrated from deprecated `vectordb@0.4.20` to `@lancedb/lancedb@0.23.0`
+  - Resolves Bun compatibility issues with Apache Arrow
+  - Changed nullable number fields to use -1 sentinel values instead of null
+  - API changes: `search().execute()` → `vectorSearch().toArray()`, `filter().execute()` → `query().where().toArray()`
+- Updated OpenAI SDK from 4.67.0 to 6.16.0 (resolves node-domexception deprecation warnings)
 - **BREAKING: Pure Function Agent API Simplified** - Consolidated to single `definePureFunction` API
   - **Removed**: `createPureFunctionAgent` and `createSafePureFunctionAgent` (use `definePureFunction` instead)
   - **API Change**: Agents now return output directly (unwrapped) instead of `OneShotAgentOutput` envelopes

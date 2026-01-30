@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/discovery",
-  "version": "0.1.1",
+  "version": "0.1.2-rc.1",
   "description": "Intelligent file discovery for VAT agents and Claude Skills",
   "type": "module",
   "main": "./dist/index.js",

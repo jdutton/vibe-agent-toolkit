@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/runtime-claude-agent-sdk",
-  "version": "0.1.1",
+  "version": "0.1.2-rc.1",
   "description": "Claude Agent SDK runtime adapter for VAT agents",
   "type": "module",
   "exports": {
