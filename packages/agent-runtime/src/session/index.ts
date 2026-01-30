@@ -14,6 +14,7 @@ export type {
 } from './types.js';
 export { SessionNotFoundError } from './errors.js';
 export { MemorySessionStore } from './memory-session-store.js';
+export { FileSessionStore, type FileSessionStoreOptions } from './file-session-store.js';
 export {
   createInitialSession,
   isSessionExpired,

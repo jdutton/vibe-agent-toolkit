@@ -23,19 +23,19 @@ import {
 } from '@vibe-agent-toolkit/agent-runtime';
 
 /**
- * File-based session store using Claude Agent SDK's storage pattern.
+ * File-based session store for VAT agents.
  *
- * Storage location: ~/.claude/vat-sessions/{session-id}/
+ * Storage location: ~/.vat-sessions/{session-id}/  (configurable via baseDir option)
  *
  * Use cases:
- * - Local development matching Claude Code behavior
- * - Single-machine deployments with persistence
- * - File checkpointing integration
+ * - Local development with session persistence
+ * - Single-machine deployments
+ * - Session debugging and inspection
  *
  * Characteristics:
  * - Durable (survives process restart)
  * - Local (single machine only)
- * - Integrates with Claude Agent SDK checkpointing
+ * - Runtime-agnostic (works with any LLM runtime)
  */
 export class FileSessionStore<TState = unknown> implements SessionStore<TState> {
   private readonly baseDir: string;
@@ -44,7 +44,7 @@ export class FileSessionStore<TState = unknown> implements SessionStore<TState> 
   private readonly ttl: number | undefined;
 
   constructor(options: FileSessionStoreOptions<TState> = {}) {
-    this.baseDir = options.baseDir ?? join(homedir(), '.claude', 'vat-sessions');
+    this.baseDir = options.baseDir ?? join(homedir(), '.vat-sessions');
     this.generateId = options.generateId ?? (() => crypto.randomUUID());
     this.createInitialState = options.createInitialState;
     this.ttl = options.ttl;
@@ -177,6 +177,6 @@ export class FileSessionStore<TState = unknown> implements SessionStore<TState> 
 }
 
 export interface FileSessionStoreOptions<TState = unknown> extends SessionStoreOptions<TState> {
-  /** Base directory for sessions (default: ~/.claude/vat-sessions) */
+  /** Base directory for sessions (default: ~/.vat-sessions) */
   baseDir?: string;
 }

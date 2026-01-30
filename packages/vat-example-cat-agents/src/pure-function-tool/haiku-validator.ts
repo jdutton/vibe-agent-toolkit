@@ -1,4 +1,4 @@
-import { definePureFunction } from '@vibe-agent-toolkit/agent-runtime';
+import { definePureFunction, type PureFunctionAgent } from '@vibe-agent-toolkit/agent-runtime';
 import { syllable } from 'syllable';
 
 import { HaikuSchema, HaikuValidationResultSchema, type Haiku, type HaikuValidationResult } from '../types/schemas.js';
@@ -157,7 +157,7 @@ export function critiqueHaiku(haiku: Haiku): string {
  *
  * Returns HaikuValidationResult directly (includes valid boolean, syllable counts, errors)
  */
-export const haikuValidatorAgent = definePureFunction(
+export const haikuValidatorAgent: PureFunctionAgent<Haiku, HaikuValidationResult> = definePureFunction(
   {
     name: 'haiku-validator',
     version: '1.0.0',

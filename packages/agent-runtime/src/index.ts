@@ -75,10 +75,12 @@ export type {
   SessionMetadata,
   SessionStore,
   SessionStoreOptions,
+  FileSessionStoreOptions,
 } from './session/index.js';
 export {
   SessionNotFoundError,
   MemorySessionStore,
+  FileSessionStore,
   createInitialSession,
   isSessionExpired,
   updateSessionAccess,

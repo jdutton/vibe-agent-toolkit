@@ -23,8 +23,7 @@
  *   source ~/.secrets.env && bun run demo:conversation claude
  */
 
-import { MemorySessionStore } from '@vibe-agent-toolkit/agent-runtime';
-import { FileSessionStore } from '@vibe-agent-toolkit/runtime-claude-agent-sdk';
+import { MemorySessionStore, FileSessionStore } from '@vibe-agent-toolkit/agent-runtime';
 import { CLITransport, type TransportSessionContext } from '@vibe-agent-toolkit/transports';
 
 import { breedAdvisorAgent } from '../src/conversational-assistant/breed-advisor.js';
@@ -281,7 +280,7 @@ async function runDemo() {
   console.log(`${colors.cyan}Session Store:${colors.reset} ${cliArgs.sessionStore}`);
   console.log(`${colors.cyan}Session ID:${colors.reset} ${sessionId}`);
   if (cliArgs.sessionStore === 'file') {
-    console.log(`${colors.dim}  Sessions saved to: ~/.claude/vat-sessions/${sessionId}/${colors.reset}`);
+    console.log(`${colors.dim}  Sessions saved to: ~/.vat-sessions/${sessionId}/${colors.reset}`);
   }
 
   showAgentInfo();
