@@ -103,6 +103,45 @@ describe('FileSessionStore', () => {
     });
   });
 
+  describe('delete', () => {
+    it('should not throw on ENOENT (already deleted)', async () => {
+      // Delete non-existent session should not throw
+      await expect(suite.store.delete('non-existent-session')).resolves.not.toThrow();
+    });
+  });
+
+  describe('exists', () => {
+    it('should return true for existing sessions', async () => {
+      const sessionId = await suite.store.create();
+      expect(await suite.store.exists(sessionId)).toBe(true);
+    });
+
+    it('should return false for non-existent sessions', async () => {
+      expect(await suite.store.exists('non-existent')).toBe(false);
+    });
+  });
+
+  describe('list', () => {
+    it('should return empty array when base directory does not exist', async () => {
+      const nonExistentDir = join(tempDir, 'non-existent-subdir');
+      const store = new FileSessionStore<{ count: number }>({
+        baseDir: nonExistentDir,
+      });
+
+      expect(await store.list()).toEqual([]);
+    });
+
+    it('should return all session IDs', async () => {
+      const id1 = await suite.store.create();
+      const id2 = await suite.store.create();
+
+      const sessions = await suite.store.list();
+      expect(sessions).toContain(id1);
+      expect(sessions).toContain(id2);
+      expect(sessions.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
   describe('getCheckpointDir', () => {
     it('should return checkpoint directory path', () => {
       const sessionId = 'test-session';
