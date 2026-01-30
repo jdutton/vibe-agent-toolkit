@@ -232,7 +232,8 @@ export class CLITransport<TState = any> implements Transport {
         this.printState();
         break;
 
-      case '/restart':
+      case '/clear':
+      case '/restart': // Alias for backward compatibility
         // Delete session from store if available
         if (this.sessionStore) {
           try {
@@ -244,7 +245,7 @@ export class CLITransport<TState = any> implements Transport {
         }
         this.conversationHistory = [];
         this.state = undefined as TState;
-        console.log(this.colorize('Session restarted.', 'yellow'));
+        console.log(this.colorize('Session cleared.', 'yellow'));
         break;
 
       case '/help':
@@ -262,7 +263,7 @@ export class CLITransport<TState = any> implements Transport {
    */
   private printWelcome(): void {
     console.log(this.colorize('=== CLI Transport ===', 'cyan'));
-    console.log(this.colorize('Type /help for commands, /quit to exit', 'gray'));
+    console.log(this.colorize('Commands: /help /state /clear /quit', 'gray'));
     console.log();
   }
 
@@ -273,7 +274,7 @@ export class CLITransport<TState = any> implements Transport {
     console.log(this.colorize('\nAvailable commands:', 'cyan'));
     console.log(this.colorize('  /help     ', 'yellow') + '- Show this help message');
     console.log(this.colorize('  /state    ', 'yellow') + '- Display current session state');
-    console.log(this.colorize('  /restart  ', 'yellow') + '- Restart session (clear history and state)');
+    console.log(this.colorize('  /clear    ', 'yellow') + '- Clear session (delete history and state)');
     console.log(this.colorize('  /quit     ', 'yellow') + '- Exit the CLI');
     console.log();
   }
