@@ -52,6 +52,7 @@ Example:
     .description('Validate markdown resources (link integrity, anchors)')
     .option('--debug', 'Enable debug logging')
     .option('--frontmatter-schema <path>', 'Validate frontmatter against JSON Schema file (.json or .yaml)')
+    .option('--validation-mode <mode>', 'Validation mode for schemas: strict (default) or permissive', 'strict')
     .action(validateCommand)
     .addHelpText(
       'after',
@@ -88,6 +89,18 @@ Frontmatter Validation:
           "category": { "enum": ["guide", "reference", "tutorial"] }
         }
       }
+
+  --validation-mode <mode>
+    Validation mode for schemas (default: strict).
+
+    Modes:
+      - strict: Enforce schema exactly (respect additionalProperties: false)
+      - permissive: Allow extra fields (schema layering use case)
+
+    Use permissive mode when:
+      - Multiple schemas validate the same frontmatter
+      - Schemas define different sets of fields
+      - Extra fields should not cause validation failures
 
 Exit Codes:
   0 - Success  |  1 - Validation errors  |  2 - System error

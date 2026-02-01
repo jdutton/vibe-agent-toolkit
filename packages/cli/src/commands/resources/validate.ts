@@ -40,6 +40,7 @@ async function loadSchema(schemaPath: string): Promise<object> {
 interface ValidateOptions {
   debug?: boolean;
   frontmatterSchema?: string; // Path to JSON Schema file
+  validationMode?: 'strict' | 'permissive'; // Validation mode for schemas
 }
 
 export async function validateCommand(
@@ -61,11 +62,23 @@ export async function validateCommand(
     }
 
     // Validate all resources
+    const validationMode = options.validationMode ?? 'strict';
     const validationResult = await registry.validate(
-      ...(frontmatterSchemaObj ? [{ frontmatterSchema: frontmatterSchemaObj }] : [])
+      ...(frontmatterSchemaObj
+        ? [{ frontmatterSchema: frontmatterSchemaObj, validationMode }]
+        : [{ validationMode }]
+      )
     );
     const stats = registry.getStats();
     const duration = Date.now() - startTime;
+
+    // Build validation metadata
+    const validationMetadata: Record<string, unknown> = {
+      validationMode,
+    };
+    if (options.frontmatterSchema) {
+      validationMetadata['frontmatterSchema'] = options.frontmatterSchema;
+    }
 
     // Filter out external_url issues (informational only, not actual errors)
     const actualErrors = validationResult.issues.filter(
@@ -88,6 +101,7 @@ export async function validateCommand(
         filesScanned: stats.totalResources,
         errorsFound: validationResult.errorCount,
         warningsFound: validationResult.warningCount,
+        ...validationMetadata,
         errors,
         duration: `${duration}ms`,
       });
@@ -107,6 +121,7 @@ export async function validateCommand(
         status: 'success',
         filesScanned: stats.totalResources,
         linksChecked: stats.totalLinks,
+        ...validationMetadata,
         duration: `${duration}ms`,
       });
 

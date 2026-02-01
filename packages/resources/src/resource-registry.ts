@@ -58,6 +58,8 @@ export interface ValidateOptions {
   frontmatterSchema?: object;
   /** Skip git-ignore checks (default: false) */
   skipGitIgnoreCheck?: boolean;
+  /** Validation mode for schemas: strict (default) or permissive */
+  validationMode?: 'strict' | 'permissive';
 }
 
 /**
@@ -398,13 +400,17 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * Validate frontmatter against a JSON Schema.
    * @private
    */
-  private validateAllFrontmatter(schema: object): ValidationIssue[] {
+  private validateAllFrontmatter(
+    schema: object,
+    mode: 'strict' | 'permissive' = 'strict'
+  ): ValidationIssue[] {
     const issues: ValidationIssue[] = [];
     for (const resource of this.resourcesByPath.values()) {
       const frontmatterIssues = validateFrontmatter(
         resource.frontmatter,
         schema,
-        resource.filePath
+        resource.filePath,
+        mode
       );
       issues.push(...frontmatterIssues);
     }
@@ -464,7 +470,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
 
     // Frontmatter validation (if schema provided)
     if (options?.frontmatterSchema) {
-      issues.push(...this.validateAllFrontmatter(options.frontmatterSchema));
+      const mode = options.validationMode ?? 'strict';
+      issues.push(...this.validateAllFrontmatter(options.frontmatterSchema, mode));
     }
 
     // Count issues by severity
