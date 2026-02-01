@@ -75,10 +75,8 @@ export async function validateCommand(
     // Build validation metadata
     const validationMetadata: Record<string, unknown> = {
       validationMode,
+      ...(options.frontmatterSchema ? { frontmatterSchema: options.frontmatterSchema } : {}),
     };
-    if (options.frontmatterSchema) {
-      validationMetadata['frontmatterSchema'] = options.frontmatterSchema;
-    }
 
     // Filter out external_url issues (informational only, not actual errors)
     const actualErrors = validationResult.issues.filter(
