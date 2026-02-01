@@ -1,4 +1,5 @@
 
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 /**
@@ -8,8 +9,10 @@ import path from 'node:path';
  * using real test fixtures.
  */
 
+/* eslint-disable security/detect-non-literal-fs-filename -- tests use dynamic file paths in temp directory */
 
-import { describe, expect, it, beforeEach } from 'vitest';
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { ResourceMetadata } from '../../src/types.js';
@@ -539,6 +542,16 @@ describe('ResourceRegistry - Integration Tests', () => {
   });
 
   describe('validate with frontmatter schema', () => {
+    let tempDir: string;
+
+    beforeEach(async () => {
+      tempDir = await mkdtemp(path.join(normalizedTmpdir(), 'frontmatter-test-'));
+    });
+
+    afterEach(async () => {
+      await rm(tempDir, { recursive: true, force: true });
+    });
+
     it('should validate frontmatter against schema and report missing required fields', async () => {
       const registry = new ResourceRegistry();
 
@@ -566,6 +579,34 @@ describe('ResourceRegistry - Integration Tests', () => {
       const error = result.issues.find((i) => i.type === 'frontmatter_missing');
       expect(error).toBeDefined();
       expect(error?.message).toContain('title');
+    });
+
+    it('should report YAML syntax errors in frontmatter', async () => {
+      const registry = new ResourceRegistry();
+
+      // Create a file with invalid YAML
+      const invalidYamlPath = path.join(tempDir, 'invalid-yaml.md');
+      await writeFile(
+        invalidYamlPath,
+        `---
+title: Test Document
+invalid: [unclosed bracket
+tags: test
+---
+
+# Content
+`
+      );
+
+      await registry.addResource(invalidYamlPath);
+
+      const result = await registry.validate();
+
+      // Should have 1 error for invalid YAML
+      expect(result.errorCount).toBe(1);
+      const error = result.issues.find((i) => i.type === 'frontmatter_invalid_yaml');
+      expect(error).toBeDefined();
+      expect(error?.message).toContain('Invalid YAML syntax');
     });
   });
 
