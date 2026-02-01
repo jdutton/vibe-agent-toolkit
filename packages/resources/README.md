@@ -6,6 +6,7 @@ Markdown resource parsing, validation, and link integrity checking for AI agent 
 
 - **Parse markdown files** - Extract links, headings, and metadata using unified/remark
 - **Validate link integrity** - Check local file links, anchor links, and detect broken references
+- **Frontmatter support** - Parse YAML frontmatter, optionally validate against JSON Schemas
 - **Track resource collections** - Manage multiple markdown files with automatic ID generation
 - **Resolve cross-references** - Link resources together and track dependencies
 - **Query capabilities** - Find resources by path, ID, or glob patterns with lazy evaluation
@@ -569,6 +570,260 @@ type ValidationSeverity = 'error' | 'warning' | 'info';
 - `error` - Critical issue that should block usage (e.g., broken file link)
 - `warning` - Non-critical issue that should be addressed (e.g., questionable link format)
 - `info` - Informational message (e.g., external URL not validated)
+
+## Frontmatter Support
+
+The resources package parses YAML frontmatter from markdown files and stores it in `ResourceMetadata.frontmatter`. You can optionally validate frontmatter against JSON Schemas.
+
+### Basic Frontmatter Parsing
+
+Frontmatter is automatically parsed when resources are added:
+
+```typescript
+import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
+
+const registry = new ResourceRegistry();
+await registry.addResource('./docs/guide.md');
+
+const resource = registry.getResource('./docs/guide.md');
+console.log('Frontmatter:', resource.frontmatter);
+// { title: 'User Guide', category: 'tutorial', tags: ['api', 'getting-started'] }
+```
+
+**Supported format**: YAML frontmatter between `---` delimiters at the start of the file:
+
+```markdown
+---
+title: User Guide
+category: tutorial
+tags:
+  - api
+  - getting-started
+---
+
+# Content starts here
+```
+
+### Frontmatter Validation
+
+Validate frontmatter against JSON Schema to enforce required fields and data types:
+
+```typescript
+import { FrontmatterValidator } from '@vibe-agent-toolkit/resources';
+
+// Create validator with JSON Schema
+const validator = new FrontmatterValidator({
+  type: 'object',
+  required: ['title', 'description'],
+  properties: {
+    title: { type: 'string', minLength: 1 },
+    description: { type: 'string' },
+    category: { enum: ['guide', 'reference', 'tutorial', 'api'] },
+    tags: { type: 'array', items: { type: 'string' } }
+  }
+});
+
+// Validate a resource
+const resource = registry.getResource('./docs/guide.md');
+const result = validator.validate(resource);
+
+if (!result.valid) {
+  console.error('Validation errors:', result.errors);
+}
+```
+
+### Schema Design Patterns
+
+#### Pattern 1: Required Fields, Allow Extras
+
+Most projects have files (README.md, etc.) without frontmatter. Use `required` for must-have fields but allow custom fields:
+
+```json
+{
+  "type": "object",
+  "required": ["title", "description"],
+  "additionalProperties": true,
+  "properties": {
+    "title": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "category": { "enum": ["guide", "reference", "tutorial", "api"] }
+  }
+}
+```
+
+**Behavior**:
+- Files without frontmatter: **Error** (missing required fields)
+- Files with partial frontmatter: **Error** (missing required fields)
+- Files with complete frontmatter: **Valid**
+- Extra fields allowed: **Yes**
+
+#### Pattern 2: Optional Fields Only
+
+For projects where frontmatter is optional:
+
+```json
+{
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "title": { "type": "string" },
+    "description": { "type": "string" },
+    "category": { "enum": ["guide", "reference", "tutorial", "api"] }
+  }
+}
+```
+
+**Behavior**:
+- Files without frontmatter: **Valid** (all fields optional)
+- Files with frontmatter: **Validated** (fields must match schema types)
+- Extra fields allowed: **Yes**
+
+#### Pattern 3: Strict Schema
+
+For knowledge bases where all metadata is required:
+
+```json
+{
+  "type": "object",
+  "required": ["title", "description", "category", "keywords"],
+  "additionalProperties": false,
+  "properties": {
+    "title": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "category": { "enum": ["guide", "reference", "tutorial", "api"] },
+    "keywords": { "type": "array", "items": { "type": "string" } },
+    "source_url": { "type": "string", "format": "uri" }
+  }
+}
+```
+
+**Behavior**:
+- Files without frontmatter: **Error** (missing required fields)
+- Extra fields: **Error** (`additionalProperties: false`)
+- All fields must match types: **Yes**
+
+### CLI Usage
+
+The `vat resources validate` command supports frontmatter validation:
+
+```bash
+# Parse frontmatter, report YAML errors only
+vat resources validate docs/
+
+# Validate against JSON Schema
+vat resources validate docs/ --frontmatter-schema schema.json
+
+# Example output with schema validation
+vat resources validate docs/ --frontmatter-schema schema.json
+# Resources validated: 42
+# Links validated: 156
+# Frontmatter errors:
+#   docs/guide.md: Missing required property 'description'
+#   docs/api.md: Property 'category' must be one of: guide, reference, tutorial, api
+```
+
+### Validation Result
+
+Frontmatter validation results are included in `ValidationResult`:
+
+```typescript
+interface ValidationResult {
+  // ... existing fields
+  frontmatterValidation?: {
+    valid: boolean;
+    errors: Array<{
+      resourcePath: string;
+      message: string;
+      field?: string;
+    }>;
+  };
+}
+```
+
+### Example Schemas
+
+#### Knowledge Base Schema
+
+```json
+{
+  "type": "object",
+  "required": ["title", "description"],
+  "additionalProperties": true,
+  "properties": {
+    "title": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "category": { "enum": ["guide", "reference", "tutorial", "api"] },
+    "keywords": { "type": "array", "items": { "type": "string" } },
+    "source_url": { "type": "string", "format": "uri" },
+    "author": { "type": "string" },
+    "last_updated": { "type": "string", "format": "date" }
+  }
+}
+```
+
+#### Blog Post Schema
+
+```json
+{
+  "type": "object",
+  "required": ["title", "date", "author"],
+  "additionalProperties": false,
+  "properties": {
+    "title": { "type": "string", "minLength": 1 },
+    "date": { "type": "string", "format": "date" },
+    "author": { "type": "string" },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "excerpt": { "type": "string" },
+    "featured": { "type": "boolean" }
+  }
+}
+```
+
+#### API Documentation Schema
+
+```json
+{
+  "type": "object",
+  "required": ["title", "api_version"],
+  "additionalProperties": true,
+  "properties": {
+    "title": { "type": "string", "minLength": 1 },
+    "api_version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "endpoint": { "type": "string" },
+    "method": { "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+    "deprecated": { "type": "boolean" }
+  }
+}
+```
+
+### Error Handling
+
+```typescript
+const validator = new FrontmatterValidator(schema);
+
+for (const resource of registry.getAllResources()) {
+  const result = validator.validate(resource);
+
+  if (!result.valid) {
+    console.error(`\n${resource.filePath}:`);
+    for (const error of result.errors) {
+      console.error(`  - ${error.message}`);
+      if (error.field) {
+        console.error(`    Field: ${error.field}`);
+      }
+    }
+  }
+}
+```
+
+### Common Validation Errors
+
+- **Missing required property**: Field specified in `required` array is missing
+- **Invalid type**: Field value doesn't match the type (e.g., number instead of string)
+- **Invalid enum value**: Field value is not in the allowed enum values
+- **Invalid format**: String doesn't match the format constraint (e.g., "uri", "date")
+- **Additional property not allowed**: Extra field present when `additionalProperties: false`
+- **YAML parsing error**: Invalid YAML syntax in frontmatter
 
 ## Schemas
 
