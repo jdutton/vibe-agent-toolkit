@@ -14,19 +14,12 @@ import {
   parseJsonSchemaResource,
   parseMarkdownResource,
   parseYamlResource,
-} from '../../src/types/resource-parser.js';
-import { ResourceType } from '../../src/types/resources.js';
+} from '../../src/types/resource-parser.ts';
+import { ResourceType } from '../../src/types/resources.ts';
 
 // ============================================================================
 // Test suite setup
 // ============================================================================
-
-const COLLECTION_DOCS = 'docs';
-const COLLECTION_SCHEMAS = 'schemas';
-const COLLECTION_DATA = 'data';
-const COLLECTION_CONFIG = 'config';
-const USER_SCHEMA_FILE = 'user.schema.json';
-const CONFIG_YAML_FILE = 'config.yaml';
 
 const suite = {
   tempDir: '',
@@ -39,6 +32,9 @@ const suite = {
 };
 
 describe('parseMarkdownResource', () => {
+  // Test constants
+  const COLLECTION_DOCS = 'docs';
+
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
 
@@ -122,6 +118,10 @@ More content.`;
 });
 
 describe('parseJsonSchemaResource', () => {
+  // Test constants
+  const COLLECTION_SCHEMAS = 'schemas';
+  const USER_SCHEMA_FILE = 'user.schema.json';
+
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
 
@@ -179,6 +179,9 @@ describe('parseJsonSchemaResource', () => {
 });
 
 describe('parseJsonResource', () => {
+  // Test constants
+  const COLLECTION_DATA = 'data';
+
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
 
@@ -229,6 +232,10 @@ describe('parseJsonResource', () => {
 });
 
 describe('parseYamlResource', () => {
+  // Test constants
+  const COLLECTION_CONFIG = 'config';
+  const CONFIG_YAML_FILE = 'config.yaml';
+
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
 
@@ -262,6 +269,7 @@ settings:
   });
 
   it('should handle YAML with arrays', async () => {
+    const COLLECTION_DATA = 'data';
     const filePath = join(suite.tempDir, 'list.yml');
     const yaml = `
 items:

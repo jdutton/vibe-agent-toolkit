@@ -11,9 +11,9 @@ import {
   getResourceAbsolutePath,
   isValidProjectPath,
   normalizeProjectPath,
-} from '../src/types/resource-path-utils.js';
+} from '../src/types/resource-path-utils.ts';
 
-// Test constants
+// Shared test constants
 const DOCS_GUIDE_MD = 'docs/guide.md';
 const DOCS_FILE_MD = 'file://docs/guide.md';
 const FILE_THREE_SLASHES = 'file:///docs/guide.md';
@@ -21,6 +21,7 @@ const DOCS_PARENT_GUIDE = 'docs/../guide.md';
 const ABSOLUTE_DOCS_GUIDE = '/docs/guide.md';
 
 describe('normalizeProjectPath', () => {
+
   describe('when input is already normalized', () => {
     it('should preserve relative path with forward slashes', () => {
       expect(normalizeProjectPath(DOCS_GUIDE_MD)).toBe(DOCS_GUIDE_MD);

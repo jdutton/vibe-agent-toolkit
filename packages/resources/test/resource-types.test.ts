@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 import {
   isJsonSchema,
   ResourceType,
-} from '../src/types/resources.js';
+} from '../src/types/resources.ts';
 
 describe('ResourceType enum', () => {
   it('should have correct enum values', () => {
