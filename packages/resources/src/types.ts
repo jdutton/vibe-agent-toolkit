@@ -68,3 +68,32 @@ export {
   parseMarkdownResource,
   parseYamlResource,
 } from './types/resource-parser.js';
+
+// Project configuration
+export type {
+  ValidationMode,
+  CollectionValidation,
+  CollectionConfig,
+  ResourcesConfig,
+  ProjectConfig,
+} from './schemas/project-config.js';
+
+// Config parsing
+export {
+  findConfigFile,
+  parseConfigFile,
+  loadConfig,
+} from './config-parser.js';
+
+// Pattern expansion
+export {
+  isGlobPattern,
+  expandPattern,
+  expandPatterns,
+} from './pattern-expander.js';
+
+// Collection matching
+export {
+  matchesCollection,
+  getCollectionsForFile,
+} from './collection-matcher.js';

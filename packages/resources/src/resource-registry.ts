@@ -13,11 +13,13 @@ import path from 'node:path';
 import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions } from '@vibe-agent-toolkit/utils';
 
 import { calculateChecksum } from './checksum.js';
+import { getCollectionsForFile } from './collection-matcher.js';
 import { validateFrontmatter } from './frontmatter-validator.js';
 import { parseMarkdown } from './link-parser.js';
 import { validateLink } from './link-validator.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { SHA256 } from './schemas/checksum.js';
+import type { ProjectConfig } from './schemas/project-config.js';
 import type { HeadingNode, ResourceMetadata } from './schemas/resource-metadata.js';
 import type { ValidationIssue, ValidationResult } from './schemas/validation-result.js';
 import { matchesGlobPattern, splitHrefAnchor } from './utils.js';
@@ -44,6 +46,8 @@ export interface ResourceRegistryOptions {
   rootDir?: string;
   /** Validate resources when they are added (default: false) */
   validateOnAdd?: boolean;
+  /** Project configuration (optional, enables collection support) */
+  config?: ProjectConfig;
 }
 
 /**
@@ -96,6 +100,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   /** Optional root directory for resources */
   readonly rootDir?: string;
 
+  /** Optional project configuration (enables collection support) */
+  readonly config?: ProjectConfig;
+
   private readonly resourcesByPath: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesById: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesByName: Map<string, ResourceMetadata[]> = new Map();
@@ -105,6 +112,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   constructor(options?: ResourceRegistryOptions) {
     if (options?.rootDir !== undefined) {
       this.rootDir = options.rootDir;
+    }
+    if (options?.config !== undefined) {
+      this.config = options.config;
     }
     this.validateOnAdd = options?.validateOnAdd ?? false;
   }
@@ -233,6 +243,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Calculate checksum eagerly
     const checksum = await calculateChecksum(absolutePath);
 
+    // Determine collections if config is present
+    const collections = this.config?.resources?.collections
+      ? getCollectionsForFile(absolutePath, this.config.resources.collections)
+      : undefined;
+
     // Create resource metadata
     const resource: ResourceMetadata = {
       id,
@@ -245,6 +260,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       estimatedTokenCount: parseResult.estimatedTokenCount,
       modifiedAt: stats.mtime,
       checksum,
+      ...(collections !== undefined && collections.length > 0 && { collections }),
     };
 
     // Index the resource

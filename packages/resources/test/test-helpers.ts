@@ -135,6 +135,32 @@ export function setupResourceTestSuite(testPrefix: string): {
   return suite;
 }
 
+/**
+ * Setup simple temp directory test suite (no ResourceRegistry).
+ *
+ * For tests that only need temp directory management without registry.
+ *
+ * @param testPrefix - Prefix for temp directory (e.g., 'config-parser-')
+ * @returns Object with tempDir ref that will be populated during beforeEach
+ */
+export function setupTempDirTestSuite(testPrefix: string): {
+  tempDir: string;
+  beforeEach: () => Promise<void>;
+  afterEach: () => Promise<void>;
+} {
+  const suite = {
+    tempDir: '',
+    beforeEach: async () => {
+      suite.tempDir = await mkdtemp(join(normalizedTmpdir(), testPrefix));
+    },
+    afterEach: async () => {
+      await rm(suite.tempDir, { recursive: true, force: true });
+    },
+  };
+
+  return suite;
+}
+
 // ============================================================================
 // Link validation helpers
 // ============================================================================

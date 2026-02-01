@@ -88,6 +88,8 @@ export const ResourceMetadataSchema = z.object({
   estimatedTokenCount: z.number().int().nonnegative().describe('Estimated token count for LLM context (roughly 1 token per 4 chars)'),
   modifiedAt: z.date().describe('Last modified timestamp'),
   checksum: SHA256Schema.describe('SHA-256 checksum of file content'),
+  collections: z.array(z.string()).optional()
+    .describe('Collection names this resource belongs to (populated when using config-based discovery)'),
 }).describe('Complete metadata for a markdown resource');
 
 export type ResourceMetadata = z.infer<typeof ResourceMetadataSchema>;
