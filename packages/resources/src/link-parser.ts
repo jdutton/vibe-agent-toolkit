@@ -11,6 +11,7 @@
 
 import { readFile, stat } from 'node:fs/promises';
 
+import * as yaml from 'js-yaml';
 import type { Heading, Link, LinkReference, Root } from 'mdast';
 import remarkFrontmatter from 'remark-frontmatter';
 import remarkGfm from 'remark-gfm';
@@ -26,6 +27,7 @@ import type { HeadingNode, LinkType, ResourceLink } from './types.js';
 export interface ParseResult {
   links: ResourceLink[];
   headings: HeadingNode[];
+  frontmatter?: Record<string, unknown>;
   content: string;
   sizeBytes: number;
   estimatedTokenCount: number;
@@ -71,9 +73,15 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
   // Extract headings with tree structure
   const headings = extractHeadings(tree);
 
+  // Extract frontmatter
+  const frontmatter = extractFrontmatter(tree);
+
+  // With exactOptionalPropertyTypes: true, we must conditionally include the property
+  // rather than assigning undefined to it
   return {
     links,
     headings,
+    ...(frontmatter !== undefined && { frontmatter }),
     content,
     sizeBytes,
     estimatedTokenCount,
@@ -368,4 +376,36 @@ function cleanupEmptyChildren(headings: HeadingNode[]): void {
       cleanupEmptyChildren(heading.children);
     }
   }
+}
+
+/**
+ * Extract and parse frontmatter from the markdown AST.
+ *
+ * Uses remark-frontmatter which creates 'yaml' nodes for frontmatter blocks.
+ * Parses YAML content and returns as plain object.
+ *
+ * @param tree - Markdown AST from unified/remark
+ * @returns Parsed frontmatter object, or undefined if no frontmatter present
+ */
+function extractFrontmatter(tree: Root): Record<string, unknown> | undefined {
+  let frontmatterData: Record<string, unknown> | undefined;
+
+  visit(tree, 'yaml', (node: { value: string }) => {
+    if (node.value.trim() === '') {
+      // Empty frontmatter block
+      return;
+    }
+
+    try {
+      const parsed = yaml.load(node.value);
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        frontmatterData = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // YAML parsing errors will be caught during validation
+      // Don't fail parsing here, let validation report the error
+    }
+  });
+
+  return frontmatterData;
 }

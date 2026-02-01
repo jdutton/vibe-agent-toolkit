@@ -29,3 +29,11 @@ export type {
   ValidationIssue,
   ValidationResult,
 } from './schemas/validation-result.js';
+
+// Resource registry types
+export type {
+  CrawlOptions,
+  ResourceRegistryOptions,
+  ValidateOptions,
+  RegistryStats,
+} from './resource-registry.js';

@@ -70,6 +70,19 @@ describe('ResourceRegistry - Integration Tests', () => {
       expect(resource.estimatedTokenCount).toBeGreaterThan(0);
     });
 
+    it('should store frontmatter in resource metadata', async () => {
+      const registry = new ResourceRegistry();
+      const mdPath = path.join(fixturesDir, 'with-frontmatter.md');
+
+      const resource = await registry.addResource(mdPath);
+
+      expect(resource.frontmatter).toEqual({
+        title: 'Test Document',
+        tags: ['test', 'example'],
+        date: new Date('2024-01-15T00:00:00.000Z'),
+      });
+    });
+
     it('should generate correct IDs from file paths', async () => {
       const validPath = path.join(fixturesDir, 'valid.md');
       const brokenPath = path.join(fixturesDir, BROKEN_FILE_MD);
@@ -522,6 +535,37 @@ describe('ResourceRegistry - Integration Tests', () => {
 
       expect(registry.getAllResources()).toHaveLength(1);
       expect(registry.getResourceById('target')).toBeDefined();
+    });
+  });
+
+  describe('validate with frontmatter schema', () => {
+    it('should validate frontmatter against schema and report missing required fields', async () => {
+      const registry = new ResourceRegistry();
+
+      // Add resource with valid frontmatter
+      const validPath = path.join(fixturesDir, 'with-frontmatter.md');
+      await registry.addResource(validPath);
+
+      // Add resource without frontmatter
+      const noFrontmatterPath = path.join(fixturesDir, 'target.md');
+      await registry.addResource(noFrontmatterPath);
+
+      const schema = {
+        type: 'object',
+        required: ['title', 'tags'],
+        properties: {
+          title: { type: 'string' },
+          tags: { type: 'array', items: { type: 'string' } },
+        },
+      };
+
+      const result = await registry.validate({ frontmatterSchema: schema });
+
+      // Should have 1 error for the file without frontmatter
+      expect(result.errorCount).toBe(1);
+      const error = result.issues.find((i) => i.type === 'frontmatter_missing');
+      expect(error).toBeDefined();
+      expect(error?.message).toContain('title');
     });
   });
 
