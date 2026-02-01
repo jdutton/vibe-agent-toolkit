@@ -37,3 +37,34 @@ export type {
   ValidateOptions,
   RegistryStats,
 } from './resource-registry.js';
+
+// Resource type system
+export {
+  ResourceType,
+  isJsonSchema,
+} from './types/resources.js';
+export type {
+  BaseResource,
+  Heading,
+  JsonResource,
+  JsonSchemaResource,
+  MarkdownResource,
+  Resource,
+  YamlResource,
+} from './types/resources.js';
+
+// Resource path utilities
+export {
+  getResourceAbsolutePath,
+  isValidProjectPath,
+  normalizeProjectPath,
+} from './types/resource-path-utils.js';
+
+// Resource parsing
+export {
+  detectResourceType,
+  parseJsonResource,
+  parseJsonSchemaResource,
+  parseMarkdownResource,
+  parseYamlResource,
+} from './types/resource-parser.js';
