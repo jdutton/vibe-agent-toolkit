@@ -352,3 +352,83 @@ export function expectHeadingStructure(
     }
   }
 }
+
+// ============================================================================
+// Schema validation helpers
+// ============================================================================
+
+/**
+ * Create a JSON Schema file in the temp directory
+ *
+ * @param tempDir - Temporary directory path
+ * @param filename - Schema filename
+ * @param schema - Schema object
+ */
+export async function createSchemaFile(
+  tempDir: string,
+  filename: string,
+  schema: object
+): Promise<void> {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir and filename are from test caller, safe in test context
+  await writeFile(
+    join(tempDir, filename),
+    JSON.stringify(schema),
+    'utf-8'
+  );
+}
+
+/**
+ * Common schema definitions for tests
+ */
+export const TestSchemas = {
+  /**
+   * Base schema requiring title field
+   */
+  base: {
+    type: 'object',
+    required: ['title'],
+    properties: {
+      title: { type: 'string' },
+    },
+    additionalProperties: false,
+  },
+
+  /**
+   * Enhanced schema requiring category field
+   */
+  enhanced: {
+    type: 'object',
+    required: ['category'],
+    properties: {
+      category: { type: 'string' },
+    },
+    additionalProperties: false,
+  },
+
+  /**
+   * Schema requiring both title and description
+   */
+  titleAndDescription: {
+    type: 'object',
+    required: ['title', 'description'],
+    properties: {
+      title: { type: 'string' },
+      description: { type: 'string' },
+    },
+  },
+};
+
+/**
+ * Assert that first schema result has validation errors
+ *
+ * @param results - Schema validation results
+ * @param expectFn - expect function from test
+ */
+export function expectFirstSchemaHasErrors(
+  results: Array<{ valid?: boolean; errors?: unknown[] }>,
+  expectFn: (_: unknown) => Assertion<unknown>,
+): void {
+  expectFn(results[0]?.valid).toBe(false);
+  expectFn(results[0]?.errors).toBeDefined();
+  expectFn(results[0]?.errors?.length).toBeGreaterThan(0);
+}

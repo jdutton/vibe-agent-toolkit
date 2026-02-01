@@ -50,6 +50,7 @@ export type {
   JsonSchemaResource,
   MarkdownResource,
   Resource,
+  SchemaReference,
   YamlResource,
 } from './types/resources.js';
 
@@ -101,3 +102,17 @@ export {
 // Link validation
 export type { ValidateLinkOptions } from './link-validator.js';
 export { validateLink } from './link-validator.js';
+
+// Schema assignment
+export {
+  addCLISchema,
+  addCollectionSchema,
+  assignSchemas,
+} from './schema-assignment.js';
+
+// Multi-schema validation
+export {
+  getAllSchemaErrors,
+  hasSchemaErrors,
+  validateFrontmatterMultiSchema,
+} from './multi-schema-validator.js';

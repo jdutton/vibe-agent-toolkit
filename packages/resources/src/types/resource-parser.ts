@@ -18,6 +18,7 @@ import type {
   JsonResource,
   JsonSchemaResource,
   MarkdownResource,
+  SchemaReference,
   YamlResource,
 } from './resources.js';
 import { isJsonSchema, ResourceType } from './resources.js';
@@ -54,6 +55,18 @@ export async function parseMarkdownResource(
   // Estimate token count (chars / 4)
   const estimatedTokenCount = Math.floor(parsed.content.length / 4);
 
+  // Extract self-asserted schema from frontmatter $schema field
+  const schemas: SchemaReference[] = [];
+  if (parsed.frontmatter?.['$schema'] !== undefined) {
+    if (typeof parsed.frontmatter['$schema'] === 'string') {
+      schemas.push({
+        schema: parsed.frontmatter['$schema'],
+        source: 'self',
+        applied: false,
+      });
+    }
+  }
+
   const resource: MarkdownResource = {
     id: projectPath,
     projectPath,
@@ -64,7 +77,7 @@ export async function parseMarkdownResource(
     modifiedAt: stats.mtime,
     checksum,
     collections: [collectionName],
-    schemas: [],
+    schemas,
     content: parsed.content,
     links,
     headings,

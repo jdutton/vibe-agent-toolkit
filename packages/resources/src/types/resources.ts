@@ -7,6 +7,7 @@
  */
 
 import type { SHA256 } from '../schemas/checksum.js';
+import type { ValidationIssue } from '../schemas/validation-result.js';
 
 /**
  * Resource type discriminator for type-safe handling
@@ -16,6 +17,26 @@ export enum ResourceType {
   JSON_SCHEMA = 'json-schema',
   JSON = 'json',
   YAML = 'yaml',
+}
+
+/**
+ * Reference to a JSON Schema with validation tracking
+ */
+export interface SchemaReference {
+  /** Path or URL to schema */
+  schema: string;
+
+  /** Source of schema assignment: 'self' (from $schema field), 'cli' (from CLI flag), or collection name */
+  source: string;
+
+  /** Whether validation was attempted for this schema */
+  applied: boolean;
+
+  /** Validation result (undefined if not validated) */
+  valid?: boolean;
+
+  /** Validation errors specific to this schema */
+  errors?: ValidationIssue[];
 }
 
 /**
@@ -70,8 +91,8 @@ export interface MarkdownResource extends BaseResource {
   /** Parsed YAML frontmatter (if present) */
   frontmatter?: Record<string, unknown>;
 
-  /** JSON Schema paths referenced by this resource */
-  schemas: string[];
+  /** JSON Schema references with validation tracking */
+  schemas: SchemaReference[];
 
   /** Raw markdown content */
   content: string;
@@ -122,8 +143,8 @@ export interface JsonResource extends BaseResource {
   /** Parsed JSON data */
   data: unknown;
 
-  /** JSON Schema paths that validate this resource */
-  schemas?: string[];
+  /** JSON Schema references with validation tracking */
+  schemas?: SchemaReference[];
 }
 
 /**
@@ -136,8 +157,8 @@ export interface YamlResource extends BaseResource {
   /** Parsed YAML data */
   data: unknown;
 
-  /** JSON Schema paths that validate this resource */
-  schemas?: string[];
+  /** JSON Schema references with validation tracking */
+  schemas?: SchemaReference[];
 }
 
 /**
