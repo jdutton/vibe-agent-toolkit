@@ -1,4 +1,5 @@
 
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 /**
@@ -8,8 +9,10 @@ import path from 'node:path';
  * using real test fixtures.
  */
 
+/* eslint-disable security/detect-non-literal-fs-filename -- tests use dynamic file paths in temp directory */
 
-import { describe, expect, it, beforeEach } from 'vitest';
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { ResourceMetadata } from '../../src/types.js';
@@ -68,6 +71,19 @@ describe('ResourceRegistry - Integration Tests', () => {
       expect(resource.headings.length).toBeGreaterThan(0);
       expect(resource.sizeBytes).toBeGreaterThan(0);
       expect(resource.estimatedTokenCount).toBeGreaterThan(0);
+    });
+
+    it('should store frontmatter in resource metadata', async () => {
+      const registry = new ResourceRegistry();
+      const mdPath = path.join(fixturesDir, 'with-frontmatter.md');
+
+      const resource = await registry.addResource(mdPath);
+
+      expect(resource.frontmatter).toEqual({
+        title: 'Test Document',
+        tags: ['test', 'example'],
+        date: new Date('2024-01-15T00:00:00.000Z'),
+      });
     });
 
     it('should generate correct IDs from file paths', async () => {
@@ -522,6 +538,75 @@ describe('ResourceRegistry - Integration Tests', () => {
 
       expect(registry.getAllResources()).toHaveLength(1);
       expect(registry.getResourceById('target')).toBeDefined();
+    });
+  });
+
+  describe('validate with frontmatter schema', () => {
+    let tempDir: string;
+
+    beforeEach(async () => {
+      tempDir = await mkdtemp(path.join(normalizedTmpdir(), 'frontmatter-test-'));
+    });
+
+    afterEach(async () => {
+      await rm(tempDir, { recursive: true, force: true });
+    });
+
+    it('should validate frontmatter against schema and report missing required fields', async () => {
+      const registry = new ResourceRegistry();
+
+      // Add resource with valid frontmatter
+      const validPath = path.join(fixturesDir, 'with-frontmatter.md');
+      await registry.addResource(validPath);
+
+      // Add resource without frontmatter
+      const noFrontmatterPath = path.join(fixturesDir, 'target.md');
+      await registry.addResource(noFrontmatterPath);
+
+      const schema = {
+        type: 'object',
+        required: ['title', 'tags'],
+        properties: {
+          title: { type: 'string' },
+          tags: { type: 'array', items: { type: 'string' } },
+        },
+      };
+
+      const result = await registry.validate({ frontmatterSchema: schema });
+
+      // Should have 1 error for the file without frontmatter
+      expect(result.errorCount).toBe(1);
+      const error = result.issues.find((i) => i.type === 'frontmatter_missing');
+      expect(error).toBeDefined();
+      expect(error?.message).toContain('title');
+    });
+
+    it('should report YAML syntax errors in frontmatter', async () => {
+      const registry = new ResourceRegistry();
+
+      // Create a file with invalid YAML
+      const invalidYamlPath = path.join(tempDir, 'invalid-yaml.md');
+      await writeFile(
+        invalidYamlPath,
+        `---
+title: Test Document
+invalid: [unclosed bracket
+tags: test
+---
+
+# Content
+`
+      );
+
+      await registry.addResource(invalidYamlPath);
+
+      const result = await registry.validate();
+
+      // Should have 1 error for invalid YAML
+      expect(result.errorCount).toBe(1);
+      const error = result.issues.find((i) => i.type === 'frontmatter_invalid_yaml');
+      expect(error).toBeDefined();
+      expect(error?.message).toContain('Invalid YAML syntax');
     });
   });
 

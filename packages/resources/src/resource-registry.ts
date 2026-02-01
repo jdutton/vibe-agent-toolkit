@@ -13,6 +13,7 @@ import path from 'node:path';
 import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions } from '@vibe-agent-toolkit/utils';
 
 import { calculateChecksum } from './checksum.js';
+import { validateFrontmatter } from './frontmatter-validator.js';
 import { parseMarkdown } from './link-parser.js';
 import { validateLink } from './link-validator.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
@@ -43,6 +44,14 @@ export interface ResourceRegistryOptions {
   rootDir?: string;
   /** Validate resources when they are added (default: false) */
   validateOnAdd?: boolean;
+}
+
+/**
+ * Options for validate method.
+ */
+export interface ValidateOptions {
+  /** Optional JSON Schema to validate frontmatter against */
+  frontmatterSchema?: object;
 }
 
 /**
@@ -230,6 +239,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       filePath: absolutePath,
       links: parseResult.links,
       headings: parseResult.headings,
+      ...(parseResult.frontmatter !== undefined && { frontmatter: parseResult.frontmatter }),
+      ...(parseResult.frontmatterError !== undefined && { frontmatterError: parseResult.frontmatterError }),
       sizeBytes: parseResult.sizeBytes,
       estimatedTokenCount: parseResult.estimatedTokenCount,
       modifiedAt: stats.mtime,
@@ -313,7 +324,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
-   * Validate all links in all resources in the registry.
+   * Validate all links and optionally frontmatter in all resources in the registry.
    *
    * Checks:
    * - local_file links: file exists, anchor valid if present
@@ -321,12 +332,20 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * - external links: returns info (not errors)
    * - email links: valid by default
    * - unknown links: returns warning
+   * - frontmatter: validates against JSON Schema if provided
    *
+   * @param options - Validation options (optional)
    * @returns Validation result with all issues and statistics
    *
    * @example
    * ```typescript
+   * // Validate links only
    * const result = await registry.validate();
+   *
+   * // Validate links and frontmatter
+   * const schema = { type: 'object', required: ['title'] };
+   * const result = await registry.validate({ frontmatterSchema: schema });
+   *
    * console.log(`Passed: ${result.passed}`);
    * console.log(`Errors: ${result.errorCount}`);
    * console.log(`Warnings: ${result.warningCount}`);
@@ -336,7 +355,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * }
    * ```
    */
-  async validate(): Promise<ValidationResult> {
+  async validate(options?: ValidateOptions): Promise<ValidationResult> {
     const startTime = Date.now();
 
     // Build headings map for validation
@@ -345,6 +364,20 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Collect all validation issues
     const issues: ValidationIssue[] = [];
 
+    // Check for YAML parsing errors first
+    for (const resource of this.resourcesByPath.values()) {
+      if (resource.frontmatterError) {
+        issues.push({
+          severity: 'error',
+          resourcePath: resource.filePath,
+          line: 1,
+          type: 'frontmatter_invalid_yaml',
+          link: '',
+          message: `Invalid YAML syntax in frontmatter: ${resource.frontmatterError}`,
+        });
+      }
+    }
+
     // Validate each link in each resource
     for (const resource of this.resourcesByPath.values()) {
       for (const link of resource.links) {
@@ -352,6 +385,18 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         if (issue) {
           issues.push(issue);
         }
+      }
+    }
+
+    // Frontmatter validation (if schema provided)
+    if (options?.frontmatterSchema) {
+      for (const resource of this.resourcesByPath.values()) {
+        const frontmatterIssues = validateFrontmatter(
+          resource.frontmatter,
+          options.frontmatterSchema,
+          resource.filePath
+        );
+        issues.push(...frontmatterIssues);
       }
     }
 

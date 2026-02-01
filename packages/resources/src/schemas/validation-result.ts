@@ -18,6 +18,15 @@ export type ValidationSeverity = z.infer<typeof ValidationSeveritySchema>;
 /**
  * A single validation issue found during link validation.
  *
+ * Issue types:
+ * - broken_file: Local file link points to non-existent file
+ * - broken_anchor: Anchor link points to non-existent heading
+ * - external_url: External URL (informational, not validated)
+ * - unknown_link: Unknown link type
+ * - frontmatter_missing: Schema requires frontmatter, file has none
+ * - frontmatter_invalid_yaml: YAML syntax error in frontmatter
+ * - frontmatter_schema_error: Frontmatter fails JSON Schema validation
+ *
  * Includes details about what went wrong, where it occurred, and optionally
  * how to fix it.
  */

@@ -11,6 +11,7 @@
 
 import { readFile, stat } from 'node:fs/promises';
 
+import * as yaml from 'js-yaml';
 import type { Heading, Link, LinkReference, Root } from 'mdast';
 import remarkFrontmatter from 'remark-frontmatter';
 import remarkGfm from 'remark-gfm';
@@ -26,6 +27,8 @@ import type { HeadingNode, LinkType, ResourceLink } from './types.js';
 export interface ParseResult {
   links: ResourceLink[];
   headings: HeadingNode[];
+  frontmatter?: Record<string, unknown>;
+  frontmatterError?: string;
   content: string;
   sizeBytes: number;
   estimatedTokenCount: number;
@@ -71,9 +74,16 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
   // Extract headings with tree structure
   const headings = extractHeadings(tree);
 
+  // Extract frontmatter
+  const { frontmatter, error: frontmatterError } = extractFrontmatter(tree);
+
+  // With exactOptionalPropertyTypes: true, we must conditionally include the property
+  // rather than assigning undefined to it
   return {
     links,
     headings,
+    ...(frontmatter !== undefined && { frontmatter }),
+    ...(frontmatterError !== undefined && { frontmatterError }),
     content,
     sizeBytes,
     estimatedTokenCount,
@@ -368,4 +378,44 @@ function cleanupEmptyChildren(headings: HeadingNode[]): void {
       cleanupEmptyChildren(heading.children);
     }
   }
+}
+
+/**
+ * Extract and parse frontmatter from the markdown AST.
+ *
+ * Uses remark-frontmatter which creates 'yaml' nodes for frontmatter blocks.
+ * Parses YAML content and returns as plain object.
+ *
+ * @param tree - Markdown AST from unified/remark
+ * @returns Object with parsed frontmatter and any error message
+ */
+function extractFrontmatter(tree: Root): {
+  frontmatter?: Record<string, unknown>;
+  error?: string;
+} {
+  let frontmatterData: Record<string, unknown> | undefined;
+  let errorMessage: string | undefined;
+
+  visit(tree, 'yaml', (node: { value: string }) => {
+    if (node.value.trim() === '') {
+      // Empty frontmatter block
+      return;
+    }
+
+    try {
+      const parsed = yaml.load(node.value);
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        frontmatterData = parsed as Record<string, unknown>;
+      }
+    } catch (error) {
+      // Capture YAML parsing error for validation reporting
+      errorMessage = error instanceof Error ? error.message : String(error);
+    }
+  });
+
+  // With exactOptionalPropertyTypes: true, we must conditionally include properties
+  return {
+    ...(frontmatterData !== undefined && { frontmatter: frontmatterData }),
+    ...(errorMessage !== undefined && { error: errorMessage }),
+  };
 }

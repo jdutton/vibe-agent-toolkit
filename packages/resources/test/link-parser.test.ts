@@ -586,4 +586,74 @@ Content
       expect(result.estimatedTokenCount).toBe(101); // Rounds up
     });
   });
+
+  describe('frontmatter extraction', () => {
+    it('should extract frontmatter from markdown', async () => {
+      const mdPath = join(tempDir, 'with-frontmatter.md');
+      await writeFile(
+        mdPath,
+        `---
+title: Test Document
+tags: [test, example]
+priority: 1
+---
+
+# Content
+
+Some content here.`,
+      );
+
+      const result = await parseMarkdown(mdPath);
+
+      expect(result.frontmatter).toEqual({
+        title: 'Test Document',
+        tags: ['test', 'example'],
+        priority: 1,
+      });
+    });
+
+    it('should return undefined for markdown without frontmatter', async () => {
+      const mdPath = join(tempDir, 'no-frontmatter.md');
+      await writeFile(mdPath, '# Just Content\n\nNo frontmatter here.');
+
+      const result = await parseMarkdown(mdPath);
+
+      expect(result.frontmatter).toBeUndefined();
+    });
+
+    it('should handle empty frontmatter', async () => {
+      const mdPath = join(tempDir, 'empty-frontmatter.md');
+      await writeFile(
+        mdPath,
+        `---
+---
+
+# Content`,
+      );
+
+      const result = await parseMarkdown(mdPath);
+
+      expect(result.frontmatter).toBeUndefined();
+    });
+
+    it('should capture YAML parsing errors', async () => {
+      const mdPath = join(tempDir, 'invalid-yaml.md');
+      await writeFile(
+        mdPath,
+        `---
+title: Test Document
+invalid: [unclosed bracket
+tags: test
+---
+
+# Content`,
+      );
+
+      const result = await parseMarkdown(mdPath);
+
+      expect(result.frontmatter).toBeUndefined();
+      expect(result.frontmatterError).toBeDefined();
+      expect(result.frontmatterError).not.toBe('');
+    });
+  });
 });

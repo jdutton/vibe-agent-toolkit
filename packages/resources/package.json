@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/resources",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Markdown resource parsing, validation, and link integrity checking",
   "type": "module",
   "main": "./dist/index.js",
@@ -34,6 +34,8 @@
   "license": "MIT",
   "dependencies": {
     "@vibe-agent-toolkit/utils": "workspace:*",
+    "ajv": "^8.17.1",
+    "js-yaml": "^4.1.1",
     "picomatch": "^4.0.3",
     "remark-frontmatter": "^5.0.0",
     "remark-gfm": "^4.0.0",
@@ -43,6 +45,7 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@types/js-yaml": "^4.0.9",
     "@types/mdast": "^4.0.4",
     "@types/node": "^22.10.5",
     "@types/picomatch": "^4.0.2",

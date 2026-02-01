@@ -73,13 +73,17 @@ export type ResourceLink = z.infer<typeof ResourceLinkSchema>;
  * Complete metadata for a markdown resource.
  *
  * Includes all parsed information about the resource: its links, headings structure,
- * file stats, and identifiers. Designed to be extensible for future front matter support.
+ * file stats, and identifiers. Supports YAML frontmatter parsing.
  */
 export const ResourceMetadataSchema = z.object({
   id: z.string().describe('Unique identifier (inferred from filePath or overridden by frontmatter)'),
   filePath: z.string().describe('Absolute path to the resource file'),
   links: z.array(ResourceLinkSchema).describe('All links found in the resource'),
   headings: z.array(HeadingNodeSchema).describe('Document table of contents (top-level headings only; children are nested)'),
+  frontmatter: z.record(z.string(), z.unknown()).optional()
+    .describe('Parsed YAML frontmatter (if present in markdown file)'),
+  frontmatterError: z.string().optional()
+    .describe('YAML parsing error message (if frontmatter contains invalid YAML syntax)'),
   sizeBytes: z.number().int().nonnegative().describe('File size in bytes'),
   estimatedTokenCount: z.number().int().nonnegative().describe('Estimated token count for LLM context (roughly 1 token per 4 chars)'),
   modifiedAt: z.date().describe('Last modified timestamp'),

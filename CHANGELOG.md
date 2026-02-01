@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-02-01
+
+### Added
+- **Frontmatter Validation**: Parse and validate YAML frontmatter in markdown files
+  - CLI flag `--frontmatter-schema` for `vat resources validate` to validate against JSON Schema
+  - Reports YAML syntax errors and schema validation failures
+  - `ResourceMetadata` includes parsed frontmatter data when present
+
 ## [0.1.2] - 2026-01-30
 
 ### Added

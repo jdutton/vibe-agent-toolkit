@@ -2,14 +2,44 @@
  * Resources validate command - strict validation with error reporting
  */
 
+import { readFile } from 'node:fs/promises';
+import * as path from 'node:path';
+
+import * as yaml from 'js-yaml';
+
 import { createLogger } from '../../utils/logger.js';
 import { flushStdout, writeTestFormatError, writeYamlOutput } from '../../utils/output.js';
 import { loadResourcesWithConfig } from '../../utils/resource-loader.js';
 
 import { handleCommandError } from './command-helpers.js';
 
+/**
+ * Load JSON Schema from file (supports .json and .yaml).
+ *
+ * @param schemaPath - Path to schema file
+ * @returns Parsed schema object
+ */
+async function loadSchema(schemaPath: string): Promise<object> {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- schemaPath is user-provided CLI argument
+  const content = await readFile(schemaPath, 'utf-8');
+  const ext = path.extname(schemaPath).toLowerCase();
+
+  if (ext === '.json') {
+    return JSON.parse(content) as object;
+  } else if (ext === '.yaml' || ext === '.yml') {
+    const parsed = yaml.load(content);
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      return parsed as object;
+    }
+    throw new Error('YAML schema must be an object');
+  } else {
+    throw new Error(`Unsupported schema format: ${ext} (use .json or .yaml)`);
+  }
+}
+
 interface ValidateOptions {
   debug?: boolean;
+  frontmatterSchema?: string; // Path to JSON Schema file
 }
 
 export async function validateCommand(
@@ -23,8 +53,17 @@ export async function validateCommand(
     // Load resources with config support
     const { registry } = await loadResourcesWithConfig(pathArg, logger);
 
+    // Load frontmatter schema if provided
+    let frontmatterSchemaObj: object | undefined;
+    if (options.frontmatterSchema) {
+      logger.debug(`Loading frontmatter schema from: ${options.frontmatterSchema}`);
+      frontmatterSchemaObj = await loadSchema(options.frontmatterSchema);
+    }
+
     // Validate all resources
-    const validationResult = await registry.validate();
+    const validationResult = await registry.validate(
+      ...(frontmatterSchemaObj ? [{ frontmatterSchema: frontmatterSchemaObj }] : [])
+    );
     const stats = registry.getStats();
     const duration = Date.now() - startTime;
 

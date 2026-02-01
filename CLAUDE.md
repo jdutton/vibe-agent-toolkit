@@ -63,6 +63,60 @@ const ResourceMetadataJsonSchema = zodToJsonSchema(ResourceMetadataSchema);
 const result = ResourceMetadataSchema.safeParse(data);
 ```
 
+### JSON Schema Validation vs Zod
+
+**Use Zod for**: All TypeScript validation, internal schemas, runtime type safety
+**Use AJV for**: Validating arbitrary user-provided JSON Schemas (e.g., frontmatter validation)
+
+Why:
+- Zod provides TypeScript types + runtime validation for our code
+- AJV validates data against standard JSON Schema files (what users provide)
+- Each tool has a specific purpose
+
+**Location**: `packages/resources/src/frontmatter-validator.ts` (only place using AJV)
+
+**Pattern**: When users need to validate their data:
+- Users provide JSON Schema file (industry standard)
+- We use AJV to validate their data against their schema
+- We use Zod for our own internal validation needs
+
+### Frontmatter Validation
+
+Resources package parses and stores YAML frontmatter from markdown files. Users can optionally validate frontmatter against JSON Schemas.
+
+**Common Use Case**: Define minimum required fields, allow extras
+
+Most projects have files (README.md, etc.) without frontmatter - this is fine. Validation only enforces requirements when frontmatter is present.
+
+**Schema Design Pattern**:
+- Use `"required": [...]` for must-have fields
+- Omit or set `"additionalProperties": true` to allow custom fields
+- Files without frontmatter: No error unless schema requires fields
+
+**Example Usage**:
+```bash
+# Parse frontmatter, report YAML errors only
+vat resources validate docs/
+
+# Validate against schema
+vat resources validate docs/ --frontmatter-schema schema.json
+```
+
+**Example Schema** (knowledge base pattern):
+```json
+{
+  "type": "object",
+  "required": ["title", "description"],
+  "properties": {
+    "title": { "type": "string", "minLength": 1 },
+    "description": { "type": "string" },
+    "category": { "enum": ["guide", "reference", "tutorial", "api"] },
+    "keywords": { "type": "array", "items": { "type": "string" } },
+    "source_url": { "type": "string", "format": "uri" }
+  }
+}
+```
+
 ### CLI Development
 
 **Commander.js for Command-Line Interface**
