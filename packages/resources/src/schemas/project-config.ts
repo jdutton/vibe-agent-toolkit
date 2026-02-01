@@ -22,7 +22,7 @@ export const CollectionValidationSchema = z.object({
   checkUrlLinks: z.boolean().optional()
     .describe('Whether to validate external URL links (default: false)'),
   checkGitIgnored: z.boolean().optional()
-    .describe('Whether to check if referenced files are git-ignored (default: false)'),
+    .describe('Whether to check if non-ignored files link to git-ignored files (default: true)'),
 }).describe('Validation configuration for a collection');
 
 export type CollectionValidation = z.infer<typeof CollectionValidationSchema>;

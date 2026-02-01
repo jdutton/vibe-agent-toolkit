@@ -56,6 +56,8 @@ export interface ResourceRegistryOptions {
 export interface ValidateOptions {
   /** Optional JSON Schema to validate frontmatter against */
   frontmatterSchema?: object;
+  /** Skip git-ignore checks (default: false) */
+  skipGitIgnoreCheck?: boolean;
 }
 
 /**
@@ -270,7 +272,12 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     if (this.validateOnAdd) {
       const headingsByFile = this.buildHeadingsByFileMap();
       for (const link of resource.links) {
-        const issue = await validateLink(link, absolutePath, headingsByFile);
+        // Only pass options if projectRoot is defined (exactOptionalPropertyTypes requirement)
+        const options = this.rootDir === undefined
+          ? undefined
+          : { projectRoot: this.rootDir, skipGitIgnoreCheck: false };
+
+        const issue = await validateLink(link, absolutePath, headingsByFile, options);
         if (issue) {
           throw new Error(`Validation failed: ${issue.message}`);
         }
@@ -340,6 +347,71 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
+   * Check for YAML parsing errors in all resources.
+   * @private
+   */
+  private collectYamlErrors(): ValidationIssue[] {
+    const issues: ValidationIssue[] = [];
+    for (const resource of this.resourcesByPath.values()) {
+      if (resource.frontmatterError) {
+        issues.push({
+          severity: 'error',
+          resourcePath: resource.filePath,
+          line: 1,
+          type: 'frontmatter_invalid_yaml',
+          link: '',
+          message: `Invalid YAML syntax in frontmatter: ${resource.frontmatterError}`,
+        });
+      }
+    }
+    return issues;
+  }
+
+  /**
+   * Validate all links in all resources.
+   * @private
+   */
+  private async validateAllLinks(
+    headingsByFile: Map<string, HeadingNode[]>,
+    skipGitIgnoreCheck: boolean
+  ): Promise<ValidationIssue[]> {
+    const issues: ValidationIssue[] = [];
+
+    for (const resource of this.resourcesByPath.values()) {
+      for (const link of resource.links) {
+        // Only pass options if projectRoot is defined (exactOptionalPropertyTypes requirement)
+        const validateOptions = this.rootDir === undefined
+          ? { skipGitIgnoreCheck }
+          : { projectRoot: this.rootDir, skipGitIgnoreCheck };
+
+        const issue = await validateLink(link, resource.filePath, headingsByFile, validateOptions);
+        if (issue) {
+          issues.push(issue);
+        }
+      }
+    }
+
+    return issues;
+  }
+
+  /**
+   * Validate frontmatter against a JSON Schema.
+   * @private
+   */
+  private validateAllFrontmatter(schema: object): ValidationIssue[] {
+    const issues: ValidationIssue[] = [];
+    for (const resource of this.resourcesByPath.values()) {
+      const frontmatterIssues = validateFrontmatter(
+        resource.frontmatter,
+        schema,
+        resource.filePath
+      );
+      issues.push(...frontmatterIssues);
+    }
+    return issues;
+  }
+
+  /**
    * Validate all links and optionally frontmatter in all resources in the registry.
    *
    * Checks:
@@ -381,39 +453,18 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     const issues: ValidationIssue[] = [];
 
     // Check for YAML parsing errors first
-    for (const resource of this.resourcesByPath.values()) {
-      if (resource.frontmatterError) {
-        issues.push({
-          severity: 'error',
-          resourcePath: resource.filePath,
-          line: 1,
-          type: 'frontmatter_invalid_yaml',
-          link: '',
-          message: `Invalid YAML syntax in frontmatter: ${resource.frontmatterError}`,
-        });
-      }
-    }
+    issues.push(...this.collectYamlErrors());
 
     // Validate each link in each resource
-    for (const resource of this.resourcesByPath.values()) {
-      for (const link of resource.links) {
-        const issue = await validateLink(link, resource.filePath, headingsByFile);
-        if (issue) {
-          issues.push(issue);
-        }
-      }
-    }
+    const linkIssues = await this.validateAllLinks(
+      headingsByFile,
+      options?.skipGitIgnoreCheck ?? false
+    );
+    issues.push(...linkIssues);
 
     // Frontmatter validation (if schema provided)
     if (options?.frontmatterSchema) {
-      for (const resource of this.resourcesByPath.values()) {
-        const frontmatterIssues = validateFrontmatter(
-          resource.frontmatter,
-          options.frontmatterSchema,
-          resource.filePath
-        );
-        issues.push(...frontmatterIssues);
-      }
+      issues.push(...this.validateAllFrontmatter(options.frontmatterSchema));
     }
 
     // Count issues by severity

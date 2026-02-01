@@ -492,7 +492,7 @@ describe('validateLink', () => {
     });
 
     /**
-     * Helper to test that a link to a gitignored file returns an error
+     * Helper to test that a non-ignored file linking to a gitignored file returns an error
      */
     async function assertGitignoreError(linkHref: string, linkText: string): Promise<void> {
       const sourceFile = path.join(gitRoot, 'source.md');
@@ -506,9 +506,13 @@ describe('validateLink', () => {
           headingsMap,
           expected: {
             severity: 'error',
-            type: 'broken_file',
+            type: 'link_to_gitignored',
             messageContains: 'gitignored',
             hasSuggestion: true,
+          },
+          validationOptions: {
+            projectRoot: gitRoot,
+            skipGitIgnoreCheck: false,
           },
         },
         expect
@@ -559,6 +563,10 @@ describe('validateLink', () => {
           link,
           headingsMap,
           expected: null,
+          validationOptions: {
+            projectRoot: gitRoot,
+            skipGitIgnoreCheck: false,
+          },
         },
         expect
       );

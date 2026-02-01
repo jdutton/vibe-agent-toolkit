@@ -11,6 +11,7 @@ import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import type { Assertion } from 'vitest';
 
 import { parseMarkdown } from '../src/link-parser.js';
+import type { ValidateLinkOptions as LinkValidatorOptions } from '../src/link-validator.js';
 import { validateLink } from '../src/link-validator.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 import type { HeadingNode, ResourceLink, ValidationIssue } from '../src/types.js';
@@ -215,6 +216,8 @@ export interface ValidateLinkOptions {
     /** Expected link property value */
     link?: string;
   };
+  /** Validation options (projectRoot, skipGitIgnoreCheck) */
+  validationOptions?: LinkValidatorOptions;
 }
 
 /**
@@ -272,9 +275,9 @@ export async function assertValidation(
   options: ValidateLinkOptions,
   expectFn: (_: ValidationIssue | null) => Assertion<ValidationIssue | null>,
 ): Promise<void> {
-  const { sourceFile, link, headingsMap, expected } = options;
+  const { sourceFile, link, headingsMap, expected, validationOptions } = options;
 
-  const result = await validateLink(link, sourceFile, headingsMap);
+  const result = await validateLink(link, sourceFile, headingsMap, validationOptions);
 
   if (expected === null) {
     expectFn(result).toBeNull();
