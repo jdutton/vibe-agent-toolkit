@@ -28,6 +28,7 @@ export interface ParseResult {
   links: ResourceLink[];
   headings: HeadingNode[];
   frontmatter?: Record<string, unknown>;
+  frontmatterError?: string;
   content: string;
   sizeBytes: number;
   estimatedTokenCount: number;
@@ -74,7 +75,7 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
   const headings = extractHeadings(tree);
 
   // Extract frontmatter
-  const frontmatter = extractFrontmatter(tree);
+  const { frontmatter, error: frontmatterError } = extractFrontmatter(tree);
 
   // With exactOptionalPropertyTypes: true, we must conditionally include the property
   // rather than assigning undefined to it
@@ -82,6 +83,7 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
     links,
     headings,
     ...(frontmatter !== undefined && { frontmatter }),
+    ...(frontmatterError !== undefined && { frontmatterError }),
     content,
     sizeBytes,
     estimatedTokenCount,
@@ -385,10 +387,14 @@ function cleanupEmptyChildren(headings: HeadingNode[]): void {
  * Parses YAML content and returns as plain object.
  *
  * @param tree - Markdown AST from unified/remark
- * @returns Parsed frontmatter object, or undefined if no frontmatter present
+ * @returns Object with parsed frontmatter and any error message
  */
-function extractFrontmatter(tree: Root): Record<string, unknown> | undefined {
+function extractFrontmatter(tree: Root): {
+  frontmatter?: Record<string, unknown>;
+  error?: string;
+} {
   let frontmatterData: Record<string, unknown> | undefined;
+  let errorMessage: string | undefined;
 
   visit(tree, 'yaml', (node: { value: string }) => {
     if (node.value.trim() === '') {
@@ -401,11 +407,15 @@ function extractFrontmatter(tree: Root): Record<string, unknown> | undefined {
       if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
         frontmatterData = parsed as Record<string, unknown>;
       }
-    } catch {
-      // YAML parsing errors will be caught during validation
-      // Don't fail parsing here, let validation report the error
+    } catch (error) {
+      // Capture YAML parsing error for validation reporting
+      errorMessage = error instanceof Error ? error.message : String(error);
     }
   });
 
-  return frontmatterData;
+  // With exactOptionalPropertyTypes: true, we must conditionally include properties
+  return {
+    ...(frontmatterData !== undefined && { frontmatter: frontmatterData }),
+    ...(errorMessage !== undefined && { error: errorMessage }),
+  };
 }

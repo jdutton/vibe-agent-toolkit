@@ -240,6 +240,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       links: parseResult.links,
       headings: parseResult.headings,
       ...(parseResult.frontmatter !== undefined && { frontmatter: parseResult.frontmatter }),
+      ...(parseResult.frontmatterError !== undefined && { frontmatterError: parseResult.frontmatterError }),
       sizeBytes: parseResult.sizeBytes,
       estimatedTokenCount: parseResult.estimatedTokenCount,
       modifiedAt: stats.mtime,
@@ -362,6 +363,20 @@ export class ResourceRegistry implements ResourceCollectionInterface {
 
     // Collect all validation issues
     const issues: ValidationIssue[] = [];
+
+    // Check for YAML parsing errors first
+    for (const resource of this.resourcesByPath.values()) {
+      if (resource.frontmatterError) {
+        issues.push({
+          severity: 'error',
+          resourcePath: resource.filePath,
+          line: 1,
+          type: 'frontmatter_invalid_yaml',
+          link: '',
+          message: `Invalid YAML syntax in frontmatter: ${resource.frontmatterError}`,
+        });
+      }
+    }
 
     // Validate each link in each resource
     for (const resource of this.resourcesByPath.values()) {

@@ -635,5 +635,25 @@ Some content here.`,
 
       expect(result.frontmatter).toBeUndefined();
     });
+
+    it('should capture YAML parsing errors', async () => {
+      const mdPath = join(tempDir, 'invalid-yaml.md');
+      await writeFile(
+        mdPath,
+        `---
+title: Test Document
+invalid: [unclosed bracket
+tags: test
+---
+
+# Content`,
+      );
+
+      const result = await parseMarkdown(mdPath);
+
+      expect(result.frontmatter).toBeUndefined();
+      expect(result.frontmatterError).toBeDefined();
+      expect(result.frontmatterError).not.toBe('');
+    });
   });
 });

@@ -82,6 +82,8 @@ export const ResourceMetadataSchema = z.object({
   headings: z.array(HeadingNodeSchema).describe('Document table of contents (top-level headings only; children are nested)'),
   frontmatter: z.record(z.string(), z.unknown()).optional()
     .describe('Parsed YAML frontmatter (if present in markdown file)'),
+  frontmatterError: z.string().optional()
+    .describe('YAML parsing error message (if frontmatter contains invalid YAML syntax)'),
   sizeBytes: z.number().int().nonnegative().describe('File size in bytes'),
   estimatedTokenCount: z.number().int().nonnegative().describe('Estimated token count for LLM context (roughly 1 token per 4 chars)'),
   modifiedAt: z.date().describe('Last modified timestamp'),
