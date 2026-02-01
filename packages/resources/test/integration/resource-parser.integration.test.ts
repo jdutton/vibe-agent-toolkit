@@ -18,6 +18,17 @@ import {
 import { ResourceType } from '../../src/types/resources.ts';
 
 // ============================================================================
+// File-scope test constants (accessible to all tests)
+// ============================================================================
+
+const COLLECTION_DOCS = 'docs';
+const COLLECTION_SCHEMAS = 'schemas';
+const USER_SCHEMA_FILE = 'user.schema.json';
+const COLLECTION_DATA = 'data';
+const COLLECTION_CONFIG = 'config';
+const CONFIG_YAML_FILE = 'config.yaml';
+
+// ============================================================================
 // Test suite setup
 // ============================================================================
 
@@ -32,8 +43,6 @@ const suite = {
 };
 
 describe('parseMarkdownResource', () => {
-  // Test constants
-  const COLLECTION_DOCS = 'docs';
 
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
@@ -118,10 +127,6 @@ More content.`;
 });
 
 describe('parseJsonSchemaResource', () => {
-  // Test constants
-  const COLLECTION_SCHEMAS = 'schemas';
-  const USER_SCHEMA_FILE = 'user.schema.json';
-
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
 
@@ -179,9 +184,6 @@ describe('parseJsonSchemaResource', () => {
 });
 
 describe('parseJsonResource', () => {
-  // Test constants
-  const COLLECTION_DATA = 'data';
-
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
 
@@ -232,10 +234,6 @@ describe('parseJsonResource', () => {
 });
 
 describe('parseYamlResource', () => {
-  // Test constants
-  const COLLECTION_CONFIG = 'config';
-  const CONFIG_YAML_FILE = 'config.yaml';
-
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
 
@@ -269,7 +267,6 @@ settings:
   });
 
   it('should handle YAML with arrays', async () => {
-    const COLLECTION_DATA = 'data';
     const filePath = join(suite.tempDir, 'list.yml');
     const yaml = `
 items:
