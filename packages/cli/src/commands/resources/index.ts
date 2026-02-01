@@ -51,6 +51,7 @@ Example:
     .command('validate [path]')
     .description('Validate markdown resources (link integrity, anchors)')
     .option('--debug', 'Enable debug logging')
+    .option('--frontmatter-schema <path>', 'Validate frontmatter against JSON Schema file (.json or .yaml)')
     .action(validateCommand)
     .addHelpText(
       'after',
@@ -66,11 +67,37 @@ Description:
 Checks:
   Internal file links, anchor links (#heading), cross-file anchors (file.md#heading)
 
+Frontmatter Validation:
+  --frontmatter-schema <path>
+    Validate frontmatter against JSON Schema file.
+
+    Behavior:
+      - Files without frontmatter: OK (unless schema requires fields)
+      - Extra fields: OK by default (unless schema sets additionalProperties: false)
+      - YAML syntax errors: Always reported
+
+    Common pattern: Define minimum required fields, allow extras.
+
+    Example schema:
+      {
+        "type": "object",
+        "required": ["title", "description"],
+        "properties": {
+          "title": { "type": "string" },
+          "description": { "type": "string" },
+          "category": { "enum": ["guide", "reference", "tutorial"] }
+        }
+      }
+
 Exit Codes:
   0 - Success  |  1 - Validation errors  |  2 - System error
 
-Example:
-  $ vat resources validate docs/        # Recursively validate all *.md under docs/
+Examples:
+  $ vat resources validate docs/
+    Parse frontmatter, report YAML syntax errors only
+
+  $ vat resources validate docs/ --frontmatter-schema schema.json
+    Validate frontmatter against schema
 `
     );
 
