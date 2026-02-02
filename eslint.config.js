@@ -67,6 +67,7 @@ export default [
     rules: {
       // Local rules - agentic code safety
       'local/no-child-process-execSync': 'error',
+      'local/no-hardcoded-path-split': 'error',
       'local/no-path-startswith': 'error',
       'local/no-unix-shell-commands': 'error',
       'local/no-os-tmpdir': 'error',

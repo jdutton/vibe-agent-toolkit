@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, sonarjs/no-duplicate-string, security/detect-non-literal-fs-filename */
 // Test file: allows test-specific patterns (any types for error testing, duplicate strings, dynamic fs paths)
 import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 
 import { describe, it, expect } from 'vitest';
 
@@ -55,7 +55,7 @@ describe('safeExecSync', () => {
       const actualPath = (result as string).trim();
       const expectedPath = tempDir;
       // Compare resolved paths to handle symlinks
-      expect(actualPath.endsWith(expectedPath.split('/').pop() ?? '')).toBe(true);
+      expect(actualPath.endsWith(basename(expectedPath))).toBe(true);
     } finally {
       rmSync(tempDir, { recursive: true, force: true });
     }

@@ -38,6 +38,7 @@ export function matchesGlobPattern(filePath: string, pattern: string): boolean {
   }
 
   // Strategy 2: For directory patterns, try matching against path segments
+  // eslint-disable-next-line local/no-hardcoded-path-split -- path is normalized above
   const segments = unixPath.split('/');
   for (let i = Math.min(10, segments.length); i > 0; i--) {
     const partialPath = segments.slice(-i).join('/');

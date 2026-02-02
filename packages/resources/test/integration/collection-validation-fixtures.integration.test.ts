@@ -17,7 +17,7 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { load as loadYaml } from 'js-yaml';
@@ -72,7 +72,7 @@ describe('Collection validation with test fixtures', () => {
     expect(errors).toHaveLength(7);
 
     // Verify all expected files have errors
-    const errorFiles = errors.map((e) => e.resourcePath.split('/').pop());
+    const errorFiles = errors.map((e) => basename(e.resourcePath));
     expect(errorFiles).toContain('guide-invalid-category.md');
     expect(errorFiles).toContain('guide-missing-required.md');
     expect(errorFiles).toContain('doc-invalid-status.md');

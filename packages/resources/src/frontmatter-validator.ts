@@ -173,6 +173,7 @@ function formatValidationError(
  * @returns Value at path or undefined
  */
 function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
+  // eslint-disable-next-line local/no-hardcoded-path-split -- JSON Schema instancePath uses forward slashes (not file paths)
   const parts = path.split('/').filter(Boolean);
   let current: unknown = obj;
 

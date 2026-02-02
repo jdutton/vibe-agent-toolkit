@@ -4,6 +4,8 @@
  * Applies include/exclude pattern rules with precedence (exclude wins).
  */
 
+import { basename as getBasename } from 'node:path';
+
 import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
@@ -55,7 +57,7 @@ export function matchesCollection(filePath: string, collection: CollectionConfig
   const normalizedPath = toForwardSlash(filePath);
 
   // Extract basename for root-level pattern matching
-  const basename = normalizedPath.split('/').pop() ?? '';
+  const basename = getBasename(filePath);
 
   // Expand patterns (paths → globs)
   const includePatterns = expandPatterns(collection.include);
