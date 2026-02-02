@@ -25,7 +25,6 @@ export type {
 
 // Validation result types
 export type {
-  ValidationSeverity,
   ValidationIssue,
   ValidationResult,
 } from './schemas/validation-result.js';

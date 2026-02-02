@@ -49,7 +49,6 @@ describe('SchemaReference', () => {
         applied: true,
         valid: false,
         errors: [{
-          severity: 'error',
           resourcePath: 'test.md',
           line: 1,
           type: 'frontmatter_schema_error',

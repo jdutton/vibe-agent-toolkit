@@ -228,9 +228,8 @@ export interface ValidateLinkOptions {
   link: ResourceLink;
   /** Headings map for validation */
   headingsMap: Map<string, HeadingNode[]>;
-  /** Expected validation result (null = valid, object = error/warning/info) */
+  /** Expected validation result (null = valid, object = error) */
   expected: null | {
-    severity: ValidationIssue['severity'];
     type: ValidationIssue['type'];
     messageContains?: string | string[];
     hasSuggestion?: boolean;
@@ -266,8 +265,7 @@ function assertValidationError(
   expected: NonNullable<ValidateLinkOptions['expected']>,
   expectFn: (_: unknown) => Assertion<unknown>,
 ): void {
-  // Assert severity and type
-  expectFn(result?.severity).toBe(expected.severity);
+  // Assert type
   expectFn(result?.type).toBe(expected.type);
 
   // Assert message contains expected text(s)

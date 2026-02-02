@@ -37,7 +37,6 @@ describe('Frontmatter Validation Modes', () => {
       const issues = validateFrontmatter(frontmatter, strictSchema, RESOURCE_PATH);
 
       expect(issues).toHaveLength(1);
-      expect(issues[0]?.severity).toBe('error');
       expect(issues[0]?.message).toMatch(/additional properties/);
     });
 

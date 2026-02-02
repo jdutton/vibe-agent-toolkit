@@ -84,7 +84,6 @@ export function validateFrontmatter(
       const requiredFields = schemaRequires.join(', ');
 
       issues.push({
-        severity: 'error',
         resourcePath,
         line: 1,
         type: 'frontmatter_missing',
@@ -106,7 +105,6 @@ export function validateFrontmatter(
   for (const error of validate.errors) {
     const message = formatValidationError(error, frontmatter, mode, schemaPath);
     issues.push({
-      severity: 'error',
       resourcePath,
       line: 1,
       type: 'frontmatter_schema_error',

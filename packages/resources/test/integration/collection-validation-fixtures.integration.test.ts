@@ -67,12 +67,11 @@ describe('Collection validation with test fixtures', () => {
   it('should validate test fixtures and find exactly 7 errors', async () => {
     const { result } = await setupAndValidate();
 
-    // Should find exactly 7 validation errors
-    const errors = result.issues.filter((i) => i.severity === 'error');
-    expect(errors).toHaveLength(7);
+    // Should find exactly 7 validation errors (all issues are errors now)
+    expect(result.issues).toHaveLength(7);
 
     // Verify all expected files have errors
-    const errorFiles = errors.map((e) => basename(e.resourcePath));
+    const errorFiles = result.issues.map((e) => basename(e.resourcePath));
     expect(errorFiles).toContain('guide-invalid-category.md');
     expect(errorFiles).toContain('guide-missing-required.md');
     expect(errorFiles).toContain('doc-invalid-status.md');
@@ -88,9 +87,7 @@ describe('Collection validation with test fixtures', () => {
     // Valid files should have no errors
     const validFiles = ['guide-valid.md', 'doc-valid.md', 'code-reviewer-SKILL.md'];
     const validFileErrors = result.issues.filter(
-      (i) =>
-        i.severity === 'error' &&
-        validFiles.some((f) => i.resourcePath.includes(f))
+      (i) => validFiles.some((f) => i.resourcePath.includes(f))
     );
 
     expect(validFileErrors).toHaveLength(0);
@@ -153,9 +150,7 @@ describe('Collection validation with test fixtures', () => {
 
     // doc-valid.md has custom_field and another_custom which should be allowed
     const docErrors = result.issues.filter(
-      (i) =>
-        i.severity === 'error' &&
-        i.resourcePath.includes('doc-valid.md')
+      (i) => i.resourcePath.includes('doc-valid.md')
     );
     expect(docErrors).toHaveLength(0);
   });
@@ -166,7 +161,6 @@ describe('Collection validation with test fixtures', () => {
     // Skills collection should catch multiple error types
     const skillErrors = result.issues.filter(
       (i) =>
-        i.severity === 'error' &&
         i.resourcePath.includes('-SKILL.md') &&
         !i.resourcePath.includes('code-reviewer')
     );

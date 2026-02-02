@@ -12,7 +12,6 @@ export function createResourcesCommand(): Command {
 
   resources
     .description('Markdown resource scanning and link validation (run before commit)')
-    .option('--verbose', 'Show verbose help')
     .helpCommand(false) // Disable redundant 'help' command, use --help instead
     .addHelpText(
       'after',
@@ -29,21 +28,32 @@ Configuration:
     .command('scan [path]')
     .description('Discover markdown resources in directory')
     .option('--debug', 'Enable debug logging')
+    .option('--verbose', 'Show full file list with details')
+    .option('--collection <id>', 'Filter by collection ID')
     .action(scanCommand)
     .addHelpText(
       'after',
       `
 Description:
-  Recursively scans for markdown files and reports statistics. Outputs YAML to stdout.
-  Path argument: base directory (defaults to current directory)
-  When path specified: recursively finds all *.md files (ignores config)
-  When no path: uses vibe-agent-toolkit.config.yaml include/exclude patterns
+  Scans for markdown files and reports statistics. Outputs YAML to stdout.
+
+Path Argument Behavior:
+  WITH path: Scans all *.md recursively under path (ignores config)
+  WITHOUT path: Uses vibe-agent-toolkit.config.yaml patterns
+
+Filtering:
+  --collection <id>: Only scan files in specified collection
+                     (requires config mode - no path argument)
 
 Output Fields:
-  status, filesScanned, linksFound, duration
+  status, filesScanned, linksFound, anchorsFound, durationSecs
+  collections: Per-collection resource counts (resourceCount)
+  files: (only with --verbose) Array with per-file details
 
-Example:
-  $ vat resources scan docs/           # Recursively scan all *.md under docs/
+Examples:
+  $ vat resources scan docs/                    # Scan all *.md under docs/
+  $ vat resources scan --verbose                # Include full file details
+  $ vat resources scan --collection guides      # Only scan guides collection
 `
     );
 
@@ -54,16 +64,36 @@ Example:
     .option('--frontmatter-schema <path>', 'Validate frontmatter against JSON Schema file (.json or .yaml)')
     .option('--validation-mode <mode>', 'Validation mode for schemas: strict (default) or permissive', 'strict')
     .option('--format <format>', 'Output format: yaml (default), json, or text', 'yaml')
+    .option('--collection <id>', 'Filter by collection ID')
     .action(validateCommand)
     .addHelpText(
       'after',
       `
 Description:
-  Recursively validates internal links and anchors in markdown files.
-  Path argument: base directory (defaults to current directory)
-  When path specified: recursively finds all *.md files (ignores config)
-  When no path: uses vibe-agent-toolkit.config.yaml include/exclude patterns
+  Validates internal links and anchors in markdown files.
   External URLs are NOT validated (by design).
+
+Path Argument Behavior:
+
+  WITH path argument (e.g., "vat resources validate docs/"):
+    • Scans all *.md files recursively under the specified directory
+    • IGNORES vibe-agent-toolkit.config.yaml (collections, includes, excludes)
+    • DOES NOT show collection statistics in output
+    • Use for: Quick validation of a specific directory tree
+
+  WITHOUT path argument (e.g., "vat resources validate"):
+    • Uses vibe-agent-toolkit.config.yaml to determine files to scan
+    • Applies include/exclude patterns from config
+    • SHOWS collection statistics and per-collection validation rules
+    • Validates frontmatter against collection-specific schemas (if configured)
+    • Use for: Full project validation with collection-aware rules
+
+  ⚠️  To see collection statistics and use collection-specific validation,
+      run WITHOUT a path argument and configure collections in config file.
+
+Filtering:
+  --collection <id>: Only validate files in specified collection
+                     (requires config mode - no path argument)
 
 Output Formats:
   --format yaml (default)
@@ -74,6 +104,16 @@ Output Formats:
 
   --format text
     Human-readable format. Errors to stderr (test-format style).
+
+Output Fields (success):
+  status, filesScanned, linksChecked, durationSecs, validationMode
+  collections: Per-collection stats (resourceCount, hasSchema, validationMode)
+
+Output Fields (failure):
+  status, filesScanned, filesWithErrors, errorsFound, durationSecs
+  errorSummary: Count of each error type (broken_file, broken_anchor, etc.)
+  collections: Per-collection stats including filesWithErrors, errorCount
+  errors: Detailed errors grouped by file
 
 Checks:
   Internal file links, anchor links (#heading), cross-file anchors (file.md#heading)
@@ -116,11 +156,28 @@ Exit Codes:
   0 - Success  |  1 - Validation errors  |  2 - System error
 
 Examples:
-  $ vat resources validate docs/
-    Parse frontmatter, report YAML syntax errors only
 
+  Mode 1: Quick directory scan (no collections)
+  $ vat resources validate docs/
+    Validates all *.md in docs/ recursively
+    Ignores config file, no collection stats
+
+  Mode 2: Project validation with collections
+  $ vat resources validate
+    Uses vibe-agent-toolkit.config.yaml
+    Shows collection stats and applies collection-specific validation
+
+  Filter by collection
+  $ vat resources validate --collection guides
+    Only validates files in the guides collection
+    Requires config mode (no path argument)
+
+  With frontmatter schema (Mode 1)
   $ vat resources validate docs/ --frontmatter-schema schema.json
-    Validate frontmatter against schema
+    Validates docs/ with single schema for all files
+
+  Note: For collection-specific schemas, use Mode 2 (no path argument)
+        and configure schemas per collection in config file
 `
     );
 

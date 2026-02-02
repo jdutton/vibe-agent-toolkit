@@ -88,7 +88,6 @@ export async function validateFrontmatterMultiSchema(
         applied: true,
         valid: false,
         errors: [{
-          severity: 'error',
           resourcePath,
           line: 1,
           type: 'frontmatter_schema_error',

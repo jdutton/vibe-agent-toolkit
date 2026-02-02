@@ -51,7 +51,6 @@ export type {
   HeadingNode,
   ResourceLink,
   ResourceMetadata,
-  ValidationSeverity,
   ValidationIssue,
   ValidationResult,
   ProjectConfig,
@@ -70,7 +69,6 @@ export {
 } from './schemas/resource-metadata.js';
 
 export {
-  ValidationSeveritySchema,
   ValidationIssueSchema,
   ValidationResultSchema,
 } from './schemas/validation-result.js';

@@ -5,6 +5,7 @@ import { afterAll, beforeAll, it } from 'vitest';
 
 import { describe, expect, fs, getBinPath, join } from './test-common.js';
 import {
+  assertValidationFailureWithErrorInStderr,
   createMarkdownWithFrontmatter,
   createSchemaFile,
   createTestTempDir,
@@ -124,16 +125,11 @@ resources:
       '# Invalid Content'
     );
 
-    const { result, parsed } = executeValidateAndParse(binPath, projectDir);
+    // Should fail with validation error - check stderr contains expected error
+    assertValidationFailureWithErrorInStderr(binPath, projectDir, 'invalid.md');
 
-    // Should fail due to invalid.md
-    expect(result.status).toBe(1);
-    expect(parsed.status).toBe('failed');
-    expect(parsed.errorsFound).toBeGreaterThan(0);
-
-    // Check error details in stderr (use text format)
+    // Also verify the specific field error
     const textResult = executeCli(binPath, ['resources', 'validate', '--format', 'text'], { cwd: projectDir });
-    expect(textResult.stderr).toContain('invalid.md');
     expect(textResult.stderr).toContain('category'); // Missing required field
   });
 
@@ -353,16 +349,8 @@ resources:
       '# Test Content'
     );
 
-    const { result, parsed } = executeValidateAndParse(binPath, projectDir);
-
-    // Should fail (exit code 1) due to warning about missing schema
-    expect(result.status).toBe(1);
-    expect(parsed.status).toBe('failed');
-    expect(parsed.warningsFound).toBe(1);
-
-    // Check error details in stderr (use text format)
-    const textResult = executeCli(binPath, ['resources', 'validate', '--format', 'text'], { cwd: projectDir });
-    expect(textResult.stderr).toContain('nonexistent-schema.json');
+    // Should fail (exit code 1) due to error about missing schema
+    assertValidationFailureWithErrorInStderr(binPath, projectDir, 'nonexistent-schema.json');
   });
 
   it('should apply different validation modes to different collections', () => {

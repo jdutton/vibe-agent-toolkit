@@ -369,7 +369,6 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     for (const resource of this.resourcesByPath.values()) {
       if (resource.frontmatterError) {
         issues.push({
-          severity: 'error',
           resourcePath: resource.filePath,
           line: 1,
           type: 'frontmatter_invalid_yaml',
@@ -534,7 +533,6 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       // Handle missing or invalid schema files gracefully
       const errorMessage = error instanceof Error ? error.message : String(error);
       return [{
-        severity: 'warning',
         resourcePath: resource.filePath,
         line: 1,
         type: 'frontmatter_schema_error',
@@ -569,10 +567,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    *
    * console.log(`Passed: ${result.passed}`);
    * console.log(`Errors: ${result.errorCount}`);
-   * console.log(`Warnings: ${result.warningCount}`);
    * console.log(`Total resources: ${result.totalResources}`);
    * for (const issue of result.issues) {
-   *   console.log(`${issue.severity}: ${issue.message}`);
+   *   console.log(`${issue.message}`);
    * }
    * ```
    */
@@ -605,10 +602,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       issues.push(...this.validateAllFrontmatter(options.frontmatterSchema, mode));
     }
 
-    // Count issues by severity
-    const errorCount = issues.filter((i) => i.severity === 'error').length;
-    const warningCount = issues.filter((i) => i.severity === 'warning').length;
-    const infoCount = issues.filter((i) => i.severity === 'info').length;
+    // Count issues (all are errors now)
+    const errorCount = issues.length;
 
     // Count links by type
     const linksByType: Record<string, number> = {};
@@ -629,8 +624,6 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       linksByType,
       issues,
       errorCount,
-      warningCount,
-      infoCount,
       passed: errorCount === 0,
       durationMs,
       timestamp: new Date(),

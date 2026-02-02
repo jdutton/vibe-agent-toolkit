@@ -11,6 +11,7 @@ import { join } from 'node:path';
 
 import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
+import { expect } from 'vitest';
 
 /**
  * Parse YAML output from CLI commands
@@ -187,6 +188,30 @@ export function executeValidateAndParse(
   cwd: string
 ): { result: CliResult; parsed: Record<string, unknown> } {
   return executeAndParseYaml(binPath, ['resources', 'validate'], { cwd });
+}
+
+/**
+ * Helper to assert validation failure and check error details in stderr
+ * Encapsulates the common pattern of:
+ * 1. Running validation and expecting failure
+ * 2. Parsing YAML output and verifying error count
+ * 3. Running text format command and checking stderr for specific error
+ */
+export function assertValidationFailureWithErrorInStderr(
+  binPath: string,
+  projectDir: string,
+  expectedErrorInStderr: string
+): void {
+  const { result, parsed } = executeValidateAndParse(binPath, projectDir);
+
+  // Should fail due to validation error
+  expect(result.status).toBe(1);
+  expect(parsed.status).toBe('failed');
+  expect(parsed.errorsFound).toBeGreaterThan(0);
+
+  // Check error details in stderr (use text format)
+  const textResult = executeCli(binPath, ['resources', 'validate', '--format', 'text'], { cwd: projectDir });
+  expect(textResult.stderr).toContain(expectedErrorInStderr);
 }
 
 /**

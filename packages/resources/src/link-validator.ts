@@ -70,15 +70,8 @@ export async function validateLink(
       return await validateAnchorLink(link, sourceFilePath, headingsByFile);
 
     case 'external':
-      // External URLs are not validated - return info
-      return {
-        severity: 'info',
-        resourcePath: sourceFilePath,
-        line: link.line,
-        type: 'external_url',
-        link: link.href,
-        message: 'External URL not validated',
-      };
+      // External URLs are not validated - don't report them
+      return null;
 
     case 'email':
       // Email links are valid by default
@@ -86,7 +79,6 @@ export async function validateLink(
 
     case 'unknown':
       return {
-        severity: 'warning',
         resourcePath: sourceFilePath,
         line: link.line,
         type: 'unknown_link',
@@ -119,7 +111,6 @@ async function validateLocalFileLink(
 
   if (!fileResult.exists) {
     return {
-      severity: 'error',
       resourcePath: sourceFilePath,
       line: link.line,
       type: 'broken_file',
@@ -150,7 +141,6 @@ async function validateLocalFileLink(
     // Error ONLY if: source is NOT ignored AND target IS ignored
     if (!sourceIsIgnored && targetIsIgnored) {
       return {
-        severity: 'error',
         resourcePath: sourceFilePath,
         line: link.line,
         type: 'link_to_gitignored',
@@ -171,7 +161,6 @@ async function validateLocalFileLink(
 
     if (!anchorValid) {
       return {
-        severity: 'error',
         resourcePath: sourceFilePath,
         line: link.line,
         type: 'broken_anchor',
@@ -201,7 +190,6 @@ async function validateAnchorLink(
 
   if (!isValid) {
     return {
-      severity: 'error',
       resourcePath: sourceFilePath,
       line: link.line,
       type: 'broken_anchor',

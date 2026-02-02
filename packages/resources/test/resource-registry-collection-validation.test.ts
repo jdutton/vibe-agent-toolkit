@@ -198,7 +198,6 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
     expect(result.passed).toBe(false);
     expect(result.errorCount).toBe(1);
     const issue = result.issues[0];
-    expect(issue?.severity).toBe('error');
     expect(issue?.type).toBe('frontmatter_schema_error');
     expect(issue?.message).toContain('description');
   });
@@ -275,14 +274,14 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
     const registry = new ResourceRegistry({ rootDir: suite.tempDir, config });
     await registry.addResource(filePath);
 
-    // Validate - should not crash, but should report warning
+    // Validate - should not crash, but should report issue
     const result = await registry.validate();
 
-    // Should have warning about missing schema
-    expect(result.warningCount).toBeGreaterThan(0);
-    const warning = result.issues.find(i => i.severity === 'warning');
-    expect(warning?.message).toContain('schema');
-    expect(warning?.message).toContain('missing.schema.json');
+    // Should have issue about missing schema
+    expect(result.errorCount).toBeGreaterThan(0);
+    const issue = result.issues.find(i => i.message.includes('schema'));
+    expect(issue?.message).toContain('schema');
+    expect(issue?.message).toContain('missing.schema.json');
   });
 
   it('should skip validation for resources not in any collection', async () => {
