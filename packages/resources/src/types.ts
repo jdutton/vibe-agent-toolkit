@@ -36,6 +36,8 @@ export type {
   ResourceRegistryOptions,
   ValidateOptions,
   RegistryStats,
+  CollectionStat,
+  CollectionStats,
 } from './resource-registry.js';
 
 // Resource type system

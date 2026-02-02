@@ -73,6 +73,30 @@ export interface RegistryStats {
 }
 
 /**
+ * Statistics for a single collection.
+ */
+export interface CollectionStat {
+  /** Number of resources in this collection */
+  resourceCount: number;
+  /** Whether this collection has a frontmatter schema configured */
+  hasSchema: boolean;
+  /** Validation mode for this collection's schema */
+  validationMode?: 'strict' | 'permissive';
+}
+
+/**
+ * Statistics about all collections in the registry.
+ */
+export interface CollectionStats {
+  /** Total number of configured collections */
+  totalCollections: number;
+  /** Total number of resources that belong to at least one collection */
+  resourcesInCollections: number;
+  /** Statistics per collection ID */
+  collections: Record<string, CollectionStat>;
+}
+
+/**
  * Resource registry for managing collections of markdown resources.
  *
  * Provides centralized management of markdown resources with:
@@ -903,6 +927,76 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       totalResources,
       totalLinks,
       linksByType,
+    };
+  }
+
+  /**
+   * Get collection-level statistics.
+   *
+   * Returns undefined if collections are not configured in the project config.
+   *
+   * @returns Collection statistics or undefined if no collections configured
+   *
+   * @example
+   * ```typescript
+   * const collectionStats = registry.getCollectionStats();
+   * if (collectionStats) {
+   *   console.log(`Total collections: ${collectionStats.totalCollections}`);
+   *   console.log(`Resources in collections: ${collectionStats.resourcesInCollections}`);
+   *   for (const [id, stat] of Object.entries(collectionStats.collections)) {
+   *     console.log(`${id}: ${stat.resourceCount} resources`);
+   *   }
+   * }
+   * ```
+   */
+  getCollectionStats(): CollectionStats | undefined {
+    if (!this.config?.resources?.collections) {
+      return undefined;
+    }
+
+    // Group resources by collection
+    const collectionMap = new Map<string, ResourceMetadata[]>();
+
+    for (const resource of this.resourcesByPath.values()) {
+      if (resource.collections) {
+        for (const collectionId of resource.collections) {
+          const resources = collectionMap.get(collectionId) ?? [];
+          resources.push(resource);
+          collectionMap.set(collectionId, resources);
+        }
+      }
+    }
+
+    // Build stats per collection
+    const collections: Record<string, CollectionStat> = {};
+
+    for (const [id, resources] of collectionMap.entries()) {
+      const collection = this.config.resources.collections[id];
+      const stat: CollectionStat = {
+        resourceCount: resources.length,
+        hasSchema: !!collection?.validation?.frontmatterSchema,
+      };
+
+      // Only add validationMode if it's defined (exactOptionalPropertyTypes requirement)
+      if (collection?.validation?.mode !== undefined) {
+        stat.validationMode = collection.validation.mode;
+      }
+
+      collections[id] = stat;
+    }
+
+    // Calculate total unique resources in collections (a resource may be in multiple collections)
+    const uniqueResourcesInCollections = new Set<string>();
+    for (const resource of this.resourcesByPath.values()) {
+      if (resource.collections && resource.collections.length > 0) {
+        uniqueResourcesInCollections.add(resource.filePath);
+      }
+    }
+
+    return {
+      totalCollections: Object.keys(this.config.resources.collections).length,
+      resourcesInCollections: uniqueResourcesInCollections.size,
+      collections,
     };
   }
 

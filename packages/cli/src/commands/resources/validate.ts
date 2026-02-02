@@ -115,13 +115,28 @@ export async function validateCommand(
       process.exit(1);
     } else {
       // Success output
-      writeYamlOutput({
-        status: 'success',
-        filesScanned: stats.totalResources,
-        linksChecked: stats.totalLinks,
-        ...validationMetadata,
-        duration: `${duration}ms`,
-      });
+      // Get collection stats if available
+      const collectionStats = registry.getCollectionStats();
+
+      // Build output object with collections if available
+      const outputData = collectionStats
+        ? {
+            status: 'success',
+            filesScanned: stats.totalResources,
+            linksChecked: stats.totalLinks,
+            ...validationMetadata,
+            collections: collectionStats.collections,
+            duration: `${duration}ms`,
+          }
+        : {
+            status: 'success',
+            filesScanned: stats.totalResources,
+            linksChecked: stats.totalLinks,
+            ...validationMetadata,
+            duration: `${duration}ms`,
+          };
+
+      writeYamlOutput(outputData);
 
       process.exit(0);
     }
