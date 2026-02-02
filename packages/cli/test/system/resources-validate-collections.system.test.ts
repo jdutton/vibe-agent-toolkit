@@ -8,6 +8,7 @@ import {
   createMarkdownWithFrontmatter,
   createSchemaFile,
   createTestTempDir,
+  executeCli,
   executeValidateAndParse,
   setupTestProject,
 } from './test-helpers.js';
@@ -130,9 +131,10 @@ resources:
     expect(parsed.status).toBe('failed');
     expect(parsed.errorsFound).toBeGreaterThan(0);
 
-    // Check error details in stderr
-    expect(result.stderr).toContain('invalid.md');
-    expect(result.stderr).toContain('category'); // Missing required field
+    // Check error details in stderr (use text format)
+    const textResult = executeCli(binPath, ['resources', 'validate', '--format', 'text'], { cwd: projectDir });
+    expect(textResult.stderr).toContain('invalid.md');
+    expect(textResult.stderr).toContain('category'); // Missing required field
   });
 
   it('should allow extra fields in permissive mode', () => {
@@ -272,8 +274,11 @@ resources:
     // Should fail because it violates guides-schema
     expect(result.status).toBe(1);
     expect(parsed.status).toBe('failed');
-    expect(result.stderr).toContain('guide-intro.md');
-    expect(result.stderr).toContain('level'); // Missing required field
+
+    // Check error details in stderr (use text format)
+    const textResult = executeCli(binPath, ['resources', 'validate', '--format', 'text'], { cwd: projectDir });
+    expect(textResult.stderr).toContain('guide-intro.md');
+    expect(textResult.stderr).toContain('level'); // Missing required field
   });
 
   it('should handle resources in no collections (default validation only)', () => {
@@ -354,7 +359,10 @@ resources:
     expect(result.status).toBe(1);
     expect(parsed.status).toBe('failed');
     expect(parsed.warningsFound).toBe(1);
-    expect(result.stderr).toContain('nonexistent-schema.json');
+
+    // Check error details in stderr (use text format)
+    const textResult = executeCli(binPath, ['resources', 'validate', '--format', 'text'], { cwd: projectDir });
+    expect(textResult.stderr).toContain('nonexistent-schema.json');
   });
 
   it('should apply different validation modes to different collections', () => {
@@ -453,8 +461,11 @@ resources:
     // Should fail because strict mode + additionalProperties: false
     expect(result.status).toBe(1);
     expect(parsed.status).toBe('failed');
-    expect(result.stderr).toContain('extra-fields.md');
-    expect(result.stderr).toContain('must NOT have additional properties');
+
+    // Check error details in stderr (use text format)
+    const textResult = executeCli(binPath, ['resources', 'validate', '--format', 'text'], { cwd: projectDir });
+    expect(textResult.stderr).toContain('extra-fields.md');
+    expect(textResult.stderr).toContain('must NOT have additional properties');
   });
 
   it('should validate resources with nested directory patterns', () => {
@@ -564,10 +575,11 @@ resources:
     expect(parsed.status).toBe('failed');
     expect(parsed.errorsFound).toBeGreaterThanOrEqual(2);
 
-    // Check both errors in stderr
-    expect(result.stderr).toContain('invalid-doc.md');
-    expect(result.stderr).toContain('category');
-    expect(result.stderr).toContain('invalid-guide.md');
-    expect(result.stderr).toContain('level');
+    // Check both errors in stderr (use text format)
+    const textResult = executeCli(binPath, ['resources', 'validate', '--format', 'text'], { cwd: projectDir });
+    expect(textResult.stderr).toContain('invalid-doc.md');
+    expect(textResult.stderr).toContain('category');
+    expect(textResult.stderr).toContain('invalid-guide.md');
+    expect(textResult.stderr).toContain('level');
   });
 });

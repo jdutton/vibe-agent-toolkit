@@ -7,6 +7,7 @@ import {
   type ProjectConfig as ResourcesProjectConfig,
   type ResourceRegistryOptions,
 } from '@vibe-agent-toolkit/resources';
+import { GitTracker } from '@vibe-agent-toolkit/utils';
 
 import type { ProjectConfig } from '../schemas/config.js';
 
@@ -19,6 +20,7 @@ export interface ResourceLoadResult {
   projectRoot: string | null;
   config: ProjectConfig | undefined;
   registry: ResourceRegistry;
+  gitTracker: GitTracker | undefined;
 }
 
 /**
@@ -49,6 +51,15 @@ export async function loadResourcesWithConfig(
     logger.debug(`Loaded config from ${projectRoot ?? 'unknown'}`);
   }
 
+  // Create and initialize GitTracker if we have a project root
+  let gitTracker: GitTracker | undefined;
+  if (projectRoot) {
+    gitTracker = new GitTracker(projectRoot);
+    await gitTracker.initialize();
+    const stats = gitTracker.getStats();
+    logger.debug(`GitTracker initialized with ${stats.cacheSize} tracked files`);
+  }
+
   // Create registry and crawl
   // Build options conditionally to satisfy exactOptionalPropertyTypes
   const registryOptions: ResourceRegistryOptions = {};
@@ -67,6 +78,9 @@ export async function loadResourcesWithConfig(
   }
   if (projectRoot) {
     registryOptions.rootDir = projectRoot;
+  }
+  if (gitTracker) {
+    registryOptions.gitTracker = gitTracker;
   }
   const registry = new ResourceRegistry(registryOptions);
 
@@ -103,5 +117,6 @@ export async function loadResourcesWithConfig(
     projectRoot,
     config,
     registry,
+    gitTracker,
   };
 }

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, it } from 'vitest';
 
 import { describe, expect, fs, getBinPath } from './test-common.js';
-import { createTestTempDir, setupSchemaAndValidate } from './test-helpers.js';
+import { createTestTempDir, executeCli, setupSchemaAndValidate } from './test-helpers.js';
 
 const binPath = getBinPath(import.meta.url);
 
@@ -41,6 +41,21 @@ describe('vat resources validate --frontmatter-schema (system test)', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
+  /**
+   * Helper to validate with text format and return stderr output
+   */
+  function validateWithTextFormat(schemaFilename: string) {
+    return executeCli(binPath, [
+      'resources',
+      'validate',
+      tempDir,
+      '--format',
+      'text',
+      '--frontmatter-schema',
+      `${tempDir}/${schemaFilename}`,
+    ]);
+  }
+
   it('should validate frontmatter successfully', () => {
     const result = setupSchemaAndValidate(
       tempDir,
@@ -74,8 +89,11 @@ describe('vat resources validate --frontmatter-schema (system test)', () => {
     );
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('Frontmatter validation');
-    expect(result.stderr).toContain('description');
+
+    // Check error details in stderr (use text format)
+    const textResult = validateWithTextFormat(SCHEMA_JSON);
+    expect(textResult.stderr).toContain('Frontmatter validation');
+    expect(textResult.stderr).toContain('description');
   });
 
   it('should support YAML schema files', () => {
@@ -126,7 +144,10 @@ describe('vat resources validate --frontmatter-schema (system test)', () => {
     );
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain('Missing required frontmatter');
-    expect(result.stderr).toContain('title');
+
+    // Check error details in stderr (use text format)
+    const textResult = validateWithTextFormat(SCHEMA_JSON);
+    expect(textResult.stderr).toContain('Missing required frontmatter');
+    expect(textResult.stderr).toContain('title');
   });
 });

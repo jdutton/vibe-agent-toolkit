@@ -57,7 +57,7 @@ describe('vat resources validate (integration)', () => {
   it('should output test-format errors to stderr', () => {
     writeTestFile(join(tempDir, 'test.md'), '[broken](./missing.md)');
 
-    const result = executeCli(binPath, ['resources', 'validate', tempDir]);
+    const result = executeCli(binPath, ['resources', 'validate', tempDir, '--format', 'text']);
 
     expect(result.stderr).toMatch(/test\.md:\d+:\d+: /);
     expect(result.stderr).toContain('missing.md');
@@ -66,7 +66,7 @@ describe('vat resources validate (integration)', () => {
   it('should detect broken anchors', () => {
     writeTestFile(join(tempDir, 'test.md'), '# Test\n[link](#missing)');
 
-    const result = executeCli(binPath, ['resources', 'validate', tempDir]);
+    const result = executeCli(binPath, ['resources', 'validate', tempDir, '--format', 'text']);
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('#missing');

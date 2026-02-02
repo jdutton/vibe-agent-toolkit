@@ -32,6 +32,8 @@ export {
   type CrawlOptions,
   type ResourceRegistryOptions,
   type RegistryStats,
+  type CollectionStats,
+  type CollectionStat,
 } from './resource-registry.js';
 
 // Export ResourceQuery for lazy evaluation and filtering

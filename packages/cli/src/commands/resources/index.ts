@@ -53,6 +53,7 @@ Example:
     .option('--debug', 'Enable debug logging')
     .option('--frontmatter-schema <path>', 'Validate frontmatter against JSON Schema file (.json or .yaml)')
     .option('--validation-mode <mode>', 'Validation mode for schemas: strict (default) or permissive', 'strict')
+    .option('--format <format>', 'Output format: yaml (default), json, or text', 'yaml')
     .action(validateCommand)
     .addHelpText(
       'after',
@@ -62,8 +63,17 @@ Description:
   Path argument: base directory (defaults to current directory)
   When path specified: recursively finds all *.md files (ignores config)
   When no path: uses vibe-agent-toolkit.config.yaml include/exclude patterns
-  Outputs YAML to stdout, errors to stderr.
   External URLs are NOT validated (by design).
+
+Output Formats:
+  --format yaml (default)
+    Structured YAML output to stdout. Errors grouped by file.
+
+  --format json
+    Structured JSON output to stdout. Errors grouped by file.
+
+  --format text
+    Human-readable format. Errors to stderr (test-format style).
 
 Checks:
   Internal file links, anchor links (#heading), cross-file anchors (file.md#heading)

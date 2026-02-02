@@ -4,6 +4,7 @@ import { describe, expect, fs, getBinPath, join, spawnSync } from './test-common
 import {
   createTestTempDir,
   executeAndParseYaml,
+  executeCli,
   setupTestProject,
   testConfigError,
 } from './test-helpers.js';
@@ -150,10 +151,12 @@ describe('Error scenarios (system test)', () => {
     expect(result.status).toBe(1);
     expect(parsed.errorsFound).toBeGreaterThanOrEqual(3);
 
-    // Check all errors in stderr
-    expect(result.stderr).toContain('missing1.md');
-    expect(result.stderr).toContain('missing2.md');
-    expect(result.stderr).toContain('bad-anchor');
+    // Check errors are in structured output (not stderr by default)
+    // Use text format to get stderr output
+    const textResult = executeCli(binPath, ['resources', 'validate', projectDir, '--format', 'text']);
+    expect(textResult.stderr).toContain('missing1.md');
+    expect(textResult.stderr).toContain('missing2.md');
+    expect(textResult.stderr).toContain('bad-anchor');
   });
 
   it('should handle circular links without crashing', () => {

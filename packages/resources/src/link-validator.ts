@@ -18,7 +18,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { isGitIgnored } from '@vibe-agent-toolkit/utils';
+import { isGitIgnored, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import type { ValidationIssue } from './schemas/validation-result.js';
 import type { HeadingNode, ResourceLink } from './types.js';
@@ -32,6 +32,8 @@ export interface ValidateLinkOptions {
   projectRoot?: string;
   /** Skip git-ignore checks (optimization when checkGitIgnored is false) */
   skipGitIgnoreCheck?: boolean;
+  /** Git tracker for efficient git-ignore checking (optional, improves performance) */
+  gitTracker?: GitTracker;
 }
 
 /**
@@ -137,8 +139,13 @@ async function validateLocalFileLink(
     options?.projectRoot !== undefined &&
     isWithinProject(fileResult.resolvedPath, options.projectRoot)
   ) {
-    const sourceIsIgnored = isGitIgnored(sourceFilePath, options.projectRoot);
-    const targetIsIgnored = isGitIgnored(fileResult.resolvedPath, options.projectRoot);
+    // Use GitTracker if available (cached), otherwise fall back to isGitIgnored
+    const sourceIsIgnored = options.gitTracker
+      ? options.gitTracker.isIgnored(sourceFilePath)
+      : isGitIgnored(sourceFilePath, options.projectRoot);
+    const targetIsIgnored = options.gitTracker
+      ? options.gitTracker.isIgnored(fileResult.resolvedPath)
+      : isGitIgnored(fileResult.resolvedPath, options.projectRoot);
 
     // Error ONLY if: source is NOT ignored AND target IS ignored
     if (!sourceIsIgnored && targetIsIgnored) {

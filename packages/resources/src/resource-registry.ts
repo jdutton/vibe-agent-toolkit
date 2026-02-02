@@ -11,7 +11,7 @@
 import type fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import { calculateChecksum } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
@@ -49,6 +49,8 @@ export interface ResourceRegistryOptions {
   validateOnAdd?: boolean;
   /** Project configuration (optional, enables collection support) */
   config?: ProjectConfig;
+  /** Git tracker for efficient git-ignore checking (optional, improves performance) */
+  gitTracker?: GitTracker;
 }
 
 /**
@@ -132,6 +134,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   /** Optional project configuration (enables collection support) */
   readonly config?: ProjectConfig;
 
+  /** Optional git tracker for efficient git-ignore checking */
+  readonly gitTracker?: GitTracker;
+
   private readonly resourcesByPath: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesById: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesByName: Map<string, ResourceMetadata[]> = new Map();
@@ -144,6 +149,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     }
     if (options?.config !== undefined) {
       this.config = options.config;
+    }
+    if (options?.gitTracker !== undefined) {
+      this.gitTracker = options.gitTracker;
     }
     this.validateOnAdd = options?.validateOnAdd ?? false;
   }
@@ -302,7 +310,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         // Only pass options if projectRoot is defined (exactOptionalPropertyTypes requirement)
         const options = this.rootDir === undefined
           ? undefined
-          : { projectRoot: this.rootDir, skipGitIgnoreCheck: false };
+          : {
+              projectRoot: this.rootDir,
+              skipGitIgnoreCheck: false,
+              ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker })
+            };
 
         const issue = await validateLink(link, absolutePath, headingsByFile, options);
         if (issue) {
@@ -409,7 +421,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         // Only pass options if projectRoot is defined (exactOptionalPropertyTypes requirement)
         const validateOptions = this.rootDir === undefined
           ? { skipGitIgnoreCheck }
-          : { projectRoot: this.rootDir, skipGitIgnoreCheck };
+          : {
+              projectRoot: this.rootDir,
+              skipGitIgnoreCheck,
+              ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker })
+            };
 
         const issue = await validateLink(link, resource.filePath, headingsByFile, validateOptions);
         if (issue) {

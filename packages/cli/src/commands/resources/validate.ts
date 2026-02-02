@@ -5,10 +5,12 @@
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 
+import type { CollectionStats, RegistryStats } from '@vibe-agent-toolkit/resources';
+import type { GitTracker } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
 
-import { createLogger } from '../../utils/logger.js';
-import { flushStdout, writeTestFormatError, writeYamlOutput } from '../../utils/output.js';
+import { createLogger, type Logger } from '../../utils/logger.js';
+import { writeTestFormatError } from '../../utils/output.js';
 import { loadResourcesWithConfig } from '../../utils/resource-loader.js';
 
 import { handleCommandError } from './command-helpers.js';
@@ -37,10 +39,178 @@ async function loadSchema(schemaPath: string): Promise<object> {
   }
 }
 
+/**
+ * Error grouped by file.
+ */
+interface FileErrors {
+  file: string;
+  errors: Array<{
+    line: number;
+    column: number;
+    type: string;
+    message: string;
+  }>;
+}
+
+/**
+ * Output data structure for validation results.
+ */
+interface ValidationOutputData {
+  status: 'success' | 'failed';
+  filesScanned: number;
+  linksChecked?: number;
+  errorsFound?: number;
+  warningsFound?: number;
+  validationMode: 'strict' | 'permissive';
+  frontmatterSchema?: string;
+  collections?: unknown;
+  errors?: FileErrors[];
+  duration: string;
+}
+
+/**
+ * Write structured output in specified format.
+ */
+function writeStructuredOutput(data: ValidationOutputData, format: Exclude<OutputFormat, 'text'>): void {
+  if (format === 'json') {
+    console.log(JSON.stringify(data, null, 2));
+  } else {
+    console.log(yaml.dump(data, { indent: 2, lineWidth: -1 }));
+  }
+}
+
+/**
+ * Error data for a single validation issue.
+ */
+type ErrorData = { file: string; line: number; column: number; type: string; message: string };
+
+/**
+ * Output format options.
+ */
+type OutputFormat = 'yaml' | 'json' | 'text';
+
+/**
+ * Group errors by file path.
+ */
+function groupErrorsByFile(errors: ErrorData[]): FileErrors[] {
+  const fileMap = new Map<string, FileErrors>();
+
+  for (const error of errors) {
+    const existing = fileMap.get(error.file);
+    if (existing) {
+      existing.errors.push({
+        line: error.line,
+        column: error.column,
+        type: error.type,
+        message: error.message,
+      });
+    } else {
+      fileMap.set(error.file, {
+        file: error.file,
+        errors: [{
+          line: error.line,
+          column: error.column,
+          type: error.type,
+          message: error.message,
+        }],
+      });
+    }
+  }
+
+  return [...fileMap.values()];
+}
+
+/**
+ * Log git tracker stats if available.
+ */
+function logGitTrackerStats(gitTracker: GitTracker | undefined, logger: Logger): void {
+  if (gitTracker) {
+    const gitStats = gitTracker.getStats();
+    logger.debug(`Git tracker cache size: ${gitStats.cacheSize} files`);
+  }
+}
+
+/**
+ * Context for validation output.
+ */
+interface ValidationContext {
+  stats: RegistryStats;
+  errorCount: number;
+  warningCount: number;
+  validationMetadata: Pick<ValidationOutputData, 'validationMode' | 'frontmatterSchema'>;
+  collectionStats: CollectionStats | undefined;
+  duration: number;
+}
+
+/**
+ * Output validation failure results.
+ */
+function outputFailure(
+  errorData: ErrorData[],
+  outputFormat: OutputFormat,
+  context: ValidationContext
+): void {
+  if (outputFormat === 'text') {
+    // Text format: test-format errors to stderr
+    for (const error of errorData) {
+      writeTestFormatError(error.file, error.line, error.column, error.message);
+    }
+  } else {
+    // Structured format (yaml/json): group errors by file
+    const groupedErrors = groupErrorsByFile(errorData);
+
+    const outputData: ValidationOutputData = {
+      status: 'failed',
+      filesScanned: context.stats.totalResources,
+      errorsFound: context.errorCount,
+      warningsFound: context.warningCount,
+      ...context.validationMetadata,
+      ...(context.collectionStats ? { collections: context.collectionStats.collections } : {}),
+      errors: groupedErrors,
+      duration: `${context.duration}ms`,
+    };
+
+    writeStructuredOutput(outputData, outputFormat);
+  }
+}
+
+/**
+ * Output validation success results.
+ */
+function outputSuccess(
+  outputFormat: OutputFormat,
+  context: Pick<ValidationContext, 'stats' | 'validationMetadata' | 'collectionStats' | 'duration'>
+): void {
+  if (outputFormat === 'text') {
+    // Text format: simple success message
+    console.log('✓ All validations passed');
+    console.log(`Files scanned: ${context.stats.totalResources}`);
+    console.log(`Links checked: ${context.stats.totalLinks}`);
+    if (context.collectionStats) {
+      console.log(`Collections: ${context.collectionStats.totalCollections}`);
+      console.log(`Resources in collections: ${context.collectionStats.resourcesInCollections}`);
+    }
+    console.log(`Duration: ${context.duration}ms`);
+  } else {
+    // Structured format (yaml/json)
+    const outputData: ValidationOutputData = {
+      status: 'success',
+      filesScanned: context.stats.totalResources,
+      linksChecked: context.stats.totalLinks,
+      ...context.validationMetadata,
+      ...(context.collectionStats ? { collections: context.collectionStats.collections } : {}),
+      duration: `${context.duration}ms`,
+    };
+
+    writeStructuredOutput(outputData, outputFormat);
+  }
+}
+
 interface ValidateOptions {
   debug?: boolean;
   frontmatterSchema?: string; // Path to JSON Schema file
   validationMode?: 'strict' | 'permissive'; // Validation mode for schemas
+  format?: OutputFormat; // Output format
 }
 
 export async function validateCommand(
@@ -51,8 +221,8 @@ export async function validateCommand(
   const startTime = Date.now();
 
   try {
-    // Load resources with config support
-    const { registry } = await loadResourcesWithConfig(pathArg, logger);
+    // Load resources with config support (includes GitTracker initialization)
+    const { registry, gitTracker } = await loadResourcesWithConfig(pathArg, logger);
 
     // Load frontmatter schema if provided
     let frontmatterSchemaObj: object | undefined;
@@ -73,10 +243,13 @@ export async function validateCommand(
     const duration = Date.now() - startTime;
 
     // Build validation metadata
-    const validationMetadata: Record<string, unknown> = {
+    const validationMetadata: Pick<ValidationOutputData, 'validationMode' | 'frontmatterSchema'> = {
       validationMode,
       ...(options.frontmatterSchema ? { frontmatterSchema: options.frontmatterSchema } : {}),
     };
+
+    // Get collection stats (common for both success and failure)
+    const collectionStats = registry.getCollectionStats();
 
     // Filter out external_url issues (informational only, not actual errors)
     const actualErrors = validationResult.issues.filter(
@@ -84,9 +257,12 @@ export async function validateCommand(
     );
     const hasErrors = actualErrors.length > 0;
 
+    // Determine output format (default: yaml)
+    const outputFormat = options.format ?? 'yaml';
+
     if (hasErrors) {
-      // Failure - write YAML first, then test-format errors
-      const errors = actualErrors.map(issue => ({
+      // Failure path
+      const errorData = actualErrors.map(issue => ({
         file: issue.resourcePath,
         line: issue.line ?? 1,
         column: 1,
@@ -94,50 +270,23 @@ export async function validateCommand(
         message: issue.message,
       }));
 
-      writeYamlOutput({
-        status: 'failed',
-        filesScanned: stats.totalResources,
-        errorsFound: validationResult.errorCount,
-        warningsFound: validationResult.warningCount,
-        ...validationMetadata,
-        errors,
-        duration: `${duration}ms`,
-      });
+      const context: ValidationContext = {
+        stats,
+        errorCount: validationResult.errorCount,
+        warningCount: validationResult.warningCount,
+        validationMetadata,
+        collectionStats,
+        duration,
+      };
 
-      // Flush stdout before writing to stderr
-      await flushStdout();
-
-      // Write test-format errors to stderr
-      for (const error of errors) {
-        writeTestFormatError(error.file, error.line, error.column, error.message);
-      }
-
+      outputFailure(errorData, outputFormat, context);
+      logGitTrackerStats(gitTracker, logger);
       process.exit(1);
     } else {
-      // Success output
-      // Get collection stats if available
-      const collectionStats = registry.getCollectionStats();
-
-      // Build output object with collections if available
-      const outputData = collectionStats
-        ? {
-            status: 'success',
-            filesScanned: stats.totalResources,
-            linksChecked: stats.totalLinks,
-            ...validationMetadata,
-            collections: collectionStats.collections,
-            duration: `${duration}ms`,
-          }
-        : {
-            status: 'success',
-            filesScanned: stats.totalResources,
-            linksChecked: stats.totalLinks,
-            ...validationMetadata,
-            duration: `${duration}ms`,
-          };
-
-      writeYamlOutput(outputData);
-
+      // Success path
+      const context = { stats, validationMetadata, collectionStats, duration };
+      outputSuccess(outputFormat, context);
+      logGitTrackerStats(gitTracker, logger);
       process.exit(0);
     }
   } catch (error) {
