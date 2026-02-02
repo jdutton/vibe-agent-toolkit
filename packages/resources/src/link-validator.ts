@@ -18,7 +18,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { isGitignored } from '@vibe-agent-toolkit/utils';
+import { isGitIgnored } from '@vibe-agent-toolkit/utils';
 
 import type { ValidationIssue } from './schemas/validation-result.js';
 import type { HeadingNode, ResourceLink } from './types.js';
@@ -137,8 +137,8 @@ async function validateLocalFileLink(
     options?.projectRoot !== undefined &&
     isWithinProject(fileResult.resolvedPath, options.projectRoot)
   ) {
-    const sourceIsIgnored = isGitignored(sourceFilePath);
-    const targetIsIgnored = isGitignored(fileResult.resolvedPath);
+    const sourceIsIgnored = isGitIgnored(sourceFilePath, options.projectRoot);
+    const targetIsIgnored = isGitIgnored(fileResult.resolvedPath, options.projectRoot);
 
     // Error ONLY if: source is NOT ignored AND target IS ignored
     if (!sourceIsIgnored && targetIsIgnored) {

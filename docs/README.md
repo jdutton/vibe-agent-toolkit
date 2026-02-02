@@ -87,4 +87,4 @@ bun run test:coverage      # Coverage report
 
 ## Contributing
 
-See [Main README](../README.md#contributing) for contribution guidelines.
+See [CLAUDE.md](../CLAUDE.md) for comprehensive development guidelines, code standards, and testing conventions.

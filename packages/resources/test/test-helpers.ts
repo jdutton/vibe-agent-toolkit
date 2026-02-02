@@ -3,6 +3,7 @@
  * Shared test helpers for resources package tests
  */
 
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path, { join } from 'node:path';
@@ -15,6 +16,26 @@ import type { ValidateLinkOptions as LinkValidatorOptions } from '../src/link-va
 import { validateLink } from '../src/link-validator.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 import type { HeadingNode, ResourceLink, ValidationIssue } from '../src/types.js';
+
+/**
+ * Initialize a git repository in the specified directory.
+ * Required for tests that use git commands (git check-ignore, git ls-files).
+ *
+ * @param directory - Absolute path to directory to initialize as git repo
+ * @returns The directory path (for chaining)
+ *
+ * @example
+ * ```typescript
+ * const tempDir = createTestTempDir('my-test-');
+ * createGitRepo(tempDir);
+ * // Now tempDir is a valid git repository
+ * ```
+ */
+export function createGitRepo(directory: string): string {
+  // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
+  spawnSync('git', ['init'], { cwd: directory, stdio: 'pipe' });
+  return directory;
+}
 
 /**
  * Walk up directories looking for package.json that matches a predicate

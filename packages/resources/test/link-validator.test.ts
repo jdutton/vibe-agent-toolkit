@@ -17,7 +17,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { validateLink } from '../src/link-validator.js';
 import type { HeadingNode } from '../src/types.js';
 
-import { assertValidation, createHeadings, createLink } from './test-helpers.js';
+import { assertValidation, createGitRepo, createHeadings, createLink } from './test-helpers.js';
 
 // Test fixtures directory
 const FIXTURES_DIR = path.resolve(import.meta.dirname, '../test-fixtures');
@@ -482,8 +482,8 @@ describe('validateLink', () => {
       tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'link-validator-gitignore-'));
       gitRoot = tempDir;
 
-      // Create .git directory
-      mkdirSyncReal(path.join(gitRoot, '.git'));
+      // Initialize git repo properly (git check-ignore needs a real repo)
+      createGitRepo(gitRoot);
     });
 
     afterEach(async () => {

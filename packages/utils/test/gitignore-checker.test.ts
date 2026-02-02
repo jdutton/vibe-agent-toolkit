@@ -3,7 +3,8 @@ import * as path from 'node:path';
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-import { findGitRoot, isGitignored, loadGitignoreRules } from '../src/gitignore-checker.js';
+import { gitFindRoot } from '../src/git-utils.js';
+import { loadGitignoreRules } from '../src/gitignore-checker.js';
 import { mkdirSyncReal, normalizedTmpdir } from '../src/path-utils.js';
 
 // Test constants
@@ -28,9 +29,9 @@ describe('gitignore-checker', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  describe('findGitRoot', () => {
+  describe('gitFindRoot', () => {
     it('should find git root in current directory', () => {
-      const result = findGitRoot(gitRoot);
+      const result = gitFindRoot(gitRoot);
       expect(result).toBe(gitRoot);
     });
 
@@ -39,7 +40,7 @@ describe('gitignore-checker', () => {
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
       fs.mkdirSync(subDir);
 
-      const result = findGitRoot(subDir);
+      const result = gitFindRoot(subDir);
       expect(result).toBe(gitRoot);
     });
 
@@ -48,14 +49,14 @@ describe('gitignore-checker', () => {
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
       fs.mkdirSync(deepDir, { recursive: true });
 
-      const result = findGitRoot(deepDir);
+      const result = gitFindRoot(deepDir);
       expect(result).toBe(gitRoot);
     });
 
     it('should return null when not in a git repository', () => {
       const nonGitDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'non-git-'));
       try {
-        const result = findGitRoot(nonGitDir);
+        const result = gitFindRoot(nonGitDir);
         expect(result).toBeNull();
       } finally {
         fs.rmSync(nonGitDir, { recursive: true, force: true });
@@ -123,76 +124,6 @@ describe('gitignore-checker', () => {
         // eslint-disable-next-line security/detect-non-literal-fs-filename, sonarjs/file-permissions -- tempDir is from mkdtempSync, safe test file
         fs.chmodSync(gitignorePath, 0o644);
       }
-    });
-  });
-
-  describe('isGitignored', () => {
-    it('should return false for files not in a git repository', () => {
-      const nonGitDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'non-git-'));
-      try {
-        const filePath = path.join(nonGitDir, 'test.txt');
-        const result = isGitignored(filePath);
-        expect(result).toBe(false);
-      } finally {
-        fs.rmSync(nonGitDir, { recursive: true, force: true });
-      }
-    });
-
-    it('should return false when no .gitignore rules exist', () => {
-      const filePath = path.join(gitRoot, 'test.txt');
-      const result = isGitignored(filePath);
-      expect(result).toBe(false);
-    });
-
-    it('should return true for gitignored files', () => {
-      const gitignorePath = path.join(gitRoot, GITIGNORE_FILENAME);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
-      fs.writeFileSync(gitignorePath, NODE_MODULES_IGNORE_CONTENT);
-
-      const logFile = path.join(gitRoot, 'test.log');
-      expect(isGitignored(logFile)).toBe(true);
-
-      const nodeModules = path.join(gitRoot, 'node_modules', 'package');
-      expect(isGitignored(nodeModules)).toBe(true);
-    });
-
-    it('should return false for non-gitignored files', () => {
-      const gitignorePath = path.join(gitRoot, GITIGNORE_FILENAME);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
-      fs.writeFileSync(gitignorePath, NODE_MODULES_IGNORE_CONTENT);
-
-      const srcFile = path.join(gitRoot, 'src', 'index.ts');
-      expect(isGitignored(srcFile)).toBe(false);
-    });
-
-    it('should handle files in subdirectories correctly', () => {
-      const gitignorePath = path.join(gitRoot, GITIGNORE_FILENAME);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
-      fs.writeFileSync(gitignorePath, '**/temp/\n');
-
-      const tempFile = path.join(gitRoot, 'src', 'temp', 'file.txt');
-      expect(isGitignored(tempFile)).toBe(true);
-
-      const nonTempFile = path.join(gitRoot, 'src', 'file.txt');
-      expect(isGitignored(nonTempFile)).toBe(false);
-    });
-
-    it('should use provided gitRoot parameter', () => {
-      const gitignorePath = path.join(gitRoot, GITIGNORE_FILENAME);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
-      fs.writeFileSync(gitignorePath, '*.log\n');
-
-      const logFile = path.join(gitRoot, 'test.log');
-      // Explicitly pass gitRoot
-      expect(isGitignored(logFile, gitRoot)).toBe(true);
-    });
-
-    it('should always return true for .git directory', () => {
-      const gitDir = path.join(gitRoot, '.git');
-      expect(isGitignored(gitDir)).toBe(true);
-
-      const gitFile = path.join(gitRoot, '.git', 'config');
-      expect(isGitignored(gitFile)).toBe(true);
     });
   });
 });

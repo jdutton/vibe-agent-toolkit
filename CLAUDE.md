@@ -269,7 +269,7 @@ These scripts map to:
    - Builds `rag` (depends on `utils` and `resources`)
    - etc.
 
-#### Adding New Packages
+#### Configuring New Package Builds
 
 When creating a new package:
 1. Add `"composite": true` to its tsconfig.json

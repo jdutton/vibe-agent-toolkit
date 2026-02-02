@@ -7,6 +7,8 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { isGitIgnored } from '../src/git-utils.js';
 import { normalizedTmpdir } from '../src/path-utils.js';
 
+import { createGitRepo } from './test-helpers.js';
+
 const GITIGNORE_FILENAME = '.gitignore';
 
 describe('isGitIgnored', () => {
@@ -15,9 +17,8 @@ describe('isGitIgnored', () => {
   beforeEach(() => {
     tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'git-utils-test-'));
     // Initialize git repo for git check-ignore to work
+    createGitRepo(tempDir);
     const gitPath = 'git'; // Using command name directly in tests is acceptable
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
-    spawnSync(gitPath, ['init'], { cwd: tempDir, stdio: 'pipe' });
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
     spawnSync(gitPath, ['config', 'user.email', 'test@example.com'], { cwd: tempDir, stdio: 'pipe' });
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH

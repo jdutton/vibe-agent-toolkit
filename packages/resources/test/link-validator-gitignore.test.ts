@@ -19,7 +19,7 @@ import { validateLink } from '../src/link-validator.js';
 import type { HeadingNode } from '../src/types.js';
 import { isWithinProject } from '../src/utils.js';
 
-import { createLink, setupTempDirTestSuite } from './test-helpers.js';
+import { createGitRepo, createLink, setupTempDirTestSuite } from './test-helpers.js';
 
 const suite = setupTempDirTestSuite('link-validator-gitignore-');
 
@@ -98,9 +98,8 @@ describe('validateLink - git-ignore safety', () => {
   }> {
     const projectRoot = suite.tempDir;
 
-    // Initialize git repo
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- projectRoot is from temp dir
-    fs.mkdirSync(path.join(projectRoot, '.git'));
+    // Initialize git repo properly (git check-ignore needs a real repo)
+    createGitRepo(projectRoot);
 
     // Create .gitignore
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- projectRoot is from temp dir

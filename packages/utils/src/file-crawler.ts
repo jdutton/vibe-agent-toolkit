@@ -2,10 +2,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { toForwardSlash } from '@vibe-agent-toolkit/utils';
-import type { Ignore } from 'ignore';
 import picomatch from 'picomatch';
 
-import { findGitRoot, loadGitignoreRules } from './gitignore-checker.js';
+import { gitFindRoot, gitLsFiles } from './git-utils.js';
 
 /**
  * Options for directory crawling
@@ -95,17 +94,39 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     throw new Error(`Base path is not a directory: ${resolvedBaseDir}`);
   }
 
-  // Load gitignore rules if requested
-  let gitignoreChecker: Ignore | null = null;
-  let gitRoot: string | null = null;
-
+  // Try using git ls-files for performance when in a git repo
   if (respectGitignore) {
-    gitRoot = findGitRoot(resolvedBaseDir);
+    const gitRoot = gitFindRoot(resolvedBaseDir);
     if (gitRoot) {
-      gitignoreChecker = loadGitignoreRules(gitRoot, resolvedBaseDir);
+      // Use git ls-files - much faster and authoritative
+      // Don't pass patterns to git - glob patterns don't work as git pathspecs
+      // Get all tracked files, then filter using glob patterns below
+      const gitFiles = gitLsFiles({
+        cwd: resolvedBaseDir,
+        includeUntracked: false, // Only tracked files
+      });
+
+      if (gitFiles !== null) {
+        // Git ls-files succeeded - filter using glob patterns
+        const isIncluded = picomatch(include);
+        const isExcluded = exclude.length > 0 ? picomatch(exclude) : (): boolean => false;
+
+        return gitFiles
+          .filter((relativePath) => {
+            const normalizedPath = toForwardSlash(relativePath);
+            // Check both include and exclude patterns
+            return isIncluded(normalizedPath) && !isExcluded(normalizedPath) && !isExcluded(normalizedPath + '/');
+          })
+          .map((relativePath) => {
+            // git ls-files returns paths relative to cwd
+            return absolute ? path.resolve(resolvedBaseDir, relativePath) : relativePath;
+          });
+      }
+      // Git ls-files failed - fall through to manual crawling
     }
   }
 
+  // Fall back to manual directory crawling (not in git repo or git ls-files failed)
   // Compile glob patterns using picomatch
   const isIncluded = picomatch(include);
   const isExcluded = exclude.length > 0 ? picomatch(exclude) : (): boolean => false;
@@ -113,26 +134,11 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
   const results: string[] = [];
 
   /**
-   * Check if a path should be excluded based on patterns and gitignore
+   * Check if a path should be excluded based on patterns
    */
-  function shouldExclude(normalizedPath: string, fullPath: string): boolean {
+  function shouldExclude(normalizedPath: string): boolean {
     // Check explicit exclude patterns
-    if (isExcluded(normalizedPath) || isExcluded(normalizedPath + '/')) {
-      return true;
-    }
-
-    // Check gitignore rules if enabled
-    if (gitignoreChecker && gitRoot) {
-      // Get path relative to git root for gitignore checking
-      const relativeToGitRoot = path.relative(gitRoot, fullPath);
-      const normalizedGitPath = toForwardSlash(relativeToGitRoot);
-
-      if (gitignoreChecker.ignores(normalizedGitPath)) {
-        return true;
-      }
-    }
-
-    return false;
+    return isExcluded(normalizedPath) || isExcluded(normalizedPath + '/');
   }
 
   /**
@@ -209,7 +215,7 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
       const normalizedPath = toForwardSlash(relativePath);
 
       // Skip excluded paths
-      if (shouldExclude(normalizedPath, fullPath)) {
+      if (shouldExclude(normalizedPath)) {
         continue;
       }
 
