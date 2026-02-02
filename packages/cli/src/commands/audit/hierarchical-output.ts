@@ -64,7 +64,6 @@ function parsePathStructure(filePath: string): {
 } {
   // Normalize to forward slashes for cross-platform parsing
   const normalizedPath = toForwardSlash(filePath);
-  // eslint-disable-next-line local/no-hardcoded-path-split -- path is normalized above
   const parts = normalizedPath.split('/');
 
   // Detect if this is a cached resource

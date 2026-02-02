@@ -640,7 +640,6 @@ async function detectUnreferencedFiles(
   // Filter files through smart filtering
   const candidateFiles = allFiles.filter(filePath => {
     const relativePath = path.relative(skillDir, filePath);
-    // eslint-disable-next-line local/no-hardcoded-path-split -- path is normalized with toForwardSlash()
     const pathParts = toForwardSlash(relativePath).split('/');
 
     // Check if any part of the path is an ignored directory
