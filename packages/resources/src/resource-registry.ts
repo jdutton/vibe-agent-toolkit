@@ -8,6 +8,7 @@
  * - Query capabilities (by path, ID, or glob pattern)
  */
 
+import type fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions } from '@vibe-agent-toolkit/utils';
@@ -418,6 +419,116 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
+   * Validate frontmatter against per-collection schemas.
+   * @private
+   */
+  private async validateCollectionFrontmatter(): Promise<ValidationIssue[]> {
+    const issues: ValidationIssue[] = [];
+
+    // Skip if no config
+    if (!this.config?.resources?.collections) {
+      return issues;
+    }
+
+    const fsPromises = await import('node:fs/promises');
+
+    for (const resource of this.resourcesByPath.values()) {
+      // Skip if resource has no collections
+      if (!resource.collections || resource.collections.length === 0) {
+        continue;
+      }
+
+      // Validate against each collection's schema
+      const collectionIssues = await this.validateResourceCollectionSchemas(
+        resource,
+        fsPromises
+      );
+      issues.push(...collectionIssues);
+    }
+
+    return issues;
+  }
+
+  /**
+   * Validate a single resource against its collection schemas.
+   * @private
+   */
+  private async validateResourceCollectionSchemas(
+    resource: ResourceMetadata,
+    fsModule: typeof fs
+  ): Promise<ValidationIssue[]> {
+    const issues: ValidationIssue[] = [];
+
+    if (!resource.collections || !this.config?.resources?.collections) {
+      return issues;
+    }
+
+    for (const collectionId of resource.collections) {
+      const collection = this.config.resources.collections[collectionId];
+
+      // Skip if collection has no validation or no schema
+      if (!collection?.validation?.frontmatterSchema) {
+        continue;
+      }
+
+      const collectionIssues = await this.validateAgainstCollectionSchema(
+        resource,
+        collection.validation,
+        fsModule
+      );
+      issues.push(...collectionIssues);
+    }
+
+    return issues;
+  }
+
+  /**
+   * Validate resource frontmatter against a specific collection schema.
+   * @private
+   */
+  private async validateAgainstCollectionSchema(
+    resource: ResourceMetadata,
+    validation: NonNullable<ProjectConfig['resources']>['collections'][string]['validation'],
+    fsModule: typeof fs
+  ): Promise<ValidationIssue[]> {
+    if (!validation?.frontmatterSchema) {
+      return [];
+    }
+
+    const schemaPath = path.resolve(
+      this.rootDir ?? process.cwd(),
+      validation.frontmatterSchema
+    );
+
+    try {
+      const schemaContent = await fsModule.readFile(schemaPath, 'utf-8');
+      const schema = JSON.parse(schemaContent) as object;
+
+      // Determine validation mode (default to permissive)
+      const mode = validation.mode ?? 'permissive';
+
+      // Validate frontmatter
+      return validateFrontmatter(
+        resource.frontmatter,
+        schema,
+        resource.filePath,
+        mode
+      );
+    } catch (error) {
+      // Handle missing or invalid schema files gracefully
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return [{
+        severity: 'warning',
+        resourcePath: resource.filePath,
+        line: 1,
+        type: 'frontmatter_schema_error',
+        link: '',
+        message: `Failed to load or parse frontmatter schema '${validation.frontmatterSchema}': ${errorMessage}`,
+      }];
+    }
+  }
+
+  /**
    * Validate all links and optionally frontmatter in all resources in the registry.
    *
    * Checks:
@@ -468,7 +579,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     );
     issues.push(...linkIssues);
 
-    // Frontmatter validation (if schema provided)
+    // Per-collection frontmatter validation
+    const collectionFrontmatterIssues = await this.validateCollectionFrontmatter();
+    issues.push(...collectionFrontmatterIssues);
+
+    // Global frontmatter validation (if schema provided)
     if (options?.frontmatterSchema) {
       const mode = options.validationMode ?? 'strict';
       issues.push(...this.validateAllFrontmatter(options.frontmatterSchema, mode));

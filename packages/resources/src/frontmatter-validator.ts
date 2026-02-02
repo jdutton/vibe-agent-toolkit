@@ -86,22 +86,84 @@ export function validateFrontmatter(
   // Case 2: Frontmatter present, validate against schema
   const valid = validate(frontmatter);
 
-  if (!valid && validate.errors) {
-    for (const error of validate.errors) {
-      const field = error.instancePath.replace(/^\//, '') ?? 'root';
-      const message = error.message ?? 'validation failed';
-      issues.push({
-        severity: 'error',
-        resourcePath,
-        line: 1,
-        type: 'frontmatter_schema_error',
-        link: '',
-        message: `Frontmatter validation: ${field} ${message}`,
-      });
-    }
+  if (valid || !validate.errors) {
+    return issues;
+  }
+
+  // Format validation errors with helpful messages
+  for (const error of validate.errors) {
+    const message = formatValidationError(error, frontmatter);
+    issues.push({
+      severity: 'error',
+      resourcePath,
+      line: 1,
+      type: 'frontmatter_schema_error',
+      link: '',
+      message,
+    });
   }
 
   return issues;
+}
+
+/**
+ * Format AJV validation error into helpful message
+ *
+ * @param error - AJV error object
+ * @param frontmatter - Frontmatter data
+ * @returns Formatted error message
+ */
+function formatValidationError(
+  error: { instancePath: string; keyword: string; message?: string; params?: Record<string, unknown> },
+  frontmatter: Record<string, unknown>
+): string {
+  const field = error.instancePath.replace(/^\//, '') || 'root';
+  const fieldName = field === 'root' ? '(root)' : field;
+
+  // Get the actual invalid value
+  const actualValue = field === 'root' ? frontmatter : getNestedValue(frontmatter, field);
+  const actualValueStr = actualValue === undefined ? 'undefined' : JSON.stringify(actualValue);
+
+  let message = `Frontmatter validation failed for '${fieldName}' (got: ${actualValueStr})`;
+
+  // Add context based on error type
+  if (error.keyword === 'enum' && error.params?.['allowedValues']) {
+    const allowed = (error.params['allowedValues'] as unknown[])
+      .map((v: unknown) => JSON.stringify(v))
+      .join(', ');
+    message += `. Expected one of: ${allowed}`;
+  } else if (error.keyword === 'pattern' && error.params?.['pattern']) {
+    message += `. Must match pattern: ${error.params['pattern']}`;
+  } else if (error.keyword === 'type' && error.params?.['type']) {
+    message += `. Expected type: ${error.params['type']}`;
+  } else if (error.keyword === 'required' && error.params?.['missingProperty']) {
+    message += `. Missing required property: ${error.params['missingProperty']}`;
+  } else if (error.message) {
+    message += `. ${error.message}`;
+  }
+
+  return message;
+}
+
+/**
+ * Get nested value from object using dot-separated path
+ *
+ * @param obj - Object to get value from
+ * @param path - Dot-separated path (e.g., "user.name")
+ * @returns Value at path or undefined
+ */
+function getNestedValue(obj: Record<string, unknown>, path: string): unknown {
+  const parts = path.split('/').filter(Boolean);
+  let current: unknown = obj;
+
+  for (const part of parts) {
+    if (typeof current !== 'object' || current === null) {
+      return undefined;
+    }
+    current = (current as Record<string, unknown>)[part];
+  }
+
+  return current;
 }
 
 /**

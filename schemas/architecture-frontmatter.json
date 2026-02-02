@@ -1,0 +1,33 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Architecture Document Frontmatter",
+  "description": "Frontmatter schema for architecture documentation",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Document title",
+      "minLength": 1
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "proposed", "accepted", "deprecated"],
+      "description": "Document status"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Architecture tags"
+    },
+    "related": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Related documents"
+    }
+  },
+  "additionalProperties": true
+}

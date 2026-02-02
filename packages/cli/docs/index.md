@@ -262,6 +262,48 @@ Override automatic context detection to force dev mode:
 VAT_ROOT_DIR=/path/to/vibe-agent-toolkit vat --version
 ```
 
+### VAT_TEST_ROOT
+
+Override project root detection for testing:
+
+```bash
+VAT_TEST_ROOT=/path/to/test/fixtures vat resources validate
+```
+
+**Use case**: Integration tests that need to run vat commands against test fixtures without relying on directory structure (.git or config file).
+
+**Example**:
+```typescript
+// Test setup
+process.env.VAT_TEST_ROOT = '/path/to/test/fixtures';
+const root = findProjectRoot(process.cwd()); // Returns /path/to/test/fixtures
+```
+
+### VAT_TEST_CONFIG
+
+Override config file path for testing:
+
+```bash
+VAT_TEST_CONFIG=/path/to/test/fixtures/config.yaml vat resources validate
+```
+
+**Use case**: Integration tests that need to test with specific config files without modifying project structure.
+
+**Example**:
+```typescript
+// Test setup
+process.env.VAT_TEST_CONFIG = '/path/to/test/fixtures/config.yaml';
+const config = loadConfig('/any/path'); // Uses override path
+```
+
+**Testing pattern**: Combine VAT_TEST_ROOT and VAT_TEST_CONFIG for complete control:
+
+```bash
+VAT_TEST_ROOT=/path/to/fixtures \
+VAT_TEST_CONFIG=/path/to/fixtures/config.yaml \
+vat resources validate
+```
+
 ## Context Detection
 
 The `vat` wrapper automatically detects your execution context:

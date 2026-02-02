@@ -23,11 +23,18 @@ export const MetadataConfigSchema = z.object({
     .describe('Default metadata values'),
 });
 
+// Validation configuration for collections
+export const ValidationConfigSchema = z.object({
+  frontmatterSchema: z.string().optional().describe('Path to JSON Schema file for frontmatter validation'),
+  mode: z.enum(['strict', 'permissive']).optional().describe('Validation mode: strict or permissive'),
+});
+
 // Resource collection configuration
 export const ResourceCollectionSchema = z.object({
   include: z.array(z.string()).describe('Glob patterns for files to include'),
   exclude: z.array(z.string()).optional().describe('Glob patterns for files to exclude'),
   metadata: MetadataConfigSchema.optional().describe('Metadata configuration for this collection'),
+  validation: ValidationConfigSchema.optional().describe('Validation configuration for this collection'),
 });
 
 // Resource defaults and collections

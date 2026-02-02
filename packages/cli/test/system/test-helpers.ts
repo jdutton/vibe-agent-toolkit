@@ -427,9 +427,8 @@ export function createMarkdownWithFrontmatter(
   let fileContent = '';
 
   if (frontmatter) {
-    const frontmatterYaml = Object.entries(frontmatter)
-      .map(([key, value]) => `${key}: ${value}`)
-      .join('\n');
+    // Use yaml.dump for proper YAML formatting (handles arrays, objects, etc.)
+    const frontmatterYaml = yaml.dump(frontmatter).trim();
     fileContent = `---\n${frontmatterYaml}\n---\n\n${content}`;
   } else {
     fileContent = content;

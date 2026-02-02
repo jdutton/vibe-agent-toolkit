@@ -1,0 +1,42 @@
+# Test configuration for collection-based validation
+# Used by packages/resources tests to validate frontmatter schemas
+
+resources:
+  # Exclude test fixtures from crawling
+  exclude:
+    - "**/node_modules/**"
+    - "**/dist/**"
+
+  # Define test collections with different validation requirements
+  collections:
+    # Strict validation: no extra fields allowed
+    guides:
+      include:
+        - "valid/guide-*.md"
+        - "invalid/guide-*.md"
+      validation:
+        frontmatterSchema: "schemas/strict-guide.json"
+        mode: strict
+
+    # Permissive validation: extra fields allowed
+    documentation:
+      include:
+        - "valid/doc-*.md"
+        - "invalid/doc-*.md"
+      validation:
+        frontmatterSchema: "schemas/permissive-doc.json"
+        mode: permissive
+
+    # Skills validation: specific requirements for SKILL.md files
+    skills:
+      include:
+        - "skills/**/*-SKILL.md"
+      validation:
+        frontmatterSchema: "schemas/skill-frontmatter.json"
+        mode: permissive
+
+# This config demonstrates:
+# - Multiple collections with different schemas
+# - Strict vs permissive validation modes
+# - Pattern-based resource inclusion
+# - Schema-based frontmatter validation

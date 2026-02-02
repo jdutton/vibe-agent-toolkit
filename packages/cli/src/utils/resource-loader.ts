@@ -2,7 +2,11 @@
  * Utilities for loading and crawling resources
  */
 
-import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import {
+  ResourceRegistry,
+  type ProjectConfig as ResourcesProjectConfig,
+  type ResourceRegistryOptions,
+} from '@vibe-agent-toolkit/resources';
 
 import type { ProjectConfig } from '../schemas/config.js';
 
@@ -46,7 +50,25 @@ export async function loadResourcesWithConfig(
   }
 
   // Create registry and crawl
-  const registry = new ResourceRegistry();
+  // Build options conditionally to satisfy exactOptionalPropertyTypes
+  const registryOptions: ResourceRegistryOptions = {};
+  if (config?.resources?.collections) {
+    // Convert CLI config to resources package config
+    // Only pass the collections field that resources package needs
+    const resourcesConfig: ResourcesProjectConfig = {
+      version: 1,
+      resources: {
+        collections: config.resources.collections,
+        include: config.resources.include,
+        exclude: config.resources.exclude,
+      },
+    };
+    registryOptions.config = resourcesConfig;
+  }
+  if (projectRoot) {
+    registryOptions.rootDir = projectRoot;
+  }
+  const registry = new ResourceRegistry(registryOptions);
 
   let crawlOptions;
 

@@ -52,6 +52,11 @@ export type {
   ValidationSeverity,
   ValidationIssue,
   ValidationResult,
+  ProjectConfig,
+  ResourcesConfig,
+  CollectionConfig,
+  CollectionValidation,
+  ValidationMode,
 } from './types.js';
 
 // Export schemas for external use (e.g., JSON Schema generation, runtime validation)
