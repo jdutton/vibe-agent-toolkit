@@ -63,9 +63,6 @@ Main class for managing collections of markdown resources.
 new ResourceRegistry(options?: ResourceRegistryOptions)
 ```
 
-**Options:**
-- `validateOnAdd?: boolean` - Validate resources immediately when added (default: `false`)
-
 #### Methods
 
 ##### addResource(filePath: string): Promise<ResourceMetadata>
@@ -903,20 +900,6 @@ for (const [path, issues] of issuesByResource) {
   for (const issue of issues) {
     console.log(`  [${issue.severity}] Line ${issue.line}: ${issue.message}`);
   }
-}
-```
-
-### Validate on Add
-
-Enable strict validation mode to fail fast on broken links:
-
-```typescript
-const registry = new ResourceRegistry({ validateOnAdd: true });
-
-try {
-  await registry.addResource('./docs/broken.md');
-} catch (error) {
-  console.error('Validation failed:', error.message);
 }
 ```
 

@@ -45,8 +45,6 @@ export interface CrawlOptions {
 export interface ResourceRegistryOptions {
   /** Root directory for resources (optional) */
   rootDir?: string;
-  /** Validate resources when they are added (default: false) */
-  validateOnAdd?: boolean;
   /** Project configuration (optional, enables collection support) */
   config?: ProjectConfig;
   /** Git tracker for efficient git-ignore checking (optional, improves performance) */
@@ -141,7 +139,6 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private readonly resourcesById: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesByName: Map<string, ResourceMetadata[]> = new Map();
   private readonly resourcesByChecksum: Map<SHA256, ResourceMetadata[]> = new Map();
-  private readonly validateOnAdd: boolean;
 
   constructor(options?: ResourceRegistryOptions) {
     if (options?.rootDir !== undefined) {
@@ -153,7 +150,6 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     if (options?.gitTracker !== undefined) {
       this.gitTracker = options.gitTracker;
     }
-    this.validateOnAdd = options?.validateOnAdd ?? false;
   }
 
   /**
@@ -251,7 +247,6 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * Add a single resource to the registry.
    *
    * Parses the markdown file, generates a unique ID, and stores the resource.
-   * If validateOnAdd is true, validates the resource immediately.
    *
    * @param filePath - Path to the markdown file (will be normalized to absolute)
    * @returns The parsed resource metadata
@@ -302,26 +297,6 @@ export class ResourceRegistry implements ResourceCollectionInterface {
 
     // Index the resource
     this.indexResource(resource);
-
-    // Validate if requested
-    if (this.validateOnAdd) {
-      const headingsByFile = this.buildHeadingsByFileMap();
-      for (const link of resource.links) {
-        // Only pass options if projectRoot is defined (exactOptionalPropertyTypes requirement)
-        const options = this.rootDir === undefined
-          ? undefined
-          : {
-              projectRoot: this.rootDir,
-              skipGitIgnoreCheck: false,
-              ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker })
-            };
-
-        const issue = await validateLink(link, absolutePath, headingsByFile, options);
-        if (issue) {
-          throw new Error(`Validation failed: ${issue.message}`);
-        }
-      }
-    }
 
     return resource;
   }

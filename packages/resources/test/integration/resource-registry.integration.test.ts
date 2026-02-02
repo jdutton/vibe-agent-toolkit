@@ -52,11 +52,6 @@ describe('ResourceRegistry - Integration Tests', () => {
       expect(stats.totalResources).toBe(0);
       expect(stats.totalLinks).toBe(0);
     });
-
-    it('should accept validateOnAdd option', () => {
-      const registryWithValidation = new ResourceRegistry({ validateOnAdd: false });
-      expect(registryWithValidation).toBeDefined();
-    });
   });
 
   describe('addResource()', () => {
