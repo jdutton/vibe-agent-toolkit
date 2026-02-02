@@ -552,7 +552,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         resource.frontmatter,
         schema,
         resource.filePath,
-        mode
+        mode,
+        schemaPath
       );
     } catch (error) {
       // Handle missing or invalid schema files gracefully

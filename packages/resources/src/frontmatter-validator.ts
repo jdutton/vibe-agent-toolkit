@@ -31,6 +31,7 @@ import type { ValidationIssue } from './schemas/validation-result.js';
  * @param schema - JSON Schema object
  * @param resourcePath - File path for error reporting
  * @param mode - Validation mode: 'strict' (default) or 'permissive'
+ * @param schemaPath - Path to schema file (for error context)
  * @returns Array of validation issues (empty if valid)
  *
  * @example
@@ -40,14 +41,21 @@ import type { ValidationIssue } from './schemas/validation-result.js';
  *   required: ['title'],
  *   properties: { title: { type: 'string' } }
  * };
- * const issues = validateFrontmatter(frontmatter, schema, '/docs/guide.md');
+ * const issues = validateFrontmatter(
+ *   frontmatter,
+ *   schema,
+ *   '/docs/guide.md',
+ *   'strict',
+ *   '/schema.json'
+ * );
  * ```
  */
 export function validateFrontmatter(
   frontmatter: Record<string, unknown> | undefined,
   schema: object,
   resourcePath: string,
-  mode: ValidationMode = 'strict'
+  mode: ValidationMode = 'strict',
+  schemaPath?: string
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
@@ -71,13 +79,17 @@ export function validateFrontmatter(
     // Check if schema requires any fields
     const schemaRequires = (schema as { required?: string[] }).required;
     if (schemaRequires && schemaRequires.length > 0) {
+      // Build context message with schema path and validation mode
+      const schemaContext = schemaPath ? ` (schema: ${schemaPath}, mode: ${mode})` : '';
+      const requiredFields = schemaRequires.join(', ');
+
       issues.push({
         severity: 'error',
         resourcePath,
         line: 1,
         type: 'frontmatter_missing',
         link: '',
-        message: `Missing required frontmatter (schema requires: ${schemaRequires.join(', ')})`,
+        message: `No frontmatter found in file. Schema requires: ${requiredFields}${schemaContext}`,
       });
     }
     return issues;
@@ -92,7 +104,7 @@ export function validateFrontmatter(
 
   // Format validation errors with helpful messages
   for (const error of validate.errors) {
-    const message = formatValidationError(error, frontmatter);
+    const message = formatValidationError(error, frontmatter, mode, schemaPath);
     issues.push({
       severity: 'error',
       resourcePath,
@@ -111,11 +123,15 @@ export function validateFrontmatter(
  *
  * @param error - AJV error object
  * @param frontmatter - Frontmatter data
+ * @param mode - Validation mode (strict/permissive)
+ * @param schemaPath - Path to schema file (for error context)
  * @returns Formatted error message
  */
 function formatValidationError(
   error: { instancePath: string; keyword: string; message?: string; params?: Record<string, unknown> },
-  frontmatter: Record<string, unknown>
+  frontmatter: Record<string, unknown>,
+  mode: ValidationMode,
+  schemaPath?: string
 ): string {
   const field = error.instancePath.replace(/^\//, '') || 'root';
   const fieldName = field === 'root' ? '(root)' : field;
@@ -141,6 +157,10 @@ function formatValidationError(
   } else if (error.message) {
     message += `. ${error.message}`;
   }
+
+  // Add schema context to help users understand the requirement
+  const schemaContext = schemaPath ? ` (schema: ${schemaPath}, mode: ${mode})` : '';
+  message += schemaContext;
 
   return message;
 }

@@ -445,7 +445,7 @@ describe('validateLink', () => {
       expect(result?.link).toBe(NONEXISTENT_FILE_LINK);
     });
 
-    it('should include suggestion in broken file issue', async () => {
+    it('should include empty suggestion in broken file issue', async () => {
       const sourceFile = path.join(FIXTURES_DIR, BROKEN_FILE_MD);
       const link = createLink('local_file', NONEXISTENT_FILE_LINK, 'Broken');
       const headingsMap = new Map<string, HeadingNode[]>();
@@ -453,10 +453,10 @@ describe('validateLink', () => {
       const result = await validateLink(link, sourceFile, headingsMap);
 
       expect(result?.suggestion).toBeDefined();
-      expect(result?.suggestion).toContain('file path');
+      expect(result?.suggestion).toBe('');
     });
 
-    it('should include suggestion in broken anchor issue', async () => {
+    it('should include empty suggestion in broken anchor issue', async () => {
       const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('anchor', NONEXISTENT_ANCHOR, 'Broken');
       const headingsMap = new Map<string, HeadingNode[]>([
@@ -466,7 +466,7 @@ describe('validateLink', () => {
       const result = await validateLink(link, sourceFile, headingsMap);
 
       expect(result?.suggestion).toBeDefined();
-      expect(result?.suggestion).toContain('heading');
+      expect(result?.suggestion).toBe('');
     });
   });
 

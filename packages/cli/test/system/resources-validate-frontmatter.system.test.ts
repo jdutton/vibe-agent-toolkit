@@ -147,7 +147,7 @@ describe('vat resources validate --frontmatter-schema (system test)', () => {
 
     // Check error details in stderr (use text format)
     const textResult = validateWithTextFormat(SCHEMA_JSON);
-    expect(textResult.stderr).toContain('Missing required frontmatter');
+    expect(textResult.stderr).toContain('No frontmatter found');
     expect(textResult.stderr).toContain('title');
   });
 });

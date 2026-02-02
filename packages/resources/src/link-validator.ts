@@ -125,7 +125,7 @@ async function validateLocalFileLink(
       type: 'broken_file',
       link: link.href,
       message: `File not found: ${fileResult.resolvedPath}`,
-      suggestion: 'Check that the file path is correct and the file exists',
+      suggestion: '',
     };
   }
 
@@ -155,9 +155,8 @@ async function validateLocalFileLink(
         line: link.line,
         type: 'link_to_gitignored',
         link: link.href,
-        message: `Non-ignored file links to gitignored file: ${fileResult.resolvedPath}`,
-        suggestion:
-          'Gitignored files are local-only and will not exist in the repository. Remove this link or unignore the target file.',
+        message: `Non-ignored file links to gitignored file: ${fileResult.resolvedPath}. Gitignored files are local-only and will not exist in the repository. Remove this link or unignore the target file.`,
+        suggestion: '',
       };
     }
   }
@@ -178,7 +177,7 @@ async function validateLocalFileLink(
         type: 'broken_anchor',
         link: link.href,
         message: `Anchor not found: #${anchor} in ${fileResult.resolvedPath}`,
-        suggestion: 'Check that the heading exists in the target file',
+        suggestion: '',
       };
     }
   }
@@ -208,7 +207,7 @@ async function validateAnchorLink(
       type: 'broken_anchor',
       link: link.href,
       message: `Anchor not found: ${link.href}`,
-      suggestion: 'Check that the heading exists in this file',
+      suggestion: '',
     };
   }
 
