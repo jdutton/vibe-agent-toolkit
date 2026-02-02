@@ -17,7 +17,7 @@
         "@types/semver": "^7.7.1",
         "@typescript-eslint/eslint-plugin": "^8.50.1",
         "@typescript-eslint/parser": "^8.50.1",
-        "@vibe-validate/cli": "0.18.4-rc.1",
+        "@vibe-validate/cli": "0.19.0-rc.1",
         "@vitest/coverage-v8": "^3.2.4",
         "adm-zip": "^0.5.16",
         "eslint": "^9.39.2",
@@ -33,14 +33,14 @@
         "semver": "^7.7.3",
         "tsx": "^4.21.0",
         "typescript": "^5.9.3",
-        "vibe-validate": "^0.18.4-rc.1",
+        "vibe-validate": "^0.19.0-rc.1",
         "vitest": "^3.2.4",
         "yaml": "^2.8.2",
       },
     },
     "packages/agent-config": {
       "name": "@vibe-agent-toolkit/agent-config",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@vibe-agent-toolkit/agent-schema": "workspace:*",
         "@vibe-agent-toolkit/rag": "workspace:*",
@@ -55,7 +55,7 @@
     },
     "packages/agent-runtime": {
       "name": "@vibe-agent-toolkit/agent-runtime",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@vibe-agent-toolkit/agent-schema": "workspace:*",
         "@vibe-agent-toolkit/utils": "workspace:*",
@@ -70,7 +70,7 @@
     },
     "packages/agent-schema": {
       "name": "@vibe-agent-toolkit/agent-schema",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "zod": "^3.23.8",
         "zod-to-json-schema": "^3.23.5",
@@ -84,7 +84,7 @@
     },
     "packages/cli": {
       "name": "@vibe-agent-toolkit/cli",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "bin": {
         "vat": "./dist/bin/vat",
       },
@@ -117,7 +117,7 @@
     },
     "packages/dev-tools": {
       "name": "@vibe-agent-toolkit/dev-tools",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@vibe-agent-toolkit/utils": "workspace:*",
         "semver": "^7.7.3",
@@ -138,7 +138,7 @@
     },
     "packages/discovery": {
       "name": "@vibe-agent-toolkit/discovery",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@vibe-agent-toolkit/utils": "workspace:*",
         "picomatch": "^4.0.2",
@@ -149,7 +149,7 @@
     },
     "packages/gateway-mcp": {
       "name": "@vibe-agent-toolkit/gateway-mcp",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@modelcontextprotocol/sdk": "^1.0.4",
         "@vibe-agent-toolkit/agent-schema": "workspace:*",
@@ -166,7 +166,7 @@
     },
     "packages/rag": {
       "name": "@vibe-agent-toolkit/rag",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@vibe-agent-toolkit/resources": "workspace:*",
         "@vibe-agent-toolkit/utils": "workspace:*",
@@ -186,7 +186,7 @@
     },
     "packages/rag-lancedb": {
       "name": "@vibe-agent-toolkit/rag-lancedb",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@lancedb/lancedb": "^0.23.0",
         "@vibe-agent-toolkit/rag": "workspace:*",
@@ -202,7 +202,7 @@
     },
     "packages/resources": {
       "name": "@vibe-agent-toolkit/resources",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@vibe-agent-toolkit/utils": "workspace:*",
         "ajv": "^8.17.1",
@@ -227,7 +227,7 @@
     },
     "packages/runtime-claude-agent-sdk": {
       "name": "@vibe-agent-toolkit/runtime-claude-agent-sdk",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.1.5",
         "@anthropic-ai/sdk": "^0.37.0",
@@ -247,7 +247,7 @@
     },
     "packages/runtime-claude-skills": {
       "name": "@vibe-agent-toolkit/runtime-claude-skills",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@vibe-agent-toolkit/agent-config": "workspace:*",
         "@vibe-agent-toolkit/resources": "workspace:*",
@@ -264,7 +264,7 @@
     },
     "packages/runtime-langchain": {
       "name": "@vibe-agent-toolkit/runtime-langchain",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@langchain/core": "^0.3.29",
         "@vibe-agent-toolkit/agent-runtime": "workspace:*",
@@ -285,7 +285,7 @@
     },
     "packages/runtime-openai": {
       "name": "@vibe-agent-toolkit/runtime-openai",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@vibe-agent-toolkit/agent-runtime": "workspace:*",
         "openai": "^4.77.3",
@@ -303,7 +303,7 @@
     },
     "packages/runtime-vercel-ai-sdk": {
       "name": "@vibe-agent-toolkit/runtime-vercel-ai-sdk",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@ai-sdk/provider": "^3.0.4",
         "@ai-sdk/provider-utils": "^4.0.8",
@@ -324,7 +324,7 @@
     },
     "packages/transports": {
       "name": "@vibe-agent-toolkit/transports",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@vibe-agent-toolkit/agent-runtime": "workspace:*",
         "ws": "^8.18.0",
@@ -338,7 +338,7 @@
     },
     "packages/utils": {
       "name": "@vibe-agent-toolkit/utils",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "ignore": "^7.0.5",
         "picomatch": "^4.0.3",
@@ -354,7 +354,7 @@
     },
     "packages/vat-development-agents": {
       "name": "@vibe-agent-toolkit/vat-development-agents",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@vibe-agent-toolkit/agent-schema": "workspace:*",
         "yaml": "^2.8.2",
@@ -365,7 +365,7 @@
     },
     "packages/vat-example-cat-agents": {
       "name": "@vibe-agent-toolkit/vat-example-cat-agents",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "dependencies": {
         "@vibe-agent-toolkit/agent-runtime": "workspace:*",
         "@vibe-agent-toolkit/agent-schema": "workspace:*",
@@ -392,7 +392,7 @@
     },
     "packages/vibe-agent-toolkit": {
       "name": "vibe-agent-toolkit",
-      "version": "0.1.2",
+      "version": "0.1.3",
       "bin": {
         "vat": "./bin/vat",
       },
@@ -852,19 +852,19 @@
 
     "@vibe-agent-toolkit/vat-example-cat-agents": ["@vibe-agent-toolkit/vat-example-cat-agents@workspace:packages/vat-example-cat-agents"],
 
-    "@vibe-validate/cli": ["@vibe-validate/cli@0.18.4-rc.1", "", { "dependencies": { "@vibe-validate/config": "0.18.4-rc.1", "@vibe-validate/core": "0.18.4-rc.1", "@vibe-validate/extractors": "0.18.4-rc.1", "@vibe-validate/git": "0.18.4-rc.1", "@vibe-validate/history": "0.18.4-rc.1", "chalk": "^5.6.2", "commander": "^12.1.0", "prompts": "^2.4.2", "proper-lockfile": "^4.1.2", "semver": "^7.7.3", "yaml": "^2.8.2", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" }, "bin": { "vibe-validate": "dist/bin/vibe-validate", "vv": "dist/bin/vv" } }, "sha512-r+2n8wHQe4O0SYXutcfMYsXGUC+elNA0P3CNqiWKIQJfDQOf66T5s3z9Nu1ds3I3oGG82yrtH+9AHKxip5i1dw=="],
+    "@vibe-validate/cli": ["@vibe-validate/cli@0.19.0-rc.1", "", { "dependencies": { "@vibe-validate/config": "0.19.0-rc.1", "@vibe-validate/core": "0.19.0-rc.1", "@vibe-validate/extractors": "0.19.0-rc.1", "@vibe-validate/git": "0.19.0-rc.1", "@vibe-validate/history": "0.19.0-rc.1", "chalk": "^5.6.2", "commander": "^12.1.0", "prompts": "^2.4.2", "proper-lockfile": "^4.1.2", "semver": "^7.7.3", "yaml": "^2.8.2", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" }, "bin": { "vibe-validate": "dist/bin/vibe-validate", "vv": "dist/bin/vv" } }, "sha512-+azNpgG4GvHlvZIPIBQyDM2E08/sghkqHxEXkUilXNIakRAwvaCEqk8Y94nbmsKx08TDyZp5+ECFZYZfnVXnEA=="],
 
-    "@vibe-validate/config": ["@vibe-validate/config@0.18.4-rc.1", "", { "dependencies": { "@vibe-validate/utils": "0.18.4-rc.1", "tsx": "^4.21.0", "yaml": "^2.8.2", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" } }, "sha512-ze9qioe2BIwJcupnm2lIuftlWK3FdXQz03hk1BondYhaTQY3hC5vZ4wOcHJH286lzVC/DA39c+saeDaxOH+YQg=="],
+    "@vibe-validate/config": ["@vibe-validate/config@0.19.0-rc.1", "", { "dependencies": { "@vibe-validate/utils": "0.19.0-rc.1", "tsx": "^4.21.0", "yaml": "^2.8.2", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" } }, "sha512-70jlqNL2sDhKnaY122wo06rd/CS5Zt6JkEYwiVK0ejAFUX8Ss1zgXobPmJOPPzDA58gsqR+oxVepyLSzLSUOkg=="],
 
-    "@vibe-validate/core": ["@vibe-validate/core@0.18.4-rc.1", "", { "dependencies": { "@vibe-validate/config": "0.18.4-rc.1", "@vibe-validate/extractors": "0.18.4-rc.1", "@vibe-validate/git": "0.18.4-rc.1", "@vibe-validate/utils": "0.18.4-rc.1", "strip-ansi": "^7.1.2", "yaml": "^2.8.2", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" } }, "sha512-G4HP8ZlqvClYbQbOsVF7RHuPcP05Ml7rRgnFKpDwlOZtDUgdqXU/yrrOLI98j4BBZRtZsbL2fBat2m6T0Vi7fA=="],
+    "@vibe-validate/core": ["@vibe-validate/core@0.19.0-rc.1", "", { "dependencies": { "@vibe-validate/config": "0.19.0-rc.1", "@vibe-validate/extractors": "0.19.0-rc.1", "@vibe-validate/git": "0.19.0-rc.1", "@vibe-validate/utils": "0.19.0-rc.1", "strip-ansi": "^7.1.2", "yaml": "^2.8.2", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" } }, "sha512-taX5Jt+b1y/X+AyCo5MFZxc+OgX9w1Fc/mlpAXypVibzkNbI3soKeAGUB6qqPQCo1uPakNvFlmB9CX0QF7sVFQ=="],
 
-    "@vibe-validate/extractors": ["@vibe-validate/extractors@0.18.4-rc.1", "", { "dependencies": { "@vibe-validate/config": "0.18.4-rc.1", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" } }, "sha512-2jA4NJD61xXBwU4LuUeDom4Ib7OzkpSbdOsLTDYfL15JZ8KJnuaDk5ngKmDyjdWPU9L7HENUPPaNxS+1p4wLgQ=="],
+    "@vibe-validate/extractors": ["@vibe-validate/extractors@0.19.0-rc.1", "", { "dependencies": { "@vibe-validate/config": "0.19.0-rc.1", "@vibe-validate/utils": "0.19.0-rc.1", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" } }, "sha512-2MAjSttcdyhiuvF4PLgIGA4Jk3HNnwPPk/gOy1C7XXmaGU9fTWnu0kmL1UeGR3AGekiu63rOcnA9MC3o3sywNw=="],
 
-    "@vibe-validate/git": ["@vibe-validate/git@0.18.4-rc.1", "", { "dependencies": { "@vibe-validate/utils": "0.18.4-rc.1", "yaml": "^2.8.2" } }, "sha512-MEKNP4eSwRUhXZSknl6b1xKNVOcPRt/potP8XybT3yGKo63lqnrOObK8pprR6eGHliIk5XLN1EKYuVOIqamGoA=="],
+    "@vibe-validate/git": ["@vibe-validate/git@0.19.0-rc.1", "", { "dependencies": { "@vibe-validate/utils": "0.19.0-rc.1", "yaml": "^2.8.2" } }, "sha512-jBp4IhTNyrPmM1CDvJzI+JMPWx/Tl8oIJRV1rED9O+QTBPmEnP2xMMIp6VQ5g7QAb6bpFcdK+a1By8y6APYqzg=="],
 
-    "@vibe-validate/history": ["@vibe-validate/history@0.18.4-rc.1", "", { "dependencies": { "@vibe-validate/core": "0.18.4-rc.1", "@vibe-validate/git": "0.18.4-rc.1", "yaml": "^2.8.2", "zod": "^3.25.76" } }, "sha512-q6JAuqBLLOS0ZCkWf2lqKza+S9Y+XJRXJpsA1a2C5HW3nDDZMHZiRlVjyjP6jLwfNf+Wi7b15a0Y7Hs92ZsSuA=="],
+    "@vibe-validate/history": ["@vibe-validate/history@0.19.0-rc.1", "", { "dependencies": { "@vibe-validate/core": "0.19.0-rc.1", "@vibe-validate/git": "0.19.0-rc.1", "yaml": "^2.8.2", "zod": "^3.25.76" } }, "sha512-uO+tvIWsJmglO4vBm1LgYI0mYp4ZQKcuUXft1HY8x/jzzO0b/9x/7k6YB35RstGcdhw5LJXU4A4mV12HuZnRjw=="],
 
-    "@vibe-validate/utils": ["@vibe-validate/utils@0.18.4-rc.1", "", { "dependencies": { "which": "^5.0.0" } }, "sha512-00JhW2fx1gg9MCyo5ckRZGlaO5JDQJXgg8wcZhJh71mZjWa4xulhWlskStGIWyCioFQ+pBBuvqxNujePWHZKPg=="],
+    "@vibe-validate/utils": ["@vibe-validate/utils@0.19.0-rc.1", "", { "dependencies": { "which": "^5.0.0" } }, "sha512-BWjAw60lSdnLEX3puh/XIY8i3PhvB1a/hthrYGMjHuWeV/uwg9VK/cLuYg8MT29tfunA/SP9SIWuVDzvvHDY3w=="],
 
     "@vitest/coverage-v8": ["@vitest/coverage-v8@3.2.4", "", { "dependencies": { "@ampproject/remapping": "^2.3.0", "@bcoe/v8-coverage": "^1.0.2", "ast-v8-to-istanbul": "^0.3.3", "debug": "^4.4.1", "istanbul-lib-coverage": "^3.2.2", "istanbul-lib-report": "^3.0.1", "istanbul-lib-source-maps": "^5.0.6", "istanbul-reports": "^3.1.7", "magic-string": "^0.30.17", "magicast": "^0.3.5", "std-env": "^3.9.0", "test-exclude": "^7.0.1", "tinyrainbow": "^2.0.0" }, "peerDependencies": { "@vitest/browser": "3.2.4", "vitest": "3.2.4" }, "optionalPeers": ["@vitest/browser"] }, "sha512-EyF9SXU6kS5Ku/U82E259WSnvg6c8KTjppUncuNdm5QHpe17mwREHnjDzozC8x9MZ0xfBUFSaLkRv4TMA75ALQ=="],
 
@@ -2092,7 +2092,7 @@
 
     "vibe-agent-toolkit": ["vibe-agent-toolkit@workspace:packages/vibe-agent-toolkit"],
 
-    "vibe-validate": ["vibe-validate@0.18.4-rc.1", "", { "dependencies": { "@vibe-validate/cli": "0.18.4-rc.1" }, "bin": { "vibe-validate": "bin/vibe-validate", "vv": "bin/vv" } }, "sha512-B+w+B9zt0tHCW4EnUPdJp4zvTowuYdNMKGf1Ljntwipl9rFwDsZE7ixP5Y78GcXXrtSwtL1oeyDYLT7oIHRy7g=="],
+    "vibe-validate": ["vibe-validate@0.19.0-rc.1", "", { "dependencies": { "@vibe-validate/cli": "0.19.0-rc.1" }, "bin": { "vibe-validate": "bin/vibe-validate", "vv": "bin/vv" } }, "sha512-U3c0OOOFMBbClR8GGfvGaSjR5ram2DteXMlbQNZnN1Mv3MlHAw/HEeAHiJYdav3TAIa2j29nV65kUw2t2BeRtA=="],
 
     "vite": ["vite@7.3.0", "", { "dependencies": { "esbuild": "^0.27.0", "fdir": "^6.5.0", "picomatch": "^4.0.3", "postcss": "^8.5.6", "rollup": "^4.43.0", "tinyglobby": "^0.2.15" }, "optionalDependencies": { "fsevents": "~2.3.3" }, "peerDependencies": { "@types/node": "^20.19.0 || >=22.12.0", "jiti": ">=1.21.0", "less": "^4.0.0", "lightningcss": "^1.21.0", "sass": "^1.70.0", "sass-embedded": "^1.70.0", "stylus": ">=0.54.8", "sugarss": "^5.0.0", "terser": "^5.16.0", "tsx": "^4.8.1", "yaml": "^2.4.2" }, "optionalPeers": ["@types/node", "jiti", "less", "lightningcss", "sass", "sass-embedded", "stylus", "sugarss", "terser", "tsx", "yaml"], "bin": { "vite": "bin/vite.js" } }, "sha512-dZwN5L1VlUBewiP6H9s2+B3e3Jg96D0vzN+Ry73sOefebhYr9f94wwkMNN/9ouoU8pV1BqA1d1zGk8928cx0rg=="],
 
