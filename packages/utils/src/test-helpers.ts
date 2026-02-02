@@ -21,8 +21,8 @@ import { mkdirSyncReal } from './path-utils.js';
  * // Result: packages/rag-lancedb/.test-output/system/20260105-143022-abc123/databases/test-db
  *
  * // Create temporary file directory for integration tests
- * const tempDir = getTestOutputDir('runtime-claude-skills', 'integration', 'temp-files');
- * // Result: packages/runtime-claude-skills/.test-output/integration/20260105-143022-def456/temp-files
+ * const tempDir = getTestOutputDir('agent-skills', 'integration', 'temp-files');
+ * // Result: packages/agent-skills/.test-output/integration/20260105-143022-def456/temp-files
  * ```
  */
 export function getTestOutputDir(
