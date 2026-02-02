@@ -7,14 +7,14 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
-import { detectFormat } from '@vibe-agent-toolkit/discovery';
 import {
   detectResourceFormat,
   validate,
   validateSkill,
   type ValidateOptions,
   type ValidationResult,
-} from '@vibe-agent-toolkit/runtime-claude-skills';
+} from '@vibe-agent-toolkit/agent-skills';
+import { detectFormat } from '@vibe-agent-toolkit/discovery';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../utils/command-error.js';

@@ -674,7 +674,7 @@ Current packages (19 published, 1 private):
 - @vibe-agent-toolkit/agent-config
 - @vibe-agent-toolkit/agent-runtime
 - @vibe-agent-toolkit/runtime-claude-agent-sdk
-- @vibe-agent-toolkit/runtime-claude-skills
+- @vibe-agent-toolkit/agent-skills
 - @vibe-agent-toolkit/runtime-langchain
 - @vibe-agent-toolkit/runtime-openai
 - @vibe-agent-toolkit/runtime-vercel-ai-sdk
@@ -829,7 +829,7 @@ Packages are published in dependency order:
 3. rag (depends on resources, utils)
 4. rag-lancedb, agent-config (parallel)
 5. agent-runtime (depends on utils)
-6. runtime-claude-agent-sdk, runtime-claude-skills, runtime-langchain, runtime-openai, runtime-vercel-ai-sdk (parallel - runtime adapters)
+6. runtime-claude-agent-sdk, agent-skills, runtime-langchain, runtime-openai, runtime-vercel-ai-sdk (parallel - runtime adapters)
 7. transports (depends on agent-runtime)
 8. cli
 9. gateway-mcp (depends on agent-schema, utils, vat-example-cat-agents)

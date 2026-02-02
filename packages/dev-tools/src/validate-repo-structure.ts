@@ -15,7 +15,7 @@
  *
  * ORIGINAL RULES:
  * - No /examples directories in runtime packages
- * - No /scripts directories (except dev-tools, agent-schema)
+ * - No /scripts directories (except dev-tools, agent-schema, agent-skills)
  * - No shell scripts (.sh, .ps1, .bat, .cmd) - use TypeScript
  * - No /staging directories in test/fixtures
  * - Test fixtures follow size guidelines (over 100KB must be compressed)
@@ -153,13 +153,13 @@ async function validateNoRuntimeExamples(): Promise<void> {
 /**
  * Rule 2: Only specific packages can have /scripts
  * Prevents utility sprawl across packages
- * Allowed: dev-tools (repo utilities), agent-schema (schema generation)
+ * Allowed: dev-tools (repo utilities), agent-schema, agent-skills (schema generation)
  */
 async function validateScriptsLocation(): Promise<void> {
   const packagesDir = join(REPO_ROOT, 'packages');
   const entries = await readdir(packagesDir, { withFileTypes: true });
 
-  const allowedScriptsPackages = new Set(['dev-tools', 'agent-schema']);
+  const allowedScriptsPackages = new Set(['dev-tools', 'agent-schema', 'agent-skills']);
 
   for (const entry of entries) {
     if (!entry.isDirectory() || allowedScriptsPackages.has(entry.name)) {
@@ -171,7 +171,7 @@ async function validateScriptsLocation(): Promise<void> {
       errors.push({
         type: ERROR_TYPES.FORBIDDEN_DIRECTORY,
         path: `packages/${entry.name}/scripts/`,
-        message: `Only dev-tools and vat-example-cat-agents should have /scripts directories. Move utilities to dev-tools package.`,
+        message: `Only dev-tools, agent-schema, and agent-skills should have /scripts directories. Move utilities to dev-tools package.`,
         severity: 'error',
       });
     }
@@ -327,6 +327,11 @@ async function validateSourceFileLocations(): Promise<void> {
 
       // Allow agent-schema/scripts (build tooling for JSON Schema generation)
       if (normalizedPath.startsWith('packages/agent-schema/scripts/')) {
+        return;
+      }
+
+      // Allow agent-skills/scripts (build tooling for JSON Schema generation)
+      if (normalizedPath.startsWith('packages/agent-skills/scripts/')) {
         return;
       }
 

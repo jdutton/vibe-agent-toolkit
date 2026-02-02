@@ -2,7 +2,7 @@
  * Agent build command - Package agents for deployment targets
  */
 
-import { buildClaudeSkill } from '@vibe-agent-toolkit/runtime-claude-skills';
+import { buildClaudeSkill } from '@vibe-agent-toolkit/agent-skills';
 
 import { resolveAgentPath } from '../../utils/agent-discovery.js';
 import { handleCommandError } from '../../utils/command-error.js';

@@ -392,7 +392,7 @@ bun run test:integration
 ## Related Packages
 
 - [`@vibe-agent-toolkit/utils`](../utils/README.md) - Provides `isGitIgnored` utility
-- [`@vibe-agent-toolkit/runtime-claude-skills`](../runtime-claude-skills/README.md) - Uses discovery for skill validation
+- [`@vibe-agent-toolkit/agent-skills`](../agent-skills/README.md) - Uses discovery for skill validation
 - [`@vibe-agent-toolkit/cli`](../cli/README.md) - CLI commands built on discovery
 
 ## License
