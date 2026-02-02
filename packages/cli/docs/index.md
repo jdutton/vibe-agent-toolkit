@@ -12,7 +12,7 @@ vat [options] <command>
 
 ### `resources validate`
 
-Markdown resource scanning and link validation (run before commit)
+Markdown resource scanning, link validation, and frontmatter validation (run before commit)
 
 **What it does:**
 
@@ -20,14 +20,21 @@ Markdown resource scanning and link validation (run before commit)
 2. Validates internal file links (relative paths)
 3. Validates anchor links within files (#heading)
 4. Validates cross-file anchor links (file.md#heading)
-5. Reports broken links to stderr
+5. **Validates frontmatter against JSON Schemas** (per-collection)
+6. Reports broken links and validation errors to stderr
+
+**Per-collection frontmatter validation:**
+
+Define collections in `vibe-agent-toolkit.config.yaml` to validate frontmatter fields, types, and patterns using JSON Schemas. Collections support strict mode (no extra fields) or permissive mode (extra fields allowed).
+
+See [Collection Validation Guide](../../../docs/guides/collection-validation.md) for full documentation, examples, and schema patterns.
 
 **When to use:** Before committing changes that touch markdown files
 
 **Exit codes:**
 
-- `0` - All links valid
-- `1` - Broken links found (see stderr for details)
+- `0` - All links and frontmatter valid
+- `1` - Broken links or validation errors found (see stderr for details)
 - `2` - System error (invalid config, directory not found)
 
 **Creates/modifies:** None (read-only validation)

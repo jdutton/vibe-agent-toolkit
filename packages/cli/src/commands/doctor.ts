@@ -245,6 +245,31 @@ export function checkConfigFile(): DoctorCheckResult {
 }
 
 /**
+ * Check if schema files referenced in collections exist
+ */
+function checkSchemaFiles(
+  collections: Record<string, { validation?: { frontmatterSchema?: string | undefined } | undefined }>,
+  configDir: string
+): { schemaFiles: string[]; missingSchemas: string[] } {
+  const schemaFiles: string[] = [];
+  const missingSchemas: string[] = [];
+
+  for (const collectionConfig of Object.values(collections)) {
+    const schemaPath = collectionConfig.validation?.frontmatterSchema;
+    if (schemaPath) {
+      schemaFiles.push(schemaPath);
+      const absoluteSchemaPath = join(configDir, schemaPath);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- schemaPath is from validated config
+      if (!existsSync(absoluteSchemaPath)) {
+        missingSchemas.push(schemaPath);
+      }
+    }
+  }
+
+  return { schemaFiles, missingSchemas };
+}
+
+/**
  * Check if configuration is valid
  */
 export function checkConfigValid(): DoctorCheckResult {
@@ -260,11 +285,51 @@ export function checkConfigValid(): DoctorCheckResult {
     }
 
     try {
-      loadConfig(configPath);
+      // loadConfig expects project root directory, not config file path
+      const configDir = join(configPath, '..');
+      const config = loadConfig(configDir);
+
+      // Basic validation passed, now check collections and schema files
+      const collections = config.resources?.collections;
+
+      if (!collections || Object.keys(collections).length === 0) {
+        return {
+          name: CHECK_NAME_CONFIG_VALID,
+          passed: true,
+          message: 'Configuration is valid (no collections defined)',
+        };
+      }
+
+      // Check if schema files exist
+      const collectionCount = Object.keys(collections).length;
+      const { schemaFiles, missingSchemas } = checkSchemaFiles(collections, configDir);
+
+      // Build message with details
+      if (missingSchemas.length > 0) {
+        const details = [
+          `Collections: ${collectionCount} defined`,
+          `Schema files: ${schemaFiles.length} referenced, ${missingSchemas.length} missing`,
+          `Missing: ${missingSchemas.join(', ')}`,
+        ].join('\n   ');
+
+        return {
+          name: CHECK_NAME_CONFIG_VALID,
+          passed: false,
+          message: `Configuration valid but schema files missing:\n   ${details}`,
+          suggestion: 'Create missing schema files or update collection config',
+        };
+      }
+
+      // All good - build success message with details
+      const details = [
+        `Collections: ${collectionCount} defined`,
+        `Schema files: ${schemaFiles.length} referenced, all exist`,
+      ].join('\n   ');
+
       return {
         name: CHECK_NAME_CONFIG_VALID,
         passed: true,
-        message: 'Configuration is valid',
+        message: `Configuration is valid\n   ${details}`,
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
