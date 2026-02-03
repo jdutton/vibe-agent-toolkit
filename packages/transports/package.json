@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/transports",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Transport adapters for VAT conversational agents",
   "type": "module",
   "main": "./dist/index.js",

@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.4] - 2026-02-03
+
+### Added
+- **Multi-Collection Resource Validation System**: Comprehensive resource type system with frontmatter validation
+  - Multi-collection support via `vibe-agent-toolkit.config.yaml` with pattern resolution
+  - Per-collection frontmatter validation with JSON Schema
+  - Validation modes: strict vs permissive
+  - Collection filtering via `--collection <id>` flag in scan/validate commands
+  - Format options: `--format yaml|json|text` for structured or human-readable output
+  - Package-based schema references (e.g., `@vibe-agent-toolkit/agent-skills/schemas/skill-frontmatter.json`)
+  - Enhanced validation error messages with actual/expected values
+  - Enhanced `vat doctor` command validates config file schema and checks schema file existence
+- **Agent Skills Package Rename**: `@vibe-agent-toolkit/runtime-claude-skills` → `@vibe-agent-toolkit/agent-skills`
+  - Exported JSON schemas: `skill-frontmatter.json` and `vat-skill-frontmatter.json`
+
+### Changed
+- **Output Format Improvements**: Enhanced validation and scan output
+  - Added error summary by type
+  - Added per-collection error tracking (filesWithErrors, errorCount)
+  - Simplified scan output with `--verbose` flag for file details
+  - Errors grouped by file in structured output (YAML/JSON)
+
 ## [0.1.3] - 2026-02-01
 
 ### Added
