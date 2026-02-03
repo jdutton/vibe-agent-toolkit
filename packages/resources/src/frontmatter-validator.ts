@@ -147,11 +147,14 @@ function formatValidationError(
       .join(', ');
     message += `. Expected one of: ${allowed}`;
   } else if (error.keyword === 'pattern' && error.params?.['pattern']) {
-    message += `. Must match pattern: ${error.params['pattern']}`;
+    const pattern = String(error.params['pattern']);
+    message += `. Must match pattern: ${pattern}`;
   } else if (error.keyword === 'type' && error.params?.['type']) {
-    message += `. Expected type: ${error.params['type']}`;
+    const type = String(error.params['type']);
+    message += `. Expected type: ${type}`;
   } else if (error.keyword === 'required' && error.params?.['missingProperty']) {
-    message += `. Missing required property: ${error.params['missingProperty']}`;
+    const missingProp = String(error.params['missingProperty']);
+    message += `. Missing required property: ${missingProp}`;
   } else if (error.message) {
     message += `. ${error.message}`;
   }

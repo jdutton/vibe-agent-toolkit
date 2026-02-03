@@ -17,80 +17,80 @@ import { createSchemaFile, setupTempDirTestSuite } from './test-helpers.js';
  * during validation based on ProjectConfig.
  */
 
+// Common schemas
+const titleDescriptionSchema = {
+  type: 'object',
+  required: ['title', 'description'],
+  properties: {
+    title: { type: 'string' },
+    description: { type: 'string' },
+  },
+};
+
+const titleOnlySchema = {
+  type: 'object',
+  required: ['title'],
+  properties: {
+    title: { type: 'string' },
+  },
+  additionalProperties: false,
+};
+
+const categorySchema = {
+  type: 'object',
+  required: ['category'],
+  properties: {
+    category: { type: 'string' },
+  },
+};
+
+/**
+ * Create a markdown file with frontmatter
+ */
+async function createMarkdownFile(
+  filePath: string,
+  frontmatter: Record<string, unknown> | null,
+  content: string = '# Test\n\nContent here.'
+): Promise<void> {
+  let frontmatterBlock = '';
+  if (frontmatter) {
+    const entries = Object.entries(frontmatter).map(([k, v]) => {
+      const jsonValue = JSON.stringify(v);
+      return `${k}: ${jsonValue}`;
+    }).join('\n');
+    frontmatterBlock = `---\n${entries}\n---\n\n`;
+  }
+  await writeFile(filePath, frontmatterBlock + content, 'utf-8');
+}
+
+/**
+ * Create a project config with a single collection
+ */
+function createSingleCollectionConfig(
+  schemaFile: string,
+  mode: 'strict' | 'permissive',
+  collectionId: string = 'skills'
+): ProjectConfig {
+  return {
+    version: 1,
+    resources: {
+      collections: {
+        [collectionId]: {
+          include: ['**/*.md'],
+          validation: {
+            frontmatterSchema: schemaFile,
+            mode,
+          },
+        },
+      },
+    },
+  };
+}
+
 describe('ResourceRegistry - per-collection frontmatter validation', () => {
   const suite = setupTempDirTestSuite('collection-validation-');
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
-
-  // Common schemas
-  const titleDescriptionSchema = {
-    type: 'object',
-    required: ['title', 'description'],
-    properties: {
-      title: { type: 'string' },
-      description: { type: 'string' },
-    },
-  };
-
-  const titleOnlySchema = {
-    type: 'object',
-    required: ['title'],
-    properties: {
-      title: { type: 'string' },
-    },
-    additionalProperties: false,
-  };
-
-  const categorySchema = {
-    type: 'object',
-    required: ['category'],
-    properties: {
-      category: { type: 'string' },
-    },
-  };
-
-  /**
-   * Create a markdown file with frontmatter
-   */
-  async function createMarkdownFile(
-    filePath: string,
-    frontmatter: Record<string, unknown> | null,
-    content: string = '# Test\n\nContent here.'
-  ): Promise<void> {
-    let frontmatterBlock = '';
-    if (frontmatter) {
-      const entries = Object.entries(frontmatter).map(([k, v]) => {
-        const jsonValue = JSON.stringify(v);
-        return `${k}: ${jsonValue}`;
-      }).join('\n');
-      frontmatterBlock = `---\n${entries}\n---\n\n`;
-    }
-    await writeFile(filePath, frontmatterBlock + content, 'utf-8');
-  }
-
-  /**
-   * Create a project config with a single collection
-   */
-  function createSingleCollectionConfig(
-    schemaFile: string,
-    mode: 'strict' | 'permissive',
-    collectionId: string = 'skills'
-  ): ProjectConfig {
-    return {
-      version: 1,
-      resources: {
-        collections: {
-          [collectionId]: {
-            include: ['**/*.md'],
-            validation: {
-              frontmatterSchema: schemaFile,
-              mode,
-            },
-          },
-        },
-      },
-    };
-  }
 
   /**
    * Create markdown file in docs directory and registry

@@ -36,7 +36,7 @@ module.exports = {
     },
     messages: {
       noHardcodedSplit:
-        'Avoid .split(\'/\') or .split(\'\\\\\') on file paths (breaks on Windows/Unix). ' +
+        String.raw`Avoid .split('/') or .split('\') on file paths (breaks on Windows/Unix). ` +
         'Use path.basename() to extract filename, or toForwardSlash() from @vibe-agent-toolkit/utils to normalize paths first.',
     },
     schema: [],

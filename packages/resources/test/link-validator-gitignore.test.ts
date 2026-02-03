@@ -23,6 +23,23 @@ import { createGitRepo, createLink, setupTempDirTestSuite } from './test-helpers
 
 const suite = setupTempDirTestSuite('link-validator-gitignore-');
 
+/**
+ * Helper to validate a link with git-ignore checking
+ */
+async function validateWithGitIgnoreCheck(
+  sourceFile: string,
+  linkHref: string,
+  projectRoot: string
+) {
+  const link = createLink('local_file', linkHref, 'Test link', 2);
+  const headingsMap = new Map<string, HeadingNode[]>();
+
+  return await validateLink(link, sourceFile, headingsMap, {
+    projectRoot,
+    skipGitIgnoreCheck: false,
+  });
+}
+
 describe('isWithinProject', () => {
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
@@ -69,23 +86,6 @@ describe('isWithinProject', () => {
 describe('validateLink - git-ignore safety', () => {
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
-
-  /**
-   * Helper to validate a link with git-ignore checking
-   */
-  async function validateWithGitIgnoreCheck(
-    sourceFile: string,
-    linkHref: string,
-    projectRoot: string
-  ) {
-    const link = createLink('local_file', linkHref, 'Test link', 2);
-    const headingsMap = new Map<string, HeadingNode[]>();
-
-    return await validateLink(link, sourceFile, headingsMap, {
-      projectRoot,
-      skipGitIgnoreCheck: false,
-    });
-  }
 
   /**
    * Setup a test project with git and gitignore

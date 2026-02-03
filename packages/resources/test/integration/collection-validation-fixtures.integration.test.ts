@@ -30,13 +30,14 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const fixturesDir = join(__dirname, '../../test-fixtures/collections');
 const configPath = join(fixturesDir, 'vibe-agent-toolkit.config.yaml');
 
+// Helper to load config consistently
+function loadTestConfig(): ProjectConfig {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- configPath is from controlled constant
+  const configContent = readFileSync(configPath, 'utf-8');
+  return loadYaml(configContent) as ProjectConfig;
+}
+
 describe('Collection validation with test fixtures', () => {
-  // Helper to load config consistently
-  function loadTestConfig(): ProjectConfig {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- configPath is from controlled constant
-    const configContent = readFileSync(configPath, 'utf-8');
-    return loadYaml(configContent) as ProjectConfig;
-  }
 
   // Helper to create registry and run validation
   async function setupAndValidate() {
