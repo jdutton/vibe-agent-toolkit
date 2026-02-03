@@ -314,5 +314,4 @@ vat resources validate docs/
 ## Related
 
 - [Agent Skills Package](../../packages/agent-skills/README.md) - Exported schemas
-- [Resources Validation](../cli/validate.md) - Full validation documentation
-- [Configuration](../configuration.md) - Config file reference
+- [Collection Validation Guide](./collection-validation.md) - Full validation documentation and config reference
