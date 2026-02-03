@@ -107,7 +107,7 @@ async function analyzePhotosInDirectory(dirPath: string, category: 'cat' | 'not-
         error: error instanceof Error ? error.message : String(error),
       });
 
-      log('Error', `Failed to analyze ${file}: ${error}`, colors.red);
+      log('Error', `Failed to analyze ${file}: ${String(error)}`, colors.red);
     }
   }
 
@@ -140,7 +140,7 @@ function displayResults(results: AnalysisResult[]): void {
     if (physical.breed) {
       console.log(`  Breed: ${physical.breed}`);
     }
-    console.log(`  Size: ${physical.size}`);
+    console.log(`  Size: ${String(physical.size ?? 'unknown')}`);
 
     console.log(`\n${colors.yellow}Behavioral Traits:${colors.reset}`);
     console.log(`  Personality: ${behavioral.personality.join(', ')}`);

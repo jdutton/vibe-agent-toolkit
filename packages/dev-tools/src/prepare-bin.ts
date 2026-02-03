@@ -40,7 +40,7 @@ export function prepareBinaries(packageRoot: string): void {
 }
 
 // CLI entry point
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === `file://${String(process.argv[1] ?? '')}`) {
   const packageRoot = process.cwd();
   prepareBinaries(packageRoot);
 }

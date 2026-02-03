@@ -406,11 +406,11 @@ export function executeRagQueryAndExpectSuccess(
 
   // Common assertions for successful RAG query
   if (result.status !== 0) {
-    throw new Error(`Expected status 0, got ${result.status}`);
+    throw new Error(`Expected status 0, got ${String(result.status ?? 'null')}`);
   }
 
   if (output.status !== 'success') {
-    throw new Error(`Expected success status, got ${output.status}`);
+    throw new Error(`Expected success status, got ${String(output.status)}`);
   }
 
   return { result, output };

@@ -47,7 +47,8 @@ export function convertLLMAnalyzerToFunction<TInput, TOutput>(
   // Create callLLM function that uses LangChain model
   const callLLM = async (prompt: string): Promise<string> => {
     const response = await llmConfig.model.invoke(prompt);
-    return response.content.toString();
+    const content = response.content;
+    return typeof content === 'string' ? content : JSON.stringify(content);
   };
 
   // Return wrapped function

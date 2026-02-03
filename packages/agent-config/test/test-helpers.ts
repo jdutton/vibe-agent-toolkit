@@ -91,8 +91,12 @@ function addResourceEntry(
 ): void {
   parts.push(`${indent}${key}:`);
   if (resource.path) {
-    parts.push(`${indent}  path: ${resource.path}`);
-    if (resource.type) parts.push(`${indent}  type: ${resource.type}`);
+    const pathStr = typeof resource.path === 'string' ? resource.path : JSON.stringify(resource.path);
+    parts.push(`${indent}  path: ${pathStr}`);
+    if (resource.type) {
+      const typeStr = typeof resource.type === 'string' ? resource.type : JSON.stringify(resource.type);
+      parts.push(`${indent}  type: ${typeStr}`);
+    }
   } else {
     for (const [nestedKey, nestedValue] of Object.entries(resource)) {
       addResourceEntry(parts, nestedKey, nestedValue as Record<string, unknown>, `${indent}  `);

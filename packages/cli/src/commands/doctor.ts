@@ -388,20 +388,20 @@ export async function checkVatVersion(
         return {
           name: CHECK_NAME_VAT_VERSION,
           passed: true,
-          message: `Current: ${currentVersion} — up to date`,
+          message: `Current: ${String(currentVersion)} — up to date`,
         };
       } else if (isOutdated) {
         return {
           name: CHECK_NAME_VAT_VERSION,
           passed: true, // Advisory only
-          message: `Current: ${currentVersion}, Latest: ${latestVersion} available`,
+          message: `Current: ${String(currentVersion)}, Latest: ${String(latestVersion)} available`,
           suggestion: 'Upgrade: npm install -g vibe-agent-toolkit@latest',
         };
       } else {
         return {
           name: CHECK_NAME_VAT_VERSION,
           passed: true,
-          message: `Current: ${currentVersion} (ahead of npm: ${latestVersion})`,
+          message: `Current: ${String(currentVersion)} (ahead of npm: ${String(latestVersion)})`,
         };
       }
     } catch (npmError) {
@@ -504,7 +504,7 @@ export function checkCliBuildSync(): DoctorCheckResult {
       return {
         name: CHECK_NAME_CLI_BUILD_STATUS,
         passed: false,
-        message: `Build is stale: running v${runningVersion}, source v${sourceVersion}`,
+        message: `Build is stale: running v${String(runningVersion)}, source v${String(sourceVersion)}`,
         suggestion: 'Rebuild packages: bun run build',
       };
     }
@@ -512,7 +512,7 @@ export function checkCliBuildSync(): DoctorCheckResult {
     return {
       name: CHECK_NAME_CLI_BUILD_STATUS,
       passed: true,
-      message: `Build is up to date (v${runningVersion})`,
+      message: `Build is up to date (v${String(runningVersion)})`,
     };
   } catch {
     return {

@@ -37,22 +37,22 @@ function loadTestConfig(): ProjectConfig {
   return loadYaml(configContent) as ProjectConfig;
 }
 
+// Helper to create registry and run validation
+async function setupAndValidate() {
+  const config = loadTestConfig();
+
+  const registry = new ResourceRegistry({
+    config,
+    rootDir: fixturesDir,
+  });
+
+  await registry.crawl({ baseDir: fixturesDir });
+  const result = await registry.validate();
+
+  return { config, registry, result };
+}
+
 describe('Collection validation with test fixtures', () => {
-
-  // Helper to create registry and run validation
-  async function setupAndValidate() {
-    const config = loadTestConfig();
-
-    const registry = new ResourceRegistry({
-      config,
-      rootDir: fixturesDir,
-    });
-
-    await registry.crawl({ baseDir: fixturesDir });
-    const result = await registry.validate();
-
-    return { config, registry, result };
-  }
 
   // Set up environment variables for testing
   beforeEach(() => {

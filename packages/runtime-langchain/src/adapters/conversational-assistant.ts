@@ -145,8 +145,10 @@ export function convertConversationalAssistantToFunction<
               return new HumanMessage(msg.content);
             case 'assistant':
               return new AIMessage(msg.content);
-            default:
-              throw new Error(`Unknown message role: ${msg.role}`);
+            default: {
+              const role: never = msg.role;
+              throw new Error(`Unknown message role: ${String(role)}`);
+            }
           }
         });
 
@@ -155,7 +157,8 @@ export function convertConversationalAssistantToFunction<
         // not per-invocation. Model configuration should be passed when creating the model.
         const response = await llmConfig.model.invoke(langchainMessages);
 
-        return response.content.toString();
+        const content = response.content;
+        return typeof content === 'string' ? content : JSON.stringify(content);
       },
     };
 

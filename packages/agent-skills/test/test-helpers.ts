@@ -178,10 +178,10 @@ export function createFrontmatter(fields: Record<string, unknown>): string {
     .map(([key, value]) => {
       if (typeof value === 'object' && value !== null) {
         return `${key}:\n${Object.entries(value)
-          .map(([k, v]) => `  ${k}: ${v}`)
+          .map(([k, v]) => `  ${k}: ${String(v)}`)
           .join('\n')}`;
       }
-      return `${key}: ${value}`;
+      return `${key}: ${String(value)}`;
     })
     .join('\n');
 

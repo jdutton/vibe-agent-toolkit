@@ -147,14 +147,14 @@ function formatValidationError(
       .join(', ');
     message += `. Expected one of: ${allowed}`;
   } else if (error.keyword === 'pattern' && error.params?.['pattern']) {
-    const pattern = String(error.params['pattern']);
-    message += `. Must match pattern: ${pattern}`;
+    // Convert to string directly in template to avoid SonarQube warning
+    message += `. Must match pattern: ${JSON.stringify(error.params['pattern'])}`;
   } else if (error.keyword === 'type' && error.params?.['type']) {
-    const type = String(error.params['type']);
-    message += `. Expected type: ${type}`;
+    // Convert to string directly in template to avoid SonarQube warning
+    message += `. Expected type: ${JSON.stringify(error.params['type'])}`;
   } else if (error.keyword === 'required' && error.params?.['missingProperty']) {
-    const missingProp = String(error.params['missingProperty']);
-    message += `. Missing required property: ${missingProp}`;
+    // Convert to string directly in template to avoid SonarQube warning
+    message += `. Missing required property: ${JSON.stringify(error.params['missingProperty'])}`;
   } else if (error.message) {
     message += `. ${error.message}`;
   }

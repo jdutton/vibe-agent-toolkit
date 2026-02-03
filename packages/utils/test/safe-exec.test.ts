@@ -16,6 +16,31 @@ import {
   CommandExecutionError,
 } from '../src/safe-exec.js';
 
+/**
+ * Test helper: Creates a temporary failing tool script
+ * Used to test error handling for tools that exist but fail
+ */
+function withFailingTool(toolName: string, testFn: () => void): void {
+  const tempDir = mkdtempSync(join(normalizedTmpdir(), 'safe-exec-test-'));
+  const scriptPath = join(tempDir, toolName);
+
+  try {
+    writeFileSync(scriptPath, '#!/bin/sh\nexit 1\n');
+    chmodSync(scriptPath, 0o755);
+
+    // Add to PATH temporarily
+    const originalPath = process.env['PATH'];
+    process.env['PATH'] = `${tempDir}:${String(originalPath ?? '')}`;
+
+    testFn();
+
+    // Restore PATH
+    process.env['PATH'] = originalPath;
+  } finally {
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
 describe('safeExecSync', () => {
   it('should execute commands with absolute path (no shell)', () => {
     const result = safeExecSync('node', ['--version'], { encoding: 'utf8' });
@@ -221,25 +246,9 @@ describe('isToolAvailable', () => {
   });
 
   it('should return false for tools that error on --version', () => {
-    // Create a temporary "tool" that exits with error
-    const tempDir = mkdtempSync(join(normalizedTmpdir(), 'safe-exec-test-'));
-    const scriptPath = join(tempDir, 'bad-tool.sh');
-
-    try {
-      writeFileSync(scriptPath, '#!/bin/sh\nexit 1\n');
-      chmodSync(scriptPath, 0o755);
-
-      // Add to PATH temporarily
-      const originalPath = process.env['PATH'];
-      process.env['PATH'] = `${tempDir}:${originalPath}`;
-
+    withFailingTool('bad-tool.sh', () => {
       expect(isToolAvailable('bad-tool.sh')).toBe(false);
-
-      // Restore PATH
-      process.env['PATH'] = originalPath;
-    } finally {
-      rmSync(tempDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it.skipIf(process.platform === 'win32')('should handle multiple concurrent checks', () => {
@@ -284,26 +293,10 @@ describe('getToolVersion', () => {
   });
 
   it('should return null if version command fails', () => {
-    // Create a temporary "tool" that exits with error
-    const tempDir = mkdtempSync(join(normalizedTmpdir(), 'safe-exec-test-'));
-    const scriptPath = join(tempDir, 'bad-version-tool.sh');
-
-    try {
-      writeFileSync(scriptPath, '#!/bin/sh\nexit 1\n');
-      chmodSync(scriptPath, 0o755);
-
-      // Add to PATH temporarily
-      const originalPath = process.env['PATH'];
-      process.env['PATH'] = `${tempDir}:${originalPath}`;
-
+    withFailingTool('bad-version-tool.sh', () => {
       const version = getToolVersion('bad-version-tool.sh');
       expect(version).toBeNull();
-
-      // Restore PATH
-      process.env['PATH'] = originalPath;
-    } finally {
-      rmSync(tempDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it.skipIf(process.platform === 'win32')('should handle multiple version queries efficiently (DRY)', () => {
@@ -335,7 +328,7 @@ describe('Security - Command Injection Prevention', () => {
       chmodSync(maliciousScript, 0o755);
 
       // Prepend malicious path (attacker scenario)
-      process.env['PATH'] = `${tempDir}:${originalPath}`;
+      process.env['PATH'] = `${tempDir}:${String(originalPath ?? '')}`;
 
       // safeExecSync should still use the real node (resolved from system PATH)
       // Note: which.sync will find our fake node first, so this test shows

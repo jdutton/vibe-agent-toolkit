@@ -96,11 +96,11 @@ export async function resolveSchemaPath(schemaPath: string): Promise<string> {
       const message = error instanceof Error ? error.message : 'Unknown error';
       // Extract package name from scoped package path like "@scope/package/sub/path.json"
       const pathParts = normalizedPath.split('/');
-      const packageName = pathParts.length >= 2 ? `${pathParts[0]}/${pathParts[1]}` : schemaPath;
+      const packageName = pathParts.length >= 2 ? `${pathParts[0] ?? ''}/${pathParts[1] ?? ''}` : schemaPath;
       throw new Error(
         `Cannot resolve package path: ${schemaPath}\n` +
         `Possible causes:\n` +
-        `  - Package not installed (run: npm install ${packageName})\n` +
+        `  - Package not installed (run: npm install ${String(packageName)})\n` +
         `  - Subpath not exported in package.json "exports" field\n` +
         `  - Typo in package name or path\n` +
         `Original error: ${message}`
