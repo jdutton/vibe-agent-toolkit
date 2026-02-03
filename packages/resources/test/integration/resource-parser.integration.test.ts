@@ -10,6 +10,7 @@ import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  detectResourceType,
   parseJsonResource,
   parseJsonSchemaResource,
   parseMarkdownResource,
@@ -21,6 +22,7 @@ import { ResourceType } from '../../src/types/resources.ts';
 // File-scope test constants (accessible to all tests)
 // ============================================================================
 
+const DRAFT_07_SCHEMA = 'http://json-schema.org/draft-07/schema#';
 const COLLECTION_DOCS = 'docs';
 const COLLECTION_SCHEMAS = 'schemas';
 const USER_SCHEMA_FILE = 'user.schema.json';
@@ -124,6 +126,63 @@ More content.`;
 
     expect(result.estimatedTokenCount).toBe(100);
   });
+
+  it('should handle $schema as string in frontmatter', async () => {
+    const filePath = join(suite.tempDir, 'with-schema.md');
+    const content = `---
+title: Test
+$schema: https://example.com/schema.json
+---
+
+# Content`;
+
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test file in controlled temp directory
+    await writeFile(filePath, content, 'utf-8');
+
+    const result = await parseMarkdownResource(filePath, 'with-schema.md', COLLECTION_DOCS);
+
+    expect(result.schemas).toHaveLength(1);
+    expect(result.schemas[0]?.schema).toBe('https://example.com/schema.json');
+    expect(result.schemas[0]?.source).toBe('self');
+    expect(result.schemas[0]?.applied).toBe(false);
+  });
+
+  it('should ignore non-string $schema in frontmatter', async () => {
+    const filePath = join(suite.tempDir, 'bad-schema.md');
+    const content = `---
+title: Test
+$schema: 123
+---
+
+# Content`;
+
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test file in controlled temp directory
+    await writeFile(filePath, content, 'utf-8');
+
+    const result = await parseMarkdownResource(filePath, 'bad-schema.md', COLLECTION_DOCS);
+
+    // Should not add non-string $schema to schemas array
+    expect(result.schemas).toEqual([]);
+  });
+
+  it('should handle frontmatter without $schema field', async () => {
+    const filePath = join(suite.tempDir, 'no-schema.md');
+    const content = `---
+title: Test
+author: John Doe
+---
+
+# Content`;
+
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test file in controlled temp directory
+    await writeFile(filePath, content, 'utf-8');
+
+    const result = await parseMarkdownResource(filePath, 'no-schema.md', COLLECTION_DOCS);
+
+    expect(result.schemas).toEqual([]);
+    expect(result.frontmatter?.['title']).toBe('Test');
+    expect(result.frontmatter?.['author']).toBe('John Doe');
+  });
 });
 
 describe('parseJsonSchemaResource', () => {
@@ -133,7 +192,7 @@ describe('parseJsonSchemaResource', () => {
   it('should parse JSON Schema with $schema keyword', async () => {
     const filePath = join(suite.tempDir, USER_SCHEMA_FILE);
     const schema = {
-      $schema: 'http://json-schema.org/draft-07/schema#',
+      $schema: DRAFT_07_SCHEMA,
       $id: 'https://example.com/schemas/user',
       title: 'User Schema',
       description: 'Defines a user object',
@@ -156,7 +215,7 @@ describe('parseJsonSchemaResource', () => {
     expect(result.collections).toEqual([COLLECTION_SCHEMAS]);
     expect(result.schema).toEqual(schema);
     expect(result.schemaId).toBe('https://example.com/schemas/user');
-    expect(result.schemaVersion).toBe('http://json-schema.org/draft-07/schema#');
+    expect(result.schemaVersion).toBe(DRAFT_07_SCHEMA);
     expect(result.title).toBe('User Schema');
     expect(result.description).toBe('Defines a user object');
     expect(result.referencedBy).toEqual([]);
@@ -180,6 +239,28 @@ describe('parseJsonSchemaResource', () => {
     expect(result.type).toBe(ResourceType.JSON_SCHEMA);
     expect(result.schemaVersion).toBeUndefined();
     expect(result.title).toBe('Config');
+  });
+
+  it('should handle schema without any optional fields', async () => {
+    const filePath = join(suite.tempDir, 'minimal.schema.json');
+    const schema = {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+      },
+    };
+
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test file in controlled temp directory
+    await writeFile(filePath, JSON.stringify(schema), 'utf-8');
+
+    const result = await parseJsonSchemaResource(filePath, 'minimal.schema.json', COLLECTION_SCHEMAS);
+
+    expect(result.type).toBe(ResourceType.JSON_SCHEMA);
+    expect(result.schemaId).toBeUndefined();
+    expect(result.schemaVersion).toBeUndefined();
+    expect(result.title).toBeUndefined();
+    expect(result.description).toBeUndefined();
+    expect(result.schema).toEqual(schema);
   });
 });
 
@@ -285,5 +366,46 @@ items:
     const items = (result.data as { items: unknown[] }).items;
     expect(Array.isArray(items)).toBe(true);
     expect(items).toHaveLength(2);
+  });
+});
+
+describe('detectResourceType', () => {
+  it('should detect markdown from .md extension', () => {
+    expect(detectResourceType('README.md')).toBe(ResourceType.MARKDOWN);
+  });
+
+  it('should detect markdown from .markdown extension', () => {
+    expect(detectResourceType('guide.markdown')).toBe(ResourceType.MARKDOWN);
+  });
+
+  it('should detect YAML from .yaml extension', () => {
+    expect(detectResourceType('config.yaml')).toBe(ResourceType.YAML);
+  });
+
+  it('should detect YAML from .yml extension', () => {
+    expect(detectResourceType('config.yml')).toBe(ResourceType.YAML);
+  });
+
+  it('should detect JSON Schema from data heuristics', () => {
+    const schemaData = { $schema: DRAFT_07_SCHEMA, type: 'object' };
+    expect(detectResourceType('file.json', schemaData)).toBe(ResourceType.JSON_SCHEMA);
+  });
+
+  it('should detect JSON from .json extension without schema markers', () => {
+    const jsonData = { name: 'test', value: 123 };
+    expect(detectResourceType('data.json', jsonData)).toBe(ResourceType.JSON);
+  });
+
+  it('should default to JSON for files without extension', () => {
+    expect(detectResourceType('README')).toBe(ResourceType.JSON);
+  });
+
+  it('should detect JSON Schema from data when extension is ambiguous', () => {
+    const schemaData = {
+      type: 'object',
+      properties: { name: { type: 'string' } },
+      required: ['name'],
+    };
+    expect(detectResourceType('unknown', schemaData)).toBe(ResourceType.JSON_SCHEMA);
   });
 });
