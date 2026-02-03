@@ -34,8 +34,8 @@ If you put logic in the CLI that other packages need, you create an impossible d
 
 | Logic Type | Wrong Place | Right Place | Why |
 |------------|-------------|-------------|-----|
-| Find agent's package root | CLI | runtime-claude-skills or utils | Other runtimes (langchain, etc.) will need this |
-| Determine default output path | CLI | runtime-claude-skills | Each runtime knows where its bundles should go |
+| Find agent's package root | CLI | agent-skills or utils | Other runtimes (langchain, etc.) will need this |
+| Determine default output path | CLI | agent-skills | Each runtime knows where its bundles should go |
 | Validate agent manifest | CLI | agent-config | Validation used by all consumers |
 | Parse YAML | CLI | utils or agent-config | Common across many packages |
 | Format user messages | CLI | ✅ CLI is fine | This is CLI-specific UX |
@@ -67,7 +67,7 @@ result = await buildClaudeSkill(buildOptions);
 ```
 
 ```typescript
-// packages/runtime-claude-skills/src/builder.ts
+// packages/agent-skills/src/builder.ts
 function getDefaultOutputPath(manifestPath: string, target: string): string {
   const agentPackageRoot = findAgentPackageRoot(manifestPath);
   return path.join(agentPackageRoot, 'dist', 'vat-bundles', target);
@@ -85,7 +85,7 @@ Ask yourself:
 
 ### Self-Hosting Consideration
 
-Remember: **Other agent repos won't have packages/cli/**. If an agent package needs to build itself, it can depend on `@vibe-agent-toolkit/runtime-claude-skills` directly. The CLI is just one convenient way to invoke the build - not the only way.
+Remember: **Other agent repos won't have packages/cli/**. If an agent package needs to build itself, it can depend on `@vibe-agent-toolkit/agent-skills` directly. The CLI is just one convenient way to invoke the build - not the only way.
 
 ## Writing Useful CLI Help Documentation
 

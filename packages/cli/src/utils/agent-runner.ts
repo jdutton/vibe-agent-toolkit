@@ -72,7 +72,7 @@ export async function runAgent(
   const manifest: LoadedAgentManifest = await loadAgentManifest(pathOrName);
 
   if (debug) {
-    console.error(`[DEBUG] Loaded agent: ${manifest.metadata.name} v${manifest.metadata.version}`);
+    console.error(`[DEBUG] Loaded agent: ${String(manifest.metadata.name)} v${String(manifest.metadata.version ?? 'unknown')}`);
     console.error(`[DEBUG] Provider: ${manifest.spec.llm.provider}, Model: ${manifest.spec.llm.model}`);
   }
 
@@ -142,7 +142,7 @@ export async function runAgent(
   });
 
   if (debug) {
-    console.error(`[DEBUG] API call complete. Status: ${response.stop_reason}`);
+    console.error(`[DEBUG] API call complete. Status: ${String(response.stop_reason ?? 'unknown')}`);
     console.error(`[DEBUG] Input tokens: ${response.usage.input_tokens}`);
     console.error(`[DEBUG] Output tokens: ${response.usage.output_tokens}`);
   }

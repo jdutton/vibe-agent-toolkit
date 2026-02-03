@@ -1,6 +1,6 @@
 import * as os from 'node:os';
 
-import type { ValidationResult } from '@vibe-agent-toolkit/runtime-claude-skills';
+import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
 import { describe, expect, it } from 'vitest';
 
 import { buildHierarchicalOutput } from '../../../src/commands/audit/hierarchical-output.js';

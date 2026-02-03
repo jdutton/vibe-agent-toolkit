@@ -12,7 +12,7 @@ vat [options] <command>
 
 ### `resources validate`
 
-Markdown resource scanning and link validation (run before commit)
+Markdown resource scanning, link validation, and frontmatter validation (run before commit)
 
 **What it does:**
 
@@ -20,14 +20,21 @@ Markdown resource scanning and link validation (run before commit)
 2. Validates internal file links (relative paths)
 3. Validates anchor links within files (#heading)
 4. Validates cross-file anchor links (file.md#heading)
-5. Reports broken links to stderr
+5. **Validates frontmatter against JSON Schemas** (per-collection)
+6. Reports broken links and validation errors to stderr
+
+**Per-collection frontmatter validation:**
+
+Define collections in `vibe-agent-toolkit.config.yaml` to validate frontmatter fields, types, and patterns using JSON Schemas. Collections support strict mode (no extra fields) or permissive mode (extra fields allowed).
+
+See [Collection Validation Guide](../../../docs/guides/collection-validation.md) for full documentation, examples, and schema patterns.
 
 **When to use:** Before committing changes that touch markdown files
 
 **Exit codes:**
 
-- `0` - All links valid
-- `1` - Broken links found (see stderr for details)
+- `0` - All links and frontmatter valid
+- `1` - Broken links or validation errors found (see stderr for details)
 - `2` - System error (invalid config, directory not found)
 
 **Creates/modifies:** None (read-only validation)
@@ -260,6 +267,48 @@ Override automatic context detection to force dev mode:
 
 ```bash
 VAT_ROOT_DIR=/path/to/vibe-agent-toolkit vat --version
+```
+
+### VAT_TEST_ROOT
+
+Override project root detection for testing:
+
+```bash
+VAT_TEST_ROOT=/path/to/test/fixtures vat resources validate
+```
+
+**Use case**: Integration tests that need to run vat commands against test fixtures without relying on directory structure (.git or config file).
+
+**Example**:
+```typescript
+// Test setup
+process.env.VAT_TEST_ROOT = '/path/to/test/fixtures';
+const root = findProjectRoot(process.cwd()); // Returns /path/to/test/fixtures
+```
+
+### VAT_TEST_CONFIG
+
+Override config file path for testing:
+
+```bash
+VAT_TEST_CONFIG=/path/to/test/fixtures/config.yaml vat resources validate
+```
+
+**Use case**: Integration tests that need to test with specific config files without modifying project structure.
+
+**Example**:
+```typescript
+// Test setup
+process.env.VAT_TEST_CONFIG = '/path/to/test/fixtures/config.yaml';
+const config = loadConfig('/any/path'); // Uses override path
+```
+
+**Testing pattern**: Combine VAT_TEST_ROOT and VAT_TEST_CONFIG for complete control:
+
+```bash
+VAT_TEST_ROOT=/path/to/fixtures \
+VAT_TEST_CONFIG=/path/to/fixtures/config.yaml \
+vat resources validate
 ```
 
 ## Context Detection

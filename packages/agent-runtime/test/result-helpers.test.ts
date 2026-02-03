@@ -114,8 +114,8 @@ describe('match', () => {
     const result = { status: 'error' as const, error: 'failed' };
 
     const message = match(result, {
-      success: (data) => `Success: ${data}`,
-      error: (err) => `Error: ${err}`,
+      success: (data) => `Success: ${String(data)}`,
+      error: (err) => `Error: ${String(err)}`,
     });
 
     expect(message).toBe('Error: failed');
@@ -125,8 +125,8 @@ describe('match', () => {
     const result = { status: 'in-progress' as const, metadata: { progress: 50 } };
 
     const message = match(result, {
-      success: (data) => `Success: ${data}`,
-      error: (err) => `Error: ${err}`,
+      success: (data) => `Success: ${String(data)}`,
+      error: (err) => `Error: ${String(err)}`,
       inProgress: (meta) => {
         const progress = (meta as { progress?: number } | undefined)?.progress ?? 0;
         return `Progress: ${progress}%`;

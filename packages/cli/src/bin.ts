@@ -120,7 +120,7 @@ doctorCommand(program);
 // Handle unknown commands
 program.on('command:*', (operands) => {
   const logger = createLogger();
-  logger.error(`error: unknown command '${operands[0]}'`);
+  logger.error(`error: unknown command '${String(operands[0] ?? 'unknown')}'`);
   logger.error('');
   program.help({ error: true });
 });

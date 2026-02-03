@@ -1,3 +1,11 @@
+---
+title: RAG Usage Guide
+description: Practical examples for using the VAT RAG system in real-world scenarios
+category: guide
+tags: [rag, documentation, examples, configuration]
+audience: intermediate
+---
+
 # RAG Usage Guide
 
 This guide provides practical examples for using the VAT RAG system in real-world scenarios.

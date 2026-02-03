@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Strict Guide Frontmatter",
+  "description": "Strict validation for guides (no extra fields allowed)",
+  "type": "object",
+  "required": ["title", "category"],
+  "properties": {
+    "title": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Guide title"
+    },
+    "category": {
+      "type": "string",
+      "enum": ["tutorial", "guide", "reference", "howto"],
+      "description": "Guide category"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Tags for categorization"
+    }
+  },
+  "additionalProperties": false
+}

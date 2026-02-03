@@ -13,7 +13,7 @@ This directory contains all packages in the vibe-agent-toolkit monorepo. This RE
 | rag | `@vibe-agent-toolkit/rag` | Published | Abstract RAG interfaces and shared implementations |
 | rag-lancedb | `@vibe-agent-toolkit/rag-lancedb` | Published | LanceDB implementation of RAG interfaces |
 | agent-config | `@vibe-agent-toolkit/agent-config` | Published | Agent manifest loading and validation |
-| runtime-claude-skills | `@vibe-agent-toolkit/runtime-claude-skills` | Published | Build and package VAT agents as Claude Skills |
+| agent-skills | `@vibe-agent-toolkit/agent-skills` | Published | Build and package VAT agents as Claude Skills |
 | cli | `@vibe-agent-toolkit/cli` | Published | Command-line interface (provides `vat` binary) |
 | vat-development-agents | `@vibe-agent-toolkit/vat-development-agents` | Published | VAT development agents (agent bundle) |
 | vibe-agent-toolkit | `vibe-agent-toolkit` | Published | Umbrella package (installs everything) |
@@ -39,7 +39,7 @@ graph TD
 
     %% Configuration & Runtime
     agent-config["agent-config"]
-    runtime-claude-skills["runtime-claude-skills"]
+    agent-skills["agent-skills"]
 
     %% CLI & Distribution
     cli["cli"]
@@ -62,16 +62,16 @@ graph TD
     utils --> agent-config
     rag --> agent-config
 
-    agent-config --> runtime-claude-skills
-    resources --> runtime-claude-skills
-    utils --> runtime-claude-skills
+    agent-config --> agent-skills
+    resources --> agent-skills
+    utils --> agent-skills
 
     agent-config --> cli
     discovery --> cli
     rag --> cli
     rag-lancedb --> cli
     resources --> cli
-    runtime-claude-skills --> cli
+    agent-skills --> cli
     utils --> cli
 
     cli --> vibe-agent-toolkit
@@ -92,7 +92,7 @@ graph TD
     class agent-schema,utils foundation
     class discovery,resources,rag fileResource
     class rag-lancedb ragImpl
-    class agent-config,runtime-claude-skills config
+    class agent-config,agent-skills config
     class cli,vibe-agent-toolkit cliDist
     class vat-development-agents separate
     class dev-tools private
@@ -192,8 +192,8 @@ Agent manifest loading and validation. Loads agent YAML manifests, validates aga
 
 ---
 
-#### runtime-claude-skills
-**npm**: `@vibe-agent-toolkit/runtime-claude-skills`
+#### agent-skills
+**npm**: `@vibe-agent-toolkit/agent-skills`
 
 Build and package VAT agents as Claude Skills. Converts VAT agent manifests to Claude Skill format, bundles resources, generates JSON Schema from Zod definitions, and produces installable skill packages.
 
@@ -222,7 +222,7 @@ Command-line interface for vibe-agent-toolkit. Provides the `vat` binary for bui
 
 **Dependencies**:
 - External: `@anthropic-ai/sdk`, `commander`, `js-yaml`, `semver`, `zod`
-- Internal: `agent-config`, `discovery`, `rag`, `rag-lancedb`, `resources`, `runtime-claude-skills`, `utils`
+- Internal: `agent-config`, `discovery`, `rag`, `rag-lancedb`, `resources`, `agent-skills`, `utils`
 
 **Note**: The CLI is a "dumb orchestrator" - it coordinates other packages but contains minimal business logic itself.
 

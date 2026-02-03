@@ -464,10 +464,10 @@ export function safeExecFromString(
   const check = hasShellSyntax(commandString);
   if (check.hasShellSyntax) {
     throw new Error(
-      `safeExecFromString does not support ${check.pattern}.\n` +
+      `safeExecFromString does not support ${String(check.pattern ?? 'unknown pattern')}.\n` +
         `Found in: ${commandString}\n\n` +
         `Use safeExecSync() with explicit argument array instead:\n` +
-        `  // Bad: safeExecFromString('${check.example}')\n` +
+        `  // Bad: safeExecFromString('${String(check.example ?? 'command')}')\n` +
         `  // Good: safeExecSync('command', ['arg1', 'arg2'], options)\n\n` +
         `This ensures no shell interpreter is used and arguments are explicit.`
     );

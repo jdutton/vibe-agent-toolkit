@@ -123,8 +123,8 @@ if (['patch', 'minor', 'major'].includes(versionArg)) {
     }
 
     newVersion = incrementVersion(currentVersion, versionArg);
-    log(`Current version: ${currentVersion}`, 'blue');
-    log(`Increment type: ${versionArg}`, 'blue');
+    log(`Current version: ${String(currentVersion)}`, 'blue');
+    log(`Increment type: ${String(versionArg)}`, 'blue');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log(`✗ Failed to read current version: ${message}`, 'red');
@@ -196,11 +196,11 @@ log('Updating root package.json...', 'blue');
 try {
   const result = updatePackageVersion(rootPackagePath, newVersion);
   if (result.skipped) {
-    log(`  - ${result.name || 'root'}: skipped (${result.reason})`, 'yellow');
+    log(`  - ${result.name ?? 'root'}: skipped (${String(result.reason ?? 'unknown')})`, 'yellow');
   } else if (result.updated) {
-    log(`  ✓ ${result.name || 'root'}: ${result.oldVersion} → ${result.newVersion}`, 'green');
+    log(`  ✓ ${result.name ?? 'root'}: ${String(result.oldVersion ?? 'unknown')} → ${String(result.newVersion ?? 'unknown')}`, 'green');
   } else {
-    log(`  - ${result.name || 'root'}: already at ${result.newVersion}`, 'yellow');
+    log(`  - ${result.name ?? 'root'}: already at ${String(result.newVersion ?? 'unknown')}`, 'yellow');
   }
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);
@@ -228,9 +228,9 @@ if (hasPackages) {
     (pkgPath) => updatePackageVersion(pkgPath, newVersion),
     (result) => {
       if (result.updated) {
-        log(`  ✓ ${result.name}: ${result.oldVersion} → ${result.newVersion}`, 'green');
+        log(`  ✓ ${String(result.name ?? 'unknown')}: ${String(result.oldVersion ?? 'unknown')} → ${String(result.newVersion ?? 'unknown')}`, 'green');
       } else {
-        log(`  - ${result.name}: already at ${result.newVersion}`, 'yellow');
+        log(`  - ${String(result.name ?? 'unknown')}: already at ${String(result.newVersion ?? 'unknown')}`, 'yellow');
       }
     },
     () => {

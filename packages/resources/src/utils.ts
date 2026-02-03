@@ -3,6 +3,9 @@
  * These are not exported from the public API.
  */
 
+import fs from 'node:fs';
+import path from 'node:path';
+
 import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
@@ -67,4 +70,44 @@ export function splitHrefAnchor(href: string): [string, string | undefined] {
   const filePath = href.slice(0, anchorIndex);
   const anchor = href.slice(anchorIndex + 1);
   return [filePath, anchor];
+}
+
+/**
+ * Check if a file path is within a project directory.
+ *
+ * Resolves symlinks before comparison to handle cases where symlinks
+ * point outside the project directory.
+ *
+ * @param filePath - Absolute path to check
+ * @param projectRoot - Absolute path to project root
+ * @returns True if filePath is under projectRoot (after symlink resolution)
+ *
+ * @example
+ * ```typescript
+ * isWithinProject('/project/docs/guide.md', '/project')  // true
+ * isWithinProject('/external/data.md', '/project')       // false
+ * isWithinProject('/project/link', '/project')           // depends on symlink target
+ * ```
+ */
+export function isWithinProject(filePath: string, projectRoot: string): boolean {
+  // Resolve symlinks to get real paths
+  let resolvedFilePath: string;
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is validated path parameter
+    resolvedFilePath = fs.realpathSync(filePath);
+  } catch {
+    // If realpath fails, file doesn't exist - use original path
+    resolvedFilePath = path.resolve(filePath);
+  }
+
+  const resolvedProjectRoot = path.resolve(projectRoot);
+
+  // Normalize to forward slashes for cross-platform comparison
+  const normalizedFile = toForwardSlash(resolvedFilePath);
+  const normalizedRoot = toForwardSlash(resolvedProjectRoot);
+
+  // Check if file path starts with project root
+  // Add trailing slash to prevent false positives like:
+  // /project-other starting with /project
+  return normalizedFile.startsWith(normalizedRoot + '/') || normalizedFile === normalizedRoot;
 }

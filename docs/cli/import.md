@@ -386,4 +386,4 @@ vat agent import SKILL.md --force
 
 - [Agent Skills Specification](https://agentskills.io/specification)
 - [VAT Agent Format](../architecture/README.md)
-- [runtime-claude-skills Package](../../packages/runtime-claude-skills/README.md)
+- [agent-skills Package](../../packages/agent-skills/README.md)

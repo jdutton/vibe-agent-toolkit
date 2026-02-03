@@ -297,7 +297,7 @@ function extractAge(text: string): string | undefined {
   const ageRegex = /(\d+)\s*(?:year|yo)/;
   const ageMatch = ageRegex.exec(text);
   if (ageMatch) {
-    return `${ageMatch[1]} years old`;
+    return `${String(ageMatch[1] ?? '0')} years old`;
   }
 
   if (text.includes('kitten')) {

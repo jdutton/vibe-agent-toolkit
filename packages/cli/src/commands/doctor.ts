@@ -245,6 +245,31 @@ export function checkConfigFile(): DoctorCheckResult {
 }
 
 /**
+ * Check if schema files referenced in collections exist
+ */
+function checkSchemaFiles(
+  collections: Record<string, { validation?: { frontmatterSchema?: string | undefined } | undefined }>,
+  configDir: string
+): { schemaFiles: string[]; missingSchemas: string[] } {
+  const schemaFiles: string[] = [];
+  const missingSchemas: string[] = [];
+
+  for (const collectionConfig of Object.values(collections)) {
+    const schemaPath = collectionConfig.validation?.frontmatterSchema;
+    if (schemaPath) {
+      schemaFiles.push(schemaPath);
+      const absoluteSchemaPath = join(configDir, schemaPath);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- schemaPath is from validated config
+      if (!existsSync(absoluteSchemaPath)) {
+        missingSchemas.push(schemaPath);
+      }
+    }
+  }
+
+  return { schemaFiles, missingSchemas };
+}
+
+/**
  * Check if configuration is valid
  */
 export function checkConfigValid(): DoctorCheckResult {
@@ -260,11 +285,51 @@ export function checkConfigValid(): DoctorCheckResult {
     }
 
     try {
-      loadConfig(configPath);
+      // loadConfig expects project root directory, not config file path
+      const configDir = join(configPath, '..');
+      const config = loadConfig(configDir);
+
+      // Basic validation passed, now check collections and schema files
+      const collections = config.resources?.collections;
+
+      if (!collections || Object.keys(collections).length === 0) {
+        return {
+          name: CHECK_NAME_CONFIG_VALID,
+          passed: true,
+          message: 'Configuration is valid (no collections defined)',
+        };
+      }
+
+      // Check if schema files exist
+      const collectionCount = Object.keys(collections).length;
+      const { schemaFiles, missingSchemas } = checkSchemaFiles(collections, configDir);
+
+      // Build message with details
+      if (missingSchemas.length > 0) {
+        const details = [
+          `Collections: ${collectionCount} defined`,
+          `Schema files: ${schemaFiles.length} referenced, ${missingSchemas.length} missing`,
+          `Missing: ${missingSchemas.join(', ')}`,
+        ].join('\n   ');
+
+        return {
+          name: CHECK_NAME_CONFIG_VALID,
+          passed: false,
+          message: `Configuration valid but schema files missing:\n   ${details}`,
+          suggestion: 'Create missing schema files or update collection config',
+        };
+      }
+
+      // All good - build success message with details
+      const details = [
+        `Collections: ${collectionCount} defined`,
+        `Schema files: ${schemaFiles.length} referenced, all exist`,
+      ].join('\n   ');
+
       return {
         name: CHECK_NAME_CONFIG_VALID,
         passed: true,
-        message: 'Configuration is valid',
+        message: `Configuration is valid\n   ${details}`,
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -323,20 +388,20 @@ export async function checkVatVersion(
         return {
           name: CHECK_NAME_VAT_VERSION,
           passed: true,
-          message: `Current: ${currentVersion} — up to date`,
+          message: `Current: ${String(currentVersion)} — up to date`,
         };
       } else if (isOutdated) {
         return {
           name: CHECK_NAME_VAT_VERSION,
           passed: true, // Advisory only
-          message: `Current: ${currentVersion}, Latest: ${latestVersion} available`,
+          message: `Current: ${String(currentVersion)}, Latest: ${String(latestVersion)} available`,
           suggestion: 'Upgrade: npm install -g vibe-agent-toolkit@latest',
         };
       } else {
         return {
           name: CHECK_NAME_VAT_VERSION,
           passed: true,
-          message: `Current: ${currentVersion} (ahead of npm: ${latestVersion})`,
+          message: `Current: ${String(currentVersion)} (ahead of npm: ${String(latestVersion)})`,
         };
       }
     } catch (npmError) {
@@ -439,7 +504,7 @@ export function checkCliBuildSync(): DoctorCheckResult {
       return {
         name: CHECK_NAME_CLI_BUILD_STATUS,
         passed: false,
-        message: `Build is stale: running v${runningVersion}, source v${sourceVersion}`,
+        message: `Build is stale: running v${String(runningVersion)}, source v${String(sourceVersion)}`,
         suggestion: 'Rebuild packages: bun run build',
       };
     }
@@ -447,7 +512,7 @@ export function checkCliBuildSync(): DoctorCheckResult {
     return {
       name: CHECK_NAME_CLI_BUILD_STATUS,
       passed: true,
-      message: `Build is up to date (v${runningVersion})`,
+      message: `Build is up to date (v${String(runningVersion)})`,
     };
   } catch {
     return {

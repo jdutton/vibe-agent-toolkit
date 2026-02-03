@@ -1,6 +1,6 @@
 /**
- * @vibe-agent-toolkit/runtime-claude-skills
- * Build and package VAT agents as Claude Skills
+ * @vibe-agent-toolkit/agent-skills
+ * Build, validate, and package agent skills in the Agent Skills format
  */
 
 export { buildClaudeSkill, type BuildOptions, type BuildResult } from './builder.js';

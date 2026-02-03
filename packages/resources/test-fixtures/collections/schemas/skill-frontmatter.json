@@ -1,0 +1,41 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Claude Code Skill Frontmatter",
+  "description": "Frontmatter schema for SKILL.md files",
+  "type": "object",
+  "required": ["name", "description"],
+  "properties": {
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "description": "Skill name in kebab-case"
+    },
+    "description": {
+      "type": "string",
+      "minLength": 10,
+      "description": "Brief description of what the skill does"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+(-[a-zA-Z0-9.-]+)?$",
+      "description": "Semantic version number"
+    },
+    "model": {
+      "type": "string",
+      "enum": ["claude-sonnet-4-5", "claude-opus-4-5", "claude-haiku-4"],
+      "description": "Recommended Claude model"
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Required tools/MCP servers"
+    },
+    "permissions": {
+      "type": "object",
+      "description": "Required permissions"
+    }
+  },
+  "additionalProperties": true
+}

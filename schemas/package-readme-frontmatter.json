@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Package README Frontmatter",
+  "description": "Frontmatter schema for package README files",
+  "type": "object",
+  "properties": {
+    "package": {
+      "type": "string",
+      "description": "Package name",
+      "pattern": "^@vibe-agent-toolkit/[a-z0-9-]+$"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["stable", "beta", "alpha", "experimental", "deprecated"],
+      "description": "Package stability status"
+    },
+    "tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Package tags"
+    }
+  },
+  "additionalProperties": true
+}

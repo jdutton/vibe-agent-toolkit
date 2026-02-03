@@ -123,15 +123,15 @@ async function demo() {
 
   log('Result', 'LLM response parsed to structured output', colors.green);
 
-  console.log(`\n${colors.bright}Generated Name:${colors.reset} ${colors.green}${result.name}${colors.reset}`);
+  console.log(`\n${colors.bright}Generated Name:${colors.reset} ${colors.green}${String(result.name)}${colors.reset}`);
 
   console.log(`\n${colors.yellow}Reasoning:${colors.reset}`);
-  console.log(`${colors.dim}${result.reasoning}${colors.reset}`);
+  console.log(`${colors.dim}${String(result.reasoning)}${colors.reset}`);
 
   if (result.alternatives && result.alternatives.length > 0) {
     console.log(`\n${colors.yellow}Alternative Names:${colors.reset}`);
     for (const altName of result.alternatives) {
-      console.log(`${colors.dim}  • ${altName}${colors.reset}`);
+      console.log(`${colors.dim}  • ${String(altName)}${colors.reset}`);
     }
   }
 
@@ -174,7 +174,7 @@ async function demo() {
 
   console.log(`\n${colors.yellow}6. Agent parsed LLM response:${colors.reset}`);
   console.log(`${colors.dim}   return {${colors.reset}`);
-  console.log(`${colors.dim}     name: '${result.name}',${colors.reset}`);
+  console.log(`${colors.dim}     name: '${String(result.name)}',${colors.reset}`);
   console.log(`${colors.dim}     reasoning: '...',${colors.reset}`);
   console.log(`${colors.dim}     alternatives: [...]${colors.reset}`);
   console.log(`${colors.dim}   }${colors.reset}`);

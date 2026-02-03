@@ -25,7 +25,6 @@ export type {
 
 // Validation result types
 export type {
-  ValidationSeverity,
   ValidationIssue,
   ValidationResult,
 } from './schemas/validation-result.js';
@@ -36,4 +35,85 @@ export type {
   ResourceRegistryOptions,
   ValidateOptions,
   RegistryStats,
+  CollectionStat,
+  CollectionStats,
 } from './resource-registry.js';
+
+// Resource type system
+export {
+  ResourceType,
+  isJsonSchema,
+} from './types/resources.js';
+export type {
+  BaseResource,
+  Heading,
+  JsonResource,
+  JsonSchemaResource,
+  MarkdownResource,
+  Resource,
+  SchemaReference,
+  YamlResource,
+} from './types/resources.js';
+
+// Resource path utilities
+export {
+  getResourceAbsolutePath,
+  isValidProjectPath,
+  normalizeProjectPath,
+} from './types/resource-path-utils.js';
+
+// Resource parsing
+export {
+  detectResourceType,
+  parseJsonResource,
+  parseJsonSchemaResource,
+  parseMarkdownResource,
+  parseYamlResource,
+} from './types/resource-parser.js';
+
+// Project configuration
+export type {
+  ValidationMode,
+  CollectionValidation,
+  CollectionConfig,
+  ResourcesConfig,
+  ProjectConfig,
+} from './schemas/project-config.js';
+
+// Config parsing
+export {
+  findConfigFile,
+  parseConfigFile,
+  loadConfig,
+} from './config-parser.js';
+
+// Pattern expansion
+export {
+  isGlobPattern,
+  expandPattern,
+  expandPatterns,
+} from './pattern-expander.js';
+
+// Collection matching
+export {
+  matchesCollection,
+  getCollectionsForFile,
+} from './collection-matcher.js';
+
+// Link validation
+export type { ValidateLinkOptions } from './link-validator.js';
+export { validateLink } from './link-validator.js';
+
+// Schema assignment
+export {
+  addCLISchema,
+  addCollectionSchema,
+  assignSchemas,
+} from './schema-assignment.js';
+
+// Multi-schema validation
+export {
+  getAllSchemaErrors,
+  hasSchemaErrors,
+  validateFrontmatterMultiSchema,
+} from './multi-schema-validator.js';

@@ -4,7 +4,7 @@
 
 import * as path from 'node:path';
 
-import { importSkillToAgent } from '@vibe-agent-toolkit/runtime-claude-skills';
+import { importSkillToAgent } from '@vibe-agent-toolkit/agent-skills';
 
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';

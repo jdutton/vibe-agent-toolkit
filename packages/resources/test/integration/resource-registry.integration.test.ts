@@ -52,11 +52,6 @@ describe('ResourceRegistry - Integration Tests', () => {
       expect(stats.totalResources).toBe(0);
       expect(stats.totalLinks).toBe(0);
     });
-
-    it('should accept validateOnAdd option', () => {
-      const registryWithValidation = new ResourceRegistry({ validateOnAdd: false });
-      expect(registryWithValidation).toBeDefined();
-    });
   });
 
   describe('addResource()', () => {
@@ -243,8 +238,6 @@ describe('ResourceRegistry - Integration Tests', () => {
       expect(result).toBeDefined();
       expect(result.passed).toBeDefined();
       expect(result.errorCount).toBeDefined();
-      expect(result.warningCount).toBeDefined();
-      expect(result.infoCount).toBeDefined();
       expect(result.issues).toBeInstanceOf(Array);
       expect(result.totalResources).toBeDefined();
       expect(result.totalLinks).toBeDefined();
@@ -264,7 +257,6 @@ describe('ResourceRegistry - Integration Tests', () => {
 
       const brokenFileIssue = result.issues.find((i) => i.type === 'broken_file');
       expect(brokenFileIssue).toBeDefined();
-      expect(brokenFileIssue?.severity).toBe('error');
       expect(brokenFileIssue?.message).toContain('File not found');
     });
 
@@ -280,7 +272,6 @@ describe('ResourceRegistry - Integration Tests', () => {
 
       const brokenAnchorIssue = result.issues.find((i) => i.type === 'broken_anchor');
       expect(brokenAnchorIssue).toBeDefined();
-      expect(brokenAnchorIssue?.severity).toBe('error');
       expect(brokenAnchorIssue?.message).toContain('Anchor not found');
     });
 
@@ -295,21 +286,18 @@ describe('ResourceRegistry - Integration Tests', () => {
       // Filter to only issues from valid.md
       const validIssues = result.issues.filter((i) => i.resourcePath.endsWith('valid.md'));
 
-      // Should have no errors, only info for external link
-      const validErrors = validIssues.filter((i) => i.severity === 'error');
-      expect(validErrors).toHaveLength(0);
+      // Should have no errors from valid.md
+      expect(validIssues).toHaveLength(0);
     });
 
-    it('should report external links as info', async () => {
+    it('should report external links', async () => {
       await registry.addResource(path.join(fixturesDir, EXTERNAL_MD));
 
       const result = await registry.validate();
 
-      expect(result.infoCount).toBeGreaterThan(0);
-
-      const externalIssue = result.issues.find((i) => i.type === 'external_url');
-      expect(externalIssue).toBeDefined();
-      expect(externalIssue?.severity).toBe('info');
+      // External links no longer generate issues - they're just skipped
+      // Verify the file was scanned successfully
+      expect(result.totalResources).toBeGreaterThan(0);
     });
 
     it('should provide statistics', async () => {

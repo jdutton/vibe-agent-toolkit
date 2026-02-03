@@ -149,10 +149,12 @@ function getRuntimeAdapter(runtimeType?: RuntimeType): ConversationalRuntimeAdap
       return createLangChainAdapter();
     case 'claude':
       return createClaudeAgentSDKAdapter();
-    default:
+    default: {
+      const invalidRuntime: never = runtime;
       throw new Error(
-        `Unknown runtime: ${runtime}. Valid options: vercel, openai, langchain, claude`,
+        `Unknown runtime: ${String(invalidRuntime)}. Valid options: vercel, openai, langchain, claude`,
       );
+    }
   }
 }
 
@@ -332,7 +334,7 @@ async function runDemo() {
       process.stdout.write(separator);
       process.stdout.write('               FINAL RESULTS\n');
       process.stdout.write(separator + '\n');
-      process.stdout.write(`Conversation Phase: ${lastResult.sessionState.conversationPhase}\n`);
+      process.stdout.write(`Conversation Phase: ${String(lastResult.sessionState.conversationPhase ?? 'unknown')}\n`);
       process.stdout.write(`Status: ${lastResult.result.status}\n`);
 
       if (lastResult.result.status === 'success' && lastResult.result.data?.selectedBreed) {

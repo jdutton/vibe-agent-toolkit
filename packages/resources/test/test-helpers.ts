@@ -3,6 +3,7 @@
  * Shared test helpers for resources package tests
  */
 
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path, { join } from 'node:path';
@@ -11,9 +12,30 @@ import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import type { Assertion } from 'vitest';
 
 import { parseMarkdown } from '../src/link-parser.js';
+import type { ValidateLinkOptions as LinkValidatorOptions } from '../src/link-validator.js';
 import { validateLink } from '../src/link-validator.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 import type { HeadingNode, ResourceLink, ValidationIssue } from '../src/types.js';
+
+/**
+ * Initialize a git repository in the specified directory.
+ * Required for tests that use git commands (git check-ignore, git ls-files).
+ *
+ * @param directory - Absolute path to directory to initialize as git repo
+ * @returns The directory path (for chaining)
+ *
+ * @example
+ * ```typescript
+ * const tempDir = createTestTempDir('my-test-');
+ * createGitRepo(tempDir);
+ * // Now tempDir is a valid git repository
+ * ```
+ */
+export function createGitRepo(directory: string): string {
+  // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
+  spawnSync('git', ['init'], { cwd: directory, stdio: 'pipe' });
+  return directory;
+}
 
 /**
  * Walk up directories looking for package.json that matches a predicate
@@ -135,6 +157,32 @@ export function setupResourceTestSuite(testPrefix: string): {
   return suite;
 }
 
+/**
+ * Setup simple temp directory test suite (no ResourceRegistry).
+ *
+ * For tests that only need temp directory management without registry.
+ *
+ * @param testPrefix - Prefix for temp directory (e.g., 'config-parser-')
+ * @returns Object with tempDir ref that will be populated during beforeEach
+ */
+export function setupTempDirTestSuite(testPrefix: string): {
+  tempDir: string;
+  beforeEach: () => Promise<void>;
+  afterEach: () => Promise<void>;
+} {
+  const suite = {
+    tempDir: '',
+    beforeEach: async () => {
+      suite.tempDir = await mkdtemp(join(normalizedTmpdir(), testPrefix));
+    },
+    afterEach: async () => {
+      await rm(suite.tempDir, { recursive: true, force: true });
+    },
+  };
+
+  return suite;
+}
+
 // ============================================================================
 // Link validation helpers
 // ============================================================================
@@ -180,15 +228,16 @@ export interface ValidateLinkOptions {
   link: ResourceLink;
   /** Headings map for validation */
   headingsMap: Map<string, HeadingNode[]>;
-  /** Expected validation result (null = valid, object = error/warning/info) */
+  /** Expected validation result (null = valid, object = error) */
   expected: null | {
-    severity: ValidationIssue['severity'];
     type: ValidationIssue['type'];
     messageContains?: string | string[];
     hasSuggestion?: boolean;
     /** Expected link property value */
     link?: string;
   };
+  /** Validation options (projectRoot, skipGitIgnoreCheck) */
+  validationOptions?: LinkValidatorOptions;
 }
 
 /**
@@ -216,8 +265,7 @@ function assertValidationError(
   expected: NonNullable<ValidateLinkOptions['expected']>,
   expectFn: (_: unknown) => Assertion<unknown>,
 ): void {
-  // Assert severity and type
-  expectFn(result?.severity).toBe(expected.severity);
+  // Assert type
   expectFn(result?.type).toBe(expected.type);
 
   // Assert message contains expected text(s)
@@ -246,9 +294,9 @@ export async function assertValidation(
   options: ValidateLinkOptions,
   expectFn: (_: ValidationIssue | null) => Assertion<ValidationIssue | null>,
 ): Promise<void> {
-  const { sourceFile, link, headingsMap, expected } = options;
+  const { sourceFile, link, headingsMap, expected, validationOptions } = options;
 
-  const result = await validateLink(link, sourceFile, headingsMap);
+  const result = await validateLink(link, sourceFile, headingsMap, validationOptions);
 
   if (expected === null) {
     expectFn(result).toBeNull();
@@ -322,4 +370,84 @@ export function expectHeadingStructure(
       }
     }
   }
+}
+
+// ============================================================================
+// Schema validation helpers
+// ============================================================================
+
+/**
+ * Create a JSON Schema file in the temp directory
+ *
+ * @param tempDir - Temporary directory path
+ * @param filename - Schema filename
+ * @param schema - Schema object
+ */
+export async function createSchemaFile(
+  tempDir: string,
+  filename: string,
+  schema: object
+): Promise<void> {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir and filename are from test caller, safe in test context
+  await writeFile(
+    join(tempDir, filename),
+    JSON.stringify(schema),
+    'utf-8'
+  );
+}
+
+/**
+ * Common schema definitions for tests
+ */
+export const TestSchemas = {
+  /**
+   * Base schema requiring title field
+   */
+  base: {
+    type: 'object',
+    required: ['title'],
+    properties: {
+      title: { type: 'string' },
+    },
+    additionalProperties: false,
+  },
+
+  /**
+   * Enhanced schema requiring category field
+   */
+  enhanced: {
+    type: 'object',
+    required: ['category'],
+    properties: {
+      category: { type: 'string' },
+    },
+    additionalProperties: false,
+  },
+
+  /**
+   * Schema requiring both title and description
+   */
+  titleAndDescription: {
+    type: 'object',
+    required: ['title', 'description'],
+    properties: {
+      title: { type: 'string' },
+      description: { type: 'string' },
+    },
+  },
+};
+
+/**
+ * Assert that first schema result has validation errors
+ *
+ * @param results - Schema validation results
+ * @param expectFn - expect function from test
+ */
+export function expectFirstSchemaHasErrors(
+  results: Array<{ valid?: boolean; errors?: unknown[] }>,
+  expectFn: (_: unknown) => Assertion<unknown>,
+): void {
+  expectFn(results[0]?.valid).toBe(false);
+  expectFn(results[0]?.errors).toBeDefined();
+  expectFn(results[0]?.errors?.length).toBeGreaterThan(0);
 }

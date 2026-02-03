@@ -1,0 +1,22 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Permissive Documentation Frontmatter",
+  "description": "Permissive validation for docs (extra fields allowed)",
+  "type": "object",
+  "properties": {
+    "title": {
+      "type": "string",
+      "description": "Document title"
+    },
+    "status": {
+      "type": "string",
+      "enum": ["draft", "review", "published", "archived"],
+      "description": "Document status"
+    },
+    "author": {
+      "type": "string",
+      "description": "Document author"
+    }
+  },
+  "additionalProperties": true
+}

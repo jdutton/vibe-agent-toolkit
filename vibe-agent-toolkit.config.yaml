@@ -4,15 +4,44 @@
 version: 1
 
 resources:
-  include:
-    - "docs/**/*.md"
-    - "packages/**/*.md"
-    - "*.md"
+  # Global excludes (apply to all scanning)
   exclude:
     - "node_modules/**"
     - "**/test-fixtures/**"
+    - "**/test/fixtures/**"
     - "**/dist/**"
     - "docs/plans/**"
+
+  # Collections group files and apply specific validation rules
+  # Note: All **/*.md files are scanned by default (implicit)
+  # Collections determine which validation rules apply to which files
+  collections:
+    # Architecture documentation
+    architecture-docs:
+      include:
+        - "docs/architecture/**/*.md"
+      validation:
+        frontmatterSchema: "schemas/architecture-frontmatter.json"
+        mode: permissive  # Warn if frontmatter invalid, but don't fail
+
+    # User guides and tutorials
+    guides:
+      include:
+        - "docs/guides/**/*.md"
+      validation:
+        frontmatterSchema: "schemas/guide-frontmatter.json"
+        mode: permissive
+
+    # Package README files
+    package-readmes:
+      include:
+        - "packages/*/README.md"
+        - "packages/vibe-agent-toolkit/README.md"
+      validation:
+        frontmatterSchema: "schemas/package-readme-frontmatter.json"
+        mode: permissive
+
+  # Default validation for all resources (applies to all files)
   validation:
     checkLinks: true
     checkAnchors: true

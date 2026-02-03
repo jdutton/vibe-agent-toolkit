@@ -13,6 +13,6 @@
     { "path": "../rag" },
     { "path": "../rag-lancedb" },
     { "path": "../agent-config" },
-    { "path": "../runtime-claude-skills" }
+    { "path": "../agent-skills" }
   ]
 }

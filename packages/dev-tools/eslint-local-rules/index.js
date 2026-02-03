@@ -37,6 +37,7 @@ const require = createRequire(import.meta.url);
 export default {
   rules: {
     'no-child-process-execSync': require('./no-child-process-execSync.cjs'),
+    'no-hardcoded-path-split': require('./no-hardcoded-path-split.cjs'),
     'no-path-startswith': require('./no-path-startswith.cjs'),
     'no-unix-shell-commands': require('./no-unix-shell-commands.cjs'),
     'no-os-tmpdir': require('./no-os-tmpdir.cjs'),

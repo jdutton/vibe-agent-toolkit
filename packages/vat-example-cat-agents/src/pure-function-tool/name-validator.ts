@@ -204,7 +204,7 @@ export function validateCatName(
   if (suggestedFixes.length > 0) {
     return {
       status: 'questionable',
-      reason: `*considers carefully* "${name}" is... acceptable, I suppose. ${suggestedFixes[0]}`,
+      reason: `*considers carefully* "${name}" is... acceptable, I suppose. ${String(suggestedFixes[0] ?? '')}`,
       suggestedFixes: suggestedFixes.slice(1),
     };
   }

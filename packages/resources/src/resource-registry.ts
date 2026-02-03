@@ -8,16 +8,19 @@
  * - Query capabilities (by path, ID, or glob pattern)
  */
 
+import type fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import { calculateChecksum } from './checksum.js';
+import { getCollectionsForFile } from './collection-matcher.js';
 import { validateFrontmatter } from './frontmatter-validator.js';
 import { parseMarkdown } from './link-parser.js';
 import { validateLink } from './link-validator.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { SHA256 } from './schemas/checksum.js';
+import type { ProjectConfig } from './schemas/project-config.js';
 import type { HeadingNode, ResourceMetadata } from './schemas/resource-metadata.js';
 import type { ValidationIssue, ValidationResult } from './schemas/validation-result.js';
 import { matchesGlobPattern, splitHrefAnchor } from './utils.js';
@@ -42,8 +45,10 @@ export interface CrawlOptions {
 export interface ResourceRegistryOptions {
   /** Root directory for resources (optional) */
   rootDir?: string;
-  /** Validate resources when they are added (default: false) */
-  validateOnAdd?: boolean;
+  /** Project configuration (optional, enables collection support) */
+  config?: ProjectConfig;
+  /** Git tracker for efficient git-ignore checking (optional, improves performance) */
+  gitTracker?: GitTracker;
 }
 
 /**
@@ -52,6 +57,10 @@ export interface ResourceRegistryOptions {
 export interface ValidateOptions {
   /** Optional JSON Schema to validate frontmatter against */
   frontmatterSchema?: object;
+  /** Skip git-ignore checks (default: false) */
+  skipGitIgnoreCheck?: boolean;
+  /** Validation mode for schemas: strict (default) or permissive */
+  validationMode?: 'strict' | 'permissive';
 }
 
 /**
@@ -61,6 +70,30 @@ export interface RegistryStats {
   totalResources: number;
   totalLinks: number;
   linksByType: Record<string, number>;
+}
+
+/**
+ * Statistics for a single collection.
+ */
+export interface CollectionStat {
+  /** Number of resources in this collection */
+  resourceCount: number;
+  /** Whether this collection has a frontmatter schema configured */
+  hasSchema: boolean;
+  /** Validation mode for this collection's schema */
+  validationMode?: 'strict' | 'permissive';
+}
+
+/**
+ * Statistics about all collections in the registry.
+ */
+export interface CollectionStats {
+  /** Total number of configured collections */
+  totalCollections: number;
+  /** Total number of resources that belong to at least one collection */
+  resourcesInCollections: number;
+  /** Statistics per collection ID */
+  collections: Record<string, CollectionStat>;
 }
 
 /**
@@ -96,17 +129,27 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   /** Optional root directory for resources */
   readonly rootDir?: string;
 
+  /** Optional project configuration (enables collection support) */
+  readonly config?: ProjectConfig;
+
+  /** Optional git tracker for efficient git-ignore checking */
+  readonly gitTracker?: GitTracker;
+
   private readonly resourcesByPath: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesById: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesByName: Map<string, ResourceMetadata[]> = new Map();
   private readonly resourcesByChecksum: Map<SHA256, ResourceMetadata[]> = new Map();
-  private readonly validateOnAdd: boolean;
 
   constructor(options?: ResourceRegistryOptions) {
     if (options?.rootDir !== undefined) {
       this.rootDir = options.rootDir;
     }
-    this.validateOnAdd = options?.validateOnAdd ?? false;
+    if (options?.config !== undefined) {
+      this.config = options.config;
+    }
+    if (options?.gitTracker !== undefined) {
+      this.gitTracker = options.gitTracker;
+    }
   }
 
   /**
@@ -204,7 +247,6 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * Add a single resource to the registry.
    *
    * Parses the markdown file, generates a unique ID, and stores the resource.
-   * If validateOnAdd is true, validates the resource immediately.
    *
    * @param filePath - Path to the markdown file (will be normalized to absolute)
    * @returns The parsed resource metadata
@@ -233,6 +275,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Calculate checksum eagerly
     const checksum = await calculateChecksum(absolutePath);
 
+    // Determine collections if config is present
+    const collections = this.config?.resources?.collections
+      ? getCollectionsForFile(absolutePath, this.config.resources.collections)
+      : undefined;
+
     // Create resource metadata
     const resource: ResourceMetadata = {
       id,
@@ -245,21 +292,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       estimatedTokenCount: parseResult.estimatedTokenCount,
       modifiedAt: stats.mtime,
       checksum,
+      ...(collections !== undefined && collections.length > 0 && { collections }),
     };
 
     // Index the resource
     this.indexResource(resource);
-
-    // Validate if requested
-    if (this.validateOnAdd) {
-      const headingsByFile = this.buildHeadingsByFileMap();
-      for (const link of resource.links) {
-        const issue = await validateLink(link, absolutePath, headingsByFile);
-        if (issue) {
-          throw new Error(`Validation failed: ${issue.message}`);
-        }
-      }
-    }
 
     return resource;
   }
@@ -324,6 +361,188 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
+   * Check for YAML parsing errors in all resources.
+   * @private
+   */
+  private collectYamlErrors(): ValidationIssue[] {
+    const issues: ValidationIssue[] = [];
+    for (const resource of this.resourcesByPath.values()) {
+      if (resource.frontmatterError) {
+        issues.push({
+          resourcePath: resource.filePath,
+          line: 1,
+          type: 'frontmatter_invalid_yaml',
+          link: '',
+          message: `Invalid YAML syntax in frontmatter: ${resource.frontmatterError}`,
+        });
+      }
+    }
+    return issues;
+  }
+
+  /**
+   * Validate all links in all resources.
+   * @private
+   */
+  private async validateAllLinks(
+    headingsByFile: Map<string, HeadingNode[]>,
+    skipGitIgnoreCheck: boolean
+  ): Promise<ValidationIssue[]> {
+    const issues: ValidationIssue[] = [];
+
+    for (const resource of this.resourcesByPath.values()) {
+      for (const link of resource.links) {
+        // Only pass options if projectRoot is defined (exactOptionalPropertyTypes requirement)
+        const validateOptions = this.rootDir === undefined
+          ? { skipGitIgnoreCheck }
+          : {
+              projectRoot: this.rootDir,
+              skipGitIgnoreCheck,
+              ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker })
+            };
+
+        const issue = await validateLink(link, resource.filePath, headingsByFile, validateOptions);
+        if (issue) {
+          issues.push(issue);
+        }
+      }
+    }
+
+    return issues;
+  }
+
+  /**
+   * Validate frontmatter against a JSON Schema.
+   * @private
+   */
+  private validateAllFrontmatter(
+    schema: object,
+    mode: 'strict' | 'permissive' = 'strict'
+  ): ValidationIssue[] {
+    const issues: ValidationIssue[] = [];
+    for (const resource of this.resourcesByPath.values()) {
+      const frontmatterIssues = validateFrontmatter(
+        resource.frontmatter,
+        schema,
+        resource.filePath,
+        mode
+      );
+      issues.push(...frontmatterIssues);
+    }
+    return issues;
+  }
+
+  /**
+   * Validate frontmatter against per-collection schemas.
+   * @private
+   */
+  private async validateCollectionFrontmatter(): Promise<ValidationIssue[]> {
+    const issues: ValidationIssue[] = [];
+
+    // Skip if no config
+    if (!this.config?.resources?.collections) {
+      return issues;
+    }
+
+    const fsPromises = await import('node:fs/promises');
+
+    for (const resource of this.resourcesByPath.values()) {
+      // Skip if resource has no collections
+      if (!resource.collections || resource.collections.length === 0) {
+        continue;
+      }
+
+      // Validate against each collection's schema
+      const collectionIssues = await this.validateResourceCollectionSchemas(
+        resource,
+        fsPromises
+      );
+      issues.push(...collectionIssues);
+    }
+
+    return issues;
+  }
+
+  /**
+   * Validate a single resource against its collection schemas.
+   * @private
+   */
+  private async validateResourceCollectionSchemas(
+    resource: ResourceMetadata,
+    fsModule: typeof fs
+  ): Promise<ValidationIssue[]> {
+    const issues: ValidationIssue[] = [];
+
+    if (!resource.collections || !this.config?.resources?.collections) {
+      return issues;
+    }
+
+    for (const collectionId of resource.collections) {
+      const collection = this.config.resources.collections[collectionId];
+
+      // Skip if collection has no validation or no schema
+      if (!collection?.validation?.frontmatterSchema) {
+        continue;
+      }
+
+      const collectionIssues = await this.validateAgainstCollectionSchema(
+        resource,
+        collection.validation,
+        fsModule
+      );
+      issues.push(...collectionIssues);
+    }
+
+    return issues;
+  }
+
+  /**
+   * Validate resource frontmatter against a specific collection schema.
+   * @private
+   */
+  private async validateAgainstCollectionSchema(
+    resource: ResourceMetadata,
+    validation: NonNullable<ProjectConfig['resources']>['collections'][string]['validation'],
+    fsModule: typeof fs
+  ): Promise<ValidationIssue[]> {
+    if (!validation?.frontmatterSchema) {
+      return [];
+    }
+
+    const schemaPath = path.resolve(
+      this.rootDir ?? process.cwd(),
+      validation.frontmatterSchema
+    );
+
+    try {
+      const schemaContent = await fsModule.readFile(schemaPath, 'utf-8');
+      const schema = JSON.parse(schemaContent) as object;
+
+      // Determine validation mode (default to permissive)
+      const mode = validation.mode ?? 'permissive';
+
+      // Validate frontmatter
+      return validateFrontmatter(
+        resource.frontmatter,
+        schema,
+        resource.filePath,
+        mode,
+        schemaPath
+      );
+    } catch (error) {
+      // Handle missing or invalid schema files gracefully
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return [{
+        resourcePath: resource.filePath,
+        line: 1,
+        type: 'frontmatter_schema_error',
+        link: '',
+        message: `Failed to load or parse frontmatter schema '${validation.frontmatterSchema}': ${errorMessage}`,
+      }];
+    }
+  }
+
+  /**
    * Validate all links and optionally frontmatter in all resources in the registry.
    *
    * Checks:
@@ -348,10 +567,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    *
    * console.log(`Passed: ${result.passed}`);
    * console.log(`Errors: ${result.errorCount}`);
-   * console.log(`Warnings: ${result.warningCount}`);
    * console.log(`Total resources: ${result.totalResources}`);
    * for (const issue of result.issues) {
-   *   console.log(`${issue.severity}: ${issue.message}`);
+   *   console.log(`${issue.message}`);
    * }
    * ```
    */
@@ -365,45 +583,27 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     const issues: ValidationIssue[] = [];
 
     // Check for YAML parsing errors first
-    for (const resource of this.resourcesByPath.values()) {
-      if (resource.frontmatterError) {
-        issues.push({
-          severity: 'error',
-          resourcePath: resource.filePath,
-          line: 1,
-          type: 'frontmatter_invalid_yaml',
-          link: '',
-          message: `Invalid YAML syntax in frontmatter: ${resource.frontmatterError}`,
-        });
-      }
-    }
+    issues.push(...this.collectYamlErrors());
 
     // Validate each link in each resource
-    for (const resource of this.resourcesByPath.values()) {
-      for (const link of resource.links) {
-        const issue = await validateLink(link, resource.filePath, headingsByFile);
-        if (issue) {
-          issues.push(issue);
-        }
-      }
-    }
+    const linkIssues = await this.validateAllLinks(
+      headingsByFile,
+      options?.skipGitIgnoreCheck ?? false
+    );
+    issues.push(...linkIssues);
 
-    // Frontmatter validation (if schema provided)
+    // Per-collection frontmatter validation
+    const collectionFrontmatterIssues = await this.validateCollectionFrontmatter();
+    issues.push(...collectionFrontmatterIssues);
+
+    // Global frontmatter validation (if schema provided)
     if (options?.frontmatterSchema) {
-      for (const resource of this.resourcesByPath.values()) {
-        const frontmatterIssues = validateFrontmatter(
-          resource.frontmatter,
-          options.frontmatterSchema,
-          resource.filePath
-        );
-        issues.push(...frontmatterIssues);
-      }
+      const mode = options.validationMode ?? 'strict';
+      issues.push(...this.validateAllFrontmatter(options.frontmatterSchema, mode));
     }
 
-    // Count issues by severity
-    const errorCount = issues.filter((i) => i.severity === 'error').length;
-    const warningCount = issues.filter((i) => i.severity === 'warning').length;
-    const infoCount = issues.filter((i) => i.severity === 'info').length;
+    // Count issues (all are errors now)
+    const errorCount = issues.length;
 
     // Count links by type
     const linksByType: Record<string, number> = {};
@@ -424,8 +624,6 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       linksByType,
       issues,
       errorCount,
-      warningCount,
-      infoCount,
       passed: errorCount === 0,
       durationMs,
       timestamp: new Date(),
@@ -714,6 +912,76 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       totalResources,
       totalLinks,
       linksByType,
+    };
+  }
+
+  /**
+   * Get collection-level statistics.
+   *
+   * Returns undefined if collections are not configured in the project config.
+   *
+   * @returns Collection statistics or undefined if no collections configured
+   *
+   * @example
+   * ```typescript
+   * const collectionStats = registry.getCollectionStats();
+   * if (collectionStats) {
+   *   console.log(`Total collections: ${collectionStats.totalCollections}`);
+   *   console.log(`Resources in collections: ${collectionStats.resourcesInCollections}`);
+   *   for (const [id, stat] of Object.entries(collectionStats.collections)) {
+   *     console.log(`${id}: ${stat.resourceCount} resources`);
+   *   }
+   * }
+   * ```
+   */
+  getCollectionStats(): CollectionStats | undefined {
+    if (!this.config?.resources?.collections) {
+      return undefined;
+    }
+
+    // Group resources by collection
+    const collectionMap = new Map<string, ResourceMetadata[]>();
+
+    for (const resource of this.resourcesByPath.values()) {
+      if (resource.collections) {
+        for (const collectionId of resource.collections) {
+          const resources = collectionMap.get(collectionId) ?? [];
+          resources.push(resource);
+          collectionMap.set(collectionId, resources);
+        }
+      }
+    }
+
+    // Build stats per collection
+    const collections: Record<string, CollectionStat> = {};
+
+    for (const [id, resources] of collectionMap.entries()) {
+      const collection = this.config.resources.collections[id];
+      const stat: CollectionStat = {
+        resourceCount: resources.length,
+        hasSchema: !!collection?.validation?.frontmatterSchema,
+      };
+
+      // Only add validationMode if it's defined (exactOptionalPropertyTypes requirement)
+      if (collection?.validation?.mode !== undefined) {
+        stat.validationMode = collection.validation.mode;
+      }
+
+      collections[id] = stat;
+    }
+
+    // Calculate total unique resources in collections (a resource may be in multiple collections)
+    const uniqueResourcesInCollections = new Set<string>();
+    for (const resource of this.resourcesByPath.values()) {
+      if (resource.collections && resource.collections.length > 0) {
+        uniqueResourcesInCollections.add(resource.filePath);
+      }
+    }
+
+    return {
+      totalCollections: Object.keys(this.config.resources.collections).length,
+      resourcesInCollections: uniqueResourcesInCollections.size,
+      collections,
     };
   }
 

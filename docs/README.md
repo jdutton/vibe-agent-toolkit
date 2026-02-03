@@ -13,6 +13,12 @@ Welcome to the Vibe Agent Toolkit documentation.
 - **[Adding Runtime Adapters](./adding-runtime-adapters.md)** - Best practices for creating new runtime adapters
 - **[Publishing Guide](./publishing.md)** - How to prepare and publish packages to npm
 
+## Guides
+
+- **[Collection Validation](./guides/collection-validation.md)** - Per-collection frontmatter validation with JSON Schemas
+- **[Writing Tests](./writing-tests.md)** - Test conventions, helpers, and duplication avoidance
+- **[RAG Usage Guide](./guides/rag-usage-guide.md)** - Using the RAG package for semantic search
+
 ## Configuration
 
 - **[ESLint Config](../eslint.config.js)** - Strict linting rules (heavily documented)
@@ -81,4 +87,4 @@ bun run test:coverage      # Coverage report
 
 ## Contributing
 
-See [Main README](../README.md#contributing) for contribution guidelines.
+See [CLAUDE.md](../CLAUDE.md) for comprehensive development guidelines, code standards, and testing conventions.

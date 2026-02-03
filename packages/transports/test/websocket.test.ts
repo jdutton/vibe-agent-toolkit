@@ -19,7 +19,7 @@ describe('WebSocketTransport', () => {
     mockFn = vi.fn(async (input: string, context) => {
       const count = (context.state?.count ?? 0) + 1;
       context.state = { count };
-      return `Message #${count}: ${input}`;
+      return `Message #${String(count)}: ${String(input)}`;
     });
   });
 

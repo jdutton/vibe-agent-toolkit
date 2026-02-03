@@ -6,6 +6,7 @@ import { it, beforeAll, afterAll } from 'vitest';
 import { describe, expect, fs, getBinPath, join, spawnSync } from './test-common.js';
 import {
   createTestTempDir,
+  executeCli,
   executeScanAndParse,
   executeValidateAndParse,
   setupTestProject,
@@ -70,10 +71,11 @@ resources:
     expect(parsed.status).toBe('failed');
     expect(parsed.errorsFound).toBe(2); // missing.md + #nonexistent
 
-    // Check test-format errors on stderr
-    expect(result.stderr).toContain('broken.md');
-    expect(result.stderr).toContain('missing.md');
-    expect(result.stderr).toContain('#nonexistent');
+    // Check test-format errors on stderr (use text format)
+    const textResult = executeCli(binPath, ['resources', 'validate', '--format', 'text'], { cwd: projectDir });
+    expect(textResult.stderr).toContain('broken.md');
+    expect(textResult.stderr).toContain('missing.md');
+    expect(textResult.stderr).toContain('#nonexistent');
   });
 
   it('should validate successfully after fixing links', () => {

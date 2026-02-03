@@ -17,7 +17,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { validateLink } from '../src/link-validator.js';
 import type { HeadingNode } from '../src/types.js';
 
-import { assertValidation, createHeadings, createLink } from './test-helpers.js';
+import { assertValidation, createGitRepo, createHeadings, createLink } from './test-helpers.js';
 
 // Test fixtures directory
 const FIXTURES_DIR = path.resolve(import.meta.dirname, '../test-fixtures');
@@ -66,7 +66,6 @@ describe('validateLink', () => {
           link: createLink('local_file', NONEXISTENT_FILE_LINK, 'Broken link', 3),
           headingsMap: new Map<string, HeadingNode[]>(),
           expected: {
-            severity: 'error',
             type: 'broken_file',
             messageContains: ['File not found', 'nonexistent.md'],
             hasSuggestion: true,
@@ -101,7 +100,6 @@ describe('validateLink', () => {
             [targetFile, createHeadings(VALID_ANCHOR_HEADING)],
           ]),
           expected: {
-            severity: 'error',
             type: 'broken_anchor',
             messageContains: ['Anchor not found', 'nonexistent-heading'],
             hasSuggestion: true,
@@ -151,7 +149,6 @@ describe('validateLink', () => {
             [sourceFile, createHeadings(HEADING_ANCHOR_HEADING)],
           ]),
           expected: {
-            severity: 'error',
             type: 'broken_anchor',
             messageContains: ['Anchor not found', NONEXISTENT_ANCHOR],
           },
@@ -206,7 +203,6 @@ describe('validateLink', () => {
           link: createLink('anchor', '#any-heading', 'No headings', 5),
           headingsMap: new Map<string, HeadingNode[]>(),
           expected: {
-            severity: 'error',
             type: 'broken_anchor',
           },
         },
@@ -216,38 +212,24 @@ describe('validateLink', () => {
   });
 
   describe('external links', () => {
-    it('should return info for HTTP URL', async () => {
-      expect(true).toBe(true); // Assertion for SonarJS (assertValidation performs detailed assertions)
-      await assertValidation(
-        {
-          sourceFile: path.join(FIXTURES_DIR, VALID_MD),
-          link: createLink('external', 'http://example.com', 'HTTP link', 6),
-          headingsMap: new Map<string, HeadingNode[]>(),
-          expected: {
-            severity: 'info',
-            type: 'external_url',
-            messageContains: 'External URL not validated',
-            link: 'http://example.com',
-          },
-        },
-        expect,
-      );
+    it('should return null for HTTP URL (external links not validated)', async () => {
+      const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
+      const link = createLink('external', 'http://example.com', 'HTTP link', 6);
+      const headingsMap = new Map<string, HeadingNode[]>();
+
+      const result = await validateLink(link, sourceFile, headingsMap);
+
+      expect(result).toBeNull();
     });
 
-    it('should return info for HTTPS URL', async () => {
-      expect(true).toBe(true); // Assertion for SonarJS (assertValidation performs detailed assertions)
-      await assertValidation(
-        {
-          sourceFile: path.join(FIXTURES_DIR, VALID_MD),
-          link: createLink('external', 'https://example.com/path', 'HTTPS link', 7),
-          headingsMap: new Map<string, HeadingNode[]>(),
-          expected: {
-            severity: 'info',
-            type: 'external_url',
-          },
-        },
-        expect,
-      );
+    it('should return null for HTTPS URL (external links not validated)', async () => {
+      const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
+      const link = createLink('external', 'https://example.com/path', 'HTTPS link', 7);
+      const headingsMap = new Map<string, HeadingNode[]>();
+
+      const result = await validateLink(link, sourceFile, headingsMap);
+
+      expect(result).toBeNull();
     });
   });
 
@@ -282,7 +264,6 @@ describe('validateLink', () => {
           link: createLink('unknown', 'ftp://example.com/file', 'FTP link', 10),
           headingsMap: new Map<string, HeadingNode[]>(),
           expected: {
-            severity: 'warning',
             type: 'unknown_link',
             messageContains: 'Unknown link type',
             link: 'ftp://example.com/file',
@@ -300,7 +281,6 @@ describe('validateLink', () => {
           link: createLink('unknown', 'tel:+1234567890', 'Tel link', 11),
           headingsMap: new Map<string, HeadingNode[]>(),
           expected: {
-            severity: 'warning',
             type: 'unknown_link',
           },
         },
@@ -358,7 +338,7 @@ describe('validateLink', () => {
       const result = await validateLink(link, sourceFile, headingsMap);
 
       expect(result).not.toBeNull();
-      expect(result?.severity).toBe('error');
+      expect(result?.type).toBe('broken_anchor');
     });
 
     it('should handle file path with anchor where file does not exist', async () => {
@@ -432,7 +412,6 @@ describe('validateLink', () => {
       const result = await validateLink(link, sourceFile, headingsMap);
 
       expect(result).not.toBeNull();
-      expect(result).toHaveProperty('severity');
       expect(result).toHaveProperty('resourcePath');
       expect(result).toHaveProperty('line');
       expect(result).toHaveProperty('type');
@@ -445,7 +424,7 @@ describe('validateLink', () => {
       expect(result?.link).toBe(NONEXISTENT_FILE_LINK);
     });
 
-    it('should include suggestion in broken file issue', async () => {
+    it('should include empty suggestion in broken file issue', async () => {
       const sourceFile = path.join(FIXTURES_DIR, BROKEN_FILE_MD);
       const link = createLink('local_file', NONEXISTENT_FILE_LINK, 'Broken');
       const headingsMap = new Map<string, HeadingNode[]>();
@@ -453,10 +432,10 @@ describe('validateLink', () => {
       const result = await validateLink(link, sourceFile, headingsMap);
 
       expect(result?.suggestion).toBeDefined();
-      expect(result?.suggestion).toContain('file path');
+      expect(result?.suggestion).toBe('');
     });
 
-    it('should include suggestion in broken anchor issue', async () => {
+    it('should include empty suggestion in broken anchor issue', async () => {
       const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('anchor', NONEXISTENT_ANCHOR, 'Broken');
       const headingsMap = new Map<string, HeadingNode[]>([
@@ -466,7 +445,7 @@ describe('validateLink', () => {
       const result = await validateLink(link, sourceFile, headingsMap);
 
       expect(result?.suggestion).toBeDefined();
-      expect(result?.suggestion).toContain('heading');
+      expect(result?.suggestion).toBe('');
     });
   });
 
@@ -482,8 +461,8 @@ describe('validateLink', () => {
       tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'link-validator-gitignore-'));
       gitRoot = tempDir;
 
-      // Create .git directory
-      mkdirSyncReal(path.join(gitRoot, '.git'));
+      // Initialize git repo properly (git check-ignore needs a real repo)
+      createGitRepo(gitRoot);
     });
 
     afterEach(async () => {
@@ -492,7 +471,7 @@ describe('validateLink', () => {
     });
 
     /**
-     * Helper to test that a link to a gitignored file returns an error
+     * Helper to test that a non-ignored file linking to a gitignored file returns an error
      */
     async function assertGitignoreError(linkHref: string, linkText: string): Promise<void> {
       const sourceFile = path.join(gitRoot, 'source.md');
@@ -505,10 +484,13 @@ describe('validateLink', () => {
           link,
           headingsMap,
           expected: {
-            severity: 'error',
-            type: 'broken_file',
+            type: 'link_to_gitignored',
             messageContains: 'gitignored',
             hasSuggestion: true,
+          },
+          validationOptions: {
+            projectRoot: gitRoot,
+            skipGitIgnoreCheck: false,
           },
         },
         expect
@@ -559,6 +541,10 @@ describe('validateLink', () => {
           link,
           headingsMap,
           expected: null,
+          validationOptions: {
+            projectRoot: gitRoot,
+            skipGitIgnoreCheck: false,
+          },
         },
         expect
       );

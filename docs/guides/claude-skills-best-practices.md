@@ -566,7 +566,7 @@ This guide is based on the specification but adds VAT-specific best practices an
 
 - [Audit Command](../cli/audit.md) - Validation rules and error codes
 - [Import Command](../cli/import.md) - Converting skills to VAT format
-- [runtime-claude-skills Package](../../packages/runtime-claude-skills/README.md) - Validation API
+- [agent-skills Package](../../packages/agent-skills/README.md) - Validation API
 
 ## Getting Help
 

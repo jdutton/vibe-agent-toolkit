@@ -1,4 +1,4 @@
-# @vibe-agent-toolkit/runtime-claude-skills
+# @vibe-agent-toolkit/agent-skills
 
 Build, validate, and import Claude Skills for Claude Desktop, Claude Code, and VAT agents.
 
@@ -22,7 +22,7 @@ This package provides runtime support for Claude Skills including:
 ## Installation
 
 ```bash
-npm install @vibe-agent-toolkit/runtime-claude-skills
+npm install @vibe-agent-toolkit/agent-skills
 ```
 
 ## Quick Start
@@ -30,7 +30,7 @@ npm install @vibe-agent-toolkit/runtime-claude-skills
 ### Validate a Claude Skill
 
 ```typescript
-import { validateSkill } from '@vibe-agent-toolkit/runtime-claude-skills';
+import { validateSkill } from '@vibe-agent-toolkit/agent-skills';
 
 const result = await validateSkill({
   skillPath: './my-skill/SKILL.md',
@@ -47,7 +47,7 @@ if (result.status === 'error') {
 ### Import SKILL.md to agent.yaml
 
 ```typescript
-import { importSkillToAgent } from '@vibe-agent-toolkit/runtime-claude-skills';
+import { importSkillToAgent } from '@vibe-agent-toolkit/agent-skills';
 
 const result = await importSkillToAgent({
   skillPath: './my-skill/SKILL.md',
@@ -65,7 +65,7 @@ if (result.success) {
 ### Build Claude Skill from VAT Agent
 
 ```typescript
-import { buildClaudeSkill } from '@vibe-agent-toolkit/runtime-claude-skills';
+import { buildClaudeSkill } from '@vibe-agent-toolkit/agent-skills';
 
 await buildClaudeSkill({
   agentPath: './my-agent',
@@ -268,7 +268,7 @@ console.log(`Version: ${result.metadata.version}`);
 Strict schema for console-compatible Claude Skills:
 
 ```typescript
-import { ClaudeSkillFrontmatterSchema } from '@vibe-agent-toolkit/runtime-claude-skills';
+import { ClaudeSkillFrontmatterSchema } from '@vibe-agent-toolkit/agent-skills';
 import { z } from 'zod';
 
 const frontmatter = {
@@ -299,7 +299,7 @@ if (result.success) {
 Extended schema for VAT-generated skills:
 
 ```typescript
-import { VATClaudeSkillFrontmatterSchema } from '@vibe-agent-toolkit/runtime-claude-skills';
+import { VATClaudeSkillFrontmatterSchema } from '@vibe-agent-toolkit/agent-skills';
 
 const frontmatter = {
   name: 'my-skill',
@@ -322,7 +322,7 @@ Parse YAML frontmatter from SKILL.md content.
 
 **Example:**
 ```typescript
-import { parseFrontmatter } from '@vibe-agent-toolkit/runtime-claude-skills';
+import { parseFrontmatter } from '@vibe-agent-toolkit/agent-skills';
 import * as fs from 'node:fs';
 
 const content = fs.readFileSync('./SKILL.md', 'utf-8');
@@ -344,7 +344,7 @@ if (result.success) {
 import {
   validateSkill,
   importSkillToAgent
-} from '@vibe-agent-toolkit/runtime-claude-skills';
+} from '@vibe-agent-toolkit/agent-skills';
 
 // Validate first
 const validation = await validateSkill({
@@ -369,7 +369,7 @@ if (importResult.success) {
 ### Batch Validation
 
 ```typescript
-import { validateSkill } from '@vibe-agent-toolkit/runtime-claude-skills';
+import { validateSkill } from '@vibe-agent-toolkit/agent-skills';
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
@@ -402,7 +402,7 @@ console.log(`Failed: ${failed.length}`);
 ### Custom Validation Logic
 
 ```typescript
-import { validateSkill } from '@vibe-agent-toolkit/runtime-claude-skills';
+import { validateSkill } from '@vibe-agent-toolkit/agent-skills';
 
 const result = await validateSkill({
   skillPath: './my-skill/SKILL.md',
@@ -443,7 +443,7 @@ See [CLI Documentation](../../docs/cli/audit.md) for command usage.
 
 ```typescript
 // ci-validate.ts
-import { validateSkill } from '@vibe-agent-toolkit/runtime-claude-skills';
+import { validateSkill } from '@vibe-agent-toolkit/agent-skills';
 import * as fs from 'node:fs/promises';
 
 async function validateInCI() {
@@ -495,7 +495,7 @@ import type {
   ImportResult,
   BuildOptions,
   BuildResult,
-} from '@vibe-agent-toolkit/runtime-claude-skills';
+} from '@vibe-agent-toolkit/agent-skills';
 ```
 
 ## Error Handling

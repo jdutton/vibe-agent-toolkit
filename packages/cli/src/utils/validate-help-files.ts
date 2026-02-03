@@ -55,7 +55,7 @@ export function validateHelpFiles(): void {
  * Run validation if this file is executed directly
  * (via tsx or node during build process)
  */
-if (import.meta.url === `file://${process.argv[1]}`) {
+if (import.meta.url === `file://${String(process.argv[1] ?? '')}`) {
   try {
     validateHelpFiles();
     console.log('✓ All required help documentation files exist');

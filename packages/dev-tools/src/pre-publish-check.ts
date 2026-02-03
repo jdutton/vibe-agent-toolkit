@@ -110,7 +110,7 @@ Exit codes:
     `);
     process.exit(0);
   } else {
-    console.error(`Unknown option: ${args[i]}`);
+    console.error(`Unknown option: ${String(args[i] ?? 'unknown')}`);
     console.error('Usage: tsx tools/pre-publish-check.ts [OPTIONS]');
     process.exit(1);
   }
@@ -413,7 +413,7 @@ try {
         });
 
         if (!isCovered && !files.includes('bin')) {
-          missingFiles.push(`${pkg} (bin "${binPath}" not covered by files array)`);
+          missingFiles.push(`${pkg} (bin "${String(binPath)}" not covered by files array)`);
           break; // Only report once per package
         }
       }
@@ -560,7 +560,7 @@ if (skipGitChecks) {
         console.log('');
         console.log('  Recovery instructions:');
         console.log(`  1. Add version entry to CHANGELOG.md:`);
-        console.log(`     ## [${version}] - ${new Date().toISOString().split('T')[0]}`);
+        console.log(`     ## [${version}] - ${String(new Date().toISOString().split('T')[0] ?? '')}`);
         console.log('  2. Document changes under the version header');
         console.log('  3. Run pre-publish-check again');
         console.log('');

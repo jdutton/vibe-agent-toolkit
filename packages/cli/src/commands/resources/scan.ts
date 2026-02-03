@@ -2,6 +2,7 @@
  * Resources scan command - discover markdown resources
  */
 
+import { formatDurationSecs } from '../../utils/duration.js';
 import { createLogger } from '../../utils/logger.js';
 import { writeYamlOutput } from '../../utils/output.js';
 import { loadResourcesWithConfig } from '../../utils/resource-loader.js';
@@ -10,6 +11,8 @@ import { handleCommandError } from './command-helpers.js';
 
 interface ScanOptions {
   debug?: boolean;
+  verbose?: boolean;
+  collection?: string;
 }
 
 export async function scanCommand(
@@ -23,11 +26,18 @@ export async function scanCommand(
     // Load resources with config support
     const { registry } = await loadResourcesWithConfig(pathArg, logger);
 
-    const stats = registry.getStats();
-    const duration = Date.now() - startTime;
+    // Get all resources (filtered by collection if specified)
+    let allResources = registry.getAllResources();
+    if (options.collection) {
+      const { collection } = options;
+      allResources = allResources.filter(r => {
+        return collection ? r.collections?.includes(collection) ?? false : false;
+      });
+    }
 
-    // Get all resources
-    const allResources = registry.getAllResources();
+    // Calculate stats from filtered resources
+    const totalLinks = allResources.reduce((sum, r) => sum + r.links.length, 0);
+    const duration = Date.now() - startTime;
 
     // Count total headings (flatten the heading tree)
     type HeadingWithChildren = { children?: HeadingWithChildren[] | undefined };
@@ -46,28 +56,45 @@ export async function scanCommand(
       0
     );
 
-    // Get duplicate statistics
-    const duplicates = registry.getDuplicates();
-    const duplicateFileCount = duplicates.reduce((sum, group) => sum + group.length, 0);
-    const uniqueResources = registry.getUniqueByChecksum();
+    // Build collection stats (filtered or all)
+    let collectionsOutput: Record<string, { resourceCount: number }> | undefined;
+    if (options.collection) {
+      // When filtering by collection, only show that collection
+      collectionsOutput = { [options.collection]: { resourceCount: allResources.length } };
+    } else {
+      // Show all collections
+      const collectionStats = registry.getCollectionStats();
+      collectionsOutput = collectionStats
+        ? Object.fromEntries(
+            Object.entries(collectionStats.collections).map(([id, stat]) => [
+              id,
+              { resourceCount: stat.resourceCount },
+            ])
+          )
+        : undefined;
+    }
 
     // Output results as YAML
-    writeYamlOutput({
+    const outputData: Record<string, unknown> = {
       status: 'success',
-      filesScanned: stats.totalResources,
-      uniqueFiles: uniqueResources.length,
-      duplicateGroups: duplicates.length,
-      duplicateFiles: duplicateFileCount,
-      linksFound: stats.totalLinks,
+      filesScanned: allResources.length,
+      linksFound: totalLinks,
       anchorsFound: totalHeadings,
-      files: allResources.map(resource => ({
+      durationSecs: formatDurationSecs(duration),
+      ...(collectionsOutput ? { collections: collectionsOutput } : {}),
+    };
+
+    // Add verbose file details if requested
+    if (options.verbose) {
+      outputData['files'] = allResources.map(resource => ({
         path: resource.filePath,
         links: resource.links.length,
         anchors: countHeadings(resource.headings),
         checksum: resource.checksum,
-      })),
-      duration: `${duration}ms`,
-    });
+      }));
+    }
+
+    writeYamlOutput(outputData);
 
     process.exit(0);
   } catch (error) {

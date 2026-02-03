@@ -32,6 +32,8 @@ export {
   type CrawlOptions,
   type ResourceRegistryOptions,
   type RegistryStats,
+  type CollectionStats,
+  type CollectionStat,
 } from './resource-registry.js';
 
 // Export ResourceQuery for lazy evaluation and filtering
@@ -49,9 +51,13 @@ export type {
   HeadingNode,
   ResourceLink,
   ResourceMetadata,
-  ValidationSeverity,
   ValidationIssue,
   ValidationResult,
+  ProjectConfig,
+  ResourcesConfig,
+  CollectionConfig,
+  CollectionValidation,
+  ValidationMode,
 } from './types.js';
 
 // Export schemas for external use (e.g., JSON Schema generation, runtime validation)
@@ -63,7 +69,6 @@ export {
 } from './schemas/resource-metadata.js';
 
 export {
-  ValidationSeveritySchema,
   ValidationIssueSchema,
   ValidationResultSchema,
 } from './schemas/validation-result.js';

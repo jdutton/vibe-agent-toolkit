@@ -75,7 +75,7 @@ mkdir -p packages/my-package/src packages/my-package/test
 
 3. **Add package configuration**:
 
-See [Adding a New Package](../README.md#adding-a-new-package) in the main README for details.
+Create `package.json`, `tsconfig.json` (with `composite: true`), and add to root `tsconfig.json` references. See [CLAUDE.md](../CLAUDE.md) Development Workflow section for complete details.
 
 4. **Update root tsconfig.json**:
 

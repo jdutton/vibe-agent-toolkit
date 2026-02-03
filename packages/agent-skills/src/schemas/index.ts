@@ -1,5 +1,5 @@
 /**
- * Schema exports for runtime-claude-skills package
+ * Schema exports for agent-skills package
  */
 
 export {

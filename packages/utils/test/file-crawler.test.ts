@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -5,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { crawlDirectory, crawlDirectorySync } from '../src/file-crawler.js';
 import { mkdirSyncReal, normalizedTmpdir, toForwardSlash } from '../src/path-utils.js';
+
+import { createGitRepo } from './test-helpers.js';
 
 describe('file-crawler', () => {
   let testDir: string;
@@ -321,21 +324,24 @@ describe('file-crawler', () => {
     it('should respect .gitignore by default', () => {
       createTestStructure();
 
-      // Create .git directory to make it a git repo
-       
-      mkdirSyncReal(path.join(testDir, '.git'));
+      // Initialize git repo properly (git ls-files needs a real repo)
+      createGitRepo(testDir);
 
       // Create .gitignore file
       const gitignorePath = path.join(testDir, '.gitignore');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is controlled temp directory
       writeFileSync(gitignorePath, 'docs/\n*.log\n');
 
+      // Track only non-ignored files (git ls-files returns tracked files)
+      // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
+      spawnSync('git', ['add', 'src/', 'README.md'], { cwd: testDir, stdio: 'pipe' });
+
       const files = crawlDirectorySync({
         baseDir: testDir,
         include: ['**/*'],
       });
 
-      // Should not include docs/ directory or *.log files
+      // Should only include tracked files (not docs/ or *.log)
       expect(files.every((f) => !f.includes('docs'))).toBe(true);
       expect(files.every((f) => !f.endsWith('.log'))).toBe(true);
     });

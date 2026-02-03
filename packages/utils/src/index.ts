@@ -23,5 +23,8 @@ export * from './gitignore-checker.js';
 // Git utilities (using git commands directly)
 export * from './git-utils.js';
 
+// Git tracking cache (for efficient git-ignore checking)
+export * from './git-tracker.js';
+
 // Test helpers for isolated test output directories
 export * from './test-helpers.js';

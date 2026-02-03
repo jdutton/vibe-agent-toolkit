@@ -2,7 +2,12 @@
  * Utilities for loading and crawling resources
  */
 
-import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import {
+  ResourceRegistry,
+  type ProjectConfig as ResourcesProjectConfig,
+  type ResourceRegistryOptions,
+} from '@vibe-agent-toolkit/resources';
+import { GitTracker } from '@vibe-agent-toolkit/utils';
 
 import type { ProjectConfig } from '../schemas/config.js';
 
@@ -15,6 +20,7 @@ export interface ResourceLoadResult {
   projectRoot: string | null;
   config: ProjectConfig | undefined;
   registry: ResourceRegistry;
+  gitTracker: GitTracker | undefined;
 }
 
 /**
@@ -45,8 +51,38 @@ export async function loadResourcesWithConfig(
     logger.debug(`Loaded config from ${projectRoot ?? 'unknown'}`);
   }
 
+  // Create and initialize GitTracker if we have a project root
+  let gitTracker: GitTracker | undefined;
+  if (projectRoot) {
+    gitTracker = new GitTracker(projectRoot);
+    await gitTracker.initialize();
+    const stats = gitTracker.getStats();
+    logger.debug(`GitTracker initialized with ${stats.cacheSize} tracked files`);
+  }
+
   // Create registry and crawl
-  const registry = new ResourceRegistry();
+  // Build options conditionally to satisfy exactOptionalPropertyTypes
+  const registryOptions: ResourceRegistryOptions = {};
+  if (config?.resources?.collections) {
+    // Convert CLI config to resources package config
+    // Only pass the collections field that resources package needs
+    const resourcesConfig: ResourcesProjectConfig = {
+      version: 1,
+      resources: {
+        collections: config.resources.collections,
+        include: config.resources.include,
+        exclude: config.resources.exclude,
+      },
+    };
+    registryOptions.config = resourcesConfig;
+  }
+  if (projectRoot) {
+    registryOptions.rootDir = projectRoot;
+  }
+  if (gitTracker) {
+    registryOptions.gitTracker = gitTracker;
+  }
+  const registry = new ResourceRegistry(registryOptions);
 
   let crawlOptions;
 
@@ -81,5 +117,6 @@ export async function loadResourcesWithConfig(
     projectRoot,
     config,
     registry,
+    gitTracker,
   };
 }

@@ -58,8 +58,6 @@ describe('System Test: Project Link Validation (Dogfooding)', () => {
     console.log(`\n✅ Validation Results:`);
     console.log(`  Status: ${validationResult.passed ? '✅ PASSED' : '❌ FAILED'}`);
     console.log(`  Errors (broken links): ${validationResult.errorCount}`);
-    console.log(`  Warnings: ${validationResult.warningCount}`);
-    console.log(`  Info: ${validationResult.infoCount}`);
     console.log(`  Duration: ${validationResult.durationMs}ms`);
     console.log('='.repeat(70));
 
@@ -67,25 +65,24 @@ describe('System Test: Project Link Validation (Dogfooding)', () => {
     if (validationResult.errorCount > 0) {
       console.log('\n❌ BROKEN LINKS DETECTED:\n');
       let errorNum = 1;
+      // All issues are errors now (no severity field)
       for (const issue of validationResult.issues) {
-        if (issue.severity === 'error') {
-          const resource = resources.find(
-            (r) => r.filePath === issue.resourcePath,
-          );
-          console.log(`[${errorNum}] ${issue.type.toUpperCase()}`);
-          console.log(`    📄 File: ${issue.resourcePath}`);
-          console.log(`    📍 Line: ${issue.line ?? 'unknown'}`);
-          console.log(`    🔗 Link: ${issue.link}`);
-          console.log(`    💬 ${issue.message}`);
-          if (issue.suggestion) {
-            console.log(`    💡 Suggestion: ${issue.suggestion}`);
-          }
-          if (resource) {
-            console.log(`    🆔 Resource ID: ${resource.id}`);
-          }
-          console.log('');
-          errorNum++;
+        const resource = resources.find(
+          (r) => r.filePath === issue.resourcePath,
+        );
+        console.log(`[${errorNum}] ${issue.type.toUpperCase()}`);
+        console.log(`    📄 File: ${issue.resourcePath}`);
+        console.log(`    📍 Line: ${issue.line ?? 'unknown'}`);
+        console.log(`    🔗 Link: ${issue.link}`);
+        console.log(`    💬 ${issue.message}`);
+        if (issue.suggestion) {
+          console.log(`    💡 Suggestion: ${issue.suggestion}`);
         }
+        if (resource) {
+          console.log(`    🆔 Resource ID: ${resource.id}`);
+        }
+        console.log('');
+        errorNum++;
       }
       console.log('='.repeat(70));
     }

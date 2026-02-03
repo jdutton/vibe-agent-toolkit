@@ -80,7 +80,7 @@ const version = args[0];
 
 // Validate version format (semver)
 if (!version || !semver.valid(version)) {
-  log(`✗ Invalid semver version: ${version ?? '(missing)'}`, 'red');
+  log(`✗ Invalid semver version: ${String(version ?? '(missing)')}`, 'red');
   log('  Expected format: X.Y.Z or X.Y.Z-prerelease', 'yellow');
   log('  Examples: 1.0.0, 2.0.0, 1.0.0-rc.1', 'yellow');
   process.exit(1);
