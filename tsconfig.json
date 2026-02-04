@@ -6,6 +6,7 @@
     { "path": "./packages/utils" },
     { "path": "./packages/discovery" },
     { "path": "./packages/resources" },
+    { "path": "./packages/resource-compiler" },
     { "path": "./packages/rag" },
     { "path": "./packages/rag-lancedb" },
     { "path": "./packages/agent-schema" },

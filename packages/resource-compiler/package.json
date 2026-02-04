@@ -1,0 +1,80 @@
+{
+  "name": "@vibe-agent-toolkit/resource-compiler",
+  "version": "0.2.0",
+  "description": "Compile markdown resources to TypeScript with full IDE support",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "vat-compile-resources": "./bin/vat-compile-resources"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./compiler": {
+      "types": "./dist/compiler/index.d.ts",
+      "default": "./dist/compiler/index.js"
+    },
+    "./transformer": {
+      "types": "./dist/transformer/index.d.ts",
+      "default": "./dist/transformer/index.js"
+    },
+    "./language-service": {
+      "types": "./dist/language-service/index.d.ts",
+      "default": "./dist/language-service/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc --build",
+    "build:clean": "tsc --build --clean && tsc --build",
+    "test": "vitest run",
+    "test:unit": "vitest run test/**/*.test.ts",
+    "test:integration": "vitest run test/**/*.integration.test.ts",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src/ test/",
+    "typecheck": "tsc --build --dry --force"
+  },
+  "dependencies": {
+    "gray-matter": "^4.0.3",
+    "unified": "^11.0.5",
+    "remark-parse": "^11.0.0",
+    "remark-stringify": "^11.0.0",
+    "@kayvan/markdown-tree-parser": "^1.0.0",
+    "slugify": "^1.6.6",
+    "glob": "^10.3.10",
+    "chokidar": "^3.6.0",
+    "commander": "^11.1.0",
+    "@vibe-agent-toolkit/utils": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.5",
+    "typescript": "^5.3.3",
+    "vitest": "^1.2.0",
+    "eslint": "^8.56.0"
+  },
+  "files": [
+    "dist",
+    "bin",
+    "README.md"
+  ],
+  "keywords": [
+    "markdown",
+    "typescript",
+    "compiler",
+    "resources",
+    "prompts",
+    "agents",
+    "vat",
+    "vibe-agent-toolkit"
+  ],
+  "author": "Jeff Dutton",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jdutton/vibe-agent-toolkit.git",
+    "directory": "packages/resource-compiler"
+  }
+}
