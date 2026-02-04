@@ -1,7 +1,8 @@
 {
   "name": "vibe-agent-toolkit",
-  "version": "0.1.5",
+  "version": "0.1.6-rc.2",
   "description": "Modular toolkit for building, testing, and deploying portable AI agents",
+  "type": "module",
   "bin": {
     "vat": "./bin/vat"
   },

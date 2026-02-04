@@ -187,8 +187,8 @@ function main(): void {
     console.error(`[vat debug] Args: ${args.join(' ')}`);
   }
 
-  // Execute the binary with all arguments (only pass projectRoot for dev context)
-  const contextPath = context === 'dev' ? projectRoot : undefined;
+  // Execute the binary with all arguments (pass projectRoot for dev and local contexts)
+  const contextPath = context === 'dev' || context === 'local' ? projectRoot : undefined;
   spawnCli(binPath, context, contextPath);
 }
 
