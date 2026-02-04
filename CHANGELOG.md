@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- CLI now works correctly with `npx` commands in CI environments without global installation
+- Link validation detects case mismatches in filenames, preventing failures on case-sensitive filesystems (Linux)
+
 ## [0.1.4] - 2026-02-03
 
 ### Added
