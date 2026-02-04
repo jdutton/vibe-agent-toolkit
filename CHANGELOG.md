@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.6] - 2026-02-04
+
 ### Fixed
 - Umbrella package now works with `npx vibe-agent-toolkit` by adding ESM type declaration
 - Version output now shows project root for local installs instead of "unknown"
