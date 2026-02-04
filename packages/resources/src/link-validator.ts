@@ -15,10 +15,13 @@
  * - External resources (outside project) skip git-ignore checks
  */
 
-import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { isGitIgnored, type GitTracker } from '@vibe-agent-toolkit/utils';
+import {
+  isGitIgnored,
+  type GitTracker,
+  verifyCaseSensitiveFilename,
+} from '@vibe-agent-toolkit/utils';
 
 import type { ValidationIssue } from './schemas/validation-result.js';
 import type { HeadingNode, ResourceLink } from './types.js';
@@ -110,6 +113,19 @@ async function validateLocalFileLink(
   const fileResult = await validateLocalFile(filePath, sourceFilePath);
 
   if (!fileResult.exists) {
+    // Check if it's a case mismatch
+    if (fileResult.actualName) {
+      const expectedName = path.basename(fileResult.resolvedPath);
+      return {
+        resourcePath: sourceFilePath,
+        line: link.line,
+        type: 'broken_file',
+        link: link.href,
+        message: `File found but case mismatch: expected "${expectedName}" but found "${fileResult.actualName}". This will fail on case-sensitive filesystems (Linux). Update the link to match the actual filename.`,
+        suggestion: `Use "${fileResult.actualName}" instead of "${expectedName}"`,
+      };
+    }
+
     return {
       resourcePath: sourceFilePath,
       line: link.line,
@@ -204,38 +220,44 @@ async function validateAnchorLink(
 
 
 /**
- * Validate that a local file exists.
+ * Validate that a local file exists with the correct case.
  *
  * @param href - The href to the file (relative or absolute)
  * @param sourceFilePath - Absolute path to the source file
- * @returns Object with exists flag and resolved absolute path
+ * @returns Object with exists flag, resolved absolute path, and optional case mismatch info
  *
  * @example
  * ```typescript
  * const result = await validateLocalFile('./docs/guide.md', '/project/README.md');
  * if (result.exists) {
  *   console.log('File exists at:', result.resolvedPath);
+ * } else if (result.actualName) {
+ *   console.log('Case mismatch:', result.actualName);
  * }
  * ```
  */
 async function validateLocalFile(
   href: string,
   sourceFilePath: string
-): Promise<{ exists: boolean; resolvedPath: string }> {
+): Promise<{ exists: boolean; resolvedPath: string; actualName?: string }> {
   // Resolve the path relative to the source file's directory
   const sourceDir = path.dirname(sourceFilePath);
   const resolvedPath = path.resolve(sourceDir, href);
 
-  // Check if file exists
-  let exists = false;
-  try {
-    await fs.access(resolvedPath, fs.constants.F_OK);
-    exists = true;
-  } catch {
-    exists = false;
+  // Check if file exists with correct case
+  const verification = await verifyCaseSensitiveFilename(resolvedPath);
+
+  // Build result with optional actualName (only include if present)
+  const result: { exists: boolean; resolvedPath: string; actualName?: string } = {
+    exists: verification.exists,
+    resolvedPath,
+  };
+
+  if (verification.actualName) {
+    result.actualName = verification.actualName;
   }
 
-  return { exists, resolvedPath };
+  return result;
 }
 
 /**

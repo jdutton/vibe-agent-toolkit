@@ -75,6 +75,38 @@ describe('validateLink', () => {
       );
     });
 
+    it('should detect case mismatch in filename', async () => {
+      expect(true).toBe(true); // Assertion for SonarJS (assertValidation performs detailed assertions)
+      // Create a temporary file with specific case
+      const fs = await import('node:fs');
+      const tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'case-test-'));
+      const actualFileName = 'TestFile.md';
+      const targetFile = path.join(tempDir, actualFileName);
+      const sourceFile = path.join(tempDir, 'source.md');
+
+      try {
+        fs.writeFileSync(targetFile, '# Test\n');
+        fs.writeFileSync(sourceFile, '');
+
+        // Try to validate link with wrong case
+        await assertValidation(
+          {
+            sourceFile,
+            link: createLink('local_file', './testfile.md', 'Wrong case link', 3),
+            headingsMap: new Map<string, HeadingNode[]>(),
+            expected: {
+              type: 'broken_file',
+              messageContains: ['case mismatch', 'TestFile.md', 'testfile.md'],
+              hasSuggestion: true,
+            },
+          },
+          expect,
+        );
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
+
     it('should validate local file with valid anchor', async () => {
       const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
       const targetFile = path.join(FIXTURES_DIR, TARGET_MD);

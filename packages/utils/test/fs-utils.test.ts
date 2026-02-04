@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { copyDirectory } from '../src/fs-utils.js';
+import { copyDirectory, verifyCaseSensitiveFilename } from '../src/fs-utils.js';
 import { normalizedTmpdir } from '../src/path-utils.js';
 
 import { setupNestedDirectory } from './test-helpers.js';
@@ -191,6 +191,82 @@ describe('fs-utils', () => {
 
       // Execute & Verify
       await expect(copyDirectory(srcFile, destDir)).rejects.toThrow();
+    });
+  });
+
+  describe('verifyCaseSensitiveFilename', () => {
+    const TEST_FILE = 'TestFile.txt';
+
+    it('should return exists=true for exact case match', async () => {
+      // Setup
+      const filePath = path.join(tempDir, TEST_FILE);
+      await fs.writeFile(filePath, 'content');
+
+      // Execute
+      const result = await verifyCaseSensitiveFilename(filePath);
+
+      // Verify
+      expect(result.exists).toBe(true);
+      expect(result.actualName).toBe(TEST_FILE);
+    });
+
+    it('should return exists=false for case mismatch', async () => {
+      // Setup
+      const actualPath = path.join(tempDir, TEST_FILE);
+      const wrongCasePath = path.join(tempDir, 'testfile.txt');
+      await fs.writeFile(actualPath, 'content');
+
+      // Execute
+      const result = await verifyCaseSensitiveFilename(wrongCasePath);
+
+      // Verify
+      // On case-insensitive filesystems, the file will be found
+      // but case won't match
+      expect(result.exists).toBe(false);
+      expect(result.actualName).toBe(TEST_FILE);
+    });
+
+    it('should return exists=false and null actualName for missing file', async () => {
+      // Setup
+      const filePath = path.join(tempDir, 'NonExistent.txt');
+
+      // Execute
+      const result = await verifyCaseSensitiveFilename(filePath);
+
+      // Verify
+      expect(result.exists).toBe(false);
+      expect(result.actualName).toBe(null);
+    });
+
+    it('should handle files in subdirectories with exact case', async () => {
+      // Setup
+      const subDir = path.join(tempDir, 'SubDir');
+      await fs.mkdir(subDir);
+      const filePath = path.join(subDir, 'File.txt');
+      await fs.writeFile(filePath, 'content');
+
+      // Execute
+      const result = await verifyCaseSensitiveFilename(filePath);
+
+      // Verify
+      expect(result.exists).toBe(true);
+      expect(result.actualName).toBe('File.txt');
+    });
+
+    it('should detect case mismatch in subdirectory filename', async () => {
+      // Setup
+      const subDir = path.join(tempDir, 'SubDir');
+      await fs.mkdir(subDir);
+      const actualPath = path.join(subDir, 'File.txt');
+      const wrongCasePath = path.join(subDir, 'file.txt');
+      await fs.writeFile(actualPath, 'content');
+
+      // Execute
+      const result = await verifyCaseSensitiveFilename(wrongCasePath);
+
+      // Verify
+      expect(result.exists).toBe(false);
+      expect(result.actualName).toBe('File.txt');
     });
   });
 });
