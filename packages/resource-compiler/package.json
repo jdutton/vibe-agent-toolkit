@@ -24,6 +24,10 @@
     "./language-service": {
       "types": "./dist/language-service/index.d.ts",
       "default": "./dist/language-service/index.js"
+    },
+    "./utils": {
+      "types": "./dist/utils/index.d.ts",
+      "default": "./dist/utils/index.js"
     }
   },
   "scripts": {

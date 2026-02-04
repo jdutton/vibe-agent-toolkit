@@ -2,6 +2,9 @@ import { executeLLMAnalyzer, validateAgentInput } from '@vibe-agent-toolkit/agen
 import type { Agent, LLMError, OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
 import { z } from 'zod';
 
+// Import compiled resources from markdown
+// eslint-disable-next-line sonarjs/unused-import -- Will be used when real LLM mode is implemented
+import * as _HaikuGeneratorResources from '../../generated/resources/agents/haiku-generator.js';
 import { CatCharacteristicsSchema, type Haiku } from '../types/schemas.js';
 
 /**
@@ -77,6 +80,9 @@ export const haikuGeneratorAgent: Agent<
       mockable,
       mockFn: () => mockGenerateHaiku(characteristics),
       notImplementedMessage: 'Real LLM haiku generation requires runtime adapter with callLLM context',
+      // When real LLM mode is implemented, use:
+      // systemPrompt: _HaikuGeneratorResources.fragments.systemPrompt.body
+      // See resources/agents/haiku-generator.md for prompts and domain knowledge
     });
   },
 };

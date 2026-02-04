@@ -687,7 +687,7 @@ See [CLAUDE.md](./CLAUDE.md) for technical navigation details when contributing.
 
 ## Documentation
 
-- **[STRUCTURE.md](./STRUCTURE.md)** - Package organization and conventions
+- **[structure.md](./docs/structure.md)** - Package organization and conventions
 - **[CLAUDE.md](./CLAUDE.md)** - Technical navigation for AI assistants
 
 ---

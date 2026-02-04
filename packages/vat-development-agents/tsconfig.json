@@ -1,0 +1,22 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "outDir": "./dist",
+    "rootDir": ".",
+    "plugins": [
+      {
+        "transform": "@vibe-agent-toolkit/resource-compiler/transformer"
+      }
+    ]
+  },
+  "include": [
+    "src/**/*",
+    "resources/**/*.md"
+  ],
+  "references": [
+    { "path": "../utils" },
+    { "path": "../agent-schema" },
+    { "path": "../resource-compiler" }
+  ]
+}

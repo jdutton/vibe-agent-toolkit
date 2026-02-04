@@ -26,6 +26,9 @@
     "README.md"
   ],
   "scripts": {
+    "generate:resources": "vat-compile-resources compile resources/ generated/resources/",
+    "build": "bun run generate:resources && tspc && bun scripts/post-build.ts",
+    "test:pipeline": "bun run build && bun run dist/src/test-pipeline.js",
     "validate": "bun run agents/agent-generator/validate-agent.ts"
   },
   "dependencies": {
@@ -33,7 +36,10 @@
     "yaml": "^2.8.2"
   },
   "devDependencies": {
-    "@types/node": "^25.0.3"
+    "@types/node": "^25.0.3",
+    "@vibe-agent-toolkit/resource-compiler": "workspace:*",
+    "ts-patch": "^3.2.1",
+    "typescript": "^5.7.3"
   },
   "author": "VAT Team",
   "license": "MIT",

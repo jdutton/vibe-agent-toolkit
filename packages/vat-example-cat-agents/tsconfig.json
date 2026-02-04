@@ -3,13 +3,14 @@
   "compilerOptions": {
     "composite": true,
     "outDir": "./dist",
-    "rootDir": "./src"
+    "rootDir": "."
   },
   "references": [
     { "path": "../agent-runtime" },
     { "path": "../agent-schema" },
-    { "path": "../utils" }
+    { "path": "../utils" },
+    { "path": "../resource-compiler" }
   ],
-  "include": ["src/**/*"],
+  "include": ["src/**/*", "resources/**/*.md"],
   "exclude": ["node_modules", "dist", "test", "examples"]
 }

@@ -73,6 +73,148 @@ console.log(prompts.fragments.farewell.body);
 const names: ('welcome' | 'farewell')[] = ['welcome', 'farewell'];
 ```
 
+## Build Integration
+
+When using the `compile` command, you generate JavaScript modules in a separate `generated/` directory. To ensure these modules are available at runtime, you need to copy them to your build output directory.
+
+### Why Copy Generated Resources?
+
+TypeScript's type-checker needs to resolve imports **during compilation**. Your source files import from the `generated/` directory:
+
+```typescript
+// src/agent.ts
+import * as Core from '../generated/resources/core.js';
+```
+
+When TypeScript compiles to `dist/`, it only copies compiled TypeScript files - not the generated JavaScript resources. You must copy `generated/` to `dist/` separately.
+
+### Recommended Pattern
+
+**Directory structure:**
+```
+your-package/
+├── resources/            # Source markdown (author these)
+│   └── prompts/
+│       └── core.md
+├── generated/            # Generated JS/TS (from compile command)
+│   └── resources/
+│       └── prompts/
+│           ├── core.js
+│           └── core.d.ts
+├── src/                  # Your TypeScript source
+│   └── agent.ts
+└── dist/                 # Build output
+    ├── src/              # Compiled TypeScript
+    │   └── agent.js
+    └── generated/        # Copied resources (post-build step)
+        └── resources/
+```
+
+**Build flow:**
+1. `compile` resources → `generated/`
+2. TypeScript compilation → `dist/src/`
+3. Copy `generated/` → `dist/generated/`
+
+### Method 1: Using the Provided Utility (Recommended)
+
+Create a post-build script using the provided cross-platform utility:
+
+```typescript
+// scripts/post-build.ts
+import { createPostBuildScript } from '@vibe-agent-toolkit/resource-compiler/utils';
+
+createPostBuildScript({
+  generatedDir: 'generated',
+  distDir: 'dist',
+  verbose: true,
+});
+```
+
+Update `package.json`:
+
+```json
+{
+  "scripts": {
+    "generate:resources": "vat-compile-resources compile resources/ generated/resources/",
+    "build": "npm run generate:resources && tsc && node scripts/post-build.js"
+  }
+}
+```
+
+### Method 2: Manual Copy (Custom Logic)
+
+For more control, use the `copyResources` utility directly:
+
+```typescript
+// scripts/post-build.ts
+import { copyResources } from '@vibe-agent-toolkit/resource-compiler/utils';
+
+copyResources({
+  sourceDir: 'generated',
+  targetDir: 'dist/generated',
+  verbose: true,
+});
+
+// Add custom logic here
+console.log('Build complete!');
+```
+
+### Method 3: Build Tool Integration
+
+Integrate with your build tool (Vite, Rollup, etc.):
+
+```typescript
+// vite.config.ts
+import { copyResources } from '@vibe-agent-toolkit/resource-compiler/utils';
+
+export default {
+  plugins: [
+    {
+      name: 'copy-resources',
+      closeBundle() {
+        copyResources({
+          sourceDir: 'generated',
+          targetDir: 'dist/generated',
+        });
+      },
+    },
+  ],
+};
+```
+
+### Cross-Platform Considerations
+
+**❌ Don't use shell commands:**
+```json
+"build": "tsc && cp -r generated dist/"  // Unix only!
+```
+
+**✅ Use Node.js APIs:**
+```typescript
+import { cpSync } from 'node:fs';
+cpSync('generated', 'dist/generated', { recursive: true });
+```
+
+The provided utilities use Node's built-in `cpSync()` which works on Windows, macOS, and Linux.
+
+### Alternative: Co-located Generation (Not Recommended)
+
+You could generate `.md.js` files alongside `.md` files:
+
+```
+resources/
+  ├── core.md
+  ├── core.md.js      # Generated - clutters source directory
+  └── core.md.d.ts    # Generated - clutters source directory
+```
+
+**Why we don't recommend this:**
+- ❌ Clutters your clean markdown directory with generated files
+- ❌ Makes `.gitignore` patterns more complex
+- ❌ Harder to clean generated files
+
+**Use a separate `generated/` directory instead** - it keeps source files clean and makes the build process explicit.
+
 ## Documentation
 
 ### CLI Commands
@@ -259,6 +401,40 @@ const result = program.emit(
   { before: [transformer] }
 );
 ```
+
+#### Build Utilities API
+
+```typescript
+import { copyResources, createPostBuildScript } from '@vibe-agent-toolkit/resource-compiler/utils';
+
+// Copy resources with options
+copyResources({
+  sourceDir: 'generated',
+  targetDir: 'dist/generated',
+  verbose: true,
+});
+
+// Create a complete post-build script
+createPostBuildScript({
+  generatedDir: 'generated',
+  distDir: 'dist',
+  verbose: true,
+});
+```
+
+**Options:**
+
+```typescript
+interface CopyResourcesOptions {
+  sourceDir: string;   // Source directory with generated files
+  targetDir: string;   // Target directory in dist
+  verbose?: boolean;   // Enable logging (default: false)
+}
+```
+
+**Throws:**
+- Error if source directory doesn't exist
+- Error if copy operation fails
 
 ### Language Service Plugin
 
