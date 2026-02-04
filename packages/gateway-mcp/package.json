@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/gateway-mcp",
-  "version": "0.1.6-rc.2",
+  "version": "0.1.6",
   "description": "MCP Gateway for exposing VAT agents through Model Context Protocol",
   "type": "module",
   "main": "./dist/index.js",
