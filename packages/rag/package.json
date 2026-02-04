@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/rag",
-  "version": "0.1.5",
+  "version": "0.1.6-rc.1",
   "type": "module",
   "description": "Abstract RAG (Retrieval-Augmented Generation) interfaces and shared implementations",
   "keywords": [
