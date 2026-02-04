@@ -137,24 +137,38 @@ const gatheringPhaseConfig: GatheringPhaseConfig = {
 const GATHERING_SYSTEM_PROMPT = generateGatheringPrompt(gatheringPhaseConfig);
 
 /**
+ * Generic extraction helper - reduces duplication
+ */
+async function extractFromConversation<T>(
+  history: Message[],
+  callLLM: (messages: Message[]) => Promise<string>,
+  extractionPrompt: string,
+  defaultValue: T,
+): Promise<T> {
+  const extractionHistory: Message[] = [...history, { role: 'user', content: extractionPrompt }];
+  const extractionResponse = await callLLM(extractionHistory);
+
+  try {
+    const cleaned = stripMarkdownFences(extractionResponse);
+    return JSON.parse(cleaned) as T;
+  } catch {
+    return defaultValue;
+  }
+}
+
+/**
  * Extract factors from conversation during gathering phase
  */
 async function extractFactorsFromConversation(
   history: Message[],
   callLLM: (messages: Message[]) => Promise<string>,
 ): Promise<Partial<SelectionProfile>> {
-  // Factor extraction prompt from resources/agents/breed-advisor.md
-  const extractionPrompt = BreedAdvisorResources.fragments.factorExtractionPrompt.body;
-
-  const extractionHistory: Message[] = [...history, { role: 'user', content: extractionPrompt }];
-  const extractionResponse = await callLLM(extractionHistory);
-
-  try {
-    const cleaned = stripMarkdownFences(extractionResponse);
-    return JSON.parse(cleaned);
-  } catch {
-    return {};
-  }
+  return extractFromConversation(
+    history,
+    callLLM,
+    BreedAdvisorResources.fragments.factorExtractionPrompt.body,
+    {},
+  );
 }
 
 /**
@@ -164,18 +178,12 @@ async function extractSelectedBreed(
   history: Message[],
   callLLM: (messages: Message[]) => Promise<string>,
 ): Promise<{ selectedBreed: string | null }> {
-  // Selection extraction prompt from resources/agents/breed-advisor.md
-  const extractionPrompt = BreedAdvisorResources.fragments.selectionExtractionPrompt.body;
-
-  const extractionHistory: Message[] = [...history, { role: 'user', content: extractionPrompt }];
-  const extractionResponse = await callLLM(extractionHistory);
-
-  try {
-    const cleaned = stripMarkdownFences(extractionResponse);
-    return JSON.parse(cleaned);
-  } catch {
-    return { selectedBreed: null };
-  }
+  return extractFromConversation(
+    history,
+    callLLM,
+    BreedAdvisorResources.fragments.selectionExtractionPrompt.body,
+    { selectedBreed: null },
+  );
 }
 
 /**

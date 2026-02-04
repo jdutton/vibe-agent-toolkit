@@ -25,6 +25,8 @@ export default [
       'build/',
       'coverage/',
       'node_modules/',
+      'generated/',
+      '**/generated/',
       '**/*.d.ts',
       'vitest.config.ts',
       'vitest.*.config.ts',

@@ -7,12 +7,13 @@
  * 3. Multiple agents using shared resources
  */
 
-import { createRequirementGatherer } from './agents/requirement-gatherer.js';
-import { createPatternAnalyzer } from './agents/pattern-analyzer.js';
 import * as CorePrinciples from '../generated/resources/prompts/core-principles.js';
+import * as LLMSelection from '../generated/resources/prompts/llm-selection.js';
 import * as PatternRecognition from '../generated/resources/prompts/pattern-recognition.js';
 import * as Questioning from '../generated/resources/prompts/questioning-techniques.js';
-import * as LLMSelection from '../generated/resources/prompts/llm-selection.js';
+
+import { createPatternAnalyzer } from './agents/pattern-analyzer.js';
+import { createRequirementGatherer } from './agents/requirement-gatherer.js';
 
 console.log('='.repeat(80));
 console.log('VAT Development Agents - Resource Compilation Demo');

@@ -22,6 +22,7 @@
     "./agents/resource-optimizer": "./agents/resource-optimizer/SCOPE.md"
   },
   "files": [
+    "dist",
     "agents",
     "README.md"
   ],

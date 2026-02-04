@@ -377,6 +377,5 @@ Error: Cannot find module '../generated/resources/agents/my-agent.js'
 
 ## See Also
 
-- [Resource Compiler README](../resource-compiler/README.md) - Full resource-compiler documentation
-- [RESOURCE-ORGANIZATION-EXPLORATION.md](./RESOURCE-ORGANIZATION-EXPLORATION.md) - Design decisions and alternatives
-- [examples/resource-demo.ts](./examples/resource-demo.ts) - Working example
+- [Resource Compiler README](../../resource-compiler/README.md) - Full resource-compiler documentation
+- [examples/resource-demo.ts](../examples/resource-demo.ts) - Working example

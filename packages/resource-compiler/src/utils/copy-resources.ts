@@ -3,8 +3,10 @@
  * Cross-platform utility for copying generated resources to dist directory
  */
 
-import { cpSync, existsSync, mkdirSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import { cpSync, existsSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
 
 export interface CopyResourcesOptions {
   /**
@@ -46,14 +48,16 @@ export function copyResources(options: CopyResourcesOptions): void {
   }
 
   // Validate source exists
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- sourceDir is from build config, not user input
   if (!existsSync(sourceDir)) {
     throw new Error(`Source directory does not exist: ${sourceDir}`);
   }
 
   // Ensure target parent directory exists
   const targetParent = dirname(targetDir);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetDir is from build config, not user input
   if (!existsSync(targetParent)) {
-    mkdirSync(targetParent, { recursive: true });
+    mkdirSyncReal(targetParent, { recursive: true });
   }
 
   try {

@@ -17,10 +17,20 @@ export interface DesignRequest {
   constraints?: string[];
 }
 
+export interface RequirementGathererAgent {
+  metadata: {
+    name: string;
+    version: string;
+    archetype: 'conversational-assistant';
+  };
+  systemPrompt: string;
+  processMessage: (message: string) => Promise<{ response: string; extracted?: Partial<DesignRequest> }>;
+}
+
 /**
  * Create a requirement gatherer agent with resource-based prompts
  */
-export function createRequirementGatherer(config: RequirementGathererConfig) {
+export function createRequirementGatherer(config: RequirementGathererConfig): RequirementGathererAgent {
   // Build system prompt from fragments
   const systemPrompt = `
 You are an expert agent designer helping users define their AI agent requirements.
@@ -51,7 +61,7 @@ Output your final understanding as JSON matching this schema:
     /**
      * Process a user message and extract requirements
      */
-    async processMessage(_message: string): Promise<{ response: string; extracted?: Partial<DesignRequest> | undefined }> {
+    async processMessage(_message: string): Promise<{ response: string; extracted?: Partial<DesignRequest> }> {
       // This would integrate with an actual LLM in a real implementation
       // For now, just demonstrate the structure
 

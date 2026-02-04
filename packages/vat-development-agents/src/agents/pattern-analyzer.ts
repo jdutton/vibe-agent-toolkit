@@ -4,8 +4,8 @@
  */
 
 import * as CorePrinciples from '../../generated/resources/prompts/core-principles.js';
-import * as PatternRecognition from '../../generated/resources/prompts/pattern-recognition.js';
 import * as LLMSelection from '../../generated/resources/prompts/llm-selection.js';
+import * as PatternRecognition from '../../generated/resources/prompts/pattern-recognition.js';
 
 export interface PatternAnalyzerConfig {
   name: string;
@@ -26,10 +26,20 @@ export interface PatternAnalysis {
   alternativePatterns?: string[];
 }
 
+export interface PatternAnalyzerAgent {
+  metadata: {
+    name: string;
+    version: string;
+    archetype: 'llm-analyzer';
+  };
+  systemPrompt: string;
+  analyze: (request: DesignRequest) => Promise<PatternAnalysis>;
+}
+
 /**
  * Create a pattern analyzer agent with resource-based prompts
  */
-export function createPatternAnalyzer(config: PatternAnalyzerConfig) {
+export function createPatternAnalyzer(config: PatternAnalyzerConfig): PatternAnalyzerAgent {
   // Build system prompt from fragments
   const systemPrompt = `
 You are an expert agent architect that analyzes requirements and recommends appropriate agent patterns.
