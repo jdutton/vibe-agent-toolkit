@@ -110,7 +110,6 @@ describe('generateJavaScript', () => {
   });
 
   describe('string escaping', () => {
-    /* eslint-disable unicorn/prefer-string-raw -- Testing string escaping behavior */
     it('should escape double quotes', () => {
       const resource: MarkdownResource = {
         frontmatter: { title: 'Title with "quotes"' },
@@ -202,7 +201,6 @@ describe('generateJavaScript', () => {
 
       expect(result).toContain(`It\\'s \\"complex\\"\\nWith\\\\backslashes\\tand\\ttabs`);
     });
-    /* eslint-enable unicorn/prefer-string-raw */
   });
 
   describe('type handling', () => {
@@ -360,7 +358,6 @@ More content here.
       expect(result).toContain('title: "Integration Test"');
       expect(result).toContain('sectionOne:');
       expect(result).toContain('sectionTwo:');
-      // eslint-disable-next-line unicorn/prefer-string-raw -- Testing string escaping
       expect(result).toContain('Content for section one with \\"quotes\\"');
     });
 
@@ -420,7 +417,6 @@ Basic content.`;
       const result = generateJavaScript(resource);
 
       expect(result).toContain('\\' + '`\\' + '`\\' + '`typescript');
-      // eslint-disable-next-line unicorn/prefer-string-raw -- Testing string escaping
       expect(result).toContain(`const x = \\"test\\";`);
     });
 

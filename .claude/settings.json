@@ -104,7 +104,8 @@
     "ask": [
       "Bash(gh run list:*)",
       "Bash(gh run view:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(sed:*)"
     ]
   },
   "hooks": {

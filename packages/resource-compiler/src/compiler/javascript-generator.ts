@@ -19,7 +19,6 @@ import type { MarkdownResource } from './types.js';
  * ```
  */
 function escapeString(str: string): string {
-  /* eslint-disable unicorn/prefer-string-raw -- Intentionally escaping strings for JavaScript code generation */
   return str
     .replaceAll('\\', '\\\\') // Backslash must be first
     .replaceAll('"', '\\"')   // Escape double quotes
@@ -28,7 +27,6 @@ function escapeString(str: string): string {
     .replaceAll('\r', '\\r')  // Escape carriage returns
     .replaceAll('\t', '\\t')  // Escape tabs
     .replaceAll('`', '\\`');  // Escape backticks
-  /* eslint-enable unicorn/prefer-string-raw */
 }
 
 /**
