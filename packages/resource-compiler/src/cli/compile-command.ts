@@ -6,7 +6,7 @@ import type { Command } from 'commander';
 
 import { compileMarkdownResources } from '../compiler/markdown-compiler.js';
 
-import { addCompileOptions, printCompilationSummary } from './compile-utils.js';
+import { addCompileOptions, printCompilationSummary, exitWithResults } from './compile-utils.js';
 
 /**
  * Register the compile command with Commander
@@ -32,13 +32,7 @@ export function registerCompileCommand(program: Command): void {
         console.log('Compilation complete:');
         printCompilationSummary(results);
 
-        // Exit with error if any failures
-        const failureCount = results.filter((r) => !r.success).length;
-        if (failureCount > 0) {
-          process.exit(1);
-        }
-
-        process.exit(0);
+        exitWithResults(results);
       } catch (error) {
         console.error('Compilation error:', error instanceof Error ? error.message : String(error));
         process.exit(1);

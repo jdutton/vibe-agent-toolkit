@@ -12,6 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { compileMarkdownResources } from '../../src/compiler/markdown-compiler.js';
 import type { CompileResult } from '../../src/compiler/types.js';
+import { createMultipleMarkdownFiles, verifyOperationResults } from '../test-file-helpers.js';
 
 /**
  * Test suite helper for markdown compiler integration tests
@@ -168,14 +169,7 @@ broken: [unclosed
       // Create multiple files
       const files = ['doc1.md', 'doc2.md', 'doc3.md'];
 
-      for (const file of files) {
-        const content = `# ${file}
-
-## Section
-
-Content for ${file}`;
-        writeFileSync(join(suite.inputDir, file), content, 'utf-8');
-      }
+      createMultipleMarkdownFiles(suite.inputDir, files);
 
       const results = await compileMarkdownResources({
         inputDir: suite.inputDir,
@@ -202,17 +196,7 @@ Content for ${file}`;
         'examples/basic.md',
       ];
 
-      for (const file of files) {
-        const content = `# ${file}
-
-## Content
-
-Test content`;
-        const filePath = join(suite.inputDir, file);
-        const dir = join(filePath, '..');
-        mkdirSyncReal(dir, { recursive: true }); // Ensure directory exists
-        writeFileSync(filePath, content, 'utf-8');
-      }
+      createMultipleMarkdownFiles(suite.inputDir, files, (file) => `# ${file}\n\n## Content\n\nTest content`);
 
       const results = await compileMarkdownResources({
         inputDir: suite.inputDir,
@@ -268,13 +252,7 @@ Test content`;
         outputDir: suite.outputDir,
       });
 
-      expect(results).toHaveLength(3);
-
-      const validResults = results.filter((r) => r.success);
-      const failedResults = results.filter((r) => !r.success);
-
-      expect(validResults).toHaveLength(2);
-      expect(failedResults).toHaveLength(1);
+      verifyOperationResults(results, 3, 2);
 
       // Valid files should be compiled
       expect(existsSync(join(suite.outputDir, 'valid.js'))).toBe(true);

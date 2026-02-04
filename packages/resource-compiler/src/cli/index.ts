@@ -5,6 +5,7 @@
 import { Command } from 'commander';
 
 import { registerCompileCommand } from './compile-command.js';
+import { registerGenerateTypesCommand } from './generate-types-command.js';
 import { registerWatchCommand } from './watch-command.js';
 
 /**
@@ -23,6 +24,7 @@ export function createCLIProgram(): Command {
   // Register commands
   registerCompileCommand(program);
   registerWatchCommand(program);
+  registerGenerateTypesCommand(program);
 
   return program;
 }

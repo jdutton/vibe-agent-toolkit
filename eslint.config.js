@@ -31,6 +31,7 @@ export default [
       '.worktrees/',  // Git worktrees
       'docs/**/*.ts',  // Documentation scripts (not part of build)
       '**/test-fixtures/**',  // Test fixture data (third-party code)
+      '**/transformer-fixtures/**',  // Transformer test fixtures (sample code)
     ],
   },
 
