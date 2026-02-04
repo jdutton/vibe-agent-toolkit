@@ -55,37 +55,38 @@ export async function copyDirectory(src: string, dest: string): Promise<void> {
 export async function verifyCaseSensitiveFilename(
   filePath: string
 ): Promise<{ exists: boolean; actualName: string | null }> {
-  try {
-    // Check if file exists at all (case-insensitive check on some filesystems)
-    await fs.access(filePath, fs.constants.F_OK);
-  } catch {
-    // File doesn't exist at all
-    return { exists: false, actualName: null };
-  }
-
   // Get parent directory and expected filename
   const parentDir = path.dirname(filePath);
   const expectedName = path.basename(filePath);
 
   // Read actual directory entries
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- parentDir from validated path
-  const entries = await fs.readdir(parentDir);
-
-  // Find the actual filename (case-sensitive)
-  const actualName = entries.find(entry => entry === expectedName);
-
-  if (actualName) {
-    // Found exact match
-    return { exists: true, actualName };
+  let entries: string[];
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- parentDir from validated path
+    entries = await fs.readdir(parentDir);
+  } catch {
+    // Parent directory doesn't exist
+    return { exists: false, actualName: null };
   }
 
-  // File exists but case doesn't match - find the actual name
-  const actualNameCaseInsensitive = entries.find(
+  // Find the actual filename (case-sensitive exact match)
+  const exactMatch = entries.find(entry => entry === expectedName);
+
+  if (exactMatch) {
+    // Found exact case match - file exists with correct case
+    return { exists: true, actualName: exactMatch };
+  }
+
+  // No exact match - check for case-insensitive match
+  const caseInsensitiveMatch = entries.find(
     entry => entry.toLowerCase() === expectedName.toLowerCase()
   );
 
+  // Return result:
+  // - If case-insensitive match found: exists=false (wrong case), actualName=<actual>
+  // - If no match at all: exists=false, actualName=null
   return {
     exists: false,
-    actualName: actualNameCaseInsensitive ?? null,
+    actualName: caseInsensitiveMatch ?? null,
   };
 }
