@@ -1,3 +1,4 @@
+/// <reference types="bun" />
 
 /**
  * Integration tests for LanceDB RAG provider
@@ -314,13 +315,16 @@ Content for section 4 with even more text.`
   it('should handle indexing errors gracefully', async () => {
     provider = await LanceDBRAGProvider.create({ dbPath });
 
-    // Create resource with non-existent file
+    // Create resource with non-existent file (missing required fields will cause error)
     const badResource = {
       id: 'bad-resource',
-      title: 'Bad Resource',
-      type: 'documentation' as const,
       filePath: join(tempDir, 'nonexistent.md'),
-      relativePath: 'nonexistent.md',
+      links: [],
+      headings: [],
+      sizeBytes: 0,
+      estimatedTokenCount: 0,
+      modifiedAt: new Date(),
+      checksum: '0000000000000000000000000000000000000000000000000000000000000000',
     };
 
     const result = await provider.indexResources([badResource]);
@@ -403,8 +407,8 @@ Content for section 4 with even more text.`
         priority: z.number(),
       });
 
-      // Create provider with custom metadata schema
-      provider = await LanceDBRAGProvider.create<CustomMetadata>({
+      // Create provider with custom metadata schema (use local variable for custom type)
+      const customProvider = await LanceDBRAGProvider.create<CustomMetadata>({
         dbPath,
         metadataSchema: CustomSchema,
       });
@@ -435,14 +439,14 @@ Content for section 4 with even more text.`
         { ...securityResource, content: securityParseResult.content, frontmatter: {} },
         { targetChunkSize: 512, modelTokenLimit: 8191, tokenCounter: new ApproximateTokenCounter() }
       );
-      const securityEmbeddings = await provider['config'].embeddingProvider.embedBatch(
+      const securityEmbeddings = await customProvider['config'].embeddingProvider.embedBatch(
         securityChunks.chunks.map((c) => c.content)
       );
       const securityRAGChunks = enrichChunks(
         securityChunks.chunks,
         { ...securityResource, content: securityParseResult.content, frontmatter: {} },
         securityEmbeddings,
-        provider['config'].embeddingProvider.model
+        customProvider['config'].embeddingProvider.model
       );
 
       // Add custom metadata to security chunks
@@ -465,14 +469,14 @@ Content for section 4 with even more text.`
         { ...apiResource, content: apiParseResult.content, frontmatter: {} },
         { targetChunkSize: 512, modelTokenLimit: 8191, tokenCounter: new ApproximateTokenCounter() }
       );
-      const apiEmbeddings = await provider['config'].embeddingProvider.embedBatch(
+      const apiEmbeddings = await customProvider['config'].embeddingProvider.embedBatch(
         apiChunks.chunks.map((c) => c.content)
       );
       const apiRAGChunks = enrichChunks(
         apiChunks.chunks,
         { ...apiResource, content: apiParseResult.content, frontmatter: {} },
         apiEmbeddings,
-        provider['config'].embeddingProvider.model
+        customProvider['config'].embeddingProvider.model
       );
 
       // Add custom metadata to API chunks
@@ -487,17 +491,17 @@ Content for section 4 with even more text.`
       });
 
       // Insert both into database
-      if (!provider['table'] && provider['connection']) {
-        provider['table'] = await provider['connection'].createTable('rag_chunks', [
+      if (!customProvider['table'] && customProvider['connection']) {
+        customProvider['table'] = await customProvider['connection'].createTable('rag_chunks', [
           ...securityRows,
           ...apiRows,
         ]);
-      } else if (provider['table']) {
-        await provider['table'].add([...securityRows, ...apiRows]);
+      } else if (customProvider['table']) {
+        await customProvider['table'].add([...securityRows, ...apiRows]);
       }
 
       // Query with domain filter
-      const result = await provider.query({
+      const result = await customProvider.query({
         text: 'document',
         filters: { metadata: { domain: 'security' } },
       });
@@ -507,6 +511,9 @@ Content for section 4 with even more text.`
       expect(
         result.chunks.every((chunk) => (chunk as typeof chunk & CustomMetadata).domain === 'security')
       ).toBe(true);
+
+      // Clean up
+      await customProvider.close();
     });
 
     it('should filter by number metadata field', async () => {
@@ -515,15 +522,15 @@ Content for section 4 with even more text.`
       type CustomMetadata = { priority: number };
       const CustomSchema = z.object({ priority: z.number() });
 
-      provider = await LanceDBRAGProvider.create<CustomMetadata>({
+      const customProvider = await LanceDBRAGProvider.create<CustomMetadata>({
         dbPath,
         metadataSchema: CustomSchema,
       });
 
-      await indexTestChunksWithMetadata(provider, tempDir, CustomSchema, { priority: 1 });
+      await indexTestChunksWithMetadata(customProvider, tempDir, CustomSchema, { priority: 1 });
 
       // Query with priority filter
-      const result = await provider.query({
+      const result = await customProvider.query({
         text: 'content',
         filters: { metadata: { priority: 1 } },
       });
@@ -532,6 +539,9 @@ Content for section 4 with even more text.`
       expect(
         result.chunks.every((chunk) => (chunk as typeof chunk & CustomMetadata).priority === 1)
       ).toBe(true);
+
+      // Clean up
+      await customProvider.close();
     });
 
     it('should filter by boolean metadata field', async () => {
@@ -540,15 +550,15 @@ Content for section 4 with even more text.`
       type CustomMetadata = { active: boolean };
       const CustomSchema = z.object({ active: z.boolean() });
 
-      provider = await LanceDBRAGProvider.create<CustomMetadata>({
+      const customProvider = await LanceDBRAGProvider.create<CustomMetadata>({
         dbPath,
         metadataSchema: CustomSchema,
       });
 
-      await indexTestChunksWithMetadata(provider, tempDir, CustomSchema, { active: true });
+      await indexTestChunksWithMetadata(customProvider, tempDir, CustomSchema, { active: true });
 
       // Query with active filter
-      const result = await provider.query({
+      const result = await customProvider.query({
         text: 'content',
         filters: { metadata: { active: true } },
       });
@@ -557,6 +567,9 @@ Content for section 4 with even more text.`
       expect(
         result.chunks.every((chunk) => (chunk as typeof chunk & CustomMetadata).active === true)
       ).toBe(true);
+
+      // Clean up
+      await customProvider.close();
     });
 
     it('should filter by array metadata field with LIKE query', async () => {
@@ -565,17 +578,17 @@ Content for section 4 with even more text.`
       type CustomMetadata = { tags: string[] };
       const CustomSchema = z.object({ tags: z.array(z.string()) });
 
-      provider = await LanceDBRAGProvider.create<CustomMetadata>({
+      const customProvider = await LanceDBRAGProvider.create<CustomMetadata>({
         dbPath,
         metadataSchema: CustomSchema,
       });
 
-      await indexTestChunksWithMetadata(provider, tempDir, CustomSchema, {
+      await indexTestChunksWithMetadata(customProvider, tempDir, CustomSchema, {
         tags: ['auth', 'security', 'api'],
       });
 
       // Query with tags filter (should match substring)
-      const result = await provider.query({
+      const result = await customProvider.query({
         text: 'content',
         filters: { metadata: { tags: 'auth' } },
       });
@@ -583,6 +596,9 @@ Content for section 4 with even more text.`
       expect(result.chunks.length).toBeGreaterThan(0);
       // Tags are stored as CSV, so we can't directly check array membership
       // but we verified the LIKE query works in unit tests
+
+      // Clean up
+      await customProvider.close();
     });
 
     it('should combine multiple metadata filters', async () => {
@@ -594,18 +610,18 @@ Content for section 4 with even more text.`
         priority: z.number(),
       });
 
-      provider = await LanceDBRAGProvider.create<CustomMetadata>({
+      const customProvider = await LanceDBRAGProvider.create<CustomMetadata>({
         dbPath,
         metadataSchema: CustomSchema,
       });
 
-      await indexTestChunksWithMetadata(provider, tempDir, CustomSchema, {
+      await indexTestChunksWithMetadata(customProvider, tempDir, CustomSchema, {
         domain: 'security',
         priority: 1,
       });
 
       // Query with multiple filters
-      const result = await provider.query({
+      const result = await customProvider.query({
         text: 'content',
         filters: { metadata: { domain: 'security', priority: 1 } },
       });
@@ -617,6 +633,9 @@ Content for section 4 with even more text.`
       expect(
         result.chunks.every((chunk) => (chunk as typeof chunk & CustomMetadata).priority === 1)
       ).toBe(true);
+
+      // Clean up
+      await customProvider.close();
     });
   });
 });
