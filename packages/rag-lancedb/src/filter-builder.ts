@@ -35,8 +35,15 @@ export function buildMetadataFilter(key: string, value: unknown, zodType: ZodTyp
     actualType = zodType.unwrap();
   }
 
-  // Metadata fields are nested under the metadata column
-  const fieldPath = `metadata.${key}`;
+  // Metadata fields are nested under the metadata struct column
+  // LanceDB requires bracket notation for struct field access
+  const fieldPath = `metadata['${key}']`;
+
+  // Handle enum fields (enums are stored as strings)
+  if (actualType instanceof z.ZodEnum) {
+    const strValue = String(value);
+    return `${fieldPath} = '${escapeSQLString(strValue)}'`;
+  }
 
   // Handle string fields
   if (actualType instanceof z.ZodString) {

@@ -362,11 +362,26 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       this.config.embeddingProvider.model
     );
 
+    // Add custom metadata from resource.frontmatter to each chunk
+    // This allows custom metadata schemas to extract additional fields beyond the default ones
+    const chunksWithMetadata = ragChunks.map((chunk) => {
+      const chunkWithMetadata: Record<string, unknown> = { ...chunk };
+
+      // Add metadata fields from frontmatter according to the schema
+      if (resource.frontmatter) {
+        for (const key of Object.keys(this.metadataSchema.shape)) {
+          if (key in resource.frontmatter) {
+            chunkWithMetadata[key] = resource.frontmatter[key];
+          }
+        }
+      }
+
+      return chunkWithMetadata as CoreRAGChunk & TMetadata;
+    });
+
     // Convert to LanceDB rows using the metadata schema
-    // Note: ragChunks have DefaultRAGMetadata, but we serialize them using the configured schema.
-    // This is safe because the schema determines which fields are extracted and stored.
-    const rows = ragChunks.map((chunk) =>
-      chunkToLanceRow<TMetadata>(chunk as unknown as CoreRAGChunk & TMetadata, resourceContentHash, this.metadataSchema)
+    const rows = chunksWithMetadata.map((chunk) =>
+      chunkToLanceRow<TMetadata>(chunk, resourceContentHash, this.metadataSchema)
     );
 
     // Insert into LanceDB

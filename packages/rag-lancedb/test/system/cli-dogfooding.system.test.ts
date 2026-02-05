@@ -94,7 +94,7 @@ describe('RAG CLI (Node.js dogfooding)', () => {
       binPath,
       ['rag', 'index', docsPath, '--db', testDbPath],
       projectRoot,
-      60000
+      180000 // 3 minutes - indexing with embeddings can be slow
     );
 
     expect(output.status).toBe('success');
@@ -106,7 +106,8 @@ describe('RAG CLI (Node.js dogfooding)', () => {
     const output = executeCliCommand(
       binPath,
       ['rag', 'query', 'How do I configure RAG?', '--db', testDbPath, '--limit', '5'],
-      projectRoot
+      projectRoot,
+      30000 // 30 seconds for query with embedding
     );
 
     expect(output.status).toBe('success');
@@ -115,7 +116,7 @@ describe('RAG CLI (Node.js dogfooding)', () => {
   });
 
   it('should show database statistics via CLI', () => {
-    const output = executeCliCommand(binPath, ['rag', 'stats', '--db', testDbPath], projectRoot);
+    const output = executeCliCommand(binPath, ['rag', 'stats', '--db', testDbPath], projectRoot, 10000);
 
     expect(output.status).toBe('success');
     expect(output.totalChunks).toBeGreaterThan(0);
@@ -127,7 +128,8 @@ describe('RAG CLI (Node.js dogfooding)', () => {
     const output = executeCliCommand(
       binPath,
       ['rag', 'query', 'RAG configuration and setup', '--db', testDbPath, '--limit', '5'],
-      projectRoot
+      projectRoot,
+      30000 // 30 seconds for query with embedding
     );
 
     expect(output.chunks.length).toBeGreaterThan(0);
@@ -142,7 +144,7 @@ describe('RAG CLI (Node.js dogfooding)', () => {
   });
 
   it('should clear database via CLI', () => {
-    const output = executeCliCommand(binPath, ['rag', 'clear', '--db', testDbPath], projectRoot);
+    const output = executeCliCommand(binPath, ['rag', 'clear', '--db', testDbPath], projectRoot, 10000);
 
     expect(output.status).toBe('success');
 

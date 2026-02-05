@@ -76,10 +76,22 @@ function getSentinelForType(innerType: z.ZodTypeAny): string | number {
 }
 
 /**
- * Serialize array to comma-separated string
+ * Serialize array to string
+ *
+ * - Arrays of primitives → comma-separated string
+ * - Arrays of objects → JSON string
  */
 function serializeArray(value: unknown): string {
-  return Array.isArray(value) ? value.join(',') : '';
+  if (!Array.isArray(value)) return '';
+
+  // Check if array contains objects
+  const hasObjects = value.some((item) => typeof item === 'object' && item !== null);
+
+  if (hasObjects) {
+    return JSON.stringify(value);
+  }
+
+  return value.join(',');
 }
 
 /**
@@ -129,6 +141,7 @@ function serializeMetadataValue(value: unknown, zodType: z.ZodTypeAny): string |
   }
 
   // Type-specific serialization
+  if (zodType instanceof z.ZodEnum) return serializeString(value); // Enums stored as strings
   if (zodType instanceof z.ZodArray) return serializeArray(value);
   if (zodType instanceof z.ZodDate) return serializeDate(value);
   if (zodType instanceof z.ZodObject) return JSON.stringify(value);
@@ -155,13 +168,28 @@ function isSentinel(value: string | number, innerType: z.ZodTypeAny, isOptional:
 }
 
 /**
- * Deserialize array from comma-separated string
+ * Deserialize array from string
+ *
+ * Handles both:
+ * - Comma-separated strings → array of strings
+ * - JSON strings → parsed array
  */
-function deserializeArray(value: string | number, isOptional: boolean): string[] | undefined {
+function deserializeArray(value: string | number, isOptional: boolean): unknown[] | undefined {
   const isEmptyOrInvalid = typeof value !== 'string' || value === '';
   if (isEmptyOrInvalid) {
     return isOptional ? undefined : [];
   }
+
+  // Try JSON parsing first (for arrays of objects)
+  if (value.startsWith('[')) {
+    try {
+      return JSON.parse(value);
+    } catch {
+      // Fall through to comma-separated parsing
+    }
+  }
+
+  // Comma-separated strings
   return value.split(',');
 }
 
@@ -239,6 +267,7 @@ function deserializeMetadataValue(value: string | number, zodType: z.ZodTypeAny)
   }
 
   // Type-specific deserialization
+  if (innerType instanceof z.ZodEnum) return deserializeString(value, isOptional); // Enums stored as strings
   if (innerType instanceof z.ZodArray) return deserializeArray(value, isOptional);
   if (innerType instanceof z.ZodDate) return deserializeDate(value, isOptional);
   if (innerType instanceof z.ZodObject) return deserializeObject(value, isOptional);

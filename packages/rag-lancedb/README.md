@@ -19,6 +19,131 @@ This package provides a complete RAG (Retrieval-Augmented Generation) implementa
 bun add @vibe-agent-toolkit/rag-lancedb
 ```
 
+## Custom Metadata
+
+LanceDBRAGProvider supports custom metadata schemas with automatic type inference.
+
+### Basic Usage (Default Metadata)
+
+```typescript
+import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
+
+const provider = await LanceDBRAGProvider.create({
+  dbPath: './rag-db',
+});
+
+// Query with default metadata filters
+const result = await provider.query({
+  text: 'authentication',
+  filters: {
+    metadata: {
+      tags: ['security'],
+      type: 'guide',
+    },
+  },
+});
+
+// Chunks have default metadata
+result.chunks[0].filePath; // ✅ string
+result.chunks[0].tags; // ✅ string[] | undefined
+```
+
+### Custom Metadata Schema
+
+Define a custom schema and the provider automatically infers types:
+
+```typescript
+import { z } from 'zod';
+import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
+
+const MyMetadataSchema = z.object({
+  domain: z.string(),
+  category: z.string().optional(),
+  priority: z.number(),
+  keywords: z.array(z.string()),
+});
+
+const provider = await LanceDBRAGProvider.create({
+  dbPath: './rag-db',
+  metadataSchema: MyMetadataSchema,
+});
+
+// Query with custom metadata filters (type-safe!)
+const result = await provider.query({
+  text: 'authentication',
+  filters: {
+    metadata: {
+      domain: 'security', // ✅ Type-safe
+      priority: 1, // ✅ Type-safe
+      // category: 123, // ❌ Type error: not a string
+    },
+  },
+});
+
+// Chunks have custom metadata (fully typed)
+result.chunks[0].domain; // ✅ string
+result.chunks[0].priority; // ✅ number
+result.chunks[0].keywords; // ✅ string[]
+```
+
+### Extending Default Metadata
+
+Combine default metadata with custom fields:
+
+```typescript
+import { DefaultRAGMetadataSchema } from '@vibe-agent-toolkit/rag';
+
+const ExtendedSchema = DefaultRAGMetadataSchema.extend({
+  domain: z.string(),
+  priority: z.number().optional(),
+});
+
+const provider = await LanceDBRAGProvider.create({
+  dbPath: './rag-db',
+  metadataSchema: ExtendedSchema,
+});
+
+// Chunks have both default and custom fields
+result.chunks[0].filePath; // ✅ Default field
+result.chunks[0].tags; // ✅ Default field
+result.chunks[0].domain; // ✅ Custom field
+```
+
+### Schema Serialization
+
+LanceDB uses Apache Arrow format, which requires consistent column types. Custom metadata is automatically serialized:
+
+- **Arrays** → Comma-separated strings
+- **Objects** → JSON strings
+- **Dates** → Unix timestamps
+- **Primitives** → Stored as-is
+
+The provider handles serialization/deserialization automatically based on your Zod schema.
+
+### Filtering
+
+All metadata fields (default or custom) are filterable:
+
+```typescript
+const result = await provider.query({
+  text: 'authentication',
+  filters: {
+    // Core filters
+    resourceId: 'doc-1',
+    dateRange: { start: new Date('2025-01-01'), end: new Date() },
+
+    // Metadata filters (type-safe)
+    metadata: {
+      domain: 'security',
+      priority: 1,
+      keywords: 'oauth', // Array field (substring match)
+    },
+  },
+});
+```
+
+Array fields use substring matching (SQL `LIKE`). Other fields use exact matching.
+
 ## Quick Start
 
 ### Building a RAG Database
