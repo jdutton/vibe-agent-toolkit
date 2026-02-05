@@ -1,61 +1,320 @@
 /**
  * LanceDB schema mapping
  *
- * Converts between RAGChunk and LanceDB row format.
+ * Converts between RAGChunk and LanceDB row format with generic metadata support.
  */
 
-import type { RAGChunk } from '@vibe-agent-toolkit/rag';
+import type { CoreRAGChunk, DefaultRAGMetadata, RAGChunk } from '@vibe-agent-toolkit/rag';
+import { DefaultRAGMetadataSchema } from '@vibe-agent-toolkit/rag';
+import { z, type ZodObject, type ZodRawShape } from 'zod';
 
 /**
- * LanceDB row format
+ * Helper type: Serializes metadata to Arrow-compatible types
+ *
+ * - Array<T> → string (comma-separated)
+ * - Date → number (Unix timestamp)
+ * - Object → string (JSON)
+ * - Optional fields → sentinel values (empty string, -1)
+ */
+export type SerializedMetadata<T extends Record<string, unknown>> = {
+  [K in keyof T]: T[K] extends Array<infer _U>
+    ? string
+    : T[K] extends Date
+      ? number
+      : T[K] extends object
+        ? string
+        : T[K] extends string | undefined
+          ? string
+          : T[K] extends number | undefined
+            ? number
+            : T[K];
+};
+
+/**
+ * LanceDB row format (generic over metadata type)
  *
  * LanceDB stores data in Apache Arrow format with specific type requirements.
- * Must have index signature for LanceDB compatibility.
- *
- * Note: LanceDB/Arrow cannot infer array types if all values are null,
- * so we use empty arrays instead of null for array fields.
+ * Custom metadata fields are serialized to Arrow-compatible types.
  */
-export interface LanceDBRow extends Record<string, unknown> {
+export interface LanceDBRow<TMetadata extends Record<string, unknown> = DefaultRAGMetadata>
+  extends Record<string, unknown> {
   // Required by LanceDB for vector search
   vector: number[];
 
-  // RAGChunk fields
+  // CoreRAGChunk fields
   chunkId: string;
   resourceId: string;
   content: string;
-  contentHash: string; // Hash of chunk content
-  resourceContentHash: string; // Hash of full resource content (for change detection)
+  contentHash: string;
   tokenCount: number;
-
-  // Structure (nullable - use -1 as sentinel for Arrow compatibility)
-  headingPath: string;
-  headingLevel: number; // -1 if not set
-  startLine: number; // -1 if not set
-  endLine: number; // -1 if not set
-
-  // Resource metadata (use empty strings for Arrow compatibility)
-  filePath: string;
-  tags: string; // Comma-separated string
-  type: string; // Empty string if not set
-  title: string; // Empty string if not set
-
-  // Embedding metadata
   embeddingModel: string;
   embeddedAt: number; // Unix timestamp
+  previousChunkId: string; // Empty string sentinel
+  nextChunkId: string; // Empty string sentinel
 
-  // Context (use empty strings for Arrow compatibility)
-  previousChunkId: string;
-  nextChunkId: string;
+  // Resource content hash (for change detection)
+  resourceContentHash: string;
+
+  // Custom metadata (serialized to Arrow-compatible types)
+  metadata: SerializedMetadata<TMetadata>;
 }
 
 /**
- * Convert RAGChunk to LanceDB row format
+ * Get sentinel value for optional field based on inner type
  *
- * @param chunk - RAGChunk to convert
- * @param resourceContentHash - Hash of the full resource content (for change detection)
- * @returns LanceDB row
+ * Note: Mixed return type (string | number) is intentional for Arrow serialization.
+ * Different Zod types require different sentinel values.
  */
-export function chunkToLanceRow(chunk: RAGChunk, resourceContentHash: string): LanceDBRow {
+// eslint-disable-next-line sonarjs/function-return-type -- Arrow serialization requires mixed return type
+function getSentinelForType(innerType: z.ZodTypeAny): string | number {
+  const isStringOrArray = innerType instanceof z.ZodString || innerType instanceof z.ZodArray;
+  const isNumberOrDate = innerType instanceof z.ZodNumber || innerType instanceof z.ZodDate;
+
+  if (isStringOrArray) return '';
+  if (isNumberOrDate) return -1;
+  return '';
+}
+
+/**
+ * Serialize array to comma-separated string
+ */
+function serializeArray(value: unknown): string {
+  return Array.isArray(value) ? value.join(',') : '';
+}
+
+/**
+ * Serialize date to Unix timestamp
+ */
+function serializeDate(value: unknown): number {
+  return value instanceof Date ? value.getTime() : -1;
+}
+
+/**
+ * Serialize string value
+ */
+function serializeString(value: unknown): string {
+  return typeof value === 'string' ? value : '';
+}
+
+/**
+ * Serialize number value
+ */
+function serializeNumber(value: unknown): number {
+  return typeof value === 'number' ? value : -1;
+}
+
+/**
+ * Serialize boolean to number (0 or 1)
+ */
+function serializeBoolean(value: unknown): number {
+  return (typeof value === 'boolean' && value) ? 1 : 0;
+}
+
+/**
+ * Serialize metadata value to Arrow-compatible type
+ *
+ * Runtime introspection of Zod schema to determine serialization strategy.
+ *
+ * Note: Mixed return type (string | number) is intentional for Arrow serialization.
+ * Arrays, strings, objects → string; numbers, dates, booleans → number.
+ */
+// eslint-disable-next-line sonarjs/function-return-type -- Arrow serialization requires mixed return type
+function serializeMetadataValue(value: unknown, zodType: z.ZodTypeAny): string | number {
+  // Handle optional types by unwrapping
+  if (zodType instanceof z.ZodOptional) {
+    if (value === undefined) {
+      return getSentinelForType(zodType.unwrap());
+    }
+    return serializeMetadataValue(value, zodType.unwrap());
+  }
+
+  // Type-specific serialization
+  if (zodType instanceof z.ZodArray) return serializeArray(value);
+  if (zodType instanceof z.ZodDate) return serializeDate(value);
+  if (zodType instanceof z.ZodObject) return JSON.stringify(value);
+  if (zodType instanceof z.ZodString) return serializeString(value);
+  if (zodType instanceof z.ZodNumber) return serializeNumber(value);
+  if (zodType instanceof z.ZodBoolean) return serializeBoolean(value);
+
+  // Fallback: JSON stringify
+  return JSON.stringify(value);
+}
+
+/**
+ * Check if value is a sentinel for optional field
+ */
+function isSentinel(value: string | number, innerType: z.ZodTypeAny, isOptional: boolean): boolean {
+  if (!isOptional) return false;
+
+  const isStringOrArray = innerType instanceof z.ZodString || innerType instanceof z.ZodArray;
+  const isNumberOrDate = innerType instanceof z.ZodNumber || innerType instanceof z.ZodDate;
+  const isStringSentinel = isStringOrArray && value === '';
+  const isNumberSentinel = isNumberOrDate && value === -1;
+
+  return isStringSentinel || isNumberSentinel;
+}
+
+/**
+ * Deserialize array from comma-separated string
+ */
+function deserializeArray(value: string | number, isOptional: boolean): string[] | undefined {
+  const isEmptyOrInvalid = typeof value !== 'string' || value === '';
+  if (isEmptyOrInvalid) {
+    return isOptional ? undefined : [];
+  }
+  return value.split(',');
+}
+
+/**
+ * Deserialize date from Unix timestamp
+ */
+function deserializeDate(value: string | number, isOptional: boolean): Date | undefined {
+  const isInvalid = typeof value !== 'number' || value === -1;
+  if (isInvalid) {
+    return isOptional ? undefined : new Date(0);
+  }
+  return new Date(value);
+}
+
+/**
+ * Deserialize object from JSON string
+ */
+function deserializeObject(value: string | number, isOptional: boolean): Record<string, unknown> | undefined {
+  const isEmptyOrInvalid = typeof value !== 'string' || value === '';
+  if (isEmptyOrInvalid) {
+    return isOptional ? undefined : {};
+  }
+  return JSON.parse(value);
+}
+
+/**
+ * Deserialize string value
+ */
+function deserializeString(value: string | number, isOptional: boolean): string | undefined {
+  if (typeof value === 'string') return value;
+  return isOptional ? undefined : '';
+}
+
+/**
+ * Deserialize number value
+ */
+function deserializeNumber(value: string | number, isOptional: boolean): number | undefined {
+  if (typeof value === 'number') return value;
+  return isOptional ? undefined : 0;
+}
+
+/**
+ * Deserialize boolean from number (0 or 1)
+ */
+function deserializeBoolean(value: string | number): boolean {
+  return typeof value === 'number' && value === 1;
+}
+
+/**
+ * Deserialize fallback (parse JSON if string, else return value)
+ */
+function deserializeFallback(value: string | number): unknown {
+  if (typeof value !== 'string') return value;
+
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * Deserialize metadata value from Arrow type to TypeScript type
+ *
+ * Runtime introspection of Zod schema to determine deserialization strategy.
+ */
+function deserializeMetadataValue(value: string | number, zodType: z.ZodTypeAny): unknown {
+  // Handle optional types by unwrapping
+  const isOptional = zodType instanceof z.ZodOptional;
+  const innerType = isOptional ? zodType.unwrap() : zodType;
+
+  // Check for sentinel values
+  if (isSentinel(value, innerType, isOptional)) {
+    return undefined;
+  }
+
+  // Type-specific deserialization
+  if (innerType instanceof z.ZodArray) return deserializeArray(value, isOptional);
+  if (innerType instanceof z.ZodDate) return deserializeDate(value, isOptional);
+  if (innerType instanceof z.ZodObject) return deserializeObject(value, isOptional);
+  if (innerType instanceof z.ZodString) return deserializeString(value, isOptional);
+  if (innerType instanceof z.ZodNumber) return deserializeNumber(value, isOptional);
+  if (innerType instanceof z.ZodBoolean) return deserializeBoolean(value);
+
+  // Fallback
+  return deserializeFallback(value);
+}
+
+/**
+ * Serialize metadata object to Arrow-compatible format
+ *
+ * Uses Zod schema to introspect field types and apply correct serialization.
+ */
+export function serializeMetadata<TMetadata extends Record<string, unknown>>(
+  metadata: TMetadata,
+  schema: ZodObject<ZodRawShape>,
+): SerializedMetadata<TMetadata> {
+  const serialized: Record<string, string | number> = {};
+
+  for (const [key, zodType] of Object.entries(schema.shape)) {
+    const value = metadata[key];
+    serialized[key] = serializeMetadataValue(value, zodType);
+  }
+
+  return serialized as SerializedMetadata<TMetadata>;
+}
+
+/**
+ * Deserialize metadata object from Arrow format to TypeScript types
+ *
+ * Uses Zod schema to introspect field types and apply correct deserialization.
+ */
+export function deserializeMetadata<TMetadata extends Record<string, unknown>>(
+  serialized: SerializedMetadata<TMetadata>,
+  schema: ZodObject<ZodRawShape>,
+): TMetadata {
+  const metadata: Record<string, unknown> = {};
+
+  for (const [key, zodType] of Object.entries(schema.shape)) {
+    const value = serialized[key as keyof SerializedMetadata<TMetadata>];
+    // Type narrowing: value is always string | number from SerializedMetadata
+    const deserialized = deserializeMetadataValue(value as string | number, zodType);
+    if (deserialized !== undefined) {
+      metadata[key] = deserialized;
+    }
+  }
+
+  return metadata as TMetadata;
+}
+
+/**
+ * Convert CoreRAGChunk + Metadata to LanceDB row format
+ *
+ * Generic over metadata type. Uses Zod schema for runtime introspection.
+ *
+ * @param chunk - Chunk with CoreRAGChunk fields + custom metadata
+ * @param resourceContentHash - Hash of the full resource content (for change detection)
+ * @param metadataSchema - Zod schema for metadata type
+ * @returns LanceDB row with serialized metadata
+ */
+export function chunkToLanceRow<TMetadata extends Record<string, unknown>>(
+  chunk: CoreRAGChunk & TMetadata,
+  resourceContentHash: string,
+  metadataSchema: ZodObject<ZodRawShape>,
+): LanceDBRow<TMetadata> {
+  // Extract metadata by collecting all fields from the schema
+  const metadata: Record<string, unknown> = {};
+  for (const key of Object.keys(metadataSchema.shape)) {
+    if (key in chunk) {
+      metadata[key] = chunk[key as keyof typeof chunk];
+    }
+  }
+
   return {
     vector: chunk.embedding,
     chunkId: chunk.chunkId,
@@ -64,52 +323,78 @@ export function chunkToLanceRow(chunk: RAGChunk, resourceContentHash: string): L
     contentHash: chunk.contentHash,
     resourceContentHash,
     tokenCount: chunk.tokenCount,
-    headingPath: chunk.headingPath ?? '', // Empty string for Arrow
-    headingLevel: chunk.headingLevel ?? -1, // -1 as sentinel for Arrow
-    startLine: chunk.startLine ?? -1, // -1 as sentinel for Arrow
-    endLine: chunk.endLine ?? -1, // -1 as sentinel for Arrow
-    filePath: chunk.filePath,
-    tags: chunk.tags?.join(',') ?? '', // Convert array to comma-separated string
-    type: chunk.type ?? '', // Empty string for Arrow
-    title: chunk.title ?? '', // Empty string for Arrow
     embeddingModel: chunk.embeddingModel,
     embeddedAt: chunk.embeddedAt.getTime(),
-    previousChunkId: chunk.previousChunkId ?? '', // Empty string for Arrow
-    nextChunkId: chunk.nextChunkId ?? '', // Empty string for Arrow
+    previousChunkId: chunk.previousChunkId ?? '',
+    nextChunkId: chunk.nextChunkId ?? '',
+    metadata: serializeMetadata(metadata as TMetadata, metadataSchema),
   };
 }
 
 /**
- * Convert LanceDB row to RAGChunk
+ * Convert LanceDB row to CoreRAGChunk + Metadata
  *
- * @param row - LanceDB row
- * @returns RAGChunk
+ * Generic over metadata type. Uses Zod schema for runtime introspection.
+ *
+ * @param row - LanceDB row with serialized metadata
+ * @param metadataSchema - Zod schema for metadata type
+ * @returns Chunk with CoreRAGChunk fields + custom metadata
  */
-export function lanceRowToChunk(row: LanceDBRow): RAGChunk {
-  const chunk: RAGChunk = {
+export function lanceRowToChunk<TMetadata extends Record<string, unknown>>(
+  row: LanceDBRow<TMetadata>,
+  metadataSchema: ZodObject<ZodRawShape>,
+): CoreRAGChunk & TMetadata {
+  const coreChunk: CoreRAGChunk = {
     chunkId: row.chunkId,
     resourceId: row.resourceId,
     content: row.content,
     contentHash: row.contentHash,
     tokenCount: row.tokenCount,
-    filePath: row.filePath,
     embedding: row.vector,
     embeddingModel: row.embeddingModel,
     embeddedAt: new Date(row.embeddedAt),
   };
 
-  // Only add optional properties if they exist (non-empty strings or non-sentinel values)
-  if (row.headingPath && row.headingPath.length > 0) chunk.headingPath = row.headingPath;
-  if (row.headingLevel !== -1) chunk.headingLevel = row.headingLevel;
-  if (row.startLine !== -1) chunk.startLine = row.startLine;
-  if (row.endLine !== -1) chunk.endLine = row.endLine;
-  if (row.tags && row.tags.length > 0) {
-    chunk.tags = row.tags.split(','); // Convert comma-separated string back to array
+  // Add optional context fields if present
+  if (row.previousChunkId && row.previousChunkId.length > 0) {
+    coreChunk.previousChunkId = row.previousChunkId;
   }
-  if (row.type && row.type.length > 0) chunk.type = row.type;
-  if (row.title && row.title.length > 0) chunk.title = row.title;
-  if (row.previousChunkId && row.previousChunkId.length > 0) chunk.previousChunkId = row.previousChunkId;
-  if (row.nextChunkId && row.nextChunkId.length > 0) chunk.nextChunkId = row.nextChunkId;
+  if (row.nextChunkId && row.nextChunkId.length > 0) {
+    coreChunk.nextChunkId = row.nextChunkId;
+  }
 
-  return chunk;
+  // Deserialize metadata
+  const metadata = deserializeMetadata(row.metadata, metadataSchema);
+
+  return { ...coreChunk, ...metadata };
+}
+
+/**
+ * Backward-compatible wrapper: Convert RAGChunk to LanceDB row format
+ *
+ * Uses DefaultRAGMetadata schema automatically for existing code.
+ * New code should use the generic chunkToLanceRow<TMetadata>() directly.
+ *
+ * @param chunk - RAGChunk (CoreRAGChunk + DefaultRAGMetadata)
+ * @param resourceContentHash - Hash of the full resource content
+ * @returns LanceDB row with default metadata
+ */
+export function chunkToLanceRowWithDefaultMetadata(
+  chunk: RAGChunk,
+  resourceContentHash: string,
+): LanceDBRow<DefaultRAGMetadata> {
+  return chunkToLanceRow(chunk, resourceContentHash, DefaultRAGMetadataSchema);
+}
+
+/**
+ * Backward-compatible wrapper: Convert LanceDB row to RAGChunk
+ *
+ * Uses DefaultRAGMetadata schema automatically for existing code.
+ * New code should use the generic lanceRowToChunk<TMetadata>() directly.
+ *
+ * @param row - LanceDB row with default metadata
+ * @returns RAGChunk (CoreRAGChunk + DefaultRAGMetadata)
+ */
+export function lanceRowToChunkWithDefaultMetadata(row: LanceDBRow<DefaultRAGMetadata>): RAGChunk {
+  return lanceRowToChunk(row, DefaultRAGMetadataSchema);
 }

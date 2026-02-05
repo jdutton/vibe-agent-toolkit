@@ -26,7 +26,11 @@ import {
 } from '@vibe-agent-toolkit/rag';
 import { parseMarkdown, type ResourceMetadata } from '@vibe-agent-toolkit/resources';
 
-import { chunkToLanceRow, lanceRowToChunk, type LanceDBRow } from './schema.js';
+import {
+  chunkToLanceRowWithDefaultMetadata,
+  lanceRowToChunkWithDefaultMetadata,
+  type LanceDBRow,
+} from './schema.js';
 
 /**
  * Configuration for LanceDBRAGProvider
@@ -142,7 +146,7 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
     const materializedResults = JSON.parse(JSON.stringify(results)) as LanceDBRow[];
 
     // Convert results to RAGChunks
-    const chunks = materializedResults.map((row) => lanceRowToChunk(row));
+    const chunks = materializedResults.map((row) => lanceRowToChunkWithDefaultMetadata(row));
 
     const searchDurationMs = Date.now() - startTime;
 
@@ -350,7 +354,7 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
 
     // Convert to LanceDB rows
     const rows = ragChunks.map((chunk) =>
-      chunkToLanceRow(chunk as RAGChunk, resourceContentHash)
+      chunkToLanceRowWithDefaultMetadata(chunk as RAGChunk, resourceContentHash)
     );
 
     // Insert into LanceDB
