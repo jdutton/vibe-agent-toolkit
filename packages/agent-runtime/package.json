@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/agent-runtime",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "type": "module",
   "description": "Runtime framework for building and executing portable AI agents",
   "keywords": [

@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.7] - 2026-02-05
+
+### Added
+- **RAG Extensible Metadata Schema Support**: Custom metadata fields with full type safety
+  - Generic provider interfaces with `TMetadata` type parameter for compile-time type safety
+  - Zod schema introspection for automatic serialization/deserialization
+  - Support for arrays (CSV), objects (JSON), dates (timestamps), and primitives
+  - Type-safe query filtering on custom metadata fields
+  - `DefaultRAGMetadata` schema with standard fields (tags, title, description, category)
+  - See `packages/rag-lancedb/README.md` for usage examples
+
 ## [0.1.6] - 2026-02-04
 
 ### Fixed

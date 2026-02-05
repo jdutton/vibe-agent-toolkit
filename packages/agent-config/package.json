@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/agent-config",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "Agent manifest loading and validation",
   "type": "module",
   "main": "./dist/index.js",
