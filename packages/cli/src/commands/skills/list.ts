@@ -1,292 +1,79 @@
 /**
- * List installed skills
+ * List skills in project or user installation
  *
- * Shows all skills currently installed in Claude's plugins directory
+ * By default, lists project skills. Use --user flag to list user-installed skills.
  */
 
-import { existsSync } from 'node:fs';
-import { readdir } from 'node:fs/promises';
-import { homedir } from 'node:os';
-import { join } from 'node:path';
+import * as path from 'node:path';
 
-import { extractH1Title, validateSkill } from '@vibe-agent-toolkit/agent-skills';
-import { parseMarkdown } from '@vibe-agent-toolkit/resources';
-import { Command } from 'commander';
+import { scan, type ScanSummary } from '@vibe-agent-toolkit/discovery';
 
-import { handleCommandError } from '../../utils/command-error.js';
+import { loadConfig } from '../../utils/config-loader.js';
 import { createLogger } from '../../utils/logger.js';
+import { discoverSkills, validateSkillFilename } from '../../utils/skill-discovery.js';
+import { scanUserContext } from '../../utils/user-context-scanner.js';
 
 export interface SkillsListCommandOptions {
-  pluginsDir?: string;
+  user?: boolean;
   verbose?: boolean;
   debug?: boolean;
 }
 
-interface InstalledSkill {
+interface DiscoveredSkill {
   name: string;
   path: string;
-  hasSkillMd: boolean;
-  title?: string;
-  description?: string;
-  validationStatus: 'valid' | 'error' | 'warning' | 'no-skill-md';
-  validationErrors?: number;
-}
-
-export function createListCommand(): Command {
-  const command = new Command('list');
-
-  command
-    .description('List installed skills in Claude Code plugins directory')
-    .option(
-      '-p, --plugins-dir <path>',
-      'Claude plugins directory',
-      join(homedir(), '.claude', 'plugins')
-    )
-    .option('-v, --verbose', 'Show detailed skill information', false)
-    .option('--debug', 'Enable debug logging')
-    .action(listCommand)
-    .addHelpText(
-      'after',
-      `
-Description:
-  Lists all skills currently installed in Claude Code's plugins directory.
-  Scans for directories containing SKILL.md files and extracts metadata.
-
-  Default plugins directory: ~/.claude/plugins/
-
-Output:
-  - status: success/error
-  - pluginsDir: Path to plugins directory
-  - skillsFound: Number of skills discovered
-  - skills: Array of skill objects with name, path, and metadata
-
-Exit Codes:
-  0 - List operation successful
-  1 - Error listing skills
-  2 - System error
-
-Example:
-  $ vat skills list
-  $ vat skills list --verbose
-`
-    );
-
-  return command;
+  valid: boolean;
+  warning?: string;
 }
 
 /**
- * Validate a skill and return status information
+ * Extract skill name from SKILL.md path
  */
-async function validateSkillAndGetStatus(
-  skillMdPath: string,
-  skillPath: string,
-  logger: ReturnType<typeof createLogger>
-): Promise<{ validationStatus: 'valid' | 'error' | 'warning'; validationErrors?: number }> {
-  try {
-    const validationResult = await validateSkill({
-      skillPath: skillMdPath,
-      rootDir: skillPath,
-    });
-
-    if (validationResult.status === 'error') {
-      const errorCount = validationResult.issues.filter(i => i.severity === 'error').length;
-      return {
-        validationStatus: 'error',
-        validationErrors: errorCount,
-      };
-    }
-
-    if (validationResult.status === 'warning') {
-      return {
-        validationStatus: 'warning',
-      };
-    }
-
-    return {
-      validationStatus: 'valid',
-    };
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    logger.debug(`Failed to validate skill: ${errorMessage}`);
-    return {
-      validationStatus: 'error',
-      validationErrors: 1,
-    };
-  }
+function extractSkillName(skillPath: string): string {
+  // Extract skill name from path (directory name containing SKILL.md)
+  const dir = path.dirname(skillPath);
+  return path.basename(dir);
 }
 
 /**
- * Extract skill metadata from SKILL.md
+ * Convert discovered skills to DiscoveredSkill format with validation
  */
-async function extractSkillMetadata(
-  skillMdPath: string,
-  skillName: string,
-  logger: ReturnType<typeof createLogger>
-): Promise<{ title?: string; description?: string }> {
-  try {
-    const parseResult = await parseMarkdown(skillMdPath);
-
-    // Try to get title from frontmatter or H1
-    let title: string | undefined;
-    if (parseResult.frontmatter?.['name']) {
-      title = parseResult.frontmatter['name'] as string;
-    } else {
-      // Extract H1 title
-      title = extractH1Title(parseResult.content);
+function processDiscoveredSkills(
+  discoveredSkills: Array<{ path: string }>
+): DiscoveredSkill[] {
+  return discoveredSkills.map(s => {
+    const filenameCheck = validateSkillFilename(s.path);
+    const skill: DiscoveredSkill = {
+      path: s.path,
+      name: extractSkillName(s.path),
+      valid: filenameCheck.valid,
+    };
+    // Only add warning if it exists (exactOptionalPropertyTypes)
+    if (filenameCheck.message !== undefined) {
+      skill.warning = filenameCheck.message;
     }
-
-    // Get description from frontmatter
-    const description = parseResult.frontmatter?.['description'] as string | undefined;
-
-    // Build result with only defined properties (exactOptionalPropertyTypes)
-    const result: { title?: string; description?: string } = {};
-    if (title !== undefined) {
-      result.title = title;
-    }
-    if (description !== undefined) {
-      result.description = description;
-    }
-
-    return result;
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : String(error);
-    logger.debug(`Failed to parse SKILL.md for ${skillName}: ${errorMessage}`);
-    return {};
-  }
+    return skill;
+  });
 }
 
 /**
  * Output skills as YAML
  */
-function outputSkillsYaml(
-  pluginsDir: string,
-  skills: InstalledSkill[],
-  duration: number,
-  options: SkillsListCommandOptions
-): void {
+function outputSkillsYaml(skills: DiscoveredSkill[], context: string): void {
   process.stdout.write('---\n');
   process.stdout.write(`status: success\n`);
-  process.stdout.write(`pluginsDir: ${pluginsDir}\n`);
+  process.stdout.write(`context: ${context}\n`);
   process.stdout.write(`skillsFound: ${skills.length}\n`);
   process.stdout.write(`skills:\n`);
 
   for (const skill of skills) {
     process.stdout.write(`  - name: ${skill.name}\n`);
     process.stdout.write(`    path: ${skill.path}\n`);
-    process.stdout.write(`    hasSkillMd: ${skill.hasSkillMd}\n`);
-    process.stdout.write(`    validationStatus: ${skill.validationStatus}\n`);
+    process.stdout.write(`    valid: ${skill.valid}\n`);
 
-    if (skill.validationErrors !== undefined) {
-      process.stdout.write(`    validationErrors: ${skill.validationErrors}\n`);
+    if (skill.warning) {
+      process.stdout.write(`    warning: "${skill.warning}"\n`);
     }
-
-    if (options.verbose && skill.title) {
-      process.stdout.write(`    title: ${skill.title}\n`);
-    }
-
-    if (options.verbose && skill.description) {
-      process.stdout.write(`    description: ${skill.description}\n`);
-    }
-  }
-
-  process.stdout.write(`duration: ${duration}ms\n`);
-}
-
-/**
- * Get status icon for a skill based on validation status
- */
-function getStatusIcon(skill: InstalledSkill): string {
-  if (skill.validationStatus === 'valid') {
-    return '✅';
-  }
-
-  if (skill.validationStatus === 'warning') {
-    return '⚠️';
-  }
-
-  if (skill.validationStatus === 'error') {
-    if (skill.validationErrors !== undefined) {
-      const plural = skill.validationErrors === 1 ? '' : 's';
-      return `❌ (${skill.validationErrors} error${plural})`;
-    }
-    return '❌';
-  }
-
-  // no-skill-md
-  return '⚠️ (no SKILL.md)';
-}
-
-/**
- * Process a single skill directory and extract all metadata
- */
-async function processSkillDirectory(
-  entry: { name: string; isDirectory: () => boolean },
-  pluginsDir: string,
-  logger: ReturnType<typeof createLogger>
-): Promise<InstalledSkill> {
-  const skillPath = join(pluginsDir, entry.name);
-  const skillMdPath = join(skillPath, 'SKILL.md');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Skill path from plugins directory
-  const hasSkillMd = existsSync(skillMdPath);
-
-  // Validate skill if SKILL.md exists
-  let validationStatus: 'valid' | 'error' | 'warning' | 'no-skill-md' = 'no-skill-md';
-  let validationErrors: number | undefined;
-
-  if (hasSkillMd) {
-    const validation = await validateSkillAndGetStatus(skillMdPath, skillPath, logger);
-    validationStatus = validation.validationStatus;
-    validationErrors = validation.validationErrors;
-  }
-
-  const skill: InstalledSkill = {
-    name: entry.name,
-    path: skillPath,
-    hasSkillMd,
-    validationStatus,
-  };
-
-  // Add validation errors if present (exactOptionalPropertyTypes)
-  if (validationErrors !== undefined) {
-    skill.validationErrors = validationErrors;
-  }
-
-  // Extract metadata if SKILL.md exists
-  if (hasSkillMd) {
-    const metadata = await extractSkillMetadata(skillMdPath, entry.name, logger);
-    // Only assign if defined (exactOptionalPropertyTypes)
-    if (metadata.title !== undefined) {
-      skill.title = metadata.title;
-    }
-    if (metadata.description !== undefined) {
-      skill.description = metadata.description;
-    }
-  }
-
-  return skill;
-}
-
-/**
- * Output a single skill line
- */
-function outputSingleSkill(
-  skill: InstalledSkill,
-  statusIcon: string,
-  logger: ReturnType<typeof createLogger>,
-  options: SkillsListCommandOptions
-): void {
-  // Show directory name, with title in parentheses if different
-  let displayName = skill.name;
-  if (skill.title && skill.title !== skill.name) {
-    displayName = `${skill.name} (${skill.title})`;
-  }
-
-  if (options.verbose && skill.description) {
-    logger.info(`   ${statusIcon} ${displayName}`);
-    logger.info(`      ${skill.description}`);
-    logger.info(`      ${skill.path}\n`);
-  } else {
-    logger.info(`   ${statusIcon} ${displayName}`);
   }
 }
 
@@ -294,7 +81,7 @@ function outputSingleSkill(
  * Output human-readable skill list
  */
 function outputSkillsHuman(
-  skills: InstalledSkill[],
+  skills: DiscoveredSkill[],
   logger: ReturnType<typeof createLogger>,
   options: SkillsListCommandOptions
 ): void {
@@ -306,59 +93,71 @@ function outputSkillsHuman(
   logger.info(`\n   Found ${skills.length} skill${skills.length === 1 ? '' : 's'}:\n`);
 
   for (const skill of skills) {
-    const statusIcon = getStatusIcon(skill);
-    outputSingleSkill(skill, statusIcon, logger, options);
+    const statusIcon = skill.valid ? '✅' : '⚠️';
+    const displayName = skill.name;
+
+    if (options.verbose) {
+      logger.info(`   ${statusIcon} ${displayName}`);
+      if (skill.warning) {
+        logger.info(`      Warning: ${skill.warning}`);
+      }
+      logger.info(`      Path: ${skill.path}\n`);
+    } else if (skill.warning) {
+      logger.info(`   ${statusIcon} ${displayName} (${skill.warning})`);
+    } else {
+      logger.info(`   ${statusIcon} ${displayName}`);
+    }
   }
 }
 
-async function listCommand(options: SkillsListCommandOptions): Promise<void> {
+export async function listCommand(
+  pathArg: string | undefined,
+  options: SkillsListCommandOptions
+): Promise<void> {
   const logger = createLogger(options.debug ? { debug: true } : {});
-  const startTime = Date.now();
 
   try {
-    const pluginsDir = options.pluginsDir ?? join(homedir(), '.claude', 'plugins');
+    let skills: DiscoveredSkill[];
+    let context: string;
 
-    logger.info(`📋 Listing skills in: ${pluginsDir}`);
+    if (options.user) {
+      // User context: scan ~/.claude
+      logger.info('📋 Listing user-installed skills');
 
-    // Check if plugins directory exists
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Plugins directory path, safe
-    if (!existsSync(pluginsDir)) {
-      logger.info(`   Plugins directory not found (no skills installed)`);
+      const { plugins, skills: standaloneSkills } = await scanUserContext();
+      const allResources = [...plugins, ...standaloneSkills];
+      const discoveredSkills = discoverSkills(allResources);
+      skills = processDiscoveredSkills(discoveredSkills);
+      context = 'user';
+    } else {
+      // Project context: use resources config
+      const rootDir = pathArg ?? process.cwd();
+      logger.info(`📋 Listing skills in: ${rootDir}`);
 
-      // Output YAML
-      process.stdout.write('---\n');
-      process.stdout.write(`status: success\n`);
-      process.stdout.write(`pluginsDir: ${pluginsDir}\n`);
-      process.stdout.write(`skillsFound: 0\n`);
-      process.stdout.write(`skills: []\n`);
+      const config = loadConfig(rootDir);
 
-      process.exit(0);
+      const scanResult: ScanSummary = await scan({
+        path: rootDir,
+        recursive: true,
+        include: config.resources?.include ?? [],
+        exclude: config.resources?.exclude ?? [],
+      });
+
+      const discoveredSkills = discoverSkills(scanResult.results);
+      skills = processDiscoveredSkills(discoveredSkills);
+      context = 'project';
     }
-
-    // Scan plugins directory for skill directories
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Plugins directory path, safe
-    const entries = await readdir(pluginsDir, { withFileTypes: true });
-    const skills: InstalledSkill[] = [];
-
-    for (const entry of entries) {
-      if (!entry.isDirectory()) {
-        continue;
-      }
-
-      const skill = await processSkillDirectory(entry, pluginsDir, logger);
-      skills.push(skill);
-    }
-
-    const duration = Date.now() - startTime;
 
     // Output YAML to stdout
-    outputSkillsYaml(pluginsDir, skills, duration, options);
+    outputSkillsYaml(skills, context);
 
     // Human-friendly output to stderr
     outputSkillsHuman(skills, logger, options);
 
     process.exit(0);
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'SkillsList');
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logger.error(`Failed to list skills: ${errorMessage}`);
+    process.exit(2);
   }
 }
