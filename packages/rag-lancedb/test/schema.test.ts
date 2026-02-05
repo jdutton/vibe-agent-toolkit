@@ -267,10 +267,11 @@ describe('chunkToLanceRow (generic)', () => {
     expect(row.vector).toEqual(TEST_EMBEDDING);
     expect(row.embeddingModel).toBe(TEST_MODEL);
     expect(row.embeddedAt).toBe(TEST_DATE.getTime());
+    // Access metadata via index signature for type safety
     expect(row.metadata.filePath).toBe(TEST_FILE_PATH);
-    expect(row.metadata.tags).toBe('test,example');
-    expect(row.metadata.type).toBe(TEST_DOCUMENTATION_TYPE);
-    expect(row.metadata.title).toBe(TEST_TITLE);
+    expect((row.metadata as Record<string, unknown>)['tags']).toBe('test,example');
+    expect((row.metadata as Record<string, unknown>)['type']).toBe(TEST_DOCUMENTATION_TYPE);
+    expect((row.metadata as Record<string, unknown>)['title']).toBe(TEST_TITLE);
   });
 
   it('should handle optional metadata fields with sentinel values', () => {
@@ -287,13 +288,14 @@ describe('chunkToLanceRow (generic)', () => {
     };
 
     const row = chunkToLanceRow(chunk, TEST_RESOURCE_CONTENT_HASH, DefaultRAGMetadataSchema);
+    const metadata = row.metadata as Record<string, unknown>;
 
-    expect(row.metadata.tags).toBe(''); // Empty string sentinel
-    expect(row.metadata.type).toBe(''); // Empty string sentinel
-    expect(row.metadata.title).toBe(''); // Empty string sentinel
-    expect(row.metadata.headingLevel).toBe(-1); // -1 sentinel
-    expect(row.metadata.startLine).toBe(-1); // -1 sentinel
-    expect(row.metadata.endLine).toBe(-1); // -1 sentinel
+    expect(metadata['tags']).toBe(''); // Empty string sentinel
+    expect(metadata['type']).toBe(''); // Empty string sentinel
+    expect(metadata['title']).toBe(''); // Empty string sentinel
+    expect(metadata['headingLevel']).toBe(-1); // -1 sentinel
+    expect(metadata['startLine']).toBe(-1); // -1 sentinel
+    expect(metadata['endLine']).toBe(-1); // -1 sentinel
   });
 
   it('should serialize custom metadata types', () => {
@@ -381,11 +383,13 @@ describe('round-trip serialization', () => {
     const deserialized = deserializeMetadata(serialized, DefaultRAGMetadataSchema);
 
     expect(deserialized).toEqual({ filePath: TEST_FILE_PATH });
-    expect(deserialized.tags).toBeUndefined();
-    expect(deserialized.type).toBeUndefined();
-    expect(deserialized.title).toBeUndefined();
-    expect(deserialized.headingPath).toBeUndefined();
-    expect(deserialized.headingLevel).toBeUndefined();
+    // Access via index signature for optional fields
+    const metadata = deserialized as Record<string, unknown>;
+    expect(metadata['tags']).toBeUndefined();
+    expect(metadata['type']).toBeUndefined();
+    expect(metadata['title']).toBeUndefined();
+    expect(metadata['headingPath']).toBeUndefined();
+    expect(metadata['headingLevel']).toBeUndefined();
   });
 
   it('should preserve custom metadata through round-trip', () => {
