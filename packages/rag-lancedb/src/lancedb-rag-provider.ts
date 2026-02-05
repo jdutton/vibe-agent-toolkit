@@ -29,7 +29,7 @@ import {
 import { parseMarkdown, type ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import type { ZodObject, ZodRawShape } from 'zod';
 
-import { buildWhereClause } from './filter-builder.js';
+import { buildWhereClause, escapeSQLString } from './filter-builder.js';
 import {
   chunkToLanceRow,
   lanceRowToChunk,
@@ -297,7 +297,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     let shouldUpdate = false;
 
     if (this.table) {
-      const existingRows = await this.table.query().where(`\`resourceId\` = '${resource.id}'`).toArray();
+      const existingRows = await this.table.query().where(`\`resourceId\` = '${escapeSQLString(resource.id)}'`).toArray();
       // Materialize immediately to avoid Arrow buffer issues
       // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
       const existing = JSON.parse(JSON.stringify(existingRows)) as LanceDBRow[];
@@ -417,7 +417,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     }
 
     // Delete chunks (use backticks for column names)
-    await this.table.delete(`\`resourceId\` = '${resourceId}'`);
+    await this.table.delete(`\`resourceId\` = '${escapeSQLString(resourceId)}'`);
   }
 
   /**

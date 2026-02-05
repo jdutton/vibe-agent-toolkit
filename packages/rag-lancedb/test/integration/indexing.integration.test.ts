@@ -638,4 +638,74 @@ Content for section 4 with even more text.`
       await customProvider.close();
     });
   });
+
+  describe('SQL Injection Prevention', () => {
+    it('should safely handle resourceId with SQL injection attempt', async () => {
+      provider = await LanceDBRAGProvider.create({ dbPath });
+
+      // Create resource with malicious ID containing SQL injection
+      const maliciousId = "doc' OR '1'='1' --";
+      const normalId = 'safe-doc-id';
+
+      const maliciousResource = await createTestResource(testFilePath, maliciousId);
+      const normalResource = await createTestResource(testFilePath, normalId);
+
+      // Index both resources
+      await provider.indexResources([maliciousResource, normalResource]);
+
+      // Query should only return chunks for the malicious ID, not all chunks
+      const result = await provider.query({
+        text: 'content',
+        filters: { resourceId: maliciousId },
+      });
+
+      // Should only get chunks from malicious resource (single quotes properly escaped)
+      expect(result.chunks.every(chunk => chunk.resourceId === maliciousId)).toBe(true);
+      expect(result.chunks.some(chunk => chunk.resourceId === normalId)).toBe(false);
+
+      // Delete should only delete the malicious resource, not all resources
+      await provider.deleteResource(maliciousId);
+
+      // Normal resource should still exist
+      const afterDelete = await provider.query({
+        text: 'content',
+        filters: { resourceId: normalId },
+      });
+      expect(afterDelete.chunks.length).toBeGreaterThan(0);
+
+      // Malicious resource should be deleted
+      const maliciousDeleted = await provider.query({
+        text: 'content',
+        filters: { resourceId: maliciousId },
+      });
+      expect(maliciousDeleted.chunks.length).toBe(0);
+    });
+
+    it('should handle resource IDs with multiple single quotes', async () => {
+      provider = await LanceDBRAGProvider.create({ dbPath });
+
+      const complexId = "it's a 'test' doc";
+      const resource = await createTestResource(testFilePath, complexId);
+
+      // Should successfully index without SQL errors
+      const indexResult = await provider.indexResources([resource]);
+      expect(indexResult.resourcesIndexed).toBe(1);
+
+      // Should successfully query
+      const queryResult = await provider.query({
+        text: 'content',
+        filters: { resourceId: complexId },
+      });
+      expect(queryResult.chunks.length).toBeGreaterThan(0);
+      expect(queryResult.chunks.every(chunk => chunk.resourceId === complexId)).toBe(true);
+
+      // Should successfully delete
+      await provider.deleteResource(complexId);
+      const afterDelete = await provider.query({
+        text: 'content',
+        filters: { resourceId: complexId },
+      });
+      expect(afterDelete.chunks.length).toBe(0);
+    });
+  });
 });

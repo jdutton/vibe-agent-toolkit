@@ -9,8 +9,14 @@ import { z } from 'zod';
 
 /**
  * Escape single quotes for SQL string literals
+ *
+ * Used to prevent SQL injection in WHERE clauses.
+ * Doubles single quotes per SQL standard ('Bob's' → 'Bob''s')
+ *
+ * @param value - String value to escape
+ * @returns Escaped string safe for SQL string literals
  */
-function escapeSQLString(value: string): string {
+export function escapeSQLString(value: string): string {
   return value.replaceAll("'", "''");
 }
 
