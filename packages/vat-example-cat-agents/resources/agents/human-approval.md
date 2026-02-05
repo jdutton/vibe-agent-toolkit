@@ -334,4 +334,4 @@ it('should timeout after specified duration', async () => {
 ## Related Documentation
 
 - **[SKILL.md](../skills/SKILL.md#workflow-e-hitl-approval-gate)** - Orchestration patterns
-- **[Agent Runtime](../../../../agent-runtime/README.md)** - executeExternalEvent helper
+- **[Agent Runtime](../../../agent-runtime/README.md)** - executeExternalEvent helper

@@ -144,6 +144,7 @@
       "name": "@vibe-agent-toolkit/dev-tools",
       "version": "0.1.8",
       "dependencies": {
+        "@vibe-agent-toolkit/agent-skills": "workspace:*",
         "@vibe-agent-toolkit/utils": "workspace:*",
         "semver": "^7.7.3",
         "which": "^5.0.0",
@@ -421,7 +422,6 @@
         "@anthropic-ai/sdk": "^0.36.0",
         "@langchain/openai": "^0.3.16",
         "@types/node": "^22.10.5",
-        "@vibe-agent-toolkit/agent-skills": "workspace:*",
         "@vibe-agent-toolkit/resource-compiler": "workspace:*",
         "@vibe-agent-toolkit/runtime-claude-agent-sdk": "workspace:*",
         "@vibe-agent-toolkit/runtime-langchain": "workspace:*",

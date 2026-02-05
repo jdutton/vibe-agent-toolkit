@@ -159,7 +159,8 @@ async function installCommand(
 
     logger.info(`✅ Installed skill: ${skillName}`);
     logger.info(`   Location: ${installPath}`);
-    logger.info(`\n💡 Restart Claude Code or run /reload-skills to use the new skill`);
+    logger.info(`\n💡 Run 'vat skills list' to verify installation`);
+    logger.info(`   Restart Claude Code or run /reload-skills to use the new skill`);
 
     process.exit(0);
   } catch (error) {

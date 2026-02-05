@@ -1,3 +1,8 @@
+---
+name: cat-agents-skill
+description: Comprehensive orchestration guide for Claude Code using the vat-example-cat-agents toolkit
+---
+
 # Cat Agents Skill
 
 Comprehensive orchestration guide for Claude Code using the vat-example-cat-agents toolkit.

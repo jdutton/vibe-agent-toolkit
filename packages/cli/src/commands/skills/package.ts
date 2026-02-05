@@ -7,7 +7,12 @@
 import { existsSync, statSync } from 'node:fs';
 import { basename, dirname, relative, resolve } from 'node:path';
 
-import { packageSkill, type PackageSkillOptions } from '@vibe-agent-toolkit/agent-skills';
+import {
+  packageSkill,
+  validateSkill,
+  type PackageSkillOptions,
+  type ValidationResult,
+} from '@vibe-agent-toolkit/agent-skills';
 import { parseMarkdown, type ParseResult } from '@vibe-agent-toolkit/resources';
 import { Command } from 'commander';
 
@@ -73,6 +78,81 @@ Examples:
     );
 
   return command;
+}
+
+/**
+ * Validate skill and exit if errors found
+ */
+async function validateSkillOrExit(
+  skillPath: string,
+  basePath: string,
+  logger: ReturnType<typeof createLogger>
+): Promise<void> {
+  logger.info(`\n🔍 Validating skill...`);
+  const validationResult = await validateSkill({
+    skillPath,
+    rootDir: basePath,
+  });
+
+  if (validationResult.status === 'error') {
+    displayValidationErrors(validationResult, logger);
+    process.exit(1);
+  }
+
+  logger.info(`✅ Validation passed`);
+}
+
+/**
+ * Display a single validation issue
+ */
+function displayIssue(
+  issue: ValidationResult['issues'][0],
+  logger: ReturnType<typeof createLogger>,
+  useErrorLevel: boolean
+): void {
+  const logFn = useErrorLevel ? logger.error : logger.info;
+
+  logFn(`  [${issue.code}] ${issue.message}`);
+  if (issue.location) {
+    logFn(`    Location: ${issue.location}`);
+  }
+  if (issue.fix) {
+    logFn(`    Fix: ${issue.fix}`);
+  }
+}
+
+/**
+ * Format and display validation errors
+ */
+function displayValidationErrors(
+  validationResult: ValidationResult,
+  logger: ReturnType<typeof createLogger>
+): void {
+  logger.error(`\n❌ Skill validation failed`);
+  logger.error(`   Status: ${validationResult.status}`);
+  logger.error(`   Summary: ${validationResult.summary}\n`);
+
+  // Group issues by severity
+  const errors = validationResult.issues.filter(i => i.severity === 'error');
+  const warnings = validationResult.issues.filter(i => i.severity === 'warning');
+
+  // Display errors
+  if (errors.length > 0) {
+    logger.error(`Errors:`);
+    for (const issue of errors) {
+      displayIssue(issue, logger, true);
+    }
+    logger.error('');
+  }
+
+  // Display warnings
+  if (warnings.length > 0) {
+    logger.info(`Warnings:`);
+    for (const issue of warnings) {
+      displayIssue(issue, logger, false);
+    }
+    logger.info('');
+  }
 }
 
 /**
@@ -201,6 +281,9 @@ async function performDryRun(
   logger.info(`   Source: ${skillPath}`);
   logger.info(`   Output: ${options.output}`);
 
+  // VALIDATE FIRST - shift left to catch errors early
+  await validateSkillOrExit(skillPath, options['base-path'] ?? dirname(skillPath), logger);
+
   // Parse SKILL.md and extract metadata
   const parseResult = await parseMarkdown(skillPath);
   const skillName = extractSkillName(parseResult);
@@ -271,6 +354,10 @@ async function packageCommand(
       await performDryRun(skillPath, options, logger);
       process.exit(0);
     }
+
+    // VALIDATE FIRST - shift left to catch errors early
+    await validateSkillOrExit(skillPath, options['base-path'] ?? dirname(skillPath), logger);
+    logger.info('');
 
     // Package the skill
     const result = await packageSkill(skillPath, packageOptions);

@@ -9,7 +9,7 @@ import { readdir } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-import { extractH1Title } from '@vibe-agent-toolkit/agent-skills';
+import { extractH1Title, validateSkill } from '@vibe-agent-toolkit/agent-skills';
 import { parseMarkdown } from '@vibe-agent-toolkit/resources';
 import { Command } from 'commander';
 
@@ -28,6 +28,8 @@ interface InstalledSkill {
   hasSkillMd: boolean;
   title?: string;
   description?: string;
+  validationStatus: 'valid' | 'error' | 'warning' | 'no-skill-md';
+  validationErrors?: number;
 }
 
 export function createListCommand(): Command {
@@ -70,6 +72,47 @@ Example:
     );
 
   return command;
+}
+
+/**
+ * Validate a skill and return status information
+ */
+async function validateSkillAndGetStatus(
+  skillMdPath: string,
+  skillPath: string,
+  logger: ReturnType<typeof createLogger>
+): Promise<{ validationStatus: 'valid' | 'error' | 'warning'; validationErrors?: number }> {
+  try {
+    const validationResult = await validateSkill({
+      skillPath: skillMdPath,
+      rootDir: skillPath,
+    });
+
+    if (validationResult.status === 'error') {
+      const errorCount = validationResult.issues.filter(i => i.severity === 'error').length;
+      return {
+        validationStatus: 'error',
+        validationErrors: errorCount,
+      };
+    }
+
+    if (validationResult.status === 'warning') {
+      return {
+        validationStatus: 'warning',
+      };
+    }
+
+    return {
+      validationStatus: 'valid',
+    };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logger.debug(`Failed to validate skill: ${errorMessage}`);
+    return {
+      validationStatus: 'error',
+      validationErrors: 1,
+    };
+  }
 }
 
 /**
@@ -131,6 +174,11 @@ function outputSkillsYaml(
     process.stdout.write(`  - name: ${skill.name}\n`);
     process.stdout.write(`    path: ${skill.path}\n`);
     process.stdout.write(`    hasSkillMd: ${skill.hasSkillMd}\n`);
+    process.stdout.write(`    validationStatus: ${skill.validationStatus}\n`);
+
+    if (skill.validationErrors !== undefined) {
+      process.stdout.write(`    validationErrors: ${skill.validationErrors}\n`);
+    }
 
     if (options.verbose && skill.title) {
       process.stdout.write(`    title: ${skill.title}\n`);
@@ -142,6 +190,104 @@ function outputSkillsYaml(
   }
 
   process.stdout.write(`duration: ${duration}ms\n`);
+}
+
+/**
+ * Get status icon for a skill based on validation status
+ */
+function getStatusIcon(skill: InstalledSkill): string {
+  if (skill.validationStatus === 'valid') {
+    return '✅';
+  }
+
+  if (skill.validationStatus === 'warning') {
+    return '⚠️';
+  }
+
+  if (skill.validationStatus === 'error') {
+    if (skill.validationErrors !== undefined) {
+      const plural = skill.validationErrors === 1 ? '' : 's';
+      return `❌ (${skill.validationErrors} error${plural})`;
+    }
+    return '❌';
+  }
+
+  // no-skill-md
+  return '⚠️ (no SKILL.md)';
+}
+
+/**
+ * Process a single skill directory and extract all metadata
+ */
+async function processSkillDirectory(
+  entry: { name: string; isDirectory: () => boolean },
+  pluginsDir: string,
+  logger: ReturnType<typeof createLogger>
+): Promise<InstalledSkill> {
+  const skillPath = join(pluginsDir, entry.name);
+  const skillMdPath = join(skillPath, 'SKILL.md');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Skill path from plugins directory
+  const hasSkillMd = existsSync(skillMdPath);
+
+  // Validate skill if SKILL.md exists
+  let validationStatus: 'valid' | 'error' | 'warning' | 'no-skill-md' = 'no-skill-md';
+  let validationErrors: number | undefined;
+
+  if (hasSkillMd) {
+    const validation = await validateSkillAndGetStatus(skillMdPath, skillPath, logger);
+    validationStatus = validation.validationStatus;
+    validationErrors = validation.validationErrors;
+  }
+
+  const skill: InstalledSkill = {
+    name: entry.name,
+    path: skillPath,
+    hasSkillMd,
+    validationStatus,
+  };
+
+  // Add validation errors if present (exactOptionalPropertyTypes)
+  if (validationErrors !== undefined) {
+    skill.validationErrors = validationErrors;
+  }
+
+  // Extract metadata if SKILL.md exists
+  if (hasSkillMd) {
+    const metadata = await extractSkillMetadata(skillMdPath, entry.name, logger);
+    // Only assign if defined (exactOptionalPropertyTypes)
+    if (metadata.title !== undefined) {
+      skill.title = metadata.title;
+    }
+    if (metadata.description !== undefined) {
+      skill.description = metadata.description;
+    }
+  }
+
+  return skill;
+}
+
+/**
+ * Output a single skill line
+ */
+function outputSingleSkill(
+  skill: InstalledSkill,
+  statusIcon: string,
+  logger: ReturnType<typeof createLogger>,
+  options: SkillsListCommandOptions
+): void {
+  // Show directory name, with title in parentheses if different
+  let displayName = skill.name;
+  if (skill.title && skill.title !== skill.name) {
+    displayName = `${skill.name} (${skill.title})`;
+  }
+
+  if (options.verbose && skill.description) {
+    logger.info(`   ${statusIcon} ${displayName}`);
+    logger.info(`      ${skill.description}`);
+    logger.info(`      ${skill.path}\n`);
+  } else {
+    logger.info(`   ${statusIcon} ${displayName}`);
+  }
 }
 
 /**
@@ -160,16 +306,8 @@ function outputSkillsHuman(
   logger.info(`\n   Found ${skills.length} skill${skills.length === 1 ? '' : 's'}:\n`);
 
   for (const skill of skills) {
-    const status = skill.hasSkillMd ? '✓' : '⚠';
-    const title = skill.title ?? skill.name;
-
-    if (options.verbose && skill.description) {
-      logger.info(`   ${status} ${title}`);
-      logger.info(`      ${skill.description}`);
-      logger.info(`      ${skill.path}\n`);
-    } else {
-      logger.info(`   ${status} ${title}`);
-    }
+    const statusIcon = getStatusIcon(skill);
+    outputSingleSkill(skill, statusIcon, logger, options);
   }
 }
 
@@ -207,29 +345,7 @@ async function listCommand(options: SkillsListCommandOptions): Promise<void> {
         continue;
       }
 
-      const skillPath = join(pluginsDir, entry.name);
-      const skillMdPath = join(skillPath, 'SKILL.md');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Skill path from plugins directory
-      const hasSkillMd = existsSync(skillMdPath);
-
-      const skill: InstalledSkill = {
-        name: entry.name,
-        path: skillPath,
-        hasSkillMd,
-      };
-
-      // Extract metadata if SKILL.md exists
-      if (hasSkillMd) {
-        const metadata = await extractSkillMetadata(skillMdPath, entry.name, logger);
-        // Only assign if defined (exactOptionalPropertyTypes)
-        if (metadata.title !== undefined) {
-          skill.title = metadata.title;
-        }
-        if (metadata.description !== undefined) {
-          skill.description = metadata.description;
-        }
-      }
-
+      const skill = await processSkillDirectory(entry, pluginsDir, logger);
       skills.push(skill);
     }
 
