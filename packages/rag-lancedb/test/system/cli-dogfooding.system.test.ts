@@ -65,7 +65,8 @@ describe('RAG CLI (Node.js dogfooding)', () => {
   const binPath = join(projectRoot, 'packages/cli/dist/bin.js');
   // Use isolated test output directory to avoid conflicts in parallel test execution
   const testDbPath = getTestOutputDir('rag-lancedb', 'system', 'test-db');
-  const docsPath = join(projectRoot, 'docs');
+  // Index only architecture docs (5 files) instead of all docs (53 files) for faster tests
+  const docsPath = join(projectRoot, 'docs/architecture');
 
   beforeAll(async () => {
     // Ensure CLI is built
@@ -94,7 +95,7 @@ describe('RAG CLI (Node.js dogfooding)', () => {
       binPath,
       ['rag', 'index', docsPath, '--db', testDbPath],
       projectRoot,
-      60000
+      60000 // 1 minute - only indexing 5 architecture docs
     );
 
     expect(output.status).toBe('success');
@@ -106,7 +107,8 @@ describe('RAG CLI (Node.js dogfooding)', () => {
     const output = executeCliCommand(
       binPath,
       ['rag', 'query', 'How do I configure RAG?', '--db', testDbPath, '--limit', '5'],
-      projectRoot
+      projectRoot,
+      30000 // 30 seconds for query with embedding
     );
 
     expect(output.status).toBe('success');
@@ -115,7 +117,7 @@ describe('RAG CLI (Node.js dogfooding)', () => {
   });
 
   it('should show database statistics via CLI', () => {
-    const output = executeCliCommand(binPath, ['rag', 'stats', '--db', testDbPath], projectRoot);
+    const output = executeCliCommand(binPath, ['rag', 'stats', '--db', testDbPath], projectRoot, 10000);
 
     expect(output.status).toBe('success');
     expect(output.totalChunks).toBeGreaterThan(0);
@@ -127,7 +129,8 @@ describe('RAG CLI (Node.js dogfooding)', () => {
     const output = executeCliCommand(
       binPath,
       ['rag', 'query', 'RAG configuration and setup', '--db', testDbPath, '--limit', '5'],
-      projectRoot
+      projectRoot,
+      30000 // 30 seconds for query with embedding
     );
 
     expect(output.chunks.length).toBeGreaterThan(0);
@@ -142,7 +145,7 @@ describe('RAG CLI (Node.js dogfooding)', () => {
   });
 
   it('should clear database via CLI', () => {
-    const output = executeCliCommand(binPath, ['rag', 'clear', '--db', testDbPath], projectRoot);
+    const output = executeCliCommand(binPath, ['rag', 'clear', '--db', testDbPath], projectRoot, 10000);
 
     expect(output.status).toBe('success');
 

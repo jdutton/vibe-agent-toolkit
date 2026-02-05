@@ -19,11 +19,16 @@ export type {
 
 // Schemas (Zod)
 export {
+  CoreRAGChunkSchema,
+  type CoreRAGChunk,
+  DefaultRAGMetadataSchema,
+  type DefaultRAGMetadata,
   RAGChunkSchema,
   RAGQuerySchema,
   RAGResultSchema,
   RAGStatsSchema,
   IndexResultSchema,
+  createCustomRAGChunkSchema,
 } from './schemas/index.js';
 
 // JSON Schemas

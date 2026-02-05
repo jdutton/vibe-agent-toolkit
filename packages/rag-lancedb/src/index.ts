@@ -6,3 +6,8 @@
 
 export { LanceDBRAGProvider, type LanceDBConfig } from './lancedb-rag-provider.js';
 export { chunkToLanceRow, lanceRowToChunk, type LanceDBRow } from './schema.js';
+export {
+  buildMetadataFilter,
+  buildMetadataWhereClause,
+  buildWhereClause,
+} from './filter-builder.js';

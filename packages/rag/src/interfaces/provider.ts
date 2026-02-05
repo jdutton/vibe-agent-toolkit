@@ -7,28 +7,30 @@
 
 import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
 
+import type { CoreRAGChunk } from '../schemas/core-chunk.js';
+import type { DefaultRAGMetadata } from '../schemas/default-metadata.js';
+
 /**
  * Query for RAG database
+ *
+ * Generic over metadata type for type-safe filtering.
  */
-export interface RAGQuery {
+export interface RAGQuery<TMetadata extends Record<string, unknown> = DefaultRAGMetadata> {
   /** Search query text */
   text: string;
 
   /** Maximum results to return (default: 10) */
   limit?: number;
 
-  /** Metadata filters */
+  /** Filters */
   filters?: {
     /** Filter by resource ID(s) */
     resourceId?: string | string[];
-    /** Filter by tags */
-    tags?: string[];
-    /** Filter by resource type */
-    type?: string;
-    /** Filter by heading path (e.g., "Architecture > RAG Design") */
-    headingPath?: string;
     /** Filter by date range */
     dateRange?: { start: Date; end: Date };
+
+    /** Metadata filters (type-safe based on TMetadata) */
+    metadata?: Partial<TMetadata>;
   };
 
   /** Hybrid search configuration (vector + keyword) */
@@ -42,34 +44,19 @@ export interface RAGQuery {
 /**
  * Chunk returned from RAG query
  * Note: Full schema defined in schemas/chunk.ts
+ *
+ * Re-exported here for convenience.
  */
-export interface RAGChunk {
-  chunkId: string;
-  resourceId: string;
-  content: string;
-  contentHash: string;
-  tokenCount: number;
-  headingPath?: string;
-  headingLevel?: number;
-  startLine?: number;
-  endLine?: number;
-  filePath: string;
-  tags?: string[];
-  type?: string;
-  title?: string;
-  embedding: number[];
-  embeddingModel: string;
-  embeddedAt: Date;
-  previousChunkId?: string;
-  nextChunkId?: string;
-}
+export type { RAGChunk } from './chunk.js';
 
 /**
  * Result from RAG query
+ *
+ * Generic over metadata type - chunks have type CoreRAGChunk & TMetadata.
  */
-export interface RAGResult {
+export interface RAGResult<TMetadata extends Record<string, unknown> = DefaultRAGMetadata> {
   /** Matched chunks, sorted by relevance */
-  chunks: RAGChunk[];
+  chunks: Array<CoreRAGChunk & TMetadata>;
 
   /** Search statistics */
   stats: {
@@ -110,12 +97,13 @@ export interface IndexResult {
  * RAG Query Provider (read-only)
  *
  * This is what agents use at runtime to query the RAG database.
+ * Generic over metadata type for type-safe queries and results.
  */
-export interface RAGQueryProvider {
+export interface RAGQueryProvider<TMetadata extends Record<string, unknown> = DefaultRAGMetadata> {
   /**
    * Query the RAG database
    */
-  query(query: RAGQuery): Promise<RAGResult>;
+  query(query: RAGQuery<TMetadata>): Promise<RAGResult<TMetadata>>;
 
   /**
    * Get database statistics
@@ -128,8 +116,10 @@ export interface RAGQueryProvider {
  *
  * This is what build tools and admin processes use to index/update the RAG database.
  * Extends RAGQueryProvider to include write operations.
+ * Generic over metadata type for type-safe operations.
  */
-export interface RAGAdminProvider extends RAGQueryProvider {
+export interface RAGAdminProvider<TMetadata extends Record<string, unknown> = DefaultRAGMetadata>
+  extends RAGQueryProvider<TMetadata> {
   /**
    * Index resources into the RAG database
    * - Detects changes via content hash

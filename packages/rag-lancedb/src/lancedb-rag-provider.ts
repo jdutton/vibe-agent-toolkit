@@ -9,10 +9,11 @@ import fs from 'node:fs';
 import type { Connection, Table } from '@lancedb/lancedb';
 import * as lancedb from '@lancedb/lancedb';
 import type {
+  CoreRAGChunk,
+  DefaultRAGMetadata,
   EmbeddingProvider,
   IndexResult,
   RAGAdminProvider,
-  RAGChunk,
   RAGQuery,
   RAGResult,
   RAGStats,
@@ -20,18 +21,25 @@ import type {
 import {
   ApproximateTokenCounter,
   chunkResource,
+  DefaultRAGMetadataSchema,
   enrichChunks,
   generateContentHash,
   TransformersEmbeddingProvider,
 } from '@vibe-agent-toolkit/rag';
 import { parseMarkdown, type ResourceMetadata } from '@vibe-agent-toolkit/resources';
+import type { ZodObject, ZodRawShape } from 'zod';
 
-import { chunkToLanceRow, lanceRowToChunk, type LanceDBRow } from './schema.js';
+import { buildWhereClause, escapeSQLString } from './filter-builder.js';
+import {
+  chunkToLanceRow,
+  lanceRowToChunk,
+  type LanceDBRow,
+} from './schema.js';
 
 /**
- * Configuration for LanceDBRAGProvider
+ * Configuration for LanceDBRAGProvider (generic over metadata type)
  */
-export interface LanceDBConfig {
+export interface LanceDBConfig<_TMetadata extends Record<string, unknown> = DefaultRAGMetadata> {
   /** Path to LanceDB database directory */
   dbPath: string;
 
@@ -46,39 +54,79 @@ export interface LanceDBConfig {
 
   /** Padding factor for token estimation (default: 0.9) */
   paddingFactor?: number;
+
+  /** Metadata schema for validation and serialization (defaults to DefaultRAGMetadataSchema) */
+  metadataSchema?: ZodObject<ZodRawShape>;
 }
 
 const TABLE_NAME = 'rag_chunks';
 
 /**
- * LanceDBRAGProvider
+ * Required configuration after defaults applied
+ */
+interface RequiredLanceDBConfig<_TMetadata extends Record<string, unknown>> {
+  dbPath: string;
+  readonly: boolean;
+  embeddingProvider: EmbeddingProvider;
+  targetChunkSize: number;
+  paddingFactor: number;
+  metadataSchema: ZodObject<ZodRawShape>;
+}
+
+/**
+ * LanceDBRAGProvider (generic over metadata type)
  *
  * Complete RAG implementation using LanceDB for vector storage.
+ * Users must explicitly specify the metadata type when using custom schemas.
  */
-export class LanceDBRAGProvider implements RAGAdminProvider {
-  private readonly config: Required<LanceDBConfig>;
+export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = DefaultRAGMetadata>
+  implements RAGAdminProvider<TMetadata> {
+  private readonly config: RequiredLanceDBConfig<TMetadata>;
+  private readonly metadataSchema: ZodObject<ZodRawShape>;
   private connection: Connection | null = null;
   private table: Table | null = null;
   private readonly tokenCounter = new ApproximateTokenCounter();
 
-  private constructor(config: LanceDBConfig) {
+  private constructor(config: LanceDBConfig<TMetadata>) {
     this.config = {
       readonly: false,
       embeddingProvider: new TransformersEmbeddingProvider(),
       targetChunkSize: 512,
       paddingFactor: 0.9,
+      metadataSchema: DefaultRAGMetadataSchema,
       ...config,
     };
+    this.metadataSchema = this.config.metadataSchema;
   }
 
   /**
    * Create and initialize LanceDBRAGProvider
    *
-   * @param config - Configuration
+   * For custom metadata types, specify the type parameter explicitly:
+   *
+   * @param config - Configuration with optional metadataSchema
    * @returns Initialized provider
+   *
+   * @example
+   * ```typescript
+   * // Default metadata (DefaultRAGMetadata)
+   * const provider = await LanceDBRAGProvider.create({
+   *   dbPath: './db',
+   * });
+   *
+   * // Custom metadata (explicit type parameter required)
+   * type CustomMetadata = { domain: string; priority: number };
+   * const CustomSchema = z.object({ domain: z.string(), priority: z.number() });
+   * const customProvider = await LanceDBRAGProvider.create<CustomMetadata>({
+   *   dbPath: './db',
+   *   metadataSchema: CustomSchema,
+   * });
+   * ```
    */
-  static async create(config: LanceDBConfig): Promise<LanceDBRAGProvider> {
-    const provider = new LanceDBRAGProvider(config);
+  static async create<TMetadata extends Record<string, unknown> = DefaultRAGMetadata>(
+    config: LanceDBConfig<TMetadata>
+  ): Promise<LanceDBRAGProvider<TMetadata>> {
+    const provider = new LanceDBRAGProvider<TMetadata>(config);
     await provider.initialize();
     return provider;
   }
@@ -110,7 +158,7 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
   /**
    * Query the RAG database
    */
-  async query(query: RAGQuery): Promise<RAGResult> {
+  async query(query: RAGQuery<TMetadata>): Promise<RAGResult<TMetadata>> {
     // Workaround for vectordb@0.4.20 + Bun Arrow buffer lifecycle bug
     // After table modifications, we need to recreate the connection entirely
     await this.reconnectAndOpenTable();
@@ -129,7 +177,7 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
 
     // Apply filters if provided
     if (query.filters) {
-      const whereClause = this.buildWhereClause(query.filters);
+      const whereClause = buildWhereClause(query.filters, this.metadataSchema);
       if (whereClause) {
         search = search.where(whereClause);
       }
@@ -139,10 +187,10 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
 
     // Convert results to plain objects immediately to avoid Arrow buffer issues
     // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
-    const materializedResults = JSON.parse(JSON.stringify(results)) as LanceDBRow[];
+    const materializedResults = JSON.parse(JSON.stringify(results)) as LanceDBRow<TMetadata>[];
 
-    // Convert results to RAGChunks
-    const chunks = materializedResults.map((row) => lanceRowToChunk(row));
+    // Convert results to RAGChunks using the metadata schema
+    const chunks = materializedResults.map((row) => lanceRowToChunk<TMetadata>(row, this.metadataSchema));
 
     const searchDurationMs = Date.now() - startTime;
 
@@ -158,40 +206,6 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
     };
   }
 
-  /**
-   * Build WHERE clause from filters
-   */
-  private buildWhereClause(filters: RAGQuery['filters']): string | null {
-    if (!filters) {
-      return null;
-    }
-
-    const conditions: string[] = [];
-
-    if (filters.resourceId !== undefined) {
-      const ids = Array.isArray(filters.resourceId) ? filters.resourceId : [filters.resourceId];
-
-      // Handle empty array case - should match nothing
-      if (ids.length === 0) {
-        conditions.push('1 = 0'); // Always false condition
-      } else {
-        const idList = ids.map((id) => `'${id}'`).join(', ');
-        // Use backticks for column names
-        conditions.push(`\`resourceId\` IN (${idList})`);
-      }
-    }
-
-    if (filters.type) {
-      conditions.push(`type = '${filters.type}'`);
-    }
-
-    if (filters.headingPath) {
-      // Use backticks for column names
-      conditions.push(`\`headingPath\` = '${filters.headingPath}'`);
-    }
-
-    return conditions.length > 0 ? conditions.join(' AND ') : null;
-  }
 
   /**
    * Get database statistics
@@ -283,7 +297,7 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
     let shouldUpdate = false;
 
     if (this.table) {
-      const existingRows = await this.table.query().where(`\`resourceId\` = '${resource.id}'`).toArray();
+      const existingRows = await this.table.query().where(`\`resourceId\` = '${escapeSQLString(resource.id)}'`).toArray();
       // Materialize immediately to avoid Arrow buffer issues
       // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
       const existing = JSON.parse(JSON.stringify(existingRows)) as LanceDBRow[];
@@ -348,9 +362,26 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
       this.config.embeddingProvider.model
     );
 
-    // Convert to LanceDB rows
-    const rows = ragChunks.map((chunk) =>
-      chunkToLanceRow(chunk as RAGChunk, resourceContentHash)
+    // Add custom metadata from resource.frontmatter to each chunk
+    // This allows custom metadata schemas to extract additional fields beyond the default ones
+    const chunksWithMetadata = ragChunks.map((chunk) => {
+      const chunkWithMetadata: Record<string, unknown> = { ...chunk };
+
+      // Add metadata fields from frontmatter according to the schema
+      if (resource.frontmatter) {
+        for (const key of Object.keys(this.metadataSchema.shape)) {
+          if (key in resource.frontmatter) {
+            chunkWithMetadata[key] = resource.frontmatter[key];
+          }
+        }
+      }
+
+      return chunkWithMetadata as CoreRAGChunk & TMetadata;
+    });
+
+    // Convert to LanceDB rows using the metadata schema
+    const rows = chunksWithMetadata.map((chunk) =>
+      chunkToLanceRow<TMetadata>(chunk, resourceContentHash, this.metadataSchema)
     );
 
     // Insert into LanceDB
@@ -386,7 +417,7 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
     }
 
     // Delete chunks (use backticks for column names)
-    await this.table.delete(`\`resourceId\` = '${resourceId}'`);
+    await this.table.delete(`\`resourceId\` = '${escapeSQLString(resourceId)}'`);
   }
 
   /**

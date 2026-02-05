@@ -31,4 +31,4 @@ if (process.platform === 'win32') {
 }
 
 // Run the actual duplication check on supported platforms
-void import('./jscpd-check-new.js');
+await import('./jscpd-check-new.js');

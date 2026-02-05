@@ -16,6 +16,75 @@ This package provides the core interfaces and schemas for RAG functionality in V
 **What's NOT included:**
 - Vector database implementations (see `@vibe-agent-toolkit/rag-lancedb`)
 
+## Custom Metadata
+
+By default, RAG chunks include sensible metadata fields optimized for markdown documentation (filePath, tags, type, headingPath, etc.). You can extend or completely replace these defaults with your own custom metadata.
+
+### Architecture
+
+RAG chunks are composed of two parts:
+
+1. **CoreRAGChunk** - Required fields for RAG functionality (identity, content, vectors, context)
+2. **Metadata** - Flexible fields for filtering and organization
+
+The default `RAGChunk` type is `CoreRAGChunk & DefaultRAGMetadata`.
+
+### Defining Custom Metadata
+
+Use Zod to define your custom metadata schema:
+
+```typescript
+import { z } from 'zod';
+import {
+  createCustomRAGChunkSchema,
+  CoreRAGChunkSchema,
+  DefaultRAGMetadataSchema,
+} from '@vibe-agent-toolkit/rag';
+
+// Option 1: Extend default metadata
+const ExtendedMetadataSchema = DefaultRAGMetadataSchema.extend({
+  domain: z.string(),
+  priority: z.number().optional(),
+});
+
+// Option 2: Replace with custom metadata
+const CustomMetadataSchema = z.object({
+  sourceUrl: z.string(),
+  domain: z.string(),
+  category: z.string().optional(),
+  keywords: z.array(z.string()),
+});
+
+// Create chunk schema
+const CustomChunkSchema = createCustomRAGChunkSchema(CustomMetadataSchema);
+type CustomChunk = z.infer<typeof CustomChunkSchema>;
+```
+
+### Type Safety
+
+TypeScript automatically infers types from your Zod schema:
+
+```typescript
+const chunk: CustomChunk = {
+  // Core fields (required)
+  chunkId: 'chunk-1',
+  resourceId: 'doc-1',
+  content: 'Authentication guide',
+  contentHash: 'abc123',
+  tokenCount: 50,
+  embedding: [0.1, 0.2, 0.3],
+  embeddingModel: 'text-embedding-3-small',
+  embeddedAt: new Date(),
+
+  // Custom metadata fields
+  sourceUrl: 'https://example.com/docs/auth.md',
+  domain: 'security',
+  keywords: ['auth', 'oauth', 'jwt'],
+};
+```
+
+See the [LanceDB provider documentation](../rag-lancedb/README.md) for usage with databases.
+
 ## Installation
 
 ```bash
