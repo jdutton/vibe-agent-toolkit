@@ -61,14 +61,26 @@ export interface LanceDBConfig<_TMetadata extends Record<string, unknown> = Defa
 const TABLE_NAME = 'rag_chunks';
 
 /**
+ * Required configuration after defaults applied
+ */
+interface RequiredLanceDBConfig<_TMetadata extends Record<string, unknown>> {
+  dbPath: string;
+  readonly: boolean;
+  embeddingProvider: EmbeddingProvider;
+  targetChunkSize: number;
+  paddingFactor: number;
+  metadataSchema: ZodObject<ZodRawShape>;
+}
+
+/**
  * LanceDBRAGProvider (generic over metadata type)
  *
  * Complete RAG implementation using LanceDB for vector storage.
- * Automatically infers metadata type from the metadataSchema provided in config.
+ * Users must explicitly specify the metadata type when using custom schemas.
  */
 export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = DefaultRAGMetadata>
   implements RAGAdminProvider<TMetadata> {
-  private readonly config: Required<LanceDBConfig<TMetadata>>;
+  private readonly config: RequiredLanceDBConfig<TMetadata>;
   private readonly metadataSchema: ZodObject<ZodRawShape>;
   private connection: Connection | null = null;
   private table: Table | null = null;
@@ -87,29 +99,27 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
   }
 
   /**
-   * Create and initialize LanceDBRAGProvider with automatic type inference
+   * Create and initialize LanceDBRAGProvider
    *
-   * Type magic: If config.metadataSchema is provided with a specific schema,
-   * the returned provider's type is automatically inferred from the schema.
+   * For custom metadata types, specify the type parameter explicitly:
    *
    * @param config - Configuration with optional metadataSchema
-   * @returns Initialized provider with inferred metadata type
+   * @returns Initialized provider
    *
    * @example
    * ```typescript
-   * // With custom schema (type inferred automatically)
-   * const CustomSchema = z.object({ domain: z.string() });
+   * // Default metadata (DefaultRAGMetadata)
    * const provider = await LanceDBRAGProvider.create({
+   *   dbPath: './db',
+   * });
+   *
+   * // Custom metadata (explicit type parameter required)
+   * type CustomMetadata = { domain: string; priority: number };
+   * const CustomSchema = z.object({ domain: z.string(), priority: z.number() });
+   * const customProvider = await LanceDBRAGProvider.create<CustomMetadata>({
    *   dbPath: './db',
    *   metadataSchema: CustomSchema,
    * });
-   * // provider has type: LanceDBRAGProvider<{ domain: string }>
-   *
-   * // Without schema (defaults to DefaultRAGMetadata)
-   * const defaultProvider = await LanceDBRAGProvider.create({
-   *   dbPath: './db',
-   * });
-   * // defaultProvider has type: LanceDBRAGProvider<DefaultRAGMetadata>
    * ```
    */
   static async create<TMetadata extends Record<string, unknown> = DefaultRAGMetadata>(
