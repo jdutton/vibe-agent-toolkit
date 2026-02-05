@@ -6,6 +6,13 @@
 export { buildClaudeSkill, type BuildOptions, type BuildResult } from './builder.js';
 
 export {
+  packageSkill,
+  type PackageSkillOptions,
+  type PackageSkillResult,
+  type SkillMetadata,
+} from './skill-packager.js';
+
+export {
   ClaudeSkillFrontmatterSchema,
   VATClaudeSkillFrontmatterSchema,
   type ClaudeSkillFrontmatter,
