@@ -6,6 +6,7 @@
 export { buildClaudeSkill, type BuildOptions, type BuildResult } from './builder.js';
 
 export {
+  extractH1Title,
   packageSkill,
   type PackageSkillOptions,
   type PackageSkillResult,

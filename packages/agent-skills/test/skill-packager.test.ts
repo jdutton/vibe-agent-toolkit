@@ -150,18 +150,32 @@ describe('skill-packager: extractSkillMetadata', () => {
     });
   });
 
-  it('should throw error if name is missing', async () => {
+  it('should use H1 title as fallback if name missing in frontmatter', async () => {
     const tempDir = getTempDir();
     const skillPath = join(tempDir, 'SKILL.md');
+    const outputPath = join(tempDir, 'output');
 
     await writeFile(
       skillPath,
       `${createFrontmatter({ description: 'No name' })}\n\n# Test Skill`
     );
 
-    await expect(packageSkill(skillPath, { formats: [] }))
-      .rejects
-      .toThrow('SKILL.md must have a name in frontmatter');
+    const result = await packageSkill(skillPath, { formats: [], outputPath });
+    expect(result.skill.name).toBe('Test Skill');
+  });
+
+  it('should use filename as last resort if no name or H1', async () => {
+    const tempDir = getTempDir();
+    const skillPath = join(tempDir, 'my-custom-skill.md');
+    const outputPath = join(tempDir, 'output');
+
+    await writeFile(
+      skillPath,
+      `${createFrontmatter({ description: 'No name or H1' })}\n\nSome content without H1`
+    );
+
+    const result = await packageSkill(skillPath, { formats: [], outputPath });
+    expect(result.skill.name).toBe('my-custom-skill');
   });
 
   it('should trim whitespace from name', async () => {

@@ -14,7 +14,7 @@
 
 import { existsSync } from 'node:fs';
 import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import { parseMarkdown, type ParseResult } from '@vibe-agent-toolkit/resources';
 import { toForwardSlash } from '@vibe-agent-toolkit/utils';
@@ -113,7 +113,7 @@ export async function packageSkill(
 
   // 1. Parse SKILL.md frontmatter and links
   const parseResult = await parseMarkdown(skillPath);
-  const skillMetadata = extractSkillMetadata(parseResult);
+  const skillMetadata = extractSkillMetadata(parseResult, skillPath);
 
   // 2. Collect all linked resources recursively
   const linkedFiles = await collectLinkedResources(
@@ -122,20 +122,24 @@ export async function packageSkill(
     new Set()
   );
 
-  // 3. Determine output path
+  // 3. Calculate common ancestor of all files (for proper relative path calculation)
+  const allFiles = [skillPath, ...linkedFiles];
+  const effectiveBasePath = findCommonAncestor(allFiles);
+
+  // 4. Determine output path
   const outputPath = options.outputPath ??
     getDefaultSkillOutputPath(skillPath, skillMetadata.name);
 
-  // 4. Copy SKILL.md and all linked files
+  // 5. Copy SKILL.md and all linked files
   await copySkillResources(
     skillPath,
     linkedFiles,
     outputPath,
-    basePath,
+    effectiveBasePath,
     rewriteLinks
   );
 
-  // 5. Generate distribution artifacts
+  // 6. Generate distribution artifacts
   const artifacts = await generatePackageArtifacts(
     outputPath,
     skillMetadata,
@@ -144,7 +148,7 @@ export async function packageSkill(
 
   // Get relative paths for result
   const relativeLinkedFiles = linkedFiles.map(f =>
-    toForwardSlash(relative(basePath, f))
+    toForwardSlash(relative(effectiveBasePath, f))
   );
 
   return {
@@ -159,16 +163,25 @@ export async function packageSkill(
 }
 
 /**
- * Extract skill metadata from SKILL.md frontmatter
+ * Extract skill metadata from SKILL.md frontmatter or content
  */
-function extractSkillMetadata(parseResult: ParseResult): SkillMetadata {
+function extractSkillMetadata(
+  parseResult: ParseResult,
+  skillPath: string
+): SkillMetadata {
   const frontmatter = parseResult.frontmatter ?? {};
 
-  // Name is required
-  const name = frontmatter['name'];
-  if (typeof name !== 'string' || name.trim() === '') {
-    throw new Error('SKILL.md must have a name in frontmatter');
-  }
+  // Extract name from frontmatter (with validation)
+  const frontmatterName = frontmatter['name'];
+  const validFrontmatterName = typeof frontmatterName === 'string' && frontmatterName.trim() !== ''
+    ? frontmatterName
+    : undefined;
+
+  // Try: frontmatter → H1 title → filename
+  const name =
+    validFrontmatterName ??
+    extractH1Title(parseResult.content) ??
+    basename(skillPath).replace(/\.md$/i, '');
 
   // Extract optional fields using bracket notation
   const description = frontmatter['description'];
@@ -195,6 +208,69 @@ function extractSkillMetadata(parseResult: ParseResult): SkillMetadata {
   }
 
   return result;
+}
+
+/**
+ * Extract H1 title from markdown content
+ *
+ * @param content - Markdown content
+ * @returns The H1 title text, or undefined if not found
+ */
+export function extractH1Title(content: string): string | undefined {
+  const lines = content.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('# ')) {
+      return trimmed.slice(2).trim();
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Find the common ancestor directory of all file paths
+ *
+ * @param filePaths - Array of absolute file paths
+ * @returns Common ancestor directory path
+ */
+function findCommonAncestor(filePaths: string[]): string {
+  if (filePaths.length === 0) {
+    return process.cwd();
+  }
+
+  if (filePaths.length === 1) {
+    return dirname(filePaths[0] ?? process.cwd());
+  }
+
+  // Normalize all paths
+  const normalizedPaths = filePaths.map(p => toForwardSlash(resolve(p)));
+
+  // Split into path segments
+  // eslint-disable-next-line local/no-hardcoded-path-split -- Paths are normalized to forward slashes by toForwardSlash()
+  const pathSegments = normalizedPaths.map(p => p.split('/'));
+
+  // Find common prefix
+  const firstPath = pathSegments[0] ?? [];
+  let commonDepth = 0;
+
+  for (const [i, segment] of firstPath.entries()) {
+    const allMatch = pathSegments.every(segments => segments[i] === segment);
+
+    if (!allMatch) {
+      break;
+    }
+
+    commonDepth = i + 1;
+  }
+
+  // If no common directory (different roots), use first file's directory
+  if (commonDepth === 0) {
+    return dirname(filePaths[0] ?? process.cwd());
+  }
+
+  // Reconstruct common ancestor path
+  const commonSegments = firstPath.slice(0, commonDepth);
+  return commonSegments.join('/');
 }
 
 /**
@@ -239,10 +315,7 @@ async function collectLinkedResources(
     // Resolve relative to the markdown file's directory
     const resolvedPath = resolve(dirname(markdownPath), hrefWithoutAnchor);
 
-    // Only include .md files within basePath
-    if (!toForwardSlash(resolvedPath).startsWith(toForwardSlash(basePath))) {
-      continue;
-    }
+    // Only include .md files (no basePath filtering - collect all valid linked files)
     if (!resolvedPath.endsWith('.md')) {
       continue;
     }

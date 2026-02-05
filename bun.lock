@@ -109,7 +109,7 @@
       "name": "@vibe-agent-toolkit/cli",
       "version": "0.1.8",
       "bin": {
-        "vat": "./dist/bin/vat",
+        "vat": "./dist/bin/vat.js",
       },
       "dependencies": {
         "@anthropic-ai/sdk": "^0.71.2",
@@ -123,12 +123,14 @@
         "@vibe-agent-toolkit/resources": "workspace:*",
         "@vibe-agent-toolkit/utils": "workspace:*",
         "@vibe-agent-toolkit/vat-example-cat-agents": "workspace:*",
+        "adm-zip": "^0.5.16",
         "commander": "^12.1.0",
         "js-yaml": "^4.1.0",
         "semver": "^7.7.3",
         "zod": "^3.24.1",
       },
       "devDependencies": {
+        "@types/adm-zip": "^0.5.7",
         "@types/js-yaml": "^4.0.9",
         "@types/node": "^22.10.5",
         "@types/semver": "^7.7.1",
@@ -419,6 +421,7 @@
         "@anthropic-ai/sdk": "^0.36.0",
         "@langchain/openai": "^0.3.16",
         "@types/node": "^22.10.5",
+        "@vibe-agent-toolkit/agent-skills": "workspace:*",
         "@vibe-agent-toolkit/resource-compiler": "workspace:*",
         "@vibe-agent-toolkit/runtime-claude-agent-sdk": "workspace:*",
         "@vibe-agent-toolkit/runtime-langchain": "workspace:*",
