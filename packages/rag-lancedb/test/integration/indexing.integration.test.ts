@@ -1,5 +1,3 @@
-/// <reference types="bun" />
-
 /**
  * Integration tests for LanceDB RAG provider
  *
@@ -225,6 +223,7 @@ Content for section 4 with even more text.`
     expect(result.chunks.every(chunk => chunk.resourceId === SPECIFIC_RESOURCE_ID)).toBe(true);
   });
 
+  // @ts-expect-error - Bun global is available at runtime
   it.skipIf(typeof Bun !== 'undefined')(
     'should handle empty resourceId filter array',
     async () => {
@@ -247,6 +246,7 @@ Content for section 4 with even more text.`
     }
   );
 
+  // @ts-expect-error - Bun global is available at runtime
   it.skipIf(typeof Bun !== 'undefined')('should delete specific resource', async () => {
     provider = await LanceDBRAGProvider.create({ dbPath });
 
@@ -371,7 +371,7 @@ Content for section 4 with even more text.`
       );
       const chunks = chunkResource(
         { ...resource, content: parseResult.content, frontmatter: {} },
-        { targetChunkSize: 512, modelTokenLimit: 8191, tokenCounter: new ApproximateTokenCounter() }
+        { targetChunkSize: 512, modelTokenLimit: 8191, paddingFactor: 0.9, tokenCounter: new ApproximateTokenCounter() }
       );
       const embeddings = await provider['config'].embeddingProvider.embedBatch(
         chunks.chunks.map((c) => c.content)
