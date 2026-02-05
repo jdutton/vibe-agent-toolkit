@@ -44,7 +44,7 @@ validation:
 
         - name: 'Skills validation'
           command: 'bun run vat skills validate'
-          description: 'Validates all SKILL.md files for skill-specific rules (reserved words, XML tags, console compatibility)'
+          description: 'Validates all SKILL.md files (unified: resources + skill-specific rules)'
 
         - name: 'Unit tests with coverage'
           command: 'bun run test:coverage'
