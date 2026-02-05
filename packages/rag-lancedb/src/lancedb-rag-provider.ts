@@ -181,13 +181,13 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
       }
     }
 
-    if (filters.type) {
-      conditions.push(`type = '${filters.type}'`);
+    if (filters.metadata?.type) {
+      conditions.push(`type = '${filters.metadata.type}'`);
     }
 
-    if (filters.headingPath) {
+    if (filters.metadata?.headingPath) {
       // Use backticks for column names
-      conditions.push(`\`headingPath\` = '${filters.headingPath}'`);
+      conditions.push(`\`headingPath\` = '${filters.metadata.headingPath}'`);
     }
 
     return conditions.length > 0 ? conditions.join(' AND ') : null;

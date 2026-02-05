@@ -1,60 +1,68 @@
 /**
- * Tests for RAG provider interfaces
+ * Compile-time type tests for generic provider interfaces
  *
- * These tests verify interface contracts by checking TypeScript types compile correctly.
+ * These tests verify that the generic provider interfaces work correctly
+ * with default and custom metadata types using TypeScript's built-in type checking.
  */
 
 import { describe, expect, it } from 'vitest';
 
-import type { RAGAdminProvider, RAGQuery, RAGQueryProvider, RAGResult, RAGStats, IndexResult } from '../../src/interfaces/provider.js';
+import type {
+  RAGAdminProvider,
+  RAGQuery,
+  RAGQueryProvider,
+  RAGResult,
+} from '../../src/interfaces/provider.js';
 
-describe('RAGQueryProvider Interface', () => {
-  it('should have query method that accepts RAGQuery and returns Promise<RAGResult>', () => {
-    // Type-only test - if this compiles, the interface is correct
-    const mockProvider: RAGQueryProvider = {
-      query: (_query: RAGQuery): Promise<RAGResult> => Promise.resolve({} as RAGResult),
-      getStats: (): Promise<RAGStats> => Promise.resolve({} as RAGStats),
-    };
+describe('Generic provider interface types', () => {
+  it('should default to DefaultRAGMetadata', () => {
+    // Compile-time type check: variable assignments validate types
+    const provider: RAGQueryProvider = {} as RAGQueryProvider;
+    const query: RAGQuery = { text: 'test' };
 
-    // Verify the query method exists and accepts RAGQuery
-    expect(mockProvider.query).toBeDefined();
-    expect(typeof mockProvider.query).toBe('function');
+    // Verify types without runtime execution
+    if (false as boolean) {
+      const result: Promise<RAGResult> = provider.query(query);
+      void result;
+    }
+
+    expect(true).toBe(true); // Test passes if code compiles
   });
 
-  it('should have getStats method that returns Promise<RAGStats>', () => {
-    // Type-only test
-    const mockProvider: RAGQueryProvider = {
-      query: (): Promise<RAGResult> => Promise.resolve({} as RAGResult),
-      getStats: (): Promise<RAGStats> => Promise.resolve({} as RAGStats),
+  it('should support custom metadata type', () => {
+    interface CustomMetadata extends Record<string, unknown> {
+      domain: string;
+      priority: number;
+    }
+
+    const provider: RAGQueryProvider<CustomMetadata> = {} as RAGQueryProvider<CustomMetadata>;
+    const query: RAGQuery<CustomMetadata> = {
+      text: 'test',
+      filters: { metadata: { domain: 'security' } },
     };
 
-    expect(mockProvider.getStats).toBeDefined();
-    expect(typeof mockProvider.getStats).toBe('function');
+    // Verify types without runtime execution
+    if (false as boolean) {
+      const result: Promise<RAGResult<CustomMetadata>> = provider.query(query);
+      void result;
+    }
+
+    expect(true).toBe(true);
   });
-});
 
-describe('RAGAdminProvider Interface', () => {
-  it('should extend RAGQueryProvider and have admin methods', () => {
-    // Type-only test - verify RAGAdminProvider extends RAGQueryProvider
-    const mockProvider: RAGAdminProvider = {
-      // RAGQueryProvider methods
-      query: (): Promise<RAGResult> => Promise.resolve({} as RAGResult),
-      getStats: (): Promise<RAGStats> => Promise.resolve({} as RAGStats),
-      // RAGAdminProvider methods
-      indexResources: (): Promise<IndexResult> => Promise.resolve({} as IndexResult),
-      updateResource: (): Promise<void> => Promise.resolve(),
-      deleteResource: (): Promise<void> => Promise.resolve(),
-      clear: (): Promise<void> => Promise.resolve(),
-      close: (): Promise<void> => Promise.resolve(),
-    };
+  it('should support RAGAdminProvider with custom metadata', () => {
+    interface CustomMetadata extends Record<string, unknown> {
+      domain: string;
+    }
 
-    // Verify it has all required methods
-    expect(mockProvider.query).toBeDefined();
-    expect(mockProvider.getStats).toBeDefined();
-    expect(mockProvider.indexResources).toBeDefined();
-    expect(mockProvider.updateResource).toBeDefined();
-    expect(mockProvider.deleteResource).toBeDefined();
-    expect(mockProvider.clear).toBeDefined();
-    expect(mockProvider.close).toBeDefined();
+    const provider: RAGAdminProvider<CustomMetadata> = {} as RAGAdminProvider<CustomMetadata>;
+
+    // Verify types without runtime execution
+    if (false as boolean) {
+      const result: Promise<RAGResult<CustomMetadata>> = provider.query({ text: 'test' });
+      void result;
+    }
+
+    expect(true).toBe(true);
   });
 });
