@@ -9,10 +9,11 @@ import fs from 'node:fs';
 import type { Connection, Table } from '@lancedb/lancedb';
 import * as lancedb from '@lancedb/lancedb';
 import type {
+  CoreRAGChunk,
+  DefaultRAGMetadata,
   EmbeddingProvider,
   IndexResult,
   RAGAdminProvider,
-  RAGChunk,
   RAGQuery,
   RAGResult,
   RAGStats,
@@ -20,22 +21,24 @@ import type {
 import {
   ApproximateTokenCounter,
   chunkResource,
+  DefaultRAGMetadataSchema,
   enrichChunks,
   generateContentHash,
   TransformersEmbeddingProvider,
 } from '@vibe-agent-toolkit/rag';
 import { parseMarkdown, type ResourceMetadata } from '@vibe-agent-toolkit/resources';
+import type { ZodObject, ZodRawShape } from 'zod';
 
 import {
-  chunkToLanceRowWithDefaultMetadata,
-  lanceRowToChunkWithDefaultMetadata,
+  chunkToLanceRow,
+  lanceRowToChunk,
   type LanceDBRow,
 } from './schema.js';
 
 /**
- * Configuration for LanceDBRAGProvider
+ * Configuration for LanceDBRAGProvider (generic over metadata type)
  */
-export interface LanceDBConfig {
+export interface LanceDBConfig<_TMetadata extends Record<string, unknown> = DefaultRAGMetadata> {
   /** Path to LanceDB database directory */
   dbPath: string;
 
@@ -50,39 +53,69 @@ export interface LanceDBConfig {
 
   /** Padding factor for token estimation (default: 0.9) */
   paddingFactor?: number;
+
+  /** Metadata schema for validation and serialization (defaults to DefaultRAGMetadataSchema) */
+  metadataSchema?: ZodObject<ZodRawShape>;
 }
 
 const TABLE_NAME = 'rag_chunks';
 
 /**
- * LanceDBRAGProvider
+ * LanceDBRAGProvider (generic over metadata type)
  *
  * Complete RAG implementation using LanceDB for vector storage.
+ * Automatically infers metadata type from the metadataSchema provided in config.
  */
-export class LanceDBRAGProvider implements RAGAdminProvider {
-  private readonly config: Required<LanceDBConfig>;
+export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = DefaultRAGMetadata>
+  implements RAGAdminProvider<TMetadata> {
+  private readonly config: Required<LanceDBConfig<TMetadata>>;
+  private readonly metadataSchema: ZodObject<ZodRawShape>;
   private connection: Connection | null = null;
   private table: Table | null = null;
   private readonly tokenCounter = new ApproximateTokenCounter();
 
-  private constructor(config: LanceDBConfig) {
+  private constructor(config: LanceDBConfig<TMetadata>) {
     this.config = {
       readonly: false,
       embeddingProvider: new TransformersEmbeddingProvider(),
       targetChunkSize: 512,
       paddingFactor: 0.9,
+      metadataSchema: DefaultRAGMetadataSchema,
       ...config,
     };
+    this.metadataSchema = this.config.metadataSchema;
   }
 
   /**
-   * Create and initialize LanceDBRAGProvider
+   * Create and initialize LanceDBRAGProvider with automatic type inference
    *
-   * @param config - Configuration
-   * @returns Initialized provider
+   * Type magic: If config.metadataSchema is provided with a specific schema,
+   * the returned provider's type is automatically inferred from the schema.
+   *
+   * @param config - Configuration with optional metadataSchema
+   * @returns Initialized provider with inferred metadata type
+   *
+   * @example
+   * ```typescript
+   * // With custom schema (type inferred automatically)
+   * const CustomSchema = z.object({ domain: z.string() });
+   * const provider = await LanceDBRAGProvider.create({
+   *   dbPath: './db',
+   *   metadataSchema: CustomSchema,
+   * });
+   * // provider has type: LanceDBRAGProvider<{ domain: string }>
+   *
+   * // Without schema (defaults to DefaultRAGMetadata)
+   * const defaultProvider = await LanceDBRAGProvider.create({
+   *   dbPath: './db',
+   * });
+   * // defaultProvider has type: LanceDBRAGProvider<DefaultRAGMetadata>
+   * ```
    */
-  static async create(config: LanceDBConfig): Promise<LanceDBRAGProvider> {
-    const provider = new LanceDBRAGProvider(config);
+  static async create<TMetadata extends Record<string, unknown> = DefaultRAGMetadata>(
+    config: LanceDBConfig<TMetadata>
+  ): Promise<LanceDBRAGProvider<TMetadata>> {
+    const provider = new LanceDBRAGProvider<TMetadata>(config);
     await provider.initialize();
     return provider;
   }
@@ -114,7 +147,7 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
   /**
    * Query the RAG database
    */
-  async query(query: RAGQuery): Promise<RAGResult> {
+  async query(query: RAGQuery<TMetadata>): Promise<RAGResult<TMetadata>> {
     // Workaround for vectordb@0.4.20 + Bun Arrow buffer lifecycle bug
     // After table modifications, we need to recreate the connection entirely
     await this.reconnectAndOpenTable();
@@ -143,10 +176,10 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
 
     // Convert results to plain objects immediately to avoid Arrow buffer issues
     // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
-    const materializedResults = JSON.parse(JSON.stringify(results)) as LanceDBRow[];
+    const materializedResults = JSON.parse(JSON.stringify(results)) as LanceDBRow<TMetadata>[];
 
-    // Convert results to RAGChunks
-    const chunks = materializedResults.map((row) => lanceRowToChunkWithDefaultMetadata(row));
+    // Convert results to RAGChunks using the metadata schema
+    const chunks = materializedResults.map((row) => lanceRowToChunk<TMetadata>(row, this.metadataSchema));
 
     const searchDurationMs = Date.now() - startTime;
 
@@ -165,7 +198,7 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
   /**
    * Build WHERE clause from filters
    */
-  private buildWhereClause(filters: RAGQuery['filters']): string | null {
+  private buildWhereClause(filters: RAGQuery<TMetadata>['filters']): string | null {
     if (!filters) {
       return null;
     }
@@ -185,13 +218,13 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
       }
     }
 
-    if (filters.metadata?.type) {
-      conditions.push(`type = '${filters.metadata.type}'`);
+    if (filters.metadata?.['type']) {
+      conditions.push(`type = '${String(filters.metadata['type'])}'`);
     }
 
-    if (filters.metadata?.headingPath) {
+    if (filters.metadata?.['headingPath']) {
       // Use backticks for column names
-      conditions.push(`\`headingPath\` = '${filters.metadata.headingPath}'`);
+      conditions.push(`\`headingPath\` = '${String(filters.metadata['headingPath'])}'`);
     }
 
     return conditions.length > 0 ? conditions.join(' AND ') : null;
@@ -352,9 +385,11 @@ export class LanceDBRAGProvider implements RAGAdminProvider {
       this.config.embeddingProvider.model
     );
 
-    // Convert to LanceDB rows
+    // Convert to LanceDB rows using the metadata schema
+    // Note: ragChunks have DefaultRAGMetadata, but we serialize them using the configured schema.
+    // This is safe because the schema determines which fields are extracted and stored.
     const rows = ragChunks.map((chunk) =>
-      chunkToLanceRowWithDefaultMetadata(chunk as RAGChunk, resourceContentHash)
+      chunkToLanceRow<TMetadata>(chunk as unknown as CoreRAGChunk & TMetadata, resourceContentHash, this.metadataSchema)
     );
 
     // Insert into LanceDB
