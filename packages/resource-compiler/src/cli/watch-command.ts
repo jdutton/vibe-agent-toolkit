@@ -50,19 +50,23 @@ export function registerWatchCommand(program: Command): void {
         ignoreInitial: true,
       });
 
+      const handleRecompilation = (error: unknown): void => {
+        console.error('Recompilation error:', error instanceof Error ? error.message : String(error));
+      };
+
       watcher.on('add', (path) => {
         console.log(`[${new Date().toLocaleTimeString()}] File added: ${path}`);
-        void recompileAll(input, output, options.pattern, options.verbose);
+        recompileAll(input, output, options.pattern, options.verbose).catch(handleRecompilation);
       });
 
       watcher.on('change', (path) => {
         console.log(`[${new Date().toLocaleTimeString()}] File changed: ${path}`);
-        void recompileAll(input, output, options.pattern, options.verbose);
+        recompileAll(input, output, options.pattern, options.verbose).catch(handleRecompilation);
       });
 
       watcher.on('unlink', (path) => {
         console.log(`[${new Date().toLocaleTimeString()}] File removed: ${path}`);
-        void recompileAll(input, output, options.pattern, options.verbose);
+        recompileAll(input, output, options.pattern, options.verbose).catch(handleRecompilation);
       });
 
       watcher.on('error', (error) => {
@@ -73,7 +77,9 @@ export function registerWatchCommand(program: Command): void {
       process.on('SIGINT', () => {
         console.log('');
         console.log('Stopping file watcher...');
-        void watcher.close();
+        watcher.close().catch((error: unknown) => {
+          console.error('Error closing watcher:', error instanceof Error ? error.message : String(error));
+        });
         process.exit(0);
       });
     });

@@ -78,6 +78,7 @@ export function executeCli(
     encoding: 'utf-8',
     cwd: options?.cwd,
     env: options?.env ? { ...process.env, ...options.env } : undefined,
+    maxBuffer: 10 * 1024 * 1024, // 10MB buffer for large audit outputs
   });
 }
 

@@ -103,18 +103,59 @@ export interface CliResult {
 
 /**
  * Execute CLI command and return result
+ *
+ * Uses file-based output capture to avoid Bun's 64KB spawnSync buffer limit.
+ * This is necessary for commands that produce large YAML outputs (e.g., audit).
  */
 export function executeCli(
   binPath: string,
   args: string[],
   options?: { cwd?: string; env?: NodeJS.ProcessEnv }
 ): CliResult {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path
-  return spawnSync('node', [binPath, ...args], {
-    encoding: 'utf-8',
-    cwd: options?.cwd,
-    env: options?.env,
-  });
+  // Create temp files for stdout/stderr to avoid Bun's 64KB buffer limit
+  // eslint-disable-next-line sonarjs/pseudo-random -- Test utility, not security-sensitive
+  const stdoutFile = join(normalizedTmpdir(), `vat-test-stdout-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+  // eslint-disable-next-line sonarjs/pseudo-random -- Test utility, not security-sensitive
+  const stderrFile = join(normalizedTmpdir(), `vat-test-stderr-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+
+  // Open file descriptors
+  const stdoutFd = fs.openSync(stdoutFile, 'w');
+  const stderrFd = fs.openSync(stderrFile, 'w');
+
+  try {
+    // eslint-disable-next-line sonarjs/no-os-command-from-path
+    const result = spawnSync('node', [binPath, ...args], {
+      cwd: options?.cwd,
+      env: options?.env,
+      stdio: ['inherit', stdoutFd, stderrFd],
+    });
+
+    // Close file descriptors
+    fs.closeSync(stdoutFd);
+    fs.closeSync(stderrFd);
+
+    // Read output from files
+    const stdout = fs.readFileSync(stdoutFile, 'utf-8');
+    const stderr = fs.readFileSync(stderrFile, 'utf-8');
+
+    return {
+      status: result.status,
+      stdout,
+      stderr,
+    };
+  } finally {
+    // Cleanup temp files
+    try {
+      fs.unlinkSync(stdoutFile);
+    } catch {
+      // Ignore cleanup errors
+    }
+    try {
+      fs.unlinkSync(stderrFile);
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
 }
 
 /**

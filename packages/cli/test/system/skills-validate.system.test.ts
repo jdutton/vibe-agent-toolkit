@@ -80,19 +80,19 @@ describe('skills validate command (system test)', () => {
     expect(['success', 'error']).toContain(parsed.status);
   });
 
-  it('should exit with code 1 when validation fails', () => {
-    // Current repo has broken anchors, so this should fail
+  it('should exit with code 0 when validation passes', () => {
+    // Current repo skills are valid, so this should pass
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
     const result = spawnSync('node', [binPath, 'skills', 'validate'], {
       encoding: 'utf-8',
       cwd: process.cwd(),
     });
 
-    // Should fail because of broken anchors
-    expect(result.status).toBe(1);
+    // Should pass - repo skills are currently valid
+    expect(result.status).toBe(0);
 
     const parsed = yaml.load(result.stdout) as { status: string };
-    expect(parsed.status).toBe('error');
+    expect(parsed.status).toBe('success');
   });
 
   it('should report both resource and skill errors', () => {
