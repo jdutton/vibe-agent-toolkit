@@ -4,21 +4,36 @@
  * Combines resource validation (markdown, links, frontmatter) with
  * skill-specific validation (reserved words, XML tags, console compatibility).
  *
- * This replaces the two-step validation approach (resource + skill) with a
- * single unified command that reports all errors together.
+ * Supports three modes:
+ * 1. Project context (default): Validate project skills with strict filename validation
+ * 2. User context (--user flag): Validate ~/.claude skills with permissive validation
+ * 3. Path context (explicit path): Validate skills at specific path
  */
 
 import * as path from 'node:path';
 
 import { validateSkill, type ValidationResult } from '@vibe-agent-toolkit/agent-skills';
+import { scan } from '@vibe-agent-toolkit/discovery';
 import { ResourceRegistry, type ValidationResult as ResourceValidationResult } from '@vibe-agent-toolkit/resources';
 import * as yaml from 'js-yaml';
 
+import { loadConfig } from '../../utils/config-loader.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import { createLogger } from '../../utils/logger.js';
-import { findSkillFiles } from '../../utils/skill-finder.js';
+import { discoverSkills, validateSkillFilename } from '../../utils/skill-discovery.js';
+import { scanUserContext } from '../../utils/user-context-scanner.js';
 
 import { handleCommandError } from './command-helpers.js';
+
+/**
+ * Validation issue source type
+ */
+type IssueSource = 'resource' | 'skill' | 'filename';
+
+/**
+ * Validation issue severity
+ */
+type IssueSeverity = 'error' | 'warning' | 'info';
 
 /**
  * Unified skill validation result
@@ -40,8 +55,8 @@ interface UnifiedSkillValidationResult {
   totalErrors: number;
   totalWarnings: number;
   issues?: Array<{
-    source: 'resource' | 'skill';
-    severity: 'error' | 'warning' | 'info';
+    source: IssueSource;
+    severity: IssueSeverity;
     code: string;
     message: string;
     location: string | undefined;
@@ -79,30 +94,40 @@ async function validateSkillAsResource(
 }
 
 /**
- * Merge resource and skill validation results
+ * Build issues array from validation results
  */
-function mergeValidationResults(
+function buildIssuesArray(
   skillPath: string,
-  resourceResult: ResourceValidationResult,
-  skillResult: ValidationResult
-): UnifiedSkillValidationResult {
-  const skillName = skillResult.metadata?.name ?? path.basename(path.dirname(skillPath));
+  filenameValidation: { valid: boolean; message?: string },
+  strictMode: boolean,
+  resourceErrors: ResourceValidationResult['issues'],
+  skillErrors: ValidationResult['issues'],
+  skillWarnings: ValidationResult['issues']
+): Array<{
+  source: IssueSource;
+  severity: IssueSeverity;
+  code: string;
+  message: string;
+  location: string | undefined;
+}> {
+  const issues: Array<{
+    source: IssueSource;
+    severity: IssueSeverity;
+    code: string;
+    message: string;
+    location: string | undefined;
+  }> = [];
 
-  // Extract resource errors (exclude external_url which are informational)
-  const resourceErrors = resourceResult.issues.filter(i => i.type !== 'external_url');
-  const resourceErrorCount = resourceErrors.length;
-
-  // Extract skill errors and warnings
-  const skillErrors = skillResult.issues.filter(i => i.severity === 'error');
-  const skillWarnings = skillResult.issues.filter(i => i.severity === 'warning');
-  const skillErrorCount = skillErrors.length;
-  const skillWarningCount = skillWarnings.length;
-
-  const totalErrors = resourceErrorCount + skillErrorCount;
-  const totalWarnings = skillWarningCount;
-
-  // Build unified issues array
-  const issues: UnifiedSkillValidationResult['issues'] = [];
+  // Add filename validation issues
+  if (!filenameValidation.valid && filenameValidation.message) {
+    issues.push({
+      source: 'filename',
+      severity: strictMode ? 'error' : 'warning',
+      code: 'non-standard-filename',
+      message: filenameValidation.message,
+      location: skillPath,
+    });
+  }
 
   // Add resource issues
   for (const issue of resourceErrors) {
@@ -120,14 +145,56 @@ function mergeValidationResults(
   for (const issue of [...skillErrors, ...skillWarnings]) {
     issues.push({
       source: 'skill',
-      severity: issue.severity,
+      severity: issue.severity as IssueSeverity,
       code: issue.code,
       message: issue.message,
       location: issue.location,
     });
   }
 
-  return {
+  return issues;
+}
+
+/**
+ * Merge resource, skill, and filename validation results
+ */
+function mergeValidationResults(
+  skillPath: string,
+  resourceResult: ResourceValidationResult,
+  skillResult: ValidationResult,
+  filenameValidation: { valid: boolean; message?: string },
+  strictMode: boolean
+): UnifiedSkillValidationResult {
+  const skillName = skillResult.metadata?.name ?? path.basename(path.dirname(skillPath));
+
+  // Extract resource errors (exclude external_url which are informational)
+  const resourceErrors = resourceResult.issues.filter(i => i.type !== 'external_url');
+  const resourceErrorCount = resourceErrors.length;
+
+  // Extract skill errors and warnings
+  const skillErrors = skillResult.issues.filter(i => i.severity === 'error');
+  const skillWarnings = skillResult.issues.filter(i => i.severity === 'warning');
+  const skillErrorCount = skillErrors.length;
+  const skillWarningCount = skillWarnings.length;
+
+  // Count filename issues
+  const filenameErrorCount = !filenameValidation.valid && strictMode ? 1 : 0;
+  const filenameWarningCount = !filenameValidation.valid && !strictMode ? 1 : 0;
+
+  const totalErrors = resourceErrorCount + skillErrorCount + filenameErrorCount;
+  const totalWarnings = skillWarningCount + filenameWarningCount;
+
+  // Build unified issues array
+  const issues = buildIssuesArray(
+    skillPath,
+    filenameValidation,
+    strictMode,
+    resourceErrors,
+    skillErrors,
+    skillWarnings
+  );
+
+  const baseResult: UnifiedSkillValidationResult = {
     skill: skillName,
     path: skillPath,
     status: totalErrors > 0 ? 'error' : 'success',
@@ -137,14 +204,20 @@ function mergeValidationResults(
       errors: resourceErrorCount,
     },
     skillValidation: {
-      status: skillErrorCount > 0 ? 'error' : 'success',
-      errors: skillErrorCount,
-      warnings: skillWarningCount,
+      status: (skillErrorCount + filenameErrorCount) > 0 ? 'error' : 'success',
+      errors: skillErrorCount + filenameErrorCount,
+      warnings: skillWarningCount + filenameWarningCount,
     },
     totalErrors,
     totalWarnings,
-    ...(issues.length > 0 ? { issues } : {}),
   };
+
+  // Only add issues property if there are issues
+  if (issues.length > 0) {
+    return { ...baseResult, issues } as UnifiedSkillValidationResult;
+  }
+
+  return baseResult;
 }
 
 /**
@@ -172,8 +245,8 @@ function formatSkillStatus(result: UnifiedSkillValidationResult): string {
  * Output detailed error for a single issue
  */
 function outputDetailedIssue(issue: {
-  source: 'resource' | 'skill';
-  severity: 'error' | 'warning' | 'info';
+  source: IssueSource;
+  severity: IssueSeverity;
   code: string;
   message: string;
   location: string | undefined;
@@ -196,7 +269,13 @@ function outputUnifiedReport(results: UnifiedSkillValidationResult[], duration: 
   };
 
   // Output YAML to stdout (for programmatic parsing)
-  console.log(yaml.dump(output, { indent: 2, lineWidth: -1 }));
+  // js-yaml has truncation issues with very large objects (>80 results)
+  // Use JSON for large outputs to avoid truncation
+  if (results.length > 80) {
+    console.log(JSON.stringify(output, null, 2));
+  } else {
+    console.log(yaml.dump(output, { indent: 2, lineWidth: -1, noRefs: true }));
+  }
 
   // If there are errors, also write detailed errors to stderr
   const failedSkills = results.filter(r => r.status === 'error');
@@ -221,6 +300,7 @@ function outputUnifiedReport(results: UnifiedSkillValidationResult[], duration: 
  */
 interface SkillsValidateCommandOptions {
   debug?: boolean;
+  user?: boolean;
 }
 
 /**
@@ -234,12 +314,41 @@ export async function validateCommand(
   const startTime = Date.now();
 
   try {
-    const rootDir = pathArg ?? process.cwd();
+    // Step 1: Determine context and discover skills
+    let skillPaths: string[];
+    let strictMode: boolean;
+    let rootDir: string;
 
-    logger.info(`🔍 Validating skills in: ${rootDir}`);
+    if (options.user) {
+      // User context: scan ~/.claude
+      logger.info('🔍 Validating user-installed skills in ~/.claude');
+      const { plugins, skills } = await scanUserContext();
+      const allResources = [...plugins, ...skills];
+      const discoveredSkills = discoverSkills(allResources);
+      skillPaths = discoveredSkills.map(s => s.path);
+      strictMode = false; // Permissive with warnings
+      rootDir = process.cwd(); // Use cwd for resource validation context
+    } else {
+      // Project context: use resources config
+      rootDir = pathArg ?? process.cwd();
+      logger.info(`🔍 Validating skills in: ${rootDir}`);
 
-    // Step 1: Find all SKILL.md files
-    const skillPaths = findSkillFiles(path.join(rootDir, 'packages'));
+      // Load project config
+      const config = loadConfig(rootDir);
+
+      // Use discovery package with config boundaries
+      const scanResult = await scan({
+        path: rootDir,
+        recursive: true,
+        include: config.resources?.include ?? ['**/*.md'],
+        exclude: config.resources?.exclude ?? [],
+      });
+
+      // Filter for skills (case-insensitive discovery)
+      const discoveredSkills = discoverSkills(scanResult.results);
+      skillPaths = discoveredSkills.map(s => s.path);
+      strictMode = true; // Strict errors
+    }
 
     if (skillPaths.length === 0) {
       logger.info('   No SKILL.md files found');
@@ -256,16 +365,25 @@ export async function validateCommand(
 
     const results: UnifiedSkillValidationResult[] = [];
 
-    // Step 2: Validate each skill with both validators
+    // Step 2: Validate each skill
     for (const skillPath of skillPaths) {
-      // 2a: Resource validation (markdown, links)
+      // 2a: Validate filename
+      const filenameCheck = validateSkillFilename(skillPath);
+
+      // 2b: Resource validation (markdown, links)
       const resourceResult = await validateSkillAsResource(skillPath, rootDir);
 
-      // 2b: Skill-specific validation (reserved words, etc.)
+      // 2c: Skill-specific validation (reserved words, etc.)
       const skillResult = await validateSkill({ skillPath, rootDir });
 
-      // 2c: Merge results
-      const unified = mergeValidationResults(skillPath, resourceResult, skillResult);
+      // 2d: Merge results
+      const unified = mergeValidationResults(
+        skillPath,
+        resourceResult,
+        skillResult,
+        filenameCheck,
+        strictMode
+      );
       results.push(unified);
 
       // Show progress

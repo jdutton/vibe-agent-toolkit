@@ -12,6 +12,7 @@ export function createValidateCommand(): Command {
   command
     .description('Validate SKILL.md files (links, frontmatter, skill rules)')
     .argument('[path]', 'Path to validate (default: current directory)')
+    .option('-u, --user', 'Validate user-installed skills in ~/.claude')
     .option('-d, --debug', 'Enable debug logging')
     .action(validateCommand)
     .addHelpText(
@@ -22,8 +23,21 @@ Description:
   links, frontmatter) and skill-specific validation (reserved words, XML
   tags, console compatibility). Reports all errors in a unified format.
 
-  Replaces the two-step validation approach (vat resources validate +
-  validate-skills script) with a single command.
+  Supports three modes:
+    - Project mode (default): Validate project skills with strict filename validation
+    - User mode (--user): Validate ~/.claude skills with permissive validation
+    - Path mode: Validate skills at specific path with strict validation
+
+Validation Modes:
+  Project mode (strict):
+    - Respects vibe-agent-toolkit.config.yaml boundaries
+    - Filename must be exactly "SKILL.md" (case-sensitive)
+    - Errors on non-standard filenames (skill.md, Skill.md)
+
+  User mode (permissive):
+    - Scans ~/.claude/plugins and ~/.claude/skills
+    - Filename warnings for non-standard names (not errors)
+    - More tolerant for user-installed content
 
 Validation Checks:
   Resource validation:
@@ -38,6 +52,11 @@ Validation Checks:
     - Console compatibility warnings
     - Frontmatter required fields (name, description)
 
+  Filename validation:
+    - Must be "SKILL.md" (uppercase)
+    - Strict mode: error on skill.md, Skill.md
+    - Permissive mode: warning only
+
 Output:
   YAML summary → stdout (for programmatic parsing)
   Detailed errors → stderr (for human reading)
@@ -50,12 +69,13 @@ Output:
 
 Exit Codes:
   0 - All validations passed
-  1 - Validation errors found
+  1 - Validation errors found (warnings don't fail)
   2 - System error (file not found, config invalid, etc.)
 
-Example:
-  $ vat skills validate                    # Validate all skills in current directory
-  $ vat skills validate packages/          # Validate skills in packages directory
+Examples:
+  $ vat skills validate                    # Project mode: validate all project skills
+  $ vat skills validate --user             # User mode: validate ~/.claude skills
+  $ vat skills validate packages/          # Path mode: validate specific directory
 `
     );
 
