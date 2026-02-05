@@ -4,7 +4,6 @@
  */
 
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 
 import {
@@ -17,6 +16,7 @@ import {
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
 import { Command } from 'commander';
 
+import { getClaudeUserPaths } from '../utils/claude-paths.js';
 import { handleCommandError } from '../utils/command-error.js';
 import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
@@ -100,14 +100,6 @@ Examples:
   return audit;
 }
 
-/**
- * Get the user-level Claude plugins directory
- * Cross-platform: ~/.claude/plugins on macOS/Linux, %USERPROFILE%\.claude\plugins on Windows
- */
-function getUserPluginsDir(): string {
-  const homeDir = os.homedir();
-  return path.join(homeDir, '.claude', 'plugins');
-}
 
 export async function auditCommand(
   targetPath: string | undefined,
@@ -122,14 +114,14 @@ export async function auditCommand(
 
     // Handle --user flag
     if (options.user) {
-      const userPluginsDir = getUserPluginsDir();
+      const { pluginsDir } = getClaudeUserPaths();
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: path constructed from os.homedir()
-      if (!fs.existsSync(userPluginsDir)) {
-        logger.error(`User plugins directory not found: ${userPluginsDir}`);
+      if (!fs.existsSync(pluginsDir)) {
+        logger.error(`User plugins directory not found: ${pluginsDir}`);
         logger.error('Claude plugins have not been installed yet.');
         process.exit(2);
       }
-      scanPath = userPluginsDir;
+      scanPath = pluginsDir;
       recursive = true; // Always recursive for user-level audit
       logger.debug(`Auditing user-level plugins at: ${scanPath}`);
     } else {

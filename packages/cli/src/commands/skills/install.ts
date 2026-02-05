@@ -10,12 +10,12 @@
 
 import { existsSync, statSync } from 'node:fs';
 import { cp, mkdir } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 
 import AdmZip from 'adm-zip';
 import { Command } from 'commander';
 
+import { getClaudeUserPaths } from '../../utils/claude-paths.js';
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
 
@@ -35,7 +35,7 @@ export function createInstallCommand(): Command {
     .option(
       '-p, --plugins-dir <path>',
       'Claude plugins directory',
-      join(homedir(), '.claude', 'plugins')
+      getClaudeUserPaths().pluginsDir
     )
     .option('-n, --name <name>', 'Custom name for installed skill (default: auto-detect from source)')
     .option('-f, --force', 'Overwrite existing skill if present', false)
@@ -116,7 +116,7 @@ async function installCommand(
     }
 
     // Determine installation path
-    const pluginsDir = options.pluginsDir ?? join(homedir(), '.claude', 'plugins');
+    const pluginsDir = options.pluginsDir ?? getClaudeUserPaths().pluginsDir;
     const installPath = join(pluginsDir, skillName);
 
     // Check if skill already exists

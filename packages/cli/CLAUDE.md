@@ -87,6 +87,26 @@ Ask yourself:
 
 Remember: **Other agent repos won't have packages/cli/**. If an agent package needs to build itself, it can depend on `@vibe-agent-toolkit/agent-skills` directly. The CLI is just one convenient way to invoke the build - not the only way.
 
+### Audit Command Independence
+
+**Intentional Architectural Decision**: The `vat skills audit` command maintains custom scanning logic rather than using `discovery.scan()`.
+
+**Why**:
+- `discovery.scan()` is optimized for VAT agent resources (finds markdown files, extracts frontmatter)
+- Audit needs to find multiple file types in specific directory structures (`.claude-plugin/` directories, JSON manifests, TypeScript/JavaScript files)
+- Different scanning requirements = different scanning implementations
+
+**What IS Shared**:
+- ✅ Skill validation logic (uses shared `validateSkill` from agent-skills)
+- ✅ Validation result formatting (uses shared `validate` function)
+- ✅ Claude paths resolution (uses `@vibe-agent-toolkit/utils/claude-paths`)
+
+**What is NOT Shared**:
+- ❌ Directory scanning (audit's requirements differ from discovery's design)
+- ❌ File type detection (audit looks for `.claude-plugin/` structure, not markdown)
+
+**This is not technical debt** - it's recognition that discovery and audit have fundamentally different scanning needs. Forcing them to share scanning logic would violate single responsibility principle and make both implementations more complex.
+
 ## Writing Useful CLI Help Documentation
 
 **Golden Rule**: Help text should answer "What does this do?" and "How do I use it?" without requiring users to read external documentation.
