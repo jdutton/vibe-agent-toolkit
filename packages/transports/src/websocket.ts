@@ -146,7 +146,10 @@ export class WebSocketTransport<TState = any> implements Transport {
     console.log(`Client connected (session: ${sessionId})`);
 
     ws.on('message', (data: Buffer) => {
-      void this.handleMessage(ws, data);
+      this.handleMessage(ws, data).catch((error: Error) => {
+        console.error('Error handling message:', error);
+        this.sendError(ws, 'Internal server error');
+      });
     });
 
     ws.on('close', () => {

@@ -87,7 +87,7 @@ export class CLITransport<TState = any> implements Transport {
     this.printWelcome();
 
     this.rl.on('line', (line: string) => {
-      void (async () => {
+      (async () => {
       const input = line.trim();
 
       if (!input) {
@@ -135,7 +135,10 @@ export class CLITransport<TState = any> implements Transport {
       }
 
       this.rl?.prompt();
-      })();
+      })().catch((error: Error) => {
+        console.error(this.colorize('Unhandled error: ', 'red') + error.message);
+        this.rl?.prompt();
+      });
     });
 
     this.rl.on('close', () => {

@@ -84,6 +84,6 @@ describe('RAGChunk interface composition', () => {
 
     // Should NOT have default metadata fields
     // @ts-expect-error - filePath not in CustomMetadata
-    chunk.filePath;
+    expect(chunk.filePath).toBeUndefined(); // Verify field doesn't exist at compile time
   });
 });

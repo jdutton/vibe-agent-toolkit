@@ -122,6 +122,14 @@ export default [
       'max-depth': ['error', 4],
       'max-params': ['error', 7], // Matches SonarQube threshold
 
+      // Code quality - align with SonarQube
+      'no-void': 'error', // SonarQube: "confusing, type-dependent" - use explicit patterns
+      'no-unused-expressions': ['error', {
+        allowShortCircuit: false,
+        allowTernary: false,
+        allowTaggedTemplates: false,
+      }],
+
       // Security
       'security/detect-object-injection': 'off',
 
