@@ -7,6 +7,8 @@
 
 import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
 
+import type { RAGChunk } from './chunk.js';
+
 /**
  * Query for RAG database
  */
@@ -39,30 +41,8 @@ export interface RAGQuery {
   };
 }
 
-/**
- * Chunk returned from RAG query
- * Note: Full schema defined in schemas/chunk.ts
- */
-export interface RAGChunk {
-  chunkId: string;
-  resourceId: string;
-  content: string;
-  contentHash: string;
-  tokenCount: number;
-  headingPath?: string;
-  headingLevel?: number;
-  startLine?: number;
-  endLine?: number;
-  filePath: string;
-  tags?: string[];
-  type?: string;
-  title?: string;
-  embedding: number[];
-  embeddingModel: string;
-  embeddedAt: Date;
-  previousChunkId?: string;
-  nextChunkId?: string;
-}
+// RAGChunk is now defined in chunk.ts and imported above
+// (exported via re-export from this module for backward compatibility)
 
 /**
  * Result from RAG query
