@@ -342,4 +342,281 @@ Content for section 4 with even more text.`
 
     await expect(provider.updateResource('test-id')).rejects.toThrow('Not implemented');
   });
+
+  describe('Custom Metadata Filtering', () => {
+    const TEST_MARKDOWN_CONTENT = '# Test\n\nContent here.';
+
+    /**
+     * Helper to create and index test chunks with custom metadata
+     */
+    async function indexTestChunksWithMetadata<TMetadata extends Record<string, unknown>>(
+      provider: LanceDBRAGProvider<TMetadata>,
+      tempDir: string,
+      schema: { shape: Record<string, unknown> },
+      metadataValues: TMetadata
+    ): Promise<void> {
+      const doc = await createTestMarkdownFile(tempDir, 'doc.md', TEST_MARKDOWN_CONTENT);
+
+      const { chunkToLanceRow } = await import('../../src/schema.js');
+      const { enrichChunks, chunkResource, generateContentHash } = await import('@vibe-agent-toolkit/rag');
+      const { ApproximateTokenCounter } = await import('@vibe-agent-toolkit/rag');
+
+      const resource = await createTestResource(doc, 'test-doc');
+      const parseResult = await import('@vibe-agent-toolkit/resources').then((m) =>
+        m.parseMarkdown(doc)
+      );
+      const chunks = chunkResource(
+        { ...resource, content: parseResult.content, frontmatter: {} },
+        { targetChunkSize: 512, modelTokenLimit: 8191, tokenCounter: new ApproximateTokenCounter() }
+      );
+      const embeddings = await provider['config'].embeddingProvider.embedBatch(
+        chunks.chunks.map((c) => c.content)
+      );
+      const ragChunks = enrichChunks(
+        chunks.chunks,
+        { ...resource, content: parseResult.content, frontmatter: {} },
+        embeddings,
+        provider['config'].embeddingProvider.model
+      );
+
+      const rows = ragChunks.map((chunk) => {
+        type ChunkWithCustomMetadata = typeof chunk & TMetadata;
+        return chunkToLanceRow<TMetadata>(
+          { ...chunk, ...metadataValues } as ChunkWithCustomMetadata,
+          generateContentHash(parseResult.content),
+          schema
+        );
+      });
+
+      if (!provider['table'] && provider['connection']) {
+        provider['table'] = await provider['connection'].createTable('rag_chunks', rows);
+      }
+    }
+
+    it('should filter by string metadata field', async () => {
+      const { z } = await import('zod');
+
+      // Define custom metadata schema
+      type CustomMetadata = { domain: string; priority: number };
+      const CustomSchema = z.object({
+        domain: z.string(),
+        priority: z.number(),
+      });
+
+      // Create provider with custom metadata schema
+      provider = await LanceDBRAGProvider.create<CustomMetadata>({
+        dbPath,
+        metadataSchema: CustomSchema,
+      });
+
+      // Create test resources with custom metadata
+      const securityDoc = await createTestMarkdownFile(
+        tempDir,
+        'security.md',
+        '# Security Document\n\nThis is about security.'
+      );
+      const apiDoc = await createTestMarkdownFile(
+        tempDir,
+        'api.md',
+        '# API Document\n\nThis is about the API.'
+      );
+
+      // Import chunkToLanceRow to create records with custom metadata
+      const { chunkToLanceRow } = await import('../../src/schema.js');
+      const { enrichChunks, chunkResource, generateContentHash } = await import('@vibe-agent-toolkit/rag');
+      const { ApproximateTokenCounter } = await import('@vibe-agent-toolkit/rag');
+
+      // Index security document
+      const securityResource = await createTestResource(securityDoc, 'security-doc');
+      const securityParseResult = await import('@vibe-agent-toolkit/resources').then((m) =>
+        m.parseMarkdown(securityDoc)
+      );
+      const securityChunks = chunkResource(
+        { ...securityResource, content: securityParseResult.content, frontmatter: {} },
+        { targetChunkSize: 512, modelTokenLimit: 8191, tokenCounter: new ApproximateTokenCounter() }
+      );
+      const securityEmbeddings = await provider['config'].embeddingProvider.embedBatch(
+        securityChunks.chunks.map((c) => c.content)
+      );
+      const securityRAGChunks = enrichChunks(
+        securityChunks.chunks,
+        { ...securityResource, content: securityParseResult.content, frontmatter: {} },
+        securityEmbeddings,
+        provider['config'].embeddingProvider.model
+      );
+
+      // Add custom metadata to security chunks
+      const securityRows = securityRAGChunks.map((chunk) => {
+        type ChunkWithCustomMetadata = typeof chunk & CustomMetadata;
+        const row = chunkToLanceRow<CustomMetadata>(
+          { ...chunk, domain: 'security', priority: 1 } as ChunkWithCustomMetadata,
+          generateContentHash(securityParseResult.content),
+          CustomSchema
+        );
+        return row;
+      });
+
+      // Index API document
+      const apiResource = await createTestResource(apiDoc, 'api-doc');
+      const apiParseResult = await import('@vibe-agent-toolkit/resources').then((m) =>
+        m.parseMarkdown(apiDoc)
+      );
+      const apiChunks = chunkResource(
+        { ...apiResource, content: apiParseResult.content, frontmatter: {} },
+        { targetChunkSize: 512, modelTokenLimit: 8191, tokenCounter: new ApproximateTokenCounter() }
+      );
+      const apiEmbeddings = await provider['config'].embeddingProvider.embedBatch(
+        apiChunks.chunks.map((c) => c.content)
+      );
+      const apiRAGChunks = enrichChunks(
+        apiChunks.chunks,
+        { ...apiResource, content: apiParseResult.content, frontmatter: {} },
+        apiEmbeddings,
+        provider['config'].embeddingProvider.model
+      );
+
+      // Add custom metadata to API chunks
+      const apiRows = apiRAGChunks.map((chunk) => {
+        type ChunkWithCustomMetadata = typeof chunk & CustomMetadata;
+        const row = chunkToLanceRow<CustomMetadata>(
+          { ...chunk, domain: 'api', priority: 2 } as ChunkWithCustomMetadata,
+          generateContentHash(apiParseResult.content),
+          CustomSchema
+        );
+        return row;
+      });
+
+      // Insert both into database
+      if (!provider['table'] && provider['connection']) {
+        provider['table'] = await provider['connection'].createTable('rag_chunks', [
+          ...securityRows,
+          ...apiRows,
+        ]);
+      } else if (provider['table']) {
+        await provider['table'].add([...securityRows, ...apiRows]);
+      }
+
+      // Query with domain filter
+      const result = await provider.query({
+        text: 'document',
+        filters: { metadata: { domain: 'security' } },
+      });
+
+      // All results should be from security domain
+      expect(result.chunks.length).toBeGreaterThan(0);
+      expect(
+        result.chunks.every((chunk) => (chunk as typeof chunk & CustomMetadata).domain === 'security')
+      ).toBe(true);
+    });
+
+    it('should filter by number metadata field', async () => {
+      const { z } = await import('zod');
+
+      type CustomMetadata = { priority: number };
+      const CustomSchema = z.object({ priority: z.number() });
+
+      provider = await LanceDBRAGProvider.create<CustomMetadata>({
+        dbPath,
+        metadataSchema: CustomSchema,
+      });
+
+      await indexTestChunksWithMetadata(provider, tempDir, CustomSchema, { priority: 1 });
+
+      // Query with priority filter
+      const result = await provider.query({
+        text: 'content',
+        filters: { metadata: { priority: 1 } },
+      });
+
+      expect(result.chunks.length).toBeGreaterThan(0);
+      expect(
+        result.chunks.every((chunk) => (chunk as typeof chunk & CustomMetadata).priority === 1)
+      ).toBe(true);
+    });
+
+    it('should filter by boolean metadata field', async () => {
+      const { z } = await import('zod');
+
+      type CustomMetadata = { active: boolean };
+      const CustomSchema = z.object({ active: z.boolean() });
+
+      provider = await LanceDBRAGProvider.create<CustomMetadata>({
+        dbPath,
+        metadataSchema: CustomSchema,
+      });
+
+      await indexTestChunksWithMetadata(provider, tempDir, CustomSchema, { active: true });
+
+      // Query with active filter
+      const result = await provider.query({
+        text: 'content',
+        filters: { metadata: { active: true } },
+      });
+
+      expect(result.chunks.length).toBeGreaterThan(0);
+      expect(
+        result.chunks.every((chunk) => (chunk as typeof chunk & CustomMetadata).active === true)
+      ).toBe(true);
+    });
+
+    it('should filter by array metadata field with LIKE query', async () => {
+      const { z } = await import('zod');
+
+      type CustomMetadata = { tags: string[] };
+      const CustomSchema = z.object({ tags: z.array(z.string()) });
+
+      provider = await LanceDBRAGProvider.create<CustomMetadata>({
+        dbPath,
+        metadataSchema: CustomSchema,
+      });
+
+      await indexTestChunksWithMetadata(provider, tempDir, CustomSchema, {
+        tags: ['auth', 'security', 'api'],
+      });
+
+      // Query with tags filter (should match substring)
+      const result = await provider.query({
+        text: 'content',
+        filters: { metadata: { tags: 'auth' } },
+      });
+
+      expect(result.chunks.length).toBeGreaterThan(0);
+      // Tags are stored as CSV, so we can't directly check array membership
+      // but we verified the LIKE query works in unit tests
+    });
+
+    it('should combine multiple metadata filters', async () => {
+      const { z } = await import('zod');
+
+      type CustomMetadata = { domain: string; priority: number };
+      const CustomSchema = z.object({
+        domain: z.string(),
+        priority: z.number(),
+      });
+
+      provider = await LanceDBRAGProvider.create<CustomMetadata>({
+        dbPath,
+        metadataSchema: CustomSchema,
+      });
+
+      await indexTestChunksWithMetadata(provider, tempDir, CustomSchema, {
+        domain: 'security',
+        priority: 1,
+      });
+
+      // Query with multiple filters
+      const result = await provider.query({
+        text: 'content',
+        filters: { metadata: { domain: 'security', priority: 1 } },
+      });
+
+      expect(result.chunks.length).toBeGreaterThan(0);
+      expect(
+        result.chunks.every((chunk) => (chunk as typeof chunk & CustomMetadata).domain === 'security')
+      ).toBe(true);
+      expect(
+        result.chunks.every((chunk) => (chunk as typeof chunk & CustomMetadata).priority === 1)
+      ).toBe(true);
+    });
+  });
 });

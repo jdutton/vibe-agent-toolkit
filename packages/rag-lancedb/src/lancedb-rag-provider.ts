@@ -29,6 +29,7 @@ import {
 import { parseMarkdown, type ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import type { ZodObject, ZodRawShape } from 'zod';
 
+import { buildWhereClause } from './filter-builder.js';
 import {
   chunkToLanceRow,
   lanceRowToChunk,
@@ -176,7 +177,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
 
     // Apply filters if provided
     if (query.filters) {
-      const whereClause = this.buildWhereClause(query.filters);
+      const whereClause = buildWhereClause(query.filters, this.metadataSchema);
       if (whereClause) {
         search = search.where(whereClause);
       }
@@ -205,40 +206,6 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     };
   }
 
-  /**
-   * Build WHERE clause from filters
-   */
-  private buildWhereClause(filters: RAGQuery<TMetadata>['filters']): string | null {
-    if (!filters) {
-      return null;
-    }
-
-    const conditions: string[] = [];
-
-    if (filters.resourceId !== undefined) {
-      const ids = Array.isArray(filters.resourceId) ? filters.resourceId : [filters.resourceId];
-
-      // Handle empty array case - should match nothing
-      if (ids.length === 0) {
-        conditions.push('1 = 0'); // Always false condition
-      } else {
-        const idList = ids.map((id) => `'${id}'`).join(', ');
-        // Use backticks for column names
-        conditions.push(`\`resourceId\` IN (${idList})`);
-      }
-    }
-
-    if (filters.metadata?.['type']) {
-      conditions.push(`type = '${String(filters.metadata['type'])}'`);
-    }
-
-    if (filters.metadata?.['headingPath']) {
-      // Use backticks for column names
-      conditions.push(`\`headingPath\` = '${String(filters.metadata['headingPath'])}'`);
-    }
-
-    return conditions.length > 0 ? conditions.join(' AND ') : null;
-  }
 
   /**
    * Get database statistics
