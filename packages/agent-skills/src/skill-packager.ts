@@ -533,7 +533,7 @@ async function copySkillResources(
 
   // Copy all linked files to flat structure
   for (const linkedFile of linkedFiles) {
-    const targetPath = pathMap.get(linkedFile);
+    const targetPath = pathMap.get(toForwardSlash(linkedFile));
     if (targetPath === undefined) {
       continue; // Should never happen, but satisfy type checker
     }
