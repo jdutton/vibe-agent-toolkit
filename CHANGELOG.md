@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **RAG Similarity Scoring**: Vector search results now include distance metrics and normalized similarity scores
+  - Chunks include `_distance` (L2 distance from query) and `score` (0-1 normalized, higher is better)
+  - Enables confidence-based filtering and result ranking validation
+  - Computed automatically during query without performance impact
+
+- **RAG Progress Reporting**: Real-time progress tracking for index building operations
+  - New `ProgressCallback` interface with elapsed time and estimated remaining time
+  - Throttled updates (recommended 2s interval) to avoid console spam
+  - Provides live statistics: resources indexed/skipped, chunks created
+  - Enables progress bars and status displays for long-running operations
+
+### Fixed
+- **RAG Line Number Tracking**: Chunks now preserve exact line ranges from source documents
+  - Previously all chunks from the same section had identical line numbers
+  - Fixed off-by-one error in line position calculation (1-based to 0-based conversion)
+  - Properly flattens nested heading hierarchy during section extraction
+  - Handles large paragraphs by splitting into line-level chunks
+  - Enables accurate IDE navigation and source citations
+
 ## [0.1.8] - 2026-02-06
 
 ### Fixed

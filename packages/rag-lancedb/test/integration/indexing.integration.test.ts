@@ -708,4 +708,253 @@ Content for section 4 with even more text.`
       expect(afterDelete.chunks.length).toBe(0);
     });
   });
+
+  describe('Frontmatter Indexing', () => {
+    it('should preserve default metadata fields from frontmatter', async () => {
+      // RED: This is the ACTUAL bug!
+      // enrichChunks() receives frontmatter: {} instead of parseResult.frontmatter
+      // So default fields (tags, type, title) are LOST even though they're in the file
+
+      provider = await LanceDBRAGProvider.create({ dbPath });
+
+      const fileWithDefaultMeta = await createTestMarkdownFile(
+        tempDir,
+        'with-default-meta.md',
+        `---
+tags: [security, authentication]
+type: guide
+title: Security Best Practices
+---
+
+# Security Guide
+
+Important security information.`
+      );
+
+      const resource = await createTestResource(fileWithDefaultMeta, 'security-doc');
+
+      // Verify frontmatter is present
+      console.log('Frontmatter before indexing:', resource.frontmatter);
+      expect(resource.frontmatter).toBeDefined();
+      expect(resource.frontmatter?.tags).toEqual(['security', 'authentication']);
+      expect(resource.frontmatter?.type).toBe('guide');
+      expect(resource.frontmatter?.title).toBe('Security Best Practices');
+
+      // Index the resource
+      const indexResult = await provider.indexResources([resource]);
+      expect(indexResult.resourcesIndexed).toBe(1);
+
+      // Query and check if default metadata was preserved
+      const queryResult = await provider.query({ text: 'security' });
+      expect(queryResult.chunks.length).toBeGreaterThan(0);
+
+      const chunk = queryResult.chunks[0];
+      console.log('Chunk after indexing:', {
+        tags: chunk?.tags,
+        type: chunk?.type,
+        title: chunk?.title,
+      });
+
+      // BUG: These will FAIL because enrichChunks receives frontmatter: {}
+      expect(chunk?.tags).toEqual(['security', 'authentication']);
+      expect(chunk?.type).toBe('guide');
+      expect(chunk?.title).toBe('Security Best Practices');
+    });
+
+    it('should fail when table exists with wrong schema', async () => {
+      // RED: Test the ACTUAL bug scenario from manuscript-tools
+      // They had an existing LanceDB table, tried to index with custom metadata,
+      // but got "Found field not in schema" because table schema doesn't have custom columns
+
+      const { z } = await import('zod');
+      const { DefaultRAGMetadataSchema } = await import('@vibe-agent-toolkit/rag');
+
+      // First: Create table with DEFAULT schema (no custom fields)
+      const defaultProvider = await LanceDBRAGProvider.create({
+        dbPath,
+        metadataSchema: DefaultRAGMetadataSchema,
+      });
+
+      const plainFile = await createTestMarkdownFile(
+        tempDir,
+        'plain.md',
+        `# Test\n\nContent here.`
+      );
+      const plainResource = await createTestResource(plainFile, 'doc-1');
+      plainResource.frontmatter = {};
+
+      await defaultProvider.indexResources([plainResource]);
+      await defaultProvider.close();
+
+      // Now: Try to index with CUSTOM schema (has extra fields)
+      const CustomMetadataSchema = z.object({
+        title: z.string(),
+        category: z.string(),
+      });
+
+      const customProvider = await LanceDBRAGProvider.create({
+        dbPath, // Same database!
+        metadataSchema: CustomMetadataSchema,
+      });
+
+      const fileWithMeta = await createTestMarkdownFile(
+        tempDir,
+        'meta.md',
+        `---
+title: Guide
+category: docs
+---
+
+# Guide
+
+Content.`
+      );
+
+      const resourceWithMeta = await createTestResource(fileWithMeta, 'doc-2');
+
+      // BUG: This should fail with "Found field not in schema: title"
+      // because table was created with default schema, doesn't have title/category columns
+      const result = await customProvider.indexResources([resourceWithMeta]);
+
+      // This assertion should FAIL (RED phase)
+      expect(result.errors).toBeDefined();
+      if (result.errors) {
+        expect(result.errors.length).toBeGreaterThan(0);
+        expect(result.errors[0]?.error).toContain('not in schema');
+      }
+    });
+
+    it('should handle missing frontmatter on first resource then present on second', async () => {
+      // RED: This test exposes the REAL bug
+      // If the first resource has no frontmatter, LanceDB infers schema without custom fields
+      // Then second resource with frontmatter fails: "Found field not in schema"
+
+      const { z } = await import('zod');
+
+      const CustomMetadataSchema = z.object({
+        title: z.string(),
+        category: z.string(),
+        priority: z.number(),
+      });
+
+      type CustomMetadata = z.infer<typeof CustomMetadataSchema>;
+
+      provider = await LanceDBRAGProvider.create<CustomMetadata>({
+        dbPath,
+        metadataSchema: CustomMetadataSchema,
+      });
+
+      // First resource: NO frontmatter (plain markdown)
+      const fileWithoutFrontmatter = await createTestMarkdownFile(
+        tempDir,
+        'plain.md',
+        `# Plain Document\n\nNo frontmatter here.`
+      );
+
+      const plainResource = await createTestResource(fileWithoutFrontmatter, 'plain-doc');
+      // Ensure no frontmatter
+      plainResource.frontmatter = undefined;
+
+      // Index first resource (creates table with NO custom metadata columns)
+      const result1 = await provider.indexResources([plainResource]);
+      expect(result1.resourcesIndexed).toBe(1);
+
+      // Second resource: HAS frontmatter
+      const fileWithFrontmatter = await createTestMarkdownFile(
+        tempDir,
+        'with-meta.md',
+        `---
+title: Security Guide
+category: guide
+priority: 1
+---
+
+# Security
+
+Authentication and authorization.`
+      );
+
+      const resourceWithMeta = await createTestResource(fileWithFrontmatter, 'security-guide');
+
+      // BUG: This should succeed but will fail with "Found field not in schema: title"
+      // because the table was created from first resource without custom columns
+      const result2 = await provider.indexResources([resourceWithMeta]);
+      expect(result2.resourcesIndexed).toBe(1); // Should succeed
+      expect(result2.errors?.length ?? 0).toBe(0); // Should have no errors
+    });
+
+    it('should index custom metadata from resource frontmatter', async () => {
+      // RED: Write failing test first
+      // This test demonstrates the bug: frontmatter is being overwritten with {}
+      // in indexResource() method, so custom metadata never gets indexed
+
+      const { z } = await import('zod');
+
+      // Define custom metadata schema
+      const CustomMetadataSchema = z.object({
+        title: z.string(),
+        category: z.string(),
+        priority: z.number(),
+      });
+
+      type CustomMetadata = z.infer<typeof CustomMetadataSchema>;
+
+      // Create provider with custom schema
+      provider = await LanceDBRAGProvider.create<CustomMetadata>({
+        dbPath,
+        metadataSchema: CustomMetadataSchema,
+      });
+
+      // Create markdown file with frontmatter
+      const fileWithFrontmatter = await createTestMarkdownFile(
+        tempDir,
+        'doc-with-frontmatter.md',
+        `---
+title: Security Guide
+category: guide
+priority: 1
+---
+
+# Security Best Practices
+
+This document covers authentication and authorization.`
+      );
+
+      // Create resource with frontmatter
+      const resource = await createTestResource(fileWithFrontmatter, 'security-guide');
+
+      // Manually parse to get frontmatter (simulating what ResourceRegistry does)
+      await import('@vibe-agent-toolkit/resources').then((m) =>
+        m.parseMarkdown(fileWithFrontmatter)
+      );
+
+      // Verify frontmatter is actually in the resource before indexing
+      console.log('Resource frontmatter before indexing:', resource.frontmatter);
+      expect(resource.frontmatter).toBeDefined();
+      expect(resource.frontmatter).toHaveProperty('title');
+
+      // Index the resource
+      const indexResult = await provider.indexResources([resource]);
+      expect(indexResult.resourcesIndexed).toBe(1);
+      expect(indexResult.chunksCreated).toBeGreaterThan(0);
+
+      // Query and verify custom metadata was indexed
+      const queryResult = await provider.query({
+        text: 'authentication',
+      });
+
+      expect(queryResult.chunks.length).toBeGreaterThan(0);
+
+      // BUG: These assertions will FAIL because frontmatter is being overwritten with {}
+      const firstChunk = queryResult.chunks[0];
+      expect(firstChunk).toHaveProperty('title');
+      expect(firstChunk).toHaveProperty('category');
+      expect(firstChunk).toHaveProperty('priority');
+
+      // Verify actual values
+      expect((firstChunk as unknown as CustomMetadata).title).toBe('Security Guide');
+      expect((firstChunk as unknown as CustomMetadata).category).toBe('guide');
+      expect((firstChunk as unknown as CustomMetadata).priority).toBe(1);
+    });
+  });
 });

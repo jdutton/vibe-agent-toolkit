@@ -13,7 +13,7 @@ import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { parseMarkdown } from '@vibe-agent-toolkit/resources';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 
-import type { LanceDBRAGProvider } from '../src/lancedb-rag-provider.js';
+import { LanceDBRAGProvider } from '../src/lancedb-rag-provider.js';
 
 /**
  * Create a temporary directory for test database.
@@ -94,22 +94,22 @@ export async function createTestMarkdownFile(
  * Provides common beforeEach/afterEach setup for tests that need
  * temporary directories and LanceDB providers.
  *
+ * @param autoCreateProvider - If true, automatically create provider in beforeEach
  * @returns Suite helper with tempDir, dbPath, provider, and lifecycle hooks
  *
  * @example
+ * // Manual provider creation:
  * const suite = setupLanceDBTestSuite();
- *
- * describe('My tests', () => {
- *   beforeEach(suite.beforeEach);
- *   afterEach(suite.afterEach);
- *
- *   it('should work', async () => {
- *     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath });
- *     // ... test code
- *   });
+ * beforeEach(async () => {
+ *   await suite.beforeEach();
+ *   suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath });
  * });
+ *
+ * // Automatic provider creation:
+ * const suite = setupLanceDBTestSuite(true);
+ * beforeEach(suite.beforeEach);
  */
-export function setupLanceDBTestSuite(): {
+export function setupLanceDBTestSuite(autoCreateProvider = false): {
   tempDir: string;
   dbPath: string;
   provider: LanceDBRAGProvider | null;
@@ -123,6 +123,9 @@ export function setupLanceDBTestSuite(): {
     beforeEach: async () => {
       suite.tempDir = await createTempDir();
       suite.dbPath = join(suite.tempDir, 'db');
+      if (autoCreateProvider) {
+        suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath });
+      }
     },
     afterEach: async () => {
       if (suite.provider) {
@@ -133,3 +136,4 @@ export function setupLanceDBTestSuite(): {
   };
   return suite;
 }
+

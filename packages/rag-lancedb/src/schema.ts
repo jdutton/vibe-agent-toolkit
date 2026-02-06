@@ -59,6 +59,9 @@ export type LanceDBRow<TMetadata extends Record<string, unknown> = DefaultRAGMet
 
   // Resource content hash (for change detection)
   resourceContentHash: string;
+
+  // Vector search result fields (optional, only present in query results)
+  _distance?: number; // Distance metric from LanceDB vector search
 } & SerializedMetadata<TMetadata>; // Metadata fields spread at top level
 
 /**
@@ -402,6 +405,14 @@ export function lanceRowToChunk<TMetadata extends Record<string, unknown>>(
   }
   if (row.nextChunkId && row.nextChunkId.length > 0) {
     coreChunk.nextChunkId = row.nextChunkId;
+  }
+
+  // Add search result metrics if present (from vector search results)
+  if (row._distance !== undefined) {
+    coreChunk._distance = row._distance;
+    // Compute similarity score: score = 1 / (1 + distance)
+    // Range: 0-1 where 1 is perfect match, approaches 0 as distance increases
+    coreChunk.score = 1 / (1 + row._distance);
   }
 
   // Extract serialized metadata from top-level row fields

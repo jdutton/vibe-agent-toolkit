@@ -4,7 +4,7 @@
  * Chunks ResourceMetadata using hybrid heading-based + token-aware strategy.
  */
 
-import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
+import type { HeadingNode, ResourceMetadata } from '@vibe-agent-toolkit/resources';
 
 import type { RAGChunk } from '../schemas/chunk.js';
 
@@ -43,26 +43,38 @@ export function chunkResource(
 ): ChunkingResult {
   const rawChunks: RawChunk[] = [];
 
-  if (resource.headings.length === 0) {
+  // Flatten nested heading tree into a sorted list
+  const flatHeadings = flattenHeadings(resource.headings);
+
+  if (flatHeadings.length === 0) {
     // No headings - chunk entire content by tokens
-    const chunks = chunkByTokens(resource.content, config);
+    const lines = resource.content.split('\n');
+    const chunks = chunkByTokens(resource.content, config, {
+      startLine: 1,
+      endLine: lines.length,
+    });
     rawChunks.push(...chunks);
   } else {
     // Extract content between headings
     const lines = resource.content.split('\n');
 
-    for (let i = 0; i < resource.headings.length; i++) {
-      const heading = resource.headings[i];
+    for (let i = 0; i < flatHeadings.length; i++) {
+      const heading = flatHeadings[i];
       if (!heading) continue;
 
-      const nextHeading = resource.headings[i + 1];
+      const nextHeading = flatHeadings[i + 1];
 
       // Extract content between this heading and next (or end of file)
-      const startLine = heading.line ?? 0;
-      const endLine = nextHeading?.line ? nextHeading.line - 1 : lines.length;
+      // Note: heading.line is 1-based, but array indices are 0-based
+      const headingLine = heading.line ?? 1; // 1-based line number
+      const nextHeadingLine = nextHeading?.line ?? (lines.length + 1); // 1-based line number
+
+      // Convert to 0-based array indices for slicing
+      const startIndex = headingLine - 1;
+      const endIndex = nextHeadingLine - 1;
 
       const sectionContent = lines
-        .slice(startLine, endLine)
+        .slice(startIndex, endIndex)
         .join('\n')
         .trim();
 
@@ -71,14 +83,15 @@ export function chunkResource(
       }
 
       // Build heading path (hierarchy)
-      const headingPath = buildHeadingPath(resource.headings, i);
+      const headingPath = buildHeadingPath(flatHeadings, i);
 
       // Chunk this section by tokens if needed
+      // Pass 1-based line numbers as metadata
       const metadata = {
         headingPath,
         headingLevel: heading.level,
-        startLine,
-        endLine,
+        startLine: headingLine,
+        endLine: nextHeadingLine - 1, // Last line of this section
       };
 
       const sectionChunks = chunkByTokens(sectionContent, config, metadata);
@@ -96,6 +109,37 @@ export function chunkResource(
   };
 
   return { chunks: rawChunks, stats };
+}
+
+/**
+ * Flatten nested heading tree into a flat array
+ *
+ * Converts hierarchical heading structure (with children) into a flat list
+ * sorted by line number, suitable for section extraction.
+ *
+ * @param headings - Hierarchical heading nodes
+ * @returns Flat array of headings sorted by line number
+ */
+function flattenHeadings(headings: HeadingNode[]): HeadingNode[] {
+  const result: HeadingNode[] = [];
+
+  function traverse(nodes: HeadingNode[]) {
+    for (const node of nodes) {
+      result.push(node);
+      if (node.children && node.children.length > 0) {
+        traverse(node.children);
+      }
+    }
+  }
+
+  traverse(headings);
+
+  // Sort by line number to ensure sections are in document order
+  return result.sort((a, b) => {
+    const lineA = a.line ?? 0;
+    const lineB = b.line ?? 0;
+    return lineA - lineB;
+  });
 }
 
 /**

@@ -14,6 +14,8 @@ export type {
   RAGResult,
   RAGStats,
   IndexResult,
+  IndexProgress,
+  ProgressCallback,
   RAGQueryProvider,
   RAGAdminProvider,
 } from './provider.js';

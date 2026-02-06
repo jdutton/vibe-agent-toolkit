@@ -12,6 +12,7 @@ import type {
   CoreRAGChunk,
   DefaultRAGMetadata,
   EmbeddingProvider,
+  IndexProgress,
   IndexResult,
   RAGAdminProvider,
   RAGQuery,
@@ -246,12 +247,16 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
   /**
    * Index resources into the RAG database
    */
-  async indexResources(resources: ResourceMetadata[]): Promise<IndexResult> {
+  async indexResources(
+    resources: ResourceMetadata[],
+    onProgress?: (progress: IndexProgress) => void
+  ): Promise<IndexResult> {
     if (this.config.readonly) {
       throw new Error('Cannot index in readonly mode');
     }
 
     const startTime = Date.now();
+    const totalResources = resources.length;
     const result: IndexResult = {
       resourcesIndexed: 0,
       resourcesSkipped: 0,
@@ -262,13 +267,37 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       errors: [],
     };
 
+    let processedCount = 0;
     for (const resource of resources) {
+      processedCount++;
+
       try {
         await this.indexResource(resource, result);
       } catch (error) {
         result.errors?.push({
           resourceId: resource.id,
           error: error instanceof Error ? error.message : String(error),
+        });
+      }
+
+      // Call progress callback after each resource
+      if (onProgress) {
+        const elapsedMs = Date.now() - startTime;
+        const avgTimePerResource = elapsedMs / processedCount;
+        const remainingResources = totalResources - processedCount;
+        const estimatedRemainingMs = remainingResources > 0 ? Math.round(avgTimePerResource * remainingResources) : 0;
+
+        onProgress({
+          current: processedCount,
+          total: totalResources,
+          resourcesIndexed: result.resourcesIndexed,
+          resourcesSkipped: result.resourcesSkipped,
+          resourcesUpdated: result.resourcesUpdated,
+          chunksCreated: result.chunksCreated,
+          elapsedMs,
+          estimatedRemainingMs,
+          resourceId: resource.id,
+          errors: result.errors ?? [],
         });
       }
     }

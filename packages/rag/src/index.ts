@@ -11,6 +11,8 @@ export type {
   RAGResult,
   RAGStats,
   IndexResult,
+  IndexProgress,
+  ProgressCallback,
   RAGQueryProvider,
   RAGAdminProvider,
   EmbeddingProvider,
