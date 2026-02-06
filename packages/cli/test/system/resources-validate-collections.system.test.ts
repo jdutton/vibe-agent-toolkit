@@ -9,7 +9,6 @@ import {
   createMarkdownWithFrontmatter,
   createSchemaFile,
   createTestTempDir,
-  executeCli,
   executeValidateAndParse,
   setupTestProject,
 } from './test-helpers.js';
@@ -126,10 +125,9 @@ resources:
     );
 
     // Should fail with validation error - check stderr contains expected error
-    assertValidationFailureWithErrorInStderr(binPath, projectDir, 'invalid.md');
+    const { textResult } = assertValidationFailureWithErrorInStderr(binPath, projectDir, 'invalid.md');
 
     // Also verify the specific field error
-    const textResult = executeCli(binPath, ['resources', 'validate', '--format', 'text'], { cwd: projectDir });
     expect(textResult.stderr).toContain('category'); // Missing required field
   });
 
@@ -265,15 +263,10 @@ resources:
       '# Introduction'
     );
 
-    const { result, parsed } = executeValidateAndParse(binPath, projectDir);
-
     // Should fail because it violates guides-schema
-    expect(result.status).toBe(1);
-    expect(parsed.status).toBe('failed');
+    const { textResult } = assertValidationFailureWithErrorInStderr(binPath, projectDir, 'guide-intro.md');
 
-    // Check error details in stderr (use text format)
-    const textResult = executeCli(binPath, ['resources', 'validate', '--format', 'text'], { cwd: projectDir });
-    expect(textResult.stderr).toContain('guide-intro.md');
+    // Also verify the specific field error
     expect(textResult.stderr).toContain('level'); // Missing required field
   });
 
@@ -444,15 +437,10 @@ resources:
       '# Content'
     );
 
-    const { result, parsed } = executeValidateAndParse(binPath, projectDir);
-
     // Should fail because strict mode + additionalProperties: false
-    expect(result.status).toBe(1);
-    expect(parsed.status).toBe('failed');
+    const { textResult } = assertValidationFailureWithErrorInStderr(binPath, projectDir, 'extra-fields.md');
 
-    // Check error details in stderr (use text format)
-    const textResult = executeCli(binPath, ['resources', 'validate', '--format', 'text'], { cwd: projectDir });
-    expect(textResult.stderr).toContain('extra-fields.md');
+    // Verify specific error about additional properties
     expect(textResult.stderr).toContain('must NOT have additional properties');
   });
 
@@ -556,16 +544,12 @@ resources:
       '# Guide Content'
     );
 
-    const { result, parsed } = executeValidateAndParse(binPath, projectDir);
-
     // Should fail with multiple errors
-    expect(result.status).toBe(1);
-    expect(parsed.status).toBe('failed');
+    const { textResult, parsed } = assertValidationFailureWithErrorInStderr(binPath, projectDir, 'invalid-doc.md');
+
     expect(parsed.errorsFound).toBeGreaterThanOrEqual(2);
 
-    // Check both errors in stderr (use text format)
-    const textResult = executeCli(binPath, ['resources', 'validate', '--format', 'text'], { cwd: projectDir });
-    expect(textResult.stderr).toContain('invalid-doc.md');
+    // Check both errors in stderr
     expect(textResult.stderr).toContain('category');
     expect(textResult.stderr).toContain('invalid-guide.md');
     expect(textResult.stderr).toContain('level');
