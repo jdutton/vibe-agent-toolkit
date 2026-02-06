@@ -20,6 +20,7 @@
     { "path": "./packages/transports" },
     { "path": "./packages/gateway-mcp" },
     { "path": "./packages/cli" },
+    { "path": "./packages/vat-development-agents" },
     { "path": "./packages/vat-example-cat-agents" }
   ]
 }

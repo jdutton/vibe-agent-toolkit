@@ -43,7 +43,7 @@ import { ConsoleObservabilityProvider, setupGracefulShutdown } from './example-h
  * - One-Shot LLM Analyzers (async, uses LLM in mock mode)
  */
 function wrapStatelessAgentForGateway<TInput, TOutput>(
-  agent: typeof haikuValidatorAgent | typeof photoAnalyzerAgent
+  agent: Agent<TInput, TOutput>
 ): Agent<TInput, OneShotAgentOutput<TOutput, string>> {
   return {
     name: agent.name,

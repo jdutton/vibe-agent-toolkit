@@ -75,7 +75,7 @@ function verifyNameSuggestion(result: NameSuggestion, providerName: string) {
     expect(result.alternatives.length).toBeLessThanOrEqual(3);
   }
 
-  console.log(`✅ ${providerName} generated name: "${result.name}"`);
+  console.log(`✅ ${providerName} generated name: "${String(result.name)}"`);
 }
 
 describeIfLLMTests('LLM Regression Tests', () => {
