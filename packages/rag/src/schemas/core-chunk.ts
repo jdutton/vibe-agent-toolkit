@@ -30,6 +30,10 @@ export const CoreRAGChunkSchema = z.object({
   // Context linking
   previousChunkId: z.string().optional().describe('Previous chunk in document (for context expansion)'),
   nextChunkId: z.string().optional().describe('Next chunk in document (for context expansion)'),
+
+  // Search result metrics (optional, only present in query results)
+  _distance: z.number().optional().describe('Raw distance metric from vector search (lower is more similar)'),
+  score: z.number().optional().describe('Computed similarity score 0-1 (higher is more similar)'),
 });
 
 /**
