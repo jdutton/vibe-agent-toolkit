@@ -28,3 +28,6 @@ export * from './git-tracker.js';
 
 // Test helpers for isolated test output directories
 export * from './test-helpers.js';
+
+// Zod type introspection (version-agnostic)
+export * from './zod-introspection.js';

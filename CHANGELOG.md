@@ -27,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Handles large paragraphs by splitting into line-level chunks
   - Enables accurate IDE navigation and source citations
 
+- **RAG Metadata Filtering Zod Compatibility**: Fixed filtering broken when user's Zod version differs from library
+  - Root cause: `instanceof` checks fail across Zod v3 vs v4 boundaries
+  - Solution: Duck typing via `_def.typeName` for version-agnostic type detection
+  - Added `ZodTypeNames` constants and introspection utilities in `@vibe-agent-toolkit/utils`
+  - Updated `filter-builder.ts` and `schema.ts` to use duck typing instead of `instanceof`
+  - Now supports both Zod v3.25.0+ and v4.0.0+ without compatibility issues
+  - All existing tests pass with both Zod versions
+
 ## [0.1.8] - 2026-02-06
 
 ### Fixed

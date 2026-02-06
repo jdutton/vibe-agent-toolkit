@@ -2,11 +2,13 @@
  * LanceDB schema mapping
  *
  * Converts between RAGChunk and LanceDB row format with generic metadata support.
+ * Uses duck typing for Zod v3/v4 compatibility.
  */
 
 import type { CoreRAGChunk, DefaultRAGMetadata, RAGChunk } from '@vibe-agent-toolkit/rag';
 import { DefaultRAGMetadataSchema } from '@vibe-agent-toolkit/rag';
-import { z, type ZodObject, type ZodRawShape } from 'zod';
+import { getZodTypeName, unwrapZodType, ZodTypeNames } from '@vibe-agent-toolkit/utils';
+import type { ZodObject, ZodRawShape, ZodTypeAny } from 'zod';
 
 /**
  * Helper type: Serializes metadata to Arrow-compatible types
@@ -71,9 +73,10 @@ export type LanceDBRow<TMetadata extends Record<string, unknown> = DefaultRAGMet
  * Different Zod types require different sentinel values.
  */
 // eslint-disable-next-line sonarjs/function-return-type -- Arrow serialization requires mixed return type
-function getSentinelForType(innerType: z.ZodTypeAny): string | number {
-  const isStringOrArray = innerType instanceof z.ZodString || innerType instanceof z.ZodArray;
-  const isNumberOrDate = innerType instanceof z.ZodNumber || innerType instanceof z.ZodDate;
+function getSentinelForType(innerType: ZodTypeAny): string | number {
+  const typeName = getZodTypeName(innerType);
+  const isStringOrArray = typeName === ZodTypeNames.STRING || typeName === ZodTypeNames.ARRAY;
+  const isNumberOrDate = typeName === ZodTypeNames.NUMBER || typeName === ZodTypeNames.DATE;
 
   if (isStringOrArray) return '';
   if (isNumberOrDate) return -1;
@@ -136,23 +139,24 @@ function serializeBoolean(value: unknown): number {
  * Arrays, strings, objects → string; numbers, dates, booleans → number.
  */
 // eslint-disable-next-line sonarjs/function-return-type -- Arrow serialization requires mixed return type
-function serializeMetadataValue(value: unknown, zodType: z.ZodTypeAny): string | number {
+function serializeMetadataValue(value: unknown, zodType: ZodTypeAny): string | number {
   // Handle optional types by unwrapping
-  if (zodType instanceof z.ZodOptional) {
-    if (value === undefined) {
-      return getSentinelForType(zodType.unwrap());
-    }
-    return serializeMetadataValue(value, zodType.unwrap());
+  const actualType = unwrapZodType(zodType);
+  const typeName = getZodTypeName(actualType);
+
+  // If value is undefined and type is optional, return sentinel
+  if (value === undefined && typeName !== getZodTypeName(zodType)) {
+    return getSentinelForType(actualType as ZodTypeAny);
   }
 
   // Type-specific serialization
-  if (zodType instanceof z.ZodEnum) return serializeString(value); // Enums stored as strings
-  if (zodType instanceof z.ZodArray) return serializeArray(value);
-  if (zodType instanceof z.ZodDate) return serializeDate(value);
-  if (zodType instanceof z.ZodObject) return JSON.stringify(value);
-  if (zodType instanceof z.ZodString) return serializeString(value);
-  if (zodType instanceof z.ZodNumber) return serializeNumber(value);
-  if (zodType instanceof z.ZodBoolean) return serializeBoolean(value);
+  if (typeName === ZodTypeNames.ENUM || typeName === ZodTypeNames.NATIVENUM) return serializeString(value);
+  if (typeName === ZodTypeNames.ARRAY) return serializeArray(value);
+  if (typeName === ZodTypeNames.DATE) return serializeDate(value);
+  if (typeName === ZodTypeNames.OBJECT) return JSON.stringify(value);
+  if (typeName === ZodTypeNames.STRING) return serializeString(value);
+  if (typeName === ZodTypeNames.NUMBER || typeName === ZodTypeNames.BIGINT) return serializeNumber(value);
+  if (typeName === ZodTypeNames.BOOLEAN) return serializeBoolean(value);
 
   // Fallback: JSON stringify
   return JSON.stringify(value);
@@ -161,11 +165,12 @@ function serializeMetadataValue(value: unknown, zodType: z.ZodTypeAny): string |
 /**
  * Check if value is a sentinel for optional field
  */
-function isSentinel(value: string | number, innerType: z.ZodTypeAny, isOptional: boolean): boolean {
+function isSentinel(value: string | number, innerType: ZodTypeAny, isOptional: boolean): boolean {
   if (!isOptional) return false;
 
-  const isStringOrArray = innerType instanceof z.ZodString || innerType instanceof z.ZodArray;
-  const isNumberOrDate = innerType instanceof z.ZodNumber || innerType instanceof z.ZodDate;
+  const typeName = getZodTypeName(innerType);
+  const isStringOrArray = typeName === ZodTypeNames.STRING || typeName === ZodTypeNames.ARRAY;
+  const isNumberOrDate = typeName === ZodTypeNames.NUMBER || typeName === ZodTypeNames.DATE;
   const isStringSentinel = isStringOrArray && value === '';
   const isNumberSentinel = isNumberOrDate && value === -1;
 
@@ -261,24 +266,29 @@ function deserializeFallback(value: string | number): unknown {
  *
  * Runtime introspection of Zod schema to determine deserialization strategy.
  */
-function deserializeMetadataValue(value: string | number, zodType: z.ZodTypeAny): unknown {
+function deserializeMetadataValue(value: string | number, zodType: ZodTypeAny): unknown {
   // Handle optional types by unwrapping
-  const isOptional = zodType instanceof z.ZodOptional;
-  const innerType = isOptional ? zodType.unwrap() : zodType;
+  const actualType = unwrapZodType(zodType);
+  const typeName = getZodTypeName(actualType);
+  const isOptional = getZodTypeName(zodType) === ZodTypeNames.OPTIONAL;
 
   // Check for sentinel values
-  if (isSentinel(value, innerType, isOptional)) {
+  if (isSentinel(value, actualType as ZodTypeAny, isOptional)) {
     return undefined;
   }
 
   // Type-specific deserialization
-  if (innerType instanceof z.ZodEnum) return deserializeString(value, isOptional); // Enums stored as strings
-  if (innerType instanceof z.ZodArray) return deserializeArray(value, isOptional);
-  if (innerType instanceof z.ZodDate) return deserializeDate(value, isOptional);
-  if (innerType instanceof z.ZodObject) return deserializeObject(value, isOptional);
-  if (innerType instanceof z.ZodString) return deserializeString(value, isOptional);
-  if (innerType instanceof z.ZodNumber) return deserializeNumber(value, isOptional);
-  if (innerType instanceof z.ZodBoolean) return deserializeBoolean(value);
+  if (typeName === ZodTypeNames.ENUM || typeName === ZodTypeNames.NATIVENUM) {
+    return deserializeString(value, isOptional);
+  }
+  if (typeName === ZodTypeNames.ARRAY) return deserializeArray(value, isOptional);
+  if (typeName === ZodTypeNames.DATE) return deserializeDate(value, isOptional);
+  if (typeName === ZodTypeNames.OBJECT) return deserializeObject(value, isOptional);
+  if (typeName === ZodTypeNames.STRING) return deserializeString(value, isOptional);
+  if (typeName === ZodTypeNames.NUMBER || typeName === ZodTypeNames.BIGINT) {
+    return deserializeNumber(value, isOptional);
+  }
+  if (typeName === ZodTypeNames.BOOLEAN) return deserializeBoolean(value);
 
   // Fallback
   return deserializeFallback(value);
