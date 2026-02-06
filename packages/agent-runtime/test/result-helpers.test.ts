@@ -27,6 +27,16 @@ function createRetryAgent(
   return { fn, attempts };
 }
 
+async function testRetryOnError(errorType: string) {
+  const { fn, attempts } = createRetryAgent(2, errorType);
+  const retryPromise = withRetry(fn, 3);
+  await vi.runAllTimersAsync();
+  const output = await retryPromise;
+
+  expect(attempts.value).toBe(2);
+  expect(output.result.execution?.retryCount).toBe(1);
+}
+
 describe('mapResult', () => {
   it('should map success data', () => {
     const result = { status: 'success' as const, data: 5 };
@@ -259,16 +269,6 @@ describe('withRetry', () => {
       cost: 0,
     });
   });
-
-  async function testRetryOnError(errorType: string) {
-    const { fn, attempts } = createRetryAgent(2, errorType);
-    const retryPromise = withRetry(fn, 3);
-    await vi.runAllTimersAsync();
-    const output = await retryPromise;
-
-    expect(attempts.value).toBe(2);
-    expect(output.result.execution?.retryCount).toBe(1);
-  }
 
   it('should retry on event-timeout errors', async () => {
     await testRetryOnError('event-timeout');
