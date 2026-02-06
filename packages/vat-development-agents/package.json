@@ -10,11 +10,26 @@
     "development-tools"
   ],
   "vat": {
-    "type": "agent-bundle",
     "version": "1.0",
+    "type": "agent-bundle",
+    "skills": [
+      {
+        "name": "vibe-agent-toolkit",
+        "source": "./resources/skills/SKILL.md",
+        "path": "./dist/skills/vibe-agent-toolkit"
+      }
+    ],
     "agents": [
-      "./agents/agent-generator",
-      "./agents/resource-optimizer"
+      {
+        "name": "agent-generator",
+        "path": "./agents/agent-generator",
+        "type": "meta-agent"
+      },
+      {
+        "name": "resource-optimizer",
+        "path": "./agents/resource-optimizer",
+        "type": "pure-function"
+      }
     ]
   },
   "exports": {

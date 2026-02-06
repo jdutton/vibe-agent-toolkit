@@ -41,6 +41,7 @@ Available schemas:
 - `agent-interface.json` - Input/output interface
 - `tool.json` - Tool definitions
 - `resource-registry.json` - Resource registry
+- `vat-package-metadata.json` - VAT package.json metadata (distribution standard)
 
 ## Exported Schemas
 
@@ -49,6 +50,7 @@ Available schemas:
 - `AgentManifestSchema` - Complete agent.yaml structure
 - `AgentMetadataSchema` - Agent metadata (name, version, etc.)
 - `AgentSpecSchema` - Agent specification (LLM, tools, resources)
+- `VatPackageMetadataSchema` - package.json `vat` field for distribution
 
 ### Component Schemas
 
@@ -80,7 +82,9 @@ import type {
 } from '@vibe-agent-toolkit/agent-schema';
 ```
 
-## Validation Example
+## Validation Examples
+
+### Validate agent.yaml
 
 ```typescript
 import { AgentManifestSchema } from '@vibe-agent-toolkit/agent-schema';
@@ -103,6 +107,31 @@ if (!result.success) {
 }
 
 console.log('✅ Valid agent manifest');
+```
+
+### Validate package.json VAT metadata
+
+```typescript
+import { VatPackageMetadataSchema } from '@vibe-agent-toolkit/agent-schema';
+import { readFileSync } from 'node:fs';
+
+// Load package.json
+const packageJson = JSON.parse(readFileSync('package.json', 'utf-8'));
+
+// Validate vat field
+if (packageJson.vat) {
+  const result = VatPackageMetadataSchema.safeParse(packageJson.vat);
+
+  if (!result.success) {
+    console.error('Invalid VAT metadata:');
+    result.error.issues.forEach(issue => {
+      console.error(`- ${issue.path.join('.')}: ${issue.message}`);
+    });
+    process.exit(1);
+  }
+
+  console.log('✅ Valid VAT metadata');
+}
 ```
 
 ## Schema Generation

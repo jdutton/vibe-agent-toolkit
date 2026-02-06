@@ -1,0 +1,139 @@
+{
+  "$ref": "#/definitions/vat-package-metadata",
+  "definitions": {
+    "vat-package-metadata": {
+      "type": "object",
+      "properties": {
+        "version": {
+          "type": "string",
+          "pattern": "^\\d+\\.\\d+$",
+          "description": "VAT metadata schema version (currently \"1.0\")"
+        },
+        "type": {
+          "type": "string",
+          "enum": [
+            "agent-bundle",
+            "skill",
+            "runtime",
+            "toolkit"
+          ],
+          "description": "Package type"
+        },
+        "skills": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Skill name (used for installation directory)"
+              },
+              "source": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Source SKILL.md path (relative to package root, for rebuilding)"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Built skill directory path (relative to package root)"
+              }
+            },
+            "required": [
+              "name",
+              "source",
+              "path"
+            ],
+            "additionalProperties": false,
+            "description": "Claude Skill metadata for distribution"
+          },
+          "description": "Claude Skills for distribution"
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Agent name"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Agent directory path (relative to package root)"
+              },
+              "type": {
+                "type": "string",
+                "description": "Agent archetype (optional, e.g., \"llm-analyzer\", \"pure-function\")"
+              }
+            },
+            "required": [
+              "name",
+              "path"
+            ],
+            "additionalProperties": false,
+            "description": "VAT agent metadata for distribution"
+          },
+          "description": "VAT agents (agent.yaml based)"
+        },
+        "pureFunctions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Pure function name"
+              },
+              "path": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Implementation path (relative to package root)"
+              },
+              "exports": {
+                "type": "object",
+                "properties": {
+                  "mcp": {
+                    "type": "string",
+                    "description": "MCP server export path (relative to package root)"
+                  },
+                  "cli": {
+                    "type": "string",
+                    "description": "CLI invocation pattern (e.g., \"vat-cat-agents haiku-validate\")"
+                  }
+                },
+                "additionalProperties": false,
+                "description": "Export mechanisms for this pure function"
+              }
+            },
+            "required": [
+              "name",
+              "path"
+            ],
+            "additionalProperties": false,
+            "description": "Pure function tool metadata for distribution"
+          },
+          "description": "Pure function tools"
+        },
+        "runtimes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Runtime adapters provided (e.g., \"vercel-ai-sdk\", \"langchain\")"
+        }
+      },
+      "required": [
+        "version",
+        "type"
+      ],
+      "additionalProperties": false,
+      "description": "VAT package metadata (package.json \"vat\" field)"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

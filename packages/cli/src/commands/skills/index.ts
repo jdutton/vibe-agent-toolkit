@@ -6,6 +6,7 @@
 
 import { Command } from 'commander';
 
+import { createBuildCommand } from './build.js';
 import { createInstallCommand } from './install.js';
 import { listCommand } from './list.js';
 import { createPackageCommand } from './package.js';
@@ -22,18 +23,21 @@ export function createSkillsCommand(): Command {
       `
 Examples:
   $ vat skills validate                               # Validate all skills
+  $ vat skills build                                  # Build skills from package.json
   $ vat skills package resources/skills/SKILL.md      # Package a skill
   $ vat skills install ./my-skill.zip                 # Install from ZIP
   $ vat skills list                                   # List installed skills
 
 Distribution Workflow:
   1. Validate: Ensure SKILL.md is valid
-  2. Package: Create distributable ZIP from SKILL.md
-  3. Share: Distribute ZIP via GitHub releases, email, etc.
-  4. Install: Users extract to ~/.claude/plugins/
+  2. Build: Build skills into dist/ (for npm packages)
+  3. Package: Create distributable ZIP from SKILL.md
+  4. Share: Distribute via npm or GitHub releases
+  5. Install: Users install from npm or extract ZIP to ~/.claude/plugins/
 
 For detailed command help:
   $ vat skills validate --help
+  $ vat skills build --help
   $ vat skills package --help
   $ vat skills install --help
   $ vat skills list --help
@@ -41,10 +45,11 @@ For detailed command help:
     );
 
   // Add subcommands
+  command.addCommand(createValidateCommand());
+  command.addCommand(createBuildCommand());
   command.addCommand(createPackageCommand());
   command.addCommand(createInstallCommand());
   command.addCommand(createListCommand());
-  command.addCommand(createValidateCommand());
 
   return command;
 }

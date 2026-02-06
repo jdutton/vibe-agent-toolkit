@@ -58,6 +58,17 @@
     "typescript": "^5.7.3",
     "vitest": "^2.1.8"
   },
+  "vat": {
+    "version": "1.0",
+    "type": "agent-bundle",
+    "skills": [
+      {
+        "name": "vat-cat-agents",
+        "source": "./resources/skills/SKILL.md",
+        "path": "./dist/skills/vat-cat-agents"
+      }
+    ]
+  },
   "keywords": [
     "ai-agent",
     "cat-agents",
