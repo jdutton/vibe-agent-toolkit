@@ -60,52 +60,54 @@ function createTestChunkWithCustomMetadata(): CoreRAGChunk & CustomMetadata {
 
 // Create test row factory with custom metadata parameter
 // Metadata fields are spread at top level (flattened schema)
+// Note: All column names are lowercase (SQL convention)
 function createTestRow(metadata: Record<string, unknown>) {
   return {
-    chunkId: TEST_CHUNK_ID,
-    resourceId: TEST_RESOURCE_ID,
+    chunkid: TEST_CHUNK_ID,
+    resourceid: TEST_RESOURCE_ID,
     content: TEST_CONTENT,
-    contentHash: TEST_CONTENT_HASH,
-    resourceContentHash: TEST_RESOURCE_CONTENT_HASH,
-    tokenCount: 5,
+    contenthash: TEST_CONTENT_HASH,
+    resourcecontenthash: TEST_RESOURCE_CONTENT_HASH,
+    tokencount: 5,
     vector: TEST_EMBEDDING,
-    embeddingModel: TEST_MODEL,
-    embeddedAt: TEST_DATE.getTime(),
-    previousChunkId: '',
-    nextChunkId: '',
-    ...metadata, // Spread metadata fields at top level
+    embeddingmodel: TEST_MODEL,
+    embeddedat: TEST_DATE.getTime(),
+    previouschunkid: '',
+    nextchunkid: '',
+    ...metadata, // Spread metadata fields at top level (lowercase)
   };
 }
 
 // Convenience wrappers for different metadata scenarios
+// Note: Keys are lowercase (database column names)
 const createTestRowWithDefaultMetadata = () =>
   createTestRow({
-    filePath: TEST_FILE_PATH,
+    filepath: TEST_FILE_PATH,
     tags: 'test,example',
     type: TEST_DOCUMENTATION_TYPE,
     title: TEST_TITLE,
-    headingPath: TEST_HEADING_PATH,
-    headingLevel: 2,
-    startLine: 10,
-    endLine: 20,
+    headingpath: TEST_HEADING_PATH,
+    headinglevel: 2,
+    startline: 10,
+    endline: 20,
   });
 
 const createTestRowWithSentinelValues = () =>
   createTestRow({
-    filePath: TEST_FILE_PATH,
+    filepath: TEST_FILE_PATH,
     tags: '',
     type: '',
     title: '',
-    headingPath: '',
-    headingLevel: -1,
-    startLine: -1,
-    endLine: -1,
+    headingpath: '',
+    headinglevel: -1,
+    startline: -1,
+    endline: -1,
   });
 
 const createTestRowWithCustomMetadata = () =>
   createTestRow({
     author: 'Alice',
-    publishedAt: TEST_DATE.getTime(),
+    publishedat: TEST_DATE.getTime(),
     version: 2,
     categories: 'tech,docs',
     config: JSON.stringify({ key: 'value' }),
@@ -157,13 +159,13 @@ describe('serializeMetadata', () => {
   it('should serialize dates to Unix timestamps', () => {
     const schema = z.object({ createdAt: z.date() });
     const result = serializeMetadata({ createdAt: TEST_DATE }, schema);
-    expect(result).toEqual({ createdAt: TEST_DATE.getTime() });
+    expect(result).toEqual({ createdat: TEST_DATE.getTime() });
   });
 
   it('should serialize optional dates to -1 sentinel', () => {
     const schema = z.object({ createdAt: z.date().optional() });
     const result = serializeMetadata({}, schema);
-    expect(result).toEqual({ createdAt: -1 });
+    expect(result).toEqual({ createdat: -1 });
   });
 
   it('should serialize objects to JSON strings', () => {
@@ -218,13 +220,13 @@ describe('deserializeMetadata', () => {
 
   it('should deserialize Unix timestamps to dates', () => {
     const schema = z.object({ createdAt: z.date() });
-    const result = deserializeMetadata({ createdAt: TEST_DATE.getTime() }, schema);
+    const result = deserializeMetadata({ createdat: TEST_DATE.getTime() }, schema);
     expect(result).toEqual({ createdAt: TEST_DATE });
   });
 
   it('should deserialize -1 sentinel to undefined for optional dates', () => {
     const schema = z.object({ createdAt: z.date().optional() });
-    const result = deserializeMetadata({ createdAt: -1 }, schema);
+    const result = deserializeMetadata({ createdat: -1 }, schema);
     expect(result).toEqual({});
   });
 
@@ -260,19 +262,20 @@ describe('chunkToLanceRow (generic)', () => {
 
     const row = chunkToLanceRow(chunk, TEST_RESOURCE_CONTENT_HASH, DefaultRAGMetadataSchema);
 
-    expect(row.chunkId).toBe(TEST_CHUNK_ID);
-    expect(row.resourceId).toBe(TEST_RESOURCE_ID);
+    // Core fields are lowercase
+    expect(row.chunkid).toBe(TEST_CHUNK_ID);
+    expect(row.resourceid).toBe(TEST_RESOURCE_ID);
     expect(row.content).toBe(TEST_CONTENT);
-    expect(row.contentHash).toBe(TEST_CONTENT_HASH);
-    expect(row.resourceContentHash).toBe(TEST_RESOURCE_CONTENT_HASH);
+    expect(row.contenthash).toBe(TEST_CONTENT_HASH);
+    expect(row.resourcecontenthash).toBe(TEST_RESOURCE_CONTENT_HASH);
     expect(row.vector).toEqual(TEST_EMBEDDING);
-    expect(row.embeddingModel).toBe(TEST_MODEL);
-    expect(row.embeddedAt).toBe(TEST_DATE.getTime());
-    // Metadata fields are now at top level (flattened schema)
-    expect(row.filePath).toBe(TEST_FILE_PATH);
-    expect(row.tags).toBe('test,example');
-    expect(row.type).toBe(TEST_DOCUMENTATION_TYPE);
-    expect(row.title).toBe(TEST_TITLE);
+    expect(row.embeddingmodel).toBe(TEST_MODEL);
+    expect(row.embeddedat).toBe(TEST_DATE.getTime());
+    // Metadata fields are now at top level with lowercase column names
+    expect(row['filepath']).toBe(TEST_FILE_PATH);
+    expect(row['tags']).toBe('test,example');
+    expect(row['type']).toBe(TEST_DOCUMENTATION_TYPE);
+    expect(row['title']).toBe(TEST_TITLE);
   });
 
   it('should handle optional metadata fields with sentinel values', () => {
@@ -290,25 +293,25 @@ describe('chunkToLanceRow (generic)', () => {
 
     const row = chunkToLanceRow(chunk, TEST_RESOURCE_CONTENT_HASH, DefaultRAGMetadataSchema);
 
-    // Metadata fields are now at top level (flattened schema)
-    expect(row.tags).toBe(''); // Empty string sentinel
-    expect(row.type).toBe(''); // Empty string sentinel
-    expect(row.title).toBe(''); // Empty string sentinel
-    expect(row.headingLevel).toBe(-1); // -1 sentinel
-    expect(row.startLine).toBe(-1); // -1 sentinel
-    expect(row.endLine).toBe(-1); // -1 sentinel
+    // Metadata fields are now at top level with lowercase column names
+    expect(row['tags']).toBe(''); // Empty string sentinel
+    expect(row['type']).toBe(''); // Empty string sentinel
+    expect(row['title']).toBe(''); // Empty string sentinel
+    expect(row['headinglevel']).toBe(-1); // -1 sentinel
+    expect(row['startline']).toBe(-1); // -1 sentinel
+    expect(row['endline']).toBe(-1); // -1 sentinel
   });
 
   it('should serialize custom metadata types', () => {
     const chunk = createTestChunkWithCustomMetadata();
     const row = chunkToLanceRow(chunk, TEST_RESOURCE_CONTENT_HASH, CustomMetadataSchema);
 
-    // Metadata fields are now at top level (flattened schema)
-    expect(row.author).toBe('Alice');
-    expect(row.publishedAt).toBe(TEST_DATE.getTime());
-    expect(row.version).toBe(2);
-    expect(row.categories).toBe('tech,docs');
-    expect(row.config).toBe(JSON.stringify({ key: 'value' }));
+    // Metadata fields are now at top level with lowercase column names
+    expect(row['author']).toBe('Alice');
+    expect(row['publishedat']).toBe(TEST_DATE.getTime());
+    expect(row['version']).toBe(2);
+    expect(row['categories']).toBe('tech,docs');
+    expect(row['config']).toBe(JSON.stringify({ key: 'value' }));
   });
 });
 

@@ -11,15 +11,16 @@ import { getZodTypeName, unwrapZodType, ZodTypeNames } from '@vibe-agent-toolkit
 import type { ZodObject, ZodRawShape, ZodTypeAny } from 'zod';
 
 /**
- * Helper type: Serializes metadata to Arrow-compatible types
+ * Helper type: Serializes metadata to Arrow-compatible types with lowercase keys
  *
+ * - Keys → lowercase (SQL convention)
  * - Array<T> → string (comma-separated)
  * - Date → number (Unix timestamp)
  * - Object → string (JSON)
  * - Optional fields → sentinel values (empty string, -1)
  */
 export type SerializedMetadata<T extends Record<string, unknown>> = {
-  [K in keyof T]: T[K] extends Array<infer _U>
+  [K in keyof T as Lowercase<string & K>]: T[K] extends Array<infer _U>
     ? string
     : T[K] extends Date
       ? number
@@ -38,33 +39,34 @@ export type SerializedMetadata<T extends Record<string, unknown>> = {
  * LanceDB stores data in Apache Arrow format with specific type requirements.
  * Custom metadata fields are stored as top-level columns for efficient filtering.
  *
- * BREAKING CHANGE: Metadata is now flattened to top-level columns instead of
+ * BREAKING CHANGE v0.2.0: All column names are now lowercase (SQL convention).
+ * BREAKING CHANGE v0.1.8: Metadata is now flattened to top-level columns instead of
  * nested under a `metadata` struct. This enables scale-efficient filtering on
  * indexes with 1000+ chunks.
  *
- * @template TMetadata - Custom metadata type (fields stored as top-level columns)
+ * @template TMetadata - Custom metadata type (fields stored as top-level columns with lowercase names)
  */
 export type LanceDBRow<TMetadata extends Record<string, unknown> = DefaultRAGMetadata> = {
   // Required by LanceDB for vector search
   vector: number[];
 
-  // CoreRAGChunk fields
-  chunkId: string;
-  resourceId: string;
+  // CoreRAGChunk fields (lowercase column names)
+  chunkid: string;
+  resourceid: string;
   content: string;
-  contentHash: string;
-  tokenCount: number;
-  embeddingModel: string;
-  embeddedAt: number; // Unix timestamp
-  previousChunkId: string; // Empty string sentinel
-  nextChunkId: string; // Empty string sentinel
+  contenthash: string;
+  tokencount: number;
+  embeddingmodel: string;
+  embeddedat: number; // Unix timestamp
+  previouschunkid: string; // Empty string sentinel
+  nextchunkid: string; // Empty string sentinel
 
   // Resource content hash (for change detection)
-  resourceContentHash: string;
+  resourcecontenthash: string;
 
   // Vector search result fields (optional, only present in query results)
   _distance?: number; // Distance metric from LanceDB vector search
-} & SerializedMetadata<TMetadata>; // Metadata fields spread at top level
+} & SerializedMetadata<TMetadata>; // Metadata fields spread at top level (lowercase)
 
 /**
  * Get sentinel value for optional field based on inner type
@@ -307,7 +309,8 @@ export function serializeMetadata<TMetadata extends Record<string, unknown>>(
 
   for (const [key, zodType] of Object.entries(schema.shape)) {
     const value = metadata[key];
-    serialized[key] = serializeMetadataValue(value, zodType);
+    // Lowercase the key for database storage (SQL convention)
+    serialized[key.toLowerCase()] = serializeMetadataValue(value, zodType);
   }
 
   return serialized as SerializedMetadata<TMetadata>;
@@ -325,10 +328,12 @@ export function deserializeMetadata<TMetadata extends Record<string, unknown>>(
   const metadata: Record<string, unknown> = {};
 
   for (const [key, zodType] of Object.entries(schema.shape)) {
-    const value = serialized[key as keyof SerializedMetadata<TMetadata>];
+    // Lookup using lowercase key (database column name)
+    const value = serialized[key.toLowerCase() as keyof SerializedMetadata<TMetadata>];
     // Type narrowing: value is always string | number from SerializedMetadata
     const deserialized = deserializeMetadataValue(value as string | number, zodType);
     if (deserialized !== undefined) {
+      // Return with original case preserved (camelCase)
       metadata[key] = deserialized;
     }
   }
@@ -365,19 +370,20 @@ export function chunkToLanceRow<TMetadata extends Record<string, unknown>>(
   const serializedMetadata = serializeMetadata(metadata as TMetadata, metadataSchema);
 
   // Spread metadata fields at top level for efficient filtering
+  // Use lowercase for all column names (SQL convention)
   return {
     vector: chunk.embedding,
-    chunkId: chunk.chunkId,
-    resourceId: chunk.resourceId,
+    chunkid: chunk.chunkId,
+    resourceid: chunk.resourceId,
     content: chunk.content,
-    contentHash: chunk.contentHash,
-    resourceContentHash,
-    tokenCount: chunk.tokenCount,
-    embeddingModel: chunk.embeddingModel,
-    embeddedAt: chunk.embeddedAt.getTime(),
-    previousChunkId: chunk.previousChunkId ?? '',
-    nextChunkId: chunk.nextChunkId ?? '',
-    // Spread serialized metadata fields as top-level columns
+    contenthash: chunk.contentHash,
+    resourcecontenthash: resourceContentHash,
+    tokencount: chunk.tokenCount,
+    embeddingmodel: chunk.embeddingModel,
+    embeddedat: chunk.embeddedAt.getTime(),
+    previouschunkid: chunk.previousChunkId ?? '',
+    nextchunkid: chunk.nextChunkId ?? '',
+    // Spread serialized metadata fields as top-level columns (already lowercase)
     ...serializedMetadata,
   };
 }
@@ -398,23 +404,27 @@ export function lanceRowToChunk<TMetadata extends Record<string, unknown>>(
   row: LanceDBRow<TMetadata>,
   metadataSchema: ZodObject<ZodRawShape>,
 ): CoreRAGChunk & TMetadata {
+  // Read from lowercase column names (SQL convention)
+  const rowData = row as unknown as Record<string, unknown>;
   const coreChunk: CoreRAGChunk = {
-    chunkId: row.chunkId,
-    resourceId: row.resourceId,
-    content: row.content,
-    contentHash: row.contentHash,
-    tokenCount: row.tokenCount,
-    embedding: row.vector,
-    embeddingModel: row.embeddingModel,
-    embeddedAt: new Date(row.embeddedAt),
+    chunkId: rowData['chunkid'] as string,
+    resourceId: rowData['resourceid'] as string,
+    content: rowData['content'] as string,
+    contentHash: rowData['contenthash'] as string,
+    tokenCount: rowData['tokencount'] as number,
+    embedding: rowData['vector'] as number[],
+    embeddingModel: rowData['embeddingmodel'] as string,
+    embeddedAt: new Date(rowData['embeddedat'] as number),
   };
 
   // Add optional context fields if present
-  if (row.previousChunkId && row.previousChunkId.length > 0) {
-    coreChunk.previousChunkId = row.previousChunkId;
+  const previousChunkId = rowData['previouschunkid'] as string;
+  if (previousChunkId && previousChunkId.length > 0) {
+    coreChunk.previousChunkId = previousChunkId;
   }
-  if (row.nextChunkId && row.nextChunkId.length > 0) {
-    coreChunk.nextChunkId = row.nextChunkId;
+  const nextChunkId = rowData['nextchunkid'] as string;
+  if (nextChunkId && nextChunkId.length > 0) {
+    coreChunk.nextChunkId = nextChunkId;
   }
 
   // Add search result metrics if present (from vector search results)
@@ -426,10 +436,12 @@ export function lanceRowToChunk<TMetadata extends Record<string, unknown>>(
   }
 
   // Extract serialized metadata from top-level row fields
+  // Row has lowercase column names, so use lowercase to lookup
   const serializedMetadata: Record<string, string | number> = {};
   for (const key of Object.keys(metadataSchema.shape)) {
-    if (key in row) {
-      serializedMetadata[key] = row[key] as string | number;
+    const lowercaseKey = key.toLowerCase();
+    if (lowercaseKey in row) {
+      serializedMetadata[lowercaseKey] = row[lowercaseKey as keyof typeof row] as string | number;
     }
   }
 

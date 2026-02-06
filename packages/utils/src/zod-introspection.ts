@@ -61,10 +61,46 @@ export const ZodTypeNames = {
 export type ZodTypeName = (typeof ZodTypeNames)[keyof typeof ZodTypeNames];
 
 /**
+ * Convert Zod v4 lowercase type to v3 PascalCase format
+ *
+ * Zod v4 changed from _def.typeName ('ZodString') to _def.type ('string').
+ * This function normalizes v4 types to match v3 format for consistency.
+ *
+ * @param v4Type - Lowercase type from Zod v4 _def.type
+ * @returns PascalCase type name with 'Zod' prefix
+ * @internal
+ *
+ * @example
+ * ```typescript
+ * zodV4TypeToV3Name('string')  // 'ZodString'
+ * zodV4TypeToV3Name('array')   // 'ZodArray'
+ * zodV4TypeToV3Name('optional') // 'ZodOptional'
+ * ```
+ */
+function zodV4TypeToV3Name(v4Type: string): string {
+  // Handle special cases with different naming
+  const specialCases: Record<string, string> = {
+    nativeenum: 'ZodNativeEnum',
+    bigint: 'ZodBigInt',
+  };
+
+  if (specialCases[v4Type]) {
+    return specialCases[v4Type];
+  }
+
+  // Convert: 'string' → 'ZodString', 'array' → 'ZodArray'
+  return 'Zod' + v4Type.charAt(0).toUpperCase() + v4Type.slice(1);
+}
+
+/**
  * Get Zod type name in version-agnostic way
  *
- * Uses duck typing to access _def.typeName, which works across
- * Zod v3 and v4 without instanceof checks.
+ * Supports both Zod v3 and v4:
+ * - Zod v3: Uses _def.typeName (e.g., 'ZodString')
+ * - Zod v4: Uses _def.type (e.g., 'string'), converts to v3 format
+ *
+ * Uses duck typing instead of instanceof checks, which fail when
+ * user's Zod version differs from library's Zod version.
  *
  * @param zodType - Zod type to introspect
  * @returns Type name string (e.g., 'ZodString') or undefined if not a Zod type
@@ -76,7 +112,7 @@ export type ZodTypeName = (typeof ZodTypeNames)[keyof typeof ZodTypeNames];
  *
  * const schema = z.string();
  * const typeName = getZodTypeName(schema);
- * console.log(typeName); // 'ZodString'
+ * console.log(typeName); // 'ZodString' (both v3 and v4)
  *
  * if (typeName === ZodTypeNames.STRING) {
  *   console.log('It\'s a string schema!');
@@ -85,7 +121,21 @@ export type ZodTypeName = (typeof ZodTypeNames)[keyof typeof ZodTypeNames];
  */
 export function getZodTypeName(zodType: unknown): string | undefined {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return (zodType as any)?._def?.typeName as string | undefined;
+  const def = (zodType as any)?._def;
+  if (!def) return undefined;
+
+  // Zod v3: uses _def.typeName (e.g., 'ZodString')
+  if (def.typeName) {
+    return def.typeName;
+  }
+
+  // Zod v4: uses _def.type (e.g., 'string')
+  // Convert to Zod v3 format for consistency
+  if (def.type) {
+    return zodV4TypeToV3Name(def.type);
+  }
+
+  return undefined;
 }
 
 /**

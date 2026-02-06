@@ -43,9 +43,9 @@ export function buildMetadataFilter(key: string, value: unknown, zodType: ZodTyp
   const actualType = unwrapZodType(zodType);
   const typeName = getZodTypeName(actualType);
 
-  // Metadata fields are stored as top-level columns for scale-efficient filtering
-  // Use backticks for column name escaping
-  const fieldPath = `\`${key}\``;
+  // Metadata fields are stored with lowercase column names following SQL convention
+  // No quotes needed since lowercase columns are unambiguous
+  const fieldPath = key.toLowerCase();
 
   // Handle enum fields (enums are stored as strings)
   if (typeName === ZodTypeNames.ENUM || typeName === ZodTypeNames.NATIVENUM) {
@@ -147,8 +147,8 @@ export function buildWhereClause<TMetadata extends Record<string, unknown>>(
       conditions.push('1 = 0'); // Always false condition
     } else {
       const idList = ids.map((id) => `'${escapeSQLString(id)}'`).join(', ');
-      // Use backticks for column names
-      conditions.push(`\`resourceId\` IN (${idList})`);
+      // Use lowercase (no backticks needed)
+      conditions.push(`resourceid IN (${idList})`);
     }
   }
 

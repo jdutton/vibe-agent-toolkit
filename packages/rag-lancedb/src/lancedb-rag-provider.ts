@@ -233,7 +233,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     // Materialize immediately to avoid Arrow buffer issues
     // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
     const rows = JSON.parse(JSON.stringify(allRows)) as LanceDBRow[];
-    const uniqueResources = new Set(rows.map((r) => r.resourceId)).size;
+    const uniqueResources = new Set(rows.map((r) => r.resourceid)).size;
 
     return {
       totalChunks: count,
@@ -326,14 +326,14 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     let shouldUpdate = false;
 
     if (this.table) {
-      const existingRows = await this.table.query().where(`\`resourceId\` = '${escapeSQLString(resource.id)}'`).toArray();
+      const existingRows = await this.table.query().where(`resourceid = '${escapeSQLString(resource.id)}'`).toArray();
       // Materialize immediately to avoid Arrow buffer issues
       // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
       const existing = JSON.parse(JSON.stringify(existingRows)) as LanceDBRow[];
 
       // Extract data immediately while Arrow buffers are valid
       if (existing.length > 0) {
-        const existingHash = existing[0]?.resourceContentHash;
+        const existingHash = existing[0]?.resourcecontenthash;
         deleteCount = existing.length;
 
         if (existingHash === resourceContentHash) {
@@ -413,7 +413,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       chunkToLanceRow<TMetadata>(chunk, resourceContentHash, this.metadataSchema)
     );
 
-    // Insert into LanceDB
+    // INSERT into LanceDB
     if (!this.table && this.connection) {
       this.table = await this.connection.createTable(TABLE_NAME, rows);
     } else if (this.table) {
@@ -445,8 +445,8 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       return;
     }
 
-    // Delete chunks (use backticks for column names)
-    await this.table.delete(`\`resourceId\` = '${escapeSQLString(resourceId)}'`);
+    // Delete chunks (use lowercase column names)
+    await this.table.delete(`resourceid = '${escapeSQLString(resourceId)}'`);
   }
 
   /**

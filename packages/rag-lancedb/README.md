@@ -198,6 +198,76 @@ for (const chunk of result.chunks) {
 
 ## Migration Guide
 
+### Upgrading from v0.1.8 to v0.2.0
+
+**⚠️ BREAKING CHANGE**: Database column names have changed to lowercase. Existing LanceDB indexes must be rebuilt.
+
+#### What Changed
+
+**v0.1.8 and earlier:**
+- Columns stored with camelCase: `contentType`, `resourceId`
+- Required backticks in SQL: `` WHERE `contentType` = 'value' ``
+
+**v0.2.0 and later:**
+- Columns stored in lowercase: `contenttype`, `resourceid`
+- No quotes needed: `WHERE contenttype = 'value'`
+
+This follows SQL convention and prevents case-sensitivity issues. See [docs/metadata-schema.md](./docs/metadata-schema.md) for details.
+
+#### Migration Steps
+
+**Option 1: Clear and Rebuild (Recommended)**
+
+```typescript
+import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
+
+// 1. Create provider (will open existing index)
+const provider = await LanceDBRAGProvider.create({
+  dbPath: './rag-db',
+  metadataSchema: MyMetadataSchema,  // Your custom schema
+});
+
+// 2. Clear old index
+await provider.clear();
+
+// 3. Re-index all resources with new schema
+const resources = await loadYourResources();
+await provider.indexResources(resources);
+
+console.log('Migration complete!');
+```
+
+**Option 2: Create New Index Path**
+
+```typescript
+// Keep old index as backup
+const provider = await LanceDBRAGProvider.create({
+  dbPath: './rag-db-v0.2.0',  // New path
+  metadataSchema: MyMetadataSchema,
+});
+
+await provider.indexResources(resources);
+
+// After verifying new index works:
+// rm -rf ./rag-db  // Delete old index
+```
+
+#### API Compatibility
+
+✅ **No code changes required** - The query API remains the same:
+
+```typescript
+// This syntax works in both v0.1.8 and v0.2.0
+const result = await provider.query({
+  text: 'query',
+  filters: {
+    metadata: { contentType: 'concepts' },  // Still use camelCase in code!
+  },
+});
+```
+
+The change is **internal only** - you still use camelCase in your code, but columns are stored as lowercase in the database.
+
 ### Upgrading from v0.1.7 to v0.1.8
 
 **⚠️ BREAKING CHANGE**: Metadata storage format has changed. Existing LanceDB indexes must be rebuilt.
