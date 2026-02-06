@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/vat-example-cat-agents",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Example agents: 8 quirky cat agents demonstrating VAT patterns",
   "type": "module",
   "exports": {
