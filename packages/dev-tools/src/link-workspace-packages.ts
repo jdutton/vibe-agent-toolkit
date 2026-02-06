@@ -20,11 +20,9 @@
 
 /* eslint-disable security/detect-non-literal-fs-filename -- All paths derived from curated WORKSPACE_PACKAGES list */
 
-import { existsSync, symlinkSync, unlinkSync, lstatSync } from 'node:fs';
+import { existsSync, mkdirSync, symlinkSync, unlinkSync, lstatSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = resolve(__filename, '..');
@@ -61,7 +59,8 @@ const WORKSPACE_PACKAGES = [
 
 function ensureScopeDirectory(scopeDir: string): void {
   if (!existsSync(scopeDir)) {
-    mkdirSyncReal(scopeDir, { recursive: true });
+    // eslint-disable-next-line local/no-fs-mkdirSync -- Cannot import utils during postinstall (before build)
+    mkdirSync(scopeDir, { recursive: true });
     console.log(`📁 Created ${WORKSPACE_SCOPE}/`);
   }
 }
