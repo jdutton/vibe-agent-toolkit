@@ -49,7 +49,6 @@
     "@vibe-agent-toolkit/resources": "workspace:*",
     "@vibe-agent-toolkit/agent-skills": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
-    "@vibe-agent-toolkit/vat-example-cat-agents": "workspace:*",
     "commander": "^12.1.0",
     "js-yaml": "^4.1.0",
     "semver": "^7.7.3",

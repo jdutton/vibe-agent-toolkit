@@ -21,11 +21,12 @@
   "engines": {
     "node": ">=22.0.0"
   },
+  "packageManager": "bun@1.3.5",
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc --build && cd packages/agent-schema && bun run generate:schemas",
+    "build": "turbo run build",
     "build:packages": "tsc --build && cd packages/agent-schema && bun run generate:schemas",
     "build:cli": "bun --filter @vibe-agent-toolkit/cli run build",
     "build:clean": "tsc --build --clean && tsc --build && cd packages/agent-schema && bun run generate:schemas",
@@ -37,9 +38,9 @@
     "test:integration": "vibe-validate run \"vitest run --config vitest.integration.config.ts\"",
     "test:system": "vibe-validate run \"vitest run --config vitest.system.config.ts\"",
     "validate-links": "vibe-validate run \"vitest run --config vitest.system.config.ts\"",
-    "lint": "eslint . --ignore-pattern '**/dist/**' --ignore-pattern '**/*.config.ts' --max-warnings=0",
-    "lint:fix": "eslint . --ignore-pattern '**/dist/**' --ignore-pattern '**/*.config.ts' --fix",
-    "typecheck": "tsc --build --dry --force",
+    "lint": "eslint . --cache --cache-location .eslintcache --ignore-pattern '**/dist/**' --ignore-pattern '**/*.config.ts' --max-warnings=0",
+    "lint:fix": "eslint . --cache --cache-location .eslintcache --ignore-pattern '**/dist/**' --ignore-pattern '**/*.config.ts' --fix",
+    "typecheck": "turbo run typecheck",
     "duplication-check": "tsx packages/dev-tools/src/duplication-check.ts",
     "duplication-update-baseline": "tsx packages/dev-tools/src/jscpd-update-baseline.ts",
     "validate": "vibe-validate validate",
@@ -83,6 +84,7 @@
     "secretlint": "^11.2.5",
     "semver": "^7.7.3",
     "tsx": "^4.21.0",
+    "turbo": "^2.8.3",
     "typescript": "^5.9.3",
     "vibe-validate": "0.19.0-rc.3",
     "vitest": "^3.2.4",

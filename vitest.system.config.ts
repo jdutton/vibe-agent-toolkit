@@ -1,3 +1,4 @@
+import { availableParallelism } from 'node:os';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({
@@ -17,10 +18,12 @@ export default defineConfig({
     poolOptions: {
       forks: {
         singleFork: false,
-        // Parallel execution for 2x speedup (~25s vs ~57s on dev machines)
-        // Conservative setting for CI compatibility (especially Windows VMs)
-        // Tests are fully isolated - could safely use maxForks: 4+ on fast machines
-        maxForks: 2,
+        // Adaptive parallelism with conservative cap for CI stability
+        // - Dev machines (10+ cores): Uses 4 cores
+        // - CI machines (2-4 cores): Uses all available
+        // - Windows VMs: Won't exceed 4 even if reporting more
+        // - Respects container/cgroup limits (Docker, K8s)
+        maxForks: Math.min(availableParallelism(), 4),
       },
     },
   },

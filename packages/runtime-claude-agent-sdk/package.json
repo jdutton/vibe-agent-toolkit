@@ -14,7 +14,6 @@
   ],
   "scripts": {
     "build": "tsc",
-    "demo": "tsx examples/demo.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
@@ -29,7 +28,6 @@
   "devDependencies": {
     "@types/node": "^22.10.5",
     "@vibe-agent-toolkit/dev-tools": "workspace:*",
-    "@vibe-agent-toolkit/vat-example-cat-agents": "workspace:*",
     "openai": "^4.77.3",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
