@@ -247,25 +247,6 @@ Skills install to:
 - **User-level:** `~/.claude/plugins/<skill-name>`
 - **Project-level:** `.claude/skills/<skill-name>` (future)
 
-### Registry Tracking
-
-VAT automatically tracks installations in `~/.claude/plugins/.vat-registry.json`:
-
-```json
-{
-  "my-skill": {
-    "version": "1.0.0",
-    "source": "npm:your-package",
-    "installedAt": "2026-02-05T23:15:00Z",
-    "installedBy": "vat-cli",
-    "path": "/Users/username/.claude/plugins/my-skill",
-    "type": "symlink"
-  }
-}
-```
-
-This enables future `update` and `uninstall` commands.
-
 ## Optional: Auto-Install on Global Install
 
 You can optionally auto-install skills when users run `npm install -g your-package`.
@@ -620,15 +601,14 @@ vat skills install npm:your-package --project
 
 ### Update and Uninstall
 
-**Not yet implemented** - enabled by registry tracking:
+**Not yet implemented** - future enhancement:
 ```bash
 vat skills update my-skill      # Reinstall from original source
-vat skills uninstall my-skill   # Remove and clean registry
+vat skills uninstall my-skill   # Remove skill directory
 ```
 
 ## References
 
-- [VAT Distribution Standard](../plans/2026-02-05-vat-distribution-standard.md) - Complete specification
 - [vat-example-cat-agents](../../packages/vat-example-cat-agents/README.md) - Example implementation
 - [vat-development-agents](../../packages/vat-development-agents/README.md) - Example implementation
 - [Claude Code Skills Docs](https://code.claude.com/docs/en/skills) - Claude Skills format

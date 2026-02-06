@@ -25,7 +25,6 @@ import {
   downloadNpmPackage,
   isGlobalNpmInstall,
   readPackageJsonVatMetadata,
-  updateRegistry,
   type SkillSource,
 } from './install-helpers.js';
 
@@ -60,7 +59,6 @@ export function createInstallCommand(): Command {
       `
 Description:
   Installs a skill to Claude Code's plugins directory from various sources.
-  Tracks installed skills in ~/.claude/plugins/.vat-registry.json for updates.
 
   Supported sources:
   - npm package: npm:@scope/package-name
@@ -162,7 +160,7 @@ async function handleNpmInstall(
     const extractedPath = downloadNpmPackage(packageName, tempDir);
 
     // Read vat metadata from package.json
-    const { packageJson, skills } = await readPackageJsonVatMetadata(extractedPath);
+    const { skills } = await readPackageJsonVatMetadata(extractedPath);
 
     if (skills.length === 0) {
       throw new Error(`No skills found in package ${packageName}`);
@@ -188,9 +186,7 @@ async function handleNpmInstall(
       skillPath,
       skillToInstall.name,
       options,
-      logger,
-      `npm:${packageName}`,
-      packageJson.version
+      logger
     );
 
     const duration = Date.now() - startTime;
@@ -231,11 +227,10 @@ async function handleLocalInstall(
 
   let skillName: string;
   let skillPath: string;
-  let version = 'local';
 
   if (hasPackageJson) {
     // Read vat metadata
-    const { packageJson, skills } = await readPackageJsonVatMetadata(sourcePath);
+    const { skills } = await readPackageJsonVatMetadata(sourcePath);
 
     const skillToInstall = options.name
       ? skills.find(s => s.name === options.name)
@@ -250,7 +245,6 @@ async function handleLocalInstall(
 
     skillName = skillToInstall.name;
     skillPath = resolve(sourcePath, skillToInstall.path);
-    version = packageJson.version;
   } else {
     // Plain directory - use directory name
     skillName = options.name ?? basename(sourcePath);
@@ -261,9 +255,7 @@ async function handleLocalInstall(
     skillPath,
     skillName,
     options,
-    logger,
-    `local:${sourcePath}`,
-    version
+    logger
   );
 
   const duration = Date.now() - startTime;
@@ -300,7 +292,7 @@ async function handleZipInstall(
   }
 
   const skillName = options.name ?? basename(sourcePath, '.zip');
-  const { pluginsDir, installPath } = await prepareInstallation(skillName, options);
+  const { installPath } = await prepareInstallation(skillName, options);
 
   if (!options.dryRun) {
     // Extract ZIP
@@ -308,16 +300,6 @@ async function handleZipInstall(
     const zip = new AdmZip(sourcePath);
     // eslint-disable-next-line sonarjs/no-unsafe-unzip -- User-provided local files, isolated plugin directory
     zip.extractAllTo(installPath, /* overwrite */ true);
-
-    // Update registry
-    await updateRegistry(pluginsDir, skillName, {
-      version: 'unknown',
-      source: sourcePath,
-      installedAt: new Date().toISOString(),
-      installedBy: 'vat-cli',
-      path: installPath,
-      type: 'copy',
-    });
   }
 
   const duration = Date.now() - startTime;
@@ -356,9 +338,7 @@ async function handleNpmPostinstall(
       skillPath,
       skill.name,
       options,
-      logger,
-      `npm:${packageJson.name}`,
-      packageJson.version
+      logger
     );
   }
 
@@ -404,31 +384,19 @@ async function installSkillFromPath(
   skillPath: string,
   skillName: string,
   options: SkillsInstallCommandOptions,
-  logger: ReturnType<typeof createLogger>,
-  source: string,
-  version: string
+  logger: ReturnType<typeof createLogger>
 ): Promise<void> {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated path
   if (!existsSync(skillPath)) {
     throw new Error(`Skill path not found: ${skillPath}`);
   }
 
-  const { pluginsDir, installPath } = await prepareInstallation(skillName, options);
+  const { installPath } = await prepareInstallation(skillName, options);
 
   if (!options.dryRun) {
     // Copy skill to plugins directory
     logger.info(`   Installing ${skillName}...`);
     await cp(skillPath, installPath, { recursive: true, force: true });
-
-    // Update registry
-    await updateRegistry(pluginsDir, skillName, {
-      version,
-      source,
-      installedAt: new Date().toISOString(),
-      installedBy: 'vat-cli',
-      path: installPath,
-      type: 'copy',
-    });
   }
 }
 

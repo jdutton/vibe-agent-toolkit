@@ -112,13 +112,6 @@ describe('skills install command (system test)', () => {
       const installedPath = join(suite.pluginsDir, 'my-skill');
       expect(existsSync(installedPath)).toBe(true);
       expect(existsSync(join(installedPath, 'SKILL.md'))).toBe(true);
-
-      // Verify registry was updated
-      const registry = await suite.loadRegistry();
-      expect(registry['my-skill']).toBeDefined();
-      expect(registry['my-skill'].version).toBe('local');
-      expect(registry['my-skill'].source).toContain('my-skill');
-      expect(registry['my-skill'].type).toBe('copy');
     });
 
     it('should install from directory with package.json vat metadata', async () => {
@@ -166,11 +159,6 @@ describe('skills install command (system test)', () => {
       const installedPath = join(suite.pluginsDir, skillName);
       expect(existsSync(installedPath)).toBe(true);
       expect(existsSync(join(installedPath, 'SKILL.md'))).toBe(true);
-
-      // Verify registry tracks version from package.json
-      const registry = await suite.loadRegistry();
-      expect(registry[skillName].version).toBe('1.0.0');
-      expect(registry[skillName].source).toContain('test-package');
     });
 
     it('should use custom name when --name provided', async () => {
@@ -271,74 +259,6 @@ describe('skills install command (system test)', () => {
     });
   });
 
-  describe('registry tracking', () => {
-    it('should create registry file on first install', async () => {
-      const skillDir = await createSimpleSkill(suite.tempDir, 'my-skill');
-
-      executeCommandAndParse(
-        suite.binPath,
-        ['skills', 'install', skillDir, '-p', suite.pluginsDir],
-        suite.projectDir
-      );
-
-      // Verify registry exists
-      const registryPath = join(suite.pluginsDir, '.vat-registry.json');
-      expect(existsSync(registryPath)).toBe(true);
-
-      const registry = await suite.loadRegistry();
-      expect(Object.keys(registry)).toHaveLength(1);
-      expect(registry['my-skill']).toBeDefined();
-    });
-
-    it('should track multiple skills in registry', async () => {
-      // Install first skill
-      const skill1Dir = await createSimpleSkill(suite.tempDir, 'skill-1');
-
-      executeCommandAndParse(
-        suite.binPath,
-        ['skills', 'install', skill1Dir, '-p', suite.pluginsDir],
-        suite.projectDir
-      );
-
-      // Install second skill
-      const skill2Dir = await createSimpleSkill(suite.tempDir, 'skill-2');
-
-      executeCommandAndParse(
-        suite.binPath,
-        ['skills', 'install', skill2Dir, '-p', suite.pluginsDir],
-        suite.projectDir
-      );
-
-      const registry = await suite.loadRegistry();
-      expect(Object.keys(registry)).toHaveLength(2);
-      expect(registry['skill-1']).toBeDefined();
-      expect(registry['skill-2']).toBeDefined();
-    });
-
-    it('should include required registry fields', async () => {
-      const skillDir = await createSimpleSkill(suite.tempDir, 'my-skill');
-
-      executeCommandAndParse(
-        suite.binPath,
-        ['skills', 'install', skillDir, '-p', suite.pluginsDir],
-        suite.projectDir
-      );
-
-      const registry = await suite.loadRegistry();
-      const entry = registry['my-skill'];
-
-      expect(entry.version).toBeDefined();
-      expect(entry.source).toBeDefined();
-      expect(entry.installedAt).toBeDefined();
-      expect(entry.installedBy).toBe('vat-cli');
-      expect(entry.path).toBeDefined();
-      expect(entry.type).toBe('copy');
-
-      // Verify installedAt is valid ISO timestamp
-      expect(() => new Date(entry.installedAt)).not.toThrow();
-    });
-  });
-
   describe('--dry-run mode', () => {
     it('should preview installation without creating files', async () => {
       const skillDir = await createSimpleSkill(suite.tempDir, 'my-skill');
@@ -360,10 +280,6 @@ describe('skills install command (system test)', () => {
 
       // Verify nothing was actually installed
       expect(existsSync(join(suite.pluginsDir, 'my-skill'))).toBe(false);
-
-      // Verify registry was not updated
-      const registryPath = join(suite.pluginsDir, '.vat-registry.json');
-      expect(existsSync(registryPath)).toBe(false);
     });
   });
 });

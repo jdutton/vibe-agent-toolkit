@@ -13,7 +13,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `vat skills build` command: Builds skills from source into `dist/skills/` during package build
   - `vat skills install` command: Smart installation from npm packages, local directories, or zip files
   - Package.json `vat` metadata convention for declaring skills, agents, pure functions, and runtimes
-  - Registry tracking in `~/.claude/plugins/.vat-registry.json` for update/uninstall support
   - Two distributable skills:
     - `vat-cat-agents`: Orchestration guide for 8 example cat agents
     - `vibe-agent-toolkit`: User adoption guide for VAT CLI and agent creation

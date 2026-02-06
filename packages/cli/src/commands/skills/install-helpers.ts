@@ -9,7 +9,7 @@
  */
 
 import { existsSync, statSync } from 'node:fs';
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
 import type { VatSkillMetadata } from '@vibe-agent-toolkit/agent-schema';
@@ -17,19 +17,6 @@ import { safeExecSync } from '@vibe-agent-toolkit/utils';
 import * as tar from 'tar';
 
 export type SkillSource = 'npm' | 'local' | 'zip' | 'npm-postinstall';
-
-export interface SkillRegistryEntry {
-  version: string;
-  source: string;
-  installedAt: string;
-  installedBy: string;
-  path: string;
-  type: 'symlink' | 'copy';
-}
-
-export interface SkillRegistry {
-  [skillName: string]: SkillRegistryEntry;
-}
 
 export interface PackageJsonVat {
   version?: string;
@@ -83,52 +70,6 @@ export function detectSource(input: string): SkillSource {
     `Cannot detect source type for: ${input}\n` +
       `Expected: npm:package-name, /path/to/dir, /path/to/file.zip, or --npm-postinstall`
   );
-}
-
-/**
- * Get path to VAT registry file in specified plugins directory
- */
-export function getRegistryPath(pluginsDir: string): string {
-  return join(pluginsDir, '.vat-registry.json');
-}
-
-/**
- * Load skill registry from plugins directory
- */
-export async function loadRegistry(pluginsDir: string): Promise<SkillRegistry> {
-  const registryPath = getRegistryPath(pluginsDir);
-
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Registry path is constructed from plugins dir
-  if (!existsSync(registryPath)) {
-    return {};
-  }
-
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Registry path is constructed from plugins dir
-    const content = await readFile(registryPath, 'utf-8');
-    return JSON.parse(content) as SkillRegistry;
-  } catch {
-    // Invalid JSON - return empty registry
-    return {};
-  }
-}
-
-/**
- * Update skill registry with new entry
- */
-export async function updateRegistry(
-  pluginsDir: string,
-  skillName: string,
-  metadata: SkillRegistryEntry
-): Promise<void> {
-  const registryPath = getRegistryPath(pluginsDir);
-  const registry = await loadRegistry(pluginsDir);
-
-  registry[skillName] = metadata;
-
-  const content = JSON.stringify(registry, null, 2);
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Registry path is constructed from plugins dir
-  await writeFile(registryPath, content, 'utf-8');
 }
 
 /**
