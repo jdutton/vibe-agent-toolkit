@@ -60,6 +60,48 @@ Why:
 - We use AJV to validate their data against their schema
 - We use Zod for our own internal validation needs
 
+### Zod Version Compatibility (CRITICAL)
+
+**VAT supports both Zod v3.25.0+ and v4.0.0+ via duck typing.**
+
+**The Problem**: When your code uses `instanceof` to check Zod types, it **breaks** when library and user Zod versions differ:
+
+```typescript
+// ❌ WRONG - Fails when user has Zod v4, library has v3
+import { z } from 'zod';
+if (zodType instanceof z.ZodString) {
+  // Never executes across version boundaries!
+}
+```
+
+**The Solution**: Use duck typing via `_def.typeName`:
+
+```typescript
+// ✅ CORRECT - Works across all Zod versions
+import { getZodTypeName, ZodTypeNames } from '@vibe-agent-toolkit/utils';
+
+const typeName = getZodTypeName(zodType);
+if (typeName === ZodTypeNames.STRING) {
+  // Always works!
+}
+```
+
+**When to Use Duck Typing**:
+- ✅ Introspecting user-provided Zod schemas (custom metadata, agent configs, etc.)
+- ✅ Runtime type detection for serialization/deserialization
+- ✅ Building SQL filters, validation logic, or any code that inspects schema structure
+- ❌ NOT needed for simple `.parse()` or `.safeParse()` validation
+
+**Available Utilities** (`@vibe-agent-toolkit/utils`):
+- `getZodTypeName(zodType)` - Extract type name safely
+- `isZodType(zodType, ZodTypeNames.STRING)` - Check type
+- `unwrapZodType(zodType)` - Unwrap optional/nullable
+- `ZodTypeNames` - Constants for all Zod types
+
+**Full Documentation**: [docs/zod-compatibility.md](docs/zod-compatibility.md)
+
+**Real-World Impact**: PR #34 fixed metadata filtering that returned 0 results when user's Zod v4 met library's Zod v3.
+
 ### Frontmatter Validation
 
 Resources package parses and stores YAML frontmatter from markdown files. Users can optionally validate frontmatter against JSON Schemas.
