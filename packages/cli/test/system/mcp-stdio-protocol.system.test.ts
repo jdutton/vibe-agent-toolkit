@@ -19,7 +19,7 @@ import {
   getBinPath,
   resolve,
 } from './test-common.js';
-import { createTestTempDir } from './test-helpers.js';
+import { createTestTempDir, waitForStreamData } from './test-helpers.js';
 
 const binPath = getBinPath(import.meta.url);
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -121,8 +121,8 @@ describe('MCP stdio protocol compliance (system test)', () => {
     const initRequest = createInitializeRequest(1);
     server.stdin.write(`${JSON.stringify(initRequest)}\n`);
 
-    // Wait for response
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    // Wait for initialize response
+    await waitForStreamData(server.stdout, { timeout: 2000, pattern: /"id":\s*1/ });
 
     // Send tools/list request
     const toolsRequest = {
@@ -134,12 +134,12 @@ describe('MCP stdio protocol compliance (system test)', () => {
 
     server.stdin.write(`${JSON.stringify(toolsRequest)}\n`);
 
-    // Wait for response
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    // Wait for tools/list response
+    await waitForStreamData(server.stdout, { timeout: 1000, pattern: /"id":\s*2/ });
 
     // Cleanup
     server.kill('SIGTERM');
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await waitForStreamData(server.stdout, { timeout: 500 });
 
     // CRITICAL: stdout must contain ONLY valid JSON-RPC messages
     expect(stdoutLines.length).toBeGreaterThan(0);
@@ -181,12 +181,12 @@ describe('MCP stdio protocol compliance (system test)', () => {
     const initRequest = createInitializeRequest(1);
     server.stdin.write(`${JSON.stringify(initRequest)}\n`);
 
-    // Wait for response
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    // Wait for initialize response
+    await waitForStreamData(server.stdout, { timeout: 2000, pattern: /"id":\s*1/ });
 
     // Cleanup
     server.kill('SIGTERM');
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await waitForStreamData(server.stdout, { timeout: 500 });
 
     const response = responseCapture.getResponse();
     expect(response).not.toBeNull();
@@ -203,7 +203,7 @@ describe('MCP stdio protocol compliance (system test)', () => {
     // Initialize first
     const initRequest = createInitializeRequest(1);
     server.stdin.write(`${JSON.stringify(initRequest)}\n`);
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await waitForStreamData(server.stdout, { timeout: 3000, pattern: /"id":\s*1/ });
 
     // Request tools list
     const toolsRequest = {
@@ -214,11 +214,11 @@ describe('MCP stdio protocol compliance (system test)', () => {
     };
 
     server.stdin.write(`${JSON.stringify(toolsRequest)}\n`);
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await waitForStreamData(server.stdout, { timeout: 2000, pattern: /"id":\s*2/ });
 
     // Cleanup
     server.kill('SIGTERM');
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await waitForStreamData(server.stdout, { timeout: 500 });
 
     const toolsResponse = toolsCapture.getResponse();
     expect(toolsResponse).not.toBeNull();

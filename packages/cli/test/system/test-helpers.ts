@@ -196,12 +196,14 @@ export function executeValidateAndParse(
  * 1. Running validation and expecting failure
  * 2. Parsing YAML output and verifying error count
  * 3. Running text format command and checking stderr for specific error
+ *
+ * @returns Object with both YAML and text results for additional assertions
  */
 export function assertValidationFailureWithErrorInStderr(
   binPath: string,
   projectDir: string,
   expectedErrorInStderr: string
-): void {
+): { yamlResult: CliResult; textResult: CliResult; parsed: Record<string, unknown> } {
   const { result, parsed } = executeValidateAndParse(binPath, projectDir);
 
   // Should fail due to validation error
@@ -212,6 +214,8 @@ export function assertValidationFailureWithErrorInStderr(
   // Check error details in stderr (use text format)
   const textResult = executeCli(binPath, ['resources', 'validate', '--format', 'text'], { cwd: projectDir });
   expect(textResult.stderr).toContain(expectedErrorInStderr);
+
+  return { yamlResult: result, textResult, parsed };
 }
 
 /**
@@ -502,4 +506,83 @@ export function setupSchemaAndValidate(
   const schemaPath = createSchemaFile(tempDir, schemaFilename, schema);
   createMarkdownWithFrontmatter(tempDir, mdFilename, frontmatter, mdContent);
   return executeResourcesValidateWithSchema(binPath, tempDir, schemaPath);
+}
+
+/**
+ * Wait for data to arrive on a stream with optional pattern matching
+ * Replaces hardcoded setTimeout delays with event-based waiting
+ *
+ * @param stream - Readable stream to wait for (stdout/stderr)
+ * @param options - Configuration options
+ * @returns Accumulated data from stream
+ *
+ * @example
+ * ```typescript
+ * // Wait for any data (up to 2s)
+ * await waitForStreamData(server.stdout, { timeout: 2000 });
+ *
+ * // Wait for specific JSON-RPC response
+ * await waitForStreamData(server.stdout, {
+ *   timeout: 2000,
+ *   pattern: /"id":\s*1/
+ * });
+ * ```
+ */
+export function waitForStreamData(
+  stream: NodeJS.ReadableStream,
+  options: { timeout?: number; pattern?: RegExp } = {}
+): Promise<string> {
+  const timeout = options.timeout ?? 2000;
+  const pattern = options.pattern;
+
+  return new Promise((resolve, reject) => {
+    let accumulated = '';
+    let resolved = false;
+    let timeoutId: NodeJS.Timeout | undefined;
+
+    const cleanup = () => {
+      if (timeoutId) {
+        clearTimeout(timeoutId);
+        timeoutId = undefined;
+      }
+      stream.removeListener('data', onData);
+    };
+
+    const onData = (chunk: Buffer) => {
+      if (resolved) return;
+
+      accumulated += chunk.toString();
+
+      // If pattern specified, check for match
+      if (pattern?.test(accumulated)) {
+        resolved = true;
+        cleanup();
+        resolve(accumulated);
+      }
+    };
+
+    // Set up timeout
+    timeoutId = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        cleanup();
+
+        // If we accumulated data, resolve with it
+        // If no data and pattern required, reject
+        if (accumulated.length > 0 || !pattern) {
+          resolve(accumulated);
+        } else {
+          reject(new Error(`Timeout waiting for pattern: ${String(pattern)}`));
+        }
+      }
+    }, timeout);
+
+    // Listen for data
+    stream.on('data', onData);
+
+    // If no pattern specified, just wait for timeout to collect data
+    if (!pattern) {
+      // Will resolve with whatever data arrives before timeout
+    }
+  });
 }

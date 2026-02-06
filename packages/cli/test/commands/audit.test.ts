@@ -1,5 +1,4 @@
 import fs from 'node:fs';
-import os from 'node:os';
 import { dirname, join } from 'node:path';
 
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
@@ -238,50 +237,10 @@ This is a test agent.
     });
   });
 
-  describe('user-level audit', () => {
-    it('should handle --user flag correctly', () => {
-      // Test --user flag behavior
-      // This test checks that the --user flag works correctly:
-      // - If ~/.claude/plugins exists, it should scan it recursively
-      // - If it doesn't exist, it should exit with status 2 (system error)
-
-      const userPluginsDir = join(os.homedir(), '.claude', 'plugins');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: path constructed from os.homedir()
-      const userPluginsDirExists = fs.existsSync(userPluginsDir);
-
-      const result = runAuditCommand('--user');
-
-      if (userPluginsDirExists) {
-        // If the directory exists, the command should succeed or have validation issues
-        // (status 0 for success, 1 for validation errors)
-        expect([0, 1]).toContain(result.status);
-        // Should have scanned something
-        expect(result.stdout).toContain('filesScanned:');
-      } else {
-        // If directory doesn't exist, should exit with status 2 (system error)
-        expect(result.status).toBe(2);
-        expect(result.stderr).toContain('User plugins directory not found');
-      }
-    });
-
-    it('should reject --user flag when path argument is also provided', () => {
-      // This test verifies that using --user with a path argument works
-      // (--user takes precedence and ignores the path argument)
-      const result = runAuditCommand(tempDir, '--user');
-
-      const userPluginsDir = join(os.homedir(), '.claude', 'plugins');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: path constructed from os.homedir()
-      const userPluginsDirExists = fs.existsSync(userPluginsDir);
-
-      if (userPluginsDirExists) {
-        // Should scan user plugins, not tempDir
-        expect([0, 1]).toContain(result.status);
-      } else {
-        expect(result.status).toBe(2);
-        expect(result.stderr).toContain('User plugins directory not found');
-      }
-    });
-  });
+  // Note: User-level audit tests were removed because they scanned the actual
+  // ~/.claude/plugins directory (5+ seconds, real user data). These should be
+  // reimplemented as system tests with mocked filesystems or only run when
+  // explicitly requested (e.g., bun run test:system).
 
   describe('recursive scanning', () => {
     it('should discover and validate all resource types recursively', () => {

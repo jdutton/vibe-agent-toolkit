@@ -41,27 +41,7 @@ While this project is in v0.1.x (pre-1.0):
 - Convert Zod schemas to JSON Schema using `zod-to-json-schema` when needed
 - Single source of truth: define schema once in Zod, get both TypeScript types and JSON Schema
 
-**Example Pattern**:
-```typescript
-import { z } from 'zod';
-import { zodToJsonSchema } from 'zod-to-json-schema';
-
-// Define schema with Zod
-const ResourceMetadataSchema = z.object({
-  title: z.string().optional(),
-  description: z.string().optional(),
-  tags: z.array(z.string()).optional(),
-});
-
-// Get TypeScript type (automatically inferred)
-type ResourceMetadata = z.infer<typeof ResourceMetadataSchema>;
-
-// Get JSON Schema (for validation and documentation)
-const ResourceMetadataJsonSchema = zodToJsonSchema(ResourceMetadataSchema);
-
-// Runtime validation
-const result = ResourceMetadataSchema.safeParse(data);
-```
+**Example**: See `packages/resources/src/schemas/metadata.ts` for reference implementation.
 
 ### JSON Schema Validation vs Zod
 
@@ -125,27 +105,7 @@ vat resources validate docs/ --frontmatter-schema schema.json
 - Supports subcommands, options, help text, and validation
 - Industry standard with excellent TypeScript support
 
-**Example Pattern**:
-```typescript
-import { Command } from 'commander';
-
-const program = new Command();
-
-program
-  .name('vibe-agent')
-  .description('Toolkit for building and testing portable AI agents')
-  .version('0.1.0');
-
-program
-  .command('validate <path>')
-  .description('Validate resources at the specified path')
-  .option('-f, --fix', 'Fix issues automatically')
-  .action((path, options) => {
-    // Implementation
-  });
-
-program.parse();
-```
+**Example**: See `packages/cli/src/index.ts` for reference implementation.
 
 ### Package-Specific Guidelines
 
@@ -188,181 +148,14 @@ packages/resources/
 
 ### TypeScript Monorepo Build System
 
-**Critical: Use `tsc --build` for all TypeScript compilation.** This is the standard TypeScript solution for monorepos with dependencies between packages.
+**Critical: Use `tsc --build` for all TypeScript compilation.** This is TypeScript's standard monorepo solution.
 
-#### Why `tsc --build`?
+**Quick rules:**
+- Every package needs `"composite": true` in tsconfig.json
+- Use `workspace:*` for all internal dependencies
+- Commands: `bun run build`, `bun run build:clean`, `bun run typecheck`
 
-TypeScript's `--build` mode (project references) provides:
-- **Dependency Order**: Automatically builds packages in the correct order based on `references` in tsconfig.json
-- **Incremental Builds**: Only rebuilds packages that changed (uses `.tsbuildinfo` files)
-- **Type Safety**: TypeScript validates cross-package imports at build time
-- **Standard Solution**: This is TypeScript's official monorepo build approach
-
-Without `--build`, builds fail on clean checkouts because dependent packages try to import from unbuilt packages.
-
-#### Required Configuration
-
-Every package **must** have `composite: true` in its tsconfig.json:
-
-```json
-{
-  "extends": "../../tsconfig.base.json",
-  "compilerOptions": {
-    "composite": true,
-    "outDir": "./dist",
-    "rootDir": "./src"
-  },
-  "references": [
-    { "path": "../utils" }
-  ]
-}
-```
-
-The `references` array tells TypeScript which packages this package depends on.
-
-#### Build Scripts
-
-```bash
-# Standard build (respects dependency order)
-bun run build
-
-# Clean build (removes all build artifacts and rebuilds)
-bun run build:clean
-
-# Type check without emitting files (fast)
-bun run typecheck
-```
-
-These scripts map to:
-- `build`: `tsc --build && cd packages/agent-schema && bun run generate:schemas`
-- `build:clean`: `tsc --build --clean && tsc --build && cd packages/agent-schema && bun run generate:schemas`
-- `typecheck`: `tsc --build --dry --force`
-
-#### How It Works
-
-1. **Root tsconfig.json** lists all packages in `references`:
-   ```json
-   {
-     "files": [],
-     "references": [
-       { "path": "./packages/utils" },
-       { "path": "./packages/resources" },
-       { "path": "./packages/rag" },
-       // ... etc
-     ]
-   }
-   ```
-
-2. **Each package tsconfig.json** declares its dependencies:
-   ```json
-   {
-     "references": [
-       { "path": "../utils" },
-       { "path": "../resources" }
-     ]
-   }
-   ```
-
-3. **`tsc --build`** walks the dependency graph and builds packages in order:
-   - Builds `utils` (no dependencies)
-   - Builds `resources` (depends on `utils`)
-   - Builds `rag` (depends on `utils` and `resources`)
-   - etc.
-
-#### Configuring New Package Builds
-
-When creating a new package:
-1. Add `"composite": true` to its tsconfig.json
-2. Add `references` for packages it depends on
-3. Add the package to root tsconfig.json `references` array
-4. Run `bun install` to update workspace links
-
-#### Troubleshooting
-
-**"Cannot find module '@vibe-agent-toolkit/utils'" during build**:
-- Missing `references` in tsconfig.json
-- Package not built yet (run `bun run build:clean`)
-
-**"Project references may not form a circular dependency"**:
-- Check for circular imports between packages
-- Packages must form a directed acyclic graph (DAG)
-
-#### Workspace Protocol for Internal Dependencies
-
-**Critical: Use `workspace:*` for all internal package dependencies.**
-
-Internal dependencies in package.json must use the workspace protocol, **not specific version numbers**:
-
-```json
-{
-  "dependencies": {
-    "@vibe-agent-toolkit/utils": "workspace:*",
-    "@vibe-agent-toolkit/resources": "workspace:*"
-  }
-}
-```
-
-**Why `workspace:*`?**
-
-1. **CI Compatibility**: `bun install` in CI uses local workspace packages, not npm
-2. **Auto-Resolution**: Publishing workflow runs `resolve-workspace-deps` to replace `workspace:*` with actual versions before `npm publish`
-3. **Single Source of Truth**: Version is managed by `bump-version` script, not individual package.json files
-
-**Without `workspace:*`**, CI builds fail because `bun install` tries to fetch packages from npm that don't exist yet:
-
-```bash
-# ❌ WRONG - CI tries to fetch from npm
-"@vibe-agent-toolkit/utils": "0.1.0-rc.2"
-
-# ✅ CORRECT - CI uses local workspace
-"@vibe-agent-toolkit/utils": "workspace:*"
-```
-
-**Publishing Workflow**:
-1. Developer commits code with `workspace:*` in package.json
-2. Developer runs `bump-version` to create git tag (workspace:* unchanged)
-3. GitHub Actions workflow triggers on tag:
-   - `bun install` uses local workspace packages
-   - `build` compiles all packages
-   - `resolve-workspace-deps` replaces `workspace:*` with actual version
-   - `npm publish` publishes with resolved dependencies
-4. Published packages on npm have actual version numbers (e.g., "0.1.0-rc.7")
-5. Workspace files in git remain unchanged with `workspace:*`
-
-**Why not use `bun publish`?** Bun automatically replaces `workspace:*`, but doesn't support `--provenance` flag needed for supply chain security. We use `npm publish` with manual resolution instead.
-
-**Fixing Incorrect Dependencies**:
-
-If dependencies get out of sync (e.g., after manual edits), run:
-
-```bash
-bun run fix-workspace-deps
-bun install
-```
-
-This ensures all internal dependencies use `workspace:*` protocol.
-
-**For AI assistants**: When adding new internal dependencies, ALWAYS use `workspace:*`. Never use specific version numbers for @vibe-agent-toolkit packages.
-
-**Build succeeds but types are wrong**:
-- Delete `.tsbuildinfo` files: `tsc --build --clean`
-- Rebuild: `bun run build:clean`
-
-#### Why Not Custom Scripts?
-
-We previously used a custom `run-in-packages.ts` script to run builds. This had problems:
-- ❌ Didn't respect dependency order → failed on clean builds
-- ❌ Required custom code to maintain
-- ❌ Slower (no incremental builds)
-- ❌ Not standard TypeScript
-
-Using `tsc --build`:
-- ✅ Respects dependency order automatically
-- ✅ Zero custom code to maintain
-- ✅ Faster with incremental builds
-- ✅ Standard TypeScript solution
-
-**Rule**: Never manually run `tsc` in individual packages. Always use `tsc --build` from the root.
+See [docs/build-system.md](docs/build-system.md) for configuration details, troubleshooting, and workspace protocol rationale.
 
 ## Project Structure
 
@@ -483,52 +276,6 @@ Only the project owner can approve baseline updates. This is non-negotiable.
 | Unit | `test/*.test.ts` | `bun run test:unit` | < 100ms |
 | Integration | `test/integration/*.integration.test.ts` | `bun run test:integration` | < 5s |
 | System | `test/system/*.system.test.ts` | `bun run test:system` | < 30s |
-
-### The Test Suite Helper Pattern (Required)
-
-**After writing 2-3 similar describe blocks**, extract a suite helper:
-
-```typescript
-// test/test-helpers.ts
-export function setupMyTestSuite(testPrefix: string) {
-  const suite = {
-    tempDir: '',
-    registry: null as unknown as MyRegistry,
-    beforeEach: async () => {
-      suite.tempDir = await mkdtemp(join(tmpdir(), testPrefix));
-      suite.registry = new MyRegistry();
-    },
-    afterEach: async () => {
-      await rm(suite.tempDir, { recursive: true, force: true });
-    },
-  };
-  return suite;
-}
-
-// my-module.test.ts
-const suite = setupMyTestSuite('my-test-');
-
-describe('Feature A', () => {
-  beforeEach(suite.beforeEach);
-  afterEach(suite.afterEach);
-
-  it('should work', () => {
-    // Use suite.tempDir, suite.registry
-  });
-});
-```
-
-**Why this matters:**
-- ❌ **Without helper**: 8-10 lines duplicated per describe block → 41-62% duplication
-- ✅ **With helper**: 2 lines per describe block → 0% duplication
-
-See [docs/writing-tests.md](docs/writing-tests.md) for:
-- Complete suite helper examples (resources, RAG, CLI)
-- Factory function patterns
-- Assertion helper patterns
-- Cross-platform path handling
-- When to extract (the 2-3 rule)
-- Anti-patterns to avoid
 
 ### Running Tests
 
@@ -660,200 +407,14 @@ Pre-commit hooks via Husky will enforce these automatically.
 
 ## Publishing & Version Management
 
-### Unified Versioning
+See [docs/publishing.md](docs/publishing.md) for complete publishing workflow, versioning, and rollback procedures.
 
-**CRITICAL**: All packages in this monorepo share the same version. When any package changes, all packages are bumped together. This ensures compatibility and simplifies dependency management.
-
-Current packages (19 published, 1 private):
-- @vibe-agent-toolkit/agent-schema
-- @vibe-agent-toolkit/utils
-- @vibe-agent-toolkit/discovery
-- @vibe-agent-toolkit/resources
-- @vibe-agent-toolkit/rag
-- @vibe-agent-toolkit/rag-lancedb
-- @vibe-agent-toolkit/agent-config
-- @vibe-agent-toolkit/agent-runtime
-- @vibe-agent-toolkit/runtime-claude-agent-sdk
-- @vibe-agent-toolkit/agent-skills
-- @vibe-agent-toolkit/runtime-langchain
-- @vibe-agent-toolkit/runtime-openai
-- @vibe-agent-toolkit/runtime-vercel-ai-sdk
-- @vibe-agent-toolkit/transports
-- @vibe-agent-toolkit/cli
-- @vibe-agent-toolkit/gateway-mcp
-- @vibe-agent-toolkit/vat-development-agents
-- @vibe-agent-toolkit/vat-example-cat-agents
-- vibe-agent-toolkit (umbrella package)
-- @vibe-agent-toolkit/dev-tools (PRIVATE - not published)
-
-### Version Bump Workflow
-
-**Always use the `bump-version` script:**
-
-```bash
-# Explicit version
-bun run bump-version 0.2.0-rc.1
-
-# Semantic increment
-bun run bump-version patch    # 0.1.0 → 0.1.1
-bun run bump-version minor    # 0.1.0 → 0.2.0
-bun run bump-version major    # 0.1.0 → 1.0.0
-```
-
-The script updates all 11 publishable packages atomically.
-
-### CHANGELOG.md Format
-
-**CRITICAL - Read This Carefully:**
-
-CHANGELOG.md uses a strict format. **RC/prerelease versions NEVER get their own section.**
-
-```markdown
-## [Unreleased]
-
-### Added
-- New feature descriptions here
-
-### Changed
-- Change descriptions here
-
-### Fixed
-- Bug fix descriptions here
-
-## [0.1.0] - 2026-01-15
-
-### Added
-- Previous release features...
-```
-
-**Rules:**
-- **RC versions (0.1.0-rc.1, 0.1.0-rc.2, etc.)**: Changes stay in `[Unreleased]` section
-- **Stable versions (0.1.0, 0.2.0, etc.)**: Move `[Unreleased]` content to new `## [X.Y.Z] - YYYY-MM-DD` section
-- **NEVER create sections like `## [0.1.0-rc.1]`** - these will break the release process
-
-**For AI assistants:** Never ask about creating CHANGELOG sections for RC versions. They don't exist.
-
-### Publishing Process (Automated)
-
-**CRITICAL**: Publishing is automated via GitHub Actions. **DO NOT manually publish** unless automation fails.
-
-**Normal Release Workflow:**
-
-1. **Update CHANGELOG.md** (if needed)
-   - **RC releases**: Ensure changes are documented in `[Unreleased]` section
-   - **Stable releases**: Move `[Unreleased]` → `## [X.Y.Z] - YYYY-MM-DD`
-
-2. **Bump version**:
-   ```bash
-   bun run bump-version 0.1.0-rc.1  # For RC
-   bun run bump-version 0.1.0       # For stable
-   ```
-
-3. **Build and verify**:
-   ```bash
-   bun run build
-   bun run validate-version
-   ```
-
-4. **Commit and tag**:
-   ```bash
-   git add -A && git commit -m "chore: Release vX.Y.Z"
-   git tag vX.Y.Z
-   git push origin main vX.Y.Z
-   ```
-
-5. **Monitor GitHub Actions**:
-   - Visit: https://github.com/jdutton/vibe-agent-toolkit/actions
-   - Workflow automatically publishes to npm
-
-### Publishing Behavior
-
-**RC versions** (e.g., `v0.1.0-rc.1`):
-- Publish to `@next` tag
-- NO GitHub release
-- CHANGELOG stays in `[Unreleased]`
-- Use for: risky changes, pre-release testing
-
-**Stable versions** (e.g., `v0.1.0`):
-- Publish to `@latest` tag
-- Also update `@next` tag (if newest)
-- Create GitHub release with changelog
-- Move CHANGELOG `[Unreleased]` → `[Version]`
-
-### Manual Publishing (Fallback Only)
-
-**Use only if automated publishing fails:**
-
-```bash
-# Ensure versions are correct
-bun run bump-version <version>
-
-# Build all packages
-bun run build
-
-# Run pre-publish checks
-bun run pre-publish-check
-
-# Publish with rollback safety
-bun run publish-with-rollback <version>
-```
-
-### CLI Wrapper Behavior
-
-The `vat` command uses smart wrapper with context detection:
-
-**Dev Mode** (in this repo):
-- Uses: `packages/cli/dist/bin.js`
-- Shows version: `0.1.0-rc.1-dev`
-
-**Local Install** (project has @vibe-agent-toolkit/cli):
-- Uses: `node_modules/@vibe-agent-toolkit/cli/dist/bin.js`
-- Shows version: project's version
-
-**Global Install** (fallback):
-- Uses: globally installed version
-- Shows version: global version
-
-**Installation:**
-```bash
-npm install -g @vibe-agent-toolkit/cli    # Just CLI
-npm install -g vibe-agent-toolkit          # Everything
-```
-
-### Package Publishing Order
-
-Packages are published in dependency order:
-
-1. agent-schema, utils (parallel - no deps)
-2. discovery, resources (parallel - depend on utils)
-3. rag (depends on resources, utils)
-4. rag-lancedb, agent-config (parallel)
-5. agent-runtime (depends on utils)
-6. runtime-claude-agent-sdk, agent-skills, runtime-langchain, runtime-openai, runtime-vercel-ai-sdk (parallel - runtime adapters)
-7. transports (depends on agent-runtime)
-8. cli
-9. gateway-mcp (depends on agent-schema, utils, vat-example-cat-agents)
-10. vat-development-agents
-11. vat-example-cat-agents
-12. vibe-agent-toolkit (umbrella - published last)
-
-### Rollback Safety
-
-Publishing uses rollback protection:
-- Tracks progress in `.publish-manifest.json`
-- On failure: attempts `npm unpublish --force`
-- Fallback: `npm deprecate` with warning message
-- Use RC testing to minimize stable release failures
-
-### Building
-
-```bash
-# Build all packages
-bun run build
-
-# Clean build
-bun run build:clean
-```
+**Quick Reference:**
+- Use `bun run bump-version <version>` for all version changes
+- All packages share same version (unified versioning)
+- RC versions stay in `[Unreleased]` section of CHANGELOG
+- Publishing is automated via GitHub Actions
+- Commands: `bun run build`, `bun run build:clean`
 
 ## CI/CD
 
@@ -874,91 +435,9 @@ See [docs/architecture/README.md](docs/architecture/README.md) for complete deta
 
 ## Enterprise Software Development Best Practices
 
-Apply these industry-standard practices regardless of what this monorepo is used for.
+Follow standard practices: SOLID, DRY, TDD, Clean Code, KISS, YAGNI.
 
-### Core Principles (You Already Know These)
-
-Follow these established patterns:
-- **SOLID Principles**: Single Responsibility, Open/Closed, Liskov Substitution, Interface Segregation, Dependency Inversion
-- **DRY**: Don't Repeat Yourself - extract to shared packages in monorepo context
-- **TDD**: Test-Driven Development - Red-Green-Refactor cycle
-- **Clean Code**: Robert C. Martin's principles
-- **KISS**: Keep It Simple, Stupid
-- **YAGNI**: You Aren't Gonna Need It
-
-### Monorepo-Specific DRY Application
-
-When you see duplication across packages:
-1. Extract to shared utilities package (utils, or create new shared-* package)
-2. Use constants objects for configuration
-3. Share TypeScript types via dedicated types in schemas
-4. Extract reusable build logic to helper functions
-
-Wait for 3+ instances before extracting (avoid premature abstraction).
-
-### Error Handling Patterns
-
-Use these approaches:
-- **Typed Errors**: Custom error classes (ValidationError, NotFoundError, etc.)
-- **Result Types**: `Result<T, E>` for expected failures (see functional programming patterns)
-- **Fail Fast**: Validate inputs early, throw immediately on invalid state
-- **Zod Validation**: Use Zod's `.safeParse()` for runtime validation with typed errors
-
-### Code Quality Standards
-
-**TypeScript**:
-- No `any` in production code (use `unknown` if truly dynamic)
-- Explicit return types on all functions
-- Use type guards for narrowing
-- Prefer Zod schemas over manual type guards for runtime validation
-
-**Testing**:
-- TDD for business logic
-- Test error paths (don't just test happy path)
-- Use descriptive test names: `should [behavior] when [condition]`
-
-**Documentation**:
-- JSDoc for public APIs with @param, @returns, @example
-- Inline comments explain WHY, not WHAT
-- README per package: purpose, installation, quick start, API
-- Document Zod schemas with `.describe()` for auto-generated JSON Schema descriptions
-
-### Code Review Checklist
-
-- [ ] No `console.log` in production (use proper logging)
-- [ ] No hardcoded secrets
-- [ ] No `@ts-ignore` without explanation
-- [ ] No `any` without justification
-- [ ] Tests exist and cover edge cases
-- [ ] Cross-platform compatible (paths, line endings)
-- [ ] DRY: no duplication that should be extracted
-- [ ] Zod schemas have `.describe()` for documentation
-- [ ] CLI commands have clear help text
-
-### Technical Debt Management
-
-**Duplication Management - ZERO TOLERANCE**:
-- **Goal**: Maintain 0 duplicates in `.github/.jscpd-baseline.json`
-- **Policy**: See "CRITICAL: Code Duplication Policy" section above
-- **For AI assistants**: NEVER update baseline without explicit user permission
-- **Workflow**: When duplication is detected → refactor to eliminate → re-run check
-- **Rationale**: Baseline exists to track progress towards zero, not to accept new duplication
-
-Tools available:
-- `bun run duplication-check` - Verify no new duplication (run this)
-- `bun run duplication-update-baseline` - Update baseline (REQUIRES USER PERMISSION)
-
-**TODO Format**:
-```typescript
-// TODO(username, YYYY-MM-DD): Reason and context
-```
-
-### Monorepo-Specific Patterns
-
-- **Package Boundaries**: Each package independently useful, avoid circular deps
-- **Shared Code**: Use utils package, version carefully (breaking changes affect all consumers)
-- **Build Order**: Respect dependency graph, use TypeScript project references
-- **Testing**: Test packages in isolation + integration between packages
+See [docs/best-practices.md](docs/best-practices.md) for detailed patterns, error handling, code review checklists, and technical debt management.
 
 ## Development Tools Package
 
@@ -979,202 +458,38 @@ Tools follow same quality standards as packages (linted, typed, tested).
 
 ## Custom ESLint Rules - Agentic Code Safety Pattern
 
-**Critical for AI-Heavy Development**: When working with agentic code (Claude, Cursor, Copilot), AI can easily reintroduce unsafe patterns that were previously fixed. Custom ESLint rules provide automatic guardrails that catch these issues during development.
+**For AI-Heavy Development**: Create custom ESLint rules for dangerous patterns to prevent AI from reintroducing them.
 
-### The Pattern: Identify → Create Rule → Never Repeat
+**Current rules:** `no-child-process-execSync` (enforces `safeExecSync()`)
 
-**When you identify a dangerous pattern that was fixed:**
-1. **Document why it's dangerous** (security, cross-platform, performance)
-2. **Create a custom ESLint rule** in `packages/dev-tools/eslint-local-rules/`
-3. **The pattern can never be reintroduced** - ESLint catches it automatically
-
-This is "good overkill" - prevents technical debt from accumulating through AI-assisted development.
-
-### Current Rules
-
-Located in `packages/dev-tools/eslint-local-rules/`:
-
-- **`no-child-process-execSync`** - Enforces `safeExecSync()` instead of raw `execSync()`
-  - Why: `execSync()` uses shell interpreter → command injection risk
-  - Why: `safeExecSync()` uses `which` pattern + no shell → cross-platform + secure
-  - **Auto-fix**: Replaces `execSync` with `safeExecSync` and adds import
-
-### Creating New Rules
-
-When you identify a dangerous pattern (security, platform-specific, error-prone):
-
-1. **Use the factory pattern** - See `eslint-rule-factory.cjs`
-2. **Create rule file** in `packages/dev-tools/eslint-local-rules/`:
-
-```javascript
-// no-fs-unlinkSync.cjs
-const factory = require('./eslint-rule-factory.cjs');
-
-module.exports = factory({
-  unsafeFn: 'unlinkSync',
-  unsafeModule: 'node:fs',
-  safeFn: 'safeUnlinkSync',
-  safeModule: './common.js',
-  message: 'Use safeUnlinkSync() for better error handling and cross-platform compatibility',
-  exemptFile: 'common.ts', // Where the safe version is implemented
-});
-```
-
-3. **Add to `index.js`**:
-```javascript
-export default {
-  rules: {
-    'no-child-process-execSync': require('./no-child-process-execSync.cjs'),
-    'no-fs-unlinkSync': require('./no-fs-unlinkSync.cjs'), // New rule
-  },
-};
-```
-
-4. **Enable in `eslint.config.js`**:
-```javascript
-rules: {
-  'local/no-child-process-execSync': 'error',
-  'local/no-fs-unlinkSync': 'error', // New rule
-}
-```
-
-### Why This Matters for Agentic Development
-
-Without custom rules:
-- ❌ AI reintroduces `execSync()` → security vulnerability
-- ❌ AI uses `os.tmpdir()` → Windows path issues
-- ❌ Manual code review catches it → time wasted, issue deployed
-
-With custom rules:
-- ✅ AI writes code → ESLint catches violation immediately
-- ✅ Auto-fix available → AI or dev applies fix instantly
-- ✅ Pattern enforced forever → never have to think about it again
-
-**Best Practice**: Every time you fix a dangerous pattern, ask yourself: "Should this be a custom ESLint rule?" If yes, create it immediately.
+See [docs/custom-eslint-rules.md](docs/custom-eslint-rules.md) for pattern details and how to create new rules.
 
 ## Demo Guidelines
 
 **CRITICAL: All demos MUST use runtime adapters, never direct agent execution.**
 
-### Requirements for New Demos
+Demos must support ALL compatible runtimes (Vercel, OpenAI, LangChain, Claude Agent SDK).
 
-1. **Multi-Runtime Support** - Demos must support ALL runtimes that can execute the archetype:
-   - Pure Function Tool → All 4 runtimes (Vercel AI SDK, LangChain, OpenAI, Claude Agent SDK)
-   - LLM Analyzer → All 4 runtimes
-   - Conversational Assistant → All 4 runtimes
-   - Future archetypes → Check runtime adapter packages
+See [docs/demo-guidelines.md](docs/demo-guidelines.md) for adapter patterns and file organization.
 
-2. **Runtime Adapter Pattern** - Use the adapter interface pattern:
-   ```typescript
-   // Define adapter interface
-   export interface MyArchetypeRuntimeAdapter<TInput, TOutput, TState> {
-     name: string;
-     convertToFunction: (...) => (input: TInput, ...) => Promise<TOutput>;
-   }
-
-   // Create implementations for each runtime
-   function createVercelAISDKAdapter(): MyArchetypeRuntimeAdapter { ... }
-   function createOpenAIAdapter(): MyArchetypeRuntimeAdapter { ... }
-   function createLangChainAdapter(): MyArchetypeRuntimeAdapter { ... }
-   function createClaudeAgentSDKAdapter(): MyArchetypeRuntimeAdapter { ... }
-
-   // Main demo accepts runtime as CLI argument
-   const adapter = getRuntimeAdapter(process.argv[2] ?? 'vercel');
-   ```
-
-3. **Runtime Selection** - Support command-line runtime selection:
-   ```bash
-   bun run demo:my-archetype           # Default runtime (usually Vercel)
-   bun run demo:my-archetype vercel    # Explicit Vercel AI SDK
-   bun run demo:my-archetype openai    # OpenAI SDK
-   bun run demo:my-archetype langchain # LangChain
-   bun run demo:my-archetype claude    # Claude Agent SDK
-   ```
-
-4. **File Organization**:
-   ```
-   examples/
-   ├── my-archetype-demo.ts                    # Main demo (runtime selection)
-   ├── my-archetype-runtime-adapter.ts         # Adapter interface
-   └── my-archetype-adapters/
-       ├── vercel-ai-sdk-adapter.ts            # Vercel implementation
-       ├── openai-adapter.ts                   # OpenAI implementation
-       ├── langchain-adapter.ts                # LangChain implementation
-       └── claude-agent-sdk-adapter.ts         # Claude implementation
-   ```
-
-5. **Why This Matters**:
-   - ✅ **Validates portability** - Ensures agents truly work across all runtimes
-   - ✅ **Demonstrates value prop** - Shows VAT's key benefit (write once, run anywhere)
-   - ✅ **Catches integration issues** - Runtime-specific bugs surface during demo creation
-   - ✅ **Better user experience** - Users can try the runtime they prefer
-   - ❌ **Never bypass adapters** - Direct agent execution skips the core value proposition
-
-6. **Anti-Patterns to Avoid**:
-   ```typescript
-   // ❌ WRONG - Direct agent execution
-   const result = await myAgent.execute(input, context);
-
-   // ✅ CORRECT - Via runtime adapter
-   const adapter = getRuntimeAdapter();
-   const result = await adapter.convertToFunction(input);
-   ```
-
-### Example: Conversational Demo
-
-See `packages/vat-example-cat-agents/examples/conversational-demo.ts` for reference implementation.
-
-**Structure**:
-- Interface: `conversational-runtime-adapter.ts`
-- Adapters: `conversational-adapters/*.ts` (4 files, one per runtime)
-- Main: `conversational-demo.ts` (runtime selection + CLI transport)
-
-**Usage**:
-```bash
-# Test all runtimes
-source ~/.secrets.env && bun run demo:conversation vercel
-source ~/.secrets.env && bun run demo:conversation openai
-source ~/.secrets.env && bun run demo:conversation langchain
-source ~/.secrets.env && bun run demo:conversation claude
-```
-
-**For AI assistants**: When creating new demos, ALWAYS use this multi-runtime pattern. Never create demos that call `agent.execute()` directly.
+**Example:** `packages/vat-example-cat-agents/examples/conversational-demo.ts`
 
 ## Structured Output Patterns
 
-**Problem**: Conversational agents have conflicting requirements - users expect natural language but systems need structured data.
+See [docs/structured-outputs.md](docs/structured-outputs.md) for pattern comparison and examples.
 
-**Solution**: Choose the right pattern for your use case:
-
-### Pattern 1: Two-Phase Conversational (Recommended for Chatbots)
-- **Phase 1**: Natural conversation, gather info informally
-- **Phase 2**: Structured extraction when ready
-- **Best for**: Chatbots, advisors, multi-turn conversations
-- **Example**: Breed advisor gathering preferences, then recommending cats
-
-### Pattern 2: JSON Mode with Schema
-- Every response includes structured data
-- Requires OpenAI gpt-4o-2024-08-06+ for 100% adherence
-- **Best for**: Form-filling, known schemas, OpenAI users
-- **Tradeoff**: Less natural, not portable to other LLMs
-
-### Pattern 3: Tool/Function Calling
-- LLM generates text AND/OR calls functions
-- LLM decides when to extract (not forced every turn)
-- **Best for**: Mixed conversation + actions, complex workflows
-- **Example**: Agent that chats, updates profile, gets recommendations
-
-**Documentation**:
-- [Structured Outputs Guide](./docs/structured-outputs.md) - Comprehensive overview
-- [Pattern Comparison Examples](./docs/examples/structured-output-patterns.md) - Side-by-side code examples
-
-**Key Insight**: Don't force JSON on every conversational turn. It fights the LLM's natural behavior and causes parsing errors.
+**Quick insight**: Don't force JSON on every conversational turn. Use two-phase pattern for chatbots.
 
 ## Questions?
 
 - [Architecture](./docs/architecture/README.md) - Package structure and evolution plan
 - [Getting Started](./docs/getting-started.md) - Detailed setup guide
 - [Documentation](./docs/README.md) - Full documentation index
+- [Build System](./docs/build-system.md) - TypeScript monorepo build configuration
+- [Publishing](./docs/publishing.md) - Version management and publishing workflow
+- [Best Practices](./docs/best-practices.md) - Enterprise development standards
+- [Custom ESLint Rules](./docs/custom-eslint-rules.md) - Agentic code safety patterns
+- [Demo Guidelines](./docs/demo-guidelines.md) - Multi-runtime demo requirements
 - vibe-validate docs: https://github.com/jdutton/vibe-validate
 - ESLint config: `eslint.config.js` (heavily documented)
 - CI workflow: `.github/workflows/validate.yml`

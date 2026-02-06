@@ -18,7 +18,7 @@ export default defineConfig({
     poolOptions: {
       forks: {
         singleFork: false,
-        maxForks: 1,
+        // Enable parallelization for integration tests (use half of available cores)
       },
     },
   },
