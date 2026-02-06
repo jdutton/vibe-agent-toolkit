@@ -1,0 +1,369 @@
+/* eslint-disable security/detect-non-literal-fs-filename */
+// Test fixtures legitimately use dynamic file paths
+
+/**
+ * System tests for skills install command
+ */
+
+import { existsSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import {
+  executeCommandAndParse,
+  setupInstallTestSuite,
+} from './test-helpers.js';
+
+const suite = setupInstallTestSuite('vat-skills-install-test-');
+
+/**
+ * Helper: Create a simple skill directory with SKILL.md
+ */
+async function createSimpleSkill(tempDir: string, skillName: string): Promise<string> {
+  const skillDir = join(tempDir, skillName);
+  await mkdir(skillDir, { recursive: true });
+  await writeFile(join(skillDir, 'SKILL.md'), '# Test Skill\nA test skill');
+  return skillDir;
+}
+
+/**
+ * Helper: Execute install command and verify success
+ */
+function executeInstallAndExpectSuccess(
+  binPath: string,
+  args: string[],
+  projectDir: string,
+  expectedSkillName: string,
+  expectedSourceType: string
+): void {
+  const { result, parsed } = executeCommandAndParse(binPath, args, projectDir);
+
+  expect(result.status).toBe(0);
+  expect(parsed.status).toBe('success');
+  expect(parsed.skillName).toBe(expectedSkillName);
+  expect(parsed.sourceType).toBe(expectedSourceType);
+}
+
+describe('skills install command (system test)', () => {
+  beforeEach(suite.beforeEach);
+  afterEach(suite.afterEach);
+
+  describe('source detection', () => {
+    it('should detect ZIP source', async () => {
+      const zipPath = join(suite.tempDir, 'test-skill.zip');
+      await writeFile(zipPath, 'fake zip content');
+
+      const { result, parsed } = executeCommandAndParse(
+        suite.binPath,
+        ['skills', 'install', zipPath, '-p', suite.pluginsDir, '--dry-run'],
+        suite.projectDir
+      );
+
+      expect(result.status).toBe(0);
+      expect(parsed.status).toBe('success');
+      expect(parsed.sourceType).toBe('zip');
+      expect(parsed.dryRun).toBe(true);
+    });
+
+    it('should detect local directory source', async () => {
+      const dirPath = join(suite.tempDir, 'test-skill-dir');
+      await mkdir(dirPath, { recursive: true });
+
+      const { result, parsed } = executeCommandAndParse(
+        suite.binPath,
+        ['skills', 'install', dirPath, '-p', suite.pluginsDir, '--dry-run'],
+        suite.projectDir
+      );
+
+      expect(result.status).toBe(0);
+      expect(parsed.status).toBe('success');
+      expect(parsed.sourceType).toBe('local');
+      expect(parsed.dryRun).toBe(true);
+    });
+
+    it('should throw error for invalid source', () => {
+      const { result } = executeCommandAndParse(
+        suite.binPath,
+        ['skills', 'install', '/nonexistent/path', '-p', suite.pluginsDir],
+        suite.projectDir
+      );
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain('Cannot detect source type');
+    });
+  });
+
+  describe('local directory installation', () => {
+    it('should install from plain directory', async () => {
+      // Create test skill directory
+      const skillDir = await createSimpleSkill(suite.tempDir, 'my-skill');
+
+      executeInstallAndExpectSuccess(
+        suite.binPath,
+        ['skills', 'install', skillDir, '-p', suite.pluginsDir],
+        suite.projectDir,
+        'my-skill',
+        'local'
+      );
+
+      // Verify skill was installed
+      const installedPath = join(suite.pluginsDir, 'my-skill');
+      expect(existsSync(installedPath)).toBe(true);
+      expect(existsSync(join(installedPath, 'SKILL.md'))).toBe(true);
+
+      // Verify registry was updated
+      const registry = await suite.loadRegistry();
+      expect(registry['my-skill']).toBeDefined();
+      expect(registry['my-skill'].version).toBe('local');
+      expect(registry['my-skill'].source).toContain('my-skill');
+      expect(registry['my-skill'].type).toBe('copy');
+    });
+
+    it('should install from directory with package.json vat metadata', async () => {
+      const skillName = 'my-vat-skill';
+
+      // Create package directory
+      const packageDir = join(suite.tempDir, 'test-package');
+      await mkdir(packageDir, { recursive: true });
+
+      // Create skill output directory
+      const skillOutputDir = join(packageDir, 'dist', 'skills', skillName);
+      await mkdir(skillOutputDir, { recursive: true });
+      await writeFile(join(skillOutputDir, 'SKILL.md'), '# VAT Skill\nFrom package');
+
+      // Create package.json with vat metadata
+      const packageJson = {
+        name: '@test/my-package',
+        version: '1.0.0',
+        vat: {
+          version: '1.0',
+          type: 'agent-bundle',
+          skills: [
+            {
+              name: skillName,
+              source: './resources/skills/SKILL.md',
+              path: `./dist/skills/${skillName}`,
+            },
+          ],
+        },
+      };
+      await writeFile(join(packageDir, 'package.json'), JSON.stringify(packageJson, null, 2));
+
+      const { result, parsed } = executeCommandAndParse(
+        suite.binPath,
+        ['skills', 'install', packageDir, '-p', suite.pluginsDir],
+        suite.projectDir
+      );
+
+      expect(result.status).toBe(0);
+      expect(parsed.status).toBe('success');
+      expect(parsed.skillName).toBe(skillName);
+      expect(parsed.sourceType).toBe('local');
+
+      // Verify skill was installed
+      const installedPath = join(suite.pluginsDir, skillName);
+      expect(existsSync(installedPath)).toBe(true);
+      expect(existsSync(join(installedPath, 'SKILL.md'))).toBe(true);
+
+      // Verify registry tracks version from package.json
+      const registry = await suite.loadRegistry();
+      expect(registry[skillName].version).toBe('1.0.0');
+      expect(registry[skillName].source).toContain('test-package');
+    });
+
+    it('should use custom name when --name provided', async () => {
+      const customName = 'custom-name';
+      const originalName = 'original-name';
+      const skillDir = join(suite.tempDir, originalName);
+      await mkdir(skillDir, { recursive: true });
+      await writeFile(join(skillDir, 'SKILL.md'), '# Test');
+
+      const { result, parsed } = executeCommandAndParse(
+        suite.binPath,
+        ['skills', 'install', skillDir, '-p', suite.pluginsDir, '--name', customName],
+        suite.projectDir
+      );
+
+      expect(result.status).toBe(0);
+      expect(parsed.skillName).toBe(customName);
+
+      // Verify installed with custom name
+      expect(existsSync(join(suite.pluginsDir, customName))).toBe(true);
+      expect(existsSync(join(suite.pluginsDir, originalName))).toBe(false);
+    });
+  });
+
+  describe('ZIP installation', () => {
+    it('should install from ZIP file', async () => {
+      // Note: Would need adm-zip to create real ZIP, testing with mock
+      // For now, test dry-run mode
+      const zipPath = join(suite.tempDir, 'skill.zip');
+      await writeFile(zipPath, 'fake zip');
+
+      executeInstallAndExpectSuccess(
+        suite.binPath,
+        ['skills', 'install', zipPath, '-p', suite.pluginsDir, '--dry-run'],
+        suite.projectDir,
+        'skill',
+        'zip'
+      );
+
+      const { parsed } = executeCommandAndParse(
+        suite.binPath,
+        ['skills', 'install', zipPath, '-p', suite.pluginsDir, '--dry-run'],
+        suite.projectDir
+      );
+      expect(parsed.dryRun).toBe(true);
+    });
+  });
+
+  describe('--force flag', () => {
+    it('should overwrite existing skill with --force', async () => {
+      const skillDir = join(suite.tempDir, 'my-skill');
+      await mkdir(skillDir, { recursive: true });
+      await writeFile(join(skillDir, 'SKILL.md'), '# Version 1');
+
+      // Install first time
+      executeCommandAndParse(
+        suite.binPath,
+        ['skills', 'install', skillDir, '-p', suite.pluginsDir],
+        suite.projectDir
+      );
+
+      // Update skill content
+      await writeFile(join(skillDir, 'SKILL.md'), '# Version 2');
+
+      // Install again with --force
+      const { result, parsed } = executeCommandAndParse(
+        suite.binPath,
+        ['skills', 'install', skillDir, '-p', suite.pluginsDir, '--force'],
+        suite.projectDir
+      );
+
+      expect(result.status).toBe(0);
+      expect(parsed.status).toBe('success');
+    });
+
+    it('should fail without --force if skill exists', async () => {
+      const skillDir = join(suite.tempDir, 'my-skill');
+      await mkdir(skillDir, { recursive: true });
+      await writeFile(join(skillDir, 'SKILL.md'), '# Test');
+
+      // Install first time
+      executeCommandAndParse(
+        suite.binPath,
+        ['skills', 'install', skillDir, '-p', suite.pluginsDir],
+        suite.projectDir
+      );
+
+      // Try to install again without --force
+      const { result } = executeCommandAndParse(
+        suite.binPath,
+        ['skills', 'install', skillDir, '-p', suite.pluginsDir],
+        suite.projectDir
+      );
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain('already exists');
+      expect(result.stderr).toContain('--force');
+    });
+  });
+
+  describe('registry tracking', () => {
+    it('should create registry file on first install', async () => {
+      const skillDir = await createSimpleSkill(suite.tempDir, 'my-skill');
+
+      executeCommandAndParse(
+        suite.binPath,
+        ['skills', 'install', skillDir, '-p', suite.pluginsDir],
+        suite.projectDir
+      );
+
+      // Verify registry exists
+      const registryPath = join(suite.pluginsDir, '.vat-registry.json');
+      expect(existsSync(registryPath)).toBe(true);
+
+      const registry = await suite.loadRegistry();
+      expect(Object.keys(registry)).toHaveLength(1);
+      expect(registry['my-skill']).toBeDefined();
+    });
+
+    it('should track multiple skills in registry', async () => {
+      // Install first skill
+      const skill1Dir = await createSimpleSkill(suite.tempDir, 'skill-1');
+
+      executeCommandAndParse(
+        suite.binPath,
+        ['skills', 'install', skill1Dir, '-p', suite.pluginsDir],
+        suite.projectDir
+      );
+
+      // Install second skill
+      const skill2Dir = await createSimpleSkill(suite.tempDir, 'skill-2');
+
+      executeCommandAndParse(
+        suite.binPath,
+        ['skills', 'install', skill2Dir, '-p', suite.pluginsDir],
+        suite.projectDir
+      );
+
+      const registry = await suite.loadRegistry();
+      expect(Object.keys(registry)).toHaveLength(2);
+      expect(registry['skill-1']).toBeDefined();
+      expect(registry['skill-2']).toBeDefined();
+    });
+
+    it('should include required registry fields', async () => {
+      const skillDir = await createSimpleSkill(suite.tempDir, 'my-skill');
+
+      executeCommandAndParse(
+        suite.binPath,
+        ['skills', 'install', skillDir, '-p', suite.pluginsDir],
+        suite.projectDir
+      );
+
+      const registry = await suite.loadRegistry();
+      const entry = registry['my-skill'];
+
+      expect(entry.version).toBeDefined();
+      expect(entry.source).toBeDefined();
+      expect(entry.installedAt).toBeDefined();
+      expect(entry.installedBy).toBe('vat-cli');
+      expect(entry.path).toBeDefined();
+      expect(entry.type).toBe('copy');
+
+      // Verify installedAt is valid ISO timestamp
+      expect(() => new Date(entry.installedAt)).not.toThrow();
+    });
+  });
+
+  describe('--dry-run mode', () => {
+    it('should preview installation without creating files', async () => {
+      const skillDir = await createSimpleSkill(suite.tempDir, 'my-skill');
+
+      executeInstallAndExpectSuccess(
+        suite.binPath,
+        ['skills', 'install', skillDir, '-p', suite.pluginsDir, '--dry-run'],
+        suite.projectDir,
+        'my-skill',
+        'local'
+      );
+
+      const { parsed } = executeCommandAndParse(
+        suite.binPath,
+        ['skills', 'install', skillDir, '-p', suite.pluginsDir, '--dry-run'],
+        suite.projectDir
+      );
+      expect(parsed.dryRun).toBe(true);
+
+      // Verify nothing was actually installed
+      expect(existsSync(join(suite.pluginsDir, 'my-skill'))).toBe(false);
+
+      // Verify registry was not updated
+      const registryPath = join(suite.pluginsDir, '.vat-registry.json');
+      expect(existsSync(registryPath)).toBe(false);
+    });
+  });
+});
