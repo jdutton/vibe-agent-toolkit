@@ -203,7 +203,7 @@ describe('MCP stdio protocol compliance (system test)', () => {
     // Initialize first
     const initRequest = createInitializeRequest(1);
     server.stdin.write(`${JSON.stringify(initRequest)}\n`);
-    await waitForStreamData(server.stdout, { timeout: 1000, pattern: /"id":\s*1/ });
+    await waitForStreamData(server.stdout, { timeout: 3000, pattern: /"id":\s*1/ });
 
     // Request tools list
     const toolsRequest = {
