@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { PluginSchema } from '../../src/schemas/plugin.js';
+import { ClaudePluginSchema } from '../../src/schemas/claude-plugin.js';
 
 function loadPluginFixture(name: string): unknown {
   const fixturePath = resolve(__dirname, '../fixtures/plugins', name);
@@ -20,7 +20,7 @@ function expectSchemaError(
   path: string,
   messageContains: string
 ): void {
-  const result = PluginSchema.safeParse(data);
+  const result = ClaudePluginSchema.safeParse(data);
   expect(result.success).toBe(false);
   if (!result.success) {
     const error = result.error.issues.find(i => i.path[0] === path);
@@ -29,10 +29,10 @@ function expectSchemaError(
   }
 }
 
-describe('PluginSchema', () => {
+describe('ClaudePluginSchema', () => {
   it('should validate known-good plugin.json from superpowers', () => {
     const knownGood = loadPluginFixture('superpowers-plugin.json');
-    const result = PluginSchema.safeParse(knownGood);
+    const result = ClaudePluginSchema.safeParse(knownGood);
 
     expect(result.success).toBe(true);
     if (result.success) {

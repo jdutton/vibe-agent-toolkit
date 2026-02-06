@@ -101,7 +101,11 @@ describe('buildHierarchicalOutput', () => {
 
     expect(output.standaloneSkills).toHaveLength(1);
     expect(output.standaloneSkills[0]?.name).toBe('standalone-skill');
-    expect(output.standaloneSkills[0]?.status).toBe('warning');
+    // Status is upgraded to 'error' due to misconfiguration detection
+    expect(output.standaloneSkills[0]?.status).toBe('error');
+    // Should have original warning + misconfiguration error
+    expect(output.standaloneSkills[0]?.issues).toHaveLength(2);
+    expect(output.standaloneSkills[0]?.issues[1]?.code).toBe('SKILL_MISCONFIGURED_LOCATION');
   });
 
   it('should use ~ for home directory paths', () => {

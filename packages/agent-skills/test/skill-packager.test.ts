@@ -433,7 +433,8 @@ describe('skill-packager: link rewriting', () => {
       '# Guide',
       { subdirectory: 'docs' }
     );
-    expect(copiedContent).toContain('[guide](docs/guide.md)');
+    // Flat structure: all files at root, links rewritten to just basename
+    expect(copiedContent).toContain('[guide](guide.md)');
   });
 
   it('should rewrite reference-style links', async () => {
@@ -487,7 +488,8 @@ describe('skill-packager: file copying', () => {
 
     const result = await packageSkillForTest(skillPath, { formats: ['directory'] });
 
-    const copiedGuidePath = join(result.outputPath, 'docs', GUIDE_MD);
+    // Flat structure: all files at root level
+    const copiedGuidePath = join(result.outputPath, GUIDE_MD);
     const copiedGuideContent = await readFile(copiedGuidePath, 'utf-8');
 
     expect(copiedGuideContent).toBe(GUIDE_CONTENT);
@@ -592,10 +594,10 @@ describe('skill-packager: integration', () => {
     expect(result.files.dependencies).toContain(toForwardSlash(DOCS_GUIDE_MD));
     expect(result.files.dependencies).toContain(toForwardSlash('docs/reference.md'));
 
-    // Verify files copied
+    // Verify files copied (flat structure: all at root level)
     const copiedSkill = await readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
-    const copiedGuide = await readFile(join(result.outputPath, 'docs', GUIDE_MD), 'utf-8');
-    const copiedReference = await readFile(join(result.outputPath, 'docs', 'reference.md'), 'utf-8');
+    const copiedGuide = await readFile(join(result.outputPath, GUIDE_MD), 'utf-8');
+    const copiedReference = await readFile(join(result.outputPath, 'reference.md'), 'utf-8');
 
     expect(copiedSkill).toContain(COMPLEX_SKILL_NAME);
     expect(copiedGuide).toContain('# Guide');

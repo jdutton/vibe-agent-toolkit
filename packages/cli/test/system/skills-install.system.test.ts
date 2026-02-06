@@ -57,7 +57,7 @@ describe('skills install command (system test)', () => {
 
       const { result, parsed } = executeCommandAndParse(
         suite.binPath,
-        ['skills', 'install', zipPath, '-p', suite.pluginsDir, '--dry-run'],
+        ['skills', 'install', zipPath, '-s', suite.skillsDir, '--dry-run'],
         suite.projectDir
       );
 
@@ -73,7 +73,7 @@ describe('skills install command (system test)', () => {
 
       const { result, parsed } = executeCommandAndParse(
         suite.binPath,
-        ['skills', 'install', dirPath, '-p', suite.pluginsDir, '--dry-run'],
+        ['skills', 'install', dirPath, '-s', suite.skillsDir, '--dry-run'],
         suite.projectDir
       );
 
@@ -86,7 +86,7 @@ describe('skills install command (system test)', () => {
     it('should throw error for invalid source', () => {
       const { result } = executeCommandAndParse(
         suite.binPath,
-        ['skills', 'install', '/nonexistent/path', '-p', suite.pluginsDir],
+        ['skills', 'install', '/nonexistent/path', '-s', suite.skillsDir],
         suite.projectDir
       );
 
@@ -102,14 +102,14 @@ describe('skills install command (system test)', () => {
 
       executeInstallAndExpectSuccess(
         suite.binPath,
-        ['skills', 'install', skillDir, '-p', suite.pluginsDir],
+        ['skills', 'install', skillDir, '-s', suite.skillsDir],
         suite.projectDir,
         'my-skill',
         'local'
       );
 
       // Verify skill was installed
-      const installedPath = join(suite.pluginsDir, 'my-skill');
+      const installedPath = join(suite.skillsDir, 'my-skill');
       expect(existsSync(installedPath)).toBe(true);
       expect(existsSync(join(installedPath, 'SKILL.md'))).toBe(true);
     });
@@ -146,7 +146,7 @@ describe('skills install command (system test)', () => {
 
       const { result, parsed } = executeCommandAndParse(
         suite.binPath,
-        ['skills', 'install', packageDir, '-p', suite.pluginsDir],
+        ['skills', 'install', packageDir, '-s', suite.skillsDir],
         suite.projectDir
       );
 
@@ -156,7 +156,7 @@ describe('skills install command (system test)', () => {
       expect(parsed.sourceType).toBe('local');
 
       // Verify skill was installed
-      const installedPath = join(suite.pluginsDir, skillName);
+      const installedPath = join(suite.skillsDir, skillName);
       expect(existsSync(installedPath)).toBe(true);
       expect(existsSync(join(installedPath, 'SKILL.md'))).toBe(true);
     });
@@ -170,7 +170,7 @@ describe('skills install command (system test)', () => {
 
       const { result, parsed } = executeCommandAndParse(
         suite.binPath,
-        ['skills', 'install', skillDir, '-p', suite.pluginsDir, '--name', customName],
+        ['skills', 'install', skillDir, '-s', suite.skillsDir, '--name', customName],
         suite.projectDir
       );
 
@@ -178,8 +178,8 @@ describe('skills install command (system test)', () => {
       expect(parsed.skillName).toBe(customName);
 
       // Verify installed with custom name
-      expect(existsSync(join(suite.pluginsDir, customName))).toBe(true);
-      expect(existsSync(join(suite.pluginsDir, originalName))).toBe(false);
+      expect(existsSync(join(suite.skillsDir, customName))).toBe(true);
+      expect(existsSync(join(suite.skillsDir, originalName))).toBe(false);
     });
   });
 
@@ -192,7 +192,7 @@ describe('skills install command (system test)', () => {
 
       executeInstallAndExpectSuccess(
         suite.binPath,
-        ['skills', 'install', zipPath, '-p', suite.pluginsDir, '--dry-run'],
+        ['skills', 'install', zipPath, '-s', suite.skillsDir, '--dry-run'],
         suite.projectDir,
         'skill',
         'zip'
@@ -200,7 +200,7 @@ describe('skills install command (system test)', () => {
 
       const { parsed } = executeCommandAndParse(
         suite.binPath,
-        ['skills', 'install', zipPath, '-p', suite.pluginsDir, '--dry-run'],
+        ['skills', 'install', zipPath, '-s', suite.skillsDir, '--dry-run'],
         suite.projectDir
       );
       expect(parsed.dryRun).toBe(true);
@@ -216,7 +216,7 @@ describe('skills install command (system test)', () => {
       // Install first time
       executeCommandAndParse(
         suite.binPath,
-        ['skills', 'install', skillDir, '-p', suite.pluginsDir],
+        ['skills', 'install', skillDir, '-s', suite.skillsDir],
         suite.projectDir
       );
 
@@ -226,7 +226,7 @@ describe('skills install command (system test)', () => {
       // Install again with --force
       const { result, parsed } = executeCommandAndParse(
         suite.binPath,
-        ['skills', 'install', skillDir, '-p', suite.pluginsDir, '--force'],
+        ['skills', 'install', skillDir, '-s', suite.skillsDir, '--force'],
         suite.projectDir
       );
 
@@ -242,14 +242,14 @@ describe('skills install command (system test)', () => {
       // Install first time
       executeCommandAndParse(
         suite.binPath,
-        ['skills', 'install', skillDir, '-p', suite.pluginsDir],
+        ['skills', 'install', skillDir, '-s', suite.skillsDir],
         suite.projectDir
       );
 
       // Try to install again without --force
       const { result } = executeCommandAndParse(
         suite.binPath,
-        ['skills', 'install', skillDir, '-p', suite.pluginsDir],
+        ['skills', 'install', skillDir, '-s', suite.skillsDir],
         suite.projectDir
       );
 
@@ -265,7 +265,7 @@ describe('skills install command (system test)', () => {
 
       executeInstallAndExpectSuccess(
         suite.binPath,
-        ['skills', 'install', skillDir, '-p', suite.pluginsDir, '--dry-run'],
+        ['skills', 'install', skillDir, '-s', suite.skillsDir, '--dry-run'],
         suite.projectDir,
         'my-skill',
         'local'
@@ -273,13 +273,13 @@ describe('skills install command (system test)', () => {
 
       const { parsed } = executeCommandAndParse(
         suite.binPath,
-        ['skills', 'install', skillDir, '-p', suite.pluginsDir, '--dry-run'],
+        ['skills', 'install', skillDir, '-s', suite.skillsDir, '--dry-run'],
         suite.projectDir
       );
       expect(parsed.dryRun).toBe(true);
 
       // Verify nothing was actually installed
-      expect(existsSync(join(suite.pluginsDir, 'my-skill'))).toBe(false);
+      expect(existsSync(join(suite.skillsDir, 'my-skill'))).toBe(false);
     });
   });
 });

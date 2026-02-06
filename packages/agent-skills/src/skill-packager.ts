@@ -19,6 +19,8 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import { parseMarkdown, type ParseResult } from '@vibe-agent-toolkit/resources';
 import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 
+const PACKAGE_JSON_FILENAME = 'package.json';
+
 export interface PackageSkillOptions {
   /**
    * Output directory for packaged skill
@@ -115,10 +117,15 @@ export async function packageSkill(
   const parseResult = await parseMarkdown(skillPath);
   const skillMetadata = extractSkillMetadata(parseResult, skillPath);
 
-  // 2. Collect all linked resources recursively
+  // 2. Find package boundary (to prevent collecting files from other packages)
+  // If no package.json found, use skill's directory as boundary (for tests)
+  const packageRoot = findPackageRootOrFallback(skillPath);
+
+  // 3. Collect all linked resources recursively (only within package boundary)
   const linkedFiles = await collectLinkedResources(
     skillPath,
     basePath,
+    packageRoot,
     new Set()
   );
 
@@ -130,12 +137,11 @@ export async function packageSkill(
   const outputPath = options.outputPath ??
     getDefaultSkillOutputPath(skillPath, skillMetadata.name);
 
-  // 5. Copy SKILL.md and all linked files
+  // 5. Copy SKILL.md and all linked files (flat structure)
   await copySkillResources(
     skillPath,
     linkedFiles,
     outputPath,
-    effectiveBasePath,
     rewriteLinks
   );
 
@@ -274,19 +280,138 @@ function findCommonAncestor(filePaths: string[]): string {
 }
 
 /**
+ * Process a linked file and recursively collect its dependencies
+ *
+ * Validates the file exists and is within package boundary, then recursively collects
+ * all files linked from it.
+ *
+ * @param resolvedPath - Absolute path to the linked file
+ * @param href - Original href from markdown (for warning messages)
+ * @param packageRoot - Package root directory (boundary for file collection)
+ * @param basePath - Base path for resolving relative links
+ * @param visited - Set of already visited files (prevents loops)
+ * @param linkedFiles - Array to push results into
+ */
+async function processAndCollectLinkedFile(
+  resolvedPath: string,
+  href: string,
+  packageRoot: string,
+  basePath: string,
+  visited: Set<string>,
+  linkedFiles: string[]
+): Promise<void> {
+  // Check if file exists
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path constructed from parsed markdown links
+  if (!existsSync(resolvedPath)) {
+    console.warn(`Warning: Linked file not found: ${href} (resolved to ${resolvedPath})`);
+    return;
+  }
+
+  // Check package boundary
+  const normalizedResolved = toForwardSlash(resolvedPath);
+  const normalizedPackageRoot = toForwardSlash(packageRoot);
+  if (!normalizedResolved.startsWith(normalizedPackageRoot)) {
+    console.warn(
+      `Warning: Skipping external link outside package boundary: ${href}\n` +
+      `  Resolved to: ${resolvedPath}\n` +
+      `  Package root: ${packageRoot}\n` +
+      `  External links are not included in skill packages.`
+    );
+    return;
+  }
+
+  linkedFiles.push(resolvedPath);
+
+  // Recursively collect from this file
+  const transitive = await collectLinkedResources(
+    resolvedPath,
+    basePath,
+    packageRoot,
+    visited
+  );
+  linkedFiles.push(...transitive);
+}
+
+/**
+ * Extract reference-style link definitions from markdown content
+ *
+ * Parses markdown content to find reference-style link definitions like: [ref]: url
+ * These are not included in the AST parser's link extraction.
+ *
+ * @param content - Markdown content
+ * @param markdownPath - Path to markdown file (for relative link resolution)
+ * @param packageRoot - Package root directory (boundary for file collection)
+ * @param basePath - Base path for resolving relative links
+ * @param visited - Set of already visited files (prevents loops)
+ * @returns Array of absolute paths to linked files
+ */
+async function extractReferenceStyleLinks(
+  content: string,
+  markdownPath: string,
+  packageRoot: string,
+  basePath: string,
+  visited: Set<string>
+): Promise<string[]> {
+  const linkedFiles: string[] = [];
+  // eslint-disable-next-line sonarjs/slow-regex -- Controlled markdown input with trusted content
+  const refLinkDefRegex = /^\[([^\]]+)\]:\s*(.+)$/gm;
+  let match: RegExpExecArray | null;
+
+  while ((match = refLinkDefRegex.exec(content)) !== null) {
+    const href = match[2]?.trim();
+    if (!href) {
+      continue;
+    }
+
+    // Skip external URLs
+    if (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('mailto:')) {
+      continue;
+    }
+
+    // Remove anchor fragments
+    const hrefWithoutAnchor = href.split('#')[0] ?? href;
+    if (hrefWithoutAnchor === '') {
+      continue;
+    }
+
+    // Resolve relative to the markdown file's directory
+    const resolvedPath = resolve(dirname(markdownPath), hrefWithoutAnchor);
+
+    // Only include .md files
+    if (!resolvedPath.endsWith('.md')) {
+      continue;
+    }
+
+    await processAndCollectLinkedFile(
+      resolvedPath,
+      href,
+      packageRoot,
+      basePath,
+      visited,
+      linkedFiles
+    );
+  }
+
+  return linkedFiles;
+}
+
+/**
  * Collect all linked resources from SKILL.md recursively
  *
  * Follows local file links to build a complete dependency graph.
  * Prevents infinite loops by tracking visited files.
+ * Only collects files within the package boundary (prevents pulling in entire monorepo).
  *
  * @param markdownPath - Current markdown file to process
  * @param basePath - Base path for resolving relative links
+ * @param packageRoot - Package root directory (boundary for file collection)
  * @param visited - Set of already visited files (prevents loops)
- * @returns Array of absolute paths to all linked files
+ * @returns Array of absolute paths to all linked files within package
  */
 async function collectLinkedResources(
   markdownPath: string,
   basePath: string,
+  packageRoot: string,
   visited: Set<string>
 ): Promise<string[]> {
   // Prevent infinite loops
@@ -300,6 +425,20 @@ async function collectLinkedResources(
   const parseResult = await parseMarkdown(markdownPath);
   const linkedFiles: string[] = [];
 
+  // Extract reference-style link definitions: [ref]: url
+  // These are not included in parseResult.links, so we need to parse them separately
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- markdownPath validated by caller
+  const content = await readFile(markdownPath, 'utf-8');
+  const refStyleLinks = await extractReferenceStyleLinks(
+    content,
+    markdownPath,
+    packageRoot,
+    basePath,
+    visited
+  );
+  linkedFiles.push(...refStyleLinks);
+
+  // Process inline links from parseResult
   for (const link of parseResult.links) {
     // Skip non-local links
     if (link.type !== 'local_file') {
@@ -315,26 +454,19 @@ async function collectLinkedResources(
     // Resolve relative to the markdown file's directory
     const resolvedPath = resolve(dirname(markdownPath), hrefWithoutAnchor);
 
-    // Only include .md files (no basePath filtering - collect all valid linked files)
+    // Only include .md files
     if (!resolvedPath.endsWith('.md')) {
       continue;
     }
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path constructed from parsed markdown links
-    if (!existsSync(resolvedPath)) {
-      console.warn(`Warning: Linked file not found: ${link.href} (resolved to ${resolvedPath})`);
-      continue;
-    }
-
-    linkedFiles.push(resolvedPath);
-
-    // Recursively collect from this file
-    const transitive = await collectLinkedResources(
+    await processAndCollectLinkedFile(
       resolvedPath,
+      link.href,
+      packageRoot,
       basePath,
-      visited
+      visited,
+      linkedFiles
     );
-    linkedFiles.push(...transitive);
   }
 
   // Deduplicate
@@ -344,45 +476,72 @@ async function collectLinkedResources(
 /**
  * Copy SKILL.md and linked files to output directory
  *
- * Preserves relative directory structure.
- * Optionally rewrites links to be relative to package root.
+ * Creates a FLAT structure with all files at the root level.
+ * Rewriteslinks to work in the flattened structure.
  *
  * @param skillPath - Path to SKILL.md
  * @param linkedFiles - All linked files to copy
  * @param outputPath - Destination directory
- * @param basePath - Base path for calculating relative paths
  * @param rewriteLinks - Whether to rewrite links
  */
 async function copySkillResources(
   skillPath: string,
   linkedFiles: string[],
   outputPath: string,
-  basePath: string,
   rewriteLinks: boolean
 ): Promise<void> {
   // Ensure output directory exists
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Output path is validated
   await mkdir(outputPath, { recursive: true });
 
+  // Build a map of original paths to flattened paths
+  // Normalize all keys for consistent lookup (handles path separator differences)
+  const pathMap = new Map<string, string>();
+  pathMap.set(toForwardSlash(skillPath), join(outputPath, 'SKILL.md'));
+
+  // Map all linked files to flat structure (using basenames)
+  // Check for collisions
+  for (const linkedFile of linkedFiles) {
+    const filename = basename(linkedFile);
+    const targetPath = join(outputPath, filename);
+
+    // Check for filename collisions
+    const existingSource = [...pathMap.entries()].find(
+      ([_src, target]) => target === targetPath
+    )?.[0];
+
+    if (existingSource !== undefined && existingSource !== linkedFile) {
+      throw new Error(
+        `Filename collision detected when flattening skill structure:\n` +
+        `  File 1: ${existingSource}\n` +
+        `  File 2: ${linkedFile}\n` +
+        `  Both would be copied to: ${filename}\n` +
+        `  Cannot flatten structure with duplicate filenames.`
+      );
+    }
+
+    pathMap.set(toForwardSlash(linkedFile), targetPath);
+  }
+
   // Copy SKILL.md
   await copyAndRewriteFile(
     skillPath,
     join(outputPath, 'SKILL.md'),
-    basePath,
-    outputPath,
+    pathMap,
     rewriteLinks
   );
 
-  // Copy all linked files preserving relative structure
+  // Copy all linked files to flat structure
   for (const linkedFile of linkedFiles) {
-    const relativePath = relative(basePath, linkedFile);
-    const targetPath = join(outputPath, relativePath);
+    const targetPath = pathMap.get(linkedFile);
+    if (targetPath === undefined) {
+      continue; // Should never happen, but satisfy type checker
+    }
 
     await copyAndRewriteFile(
       linkedFile,
       targetPath,
-      basePath,
-      outputPath,
+      pathMap,
       rewriteLinks
     );
   }
@@ -391,19 +550,17 @@ async function copySkillResources(
 /**
  * Copy a markdown file, optionally rewriting links
  *
- * If rewriteLinks is true, adjusts relative links to work from new location.
+ * If rewriteLinks is true, adjusts relative links to work from new flat location.
  *
  * @param sourcePath - Source file absolute path
  * @param targetPath - Target file absolute path
- * @param basePath - Original base path for resolving links
- * @param outputPath - Output directory where files are being copied
+ * @param pathMap - Map of source paths to target paths (for flat structure)
  * @param rewriteLinks - Whether to rewrite links
  */
 async function copyAndRewriteFile(
   sourcePath: string,
   targetPath: string,
-  basePath: string,
-  outputPath: string,
+  pathMap: Map<string, string>,
   rewriteLinks: boolean
 ): Promise<void> {
   // Ensure target directory exists
@@ -420,7 +577,7 @@ async function copyAndRewriteFile(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- sourcePath is validated
   let content = await readFile(sourcePath, 'utf-8');
 
-  // Rewrite markdown links to stay relative within package
+  // Rewrite markdown links to work in flat structure
   content = rewriteMarkdownLinks(content, (href) => {
     // Keep external URLs and anchors unchanged
     if (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('mailto:') || href.startsWith('#')) {
@@ -435,20 +592,31 @@ async function copyAndRewriteFile(
     }
 
     // Resolve old link target (where it currently is)
-    const oldLinkTarget = resolve(dirname(sourcePath), path);
+    // Normalize to handle path separator differences
+    const oldLinkTarget = toForwardSlash(resolve(dirname(sourcePath), path));
 
-    // If link points outside basePath, keep original (broken link warning was already issued)
-    if (!toForwardSlash(oldLinkTarget).startsWith(toForwardSlash(basePath))) {
+    // Look up where this file will be in the flat structure
+    // pathMap keys are also normalized, so this should match
+    const newLinkTarget = pathMap.get(oldLinkTarget);
+    if (newLinkTarget === undefined) {
+      // Link points to file not in package (external link already warned about)
+      // Keep original href (will be broken, but user was warned)
       return href;
     }
 
-    // Calculate where the linked file will be copied to
-    // It will maintain its relative position from basePath in the output
-    const relativeFromBase = relative(basePath, oldLinkTarget);
-    const newLinkTarget = join(outputPath, relativeFromBase);
+    // In flat structure, all files are at same level, so just use basename
+    let relativePath = relative(dirname(targetPath), newLinkTarget);
 
-    // Calculate new relative path from new file location to where link target will be
-    const relativePath = relative(dirname(targetPath), newLinkTarget);
+    // Clean up ./ prefix (relative() returns ./file when in same directory)
+    const normalizedRelPath = toForwardSlash(relativePath);
+    if (normalizedRelPath.startsWith('./')) {
+      relativePath = normalizedRelPath.slice(2);
+    } else if (normalizedRelPath === '.') {
+      // Same file (shouldn't happen but handle gracefully)
+      relativePath = basename(newLinkTarget);
+    } else {
+      relativePath = normalizedRelPath;
+    }
 
     // Reconstruct with anchor if present
     const newHref = anchor ? `${relativePath}#${anchor}` : relativePath;
@@ -585,7 +753,7 @@ async function createNpmPackage(
     files: ['**/*.md'],
   };
 
-  const packageJsonPath = join(outputPath, 'package.json');
+  const packageJsonPath = join(outputPath, PACKAGE_JSON_FILENAME);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path is constructed from validated outputPath
   await writeFile(
     packageJsonPath,
@@ -651,14 +819,16 @@ function getDefaultSkillOutputPath(skillPath: string, skillName: string): string
  * Walks up from the skill directory to find the nearest package.json
  *
  * @param skillPath - Path to SKILL.md
- * @returns Package root directory
+ * @param fallbackToSkillDir - If true, falls back to skill's directory instead of throwing
+ * @returns Package root directory (or skill's directory if fallback enabled)
  */
-function findPackageRoot(skillPath: string): string {
+function findPackageRoot(skillPath: string, fallbackToSkillDir = false): string {
   let currentDir = dirname(resolve(skillPath));
+  const skillDir = currentDir;
 
   // Walk up until we find a package.json or hit the filesystem root
   while (currentDir !== dirname(currentDir)) {
-    const packageJsonPath = join(currentDir, 'package.json');
+    const packageJsonPath = join(currentDir, PACKAGE_JSON_FILENAME);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Searching for package.json
     if (existsSync(packageJsonPath)) {
       return currentDir;
@@ -666,8 +836,26 @@ function findPackageRoot(skillPath: string): string {
     currentDir = dirname(currentDir);
   }
 
+  // Not found - either throw or fallback
+  if (fallbackToSkillDir) {
+    return skillDir;
+  }
+
   throw new Error(
     `Could not find package.json for skill at ${skillPath}. ` +
       `Skill must be within an npm package to generate default output path.`
   );
+}
+
+/**
+ * Find the package root or fall back to skill's directory
+ *
+ * Used for package boundary detection - if no package.json found,
+ * uses skill's directory as the boundary (useful for tests).
+ *
+ * @param skillPath - Path to SKILL.md
+ * @returns Package root directory or skill's directory
+ */
+function findPackageRootOrFallback(skillPath: string): string {
+  return findPackageRoot(skillPath, true);
 }

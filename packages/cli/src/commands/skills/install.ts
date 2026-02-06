@@ -29,7 +29,7 @@ import {
 } from './install-helpers.js';
 
 export interface SkillsInstallCommandOptions {
-  pluginsDir?: string;
+  skillsDir?: string;
   name?: string;
   force?: boolean;
   dryRun?: boolean;
@@ -41,12 +41,12 @@ export function createInstallCommand(): Command {
   const command = new Command('install');
 
   command
-    .description('Install a skill to Claude Code plugins directory')
+    .description('Install a skill to Claude Code skills directory')
     .argument('[source]', 'Source to install from (npm:package, ZIP file, or directory path)')
     .option(
-      '-p, --plugins-dir <path>',
-      'Claude plugins directory',
-      getClaudeUserPaths().pluginsDir
+      '-s, --skills-dir <path>',
+      'Claude skills directory',
+      getClaudeUserPaths().skillsDir
     )
     .option('-n, --name <name>', 'Custom name for installed skill (default: auto-detect from source)')
     .option('-f, --force', 'Overwrite existing skill if present', false)
@@ -58,7 +58,7 @@ export function createInstallCommand(): Command {
       'after',
       `
 Description:
-  Installs a skill to Claude Code's plugins directory from various sources.
+  Installs a skill to Claude Code's skills directory from various sources.
 
   Supported sources:
   - npm package: npm:@scope/package-name
@@ -66,7 +66,7 @@ Description:
   - Local directory: ./path/to/skill-dir
   - npm postinstall: --npm-postinstall (automatic during global install)
 
-  Default plugins directory: ~/.claude/plugins/
+  Default skills directory: ~/.claude/skills/
 
 Output:
   - status: success/error
@@ -192,7 +192,7 @@ async function handleNpmInstall(
     const duration = Date.now() - startTime;
     outputSuccess(
       skillToInstall.name,
-      join(options.pluginsDir ?? getClaudeUserPaths().pluginsDir, skillToInstall.name),
+      join(options.skillsDir ?? getClaudeUserPaths().skillsDir, skillToInstall.name),
       `npm:${packageName}`,
       'npm',
       duration,
@@ -261,7 +261,7 @@ async function handleLocalInstall(
   const duration = Date.now() - startTime;
   outputSuccess(
     skillName,
-    join(options.pluginsDir ?? getClaudeUserPaths().pluginsDir, skillName),
+    join(options.skillsDir ?? getClaudeUserPaths().skillsDir, skillName),
     `local:${sourcePath}`,
     'local',
     duration,
@@ -356,9 +356,9 @@ async function handleNpmPostinstall(
 async function prepareInstallation(
   skillName: string,
   options: SkillsInstallCommandOptions
-): Promise<{ pluginsDir: string; installPath: string }> {
-  const pluginsDir = options.pluginsDir ?? getClaudeUserPaths().pluginsDir;
-  const installPath = join(pluginsDir, skillName);
+): Promise<{ skillsDir: string; installPath: string }> {
+  const skillsDir = options.skillsDir ?? getClaudeUserPaths().skillsDir;
+  const installPath = join(skillsDir, skillName);
 
   // Check if skill already exists
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Constructed from validated paths
@@ -371,10 +371,10 @@ async function prepareInstallation(
   if (!options.dryRun) {
     // Create plugins directory
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Plugins directory path, safe
-    await mkdir(pluginsDir, { recursive: true });
+    await mkdir(skillsDir, { recursive: true });
   }
 
-  return { pluginsDir, installPath };
+  return { skillsDir, installPath };
 }
 
 /**

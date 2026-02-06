@@ -68,8 +68,8 @@ describe('audit command (integration)', () => {
       fs.writeFileSync(
         join(claudePluginDir, PLUGIN_JSON_FILENAME),
         JSON.stringify({
-          // Missing required fields
-          name: 'invalid-plugin',
+          // Invalid name format (must be lowercase-alphanumeric-with-hyphens)
+          name: 'Invalid_Plugin_Name',
         })
       );
 
