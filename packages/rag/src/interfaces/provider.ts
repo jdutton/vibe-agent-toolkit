@@ -81,6 +81,37 @@ export interface RAGStats {
 }
 
 /**
+ * Progress update during indexing operation
+ */
+export interface IndexProgress {
+  /** Current resource being processed (1-indexed) */
+  current: number;
+  /** Total resources to process */
+  total: number;
+  /** Resources indexed so far */
+  resourcesIndexed: number;
+  /** Resources skipped so far */
+  resourcesSkipped: number;
+  /** Resources updated so far */
+  resourcesUpdated: number;
+  /** Chunks created so far */
+  chunksCreated: number;
+  /** Elapsed time in milliseconds */
+  elapsedMs: number;
+  /** Estimated time remaining in milliseconds (null if not enough data) */
+  estimatedRemainingMs: number | null;
+  /** Current resource ID */
+  resourceId: string;
+  /** Errors encountered so far */
+  errors: Array<{ resourceId: string; error: string }>;
+}
+
+/**
+ * Progress callback for indexing operations
+ */
+export type ProgressCallback = (progress: IndexProgress) => void;
+
+/**
  * Result from indexing operation
  */
 export interface IndexResult {
@@ -125,8 +156,11 @@ export interface RAGAdminProvider<TMetadata extends Record<string, unknown> = De
    * - Detects changes via content hash
    * - Deletes old chunks for changed resources
    * - Skips unchanged resources
+   *
+   * @param resources - Resources to index
+   * @param onProgress - Optional callback for progress updates (called after each resource)
    */
-  indexResources(resources: ResourceMetadata[]): Promise<IndexResult>;
+  indexResources(resources: ResourceMetadata[], onProgress?: ProgressCallback): Promise<IndexResult>;
 
   /**
    * Update a specific resource
