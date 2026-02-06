@@ -34,10 +34,15 @@ export type SerializedMetadata<T extends Record<string, unknown>> = {
  * LanceDB row format (generic over metadata type)
  *
  * LanceDB stores data in Apache Arrow format with specific type requirements.
- * Custom metadata fields are serialized to Arrow-compatible types.
+ * Custom metadata fields are stored as top-level columns for efficient filtering.
+ *
+ * BREAKING CHANGE: Metadata is now flattened to top-level columns instead of
+ * nested under a `metadata` struct. This enables scale-efficient filtering on
+ * indexes with 1000+ chunks.
+ *
+ * @template TMetadata - Custom metadata type (fields stored as top-level columns)
  */
-export interface LanceDBRow<TMetadata extends Record<string, unknown> = DefaultRAGMetadata>
-  extends Record<string, unknown> {
+export type LanceDBRow<TMetadata extends Record<string, unknown> = DefaultRAGMetadata> = {
   // Required by LanceDB for vector search
   vector: number[];
 
@@ -54,10 +59,7 @@ export interface LanceDBRow<TMetadata extends Record<string, unknown> = DefaultR
 
   // Resource content hash (for change detection)
   resourceContentHash: string;
-
-  // Custom metadata (serialized to Arrow-compatible types)
-  metadata: SerializedMetadata<TMetadata>;
-}
+} & SerializedMetadata<TMetadata>; // Metadata fields spread at top level
 
 /**
  * Get sentinel value for optional field based on inner type
@@ -326,17 +328,20 @@ export function deserializeMetadata<TMetadata extends Record<string, unknown>>(
  *
  * Generic over metadata type. Uses Zod schema for runtime introspection.
  *
+ * BREAKING CHANGE: Metadata fields are now spread at top level instead of
+ * nested under `metadata` struct. This enables efficient filtering at scale.
+ *
  * @param chunk - Chunk with CoreRAGChunk fields + custom metadata
  * @param resourceContentHash - Hash of the full resource content (for change detection)
  * @param metadataSchema - Zod schema for metadata type
- * @returns LanceDB row with serialized metadata
+ * @returns LanceDB row with metadata fields at top level
  */
 export function chunkToLanceRow<TMetadata extends Record<string, unknown>>(
   chunk: CoreRAGChunk & TMetadata,
   resourceContentHash: string,
   metadataSchema: ZodObject<ZodRawShape>,
 ): LanceDBRow<TMetadata> {
-  // Extract metadata by collecting all fields from the schema
+  // Extract and serialize metadata by collecting all fields from the schema
   const metadata: Record<string, unknown> = {};
   for (const key of Object.keys(metadataSchema.shape)) {
     if (key in chunk) {
@@ -344,6 +349,9 @@ export function chunkToLanceRow<TMetadata extends Record<string, unknown>>(
     }
   }
 
+  const serializedMetadata = serializeMetadata(metadata as TMetadata, metadataSchema);
+
+  // Spread metadata fields at top level for efficient filtering
   return {
     vector: chunk.embedding,
     chunkId: chunk.chunkId,
@@ -356,7 +364,8 @@ export function chunkToLanceRow<TMetadata extends Record<string, unknown>>(
     embeddedAt: chunk.embeddedAt.getTime(),
     previousChunkId: chunk.previousChunkId ?? '',
     nextChunkId: chunk.nextChunkId ?? '',
-    metadata: serializeMetadata(metadata as TMetadata, metadataSchema),
+    // Spread serialized metadata fields as top-level columns
+    ...serializedMetadata,
   };
 }
 
@@ -365,7 +374,10 @@ export function chunkToLanceRow<TMetadata extends Record<string, unknown>>(
  *
  * Generic over metadata type. Uses Zod schema for runtime introspection.
  *
- * @param row - LanceDB row with serialized metadata
+ * BREAKING CHANGE: Metadata fields are now extracted from top level instead of
+ * nested `metadata` struct.
+ *
+ * @param row - LanceDB row with metadata fields at top level
  * @param metadataSchema - Zod schema for metadata type
  * @returns Chunk with CoreRAGChunk fields + custom metadata
  */
@@ -392,8 +404,19 @@ export function lanceRowToChunk<TMetadata extends Record<string, unknown>>(
     coreChunk.nextChunkId = row.nextChunkId;
   }
 
+  // Extract serialized metadata from top-level row fields
+  const serializedMetadata: Record<string, string | number> = {};
+  for (const key of Object.keys(metadataSchema.shape)) {
+    if (key in row) {
+      serializedMetadata[key] = row[key] as string | number;
+    }
+  }
+
   // Deserialize metadata
-  const metadata = deserializeMetadata(row.metadata, metadataSchema);
+  const metadata = deserializeMetadata(
+    serializedMetadata as SerializedMetadata<TMetadata>,
+    metadataSchema
+  );
 
   return { ...coreChunk, ...metadata };
 }

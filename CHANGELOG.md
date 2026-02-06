@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.8] - 2026-02-06
+
+### Fixed
+- **RAG Metadata Filtering at Scale**: Fixed metadata filtering returning empty results on production-scale indexes (>1000 chunks)
+  - Root cause: LanceDB struct column access (`metadata['field']`) doesn't scale
+  - Solution: Store metadata as top-level columns with direct access (`` `field` ``)
+  - All metadata fields now stored as top-level LanceDB columns instead of nested struct
+  - Filter builder updated to use direct column access for efficient queries
+  - Added system test validating metadata filtering with flattened schema
+  - Fixes issue reported by manuscript-tools (753 docs, 4,321 chunks)
+
+### Changed
+- **BREAKING CHANGE**: Existing LanceDB indexes must be rebuilt
+  - Metadata storage format changed from nested struct to top-level columns
+  - Run `await ragProvider.clear()` then re-index resources
+  - API remains backward compatible - no code changes required beyond index rebuild
+  - See migration guide in `packages/rag-lancedb/README.md`
+
 ## [0.1.7] - 2026-02-05
 
 ### Added

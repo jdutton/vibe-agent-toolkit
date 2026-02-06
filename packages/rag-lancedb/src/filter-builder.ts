@@ -24,10 +24,13 @@ export function escapeSQLString(value: string): string {
  * Build SQL filter expression for a single metadata field
  *
  * Strategy:
- * - Strings: Exact match with SQL escaping (`metadata.domain = 'security'`)
- * - Numbers: Exact match (`metadata.priority = 1`)
- * - Arrays (stored as CSV): LIKE query for substring match (`metadata.tags LIKE '%auth%'`)
- * - Booleans: Exact match (`metadata.active = true`)
+ * - Strings: Exact match with SQL escaping (`domain = 'security'`)
+ * - Numbers: Exact match (`priority = 1`)
+ * - Arrays (stored as CSV): LIKE query for substring match (`tags LIKE '%auth%'`)
+ * - Booleans: Exact match (`active = true`)
+ *
+ * BREAKING CHANGE: Metadata fields are now stored as top-level columns.
+ * Filters use direct column access instead of struct notation.
  *
  * @param key - Metadata field name
  * @param value - Filter value
@@ -41,9 +44,9 @@ export function buildMetadataFilter(key: string, value: unknown, zodType: ZodTyp
     actualType = zodType.unwrap();
   }
 
-  // Metadata fields are nested under the metadata struct column
-  // LanceDB requires bracket notation for struct field access
-  const fieldPath = `metadata['${key}']`;
+  // Metadata fields are stored as top-level columns for scale-efficient filtering
+  // Use backticks for column name escaping
+  const fieldPath = `\`${key}\``;
 
   // Handle enum fields (enums are stored as strings)
   if (actualType instanceof z.ZodEnum) {

@@ -196,6 +196,94 @@ for (const chunk of result.chunks) {
 }
 ```
 
+## Migration Guide
+
+### Upgrading from v0.1.7 to v0.1.8
+
+**⚠️ BREAKING CHANGE**: Metadata storage format has changed. Existing LanceDB indexes must be rebuilt.
+
+#### What Changed
+
+**v0.1.7 and earlier:**
+- Metadata stored as nested struct: `metadata.field`
+- Filters failed on large indexes (>1000 chunks)
+
+**v0.1.8 and later:**
+- Metadata stored as top-level columns: `field`
+- Filters work efficiently at any scale
+
+#### Migration Steps
+
+**Option 1: Clear and Rebuild (Recommended)**
+
+```typescript
+import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
+
+// 1. Create provider (will open existing index)
+const provider = await LanceDBRAGProvider.create({
+  dbPath: './rag-db',
+  metadataSchema: MyMetadataSchema,  // Your custom schema
+});
+
+// 2. Clear old index
+await provider.clear();
+
+// 3. Re-index all resources with new schema
+const resources = await loadYourResources();
+await provider.indexResources(resources);
+
+console.log('Migration complete!');
+```
+
+**Option 2: Create New Index Path**
+
+```typescript
+// Keep old index as backup
+const provider = await LanceDBRAGProvider.create({
+  dbPath: './rag-db-v0.1.8',  // New path
+  metadataSchema: MyMetadataSchema,
+});
+
+await provider.indexResources(resources);
+
+// After verifying new index works:
+// rm -rf ./rag-db  // Delete old index
+```
+
+#### Verification
+
+After migration, test that filtering works:
+
+```typescript
+const result = await provider.query({
+  text: 'your query',
+  filters: {
+    metadata: {
+      domain: 'security',  // Your custom field
+    },
+  },
+});
+
+console.log(`Found ${result.chunks.length} results`);
+// Should return filtered results (not empty!)
+```
+
+#### API Compatibility
+
+✅ **No code changes required** - The query API remains the same:
+
+```typescript
+// This syntax works in both v0.1.7 and v0.1.8
+const result = await provider.query({
+  text: 'query',
+  filters: {
+    metadata: { domain: 'security' },  // Same API
+  },
+});
+```
+
+The change is **internal only** - metadata is now stored differently in LanceDB for better performance at scale.
+
 ## Architecture
 
 - **Database**: LanceDB (Apache Arrow format)
