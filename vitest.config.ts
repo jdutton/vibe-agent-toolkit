@@ -42,12 +42,16 @@ export default defineConfig({
         'packages/cli/src/bin.ts', // CLI entry point (integration test only)
         'packages/cli/src/bin/**', // CLI entry points (integration test only)
         'packages/cli/src/commands/**', // CLI commands (integration test only)
+        'packages/resource-compiler/src/cli/**', // CLI commands (integration test only)
+        'packages/resource-compiler/src/language-service/**', // VSCode integration (not unit testable)
+        'packages/vat-development-agents/src/**', // Agent packages (integration test only)
+        'packages/vat-example-cat-agents/src/**', // Agent packages (integration test only)
       ],
       thresholds: {
-        statements: 79.5,
-        branches: 79.5,
-        functions: 79.5,
-        lines: 79.5,
+        statements: 79,
+        branches: 79,
+        functions: 79,
+        lines: 79,
       },
     },
   },

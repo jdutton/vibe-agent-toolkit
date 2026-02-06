@@ -212,6 +212,18 @@ export function executeAndParseYaml(
 }
 
 /**
+ * Execute command and parse YAML output (convenience wrapper)
+ * Alternative signature that takes cwd as third parameter
+ */
+export function executeCommandAndParse(
+  binPath: string,
+  args: string[],
+  cwd: string
+): { result: CliResult; parsed: Record<string, unknown> } {
+  return executeAndParseYaml(binPath, args, { cwd });
+}
+
+/**
  * Execute scan and parse result
  */
 export function executeScanAndParse(
@@ -420,6 +432,42 @@ export function setupRagTestSuite(
     },
     afterAll: () => {
       fs.rmSync(suite.tempDir, { recursive: true, force: true });
+    },
+  };
+
+  return suite;
+}
+
+/**
+ * Set up test suite for skills install command tests
+ * Creates temp directories and provides consistent setup/cleanup
+ *
+ * @param testPrefix - Prefix for temp directory name
+ * @returns Suite object with tempDir, projectDir, skillsDir, binPath, and lifecycle methods
+ */
+export function setupInstallTestSuite(testPrefix: string): {
+  tempDir: string;
+  projectDir: string;
+  skillsDir: string;
+  binPath: string;
+  beforeEach: () => void;
+  afterEach: () => void;
+} {
+  const suite = {
+    tempDir: '',
+    projectDir: '',
+    skillsDir: '',
+    binPath: join(process.cwd(), 'packages', 'cli', 'dist', 'bin.js'),
+    beforeEach: () => {
+      suite.tempDir = createTestTempDir(testPrefix);
+      suite.projectDir = join(suite.tempDir, 'project');
+      suite.skillsDir = join(suite.projectDir, '.claude', 'skills');
+      fs.mkdirSync(suite.skillsDir, { recursive: true });
+    },
+    afterEach: () => {
+      if (suite.tempDir) {
+        fs.rmSync(suite.tempDir, { recursive: true, force: true });
+      }
     },
   };
 
