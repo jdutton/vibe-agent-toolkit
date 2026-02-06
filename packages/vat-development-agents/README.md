@@ -46,9 +46,39 @@ Identifies opportunities to improve agent resources following Anthropic's "small
 
 ## Installation
 
+### As NPM Package
+
 ```bash
 npm install @vibe-agent-toolkit/vat-development-agents
 ```
+
+### Installing the Skill
+
+This package includes a distributable Claude Code skill called `vibe-agent-toolkit` that provides guidance on using VAT for agent creation and development.
+
+**Install from npm:**
+```bash
+vat skills install npm:@vibe-agent-toolkit/vat-development-agents
+```
+
+**Install from local directory (development):**
+```bash
+vat skills install ./packages/vat-development-agents
+```
+
+**Verify installation:**
+```bash
+vat skills list --installed
+```
+
+The `vibe-agent-toolkit` skill will be installed to `~/.claude/plugins/vibe-agent-toolkit/` and will appear in Claude Code after restarting or running `/reload-skills`.
+
+**What the skill includes:**
+- VAT overview and use cases
+- Agent creation guide (using agent-generator)
+- CLI workflow documentation
+- Links to agent authoring and orchestration guides
+- Best practices for portable agents
 
 ## Usage
 
