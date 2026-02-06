@@ -59,6 +59,7 @@ function createTestChunkWithCustomMetadata(): CoreRAGChunk & CustomMetadata {
 }
 
 // Create test row factory with custom metadata parameter
+// Metadata fields are spread at top level (flattened schema)
 function createTestRow(metadata: Record<string, unknown>) {
   return {
     chunkId: TEST_CHUNK_ID,
@@ -72,7 +73,7 @@ function createTestRow(metadata: Record<string, unknown>) {
     embeddedAt: TEST_DATE.getTime(),
     previousChunkId: '',
     nextChunkId: '',
-    metadata,
+    ...metadata, // Spread metadata fields at top level
   };
 }
 
@@ -267,11 +268,11 @@ describe('chunkToLanceRow (generic)', () => {
     expect(row.vector).toEqual(TEST_EMBEDDING);
     expect(row.embeddingModel).toBe(TEST_MODEL);
     expect(row.embeddedAt).toBe(TEST_DATE.getTime());
-    // Access metadata via index signature for type safety
-    expect(row.metadata.filePath).toBe(TEST_FILE_PATH);
-    expect((row.metadata as Record<string, unknown>)['tags']).toBe('test,example');
-    expect((row.metadata as Record<string, unknown>)['type']).toBe(TEST_DOCUMENTATION_TYPE);
-    expect((row.metadata as Record<string, unknown>)['title']).toBe(TEST_TITLE);
+    // Metadata fields are now at top level (flattened schema)
+    expect(row.filePath).toBe(TEST_FILE_PATH);
+    expect(row.tags).toBe('test,example');
+    expect(row.type).toBe(TEST_DOCUMENTATION_TYPE);
+    expect(row.title).toBe(TEST_TITLE);
   });
 
   it('should handle optional metadata fields with sentinel values', () => {
@@ -288,25 +289,26 @@ describe('chunkToLanceRow (generic)', () => {
     };
 
     const row = chunkToLanceRow(chunk, TEST_RESOURCE_CONTENT_HASH, DefaultRAGMetadataSchema);
-    const metadata = row.metadata as Record<string, unknown>;
 
-    expect(metadata['tags']).toBe(''); // Empty string sentinel
-    expect(metadata['type']).toBe(''); // Empty string sentinel
-    expect(metadata['title']).toBe(''); // Empty string sentinel
-    expect(metadata['headingLevel']).toBe(-1); // -1 sentinel
-    expect(metadata['startLine']).toBe(-1); // -1 sentinel
-    expect(metadata['endLine']).toBe(-1); // -1 sentinel
+    // Metadata fields are now at top level (flattened schema)
+    expect(row.tags).toBe(''); // Empty string sentinel
+    expect(row.type).toBe(''); // Empty string sentinel
+    expect(row.title).toBe(''); // Empty string sentinel
+    expect(row.headingLevel).toBe(-1); // -1 sentinel
+    expect(row.startLine).toBe(-1); // -1 sentinel
+    expect(row.endLine).toBe(-1); // -1 sentinel
   });
 
   it('should serialize custom metadata types', () => {
     const chunk = createTestChunkWithCustomMetadata();
     const row = chunkToLanceRow(chunk, TEST_RESOURCE_CONTENT_HASH, CustomMetadataSchema);
 
-    expect(row.metadata.author).toBe('Alice');
-    expect(row.metadata.publishedAt).toBe(TEST_DATE.getTime());
-    expect(row.metadata.version).toBe(2);
-    expect(row.metadata.categories).toBe('tech,docs');
-    expect(row.metadata.config).toBe(JSON.stringify({ key: 'value' }));
+    // Metadata fields are now at top level (flattened schema)
+    expect(row.author).toBe('Alice');
+    expect(row.publishedAt).toBe(TEST_DATE.getTime());
+    expect(row.version).toBe(2);
+    expect(row.categories).toBe('tech,docs');
+    expect(row.config).toBe(JSON.stringify({ key: 'value' }));
   });
 });
 
