@@ -38,6 +38,7 @@
   ],
   "author": "Jeff Dutton",
   "license": "MIT",
+  "//dependencies-note": "DO NOT add example agent packages (vat-example-cat-agents, etc.) - users install those separately, not as CLI dependencies. Only vat-development-agents (contains vibe-agent-toolkit skill) should be included.",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
     "@vibe-agent-toolkit/agent-config": "workspace:*",
@@ -49,7 +50,7 @@
     "@vibe-agent-toolkit/rag-lancedb": "workspace:*",
     "@vibe-agent-toolkit/resources": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
-    "@vibe-agent-toolkit/vat-example-cat-agents": "workspace:*",
+    "@vibe-agent-toolkit/vat-development-agents": "workspace:*",
     "adm-zip": "^0.5.16",
     "commander": "^12.1.0",
     "js-yaml": "^4.1.0",
