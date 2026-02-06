@@ -18,12 +18,9 @@ export default defineConfig({
     poolOptions: {
       forks: {
         singleFork: false,
-        // Adaptive parallelism with conservative cap for CI stability
-        // - Dev machines (10+ cores): Uses 4 cores
-        // - CI machines (2-4 cores): Uses all available
-        // - Windows VMs: Won't exceed 4 even if reporting more
-        // - Respects container/cgroup limits (Docker, K8s)
-        maxForks: Math.min(availableParallelism(), 4),
+        // CI: Serial execution for reliability (system tests spawn processes)
+        // Local: Adaptive parallelism for speed (up to 4 cores)
+        maxForks: process.env['CI'] ? 1 : Math.min(availableParallelism(), 4),
       },
     },
   },
