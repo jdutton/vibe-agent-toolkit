@@ -1,5 +1,9 @@
 import { createPureFunctionTestSuite, parseUnwrappedOutput } from '@vibe-agent-toolkit/dev-tools';
-import { HaikuSchema, HaikuValidationResultSchema, haikuValidatorAgent } from '@vibe-agent-toolkit/vat-example-cat-agents';
+import {
+  SimpleValidationInputSchema,
+  SimpleValidationOutputSchema,
+  simpleValidatorAgent,
+} from '@vibe-agent-toolkit/test-agents';
 import { expect } from 'vitest';
 
 import { convertPureFunctionToTool, convertPureFunctionsToTools } from '../src/adapters/pure-function.js';
@@ -9,9 +13,9 @@ createPureFunctionTestSuite({
   runtimeName: 'OpenAI SDK',
   convertPureFunctionToTool,
   convertPureFunctionsToTools,
-  agent: haikuValidatorAgent,
-  inputSchema: HaikuSchema,
-  outputSchema: HaikuValidationResultSchema,
+  agent: simpleValidatorAgent,
+  inputSchema: SimpleValidationInputSchema,
+  outputSchema: SimpleValidationOutputSchema,
   getToolFromResult: (result) => result.tool,
   executeFunction: async (result, input) => {
     return await result.execute(input);

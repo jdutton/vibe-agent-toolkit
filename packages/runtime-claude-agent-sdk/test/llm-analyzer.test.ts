@@ -1,9 +1,9 @@
 import { createLLMAnalyzerTestSuite } from '@vibe-agent-toolkit/dev-tools';
 import {
-  NameGeneratorInputSchema,
-  NameSuggestionSchema,
-  nameGeneratorAgent,
-} from '@vibe-agent-toolkit/vat-example-cat-agents';
+  SimpleNameInputSchema,
+  SimpleNameOutputSchema,
+  simpleNameGeneratorAgent,
+} from '@vibe-agent-toolkit/test-agents';
 
 import { convertLLMAnalyzerToTool, convertLLMAnalyzersToTools } from '../src/adapters/llm-analyzer.js';
 
@@ -22,9 +22,9 @@ createLLMAnalyzerTestSuite({
     const { server, metadata } = convertLLMAnalyzersToTools(configs, llmConfig);
     return createBatchToolExecutors(server, Object.keys(metadata.tools));
   },
-  agent: nameGeneratorAgent,
-  inputSchema: NameGeneratorInputSchema,
-  outputSchema: NameSuggestionSchema,
+  agent: simpleNameGeneratorAgent,
+  inputSchema: SimpleNameInputSchema,
+  outputSchema: SimpleNameOutputSchema,
   llmConfig: {
     apiKey: 'test-key',
     model: 'claude-sonnet-4-5',

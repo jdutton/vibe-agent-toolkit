@@ -1,9 +1,9 @@
 import { createLLMAnalyzerTestSuite } from '@vibe-agent-toolkit/dev-tools';
 import {
-  NameGeneratorInputSchema,
-  NameSuggestionSchema,
-  nameGeneratorAgent,
-} from '@vibe-agent-toolkit/vat-example-cat-agents';
+  SimpleNameInputSchema,
+  SimpleNameOutputSchema,
+  simpleNameGeneratorAgent,
+} from '@vibe-agent-toolkit/test-agents';
 import OpenAI from 'openai';
 
 import { convertLLMAnalyzerToFunction, convertLLMAnalyzersToFunctions } from '../src/adapters/llm-analyzer.js';
@@ -13,9 +13,9 @@ createLLMAnalyzerTestSuite({
   runtimeName: 'OpenAI SDK',
   convertLLMAnalyzerToFunction,
   convertLLMAnalyzersToFunctions,
-  agent: nameGeneratorAgent,
-  inputSchema: NameGeneratorInputSchema,
-  outputSchema: NameSuggestionSchema,
+  agent: simpleNameGeneratorAgent,
+  inputSchema: SimpleNameInputSchema,
+  outputSchema: SimpleNameOutputSchema,
   llmConfig: {
     client: new OpenAI({ apiKey: 'test-key' }),
     model: 'gpt-4o-mini',

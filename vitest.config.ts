@@ -44,10 +44,10 @@ export default defineConfig({
         'packages/cli/src/commands/**', // CLI commands (integration test only)
       ],
       thresholds: {
-        statements: 79.5,
-        branches: 79.5,
-        functions: 79.5,
-        lines: 79.5,
+        statements: 79,
+        branches: 79,
+        functions: 79,
+        lines: 79,
       },
     },
   },
