@@ -9,14 +9,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.9] - 2026-02-07
 
+- **Resource Compiler** (`@vibe-agent-toolkit/resource-compiler`) - Compile markdown to TypeScript with full IDE support
+  - Direct `.md` imports in TypeScript with type safety
+  - H2 headings become typed fragment properties for granular access
+  - Frontmatter parsing to typed objects
+  - IDE autocomplete, go-to-definition, and hover tooltips
+  - `vat-compile-resources` CLI: compile markdown to JS/TS modules
+  - TypeScript Language Service Plugin for seamless `.md` imports
+  - Build integration: copy generated resources to dist during build
+  - Dog-fooded in vat-example-cat-agents package
+
 - **VAT Distribution Standard** - Package-based skill distribution with build and install infrastructure
   - `vat skills build` command: Builds skills from source into `dist/skills/` during package build
   - `vat skills install` command: Smart installation from npm packages, local directories, or zip files
   - Package.json `vat` metadata convention for declaring skills, agents, pure functions, and runtimes
+  - Automatic skill installation via npm postinstall hooks
   - Two distributable skills:
-    - `vat-cat-agents`: Orchestration guide for 8 example cat agents
-    - `vibe-agent-toolkit`: User adoption guide for VAT CLI and agent creation
+    - `vibe-agent-toolkit`: User adoption guide for VAT CLI and agent creation (from vat-development-agents)
+    - `vat-example-cat-agents`: Orchestration guide for 8 example cat agents (from vat-example-cat-agents)
   - See [Distributing VAT Skills Guide](./docs/guides/distributing-vat-skills.md) for usage
+
+- **Audit Misconfiguration Detection** - `vat audit` now detects misconfigured standalone skills
+  - Identifies standalone SKILL.md files in ~/.claude/plugins/ that won't be recognized by Claude Code
+  - Error code: SKILL_MISCONFIGURED_LOCATION with actionable fix suggestions
+  - Helps users correct common installation mistakes
 
 - `--user` flag for `vat skills validate` to validate installed user skills
 - Shared utilities: claude-paths, skill-discovery, user-context-scanner, config-loader
@@ -24,6 +40,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - **BREAKING**: `vat skills list` now defaults to project skills (use `--user` for installed skills)
+- **Plugin Schema Updated to Official Claude Code Spec** - Updated ClaudePluginSchema to match official documentation
+  - Made `description` and `version` optional (only `name` required if manifest exists)
+  - Added component path fields: `commands`, `skills`, `agents`, `hooks`, `mcpServers`, `outputStyles`, `lspServers`
+  - Renamed types for clarity: `PluginSchema` → `ClaudePluginSchema`, `Plugin` → `ClaudePlugin`
+  - Updated plugin-validator to handle optional version field with exactOptionalPropertyTypes
+  - Tests updated to validate actual errors instead of missing optional fields
+- **CLI Dependency Cleanup** - Removed example agent packages from automatic installation
+  - Removed `@vibe-agent-toolkit/vat-example-cat-agents` from CLI dependencies
+  - Added `@vibe-agent-toolkit/vat-development-agents` to CLI dependencies
+  - Added comment warning against adding example packages to CLI dependencies
+  - Example agents now opt-in via separate `npm install -g @vibe-agent-toolkit/vat-example-cat-agents`
+- **Skill Naming Consistency** - Skill names now match package names
+  - `vat-example-cat-agents` skill renamed from `cat-agents-skill` for consistency
 - Refactored `vat skills validate` to use shared utilities and respect resource config boundaries
 - Refactored `vat skills list` to use shared utilities
 
@@ -62,6 +91,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Internal
 - Deleted obsolete skill-finder.ts (replaced by skill-discovery.ts)
+- Removed registry tracking from skills install command (architectural simplification)
 - Preserved audit.ts custom scanning logic (architectural decision for independence)
 
 ## [0.1.8] - 2026-02-06

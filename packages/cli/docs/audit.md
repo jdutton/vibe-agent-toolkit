@@ -224,6 +224,7 @@ Warnings indicate potential issues but don't prevent usage:
 | `SKILL_NAME_XML_TAGS` | error | Name contains XML-like tags | Remove XML tags from name |
 | `SKILL_DESCRIPTION_XML_TAGS` | error | Description contains XML-like tags | Remove XML tags from description |
 | `SKILL_DESCRIPTION_EMPTY` | error | Description is empty or whitespace | Provide meaningful description |
+| `SKILL_MISCONFIGURED_LOCATION` | error | Standalone skill in `~/.claude/plugins/` won't be recognized | Move to `~/.claude/skills/` for standalone skills, or add `.claude-plugin/plugin.json` for a proper plugin |
 | `PATH_STYLE_WINDOWS` | error | Windows-style backslashes in paths | Use forward slashes (/) instead |
 | `LINK_INTEGRITY_BROKEN` | error | Link to non-existent file | Fix or remove broken link |
 

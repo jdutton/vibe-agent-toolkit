@@ -46,7 +46,8 @@
     "build:code": "bun run generate:resources && tspc && bun scripts/post-build.ts",
     "build": "bun run build:code && vat skills build",
     "test:pipeline": "bun run build && bun run dist/src/test-pipeline.js",
-    "validate": "bun run agents/agent-generator/validate-agent.ts"
+    "validate": "bun run agents/agent-generator/validate-agent.ts",
+    "postinstall": "vat skills install --npm-postinstall || exit 0"
   },
   "dependencies": {
     "@vibe-agent-toolkit/agent-schema": "workspace:*",

@@ -32,7 +32,8 @@
     "typecheck": "tsc --noEmit",
     "demo:photos": "bun examples/photo-analysis-demo.ts",
     "demo:conversation": "bun examples/conversational-demo.ts",
-    "demo:resources": "bun run build && bun examples/resource-demo.ts"
+    "demo:resources": "bun run build && bun examples/resource-demo.ts",
+    "postinstall": "vat skills install --npm-postinstall || exit 0"
   },
   "dependencies": {
     "@vibe-agent-toolkit/agent-runtime": "workspace:*",
@@ -64,9 +65,9 @@
     "type": "agent-bundle",
     "skills": [
       {
-        "name": "vat-cat-agents",
+        "name": "vat-example-cat-agents",
         "source": "./resources/skills/SKILL.md",
-        "path": "./dist/skills/vat-cat-agents"
+        "path": "./dist/skills/vat-example-cat-agents"
       }
     ]
   },
