@@ -1,5 +1,5 @@
 import type { OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { andThen, mapResult, match, unwrap, withRetry, withTiming } from '../src/result-helpers.js';
 
@@ -152,6 +152,15 @@ describe('unwrap', () => {
 });
 
 describe('withRetry', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
   it('should succeed without retries', async () => {
     const agentFn = createSuccessAgent('success');
     const output = await withRetry(agentFn, 3);
@@ -165,7 +174,11 @@ describe('withRetry', () => {
 
   it('should retry on retryable errors', async () => {
     const { fn, attempts } = createRetryAgent(3, ERROR_LLM_TIMEOUT, 'success after retry');
-    const output = await withRetry(fn, 5);
+    const retryPromise = withRetry(fn, 5);
+
+    // Fast-forward through retry delays (1000ms each for LLM_TIMEOUT)
+    await vi.runAllTimersAsync();
+    const output = await retryPromise;
 
     expect(attempts.value).toBe(3);
     expect(output.result.status).toBe('success');
@@ -209,7 +222,9 @@ describe('withRetry', () => {
       };
     };
 
-    const output = await withRetry(agentFn, 5);
+    const retryPromise = withRetry(agentFn, 5);
+    await vi.runAllTimersAsync();
+    const output = await retryPromise;
 
     expect(output.result.execution).toMatchObject({
       retryCount: 2,
@@ -221,7 +236,9 @@ describe('withRetry', () => {
 
   it('should cap retries at max attempts', async () => {
     const { fn, attempts } = createRetryAgent(999, ERROR_LLM_TIMEOUT); // Never succeeds
-    const output = await withRetry(fn, 2);
+    const retryPromise = withRetry(fn, 2);
+    await vi.runAllTimersAsync();
+    const output = await retryPromise;
 
     expect(attempts.value).toBe(2);
     expect(output.result.status).toBe('error');
@@ -243,20 +260,22 @@ describe('withRetry', () => {
     });
   });
 
-  it('should retry on event-timeout errors', async () => {
-    const { fn, attempts } = createRetryAgent(2, 'event-timeout');
-    const output = await withRetry(fn, 3);
+  async function testRetryOnError(errorType: string) {
+    const { fn, attempts } = createRetryAgent(2, errorType);
+    const retryPromise = withRetry(fn, 3);
+    await vi.runAllTimersAsync();
+    const output = await retryPromise;
 
     expect(attempts.value).toBe(2);
     expect(output.result.execution?.retryCount).toBe(1);
+  }
+
+  it('should retry on event-timeout errors', async () => {
+    await testRetryOnError('event-timeout');
   });
 
   it('should retry on event-unavailable errors', async () => {
-    const { fn, attempts } = createRetryAgent(2, 'event-unavailable');
-    const output = await withRetry(fn, 3);
-
-    expect(attempts.value).toBe(2);
-    expect(output.result.execution?.retryCount).toBe(1);
+    await testRetryOnError('event-unavailable');
   });
 });
 
