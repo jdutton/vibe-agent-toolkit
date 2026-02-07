@@ -355,6 +355,10 @@
         "rimraf": "^6.0.1",
         "typescript": "^5.9.3",
         "vitest": "^3.2.4",
+        "zod": "^3.25.0",
+      },
+      "peerDependencies": {
+        "zod": "^3.25.0 || ^4.0.0",
       },
     },
     "packages/vat-development-agents": {

@@ -15,7 +15,7 @@ import {
 
 describe('Filter Builder', () => {
   const TEST_DOMAIN = 'security';
-  const EXPECTED_DOMAIN_FILTER = "`domain` = 'security'";
+  const EXPECTED_DOMAIN_FILTER = "domain = 'security'";
 
   describe('buildMetadataFilter', () => {
     it('should build string filter with exact match', () => {
@@ -27,31 +27,31 @@ describe('Filter Builder', () => {
     it('should escape single quotes in string values', () => {
       const zodType = z.string();
       const result = buildMetadataFilter('title', "Bob's Document", zodType);
-      expect(result).toBe("`title` = 'Bob''s Document'");
+      expect(result).toBe("title = 'Bob''s Document'");
     });
 
     it('should build number filter with exact match', () => {
       const zodType = z.number();
       const result = buildMetadataFilter('priority', 1, zodType);
-      expect(result).toBe("`priority` = 1");
+      expect(result).toBe("priority = 1");
     });
 
     it('should build boolean filter with exact match', () => {
       const zodType = z.boolean();
       const result = buildMetadataFilter('active', true, zodType);
-      expect(result).toBe("`active` = 1");
+      expect(result).toBe("active = 1");
     });
 
     it('should build array filter with LIKE query', () => {
       const zodType = z.array(z.string());
       const result = buildMetadataFilter('tags', 'auth', zodType);
-      expect(result).toBe("`tags` LIKE '%auth%'");
+      expect(result).toBe("tags LIKE '%auth%'");
     });
 
     it('should escape single quotes in array filter values', () => {
       const zodType = z.array(z.string());
       const result = buildMetadataFilter('tags', "user's-tag", zodType);
-      expect(result).toBe("`tags` LIKE '%user''s-tag%'");
+      expect(result).toBe("tags LIKE '%user''s-tag%'");
     });
 
     it('should unwrap optional types', () => {
@@ -63,19 +63,25 @@ describe('Filter Builder', () => {
     it('should handle optional number types', () => {
       const zodType = z.number().optional();
       const result = buildMetadataFilter('priority', 2, zodType);
-      expect(result).toBe("`priority` = 2");
+      expect(result).toBe("priority = 2");
     });
 
     it('should handle optional boolean types', () => {
       const zodType = z.boolean().optional();
       const result = buildMetadataFilter('archived', false, zodType);
-      expect(result).toBe("`archived` = 0");
+      expect(result).toBe("archived = 0");
     });
 
     it('should handle optional array types', () => {
       const zodType = z.array(z.string()).optional();
       const result = buildMetadataFilter('keywords', 'security', zodType);
-      expect(result).toBe("`keywords` LIKE '%security%'");
+      expect(result).toBe("keywords LIKE '%security%'");
+    });
+
+    it('should convert camelCase keys to lowercase', () => {
+      const zodType = z.string();
+      const result = buildMetadataFilter('contentType', 'concepts', zodType);
+      expect(result).toBe("contenttype = 'concepts'");
     });
   });
 
@@ -91,21 +97,21 @@ describe('Filter Builder', () => {
       const schema = z.object({ priority: z.number() });
       const filters = { priority: 1 };
       const result = buildMetadataWhereClause(filters, schema);
-      expect(result).toBe("`priority` = 1");
+      expect(result).toBe("priority = 1");
     });
 
     it('should build clause for single boolean field', () => {
       const schema = z.object({ active: z.boolean() });
       const filters = { active: true };
       const result = buildMetadataWhereClause(filters, schema);
-      expect(result).toBe("`active` = 1");
+      expect(result).toBe("active = 1");
     });
 
     it('should build clause for single array field', () => {
       const schema = z.object({ tags: z.array(z.string()) });
       const filters = { tags: 'auth' };
       const result = buildMetadataWhereClause(filters, schema);
-      expect(result).toBe("`tags` LIKE '%auth%'");
+      expect(result).toBe("tags LIKE '%auth%'");
     });
 
     it('should combine multiple filters with AND', () => {
@@ -115,7 +121,7 @@ describe('Filter Builder', () => {
       });
       const filters = { domain: TEST_DOMAIN, priority: 1 };
       const result = buildMetadataWhereClause(filters, schema);
-      expect(result).toBe("`domain` = 'security' AND `priority` = 1");
+      expect(result).toBe("domain = 'security' AND priority = 1");
     });
 
     it('should handle all field types together', () => {
@@ -133,7 +139,7 @@ describe('Filter Builder', () => {
       };
       const result = buildMetadataWhereClause(filters, schema);
       expect(result).toBe(
-        "`domain` = 'security' AND `priority` = 1 AND `active` = 1 AND `tags` LIKE '%auth%'"
+        "domain = 'security' AND priority = 1 AND active = 1 AND tags LIKE '%auth%'"
       );
     });
 
@@ -174,7 +180,17 @@ describe('Filter Builder', () => {
       });
       const filters = { domain: TEST_DOMAIN, priority: 1 };
       const result = buildMetadataWhereClause(filters, schema);
-      expect(result).toBe("`domain` = 'security' AND `priority` = 1");
+      expect(result).toBe("domain = 'security' AND priority = 1");
+    });
+
+    it('should convert camelCase to lowercase in combined filters', () => {
+      const schema = z.object({
+        contentType: z.string(),
+        isActive: z.boolean(),
+      });
+      const filters = { contentType: 'concepts', isActive: true };
+      const result = buildMetadataWhereClause(filters, schema);
+      expect(result).toBe("contenttype = 'concepts' AND isactive = 1");
     });
   });
 
@@ -187,13 +203,13 @@ describe('Filter Builder', () => {
     it('should build clause for resourceId only', () => {
       const filters = { resourceId: 'doc-123' };
       const result = buildWhereClause(filters, schema);
-      expect(result).toBe("`resourceId` IN ('doc-123')");
+      expect(result).toBe("resourceid IN ('doc-123')");
     });
 
     it('should build clause for multiple resourceIds', () => {
       const filters = { resourceId: ['doc-123', 'doc-456'] };
       const result = buildWhereClause(filters, schema);
-      expect(result).toBe("`resourceId` IN ('doc-123', 'doc-456')");
+      expect(result).toBe("resourceid IN ('doc-123', 'doc-456')");
     });
 
     it('should handle empty resourceId array', () => {
@@ -205,7 +221,7 @@ describe('Filter Builder', () => {
     it('should escape single quotes in resourceIds', () => {
       const filters = { resourceId: "doc's-file" };
       const result = buildWhereClause(filters, schema);
-      expect(result).toBe("`resourceId` IN ('doc''s-file')");
+      expect(result).toBe("resourceid IN ('doc''s-file')");
     });
 
     it('should build clause for metadata only', () => {
@@ -221,7 +237,7 @@ describe('Filter Builder', () => {
       };
       const result = buildWhereClause(filters, schema);
       expect(result).toBe(
-        "`resourceId` IN ('doc-123') AND `domain` = 'security' AND `priority` = 1"
+        "resourceid IN ('doc-123') AND domain = 'security' AND priority = 1"
       );
     });
 
@@ -231,7 +247,7 @@ describe('Filter Builder', () => {
         metadata: { domain: TEST_DOMAIN },
       };
       const result = buildWhereClause(filters, schema);
-      expect(result).toBe("`resourceId` IN ('doc-123', 'doc-456') AND `domain` = 'security'");
+      expect(result).toBe("resourceid IN ('doc-123', 'doc-456') AND domain = 'security'");
     });
 
     it('should return null for undefined filters', () => {
@@ -254,7 +270,7 @@ describe('Filter Builder', () => {
     it('should handle resourceId with empty metadata', () => {
       const filters = { resourceId: 'doc-123', metadata: {} };
       const result = buildWhereClause(filters, schema);
-      expect(result).toBe("`resourceId` IN ('doc-123')");
+      expect(result).toBe("resourceid IN ('doc-123')");
     });
   });
 
@@ -264,19 +280,19 @@ describe('Filter Builder', () => {
     it('should escape malicious string with single quotes', () => {
       const filters = { metadata: { notes: "'; DROP TABLE users; --" } };
       const result = buildWhereClause(filters, schema);
-      expect(result).toBe("`notes` = '''; DROP TABLE users; --'");
+      expect(result).toBe("notes = '''; DROP TABLE users; --'");
     });
 
     it('should escape resourceId with injection attempt', () => {
       const filters = { resourceId: "doc-123' OR '1'='1" };
       const result = buildWhereClause(filters, schema);
-      expect(result).toBe("`resourceId` IN ('doc-123'' OR ''1''=''1')");
+      expect(result).toBe("resourceid IN ('doc-123'' OR ''1''=''1')");
     });
 
     it('should handle multiple quotes in metadata', () => {
       const filters = { metadata: { notes: "It's a ''trap''" } };
       const result = buildWhereClause(filters, schema);
-      expect(result).toBe("`notes` = 'It''s a ''''trap'''''");
+      expect(result).toBe("notes = 'It''s a ''''trap'''''");
     });
   });
 });

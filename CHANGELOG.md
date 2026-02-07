@@ -7,25 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-- **RAG Similarity Scoring**: Vector search results now include distance metrics and normalized similarity scores
-  - Chunks include `_distance` (L2 distance from query) and `score` (0-1 normalized, higher is better)
-  - Enables confidence-based filtering and result ranking validation
-  - Computed automatically during query without performance impact
-
-- **RAG Progress Reporting**: Real-time progress tracking for index building operations
-  - New `ProgressCallback` interface with elapsed time and estimated remaining time
-  - Throttled updates (recommended 2s interval) to avoid console spam
-  - Provides live statistics: resources indexed/skipped, chunks created
-  - Enables progress bars and status displays for long-running operations
+## [0.1.9] - 2026-02-07
 
 ### Fixed
-- **RAG Line Number Tracking**: Chunks now preserve exact line ranges from source documents
-  - Previously all chunks from the same section had identical line numbers
-  - Fixed off-by-one error in line position calculation (1-based to 0-based conversion)
-  - Properly flattens nested heading hierarchy during section extraction
-  - Handles large paragraphs by splitting into line-level chunks
-  - Enables accurate IDE navigation and source citations
+- **RAG Metadata Filtering**: Now works correctly regardless of which Zod version (v3 or v4) you have installed
+  - Previously: Metadata filters returned 0 results if your Zod version differed from the library's
+  - Now: Automatically detects and works with both Zod v3.25.0+ and v4.0.0+
+  - No code changes required - filtering just works
+
+### Changed
+- **BREAKING CHANGE**: RAG database column names are now lowercase (SQL standard)
+  - Existing LanceDB indexes must be rebuilt - run `await provider.clear()` then re-index
+  - Your code doesn't change - still use camelCase in queries: `{ metadata: { contentType: 'docs' } }`
+  - Why: Prevents case-sensitivity issues, no quotes needed in queries, follows SQL conventions
+  - See migration guide: `packages/rag-lancedb/README.md#upgrading-from-v018-to-v019`
+
+### Added
+- **RAG Similarity Scores**: Search results now include confidence scores (0-1, higher is better)
+  - Filter results by confidence threshold
+  - Compare result relevance
+  - Build smarter retrieval logic
+
+- **RAG Progress Tracking**: See real-time progress when building large indexes
+  - Shows resources indexed, chunks created, time elapsed/remaining
+  - Add progress bars to your CLI tools
+  - Monitor long-running index builds
+
+- **Accurate Line Numbers**: Chunks now track exact line ranges in source files
+  - Jump directly to source in your IDE
+  - Show precise code citations
+  - Build better documentation tools
 
 ## [0.1.8] - 2026-02-06
 

@@ -2,22 +2,25 @@
  * LanceDB schema mapping
  *
  * Converts between RAGChunk and LanceDB row format with generic metadata support.
+ * Uses duck typing for Zod v3/v4 compatibility.
  */
 
 import type { CoreRAGChunk, DefaultRAGMetadata, RAGChunk } from '@vibe-agent-toolkit/rag';
 import { DefaultRAGMetadataSchema } from '@vibe-agent-toolkit/rag';
-import { z, type ZodObject, type ZodRawShape } from 'zod';
+import { getZodTypeName, unwrapZodType, ZodTypeNames } from '@vibe-agent-toolkit/utils';
+import type { ZodObject, ZodRawShape, ZodTypeAny } from 'zod';
 
 /**
- * Helper type: Serializes metadata to Arrow-compatible types
+ * Helper type: Serializes metadata to Arrow-compatible types with lowercase keys
  *
+ * - Keys → lowercase (SQL convention)
  * - Array<T> → string (comma-separated)
  * - Date → number (Unix timestamp)
  * - Object → string (JSON)
  * - Optional fields → sentinel values (empty string, -1)
  */
 export type SerializedMetadata<T extends Record<string, unknown>> = {
-  [K in keyof T]: T[K] extends Array<infer _U>
+  [K in keyof T as Lowercase<string & K>]: T[K] extends Array<infer _U>
     ? string
     : T[K] extends Date
       ? number
@@ -36,33 +39,34 @@ export type SerializedMetadata<T extends Record<string, unknown>> = {
  * LanceDB stores data in Apache Arrow format with specific type requirements.
  * Custom metadata fields are stored as top-level columns for efficient filtering.
  *
- * BREAKING CHANGE: Metadata is now flattened to top-level columns instead of
+ * BREAKING CHANGE v0.2.0: All column names are now lowercase (SQL convention).
+ * BREAKING CHANGE v0.1.8: Metadata is now flattened to top-level columns instead of
  * nested under a `metadata` struct. This enables scale-efficient filtering on
  * indexes with 1000+ chunks.
  *
- * @template TMetadata - Custom metadata type (fields stored as top-level columns)
+ * @template TMetadata - Custom metadata type (fields stored as top-level columns with lowercase names)
  */
 export type LanceDBRow<TMetadata extends Record<string, unknown> = DefaultRAGMetadata> = {
   // Required by LanceDB for vector search
   vector: number[];
 
-  // CoreRAGChunk fields
-  chunkId: string;
-  resourceId: string;
+  // CoreRAGChunk fields (lowercase column names)
+  chunkid: string;
+  resourceid: string;
   content: string;
-  contentHash: string;
-  tokenCount: number;
-  embeddingModel: string;
-  embeddedAt: number; // Unix timestamp
-  previousChunkId: string; // Empty string sentinel
-  nextChunkId: string; // Empty string sentinel
+  contenthash: string;
+  tokencount: number;
+  embeddingmodel: string;
+  embeddedat: number; // Unix timestamp
+  previouschunkid: string; // Empty string sentinel
+  nextchunkid: string; // Empty string sentinel
 
   // Resource content hash (for change detection)
-  resourceContentHash: string;
+  resourcecontenthash: string;
 
   // Vector search result fields (optional, only present in query results)
   _distance?: number; // Distance metric from LanceDB vector search
-} & SerializedMetadata<TMetadata>; // Metadata fields spread at top level
+} & SerializedMetadata<TMetadata>; // Metadata fields spread at top level (lowercase)
 
 /**
  * Get sentinel value for optional field based on inner type
@@ -71,9 +75,10 @@ export type LanceDBRow<TMetadata extends Record<string, unknown> = DefaultRAGMet
  * Different Zod types require different sentinel values.
  */
 // eslint-disable-next-line sonarjs/function-return-type -- Arrow serialization requires mixed return type
-function getSentinelForType(innerType: z.ZodTypeAny): string | number {
-  const isStringOrArray = innerType instanceof z.ZodString || innerType instanceof z.ZodArray;
-  const isNumberOrDate = innerType instanceof z.ZodNumber || innerType instanceof z.ZodDate;
+function getSentinelForType(innerType: ZodTypeAny): string | number {
+  const typeName = getZodTypeName(innerType);
+  const isStringOrArray = typeName === ZodTypeNames.STRING || typeName === ZodTypeNames.ARRAY;
+  const isNumberOrDate = typeName === ZodTypeNames.NUMBER || typeName === ZodTypeNames.DATE;
 
   if (isStringOrArray) return '';
   if (isNumberOrDate) return -1;
@@ -136,23 +141,24 @@ function serializeBoolean(value: unknown): number {
  * Arrays, strings, objects → string; numbers, dates, booleans → number.
  */
 // eslint-disable-next-line sonarjs/function-return-type -- Arrow serialization requires mixed return type
-function serializeMetadataValue(value: unknown, zodType: z.ZodTypeAny): string | number {
+function serializeMetadataValue(value: unknown, zodType: ZodTypeAny): string | number {
   // Handle optional types by unwrapping
-  if (zodType instanceof z.ZodOptional) {
-    if (value === undefined) {
-      return getSentinelForType(zodType.unwrap());
-    }
-    return serializeMetadataValue(value, zodType.unwrap());
+  const actualType = unwrapZodType(zodType);
+  const typeName = getZodTypeName(actualType);
+
+  // If value is undefined and type is optional, return sentinel
+  if (value === undefined && typeName !== getZodTypeName(zodType)) {
+    return getSentinelForType(actualType as ZodTypeAny);
   }
 
   // Type-specific serialization
-  if (zodType instanceof z.ZodEnum) return serializeString(value); // Enums stored as strings
-  if (zodType instanceof z.ZodArray) return serializeArray(value);
-  if (zodType instanceof z.ZodDate) return serializeDate(value);
-  if (zodType instanceof z.ZodObject) return JSON.stringify(value);
-  if (zodType instanceof z.ZodString) return serializeString(value);
-  if (zodType instanceof z.ZodNumber) return serializeNumber(value);
-  if (zodType instanceof z.ZodBoolean) return serializeBoolean(value);
+  if (typeName === ZodTypeNames.ENUM || typeName === ZodTypeNames.NATIVENUM) return serializeString(value);
+  if (typeName === ZodTypeNames.ARRAY) return serializeArray(value);
+  if (typeName === ZodTypeNames.DATE) return serializeDate(value);
+  if (typeName === ZodTypeNames.OBJECT) return JSON.stringify(value);
+  if (typeName === ZodTypeNames.STRING) return serializeString(value);
+  if (typeName === ZodTypeNames.NUMBER || typeName === ZodTypeNames.BIGINT) return serializeNumber(value);
+  if (typeName === ZodTypeNames.BOOLEAN) return serializeBoolean(value);
 
   // Fallback: JSON stringify
   return JSON.stringify(value);
@@ -161,11 +167,12 @@ function serializeMetadataValue(value: unknown, zodType: z.ZodTypeAny): string |
 /**
  * Check if value is a sentinel for optional field
  */
-function isSentinel(value: string | number, innerType: z.ZodTypeAny, isOptional: boolean): boolean {
+function isSentinel(value: string | number, innerType: ZodTypeAny, isOptional: boolean): boolean {
   if (!isOptional) return false;
 
-  const isStringOrArray = innerType instanceof z.ZodString || innerType instanceof z.ZodArray;
-  const isNumberOrDate = innerType instanceof z.ZodNumber || innerType instanceof z.ZodDate;
+  const typeName = getZodTypeName(innerType);
+  const isStringOrArray = typeName === ZodTypeNames.STRING || typeName === ZodTypeNames.ARRAY;
+  const isNumberOrDate = typeName === ZodTypeNames.NUMBER || typeName === ZodTypeNames.DATE;
   const isStringSentinel = isStringOrArray && value === '';
   const isNumberSentinel = isNumberOrDate && value === -1;
 
@@ -261,24 +268,29 @@ function deserializeFallback(value: string | number): unknown {
  *
  * Runtime introspection of Zod schema to determine deserialization strategy.
  */
-function deserializeMetadataValue(value: string | number, zodType: z.ZodTypeAny): unknown {
+function deserializeMetadataValue(value: string | number, zodType: ZodTypeAny): unknown {
   // Handle optional types by unwrapping
-  const isOptional = zodType instanceof z.ZodOptional;
-  const innerType = isOptional ? zodType.unwrap() : zodType;
+  const actualType = unwrapZodType(zodType);
+  const typeName = getZodTypeName(actualType);
+  const isOptional = getZodTypeName(zodType) === ZodTypeNames.OPTIONAL;
 
   // Check for sentinel values
-  if (isSentinel(value, innerType, isOptional)) {
+  if (isSentinel(value, actualType as ZodTypeAny, isOptional)) {
     return undefined;
   }
 
   // Type-specific deserialization
-  if (innerType instanceof z.ZodEnum) return deserializeString(value, isOptional); // Enums stored as strings
-  if (innerType instanceof z.ZodArray) return deserializeArray(value, isOptional);
-  if (innerType instanceof z.ZodDate) return deserializeDate(value, isOptional);
-  if (innerType instanceof z.ZodObject) return deserializeObject(value, isOptional);
-  if (innerType instanceof z.ZodString) return deserializeString(value, isOptional);
-  if (innerType instanceof z.ZodNumber) return deserializeNumber(value, isOptional);
-  if (innerType instanceof z.ZodBoolean) return deserializeBoolean(value);
+  if (typeName === ZodTypeNames.ENUM || typeName === ZodTypeNames.NATIVENUM) {
+    return deserializeString(value, isOptional);
+  }
+  if (typeName === ZodTypeNames.ARRAY) return deserializeArray(value, isOptional);
+  if (typeName === ZodTypeNames.DATE) return deserializeDate(value, isOptional);
+  if (typeName === ZodTypeNames.OBJECT) return deserializeObject(value, isOptional);
+  if (typeName === ZodTypeNames.STRING) return deserializeString(value, isOptional);
+  if (typeName === ZodTypeNames.NUMBER || typeName === ZodTypeNames.BIGINT) {
+    return deserializeNumber(value, isOptional);
+  }
+  if (typeName === ZodTypeNames.BOOLEAN) return deserializeBoolean(value);
 
   // Fallback
   return deserializeFallback(value);
@@ -297,7 +309,8 @@ export function serializeMetadata<TMetadata extends Record<string, unknown>>(
 
   for (const [key, zodType] of Object.entries(schema.shape)) {
     const value = metadata[key];
-    serialized[key] = serializeMetadataValue(value, zodType);
+    // Lowercase the key for database storage (SQL convention)
+    serialized[key.toLowerCase()] = serializeMetadataValue(value, zodType);
   }
 
   return serialized as SerializedMetadata<TMetadata>;
@@ -315,10 +328,12 @@ export function deserializeMetadata<TMetadata extends Record<string, unknown>>(
   const metadata: Record<string, unknown> = {};
 
   for (const [key, zodType] of Object.entries(schema.shape)) {
-    const value = serialized[key as keyof SerializedMetadata<TMetadata>];
+    // Lookup using lowercase key (database column name)
+    const value = serialized[key.toLowerCase() as keyof SerializedMetadata<TMetadata>];
     // Type narrowing: value is always string | number from SerializedMetadata
     const deserialized = deserializeMetadataValue(value as string | number, zodType);
     if (deserialized !== undefined) {
+      // Return with original case preserved (camelCase)
       metadata[key] = deserialized;
     }
   }
@@ -355,19 +370,20 @@ export function chunkToLanceRow<TMetadata extends Record<string, unknown>>(
   const serializedMetadata = serializeMetadata(metadata as TMetadata, metadataSchema);
 
   // Spread metadata fields at top level for efficient filtering
+  // Use lowercase for all column names (SQL convention)
   return {
     vector: chunk.embedding,
-    chunkId: chunk.chunkId,
-    resourceId: chunk.resourceId,
+    chunkid: chunk.chunkId,
+    resourceid: chunk.resourceId,
     content: chunk.content,
-    contentHash: chunk.contentHash,
-    resourceContentHash,
-    tokenCount: chunk.tokenCount,
-    embeddingModel: chunk.embeddingModel,
-    embeddedAt: chunk.embeddedAt.getTime(),
-    previousChunkId: chunk.previousChunkId ?? '',
-    nextChunkId: chunk.nextChunkId ?? '',
-    // Spread serialized metadata fields as top-level columns
+    contenthash: chunk.contentHash,
+    resourcecontenthash: resourceContentHash,
+    tokencount: chunk.tokenCount,
+    embeddingmodel: chunk.embeddingModel,
+    embeddedat: chunk.embeddedAt.getTime(),
+    previouschunkid: chunk.previousChunkId ?? '',
+    nextchunkid: chunk.nextChunkId ?? '',
+    // Spread serialized metadata fields as top-level columns (already lowercase)
     ...serializedMetadata,
   };
 }
@@ -388,23 +404,27 @@ export function lanceRowToChunk<TMetadata extends Record<string, unknown>>(
   row: LanceDBRow<TMetadata>,
   metadataSchema: ZodObject<ZodRawShape>,
 ): CoreRAGChunk & TMetadata {
+  // Read from lowercase column names (SQL convention)
+  const rowData = row as unknown as Record<string, unknown>;
   const coreChunk: CoreRAGChunk = {
-    chunkId: row.chunkId,
-    resourceId: row.resourceId,
-    content: row.content,
-    contentHash: row.contentHash,
-    tokenCount: row.tokenCount,
-    embedding: row.vector,
-    embeddingModel: row.embeddingModel,
-    embeddedAt: new Date(row.embeddedAt),
+    chunkId: rowData['chunkid'] as string,
+    resourceId: rowData['resourceid'] as string,
+    content: rowData['content'] as string,
+    contentHash: rowData['contenthash'] as string,
+    tokenCount: rowData['tokencount'] as number,
+    embedding: rowData['vector'] as number[],
+    embeddingModel: rowData['embeddingmodel'] as string,
+    embeddedAt: new Date(rowData['embeddedat'] as number),
   };
 
   // Add optional context fields if present
-  if (row.previousChunkId && row.previousChunkId.length > 0) {
-    coreChunk.previousChunkId = row.previousChunkId;
+  const previousChunkId = rowData['previouschunkid'] as string;
+  if (previousChunkId && previousChunkId.length > 0) {
+    coreChunk.previousChunkId = previousChunkId;
   }
-  if (row.nextChunkId && row.nextChunkId.length > 0) {
-    coreChunk.nextChunkId = row.nextChunkId;
+  const nextChunkId = rowData['nextchunkid'] as string;
+  if (nextChunkId && nextChunkId.length > 0) {
+    coreChunk.nextChunkId = nextChunkId;
   }
 
   // Add search result metrics if present (from vector search results)
@@ -416,10 +436,12 @@ export function lanceRowToChunk<TMetadata extends Record<string, unknown>>(
   }
 
   // Extract serialized metadata from top-level row fields
+  // Row has lowercase column names, so use lowercase to lookup
   const serializedMetadata: Record<string, string | number> = {};
   for (const key of Object.keys(metadataSchema.shape)) {
-    if (key in row) {
-      serializedMetadata[key] = row[key] as string | number;
+    const lowercaseKey = key.toLowerCase();
+    if (lowercaseKey in row) {
+      serializedMetadata[lowercaseKey] = row[lowercaseKey as keyof typeof row] as string | number;
     }
   }
 

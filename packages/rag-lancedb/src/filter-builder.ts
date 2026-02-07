@@ -2,10 +2,11 @@
  * Filter Builder for LanceDB SQL WHERE clauses
  *
  * Introspects Zod schemas to build type-safe SQL filters.
+ * Uses duck typing for Zod v3/v4 compatibility.
  */
 
+import { getZodTypeName, unwrapZodType, ZodTypeNames } from '@vibe-agent-toolkit/utils';
 import type { ZodObject, ZodRawShape, ZodTypeAny } from 'zod';
-import { z } from 'zod';
 
 /**
  * Escape single quotes for SQL string literals
@@ -38,41 +39,39 @@ export function escapeSQLString(value: string): string {
  * @returns SQL WHERE clause fragment
  */
 export function buildMetadataFilter(key: string, value: unknown, zodType: ZodTypeAny): string {
-  // Unwrap optional types
-  let actualType = zodType;
-  if (zodType instanceof z.ZodOptional) {
-    actualType = zodType.unwrap();
-  }
+  // Unwrap optional/nullable types to get actual type
+  const actualType = unwrapZodType(zodType);
+  const typeName = getZodTypeName(actualType);
 
-  // Metadata fields are stored as top-level columns for scale-efficient filtering
-  // Use backticks for column name escaping
-  const fieldPath = `\`${key}\``;
+  // Metadata fields are stored with lowercase column names following SQL convention
+  // No quotes needed since lowercase columns are unambiguous
+  const fieldPath = key.toLowerCase();
 
   // Handle enum fields (enums are stored as strings)
-  if (actualType instanceof z.ZodEnum) {
+  if (typeName === ZodTypeNames.ENUM || typeName === ZodTypeNames.NATIVENUM) {
     const strValue = String(value);
     return `${fieldPath} = '${escapeSQLString(strValue)}'`;
   }
 
   // Handle string fields
-  if (actualType instanceof z.ZodString) {
+  if (typeName === ZodTypeNames.STRING) {
     const strValue = String(value);
     return `${fieldPath} = '${escapeSQLString(strValue)}'`;
   }
 
   // Handle number fields
-  if (actualType instanceof z.ZodNumber) {
+  if (typeName === ZodTypeNames.NUMBER || typeName === ZodTypeNames.BIGINT) {
     return `${fieldPath} = ${Number(value)}`;
   }
 
   // Handle boolean fields (stored as 0/1 in LanceDB)
-  if (actualType instanceof z.ZodBoolean) {
+  if (typeName === ZodTypeNames.BOOLEAN) {
     const numericValue = value ? 1 : 0;
     return `${fieldPath} = ${numericValue}`;
   }
 
   // Handle array fields (stored as CSV strings)
-  if (actualType instanceof z.ZodArray) {
+  if (typeName === ZodTypeNames.ARRAY) {
     const strValue = String(value);
     return `${fieldPath} LIKE '%${escapeSQLString(strValue)}%'`;
   }
@@ -148,8 +147,8 @@ export function buildWhereClause<TMetadata extends Record<string, unknown>>(
       conditions.push('1 = 0'); // Always false condition
     } else {
       const idList = ids.map((id) => `'${escapeSQLString(id)}'`).join(', ');
-      // Use backticks for column names
-      conditions.push(`\`resourceId\` IN (${idList})`);
+      // Use lowercase (no backticks needed)
+      conditions.push(`resourceid IN (${idList})`);
     }
   }
 
