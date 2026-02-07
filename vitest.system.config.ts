@@ -20,7 +20,8 @@ export default defineConfig({
         // Parallel execution for 2x speedup (~25s vs ~57s on dev machines)
         // Conservative setting for CI compatibility (especially Windows VMs)
         // Tests are fully isolated - could safely use maxForks: 4+ on fast machines
-        maxForks: 2,
+        // Windows CI requires maxForks: 1 for stability
+        maxForks: process.platform === 'win32' ? 1 : 2,
       },
     },
   },
