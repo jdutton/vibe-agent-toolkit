@@ -16,7 +16,7 @@ export default defineConfig({
       '**/*.system.test.ts', // System tests run separately (e2e, longer running)
     ],
     // Enable parallelization for fast unit test execution
-    testTimeout: 30000,
+    testTimeout: 60000, // Increased for Windows CI (fork pool is 3x slower on Windows)
     pool: 'forks',
     poolOptions: {
       forks: {
