@@ -31,6 +31,7 @@
 import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { safeExecSync } from '@vibe-agent-toolkit/utils';
 import semver from 'semver';
 
 import { PROJECT_ROOT, log, processWorkspacePackages, type PackageProcessResult } from './common.js';
@@ -250,6 +251,22 @@ if (hasPackages) {
 
 console.log('');
 log(`✅ Version bump complete!`, 'green');
+console.log('');
+
+// Update bun.lock to reflect version changes
+log('Updating bun.lock...', 'blue');
+try {
+  safeExecSync('bun', ['install'], {
+    cwd: PROJECT_ROOT,
+    stdio: ['inherit', 'inherit', 'inherit'],
+  });
+  log('  ✓ bun.lock updated', 'green');
+} catch (error) {
+  const message = error instanceof Error ? error.message : String(error);
+  log(`  ✗ Failed to update bun.lock: ${message}`, 'red');
+  log('  You may need to run "bun install" manually', 'yellow');
+}
+
 console.log('');
 console.log('Next steps:');
 console.log(`  1. Review changes: git diff`);
