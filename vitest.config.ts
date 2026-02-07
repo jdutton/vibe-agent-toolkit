@@ -16,13 +16,13 @@ export default defineConfig({
       '**/*.system.test.ts', // System tests run separately (e2e, longer running)
     ],
     // Enable parallelization for fast unit test execution
-    testTimeout: 60000, // Increased for Windows CI (fork pool is 3x slower on Windows)
+    testTimeout: process.platform === 'win32' ? 900000 : 60000, // 15min Windows, 1min Unix
     pool: 'forks',
     poolOptions: {
       forks: {
         singleFork: false,
-        // Limit to 1 worker on Windows (fork is expensive), unlimited on Unix
-        maxForks: process.platform === 'win32' ? 1 : undefined,
+        // Limit to 2 workers on Windows (sweet spot per arch analysis), unlimited on Unix
+        maxForks: process.platform === 'win32' ? 2 : undefined,
       },
     },
     coverage: {

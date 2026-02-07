@@ -123,10 +123,10 @@ export function generateTypeScriptDeclarations(resource: MarkdownResource): stri
 
   // Meta type (from frontmatter)
   const metaType = generateMetaType(resource.frontmatter);
-  lines.push(`export const meta: ${metaType};`, '');
+  lines.push(...[`export const meta: ${metaType};`, '']);
 
   // Text export
-  lines.push('export const text: string;', '');
+  lines.push(...['export const text: string;', '']);
 
   // Fragments type (specific to this resource)
   if (resource.fragments.length === 0) {
