@@ -21,6 +21,8 @@ export default defineConfig({
     poolOptions: {
       forks: {
         singleFork: false,
+        // Limit to 2 workers on Windows (fork is expensive), unlimited on Unix
+        maxForks: process.platform === 'win32' ? 2 : undefined,
       },
     },
     coverage: {

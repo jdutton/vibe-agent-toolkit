@@ -119,8 +119,8 @@ describe('generateJavaScript', () => {
 
       const result = generateJavaScript(resource);
 
-      expect(result).toContain('Title with \\"quotes\\"');
-      expect(result).toContain('Content with \\"quotes\\"');
+      expect(result).toContain(String.raw`Title with \"quotes\"`);
+      expect(result).toContain(String.raw`Content with \"quotes\"`);
       expect(result).not.toContain('Title with "quotes"');
     });
 
@@ -133,8 +133,8 @@ describe('generateJavaScript', () => {
 
       const result = generateJavaScript(resource);
 
-      expect(result).toContain("It\\'s working");
-      expect(result).toContain("Content with \\'single quotes\\'");
+      expect(result).toContain(String.raw`It\'s working`);
+      expect(result).toContain(String.raw`Content with \'single quotes\'`);
     });
 
     it('should escape newlines', () => {
@@ -146,22 +146,22 @@ describe('generateJavaScript', () => {
 
       const result = generateJavaScript(resource);
 
-      expect(result).toContain('Line 1\\nLine 2');
-      expect(result).toContain('First paragraph\\n\\nSecond paragraph');
+      expect(result).toContain(String.raw`Line 1\nLine 2`);
+      expect(result).toContain(String.raw`First paragraph\n\nSecond paragraph`);
       expect(result).not.toContain('Line 1\nLine 2');
     });
 
     it('should escape backslashes', () => {
       const resource: MarkdownResource = {
-        frontmatter: { path: 'C:\\Users\\test' },
-        content: 'Path: C:\\path\\to\\file',
+        frontmatter: { path: String.raw`C:\Users\test` },
+        content: String.raw`Path: C:\path\to\file`,
         fragments: [],
       };
 
       const result = generateJavaScript(resource);
 
-      expect(result).toContain('C:\\\\Users\\\\test');
-      expect(result).toContain('C:\\\\path\\\\to\\\\file');
+      expect(result).toContain(String.raw`C:\\Users\\test`);
+      expect(result).toContain(String.raw`C:\\path\\to\\file`);
     });
 
     it('should escape tabs', () => {
@@ -173,8 +173,8 @@ describe('generateJavaScript', () => {
 
       const result = generateJavaScript(resource);
 
-      expect(result).toContain('Tab\\there');
-      expect(result).toContain('Content\\twith\\ttabs');
+      expect(result).toContain(String.raw`Tab\there`);
+      expect(result).toContain(String.raw`Content\twith\ttabs`);
     });
 
     it('should escape backticks', () => {
@@ -186,8 +186,8 @@ describe('generateJavaScript', () => {
 
       const result = generateJavaScript(resource);
 
-      expect(result).toContain('\\`const x = 1\\`');
-      expect(result).toContain('Inline code: \\`value\\`');
+      expect(result).toContain(String.raw`\`const x = 1\``);
+      expect(result).toContain(String.raw`Inline code: \`value\``);
     });
 
     it('should handle multiple special characters', () => {
@@ -199,7 +199,7 @@ describe('generateJavaScript', () => {
 
       const result = generateJavaScript(resource);
 
-      expect(result).toContain(`It\\'s \\"complex\\"\\nWith\\\\backslashes\\tand\\ttabs`);
+      expect(result).toContain(String.raw`It\'s \"complex\"\nWith\\backslashes\tand\ttabs`);
     });
   });
 
@@ -358,7 +358,7 @@ More content here.
       expect(result).toContain('title: "Integration Test"');
       expect(result).toContain('sectionOne:');
       expect(result).toContain('sectionTwo:');
-      expect(result).toContain('Content for section one with \\"quotes\\"');
+      expect(result).toContain(String.raw`Content for section one with \"quotes\"`);
     });
 
     it('should generate valid JavaScript for markdown without frontmatter', () => {
@@ -417,7 +417,7 @@ Basic content.`;
       const result = generateJavaScript(resource);
 
       expect(result).toContain('\\' + '`\\' + '`\\' + '`typescript');
-      expect(result).toContain(`const x = \\"test\\";`);
+      expect(result).toContain(String.raw`const x = \"test\";`);
     });
 
     it('should preserve markdown formatting in fragments', () => {

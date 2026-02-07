@@ -104,27 +104,29 @@ export function generateTypeScriptDeclarations(resource: MarkdownResource): stri
   const lines: string[] = [];
 
   // Header comment
-  lines.push('/**');
-  lines.push(' * Generated TypeScript declarations - DO NOT EDIT');
-  lines.push(' */');
-  lines.push('');
+  lines.push(
+    '/**',
+    ' * Generated TypeScript declarations - DO NOT EDIT',
+    ' */',
+    '',
+  );
 
   // Fragment interface (always same structure)
-  lines.push('export interface Fragment {');
-  lines.push('  readonly header: string;');
-  lines.push('  readonly body: string;');
-  lines.push('  readonly text: string;');
-  lines.push('}');
-  lines.push('');
+  lines.push(
+    'export interface Fragment {',
+    '  readonly header: string;',
+    '  readonly body: string;',
+    '  readonly text: string;',
+    '}',
+    '',
+  );
 
   // Meta type (from frontmatter)
   const metaType = generateMetaType(resource.frontmatter);
-  lines.push(`export const meta: ${metaType};`);
-  lines.push('');
+  lines.push(`export const meta: ${metaType};`, '');
 
   // Text export
-  lines.push('export const text: string;');
-  lines.push('');
+  lines.push('export const text: string;', '');
 
   // Fragments type (specific to this resource)
   if (resource.fragments.length === 0) {

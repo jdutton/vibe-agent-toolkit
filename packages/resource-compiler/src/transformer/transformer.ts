@@ -122,6 +122,6 @@ export function createTransformer(
  * @param program - The TypeScript program
  * @returns Transformer factory
  */
-export default function (program: ts.Program): ts.TransformerFactory<ts.SourceFile> {
+export default function transformerFactory(program: ts.Program): ts.TransformerFactory<ts.SourceFile> {
   return createTransformer(program);
 }

@@ -20,13 +20,13 @@ import type { MarkdownResource } from './types.js';
  */
 function escapeString(str: string): string {
   return str
-    .replaceAll('\\', '\\\\') // Backslash must be first
-    .replaceAll('"', '\\"')   // Escape double quotes
-    .replaceAll("'", "\\'")   // Escape single quotes
-    .replaceAll('\n', '\\n')  // Escape newlines
-    .replaceAll('\r', '\\r')  // Escape carriage returns
-    .replaceAll('\t', '\\t')  // Escape tabs
-    .replaceAll('`', '\\`');  // Escape backticks
+    .replaceAll('\\', String.raw`\\`) // Backslash must be first
+    .replaceAll('"', String.raw`\"`)   // Escape double quotes
+    .replaceAll("'", String.raw`\'`)   // Escape single quotes
+    .replaceAll('\n', String.raw`\n`)  // Escape newlines
+    .replaceAll('\r', String.raw`\r`)  // Escape carriage returns
+    .replaceAll('\t', String.raw`\t`)  // Escape tabs
+    .replaceAll('`', String.raw`\``);  // Escape backticks
 }
 
 /**
@@ -99,18 +99,18 @@ export function generateJavaScript(resource: MarkdownResource): string {
   const lines: string[] = [];
 
   // Generate frontmatter export
-  lines.push('/**');
-  lines.push(' * Generated from markdown file - DO NOT EDIT');
-  lines.push(' */');
-  lines.push('');
+  lines.push(
+    '/**',
+    ' * Generated from markdown file - DO NOT EDIT',
+    ' */',
+    '',
+  );
 
   // Export meta (frontmatter)
-  lines.push('export const meta = ' + serializeValue(resource.frontmatter, 0) + ';');
-  lines.push('');
+  lines.push('export const meta = ' + serializeValue(resource.frontmatter, 0) + ';', '');
 
   // Export full text
-  lines.push('export const text = ' + serializeValue(resource.content, 0) + ';');
-  lines.push('');
+  lines.push('export const text = ' + serializeValue(resource.content, 0) + ';', '');
 
   // Export fragments
   const fragmentsObj: Record<string, unknown> = {};
@@ -122,8 +122,7 @@ export function generateJavaScript(resource: MarkdownResource): string {
     };
   }
 
-  lines.push('export const fragments = ' + serializeValue(fragmentsObj, 0) + ';');
-  lines.push('');
+  lines.push('export const fragments = ' + serializeValue(fragmentsObj, 0) + ';', '');
 
   return lines.join('\n');
 }

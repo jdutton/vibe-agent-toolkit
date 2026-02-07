@@ -230,7 +230,7 @@ export function findHeadingPosition(
   heading: string,
 ): { line: number; character: number } | null {
   const lines = content.split('\n');
-  const headingPattern = new RegExp(`^##\\s+${escapeRegex(heading)}\\s*$`);
+  const headingPattern = new RegExp(String.raw`^##\s+${escapeRegex(heading)}\s*$`);
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
@@ -249,7 +249,7 @@ export function findHeadingPosition(
  * @returns Escaped string safe for use in RegExp
  */
 function escapeRegex(str: string): string {
-  return str.replaceAll(/[$()*+.?[\\\]^{|}]/g, '\\$&');
+  return str.replaceAll(/[$()*+.?[\\\]^{|}]/g, String.raw`\$&`);
 }
 
 /**

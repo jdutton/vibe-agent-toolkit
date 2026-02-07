@@ -200,7 +200,6 @@ export default [
     files: ['packages/resource-compiler/**/*.ts'],
     rules: {
       'unicorn/no-array-for-each': 'off',
-      'unicorn/no-array-push-push': 'off',
       'unicorn/no-for-loop': 'off',
       'unicorn/no-instanceof-array': 'off',
       'unicorn/no-negated-condition': 'off',
@@ -219,7 +218,6 @@ export default [
       'unicorn/prefer-number-properties': 'off',
       'unicorn/prefer-regexp-test': 'off',
       'unicorn/prefer-spread': 'off',
-      'unicorn/prefer-string-raw': 'off',
       'unicorn/prefer-string-replace-all': 'off',
       'unicorn/prefer-string-slice': 'off',
       'unicorn/prefer-structured-clone': 'off',
