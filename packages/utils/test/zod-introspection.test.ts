@@ -204,9 +204,8 @@ describe('Zod Introspection', () => {
 
     describe('Special Types', () => {
       it('should detect effects (preprocess) type', () => {
-        // Preprocess requires callback - disable nesting rule
-        // eslint-disable-next-line sonarjs/no-nested-functions
-        const schema = z.preprocess((val: unknown) => String(val), z.string());
+        // Preprocess with direct function reference (no arrow function needed)
+        const schema = z.preprocess(String, z.string());
         expect(getZodTypeName(schema)).toBe(ZodTypeNames.EFFECTS);
       });
 
@@ -379,9 +378,8 @@ describe('Zod Introspection', () => {
       });
 
       it('should not unwrap effects (preprocess)', () => {
-        // Preprocess requires callback - disable nesting rule
-        // eslint-disable-next-line sonarjs/no-nested-functions
-        const schema = z.preprocess((val: unknown) => String(val), z.string());
+        // Preprocess with direct function reference (no arrow function needed)
+        const schema = z.preprocess(String, z.string());
         const unwrapped = unwrapZodType(schema);
         // Effects are not unwrapped (contain logic that must run)
         expect(unwrapped).toBe(schema);
