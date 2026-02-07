@@ -1,8 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 
 import { prepareBinaries } from '../src/prepare-bin.js';
@@ -10,14 +10,15 @@ import { prepareBinaries } from '../src/prepare-bin.js';
 /* eslint-disable security/detect-non-literal-fs-filename -- test file with dynamic temp paths */
 
 describe('prepareBinaries', () => {
+  const suite = setupSyncTempDirSuite('prepare-bin');
   let tempDir: string;
 
-  beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'prepare-bin-test-'));
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
-  afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+  beforeEach(() => {
+    suite.beforeEach();
+    tempDir = suite.getTempDir();
   });
 
   it('should copy and chmod binary files', () => {

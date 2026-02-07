@@ -1,5 +1,5 @@
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 /**
@@ -12,7 +12,7 @@ import path from 'node:path';
 /* eslint-disable security/detect-non-literal-fs-filename -- tests use dynamic file paths in temp directory */
 
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { ResourceMetadata } from '../../src/types.js';
@@ -530,14 +530,26 @@ describe('ResourceRegistry - Integration Tests', () => {
   });
 
   describe('validate with frontmatter schema', () => {
+    let suiteDir: string;
     let tempDir: string;
+    let testCounter = 0;
+
+    beforeAll(async () => {
+      suiteDir = await mkdtemp(path.join(normalizedTmpdir(), 'frontmatter-suite-'));
+    });
+
+    afterAll(async () => {
+      await rm(suiteDir, { recursive: true, force: true });
+    });
 
     beforeEach(async () => {
-      tempDir = await mkdtemp(path.join(normalizedTmpdir(), 'frontmatter-test-'));
+      testCounter++;
+      tempDir = path.join(suiteDir, `test-${testCounter}`);
+      await mkdir(tempDir, { recursive: true });
     });
 
     afterEach(async () => {
-      await rm(tempDir, { recursive: true, force: true });
+      // Per-test cleanup handled by suite cleanup
     });
 
     it('should validate frontmatter against schema and report missing required fields', async () => {

@@ -5,38 +5,19 @@
 
 /* eslint-disable security/detect-non-literal-fs-filename, sonarjs/no-duplicate-string -- Test file with controlled inputs */
 
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { normalizedTmpdir, mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
 import ts from 'typescript/lib/tsserverlibrary';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, beforeAll } from 'vitest';
 
 import { clearCache } from '../../src/language-service/markdown-cache.js';
 import init from '../../src/language-service/plugin.js';
 
 import { setupMarkdownFiles, createTsConfig } from './test-project-helpers.js';
 
-/**
- * Test suite helper for Language Service integration tests
- */
-function setupLanguageServiceSuite(testPrefix: string) {
-  const suite = {
-    projectDir: '',
-    beforeEach: () => {
-      const tmpBase = normalizedTmpdir();
-      suite.projectDir = mkdtempSync(join(tmpBase, `${testPrefix}-`));
-      clearCache();
-    },
-    afterEach: () => {
-      if (suite.projectDir) {
-        rmSync(suite.projectDir, { recursive: true, force: true });
-      }
-      clearCache();
-    },
-  };
-  return suite;
-}
+const suite = setupSyncTempDirSuite('language-service-test');
 
 /**
  * Helper to test go-to-definition at a specific position
@@ -143,11 +124,27 @@ function createLanguageServiceProject(
   return { languageService, fileName };
 }
 
-const suite = setupLanguageServiceSuite('language-service-test');
-
 describe('Language Service Plugin Integration', () => {
-  beforeEach(suite.beforeEach);
-  afterEach(suite.afterEach);
+  let projectDir: string;
+
+  beforeAll(() => {
+    suite.beforeAll();
+  });
+
+  afterAll(() => {
+    suite.afterAll();
+    clearCache();
+  });
+
+  beforeEach(() => {
+    suite.beforeEach();
+    projectDir = suite.getTempDir();
+    clearCache();
+  });
+
+  afterEach(() => {
+    clearCache();
+  });
 
   describe('completions', () => {
     it('should provide fragment completions', () => {
@@ -157,7 +154,7 @@ import Core from './resources/core.md';
 const frag = Core.fragments.
       `.trim();
 
-      const { languageService, fileName } = createLanguageServiceProject(suite.projectDir, tsCode, {
+      const { languageService, fileName } = createLanguageServiceProject(projectDir, tsCode, {
         'core.md': `## Purpose Driven
 Content here
 
@@ -183,7 +180,7 @@ More content`,
       const tsCode = `import Core from './resources/core.md';`;
 
       const definitions = testDefinitionAtPosition(
-        suite.projectDir,
+        projectDir,
         tsCode,
         { 'core.md': '## Fragment\nContent' },
         "'./resources/core.md'",
@@ -202,7 +199,7 @@ const frag = Core.fragments.purposeDriven;
       `.trim();
 
       const definitions = testDefinitionAtPosition(
-        suite.projectDir,
+        projectDir,
         tsCode,
         { 'core.md': '## Purpose Driven\nContent here' },
         'purposeDriven',
@@ -218,7 +215,7 @@ const frag = Core.fragments.purposeDriven;
     it('should report error for missing markdown file', () => {
       const tsCode = `import Core from './resources/missing.md';`;
 
-      const { languageService, fileName } = createLanguageServiceProject(suite.projectDir, tsCode, {});
+      const { languageService, fileName } = createLanguageServiceProject(projectDir, tsCode, {});
 
       const diagnostics = languageService.getSemanticDiagnostics(fileName);
 
@@ -233,7 +230,7 @@ import Core from './resources/core.md';
 const frag = Core.fragments.nonExistent;
       `.trim();
 
-      const { languageService, fileName } = createLanguageServiceProject(suite.projectDir, tsCode, {
+      const { languageService, fileName } = createLanguageServiceProject(projectDir, tsCode, {
         'core.md': '## Purpose Driven\nContent here',
       });
 
@@ -252,7 +249,7 @@ import Core from './resources/core.md';
 const frag = Core.fragments.purposeDriven;
       `.trim();
 
-      const { languageService, fileName } = createLanguageServiceProject(suite.projectDir, tsCode, {
+      const { languageService, fileName } = createLanguageServiceProject(projectDir, tsCode, {
         'core.md': '## Purpose Driven\nContent here',
       });
 
@@ -275,7 +272,7 @@ import Core from './resources/core.md';
 const frag = Core.fragments.purposeDriven;
       `.trim();
 
-      const { languageService, fileName } = createLanguageServiceProject(suite.projectDir, tsCode, {
+      const { languageService, fileName } = createLanguageServiceProject(projectDir, tsCode, {
         'core.md': '## Purpose Driven\nThis is the content of the fragment.',
       });
 
@@ -302,7 +299,7 @@ const frag1 = Core.fragments.purposeDriven;
 const frag2 = Core.fragments.apiV20;
       `.trim();
 
-      const { languageService, fileName } = createLanguageServiceProject(suite.projectDir, tsCode, {
+      const { languageService, fileName } = createLanguageServiceProject(projectDir, tsCode, {
         'core.md': `## Purpose Driven
 Content one
 

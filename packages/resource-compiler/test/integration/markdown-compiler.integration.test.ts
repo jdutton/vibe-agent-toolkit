@@ -4,39 +4,15 @@
 
 /* eslint-disable security/detect-non-literal-fs-filename -- Test file with controlled inputs */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { mkdirSyncReal, normalizedTmpdir, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdirSyncReal, setupSyncTempDirSuite, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { compileMarkdownResources } from '../../src/compiler/markdown-compiler.js';
 import type { CompileResult } from '../../src/compiler/types.js';
 import { createMultipleMarkdownFiles, verifyOperationResults } from '../test-file-helpers.js';
-
-/**
- * Test suite helper for markdown compiler integration tests
- */
-function setupMarkdownCompilerTestSuite(testPrefix: string) {
-  const suite = {
-    inputDir: '',
-    outputDir: '',
-    beforeEach: () => {
-      const tmpBase = normalizedTmpdir();
-      suite.inputDir = mkdtempSync(join(tmpBase, `${testPrefix}-input-`));
-      suite.outputDir = mkdtempSync(join(tmpBase, `${testPrefix}-output-`));
-    },
-    afterEach: () => {
-      if (suite.inputDir) {
-        rmSync(suite.inputDir, { recursive: true, force: true });
-      }
-      if (suite.outputDir) {
-        rmSync(suite.outputDir, { recursive: true, force: true });
-      }
-    },
-  };
-  return suite;
-}
 
 /**
  * Helper to compile a single markdown file and verify results
@@ -56,11 +32,22 @@ async function compileAndVerifyFile(
   });
 }
 
-const suite = setupMarkdownCompilerTestSuite('md-compiler');
+const suite = setupSyncTempDirSuite('md-compiler');
 
 describe('compileMarkdownResources', () => {
-  beforeEach(suite.beforeEach);
-  afterEach(suite.afterEach);
+  let inputDir: string;
+  let outputDir: string;
+
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(() => {
+    suite.beforeEach();
+    const tempDir = suite.getTempDir();
+    inputDir = join(tempDir, 'input');
+    outputDir = join(tempDir, 'output');
+    mkdirSyncReal(inputDir);
+    mkdirSyncReal(outputDir);
+  });
 
   describe('single file compilation', () => {
     it('should compile a simple markdown file', async () => {
@@ -75,13 +62,13 @@ This is a test document.
 
 Final thoughts.`;
 
-      const inputFile = join(suite.inputDir, 'test.md');
+      const inputFile = join(inputDir, 'test.md');
       writeFileSync(inputFile, mdContent, 'utf-8');
 
       // Compile
       const results = await compileMarkdownResources({
-        inputDir: suite.inputDir,
-        outputDir: suite.outputDir,
+        inputDir: inputDir,
+        outputDir: outputDir,
       });
 
       // Verify results
@@ -89,8 +76,8 @@ Final thoughts.`;
       expect(results[0]?.success).toBe(true);
 
       // Verify output files exist
-      const jsPath = join(suite.outputDir, 'test.js');
-      const dtsPath = join(suite.outputDir, 'test.d.ts');
+      const jsPath = join(outputDir, 'test.js');
+      const dtsPath = join(outputDir, 'test.d.ts');
 
       expect(existsSync(jsPath)).toBe(true);
       expect(existsSync(dtsPath)).toBe(true);
@@ -126,8 +113,8 @@ version: 1.0
 Content here.`;
 
       const results = await compileAndVerifyFile(
-        suite.inputDir,
-        suite.outputDir,
+        inputDir,
+        outputDir,
         'with-frontmatter.md',
         mdContent,
       );
@@ -135,7 +122,7 @@ Content here.`;
       expect(results).toHaveLength(1);
       expect(results[0]?.success).toBe(true);
 
-      const jsPath = join(suite.outputDir, 'with-frontmatter.js');
+      const jsPath = join(outputDir, 'with-frontmatter.js');
       const jsContent = readFileSync(jsPath, 'utf-8');
 
       expect(jsContent).toContain('title: "Test Document"');
@@ -152,8 +139,8 @@ broken: [unclosed
 ## Section`;
 
       const results = await compileAndVerifyFile(
-        suite.inputDir,
-        suite.outputDir,
+        inputDir,
+        outputDir,
         'broken.md',
         mdContent,
       );
@@ -169,11 +156,11 @@ broken: [unclosed
       // Create multiple files
       const files = ['doc1.md', 'doc2.md', 'doc3.md'];
 
-      createMultipleMarkdownFiles(suite.inputDir, files);
+      createMultipleMarkdownFiles(inputDir, files);
 
       const results = await compileMarkdownResources({
-        inputDir: suite.inputDir,
-        outputDir: suite.outputDir,
+        inputDir: inputDir,
+        outputDir: outputDir,
       });
 
       expect(results).toHaveLength(3);
@@ -182,8 +169,8 @@ broken: [unclosed
       // Verify all output files exist
       for (const file of files) {
         const baseName = file.replace('.md', '');
-        expect(existsSync(join(suite.outputDir, `${baseName}.js`))).toBe(true);
-        expect(existsSync(join(suite.outputDir, `${baseName}.d.ts`))).toBe(true);
+        expect(existsSync(join(outputDir, `${baseName}.js`))).toBe(true);
+        expect(existsSync(join(outputDir, `${baseName}.d.ts`))).toBe(true);
       }
     });
 
@@ -196,37 +183,37 @@ broken: [unclosed
         'examples/basic.md',
       ];
 
-      createMultipleMarkdownFiles(suite.inputDir, files, (file) => `# ${file}\n\n## Content\n\nTest content`);
+      createMultipleMarkdownFiles(inputDir, files, (file) => `# ${file}\n\n## Content\n\nTest content`);
 
       const results = await compileMarkdownResources({
-        inputDir: suite.inputDir,
-        outputDir: suite.outputDir,
+        inputDir: inputDir,
+        outputDir: outputDir,
       });
 
       expect(results).toHaveLength(4);
       expect(results.every((r) => r.success)).toBe(true);
 
       // Verify directory structure is maintained
-      expect(existsSync(join(suite.outputDir, 'root.js'))).toBe(true);
-      expect(existsSync(join(suite.outputDir, 'docs/guide.js'))).toBe(true);
-      expect(existsSync(join(suite.outputDir, 'docs/api/reference.js'))).toBe(true);
-      expect(existsSync(join(suite.outputDir, 'examples/basic.js'))).toBe(true);
+      expect(existsSync(join(outputDir, 'root.js'))).toBe(true);
+      expect(existsSync(join(outputDir, 'docs/guide.js'))).toBe(true);
+      expect(existsSync(join(outputDir, 'docs/api/reference.js'))).toBe(true);
+      expect(existsSync(join(outputDir, 'examples/basic.js'))).toBe(true);
 
-      expect(existsSync(join(suite.outputDir, 'root.d.ts'))).toBe(true);
-      expect(existsSync(join(suite.outputDir, 'docs/guide.d.ts'))).toBe(true);
-      expect(existsSync(join(suite.outputDir, 'docs/api/reference.d.ts'))).toBe(true);
-      expect(existsSync(join(suite.outputDir, 'examples/basic.d.ts'))).toBe(true);
+      expect(existsSync(join(outputDir, 'root.d.ts'))).toBe(true);
+      expect(existsSync(join(outputDir, 'docs/guide.d.ts'))).toBe(true);
+      expect(existsSync(join(outputDir, 'docs/api/reference.d.ts'))).toBe(true);
+      expect(existsSync(join(outputDir, 'examples/basic.d.ts'))).toBe(true);
     });
 
     it('should respect glob pattern', async () => {
       // Create multiple files with different extensions
-      writeFileSync(join(suite.inputDir, 'include.md'), '# Test\n\n## Section\n\nContent', 'utf-8');
-      writeFileSync(join(suite.inputDir, 'exclude.txt'), 'Not markdown', 'utf-8');
-      writeFileSync(join(suite.inputDir, 'also-include.md'), '# Test 2\n\n## Section\n\nContent', 'utf-8');
+      writeFileSync(join(inputDir, 'include.md'), '# Test\n\n## Section\n\nContent', 'utf-8');
+      writeFileSync(join(inputDir, 'exclude.txt'), 'Not markdown', 'utf-8');
+      writeFileSync(join(inputDir, 'also-include.md'), '# Test 2\n\n## Section\n\nContent', 'utf-8');
 
       const results = await compileMarkdownResources({
-        inputDir: suite.inputDir,
-        outputDir: suite.outputDir,
+        inputDir: inputDir,
+        outputDir: outputDir,
         pattern: '**/*.md',
       });
 
@@ -234,38 +221,38 @@ broken: [unclosed
       expect(results).toHaveLength(2);
       expect(results.every((r) => r.success)).toBe(true);
 
-      expect(existsSync(join(suite.outputDir, 'include.js'))).toBe(true);
-      expect(existsSync(join(suite.outputDir, 'also-include.js'))).toBe(true);
-      expect(existsSync(join(suite.outputDir, 'exclude.js'))).toBe(false);
+      expect(existsSync(join(outputDir, 'include.js'))).toBe(true);
+      expect(existsSync(join(outputDir, 'also-include.js'))).toBe(true);
+      expect(existsSync(join(outputDir, 'exclude.js'))).toBe(false);
     });
   });
 
   describe('error handling', () => {
     it('should report errors without stopping compilation', async () => {
       // Create mix of valid and invalid files
-      writeFileSync(join(suite.inputDir, 'valid.md'), '# Valid\n\n## Section\n\nContent', 'utf-8');
-      writeFileSync(join(suite.inputDir, 'broken.md'), '---\nbroken: [unclosed\n---\n\n## Test', 'utf-8');
-      writeFileSync(join(suite.inputDir, 'also-valid.md'), '# Also Valid\n\n## Section\n\nMore', 'utf-8');
+      writeFileSync(join(inputDir, 'valid.md'), '# Valid\n\n## Section\n\nContent', 'utf-8');
+      writeFileSync(join(inputDir, 'broken.md'), '---\nbroken: [unclosed\n---\n\n## Test', 'utf-8');
+      writeFileSync(join(inputDir, 'also-valid.md'), '# Also Valid\n\n## Section\n\nMore', 'utf-8');
 
       const results = await compileMarkdownResources({
-        inputDir: suite.inputDir,
-        outputDir: suite.outputDir,
+        inputDir: inputDir,
+        outputDir: outputDir,
       });
 
       verifyOperationResults(results, 3, 2);
 
       // Valid files should be compiled
-      expect(existsSync(join(suite.outputDir, 'valid.js'))).toBe(true);
-      expect(existsSync(join(suite.outputDir, 'also-valid.js'))).toBe(true);
+      expect(existsSync(join(outputDir, 'valid.js'))).toBe(true);
+      expect(existsSync(join(outputDir, 'also-valid.js'))).toBe(true);
 
       // Broken file should not produce output
-      expect(existsSync(join(suite.outputDir, 'broken.js'))).toBe(false);
+      expect(existsSync(join(outputDir, 'broken.js'))).toBe(false);
     });
 
     it('should handle empty input directory', async () => {
       const results = await compileMarkdownResources({
-        inputDir: suite.inputDir,
-        outputDir: suite.outputDir,
+        inputDir: inputDir,
+        outputDir: outputDir,
       });
 
       expect(results).toHaveLength(0);
@@ -283,16 +270,16 @@ tags: [one, two]
 
 Content with "quotes" and 'apostrophes'.`;
 
-      writeFileSync(join(suite.inputDir, 'quotes.md'), mdContent, 'utf-8');
+      writeFileSync(join(inputDir, 'quotes.md'), mdContent, 'utf-8');
 
       const results = await compileMarkdownResources({
-        inputDir: suite.inputDir,
-        outputDir: suite.outputDir,
+        inputDir: inputDir,
+        outputDir: outputDir,
       });
 
       expect(results[0]?.success).toBe(true);
 
-      const jsPath = join(suite.outputDir, 'quotes.js');
+      const jsPath = join(outputDir, 'quotes.js');
       const jsContent = readFileSync(jsPath, 'utf-8');
 
       // Should escape quotes properly
@@ -317,15 +304,15 @@ enabled: true
 Content`;
 
       const results = await compileAndVerifyFile(
-        suite.inputDir,
-        suite.outputDir,
+        inputDir,
+        outputDir,
         'types.md',
         mdContent,
       );
 
       expect(results[0]?.success).toBe(true);
 
-      const dtsPath = join(suite.outputDir, 'types.d.ts');
+      const dtsPath = join(outputDir, 'types.d.ts');
       const dtsContent = readFileSync(dtsPath, 'utf-8');
 
       // Should infer correct types
@@ -338,8 +325,8 @@ Content`;
   describe('result metadata', () => {
     it('should return correct paths in results', async () => {
       const results = await compileAndVerifyFile(
-        suite.inputDir,
-        suite.outputDir,
+        inputDir,
+        outputDir,
         'test.md',
         '# Test\n\n## Section\n\nContent',
       );
@@ -354,15 +341,15 @@ Content`;
 
     it('should preserve relative paths in nested directories', async () => {
       const nestedPath = 'docs/guides/getting-started.md';
-      const filePath = join(suite.inputDir, nestedPath);
+      const filePath = join(inputDir, nestedPath);
       const dir = join(filePath, '..');
 
       mkdirSyncReal(dir, { recursive: true });
       writeFileSync(filePath, '# Guide\n\n## Step 1\n\nContent', 'utf-8');
 
       const results = await compileMarkdownResources({
-        inputDir: suite.inputDir,
-        outputDir: suite.outputDir,
+        inputDir: inputDir,
+        outputDir: outputDir,
       });
 
       const result = results[0] as CompileResult;

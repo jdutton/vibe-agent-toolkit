@@ -33,7 +33,7 @@
     "test:unit": "vitest run",
     "test:cli": "bun --filter @vibe-agent-toolkit/cli run test",
     "test:watch": "vitest",
-    "test:coverage": "vibe-validate run \"vitest run --coverage\"",
+    "test:coverage": "vibe-validate run \"vitest run --coverage --no-file-parallelism\"",
     "test:integration": "vibe-validate run \"vitest run --config vitest.integration.config.ts\"",
     "test:system": "vibe-validate run \"vitest run --config vitest.system.config.ts\"",
     "validate-links": "vibe-validate run \"vitest run --config vitest.system.config.ts\"",
@@ -85,7 +85,7 @@
     "semver": "^7.7.3",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",
-    "vibe-validate": "^0.19.0-rc.3",
+    "vibe-validate": "0.19.0-rc.5",
     "vitest": "^3.2.4",
     "yaml": "^2.8.2"
   },

@@ -2,21 +2,35 @@ import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
 
 import * as claudePaths from '../../src/utils/claude-paths.js';
 import { scanUserContext } from '../../src/utils/user-context-scanner.js';
 
 describe('scanUserContext', () => {
+  let suiteDir: string;
   let tempDir: string;
+  let testCounter = 0;
   let mockClaudeDir: string;
   let mockPluginsDir: string;
   let mockSkillsDir: string;
   let mockMarketplacesDir: string;
 
+  beforeAll(async () => {
+    suiteDir = await mkdtemp(join(normalizedTmpdir(), 'vat-user-context-suite-'));
+  });
+
+  afterAll(async () => {
+    await rm(suiteDir, { recursive: true, force: true });
+  });
+
   beforeEach(async () => {
-    // Create temp directory structure
-    tempDir = await mkdtemp(join(normalizedTmpdir(), 'vat-user-context-test-'));
+    // Create subdirectory for each test
+    testCounter++;
+    tempDir = join(suiteDir, `test-${testCounter}`);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtemp
+    await mkdir(tempDir, { recursive: true });
+
     mockClaudeDir = join(tempDir, '.claude');
     mockPluginsDir = join(mockClaudeDir, 'plugins');
     mockSkillsDir = join(mockClaudeDir, 'skills');
@@ -42,7 +56,6 @@ describe('scanUserContext', () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
-    await rm(tempDir, { recursive: true, force: true });
   });
 
   it('should scan plugins directory for SKILL.md files', async () => {

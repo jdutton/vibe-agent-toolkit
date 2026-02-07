@@ -3,8 +3,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   discoverAgents,
@@ -13,6 +13,7 @@ import {
 } from '../../src/utils/agent-discovery.js';
 
 describe('agent-discovery', () => {
+  const suite = setupAsyncTempDirSuite('agent-discovery');
   let tempDir: string;
   let originalCwd: string;
 
@@ -21,21 +22,24 @@ describe('agent-discovery', () => {
   const AGENT_YAML = 'agent.yaml';
   const CURRENT_AGENT = 'current-agent';
 
-  beforeEach(async () => {
-    // Save original working directory
+  beforeAll(async () => {
     originalCwd = process.cwd();
+    await suite.beforeAll();
+  });
 
-    // Create temp directory for test
-    tempDir = await fs.mkdtemp(path.join(normalizedTmpdir(), 'agent-discovery-test-'));
+  afterAll(async () => {
+    process.chdir(originalCwd);
+    await suite.afterAll();
+  });
+
+  beforeEach(async () => {
+    await suite.beforeEach();
+    tempDir = suite.getTempDir();
     process.chdir(tempDir);
   });
 
-  afterEach(async () => {
-    // Restore original working directory
+  afterEach(() => {
     process.chdir(originalCwd);
-
-    // Clean up temp directory
-    await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   describe('discoverAgents', () => {

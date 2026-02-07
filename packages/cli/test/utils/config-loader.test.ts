@@ -1,22 +1,23 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { DEFAULT_CONFIG } from '../../src/schemas/config.js';
 import { loadConfig } from '../../src/utils/config-loader.js';
 
 describe('loadConfig', () => {
+  const suite = setupSyncTempDirSuite('vat-config');
   let tempDir: string;
   const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 
-  beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'vat-config-test-'));
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
-  afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+  beforeEach(() => {
+    suite.beforeEach();
+    tempDir = suite.getTempDir();
   });
 
   it('should return default config when no file exists', () => {

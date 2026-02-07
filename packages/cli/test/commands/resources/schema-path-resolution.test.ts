@@ -5,47 +5,44 @@
  * ensuring users can reference schemas from installed npm packages OR local files.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { describe, expect, it, beforeEach, beforeAll, afterAll } from 'vitest';
 
 // Test constants
 const SCHEMAS_LOCAL_JSON = './schemas/local.json';
 
 /**
- * Test helper: Creates a temporary directory structure
+ * Test helper: Creates schema files in test directory
  */
-async function setupTestDir() {
-  const testDir = mkdtempSync(join(normalizedTmpdir(), 'schema-path-test-'));
-
+async function setupTestDir(testDir: string) {
   // Create directory structure
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is from suite helper
   await mkdir(join(testDir, 'schemas'), { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is from suite helper
   await mkdir(join(testDir, 'config'), { recursive: true });
 
   // Create test schema files
   const testSchema = { type: 'object', properties: { name: { type: 'string' } } };
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is from suite helper
   await writeFile(join(testDir, 'schemas', 'local.json'), JSON.stringify(testSchema));
-  // eslint-disable-next-line security/detect-non-literal-fs-filename
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is from suite helper
   await writeFile(join(testDir, 'config', 'schema.json'), JSON.stringify(testSchema));
-
-  return testDir;
 }
 
 describe('Schema Path Resolution', () => {
+  const suite = setupAsyncTempDirSuite('schema-path');
   let testDir: string;
 
-  beforeEach(async () => {
-    testDir = await setupTestDir();
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
-  afterEach(() => {
-    rmSync(testDir, { recursive: true, force: true });
+  beforeEach(async () => {
+    await suite.beforeEach();
+    testDir = suite.getTempDir();
+    await setupTestDir(testDir);
   });
 
   describe('File Path Resolution', () => {

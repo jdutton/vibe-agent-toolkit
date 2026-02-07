@@ -5,12 +5,12 @@
 
 /* eslint-disable security/detect-non-literal-fs-filename -- Test file with controlled inputs */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
 import ts from 'typescript';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { createTransformer } from '../../src/transformer/transformer.js';
 
@@ -18,25 +18,6 @@ import { setupMarkdownFiles, createTsConfig } from './test-project-helpers.js';
 
 // Test constants
 const DIST_INDEX_PATH = 'dist/index.js';
-
-/**
- * Test suite helper for transformer integration tests
- */
-function setupTransformerIntegrationSuite(testPrefix: string) {
-  const suite = {
-    projectDir: '',
-    beforeEach: () => {
-      const tmpBase = normalizedTmpdir();
-      suite.projectDir = mkdtempSync(join(tmpBase, `${testPrefix}-project-`));
-    },
-    afterEach: () => {
-      if (suite.projectDir) {
-        rmSync(suite.projectDir, { recursive: true, force: true });
-      }
-    },
-  };
-  return suite;
-}
 
 /**
  * Helper to create a test TypeScript project with markdown imports
@@ -127,11 +108,17 @@ function compileWithTransformer(projectDir: string): { success: boolean; diagnos
   };
 }
 
-const suite = setupTransformerIntegrationSuite('transformer-int');
+const suite = setupSyncTempDirSuite('transformer-int');
 
 describe('TypeScript transformer integration', () => {
-  beforeEach(suite.beforeEach);
-  afterEach(suite.afterEach);
+  let projectDir: string;
+
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(() => {
+    suite.beforeEach();
+    projectDir = suite.getTempDir();
+  });
 
   describe('single markdown import', () => {
     it('should compile TypeScript file with default markdown import', () => {
@@ -159,9 +146,9 @@ Welcome to the system.
 Thank you for using our system.`,
       };
 
-      createTestProject(suite.projectDir, tsCode, markdownFiles);
+      createTestProject(projectDir, tsCode, markdownFiles);
 
-      const result = compileWithTransformer(suite.projectDir);
+      const result = compileWithTransformer(projectDir);
 
       if (!result.success) {
         console.error('Compilation errors:');
@@ -175,7 +162,7 @@ Thank you for using our system.`,
       expect(result.diagnostics).toHaveLength(0);
 
       // Verify output file exists
-      const outputPath = join(suite.projectDir, DIST_INDEX_PATH);
+      const outputPath = join(projectDir, DIST_INDEX_PATH);
       expect(existsSync(outputPath)).toBe(true);
 
       // Verify generated code contains inlined resource
@@ -201,7 +188,7 @@ console.log(doc.fragments.overview.body);
 This is the overview section.`,
       };
 
-      const { outputPath } = compileTestProjectSuccess(suite.projectDir, tsCode, markdownFiles);
+      const { outputPath } = compileTestProjectSuccess(projectDir, tsCode, markdownFiles);
 
       expect(existsSync(outputPath)).toBe(true);
 
@@ -224,7 +211,7 @@ console.log(fragments.gettingStarted.header);
 Follow these steps to get started.`,
       };
 
-      const { outputPath } = compileTestProjectSuccess(suite.projectDir, tsCode, markdownFiles);
+      const { outputPath } = compileTestProjectSuccess(projectDir, tsCode, markdownFiles);
 
       const output = readFileSync(outputPath, 'utf-8');
       expect(output).toContain('gettingStarted');
@@ -255,7 +242,7 @@ System prompt text.`,
 Setup instructions.`,
       };
 
-      const { outputPath } = compileTestProjectSuccess(suite.projectDir, tsCode, markdownFiles);
+      const { outputPath } = compileTestProjectSuccess(projectDir, tsCode, markdownFiles);
 
       const output = readFileSync(outputPath, 'utf-8');
       expect(output).toContain('System prompt text');
@@ -278,9 +265,9 @@ console.log(text);
         'doc3.md': '# Doc 3\n\n## Section\n\nContent 3',
       };
 
-      createTestProject(suite.projectDir, tsCode, markdownFiles);
+      createTestProject(projectDir, tsCode, markdownFiles);
 
-      const result = compileWithTransformer(suite.projectDir);
+      const result = compileWithTransformer(projectDir);
 
       expect(result.success).toBe(true);
       expect(result.diagnostics).toHaveLength(0);
@@ -315,7 +302,7 @@ Intro text.
 Conclusion text.`,
       };
 
-      compileTestProjectSuccess(suite.projectDir, tsCode, markdownFiles);
+      compileTestProjectSuccess(projectDir, tsCode, markdownFiles);
     });
   });
 
@@ -326,9 +313,9 @@ Conclusion text.`,
 console.log(missing.text);
 `;
 
-      createTestProject(suite.projectDir, tsCode, {});
+      createTestProject(projectDir, tsCode, {});
 
-      const result = compileWithTransformer(suite.projectDir);
+      const result = compileWithTransformer(projectDir);
 
       // Should have compilation error about missing module
       expect(result.success).toBe(false);
@@ -350,9 +337,9 @@ console.log(prompts.nonExistent);
 Content.`,
       };
 
-      createTestProject(suite.projectDir, tsCode, markdownFiles);
+      createTestProject(projectDir, tsCode, markdownFiles);
 
-      const result = compileWithTransformer(suite.projectDir);
+      const result = compileWithTransformer(projectDir);
 
       // Should have type error
       expect(result.success).toBe(false);
@@ -387,7 +374,7 @@ tags: [typescript, markdown, compiler]
 Detailed content.`,
       };
 
-      compileTestProjectSuccess(suite.projectDir, tsCode, markdownFiles);
+      compileTestProjectSuccess(projectDir, tsCode, markdownFiles);
     });
 
     it('should handle markdown with many fragments', () => {
@@ -428,7 +415,7 @@ Usage instructions.
 Troubleshooting tips.`,
       };
 
-      compileTestProjectSuccess(suite.projectDir, tsCode, markdownFiles);
+      compileTestProjectSuccess(projectDir, tsCode, markdownFiles);
     });
   });
 });

@@ -33,7 +33,7 @@
         "semver": "^7.7.3",
         "tsx": "^4.21.0",
         "typescript": "^5.9.3",
-        "vibe-validate": "^0.19.0-rc.3",
+        "vibe-validate": "0.19.0-rc.5",
         "vitest": "^3.2.4",
         "yaml": "^2.8.2",
       },
@@ -2233,7 +2233,7 @@
 
     "vibe-agent-toolkit": ["vibe-agent-toolkit@workspace:packages/vibe-agent-toolkit"],
 
-    "vibe-validate": ["vibe-validate@0.19.0-rc.3", "", { "dependencies": { "@vibe-validate/cli": "0.19.0-rc.3" }, "bin": { "vibe-validate": "bin/vibe-validate", "vv": "bin/vv" } }, "sha512-AsU4dJW3uNssOdI7YGNOB4QhucvTU+k/niHUgEz1jAKvnediQVwVADetA0gYgkZzgO5/O8JAOhFlBdnDwvOEZA=="],
+    "vibe-validate": ["vibe-validate@0.19.0-rc.5", "", { "dependencies": { "@vibe-validate/cli": "0.19.0-rc.5" }, "bin": { "vibe-validate": "bin/vibe-validate", "vv": "bin/vv" } }, "sha512-7FmF9AxmF8g/NKObhMmH1eh9zsmqK6LWHc7rEa603jL3hpfKhUA4DyNUZSfts8s/V5olxi2nImjB7w+VDUMV6Q=="],
 
     "vite": ["vite@7.3.0", "", { "dependencies": { "esbuild": "^0.27.0", "fdir": "^6.5.0", "picomatch": "^4.0.3", "postcss": "^8.5.6", "rollup": "^4.43.0", "tinyglobby": "^0.2.15" }, "optionalDependencies": { "fsevents": "~2.3.3" }, "peerDependencies": { "@types/node": "^20.19.0 || >=22.12.0", "jiti": ">=1.21.0", "less": "^4.0.0", "lightningcss": "^1.21.0", "sass": "^1.70.0", "sass-embedded": "^1.70.0", "stylus": ">=0.54.8", "sugarss": "^5.0.0", "terser": "^5.16.0", "tsx": "^4.8.1", "yaml": "^2.4.2" }, "optionalPeers": ["@types/node", "jiti", "less", "lightningcss", "sass", "sass-embedded", "stylus", "sugarss", "terser", "tsx", "yaml"], "bin": { "vite": "bin/vite.js" } }, "sha512-dZwN5L1VlUBewiP6H9s2+B3e3Jg96D0vzN+Ry73sOefebhYr9f94wwkMNN/9ouoU8pV1BqA1d1zGk8928cx0rg=="],
 
@@ -2531,7 +2531,7 @@
 
     "ts-patch/chalk": ["chalk@4.1.2", "", { "dependencies": { "ansi-styles": "^4.1.0", "supports-color": "^7.1.0" } }, "sha512-oKnbhFyRIXpUuez8iBMmyEa4nbj4IOQyuhc/wy9kY7/WVPcwIO9VA668Pu8RkO7+0G76SLROeyw9CpQ061i4mA=="],
 
-    "vibe-validate/@vibe-validate/cli": ["@vibe-validate/cli@0.19.0-rc.3", "", { "dependencies": { "@vibe-validate/config": "0.19.0-rc.3", "@vibe-validate/core": "0.19.0-rc.3", "@vibe-validate/extractors": "0.19.0-rc.3", "@vibe-validate/git": "0.19.0-rc.3", "@vibe-validate/history": "0.19.0-rc.3", "chalk": "^5.6.2", "commander": "^12.1.0", "prompts": "^2.4.2", "proper-lockfile": "^4.1.2", "semver": "^7.7.3", "yaml": "^2.8.2", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" }, "bin": { "vibe-validate": "dist/bin/vibe-validate", "vv": "dist/bin/vv" } }, "sha512-QEJ0jipjuR8XWKSFosc+DjaxCPEyLPPhgqA3m+HqgfMeUkan1haijCZhyQH+oLRMXCERbJW62uMsTqrhxob6jQ=="],
+    "vibe-validate/@vibe-validate/cli": ["@vibe-validate/cli@0.19.0-rc.5", "", { "dependencies": { "@vibe-validate/config": "0.19.0-rc.5", "@vibe-validate/core": "0.19.0-rc.5", "@vibe-validate/extractors": "0.19.0-rc.5", "@vibe-validate/git": "0.19.0-rc.5", "@vibe-validate/history": "0.19.0-rc.5", "chalk": "^5.6.2", "commander": "^12.1.0", "prompts": "^2.4.2", "proper-lockfile": "^4.1.2", "semver": "^7.7.3", "yaml": "^2.8.2", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" }, "bin": { "vibe-validate": "dist/bin/vibe-validate", "vv": "dist/bin/vv" } }, "sha512-25GJ6DJTFeAvh5CrYLbTzEepXWWPphbYjfUF+cP78quMNg+ggzCM1mVFmXK/QRZEN+lbfAjxOJgrTJ4xKGXmpA=="],
 
     "wrap-ansi/ansi-styles": ["ansi-styles@6.2.3", "", {}, "sha512-4Dj6M28JB+oAH8kFkTLUo+a2jwOFkuqb3yucU0CANcRRUbxS0cP0nZYCGjcc3BNXwRIsUVmDGgzawme7zvJHvg=="],
 
@@ -2901,15 +2901,15 @@
 
     "ts-patch/chalk/ansi-styles": ["ansi-styles@4.3.0", "", { "dependencies": { "color-convert": "^2.0.1" } }, "sha512-zbB9rCJAT1rbjiVDb2hqKFHNYLxgtk8NURxZ3IZwD3F6NtxbXZQCnnSi1Lkx+IDohdPlFp222wVALIheZJQSEg=="],
 
-    "vibe-validate/@vibe-validate/cli/@vibe-validate/config": ["@vibe-validate/config@0.19.0-rc.3", "", { "dependencies": { "@vibe-validate/utils": "0.19.0-rc.3", "tsx": "^4.21.0", "yaml": "^2.8.2", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" } }, "sha512-YnOGUu/EvI+56HjeeNfZgq9BZSbVQmGqC3BGzfCRmKS6MgtD+aUm76hSnI0BKuVSgjpWoRyHgpOIQvy5pRNHLQ=="],
+    "vibe-validate/@vibe-validate/cli/@vibe-validate/config": ["@vibe-validate/config@0.19.0-rc.5", "", { "dependencies": { "@vibe-validate/utils": "0.19.0-rc.5", "tsx": "^4.21.0", "yaml": "^2.8.2", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" } }, "sha512-SUKQUX/DdoEx7yzir+Leb6vJTG9p0IIc8ZpFY/9cX5dY8zlSgjUsFk3X8MHOpmNyo8VFHv5ViVf1LCBkQT3pXw=="],
 
-    "vibe-validate/@vibe-validate/cli/@vibe-validate/core": ["@vibe-validate/core@0.19.0-rc.3", "", { "dependencies": { "@vibe-validate/config": "0.19.0-rc.3", "@vibe-validate/extractors": "0.19.0-rc.3", "@vibe-validate/git": "0.19.0-rc.3", "@vibe-validate/utils": "0.19.0-rc.3", "strip-ansi": "^7.1.2", "yaml": "^2.8.2", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" } }, "sha512-Kfpnp5vdKl6Xy93DHs0i9dMCJxwyOzZLJG7ctQrQJiG2LwFmFwkD5VSeW7nv0WHeKHPGhX5URv+nnGTjHs6oaQ=="],
+    "vibe-validate/@vibe-validate/cli/@vibe-validate/core": ["@vibe-validate/core@0.19.0-rc.5", "", { "dependencies": { "@vibe-validate/config": "0.19.0-rc.5", "@vibe-validate/extractors": "0.19.0-rc.5", "@vibe-validate/git": "0.19.0-rc.5", "@vibe-validate/utils": "0.19.0-rc.5", "strip-ansi": "^7.1.2", "yaml": "^2.8.2", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" } }, "sha512-DPpvWpSkfT2wh/josZAjiqu5wTD8M3Y9E0Csg3JBPp6meQqCZZ8LwC4mkFBPlSKbMa6iRJgbiL3oqT3g76NU2w=="],
 
-    "vibe-validate/@vibe-validate/cli/@vibe-validate/extractors": ["@vibe-validate/extractors@0.19.0-rc.3", "", { "dependencies": { "@vibe-validate/config": "0.19.0-rc.3", "@vibe-validate/utils": "0.19.0-rc.3", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" } }, "sha512-66ztRkZ9CS5K2jed3hbu6d2dNxjRZ5RCgdB41ux9qdxUbheBvvMoPbqt/HXSdI8Na65+5rRCLp1QzAPK4Dwpow=="],
+    "vibe-validate/@vibe-validate/cli/@vibe-validate/extractors": ["@vibe-validate/extractors@0.19.0-rc.5", "", { "dependencies": { "@vibe-validate/config": "0.19.0-rc.5", "@vibe-validate/utils": "0.19.0-rc.5", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" } }, "sha512-qF0TAfSME6ipeqVNV2XpUkRVPdIQM8Ek/uIDawcihxlE52zmZvxsf4tKcCN9t5TEdqfu619IZFA/cddtCYnenw=="],
 
-    "vibe-validate/@vibe-validate/cli/@vibe-validate/git": ["@vibe-validate/git@0.19.0-rc.3", "", { "dependencies": { "@vibe-validate/utils": "0.19.0-rc.3", "yaml": "^2.8.2" } }, "sha512-qcchBCJYLKOzW6xFMyMqojckpjDF5EIFEsGFPZFOF1wOCQJkDj1lLsex0NV+vXkgF45+0+fC95x0YsH5rLdwEA=="],
+    "vibe-validate/@vibe-validate/cli/@vibe-validate/git": ["@vibe-validate/git@0.19.0-rc.5", "", { "dependencies": { "@vibe-validate/utils": "0.19.0-rc.5", "yaml": "^2.8.2" } }, "sha512-bl3aY41kdfseGzmPWLLAxx75QNe0fITewrV3GvLabj7MPp8BvJHPoLuzxtxsQBC3+/4IMUgFkkI/T4rakmlxbg=="],
 
-    "vibe-validate/@vibe-validate/cli/@vibe-validate/history": ["@vibe-validate/history@0.19.0-rc.3", "", { "dependencies": { "@vibe-validate/core": "0.19.0-rc.3", "@vibe-validate/git": "0.19.0-rc.3", "yaml": "^2.8.2", "zod": "^3.25.76" } }, "sha512-kaGiUkSiYCqyGhD4M8ucq7vFs1z0r6dqZ01XwhLB3yK1R7Q71DDl77di8scdeBgY2mXc8pwtuivWpltsVS2Fvg=="],
+    "vibe-validate/@vibe-validate/cli/@vibe-validate/history": ["@vibe-validate/history@0.19.0-rc.5", "", { "dependencies": { "@vibe-validate/core": "0.19.0-rc.5", "@vibe-validate/git": "0.19.0-rc.5", "yaml": "^2.8.2", "zod": "^3.25.76" } }, "sha512-g70kdU1yEWtScwp+mnVBmGUXzNo3Dsdj7rjXVIRG6EKpHb7sTymyg0jyzVoDC2oDUsGSRY2qME28uKf4hEkdpA=="],
 
     "wrap-ansi/string-width/emoji-regex": ["emoji-regex@9.2.2", "", {}, "sha512-L18DaJsXSUk2+42pv8mLs5jJT2hqFkFE4j21wOmgbUqsZ2hL72NsUU785g9RXgo3s0ZNgVl42TiHp3ZtOv/Vyg=="],
 
@@ -2991,15 +2991,15 @@
 
     "rimraf/glob/path-scurry/lru-cache": ["lru-cache@11.2.4", "", {}, "sha512-B5Y16Jr9LB9dHVkh6ZevG+vAbOsNOYCX+sXvFWFu7B3Iz5mijW3zdbMyhsh8ANd2mSWBYdJgnqi+mL7/LrOPYg=="],
 
-    "vibe-validate/@vibe-validate/cli/@vibe-validate/config/@vibe-validate/utils": ["@vibe-validate/utils@0.19.0-rc.3", "", { "dependencies": { "which": "^5.0.0" } }, "sha512-5aUzJ/lGHn88wVkj7gvRwafTlNWfYDIaCkh2XsjmFwJl6BNWqhNJYdJvMwvWz7BS3FsiajjcyFm8Qjz3sXAt4g=="],
+    "vibe-validate/@vibe-validate/cli/@vibe-validate/config/@vibe-validate/utils": ["@vibe-validate/utils@0.19.0-rc.5", "", { "dependencies": { "which": "^5.0.0" } }, "sha512-Mcij34PoPC1KJzFQbDlwNKbUHzBBAn6laBT1ub9mJLBCl6xON7YAJGxOfHPu0Y164zLWG4yWWbRhgCHjKK6ACQ=="],
 
-    "vibe-validate/@vibe-validate/cli/@vibe-validate/core/@vibe-validate/utils": ["@vibe-validate/utils@0.19.0-rc.3", "", { "dependencies": { "which": "^5.0.0" } }, "sha512-5aUzJ/lGHn88wVkj7gvRwafTlNWfYDIaCkh2XsjmFwJl6BNWqhNJYdJvMwvWz7BS3FsiajjcyFm8Qjz3sXAt4g=="],
+    "vibe-validate/@vibe-validate/cli/@vibe-validate/core/@vibe-validate/utils": ["@vibe-validate/utils@0.19.0-rc.5", "", { "dependencies": { "which": "^5.0.0" } }, "sha512-Mcij34PoPC1KJzFQbDlwNKbUHzBBAn6laBT1ub9mJLBCl6xON7YAJGxOfHPu0Y164zLWG4yWWbRhgCHjKK6ACQ=="],
 
     "vibe-validate/@vibe-validate/cli/@vibe-validate/core/strip-ansi": ["strip-ansi@7.1.2", "", { "dependencies": { "ansi-regex": "^6.0.1" } }, "sha512-gmBGslpoQJtgnMAvOVqGZpEz9dyoKTCzy2nfz/n8aIFhN/jCE/rCmcxabB6jOOHV+0WNnylOxaxBQPSvcWklhA=="],
 
-    "vibe-validate/@vibe-validate/cli/@vibe-validate/extractors/@vibe-validate/utils": ["@vibe-validate/utils@0.19.0-rc.3", "", { "dependencies": { "which": "^5.0.0" } }, "sha512-5aUzJ/lGHn88wVkj7gvRwafTlNWfYDIaCkh2XsjmFwJl6BNWqhNJYdJvMwvWz7BS3FsiajjcyFm8Qjz3sXAt4g=="],
+    "vibe-validate/@vibe-validate/cli/@vibe-validate/extractors/@vibe-validate/utils": ["@vibe-validate/utils@0.19.0-rc.5", "", { "dependencies": { "which": "^5.0.0" } }, "sha512-Mcij34PoPC1KJzFQbDlwNKbUHzBBAn6laBT1ub9mJLBCl6xON7YAJGxOfHPu0Y164zLWG4yWWbRhgCHjKK6ACQ=="],
 
-    "vibe-validate/@vibe-validate/cli/@vibe-validate/git/@vibe-validate/utils": ["@vibe-validate/utils@0.19.0-rc.3", "", { "dependencies": { "which": "^5.0.0" } }, "sha512-5aUzJ/lGHn88wVkj7gvRwafTlNWfYDIaCkh2XsjmFwJl6BNWqhNJYdJvMwvWz7BS3FsiajjcyFm8Qjz3sXAt4g=="],
+    "vibe-validate/@vibe-validate/cli/@vibe-validate/git/@vibe-validate/utils": ["@vibe-validate/utils@0.19.0-rc.5", "", { "dependencies": { "which": "^5.0.0" } }, "sha512-Mcij34PoPC1KJzFQbDlwNKbUHzBBAn6laBT1ub9mJLBCl6xON7YAJGxOfHPu0Y164zLWG4yWWbRhgCHjKK6ACQ=="],
 
     "@vibe-agent-toolkit/cli/vitest/vite/esbuild/@esbuild/aix-ppc64": ["@esbuild/aix-ppc64@0.21.5", "", { "os": "aix", "cpu": "ppc64" }, "sha512-1SDgH6ZSPTlggy1yI6+Dbkiz8xzpHJEVAlF/AM1tHPLsf5STom9rwtjE4hKAF20FfXXNTFqEYXyJNWh1GiZedQ=="],
 
