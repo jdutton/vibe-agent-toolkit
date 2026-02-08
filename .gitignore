@@ -21,6 +21,7 @@ coverage/
 # Code quality reports
 jscpd-report/
 .jscpd/
+.eslintcache
 
 # Environment variables and secrets
 .env

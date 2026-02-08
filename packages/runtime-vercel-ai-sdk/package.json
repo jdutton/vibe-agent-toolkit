@@ -14,7 +14,6 @@
   ],
   "scripts": {
     "build": "tsc",
-    "demo": "tsx examples/demo.ts",
     "llm-demo": "tsx examples/llm-agent-demo.ts",
     "test": "vitest run",
     "test:watch": "vitest",
@@ -33,10 +32,10 @@
     "@ai-sdk/openai": "^3.0.12",
     "@types/node": "^22.10.5",
     "@vibe-agent-toolkit/dev-tools": "workspace:*",
-    "@vibe-agent-toolkit/vat-example-cat-agents": "workspace:*",
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "@vibe-agent-toolkit/test-agents": "workspace:*"
   },
   "keywords": [
     "ai-agent",

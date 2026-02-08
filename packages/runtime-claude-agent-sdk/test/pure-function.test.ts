@@ -1,5 +1,9 @@
 import { createPureFunctionTestSuite, parseUnwrappedOutput } from '@vibe-agent-toolkit/dev-tools';
-import { HaikuSchema, HaikuValidationResultSchema, haikuValidatorAgent } from '@vibe-agent-toolkit/vat-example-cat-agents';
+import {
+  SimpleValidationInputSchema,
+  SimpleValidationOutputSchema,
+  simpleValidatorAgent,
+} from '@vibe-agent-toolkit/test-agents';
 import { expect } from 'vitest';
 
 import { convertPureFunctionToTool, convertPureFunctionsToTools } from '../src/adapters/pure-function.js';
@@ -15,9 +19,9 @@ createPureFunctionTestSuite({
     const { server, metadata } = convertPureFunctionsToTools(configs);
     return createBatchToolExecutors(server, Object.keys(metadata.tools));
   },
-  agent: haikuValidatorAgent,
-  inputSchema: HaikuSchema,
-  outputSchema: HaikuValidationResultSchema,
+  agent: simpleValidatorAgent,
+  inputSchema: SimpleValidationInputSchema,
+  outputSchema: SimpleValidationOutputSchema,
   getToolFromResult: (result) => result.server,
   executeFunction: async (result, input) => {
     // For Claude Agent SDK, the actual execution would happen through query() in real usage

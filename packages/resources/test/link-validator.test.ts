@@ -529,7 +529,6 @@ describe('validateLink', () => {
       );
     }
 
-    // eslint-disable-next-line sonarjs/assertions-in-tests -- assertValidation helper contains assertions
     it('should return error for links to gitignored files', async () => {
       const fs = await import('node:fs');
 
@@ -548,7 +547,6 @@ describe('validateLink', () => {
       await assertGitignoreError('./ignored.md', 'Link to ignored');
     });
 
-    // eslint-disable-next-line sonarjs/assertions-in-tests -- assertValidation helper contains assertions
     it('should pass for links to non-gitignored files in git repo', async () => {
       const fs = await import('node:fs');
 
@@ -582,7 +580,6 @@ describe('validateLink', () => {
       );
     });
 
-    // eslint-disable-next-line sonarjs/assertions-in-tests -- assertValidation helper contains assertions
     it('should return error for links to gitignored directories', async () => {
       const fs = await import('node:fs');
 

@@ -2,6 +2,46 @@
 
 This document provides guidance specific to developing the vat CLI tool.
 
+## Running vat Commands in Development
+
+**In this monorepo during development**, use one of these approaches to run vat commands:
+
+### From Root Directory
+```bash
+# Use the convenience script (recommended)
+bun run vat <command> <args>
+
+# Example:
+bun run vat skills build
+bun run vat resources validate docs/
+```
+
+### From Package Scripts
+When calling vat from another package's build script, use the relative path:
+
+```json
+{
+  "scripts": {
+    "build": "bun run build:code && node ../cli/dist/bin/vat.js skills build"
+  }
+}
+```
+
+**Why relative paths?** Workspace bin linking doesn't work reliably across Bun/npm/pnpm. Relative paths work everywhere and make dependencies explicit.
+
+### For End Users (Self-Hosting)
+Users who install VAT in their own projects should use:
+
+```bash
+# If installed globally
+vat skills build
+
+# If installed as dev dependency
+npx vat skills build
+# or
+bunx vat skills build
+```
+
 ## CLI Package Architecture Principles
 
 ### The CLI Must Remain "Dumb"

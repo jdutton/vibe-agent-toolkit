@@ -1,0 +1,68 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": ["dist/**", "**/*.schema.json"],
+      "cache": true
+    },
+    "build:skills": {
+      "dependsOn": ["build"],
+      "outputs": ["dist/skills/**"],
+      "cache": true
+    },
+    "typecheck": {
+      "dependsOn": ["^build"],
+      "outputs": [],
+      "cache": true
+    },
+    "lint": {
+      "dependsOn": [],
+      "outputs": [],
+      "cache": true
+    },
+    "test": {
+      "dependsOn": ["^build"],
+      "outputs": ["coverage/**"],
+      "cache": true
+    },
+    "test:unit": {
+      "dependsOn": ["^build"],
+      "outputs": ["coverage/**"],
+      "cache": true
+    },
+    "test:integration": {
+      "dependsOn": ["^build"],
+      "outputs": [],
+      "cache": true
+    },
+    "test:system": {
+      "dependsOn": ["^build"],
+      "outputs": [],
+      "cache": true
+    },
+    "test:coverage": {
+      "dependsOn": ["^build"],
+      "outputs": ["coverage/**"],
+      "cache": true
+    },
+    "duplication-check": {
+      "dependsOn": [],
+      "outputs": [],
+      "cache": true
+    },
+    "validate-structure": {
+      "dependsOn": [],
+      "outputs": [],
+      "cache": true
+    }
+  },
+  "globalDependencies": [
+    "package.json",
+    "tsconfig.json",
+    "tsconfig.*.json",
+    "eslint.config.js",
+    "vitest.config.ts",
+    "vitest.*.config.ts"
+  ]
+}

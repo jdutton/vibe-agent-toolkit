@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
-import { breedAdvisorAgent, BreedAdvisorInputSchema, BreedAdvisorOutputSchema } from '@vibe-agent-toolkit/vat-example-cat-agents';
+import { defineConversationalAssistant } from '@vibe-agent-toolkit/agent-runtime';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 
 import {
   convertConversationalAssistantToTool,
@@ -22,6 +23,54 @@ vi.mock('@anthropic-ai/sdk', () => {
 });
 
 const CONVERSATIONAL_ASSISTANT_ARCHETYPE = 'conversational-assistant';
+const TEST_API_KEY = 'test-key';
+const BREED_ADVISOR_NAME = 'breed-advisor';
+
+// Test schemas
+const BreedAdvisorInputSchema = z.object({
+  message: z.string(),
+  sessionState: z
+    .object({
+      livingSpace: z.string().optional(),
+      conversationPhase: z.string().optional(),
+    })
+    .optional(),
+});
+
+const BreedAdvisorOutputSchema = z.object({
+  reply: z.string(),
+  updatedProfile: z
+    .object({
+      livingSpace: z.string().optional(),
+      conversationPhase: z.string().optional(),
+    })
+    .optional(),
+});
+
+type BreedAdvisorInput = z.infer<typeof BreedAdvisorInputSchema>;
+type BreedAdvisorOutput = z.infer<typeof BreedAdvisorOutputSchema>;
+
+// Test agent - simple conversational assistant for testing
+const breedAdvisorAgent = defineConversationalAssistant<BreedAdvisorInput, BreedAdvisorOutput>(
+  {
+    name: BREED_ADVISOR_NAME,
+    description: 'Conversational assistant that helps users find their perfect cat breed',
+    version: '1.0.0',
+    inputSchema: BreedAdvisorInputSchema,
+    outputSchema: BreedAdvisorOutputSchema,
+    systemPrompt: 'You are a friendly cat breed advisor.',
+  },
+  async (input, ctx) => {
+    ctx.addToHistory('user', input.message);
+    const response = await ctx.callLLM(ctx.history);
+    ctx.addToHistory('assistant', response);
+
+    return {
+      reply: response,
+      updatedProfile: input.sessionState,
+    };
+  },
+);
 
 describe('convertConversationalAssistantToTool', () => {
   beforeEach(() => {
@@ -37,7 +86,7 @@ describe('convertConversationalAssistantToTool', () => {
       breedAdvisorAgent,
       BreedAdvisorInputSchema,
       BreedAdvisorOutputSchema,
-      { apiKey: 'test-key' },
+      { apiKey: TEST_API_KEY },
     );
 
     expect(result).toHaveProperty('server');
@@ -45,7 +94,7 @@ describe('convertConversationalAssistantToTool', () => {
     expect(result).toHaveProperty('inputSchema');
     expect(result).toHaveProperty('outputSchema');
 
-    expect(result.metadata.name).toBe('breed-advisor');
+    expect(result.metadata.name).toBe(BREED_ADVISOR_NAME);
     expect(result.metadata.archetype).toBe(CONVERSATIONAL_ASSISTANT_ARCHETYPE);
     expect(result.metadata.toolName).toBe('mcp__breed-advisor__breed-advisor');
   });
@@ -55,7 +104,7 @@ describe('convertConversationalAssistantToTool', () => {
       breedAdvisorAgent,
       BreedAdvisorInputSchema,
       BreedAdvisorOutputSchema,
-      { apiKey: 'test-key' },
+      { apiKey: TEST_API_KEY },
       'custom-server',
     );
 
@@ -99,7 +148,7 @@ describe('convertConversationalAssistantToTool', () => {
       breedAdvisorAgent,
       BreedAdvisorInputSchema,
       BreedAdvisorOutputSchema,
-      { apiKey: 'test-key' },
+      { apiKey: TEST_API_KEY },
     );
 
     expect(result.metadata.description).toBe('Conversational assistant that helps users find their perfect cat breed');
@@ -111,7 +160,7 @@ describe('convertConversationalAssistantToTool', () => {
       breedAdvisorAgent,
       BreedAdvisorInputSchema,
       BreedAdvisorOutputSchema,
-      { apiKey: 'test-key' },
+      { apiKey: TEST_API_KEY },
     );
 
     expect(result.server).toBeDefined();
@@ -124,7 +173,7 @@ describe('convertConversationalAssistantToTool', () => {
       BreedAdvisorInputSchema,
       BreedAdvisorOutputSchema,
       {
-        apiKey: 'test-key',
+        apiKey: TEST_API_KEY,
         model: 'claude-3-5-sonnet-20241022',
         temperature: 0.9,
         maxTokens: 2048,
@@ -175,7 +224,7 @@ describe('convertConversationalAssistantsToTools', () => {
           outputSchema: BreedAdvisorOutputSchema,
         },
       },
-      { apiKey: 'test-key' },
+      { apiKey: TEST_API_KEY },
     );
 
     expect(result).toHaveProperty('server');
@@ -193,7 +242,7 @@ describe('convertConversationalAssistantsToTools', () => {
           outputSchema: BreedAdvisorOutputSchema,
         },
       },
-      { apiKey: 'test-key' },
+      { apiKey: TEST_API_KEY },
       'custom-batch-server',
     );
 
@@ -210,11 +259,11 @@ describe('convertConversationalAssistantsToTools', () => {
           outputSchema: BreedAdvisorOutputSchema,
         },
       },
-      { apiKey: 'test-key' },
+      { apiKey: TEST_API_KEY },
     );
 
     expect(result.metadata.tools['breedAdvisor']).toBeDefined();
-    expect(result.metadata.tools['breedAdvisor']?.name).toBe('breed-advisor');
+    expect(result.metadata.tools['breedAdvisor']?.name).toBe(BREED_ADVISOR_NAME);
     expect(result.metadata.tools['breedAdvisor']?.archetype).toBe(CONVERSATIONAL_ASSISTANT_ARCHETYPE);
   });
 
@@ -227,7 +276,7 @@ describe('convertConversationalAssistantsToTools', () => {
           outputSchema: BreedAdvisorOutputSchema,
         },
       },
-      { apiKey: 'test-key' },
+      { apiKey: TEST_API_KEY },
     );
 
     expect(result.server).toBeDefined();
@@ -245,7 +294,7 @@ describe('convertConversationalAssistantsToTools', () => {
         },
       },
       {
-        apiKey: 'test-key',
+        apiKey: TEST_API_KEY,
         model: 'claude-3-5-sonnet-20241022',
         temperature: 0.8,
         maxTokens: 3000,
@@ -257,7 +306,7 @@ describe('convertConversationalAssistantsToTools', () => {
   });
 
   it('should handle empty configuration object', () => {
-    const result = convertConversationalAssistantsToTools({}, { apiKey: 'test-key' });
+    const result = convertConversationalAssistantsToTools({}, { apiKey: TEST_API_KEY });
 
     expect(result.server).toBeDefined();
     expect(result.metadata.serverName).toBe('vat-conversational-agents');
