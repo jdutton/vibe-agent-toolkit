@@ -5,6 +5,7 @@
  */
 
 import fs from 'node:fs';
+import path from 'node:path';
 
 import type { Connection, Table } from '@lancedb/lancedb';
 import * as lancedb from '@lancedb/lancedb';
@@ -58,6 +59,37 @@ export interface LanceDBConfig<_TMetadata extends Record<string, unknown> = Defa
 
   /** Metadata schema for validation and serialization (defaults to DefaultRAGMetadataSchema) */
   metadataSchema?: ZodObject<ZodRawShape>;
+}
+
+/**
+ * Calculate total size of a directory recursively
+ * @param dirPath - Path to directory
+ * @returns Total size in bytes
+ */
+function getDirectorySize(dirPath: string): number {
+  let totalSize = 0;
+
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirPath is from config, not user input
+    const items = fs.readdirSync(dirPath);
+
+    for (const item of items) {
+      const itemPath = path.join(dirPath, item);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- itemPath is constructed from config, not user input
+      const stats = fs.statSync(itemPath);
+
+      if (stats.isDirectory()) {
+        totalSize += getDirectorySize(itemPath);
+      } else {
+        totalSize += stats.size;
+      }
+    }
+  } catch {
+    // If directory doesn't exist or can't be read, return 0
+    return 0;
+  }
+
+  return totalSize;
 }
 
 const TABLE_NAME = 'rag_chunks';
@@ -235,10 +267,13 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     const rows = JSON.parse(JSON.stringify(allRows)) as LanceDBRow[];
     const uniqueResources = new Set(rows.map((r) => r.resourceid)).size;
 
+    // Calculate database size by traversing the directory
+    const dbSizeBytes = getDirectorySize(this.config.dbPath);
+
     return {
       totalChunks: count,
       totalResources: uniqueResources,
-      dbSizeBytes: 0, // LanceDB doesn't provide size info easily
+      dbSizeBytes,
       embeddingModel: this.config.embeddingProvider.model,
       lastIndexed: new Date(), // Would need to track this separately
     };
