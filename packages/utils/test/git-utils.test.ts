@@ -4,7 +4,7 @@ import * as path from 'node:path';
 
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
-import { gitFindRoot, gitLsFiles, isGitIgnored } from '../src/git-utils.js';
+import { gitFindRoot, gitLsFiles, isGitIgnored, gitCheckIgnoredBatch } from '../src/git-utils.js';
 import { normalizedTmpdir } from '../src/path-utils.js';
 import { setupSyncTempDirSuite } from '../src/test-helpers.js';
 
@@ -22,6 +22,40 @@ function setupGitRepo(tempDir: string): void {
   spawnSync(gitPath, ['config', 'user.email', 'test@example.com'], { cwd: tempDir, stdio: 'pipe' });
   // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
   spawnSync(gitPath, ['config', 'user.name', 'Test User'], { cwd: tempDir, stdio: 'pipe' });
+}
+
+/**
+ * Helper to set up a git test suite with temp directory and git repo
+ * Reduces duplication across test suites
+ */
+function setupGitTestSuite(suiteName: string) {
+  const suite = setupSyncTempDirSuite(suiteName);
+  let tempDir: string;
+
+  const getTempDir = () => tempDir;
+
+  const hooks = {
+    beforeAll: suite.beforeAll,
+    afterAll: suite.afterAll,
+    beforeEach: () => {
+      suite.beforeEach();
+      tempDir = suite.getTempDir();
+      setupGitRepo(tempDir);
+    },
+  };
+
+  return { ...hooks, getTempDir };
+}
+
+/**
+ * Helper to assert all files in result are not ignored
+ * Extracted to outer scope to avoid function-in-loop code smell
+ */
+function expectAllNotIgnored(result: Map<string, boolean>, files: string[]) {
+  expect(result.size).toBe(files.length);
+  for (const file of files) {
+    expect(result.get(file)).toBe(false);
+  }
 }
 
 describe('gitFindRoot', () => {
@@ -160,16 +194,14 @@ describe('gitLsFiles', () => {
 });
 
 describe('isGitIgnored', () => {
-  const suite = setupSyncTempDirSuite('git-utils');
+  const suite = setupGitTestSuite('git-utils');
   let tempDir: string;
 
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
-
   beforeEach(() => {
     suite.beforeEach();
     tempDir = suite.getTempDir();
-    setupGitRepo(tempDir);
   });
 
   it('should return true for gitignored file', () => {
@@ -201,5 +233,121 @@ describe('isGitIgnored', () => {
     const result = isGitIgnored(path.join(tempDir, '.worktrees', 'feat'), tempDir);
 
     expect(result).toBe(true);
+  });
+});
+
+describe('gitCheckIgnoredBatch', () => {
+  const suite = setupGitTestSuite('git-check-ignored-batch');
+  let tempDir: string;
+
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+  beforeEach(() => {
+    suite.beforeEach();
+    tempDir = suite.getTempDir();
+  });
+
+  it('should return empty map for empty array', () => {
+    const result = gitCheckIgnoredBatch([], tempDir);
+
+    expect(result.size).toBe(0);
+  });
+
+  it('should identify ignored and non-ignored files', () => {
+    // Create .gitignore
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
+    fs.writeFileSync(
+      path.join(tempDir, GITIGNORE_FILENAME),
+      'node_modules/\ndist/\n*.log\n'
+    );
+
+    const files = [
+      path.join(tempDir, 'src', 'index.ts'),
+      path.join(tempDir, 'node_modules', 'foo.js'),
+      path.join(tempDir, 'dist', 'bundle.js'),
+      path.join(tempDir, 'debug.log'),
+      path.join(tempDir, 'README.md'),
+    ];
+
+    const result = gitCheckIgnoredBatch(files, tempDir);
+
+    expect(result.size).toBe(5);
+    expect(result.get(files[0])).toBe(false); // src/index.ts - not ignored
+    expect(result.get(files[1])).toBe(true);  // node_modules/foo.js - ignored
+    expect(result.get(files[2])).toBe(true);  // dist/bundle.js - ignored
+    expect(result.get(files[3])).toBe(true);  // debug.log - ignored
+    expect(result.get(files[4])).toBe(false); // README.md - not ignored
+  });
+
+  it('should handle all files ignored', () => {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
+    fs.writeFileSync(
+      path.join(tempDir, GITIGNORE_FILENAME),
+      '*.tmp\n'
+    );
+
+    const files = [
+      path.join(tempDir, 'file1.tmp'),
+      path.join(tempDir, 'file2.tmp'),
+    ];
+
+    const result = gitCheckIgnoredBatch(files, tempDir);
+
+    expect(result.size).toBe(2);
+    expect(result.get(files[0])).toBe(true);
+    expect(result.get(files[1])).toBe(true);
+  });
+
+  it('should handle no files ignored', () => {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
+    fs.writeFileSync(
+      path.join(tempDir, GITIGNORE_FILENAME),
+      '*.tmp\n'
+    );
+
+    const files = [
+      path.join(tempDir, 'file1.ts'),
+      path.join(tempDir, 'file2.ts'),
+    ];
+
+    const result = gitCheckIgnoredBatch(files, tempDir);
+
+    expectAllNotIgnored(result, files);
+  });
+
+  it('should return all false when not in git repository', () => {
+    const nonGitDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'non-git-'));
+
+    try {
+      const files = [
+        path.join(nonGitDir, 'file1.ts'),
+        path.join(nonGitDir, 'file2.ts'),
+      ];
+
+      const result = gitCheckIgnoredBatch(files, nonGitDir);
+
+      expectAllNotIgnored(result, files);
+    } finally {
+      fs.rmSync(nonGitDir, { recursive: true, force: true });
+    }
+  });
+
+  it('should handle relative and absolute paths', () => {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
+    fs.writeFileSync(
+      path.join(tempDir, GITIGNORE_FILENAME),
+      'ignored/\n'
+    );
+
+    const files = [
+      'src/index.ts', // relative
+      path.join(tempDir, 'ignored', 'file.ts'), // absolute
+    ];
+
+    const result = gitCheckIgnoredBatch(files, tempDir);
+
+    expect(result.size).toBe(2);
+    expect(result.get(files[0])).toBe(false); // src/index.ts - not ignored
+    expect(result.get(files[1])).toBe(true);  // ignored/file.ts - ignored
   });
 });

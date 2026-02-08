@@ -120,6 +120,25 @@ More content in section 2.`
     expect(stats.embeddingModel).toBeTruthy();
   });
 
+  it('should calculate database size in bytes', async () => {
+    provider = await LanceDBRAGProvider.create({ dbPath });
+
+    // Empty database should have 0 size (no files created yet)
+    let stats = await provider.getStats();
+    expect(stats.dbSizeBytes).toBe(0);
+
+    // Index a resource
+    const resource = await createTestResource(testFilePath);
+    await provider.indexResources([resource]);
+
+    // Database should now have non-zero size
+    stats = await provider.getStats();
+    expect(stats.dbSizeBytes).toBeGreaterThan(0);
+
+    // Size should be reasonable (not absurdly large or negative)
+    expect(stats.dbSizeBytes).toBeLessThan(100 * 1024 * 1024); // Less than 100MB for test data
+  });
+
   it('should throw error when querying empty database', async () => {
     provider = await LanceDBRAGProvider.create({ dbPath });
 
