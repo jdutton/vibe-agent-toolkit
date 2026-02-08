@@ -11,9 +11,9 @@ export default defineConfig({
     exclude: [
       '**/node_modules/**',
       '**/dist/**',
-      // Skip slow filesystem-crawling tests on Windows CI
-      // These tests scan entire project directory tree which is 10-20x slower on Windows
-      // TODO: Replace with fixture-based tests that use small test directories
+      // Windows: Skip full-project tests (10-20x slower filesystem), use fast fixture tests instead
+      // skills-list-fixture.system.test.ts and skills-validate-fixture.system.test.ts provide Windows coverage
+      // Full-project tests below run on Mac/Linux for comprehensive validation
       ...(process.platform === 'win32'
         ? [
             'packages/cli/test/system/skills-list.system.test.ts',

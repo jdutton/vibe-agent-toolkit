@@ -192,38 +192,4 @@ export default [
       'sonarjs/no-empty-test-file': 'off',
     },
   },
-
-  // Override for resource-compiler - disable all unicorn rules
-  // Multiple unicorn rules crash with "sourceCode.getXXX is not a function" errors
-  // This appears to be a version compatibility issue with eslint-plugin-unicorn
-  {
-    files: ['packages/resource-compiler/**/*.ts'],
-    rules: {
-      'unicorn/no-array-for-each': 'off',
-      'unicorn/no-for-loop': 'off',
-      'unicorn/no-instanceof-array': 'off',
-      'unicorn/no-negated-condition': 'off',
-      'unicorn/no-useless-spread': 'off',
-      'unicorn/no-zero-fractions': 'off',
-      'unicorn/prefer-array-find': 'off',
-      'unicorn/prefer-array-flat-map': 'off',
-      'unicorn/prefer-array-some': 'off',
-      'unicorn/prefer-at': 'off',
-      'unicorn/prefer-code-point': 'off',
-      'unicorn/prefer-date-now': 'off',
-      'unicorn/prefer-export-from': 'off',
-      'unicorn/prefer-includes': 'off',
-      'unicorn/prefer-module': 'off',
-      'unicorn/prefer-node-protocol': 'off',
-      'unicorn/prefer-number-properties': 'off',
-      'unicorn/prefer-regexp-test': 'off',
-      'unicorn/prefer-spread': 'off',
-      'unicorn/prefer-string-replace-all': 'off',
-      'unicorn/prefer-string-slice': 'off',
-      'unicorn/prefer-structured-clone': 'off',
-      'unicorn/prefer-ternary': 'off',
-      'unicorn/prefer-top-level-await': 'off',
-      'unicorn/throw-new-error': 'off',
-    },
-  },
 ];

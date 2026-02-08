@@ -232,8 +232,7 @@ export function findHeadingPosition(
   const lines = content.split('\n');
   const headingPattern = new RegExp(String.raw`^##\s+${escapeRegex(heading)}\s*$`);
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  for (const [i, line] of lines.entries()) {
     if (line && headingPattern.test(line)) {
       return { line: i, character: 0 };
     }
