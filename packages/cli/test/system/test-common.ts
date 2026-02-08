@@ -78,6 +78,7 @@ export function executeCli(
     encoding: 'utf-8',
     cwd: options?.cwd,
     env: options?.env ? { ...process.env, ...options.env } : undefined,
+    maxBuffer: 10 * 1024 * 1024, // 10MB buffer for large audit outputs
   });
 }
 
@@ -123,4 +124,50 @@ export function executeBunVat(
     encoding: 'utf-8',
     cwd: options?.cwd ?? monorepoRoot,
   });
+}
+
+/**
+ * Skills test fixture - VAT skill metadata
+ */
+export interface TestVatSkill {
+  name: string;
+  source: string;
+  path: string;
+}
+
+/**
+ * Create package.json content for skills testing
+ * @param packageName - Name of the package
+ * @param skills - Array of skill configurations
+ * @returns Package.json content as string
+ */
+export function createSkillsPackageJson(packageName: string, skills: TestVatSkill[]): string {
+  return JSON.stringify({
+    name: packageName,
+    version: '1.0.0',
+    vat: {
+      version: '1.0',
+      type: 'agent-bundle',
+      skills,
+    },
+  });
+}
+
+/**
+ * Create a SKILL.md markdown file content
+ * @param skillName - Name of the skill
+ * @param description - Optional description
+ * @returns SKILL.md content
+ */
+export function createSkillMarkdown(skillName: string, description?: string): string {
+  return `---
+name: ${skillName}
+description: ${description ?? `${skillName} description`}
+version: 1.0.0
+---
+
+# ${skillName}
+
+This is ${description ?? 'a test skill'}.
+`;
 }

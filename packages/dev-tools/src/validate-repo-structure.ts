@@ -159,7 +159,13 @@ async function validateScriptsLocation(): Promise<void> {
   const packagesDir = join(REPO_ROOT, 'packages');
   const entries = await readdir(packagesDir, { withFileTypes: true });
 
-  const allowedScriptsPackages = new Set(['dev-tools', 'agent-schema', 'agent-skills']);
+  const allowedScriptsPackages = new Set([
+    'dev-tools',
+    'agent-schema',
+    'agent-skills',
+    'vat-example-cat-agents', // Uses resource-compiler post-build script
+    'vat-development-agents', // Uses resource-compiler post-build script
+  ]);
 
   for (const entry of entries) {
     if (!entry.isDirectory() || allowedScriptsPackages.has(entry.name)) {
@@ -340,9 +346,11 @@ async function validateSourceFileLocations(): Promise<void> {
       const isInPackageTest = /^packages\/[^/]+\/test\//.test(normalizedPath);
       const isInPackageExamples = /^packages\/[^/]+\/examples\//.test(normalizedPath);
       const isInPackageAgents = /^packages\/[^/]+\/agents\//.test(normalizedPath); // For vat-development-agents
+      const isInPackageGenerated = /^packages\/[^/]+\/generated\//.test(normalizedPath); // Build artifacts
+      const isInPackageScripts = /^packages\/[^/]+\/scripts\//.test(normalizedPath); // Build scripts
       const isInDocs = normalizedPath.startsWith('docs/');
 
-      if (!isInPackageSrc && !isInPackageTest && !isInPackageExamples && !isInPackageAgents && !isInDocs) {
+      if (!isInPackageSrc && !isInPackageTest && !isInPackageExamples && !isInPackageAgents && !isInPackageGenerated && !isInPackageScripts && !isInDocs) {
         errors.push({
           type: ERROR_TYPES.STRUCTURAL_VIOLATION,
           path: relPath,

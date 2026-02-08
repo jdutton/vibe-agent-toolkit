@@ -53,8 +53,9 @@ function replaceHomeDir(filePath: string): string {
  *
  * Expected patterns:
  * - Marketplace plugin skill: .../marketplaces/{marketplace}/{plugin}/skills/{skill}/SKILL.md
- * - Standalone plugin skill: .../plugins/{plugin}/skills/{skill}/SKILL.md (no marketplaces/)
- * - Standalone skill: .../plugins/{skill}/SKILL.md (no skills/)
+ * - Standalone plugin skill (in plugins dir): .../plugins/{plugin}/skills/{skill}/SKILL.md (no marketplaces/)
+ * - Standalone plugin skill (no skills subdir): .../plugins/{skill}/SKILL.md (no skills/)
+ * - Standalone skill (in skills dir): ~/.claude/skills/{skill}/SKILL.md
  */
 function parsePathStructure(filePath: string): {
   marketplace?: string;
@@ -84,18 +85,15 @@ function parsePathStructure(filePath: string): {
     }
   }
 
-  // Standalone plugin skill: .../plugins/{plugin}/skills/{skill}/SKILL.md
-  if (pluginsIdx >= 0 && skillsIdx >= 0) {
-    const plugin = parts[skillsIdx - 1]; // Plugin name is before /skills/
-    const skill = parts[skillsIdx + 1];
-    if (plugin !== undefined && skill !== undefined) {
-      return { plugin, skill, isCached };
-    }
+  // Plugin-related patterns (requires /plugins/ in path)
+  if (pluginsIdx >= 0) {
+    return parsePluginPath(parts, pluginsIdx, skillsIdx, isCached);
   }
 
-  // Standalone skill: .../plugins/{skill}/SKILL.md
-  if (pluginsIdx >= 0) {
-    const skill = parts[pluginsIdx + 1];
+  // Standalone skill in skills dir: ~/.claude/skills/{skill}/SKILL.md
+  // This is the standard location for standalone skills (not in a plugin)
+  if (skillsIdx >= 0) {
+    const skill = parts[skillsIdx + 1];
     if (skill !== undefined) {
       return { skill, isCached };
     }
@@ -104,6 +102,35 @@ function parsePathStructure(filePath: string): {
   // Fallback: use directory name before SKILL.md
   const skill = parts.at(-2) ?? 'unknown';
   return { skill, isCached };
+}
+
+/**
+ * Parse plugin-related paths
+ * Handles both: .../plugins/{plugin}/skills/{skill}/SKILL.md and .../plugins/{skill}/SKILL.md
+ */
+function parsePluginPath(
+  parts: string[],
+  pluginsIdx: number,
+  skillsIdx: number,
+  isCached: boolean
+): { plugin?: string; skill: string; isCached: boolean } {
+  // Standalone plugin skill: .../plugins/{plugin}/skills/{skill}/SKILL.md
+  if (skillsIdx >= 0) {
+    const plugin = parts[skillsIdx - 1]; // Plugin name is before /skills/
+    const skill = parts[skillsIdx + 1];
+    if (plugin !== undefined && skill !== undefined) {
+      return { plugin, skill, isCached };
+    }
+  }
+
+  // Standalone skill in plugins dir: .../plugins/{skill}/SKILL.md (no /skills/ subdir)
+  const skill = parts[pluginsIdx + 1];
+  if (skill !== undefined) {
+    return { skill, isCached };
+  }
+
+  // Fallback
+  return { skill: 'unknown', isCached };
 }
 
 /**
@@ -316,6 +343,52 @@ function convertPluginMapToArray(pluginMap: Map<string, SkillEntry[]>): PluginGr
 }
 
 /**
+ * Add misconfiguration issues to standalone skills in wrong locations
+ *
+ * Detects standalone SKILL.md files in ~/.claude/plugins/ that won't be recognized
+ * by Claude Code. These should be either moved to ~/.claude/skills/ or properly
+ * configured as plugins with .claude-plugin/plugin.json.
+ *
+ * @param results - Validation results to check
+ * @returns Results with misconfiguration issues added
+ */
+function addMisconfigurationIssues(results: ValidationResult[]): ValidationResult[] {
+  const homeDir = toForwardSlash(os.homedir());
+  const pluginsPath = `${homeDir}/.claude/plugins/`;
+
+  return results.map((result) => {
+    const { marketplace, plugin, isCached } = parsePathStructure(result.path);
+
+    // Only check standalone skills (no marketplace, no plugin structure)
+    if (marketplace || plugin || isCached) {
+      return result; // Not a standalone skill, leave unchanged
+    }
+
+    // Check if this standalone skill is in the plugins directory
+    const normalizedPath = toForwardSlash(result.path);
+    if (!normalizedPath.startsWith(pluginsPath)) {
+      return result; // Not in plugins dir, leave unchanged
+    }
+
+    // This is a standalone SKILL.md in ~/.claude/plugins/ - add misconfiguration issue
+    const misconfigIssue: ValidationIssue = {
+      severity: 'error',
+      code: 'SKILL_MISCONFIGURED_LOCATION',
+      message: 'Standalone skill in plugins directory won\'t be recognized by Claude Code',
+      location: result.path,
+      fix: 'Move to ~/.claude/skills/ for standalone skills, or add .claude-plugin/plugin.json for a proper plugin',
+    };
+
+    // Clone result and add issue
+    return {
+      ...result,
+      status: 'error', // Upgrade to error
+      issues: [...result.issues, misconfigIssue],
+    };
+  });
+}
+
+/**
  * Build hierarchical output structure from validation results.
  *
  * Groups skills by:
@@ -335,6 +408,9 @@ export function buildHierarchicalOutput(results: ValidationResult[], verbose: bo
   // Filter out cache duplicates that match their source
   const { filtered: filteredResults, cacheStatusMap } = filterCacheDuplicates(results);
 
+  // Add misconfiguration detection to results BEFORE verbose filtering
+  const resultsWithMisconfigDetection = addMisconfigurationIssues(filteredResults);
+
   const marketplacesMap = new Map<string, Map<string, SkillEntry[]>>();
   const cachedPluginsMap = new Map<string, SkillEntry[]>();
   const standalonePluginsMap = new Map<string, SkillEntry[]>();
@@ -347,7 +423,7 @@ export function buildHierarchicalOutput(results: ValidationResult[], verbose: bo
     standaloneSkills,
   };
 
-  for (const result of filteredResults) {
+  for (const result of resultsWithMisconfigDetection) {
     // Only include results with issues (terse principle), unless verbose mode
     if (!verbose && result.status === 'success') {
       continue;

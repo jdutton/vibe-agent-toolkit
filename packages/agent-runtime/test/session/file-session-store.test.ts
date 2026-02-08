@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { SessionNotFoundError } from '@vibe-agent-toolkit/agent-runtime';
@@ -12,26 +12,39 @@ import {
   type SessionStoreTestSuite,
 } from '@vibe-agent-toolkit/agent-runtime/session/test-helpers';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 
 import { FileSessionStore } from '../../src/session/file-session-store.js';
 
 describe('FileSessionStore', () => {
+  let suiteDir: string;
   let tempDir: string;
+  let testCounter = 0;
 
   const suite: SessionStoreTestSuite<{ count: number }> = {
     store: null as unknown as FileSessionStore<{ count: number }>,
     setup: async () => {
-      tempDir = await mkdtemp(join(normalizedTmpdir(), 'file-session-store-test-'));
+      testCounter++;
+      tempDir = join(suiteDir, `test-${testCounter}`);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtemp
+      await mkdir(tempDir, { recursive: true });
       suite.store = new FileSessionStore<{ count: number }>({
         baseDir: tempDir,
         createInitialState: () => ({ count: 0 }),
       });
     },
     teardown: async () => {
-      await rm(tempDir, { recursive: true, force: true });
+      // Per-test cleanup handled by suite cleanup
     },
   };
+
+  beforeAll(async () => {
+    suiteDir = await mkdtemp(join(normalizedTmpdir(), 'file-session-store-suite-'));
+  });
+
+  afterAll(async () => {
+    await rm(suiteDir, { recursive: true, force: true });
+  });
 
   beforeEach(async () => {
     await suite.setup();

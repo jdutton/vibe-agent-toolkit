@@ -158,8 +158,6 @@ describe('Zod Introspection', () => {
           value: string;
           children?: Node[];
         }
-        // Disable nesting rule for this test - lazy requires callback
-        // eslint-disable-next-line sonarjs/no-nested-functions
         const schema: z.ZodType<Node> = z.lazy(() =>
           z.object({
             value: z.string(),
@@ -210,15 +208,11 @@ describe('Zod Introspection', () => {
       });
 
       it('should detect effects (refine) type', () => {
-        // Refine requires callback - disable nesting rule
-        // eslint-disable-next-line sonarjs/no-nested-functions
         const schema = z.string().refine((val: string) => val.length > 0);
         expect(getZodTypeName(schema)).toBe(ZodTypeNames.EFFECTS);
       });
 
       it('should detect effects (transform) type', () => {
-        // Transform requires callback - disable nesting rule
-        // eslint-disable-next-line sonarjs/no-nested-functions
         const schema = z.string().transform((val: string) => val.toUpperCase());
         expect(getZodTypeName(schema)).toBe(ZodTypeNames.EFFECTS);
       });
@@ -387,8 +381,6 @@ describe('Zod Introspection', () => {
       });
 
       it('should not unwrap effects (transform)', () => {
-        // Transform requires callback - disable nesting rule
-        // eslint-disable-next-line sonarjs/no-nested-functions
         const schema = z.string().transform((val: string) => val.toUpperCase());
         const unwrapped = unwrapZodType(schema);
         // Effects are not unwrapped (contain logic that must run)

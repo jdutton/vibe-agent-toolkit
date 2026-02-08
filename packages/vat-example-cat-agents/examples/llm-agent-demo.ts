@@ -34,9 +34,9 @@ async function demo() {
   section('Step 1: Understanding the VAT LLM Analyzer Agent');
 
   log('Agent', 'nameGeneratorAgent', colors.cyan);
-  console.log(`${colors.dim}  Archetype: ${nameGeneratorAgent.manifest.archetype}${colors.reset}`);
-  console.log(`${colors.dim}  Description: ${nameGeneratorAgent.manifest.description}${colors.reset}`);
-  console.log(`${colors.dim}  Version: ${nameGeneratorAgent.manifest.version}${colors.reset}`);
+  console.log(`${colors.dim}  Archetype: ${String(nameGeneratorAgent.manifest.archetype)}${colors.reset}`);
+  console.log(`${colors.dim}  Description: ${String(nameGeneratorAgent.manifest.description)}${colors.reset}`);
+  console.log(`${colors.dim}  Version: ${String(nameGeneratorAgent.manifest.version)}${colors.reset}`);
 
   console.log(`\n${colors.yellow}How it works:${colors.reset}`);
   console.log(`${colors.dim}  1. Agent defines input/output schemas (Zod)${colors.reset}`);

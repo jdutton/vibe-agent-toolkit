@@ -3,22 +3,24 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { ResourceRegistry } from '../src/resource-registry.js';
 
 describe('ResourceRegistry with checksum', () => {
+  const suite = setupAsyncTempDirSuite('parser-checksum');
   let tempDir: string;
   let registry: ResourceRegistry;
 
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(join(normalizedTmpdir(), 'parser-checksum-'));
-    registry = new ResourceRegistry();
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+  beforeEach(async () => {
+    await suite.beforeEach();
+    tempDir = suite.getTempDir();
+    // Create fresh registry for checksum validation
+    registry = new ResourceRegistry();
   });
 
   it('should calculate checksum when adding resource', async () => {

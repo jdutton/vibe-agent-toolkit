@@ -1,20 +1,21 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { findProjectRoot } from '../../src/utils/project-root.js';
 
 describe('findProjectRoot', () => {
+  const suite = setupSyncTempDirSuite('vat-test');
   let tempDir: string;
 
-  beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'vat-test-'));
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
-  afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+  beforeEach(() => {
+    suite.beforeEach();
+    tempDir = suite.getTempDir();
   });
 
   // Helper to create subdirectory

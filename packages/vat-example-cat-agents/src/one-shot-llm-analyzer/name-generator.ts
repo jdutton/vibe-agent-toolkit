@@ -2,6 +2,9 @@ import { executeLLMAnalyzer, validateAgentInput } from '@vibe-agent-toolkit/agen
 import type { Agent, LLMError, OneShotAgentOutput } from '@vibe-agent-toolkit/agent-schema';
 import { z } from 'zod';
 
+// Import compiled resources from markdown
+// eslint-disable-next-line sonarjs/unused-import -- Will be used when real LLM mode is implemented
+import * as _NameGeneratorResources from '../../generated/resources/agents/name-generator.js';
 import { CatCharacteristicsSchema, type NameSuggestion } from '../types/schemas.js';
 
 /**
@@ -139,6 +142,9 @@ export const nameGeneratorAgent: Agent<
       mockable,
       mockFn: () => mockGenerateName(characteristics),
       notImplementedMessage: 'Real LLM name generation requires runtime adapter with callLLM context',
+      // When real LLM mode is implemented, use:
+      // systemPrompt: _NameGeneratorResources.fragments.systemPrompt.body
+      // See resources/agents/name-generator.md for prompts and domain knowledge
     });
   },
 };

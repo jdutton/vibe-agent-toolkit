@@ -28,9 +28,39 @@ This package serves as a **reference implementation** for the Vibe Agent Toolkit
 
 ## Installation
 
+### As NPM Package
+
 ```bash
 npm install @vibe-agent-toolkit/vat-example-cat-agents
 ```
+
+### Installing the Skill
+
+This package includes a distributable Claude Code skill called `vat-cat-agents` that provides orchestration guidance for using the 8 example cat agents.
+
+**Install from npm:**
+```bash
+vat skills install npm:@vibe-agent-toolkit/vat-example-cat-agents
+```
+
+**Install from local directory (development):**
+```bash
+vat skills install ./packages/vat-example-cat-agents
+```
+
+**Verify installation:**
+```bash
+vat skills list --installed
+```
+
+The `vat-cat-agents` skill will be installed to `~/.claude/plugins/vat-cat-agents/` and will appear in Claude Code after restarting or running `/reload-skills`.
+
+**What the skill includes:**
+- SKILL.md with agent orchestration patterns
+- Documentation on multi-agent workflows
+- Examples of feedback loops (generator → validator)
+- Multi-modal input patterns (photo vs text)
+- Links to all 8 agent implementations
 
 ## Result Envelopes
 
@@ -687,7 +717,7 @@ See [CLAUDE.md](./CLAUDE.md) for technical navigation details when contributing.
 
 ## Documentation
 
-- **[STRUCTURE.md](./STRUCTURE.md)** - Package organization and conventions
+- **[structure.md](./docs/structure.md)** - Package organization and conventions
 - **[CLAUDE.md](./CLAUDE.md)** - Technical navigation for AI assistants
 
 ---

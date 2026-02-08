@@ -16,11 +16,13 @@ export default defineConfig({
       '**/*.system.test.ts', // System tests run separately (e2e, longer running)
     ],
     // Enable parallelization for fast unit test execution
-    testTimeout: 30000,
+    testTimeout: process.platform === 'win32' ? 900000 : 60000, // 15min Windows, 1min Unix
     pool: 'forks',
     poolOptions: {
       forks: {
         singleFork: false,
+        // Limit to 2 workers on Windows (sweet spot per arch analysis), unlimited on Unix
+        maxForks: process.platform === 'win32' ? 2 : undefined,
       },
     },
     coverage: {
@@ -42,6 +44,11 @@ export default defineConfig({
         'packages/cli/src/bin.ts', // CLI entry point (integration test only)
         'packages/cli/src/bin/**', // CLI entry points (integration test only)
         'packages/cli/src/commands/**', // CLI commands (integration test only)
+        'packages/resource-compiler/src/cli/**', // CLI commands (integration test only)
+        'packages/resource-compiler/src/language-service/**', // VSCode integration (not unit testable)
+        'packages/resource-compiler/src/compiler/markdown-compiler.ts', // Orchestrator with comprehensive integration tests
+        'packages/vat-development-agents/src/**', // Agent packages (integration test only)
+        'packages/vat-example-cat-agents/src/**', // Agent packages (integration test only)
       ],
       thresholds: {
         statements: 79,

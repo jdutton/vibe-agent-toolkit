@@ -103,18 +103,59 @@ export interface CliResult {
 
 /**
  * Execute CLI command and return result
+ *
+ * Uses file-based output capture to avoid Bun's 64KB spawnSync buffer limit.
+ * This is necessary for commands that produce large YAML outputs (e.g., audit).
  */
 export function executeCli(
   binPath: string,
   args: string[],
   options?: { cwd?: string; env?: NodeJS.ProcessEnv }
 ): CliResult {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path
-  return spawnSync('node', [binPath, ...args], {
-    encoding: 'utf-8',
-    cwd: options?.cwd,
-    env: options?.env,
-  });
+  // Create temp files for stdout/stderr to avoid Bun's 64KB buffer limit
+  // eslint-disable-next-line sonarjs/pseudo-random -- Test utility, not security-sensitive
+  const stdoutFile = join(normalizedTmpdir(), `vat-test-stdout-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+  // eslint-disable-next-line sonarjs/pseudo-random -- Test utility, not security-sensitive
+  const stderrFile = join(normalizedTmpdir(), `vat-test-stderr-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+
+  // Open file descriptors
+  const stdoutFd = fs.openSync(stdoutFile, 'w');
+  const stderrFd = fs.openSync(stderrFile, 'w');
+
+  try {
+    // eslint-disable-next-line sonarjs/no-os-command-from-path
+    const result = spawnSync('node', [binPath, ...args], {
+      cwd: options?.cwd,
+      env: options?.env,
+      stdio: ['inherit', stdoutFd, stderrFd],
+    });
+
+    // Close file descriptors
+    fs.closeSync(stdoutFd);
+    fs.closeSync(stderrFd);
+
+    // Read output from files
+    const stdout = fs.readFileSync(stdoutFile, 'utf-8');
+    const stderr = fs.readFileSync(stderrFile, 'utf-8');
+
+    return {
+      status: result.status,
+      stdout,
+      stderr,
+    };
+  } finally {
+    // Cleanup temp files
+    try {
+      fs.unlinkSync(stdoutFile);
+    } catch {
+      // Ignore cleanup errors
+    }
+    try {
+      fs.unlinkSync(stderrFile);
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
 }
 
 /**
@@ -168,6 +209,18 @@ export function executeAndParseYaml(
   const result = executeCli(binPath, args, options);
   const parsed = parseYamlOutput(result.stdout);
   return { result, parsed };
+}
+
+/**
+ * Execute command and parse YAML output (convenience wrapper)
+ * Alternative signature that takes cwd as third parameter
+ */
+export function executeCommandAndParse(
+  binPath: string,
+  args: string[],
+  cwd: string
+): { result: CliResult; parsed: Record<string, unknown> } {
+  return executeAndParseYaml(binPath, args, { cwd });
 }
 
 /**
@@ -386,6 +439,42 @@ export function setupRagTestSuite(
 }
 
 /**
+ * Set up test suite for skills install command tests
+ * Creates temp directories and provides consistent setup/cleanup
+ *
+ * @param testPrefix - Prefix for temp directory name
+ * @returns Suite object with tempDir, projectDir, skillsDir, binPath, and lifecycle methods
+ */
+export function setupInstallTestSuite(testPrefix: string): {
+  tempDir: string;
+  projectDir: string;
+  skillsDir: string;
+  binPath: string;
+  beforeEach: () => void;
+  afterEach: () => void;
+} {
+  const suite = {
+    tempDir: '',
+    projectDir: '',
+    skillsDir: '',
+    binPath: join(process.cwd(), 'packages', 'cli', 'dist', 'bin.js'),
+    beforeEach: () => {
+      suite.tempDir = createTestTempDir(testPrefix);
+      suite.projectDir = join(suite.tempDir, 'project');
+      suite.skillsDir = join(suite.projectDir, '.claude', 'skills');
+      fs.mkdirSync(suite.skillsDir, { recursive: true });
+    },
+    afterEach: () => {
+      if (suite.tempDir) {
+        fs.rmSync(suite.tempDir, { recursive: true, force: true });
+      }
+    },
+  };
+
+  return suite;
+}
+
+/**
  * Execute RAG query command and verify basic success response
  * Eliminates duplication in RAG query tests
  *
@@ -585,4 +674,104 @@ export function waitForStreamData(
       // Will resolve with whatever data arrives before timeout
     }
   });
+}
+
+/**
+ * Create a skill fixture with valid SKILL.md file
+ * @param baseDir - Base directory to create skill in
+ * @param skillName - Name for the skill directory
+ * @param skillNumber - Optional number for test skill naming (defaults to "")
+ * @returns Path to the created SKILL.md file
+ */
+export function createSkillFixture(
+  baseDir: string,
+  skillName: string,
+  skillNumber = ''
+): string {
+  const skillsDir = join(baseDir, 'resources', 'skills');
+  mkdirSyncReal(skillsDir, { recursive: true });
+
+  const skillContent = `---
+name: ${skillName}${skillNumber}
+description: ${skillNumber ? 'Another' : 'A'} valid test skill${skillNumber}
+---
+
+# Test Skill${skillNumber ? ` ${skillNumber}` : ''}
+
+${skillNumber ? 'Another' : 'A'} valid test skill.
+
+## Usage
+
+${skillNumber ? 'More test usage' : 'Test usage'}.
+`;
+
+  const skillPath = join(skillsDir, 'SKILL.md');
+  fs.writeFileSync(skillPath, skillContent);
+  return skillPath;
+}
+
+/**
+ * Setup a test suite for skills commands with fixture-based tests
+ * Creates small, fast, deterministic test fixtures instead of scanning full project
+ *
+ * @param testPrefix - Prefix for temp directory name
+ * @param skillCount - Number of skills to create in fixture (default: 1)
+ * @returns Suite object with tempDir, beforeAll, afterAll lifecycle hooks
+ */
+export function setupSkillsFixtureTestSuite(
+  testPrefix: string,
+  skillCount = 1
+): {
+  fixtureDir: string;
+  beforeAll: () => void;
+  afterAll: () => void;
+} {
+  const suite = {
+    fixtureDir: '',
+    beforeAll: () => {
+      suite.fixtureDir = createTestTempDir(testPrefix);
+
+      // Create specified number of skills
+      for (let i = 1; i <= skillCount; i++) {
+        if (i === 1) {
+          // First skill in resources/skills/
+          createSkillFixture(suite.fixtureDir, 'test-skill', '');
+        } else {
+          // Additional skills in nested package directories
+          const packageDir = join(suite.fixtureDir, 'packages', `test-skill-${i}`);
+          createSkillFixture(packageDir, 'test-skill', `-${i}`);
+        }
+      }
+    },
+    afterAll: () => {
+      if (suite.fixtureDir) {
+        fs.rmSync(suite.fixtureDir, { recursive: true, force: true });
+      }
+    },
+  };
+
+  return suite;
+}
+
+/**
+ * Execute skills command and verify YAML output is parseable
+ * Eliminates duplication in skills test files
+ *
+ * @param binPath - Path to CLI binary
+ * @param command - Command to run (e.g., 'list' or 'validate')
+ * @param targetPath - Path to directory to scan
+ * @returns Object with result and parsed output
+ */
+export function executeSkillsCommandAndExpectYaml(
+  binPath: string,
+  command: string,
+  targetPath: string
+): { result: CliResult; parsed: Record<string, unknown> } {
+  // eslint-disable-next-line sonarjs/no-os-command-from-path -- Test helper
+  const result = spawnSync('node', [binPath, 'skills', command, targetPath], {
+    encoding: 'utf-8',
+  });
+
+  const parsed = yaml.load(result.stdout) as Record<string, unknown>;
+  return { result, parsed };
 }

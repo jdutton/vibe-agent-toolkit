@@ -57,7 +57,13 @@ function verifyNameSuggestion(result: SimpleNameOutput, providerName: string) {
   expect(typeof result.reasoning).toBe('string');
   expect(result.reasoning.length).toBeGreaterThan(0);
 
-  console.log(`✅ ${providerName} generated name: "${result.name}"`);
+  if (result.alternatives) {
+    expect(Array.isArray(result.alternatives)).toBe(true);
+    expect(result.alternatives.length).toBeGreaterThanOrEqual(2);
+    expect(result.alternatives.length).toBeLessThanOrEqual(3);
+  }
+
+  console.log(`✅ ${providerName} generated name: "${String(result.name)}"`);
 }
 
 describeIfLLMTests('LLM Regression Tests', () => {

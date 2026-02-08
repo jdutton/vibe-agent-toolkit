@@ -3,20 +3,21 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { beforeEach, describe, expect, it, beforeAll, afterAll } from 'vitest';
 
 import { ResourceRegistry } from '../src/resource-registry.js';
 
 describe('ResourceRegistry factory methods', () => {
+  const suite = setupAsyncTempDirSuite('registry-factories');
   let tempDir: string;
 
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(join(normalizedTmpdir(), 'registry-factories-'));
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+  beforeEach(async () => {
+    await suite.beforeEach();
+    tempDir = suite.getTempDir();
   });
 
   describe('empty', () => {

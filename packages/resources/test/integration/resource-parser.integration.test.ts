@@ -3,11 +3,11 @@
  * Tests parsing real markdown, JSON, and YAML files with proper resource type detection
  */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   detectResourceType,
@@ -34,18 +34,31 @@ const CONFIG_YAML_FILE = 'config.yaml';
 // Test suite setup
 // ============================================================================
 
+let testCounter = 0;
 const suite = {
+  suiteDir: '',
   tempDir: '',
+  beforeAll: async () => {
+    suite.suiteDir = await mkdtemp(join(normalizedTmpdir(), 'resource-parser-suite-'));
+  },
+  afterAll: async () => {
+    await rm(suite.suiteDir, { recursive: true, force: true });
+  },
   beforeEach: async () => {
-    suite.tempDir = await mkdtemp(join(normalizedTmpdir(), 'resource-parser-integration-'));
+    testCounter++;
+    suite.tempDir = join(suite.suiteDir, `test-${testCounter}`);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtemp
+    await mkdir(suite.tempDir, { recursive: true });
   },
   afterEach: async () => {
-    await rm(suite.tempDir, { recursive: true, force: true });
+    // Per-test cleanup handled by suite cleanup
   },
 };
 
 describe('parseMarkdownResource', () => {
 
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
 
@@ -186,6 +199,8 @@ author: John Doe
 });
 
 describe('parseJsonSchemaResource', () => {
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
 

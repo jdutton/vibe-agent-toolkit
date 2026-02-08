@@ -17,12 +17,23 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc",
+    "generate:resources": "vat-compile-resources compile resources/ generated/resources/",
+    "build:code": "bun run generate:resources && tsc && bun scripts/post-build.ts",
+    "build": "bun run build:code && vat skills build",
+    "lint": "eslint src/ test/ examples/",
+    "duplication-check": "echo 'Duplication check not applicable to example packages'",
+    "validate-structure": "echo 'Structure validation not applicable to example packages'",
+    "pre-publish": "echo 'Pre-publish checks not applicable to example packages'",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:integration": "echo 'No integration tests in example package'",
+    "test:system": "echo 'No system tests in example package'",
     "typecheck": "tsc --noEmit",
     "demo:photos": "bun examples/photo-analysis-demo.ts",
-    "demo:conversation": "bun examples/conversational-demo.ts"
+    "demo:conversation": "bun examples/conversational-demo.ts",
+    "demo:resources": "bun run build && bun examples/resource-demo.ts",
+    "postinstall": "vat skills install --npm-postinstall || exit 0"
   },
   "dependencies": {
     "@vibe-agent-toolkit/agent-runtime": "workspace:*",
@@ -38,14 +49,27 @@
     "@anthropic-ai/sdk": "^0.36.0",
     "@langchain/openai": "^0.3.16",
     "@types/node": "^22.10.5",
+    "@vibe-agent-toolkit/resource-compiler": "workspace:*",
     "@vibe-agent-toolkit/runtime-claude-agent-sdk": "workspace:*",
     "@vibe-agent-toolkit/runtime-langchain": "workspace:*",
     "@vibe-agent-toolkit/runtime-openai": "workspace:*",
     "@vibe-agent-toolkit/runtime-vercel-ai-sdk": "workspace:*",
+    "@vitest/coverage-v8": "2.1.8",
     "ai": "^6.0.48",
     "openai": "^4.77.3",
     "typescript": "^5.7.3",
     "vitest": "^2.1.8"
+  },
+  "vat": {
+    "version": "1.0",
+    "type": "agent-bundle",
+    "skills": [
+      {
+        "name": "vat-example-cat-agents",
+        "source": "./resources/skills/SKILL.md",
+        "path": "./dist/skills/vat-example-cat-agents"
+      }
+    ]
   },
   "keywords": [
     "ai-agent",

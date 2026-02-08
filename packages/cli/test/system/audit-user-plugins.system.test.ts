@@ -19,11 +19,10 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   cleanupTestTempDir,
   createTestTempDir,
-  executeCli,
   getBinPath,
 } from './test-common.js';
 import { getTestFixturesPath } from './test-fixture-loader.js';
-import { parseYamlOutput } from './test-helpers.js';
+import { executeCli, parseYamlOutput } from './test-helpers.js';
 
 describe('Audit User Plugins Fixture (system test)', () => {
   let binPath: string;

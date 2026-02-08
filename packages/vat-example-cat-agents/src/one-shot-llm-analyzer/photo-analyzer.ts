@@ -3,6 +3,9 @@ import type { Agent, LLMError, OneShotAgentOutput } from '@vibe-agent-toolkit/ag
 import { LLM_INVALID_OUTPUT, RESULT_ERROR } from '@vibe-agent-toolkit/agent-schema';
 import { z } from 'zod';
 
+// Import compiled resources from markdown
+// eslint-disable-next-line sonarjs/unused-import -- Will be used when real vision API is implemented
+import * as _PhotoAnalyzerResources from '../../generated/resources/agents/photo-analyzer.js';
 import { CatCharacteristicsSchema, type CatCharacteristics } from '../types/schemas.js';
 import { extractFurColor as extractFurColorUtil } from '../utils/color-extraction.js';
 
@@ -331,6 +334,9 @@ export const photoAnalyzerAgent: Agent<
       mockFn: () => mockAnalyzePhoto(imagePathOrBase64),
       realFn: async () => {
         throw new Error('Real vision API not implemented yet. Use mockable: true for testing.');
+        // When real vision API is implemented, use:
+        // systemPrompt: _PhotoAnalyzerResources.fragments.systemPrompt.body
+        // See resources/agents/photo-analyzer.md for prompts and domain knowledge
       },
       parseOutput: (raw) => {
         const parsed = JSON.parse(raw as string);

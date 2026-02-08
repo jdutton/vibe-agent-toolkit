@@ -6,13 +6,21 @@
 export { buildClaudeSkill, type BuildOptions, type BuildResult } from './builder.js';
 
 export {
+  extractH1Title,
+  packageSkill,
+  type PackageSkillOptions,
+  type PackageSkillResult,
+  type SkillMetadata,
+} from './skill-packager.js';
+
+export {
   ClaudeSkillFrontmatterSchema,
   VATClaudeSkillFrontmatterSchema,
   type ClaudeSkillFrontmatter,
   type VATClaudeSkillFrontmatter,
 } from './schemas/claude-skill-frontmatter.js';
 
-export { PluginJsonSchema, PluginSchema, type Plugin } from './schemas/plugin.js';
+export { ClaudePluginJsonSchema, ClaudePluginSchema, type ClaudePlugin } from './schemas/claude-plugin.js';
 
 export {
   MarketplaceJsonSchema,

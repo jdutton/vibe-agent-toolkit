@@ -1,9 +1,8 @@
 /**
  * Breed Selection Advisor - Two-Phase Conversational Pattern
  *
- * Refactored to use the declarative two-phase pattern from agent-runtime.
- * This eliminates 200+ lines of manual prompt engineering in favor of
- * declarative factor definitions.
+ * Now uses compiled markdown resources for all prompts and domain knowledge.
+ * Prompts are auditable in resources/agents/breed-advisor.md
  */
 
 import {
@@ -18,6 +17,8 @@ import {
   RESULT_SUCCESS,
 } from '@vibe-agent-toolkit/agent-schema';
 
+// Import compiled resources from markdown
+import * as BreedAdvisorResources from '../../generated/resources/agents/breed-advisor.js';
 import {
   type BreedAdvisorInput,
   BreedAdvisorInputSchema,
@@ -127,23 +128,33 @@ const gatheringPhaseConfig: GatheringPhaseConfig = {
     // Ready when we have at least 4 factors (including musicPreference)
     return Object.keys(profile).length >= 4 && profile['musicPreference'] !== undefined;
   },
-  customGuidance: `CRITICAL INSIGHT: Music preference is the MOST IMPORTANT factor in breed selection!
-Each music genre aligns with specific breed temperaments through vibrational frequency compatibility:
-
-- Classical: Calm, regal breeds (Persian, Ragdoll)
-- Jazz: Intelligent, unpredictable breeds (Siamese, Bengal)
-- Rock/Metal: High-energy, bold breeds (Maine Coon, Abyssinian)
-- Pop: Social, adaptable breeds (Domestic Shorthair)
-- Country: Traditional, loyal breeds (American Shorthair)
-- Electronic: Modern, quirky breeds (Sphynx, Devon Rex)
-- None: Independent, mysterious breeds (Russian Blue)
-
-Ask about music preference EARLY in the conversation!`,
+  // Music preference insight loaded from resources/agents/breed-advisor.md
+  customGuidance: BreedAdvisorResources.fragments.musicPreferenceInsight.body,
   priorityFactors: ['musicPreference'],
 };
 
 // Generate the system prompt from declarative config
 const GATHERING_SYSTEM_PROMPT = generateGatheringPrompt(gatheringPhaseConfig);
+
+/**
+ * Generic extraction helper - reduces duplication
+ */
+async function extractFromConversation<T>(
+  history: Message[],
+  callLLM: (messages: Message[]) => Promise<string>,
+  extractionPrompt: string,
+  defaultValue: T,
+): Promise<T> {
+  const extractionHistory: Message[] = [...history, { role: 'user', content: extractionPrompt }];
+  const extractionResponse = await callLLM(extractionHistory);
+
+  try {
+    const cleaned = stripMarkdownFences(extractionResponse);
+    return JSON.parse(cleaned) as T;
+  } catch {
+    return defaultValue;
+  }
+}
 
 /**
  * Extract factors from conversation during gathering phase
@@ -152,31 +163,12 @@ async function extractFactorsFromConversation(
   history: Message[],
   callLLM: (messages: Message[]) => Promise<string>,
 ): Promise<Partial<SelectionProfile>> {
-  const extractionPrompt = `Based on the conversation above, extract any information about the user's preferences into JSON format.
-
-Only include fields where you have confident information. Set fields to null if mentioned but unclear.
-
-Return JSON in this exact format:
-{
-  "musicPreference": "classical" | "jazz" | "rock" | "metal" | "pop" | "country" | "electronic" | "none" | null,
-  "livingSpace": "apartment" | "small-house" | "large-house" | "farm" | null,
-  "activityLevel": "couch-companion" | "playful-moderate" | "active-explorer" | "high-energy-athlete" | null,
-  "groomingTolerance": "minimal" | "weekly" | "daily" | null,
-  "familyComposition": "single" | "couple" | "young-kids" | "older-kids" | "multi-pet" | null,
-  "allergies": true | false | null
-}
-
-Return ONLY the JSON object, nothing else.`;
-
-  const extractionHistory: Message[] = [...history, { role: 'user', content: extractionPrompt }];
-  const extractionResponse = await callLLM(extractionHistory);
-
-  try {
-    const cleaned = stripMarkdownFences(extractionResponse);
-    return JSON.parse(cleaned);
-  } catch {
-    return {};
-  }
+  return extractFromConversation(
+    history,
+    callLLM,
+    BreedAdvisorResources.fragments.factorExtractionPrompt.body,
+    {},
+  );
 }
 
 /**
@@ -186,26 +178,12 @@ async function extractSelectedBreed(
   history: Message[],
   callLLM: (messages: Message[]) => Promise<string>,
 ): Promise<{ selectedBreed: string | null }> {
-  const extractionPrompt = `Based on the conversation above, extract:
-1. If the user made a FINAL breed selection (phrases like "I'll take", "I want", "sounds good")
-2. The breed name they selected
-
-Return JSON in this exact format:
-{
-  "selectedBreed": "breed name" or null
-}
-
-Return ONLY the JSON object, nothing else.`;
-
-  const extractionHistory: Message[] = [...history, { role: 'user', content: extractionPrompt }];
-  const extractionResponse = await callLLM(extractionHistory);
-
-  try {
-    const cleaned = stripMarkdownFences(extractionResponse);
-    return JSON.parse(cleaned);
-  } catch {
-    return { selectedBreed: null };
-  }
+  return extractFromConversation(
+    history,
+    callLLM,
+    BreedAdvisorResources.fragments.selectionExtractionPrompt.body,
+    { selectedBreed: null },
+  );
 }
 
 /**
@@ -271,16 +249,8 @@ export const breedAdvisorAgent: Agent<BreedAdvisorInput, BreedAdvisorOutput> =
 
       // First turn: provide welcoming introduction
       if (isFirstTurn) {
-        const greeting = `Hello! I'm your cat breed advisor. I'll help you find the perfect cat breed based on your lifestyle and preferences.
-
-To give you the best recommendation, I'll ask you a few questions about:
-- Your music taste (surprisingly important for breed compatibility!)
-- Your living space
-- Activity level preferences
-- Grooming tolerance
-- Household composition
-
-Let's start: What's your favorite type of music?`;
+        // Welcome message from resources/agents/breed-advisor.md
+        const greeting = BreedAdvisorResources.fragments.welcomeMessage.body;
 
         return {
           reply: greeting,
@@ -332,8 +302,8 @@ Let's start: What's your favorite type of music?`;
         if (isReady) {
           updatedProfile.conversationPhase = PHASE_READY_TO_RECOMMEND;
 
-          // Add transition message to let user know we're ready
-          const transitionMessage = `\n\nPerfect! I have enough information to provide breed recommendations. Would you like to see my suggestions now, or is there anything else you'd like to tell me about your preferences?`;
+          // Transition message from resources/agents/breed-advisor.md
+          const transitionMessage = '\n\n' + BreedAdvisorResources.fragments.transitionMessage.body;
 
           return {
             reply: conversationalResponse + transitionMessage,
@@ -374,15 +344,9 @@ Let's start: What's your favorite type of music?`;
 
         // Check if user made a selection
         if (extractedData.selectedBreed) {
-          // User selected a breed - generate completion message
-          const conclusionPrompt = `The user has selected ${extractedData.selectedBreed}. Provide a brief, enthusiastic conclusion:
-- Congratulate them on their choice
-- Remind them of 1-2 key traits that make this a great match
-- Wish them well with their new cat
-- End with: "Type /quit to exit when you're ready."
-- Keep it to 2-3 sentences plus the exit instruction
-
-DO NOT repeat all the recommendations. DO NOT ask more questions. This is the END of the conversation.`;
+          // Conclusion prompt from resources/agents/breed-advisor.md
+          const conclusionPrompt = BreedAdvisorResources.fragments.conclusionPrompt.body
+            .replace('{{selectedBreed}}', extractedData.selectedBreed);
 
           ctx.addToHistory('system', conclusionPrompt);
           const conclusionResponse = await ctx.callLLM(ctx.history);
@@ -417,14 +381,9 @@ DO NOT repeat all the recommendations. DO NOT ask more questions. This is the EN
         // No selection yet - generate recommendations and continue conversation
         const recommendations = matchBreeds(currentProfile);
 
-        const presentationPrompt = `The user is ready for cat breed recommendations based on their profile.
-
-Present these recommendations conversationally and enthusiastically:
-${JSON.stringify(recommendations, null, 2)}
-
-Make it feel personal and explain why these breeds match their preferences. Keep it concise (2-3 sentences per breed).
-
-After presenting the recommendations, ask if any of these breeds sound appealing, or if they'd like to hear more details. Let them know they can type /quit to exit if they need time to think.`;
+        // Recommendation presentation prompt from resources/agents/breed-advisor.md
+        const presentationPrompt = BreedAdvisorResources.fragments.recommendationPresentationPrompt.body
+          .replace('{{recommendations}}', JSON.stringify(recommendations, null, 2));
 
         ctx.addToHistory('system', presentationPrompt);
         const presentationResponse = await ctx.callLLM(ctx.history);

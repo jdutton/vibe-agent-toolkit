@@ -7,8 +7,8 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 
-import { GitTracker, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { GitTracker, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { beforeEach, describe, expect, it, beforeAll, afterAll } from 'vitest';
 
 import { ResourceRegistry } from '../src/resource-registry.js';
 import type { ProjectConfig } from '../src/schemas/project-config.js';
@@ -71,14 +71,15 @@ describe('ResourceRegistry constructor optionals', () => {
 });
 
 describe('ResourceRegistry.fromResources index building', () => {
+  const suite = setupAsyncTempDirSuite('registry-indexes');
   let tempDir: string;
 
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(join(normalizedTmpdir(), 'registry-indexes-'));
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+  beforeEach(async () => {
+    await suite.beforeEach();
+    tempDir = suite.getTempDir();
   });
 
   it('should build all 4 indexes correctly', async () => {
@@ -114,14 +115,15 @@ describe('ResourceRegistry.fromResources index building', () => {
 });
 
 describe('ResourceRegistry.addResource with collections', () => {
+  const suite = setupAsyncTempDirSuite('registry-collections');
   let tempDir: string;
 
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(join(normalizedTmpdir(), 'registry-collections-'));
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+  beforeEach(async () => {
+    await suite.beforeEach();
+    tempDir = suite.getTempDir();
   });
 
   it('should handle resources when config has no collections', async () => {
@@ -158,14 +160,15 @@ describe('ResourceRegistry.addResource with collections', () => {
 });
 
 describe('ResourceRegistry.validate without rootDir', () => {
+  const suite = setupAsyncTempDirSuite('registry-validate');
   let tempDir: string;
 
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(join(normalizedTmpdir(), 'registry-validate-'));
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+  beforeEach(async () => {
+    await suite.beforeEach();
+    tempDir = suite.getTempDir();
   });
 
   it('should validate links when rootDir is undefined', async () => {
@@ -183,14 +186,15 @@ describe('ResourceRegistry.validate without rootDir', () => {
 });
 
 describe('ResourceRegistry schema validation error handling', () => {
+  const suite = setupAsyncTempDirSuite('registry-schema-errors');
   let tempDir: string;
 
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(join(normalizedTmpdir(), 'registry-schema-errors-'));
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+  beforeEach(async () => {
+    await suite.beforeEach();
+    tempDir = suite.getTempDir();
   });
 
   it('should handle missing schema file gracefully', async () => {
@@ -294,14 +298,15 @@ describe('ResourceRegistry schema validation error handling', () => {
 });
 
 describe('ResourceRegistry.getCollectionStats edge cases', () => {
+  const suite = setupAsyncTempDirSuite('registry-stats');
   let tempDir: string;
 
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(join(normalizedTmpdir(), 'registry-stats-'));
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+  beforeEach(async () => {
+    await suite.beforeEach();
+    tempDir = suite.getTempDir();
   });
 
   it('should return undefined when no collections configured', () => {
