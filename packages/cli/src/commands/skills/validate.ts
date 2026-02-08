@@ -15,6 +15,7 @@ import * as path from 'node:path';
 import { validateSkill, type ValidationResult } from '@vibe-agent-toolkit/agent-skills';
 import { scan } from '@vibe-agent-toolkit/discovery';
 import { ResourceRegistry, type ValidationResult as ResourceValidationResult } from '@vibe-agent-toolkit/resources';
+import { GitTracker } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
 
 import { loadConfig } from '../../utils/config-loader.js';
@@ -78,9 +79,13 @@ interface UnifiedValidationOutput {
  */
 async function validateSkillAsResource(
   skillPath: string,
-  rootDir: string
+  rootDir: string,
+  gitTracker?: GitTracker
 ): Promise<ResourceValidationResult> {
-  const registry = new ResourceRegistry({ rootDir });
+  const registry = new ResourceRegistry({
+    rootDir,
+    ...(gitTracker !== undefined && { gitTracker })
+  });
 
   // Add the entire resources directory to ensure all linked files are available for validation
   // This is necessary because SKILL.md links to agent markdown files in ../agents/
@@ -363,6 +368,11 @@ export async function validateCommand(
 
     logger.info(`   Found ${skillPaths.length} skill${skillPaths.length === 1 ? '' : 's'}\n`);
 
+    // Create GitTracker for efficient git-ignore checking across all skills
+    // This caches git operations and avoids spawning hundreds of git subprocesses
+    const gitTracker = new GitTracker(rootDir);
+    await gitTracker.initialize();
+
     const results: UnifiedSkillValidationResult[] = [];
 
     // Step 2: Validate each skill
@@ -371,7 +381,7 @@ export async function validateCommand(
       const filenameCheck = validateSkillFilename(skillPath);
 
       // 2b: Resource validation (markdown, links)
-      const resourceResult = await validateSkillAsResource(skillPath, rootDir);
+      const resourceResult = await validateSkillAsResource(skillPath, rootDir, gitTracker);
 
       // 2c: Skill-specific validation (reserved words, etc.)
       const skillResult = await validateSkill({ skillPath, rootDir });
