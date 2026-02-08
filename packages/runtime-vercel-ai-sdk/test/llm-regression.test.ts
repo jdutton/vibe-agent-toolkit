@@ -12,14 +12,14 @@
 import { anthropic } from '@ai-sdk/anthropic';
 import { openai } from '@ai-sdk/openai';
 import {
-  HaikuSchema,
-  HaikuValidationResultSchema,
-  NameGeneratorInputSchema,
-  NameSuggestionSchema,
-  haikuValidatorAgent,
-  nameGeneratorAgent,
-  type NameSuggestion,
-} from '@vibe-agent-toolkit/vat-example-cat-agents';
+  SimpleNameInputSchema,
+  SimpleNameOutputSchema,
+  SimpleValidationInputSchema,
+  SimpleValidationOutputSchema,
+  simpleNameGeneratorAgent,
+  simpleValidatorAgent,
+  type SimpleNameOutput,
+} from '@vibe-agent-toolkit/test-agents';
 import { describe, expect, it } from 'vitest';
 
 import { convertLLMAnalyzerToFunction } from '../src/adapters/llm-analyzer.js';
@@ -34,35 +34,23 @@ const hasOpenAIKey = !!process.env['OPENAI_API_KEY'];
 const hasAnthropicKey = !!process.env['ANTHROPIC_API_KEY'];
 
 // Test data
-const nobleOrangeCat = {
-  characteristics: {
-    physical: { furColor: 'Orange' as const },
-    behavioral: { personality: ['Distinguished'] },
-    description: 'A noble orange cat',
-  },
+const simpleTest1 = {
+  adjective: 'Swift',
+  noun: 'River',
 };
 
-const regalOrangeCat = {
-  characteristics: {
-    physical: { furColor: 'Orange' as const, size: 'large' as const },
-    behavioral: {
-      personality: ['Distinguished', 'Noble', 'Regal'],
-      quirks: ['Sits like royalty', 'Judges everyone'],
-    },
-    description: 'A distinguished orange cat with a regal bearing',
-  },
+const simpleTest2 = {
+  adjective: 'Golden',
+  noun: 'Mountain',
 };
 
-const playfulOrangeCat = {
-  characteristics: {
-    physical: { furColor: 'Orange' as const },
-    behavioral: { personality: ['Playful'] },
-    description: 'A playful orange cat',
-  },
+const simpleTest3 = {
+  adjective: 'Bright',
+  noun: 'Star',
 };
 
 // Helper to verify LLM analyzer output structure
-function verifyNameSuggestion(result: NameSuggestion, providerName: string) {
+function verifyNameSuggestion(result: SimpleNameOutput, providerName: string) {
   expect(result).toBeDefined();
   expect(typeof result.name).toBe('string');
   expect(result.name.length).toBeGreaterThan(0);
@@ -87,27 +75,22 @@ describeIfLLMTests('LLM Regression Tests', () => {
       }
 
       const { tool } = convertPureFunctionToTool(
-        haikuValidatorAgent,
-        HaikuSchema,
-        HaikuValidationResultSchema,
+        simpleValidatorAgent,
+        SimpleValidationInputSchema,
+        SimpleValidationOutputSchema,
       );
 
-      const validHaiku = {
-        line1: 'Orange fur ablaze',
-        line2: 'Whiskers twitch in winter sun',
-        line3: 'Cat dreams of dinner',
+      const validInput = {
+        text: 'Hello, World!',
+        minLength: 5,
+        maxLength: 50,
       };
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result = await (tool.execute as any)(validHaiku, {} as any);
+      const result = await (tool.execute as any)(validInput, {} as any);
 
       expect(result).toBeDefined();
       expect(result.valid).toBe(true);
-      expect(result.syllables).toEqual({
-        line1: 5,
-        line2: 7,
-        line3: 5,
-      });
     }, 30000); // 30s timeout for API calls
 
     it('should work with LLM analyzer functions', async () => {
@@ -117,16 +100,16 @@ describeIfLLMTests('LLM Regression Tests', () => {
       }
 
       const generateName = convertLLMAnalyzerToFunction(
-        nameGeneratorAgent,
-        NameGeneratorInputSchema,
-        NameSuggestionSchema,
+        simpleNameGeneratorAgent,
+        SimpleNameInputSchema,
+        SimpleNameOutputSchema,
         {
           model: openai('gpt-4o-mini'),
           temperature: 0.9,
         },
       );
 
-      const result = await generateName(nobleOrangeCat);
+      const result = await generateName(simpleTest1);
       verifyNameSuggestion(result, 'OpenAI');
     }, 30000);
   });
@@ -139,16 +122,16 @@ describeIfLLMTests('LLM Regression Tests', () => {
       }
 
       const generateName = convertLLMAnalyzerToFunction(
-        nameGeneratorAgent,
-        NameGeneratorInputSchema,
-        NameSuggestionSchema,
+        simpleNameGeneratorAgent,
+        SimpleNameInputSchema,
+        SimpleNameOutputSchema,
         {
           model: anthropic('claude-sonnet-4-5-20250929'),
           temperature: 0.9,
         },
       );
 
-      const result = await generateName(regalOrangeCat);
+      const result = await generateName(simpleTest2);
       verifyNameSuggestion(result, 'Anthropic');
     }, 30000);
   });
@@ -162,23 +145,23 @@ describeIfLLMTests('LLM Regression Tests', () => {
 
       // Create functions with both providers
       const generateNameOpenAI = convertLLMAnalyzerToFunction(
-        nameGeneratorAgent,
-        NameGeneratorInputSchema,
-        NameSuggestionSchema,
+        simpleNameGeneratorAgent,
+        SimpleNameInputSchema,
+        SimpleNameOutputSchema,
         { model: openai('gpt-4o-mini'), temperature: 0.9 },
       );
 
       const generateNameAnthropic = convertLLMAnalyzerToFunction(
-        nameGeneratorAgent,
-        NameGeneratorInputSchema,
-        NameSuggestionSchema,
+        simpleNameGeneratorAgent,
+        SimpleNameInputSchema,
+        SimpleNameOutputSchema,
         { model: anthropic('claude-sonnet-4-5-20250929'), temperature: 0.9 },
       );
 
       // Call both providers in parallel with same input
       const [resultOpenAI, resultAnthropic] = await Promise.all([
-        generateNameOpenAI(playfulOrangeCat),
-        generateNameAnthropic(playfulOrangeCat),
+        generateNameOpenAI(simpleTest3),
+        generateNameAnthropic(simpleTest3),
       ]);
 
       // Verify both outputs

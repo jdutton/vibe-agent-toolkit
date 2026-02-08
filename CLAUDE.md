@@ -407,6 +407,36 @@ Pre-commit hooks via Husky will enforce these automatically.
 
 **IMPORTANT**: If `duplication-check` fails, refactor to eliminate duplication. Never update the baseline without explicit permission.
 
+### Running vat CLI During Development
+
+**In this monorepo**, use the convenience script to run vat commands:
+
+```bash
+# From repository root
+bun run vat <command> <args>
+
+# Examples:
+bun run vat skills build
+bun run vat resources validate docs/
+bun run vat skills audit ~/.claude/plugins
+```
+
+**For package build scripts** that need to invoke vat, use relative path to the built CLI:
+
+```json
+{
+  "scripts": {
+    "build": "bun run build:code && node ../cli/dist/bin/vat.js skills build"
+  }
+}
+```
+
+**Why not use bunx/npx?** Workspace bin linking doesn't work reliably across package managers (Bun/npm/pnpm) in monorepos. Direct paths and convenience scripts work everywhere.
+
+**Note**: End users who self-host VAT in their own projects can use standard commands like `vat skills build` or `npx vat skills build`.
+
+See [packages/cli/CLAUDE.md](packages/cli/CLAUDE.md) for more CLI development guidance.
+
 ### Adding New Packages
 
 1. Create directory: `packages/my-package/`

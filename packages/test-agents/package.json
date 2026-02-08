@@ -1,7 +1,8 @@
 {
-  "name": "@vibe-agent-toolkit/runtime-claude-agent-sdk",
-  "version": "0.1.9",
-  "description": "Claude Agent SDK runtime adapter for VAT agents",
+  "name": "@vibe-agent-toolkit/test-agents",
+  "version": "0.1.8",
+  "private": true,
+  "description": "Simple test agents for validating runtime adapters (internal use only)",
   "type": "module",
   "exports": {
     ".": {
@@ -19,34 +20,24 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.1.5",
-    "@anthropic-ai/sdk": "^0.37.0",
     "@vibe-agent-toolkit/agent-runtime": "workspace:*",
-    "@vibe-agent-toolkit/utils": "workspace:*",
     "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
-    "@vibe-agent-toolkit/dev-tools": "workspace:*",
-    "openai": "^4.77.3",
-    "tsx": "^4.19.2",
     "typescript": "^5.7.3",
-    "vitest": "^2.1.8",
-    "@vibe-agent-toolkit/test-agents": "workspace:*"
+    "vitest": "^2.1.8"
   },
   "keywords": [
-    "ai-agent",
-    "claude",
-    "anthropic",
-    "claude-agent-sdk",
-    "vibe-agent-toolkit",
-    "runtime-adapter"
+    "test",
+    "agents",
+    "vibe-agent-toolkit"
   ],
   "author": "Jeff Dutton",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "https://github.com/jdutton/vibe-agent-toolkit.git",
-    "directory": "packages/runtime-claude-agent-sdk"
+    "directory": "packages/test-agents"
   }
 }

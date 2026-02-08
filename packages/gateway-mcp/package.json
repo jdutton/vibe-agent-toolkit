@@ -25,16 +25,21 @@
     "@modelcontextprotocol/sdk": "^1.0.4",
     "@vibe-agent-toolkit/agent-schema": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
-    "@vibe-agent-toolkit/vat-example-cat-agents": "workspace:*",
     "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
     "@vitest/coverage-v8": "^3.0.5",
     "typescript": "^5.7.3",
-    "vitest": "^3.0.5"
+    "vitest": "^3.0.5",
+    "@vibe-agent-toolkit/vat-example-cat-agents": "workspace:*"
   },
-  "keywords": ["mcp", "model-context-protocol", "agents", "vat"],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "agents",
+    "vat"
+  ],
   "author": "Jeff Dutton",
   "license": "MIT",
   "repository": {

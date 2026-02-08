@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Internal
+- **Turborepo Integration**: Build orchestration with intelligent caching and parallel execution
+- **Circular Dependency Resolution**: Removed circular dependencies between packages for cleaner architecture
+- **Shared Test Infrastructure**: `@vibe-agent-toolkit/test-agents` package for consistent testing across runtime adapters
+- **Test Parallelism**: Adaptive test parallelism with `availableParallelism()` for 2x dev speedup
+
 ## [0.1.9] - 2026-02-07
 
 - **Resource Compiler** (`@vibe-agent-toolkit/resource-compiler`) - Compile markdown to TypeScript with full IDE support

@@ -50,4 +50,5 @@ export const PUBLISHED_PACKAGES = [
  */
 export const SKIP_PACKAGES = [
   'dev-tools', // Private development tools package
+  'test-agents', // Private test utilities for runtime adapters
 ] as const;

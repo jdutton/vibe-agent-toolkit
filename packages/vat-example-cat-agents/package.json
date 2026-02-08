@@ -19,7 +19,8 @@
   "scripts": {
     "generate:resources": "vat-compile-resources compile resources/ generated/resources/",
     "build:code": "bun run generate:resources && tsc && bun scripts/post-build.ts",
-    "build": "bun run build:code && vat skills build",
+    "build": "bun run build:code",
+    "build:skills": "node ../cli/dist/bin/vat.js skills build",
     "lint": "eslint src/ test/ examples/",
     "duplication-check": "echo 'Duplication check not applicable to example packages'",
     "validate-structure": "echo 'Structure validation not applicable to example packages'",
