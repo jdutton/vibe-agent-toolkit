@@ -9,34 +9,90 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.1.9] - 2026-02-07
 
+- **Resource Compiler** (`@vibe-agent-toolkit/resource-compiler`) - Compile markdown to TypeScript with full IDE support
+  - Direct `.md` imports in TypeScript with type safety
+  - H2 headings become typed fragment properties for granular access
+  - Frontmatter parsing to typed objects
+  - IDE autocomplete, go-to-definition, and hover tooltips
+  - `vat-compile-resources` CLI: compile markdown to JS/TS modules
+  - TypeScript Language Service Plugin for seamless `.md` imports
+  - Build integration: copy generated resources to dist during build
+  - Dog-fooded in vat-example-cat-agents package
+
+- **VAT Distribution Standard** - Package-based skill distribution with build and install infrastructure
+  - `vat skills build` command: Builds skills from source into `dist/skills/` during package build
+  - `vat skills install` command: Smart installation from npm packages, local directories, or zip files
+  - Package.json `vat` metadata convention for declaring skills, agents, pure functions, and runtimes
+  - Automatic skill installation via npm postinstall hooks
+  - Two distributable skills:
+    - `vibe-agent-toolkit`: User adoption guide for VAT CLI and agent creation (from vat-development-agents)
+    - `vat-example-cat-agents`: Orchestration guide for 8 example cat agents (from vat-example-cat-agents)
+  - See [Distributing VAT Skills Guide](./docs/guides/distributing-vat-skills.md) for usage
+
+- **Audit Misconfiguration Detection** - `vat audit` now detects misconfigured standalone skills
+  - Identifies standalone SKILL.md files in ~/.claude/plugins/ that won't be recognized by Claude Code
+  - Error code: SKILL_MISCONFIGURED_LOCATION with actionable fix suggestions
+  - Helps users correct common installation mistakes
+
+- `--user` flag for `vat skills validate` to validate installed user skills
+- Shared utilities: claude-paths, skill-discovery, user-context-scanner, config-loader
+- Case-insensitive skill discovery (finds malformed SKILL.md variations)
+
+### Changed
+- **BREAKING**: `vat skills list` now defaults to project skills (use `--user` for installed skills)
+- **Plugin Schema Updated to Official Claude Code Spec** - Updated ClaudePluginSchema to match official documentation
+  - Made `description` and `version` optional (only `name` required if manifest exists)
+  - Added component path fields: `commands`, `skills`, `agents`, `hooks`, `mcpServers`, `outputStyles`, `lspServers`
+  - Renamed types for clarity: `PluginSchema` → `ClaudePluginSchema`, `Plugin` → `ClaudePlugin`
+  - Updated plugin-validator to handle optional version field with exactOptionalPropertyTypes
+  - Tests updated to validate actual errors instead of missing optional fields
+- **CLI Dependency Cleanup** - Removed example agent packages from automatic installation
+  - Removed `@vibe-agent-toolkit/vat-example-cat-agents` from CLI dependencies
+  - Added `@vibe-agent-toolkit/vat-development-agents` to CLI dependencies
+  - Added comment warning against adding example packages to CLI dependencies
+  - Example agents now opt-in via separate `npm install -g @vibe-agent-toolkit/vat-example-cat-agents`
+- **Skill Naming Consistency** - Skill names now match package names
+  - `vat-example-cat-agents` skill renamed from `cat-agents-skill` for consistency
+- Refactored `vat skills validate` to use shared utilities and respect resource config boundaries
+- Refactored `vat skills list` to use shared utilities
+
 ### Fixed
 - **RAG Metadata Filtering**: Now works correctly regardless of which Zod version (v3 or v4) you have installed
   - Previously: Metadata filters returned 0 results if your Zod version differed from the library's
   - Now: Automatically detects and works with both Zod v3.25.0+ and v4.0.0+
   - No code changes required - filtering just works
-
-### Changed
+- **RAG Line Number Tracking**: Chunks now preserve exact line ranges from source documents
+  - Previously all chunks from the same section had identical line numbers
+  - Fixed off-by-one error in line position calculation (1-based to 0-based conversion)
+  - Properly flattens nested heading hierarchy during section extraction
+  - Handles large paragraphs by splitting into line-level chunks
+  - Enables accurate IDE navigation and source citations
 - **BREAKING CHANGE**: RAG database column names are now lowercase (SQL standard)
   - Existing LanceDB indexes must be rebuilt - run `await provider.clear()` then re-index
   - Your code doesn't change - still use camelCase in queries: `{ metadata: { contentType: 'docs' } }`
   - Why: Prevents case-sensitivity issues, no quotes needed in queries, follows SQL conventions
   - See migration guide: `packages/rag-lancedb/README.md#upgrading-from-v018-to-v019`
+- Eliminated path duplication across audit, install, and other commands
+- `vat audit --user` now finds standalone skills in ~/.claude/skills
 
 ### Added
 - **RAG Similarity Scores**: Search results now include confidence scores (0-1, higher is better)
   - Filter results by confidence threshold
   - Compare result relevance
   - Build smarter retrieval logic
-
 - **RAG Progress Tracking**: See real-time progress when building large indexes
   - Shows resources indexed, chunks created, time elapsed/remaining
   - Add progress bars to your CLI tools
   - Monitor long-running index builds
-
 - **Accurate Line Numbers**: Chunks now track exact line ranges in source files
   - Jump directly to source in your IDE
   - Show precise code citations
   - Build better documentation tools
+
+### Internal
+- Deleted obsolete skill-finder.ts (replaced by skill-discovery.ts)
+- Removed registry tracking from skills install command (architectural simplification)
+- Preserved audit.ts custom scanning logic (architectural decision for independence)
 
 ## [0.1.8] - 2026-02-06
 

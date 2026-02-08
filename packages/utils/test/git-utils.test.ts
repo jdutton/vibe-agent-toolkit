@@ -2,10 +2,11 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { gitFindRoot, gitLsFiles, isGitIgnored } from '../src/git-utils.js';
 import { normalizedTmpdir } from '../src/path-utils.js';
+import { setupSyncTempDirSuite } from '../src/test-helpers.js';
 
 import { createGitRepo } from './test-helpers.js';
 
@@ -24,14 +25,15 @@ function setupGitRepo(tempDir: string): void {
 }
 
 describe('gitFindRoot', () => {
+  const suite = setupSyncTempDirSuite('git-find-root');
   let tempDir: string;
 
-  beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'git-find-root-'));
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
-  afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+  beforeEach(() => {
+    suite.beforeEach();
+    tempDir = suite.getTempDir();
   });
 
   it('should find git root in repository', () => {
@@ -65,16 +67,17 @@ describe('gitFindRoot', () => {
 });
 
 describe('gitLsFiles', () => {
+  const suite = setupSyncTempDirSuite('git-ls-files');
   let tempDir: string;
   const TRACKED_FILE = 'tracked.md';
 
-  beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'git-ls-files-'));
-    setupGitRepo(tempDir);
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
-  afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+  beforeEach(() => {
+    suite.beforeEach();
+    tempDir = suite.getTempDir();
+    setupGitRepo(tempDir);
   });
 
   it('should list tracked files', () => {
@@ -157,15 +160,16 @@ describe('gitLsFiles', () => {
 });
 
 describe('isGitIgnored', () => {
+  const suite = setupSyncTempDirSuite('git-utils');
   let tempDir: string;
 
-  beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'git-utils-test-'));
-    setupGitRepo(tempDir);
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
-  afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+  beforeEach(() => {
+    suite.beforeEach();
+    tempDir = suite.getTempDir();
+    setupGitRepo(tempDir);
   });
 
   it('should return true for gitignored file', () => {

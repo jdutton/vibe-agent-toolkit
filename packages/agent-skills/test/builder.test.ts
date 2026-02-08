@@ -3,8 +3,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildClaudeSkill } from '../src/builder.js';
 
@@ -19,14 +19,15 @@ const TEST_AGENT_LICENSE_NAME = 'test-agent-license';
 const TEST_AGENT_NO_PROMPT_NAME = 'test-agent-no-prompt';
 
 describe('buildClaudeSkill', () => {
+  const suite = setupAsyncTempDirSuite('claude-skill');
   let tempDir: string;
 
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(normalizedTmpdir(), 'claude-skill-test-'));
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+  beforeEach(async () => {
+    await suite.beforeEach();
+    tempDir = suite.getTempDir();
   });
 
   it('should build a basic Claude Skill', async () => {

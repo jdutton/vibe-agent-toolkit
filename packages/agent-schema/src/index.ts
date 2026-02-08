@@ -66,3 +66,14 @@ export {
   type RAGConfig,
   type TestConfig,
 } from './agent-manifest.js';
+
+export {
+  VatAgentMetadataSchema,
+  VatPackageMetadataSchema,
+  VatPureFunctionMetadataSchema,
+  VatSkillMetadataSchema,
+  type VatAgentMetadata,
+  type VatPackageMetadata,
+  type VatPureFunctionMetadata,
+  type VatSkillMetadata,
+} from './package-metadata.js';

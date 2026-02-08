@@ -13,27 +13,36 @@
 /* eslint-disable @typescript-eslint/no-non-null-assertion -- tests use non-null assertions for expected values */
 /* eslint-disable security/detect-non-literal-fs-filename -- tests use dynamic file paths in temp directory */
 
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { parseMarkdown } from '../src/link-parser.js';
 
 import { expectHeadingStructure, findPackageRoot, writeAndParse } from './test-helpers.js';
 
 describe('link-parser', () => {
+  let suiteDir: string;
   let tempDir: string;
+  let testCounter = 0;
 
-  beforeEach(async () => {
-    // Create temp directory for test files
-    tempDir = await mkdtemp(join(normalizedTmpdir(), 'link-parser-test-'));
+  beforeAll(async () => {
+    // Create temp directory for the entire test suite
+    suiteDir = await mkdtemp(join(normalizedTmpdir(), 'link-parser-suite-'));
   });
 
-  afterEach(async () => {
-    // Clean up temp directory
-    await rm(tempDir, { recursive: true, force: true });
+  afterAll(async () => {
+    // Clean up suite directory
+    await rm(suiteDir, { recursive: true, force: true });
+  });
+
+  beforeEach(async () => {
+    // Create subdirectory for each test (fast - no mkdtemp overhead)
+    testCounter++;
+    tempDir = join(suiteDir, `test-${testCounter}`);
+    await mkdir(tempDir, { recursive: true });
   });
 
   describe('parseMarkdown', () => {

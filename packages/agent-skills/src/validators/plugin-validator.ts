@@ -2,7 +2,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { PluginSchema } from '../schemas/plugin.js';
+import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
 
 import type { ValidationIssue, ValidationResult } from './types.js';
 import {
@@ -65,7 +65,7 @@ export async function validatePlugin(pluginPath: string): Promise<ValidationResu
 	}
 
 	// Validate against schema
-	const result = PluginSchema.safeParse(pluginData);
+	const result = ClaudePluginSchema.safeParse(pluginData);
 	if (!result.success) {
 		for (const zodIssue of result.error.issues) {
 			issues.push({
@@ -92,7 +92,7 @@ export async function validatePlugin(pluginPath: string): Promise<ValidationResu
 	if (result.success) {
 		validationResult.metadata = {
 			name: result.data.name,
-			version: result.data.version,
+			...(result.data.version !== undefined && { version: result.data.version }),
 		};
 	}
 

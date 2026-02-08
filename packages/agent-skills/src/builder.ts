@@ -9,6 +9,8 @@ import path from 'node:path';
 import { loadAgentManifest, type LoadedAgentManifest } from '@vibe-agent-toolkit/agent-config';
 import { copyDirectory } from '@vibe-agent-toolkit/utils';
 
+import { packageSkill } from './skill-packager.js';
+
 export interface BuildOptions {
   /**
    * Path to agent directory or manifest file
@@ -26,6 +28,18 @@ export interface BuildOptions {
    * Used for default output path determination
    */
   target?: string;
+
+  /**
+   * Whether to package the generated SKILL.md
+   * @default true
+   */
+  package?: boolean;
+
+  /**
+   * Package formats to generate (when package=true)
+   * @default ['directory']
+   */
+  formats?: ('directory' | 'zip' | 'npm' | 'marketplace')[];
 }
 
 export interface BuildResult {
@@ -46,13 +60,22 @@ export interface BuildResult {
    * Files created
    */
   files: string[];
+
+  /**
+   * Package artifacts (when package=true)
+   */
+  packageArtifacts?: Record<string, string>;
 }
 
 /**
  * Build a Claude Skill from a VAT agent
+ *
+ * This function:
+ * 1. Generates SKILL.md from agent.yml (the "extra pre-step")
+ * 2. Optionally packages the SKILL.md using unified packaging logic
  */
 export async function buildClaudeSkill(options: BuildOptions): Promise<BuildResult> {
-  const { agentPath, target = 'skill' } = options;
+  const { agentPath, target = 'skill', package: shouldPackage = true } = options;
 
   // Load agent manifest
   const manifest = await loadAgentManifest(agentPath);
@@ -74,7 +97,7 @@ export async function buildClaudeSkill(options: BuildOptions): Promise<BuildResu
 
   const files: string[] = [];
 
-  // Generate SKILL.md
+  // STEP 1: Generate SKILL.md from agent.yml
   const skillPath = await generateSkillFile(manifest, agentDir, outputPath);
   files.push(skillPath);
 
@@ -104,6 +127,32 @@ export async function buildClaudeSkill(options: BuildOptions): Promise<BuildResu
     // No LICENSE.txt to copy
   }
 
+  // STEP 2: Optionally package the generated SKILL.md
+  if (shouldPackage) {
+    const packageResult = await packageSkill(skillPath, {
+      outputPath,
+      formats: options.formats ?? ['directory'],
+      basePath: agentDir,
+    });
+
+    const result: BuildResult = {
+      outputPath: packageResult.outputPath,
+      agent: {
+        name: manifest.metadata.name,
+        version: manifest.metadata.version,
+      },
+      files: [...files, ...packageResult.files.dependencies.map(f => path.join(agentDir, f))],
+    };
+
+    // Conditionally add packageArtifacts (exactOptionalPropertyTypes)
+    if (packageResult.artifacts !== undefined) {
+      result.packageArtifacts = packageResult.artifacts;
+    }
+
+    return result;
+  }
+
+  // Just generate SKILL.md without packaging
   return {
     outputPath,
     agent: {

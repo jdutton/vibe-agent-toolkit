@@ -1,19 +1,25 @@
 import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 
-import { normalizedTmpdir, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { setupAsyncTempDirSuite, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { ResourceCollection } from '../../src/resource-collection.js';
 import { ResourceQuery } from '../../src/resource-query.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
 
 describe('Resource Collection System - End to End', () => {
+  const suite = setupAsyncTempDirSuite('e2e-collections');
   let tempDir: string;
   let registry: ResourceRegistry;
 
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+
   beforeEach(async () => {
-    tempDir = await fs.mkdtemp(join(normalizedTmpdir(), 'e2e-collections-'));
+    await suite.beforeEach();
+    tempDir = suite.getTempDir();
+    // Initialize registry and create test directory structure
     registry = new ResourceRegistry();
 
     // Create test directory structure
@@ -39,10 +45,6 @@ describe('Resource Collection System - End to End', () => {
     // Create duplicate content - same as README
     // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.writeFile(join(tempDir, 'docs/guides/README.md'), '# Project README\n\nWelcome to the project.', 'utf-8');
-  });
-
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
   });
 
   it('should crawl directory and build complete registry', async () => {

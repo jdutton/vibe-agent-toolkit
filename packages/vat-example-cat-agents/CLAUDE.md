@@ -58,7 +58,7 @@ packages/vat-example-cat-agents/
 │
 ├── README.md                          # Human-facing documentation
 ├── CLAUDE.md                          # This file (AI navigation)
-├── STRUCTURE.md                       # Package organization details
+├── docs/structure.md                       # Package organization details
 └── package.json
 ```
 
@@ -402,7 +402,7 @@ vi.mock('../src/one-shot-llm-analyzer/photo-analyzer', () => ({
 ## Related Documentation
 
 - **[README.md](./README.md)** - Human-facing package documentation
-- **[STRUCTURE.md](./STRUCTURE.md)** - Detailed package organization
+- **[docs/structure.md](./docs/structure.md)** - Detailed package organization
 - **[Project CLAUDE.md](../../CLAUDE.md)** - Root-level project guidance
 
 ## Contributing Workflow
@@ -420,5 +420,5 @@ vi.mock('../src/one-shot-llm-analyzer/photo-analyzer', () => ({
 
 For high-level understanding: Read README.md
 For technical navigation: Read this file (CLAUDE.md)
-For package structure details: Read STRUCTURE.md
+For package structure details: Read docs/structure.md
 For archetype theory: See the Missing Archetypes section above

@@ -9,7 +9,7 @@ export {
   type VATClaudeSkillFrontmatter,
 } from './claude-skill-frontmatter.js';
 
-export { PluginJsonSchema, PluginSchema, type Plugin } from './plugin.js';
+export { ClaudePluginJsonSchema, ClaudePluginSchema, type ClaudePlugin } from './claude-plugin.js';
 
 export {
   MarketplaceJsonSchema,

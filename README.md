@@ -14,6 +14,22 @@ A toolkit for testing and packaging portable AI agents that work across various 
 - 🔍 **Claude Skills Validation** - Audit skills for quality, compatibility, and best practices
 - 🩺 **Environment Diagnostics** - Doctor command checks setup and health
 
+### Skills Distribution
+- 📦 **VAT Distribution Standard** - Package-based distribution for skills, agents, and tools
+- 🔨 **Build Infrastructure** - `vat skills build` creates distributable skill packages
+- ⬇️ **Smart Installation** - Install skills from npm, local directories, or zip files
+- 📋 **Registry Tracking** - Track installed skills for updates and management
+- 🎯 **Multi-Artifact Support** - Distribute skills, agents, pure functions, and runtimes together
+
+**Install skills:**
+```bash
+vat skills install npm:@vibe-agent-toolkit/vat-example-cat-agents
+vat skills install ./path/to/local/package
+vat skills list --installed
+```
+
+See [Distributing VAT Skills Guide](./docs/guides/distributing-vat-skills.md) for creating your own distributable packages.
+
 ### Plugin & Marketplace Audit
 
 Comprehensive validation for Claude plugins, marketplaces, and configurations:

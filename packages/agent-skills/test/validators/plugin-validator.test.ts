@@ -60,8 +60,7 @@ describe('validatePlugin', () => {
 	it('should return error when plugin.json fails schema validation', async () => {
 		const tempDir = getTempDir();
 		const pluginPath = createTestPlugin(tempDir, {
-			name: 'test',
-			// Missing required fields: description, version
+			name: 'Invalid_Name_With_Uppercase', // Invalid: must be lowercase-alphanumeric-with-hyphens
 		});
 
 		const result = await validatePlugin(pluginPath);

@@ -4,7 +4,6 @@
  */
 
 import * as fs from 'node:fs';
-import * as os from 'node:os';
 import * as path from 'node:path';
 
 import {
@@ -17,6 +16,7 @@ import {
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
 import { Command } from 'commander';
 
+import { getClaudeUserPaths } from '../utils/claude-paths.js';
 import { handleCommandError } from '../utils/command-error.js';
 import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
@@ -42,7 +42,7 @@ export function createAuditCommand(): Command {
     .description('Audit Claude plugins, marketplaces, registries, and skills')
     .argument('[path]', 'Path to audit (default: current directory)')
     .option('-r, --recursive', 'Scan directories recursively for all resource types')
-    .option('--user', 'Audit user-level Claude plugins installation (~/.claude/plugins)')
+    .option('--user', 'Audit user-level Claude plugins and skills (~/.claude/plugins and ~/.claude/skills)')
     .option('--verbose', 'Show all scanned resources, including those without issues')
     .option('--warn-unreferenced-files', 'Warn about files not referenced in skill markdown')
     .option('--debug', 'Enable debug logging')
@@ -65,7 +65,7 @@ Description:
 
   Path can be: resource directory, registry file, SKILL.md file, or scan directory
   Default: current directory
-  Use --user to audit user-level installation (~/.claude/plugins) automatically
+  Use --user to audit user-level installation (~/.claude/plugins and ~/.claude/skills) automatically
 
 Validation Behavior:
   Default: Validates SKILL.md and all transitively linked markdown files
@@ -89,7 +89,7 @@ Exit Codes:
   0 - Success  |  1 - Errors found  |  2 - System error
 
 Examples:
-  $ vat audit --user                   # Audit user-level plugins installation
+  $ vat audit --user                   # Audit user-level plugins and skills installation
   $ vat audit                          # Audit current directory
   $ vat audit ./my-plugin              # Audit plugin directory
   $ vat audit installed_plugins.json   # Audit registry file
@@ -100,14 +100,6 @@ Examples:
   return audit;
 }
 
-/**
- * Get the user-level Claude plugins directory
- * Cross-platform: ~/.claude/plugins on macOS/Linux, %USERPROFILE%\.claude\plugins on Windows
- */
-function getUserPluginsDir(): string {
-  const homeDir = os.homedir();
-  return path.join(homeDir, '.claude', 'plugins');
-}
 
 export async function auditCommand(
   targetPath: string | undefined,
@@ -122,38 +114,57 @@ export async function auditCommand(
 
     // Handle --user flag
     if (options.user) {
-      const userPluginsDir = getUserPluginsDir();
+      const { pluginsDir, skillsDir } = getClaudeUserPaths();
+
+      // Check both directories exist
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: path constructed from os.homedir()
-      if (!fs.existsSync(userPluginsDir)) {
-        logger.error(`User plugins directory not found: ${userPluginsDir}`);
-        logger.error('Claude plugins have not been installed yet.');
+      const pluginsDirExists = fs.existsSync(pluginsDir);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: path constructed from os.homedir()
+      const skillsDirExists = fs.existsSync(skillsDir);
+
+      if (!pluginsDirExists && !skillsDirExists) {
+        logger.error(`Neither user plugins nor skills directory found:`);
+        logger.error(`  Plugins: ${pluginsDir}`);
+        logger.error(`  Skills: ${skillsDir}`);
+        logger.error('Claude plugins/skills have not been installed yet.');
         process.exit(2);
       }
-      scanPath = userPluginsDir;
+
+      // Scan both directories if they exist
+      const results: ValidationResult[] = [];
       recursive = true; // Always recursive for user-level audit
-      logger.debug(`Auditing user-level plugins at: ${scanPath}`);
-    } else {
-      scanPath = targetPath ? path.resolve(targetPath) : process.cwd();
-      logger.debug(`Auditing resources at: ${scanPath}`);
-    }
 
-    // Get validation results
-    const results = await getValidationResults(scanPath, recursive, options, logger);
+      if (pluginsDirExists) {
+        logger.debug(`Auditing user-level plugins at: ${pluginsDir}`);
+        const pluginResults = await getValidationResults(pluginsDir, recursive, options, logger);
+        results.push(...pluginResults);
+      }
 
-    // Use hierarchical output for --user flag, flat output otherwise
-    if (options.user) {
-      // Filter to only include claude-skill type for hierarchical output
+      if (skillsDirExists) {
+        logger.debug(`Auditing user-level skills at: ${skillsDir}`);
+        const skillResults = await getValidationResults(skillsDir, recursive, options, logger);
+        results.push(...skillResults);
+      }
+
+      // Use hierarchical output for --user flag
       const skillResults = results.filter((r: ValidationResult) => r.type === 'claude-skill');
       const hierarchical = buildHierarchicalOutput(skillResults, options.verbose ?? false);
       const summary = calculateHierarchicalSummary(results, hierarchical, startTime);
       writeYamlOutput(summary);
       logHierarchicalSummary(results, hierarchical, logger);
+      return;
     } else {
-      // Standard flat output
-      const summary = calculateSummary(results, startTime);
-      writeYamlOutput(summary);
-      handleAuditResults(results, summary, logger);
+      scanPath = targetPath ? path.resolve(targetPath) : process.cwd();
+      logger.debug(`Auditing resources at: ${scanPath}`);
     }
+
+    // Get validation results (non-user path)
+    const results = await getValidationResults(scanPath, recursive, options, logger);
+
+    // Standard flat output
+    const summary = calculateSummary(results, startTime);
+    writeYamlOutput(summary);
+    handleAuditResults(results, summary, logger);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'AgentAudit');
   }

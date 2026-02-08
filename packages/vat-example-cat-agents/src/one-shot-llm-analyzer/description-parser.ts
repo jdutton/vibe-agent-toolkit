@@ -3,8 +3,10 @@ import type { Agent, LLMError, OneShotAgentOutput } from '@vibe-agent-toolkit/ag
 import { LLM_INVALID_OUTPUT, RESULT_ERROR } from '@vibe-agent-toolkit/agent-schema';
 import { z } from 'zod';
 
+// Import compiled resources from markdown
+// eslint-disable-next-line sonarjs/unused-import -- Will be used when real LLM parsing is implemented
+import * as _DescriptionParserResources from '../../generated/resources/agents/description-parser.js';
 import { CatCharacteristicsSchema, type CatCharacteristics } from '../types/schemas.js';
-// Extract fur color from text descriptions
 import { extractFurColor as extractFurColorUtil } from '../utils/color-extraction.js';
 
 /**
@@ -398,6 +400,9 @@ export const descriptionParserAgent: Agent<
       mockFn: () => mockParseDescription(description),
       realFn: async () => {
         throw new Error('Real LLM parsing not implemented yet. Use mockable: true for testing.');
+        // When real LLM parsing is implemented, use:
+        // systemPrompt: _DescriptionParserResources.fragments.systemPrompt.body
+        // See resources/agents/description-parser.md for prompts and domain knowledge
       },
       parseOutput: (raw) => {
         const parsed = JSON.parse(raw as string);

@@ -3,21 +3,22 @@ import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 
 import { scan } from '../src/scanners/local-scanner.js';
 
 describe('scan', () => {
+  const suite = setupSyncTempDirSuite('discovery');
   let tempDir: string;
 
-  beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'discovery-test-'));
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
-  afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
+  beforeEach(() => {
+    suite.beforeEach();
+    tempDir = suite.getTempDir();
   });
 
   it('should scan single SKILL.md file', async () => {

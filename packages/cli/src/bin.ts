@@ -13,6 +13,7 @@ import { doctorCommand } from './commands/doctor.js';
 import { createMCPCommand } from './commands/mcp/index.js';
 import { createRagCommand, showRagVerboseHelp } from './commands/rag/index.js';
 import { createResourcesCommand, showResourcesVerboseHelp } from './commands/resources/index.js';
+import { createSkillsCommand } from './commands/skills/index.js';
 import { loadVerboseHelp } from './utils/help-loader.js';
 import { createLogger } from './utils/logger.js';
 import { version, getVersionString, type VersionContext } from './version.js';
@@ -113,6 +114,7 @@ program.addCommand(createResourcesCommand());
 program.addCommand(createRagCommand());
 program.addCommand(createAgentCommand());
 program.addCommand(createMCPCommand());
+program.addCommand(createSkillsCommand());
 
 // Add standalone commands
 doctorCommand(program);

@@ -1,23 +1,19 @@
-import { promises as fs } from 'node:fs';
-import { join } from 'node:path';
-
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import type { ResourceCollectionInterface } from '../src/resource-collection-interface.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 
 describe('ResourceCollectionInterface', () => {
-  let tempDir: string;
+  const suite = setupAsyncTempDirSuite('collection-interface');
   let collection: ResourceCollectionInterface;
 
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(join(normalizedTmpdir(), 'collection-interface-'));
-    collection = new ResourceRegistry();
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+  beforeEach(async () => {
+    await suite.beforeEach();
+    collection = new ResourceRegistry();
   });
 
   it('should provide size() method', () => {

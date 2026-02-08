@@ -6,6 +6,7 @@
     { "path": "./packages/utils" },
     { "path": "./packages/discovery" },
     { "path": "./packages/resources" },
+    { "path": "./packages/resource-compiler" },
     { "path": "./packages/rag" },
     { "path": "./packages/rag-lancedb" },
     { "path": "./packages/agent-schema" },
@@ -19,6 +20,7 @@
     { "path": "./packages/transports" },
     { "path": "./packages/gateway-mcp" },
     { "path": "./packages/cli" },
+    { "path": "./packages/vat-development-agents" },
     { "path": "./packages/vat-example-cat-agents" }
   ]
 }

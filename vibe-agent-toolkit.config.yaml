@@ -41,6 +41,15 @@ resources:
         frontmatterSchema: "schemas/package-readme-frontmatter.json"
         mode: permissive
 
+    # Claude Skills (SKILL.md files)
+    skills:
+      include:
+        - "**/resources/skills/SKILL.md"
+        - "packages/*/SKILL.md"
+      validation:
+        frontmatterSchema: "packages/agent-skills/schemas/skill-frontmatter.json"
+        mode: strict  # Skills MUST have valid frontmatter
+
   # Default validation for all resources (applies to all files)
   validation:
     checkLinks: true

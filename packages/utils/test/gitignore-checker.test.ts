@@ -1,32 +1,32 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { gitFindRoot } from '../src/git-utils.js';
 import { loadGitignoreRules } from '../src/gitignore-checker.js';
 import { mkdirSyncReal, normalizedTmpdir } from '../src/path-utils.js';
+import { setupSyncTempDirSuite } from '../src/test-helpers.js';
 
 // Test constants
 const GITIGNORE_FILENAME = '.gitignore';
 const NODE_MODULES_IGNORE_CONTENT = 'node_modules/\n*.log\n';
 
 describe('gitignore-checker', () => {
+  const suite = setupSyncTempDirSuite('gitignore');
   let tempDir: string;
   let gitRoot: string;
 
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+
   beforeEach(() => {
-    // Create temp directory structure with git repo
-    tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'gitignore-test-'));
+    suite.beforeEach();
+    tempDir = suite.getTempDir();
     gitRoot = tempDir;
 
     // Create .git directory
-     
     mkdirSyncReal(path.join(gitRoot, '.git'));
-  });
-
-  afterEach(() => {
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   describe('gitFindRoot', () => {

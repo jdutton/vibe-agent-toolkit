@@ -2,10 +2,10 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { copyDirectory, verifyCaseSensitiveFilename } from '../src/fs-utils.js';
-import { normalizedTmpdir } from '../src/path-utils.js';
+import { setupAsyncTempDirSuite } from '../src/test-helpers.js';
 
 import { setupNestedDirectory } from './test-helpers.js';
 
@@ -14,14 +14,15 @@ describe('fs-utils', () => {
   const NESTED_TXT = 'nested.txt';
   const NESTED_CONTENT = 'nested content';
 
+  const suite = setupAsyncTempDirSuite('fs-utils');
   let tempDir: string;
 
-  beforeEach(async () => {
-    tempDir = await fs.mkdtemp(path.join(normalizedTmpdir(), 'fs-utils-test-'));
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
-  afterEach(async () => {
-    await fs.rm(tempDir, { recursive: true, force: true });
+  beforeEach(async () => {
+    await suite.beforeEach();
+    tempDir = suite.getTempDir();
   });
 
   describe('copyDirectory', () => {

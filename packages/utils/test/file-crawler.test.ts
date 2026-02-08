@@ -1,29 +1,25 @@
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { crawlDirectory, crawlDirectorySync } from '../src/file-crawler.js';
-import { mkdirSyncReal, normalizedTmpdir, toForwardSlash } from '../src/path-utils.js';
+import { mkdirSyncReal, toForwardSlash } from '../src/path-utils.js';
+import { setupSyncTempDirSuite } from '../src/test-helpers.js';
 
 import { createGitRepo } from './test-helpers.js';
 
 describe('file-crawler', () => {
+  const suite = setupSyncTempDirSuite('file-crawler');
   let testDir: string;
 
-  beforeEach(() => {
-    // Create a temporary directory for testing
-    testDir = mkdtempSync(path.join(normalizedTmpdir(), 'file-crawler-test-'));
-  });
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
 
-  afterEach(() => {
-    // Clean up temporary directory
-    try {
-      rmSync(testDir, { recursive: true, force: true });
-    } catch {
-      // Ignore cleanup errors
-    }
+  beforeEach(() => {
+    suite.beforeEach();
+    testDir = suite.getTempDir();
   });
 
   /**
