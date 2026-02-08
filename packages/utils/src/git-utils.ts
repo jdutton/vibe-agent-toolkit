@@ -9,6 +9,8 @@ import { dirname, join, parse, resolve } from 'node:path';
 
 import which from 'which';
 
+import { toForwardSlash } from './path-utils.js';
+
 /**
  * Find the git repository root by walking up from the given directory.
  *
@@ -159,7 +161,20 @@ export function gitCheckIgnoredBatch(
     return result;
   }
 
-  // Initialize all as not ignored
+  // Normalize paths to forward slashes for cross-platform consistency
+  // Git on Windows returns forward slashes, so we normalize input paths to match
+  const normalizedPaths = filePaths.map(p => toForwardSlash(p));
+
+  // Create map with normalized paths as keys
+  const pathMap = new Map<string, string>(); // normalized -> original
+  for (const [index, normalizedPath] of normalizedPaths.entries()) {
+    const originalPath = filePaths[index];
+    if (originalPath !== undefined) {
+      pathMap.set(normalizedPath, originalPath);
+    }
+  }
+
+  // Initialize all as not ignored (using original paths as keys)
   for (const filePath of filePaths) {
     result.set(filePath, false);
   }
@@ -169,10 +184,11 @@ export function gitCheckIgnoredBatch(
     const gitPath = which.sync('git');
 
     // git check-ignore --stdin reads paths from stdin and outputs ignored ones
+    // Send normalized paths to git
     const gitResult = spawnSync(gitPath, ['check-ignore', '--stdin'], {
       cwd,
       encoding: 'utf-8',
-      input: filePaths.join('\n'),
+      input: normalizedPaths.join('\n'),
       stdio: 'pipe',
       shell: false, // No shell interpreter for security
     });
@@ -185,9 +201,12 @@ export function gitCheckIgnoredBatch(
         .map((line) => line.trim())
         .filter((line) => line.length > 0);
 
-      // Mark ignored files
+      // Mark ignored files (convert back to original paths)
       for (const ignoredPath of ignoredPaths) {
-        result.set(ignoredPath, true);
+        const originalPath = pathMap.get(ignoredPath);
+        if (originalPath !== undefined) {
+          result.set(originalPath, true);
+        }
       }
     }
 
