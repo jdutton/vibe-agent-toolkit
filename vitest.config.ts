@@ -46,6 +46,7 @@ export default defineConfig({
         'packages/cli/src/commands/**', // CLI commands (integration test only)
         'packages/resource-compiler/src/cli/**', // CLI commands (integration test only)
         'packages/resource-compiler/src/language-service/**', // VSCode integration (not unit testable)
+        'packages/resource-compiler/src/compiler/markdown-compiler.ts', // Orchestrator with comprehensive integration tests
         'packages/vat-development-agents/src/**', // Agent packages (integration test only)
         'packages/vat-example-cat-agents/src/**', // Agent packages (integration test only)
       ],
