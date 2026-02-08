@@ -29,7 +29,7 @@
     "sharp": "^0.34.5"
   },
   "scripts": {
-    "build": "turbo run build",
+    "build": "turbo run build && turbo run build:skills",
     "build:packages": "tsc --build && cd packages/agent-schema && bun run generate:schemas",
     "build:cli": "bun --filter @vibe-agent-toolkit/cli run build",
     "build:clean": "tsc --build --clean && tsc --build && cd packages/agent-schema && bun run generate:schemas",

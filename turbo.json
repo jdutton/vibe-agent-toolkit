@@ -6,6 +6,11 @@
       "outputs": ["dist/**", "**/*.schema.json"],
       "cache": true
     },
+    "build:skills": {
+      "dependsOn": ["build"],
+      "outputs": ["dist/skills/**"],
+      "cache": true
+    },
     "typecheck": {
       "dependsOn": ["^build"],
       "outputs": [],
