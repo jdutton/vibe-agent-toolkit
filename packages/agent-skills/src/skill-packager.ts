@@ -510,7 +510,8 @@ async function copySkillResources(
       ([_src, target]) => target === targetPath
     )?.[0];
 
-    if (existingSource !== undefined && existingSource !== linkedFile) {
+    // Normalize paths for comparison (handles Windows backslash vs forward slash)
+    if (existingSource !== undefined && existingSource !== toForwardSlash(linkedFile)) {
       throw new Error(
         `Filename collision detected when flattening skill structure:\n` +
         `  File 1: ${existingSource}\n` +
