@@ -107,10 +107,12 @@ export function generateJavaScript(resource: MarkdownResource): string {
   );
 
   // Export meta (frontmatter)
-  lines.push('export const meta = ' + serializeValue(resource.frontmatter, 0) + ';', '');
+  const metaExport = ['export const meta = ' + serializeValue(resource.frontmatter, 0) + ';', ''];
+  lines.push(...metaExport);
 
   // Export full text
-  lines.push('export const text = ' + serializeValue(resource.content, 0) + ';', '');
+  const textExport = ['export const text = ' + serializeValue(resource.content, 0) + ';', ''];
+  lines.push(...textExport);
 
   // Export fragments
   const fragmentsObj: Record<string, unknown> = {};
