@@ -1,4 +1,3 @@
-import { availableParallelism } from 'node:os';
 import { defineConfig } from 'vitest/config';
 
 export default defineConfig({

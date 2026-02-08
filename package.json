@@ -25,6 +25,9 @@
   "workspaces": [
     "packages/*"
   ],
+  "overrides": {
+    "sharp": "^0.34.5"
+  },
   "scripts": {
     "build": "turbo run build",
     "build:packages": "tsc --build && cd packages/agent-schema && bun run generate:schemas",
