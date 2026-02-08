@@ -102,6 +102,9 @@ export function gitLsFiles(options: {
  *
  * Uses git check-ignore which respects .gitignore, .git/info/exclude, and global gitignore
  *
+ * **Performance warning**: This spawns a git subprocess for each file.
+ * For checking multiple files, use `gitCheckIgnoredBatch()` instead.
+ *
  * @param filePath - Absolute or relative path to check
  * @param cwd - Working directory (defaults to process.cwd())
  * @returns true if file is gitignored, false otherwise
@@ -123,5 +126,74 @@ export function isGitIgnored(filePath: string, cwd: string = process.cwd()): boo
   } catch {
     // If git is not available or other error, assume not ignored
     return false;
+  }
+}
+
+/**
+ * Batch check if multiple file paths are ignored by git
+ *
+ * Much more efficient than calling `isGitIgnored()` in a loop - uses a single
+ * git subprocess with stdin instead of N subprocesses.
+ *
+ * @param filePaths - Array of absolute or relative paths to check
+ * @param cwd - Working directory (defaults to process.cwd())
+ * @returns Map of filePath -> isIgnored (true if gitignored, false otherwise)
+ *
+ * @example
+ * ```typescript
+ * const files = ['src/foo.ts', 'dist/bar.js', 'node_modules/baz.js'];
+ * const ignoreMap = gitCheckIgnoredBatch(files, '/project');
+ * // ignoreMap.get('src/foo.ts') === false
+ * // ignoreMap.get('dist/bar.js') === true
+ * // ignoreMap.get('node_modules/baz.js') === true
+ * ```
+ */
+export function gitCheckIgnoredBatch(
+  filePaths: string[],
+  cwd: string = process.cwd()
+): Map<string, boolean> {
+  const result = new Map<string, boolean>();
+
+  // No files to check
+  if (filePaths.length === 0) {
+    return result;
+  }
+
+  // Initialize all as not ignored
+  for (const filePath of filePaths) {
+    result.set(filePath, false);
+  }
+
+  try {
+    // Resolve git path using which for security (avoids PATH manipulation)
+    const gitPath = which.sync('git');
+
+    // git check-ignore --stdin reads paths from stdin and outputs ignored ones
+    const gitResult = spawnSync(gitPath, ['check-ignore', '--stdin'], {
+      cwd,
+      encoding: 'utf-8',
+      input: filePaths.join('\n'),
+      stdio: 'pipe',
+      shell: false, // No shell interpreter for security
+    });
+
+    // Exit code 0 = at least one file ignored, 1 = none ignored
+    // Parse stdout to get which files are ignored
+    if (gitResult.status === 0 && gitResult.stdout) {
+      const ignoredPaths = gitResult.stdout
+        .split('\n')
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0);
+
+      // Mark ignored files
+      for (const ignoredPath of ignoredPaths) {
+        result.set(ignoredPath, true);
+      }
+    }
+
+    return result;
+  } catch {
+    // If git is not available or other error, return all as not ignored
+    return result;
   }
 }

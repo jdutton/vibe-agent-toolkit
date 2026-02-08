@@ -1,11 +1,22 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { crawlDirectory , isGitIgnored } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, gitCheckIgnoredBatch } from '@vibe-agent-toolkit/utils';
 
 import { detectFormat } from '../detectors/format-detector.js';
 import { createPatternFilter } from '../filters/pattern-filter.js';
-import type { ScanOptions, ScanResult, ScanSummary } from '../types.js';
+import type { DetectedFormat, ScanOptions, ScanResult, ScanSummary } from '../types.js';
+
+/**
+ * Directories that should ALWAYS be excluded from scanning to prevent catastrophic performance.
+ * These contain tens of thousands of files and are never useful for discovery.
+ */
+const PERFORMANCE_POISON = [
+  '**/.git/**',          // Git objects (1000s of files), never useful for discovery
+  '**/node_modules/**',  // Dependencies (40K+ files), never user content
+  '**/coverage/**',      // Test coverage reports, never useful for discovery
+  '**/.test-output/**',  // Test artifacts, never useful for discovery
+];
 
 /**
  * Scan local filesystem for VAT agents and Claude Skills
@@ -38,10 +49,14 @@ export async function scan(options: ScanOptions): Promise<ScanSummary> {
     filePaths = [absolutePath];
   } else if (stat.isDirectory()) {
     if (recursive) {
+      // Merge performance poison patterns with user's exclude patterns
+      // This prevents catastrophic crawls of .git, node_modules, etc. (52K+ files)
+      const crawlExclusions = [...PERFORMANCE_POISON, ...(exclude ?? [])];
+
       filePaths = await crawlDirectory({
         baseDir: absolutePath,
         respectGitignore: false, // We handle gitignore separately
-        exclude: [], // Don't exclude anything - we handle filtering ourselves
+        exclude: crawlExclusions, // Skip poison directories during crawl (not after)
       });
     } else {
       // Non-recursive: only immediate children
@@ -55,33 +70,43 @@ export async function scan(options: ScanOptions): Promise<ScanSummary> {
     throw new Error(`Path is neither file nor directory: ${absolutePath}`);
   }
 
-  // Create pattern filter
+  // Create pattern filter for include patterns only
+  // (exclude patterns already applied during crawl for performance)
   const patternFilter = createPatternFilter({
     ...(include && { include }),
-    ...(exclude && { exclude }),
+    // Note: For recursive scans, exclude patterns are applied during crawl.
+    // For non-recursive scans, we apply them here for consistency.
+    ...(!recursive && exclude && { exclude }),
   });
 
-  // Process each file
-  const results: ScanResult[] = [];
+  // Filter files by pattern and detect formats
+  const filteredFiles: Array<{ path: string; relativePath: string; format: DetectedFormat }> = [];
 
   for (const filePath of filePaths) {
     const relativePath = path.relative(scanRoot, filePath);
 
-    // Apply pattern filter
+    // Apply pattern filter (include patterns, and exclude for non-recursive)
     if (!patternFilter(relativePath)) {
       continue;
     }
 
     const format = detectFormat(filePath);
-    const gitIgnored = isGitIgnored(filePath, scanRoot);
-
-    results.push({
-      path: filePath,
-      format,
-      isGitIgnored: gitIgnored,
-      relativePath,
-    });
+    filteredFiles.push({ path: filePath, relativePath, format });
   }
+
+  // Batch check git-ignored status (single git subprocess instead of N)
+  const gitIgnoredMap = gitCheckIgnoredBatch(
+    filteredFiles.map((f) => f.path),
+    scanRoot
+  );
+
+  // Build final results
+  const results: ScanResult[] = filteredFiles.map((file) => ({
+    path: file.path,
+    format: file.format,
+    isGitIgnored: gitIgnoredMap.get(file.path) ?? false,
+    relativePath: file.relativePath,
+  }));
 
   // Build summary
   const byFormat = results.reduce((acc, r) => {
