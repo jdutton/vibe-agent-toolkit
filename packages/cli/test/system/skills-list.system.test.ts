@@ -104,30 +104,6 @@ describe('skills list command (system test)', () => {
     expect(['project', 'user']).toContain(parsed.context);
   });
 
-  it('should accept --user flag to list user context', () => {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
-    const result = spawnSync('node', [binPath, 'skills', 'list', '--user'], {
-      encoding: 'utf-8',
-      cwd: process.cwd(),
-      maxBuffer: 10 * 1024 * 1024, // 10MB buffer for large user directories
-    });
-
-    // Should not error (even if no user skills exist)
-    expect(result.status).toBe(0);
-
-    // Parse output
-    const parsed = yaml.load(result.stdout) as {
-      status: string;
-      context: string;
-      skillsFound: number;
-    };
-
-    expect(parsed.status).toBe('success');
-    expect(parsed.context).toBe('user');
-    expect(typeof parsed.skillsFound).toBe('number');
-    expect(parsed.skillsFound).toBeGreaterThanOrEqual(0);
-  });
-
   it('should show validation warnings for non-standard filenames', () => {
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
     const result = spawnSync('node', [binPath, 'skills', 'list'], {

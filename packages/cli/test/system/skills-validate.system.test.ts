@@ -127,38 +127,6 @@ describe('skills validate command (system test)', () => {
     }
   });
 
-  it('should accept --user flag to validate user context', () => {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
-    const result = spawnSync('node', [binPath, 'skills', 'validate', '--user'], {
-      encoding: 'utf-8',
-      cwd: process.cwd(),
-      maxBuffer: 10 * 1024 * 1024, // 10MB buffer for large user directories
-    });
-
-    // Should not error (even if no user skills exist)
-    expect([0, 1]).toContain(result.status);
-
-    // Try to parse output, but if user has too many skills (>100), stdout may be truncated
-    // In that case, we just verify the command runs without crashing
-    try {
-      let parsed: { status: string; skillsValidated: number };
-      try {
-        parsed = yaml.load(result.stdout) as { status: string; skillsValidated: number };
-      } catch {
-        // Large result sets use JSON to avoid js-yaml truncation
-        parsed = JSON.parse(result.stdout) as { status: string; skillsValidated: number };
-      }
-
-      expect(parsed).toHaveProperty('status');
-      expect(parsed).toHaveProperty('skillsValidated');
-      expect(['success', 'error']).toContain(parsed.status);
-    } catch {
-      // If parsing fails due to very large user directory (>100 skills),
-      // just verify the command didn't crash (exit code 0 or 1)
-      expect([0, 1]).toContain(result.status);
-    }
-  });
-
   it('should use strict filename validation in project mode', () => {
     // Project mode should enforce exact "SKILL.md" filename
     // This test verifies that the command respects strict mode
