@@ -675,3 +675,103 @@ export function waitForStreamData(
     }
   });
 }
+
+/**
+ * Create a skill fixture with valid SKILL.md file
+ * @param baseDir - Base directory to create skill in
+ * @param skillName - Name for the skill directory
+ * @param skillNumber - Optional number for test skill naming (defaults to "")
+ * @returns Path to the created SKILL.md file
+ */
+export function createSkillFixture(
+  baseDir: string,
+  skillName: string,
+  skillNumber = ''
+): string {
+  const skillsDir = join(baseDir, 'resources', 'skills');
+  mkdirSyncReal(skillsDir, { recursive: true });
+
+  const skillContent = `---
+name: ${skillName}${skillNumber}
+description: ${skillNumber ? 'Another' : 'A'} valid test skill${skillNumber}
+---
+
+# Test Skill${skillNumber ? ` ${skillNumber}` : ''}
+
+${skillNumber ? 'Another' : 'A'} valid test skill.
+
+## Usage
+
+${skillNumber ? 'More test usage' : 'Test usage'}.
+`;
+
+  const skillPath = join(skillsDir, 'SKILL.md');
+  fs.writeFileSync(skillPath, skillContent);
+  return skillPath;
+}
+
+/**
+ * Setup a test suite for skills commands with fixture-based tests
+ * Creates small, fast, deterministic test fixtures instead of scanning full project
+ *
+ * @param testPrefix - Prefix for temp directory name
+ * @param skillCount - Number of skills to create in fixture (default: 1)
+ * @returns Suite object with tempDir, beforeAll, afterAll lifecycle hooks
+ */
+export function setupSkillsFixtureTestSuite(
+  testPrefix: string,
+  skillCount = 1
+): {
+  fixtureDir: string;
+  beforeAll: () => void;
+  afterAll: () => void;
+} {
+  const suite = {
+    fixtureDir: '',
+    beforeAll: () => {
+      suite.fixtureDir = createTestTempDir(testPrefix);
+
+      // Create specified number of skills
+      for (let i = 1; i <= skillCount; i++) {
+        if (i === 1) {
+          // First skill in resources/skills/
+          createSkillFixture(suite.fixtureDir, 'test-skill', '');
+        } else {
+          // Additional skills in nested package directories
+          const packageDir = join(suite.fixtureDir, 'packages', `test-skill-${i}`);
+          createSkillFixture(packageDir, 'test-skill', `-${i}`);
+        }
+      }
+    },
+    afterAll: () => {
+      if (suite.fixtureDir) {
+        fs.rmSync(suite.fixtureDir, { recursive: true, force: true });
+      }
+    },
+  };
+
+  return suite;
+}
+
+/**
+ * Execute skills command and verify YAML output is parseable
+ * Eliminates duplication in skills test files
+ *
+ * @param binPath - Path to CLI binary
+ * @param command - Command to run (e.g., 'list' or 'validate')
+ * @param targetPath - Path to directory to scan
+ * @returns Object with result and parsed output
+ */
+export function executeSkillsCommandAndExpectYaml(
+  binPath: string,
+  command: string,
+  targetPath: string
+): { result: CliResult; parsed: Record<string, unknown> } {
+  // eslint-disable-next-line sonarjs/no-os-command-from-path -- Test helper
+  const result = spawnSync('node', [binPath, 'skills', command, targetPath], {
+    encoding: 'utf-8',
+  });
+
+  const parsed = yaml.load(result.stdout) as Record<string, unknown>;
+  return { result, parsed };
+}
