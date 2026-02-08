@@ -47,6 +47,17 @@ function setupGitTestSuite(suiteName: string) {
   return { ...hooks, getTempDir };
 }
 
+/**
+ * Helper to assert all files in result are not ignored
+ * Extracted to outer scope to avoid function-in-loop code smell
+ */
+function expectAllNotIgnored(result: Map<string, boolean>, files: string[]) {
+  expect(result.size).toBe(files.length);
+  for (const file of files) {
+    expect(result.get(file)).toBe(false);
+  }
+}
+
 describe('gitFindRoot', () => {
   const suite = setupSyncTempDirSuite('git-find-root');
   let tempDir: string;
@@ -235,14 +246,6 @@ describe('gitCheckIgnoredBatch', () => {
     suite.beforeEach();
     tempDir = suite.getTempDir();
   });
-
-  /** Helper to assert all files in result are not ignored */
-  function expectAllNotIgnored(result: Map<string, boolean>, files: string[]) {
-    expect(result.size).toBe(files.length);
-    for (const file of files) {
-      expect(result.get(file)).toBe(false);
-    }
-  }
 
   it('should return empty map for empty array', () => {
     const result = gitCheckIgnoredBatch([], tempDir);
