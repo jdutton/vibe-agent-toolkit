@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New issue types: `external_url_dead`, `external_url_timeout`, `external_url_error`
   - Cache stored in `.vat-cache/external-urls.json`
   - Uses `markdown-link-check` library for robust HTTP checking
+- **Resource Naming Strategies for Skills** - Flexible control over packaged resource file naming
+  - Three strategies: `basename` (default, simple), `resource-id` (flatten to kebab-case), `preserve-path` (maintain directory structure)
+  - Universal `stripPrefix` option removes path prefixes before applying naming strategy
+  - Prevents filename collisions in large knowledge bases with duplicate filenames
+  - Enables descriptive, path-based naming for better organization
+  - Tested in production with 493-file knowledge base (manuscript-tools)
+  - Configure via `packagingOptions` in skill metadata (package.json `vat.skills[]`)
 
 ## [0.1.11] - 2026-02-09
 
