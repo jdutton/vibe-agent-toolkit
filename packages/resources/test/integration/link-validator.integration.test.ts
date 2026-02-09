@@ -14,13 +14,12 @@ import path from 'node:path';
 import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-import { validateLink } from '../src/link-validator.js';
-import type { HeadingNode } from '../src/types.js';
-
-import { assertValidation, createGitRepo, createHeadings, createLink } from './test-helpers.js';
+import { validateLink } from '../../src/link-validator.js';
+import type { HeadingNode } from '../../src/types.js';
+import { assertValidation, createGitRepo, createHeadings, createLink } from '../test-helpers.js';
 
 // Test fixtures directory
-const FIXTURES_DIR = path.resolve(import.meta.dirname, '../test-fixtures');
+const FIXTURES_DIR = path.resolve(import.meta.dirname, '../../test-fixtures');
 
 // Common test file paths
 const VALID_MD = 'valid.md';

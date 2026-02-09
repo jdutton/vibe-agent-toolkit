@@ -15,11 +15,10 @@ import path from 'node:path';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { validateLink } from '../src/link-validator.js';
-import type { HeadingNode } from '../src/types.js';
-import { isWithinProject } from '../src/utils.js';
-
-import { createGitRepo, createLink, setupTempDirTestSuite } from './test-helpers.js';
+import { validateLink } from '../../src/link-validator.js';
+import type { HeadingNode } from '../../src/types.js';
+import { isWithinProject } from '../../src/utils.js';
+import { createGitRepo, createLink, setupTempDirTestSuite } from '../test-helpers.js';
 
 const suite = setupTempDirTestSuite('link-validator-gitignore-');
 

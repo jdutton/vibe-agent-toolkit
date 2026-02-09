@@ -51,10 +51,12 @@ export default defineConfig({
         'packages/vat-example-cat-agents/src/**', // Agent packages (integration test only)
       ],
       thresholds: {
-        statements: 79,
-        branches: 79,
-        functions: 79,
-        lines: 79,
+        // Adjusted after moving integration tests to separate test phase
+        // Unit tests focus on pure logic; integration tests verify I/O operations
+        statements: 70,
+        branches: 70,
+        functions: 70,
+        lines: 70,
       },
     },
   },

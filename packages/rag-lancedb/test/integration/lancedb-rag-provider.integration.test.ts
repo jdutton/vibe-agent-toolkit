@@ -7,9 +7,8 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { LanceDBRAGProvider } from '../src/lancedb-rag-provider.js';
-
-import { createTempDir, createTestMarkdownFile, createTestResource } from './test-helpers.js';
+import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
+import { createTempDir, createTestMarkdownFile, createTestResource } from '../test-helpers.js';
 
 describe('LanceDBRAGProvider - Database Size Calculation', () => {
   let tempDir: string;
