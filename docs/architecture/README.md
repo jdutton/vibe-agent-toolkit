@@ -361,7 +361,7 @@ resources (→ utils)
   - Registry files: `installed_plugins.json`, `known_marketplaces.json`
   - Skills: `SKILL.md` files
   - VAT agents: `agent.yaml` + `SKILL.md`
-- **Validators**: Reuses validators from `runtime-claude-skills` package
+- **Validators**: Reuses validators from `agent-skills` package
   - Plugin validator: Schema validation for plugin manifests
   - Marketplace validator: Schema validation for marketplace manifests
   - Registry validator: Schema validation + checksum staleness detection
@@ -379,7 +379,7 @@ resources (→ utils)
 - `cache-detector.ts` - Compares cache and installed checksums (future enhancement)
 
 **Integration:**
-- Uses validators from `@vibe-agent-toolkit/runtime-claude-skills`
+- Uses validators from `@vibe-agent-toolkit/agent-skills`
   - `validate()` - Unified validator for plugins/marketplaces/registries
   - `validateSkill()` - Skill-specific validator
   - `detectResourceFormat()` - Resource type detection
@@ -403,7 +403,7 @@ When using `--user` flag:
 - Cache staleness detection for plugins
 
 **Design Principles:**
-- **CLI is "dumb"**: All validation logic lives in `runtime-claude-skills`
+- **CLI is "dumb"**: All validation logic lives in `agent-skills`
 - **Reusable validators**: Same validators used by build, import, and audit
 - **Structured output**: YAML to stdout, errors to stderr
 - **CI/CD friendly**: Clear exit codes and parseable output

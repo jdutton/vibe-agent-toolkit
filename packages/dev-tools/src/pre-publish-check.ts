@@ -30,7 +30,7 @@ import { readdirSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { PROJECT_ROOT, log, safeExecSync, safeExecResult } from './common.js';
-import { getMissingPackages } from './validate-package-list.js';
+import { validatePackageList } from './validate-package-list.js';
 
 /**
  * Detect if running in CI environment
@@ -274,19 +274,32 @@ console.log('Checking package list synchronization...');
 const packagesDir = join(PROJECT_ROOT, 'packages');
 
 try {
-  const missingPackages = getMissingPackages(PROJECT_ROOT);
+  const validation = validatePackageList(PROJECT_ROOT);
+  const hasErrors = validation.undeclared.length > 0 || validation.phantom.length > 0;
 
-  if (missingPackages.length > 0) {
+  if (hasErrors) {
     log('✗ Package list out of sync!', 'red');
     console.log('');
-    console.log('  The following packages exist in packages/ but are not declared:');
-    for (const pkg of missingPackages) {
-      console.log(`    ${pkg}`);
+
+    if (validation.undeclared.length > 0) {
+      console.log('  The following packages exist in packages/ but are not declared:');
+      for (const pkg of validation.undeclared) {
+        console.log(`    ${pkg}`);
+      }
+      console.log('');
     }
-    console.log('');
+
+    if (validation.phantom.length > 0) {
+      console.log('  The following packages are declared but do not exist in packages/:');
+      for (const pkg of validation.phantom) {
+        console.log(`    ${pkg}`);
+      }
+      console.log('');
+    }
+
     console.log('  Update packages/dev-tools/src/package-lists.ts:');
-    console.log('    - Add to PUBLISHED_PACKAGES array if it should be published');
-    console.log('    - Add to SKIP_PACKAGES array if it should not be published');
+    console.log('    - Add undeclared packages to PUBLISHED_PACKAGES or SKIP_PACKAGES');
+    console.log('    - Remove phantom packages from PUBLISHED_PACKAGES and SKIP_PACKAGES');
     process.exit(1);
   }
 

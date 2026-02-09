@@ -258,7 +258,7 @@ log('Updating bun.lock...', 'blue');
 try {
   safeExecSync('bun', ['install'], {
     cwd: PROJECT_ROOT,
-    stdio: ['inherit', 'inherit', 'inherit'],
+    stdio: ['ignore', 'inherit', 'inherit'], // stdin: ignore to prevent hanging in pipes/bg
   });
   log('  ✓ bun.lock updated', 'green');
 } catch (error) {

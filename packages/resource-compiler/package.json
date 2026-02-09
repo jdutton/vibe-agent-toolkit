@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/resource-compiler",
-  "version": "0.1.10",
+  "version": "0.1.11",
   "description": "Compile markdown resources to TypeScript with full IDE support",
   "type": "module",
   "main": "./dist/index.js",

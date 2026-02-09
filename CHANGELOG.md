@@ -7,7 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.10] - 2026-02-09
+## [0.1.11] - 2026-02-09
+
+**Note:** Version 0.1.10 was deprecated due to incomplete publish (phantom package in publish list caused partial release).
 
 ### Performance
 - **Discovery Scan: 540x Faster** - File discovery now completes in ~0.5 seconds instead of 5+ minutes
@@ -24,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Previously always showed "0.00 MB" regardless of actual size
   - Implements recursive directory traversal to calculate true size in bytes
   - Helps users monitor disk usage and verify successful index builds
+- **Phantom Package Validation** - Pre-publish check now catches packages declared but not existing
+  - Previously only checked for undeclared packages (exist but not in lists)
+  - Now validates both directions: undeclared packages AND phantom packages
+  - Prevents publish failures from stale package list entries
+  - Root cause of 0.1.10 publish failure
 
 ### Changed
 - **Test Suite Reorganization**: Separated integration tests from unit tests for faster development feedback

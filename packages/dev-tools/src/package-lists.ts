@@ -29,7 +29,6 @@ export const PUBLISHED_PACKAGES = [
   'agent-config',
   'agent-runtime',
   'runtime-claude-agent-sdk',
-  'runtime-claude-skills',
   'agent-skills',
   'runtime-langchain',
   'runtime-openai',
