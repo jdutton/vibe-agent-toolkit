@@ -64,11 +64,3 @@ export function validatePackageList(projectRoot: string): PackageListValidation 
 
   return { undeclared, phantom };
 }
-
-/**
- * Legacy function for backward compatibility
- * @deprecated Use validatePackageList() instead
- */
-export function getMissingPackages(projectRoot: string): string[] {
-  return validatePackageList(projectRoot).undeclared;
-}

@@ -12,7 +12,7 @@ import semver from 'semver';
 
 import { log, safeExecResult, safeExecSync } from './common.js';
 import { PUBLISHED_PACKAGES } from './package-lists.js';
-import { getMissingPackages } from './validate-package-list.js';
+import { validatePackageList as validatePackages } from './validate-package-list.js';
 
 const PROJECT_ROOT = process.cwd();
 const MANIFEST_PATH = join(PROJECT_ROOT, '.publish-manifest.json');
@@ -28,17 +28,29 @@ const PACKAGES: readonly string[] = PUBLISHED_PACKAGES;
  */
 function validatePackageList(): void {
   try {
-    const missingPackages = getMissingPackages(PROJECT_ROOT);
+    const validation = validatePackages(PROJECT_ROOT);
+    const hasErrors = validation.undeclared.length > 0 || validation.phantom.length > 0;
 
-    if (missingPackages.length > 0) {
+    if (hasErrors) {
       log('✗ Package list out of sync!', 'red');
-      log('  The following packages exist in packages/ but are not declared:', 'red');
-      for (const pkg of missingPackages) {
-        log(`    - ${pkg}`, 'red');
+
+      if (validation.undeclared.length > 0) {
+        log('  The following packages exist in packages/ but are not declared:', 'red');
+        for (const pkg of validation.undeclared) {
+          log(`    - ${pkg}`, 'red');
+        }
       }
+
+      if (validation.phantom.length > 0) {
+        log('  The following packages are declared but do not exist:', 'red');
+        for (const pkg of validation.phantom) {
+          log(`    - ${pkg}`, 'red');
+        }
+      }
+
       log('\n  Update packages/dev-tools/src/package-lists.ts:', 'yellow');
-      log('    - Add to PUBLISHED_PACKAGES array if it should be published', 'yellow');
-      log('    - Add to SKIP_PACKAGES array if it should not be published', 'yellow');
+      log('    - Add undeclared packages to PUBLISHED_PACKAGES or SKIP_PACKAGES', 'yellow');
+      log('    - Remove phantom packages from the lists', 'yellow');
       process.exit(1);
     }
 
