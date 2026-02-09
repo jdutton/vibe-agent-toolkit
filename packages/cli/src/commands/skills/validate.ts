@@ -23,34 +23,43 @@ import {
 import { readPackageJson, validateSkillSource } from './shared.js';
 
 /**
- * Unified validation output
- */
-interface ValidationOutput {
-  status: 'success' | 'error';
-  skillsValidated: number;
-  results: PackagingValidationResult[];
-  durationSecs: number;
-}
-
-/**
- * Package.json vat configuration
- */
-/**
  * Skills validate command options
  */
 export interface SkillsValidateCommandOptions {
   skill?: string;
   debug?: boolean;
+  verbose?: boolean;
+}
+
+/**
+ * Strip excludedReferences from results metadata for non-verbose YAML output.
+ * Keeps excludedReferenceCount for summary info, but removes the full path list
+ * which can be noisy. Operates on a deep copy to avoid mutating original results.
+ */
+function stripExcludedReferencePaths(results: PackagingValidationResult[]): unknown[] {
+  return results.map((result) => {
+    const { skillLines, totalLines, fileCount, directFileCount, maxLinkDepth, excludedReferenceCount } = result.metadata;
+    return {
+      ...result,
+      metadata: { skillLines, totalLines, fileCount, directFileCount, maxLinkDepth, excludedReferenceCount },
+    };
+  });
 }
 
 /**
  * Output YAML summary to stdout
  */
-function outputYamlSummary(results: PackagingValidationResult[], duration: number): void {
-  const output: ValidationOutput = {
+function outputYamlSummary(
+  results: PackagingValidationResult[],
+  duration: number,
+  verbose: boolean
+): void {
+  const outputResults = verbose ? results : stripExcludedReferencePaths(results);
+
+  const output = {
     status: results.some((r) => r.status === 'error') ? 'error' : 'success',
     skillsValidated: results.length,
-    results,
+    results: outputResults,
     durationSecs: formatDurationSecs(duration),
   };
 
@@ -117,10 +126,11 @@ function outputSkillErrors(result: PackagingValidationResult): void {
 function outputValidationReport(
   results: PackagingValidationResult[],
   duration: number,
-  logger: ReturnType<typeof createLogger>
+  logger: ReturnType<typeof createLogger>,
+  verbose: boolean
 ): void {
   // Output YAML to stdout (for programmatic parsing)
-  outputYamlSummary(results, duration);
+  outputYamlSummary(results, duration, verbose);
 
   // Output human-readable summary to stderr
   const failedSkills = results.filter((r) => r.status === 'error');
@@ -240,7 +250,8 @@ export async function validateCommand(
 
     // Output report and exit
     const duration = Date.now() - startTime;
-    outputValidationReport(results, duration, logger);
+    const verbose = options.verbose === true;
+    outputValidationReport(results, duration, logger, verbose);
 
     const hasErrors = results.some(
       (r) => r.activeErrors.length > 0 || r.expiredOverrides.length > 0

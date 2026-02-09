@@ -88,6 +88,79 @@
                   "stripPrefix": {
                     "type": "string",
                     "description": "Path prefix to strip before applying naming strategy (e.g., \"knowledge-base\")"
+                  },
+                  "linkFollowDepth": {
+                    "anyOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "string",
+                        "const": "full"
+                      }
+                    ],
+                    "description": "How deep to follow markdown links from SKILL.md for bundling:\n  0 = skill file only (no link following)\n  1 = direct links only\n  2 = direct + one transitive level (default, recommended)\n  N = N levels of transitive links\n  \"full\" = complete transitive closure (use with caution)"
+                  },
+                  "excludeReferencesFromBundle": {
+                    "type": "object",
+                    "properties": {
+                      "rules": {
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "patterns": {
+                              "type": "array",
+                              "items": {
+                                "type": "string"
+                              },
+                              "description": "Glob patterns matched against path relative to skill root"
+                            },
+                            "handling": {
+                              "type": "string",
+                              "enum": [
+                                "strip-to-text",
+                                "rag-search-hint"
+                              ],
+                              "description": "How to rewrite links to matched files"
+                            },
+                            "template": {
+                              "type": "string",
+                              "description": "Handlebars template. Context: {{link.text}}, {{link.uri}}, {{link.fileName}}, {{link.filePath}}, {{skill.name}}, {{tool.name}}"
+                            }
+                          },
+                          "required": [
+                            "patterns",
+                            "handling"
+                          ],
+                          "additionalProperties": false
+                        },
+                        "default": [],
+                        "description": "Ordered rules evaluated first-match. Each rule matches file paths and specifies rewrite strategy."
+                      },
+                      "default": {
+                        "type": "object",
+                        "properties": {
+                          "handling": {
+                            "type": "string",
+                            "enum": [
+                              "strip-to-text",
+                              "rag-search-hint"
+                            ],
+                            "default": "strip-to-text",
+                            "description": "Handling for non-bundled links that do not match any rule"
+                          },
+                          "template": {
+                            "type": "string",
+                            "description": "Template for default handling. Default: \"{{link.text}}\""
+                          }
+                        },
+                        "additionalProperties": false,
+                        "description": "Default handling for depth-exceeded and unmatched excluded links"
+                      }
+                    },
+                    "additionalProperties": false
                   }
                 },
                 "additionalProperties": false,

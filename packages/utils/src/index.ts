@@ -31,3 +31,6 @@ export * from './test-helpers.js';
 
 // Zod type introspection (version-agnostic)
 export * from './zod-introspection.js';
+
+// Handlebars template rendering (cached, no HTML escaping)
+export * from './template.js';

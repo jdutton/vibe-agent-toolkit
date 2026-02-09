@@ -2,6 +2,8 @@
  * Unit tests for packaging validation
  */
 
+import * as path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import type { PackagingValidationResult } from '../../src/validators/packaging-validator.js';
@@ -29,6 +31,31 @@ const TEST_REASON = 'Will be refactored in Q2';
 const SKILL_HEADER = '\n# Test Skill\n\n';
 const SKILL_HEADER_NO_TRAILING = '\n# Test Skill';
 const LONG_SKILL_BODY = SKILL_HEADER + LINE_CONTENT.repeat(550);
+
+// Depth chain fixture constants
+const LEVEL1_KEY = 'level1.md';
+const LEVEL2_KEY = 'level2.md';
+const LEVEL3_KEY = 'level3.md';
+const LEVEL1_WITH_LINK = '# Level 1\n\nSee [level2](./level2.md).';
+const LEVEL2_WITH_LINK = '# Level 2\n\nSee [level3](./level3.md).';
+const LEVEL3_TERMINAL = '# Level 3\n\nEnd of chain.';
+const SKILL_BODY_WITH_LEVEL1 = '\n# Test Skill\n\nSee [level1](./level1.md).';
+
+/**
+ * Create a 3-level depth chain fixture: SKILL.md → level1 → level2 → level3
+ */
+function createThreeLevelChain(tempDir: string): { skillPath: string } {
+	const files = {
+		[LEVEL1_KEY]: LEVEL1_WITH_LINK,
+		[LEVEL2_KEY]: LEVEL2_WITH_LINK,
+		[LEVEL3_KEY]: LEVEL3_TERMINAL,
+	};
+	const skillContent = createSkillContent(
+		{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+		SKILL_BODY_WITH_LEVEL1,
+	);
+	return createTransitiveSkillStructure(tempDir, files, skillContent);
+}
 
 /**
  * Helper to test override validation with common assertions
@@ -176,12 +203,12 @@ describe('validateSkillForPackaging - Link depth validation', () => {
 	it('should pass for depth <= 2', async () => {
 		const tempDir = getTempDir();
 		const files = {
-			'level1.md': '# Level 1\n\nSee [level2](./level2.md).',
-			'level2.md': '# Level 2\n\nEnd of chain.',
+			[LEVEL1_KEY]: LEVEL1_WITH_LINK,
+			[LEVEL2_KEY]: '# Level 2\n\nEnd of chain.',
 		};
 		const skillContent = createSkillContent(
 			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
-			'\n# Test Skill\n\nSee [level1](./level1.md).',
+			SKILL_BODY_WITH_LEVEL1,
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 
@@ -191,30 +218,35 @@ describe('validateSkillForPackaging - Link depth validation', () => {
 		expect(result.activeErrors.filter((e) => e.code === 'REFERENCE_TOO_DEEP')).toHaveLength(0);
 	});
 
-	it('should error for depth > 2', async () => {
-		const tempDir = getTempDir();
-		const files = {
-			'level1.md': '# Level 1\n\nSee [level2](./level2.md).',
-			'level2.md': '# Level 2\n\nSee [level3](./level3.md).',
-			'level3.md': '# Level 3\n\nEnd of chain.',
-		};
-		const skillContent = createSkillContent(
-			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
-			'\n# Test Skill\n\nSee [level1](./level1.md).',
-		);
-		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
+	it('should error for depth > 2 when linkFollowDepth is full', async () => {
+		const { skillPath } = createThreeLevelChain(getTempDir());
 
-		const result = await validateSkillForPackaging(skillPath);
+		// With linkFollowDepth: 'full', all links are followed regardless of depth
+		const metadata = { packagingOptions: { linkFollowDepth: 'full' as const } };
+		const result = await validateSkillForPackaging(skillPath, metadata as never);
 
 		expect(result.status).toBe('error');
 		expect(result.metadata.maxLinkDepth).toBeGreaterThan(2);
 		const depthError = result.activeErrors.find((e) => e.code === 'REFERENCE_TOO_DEEP');
 		expect(depthError).toBeDefined();
 	});
+
+	it('should truncate at default depth 2 and exclude deeper files', async () => {
+		const { skillPath } = createThreeLevelChain(getTempDir());
+
+		// Default behavior: linkFollowDepth = 2, so level3.md is excluded
+		const result = await validateSkillForPackaging(skillPath);
+
+		expect(result.status).toBe('success');
+		expect(result.metadata.maxLinkDepth).toBeLessThanOrEqual(2);
+		expect(result.metadata.fileCount).toBe(3); // SKILL.md + level1.md + level2.md
+		expect(result.metadata.excludedReferenceCount).toBe(1); // level3.md excluded
+		expect(result.activeErrors.filter((e) => e.code === 'REFERENCE_TOO_DEEP')).toHaveLength(0);
+	});
 });
 
 describe('validateSkillForPackaging - Navigation file detection', () => {
-	it('should detect links to README.md', async () => {
+	it('should detect links to README.md with full path and line number', async () => {
 		const tempDir = getTempDir();
 		const files = {
 			'docs/README.md': '# Documentation Index',
@@ -230,7 +262,10 @@ describe('validateSkillForPackaging - Navigation file detection', () => {
 		expect(result.status).toBe('error');
 		const navError = result.activeErrors.find((e) => e.code === 'LINKS_TO_NAVIGATION_FILES');
 		expect(navError).toBeDefined();
-		expect(navError?.message).toContain('README.md');
+		// Should contain full resolved path, not just basename
+		expect(navError?.message).toContain(path.resolve(tempDir, 'docs/README.md'));
+		// Should contain a line number (colon followed by digits)
+		expect(navError?.message).toMatch(/:\d+/);
 	});
 
 	it('should detect links to index.md', async () => {
@@ -477,7 +512,10 @@ describe('validateSkillForPackaging - Metadata reporting', () => {
 		expect(result.metadata.skillLines).toBeGreaterThan(300);
 		expect(result.metadata.totalLines).toBeGreaterThan(400);
 		expect(result.metadata.fileCount).toBe(3); // SKILL.md + ref1.md + ref2.md
+		expect(result.metadata.directFileCount).toBe(1); // Only ref2.md linked directly (ref1.md is transitive)
 		expect(result.metadata.maxLinkDepth).toBe(2); // SKILL → ref2 → ref1
+		expect(result.metadata.excludedReferenceCount).toBe(0);
+		expect(result.metadata.excludedReferences).toEqual([]);
 	});
 
 	it('should extract skill name from frontmatter', async () => {
@@ -504,5 +542,90 @@ describe('validateSkillForPackaging - Metadata reporting', () => {
 		const result = await validateSkillForPackaging(skillPath);
 
 		expect(result.skillName).toBe('My H1 Title');
+	});
+});
+
+describe('validateSkillForPackaging - Link collection integration', () => {
+	it('should limit bundled files to depth 1 when linkFollowDepth is 1', async () => {
+		const { skillPath } = createThreeLevelChain(getTempDir());
+
+		const metadata = { packagingOptions: { linkFollowDepth: 1 } };
+		const result = await validateSkillForPackaging(skillPath, metadata as never);
+
+		// Only level1.md should be bundled (depth 1), level2.md excluded at depth boundary
+		expect(result.metadata.fileCount).toBe(2); // SKILL.md + level1.md
+		expect(result.metadata.excludedReferenceCount).toBeGreaterThan(0);
+		expect(result.metadata.maxLinkDepth).toBeLessThanOrEqual(1);
+	});
+
+	it('should exclude files matching exclude patterns', async () => {
+		const tempDir = getTempDir();
+		const files = {
+			'guide.md': '# Guide\n\nUser-facing guide content.',
+			'internal/notes.md': '# Internal Notes\n\nInternal documentation.',
+		};
+		const skillContent = createSkillContent(
+			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+			'\n# Test Skill\n\nSee [guide](./guide.md) and [notes](./internal/notes.md).',
+		);
+		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
+
+		const metadata = {
+			packagingOptions: {
+				excludeReferencesFromBundle: {
+					rules: [
+						{ patterns: ['internal/**'], handling: 'strip-to-text' },
+					],
+				},
+			},
+		};
+		const result = await validateSkillForPackaging(skillPath, metadata as never);
+
+		// guide.md bundled, internal/notes.md excluded by pattern
+		expect(result.metadata.fileCount).toBe(2); // SKILL.md + guide.md
+		expect(result.metadata.excludedReferenceCount).toBe(1);
+		expect(result.metadata.excludedReferences).toHaveLength(1);
+		expect(result.metadata.excludedReferences[0]).toContain('notes.md');
+	});
+
+	it('should default to depth 2 with no packaging options', async () => {
+		const tempDir = getTempDir();
+		const files = {
+			[LEVEL1_KEY]: LEVEL1_WITH_LINK,
+			[LEVEL2_KEY]: '# Level 2\n\nContent at depth 2.',
+		};
+		const skillContent = createSkillContent(
+			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+			SKILL_BODY_WITH_LEVEL1,
+		);
+		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
+
+		// No metadata at all - should use default depth of 2
+		const result = await validateSkillForPackaging(skillPath);
+
+		// Both level1.md and level2.md should be bundled (within depth 2)
+		expect(result.metadata.fileCount).toBe(3); // SKILL.md + level1.md + level2.md
+		expect(result.metadata.maxLinkDepth).toBe(2);
+		expect(result.metadata.excludedReferenceCount).toBe(0);
+		expect(result.metadata.excludedReferences).toEqual([]);
+	});
+
+	it('should bundle all files with linkFollowDepth: 0 (skill only)', async () => {
+		const tempDir = getTempDir();
+		const files = {
+			'reference.md': '# Reference\n\nContent.',
+		};
+		const skillContent = createSkillContent(
+			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+			'\n# Test Skill\n\nSee [reference](./reference.md).',
+		);
+		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
+
+		const metadata = { packagingOptions: { linkFollowDepth: 0 } };
+		const result = await validateSkillForPackaging(skillPath, metadata as never);
+
+		// Only SKILL.md should be bundled, reference.md excluded
+		expect(result.metadata.fileCount).toBe(1); // SKILL.md only
+		expect(result.metadata.excludedReferenceCount).toBe(1);
 	});
 });

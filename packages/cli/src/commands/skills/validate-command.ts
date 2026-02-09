@@ -13,6 +13,7 @@ export function createValidateCommand(): Command {
     .description('Validate skills for packaging (reads vat.skills from package.json)')
     .argument('[path]', 'Path to directory with package.json (default: current directory)')
     .option('--skill <name>', 'Validate specific skill only')
+    .option('-v, --verbose', 'Show full details including excluded reference paths')
     .option('-d, --debug', 'Enable debug logging')
     .action(validateCommand)
     .addHelpText(

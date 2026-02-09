@@ -4,6 +4,7 @@
 
 import { spawnSync } from 'node:child_process';
 
+import * as yaml from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 
 import { getBinPath, getFixturePath } from './test-common.js';
@@ -23,7 +24,10 @@ interface PackagingValidationOutput {
       skillLines: number;
       totalLines: number;
       fileCount: number;
+      directFileCount: number;
       maxLinkDepth: number;
+      excludedReferenceCount: number;
+      excludedReferences?: string[];
     };
   }>;
   durationSecs: number;
@@ -109,11 +113,43 @@ describe('skills validate command (system test)', () => {
       expect(skillResult).toHaveProperty('ignoredErrors');
       expect(skillResult).toHaveProperty('metadata');
 
-      // Verify metadata structure
+      // Verify metadata structure (including new fields)
       expect(skillResult.metadata).toHaveProperty('skillLines');
       expect(skillResult.metadata).toHaveProperty('totalLines');
       expect(skillResult.metadata).toHaveProperty('fileCount');
+      expect(skillResult.metadata).toHaveProperty('directFileCount');
       expect(skillResult.metadata).toHaveProperty('maxLinkDepth');
+      expect(skillResult.metadata).toHaveProperty('excludedReferenceCount');
+    }
+  });
+
+  it('should NOT include excludedReferences in default (non-verbose) output', () => {
+    const { parsed } = executeSkillsCommandAndExpectYaml(binPath, 'validate', fixtureDir);
+
+    const typedParsed = parsed as unknown as PackagingValidationOutput;
+
+    // In non-verbose mode, excludedReferences should be stripped from metadata
+    for (const result of typedParsed.results) {
+      expect(result.metadata).not.toHaveProperty('excludedReferences');
+      // But excludedReferenceCount should still be present
+      expect(result.metadata).toHaveProperty('excludedReferenceCount');
+    }
+  });
+
+  it('should include excludedReferences in verbose output', () => {
+    // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
+    const result = spawnSync('node', [binPath, 'skills', 'validate', fixtureDir, '--verbose'], {
+      encoding: 'utf-8',
+    });
+
+    expect(result.status).toBe(0);
+
+    const parsed = yaml.load(result.stdout) as PackagingValidationOutput;
+
+    // In verbose mode, excludedReferences should be present in metadata
+    for (const skillResult of parsed.results) {
+      expect(skillResult.metadata).toHaveProperty('excludedReferences');
+      expect(Array.isArray(skillResult.metadata.excludedReferences)).toBe(true);
     }
   });
 });

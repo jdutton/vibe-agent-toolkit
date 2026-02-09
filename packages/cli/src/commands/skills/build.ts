@@ -204,6 +204,8 @@ async function buildSkill(
     basePath,
     ...(packagingOptions?.resourceNaming && { resourceNaming: packagingOptions.resourceNaming }),
     ...(packagingOptions?.stripPrefix && { stripPrefix: packagingOptions.stripPrefix }),
+    ...(packagingOptions?.linkFollowDepth !== undefined && { linkFollowDepth: packagingOptions.linkFollowDepth }),
+    ...(packagingOptions?.excludeReferencesFromBundle && { excludeReferencesFromBundle: packagingOptions.excludeReferencesFromBundle }),
   });
 
   logger.info(`   ✅ Built ${result.files.dependencies.length + 1} files`);

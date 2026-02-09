@@ -363,6 +363,129 @@ describe('PackagingOptionsSchema', () => {
     const result = PackagingOptionsSchema.safeParse(invalidOptions);
     expect(result.success).toBe(false);
   });
+
+  describe('linkFollowDepth', () => {
+    it('should accept linkFollowDepth: 0', () => {
+      const result = PackagingOptionsSchema.safeParse({ linkFollowDepth: 0 });
+      expect(result.success).toBe(true);
+    });
+
+    it('should accept linkFollowDepth: 5 (not capped)', () => {
+      const result = PackagingOptionsSchema.safeParse({ linkFollowDepth: 5 });
+      expect(result.success).toBe(true);
+    });
+
+    it('should reject linkFollowDepth: -1 (negative)', () => {
+      const result = PackagingOptionsSchema.safeParse({ linkFollowDepth: -1 });
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject linkFollowDepth: 1.5 (non-integer)', () => {
+      const result = PackagingOptionsSchema.safeParse({ linkFollowDepth: 1.5 });
+      expect(result.success).toBe(false);
+    });
+
+    it('should accept linkFollowDepth: "full"', () => {
+      const result = PackagingOptionsSchema.safeParse({ linkFollowDepth: 'full' });
+      expect(result.success).toBe(true);
+    });
+
+    it('should reject linkFollowDepth: "partial" (invalid string)', () => {
+      const result = PackagingOptionsSchema.safeParse({ linkFollowDepth: 'partial' });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('excludeReferencesFromBundle', () => {
+    it('should accept rules array with default handling', () => {
+      const options = {
+        excludeReferencesFromBundle: {
+          rules: [
+            {
+              patterns: ['**/*.pdf'],
+              handling: 'strip-to-text' as const,
+            },
+          ],
+          default: {
+            handling: 'strip-to-text' as const,
+          },
+        },
+      };
+
+      const result = PackagingOptionsSchema.safeParse(options);
+      expect(result.success).toBe(true);
+    });
+
+    it('should accept empty rules array', () => {
+      const options = {
+        excludeReferencesFromBundle: {
+          rules: [],
+        },
+      };
+
+      const result = PackagingOptionsSchema.safeParse(options);
+      expect(result.success).toBe(true);
+    });
+
+    it('should accept rule with rag-search-hint handling and template', () => {
+      const options = {
+        excludeReferencesFromBundle: {
+          rules: [
+            {
+              patterns: ['knowledge-base/**/*.md'],
+              handling: 'rag-search-hint' as const,
+              template: 'Search for: {{link.text}} in {{skill.name}}',
+            },
+          ],
+        },
+      };
+
+      const result = PackagingOptionsSchema.safeParse(options);
+      expect(result.success).toBe(true);
+    });
+
+    it('should default rules to empty array when omitted', () => {
+      const options = {
+        excludeReferencesFromBundle: {},
+      };
+
+      const result = PackagingOptionsSchema.safeParse(options);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.excludeReferencesFromBundle?.rules).toEqual([]);
+      }
+    });
+
+    it('should accept default handling with template', () => {
+      const options = {
+        excludeReferencesFromBundle: {
+          default: {
+            handling: 'rag-search-hint' as const,
+            template: '{{link.text}} (see {{link.fileName}})',
+          },
+        },
+      };
+
+      const result = PackagingOptionsSchema.safeParse(options);
+      expect(result.success).toBe(true);
+    });
+
+    it('should reject rule with invalid handling value', () => {
+      const options = {
+        excludeReferencesFromBundle: {
+          rules: [
+            {
+              patterns: ['**/*.pdf'],
+              handling: 'invalid-handling',
+            },
+          ],
+        },
+      };
+
+      const result = PackagingOptionsSchema.safeParse(options);
+      expect(result.success).toBe(false);
+    });
+  });
 });
 
 describe('VatSkillMetadataSchema with validation overrides', () => {

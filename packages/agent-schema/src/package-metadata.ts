@@ -8,6 +8,13 @@
 import { z } from 'zod';
 
 /**
+ * Link handling strategies for excluded references
+ *
+ * Defines how links to excluded files are rewritten during skill packaging.
+ */
+const LINK_HANDLING_STRATEGIES = ['strip-to-text', 'rag-search-hint'] as const;
+
+/**
  * Validation override value
  *
  * Supports both simple string format and extended object format with expiration.
@@ -41,6 +48,41 @@ export const PackagingOptionsSchema = z.object({
     .string()
     .optional()
     .describe('Path prefix to strip before applying naming strategy (e.g., "knowledge-base")'),
+  linkFollowDepth: z
+    .union([z.number().int().min(0), z.literal('full')])
+    .optional()
+    .describe(
+      'How deep to follow markdown links from SKILL.md for bundling:\n' +
+      '  0 = skill file only (no link following)\n' +
+      '  1 = direct links only\n' +
+      '  2 = direct + one transitive level (default, recommended)\n' +
+      '  N = N levels of transitive links\n' +
+      '  "full" = complete transitive closure (use with caution)'
+    ),
+  excludeReferencesFromBundle: z.object({
+    rules: z.array(z.object({
+      patterns: z.array(z.string())
+        .describe('Glob patterns matched against path relative to skill root'),
+      handling: z.enum(LINK_HANDLING_STRATEGIES)
+        .describe('How to rewrite links to matched files'),
+      template: z.string()
+        .optional()
+        .describe(
+          'Handlebars template. Context: {{link.text}}, {{link.uri}}, ' +
+          '{{link.fileName}}, {{link.filePath}}, {{skill.name}}, {{tool.name}}'
+        ),
+    })).optional().default([])
+      .describe('Ordered rules evaluated first-match. Each rule matches file paths and specifies rewrite strategy.'),
+    default: z.object({
+      handling: z.enum(LINK_HANDLING_STRATEGIES)
+        .default(LINK_HANDLING_STRATEGIES[0])
+        .describe('Handling for non-bundled links that do not match any rule'),
+      template: z.string()
+        .optional()
+        .describe('Template for default handling. Default: "{{link.text}}"'),
+    }).optional()
+      .describe('Default handling for depth-exceeded and unmatched excluded links'),
+  }).optional(),
 }).describe('Packaging options for skill distribution');
 
 export type PackagingOptions = z.infer<typeof PackagingOptionsSchema>;

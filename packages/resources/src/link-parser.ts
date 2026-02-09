@@ -12,7 +12,7 @@
 import { readFile, stat } from 'node:fs/promises';
 
 import * as yaml from 'js-yaml';
-import type { Heading, Link, LinkReference, Root } from 'mdast';
+import type { Definition, Heading, Link, LinkReference, Root } from 'mdast';
 import remarkFrontmatter from 'remark-frontmatter';
 import remarkGfm from 'remark-gfm';
 import remarkParse from 'remark-parse';
@@ -125,6 +125,18 @@ function extractLinks(tree: Root): ResourceLink[] {
       text: extractLinkText(node),
       href,
       type: 'unknown', // Reference links need definition resolution
+      line: node.position?.start.line,
+    };
+    links.push(link);
+  });
+
+  // Visit definition nodes (reference-style link definitions: [ref]: url)
+  // These provide the actual URLs for linkReference nodes
+  visit(tree, 'definition', (node: Definition) => {
+    const link: ResourceLink = {
+      text: node.identifier,
+      href: node.url,
+      type: classifyLink(node.url),
       line: node.position?.start.line,
     };
     links.push(link);

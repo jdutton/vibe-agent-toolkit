@@ -21,6 +21,8 @@ import { basename, dirname, resolve } from 'node:path';
 import type { ValidationOverride, VatSkillMetadata } from '@vibe-agent-toolkit/agent-schema';
 import { parseMarkdown } from '@vibe-agent-toolkit/resources';
 
+import { collectLinks } from '../link-collector.js';
+
 import type { ValidationIssue } from './types.js';
 import {
   createIssue,
@@ -65,7 +67,10 @@ export interface PackagingValidationResult {
     skillLines: number;
     totalLines: number;
     fileCount: number;
+    directFileCount: number;
     maxLinkDepth: number;
+    excludedReferenceCount: number;
+    excludedReferences: string[];
   };
 }
 
@@ -94,20 +99,41 @@ export async function validateSkillForPackaging(
   const skillContent = await readFile(skillPath, 'utf-8');
   const skillLines = skillContent.split('\n').length;
 
-  // Collect linked files recursively
-  const linkedFiles = await collectLinkedFiles(skillPath, new Set());
-  const fileCount = linkedFiles.length + 1; // +1 for SKILL.md itself
+  // Count files linked directly from SKILL.md (not transitively)
+  const directLinks = getResolvedMarkdownLinks(parseResult.links, skillPath);
+  const directFileCount = directLinks.length;
 
-  // Calculate total lines
+  // Read packaging options for depth/exclude configuration
+  const linkFollowDepth = skillMetadata?.packagingOptions?.linkFollowDepth ?? 2;
+  const excludeConfig = skillMetadata?.packagingOptions?.excludeReferencesFromBundle;
+  const maxDepth = linkFollowDepth === 'full' ? Infinity : linkFollowDepth;
+
+  // Collect linked files with depth + exclusion
+  const { bundledFiles, excludedReferences, maxBundledDepth } = await collectLinks(
+    skillPath,
+    {
+      maxDepth,
+      excludeRules: excludeConfig?.rules ?? [],
+      defaultRule: excludeConfig?.default ?? { handling: 'strip-to-text' },
+      skillRoot: dirname(skillPath),
+    }
+  );
+
+  const fileCount = bundledFiles.length + 1; // +1 for SKILL.md itself
+  const maxLinkDepth = maxBundledDepth;
+
+  // Calculate total lines from bundled markdown files only
   let totalLines = skillLines;
-  for (const linkedFile of linkedFiles) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- linkedFile resolved from markdown parser
-    const content = await readFile(linkedFile, 'utf-8');
-    totalLines += content.split('\n').length;
+  for (const bundledFile of bundledFiles) {
+    if (bundledFile.endsWith('.md')) {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- bundledFile resolved from markdown parser
+      const content = await readFile(bundledFile, 'utf-8');
+      totalLines += content.split('\n').length;
+    }
   }
 
-  // Calculate maximum link depth
-  const maxLinkDepth = await calculateMaxLinkDepth(skillPath, new Set());
+  // Deduplicate excluded reference paths for metadata
+  const uniqueExcludedPaths = [...new Set(excludedReferences.map(r => r.path))];
 
   // Run validation checks
   await validateSkillSize(skillLines, skillPath, errors);
@@ -116,7 +142,7 @@ export async function validateSkillForPackaging(
   await validateLinkDepth(maxLinkDepth, skillPath, errors);
   await validateNavigationLinks(parseResult.links, skillPath, errors);
   await validateDescription(parseResult.frontmatter, skillPath, errors);
-  await validateProgressiveDisclosure(skillLines, linkedFiles.length, skillPath, errors);
+  await validateProgressiveDisclosure(skillLines, bundledFiles.length, skillPath, errors);
 
   // Apply overrides
   const skillName = extractSkillName(parseResult, skillPath);
@@ -135,7 +161,10 @@ export async function validateSkillForPackaging(
       skillLines,
       totalLines,
       fileCount,
+      directFileCount,
       maxLinkDepth,
+      excludedReferenceCount: uniqueExcludedPaths.length,
+      excludedReferences: uniqueExcludedPaths,
     },
   };
 }
@@ -201,7 +230,7 @@ async function validateLinkDepth(
  * Validate navigation links
  */
 async function validateNavigationLinks(
-  links: Array<{ href: string; type: string }>,
+  links: Array<{ href: string; type: string; line?: number | undefined; text?: string | undefined }>,
   skillPath: string,
   errors: ValidationIssue[]
 ): Promise<void> {
@@ -213,7 +242,12 @@ async function validateNavigationLinks(
     });
 
   if (navigationLinks.length > 0) {
-    const files = navigationLinks.map((l) => basename(l.href)).join(', ');
+    const files = navigationLinks.map((l) => {
+      const hrefBase = l.href.split('#')[0] ?? l.href;
+      const resolvedPath = resolve(dirname(skillPath), hrefBase);
+      const lineInfo = l.line === undefined ? '' : `:${l.line}`;
+      return `${resolvedPath}${lineInfo}`;
+    }).join(', ');
     const rule = VALIDATION_RULES.LINKS_TO_NAVIGATION_FILES;
     errors.push(createIssue(rule, { files }, skillPath));
   }
@@ -287,71 +321,6 @@ function getResolvedMarkdownLinks(
   }
 
   return resolvedPaths;
-}
-
-/**
- * Collect all linked markdown files recursively
- */
-async function collectLinkedFiles(
-  markdownPath: string,
-  visited: Set<string>
-): Promise<string[]> {
-  const normalizedPath = resolve(markdownPath);
-
-  // Prevent infinite loops
-  if (visited.has(normalizedPath)) {
-    return [];
-  }
-  visited.add(normalizedPath);
-
-  // Parse markdown
-  const parseResult = await parseMarkdown(markdownPath);
-  const linkedFiles: string[] = [];
-
-  // Process links
-  const resolvedPaths = getResolvedMarkdownLinks(parseResult.links, markdownPath);
-  for (const resolvedPath of resolvedPaths) {
-    linkedFiles.push(resolvedPath);
-
-    // Recurse
-    const transitive = await collectLinkedFiles(resolvedPath, visited);
-    linkedFiles.push(...transitive);
-  }
-
-  // Deduplicate
-  return [...new Set(linkedFiles)];
-}
-
-/**
- * Calculate maximum link depth
- */
-async function calculateMaxLinkDepth(
-  markdownPath: string,
-  visited: Set<string>,
-  currentDepth = 0
-): Promise<number> {
-  const normalizedPath = resolve(markdownPath);
-
-  // Prevent infinite loops
-  if (visited.has(normalizedPath)) {
-    return currentDepth;
-  }
-  visited.add(normalizedPath);
-
-  // Parse markdown
-  const parseResult = await parseMarkdown(markdownPath);
-
-  let maxDepth = currentDepth;
-
-  // Process links
-  const resolvedPaths = getResolvedMarkdownLinks(parseResult.links, markdownPath);
-  for (const resolvedPath of resolvedPaths) {
-    // Recurse with incremented depth
-    const depth = await calculateMaxLinkDepth(resolvedPath, visited, currentDepth + 1);
-    maxDepth = Math.max(maxDepth, depth);
-  }
-
-  return maxDepth;
 }
 
 /**

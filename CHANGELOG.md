@@ -16,6 +16,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - New issue types: `external_url_dead`, `external_url_timeout`, `external_url_error`
   - Cache stored in `.vat-cache/external-urls.json`
   - Uses `markdown-link-check` library for robust HTTP checking
+- **Link Depth Control for Skills** - Control how deep to follow markdown links during skill packaging
+  - `linkFollowDepth` in `packagingOptions`: `0` (skill only), `1` (direct links), `2` (default), `N`, or `"full"` (unlimited)
+  - Prevents transitive link explosion in large knowledge bases (e.g., 493 files → ~10 files with depth 1)
+- **Rule-Based Link Exclusion** - Selectively exclude files from bundles with per-pattern link rewriting
+  - `excludeReferencesFromBundle` with ordered rules: each rule specifies glob patterns, handling strategy, and Handlebars template
+  - Two handling modes: `strip-to-text` (replace link with plain text) and `rag-search-hint` (replace with search guidance)
+  - Default rule catches all depth-boundary links that don't match explicit rules
+  - No dead links in output: every non-bundled link target is rewritten per its matched rule
+- **Non-Markdown Asset Bundling** - JSON schemas, images, and other non-markdown files linked from bundled markdown are now included in skill packages
+- **Handlebars Template Utility** - Shared template rendering in `@vibe-agent-toolkit/utils` with compiled template caching
+- **Expanded Validation Metadata** - `directFileCount`, `excludedReferenceCount`, and `excludedReferences` in validation results
+  - `--verbose` flag on `vat skills validate` shows full excluded reference paths
+
+### Changed
+- **BREAKING: Default link follow depth is now 2** (was unlimited). Skills that already pass validation are within depth 2 and unaffected. Use `linkFollowDepth: "full"` to restore unlimited behavior.
+
+### Improved
+- **Navigation file errors** now include full resolved paths and line numbers (not just basename)
+- **Depth terminology** clarified as "link-chain hops" instead of misleading "levels deep"
 - **Resource Naming Strategies for Skills** - Flexible control over packaged resource file naming
   - Three strategies: `basename` (default, simple), `resource-id` (flatten to kebab-case), `preserve-path` (maintain directory structure)
   - Universal `stripPrefix` option removes path prefixes before applying naming strategy

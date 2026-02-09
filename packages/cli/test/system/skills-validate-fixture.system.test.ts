@@ -37,7 +37,9 @@ describe('skills validate command - fixture tests (system test)', () => {
           skillLines: number;
           totalLines: number;
           fileCount: number;
+          directFileCount: number;
           maxLinkDepth: number;
+          excludedReferenceCount: number;
         };
       }>;
     };
@@ -52,6 +54,8 @@ describe('skills validate command - fixture tests (system test)', () => {
       expect(skillResult.activeErrors).toHaveLength(0);
       expect(skillResult.metadata).toHaveProperty('skillLines');
       expect(skillResult.metadata).toHaveProperty('totalLines');
+      expect(skillResult.metadata).toHaveProperty('directFileCount');
+      expect(skillResult.metadata).toHaveProperty('excludedReferenceCount');
     }
   });
 

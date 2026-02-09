@@ -189,10 +189,10 @@ describe('Rule message context interpolation', () => {
 		expect(message).toBe('Skill includes 10 files (recommended ≤6)');
 	});
 
-	it('REFERENCE_TOO_DEEP should show depth', () => {
+	it('REFERENCE_TOO_DEEP should show depth in hops', () => {
 		const rule = VALIDATION_RULES.REFERENCE_TOO_DEEP;
 		const message = rule.message({ depth: 4 });
-		expect(message).toBe('Reference links are 4 levels deep (recommended ≤2)');
+		expect(message).toBe('Link chain is 4 hops deep (recommended ≤2). Each linked file\'s own links create additional hops.');
 	});
 
 	it('LINKS_TO_NAVIGATION_FILES should show file list', () => {

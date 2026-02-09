@@ -150,9 +150,10 @@ export const VALIDATION_RULES: Record<ValidationRuleCode, ValidationRule> = {
   REFERENCE_TOO_DEEP: {
     code: 'REFERENCE_TOO_DEEP',
     category: 'best_practice',
-    message: (ctx) => `Reference links are ${Number(ctx['depth'] ?? 0)} levels deep (recommended ≤2)`,
-    fix: 'Flatten reference structure - Claude may partially read deep nesting',
-    example: 'SKILL.md → reference.md (good), SKILL.md → advanced.md → details.md (bad)',
+    message: (ctx) =>
+      `Link chain is ${Number(ctx['depth'] ?? 0)} hops deep (recommended ≤2). Each linked file's own links create additional hops.`,
+    fix: 'Reduce transitive link chains by moving deep content to RAG search or using linkFollowDepth configuration',
+    example: 'SKILL.md → reference.md (1 hop), SKILL.md → advanced.md → details.md (2 hops, OK)',
   },
   LINKS_TO_NAVIGATION_FILES: {
     code: 'LINKS_TO_NAVIGATION_FILES',
