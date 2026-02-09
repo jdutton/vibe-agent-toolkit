@@ -1,0 +1,19 @@
+{
+  "name": "test-fixture-skills-minimal",
+  "version": "0.0.1",
+  "private": true,
+  "vat": {
+    "skills": [
+      {
+        "name": "test-skill-1",
+        "source": "resources/skills/SKILL.md",
+        "path": "dist/skills/test-skill-1"
+      },
+      {
+        "name": "test-skill-2",
+        "source": "packages/test-skill-2/resources/skills/SKILL.md",
+        "path": "dist/skills/test-skill-2"
+      }
+    ]
+  }
+}

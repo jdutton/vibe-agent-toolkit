@@ -4,18 +4,22 @@
  * Reads vat.skills from package.json and builds each skill using packageSkill()
  */
 
-import { existsSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 
 import type { VatSkillMetadata } from '@vibe-agent-toolkit/agent-schema';
-import { packageSkill, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
+import {
+  packageSkill,
+  validateSkillForPackaging,
+  type PackageSkillResult,
+  type PackagingValidationResult,
+} from '@vibe-agent-toolkit/agent-skills';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../../utils/command-error.js';
-import { createLogger } from '../../utils/logger.js';
+import { type createLogger } from '../../utils/logger.js';
 
-import { filterSkillsByName, writeYamlHeader } from './command-helpers.js';
+import { filterSkillsByName, setupCommandContext, writeYamlHeader } from './command-helpers.js';
+import { readPackageJson, validateSkillSource } from './shared.js';
 
 export interface SkillsBuildCommandOptions {
   skill?: string;
@@ -23,20 +27,12 @@ export interface SkillsBuildCommandOptions {
   debug?: boolean;
 }
 
-interface PackageJsonVat {
-  skills?: VatSkillMetadata[];
-}
-
-interface PackageJson {
-  name: string;
-  vat?: PackageJsonVat;
-}
-
 export function createBuildCommand(): Command {
   const command = new Command('build');
 
   command
     .description('Build skills from source (reads vat.skills from package.json)')
+    .argument('[path]', 'Path to directory with package.json (default: current directory)')
     .option('--skill <name>', 'Build specific skill only')
     .option('--dry-run', 'Preview build without creating files')
     .option('--debug', 'Enable debug logging')
@@ -46,8 +42,11 @@ export function createBuildCommand(): Command {
       `
 Description:
   Builds all skills declared in package.json vat.skills field. For each
-  skill, validates the source exists, runs packageSkill(), and outputs to
-  the configured path directory.
+  skill, validates the skill for packaging (using validateSkillForPackaging),
+  then runs packageSkill() and outputs to the configured path directory.
+
+  Validation runs before packaging to catch errors early. Build fails if
+  any active validation errors exist (after applying overrides).
 
   Typically run as part of package build: "build": "tsc && vat skills build"
 
@@ -72,8 +71,14 @@ Output:
 
 Exit Codes:
   0 - Build successful (or dry-run preview)
-  1 - Invalid source or build error
+  1 - Validation error or build error
   2 - System error (missing package.json, invalid config)
+
+Validation:
+  Skills are validated before packaging using validateSkillForPackaging().
+  Validation checks size, complexity, link depth, and navigation patterns.
+  Supports overrides via ignoreValidationErrors in skill metadata.
+  Build fails if active errors exist (after applying valid overrides).
 
 Examples:
   $ vat skills build                    # Build all skills
@@ -86,47 +91,89 @@ Examples:
 }
 
 /**
- * Read and parse package.json from current directory
+ * Display active validation errors
  */
-async function readPackageJson(cwd: string): Promise<PackageJson> {
-  const packageJsonPath = join(cwd, 'package.json');
-
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Reading from validated current directory
-  if (!existsSync(packageJsonPath)) {
-    throw new Error(`package.json not found in current directory: ${cwd}`);
+function displayActiveErrors(
+  validationResult: PackagingValidationResult,
+  logger: ReturnType<typeof createLogger>
+): void {
+  if (validationResult.activeErrors.length > 0) {
+    logger.error(`\n   Active errors (${validationResult.activeErrors.length}):`);
+    for (const error of validationResult.activeErrors) {
+      logger.error(`     [${String(error.code)}] ${String(error.message)}`);
+      if (error.location) {
+        logger.error(`       Location: ${String(error.location)}`);
+      }
+      if (error.fix) {
+        logger.error(`       Fix: ${String(error.fix)}`);
+      }
+    }
   }
-
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Reading from validated current directory
-  const content = await readFile(packageJsonPath, 'utf-8');
-  const packageJson = JSON.parse(content) as PackageJson;
-
-  if (!packageJson.vat?.skills || packageJson.vat.skills.length === 0) {
-    throw new Error(
-      'No skills found in package.json vat.skills field. Add skill metadata to build skills.'
-    );
-  }
-
-  return packageJson;
 }
 
 /**
- * Validate skill source exists
+ * Display expired overrides
  */
-function validateSkillSource(
-  skill: VatSkillMetadata,
-  cwd: string,
+function displayExpiredOverrides(
+  validationResult: PackagingValidationResult,
   logger: ReturnType<typeof createLogger>
-): string {
-  const sourcePath = resolve(cwd, skill.source);
+): void {
+  if (validationResult.expiredOverrides.length > 0) {
+    logger.error(`\n   Expired overrides (${validationResult.expiredOverrides.length}):`);
+    for (const { error, reason, expiredDate } of validationResult.expiredOverrides) {
+      logger.error(`     [${String(error.code)}] ${String(error.message)}`);
+      logger.error(`       Override expired: ${expiredDate} (reason: ${reason})`);
+    }
+  }
+}
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path resolved from package.json
-  if (!existsSync(sourcePath)) {
-    logger.error(`❌ Skill source not found: ${skill.source}`);
-    logger.error(`   Expected path: ${sourcePath}`);
-    process.exit(1);
+/**
+ * Display ignored errors for context
+ */
+function displayIgnoredErrors(
+  validationResult: PackagingValidationResult,
+  logger: ReturnType<typeof createLogger>
+): void {
+  if (validationResult.ignoredErrors.length > 0) {
+    logger.info(`\n   Ignored errors (${validationResult.ignoredErrors.length}):`);
+    for (const { error, reason } of validationResult.ignoredErrors) {
+      logger.info(`     [${String(error.code)}] ${String(error.message)} (ignored: ${reason})`);
+    }
+  }
+}
+
+/**
+ * Validate skill before building
+ */
+async function validateSkillOrExit(
+  skill: VatSkillMetadata,
+  sourcePath: string,
+  logger: ReturnType<typeof createLogger>
+): Promise<void> {
+  logger.debug(`   Validating skill: ${skill.name}`);
+
+  const validationResult = await validateSkillForPackaging(sourcePath, skill);
+  const hasActiveErrors =
+    validationResult.activeErrors.length > 0 || validationResult.expiredOverrides.length > 0;
+
+  if (!hasActiveErrors) {
+    // Validation passed - log ignored errors if any
+    if (validationResult.ignoredErrors.length > 0) {
+      logger.debug(`   ℹ️  ${validationResult.ignoredErrors.length} error(s) ignored by overrides`);
+    }
+    return;
   }
 
-  return sourcePath;
+  // Validation failed - display all errors and exit
+  logger.error(`\n❌ Skill validation failed: ${skill.name}`);
+  logger.error(`   Source: ${sourcePath}`);
+
+  displayActiveErrors(validationResult, logger);
+  displayExpiredOverrides(validationResult, logger);
+  displayIgnoredErrors(validationResult, logger);
+
+  logger.error(`\n   Build aborted due to validation errors`);
+  process.exit(1);
 }
 
 /**
@@ -144,6 +191,9 @@ async function buildSkill(
   logger.info(`\n📦 Building skill: ${skill.name}`);
   logger.info(`   Source: ${skill.source}`);
   logger.info(`   Output: ${skill.path}`);
+
+  // Validate before building
+  await validateSkillOrExit(skill, sourcePath, logger);
 
   const result = await packageSkill(sourcePath, {
     outputPath,
@@ -236,15 +286,13 @@ function outputBuildYaml(
   process.stdout.write(`duration: ${duration}ms\n`);
 }
 
-async function buildCommand(options: SkillsBuildCommandOptions): Promise<void> {
-  const logger = createLogger(options.debug ? { debug: true } : {});
-  const startTime = Date.now();
+async function buildCommand(
+  pathArg: string | undefined,
+  options: SkillsBuildCommandOptions
+): Promise<void> {
+  const { logger, cwd, startTime } = setupCommandContext(pathArg, options.debug);
 
   try {
-    const cwd = process.cwd();
-
-    logger.info(`📖 Reading package.json from ${cwd}`);
-
     // Read package.json
     const packageJson = await readPackageJson(cwd);
     const skills = packageJson.vat?.skills ?? [];
@@ -258,9 +306,12 @@ async function buildCommand(options: SkillsBuildCommandOptions): Promise<void> {
 
     logger.info(`📦 Found ${skillsToBuild.length} skill(s) to build`);
 
+    // Ensure package has a name
+    const packageName = packageJson.name ?? 'unnamed-package';
+
     // Handle dry-run mode
     if (options.dryRun) {
-      await performDryRun(skillsToBuild, packageJson.name, logger);
+      await performDryRun(skillsToBuild, packageName, logger);
       process.exit(0);
     }
 
@@ -276,7 +327,7 @@ async function buildCommand(options: SkillsBuildCommandOptions): Promise<void> {
     const duration = Date.now() - startTime;
 
     // Output YAML results
-    outputBuildYaml(results, packageJson.name, duration);
+    outputBuildYaml(results, packageName, duration);
 
     logger.info(`\n✅ Built ${results.length} skill(s) successfully`);
 

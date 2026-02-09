@@ -1,6 +1,6 @@
 ---
 name: test-skill-1
-description: First test skill for fixture-based tests
+description: First test skill for fixture-based testing with comprehensive validation checks
 ---
 
 # Test Skill 1

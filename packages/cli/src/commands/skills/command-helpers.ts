@@ -2,9 +2,11 @@
  * Helper functions for skill commands
  */
 
+import { resolve } from 'node:path';
+
 import type { VatSkillMetadata } from '@vibe-agent-toolkit/agent-schema';
 
-import type { Logger } from '../../utils/logger.js';
+import { createLogger, type Logger } from '../../utils/logger.js';
 
 /**
  * Handle command errors consistently
@@ -72,4 +74,33 @@ export function writeYamlHeader(fields: Record<string, string | number | boolean
   for (const [key, value] of Object.entries(fields)) {
     process.stdout.write(`${key}: ${value}\n`);
   }
+}
+
+/**
+ * Command context setup
+ */
+export interface CommandContext {
+  logger: Logger;
+  cwd: string;
+  startTime: number;
+}
+
+/**
+ * Setup command context (logger, cwd, timing)
+ *
+ * @param pathArg - Optional path argument
+ * @param debug - Enable debug logging
+ * @returns Command context
+ */
+export function setupCommandContext(
+  pathArg: string | undefined,
+  debug?: boolean
+): CommandContext {
+  const logger = createLogger(debug ? { debug: true } : {});
+  const startTime = Date.now();
+  const cwd = pathArg ? resolve(pathArg) : process.cwd();
+
+  logger.info(`📖 Reading package.json from ${cwd}`);
+
+  return { logger, cwd, startTime };
 }

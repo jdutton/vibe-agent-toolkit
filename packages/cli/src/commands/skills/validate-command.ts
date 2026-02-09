@@ -10,52 +10,64 @@ export function createValidateCommand(): Command {
   const command = new Command('validate');
 
   command
-    .description('Validate SKILL.md files (links, frontmatter, skill rules)')
-    .argument('[path]', 'Path to validate (default: current directory)')
-    .option('-u, --user', 'Validate user-installed skills in ~/.claude')
+    .description('Validate skills for packaging (reads vat.skills from package.json)')
+    .argument('[path]', 'Path to directory with package.json (default: current directory)')
+    .option('--skill <name>', 'Validate specific skill only')
     .option('-d, --debug', 'Enable debug logging')
     .action(validateCommand)
     .addHelpText(
       'after',
       `
 Description:
-  Validates all SKILL.md files using both resource validation (markdown,
-  links, frontmatter) and skill-specific validation (reserved words, XML
-  tags, console compatibility). Reports all errors in a unified format.
+  Validates skills declared in package.json vat.skills field using
+  enhanced packaging validation. Checks size/complexity, link depth,
+  navigation patterns, and applies validation overrides.
 
-  Supports three modes:
-    - Project mode (default): Validate project skills with strict filename validation
-    - User mode (--user): Validate ~/.claude skills with permissive validation
-    - Path mode: Validate skills at specific path with strict validation
-
-Validation Modes:
-  Project mode (strict):
-    - Respects vibe-agent-toolkit.config.yaml boundaries
-    - Filename must be exactly "SKILL.md" (case-sensitive)
-    - Errors on non-standard filenames (skill.md, Skill.md)
-
-  User mode (permissive):
-    - Scans ~/.claude/plugins and ~/.claude/skills
-    - Filename warnings for non-standard names (not errors)
-    - More tolerant for user-installed content
+  Reads skills from package.json vat.skills and runs validateSkillForPackaging()
+  for each skill. Supports validation overrides with expiration checking.
 
 Validation Checks:
-  Resource validation:
-    - Internal file links (relative paths)
-    - Anchor links within files (#heading)
-    - Cross-file anchor links (file.md#heading)
-    - Frontmatter schema (if SKILL.md has frontmatter)
+  Required (non-overridable):
+    - Valid YAML frontmatter
+    - Skill has a name
+    - No reserved words (anthropic/claude)
+    - No broken internal links
+    - No circular references
+    - Links stay within package boundary
+    - No filename collisions
+    - Forward slashes in paths (not backslashes)
 
-  Skill-specific validation:
-    - Reserved word checks (name field)
-    - XML tag detection (name/description fields)
-    - Console compatibility warnings
-    - Frontmatter required fields (name, description)
+  Best practices (overridable):
+    - SKILL.md ≤500 lines (recommended)
+    - Total skill size ≤2000 lines
+    - File count ≤6 files
+    - Reference depth ≤2 levels
+    - No links to navigation files (README.md, index.md)
+    - Description ≥50 characters
+    - Progressive disclosure pattern
 
-  Filename validation:
-    - Must be "SKILL.md" (uppercase)
-    - Strict mode: error on skill.md, Skill.md
-    - Permissive mode: warning only
+Validation Overrides:
+  Configure overrides in package.json vat.skills:
+
+  {
+    "vat": {
+      "skills": [{
+        "name": "my-skill",
+        "source": "./SKILL.md",
+        "path": "./dist/skills/my-skill",
+        "ignoreValidationErrors": {
+          "SKILL_LENGTH_EXCEEDS_RECOMMENDED": "Complex domain requires detailed examples",
+          "SKILL_TOO_MANY_FILES": {
+            "reason": "Migration in progress - will split skill",
+            "expires": "2026-06-01"
+          }
+        }
+      }]
+    }
+  }
+
+  Non-overridable rules (required for correctness) cannot be ignored.
+  Expired overrides are reported as errors.
 
 Output:
   YAML summary → stdout (for programmatic parsing)
@@ -63,19 +75,19 @@ Output:
 
   Output includes:
     - status: success/error
-    - skillsValidated: number of SKILL.md files found
-    - results: per-skill validation details
+    - skillsValidated: number of skills validated
+    - results: per-skill validation details (activeErrors, ignoredErrors, expiredOverrides)
     - durationSecs: validation time
 
 Exit Codes:
-  0 - All validations passed
-  1 - Validation errors found (warnings don't fail)
-  2 - System error (file not found, config invalid, etc.)
+  0 - All validations passed (or all errors ignored by valid overrides)
+  1 - Active validation errors found (or expired overrides)
+  2 - System error (file not found, invalid config, etc.)
 
 Examples:
-  $ vat skills validate                    # Project mode: validate all project skills
-  $ vat skills validate --user             # User mode: validate ~/.claude skills
-  $ vat skills validate packages/          # Path mode: validate specific directory
+  $ vat skills validate                    # Validate all skills in package.json
+  $ vat skills validate --skill my-skill   # Validate specific skill only
+  $ vat skills validate packages/my-pkg/   # Validate skills in specific directory
 `
     );
 

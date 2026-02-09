@@ -39,6 +39,21 @@ export {
 export { validateSkill } from './validators/skill-validator.js';
 export { validate } from './validators/unified-validator.js';
 export { detectResourceFormat } from './validators/format-detection.js';
+export {
+  validateSkillForPackaging,
+  type PackagingValidationResult,
+} from './validators/packaging-validator.js';
+export {
+  createIssue,
+  isOverridable,
+  NAVIGATION_FILE_PATTERNS,
+  NON_OVERRIDABLE_RULES,
+  VALIDATION_RULES,
+  VALIDATION_THRESHOLDS,
+  type RuleCategory,
+  type ValidationRule,
+  type ValidationRuleCode,
+} from './validators/validation-rules.js';
 export type {
   ValidationResult,
   ValidationIssue,
@@ -51,3 +66,6 @@ export {
   type ImportOptions,
   type ImportResult,
 } from './import.js';
+
+// Re-export ValidationOverride from agent-schema for convenience
+export type { ValidationOverride } from '@vibe-agent-toolkit/agent-schema';

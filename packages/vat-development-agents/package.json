@@ -16,7 +16,14 @@
       {
         "name": "vibe-agent-toolkit",
         "source": "./resources/skills/SKILL.md",
-        "path": "./dist/skills/vibe-agent-toolkit"
+        "path": "./dist/skills/vibe-agent-toolkit",
+        "ignoreValidationErrors": {
+          "SKILL_LENGTH_EXCEEDS_RECOMMENDED": "Comprehensive toolkit documentation requires detailed examples",
+          "SKILL_TOTAL_SIZE_LARGE": "Complete VAT reference includes architecture docs, guides, and API reference",
+          "SKILL_TOO_MANY_FILES": "Toolkit skill aggregates all VAT package documentation",
+          "REFERENCE_TOO_DEEP": "Documentation hierarchy mirrors package structure",
+          "LINKS_TO_NAVIGATION_FILES": "Navigation files provide organized entry points for different domains"
+        }
       }
     ],
     "agents": [

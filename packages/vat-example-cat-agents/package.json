@@ -68,7 +68,14 @@
       {
         "name": "vat-example-cat-agents",
         "source": "./resources/skills/SKILL.md",
-        "path": "./dist/skills/vat-example-cat-agents"
+        "path": "./dist/skills/vat-example-cat-agents",
+        "ignoreValidationErrors": {
+          "SKILL_LENGTH_EXCEEDS_RECOMMENDED": "Example package demonstrates comprehensive agent patterns",
+          "SKILL_TOTAL_SIZE_LARGE": "Complete example includes all agent archetypes, tests, and demos",
+          "SKILL_TOO_MANY_FILES": "Example skill references full implementation including detailed docs",
+          "REFERENCE_TOO_DEEP": "Documentation structure follows natural project organization",
+          "LINKS_TO_NAVIGATION_FILES": "Navigation file provides organized entry to examples"
+        }
       }
     ]
   },

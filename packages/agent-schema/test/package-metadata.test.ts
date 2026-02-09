@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  PackagingOptionsSchema,
+  ValidationOverrideSchema,
   VatAgentMetadataSchema,
   VatPackageMetadataSchema,
   VatPureFunctionMetadataSchema,
@@ -259,5 +261,204 @@ describe('VatPackageMetadataSchema', () => {
 
     const result = VatPackageMetadataSchema.safeParse(minimalMetadata);
     expect(result.success).toBe(true);
+  });
+});
+
+describe('ValidationOverrideSchema', () => {
+  it('should validate simple string override', () => {
+    const simpleOverride = 'Acceptable because documentation explains workaround';
+
+    const result = ValidationOverrideSchema.safeParse(simpleOverride);
+    expect(result.success).toBe(true);
+  });
+
+  it('should validate object override with reason only', () => {
+    const objectOverride = {
+      reason: 'Legacy API compatibility required until v2.0',
+    };
+
+    const result = ValidationOverrideSchema.safeParse(objectOverride);
+    expect(result.success).toBe(true);
+  });
+
+  it('should validate object override with reason and expiration', () => {
+    const objectOverride = {
+      reason: 'Temporary workaround for upstream bug',
+      expires: '2026-06-30T00:00:00Z',
+    };
+
+    const result = ValidationOverrideSchema.safeParse(objectOverride);
+    expect(result.success).toBe(true);
+  });
+
+  it('should reject empty string override', () => {
+    const invalidOverride = '';
+
+    const result = ValidationOverrideSchema.safeParse(invalidOverride);
+    expect(result.success).toBe(false);
+  });
+
+  it('should reject object override with empty reason', () => {
+    const invalidOverride = {
+      reason: '',
+      expires: '2026-06-30T00:00:00Z',
+    };
+
+    const result = ValidationOverrideSchema.safeParse(invalidOverride);
+    expect(result.success).toBe(false);
+  });
+
+  it('should reject object override with invalid expiration format', () => {
+    const invalidOverride = {
+      reason: 'Valid reason',
+      expires: '2026-06-30', // Not ISO 8601 datetime
+    };
+
+    const result = ValidationOverrideSchema.safeParse(invalidOverride);
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('PackagingOptionsSchema', () => {
+  it('should validate packaging options with usePathNames', () => {
+    const options = {
+      usePathNames: true,
+    };
+
+    const result = PackagingOptionsSchema.safeParse(options);
+    expect(result.success).toBe(true);
+  });
+
+  it('should validate packaging options with stripPrefix', () => {
+    const options = {
+      stripPrefix: 'src/skills/',
+    };
+
+    const result = PackagingOptionsSchema.safeParse(options);
+    expect(result.success).toBe(true);
+  });
+
+  it('should validate packaging options with both fields', () => {
+    const options = {
+      usePathNames: true,
+      stripPrefix: 'resources/skills/',
+    };
+
+    const result = PackagingOptionsSchema.safeParse(options);
+    expect(result.success).toBe(true);
+  });
+
+  it('should validate empty packaging options', () => {
+    const options = {};
+
+    const result = PackagingOptionsSchema.safeParse(options);
+    expect(result.success).toBe(true);
+  });
+
+  it('should reject packaging options with invalid field types', () => {
+    const invalidOptions = {
+      usePathNames: 'yes', // Should be boolean
+    };
+
+    const result = PackagingOptionsSchema.safeParse(invalidOptions);
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('VatSkillMetadataSchema with validation overrides', () => {
+  it('should validate skill metadata with simple override', () => {
+    const skillWithOverride = {
+      name: TEST_SKILL_NAME,
+      source: TEST_SKILL_SOURCE,
+      path: TEST_SKILL_PATH,
+      ignoreValidationErrors: {
+        'DUPLICATE_RESOURCE': 'Intentional duplication for testing',
+      },
+    };
+
+    const result = VatSkillMetadataSchema.safeParse(skillWithOverride);
+    expect(result.success).toBe(true);
+  });
+
+  it('should validate skill metadata with extended override', () => {
+    const skillWithOverride = {
+      name: TEST_SKILL_NAME,
+      source: TEST_SKILL_SOURCE,
+      path: TEST_SKILL_PATH,
+      ignoreValidationErrors: {
+        'MISSING_FRONTMATTER': {
+          reason: 'Optional for examples',
+          expires: '2026-12-31T23:59:59Z',
+        },
+      },
+    };
+
+    const result = VatSkillMetadataSchema.safeParse(skillWithOverride);
+    expect(result.success).toBe(true);
+  });
+
+  it('should validate skill metadata with multiple overrides', () => {
+    const skillWithOverrides = {
+      name: TEST_SKILL_NAME,
+      source: TEST_SKILL_SOURCE,
+      path: TEST_SKILL_PATH,
+      ignoreValidationErrors: {
+        'DUPLICATE_RESOURCE': 'Intentional for testing',
+        'MISSING_FRONTMATTER': {
+          reason: 'Optional for examples',
+          expires: '2026-12-31T23:59:59Z',
+        },
+        'BROKEN_LINK': 'External link unavailable during build',
+      },
+    };
+
+    const result = VatSkillMetadataSchema.safeParse(skillWithOverrides);
+    expect(result.success).toBe(true);
+  });
+
+  it('should validate skill metadata with packaging options', () => {
+    const skillWithOptions = {
+      name: TEST_SKILL_NAME,
+      source: TEST_SKILL_SOURCE,
+      path: TEST_SKILL_PATH,
+      packagingOptions: {
+        usePathNames: true,
+        stripPrefix: 'resources/skills/',
+      },
+    };
+
+    const result = VatSkillMetadataSchema.safeParse(skillWithOptions);
+    expect(result.success).toBe(true);
+  });
+
+  it('should validate skill metadata with both overrides and packaging options', () => {
+    const completeSkill = {
+      name: TEST_SKILL_NAME,
+      source: TEST_SKILL_SOURCE,
+      path: TEST_SKILL_PATH,
+      ignoreValidationErrors: {
+        'DUPLICATE_RESOURCE': 'Intentional duplication',
+      },
+      packagingOptions: {
+        usePathNames: true,
+      },
+    };
+
+    const result = VatSkillMetadataSchema.safeParse(completeSkill);
+    expect(result.success).toBe(true);
+  });
+
+  it('should reject skill metadata with invalid override format', () => {
+    const invalidSkill = {
+      name: TEST_SKILL_NAME,
+      source: TEST_SKILL_SOURCE,
+      path: TEST_SKILL_PATH,
+      ignoreValidationErrors: {
+        'DUPLICATE_RESOURCE': '', // Empty reason
+      },
+    };
+
+    const result = VatSkillMetadataSchema.safeParse(invalidSkill);
+    expect(result.success).toBe(false);
   });
 });

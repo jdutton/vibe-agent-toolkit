@@ -30,10 +30,15 @@ describe('skills validate command - fixture tests (system test)', () => {
       status: string;
       skillsValidated: number;
       results: Array<{
-        skill: string;
+        skillName: string;
         status: string;
-        resourceValidation: { status: string };
-        skillValidation: { status: string };
+        activeErrors: Array<unknown>;
+        metadata: {
+          skillLines: number;
+          totalLines: number;
+          fileCount: number;
+          maxLinkDepth: number;
+        };
       }>;
     };
 
@@ -44,8 +49,9 @@ describe('skills validate command - fixture tests (system test)', () => {
     // All skills should be valid
     for (const skillResult of parsed.results) {
       expect(skillResult.status).toBe('success');
-      expect(skillResult.resourceValidation.status).toBe('success');
-      expect(skillResult.skillValidation.status).toBe('success');
+      expect(skillResult.activeErrors).toHaveLength(0);
+      expect(skillResult.metadata).toHaveProperty('skillLines');
+      expect(skillResult.metadata).toHaveProperty('totalLines');
     }
   });
 

@@ -36,6 +36,17 @@ export function getWrapperPath(testFileUrl: string): string {
 }
 
 /**
+ * Get fixture path from current test file location
+ * @param testFileUrl - import.meta.url from the test file
+ * @param fixtureName - Name of the fixture directory (e.g., 'skills-minimal')
+ * @returns Absolute path to the fixture directory
+ */
+export function getFixturePath(testFileUrl: string, fixtureName: string): string {
+  const testDir = pathDirname(urlFileURLToPath(testFileUrl));
+  return pathResolve(testDir, '../fixtures', fixtureName);
+}
+
+/**
  * Create a temporary directory for testing
  * Automatically generates a unique directory name
  */
@@ -160,9 +171,11 @@ export function createSkillsPackageJson(packageName: string, skills: TestVatSkil
  * @returns SKILL.md content
  */
 export function createSkillMarkdown(skillName: string, description?: string): string {
+  // Ensure description meets minimum length requirement (50 chars)
+  const desc = description ?? `${skillName} - comprehensive test skill for validation and packaging`;
   return `---
 name: ${skillName}
-description: ${description ?? `${skillName} description`}
+description: ${desc}
 version: 1.0.0
 ---
 

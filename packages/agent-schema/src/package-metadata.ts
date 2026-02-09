@@ -8,6 +8,39 @@
 import { z } from 'zod';
 
 /**
+ * Validation override value
+ *
+ * Supports both simple string format and extended object format with expiration.
+ */
+export const ValidationOverrideSchema = z.union([
+  z.string().min(1).describe('Simple override reason'),
+  z.object({
+    reason: z.string().min(1).describe('Override reason'),
+    expires: z.string().datetime().optional().describe('Optional expiration date (ISO 8601)'),
+  }).describe('Extended override with optional expiration'),
+]).describe('Validation override (reason or reason + expiration)');
+
+export type ValidationOverride = z.infer<typeof ValidationOverrideSchema>;
+
+/**
+ * Packaging options for skill distribution
+ *
+ * Controls how skills are packaged and distributed.
+ */
+export const PackagingOptionsSchema = z.object({
+  usePathNames: z
+    .boolean()
+    .optional()
+    .describe('Enable path-based filenames for collision avoidance'),
+  stripPrefix: z
+    .string()
+    .optional()
+    .describe('Prefix to remove from path-based names'),
+}).describe('Packaging options for skill distribution');
+
+export type PackagingOptions = z.infer<typeof PackagingOptionsSchema>;
+
+/**
  * Skill metadata for distribution
  *
  * Describes a Claude Skill packaged in this npm package.
@@ -26,6 +59,13 @@ export const VatSkillMetadataSchema = z
       .string()
       .min(1)
       .describe('Built skill directory path (relative to package root)'),
+    ignoreValidationErrors: z
+      .record(z.string(), ValidationOverrideSchema)
+      .optional()
+      .describe('Validation errors to ignore (rule code -> override reason/config)'),
+    packagingOptions: PackagingOptionsSchema
+      .optional()
+      .describe('Packaging configuration options'),
   })
   .describe('Claude Skill metadata for distribution');
 

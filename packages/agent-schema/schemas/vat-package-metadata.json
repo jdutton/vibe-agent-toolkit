@@ -38,6 +38,55 @@
                 "type": "string",
                 "minLength": 1,
                 "description": "Built skill directory path (relative to package root)"
+              },
+              "ignoreValidationErrors": {
+                "type": "object",
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "description": "Simple override reason"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "reason": {
+                          "type": "string",
+                          "minLength": 1,
+                          "description": "Override reason"
+                        },
+                        "expires": {
+                          "type": "string",
+                          "format": "date-time",
+                          "description": "Optional expiration date (ISO 8601)"
+                        }
+                      },
+                      "required": [
+                        "reason"
+                      ],
+                      "additionalProperties": false,
+                      "description": "Extended override with optional expiration"
+                    }
+                  ],
+                  "description": "Validation override (reason or reason + expiration)"
+                },
+                "description": "Validation errors to ignore (rule code -> override reason/config)"
+              },
+              "packagingOptions": {
+                "type": "object",
+                "properties": {
+                  "usePathNames": {
+                    "type": "boolean",
+                    "description": "Enable path-based filenames for collision avoidance"
+                  },
+                  "stripPrefix": {
+                    "type": "string",
+                    "description": "Prefix to remove from path-based names"
+                  }
+                },
+                "additionalProperties": false,
+                "description": "Packaging configuration options"
               }
             },
             "required": [
