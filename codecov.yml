@@ -8,11 +8,14 @@ coverage:
   status:
     project:
       default:
-        target: 80%
+        # Adjusted after moving integration tests to separate phase
+        # Project coverage reflects unit test coverage only
+        target: 70%
         threshold: 1%
         if_ci_failed: error
     patch:
       default:
+        # New code should maintain high coverage standards
         target: 80%
         threshold: 1%
         if_ci_failed: error
