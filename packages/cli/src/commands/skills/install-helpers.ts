@@ -154,7 +154,7 @@ export function downloadNpmPackage(packageName: string, tempDir: string): string
 
 /**
  * Validate npm postinstall environment
- * Returns true if running in global install context
+ * Returns true if running in global install context (but not during npm link)
  */
 export function isGlobalNpmInstall(): boolean {
   // Check if npm_config_global is set (npm sets this during global installs)
@@ -163,5 +163,11 @@ export function isGlobalNpmInstall(): boolean {
   // Check if running as postinstall script
   const isPostinstall = process.env['npm_lifecycle_event'] === 'postinstall';
 
-  return isGlobal && isPostinstall;
+  // Check npm command to distinguish between:
+  // - npm install -g → npm_command === 'install' → Run postinstall ✅
+  // - npm link → npm_command === 'link' → Skip postinstall ✅
+  // This prevents npm link from corrupting npm's internal state
+  const isInstallCommand = process.env['npm_command'] === 'install';
+
+  return isGlobal && isPostinstall && isInstallCommand;
 }

@@ -8,7 +8,7 @@
 // File paths derived from PROJECT_ROOT constant (controlled, not user input)
 
 import { spawnSync } from 'node:child_process';
-import { readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -248,4 +248,121 @@ export function processWorkspacePackages<T extends PackageProcessResult>(
   }
 
   return { processed: processedCount, skipped: skippedCount };
+}
+
+/**
+ * Find all publishable packages in the monorepo
+ *
+ * @param packagesDir - Path to packages/ directory
+ * @param options - Configuration options
+ * @param options.skipUmbrellaPackage - Skip the umbrella package (vibe-agent-toolkit) for npm link
+ * @returns Array of package information
+ */
+export function findPublishablePackages(
+  packagesDir: string,
+  options: { skipUmbrellaPackage?: boolean } = {}
+): Array<{ name: string; path: string; packageJson: Record<string, unknown> }> {
+  const packages: Array<{ name: string; path: string; packageJson: Record<string, unknown> }> = [];
+
+  if (!existsSync(packagesDir)) {
+    return packages;
+  }
+
+  const entries = readdirSync(packagesDir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const packagePath = join(packagesDir, entry.name);
+    const packageJsonPath = join(packagePath, 'package.json');
+
+    if (!existsSync(packageJsonPath)) {
+      continue;
+    }
+
+    try {
+      const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as Record<string, unknown>;
+
+      // Skip private packages (not published to npm)
+      if (packageJson['private'] === true) {
+        continue;
+      }
+
+      // Skip umbrella package if requested (for npm link, to avoid bin conflicts)
+      if (options.skipUmbrellaPackage && packageJson['name'] === 'vibe-agent-toolkit') {
+        continue;
+      }
+
+      packages.push({
+        name: packageJson['name'] as string,
+        path: packagePath,
+        packageJson,
+      });
+    } catch {
+      // Skip packages with invalid package.json
+      continue;
+    }
+  }
+
+  return packages;
+}
+
+/**
+ * Process packages with a given action (link or unlink)
+ *
+ * @param options - Configuration for processing packages
+ * @returns Exit code (0 = success, 1 = failure)
+ */
+export function processPackages(options: {
+  action: 'link' | 'unlink';
+  actionVerb: string; // "Linked" or "Unlinked"
+  introMessage: string;
+  successMessage: string;
+  packageHandler: (name: string, path: string) => boolean;
+}): number {
+  const { actionVerb, introMessage, successMessage, packageHandler } = options;
+
+  console.log(introMessage);
+
+  // Find repo root (2 levels up from dev-tools/dist)
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  const repoRoot = join(__dirname, '../../..');
+  const packagesDir = join(repoRoot, 'packages');
+
+  // Find all publishable packages (skip umbrella package to avoid bin conflicts)
+  const packages = findPublishablePackages(packagesDir, { skipUmbrellaPackage: true });
+
+  if (packages.length === 0) {
+    console.log('⚠️  No publishable packages found');
+    return 0;
+  }
+
+  console.log(`Found ${packages.length} publishable package(s)\n`);
+
+  let processed = 0;
+  let failed = 0;
+
+  for (const pkg of packages) {
+    if (packageHandler(pkg.name, pkg.path)) {
+      processed++;
+    } else {
+      failed++;
+    }
+  }
+
+  console.log('\n' + '='.repeat(60));
+  console.log(`✅ ${actionVerb}: ${processed} package(s)`);
+  if (failed > 0) {
+    console.log(`❌ Failed: ${failed} package(s)`);
+  }
+  console.log('='.repeat(60));
+
+  if (failed === 0) {
+    console.log(successMessage);
+    return 0;
+  }
+
+  return 1;
 }

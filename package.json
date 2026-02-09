@@ -62,7 +62,9 @@
     "fix-workspace-deps": "tsx packages/dev-tools/src/fix-workspace-deps.ts",
     "resolve-workspace-deps": "tsx packages/dev-tools/src/resolve-workspace-deps.ts",
     "prepare-cli-bin": "cd packages/cli && tsx ../dev-tools/src/prepare-bin.ts",
-    "vat": "node packages/cli/dist/bin/vat.js"
+    "vat": "node packages/cli/dist/bin/vat.js",
+    "link-all": "tsx packages/dev-tools/src/link-all.ts",
+    "unlink-all": "tsx packages/dev-tools/src/unlink-all.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.2",
