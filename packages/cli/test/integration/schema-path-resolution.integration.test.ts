@@ -50,7 +50,7 @@ describe('Schema Path Resolution', () => {
       const schemaPath = join(testDir, 'schemas', 'local.json');
 
       // Dynamically import to avoid top-level await issues
-      const { resolveSchemaPath } = await import('../../../src/commands/resources/validate.js');
+      const { resolveSchemaPath } = await import('../../src/commands/resources/validate.js');
 
       const resolved = await resolveSchemaPath(schemaPath);
       expect(resolved).toBe(schemaPath);
@@ -59,7 +59,7 @@ describe('Schema Path Resolution', () => {
     it('should resolve explicit relative paths starting with ./', async () => {
       const schemaPath = SCHEMAS_LOCAL_JSON;
 
-      const { resolveSchemaPath } = await import('../../../src/commands/resources/validate.js');
+      const { resolveSchemaPath } = await import('../../src/commands/resources/validate.js');
 
       const resolved = await resolveSchemaPath(schemaPath);
       expect(resolved).toBe(schemaPath);
@@ -68,7 +68,7 @@ describe('Schema Path Resolution', () => {
     it('should resolve explicit relative paths starting with ../', async () => {
       const schemaPath = '../config/schema.json';
 
-      const { resolveSchemaPath } = await import('../../../src/commands/resources/validate.js');
+      const { resolveSchemaPath } = await import('../../src/commands/resources/validate.js');
 
       const resolved = await resolveSchemaPath(schemaPath);
       expect(resolved).toBe(schemaPath);
@@ -83,7 +83,7 @@ describe('Schema Path Resolution', () => {
       // This package is installed in our monorepo
       const schemaPath = '@vibe-agent-toolkit/agent-skills/schemas/skill-frontmatter.json';
 
-      const { resolveSchemaPath } = await import('../../../src/commands/resources/validate.js');
+      const { resolveSchemaPath } = await import('../../src/commands/resources/validate.js');
 
       const resolved = await resolveSchemaPath(schemaPath);
 
@@ -97,7 +97,7 @@ describe('Schema Path Resolution', () => {
     it('should throw clear error for non-existent scoped package', async () => {
       const schemaPath = '@non-existent/package/schemas/file.json';
 
-      const { resolveSchemaPath } = await import('../../../src/commands/resources/validate.js');
+      const { resolveSchemaPath } = await import('../../src/commands/resources/validate.js');
 
       await expect(resolveSchemaPath(schemaPath)).rejects.toThrow(/Cannot resolve package path/);
       await expect(resolveSchemaPath(schemaPath)).rejects.toThrow(/@non-existent\/package/);
@@ -107,7 +107,7 @@ describe('Schema Path Resolution', () => {
       // Package exists but this subpath is not exported
       const schemaPath = '@vibe-agent-toolkit/agent-skills/internal/private.json';
 
-      const { resolveSchemaPath } = await import('../../../src/commands/resources/validate.js');
+      const { resolveSchemaPath } = await import('../../src/commands/resources/validate.js');
 
       await expect(resolveSchemaPath(schemaPath)).rejects.toThrow(/Cannot resolve package path/);
     });
@@ -120,7 +120,7 @@ describe('Schema Path Resolution', () => {
       // Since it doesn't, should fallback to file path
       const schemaPath = 'vitest/schemas/test.json';
 
-      const { resolveSchemaPath } = await import('../../../src/commands/resources/validate.js');
+      const { resolveSchemaPath } = await import('../../src/commands/resources/validate.js');
 
       const resolved = await resolveSchemaPath(schemaPath);
 
@@ -132,7 +132,7 @@ describe('Schema Path Resolution', () => {
       // No package called "schemas" is installed
       const schemaPath = 'schemas/local.json';
 
-      const { resolveSchemaPath } = await import('../../../src/commands/resources/validate.js');
+      const { resolveSchemaPath } = await import('../../src/commands/resources/validate.js');
 
       const resolved = await resolveSchemaPath(schemaPath);
 
@@ -147,7 +147,7 @@ describe('Schema Path Resolution', () => {
 
       const schemaPath = '@vibe-agent-toolkit/agent-skills/schemas/vat-skill-frontmatter.json';
 
-      const { resolveSchemaPath } = await import('../../../src/commands/resources/validate.js');
+      const { resolveSchemaPath } = await import('../../src/commands/resources/validate.js');
 
       const resolved = await resolveSchemaPath(schemaPath);
 
@@ -166,7 +166,7 @@ describe('Schema Path Resolution', () => {
       // For testing, we use a package we know exists
       const schemaPath = 'vitest/config';  // Bare specifier
 
-      const { resolveSchemaPath } = await import('../../../src/commands/resources/validate.js');
+      const { resolveSchemaPath } = await import('../../src/commands/resources/validate.js');
 
       const resolved = await resolveSchemaPath(schemaPath);
 
@@ -178,7 +178,7 @@ describe('Schema Path Resolution', () => {
       // Even if package "schemas" existed, "./" forces file resolution
       const schemaPath = SCHEMAS_LOCAL_JSON;
 
-      const { resolveSchemaPath } = await import('../../../src/commands/resources/validate.js');
+      const { resolveSchemaPath } = await import('../../src/commands/resources/validate.js');
 
       const resolved = await resolveSchemaPath(schemaPath);
 
@@ -191,7 +191,7 @@ describe('Schema Path Resolution', () => {
     it('should provide helpful error for scoped package not found', async () => {
       const schemaPath = '@my-org/my-package/schemas/file.json';
 
-      const { resolveSchemaPath } = await import('../../../src/commands/resources/validate.js');
+      const { resolveSchemaPath } = await import('../../src/commands/resources/validate.js');
 
       await expect(resolveSchemaPath(schemaPath)).rejects.toThrow(/Cannot resolve package path/);
       await expect(resolveSchemaPath(schemaPath)).rejects.toThrow(/Package not installed/);
@@ -201,7 +201,7 @@ describe('Schema Path Resolution', () => {
     it('should mention possible causes in error message', async () => {
       const schemaPath = '@scope/package/file.json';
 
-      const { resolveSchemaPath } = await import('../../../src/commands/resources/validate.js');
+      const { resolveSchemaPath } = await import('../../src/commands/resources/validate.js');
 
       try {
         await resolveSchemaPath(schemaPath);
@@ -221,7 +221,7 @@ describe('Schema Path Resolution', () => {
       // Common pattern in vibe-agent-toolkit.config.yaml
       const schemaPath = '@vibe-agent-toolkit/agent-skills/schemas/skill-frontmatter.json';
 
-      const { resolveSchemaPath } = await import('../../../src/commands/resources/validate.js');
+      const { resolveSchemaPath } = await import('../../src/commands/resources/validate.js');
 
       const resolved = await resolveSchemaPath(schemaPath);
 
@@ -233,7 +233,7 @@ describe('Schema Path Resolution', () => {
     it('should handle config file pattern with local file reference', async () => {
       const schemaPath = './schemas/custom-schema.json';
 
-      const { resolveSchemaPath } = await import('../../../src/commands/resources/validate.js');
+      const { resolveSchemaPath } = await import('../../src/commands/resources/validate.js');
 
       const resolved = await resolveSchemaPath(schemaPath);
 
@@ -243,7 +243,7 @@ describe('Schema Path Resolution', () => {
     it('should handle absolute paths from environment variables', async () => {
       const schemaPath = join(testDir, 'config', 'schema.json');
 
-      const { resolveSchemaPath } = await import('../../../src/commands/resources/validate.js');
+      const { resolveSchemaPath } = await import('../../src/commands/resources/validate.js');
 
       const resolved = await resolveSchemaPath(schemaPath);
 

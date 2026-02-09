@@ -4,11 +4,10 @@ import path from 'node:path';
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { crawlDirectory, crawlDirectorySync } from '../src/file-crawler.js';
-import { mkdirSyncReal, toForwardSlash } from '../src/path-utils.js';
-import { setupSyncTempDirSuite } from '../src/test-helpers.js';
-
-import { createGitRepo } from './test-helpers.js';
+import { crawlDirectory, crawlDirectorySync } from '../../src/file-crawler.js';
+import { mkdirSyncReal, toForwardSlash } from '../../src/path-utils.js';
+import { setupSyncTempDirSuite } from '../../src/test-helpers.js';
+import { createGitRepo } from '../test-helpers.js';
 
 describe('file-crawler', () => {
   const suite = setupSyncTempDirSuite('file-crawler');

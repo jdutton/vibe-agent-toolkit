@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/runtime-vercel-ai-sdk",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Vercel AI SDK runtime adapter for VAT agents",
   "type": "module",
   "exports": {

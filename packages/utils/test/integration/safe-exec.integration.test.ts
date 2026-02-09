@@ -5,7 +5,7 @@ import { basename, join } from 'node:path';
 
 import { describe, it, expect } from 'vitest';
 
-import { normalizedTmpdir } from '../src/path-utils.js';
+import { normalizedTmpdir } from '../../src/path-utils.js';
 import {
   safeExecSync,
   safeExecResult,
@@ -14,7 +14,7 @@ import {
   getToolVersion,
   hasShellSyntax,
   CommandExecutionError,
-} from '../src/safe-exec.js';
+} from '../../src/safe-exec.js';
 
 /**
  * Test helper: Creates a temporary failing tool script

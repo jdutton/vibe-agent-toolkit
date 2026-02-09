@@ -5,10 +5,9 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { ResourceRegistry } from '../src/resource-registry.js';
-import type { ProjectConfig } from '../src/schemas/project-config.js';
-
-import { createSchemaFile, setupTempDirTestSuite } from './test-helpers.js';
+import { ResourceRegistry } from '../../src/resource-registry.js';
+import type { ProjectConfig } from '../../src/schemas/project-config.js';
+import { createSchemaFile, setupTempDirTestSuite } from '../test-helpers.js';
 
 /**
  * Tests for per-collection frontmatter schema validation

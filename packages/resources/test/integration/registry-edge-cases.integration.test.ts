@@ -10,9 +10,9 @@ import { join } from 'node:path';
 import { GitTracker, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
 import { beforeEach, describe, expect, it, beforeAll, afterAll } from 'vitest';
 
-import { ResourceRegistry } from '../src/resource-registry.js';
-import type { ProjectConfig } from '../src/schemas/project-config.js';
-import type { ResourceMetadata } from '../src/schemas/resource-metadata.js';
+import { ResourceRegistry } from '../../src/resource-registry.js';
+import type { ProjectConfig } from '../../src/schemas/project-config.js';
+import type { ResourceMetadata } from '../../src/schemas/resource-metadata.js';
 
 /**
  * Helper to create a registry with a config and add a simple test file

@@ -5,9 +5,8 @@ import { dirname, join } from 'node:path';
 import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { packageSkill, type PackageSkillOptions } from '../src/skill-packager.js';
-
-import { createFrontmatter, setupTempDir } from './test-helpers.js';
+import { packageSkill, type PackageSkillOptions } from '../../src/skill-packager.js';
+import { createFrontmatter, setupTempDir } from '../test-helpers.js';
 
 const { getTempDir } = setupTempDir('skill-packager-');
 

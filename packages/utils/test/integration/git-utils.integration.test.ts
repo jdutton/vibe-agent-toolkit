@@ -4,11 +4,10 @@ import * as path from 'node:path';
 
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
-import { gitFindRoot, gitLsFiles, isGitIgnored, gitCheckIgnoredBatch } from '../src/git-utils.js';
-import { normalizedTmpdir } from '../src/path-utils.js';
-import { setupSyncTempDirSuite } from '../src/test-helpers.js';
-
-import { createGitRepo } from './test-helpers.js';
+import { gitFindRoot, gitLsFiles, isGitIgnored, gitCheckIgnoredBatch } from '../../src/git-utils.js';
+import { normalizedTmpdir } from '../../src/path-utils.js';
+import { setupSyncTempDirSuite } from '../../src/test-helpers.js';
+import { createGitRepo } from '../test-helpers.js';
 
 const GITIGNORE_FILENAME = '.gitignore';
 

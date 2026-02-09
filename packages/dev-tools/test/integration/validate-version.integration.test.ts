@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { mkdirSyncReal, safeExecSync } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-import { createTestTempDir, cleanupTestTempDir, createMockPackageJson } from './test-helpers.js';
+import { createTestTempDir, cleanupTestTempDir, createMockPackageJson } from '../test-helpers.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -18,8 +18,8 @@ describe('validate-version', () => {
 
   beforeEach(() => {
     tempDir = createTestTempDir({ prefix: 'validate-version-' });
-    // Resolve path relative to this test file: test/ -> src/
-    validateVersionPath = join(__dirname, '../src/validate-version.ts');
+    // Resolve path relative to this test file: test/integration/ -> src/
+    validateVersionPath = join(__dirname, '../../src/validate-version.ts');
   });
 
   afterEach(() => {

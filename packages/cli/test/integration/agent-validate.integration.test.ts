@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { runCliCommand } from '../../test-helpers.js';
+import { runCliCommand } from '../test-helpers.js';
 
 describe('agent validate command (integration)', () => {
   let tempDir: string;
