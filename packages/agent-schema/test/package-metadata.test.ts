@@ -320,9 +320,9 @@ describe('ValidationOverrideSchema', () => {
 });
 
 describe('PackagingOptionsSchema', () => {
-  it('should validate packaging options with usePathNames', () => {
+  it('should validate packaging options with resourceNaming', () => {
     const options = {
-      usePathNames: true,
+      resourceNaming: 'resource-id' as const,
     };
 
     const result = PackagingOptionsSchema.safeParse(options);
@@ -340,7 +340,7 @@ describe('PackagingOptionsSchema', () => {
 
   it('should validate packaging options with both fields', () => {
     const options = {
-      usePathNames: true,
+      resourceNaming: 'preserve-path' as const,
       stripPrefix: 'resources/skills/',
     };
 
@@ -357,7 +357,7 @@ describe('PackagingOptionsSchema', () => {
 
   it('should reject packaging options with invalid field types', () => {
     const invalidOptions = {
-      usePathNames: 'yes', // Should be boolean
+      resourceNaming: 'invalid-strategy', // Should be one of: basename, resource-id, preserve-path
     };
 
     const result = PackagingOptionsSchema.safeParse(invalidOptions);
@@ -422,7 +422,7 @@ describe('VatSkillMetadataSchema with validation overrides', () => {
       source: TEST_SKILL_SOURCE,
       path: TEST_SKILL_PATH,
       packagingOptions: {
-        usePathNames: true,
+        resourceNaming: 'resource-id' as const,
         stripPrefix: 'resources/skills/',
       },
     };
@@ -440,7 +440,7 @@ describe('VatSkillMetadataSchema with validation overrides', () => {
         'DUPLICATE_RESOURCE': 'Intentional duplication',
       },
       packagingOptions: {
-        usePathNames: true,
+        resourceNaming: 'preserve-path' as const,
       },
     };
 

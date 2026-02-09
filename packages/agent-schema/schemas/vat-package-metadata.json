@@ -76,13 +76,18 @@
               "packagingOptions": {
                 "type": "object",
                 "properties": {
-                  "usePathNames": {
-                    "type": "boolean",
-                    "description": "Enable path-based filenames for collision avoidance"
+                  "resourceNaming": {
+                    "type": "string",
+                    "enum": [
+                      "basename",
+                      "resource-id",
+                      "preserve-path"
+                    ],
+                    "description": "Strategy for naming packaged resource files:\n  - basename: Use original filename only (default, may conflict)\n  - resource-id: Flatten path to kebab-case filename (e.g., lobs-homeowners-overview.md)\n  - preserve-path: Preserve directory structure (e.g., lobs/homeowners/overview.md)"
                   },
                   "stripPrefix": {
                     "type": "string",
-                    "description": "Prefix to remove from path-based names"
+                    "description": "Path prefix to strip before applying naming strategy (e.g., \"knowledge-base\")"
                   }
                 },
                 "additionalProperties": false,

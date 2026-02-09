@@ -195,11 +195,15 @@ async function buildSkill(
   // Validate before building
   await validateSkillOrExit(skill, sourcePath, logger);
 
+  // Apply packaging options from skill metadata (only include if defined)
+  const packagingOptions = skill.packagingOptions;
   const result = await packageSkill(sourcePath, {
     outputPath,
     formats: ['directory'],
     rewriteLinks: true,
     basePath,
+    ...(packagingOptions?.resourceNaming && { resourceNaming: packagingOptions.resourceNaming }),
+    ...(packagingOptions?.stripPrefix && { stripPrefix: packagingOptions.stripPrefix }),
   });
 
   logger.info(`   ✅ Built ${result.files.dependencies.length + 1} files`);

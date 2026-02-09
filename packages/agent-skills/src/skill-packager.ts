@@ -21,6 +21,11 @@ import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 const PACKAGE_JSON_FILENAME = 'package.json';
 
+/**
+ * Resource naming strategy type
+ */
+export type ResourceNamingStrategy = 'basename' | 'resource-id' | 'preserve-path';
+
 export interface PackageSkillOptions {
   /**
    * Output directory for packaged skill
@@ -45,6 +50,38 @@ export interface PackageSkillOptions {
    * Default: dirname(skillPath)
    */
   basePath?: string;
+
+  /**
+   * Strategy for naming packaged resource files
+   *
+   * - 'basename': Use original filename only (default, may cause conflicts)
+   * - 'resource-id': Flatten path to kebab-case filename (descriptive, unique)
+   * - 'preserve-path': Preserve directory structure in output
+   *
+   * Default: 'basename'
+   *
+   * @example
+   * // Original: knowledge-base/manuscript/lobs/homeowners/overview.md
+   * // basename:       overview.md (may conflict)
+   * // resource-id:    manuscript-lobs-homeowners-overview.md (with stripPrefix: 'knowledge-base-')
+   * // preserve-path:  manuscript/lobs/homeowners/overview.md (creates subdirectories)
+   */
+  resourceNaming?: ResourceNamingStrategy;
+
+  /**
+   * Path prefix to strip before applying naming strategy
+   *
+   * Removes a directory prefix from the relative path before the naming strategy is applied.
+   * Works with both 'resource-id' and 'preserve-path' strategies.
+   *
+   * @example
+   * // Original: knowledge-base/manuscript/lobs/homeowners/overview.md
+   * // stripPrefix: 'knowledge-base'
+   * //
+   * // resource-id:    manuscript-lobs-homeowners-overview.md
+   * // preserve-path:  manuscript/lobs/homeowners/overview.md
+   */
+  stripPrefix?: string;
 }
 
 export interface SkillMetadata {
@@ -111,6 +148,8 @@ export async function packageSkill(
     formats = ['directory'],
     rewriteLinks = true,
     basePath = dirname(skillPath),
+    resourceNaming = 'basename',
+    stripPrefix,
   } = options;
 
   // 1. Parse SKILL.md frontmatter and links
@@ -137,12 +176,15 @@ export async function packageSkill(
   const outputPath = options.outputPath ??
     getDefaultSkillOutputPath(skillPath, skillMetadata.name);
 
-  // 5. Copy SKILL.md and all linked files (flat structure)
+  // 5. Copy SKILL.md and all linked files (flat structure with configurable naming)
   await copySkillResources(
     skillPath,
     linkedFiles,
     outputPath,
-    rewriteLinks
+    rewriteLinks,
+    resourceNaming,
+    stripPrefix,
+    packageRoot
   );
 
   // 6. Generate distribution artifacts
@@ -474,6 +516,67 @@ async function collectLinkedResources(
 }
 
 /**
+ * Generate target path based on naming strategy
+ *
+ * @param filePath - Absolute path to the source file
+ * @param basePath - Base path to calculate relative path from
+ * @param strategy - Naming strategy to use
+ * @param stripPrefix - Path prefix to remove before applying strategy (works for all strategies)
+ * @returns Target path (relative) for the packaged resource
+ */
+function generateTargetPath(
+  filePath: string,
+  basePath: string,
+  strategy: ResourceNamingStrategy = 'basename',
+  stripPrefix?: string
+): string {
+  if (strategy === 'basename') {
+    // Default: just use the filename (flat structure)
+    return basename(filePath);
+  }
+
+  const ext = filePath.substring(filePath.lastIndexOf('.'));
+  let relPath = relative(basePath, filePath);
+
+  // Strip prefix from relative path (if specified)
+  // Works for both resource-id and preserve-path strategies
+  if (stripPrefix) {
+    // Normalize separators for consistent matching
+    const normalizedRelPath = relPath.replaceAll('\\', '/');
+    const normalizedPrefix = stripPrefix.replaceAll('\\', '/').replace(/\/$/, ''); // Remove trailing slash
+
+    if (normalizedRelPath.startsWith(normalizedPrefix + '/')) {
+      // Strip the prefix and leading slash
+      relPath = normalizedRelPath.substring(normalizedPrefix.length + 1);
+    } else if (normalizedRelPath.startsWith(normalizedPrefix)) {
+      // Prefix without trailing slash
+      relPath = normalizedRelPath.substring(normalizedPrefix.length);
+      // Clean up any leading slash
+      relPath = relPath.replace(/^\//, '');
+    }
+  }
+
+  if (strategy === 'preserve-path') {
+    // Preserve directory structure (creates subdirectories)
+    return relPath;
+  }
+
+  // strategy === 'resource-id': Flatten path to kebab-case filename
+  // Convert path to kebab-case identifier (all in one filename)
+  const pathWithoutExt = relPath.substring(0, relPath.length - ext.length);
+  const resourceId = pathWithoutExt
+    .replaceAll(/[/\\]+/g, '-')     // Path separators to hyphens
+    .replaceAll(/[_\s]+/g, '-')     // Underscores and spaces to hyphens
+    .toLowerCase()
+    .replaceAll(/[^\da-z-]/g, '')   // Remove non-alphanumeric except hyphens
+    .replaceAll(/-{2,}/g, '-')      // Collapse multiple hyphens
+    .replace(/^-/, '')               // Trim leading hyphen
+    .replace(/-$/, '');              // Trim trailing hyphen
+
+  return resourceId + ext;
+}
+
+/**
  * Copy SKILL.md and linked files to output directory
  *
  * Creates a FLAT structure with all files at the root level.
@@ -483,12 +586,18 @@ async function collectLinkedResources(
  * @param linkedFiles - All linked files to copy
  * @param outputPath - Destination directory
  * @param rewriteLinks - Whether to rewrite links
+ * @param resourceNaming - Strategy for naming packaged files
+ * @param stripPrefix - Prefix to strip when using resource-id naming
+ * @param packageRoot - Root directory for calculating relative paths (for resource naming)
  */
 async function copySkillResources(
   skillPath: string,
   linkedFiles: string[],
   outputPath: string,
-  rewriteLinks: boolean
+  rewriteLinks: boolean,
+  resourceNaming: ResourceNamingStrategy = 'basename',
+  stripPrefix?: string,
+  packageRoot?: string
 ): Promise<void> {
   // Ensure output directory exists
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Output path is validated
@@ -499,11 +608,19 @@ async function copySkillResources(
   const pathMap = new Map<string, string>();
   pathMap.set(toForwardSlash(skillPath), join(outputPath, 'SKILL.md'));
 
-  // Map all linked files to flat structure (using basenames)
+  // Determine base path for resource naming (fallback to skill directory)
+  const namingBasePath = packageRoot ?? dirname(skillPath);
+
+  // Map all linked files (using naming strategy - may create subdirectories)
   // Check for collisions
   for (const linkedFile of linkedFiles) {
-    const filename = basename(linkedFile);
-    const targetPath = join(outputPath, filename);
+    const targetRelPath = generateTargetPath(
+      linkedFile,
+      namingBasePath,
+      resourceNaming,
+      stripPrefix
+    );
+    const targetPath = join(outputPath, targetRelPath);
 
     // Check for filename collisions
     const existingSource = [...pathMap.entries()].find(
@@ -513,11 +630,14 @@ async function copySkillResources(
     // Normalize paths for comparison (handles Windows backslash vs forward slash)
     if (existingSource !== undefined && existingSource !== toForwardSlash(linkedFile)) {
       throw new Error(
-        `Filename collision detected when flattening skill structure:\n` +
+        `Filename collision detected when packaging skill:\n` +
         `  File 1: ${existingSource}\n` +
         `  File 2: ${linkedFile}\n` +
-        `  Both would be copied to: ${filename}\n` +
-        `  Cannot flatten structure with duplicate filenames.`
+        `  Both would be packaged as: ${targetRelPath}\n` +
+        `\n` +
+        `  To resolve: Use a different resourceNaming strategy or ensure unique filenames.\n` +
+        `  Current strategy: ${resourceNaming}\n` +
+        `  Try 'resource-id' or 'preserve-path' for path-based naming.`
       );
     }
 
@@ -532,7 +652,7 @@ async function copySkillResources(
     rewriteLinks
   );
 
-  // Copy all linked files to flat structure
+  // Copy all linked files (structure depends on naming strategy)
   for (const linkedFile of linkedFiles) {
     const targetPath = pathMap.get(toForwardSlash(linkedFile));
     if (targetPath === undefined) {

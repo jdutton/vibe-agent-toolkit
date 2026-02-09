@@ -28,14 +28,19 @@ export type ValidationOverride = z.infer<typeof ValidationOverrideSchema>;
  * Controls how skills are packaged and distributed.
  */
 export const PackagingOptionsSchema = z.object({
-  usePathNames: z
-    .boolean()
+  resourceNaming: z
+    .enum(['basename', 'resource-id', 'preserve-path'])
     .optional()
-    .describe('Enable path-based filenames for collision avoidance'),
+    .describe(
+      'Strategy for naming packaged resource files:\n' +
+      '  - basename: Use original filename only (default, may conflict)\n' +
+      '  - resource-id: Flatten path to kebab-case filename (e.g., lobs-homeowners-overview.md)\n' +
+      '  - preserve-path: Preserve directory structure (e.g., lobs/homeowners/overview.md)'
+    ),
   stripPrefix: z
     .string()
     .optional()
-    .describe('Prefix to remove from path-based names'),
+    .describe('Path prefix to strip before applying naming strategy (e.g., "knowledge-base")'),
 }).describe('Packaging options for skill distribution');
 
 export type PackagingOptions = z.infer<typeof PackagingOptionsSchema>;
