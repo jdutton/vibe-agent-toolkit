@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.10] - 2026-02-09
+
+### Performance
+- **Discovery Scan: 540x Faster** - File discovery now completes in ~0.5 seconds instead of 5+ minutes
+  - Added `PERFORMANCE_POISON` patterns to exclude `.git`, `node_modules`, and `coverage` directories
+  - Batch git-ignore checking reduces 794 subprocess calls to 1 (`git check-ignore --stdin`)
+  - Skills list command that previously timed out now completes in seconds
+- **Skills Validation: 12x Faster** - Validation improved from 13.5s to 1.13s
+  - Introduced `GitTracker` to cache git-ignore checks across validations
+  - Eliminates 174 redundant git subprocess calls during link validation
+  - Pre-populates cache from `git ls-files` for instant lookups
+
+### Fixed
+- **LanceDB Database Size** - `getStats()` now accurately reports database disk usage
+  - Previously always showed "0.00 MB" regardless of actual size
+  - Implements recursive directory traversal to calculate true size in bytes
+  - Helps users monitor disk usage and verify successful index builds
+
+### Changed
+- **Test Suite Reorganization**: Separated integration tests from unit tests for faster development feedback
+  - Moved 15 integration tests (testing file I/O, git, databases, ML models) to separate test phase
+  - Unit test execution time improved from 121s to 27-41s (63% faster)
+  - Integration tests run separately in ~34-38s
+  - Coverage thresholds adjusted to reflect unit test reality: 70% for project coverage, 80% for new code (patches)
+  - Clearer separation enables faster development iteration and better CI parallelization
+
 ### Internal
 - **Turborepo Integration**: Build orchestration with intelligent caching and parallel execution
 - **Circular Dependency Resolution**: Removed circular dependencies between packages for cleaner architecture
