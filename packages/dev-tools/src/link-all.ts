@@ -128,15 +128,22 @@ function warnAboutGlobalInstallations(packages: string[]): void {
 }
 
 function linkPackage(packageName: string, packagePath: string): boolean {
+  // --install-strategy=shallow prevents npm arborist from deeply resolving
+  // workspace:* dependencies, which crashes with "Cannot read properties of null"
+  // in monorepos (npm/arborist bug as of npm v11.5.1).
+  const args = ['link', '--install-strategy=shallow'];
+
   try {
     console.log(`🔗 Linking: ${packageName}`);
-    safeExecSync('npm', ['link'], {
+    safeExecSync('npm', args, {
       cwd: packagePath,
       stdio: 'pipe',
     });
     return true;
-  } catch (error) {
-    console.error(`❌ Failed to link ${packageName}:`, error);
+  } catch (_error: unknown) {
+    const msg = _error instanceof Error ? _error.message : String(_error);
+    const firstLine = msg.split('\n')[0] ?? msg;
+    console.error(`⚠️  First attempt failed for ${packageName}: ${firstLine}`);
     return false;
   }
 }

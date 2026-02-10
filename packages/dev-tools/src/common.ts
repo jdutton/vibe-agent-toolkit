@@ -309,6 +309,55 @@ export function findPublishablePackages(
   return packages;
 }
 
+type PackageInfo = { name: string; path: string; packageJson: Record<string, unknown> };
+
+/**
+ * Sort packages in topological order: leaf packages (no workspace deps) first,
+ * then packages that depend on them.
+ *
+ * This matters for `npm link` because npm's arborist resolves the full dependency
+ * tree during link. If a package has workspace:* deps on packages that aren't yet
+ * globally linked, arborist can crash with "Cannot read properties of null".
+ */
+function topologicalSort(packages: PackageInfo[]): PackageInfo[] {
+  const packageNames = new Set(packages.map(p => p.name));
+
+  function countWorkspaceDeps(pkg: PackageInfo): number {
+    const deps = pkg.packageJson['dependencies'] as Record<string, string> | undefined;
+    if (!deps) return 0;
+    return Object.entries(deps).filter(
+      ([name, version]) => packageNames.has(name) && typeof version === 'string' && version.startsWith('workspace:')
+    ).length;
+  }
+
+  return [...packages].sort((a, b) => countWorkspaceDeps(a) - countWorkspaceDeps(b));
+}
+
+/** Run handler on each package with a settle delay between operations */
+function runPackageBatch(
+  packages: PackageInfo[],
+  handler: (name: string, path: string) => boolean,
+  settleDelayMs: number,
+): { processed: number; failed: PackageInfo[] } {
+  let processed = 0;
+  const failed: PackageInfo[] = [];
+
+  for (const pkg of packages) {
+    if (handler(pkg.name, pkg.path)) {
+      processed++;
+    } else {
+      failed.push(pkg);
+    }
+    // Let npm's global state settle before the next link/unlink
+    if (settleDelayMs > 0) {
+      const start = Date.now();
+      while (Date.now() - start < settleDelayMs) { /* settle */ }
+    }
+  }
+
+  return { processed, failed };
+}
+
 /**
  * Process packages with a given action (link or unlink)
  *
@@ -321,8 +370,10 @@ export function processPackages(options: {
   introMessage: string;
   successMessage: string;
   packageHandler: (name: string, path: string) => boolean;
+  /** Milliseconds to wait between each package operation (default: 100) */
+  settleDelayMs?: number;
 }): number {
-  const { actionVerb, introMessage, successMessage, packageHandler } = options;
+  const { actionVerb, introMessage, successMessage, packageHandler, settleDelayMs = 100 } = options;
 
   console.log(introMessage);
 
@@ -339,18 +390,25 @@ export function processPackages(options: {
     return 0;
   }
 
-  console.log(`Found ${packages.length} publishable package(s)\n`);
+  // Sort: leaf packages first so their global links exist before dependents need them
+  const sorted = topologicalSort(packages);
 
-  let processed = 0;
-  let failed = 0;
+  console.log(`Found ${sorted.length} publishable package(s)\n`);
 
-  for (const pkg of packages) {
-    if (packageHandler(pkg.name, pkg.path)) {
-      processed++;
-    } else {
-      failed++;
-    }
+  const first = runPackageBatch(sorted, packageHandler, settleDelayMs);
+  let { processed } = first;
+
+  // Retry failed packages once - ordering/timing issues often resolve on second pass
+  // because all leaf dependencies have been linked by now.
+  if (first.failed.length > 0) {
+    console.log(`\n🔄 Retrying ${first.failed.length} failed package(s)...\n`);
+    const retry = runPackageBatch(first.failed, packageHandler, settleDelayMs);
+    processed += retry.processed;
+    first.failed.length = 0;
+    first.failed.push(...retry.failed);
   }
+
+  const failed = first.failed.length;
 
   console.log('\n' + '='.repeat(60));
   console.log(`✅ ${actionVerb}: ${processed} package(s)`);
