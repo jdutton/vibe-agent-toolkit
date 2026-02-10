@@ -75,7 +75,8 @@ export class ExternalLinkCache {
 			this.cache = JSON.parse(data) as CacheData;
 			return this.cache;
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+			// Handle missing file or corrupted JSON - start with empty cache
+			if ((error as NodeJS.ErrnoException).code === 'ENOENT' || error instanceof SyntaxError) {
 				this.cache = {};
 				return this.cache;
 			}

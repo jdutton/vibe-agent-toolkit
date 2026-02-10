@@ -100,4 +100,29 @@ describe('ExternalLinkValidator', () => {
 		// Cache behavior may vary due to concurrency, but results should be consistent
 		expect(cached.has(true) || cached.has(false)).toBe(true);
 	});
+
+	it('should clear cache', async () => {
+		// Validate and cache a URL
+		await validator.validateLink(GOOGLE_URL);
+
+		// Clear cache
+		await validator.clearCache();
+
+		// Next validation should not be cached
+		const result = await validator.validateLink(GOOGLE_URL);
+		expect(result.cached).toBe(false);
+	});
+
+	it('should get cache statistics', async () => {
+		// Initially empty
+		let stats = await validator.getCacheStats();
+		expect(stats.total).toBe(0);
+
+		// Add some entries
+		await validator.validateLink(GOOGLE_URL);
+		await validator.validateLink(GITHUB_URL);
+
+		stats = await validator.getCacheStats();
+		expect(stats.total).toBeGreaterThan(0);
+	});
 });

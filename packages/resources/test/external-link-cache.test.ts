@@ -105,4 +105,72 @@ describe('ExternalLinkCache', () => {
 		expect(result).not.toBeNull();
 		expect(result?.statusCode).toBe(200);
 	});
+
+	it('should handle corrupted cache file gracefully', async () => {
+		// Write invalid JSON to cache file
+		const cacheFile = path.join(tempDir, 'external-links.json');
+		// eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir from mkdtemp, safe
+		await fs.writeFile(cacheFile, 'invalid json {{{');
+
+		// Should handle gracefully and return null
+		const result = await cache.get(EXAMPLE_URL);
+		expect(result).toBeNull();
+
+		// Should be able to write after corruption
+		await cache.set(EXAMPLE_URL, 200, 'OK');
+		const newResult = await cache.get(EXAMPLE_URL);
+		expect(newResult).not.toBeNull();
+	});
+
+	it('should clear all cache entries', async () => {
+		// Add some entries
+		await cache.set(EXAMPLE_URL, 200, 'OK');
+		await cache.set(GITHUB_URL, 200, 'OK');
+
+		// Clear cache
+		await cache.clear();
+
+		// All entries should be gone
+		expect(await cache.get(EXAMPLE_URL)).toBeNull();
+		expect(await cache.get(GITHUB_URL)).toBeNull();
+	});
+
+	it('should get cache statistics', async () => {
+		// Initially empty
+		let stats = await cache.getStats();
+		expect(stats.total).toBe(0);
+		expect(stats.expired).toBe(0);
+
+		// Add fresh entries
+		await cache.set(EXAMPLE_URL, 200, 'OK');
+		await cache.set(GITHUB_URL, 200, 'OK');
+
+		stats = await cache.getStats();
+		expect(stats.total).toBe(2);
+		expect(stats.expired).toBe(0);
+
+		// Add expired entry
+		const shortCache = new ExternalLinkCache(tempDir, 0);
+		await shortCache.set(BROKEN_URL, 404, 'Not Found');
+
+		// Wait for expiration
+		await new Promise((resolve) => setTimeout(resolve, 10));
+
+		stats = await shortCache.getStats();
+		expect(stats.total).toBeGreaterThan(0);
+		expect(stats.expired).toBeGreaterThan(0);
+	});
+
+	it('should handle cache directory creation', async () => {
+		// Test with non-existent directory
+		const newDir = path.join(tempDir, 'nested', 'cache');
+		const newCache = new ExternalLinkCache(newDir, 24);
+
+		// Should create directory and work normally
+		await newCache.set(EXAMPLE_URL, 200, 'OK');
+		const result = await newCache.get(EXAMPLE_URL);
+
+		expect(result).not.toBeNull();
+		expect(result?.statusCode).toBe(200);
+	});
 });
