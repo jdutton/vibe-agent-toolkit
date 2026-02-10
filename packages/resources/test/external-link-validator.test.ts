@@ -93,11 +93,11 @@ describe('ExternalLinkValidator', () => {
 		]);
 
 		// At least one should be from cache (or they should all have same result)
-		const cached = [result1.cached, result2.cached, result3.cached];
+		const cached = new Set([result1.cached, result2.cached, result3.cached]);
 		const allSameStatus = result1.statusCode === result2.statusCode && result2.statusCode === result3.statusCode;
 
 		expect(allSameStatus).toBe(true);
 		// Cache behavior may vary due to concurrency, but results should be consistent
-		expect(cached.includes(true) || cached.includes(false)).toBe(true);
+		expect(cached.has(true) || cached.has(false)).toBe(true);
 	});
 });

@@ -11,22 +11,22 @@ import { setupTempDirTestSuite } from './test-helpers.js';
 
 const TEST_EXTERNAL_URL = 'https://example.com/page';
 
+/**
+ * Create a test file with external link and return registry
+ */
+async function setupRegistryWithExternalLink(tempDir: string, url: string): Promise<ResourceRegistry> {
+  const testFile = join(tempDir, 'test.md');
+  await writeFile(testFile, `# Test\n\n[Link](${url})\n`);
+
+  const registry = new ResourceRegistry({ rootDir: tempDir });
+  await registry.addResource(testFile);
+  return registry;
+}
+
 describe('ResourceRegistry external URL validation', () => {
   const suite = setupTempDirTestSuite('registry-external-urls-');
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
-
-  /**
-   * Create a test file with external link and return registry
-   */
-  async function setupRegistryWithExternalLink(tempDir: string, url: string): Promise<ResourceRegistry> {
-    const testFile = join(tempDir, 'test.md');
-    await writeFile(testFile, `# Test\n\n[Link](${url})\n`);
-
-    const registry = new ResourceRegistry({ rootDir: tempDir });
-    await registry.addResource(testFile);
-    return registry;
-  }
 
   it('should collect external URLs when checkExternalUrls is true', async () => {
     const registry = await setupRegistryWithExternalLink(suite.tempDir, TEST_EXTERNAL_URL);
