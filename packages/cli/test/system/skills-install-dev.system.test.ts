@@ -31,6 +31,19 @@ afterAll(() => {
 });
 
 /**
+ * Setup a dev test case: creates skillsDir and projectDir with given skills
+ */
+function setupTestCase(
+  name: string,
+  skills: Array<{ name: string; built: boolean }>
+): { skillsDir: string; projectDir: string } {
+  const skillsDir = join(tmpDir, `skills-${name}`);
+  mkdirSyncReal(skillsDir, { recursive: true });
+  const projectDir = setupDevTestProject(tmpDir, `proj-${name}`, skills);
+  return { skillsDir, projectDir };
+}
+
+/**
  * Execute --dev install and return parsed YAML result
  */
 function executeDevInstall(
@@ -47,9 +60,7 @@ function executeDevInstall(
 
 describe('skills install --dev command (system test)', () => {
   it('should symlink a single skill', () => {
-    const skillsDir = join(tmpDir, 'skills-single');
-    mkdirSyncReal(skillsDir, { recursive: true });
-    const projectDir = setupDevTestProject(tmpDir, 'proj-single', [
+    const { skillsDir, projectDir } = setupTestCase('single', [
       { name: 'my-skill', built: true },
     ]);
 
@@ -67,9 +78,7 @@ describe('skills install --dev command (system test)', () => {
   });
 
   it('should symlink all skills from multi-skill package', () => {
-    const skillsDir = join(tmpDir, 'skills-multi');
-    mkdirSyncReal(skillsDir, { recursive: true });
-    const projectDir = setupDevTestProject(tmpDir, 'proj-multi', [
+    const { skillsDir, projectDir } = setupTestCase('multi', [
       { name: 'skill-alpha', built: true },
       { name: 'skill-beta', built: true },
     ]);
@@ -84,9 +93,7 @@ describe('skills install --dev command (system test)', () => {
   });
 
   it('should filter by --name', () => {
-    const skillsDir = join(tmpDir, 'skills-filter');
-    mkdirSyncReal(skillsDir, { recursive: true });
-    const projectDir = setupDevTestProject(tmpDir, 'proj-filter', [
+    const { skillsDir, projectDir } = setupTestCase('filter', [
       { name: 'wanted-skill', built: true },
       { name: 'other-skill', built: true },
     ]);
@@ -100,9 +107,7 @@ describe('skills install --dev command (system test)', () => {
   });
 
   it('should fail when skill not built', () => {
-    const skillsDir = join(tmpDir, 'skills-not-built');
-    mkdirSyncReal(skillsDir, { recursive: true });
-    const projectDir = setupDevTestProject(tmpDir, 'proj-not-built', [
+    const { skillsDir, projectDir } = setupTestCase('not-built', [
       { name: 'unbuilt-skill', built: false },
     ]);
 
@@ -117,9 +122,7 @@ describe('skills install --dev command (system test)', () => {
   });
 
   it('should not create symlinks with --dry-run', () => {
-    const skillsDir = join(tmpDir, 'skills-dryrun');
-    mkdirSyncReal(skillsDir, { recursive: true });
-    const projectDir = setupDevTestProject(tmpDir, 'proj-dryrun', [
+    const { skillsDir, projectDir } = setupTestCase('dryrun', [
       { name: 'dry-skill', built: true },
     ]);
 
@@ -133,9 +136,7 @@ describe('skills install --dev command (system test)', () => {
   });
 
   it('should fail without --force when skill exists', () => {
-    const skillsDir = join(tmpDir, 'skills-exists');
-    mkdirSyncReal(skillsDir, { recursive: true });
-    const projectDir = setupDevTestProject(tmpDir, 'proj-exists', [
+    const { skillsDir, projectDir } = setupTestCase('exists', [
       { name: 'dup-skill', built: true },
     ]);
 
@@ -155,9 +156,7 @@ describe('skills install --dev command (system test)', () => {
   });
 
   it('should overwrite with --force', () => {
-    const skillsDir = join(tmpDir, 'skills-force');
-    mkdirSyncReal(skillsDir, { recursive: true });
-    const projectDir = setupDevTestProject(tmpDir, 'proj-force', [
+    const { skillsDir, projectDir } = setupTestCase('force', [
       { name: 'force-skill', built: true },
     ]);
 

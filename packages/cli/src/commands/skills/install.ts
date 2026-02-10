@@ -165,6 +165,7 @@ async function installCommand(
 
 /**
  * Handle npm package installation
+ * Installs ALL skills from the package (or filtered by --name)
  */
 async function handleNpmInstall(
   source: string,
@@ -191,33 +192,32 @@ async function handleNpmInstall(
       throw new Error(`No skills found in package ${packageName}`);
     }
 
-    // Install first skill (or specific skill if --name provided)
-    const skillToInstall = options.name
-      ? skills.find(s => s.name === options.name)
-      : skills[0];
+    // Filter by --name if specified, otherwise install all
+    const skillsToInstall = options.name
+      ? skills.filter(s => s.name === options.name)
+      : skills;
 
-    if (!skillToInstall) {
+    if (skillsToInstall.length === 0) {
       throw new Error(
         `Skill "${options.name ?? ''}" not found in package ${packageName}. ` +
           `Available: ${skills.map(s => s.name).join(', ')}`
       );
     }
 
-    // Determine skill path (from vat.skills metadata)
-    const skillPath = resolve(extractedPath, skillToInstall.path);
+    const skillsDir = options.skillsDir ?? getClaudeUserPaths().skillsDir;
 
-    // Install skill
-    await installSkillFromPath(
-      skillPath,
-      skillToInstall.name,
-      options,
-      logger
-    );
+    // Install all matching skills
+    for (const skill of skillsToInstall) {
+      const skillPath = resolve(extractedPath, skill.path);
+      await installSkillFromPath(skillPath, skill.name, options, logger);
+    }
 
     const duration = Date.now() - startTime;
-    outputSuccess(
-      skillToInstall.name,
-      join(options.skillsDir ?? getClaudeUserPaths().skillsDir, skillToInstall.name),
+    outputInstallSuccess(
+      skillsToInstall.map(s => ({
+        name: s.name,
+        installPath: join(skillsDir, s.name),
+      })),
       `npm:${packageName}`,
       'npm',
       duration,
@@ -234,6 +234,7 @@ async function handleNpmInstall(
 
 /**
  * Handle local directory installation
+ * If directory has package.json with vat.skills, installs ALL skills (or filtered by --name)
  */
 async function handleLocalInstall(
   source: string,
@@ -249,6 +250,9 @@ async function handleLocalInstall(
   const packageJsonPath = join(sourcePath, 'package.json');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- User-provided CLI argument
   const hasPackageJson = existsSync(packageJsonPath);
+
+  const skillsDir = options.skillsDir ?? getClaudeUserPaths().skillsDir;
+  let installed: Array<{ name: string; installPath: string }>;
 
   if (hasPackageJson) {
     // Read vat metadata - install all skills (or filtered by --name)
@@ -270,36 +274,16 @@ async function handleLocalInstall(
       await installSkillFromPath(skillPath, skill.name, options, logger);
     }
 
-    const duration = Date.now() - startTime;
-    const firstSkill = skillsToInstall[0];
-    if (firstSkill) {
-      outputSuccess(
-        firstSkill.name,
-        join(options.skillsDir ?? getClaudeUserPaths().skillsDir, firstSkill.name),
-        `local:${sourcePath}`,
-        'local',
-        duration,
-        logger,
-        options.dryRun
-      );
-    }
+    installed = skillsToInstall.map(s => ({ name: s.name, installPath: join(skillsDir, s.name) }));
   } else {
     // Plain directory - use directory name
     const skillName = options.name ?? basename(sourcePath);
     await installSkillFromPath(sourcePath, skillName, options, logger);
-
-    const duration = Date.now() - startTime;
-    outputSuccess(
-      skillName,
-      join(options.skillsDir ?? getClaudeUserPaths().skillsDir, skillName),
-      `local:${sourcePath}`,
-      'local',
-      duration,
-      logger,
-      options.dryRun
-    );
+    installed = [{ name: skillName, installPath: join(skillsDir, skillName) }];
   }
 
+  const duration = Date.now() - startTime;
+  outputInstallSuccess(installed, `local:${sourcePath}`, 'local', duration, logger, options.dryRun);
   process.exit(0);
 }
 
@@ -334,7 +318,14 @@ async function handleZipInstall(
   }
 
   const duration = Date.now() - startTime;
-  outputSuccess(skillName, installPath, sourcePath, 'zip', duration, logger, options.dryRun);
+  outputInstallSuccess(
+    [{ name: skillName, installPath }],
+    sourcePath,
+    'zip',
+    duration,
+    logger,
+    options.dryRun
+  );
 
   process.exit(0);
 }
@@ -624,32 +615,31 @@ async function installSkillFromPath(
 }
 
 /**
- * Output success YAML and human-readable messages
+ * Output success YAML and human-readable messages for install (supports multiple skills)
  */
-function outputSuccess(
-  skillName: string,
-  installPath: string,
+function outputInstallSuccess(
+  skills: Array<{ name: string; installPath: string }>,
   source: string,
   sourceType: SkillSource,
   duration: number,
   logger: ReturnType<typeof createLogger>,
   dryRun?: boolean
 ): void {
-  // Output YAML to stdout
   writeYamlHeader(dryRun);
-  process.stdout.write(`skillName: ${skillName}\n`);
-  process.stdout.write(`installPath: ${installPath}\n`);
   process.stdout.write(`source: ${source}\n`);
   process.stdout.write(`sourceType: ${sourceType}\n`);
+  process.stdout.write(`skillsInstalled: ${skills.length}\n`);
+  process.stdout.write(`skills:\n`);
+  for (const skill of skills) {
+    process.stdout.write(`  - name: ${skill.name}\n`);
+    process.stdout.write(`    installPath: ${skill.installPath}\n`);
+  }
   process.stdout.write(`duration: ${duration}ms\n`);
 
   if (dryRun) {
-    logger.info(`✅ Dry-run complete (no files created)`);
-    logger.info(`   Skill: ${skillName}`);
-    logger.info(`   Would install to: ${installPath}`);
+    logger.info(`\n✅ Dry-run complete: ${skills.length} skill(s) would be installed`);
   } else {
-    logger.info(`✅ Installed skill: ${skillName}`);
-    logger.info(`   Location: ${installPath}`);
+    logger.info(`\n✅ Installed ${skills.length} skill(s)`);
     logger.info(`\n💡 Run 'vat skills list' to verify installation`);
     logger.info(`   Restart Claude Code or run /reload-skills to use the new skill`);
   }

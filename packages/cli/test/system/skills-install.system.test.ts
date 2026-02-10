@@ -42,8 +42,11 @@ function executeInstallAndExpectSuccess(
 
   expect(result.status).toBe(0);
   expect(parsed.status).toBe('success');
-  expect(parsed.skillName).toBe(expectedSkillName);
   expect(parsed.sourceType).toBe(expectedSourceType);
+
+  const skills = parsed.skills as Array<Record<string, unknown>>;
+  expect(skills).toHaveLength(1);
+  expect(skills[0]).toHaveProperty('name', expectedSkillName);
 }
 
 describe('skills install command (system test)', () => {
@@ -152,8 +155,11 @@ describe('skills install command (system test)', () => {
 
       expect(result.status).toBe(0);
       expect(parsed.status).toBe('success');
-      expect(parsed.skillName).toBe(skillName);
       expect(parsed.sourceType).toBe('local');
+
+      const skills = parsed.skills as Array<Record<string, unknown>>;
+      expect(skills).toHaveLength(1);
+      expect(skills[0]).toHaveProperty('name', skillName);
 
       // Verify skill was installed
       const installedPath = join(suite.skillsDir, skillName);
@@ -175,7 +181,8 @@ describe('skills install command (system test)', () => {
       );
 
       expect(result.status).toBe(0);
-      expect(parsed.skillName).toBe(customName);
+      const skills = parsed.skills as Array<Record<string, unknown>>;
+      expect(skills[0]).toHaveProperty('name', customName);
 
       // Verify installed with custom name
       expect(existsSync(join(suite.skillsDir, customName))).toBe(true);

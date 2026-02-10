@@ -121,8 +121,8 @@ describe('MCP stdio protocol compliance (system test)', () => {
     const initRequest = createInitializeRequest(1);
     server.stdin.write(`${JSON.stringify(initRequest)}\n`);
 
-    // Wait for initialize response
-    await waitForStreamData(server.stdout, { timeout: 2000, pattern: /"id":\s*1/ });
+    // Wait for initialize response (5s: cold start includes process spawn + dynamic imports + MCP handshake)
+    await waitForStreamData(server.stdout, { timeout: 5000, pattern: /"id":\s*1/ });
 
     // Send tools/list request
     const toolsRequest = {
@@ -135,7 +135,7 @@ describe('MCP stdio protocol compliance (system test)', () => {
     server.stdin.write(`${JSON.stringify(toolsRequest)}\n`);
 
     // Wait for tools/list response
-    await waitForStreamData(server.stdout, { timeout: 1000, pattern: /"id":\s*2/ });
+    await waitForStreamData(server.stdout, { timeout: 2000, pattern: /"id":\s*2/ });
 
     // Cleanup
     server.kill('SIGTERM');
@@ -181,8 +181,8 @@ describe('MCP stdio protocol compliance (system test)', () => {
     const initRequest = createInitializeRequest(1);
     server.stdin.write(`${JSON.stringify(initRequest)}\n`);
 
-    // Wait for initialize response
-    await waitForStreamData(server.stdout, { timeout: 2000, pattern: /"id":\s*1/ });
+    // Wait for initialize response (5s: process spawn + dynamic imports + MCP handshake)
+    await waitForStreamData(server.stdout, { timeout: 5000, pattern: /"id":\s*1/ });
 
     // Cleanup
     server.kill('SIGTERM');
@@ -203,7 +203,7 @@ describe('MCP stdio protocol compliance (system test)', () => {
     // Initialize first
     const initRequest = createInitializeRequest(1);
     server.stdin.write(`${JSON.stringify(initRequest)}\n`);
-    await waitForStreamData(server.stdout, { timeout: 3000, pattern: /"id":\s*1/ });
+    await waitForStreamData(server.stdout, { timeout: 5000, pattern: /"id":\s*1/ });
 
     // Request tools list
     const toolsRequest = {
