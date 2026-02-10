@@ -117,47 +117,22 @@
                               },
                               "description": "Glob patterns matched against path relative to skill root"
                             },
-                            "handling": {
-                              "type": "string",
-                              "enum": [
-                                "strip-to-text",
-                                "rag-search-hint"
-                              ],
-                              "description": "How to rewrite links to matched files"
-                            },
                             "template": {
                               "type": "string",
-                              "description": "Handlebars template. Context: {{link.text}}, {{link.uri}}, {{link.fileName}}, {{link.filePath}}, {{skill.name}}, {{tool.name}}"
+                              "description": "Handlebars template for rewriting links to matched files.\nContext: {{link.text}}, {{link.uri}}, {{link.fileName}}, {{link.filePath}}, {{skill.name}}\nDefault: \"{{link.text}}\""
                             }
                           },
                           "required": [
-                            "patterns",
-                            "handling"
+                            "patterns"
                           ],
                           "additionalProperties": false
                         },
                         "default": [],
-                        "description": "Ordered rules evaluated first-match. Each rule matches file paths and specifies rewrite strategy."
+                        "description": "Ordered rules evaluated first-match. Each rule matches file paths and specifies a rewrite template."
                       },
-                      "default": {
-                        "type": "object",
-                        "properties": {
-                          "handling": {
-                            "type": "string",
-                            "enum": [
-                              "strip-to-text",
-                              "rag-search-hint"
-                            ],
-                            "default": "strip-to-text",
-                            "description": "Handling for non-bundled links that do not match any rule"
-                          },
-                          "template": {
-                            "type": "string",
-                            "description": "Template for default handling. Default: \"{{link.text}}\""
-                          }
-                        },
-                        "additionalProperties": false,
-                        "description": "Default handling for depth-exceeded and unmatched excluded links"
+                      "defaultTemplate": {
+                        "type": "string",
+                        "description": "Handlebars template for non-bundled links that don't match any rule (depth-exceeded links).\nContext: {{link.text}}, {{link.uri}}, {{link.fileName}}, {{link.filePath}}, {{skill.name}}\nDefault: \"{{link.text}}\""
                       }
                     },
                     "additionalProperties": false

@@ -12,7 +12,6 @@ import type { ExcludeRule, LinkCollectionOptions } from '../src/link-collector.j
 // Constants
 // ============================================================================
 
-const STRIP_TO_TEXT = 'strip-to-text' as const;
 const DEPTH_EXCEEDED = 'depth-exceeded' as const;
 const PATTERN_MATCHED = 'pattern-matched' as const;
 const SCHEMA_JSON = 'schema.json';
@@ -33,7 +32,7 @@ function makeOptions(
   return {
     maxDepth: Infinity,
     excludeRules: [],
-    defaultRule: { handling: STRIP_TO_TEXT },
+    defaultRule: {},
     skillRoot,
     ...overrides,
   };
@@ -211,7 +210,6 @@ describe('collectLinks', () => {
     const skillPath = createStandardFixture(tempDir);
     const excludeRule: ExcludeRule = {
       patterns: ['**/level1.md'],
-      handling: STRIP_TO_TEXT,
     };
     const options = makeOptions(tempDir, {
       maxDepth: 2,
@@ -241,7 +239,6 @@ describe('collectLinks', () => {
     const skillPath = createStandardFixture(tempDir);
     const excludeRule: ExcludeRule = {
       patterns: ['**/schema.json'],
-      handling: 'rag-search-hint',
       template: 'Search for: {{linkText}}',
     };
     const options = makeOptions(tempDir, {
@@ -461,12 +458,10 @@ describe('collectLinks', () => {
 
       const firstRule: ExcludeRule = {
         patterns: ['**/*.md'],
-        handling: STRIP_TO_TEXT,
         template: 'First rule',
       };
       const secondRule: ExcludeRule = {
         patterns: ['**/target.md'],
-        handling: 'rag-search-hint',
         template: 'Second rule',
       };
 

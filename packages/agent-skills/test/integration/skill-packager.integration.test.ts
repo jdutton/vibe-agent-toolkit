@@ -19,6 +19,7 @@ const DOCS_GUIDE_MD = 'docs/guide.md';
 const GUIDE_CONTENT = '# Guide\n\nContent.';
 const GUIDE_WITH_REF = '# Guide\n\nSee [reference](./reference.md).';
 const CONFIG_JSON = 'config.json';
+const REFERENCE_MD = 'reference.md';
 
 /**
  * Helper to package skill with default output path
@@ -618,10 +619,7 @@ describe('skill-packager: depth-limited packaging', () => {
       linkFollowDepth: 0,
       rewriteLinks: true,
       excludeReferencesFromBundle: {
-        default: {
-          handling: 'strip-to-text',
-          template: '{{link.text}} (search KB for details)',
-        },
+        defaultTemplate: '{{link.text}} (search KB for details)',
       },
     });
 
@@ -632,6 +630,33 @@ describe('skill-packager: depth-limited packaging', () => {
     const skillContent = await readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
     expect(skillContent).toContain('important doc (search KB for details)');
     expect(skillContent).not.toContain('[important doc](');
+  });
+
+  it('should render all template variables (skill.name, link.fileName, link.filePath)', async () => {
+    const tempDir = getTempDir();
+    const subDir = join(tempDir, 'docs');
+    await mkdir(subDir, { recursive: true });
+    const refPath = join(subDir, REFERENCE_MD);
+    const skillPath = join(tempDir, 'SKILL.md');
+
+    await writeFile(refPath, '# Reference\n\nContent.');
+    await writeFile(
+      skillPath,
+      `${createFrontmatter({ name: 'my-test-skill' })}\n\nSee [ref](./docs/reference.md).`
+    );
+
+    const result = await packageSkillForTest(skillPath, {
+      formats: ['directory'],
+      linkFollowDepth: 0,
+      rewriteLinks: true,
+      excludeReferencesFromBundle: {
+        defaultTemplate: 'Search {{skill.name}} for {{link.fileName}} ({{link.filePath}})',
+      },
+    });
+
+    const skillContent = await readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
+    expect(skillContent).toContain('Search my-test-skill for reference.md (docs/reference.md)');
+    expect(skillContent).not.toContain('[ref](');
   });
 
   it('should bundle non-markdown assets as plain copies', async () => {
@@ -673,7 +698,6 @@ describe('skill-packager: depth-limited packaging', () => {
       excludeReferencesFromBundle: {
         rules: [{
           patterns: ['**/*.md'],
-          handling: 'rag-search-hint',
           template: '[Search: {{link.text}}]',
         }],
       },
@@ -697,7 +721,7 @@ describe('skill-packager: integration', () => {
     const skillPath = join(tempDir, 'SKILL.md');
     const docsDir = join(tempDir, 'docs');
     const guidePath = join(docsDir, GUIDE_MD);
-    const referencePath = join(docsDir, 'reference.md');
+    const referencePath = join(docsDir, REFERENCE_MD);
 
     // Create linked structure
     await mkdir(docsDir, { recursive: true });
@@ -725,12 +749,12 @@ describe('skill-packager: integration', () => {
     // Verify files collected
     expect(result.files.dependencies).toHaveLength(2);
     expect(result.files.dependencies).toContain(toForwardSlash(DOCS_GUIDE_MD));
-    expect(result.files.dependencies).toContain(toForwardSlash('docs/reference.md'));
+    expect(result.files.dependencies).toContain(toForwardSlash(`docs/${REFERENCE_MD}`));
 
     // Verify files copied (flat structure: all at root level)
     const copiedSkill = await readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
     const copiedGuide = await readFile(join(result.outputPath, GUIDE_MD), 'utf-8');
-    const copiedReference = await readFile(join(result.outputPath, 'reference.md'), 'utf-8');
+    const copiedReference = await readFile(join(result.outputPath, REFERENCE_MD), 'utf-8');
 
     expect(copiedSkill).toContain(COMPLEX_SKILL_NAME);
     expect(copiedGuide).toContain('# Guide');

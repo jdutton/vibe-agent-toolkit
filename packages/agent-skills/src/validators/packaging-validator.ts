@@ -114,7 +114,7 @@ export async function validateSkillForPackaging(
     {
       maxDepth,
       excludeRules: excludeConfig?.rules ?? [],
-      defaultRule: excludeConfig?.default ?? { handling: 'strip-to-text' },
+      defaultRule: { template: excludeConfig?.defaultTemplate },
       skillRoot: dirname(skillPath),
     }
   );

@@ -20,10 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `linkFollowDepth` in `packagingOptions`: `0` (skill only), `1` (direct links), `2` (default), `N`, or `"full"` (unlimited)
   - Prevents transitive link explosion in large knowledge bases (e.g., 493 files → ~10 files with depth 1)
 - **Rule-Based Link Exclusion** - Selectively exclude files from bundles with per-pattern link rewriting
-  - `excludeReferencesFromBundle` with ordered rules: each rule specifies glob patterns, handling strategy, and Handlebars template
-  - Two handling modes: `strip-to-text` (replace link with plain text) and `rag-search-hint` (replace with search guidance)
-  - Default rule catches all depth-boundary links that don't match explicit rules
-  - No dead links in output: every non-bundled link target is rewritten per its matched rule
+  - `excludeReferencesFromBundle` with ordered rules: each rule specifies glob patterns and optional Handlebars template
+  - `defaultTemplate` for depth-boundary links that don't match explicit rules (default: `"{{link.text}}"`)
+  - Template variables: `{{link.text}}`, `{{link.uri}}`, `{{link.fileName}}`, `{{link.filePath}}`, `{{skill.name}}`
+  - No dead links in output: every non-bundled link target is rewritten per its matched template
 - **Non-Markdown Asset Bundling** - JSON schemas, images, and other non-markdown files linked from bundled markdown are now included in skill packages
 - **Handlebars Template Utility** - Shared template rendering in `@vibe-agent-toolkit/utils` with compiled template caching
 - **Expanded Validation Metadata** - `directFileCount`, `excludedReferenceCount`, and `excludedReferences` in validation results

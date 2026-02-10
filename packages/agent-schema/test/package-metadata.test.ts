@@ -397,18 +397,15 @@ describe('PackagingOptionsSchema', () => {
   });
 
   describe('excludeReferencesFromBundle', () => {
-    it('should accept rules array with default handling', () => {
+    it('should accept rules array with defaultTemplate', () => {
       const options = {
         excludeReferencesFromBundle: {
           rules: [
             {
               patterns: ['**/*.pdf'],
-              handling: 'strip-to-text' as const,
             },
           ],
-          default: {
-            handling: 'strip-to-text' as const,
-          },
+          defaultTemplate: '{{link.text}}',
         },
       };
 
@@ -427,13 +424,12 @@ describe('PackagingOptionsSchema', () => {
       expect(result.success).toBe(true);
     });
 
-    it('should accept rule with rag-search-hint handling and template', () => {
+    it('should accept rule with custom template', () => {
       const options = {
         excludeReferencesFromBundle: {
           rules: [
             {
               patterns: ['knowledge-base/**/*.md'],
-              handling: 'rag-search-hint' as const,
               template: 'Search for: {{link.text}} in {{skill.name}}',
             },
           ],
@@ -456,13 +452,10 @@ describe('PackagingOptionsSchema', () => {
       }
     });
 
-    it('should accept default handling with template', () => {
+    it('should accept defaultTemplate string', () => {
       const options = {
         excludeReferencesFromBundle: {
-          default: {
-            handling: 'rag-search-hint' as const,
-            template: '{{link.text}} (see {{link.fileName}})',
-          },
+          defaultTemplate: '{{link.text}} (see {{link.fileName}})',
         },
       };
 
@@ -470,20 +463,19 @@ describe('PackagingOptionsSchema', () => {
       expect(result.success).toBe(true);
     });
 
-    it('should reject rule with invalid handling value', () => {
+    it('should accept rule with patterns only (no template)', () => {
       const options = {
         excludeReferencesFromBundle: {
           rules: [
             {
               patterns: ['**/*.pdf'],
-              handling: 'invalid-handling',
             },
           ],
         },
       };
 
       const result = PackagingOptionsSchema.safeParse(options);
-      expect(result.success).toBe(false);
+      expect(result.success).toBe(true);
     });
   });
 });

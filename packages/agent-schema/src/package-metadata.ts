@@ -8,13 +8,6 @@
 import { z } from 'zod';
 
 /**
- * Link handling strategies for excluded references
- *
- * Defines how links to excluded files are rewritten during skill packaging.
- */
-const LINK_HANDLING_STRATEGIES = ['strip-to-text', 'rag-search-hint'] as const;
-
-/**
  * Validation override value
  *
  * Supports both simple string format and extended object format with expiration.
@@ -63,25 +56,22 @@ export const PackagingOptionsSchema = z.object({
     rules: z.array(z.object({
       patterns: z.array(z.string())
         .describe('Glob patterns matched against path relative to skill root'),
-      handling: z.enum(LINK_HANDLING_STRATEGIES)
-        .describe('How to rewrite links to matched files'),
       template: z.string()
         .optional()
         .describe(
-          'Handlebars template. Context: {{link.text}}, {{link.uri}}, ' +
-          '{{link.fileName}}, {{link.filePath}}, {{skill.name}}, {{tool.name}}'
+          'Handlebars template for rewriting links to matched files.\n' +
+          'Context: {{link.text}}, {{link.uri}}, {{link.fileName}}, {{link.filePath}}, {{skill.name}}\n' +
+          'Default: "{{link.text}}"'
         ),
     })).optional().default([])
-      .describe('Ordered rules evaluated first-match. Each rule matches file paths and specifies rewrite strategy.'),
-    default: z.object({
-      handling: z.enum(LINK_HANDLING_STRATEGIES)
-        .default(LINK_HANDLING_STRATEGIES[0])
-        .describe('Handling for non-bundled links that do not match any rule'),
-      template: z.string()
-        .optional()
-        .describe('Template for default handling. Default: "{{link.text}}"'),
-    }).optional()
-      .describe('Default handling for depth-exceeded and unmatched excluded links'),
+      .describe('Ordered rules evaluated first-match. Each rule matches file paths and specifies a rewrite template.'),
+    defaultTemplate: z.string()
+      .optional()
+      .describe(
+        'Handlebars template for non-bundled links that don\'t match any rule (depth-exceeded links).\n' +
+        'Context: {{link.text}}, {{link.uri}}, {{link.fileName}}, {{link.filePath}}, {{skill.name}}\n' +
+        'Default: "{{link.text}}"'
+      ),
   }).optional(),
 }).describe('Packaging options for skill distribution');
 

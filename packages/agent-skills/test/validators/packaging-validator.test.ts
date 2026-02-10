@@ -574,7 +574,7 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 			packagingOptions: {
 				excludeReferencesFromBundle: {
 					rules: [
-						{ patterns: ['internal/**'], handling: 'strip-to-text' },
+						{ patterns: ['internal/**'] },
 					],
 				},
 			},

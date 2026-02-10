@@ -49,15 +49,13 @@ export interface LinkResolution {
  */
 export interface ExcludeRule {
   patterns: string[];
-  handling: 'strip-to-text' | 'rag-search-hint';
   template?: string | undefined;
 }
 
 /**
- * Default handling for depth-exceeded and unmatched excluded links.
+ * Default template for depth-exceeded and unmatched excluded links.
  */
 export interface DefaultRule {
-  handling: 'strip-to-text' | 'rag-search-hint';
   template?: string | undefined;
 }
 

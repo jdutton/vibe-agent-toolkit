@@ -24,7 +24,6 @@ import type { DefaultRule, ExcludeRule } from './link-collector.js';
 
 const PACKAGE_JSON_FILENAME = 'package.json';
 const DEFAULT_STRIP_TEMPLATE = '{{link.text}}';
-const STRIP_TO_TEXT = 'strip-to-text' as const;
 const REPLACE_ENTIRE = 'replace-entire' as const;
 
 /**
@@ -92,17 +91,13 @@ export interface PackageSkillOptions {
   /** How deep to follow markdown links (default: 2) */
   linkFollowDepth?: number | 'full' | undefined;
 
-  /** Exclude patterns and handling for non-bundled links */
+  /** Exclude patterns and rewrite templates for non-bundled links */
   excludeReferencesFromBundle?: {
     rules?: Array<{
       patterns: string[];
-      handling: 'strip-to-text' | 'rag-search-hint';
       template?: string | undefined;
     }> | undefined;
-    default?: {
-      handling?: 'strip-to-text' | 'rag-search-hint' | undefined;
-      template?: string | undefined;
-    } | undefined;
+    defaultTemplate?: string | undefined;
   } | undefined;
 }
 
@@ -190,8 +185,7 @@ export async function packageSkill(
   const excludeConfig = options.excludeReferencesFromBundle;
   const maxDepth = linkFollowDepth === 'full' ? Infinity : linkFollowDepth;
   const defaultRule: DefaultRule = {
-    handling: excludeConfig?.default?.handling ?? STRIP_TO_TEXT,
-    ...(excludeConfig?.default?.template ? { template: excludeConfig.default.template } : {}),
+    ...(excludeConfig?.defaultTemplate ? { template: excludeConfig.defaultTemplate } : {}),
   };
 
   const { bundledFiles, excludedReferences } = await collectLinks(skillPath, {
@@ -449,7 +443,7 @@ function generateTargetPath(
 interface ExcludeContext {
   /** Set of forward-slash normalized absolute paths excluded from bundle */
   excludedFiles: Set<string>;
-  /** Map of excluded file paths to their handling rules */
+  /** Map of excluded file paths to their rewrite rules */
   ruleMap: Map<string, { rule?: ExcludeRule | undefined; defaultRule: DefaultRule }>;
   /** Skill name for template rendering context */
   skillName: string;
@@ -625,7 +619,7 @@ async function copyAndRewriteFile(
     // Check if this link targets an excluded file
     if (excludeCtx?.excludedFiles.has(normalizedTarget)) {
       const info = excludeCtx.ruleMap.get(normalizedTarget);
-      const rule = info?.rule ?? info?.defaultRule ?? { handling: STRIP_TO_TEXT };
+      const rule = info?.rule ?? info?.defaultRule ?? {};
       const template = rule.template ?? DEFAULT_STRIP_TEMPLATE;
       const context = {
         link: {
