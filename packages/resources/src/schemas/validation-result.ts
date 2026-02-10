@@ -9,6 +9,9 @@ import { z } from 'zod';
  * - frontmatter_missing: Schema requires frontmatter, file has none
  * - frontmatter_invalid_yaml: YAML syntax error in frontmatter
  * - frontmatter_schema_error: Frontmatter fails JSON Schema validation
+ * - external_url_dead: External URL returned error status (4xx, 5xx)
+ * - external_url_timeout: External URL request timed out
+ * - external_url_error: External URL validation failed (DNS, network, etc.)
  * - unknown_link: Unknown link type
  *
  * Includes details about what went wrong, where it occurred, and optionally

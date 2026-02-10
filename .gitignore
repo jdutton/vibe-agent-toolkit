@@ -96,3 +96,6 @@ docs/plans/
 # Misc
 .turbo/
 .rag-db/
+
+# VAT cache
+.vat-cache/

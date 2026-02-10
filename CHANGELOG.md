@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **External URL validation with caching** (#41)
+  - Optional external URL validation via `--check-external-urls` flag
+  - Filesystem-based cache with TTLs (24h alive, 1h dead)
+  - Per-collection configuration for timeout, retry, ignore patterns
+  - New issue types: `external_url_dead`, `external_url_timeout`, `external_url_error`
+  - Cache stored in `.vat-cache/external-urls.json`
+  - Uses `markdown-link-check` library for robust HTTP checking
+
 ## [0.1.11] - 2026-02-09
 
 **Note:** Version 0.1.10 was deprecated due to incomplete publish (phantom package in publish list caused partial release).
