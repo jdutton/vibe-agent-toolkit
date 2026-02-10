@@ -13,6 +13,7 @@
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -42,8 +43,8 @@ describe('External URL validation CLI flags (system test)', () => {
     // Create temp directory
     tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'vat-external-url-test-'));
 
-    // Path to vat CLI binary
-    const currentDir = path.dirname(new URL(import.meta.url).pathname);
+    // Path to vat CLI binary (use fileURLToPath for cross-platform compatibility)
+    const currentDir = path.dirname(fileURLToPath(import.meta.url));
     binPath = path.resolve(currentDir, '../../../cli/dist/bin/vat.js');
 
     // Create minimal test structure

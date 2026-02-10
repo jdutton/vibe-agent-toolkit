@@ -5,6 +5,8 @@
  * This is "dogfooding" - using the tool on the project that builds it.
  */
 
+import { fileURLToPath } from 'node:url';
+
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -37,8 +39,8 @@ describe('Audit Dogfooding (system test)', () => {
 
   beforeAll(() => {
     binPath = getBinPath(import.meta.url);
-    // Get project root (4 levels up from test/system/)
-    projectRoot = new URL('../../../../', import.meta.url).pathname;
+    // Get project root (4 levels up from test/system/) - use fileURLToPath for cross-platform compatibility
+    projectRoot = fileURLToPath(new URL('../../../../', import.meta.url));
     tempDir = createTestTempDir('vat-audit-dogfood-');
   });
 
