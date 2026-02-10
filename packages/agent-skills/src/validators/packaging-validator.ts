@@ -16,10 +16,11 @@
 
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { basename, dirname, resolve } from 'node:path';
+import { basename, dirname, relative, resolve } from 'node:path';
 
 import type { ValidationOverride, VatSkillMetadata } from '@vibe-agent-toolkit/agent-schema';
 import { parseMarkdown } from '@vibe-agent-toolkit/resources';
+import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { collectLinks } from '../link-collector.js';
 
@@ -99,10 +100,6 @@ export async function validateSkillForPackaging(
   const skillContent = await readFile(skillPath, 'utf-8');
   const skillLines = skillContent.split('\n').length;
 
-  // Count files linked directly from SKILL.md (not transitively)
-  const directLinks = getResolvedMarkdownLinks(parseResult.links, skillPath);
-  const directFileCount = directLinks.length;
-
   // Read packaging options for depth/exclude configuration
   const linkFollowDepth = skillMetadata?.packagingOptions?.linkFollowDepth ?? 2;
   const excludeConfig = skillMetadata?.packagingOptions?.excludeReferencesFromBundle;
@@ -118,6 +115,18 @@ export async function validateSkillForPackaging(
       skillRoot: dirname(skillPath),
     }
   );
+
+  // Count direct links that actually made it into the bundle
+  const directLinks = getResolvedMarkdownLinks(parseResult.links, skillPath);
+  const bundledFileSet = new Set(bundledFiles);
+  const directFileCount = directLinks.filter(p => bundledFileSet.has(p)).length;
+
+  // Check for directory links (directories are not valid bundle targets)
+  const directoryLinks = excludedReferences.filter(r => r.excludeReason === 'directory-target');
+  for (const dirLink of directoryLinks) {
+    const dirPath = toForwardSlash(relative(dirname(skillPath), dirLink.path));
+    errors.push(createIssue(VALIDATION_RULES.LINK_TARGETS_DIRECTORY, { dirPath }, skillPath));
+  }
 
   const fileCount = bundledFiles.length + 1; // +1 for SKILL.md itself
   const maxLinkDepth = maxBundledDepth;

@@ -34,6 +34,7 @@ export type ValidationRuleCode =
   | 'OUTSIDE_PACKAGE_BOUNDARY'
   | 'FILENAME_COLLISION'
   | 'WINDOWS_BACKSLASH_IN_PATH'
+  | 'LINK_TARGETS_DIRECTORY'
   // Best practice rules (overridable)
   | 'SKILL_LENGTH_EXCEEDS_RECOMMENDED'
   | 'SKILL_TOTAL_SIZE_LARGE'
@@ -68,6 +69,7 @@ export const NON_OVERRIDABLE_RULES: ValidationRuleCode[] = [
   'OUTSIDE_PACKAGE_BOUNDARY',
   'FILENAME_COLLISION',
   'WINDOWS_BACKSLASH_IN_PATH',
+  'LINK_TARGETS_DIRECTORY',
 ];
 
 /**
@@ -122,6 +124,12 @@ export const VALIDATION_RULES: Record<ValidationRuleCode, ValidationRule> = {
     category: 'required',
     message: () => 'Path uses Windows backslashes',
     fix: 'Use forward slashes for cross-platform compatibility',
+  },
+  LINK_TARGETS_DIRECTORY: {
+    code: 'LINK_TARGETS_DIRECTORY',
+    category: 'required',
+    message: (ctx) => `Link targets directory "${(ctx['dirPath'] as string) ?? 'unknown'}". Link to a specific file instead (e.g., "${(ctx['dirPath'] as string) ?? 'unknown'}/README.md" or "${(ctx['dirPath'] as string) ?? 'unknown'}/index.md").`,
+    fix: 'Link to a specific file instead of a directory',
   },
 
   // Best practice rules (overridable)

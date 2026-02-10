@@ -13,6 +13,7 @@ import type { ExcludeRule, LinkCollectionOptions } from '../src/link-collector.j
 // ============================================================================
 
 const DEPTH_EXCEEDED = 'depth-exceeded' as const;
+const DIRECTORY_TARGET = 'directory-target' as const;
 const PATTERN_MATCHED = 'pattern-matched' as const;
 const SCHEMA_JSON = 'schema.json';
 const SKILL_MD_FILENAME = 'SKILL.md';
@@ -488,6 +489,29 @@ describe('collectLinks', () => {
       expect(excluded).toBeDefined();
       expect(excluded?.linkText).toBe('level2');
       expect(excluded?.linkHref).toBe('./level2.md');
+    });
+
+    it('should report directory links as directory-target excluded references', async () => {
+      const conceptsDir = path.join(tempDir, 'concepts');
+      fs.mkdirSync(conceptsDir, { recursive: true });
+      fs.writeFileSync(path.join(conceptsDir, 'README.md'), '# Concepts\n\nOverview.');
+
+      const skillPath = path.join(tempDir, SKILL_MD_FILENAME);
+      fs.writeFileSync(skillPath, [
+        '---', 'name: test-skill', 'description: A test skill for directory link detection', '---',
+        '', TEST_SKILL_HEADING, '',
+        'See [Core Concepts](./concepts/) for details.',
+      ].join('\n'));
+
+      const options = makeOptions(tempDir);
+      const result = await collectLinks(skillPath, options);
+
+      // Directory should NOT be bundled
+      expect(result.bundledFiles).toHaveLength(0);
+      // Should appear as excluded with 'directory-target' reason
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe(DIRECTORY_TARGET);
+      expect(result.excludedReferences[0]?.linkText).toBe('Core Concepts');
     });
 
     it('should handle subdirectory structures', async () => {

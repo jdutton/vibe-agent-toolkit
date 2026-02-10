@@ -23,6 +23,7 @@ export type IssueCode =
   | 'OUTSIDE_PACKAGE_BOUNDARY'
   | 'FILENAME_COLLISION'
   | 'WINDOWS_BACKSLASH_IN_PATH'
+  | 'LINK_TARGETS_DIRECTORY'
   // Packaging validation - Best practice (overridable)
   | 'SKILL_LENGTH_EXCEEDS_RECOMMENDED'
   | 'SKILL_TOTAL_SIZE_LARGE'

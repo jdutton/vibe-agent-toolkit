@@ -2,6 +2,8 @@
  * Unit tests for packaging validation
  */
 
+/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
@@ -608,6 +610,48 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 		expect(result.metadata.maxLinkDepth).toBe(2);
 		expect(result.metadata.excludedReferenceCount).toBe(0);
 		expect(result.metadata.excludedReferences).toEqual([]);
+	});
+
+	it('should error when skill links to a directory', async () => {
+		const tempDir = getTempDir();
+		const conceptsDir = path.join(tempDir, 'concepts');
+		fs.mkdirSync(conceptsDir, { recursive: true });
+		fs.writeFileSync(path.join(conceptsDir, 'README.md'), '# Concepts');
+
+		const skillContent = createSkillContent(
+			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+			'\n# Test\n\nSee [Concepts](./concepts/) for details.',
+		);
+		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
+
+		const result = await validateSkillForPackaging(skillPath);
+
+		expect(result.status).toBe('error');
+		const dirError = result.activeErrors.find(e => e.code === 'LINK_TARGETS_DIRECTORY');
+		expect(dirError).toBeDefined();
+		expect(dirError?.message).toContain('concepts');
+	});
+
+	it('should report directFileCount <= fileCount when links are excluded by depth', async () => {
+		const tempDir = getTempDir();
+		const files = {
+			'ref1.md': '# Ref 1\n\nContent.',
+			'ref2.md': '# Ref 2\n\nContent.',
+			'ref3.md': '# Ref 3\n\nContent.',
+		};
+		const skillContent = createSkillContent(
+			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+			'\n# Test\n\nSee [ref1](./ref1.md), [ref2](./ref2.md), [ref3](./ref3.md).',
+		);
+		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
+
+		// depth=0 means no links followed
+		const metadata = { packagingOptions: { linkFollowDepth: 0 } };
+		const result = await validateSkillForPackaging(skillPath, metadata as never);
+
+		// fileCount=1 (SKILL.md only), directFileCount should NOT exceed fileCount
+		expect(result.metadata.fileCount).toBe(1);
+		expect(result.metadata.directFileCount).toBeLessThanOrEqual(result.metadata.fileCount);
 	});
 
 	it('should bundle all files with linkFollowDepth: 0 (skill only)', async () => {

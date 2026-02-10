@@ -14,7 +14,7 @@
  * - Glob matching uses forward-slash paths relative to skillRoot
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { dirname, relative, resolve } from 'node:path';
 
 import { parseMarkdown } from '@vibe-agent-toolkit/resources';
@@ -34,7 +34,7 @@ export interface LinkResolution {
   /** Whether the file will be bundled */
   bundled: boolean;
   /** Reason it was excluded (only set when bundled is false) */
-  excludeReason?: 'depth-exceeded' | 'pattern-matched' | undefined;
+  excludeReason?: 'depth-exceeded' | 'pattern-matched' | 'directory-target' | undefined;
   /** The rule that matched (only set for pattern-matched exclusions) */
   matchedRule?: ExcludeRule | undefined;
   /** Link text from the source markdown */
@@ -99,6 +99,8 @@ interface ResolvedLink {
   path: string;
   /** Whether the target is a markdown file */
   isMarkdown: boolean;
+  /** Whether the target is a directory (not a file) */
+  isDirectory?: boolean | undefined;
   /** Link text from the source markdown */
   linkText: string;
   /** Original href from the markdown */
@@ -180,6 +182,18 @@ async function collectLinksRecursive(
   }));
 
   for (const link of resolvedLinks) {
+    // Step 0: Directory links are always excluded (directories are not valid bundle targets)
+    if (link.isDirectory) {
+      excludedReferences.push({
+        path: link.path,
+        bundled: false,
+        excludeReason: 'directory-target',
+        linkText: link.linkText,
+        linkHref: link.linkHref,
+      });
+      continue;
+    }
+
     // Step 1: Check exclude rules (applies to ALL file types)
     const relativePath = toForwardSlash(relative(options.skillRoot, link.path));
     const matchedExclude = excludeMatchers.find((m) => m.isMatch(relativePath));
@@ -292,6 +306,20 @@ function resolveLocalLinks(
       if (rel.startsWith('..')) {
         continue;
       }
+    }
+
+    // Check if target is a directory (not a file)
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path constructed from parsed markdown links
+    const stats = statSync(resolvedPath);
+    if (stats.isDirectory()) {
+      resolved.push({
+        path: resolvedPath,
+        isMarkdown: false,
+        isDirectory: true,
+        linkText: link.text ?? '',
+        linkHref: link.href,
+      });
+      continue;
     }
 
     const isMarkdown = resolvedPath.endsWith('.md');
