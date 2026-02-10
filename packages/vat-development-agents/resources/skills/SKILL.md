@@ -369,14 +369,11 @@ vat --version
 
 **List available skills:**
 ```bash
-# Show project skills (default)
+# Scan for SKILL.md files in current directory
 vat skills list
 
-# Show user-installed skills
+# Show user-installed skills (~/.claude/plugins)
 vat skills list --user
-
-# Show all skills (project + user)
-vat skills list --all
 ```
 
 **Install skills:**
@@ -393,14 +390,14 @@ vat skills install ./skills.zip
 
 **Validate skill quality:**
 ```bash
-# Validate single skill
-vat skills validate my-skill/SKILL.md
+# Validate all skills declared in package.json vat.skills
+vat skills validate
 
-# Validate directory of skills
-vat skills validate skills/ --recursive
+# Validate a specific skill by name
+vat skills validate --skill my-skill
 
-# Show detailed errors
-vat skills validate my-skill/SKILL.md --debug
+# Show verbose output (excluded reference details)
+vat skills validate --verbose
 ```
 
 **Build skills for distribution:**
@@ -413,6 +410,80 @@ vat skills build --skill my-skill
 
 # Dry-run (preview)
 vat skills build --dry-run
+```
+
+### Packaging Options
+
+Configure `packagingOptions` in your skill's `vat.skills[]` entry in package.json:
+
+```json
+{
+  "vat": {
+    "skills": [{
+      "name": "my-skill",
+      "source": "./SKILL.md",
+      "path": "./dist/skills/my-skill",
+      "packagingOptions": {
+        "linkFollowDepth": 1,
+        "resourceNaming": "resource-id",
+        "stripPrefix": "knowledge-base",
+        "excludeReferencesFromBundle": {
+          "rules": [
+            { "patterns": ["**/concepts/**"], "template": "Use search to find: {{link.text}}" }
+          ],
+          "defaultTemplate": "{{link.text}} (search knowledge base)"
+        }
+      }
+    }]
+  }
+}
+```
+
+**`linkFollowDepth`** — Controls how deep links are followed from SKILL.md:
+
+| Value | Behavior |
+|-------|----------|
+| `0` | Skill file only (no links followed) |
+| `1` | Direct links only |
+| `2` | Direct + one transitive level **(default)** |
+| `N` | N levels of transitive links |
+| `"full"` | Complete transitive closure |
+
+**`resourceNaming`** — How bundled files are named in output:
+
+| Strategy | Example Output | Use When |
+|----------|---------------|----------|
+| `basename` | `overview.md` | Few files, unique names **(default)** |
+| `resource-id` | `lobs-homeowners-overview.md` | Many files, flat output needed |
+| `preserve-path` | `lobs/homeowners/overview.md` | Preserve original structure |
+
+Use `stripPrefix` to remove a common directory prefix (e.g., `"knowledge-base"`).
+
+**`excludeReferencesFromBundle`** — Rules for excluding files and rewriting their links:
+
+- `rules[]` — Ordered glob patterns (first match wins), each with optional Handlebars template
+- `defaultTemplate` — Applied to depth-exceeded links not matching any rule
+
+**Template variables:**
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `{{link.text}}` | Link display text | `"Setup Guide"` |
+| `{{link.uri}}` | Original href | `"./docs/setup.md"` |
+| `{{link.fileName}}` | Target filename | `"setup.md"` |
+| `{{link.filePath}}` | Path relative to skill root | `"docs/setup.md"` |
+| `{{skill.name}}` | Skill name from frontmatter | `"my-skill"` |
+
+**`ignoreValidationErrors`** — Override validation rules:
+
+```json
+"ignoreValidationErrors": {
+  "SKILL_LENGTH_EXCEEDS_RECOMMENDED": "Large domain requires detailed examples",
+  "NO_PROGRESSIVE_DISCLOSURE": {
+    "reason": "Temporary — refactoring planned",
+    "expires": "2026-06-30"
+  }
+}
 ```
 
 ### Agent Commands
