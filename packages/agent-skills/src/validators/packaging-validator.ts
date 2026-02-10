@@ -22,7 +22,7 @@ import type { ValidationOverride, VatSkillMetadata } from '@vibe-agent-toolkit/a
 import { parseMarkdown } from '@vibe-agent-toolkit/resources';
 import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 
-import { collectLinks } from '../link-collector.js';
+import { collectLinks, type LinkResolution } from '../link-collector.js';
 
 import type { ValidationIssue } from './types.js';
 import {
@@ -33,6 +33,13 @@ import {
   VALIDATION_THRESHOLDS,
   type ValidationRuleCode,
 } from './validation-rules.js';
+
+/** Excluded reference detail for verbose output */
+export interface ExcludedReferenceDetail {
+  path: string;
+  reason: 'depth-exceeded' | 'pattern-matched';
+  matchedPattern?: string | undefined;
+}
 
 /**
  * Enhanced validation result with override support
@@ -71,7 +78,7 @@ export interface PackagingValidationResult {
     directFileCount: number;
     maxLinkDepth: number;
     excludedReferenceCount: number;
-    excludedReferences: string[];
+    excludedReferences: ExcludedReferenceDetail[];
   };
 }
 
@@ -141,8 +148,7 @@ export async function validateSkillForPackaging(
     }
   }
 
-  // Deduplicate excluded reference paths for metadata
-  const uniqueExcludedPaths = [...new Set(excludedReferences.map(r => r.path))];
+  const excludedDetails = deduplicateExcludedReferences(excludedReferences, skillPath);
 
   // Run validation checks
   await validateSkillSize(skillLines, skillPath, errors);
@@ -172,8 +178,8 @@ export async function validateSkillForPackaging(
       fileCount,
       directFileCount,
       maxLinkDepth,
-      excludedReferenceCount: uniqueExcludedPaths.length,
-      excludedReferences: uniqueExcludedPaths,
+      excludedReferenceCount: excludedDetails.length,
+      excludedReferences: excludedDetails,
     },
   };
 }
@@ -330,6 +336,36 @@ function getResolvedMarkdownLinks(
   }
 
   return resolvedPaths;
+}
+
+/**
+ * Deduplicate excluded references by path, preserving detail from first occurrence.
+ * Filters out directory-target entries (reported as validation errors instead).
+ */
+function deduplicateExcludedReferences(
+  excludedReferences: LinkResolution[],
+  skillPath: string,
+): ExcludedReferenceDetail[] {
+  const seenPaths = new Set<string>();
+  const details: ExcludedReferenceDetail[] = [];
+
+  for (const ref of excludedReferences) {
+    if (ref.excludeReason === 'directory-target') {
+      continue;
+    }
+    if (seenPaths.has(ref.path)) {
+      continue;
+    }
+    seenPaths.add(ref.path);
+    const matchedPattern = ref.matchedRule?.patterns[0];
+    details.push({
+      path: toForwardSlash(relative(dirname(skillPath), ref.path)),
+      reason: ref.excludeReason === 'pattern-matched' ? 'pattern-matched' : 'depth-exceeded',
+      ...(matchedPattern === undefined ? {} : { matchedPattern }),
+    });
+  }
+
+  return details;
 }
 
 /**

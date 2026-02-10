@@ -27,7 +27,11 @@ interface PackagingValidationOutput {
       directFileCount: number;
       maxLinkDepth: number;
       excludedReferenceCount: number;
-      excludedReferences?: string[];
+      excludedReferences?: Array<{
+        path: string;
+        reason: string;
+        matchedPattern?: string;
+      }>;
     };
   }>;
   durationSecs: number;

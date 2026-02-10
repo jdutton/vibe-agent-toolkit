@@ -245,6 +245,18 @@ describe('validateSkillForPackaging - Link depth validation', () => {
 		expect(result.metadata.excludedReferenceCount).toBe(1); // level3.md excluded
 		expect(result.activeErrors.filter((e) => e.code === 'REFERENCE_TOO_DEEP')).toHaveLength(0);
 	});
+
+	it('should include reason detail in excludedReferences for depth-exceeded files', async () => {
+		const { skillPath } = createThreeLevelChain(getTempDir());
+
+		const result = await validateSkillForPackaging(skillPath);
+
+		expect(result.metadata.excludedReferenceCount).toBe(1);
+		expect(result.metadata.excludedReferences).toHaveLength(1);
+		expect(result.metadata.excludedReferences[0]?.reason).toBe('depth-exceeded');
+		expect(result.metadata.excludedReferences[0]?.path).toContain('level3.md');
+		expect(result.metadata.excludedReferences[0]?.matchedPattern).toBeUndefined();
+	});
 });
 
 describe('validateSkillForPackaging - Navigation file detection', () => {
@@ -587,7 +599,9 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 		expect(result.metadata.fileCount).toBe(2); // SKILL.md + guide.md
 		expect(result.metadata.excludedReferenceCount).toBe(1);
 		expect(result.metadata.excludedReferences).toHaveLength(1);
-		expect(result.metadata.excludedReferences[0]).toContain('notes.md');
+		expect(result.metadata.excludedReferences[0]?.path).toContain('notes.md');
+		expect(result.metadata.excludedReferences[0]?.reason).toBe('pattern-matched');
+		expect(result.metadata.excludedReferences[0]?.matchedPattern).toBe('internal/**');
 	});
 
 	it('should default to depth 2 with no packaging options', async () => {

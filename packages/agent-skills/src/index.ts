@@ -41,6 +41,7 @@ export { validate } from './validators/unified-validator.js';
 export { detectResourceFormat } from './validators/format-detection.js';
 export {
   validateSkillForPackaging,
+  type ExcludedReferenceDetail,
   type PackagingValidationResult,
 } from './validators/packaging-validator.js';
 export {
