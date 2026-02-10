@@ -781,7 +781,7 @@ Important security information.`
     });
 
     it('should fail when table exists with wrong schema', async () => {
-      // RED: Test the ACTUAL bug scenario from manuscript-tools
+      // RED: Test the ACTUAL bug scenario from an adopter project
       // They had an existing LanceDB table, tried to index with custom metadata,
       // but got "Found field not in schema" because table schema doesn't have custom columns
 

@@ -139,6 +139,39 @@ describe('packageSkill - resource naming: preserve-path', () => {
   });
 });
 
+describe('packageSkill - preserve-path with stripPrefix (no false collision)', () => {
+  it('should not collide on same-basename files in different directories', async () => {
+    // Reproduces adopter scenario: two overview.md files at different paths
+    const tmp = getTempDir();
+    const kb = 'knowledge-base';
+    const overview = 'overview.md';
+    const dirA = join(tmp, kb, 'guides');
+    const dirB = join(tmp, kb, 'guides', 'topics', 'quickstart');
+    await mkdir(dirA, { recursive: true });
+    await mkdir(dirB, { recursive: true });
+    await writeFile(join(dirA, overview), '# Guides Overview');
+    await writeFile(join(dirB, overview), '# Quickstart Overview');
+
+    const sp = await writeSkillMd(
+      tmp,
+      UNIT_SKILL_NAME,
+      [
+        `See [guides](./${kb}/guides/${overview})`,
+        `and [quickstart](./${kb}/guides/topics/quickstart/${overview}).`,
+      ].join('\n'),
+    );
+
+    const result = await packWithOutput(sp, {
+      resourceNaming: 'preserve-path',
+      stripPrefix: kb,
+    });
+
+    // Both files should exist at their stripped paths (no collision)
+    expect(existsSync(join(result.outputPath, 'guides', overview))).toBe(true);
+    expect(existsSync(join(result.outputPath, 'guides', 'topics', 'quickstart', overview))).toBe(true);
+  });
+});
+
 describe('packageSkill - filename collision detection', () => {
   it('should throw when two different source files map to the same basename', async () => {
     const tmp = getTempDir();

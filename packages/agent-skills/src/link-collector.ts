@@ -195,7 +195,11 @@ async function collectLinksRecursive(
     }
 
     // Step 1: Check exclude rules (applies to ALL file types)
-    const relativePath = toForwardSlash(relative(options.skillRoot, link.path));
+    // Use packageRoot (when available) as the base for glob matching.
+    // skillRoot is dirname(SKILL.md) which may be deep inside the package;
+    // files outside it produce ../  prefixes that picomatch ** cannot match.
+    const matchBase = options.packageRoot ?? options.skillRoot;
+    const relativePath = toForwardSlash(relative(matchBase, link.path));
     const matchedExclude = excludeMatchers.find((m) => m.isMatch(relativePath));
 
     if (matchedExclude) {

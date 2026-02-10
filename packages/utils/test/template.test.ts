@@ -8,8 +8,8 @@ describe('renderTemplate', () => {
   });
 
   it('renders multiple properties', () => {
-    const ctx = { link: { text: 'Guide' }, skill: { name: 'manuscript' } };
-    expect(renderTemplate('{{link.text}} (search {{skill.name}})', ctx)).toBe('Guide (search manuscript)');
+    const ctx = { link: { text: 'Guide' }, skill: { name: 'my-toolkit' } };
+    expect(renderTemplate('{{link.text}} (search {{skill.name}})', ctx)).toBe('Guide (search my-toolkit)');
   });
 
   it('does not HTML-escape special characters', () => {

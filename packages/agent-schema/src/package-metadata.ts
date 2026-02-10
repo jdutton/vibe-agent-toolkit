@@ -34,8 +34,8 @@ export const PackagingOptionsSchema = z.object({
     .describe(
       'Strategy for naming packaged resource files:\n' +
       '  - basename: Use original filename only (default, may conflict)\n' +
-      '  - resource-id: Flatten path to kebab-case filename (e.g., lobs-homeowners-overview.md)\n' +
-      '  - preserve-path: Preserve directory structure (e.g., lobs/homeowners/overview.md)'
+      '  - resource-id: Flatten path to kebab-case filename (e.g., topics-quickstart-overview.md)\n' +
+      '  - preserve-path: Preserve directory structure (e.g., topics/quickstart/overview.md)'
     ),
   stripPrefix: z
     .string()

@@ -66,10 +66,10 @@ export interface PackageSkillOptions {
    * Default: 'basename'
    *
    * @example
-   * // Original: knowledge-base/manuscript/lobs/homeowners/overview.md
+   * // Original: knowledge-base/guides/topics/quickstart/overview.md
    * // basename:       overview.md (may conflict)
-   * // resource-id:    manuscript-lobs-homeowners-overview.md (with stripPrefix: 'knowledge-base-')
-   * // preserve-path:  manuscript/lobs/homeowners/overview.md (creates subdirectories)
+   * // resource-id:    guides-topics-quickstart-overview.md (with stripPrefix: 'knowledge-base-')
+   * // preserve-path:  guides/topics/quickstart/overview.md (creates subdirectories)
    */
   resourceNaming?: ResourceNamingStrategy;
 
@@ -80,11 +80,11 @@ export interface PackageSkillOptions {
    * Works with both 'resource-id' and 'preserve-path' strategies.
    *
    * @example
-   * // Original: knowledge-base/manuscript/lobs/homeowners/overview.md
+   * // Original: knowledge-base/guides/topics/quickstart/overview.md
    * // stripPrefix: 'knowledge-base'
    * //
-   * // resource-id:    manuscript-lobs-homeowners-overview.md
-   * // preserve-path:  manuscript/lobs/homeowners/overview.md
+   * // resource-id:    guides-topics-quickstart-overview.md
+   * // preserve-path:  guides/topics/quickstart/overview.md
    */
   stripPrefix?: string;
 

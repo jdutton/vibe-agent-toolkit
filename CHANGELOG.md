@@ -178,7 +178,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - All metadata fields now stored as top-level LanceDB columns instead of nested struct
   - Filter builder updated to use direct column access for efficient queries
   - Added system test validating metadata filtering with flattened schema
-  - Fixes issue reported by manuscript-tools (753 docs, 4,321 chunks)
+  - Fixes issue reported by an adopter project (753 docs, 4,321 chunks)
 
 ### Changed
 - **BREAKING CHANGE**: Existing LanceDB indexes must be rebuilt

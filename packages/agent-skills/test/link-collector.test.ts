@@ -18,6 +18,7 @@ const PATTERN_MATCHED = 'pattern-matched' as const;
 const SCHEMA_JSON = 'schema.json';
 const SKILL_MD_FILENAME = 'SKILL.md';
 const TEST_SKILL_HEADING = '# Test Skill';
+const TEST_SKILL_NAME_FIELD = 'name: test-skill';
 
 // ============================================================================
 // Test Fixture Helpers
@@ -53,7 +54,7 @@ function createStandardFixture(tempDir: string): string {
 
   fs.writeFileSync(skillPath, [
     '---',
-    'name: test-skill',
+    TEST_SKILL_NAME_FIELD,
     'description: A test skill for link collection',
     '---',
     '',
@@ -498,7 +499,7 @@ describe('collectLinks', () => {
 
       const skillPath = path.join(tempDir, SKILL_MD_FILENAME);
       fs.writeFileSync(skillPath, [
-        '---', 'name: test-skill', 'description: A test skill for directory link detection', '---',
+        '---', TEST_SKILL_NAME_FIELD, 'description: A test skill for directory link detection', '---',
         '', TEST_SKILL_HEADING, '',
         'See [Core Concepts](./concepts/) for details.',
       ].join('\n'));
@@ -512,6 +513,45 @@ describe('collectLinks', () => {
       expect(result.excludedReferences).toHaveLength(1);
       expect(result.excludedReferences[0]?.excludeReason).toBe(DIRECTORY_TARGET);
       expect(result.excludedReferences[0]?.linkText).toBe('Core Concepts');
+    });
+
+    it('should match exclude patterns for files outside skillRoot when packageRoot is set', async () => {
+      // Simulate real-world layout: SKILL.md is deep inside package,
+      // but links to files elsewhere in the package.
+      //   pkg/resources/skills/SKILL.md  →  ../../knowledge-base/concepts/intro.md
+      // Without packageRoot, relative() produces ../../knowledge-base/concepts/intro.md
+      // and picomatch ** cannot match .. segments.
+      const pkg = path.join(tempDir, 'pkg');
+      const skillDir = path.join(pkg, 'resources', 'skills');
+      const conceptsDir = path.join(pkg, 'knowledge-base', 'concepts');
+      fs.mkdirSync(skillDir, { recursive: true });
+      fs.mkdirSync(conceptsDir, { recursive: true });
+
+      const skillPath = path.join(skillDir, SKILL_MD_FILENAME);
+      fs.writeFileSync(skillPath, [
+        '---', TEST_SKILL_NAME_FIELD, 'description: Test exclude patterns with packageRoot', '---',
+        '', TEST_SKILL_HEADING, '',
+        'See [intro](../../knowledge-base/concepts/intro.md).',
+      ].join('\n'));
+
+      fs.writeFileSync(path.join(conceptsDir, 'intro.md'), '# Intro\n\nContent.');
+
+      const excludeRule: ExcludeRule = {
+        patterns: ['**/concepts/**'],
+        template: 'Search for: {{link.text}}',
+      };
+
+      const options = makeOptions(skillDir, {
+        excludeRules: [excludeRule],
+        packageRoot: pkg,
+      });
+      const result = await collectLinks(skillPath, options);
+
+      // intro.md should be excluded by pattern (not bundled)
+      expect(result.bundledFiles).toHaveLength(0);
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe(PATTERN_MATCHED);
+      expect(result.excludedReferences[0]?.matchedRule).toBe(excludeRule);
     });
 
     it('should handle subdirectory structures', async () => {

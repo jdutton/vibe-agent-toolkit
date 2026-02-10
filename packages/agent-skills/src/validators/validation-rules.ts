@@ -145,7 +145,7 @@ export const VALIDATION_RULES: Record<ValidationRuleCode, ValidationRule> = {
     category: 'best_practice',
     message: (ctx) => `Total skill size is ${Number(ctx['totalLines'] ?? 0)} lines (recommended ≤2000)`,
     fix: 'Split into multiple focused skills by domain',
-    example: 'manuscript-data-models, manuscript-forms as separate skills',
+    example: 'api-reference, ui-components as separate skills',
   },
   SKILL_TOO_MANY_FILES: {
     code: 'SKILL_TOO_MANY_FILES',

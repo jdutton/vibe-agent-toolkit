@@ -12,8 +12,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { packageSkill } from '../../src/skill-packager.js';
 
 const KB_PATH = 'knowledge-base';
-const MANUSCRIPT_PATH = 'manuscript';
-const LOBS_HOMEOWNERS_PATH = join('lobs', 'homeowners');
+const GUIDES_PATH = 'guides';
+
+const TOPICS_QUICKSTART_PATH = join('topics', 'quickstart');
 const OVERVIEW_MD = 'overview.md';
 const BASENAME_STRATEGY = 'basename';
 const RESOURCE_ID_STRATEGY = 'resource-id';
@@ -31,19 +32,19 @@ describe('Resource Naming Strategies', () => {
     mkdirSyncReal(testProjectDir, { recursive: true });
 
     // Create nested directory structure
-    const kbDir = join(testProjectDir, KB_PATH, MANUSCRIPT_PATH, LOBS_HOMEOWNERS_PATH);
+    const kbDir = join(testProjectDir, KB_PATH, GUIDES_PATH, TOPICS_QUICKSTART_PATH);
     mkdirSyncReal(kbDir, { recursive: true });
 
     // Create test files
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test fixture creation
     writeFileSync(
       join(kbDir, OVERVIEW_MD),
-      '# Homeowners Overview\n\nContent here.'
+      '# Quickstart Overview\n\nContent here.'
     );
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test fixture creation
     writeFileSync(
-      join(testProjectDir, KB_PATH, MANUSCRIPT_PATH, OVERVIEW_MD),
-      '# Manuscript Overview\n\nContent here.'
+      join(testProjectDir, KB_PATH, GUIDES_PATH, OVERVIEW_MD),
+      '# Guides Overview\n\nContent here.'
     );
 
     // Create SKILL.md that links to both
@@ -57,8 +58,8 @@ description: Test skill for naming strategies with proper length to meet validat
 
 # Test Skill
 
-See [Manuscript Overview](${KB_PATH}/${MANUSCRIPT_PATH}/overview.md)
-See [Homeowners Overview](${KB_PATH}/${MANUSCRIPT_PATH}/lobs/homeowners/overview.md)
+See [Guides Overview](${KB_PATH}/${GUIDES_PATH}/overview.md)
+See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.md)
 `
     );
   });
@@ -95,8 +96,8 @@ See [Homeowners Overview](${KB_PATH}/${MANUSCRIPT_PATH}/lobs/homeowners/overview
       // Files should be flattened with kebab-case names
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
       const files = readdirSync(outputPath);
-      expect(files).toContain('knowledge-base-manuscript-overview.md');
-      expect(files).toContain('knowledge-base-manuscript-lobs-homeowners-overview.md');
+      expect(files).toContain('knowledge-base-guides-overview.md');
+      expect(files).toContain('knowledge-base-guides-topics-quickstart-overview.md');
     });
 
     it('should strip prefix and trim leading dash', async () => {
@@ -112,8 +113,8 @@ See [Homeowners Overview](${KB_PATH}/${MANUSCRIPT_PATH}/lobs/homeowners/overview
       // Prefix should be stripped, no leading dash
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
       const files = readdirSync(outputPath);
-      expect(files).toContain('manuscript-overview.md');
-      expect(files).toContain('manuscript-lobs-homeowners-overview.md');
+      expect(files).toContain('guides-overview.md');
+      expect(files).toContain('guides-topics-quickstart-overview.md');
       
       // Should NOT have knowledge-base- prefix
       expect(files.some(f => f.startsWith('knowledge-base-'))).toBe(false);
@@ -147,7 +148,7 @@ See [Homeowners Overview](${KB_PATH}/${MANUSCRIPT_PATH}/lobs/homeowners/overview
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
       const files2 = readdirSync(output2).sort((a, b) => a.localeCompare(b));
       expect(files1).toEqual(files2);
-      expect(files1).toContain('manuscript-overview.md');
+      expect(files1).toContain('guides-overview.md');
     });
   });
 
@@ -163,9 +164,9 @@ See [Homeowners Overview](${KB_PATH}/${MANUSCRIPT_PATH}/lobs/homeowners/overview
 
       // Directory structure should be preserved
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
-      expect(existsSync(join(outputPath, KB_PATH, MANUSCRIPT_PATH, OVERVIEW_MD))).toBe(true);
+      expect(existsSync(join(outputPath, KB_PATH, GUIDES_PATH, OVERVIEW_MD))).toBe(true);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
-      expect(existsSync(join(outputPath, KB_PATH, MANUSCRIPT_PATH, 'lobs', 'homeowners', OVERVIEW_MD))).toBe(true);
+      expect(existsSync(join(outputPath, KB_PATH, GUIDES_PATH, 'topics', 'quickstart', OVERVIEW_MD))).toBe(true);
     });
 
     it('should strip path prefix and trim leading slash', async () => {
@@ -180,9 +181,9 @@ See [Homeowners Overview](${KB_PATH}/${MANUSCRIPT_PATH}/lobs/homeowners/overview
 
       // Prefix should be stripped from paths
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
-      expect(existsSync(join(outputPath, MANUSCRIPT_PATH, OVERVIEW_MD))).toBe(true);
+      expect(existsSync(join(outputPath, GUIDES_PATH, OVERVIEW_MD))).toBe(true);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
-      expect(existsSync(join(outputPath, MANUSCRIPT_PATH, 'lobs', 'homeowners', OVERVIEW_MD))).toBe(true);
+      expect(existsSync(join(outputPath, GUIDES_PATH, 'topics', 'quickstart', OVERVIEW_MD))).toBe(true);
 
       // Should NOT have knowledge-base directory
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
@@ -210,9 +211,9 @@ See [Homeowners Overview](${KB_PATH}/${MANUSCRIPT_PATH}/lobs/homeowners/overview
 
       // Both should produce same structure
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
-      expect(existsSync(join(output1, MANUSCRIPT_PATH, OVERVIEW_MD))).toBe(true);
+      expect(existsSync(join(output1, GUIDES_PATH, OVERVIEW_MD))).toBe(true);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
-      expect(existsSync(join(output2, MANUSCRIPT_PATH, OVERVIEW_MD))).toBe(true);
+      expect(existsSync(join(output2, GUIDES_PATH, OVERVIEW_MD))).toBe(true);
     });
   });
 
@@ -224,14 +225,14 @@ See [Homeowners Overview](${KB_PATH}/${MANUSCRIPT_PATH}/lobs/homeowners/overview
       await packageSkill(skillPath, {
         outputPath,
         resourceNaming: RESOURCE_ID_STRATEGY,
-        stripPrefix: `${KB_PATH}/${MANUSCRIPT_PATH}`,
+        stripPrefix: `${KB_PATH}/${GUIDES_PATH}`,
       });
 
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
       const files = readdirSync(outputPath);
-      // Should strip both knowledge-base and manuscript
+      // Should strip both knowledge-base and guides
       expect(files).toContain(OVERVIEW_MD);
-      expect(files).toContain('lobs-homeowners-overview.md');
+      expect(files).toContain('topics-quickstart-overview.md');
     });
 
     it('should not strip if prefix does not match', async () => {
@@ -247,7 +248,7 @@ See [Homeowners Overview](${KB_PATH}/${MANUSCRIPT_PATH}/lobs/homeowners/overview
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
       const files = readdirSync(outputPath);
       // Prefix didn't match, so full path should remain
-      expect(files).toContain('knowledge-base-manuscript-overview.md');
+      expect(files).toContain('knowledge-base-guides-overview.md');
     });
   });
 });

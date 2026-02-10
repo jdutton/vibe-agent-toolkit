@@ -454,8 +454,8 @@ Configure `packagingOptions` in your skill's `vat.skills[]` entry in package.jso
 | Strategy | Example Output | Use When |
 |----------|---------------|----------|
 | `basename` | `overview.md` | Few files, unique names **(default)** |
-| `resource-id` | `lobs-homeowners-overview.md` | Many files, flat output needed |
-| `preserve-path` | `lobs/homeowners/overview.md` | Preserve original structure |
+| `resource-id` | `topics-quickstart-overview.md` | Many files, flat output needed |
+| `preserve-path` | `topics/quickstart/overview.md` | Preserve original structure |
 
 Use `stripPrefix` to remove a common directory prefix (e.g., `"knowledge-base"`).
 
