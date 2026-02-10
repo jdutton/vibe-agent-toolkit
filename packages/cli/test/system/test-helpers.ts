@@ -775,3 +775,69 @@ export function executeSkillsCommandAndExpectYaml(
   const parsed = yaml.load(result.stdout) as Record<string, unknown>;
   return { result, parsed };
 }
+
+/**
+ * Create a test project with package.json containing vat.skills[] metadata
+ * and optionally create built skill directories under dist/skills/
+ *
+ * Shared between skills-install-dev and skills-uninstall system tests
+ */
+export function setupDevTestProject(
+  baseDir: string,
+  name: string,
+  skills: Array<{ name: string; built: boolean }>
+): string {
+  const projectDir = join(baseDir, name);
+  mkdirSyncReal(projectDir, { recursive: true });
+
+  const vatSkills = skills.map(s => ({
+    name: s.name,
+    source: `./resources/skills/SKILL.md`,
+    path: `./dist/skills/${s.name}`,
+  }));
+
+  fs.writeFileSync(
+    join(projectDir, 'package.json'),
+    JSON.stringify({
+      name: '@test/my-package',
+      version: '1.0.0',
+      vat: { version: '1.0', type: 'agent-bundle', skills: vatSkills },
+    })
+  );
+
+  for (const skill of skills) {
+    if (skill.built) {
+      const skillDir = join(projectDir, 'dist', 'skills', skill.name);
+      mkdirSyncReal(skillDir, { recursive: true });
+      fs.writeFileSync(join(skillDir, 'SKILL.md'), `# ${skill.name}\nTest skill content`);
+    }
+  }
+
+  return projectDir;
+}
+
+/**
+ * Create an installed skill directory (non-symlink) for uninstall testing
+ */
+export function createInstalledSkillDir(skillsDir: string, skillName: string): void {
+  const skillPath = join(skillsDir, skillName);
+  mkdirSyncReal(skillPath, { recursive: true });
+  fs.writeFileSync(join(skillPath, 'SKILL.md'), `# ${skillName}\nTest skill content`);
+}
+
+/**
+ * Execute a CLI command and parse YAML output if successful
+ * Returns both raw result and parsed YAML (empty object if parse fails)
+ */
+export function executeCliAndParseYaml(
+  binPath: string,
+  args: string[],
+  options?: { cwd?: string }
+): { status: number | null; stdout: string; stderr: string; parsed: Record<string, unknown> } {
+  const result = executeCli(binPath, args, options);
+  let parsed: Record<string, unknown> = {};
+  if (result.status === 0 && result.stdout.includes('---')) {
+    parsed = parseYamlOutput(result.stdout);
+  }
+  return { ...result, parsed };
+}

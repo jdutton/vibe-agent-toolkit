@@ -8,11 +8,11 @@
  * - npm postinstall hook (--npm-postinstall)
  */
 
-import { existsSync } from 'node:fs';
-import { cp, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { existsSync, lstatSync } from 'node:fs';
+import { cp, mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safeExecSync } from '@vibe-agent-toolkit/utils';
 import AdmZip from 'adm-zip';
 import { Command } from 'commander';
 
@@ -26,6 +26,7 @@ import {
   isGlobalNpmInstall,
   readPackageJsonVatMetadata,
   type SkillSource,
+  writeYamlHeader,
 } from './install-helpers.js';
 
 export interface SkillsInstallCommandOptions {
@@ -35,6 +36,8 @@ export interface SkillsInstallCommandOptions {
   dryRun?: boolean;
   debug?: boolean;
   npmPostinstall?: boolean;
+  dev?: boolean;
+  build?: boolean;
 }
 
 export function createInstallCommand(): Command {
@@ -52,28 +55,34 @@ export function createInstallCommand(): Command {
     .option('-f, --force', 'Overwrite existing skill if present', false)
     .option('--dry-run', 'Preview installation without creating files', false)
     .option('--npm-postinstall', 'Run as npm postinstall hook (internal use)', false)
+    .option('-d, --dev', 'Development mode: symlink skills from cwd package.json (rebuilds reflected immediately)')
+    .option('--build', 'Build skills before installing (implies --dev)')
     .option('--debug', 'Enable debug logging')
     .action(installCommand)
     .addHelpText(
       'after',
       `
 Description:
-  Installs a skill to Claude Code's skills directory from various sources.
+  Installs skills to Claude Code's skills directory from various sources.
 
   Supported sources:
   - npm package: npm:@scope/package-name
   - Local ZIP file: ./path/to/skill.zip
   - Local directory: ./path/to/skill-dir
   - npm postinstall: --npm-postinstall (automatic during global install)
+  - Dev mode: --dev (symlinks from cwd package.json vat.skills[])
 
   Default skills directory: ~/.claude/skills/
+
+  Dev mode creates symlinks so rebuilds are immediately reflected.
+  Use --build to auto-build before symlinking.
 
 Output:
   - status: success/error
   - skillName: Name of installed skill
   - installPath: Where the skill was installed
   - source: Original source
-  - sourceType: npm/local/zip/npm-postinstall
+  - sourceType: npm/local/zip/npm-postinstall/dev
 
 Exit Codes:
   0 - Installation successful
@@ -81,10 +90,11 @@ Exit Codes:
   2 - System error
 
 Example:
-  $ vat skills install npm:@vibe-agent-toolkit/vat-development-agents
-  $ vat skills install ./cat-agents-skill.zip
-  $ vat skills install ./my-skill-dir --name custom-skill-name
-  $ vat skills install skill.zip --force
+  $ vat skills install --dev                        # Symlink all skills from cwd
+  $ vat skills install --build                      # Build + symlink
+  $ vat skills install --dev --name my-skill        # Symlink specific skill
+  $ vat skills install npm:@scope/package           # Install from npm
+  $ vat skills install ./my-skill.zip --force       # Install from ZIP
 `
     );
 
@@ -99,6 +109,17 @@ async function installCommand(
   const startTime = Date.now();
 
   try {
+    // Handle --build (implies --dev)
+    if (options.build) {
+      options.dev = true;
+    }
+
+    // Handle --dev flag
+    if (options.dev) {
+      await handleDevInstall(options, logger, startTime);
+      return;
+    }
+
     // Handle --npm-postinstall flag
     if (options.npmPostinstall) {
       await handleNpmPostinstall(options, logger, startTime);
@@ -131,6 +152,10 @@ async function installCommand(
       case 'npm-postinstall': {
         // This case is handled by --npm-postinstall flag, not by source detection
         throw new Error('npm-postinstall source type should be handled by --npm-postinstall flag');
+      }
+      case 'dev': {
+        // This case is handled by --dev flag, not by source detection
+        throw new Error('dev source type should be handled by --dev flag');
       }
     }
   } catch (error) {
@@ -225,49 +250,55 @@ async function handleLocalInstall(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- User-provided CLI argument
   const hasPackageJson = existsSync(packageJsonPath);
 
-  let skillName: string;
-  let skillPath: string;
-
   if (hasPackageJson) {
-    // Read vat metadata
-    const { skills } = await readPackageJsonVatMetadata(sourcePath);
+    // Read vat metadata - install all skills (or filtered by --name)
+    const { packageJson, skills } = await readPackageJsonVatMetadata(sourcePath);
 
-    const skillToInstall = options.name
-      ? skills.find(s => s.name === options.name)
-      : skills[0];
+    const skillsToInstall = options.name
+      ? skills.filter(s => s.name === options.name)
+      : skills;
 
-    if (!skillToInstall) {
+    if (skillsToInstall.length === 0) {
       throw new Error(
-        `Skill "${options.name ?? ''}" not found in package. ` +
+        `Skill "${options.name ?? ''}" not found in package ${packageJson.name}. ` +
           `Available: ${skills.map(s => s.name).join(', ')}`
       );
     }
 
-    skillName = skillToInstall.name;
-    skillPath = resolve(sourcePath, skillToInstall.path);
+    for (const skill of skillsToInstall) {
+      const skillPath = resolve(sourcePath, skill.path);
+      await installSkillFromPath(skillPath, skill.name, options, logger);
+    }
+
+    const duration = Date.now() - startTime;
+    const firstSkill = skillsToInstall[0];
+    if (firstSkill) {
+      outputSuccess(
+        firstSkill.name,
+        join(options.skillsDir ?? getClaudeUserPaths().skillsDir, firstSkill.name),
+        `local:${sourcePath}`,
+        'local',
+        duration,
+        logger,
+        options.dryRun
+      );
+    }
   } else {
     // Plain directory - use directory name
-    skillName = options.name ?? basename(sourcePath);
-    skillPath = sourcePath;
+    const skillName = options.name ?? basename(sourcePath);
+    await installSkillFromPath(sourcePath, skillName, options, logger);
+
+    const duration = Date.now() - startTime;
+    outputSuccess(
+      skillName,
+      join(options.skillsDir ?? getClaudeUserPaths().skillsDir, skillName),
+      `local:${sourcePath}`,
+      'local',
+      duration,
+      logger,
+      options.dryRun
+    );
   }
-
-  await installSkillFromPath(
-    skillPath,
-    skillName,
-    options,
-    logger
-  );
-
-  const duration = Date.now() - startTime;
-  outputSuccess(
-    skillName,
-    join(options.skillsDir ?? getClaudeUserPaths().skillsDir, skillName),
-    `local:${sourcePath}`,
-    'local',
-    duration,
-    logger,
-    options.dryRun
-  );
 
   process.exit(0);
 }
@@ -306,6 +337,186 @@ async function handleZipInstall(
   outputSuccess(skillName, installPath, sourcePath, 'zip', duration, logger, options.dryRun);
 
   process.exit(0);
+}
+
+/**
+ * Handle development mode installation (symlinks)
+ * Reads package.json vat.skills[], symlinks each built skill to ~/.claude/skills/
+ */
+async function handleDevInstall(
+  options: SkillsInstallCommandOptions,
+  logger: ReturnType<typeof createLogger>,
+  startTime: number
+): Promise<void> {
+  // Windows check - symlinks require elevated privileges
+  if (process.platform === 'win32') {
+    throw new Error(
+      '--dev (symlink) not supported on Windows.\n' +
+        'Use copy mode (omit --dev) or WSL for development.'
+    );
+  }
+
+  const cwd = process.cwd();
+
+  // If --build, shell out to vat skills build first
+  if (options.build) {
+    runSkillsBuild(cwd, options.name, logger);
+  }
+
+  // Read package.json for skill metadata
+  const { packageJson, skills } = await readPackageJsonVatMetadata(cwd);
+  logger.info(`📥 Dev-installing skills from ${packageJson.name}`);
+
+  // Filter by --name if specified
+  const skillsToInstall = options.name
+    ? skills.filter(s => s.name === options.name)
+    : skills;
+
+  if (skillsToInstall.length === 0) {
+    const msg = options.name
+      ? `Skill "${options.name}" not found in package. Available: ${skills.map(s => s.name).join(', ')}`
+      : `No skills found in ${packageJson.name}`;
+    throw new Error(msg);
+  }
+
+  const skillsDir = options.skillsDir ?? getClaudeUserPaths().skillsDir;
+  const installed: Array<{ name: string; installPath: string; sourcePath: string }> = [];
+
+  for (const skill of skillsToInstall) {
+    const result = await symlinkSkill(skill, cwd, skillsDir, options, logger);
+    installed.push(result);
+  }
+
+  const duration = Date.now() - startTime;
+  outputDevSuccess(installed, packageJson.name, duration, logger, options.dryRun);
+  process.exit(0);
+}
+
+/**
+ * Shell out to vat skills build
+ */
+function runSkillsBuild(
+  cwd: string,
+  skillName: string | undefined,
+  logger: ReturnType<typeof createLogger>
+): void {
+  logger.info('🔨 Building skills first...');
+  const binPath = resolve(join(import.meta.dirname, '../../bin/vat.js'));
+  const buildArgs = ['skills', 'build'];
+  if (skillName) {
+    buildArgs.push('--skill', skillName);
+  }
+  safeExecSync('node', [binPath, ...buildArgs], {
+    cwd,
+    stdio: ['inherit', 'inherit', 'inherit'],
+  });
+  logger.info('');
+}
+
+/**
+ * Symlink a single skill to the skills directory
+ * Verifies skill is built, checks for existing installation, creates symlink
+ */
+async function symlinkSkill(
+  skill: { name: string; path: string },
+  cwd: string,
+  skillsDir: string,
+  options: SkillsInstallCommandOptions,
+  logger: ReturnType<typeof createLogger>
+): Promise<{ name: string; installPath: string; sourcePath: string }> {
+  const sourcePath = resolve(cwd, skill.path);
+  const installPath = join(skillsDir, skill.name);
+
+  // Verify skill is built
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated path from package.json
+  if (!existsSync(sourcePath)) {
+    const buildCmd = options.name ? `vat skills build --skill ${skill.name}` : 'vat skills build';
+    throw new Error(
+      `Skill "${skill.name}" not built at ${sourcePath}\n` +
+        `Run: ${buildCmd}\n` +
+        `Or use: vat skills install --build`
+    );
+  }
+
+  // Check existing installation
+  const existingIsSymlink = await handleExistingDevInstall(installPath, skill.name, options);
+
+  if (!options.dryRun) {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Skills directory from config
+    await mkdir(skillsDir, { recursive: true });
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated paths
+    await symlink(sourcePath, installPath, 'dir');
+  }
+
+  const action = existingIsSymlink ? 'Re-symlinked' : 'Symlinked';
+  logger.info(`   ${options.dryRun ? 'Would symlink' : action}: ${skill.name} → ${sourcePath}`);
+  return { name: skill.name, installPath, sourcePath };
+}
+
+/**
+ * Check if a skill is already installed at the target path
+ * Returns whether the existing entry was a symlink (for logging)
+ */
+async function handleExistingDevInstall(
+  installPath: string,
+  skillName: string,
+  options: SkillsInstallCommandOptions
+): Promise<boolean> {
+  let existingIsSymlink = false;
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated install path
+    lstatSync(installPath);
+    // Path exists (lstat doesn't follow symlinks, so broken symlinks are detected)
+    if (!options.force) {
+      throw new Error(
+        `Skill "${skillName}" already installed at ${installPath}.\n` +
+          `Use --force to overwrite.`
+      );
+    }
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated install path
+    existingIsSymlink = lstatSync(installPath).isSymbolicLink();
+    if (!options.dryRun) {
+      await rm(installPath, { recursive: true, force: true });
+    }
+  } catch (error) {
+    // Re-throw if it's our "already installed" error
+    if (error instanceof Error && error.message.includes('already installed')) {
+      throw error;
+    }
+    // Otherwise: not installed, continue
+  }
+  return existingIsSymlink;
+}
+
+/**
+ * Output success YAML for dev install (multiple skills)
+ */
+function outputDevSuccess(
+  installed: Array<{ name: string; installPath: string; sourcePath: string }>,
+  packageName: string,
+  duration: number,
+  logger: ReturnType<typeof createLogger>,
+  dryRun?: boolean
+): void {
+  writeYamlHeader(dryRun);
+  process.stdout.write(`sourceType: dev\n`);
+  process.stdout.write(`package: "${packageName}"\n`);
+  process.stdout.write(`skillsInstalled: ${installed.length}\n`);
+  process.stdout.write(`symlink: true\n`);
+  process.stdout.write(`skills:\n`);
+  for (const skill of installed) {
+    process.stdout.write(`  - name: ${skill.name}\n`);
+    process.stdout.write(`    installPath: ${skill.installPath}\n`);
+    process.stdout.write(`    sourcePath: ${skill.sourcePath}\n`);
+  }
+  process.stdout.write(`duration: ${duration}ms\n`);
+
+  if (dryRun) {
+    logger.info(`\n✅ Dry-run complete: ${installed.length} skill(s) would be symlinked`);
+  } else {
+    logger.info(`\n✅ Dev-installed ${installed.length} skill(s) via symlink`);
+    logger.info(`   After rebuilding, run /reload-skills in Claude Code`);
+  }
 }
 
 /**
@@ -360,17 +571,29 @@ async function prepareInstallation(
   const skillsDir = options.skillsDir ?? getClaudeUserPaths().skillsDir;
   const installPath = join(skillsDir, skillName);
 
-  // Check if skill already exists
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Constructed from validated paths
-  if (existsSync(installPath) && !options.force) {
+  // Check if skill already exists (lstatSync detects broken symlinks too)
+  let exists = false;
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Install path from config
+    lstatSync(installPath);
+    exists = true;
+  } catch {
+    // Does not exist
+  }
+
+  if (exists && !options.force) {
     throw new Error(
       `Skill already exists at ${installPath}. Use --force to overwrite.`
     );
   }
 
+  if (exists && options.force && !options.dryRun) {
+    await rm(installPath, { recursive: true, force: true });
+  }
+
   if (!options.dryRun) {
-    // Create plugins directory
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Plugins directory path, safe
+    // Create skills directory
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Skills directory path, safe
     await mkdir(skillsDir, { recursive: true });
   }
 
@@ -413,11 +636,7 @@ function outputSuccess(
   dryRun?: boolean
 ): void {
   // Output YAML to stdout
-  process.stdout.write('---\n');
-  process.stdout.write(`status: success\n`);
-  if (dryRun) {
-    process.stdout.write(`dryRun: true\n`);
-  }
+  writeYamlHeader(dryRun);
   process.stdout.write(`skillName: ${skillName}\n`);
   process.stdout.write(`installPath: ${installPath}\n`);
   process.stdout.write(`source: ${source}\n`);
