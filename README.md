@@ -157,6 +157,16 @@ bun run validate-links
 
 **Runs automatically in CI/CD** as part of the System Tests phase, ensuring broken links are caught before merge.
 
+### External URL Validation
+
+Optionally validate external URLs with caching:
+
+```bash
+vat resources validate docs/ --check-external-urls
+```
+
+See [External URL Validation](docs/external-url-validation.md) for details.
+
 ## Project Structure
 
 ```

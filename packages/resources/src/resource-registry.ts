@@ -11,10 +11,11 @@
 import type fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, type GitTracker } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, type GitTracker, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 
 import { calculateChecksum } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
+import { ExternalLinkValidator } from './external-link-validator.js';
 import { validateFrontmatter } from './frontmatter-validator.js';
 import { parseMarkdown } from './link-parser.js';
 import { validateLink } from './link-validator.js';
@@ -61,6 +62,10 @@ export interface ValidateOptions {
   skipGitIgnoreCheck?: boolean;
   /** Validation mode for schemas: strict (default) or permissive */
   validationMode?: 'strict' | 'permissive';
+  /** Check external URLs for validity (default: false) */
+  checkExternalUrls?: boolean;
+  /** Disable cache for external URL checks (default: false) */
+  noCache?: boolean;
 }
 
 /**
@@ -602,6 +607,12 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       issues.push(...this.validateAllFrontmatter(options.frontmatterSchema, mode));
     }
 
+    // External URL validation (if enabled)
+    if (options?.checkExternalUrls) {
+      const externalUrlIssues = await this.validateExternalUrls(options.noCache ?? false);
+      issues.push(...externalUrlIssues);
+    }
+
     // Count issues (all are errors now)
     const errorCount = issues.length;
 
@@ -628,6 +639,125 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       durationMs,
       timestamp: new Date(),
     };
+  }
+
+  /**
+   * Validate external URLs in all resources.
+   * @private
+   */
+  private async validateExternalUrls(noCache: boolean): Promise<ValidationIssue[]> {
+    // Determine cache directory
+    const cacheDir = this.getCacheDirectory();
+
+    // Create validator
+    const validator = new ExternalLinkValidator(cacheDir, {
+      timeout: 15000,
+      cacheTtlHours: noCache ? 0 : 24,
+    });
+
+    // Collect all external URLs from all resources
+    const urlsToValidate = this.collectExternalUrls();
+
+    // Validate all unique URLs
+    const uniqueUrls = [...urlsToValidate.keys()];
+    const results = await validator.validateLinks(uniqueUrls);
+
+    // Convert validation results to issues
+    return this.convertValidationResultsToIssues(results, urlsToValidate);
+  }
+
+  /**
+   * Get cache directory for external URL validation.
+   *
+   * Always uses system temp directory (not project directory) because:
+   * - URL validation results are universal (not project-specific)
+   * - Avoids polluting project directories
+   * - No .gitignore entry needed
+   * - OS handles cleanup automatically
+   * - Cache shared across all projects (more efficient)
+   *
+   * @private
+   */
+  private getCacheDirectory(): string {
+    return path.join(normalizedTmpdir(), '.vat-cache');
+  }
+
+  /**
+   * Collect all external URLs from all resources.
+   * @private
+   */
+  private collectExternalUrls(): Map<string, Array<{ resourcePath: string; line?: number }>> {
+    const urlsToValidate = new Map<string, Array<{ resourcePath: string; line?: number }>>();
+
+    for (const resource of this.resourcesByPath.values()) {
+      for (const link of resource.links) {
+        if (link.type === 'external') {
+          const locations = urlsToValidate.get(link.href) ?? [];
+          const location: { resourcePath: string; line?: number } = {
+            resourcePath: resource.filePath,
+          };
+          if (link.line !== undefined) {
+            location.line = link.line;
+          }
+          locations.push(location);
+          urlsToValidate.set(link.href, locations);
+        }
+      }
+    }
+
+    return urlsToValidate;
+  }
+
+  /**
+   * Convert validation results to validation issues.
+   * @private
+   */
+  private convertValidationResultsToIssues(
+    results: Array<{ url: string; status: 'ok' | 'error'; statusCode: number; error?: string }>,
+    urlsToValidate: Map<string, Array<{ resourcePath: string; line?: number }>>,
+  ): ValidationIssue[] {
+    const issues: ValidationIssue[] = [];
+
+    for (const result of results) {
+      if (result.status !== 'error') {
+        continue;
+      }
+
+      const locations = urlsToValidate.get(result.url);
+      if (!locations) {
+        continue;
+      }
+
+      const issueType = this.determineExternalUrlIssueType(result.statusCode, result.error);
+      const errorMessage = result.error ?? `HTTP ${result.statusCode}`;
+
+      for (const location of locations) {
+        issues.push({
+          resourcePath: location.resourcePath,
+          line: location.line,
+          type: issueType,
+          link: result.url,
+          message: `External URL failed: ${errorMessage}`,
+        });
+      }
+    }
+
+    return issues;
+  }
+
+  /**
+   * Determine issue type based on validation error.
+   * @private
+   */
+  private determineExternalUrlIssueType(statusCode: number, error?: string): string {
+    if (statusCode === 0) {
+      const errorLower = error?.toString().toLowerCase();
+      if (errorLower?.includes('timeout')) {
+        return 'external_url_timeout';
+      }
+      return 'external_url_error';
+    }
+    return 'external_url_dead';
   }
 
   /**

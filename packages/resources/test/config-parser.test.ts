@@ -226,3 +226,34 @@ resources:
     await expect(loadConfig(suite.tempDir)).rejects.toThrow('Invalid YAML');
   });
 });
+
+describe('external URL validation config', () => {
+  const suite = setupTempDirTestSuite('config-external-urls-');
+  beforeEach(suite.beforeEach);
+  afterEach(suite.afterEach);
+
+  it('should parse externalUrls config', async () => {
+    const configPath = join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
+    const content = `
+version: 1
+resources:
+  collections:
+    docs:
+      include: ['docs/**/*.md']
+      validation:
+        externalUrls:
+          enabled: true
+          timeout: 10000
+          retryOn429: true
+          ignorePatterns: ['^https://localhost']
+`;
+    await writeFile(configPath, content);
+
+    const config = await parseConfigFile(configPath);
+
+    expect(config.resources?.collections.docs?.validation?.externalUrls?.enabled).toBe(true);
+    expect(config.resources?.collections.docs?.validation?.externalUrls?.timeout).toBe(10000);
+    expect(config.resources?.collections.docs?.validation?.externalUrls?.retryOn429).toBe(true);
+    expect(config.resources?.collections.docs?.validation?.externalUrls?.ignorePatterns).toEqual(['^https://localhost']);
+  });
+});

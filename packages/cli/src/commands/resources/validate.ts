@@ -402,6 +402,8 @@ interface ValidateOptions {
   validationMode?: 'strict' | 'permissive'; // Validation mode for schemas
   format?: OutputFormat; // Output format
   collection?: string; // Filter by collection ID
+  checkExternalUrls?: boolean; // NEW: Validate external URLs
+  noCache?: boolean; // NEW: Disable cache for external URL validation
 }
 
 export async function validateCommand(
@@ -424,12 +426,12 @@ export async function validateCommand(
 
     // Validate all resources
     const validationMode = options.validationMode ?? 'strict';
-    const validationResult = await registry.validate(
-      ...(frontmatterSchemaObj
-        ? [{ frontmatterSchema: frontmatterSchemaObj, validationMode }]
-        : [{ validationMode }]
-      )
-    );
+    const validationResult = await registry.validate({
+      ...(frontmatterSchemaObj ? { frontmatterSchema: frontmatterSchemaObj } : {}),
+      validationMode,
+      checkExternalUrls: options.checkExternalUrls ?? false,
+      noCache: options.noCache ?? false,
+    });
 
     // Filter by collection if specified
     let filteredIssues = validationResult.issues;

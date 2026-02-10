@@ -12,6 +12,28 @@ export const ValidationModeSchema = z.enum(['strict', 'permissive'])
 export type ValidationMode = z.infer<typeof ValidationModeSchema>;
 
 /**
+ * External URL validation configuration.
+ *
+ * Controls how external URLs are validated:
+ * - enabled: Whether to check external URLs
+ * - timeout: Request timeout in milliseconds (default: 15000)
+ * - retryOn429: Whether to retry on rate limit (default: true)
+ * - ignorePatterns: Regex patterns for URLs to skip (e.g., '^https://localhost')
+ */
+export const ExternalUrlValidationSchema = z.object({
+  enabled: z.boolean().optional()
+    .describe('Whether to validate external URLs (default: false)'),
+  timeout: z.number().int().positive().optional()
+    .describe('Request timeout in milliseconds (default: 15000)'),
+  retryOn429: z.boolean().optional()
+    .describe('Whether to retry on rate limit (429) (default: true)'),
+  ignorePatterns: z.array(z.string()).optional()
+    .describe('Regex patterns for URLs to skip validation (e.g., "^https://localhost")'),
+}).describe('External URL validation configuration');
+
+export type ExternalUrlValidation = z.infer<typeof ExternalUrlValidationSchema>;
+
+/**
  * Validation configuration for a collection.
  */
 export const CollectionValidationSchema = z.object({
@@ -23,6 +45,8 @@ export const CollectionValidationSchema = z.object({
     .describe('Whether to validate external URL links (default: false)'),
   checkGitIgnored: z.boolean().optional()
     .describe('Whether to check if non-ignored files link to git-ignored files (default: true)'),
+  externalUrls: ExternalUrlValidationSchema.optional()
+    .describe('External URL validation configuration'),
 }).describe('Validation configuration for a collection');
 
 export type CollectionValidation = z.infer<typeof CollectionValidationSchema>;

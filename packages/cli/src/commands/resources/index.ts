@@ -65,13 +65,14 @@ Examples:
     .option('--validation-mode <mode>', 'Validation mode for schemas: strict (default) or permissive', 'strict')
     .option('--format <format>', 'Output format: yaml (default), json, or text', 'yaml')
     .option('--collection <id>', 'Filter by collection ID')
+    .option('--check-external-urls', 'Validate external URLs (default: false, slow operation)')
+    .option('--no-cache', 'Disable cache for external URL validation (forces fresh checks)')
     .action(validateCommand)
     .addHelpText(
       'after',
       `
 Description:
-  Validates internal links and anchors in markdown files.
-  External URLs are NOT validated (by design).
+  Validates links and anchors in markdown files.
 
 Path Argument Behavior:
 
@@ -115,8 +116,18 @@ Output Fields (failure):
   collections: Per-collection stats including filesWithErrors, errorCount
   errors: Detailed errors grouped by file
 
-Checks:
-  Internal file links, anchor links (#heading), cross-file anchors (file.md#heading)
+Validation Checks:
+  - Internal file links (relative paths)
+  - Anchor links within files (#heading)
+  - Cross-file anchor links (file.md#heading)
+  - External URLs (only with --check-external-urls flag)
+
+External URL Validation:
+  By default, external URLs are NOT validated (for speed).
+  Use --check-external-urls to enable HTTP checking of external links.
+  Results are cached in system temp directory (24h alive, 1h dead).
+  Cache is shared across all projects (URLs are universal).
+  Use --no-cache to force fresh checks (ignores cache).
 
 Frontmatter Validation:
   --frontmatter-schema <path>
@@ -175,6 +186,10 @@ Examples:
   With frontmatter schema (Mode 1)
   $ vat resources validate docs/ --frontmatter-schema schema.json
     Validates docs/ with single schema for all files
+
+  With external URL validation
+  $ vat resources validate docs/ --check-external-urls
+    Validates all links including HTTP checks of external URLs
 
   Note: For collection-specific schemas, use Mode 2 (no path argument)
         and configure schemas per collection in config file
