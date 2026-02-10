@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/agent-skills",
-  "version": "0.1.12",
+  "version": "0.1.13",
   "description": "Build, validate, and package agent skills in the Agent Skills format",
   "type": "module",
   "main": "./dist/index.js",

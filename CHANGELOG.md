@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.13] - 2026-02-10
+
+### Added
+- **Skills development install** (`vat skills install --dev`) - Symlink-based installation reads `vat.skills[]` from `package.json` and symlinks built skills into `~/.claude/skills/`
+  - After rebuild, skills update immediately (no re-install needed)
+  - `--build` flag auto-runs `vat skills build` before symlinking
+  - `--name` flag to install a specific skill from multi-skill packages
+  - `--force` to overwrite existing installations
+  - `--dry-run` to preview without creating symlinks
+- **Skills uninstall** (`vat skills uninstall <name>`) - Remove installed skills (directories or symlinks)
+  - `--all` flag reads `package.json` and removes all declared skills
+  - `--dry-run` to preview without removing
+  - Reports `wasSymlink` in YAML output for each removed skill
+- **MCP test client harness** - Reusable `MCPTestClient` class for reliable MCP server testing
+  - Waits for server readiness signal before sending requests (eliminates race conditions)
+  - Auto-incrementing request IDs with ID-based promise resolution
+  - Graceful shutdown with SIGTERM/SIGKILL fallback
+
+### Fixed
+- **npm install installs ALL skills** - `vat skills install <npm-package>` now installs all skills from multi-skill packages instead of only the first one
+- **Broken symlink detection** - `vat skills install --force` now correctly detects and removes broken symlinks using `lstatSync` instead of `existsSync`
+- **MCP test reliability** - Replaced timing-based test approach with readiness-signal pattern; tests now complete in ~600ms instead of flaking at 2-3.5s
+
 ## [0.1.12] - 2026-02-10
 
 ### Added
