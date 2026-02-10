@@ -21,7 +21,7 @@ function checkType(zodType: ZodTypeAny) {
 }
 ```
 
-**Real-world impact**: Metadata filtering in RAG queries returned 0 results when manuscript-tools (Zod v4) used vibe-agent-toolkit v0.1.8 (Zod v3).
+**Real-world impact**: Metadata filtering in RAG queries returned 0 results when an adopter project (Zod v4) used vibe-agent-toolkit v0.1.8 (Zod v3).
 
 ## The Solution: Duck Typing
 

@@ -282,12 +282,13 @@ async function validateNoNestedPackageJson(): Promise<void> {
         // Check if it's in a valid location
         const isRootPackageJson = normalizedPath === 'package.json';
         const isInPackagesDir = /^packages\/[^/]+\/package\.json$/.test(normalizedPath);
+        const isInTestFixtures = /^packages\/[^/]+\/test\/fixtures\//.test(normalizedPath);
 
-        if (!isRootPackageJson && !isInPackagesDir) {
+        if (!isRootPackageJson && !isInPackagesDir && !isInTestFixtures) {
           errors.push({
             type: ERROR_TYPES.FORBIDDEN_DIRECTORY,
             path: relPath,
-            message: `Nested package.json detected. Only root and packages/*/ can have package.json files.`,
+            message: `Nested package.json detected. Only root, packages/*/, and test/fixtures/ can have package.json files.`,
             severity: 'error',
           });
         }
@@ -496,3 +497,4 @@ if (import.meta.main) {
 }
 
 export { validate, type ValidationError };
+ 

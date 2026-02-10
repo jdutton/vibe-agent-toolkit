@@ -1,311 +1,221 @@
 /**
- * Skills validate command - unified validation for SKILL.md files
+ * Skills validate command - validate skills for packaging
  *
- * Combines resource validation (markdown, links, frontmatter) with
- * skill-specific validation (reserved words, XML tags, console compatibility).
- *
- * Supports three modes:
- * 1. Project context (default): Validate project skills with strict filename validation
- * 2. User context (--user flag): Validate ~/.claude skills with permissive validation
- * 3. Path context (explicit path): Validate skills at specific path
+ * Validates skills declared in package.json vat.skills using validateSkillForPackaging.
+ * Supports validation overrides and expiration checking.
  */
 
-import * as path from 'node:path';
-
-import { validateSkill, type ValidationResult } from '@vibe-agent-toolkit/agent-skills';
-import { scan } from '@vibe-agent-toolkit/discovery';
-import { ResourceRegistry, type ValidationResult as ResourceValidationResult } from '@vibe-agent-toolkit/resources';
-import { GitTracker } from '@vibe-agent-toolkit/utils';
+import type { VatSkillMetadata } from '@vibe-agent-toolkit/agent-schema';
+import {
+  validateSkillForPackaging,
+  type PackagingValidationResult,
+} from '@vibe-agent-toolkit/agent-skills';
 import * as yaml from 'js-yaml';
 
-import { loadConfig } from '../../utils/config-loader.js';
 import { formatDurationSecs } from '../../utils/duration.js';
-import { createLogger } from '../../utils/logger.js';
-import { discoverSkills, validateSkillFilename } from '../../utils/skill-discovery.js';
-import { scanUserContext } from '../../utils/user-context-scanner.js';
+import { type createLogger } from '../../utils/logger.js';
 
-import { handleCommandError } from './command-helpers.js';
-
-/**
- * Validation issue source type
- */
-type IssueSource = 'resource' | 'skill' | 'filename';
+import {
+  filterSkillsByName,
+  handleCommandError,
+  setupCommandContext,
+} from './command-helpers.js';
+import { readPackageJson, validateSkillSource } from './shared.js';
 
 /**
- * Validation issue severity
+ * Skills validate command options
  */
-type IssueSeverity = 'error' | 'warning' | 'info';
-
-/**
- * Unified skill validation result
- */
-interface UnifiedSkillValidationResult {
-  skill: string;
-  path: string;
-  status: 'success' | 'error';
-  resourceValidation: {
-    status: 'success' | 'error';
-    linksChecked: number;
-    errors: number;
-  };
-  skillValidation: {
-    status: 'success' | 'error';
-    errors: number;
-    warnings: number;
-  };
-  totalErrors: number;
-  totalWarnings: number;
-  issues?: Array<{
-    source: IssueSource;
-    severity: IssueSeverity;
-    code: string;
-    message: string;
-    location: string | undefined;
-  }>;
+export interface SkillsValidateCommandOptions {
+  skill?: string;
+  debug?: boolean;
+  verbose?: boolean;
 }
 
 /**
- * Unified output format
+ * Strip excludedReferences from results metadata for non-verbose YAML output.
+ * Keeps excludedReferenceCount for summary info, but removes the full path list
+ * which can be noisy. Operates on a deep copy to avoid mutating original results.
  */
-interface UnifiedValidationOutput {
-  status: 'success' | 'error';
-  skillsValidated: number;
-  results: UnifiedSkillValidationResult[];
-  durationSecs: number;
-}
-
-/**
- * Validate a SKILL.md file using resource validation (links, frontmatter)
- */
-async function validateSkillAsResource(
-  skillPath: string,
-  rootDir: string,
-  gitTracker?: GitTracker
-): Promise<ResourceValidationResult> {
-  const registry = new ResourceRegistry({
-    rootDir,
-    ...(gitTracker !== undefined && { gitTracker })
+function stripExcludedReferencePaths(results: PackagingValidationResult[]): unknown[] {
+  return results.map((result) => {
+    const { skillLines, totalLines, fileCount, directFileCount, maxLinkDepth, excludedReferenceCount } = result.metadata;
+    return {
+      ...result,
+      metadata: { skillLines, totalLines, fileCount, directFileCount, maxLinkDepth, excludedReferenceCount },
+    };
   });
-
-  // Add the entire resources directory to ensure all linked files are available for validation
-  // This is necessary because SKILL.md links to agent markdown files in ../agents/
-  const resourcesDir = path.resolve(path.dirname(skillPath), '..');
-  await registry.crawl({ baseDir: resourcesDir, include: ['**/*.md'] });
-
-  // Validate (no frontmatter schema by default)
-  const result = await registry.validate();
-
-  return result;
 }
 
 /**
- * Build issues array from validation results
+ * Output YAML summary to stdout
  */
-function buildIssuesArray(
-  skillPath: string,
-  filenameValidation: { valid: boolean; message?: string },
-  strictMode: boolean,
-  resourceErrors: ResourceValidationResult['issues'],
-  skillErrors: ValidationResult['issues'],
-  skillWarnings: ValidationResult['issues']
-): Array<{
-  source: IssueSource;
-  severity: IssueSeverity;
-  code: string;
-  message: string;
-  location: string | undefined;
-}> {
-  const issues: Array<{
-    source: IssueSource;
-    severity: IssueSeverity;
-    code: string;
-    message: string;
-    location: string | undefined;
-  }> = [];
+function outputYamlSummary(
+  results: PackagingValidationResult[],
+  duration: number,
+  verbose: boolean
+): void {
+  const outputResults = verbose ? results : stripExcludedReferencePaths(results);
 
-  // Add filename validation issues
-  if (!filenameValidation.valid && filenameValidation.message) {
-    issues.push({
-      source: 'filename',
-      severity: strictMode ? 'error' : 'warning',
-      code: 'non-standard-filename',
-      message: filenameValidation.message,
-      location: skillPath,
-    });
-  }
-
-  // Add resource issues
-  for (const issue of resourceErrors) {
-    const location = issue.line === undefined ? skillPath : `${skillPath}:${issue.line}`;
-    issues.push({
-      source: 'resource',
-      severity: 'error',
-      code: issue.type,
-      message: issue.message,
-      location,
-    });
-  }
-
-  // Add skill issues
-  for (const issue of [...skillErrors, ...skillWarnings]) {
-    issues.push({
-      source: 'skill',
-      severity: issue.severity as IssueSeverity,
-      code: issue.code,
-      message: issue.message,
-      location: issue.location,
-    });
-  }
-
-  return issues;
-}
-
-/**
- * Merge resource, skill, and filename validation results
- */
-function mergeValidationResults(
-  skillPath: string,
-  resourceResult: ResourceValidationResult,
-  skillResult: ValidationResult,
-  filenameValidation: { valid: boolean; message?: string },
-  strictMode: boolean
-): UnifiedSkillValidationResult {
-  const skillName = skillResult.metadata?.name ?? path.basename(path.dirname(skillPath));
-
-  // Extract resource errors (exclude external_url which are informational)
-  const resourceErrors = resourceResult.issues.filter(i => i.type !== 'external_url');
-  const resourceErrorCount = resourceErrors.length;
-
-  // Extract skill errors and warnings
-  const skillErrors = skillResult.issues.filter(i => i.severity === 'error');
-  const skillWarnings = skillResult.issues.filter(i => i.severity === 'warning');
-  const skillErrorCount = skillErrors.length;
-  const skillWarningCount = skillWarnings.length;
-
-  // Count filename issues
-  const filenameErrorCount = !filenameValidation.valid && strictMode ? 1 : 0;
-  const filenameWarningCount = !filenameValidation.valid && !strictMode ? 1 : 0;
-
-  const totalErrors = resourceErrorCount + skillErrorCount + filenameErrorCount;
-  const totalWarnings = skillWarningCount + filenameWarningCount;
-
-  // Build unified issues array
-  const issues = buildIssuesArray(
-    skillPath,
-    filenameValidation,
-    strictMode,
-    resourceErrors,
-    skillErrors,
-    skillWarnings
-  );
-
-  const baseResult: UnifiedSkillValidationResult = {
-    skill: skillName,
-    path: skillPath,
-    status: totalErrors > 0 ? 'error' : 'success',
-    resourceValidation: {
-      status: resourceErrorCount > 0 ? 'error' : 'success',
-      linksChecked: resourceResult.linksByType ? Object.values(resourceResult.linksByType).reduce((sum, count) => sum + count, 0) : 0,
-      errors: resourceErrorCount,
-    },
-    skillValidation: {
-      status: (skillErrorCount + filenameErrorCount) > 0 ? 'error' : 'success',
-      errors: skillErrorCount + filenameErrorCount,
-      warnings: skillWarningCount + filenameWarningCount,
-    },
-    totalErrors,
-    totalWarnings,
-  };
-
-  // Only add issues property if there are issues
-  if (issues.length > 0) {
-    return { ...baseResult, issues } as UnifiedSkillValidationResult;
-  }
-
-  return baseResult;
-}
-
-/**
- * Format skill status for console output
- */
-function formatSkillStatus(result: UnifiedSkillValidationResult): string {
-  if (result.status === 'error') {
-    const errorText = `${result.totalErrors} error${result.totalErrors === 1 ? '' : 's'}`;
-    const warningPlural = result.totalWarnings === 1 ? '' : 's';
-    const warningText = result.totalWarnings > 0
-      ? `, ${result.totalWarnings} warning${warningPlural}`
-      : '';
-    return `   ❌ ${result.skill} (${errorText}${warningText})`;
-  }
-
-  if (result.totalWarnings > 0) {
-    const warningPlural = result.totalWarnings === 1 ? '' : 's';
-    return `   ⚠️  ${result.skill} (${result.totalWarnings} warning${warningPlural})`;
-  }
-
-  return `   ✅ ${result.skill}`;
-}
-
-/**
- * Output detailed error for a single issue
- */
-function outputDetailedIssue(issue: {
-  source: IssueSource;
-  severity: IssueSeverity;
-  code: string;
-  message: string;
-  location: string | undefined;
-}): void {
-  console.error(`      [${issue.source}] ${issue.severity}: ${issue.message} (${issue.code})`);
-  if (issue.location !== undefined) {
-    console.error(`      Location: ${issue.location}`);
-  }
-}
-
-/**
- * Output unified validation report
- */
-function outputUnifiedReport(results: UnifiedSkillValidationResult[], duration: number): void {
-  const output: UnifiedValidationOutput = {
-    status: results.some(r => r.status === 'error') ? 'error' : 'success',
+  const output = {
+    status: results.some((r) => r.status === 'error') ? 'error' : 'success',
     skillsValidated: results.length,
-    results,
+    results: outputResults,
     durationSecs: formatDurationSecs(duration),
   };
 
-  // Output YAML to stdout (for programmatic parsing)
-  // js-yaml has truncation issues with very large objects (>80 results)
-  // Use JSON for large outputs to avoid truncation
-  if (results.length > 80) {
-    console.log(JSON.stringify(output, null, 2));
-  } else {
-    console.log(yaml.dump(output, { indent: 2, lineWidth: -1, noRefs: true }));
+  console.log(yaml.dump(output, { indent: 2, lineWidth: -1, noRefs: true }));
+}
+
+/**
+ * Output a single validation error
+ */
+function outputSingleError(error: {
+  code: string;
+  message: string;
+  location?: string;
+  fix?: string;
+}): void {
+  console.error(`    [${String(error.code)}] ${String(error.message)}`);
+  if (error.location) {
+    console.error(`      Location: ${String(error.location)}`);
+  }
+  if (error.fix) {
+    console.error(`      Fix: ${String(error.fix)}`);
+  }
+}
+
+/**
+ * Output detailed errors for a skill
+ */
+function outputSkillErrors(result: PackagingValidationResult): void {
+  console.error(`Skill: ${result.skillName}`);
+
+  // Show active errors
+  if (result.activeErrors.length > 0) {
+    console.error(`  Active errors (${result.activeErrors.length}):`);
+    for (const error of result.activeErrors) {
+      outputSingleError(error);
+    }
   }
 
-  // If there are errors, also write detailed errors to stderr
-  const failedSkills = results.filter(r => r.status === 'error');
+  // Show ignored errors (with reasons)
+  if (result.ignoredErrors.length > 0) {
+    console.error(`  Ignored errors (${result.ignoredErrors.length}):`);
+    for (const { error, reason } of result.ignoredErrors) {
+      console.error(
+        `    [${String(error.code)}] ${String(error.message)} (ignored: ${reason})`
+      );
+    }
+  }
+
+  // Show expired overrides as errors
+  if (result.expiredOverrides.length > 0) {
+    console.error(`  Expired overrides (${result.expiredOverrides.length}):`);
+    for (const { error, reason, expiredDate } of result.expiredOverrides) {
+      console.error(`    [${String(error.code)}] ${String(error.message)}`);
+      console.error(`      Override expired: ${expiredDate} (reason: ${reason})`);
+    }
+  }
+
+  console.error('');
+}
+
+/**
+ * Output validation report to stdout (YAML) and stderr (human-readable)
+ */
+function outputValidationReport(
+  results: PackagingValidationResult[],
+  duration: number,
+  logger: ReturnType<typeof createLogger>,
+  verbose: boolean
+): void {
+  // Output YAML to stdout (for programmatic parsing)
+  outputYamlSummary(results, duration, verbose);
+
+  // Output human-readable summary to stderr
+  const failedSkills = results.filter((r) => r.status === 'error');
+
   if (failedSkills.length === 0) {
+    logger.info('\n✅ All validations passed');
     return;
   }
 
   console.error('\n❌ Validation errors:\n');
   for (const result of failedSkills) {
-    console.error(`   ${result.path}:`);
-    if (result.issues) {
-      for (const issue of result.issues) {
-        outputDetailedIssue(issue);
-      }
-    }
-    console.error('');
+    outputSkillErrors(result);
   }
 }
 
 /**
- * Skills validate command options
+ * Log error status progress
  */
-interface SkillsValidateCommandOptions {
-  debug?: boolean;
-  user?: boolean;
+function logErrorProgress(
+  skill: VatSkillMetadata,
+  result: PackagingValidationResult,
+  logger: ReturnType<typeof createLogger>
+): void {
+  const activeCount = result.activeErrors.length;
+  const ignoredCount = result.ignoredErrors.length;
+  const expiredCount = result.expiredOverrides.length;
+
+  if (activeCount > 0) {
+    logger.error(`   ❌ ${skill.name}: ${activeCount} error${activeCount === 1 ? '' : 's'}`);
+  }
+  if (ignoredCount > 0) {
+    logger.info(`      (${ignoredCount} ignored by overrides)`);
+  }
+  if (expiredCount > 0) {
+    logger.error(`      (${expiredCount} expired override${expiredCount === 1 ? '' : 's'})`);
+  }
+}
+
+/**
+ * Log success status progress
+ */
+function logSuccessProgress(
+  skill: VatSkillMetadata,
+  ignoredCount: number,
+  logger: ReturnType<typeof createLogger>
+): void {
+  if (ignoredCount > 0) {
+    logger.info(`   ✅ ${skill.name} (${ignoredCount} ignored by overrides)`);
+  } else {
+    logger.info(`   ✅ ${skill.name}`);
+  }
+}
+
+/**
+ * Log validation progress for a single skill
+ */
+function logSkillProgress(
+  skill: VatSkillMetadata,
+  result: PackagingValidationResult,
+  logger: ReturnType<typeof createLogger>
+): void {
+  if (result.status === 'error') {
+    logErrorProgress(skill, result, logger);
+  } else {
+    logSuccessProgress(skill, result.ignoredErrors.length, logger);
+  }
+}
+
+/**
+ * Validate a single skill
+ */
+async function validateSingleSkill(
+  skill: VatSkillMetadata,
+  cwd: string,
+  logger: ReturnType<typeof createLogger>
+): Promise<PackagingValidationResult> {
+  const sourcePath = validateSkillSource(skill, cwd, logger);
+
+  logger.info(`   Validating: ${skill.name}`);
+  logger.debug(`   Source: ${skill.source}`);
+
+  const result = await validateSkillForPackaging(sourcePath, skill);
+  logSkillProgress(skill, result, logger);
+
+  return result;
 }
 
 /**
@@ -315,100 +225,38 @@ export async function validateCommand(
   pathArg: string | undefined,
   options: SkillsValidateCommandOptions
 ): Promise<void> {
-  const logger = createLogger(options.debug ? { debug: true } : {});
-  const startTime = Date.now();
+  const { logger, cwd, startTime } = setupCommandContext(pathArg, options.debug);
 
   try {
-    // Step 1: Determine context and discover skills
-    let skillPaths: string[];
-    let strictMode: boolean;
-    let rootDir: string;
+    // Read package.json and filter skills
+    const packageJson = await readPackageJson(cwd);
+    const skills = packageJson.vat?.skills ?? [];
 
-    if (options.user) {
-      // User context: scan ~/.claude
-      logger.info('🔍 Validating user-installed skills in ~/.claude');
-      const { plugins, skills } = await scanUserContext();
-      const allResources = [...plugins, ...skills];
-      const discoveredSkills = discoverSkills(allResources);
-      skillPaths = discoveredSkills.map(s => s.path);
-      strictMode = false; // Permissive with warnings
-      rootDir = process.cwd(); // Use cwd for resource validation context
-    } else {
-      // Project context: use resources config
-      rootDir = pathArg ?? process.cwd();
-      logger.info(`🔍 Validating skills in: ${rootDir}`);
-
-      // Load project config
-      const config = loadConfig(rootDir);
-
-      // Use discovery package with config boundaries
-      const scanResult = await scan({
-        path: rootDir,
-        recursive: true,
-        include: config.resources?.include ?? ['**/*.md'],
-        exclude: config.resources?.exclude ?? [],
-      });
-
-      // Filter for skills (case-insensitive discovery)
-      const discoveredSkills = discoverSkills(scanResult.results);
-      skillPaths = discoveredSkills.map(s => s.path);
-      strictMode = true; // Strict errors
-    }
-
-    if (skillPaths.length === 0) {
-      logger.info('   No SKILL.md files found');
-      console.log(yaml.dump({
-        status: 'success',
-        skillsValidated: 0,
-        results: [],
-        durationSecs: formatDurationSecs(Date.now() - startTime),
-      }, { indent: 2, lineWidth: -1 }));
+    if (skills.length === 0) {
+      logger.info('ℹ️  No skills found in package.json vat.skills');
+      logger.info('   To add skills, define them in package.json under the vat.skills field');
       process.exit(0);
     }
 
-    logger.info(`   Found ${skillPaths.length} skill${skillPaths.length === 1 ? '' : 's'}\n`);
+    const skillsToValidate = filterSkillsByName(skills, options.skill);
+    logger.info(`🔍 Found ${skillsToValidate.length} skill(s) to validate\n`);
 
-    // Create GitTracker for efficient git-ignore checking across all skills
-    // This caches git operations and avoids spawning hundreds of git subprocesses
-    const gitTracker = new GitTracker(rootDir);
-    await gitTracker.initialize();
-
-    const results: UnifiedSkillValidationResult[] = [];
-
-    // Step 2: Validate each skill
-    for (const skillPath of skillPaths) {
-      // 2a: Validate filename
-      const filenameCheck = validateSkillFilename(skillPath);
-
-      // 2b: Resource validation (markdown, links)
-      const resourceResult = await validateSkillAsResource(skillPath, rootDir, gitTracker);
-
-      // 2c: Skill-specific validation (reserved words, etc.)
-      const skillResult = await validateSkill({ skillPath, rootDir });
-
-      // 2d: Merge results
-      const unified = mergeValidationResults(
-        skillPath,
-        resourceResult,
-        skillResult,
-        filenameCheck,
-        strictMode
-      );
-      results.push(unified);
-
-      // Show progress
-      logger.info(formatSkillStatus(unified));
+    // Validate each skill
+    const results: PackagingValidationResult[] = [];
+    for (const skill of skillsToValidate) {
+      const result = await validateSingleSkill(skill, cwd, logger);
+      results.push(result);
     }
 
-    // Step 3: Output unified report
+    // Output report and exit
     const duration = Date.now() - startTime;
-    logger.info('');
-    outputUnifiedReport(results, duration);
+    const verbose = options.verbose === true;
+    outputValidationReport(results, duration, logger, verbose);
 
-    // Step 4: Exit with appropriate code
-    const hasErrors = results.some(r => r.totalErrors > 0);
+    const hasErrors = results.some(
+      (r) => r.activeErrors.length > 0 || r.expiredOverrides.length > 0
+    );
     process.exit(hasErrors ? 1 : 0);
-
   } catch (error) {
     handleCommandError(error, logger, startTime, 'SkillsValidate');
   }

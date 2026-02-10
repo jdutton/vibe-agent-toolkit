@@ -1,6 +1,6 @@
 ---
 name: test-skill-2
-description: Second test skill for fixture-based tests
+description: Second test skill for fixture-based testing with comprehensive validation
 ---
 
 # Test Skill 2

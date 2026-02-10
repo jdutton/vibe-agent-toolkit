@@ -62,7 +62,8 @@ function setupSkillsBuildTestSuite() {
   const createSkillSource = (tempDir: string, relativePath: string, skillName: string) => {
     const resourcesDir = join(tempDir, relativePath, '..');
     mkdirSyncReal(resourcesDir, { recursive: true });
-    writeTestFile(join(tempDir, relativePath), createSkillMarkdown(skillName, `${skillName} test`));
+    // Use default description (meets 50 char minimum for DESCRIPTION_TOO_VAGUE validation)
+    writeTestFile(join(tempDir, relativePath), createSkillMarkdown(skillName));
   };
 
   const setupSingleSkillTest = (tempDir: string) => {

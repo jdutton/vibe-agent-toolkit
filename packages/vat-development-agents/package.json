@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/vat-development-agents",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "VAT development agents - dogfooding the vibe-agent-toolkit",
   "type": "module",
   "keywords": [
@@ -16,7 +16,18 @@
       {
         "name": "vibe-agent-toolkit",
         "source": "./resources/skills/SKILL.md",
-        "path": "./dist/skills/vibe-agent-toolkit"
+        "path": "./dist/skills/vibe-agent-toolkit",
+        "packagingOptions": {
+          "linkFollowDepth": 2
+        },
+        "ignoreValidationErrors": {
+          "SKILL_LENGTH_EXCEEDS_RECOMMENDED": "Comprehensive toolkit documentation requires detailed examples",
+          "SKILL_TOTAL_SIZE_LARGE": "Complete VAT reference includes architecture docs, guides, and API reference",
+          "SKILL_TOO_MANY_FILES": "Toolkit skill aggregates all VAT package documentation",
+          "REFERENCE_TOO_DEEP": "Documentation hierarchy mirrors package structure",
+          "LINKS_TO_NAVIGATION_FILES": "Navigation files provide organized entry points for different domains",
+          "LINK_TARGETS_DIRECTORY": "Transitively-bundled docs from other packages contain directory links"
+        }
       }
     ],
     "agents": [

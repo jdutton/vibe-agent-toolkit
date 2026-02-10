@@ -68,10 +68,14 @@ export {
 } from './agent-manifest.js';
 
 export {
+  PackagingOptionsSchema,
+  ValidationOverrideSchema,
   VatAgentMetadataSchema,
   VatPackageMetadataSchema,
   VatPureFunctionMetadataSchema,
   VatSkillMetadataSchema,
+  type PackagingOptions,
+  type ValidationOverride,
   type VatAgentMetadata,
   type VatPackageMetadata,
   type VatPureFunctionMetadata,

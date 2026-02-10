@@ -17,9 +17,19 @@ import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import { parseMarkdown, type ParseResult } from '@vibe-agent-toolkit/resources';
-import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { renderTemplate, toForwardSlash } from '@vibe-agent-toolkit/utils';
+
+import { collectLinks } from './link-collector.js';
+import type { DefaultRule, ExcludeRule } from './link-collector.js';
 
 const PACKAGE_JSON_FILENAME = 'package.json';
+const DEFAULT_STRIP_TEMPLATE = '{{link.text}}';
+const REPLACE_ENTIRE = 'replace-entire' as const;
+
+/**
+ * Resource naming strategy type
+ */
+export type ResourceNamingStrategy = 'basename' | 'resource-id' | 'preserve-path';
 
 export interface PackageSkillOptions {
   /**
@@ -45,6 +55,50 @@ export interface PackageSkillOptions {
    * Default: dirname(skillPath)
    */
   basePath?: string;
+
+  /**
+   * Strategy for naming packaged resource files
+   *
+   * - 'basename': Use original filename only (default, may cause conflicts)
+   * - 'resource-id': Flatten path to kebab-case filename (descriptive, unique)
+   * - 'preserve-path': Preserve directory structure in output
+   *
+   * Default: 'basename'
+   *
+   * @example
+   * // Original: knowledge-base/guides/topics/quickstart/overview.md
+   * // basename:       overview.md (may conflict)
+   * // resource-id:    guides-topics-quickstart-overview.md (with stripPrefix: 'knowledge-base-')
+   * // preserve-path:  guides/topics/quickstart/overview.md (creates subdirectories)
+   */
+  resourceNaming?: ResourceNamingStrategy;
+
+  /**
+   * Path prefix to strip before applying naming strategy
+   *
+   * Removes a directory prefix from the relative path before the naming strategy is applied.
+   * Works with both 'resource-id' and 'preserve-path' strategies.
+   *
+   * @example
+   * // Original: knowledge-base/guides/topics/quickstart/overview.md
+   * // stripPrefix: 'knowledge-base'
+   * //
+   * // resource-id:    guides-topics-quickstart-overview.md
+   * // preserve-path:  guides/topics/quickstart/overview.md
+   */
+  stripPrefix?: string;
+
+  /** How deep to follow markdown links (default: 2) */
+  linkFollowDepth?: number | 'full' | undefined;
+
+  /** Exclude patterns and rewrite templates for non-bundled links */
+  excludeReferencesFromBundle?: {
+    rules?: Array<{
+      patterns: string[];
+      template?: string | undefined;
+    }> | undefined;
+    defaultTemplate?: string | undefined;
+  } | undefined;
 }
 
 export interface SkillMetadata {
@@ -83,6 +137,9 @@ export interface PackageSkillResult {
     npm?: string;          // dist/skills/cat-agents.tgz
     marketplace?: string;  // dist/skills/cat-agents.marketplace.json
   };
+
+  /** References excluded from bundle */
+  excludedReferences?: string[] | undefined;
 }
 
 /**
@@ -110,7 +167,8 @@ export async function packageSkill(
   const {
     formats = ['directory'],
     rewriteLinks = true,
-    basePath = dirname(skillPath),
+    resourceNaming = 'basename',
+    stripPrefix,
   } = options;
 
   // 1. Parse SKILL.md frontmatter and links
@@ -120,32 +178,59 @@ export async function packageSkill(
   // 2. Find package boundary (to prevent collecting files from other packages)
   // If no package.json found, use skill's directory as boundary (for tests)
   const packageRoot = findPackageRootOrFallback(skillPath);
+  const skillRoot = dirname(skillPath);
 
-  // 3. Collect all linked resources recursively (only within package boundary)
-  const linkedFiles = await collectLinkedResources(
-    skillPath,
-    basePath,
+  // 3. Collect all linked resources using unified link collector
+  const linkFollowDepth = options.linkFollowDepth ?? 2;
+  const excludeConfig = options.excludeReferencesFromBundle;
+  const maxDepth = linkFollowDepth === 'full' ? Infinity : linkFollowDepth;
+  const defaultRule: DefaultRule = {
+    ...(excludeConfig?.defaultTemplate ? { template: excludeConfig.defaultTemplate } : {}),
+  };
+
+  const { bundledFiles, excludedReferences } = await collectLinks(skillPath, {
+    maxDepth,
+    excludeRules: excludeConfig?.rules ?? [],
+    defaultRule,
+    skillRoot,
     packageRoot,
-    new Set()
-  );
+  });
 
-  // 3. Calculate common ancestor of all files (for proper relative path calculation)
-  const allFiles = [skillPath, ...linkedFiles];
+  // 4. Calculate common ancestor of all files (for proper relative path calculation)
+  const allFiles = [skillPath, ...bundledFiles];
   const effectiveBasePath = findCommonAncestor(allFiles);
 
-  // 4. Determine output path
+  // 5. Determine output path
   const outputPath = options.outputPath ??
     getDefaultSkillOutputPath(skillPath, skillMetadata.name);
 
-  // 5. Copy SKILL.md and all linked files (flat structure)
+  // 6. Build excluded file maps for link rewriting
+  const excludedFileSet = new Set(excludedReferences.map(r => toForwardSlash(r.path)));
+  const excludeRuleMap = new Map<string, { rule?: ExcludeRule | undefined; defaultRule: DefaultRule }>();
+
+  for (const ref of excludedReferences) {
+    const normalizedRefPath = toForwardSlash(ref.path);
+    if (!excludeRuleMap.has(normalizedRefPath)) {
+      excludeRuleMap.set(normalizedRefPath, {
+        rule: ref.matchedRule,
+        defaultRule,
+      });
+    }
+  }
+
+  // 7. Copy SKILL.md and all linked files (flat structure with configurable naming)
+  const excludeCtx: ExcludeContext | undefined = excludedFileSet.size > 0
+    ? { excludedFiles: excludedFileSet, ruleMap: excludeRuleMap, skillName: skillMetadata.name, skillRoot }
+    : undefined;
+
   await copySkillResources(
     skillPath,
-    linkedFiles,
+    bundledFiles,
     outputPath,
-    rewriteLinks
+    { rewriteLinks, resourceNaming, stripPrefix, packageRoot, excludeCtx },
   );
 
-  // 6. Generate distribution artifacts
+  // 8. Generate distribution artifacts
   const artifacts = await generatePackageArtifacts(
     outputPath,
     skillMetadata,
@@ -153,11 +238,12 @@ export async function packageSkill(
   );
 
   // Get relative paths for result
-  const relativeLinkedFiles = linkedFiles.map(f =>
+  const relativeLinkedFiles = bundledFiles.map(f =>
     toForwardSlash(relative(effectiveBasePath, f))
   );
 
-  return {
+  // Build excluded reference paths for result
+  const result: PackageSkillResult = {
     outputPath,
     skill: skillMetadata,
     files: {
@@ -166,6 +252,16 @@ export async function packageSkill(
     },
     artifacts,
   };
+
+  if (excludedReferences.length > 0) {
+    // Deduplicate excluded reference paths for the result
+    const uniqueExcludedPaths = [...new Set(
+      excludedReferences.map(r => toForwardSlash(relative(skillRoot, r.path)))
+    )];
+    result.excludedReferences = uniqueExcludedPaths;
+  }
+
+  return result;
 }
 
 /**
@@ -280,216 +376,116 @@ function findCommonAncestor(filePaths: string[]): string {
 }
 
 /**
- * Process a linked file and recursively collect its dependencies
+ * Generate target path based on naming strategy
  *
- * Validates the file exists and is within package boundary, then recursively collects
- * all files linked from it.
- *
- * @param resolvedPath - Absolute path to the linked file
- * @param href - Original href from markdown (for warning messages)
- * @param packageRoot - Package root directory (boundary for file collection)
- * @param basePath - Base path for resolving relative links
- * @param visited - Set of already visited files (prevents loops)
- * @param linkedFiles - Array to push results into
+ * @param filePath - Absolute path to the source file
+ * @param basePath - Base path to calculate relative path from
+ * @param strategy - Naming strategy to use
+ * @param stripPrefix - Path prefix to remove before applying strategy (works for all strategies)
+ * @returns Target path (relative) for the packaged resource
  */
-async function processAndCollectLinkedFile(
-  resolvedPath: string,
-  href: string,
-  packageRoot: string,
+function generateTargetPath(
+  filePath: string,
   basePath: string,
-  visited: Set<string>,
-  linkedFiles: string[]
-): Promise<void> {
-  // Check if file exists
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path constructed from parsed markdown links
-  if (!existsSync(resolvedPath)) {
-    console.warn(`Warning: Linked file not found: ${href} (resolved to ${resolvedPath})`);
-    return;
+  strategy: ResourceNamingStrategy = 'basename',
+  stripPrefix?: string
+): string {
+  if (strategy === 'basename') {
+    // Default: just use the filename (flat structure)
+    return basename(filePath);
   }
 
-  // Check package boundary
-  const normalizedResolved = toForwardSlash(resolvedPath);
-  const normalizedPackageRoot = toForwardSlash(packageRoot);
-  if (!normalizedResolved.startsWith(normalizedPackageRoot)) {
-    console.warn(
-      `Warning: Skipping external link outside package boundary: ${href}\n` +
-      `  Resolved to: ${resolvedPath}\n` +
-      `  Package root: ${packageRoot}\n` +
-      `  External links are not included in skill packages.`
-    );
-    return;
+  const ext = filePath.substring(filePath.lastIndexOf('.'));
+  let relPath = relative(basePath, filePath);
+
+  // Strip prefix from relative path (if specified)
+  // Works for both resource-id and preserve-path strategies
+  if (stripPrefix) {
+    // Normalize separators for consistent matching
+    const normalizedRelPath = relPath.replaceAll('\\', '/');
+    const normalizedPrefix = stripPrefix.replaceAll('\\', '/').replace(/\/$/, ''); // Remove trailing slash
+
+    if (normalizedRelPath.startsWith(normalizedPrefix + '/')) {
+      // Strip the prefix and leading slash
+      relPath = normalizedRelPath.substring(normalizedPrefix.length + 1);
+    } else if (normalizedRelPath.startsWith(normalizedPrefix)) {
+      // Prefix without trailing slash
+      relPath = normalizedRelPath.substring(normalizedPrefix.length);
+      // Clean up any leading slash
+      relPath = relPath.replace(/^\//, '');
+    }
   }
 
-  linkedFiles.push(resolvedPath);
+  if (strategy === 'preserve-path') {
+    // Preserve directory structure (creates subdirectories)
+    return relPath;
+  }
 
-  // Recursively collect from this file
-  const transitive = await collectLinkedResources(
-    resolvedPath,
-    basePath,
-    packageRoot,
-    visited
-  );
-  linkedFiles.push(...transitive);
+  // strategy === 'resource-id': Flatten path to kebab-case filename
+  // Convert path to kebab-case identifier (all in one filename)
+  const pathWithoutExt = relPath.substring(0, relPath.length - ext.length);
+  const resourceId = pathWithoutExt
+    .replaceAll(/[/\\]+/g, '-')     // Path separators to hyphens
+    .replaceAll(/[_\s]+/g, '-')     // Underscores and spaces to hyphens
+    .toLowerCase()
+    .replaceAll(/[^\da-z-]/g, '')   // Remove non-alphanumeric except hyphens
+    .replaceAll(/-{2,}/g, '-')      // Collapse multiple hyphens
+    .replace(/^-/, '')               // Trim leading hyphen
+    .replace(/-$/, '');              // Trim trailing hyphen
+
+  return resourceId + ext;
 }
 
 /**
- * Extract reference-style link definitions from markdown content
- *
- * Parses markdown content to find reference-style link definitions like: [ref]: url
- * These are not included in the AST parser's link extraction.
- *
- * @param content - Markdown content
- * @param markdownPath - Path to markdown file (for relative link resolution)
- * @param packageRoot - Package root directory (boundary for file collection)
- * @param basePath - Base path for resolving relative links
- * @param visited - Set of already visited files (prevents loops)
- * @returns Array of absolute paths to linked files
+ * Context for excluded file link rewriting.
+ * Groups the parameters needed to rewrite links targeting excluded files.
  */
-async function extractReferenceStyleLinks(
-  content: string,
-  markdownPath: string,
-  packageRoot: string,
-  basePath: string,
-  visited: Set<string>
-): Promise<string[]> {
-  const linkedFiles: string[] = [];
-  // eslint-disable-next-line sonarjs/slow-regex -- Controlled markdown input with trusted content
-  const refLinkDefRegex = /^\[([^\]]+)\]:\s*(.+)$/gm;
-  let match: RegExpExecArray | null;
-
-  while ((match = refLinkDefRegex.exec(content)) !== null) {
-    const href = match[2]?.trim();
-    if (!href) {
-      continue;
-    }
-
-    // Skip external URLs
-    if (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('mailto:')) {
-      continue;
-    }
-
-    // Remove anchor fragments
-    const hrefWithoutAnchor = href.split('#')[0] ?? href;
-    if (hrefWithoutAnchor === '') {
-      continue;
-    }
-
-    // Resolve relative to the markdown file's directory
-    const resolvedPath = resolve(dirname(markdownPath), hrefWithoutAnchor);
-
-    // Only include .md files
-    if (!resolvedPath.endsWith('.md')) {
-      continue;
-    }
-
-    await processAndCollectLinkedFile(
-      resolvedPath,
-      href,
-      packageRoot,
-      basePath,
-      visited,
-      linkedFiles
-    );
-  }
-
-  return linkedFiles;
+interface ExcludeContext {
+  /** Set of forward-slash normalized absolute paths excluded from bundle */
+  excludedFiles: Set<string>;
+  /** Map of excluded file paths to their rewrite rules */
+  ruleMap: Map<string, { rule?: ExcludeRule | undefined; defaultRule: DefaultRule }>;
+  /** Skill name for template rendering context */
+  skillName: string;
+  /** Skill root directory for template rendering context */
+  skillRoot: string;
 }
 
 /**
- * Collect all linked resources from SKILL.md recursively
- *
- * Follows local file links to build a complete dependency graph.
- * Prevents infinite loops by tracking visited files.
- * Only collects files within the package boundary (prevents pulling in entire monorepo).
- *
- * @param markdownPath - Current markdown file to process
- * @param basePath - Base path for resolving relative links
- * @param packageRoot - Package root directory (boundary for file collection)
- * @param visited - Set of already visited files (prevents loops)
- * @returns Array of absolute paths to all linked files within package
+ * Options for copying skill resources to the output directory.
  */
-async function collectLinkedResources(
-  markdownPath: string,
-  basePath: string,
-  packageRoot: string,
-  visited: Set<string>
-): Promise<string[]> {
-  // Prevent infinite loops
-  const normalizedPath = resolve(markdownPath);
-  if (visited.has(normalizedPath)) {
-    return [];
-  }
-  visited.add(normalizedPath);
-
-  // Parse markdown to extract links
-  const parseResult = await parseMarkdown(markdownPath);
-  const linkedFiles: string[] = [];
-
-  // Extract reference-style link definitions: [ref]: url
-  // These are not included in parseResult.links, so we need to parse them separately
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- markdownPath validated by caller
-  const content = await readFile(markdownPath, 'utf-8');
-  const refStyleLinks = await extractReferenceStyleLinks(
-    content,
-    markdownPath,
-    packageRoot,
-    basePath,
-    visited
-  );
-  linkedFiles.push(...refStyleLinks);
-
-  // Process inline links from parseResult
-  for (const link of parseResult.links) {
-    // Skip non-local links
-    if (link.type !== 'local_file') {
-      continue;
-    }
-
-    // Remove anchor fragments (#...)
-    const hrefWithoutAnchor = link.href.split('#')[0] ?? link.href;
-    if (hrefWithoutAnchor === '') {
-      continue; // Pure anchor link
-    }
-
-    // Resolve relative to the markdown file's directory
-    const resolvedPath = resolve(dirname(markdownPath), hrefWithoutAnchor);
-
-    // Only include .md files
-    if (!resolvedPath.endsWith('.md')) {
-      continue;
-    }
-
-    await processAndCollectLinkedFile(
-      resolvedPath,
-      link.href,
-      packageRoot,
-      basePath,
-      visited,
-      linkedFiles
-    );
-  }
-
-  // Deduplicate
-  return [...new Set(linkedFiles)];
+interface CopyResourcesOptions {
+  rewriteLinks: boolean;
+  resourceNaming?: ResourceNamingStrategy | undefined;
+  stripPrefix?: string | undefined;
+  packageRoot?: string | undefined;
+  excludeCtx?: ExcludeContext | undefined;
 }
 
 /**
  * Copy SKILL.md and linked files to output directory
  *
  * Creates a FLAT structure with all files at the root level.
- * Rewriteslinks to work in the flattened structure.
+ * Rewrites links to work in the flattened structure.
  *
  * @param skillPath - Path to SKILL.md
  * @param linkedFiles - All linked files to copy
  * @param outputPath - Destination directory
- * @param rewriteLinks - Whether to rewrite links
+ * @param options - Copy options including rewrite settings and exclude context
  */
 async function copySkillResources(
   skillPath: string,
   linkedFiles: string[],
   outputPath: string,
-  rewriteLinks: boolean
+  options: CopyResourcesOptions,
 ): Promise<void> {
+  const {
+    rewriteLinks,
+    resourceNaming = 'basename',
+    stripPrefix,
+    packageRoot,
+    excludeCtx,
+  } = options;
   // Ensure output directory exists
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Output path is validated
   await mkdir(outputPath, { recursive: true });
@@ -499,11 +495,19 @@ async function copySkillResources(
   const pathMap = new Map<string, string>();
   pathMap.set(toForwardSlash(skillPath), join(outputPath, 'SKILL.md'));
 
-  // Map all linked files to flat structure (using basenames)
+  // Determine base path for resource naming (fallback to skill directory)
+  const namingBasePath = packageRoot ?? dirname(skillPath);
+
+  // Map all linked files (using naming strategy - may create subdirectories)
   // Check for collisions
   for (const linkedFile of linkedFiles) {
-    const filename = basename(linkedFile);
-    const targetPath = join(outputPath, filename);
+    const targetRelPath = generateTargetPath(
+      linkedFile,
+      namingBasePath,
+      resourceNaming,
+      stripPrefix
+    );
+    const targetPath = join(outputPath, targetRelPath);
 
     // Check for filename collisions
     const existingSource = [...pathMap.entries()].find(
@@ -513,11 +517,14 @@ async function copySkillResources(
     // Normalize paths for comparison (handles Windows backslash vs forward slash)
     if (existingSource !== undefined && existingSource !== toForwardSlash(linkedFile)) {
       throw new Error(
-        `Filename collision detected when flattening skill structure:\n` +
+        `Filename collision detected when packaging skill:\n` +
         `  File 1: ${existingSource}\n` +
         `  File 2: ${linkedFile}\n` +
-        `  Both would be copied to: ${filename}\n` +
-        `  Cannot flatten structure with duplicate filenames.`
+        `  Both would be packaged as: ${targetRelPath}\n` +
+        `\n` +
+        `  To resolve: Use a different resourceNaming strategy or ensure unique filenames.\n` +
+        `  Current strategy: ${resourceNaming}\n` +
+        `  Try 'resource-id' or 'preserve-path' for path-based naming.`
       );
     }
 
@@ -529,10 +536,11 @@ async function copySkillResources(
     skillPath,
     join(outputPath, 'SKILL.md'),
     pathMap,
-    rewriteLinks
+    rewriteLinks,
+    excludeCtx,
   );
 
-  // Copy all linked files to flat structure
+  // Copy all linked files (structure depends on naming strategy)
   for (const linkedFile of linkedFiles) {
     const targetPath = pathMap.get(toForwardSlash(linkedFile));
     if (targetPath === undefined) {
@@ -543,30 +551,41 @@ async function copySkillResources(
       linkedFile,
       targetPath,
       pathMap,
-      rewriteLinks
+      rewriteLinks,
+      excludeCtx,
     );
   }
 }
 
 /**
- * Copy a markdown file, optionally rewriting links
+ * Copy a file, optionally rewriting markdown links
  *
- * If rewriteLinks is true, adjusts relative links to work from new flat location.
+ * For markdown files with rewriteLinks enabled, adjusts relative links to work
+ * from the new location and replaces links to excluded files using templates.
+ * For non-markdown files, performs a plain binary copy.
  *
  * @param sourcePath - Source file absolute path
  * @param targetPath - Target file absolute path
  * @param pathMap - Map of source paths to target paths (for flat structure)
  * @param rewriteLinks - Whether to rewrite links
+ * @param excludeCtx - Context for excluded file link rewriting
  */
 async function copyAndRewriteFile(
   sourcePath: string,
   targetPath: string,
   pathMap: Map<string, string>,
-  rewriteLinks: boolean
+  rewriteLinks: boolean,
+  excludeCtx?: ExcludeContext,
 ): Promise<void> {
   // Ensure target directory exists
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
   await mkdir(dirname(targetPath), { recursive: true });
+
+  // Non-markdown files: plain binary copy (no link rewriting)
+  if (!sourcePath.endsWith('.md')) {
+    await copyFile(sourcePath, targetPath);
+    return;
+  }
 
   if (!rewriteLinks) {
     // Simple copy
@@ -579,30 +598,48 @@ async function copyAndRewriteFile(
   let content = await readFile(sourcePath, 'utf-8');
 
   // Rewrite markdown links to work in flat structure
-  content = rewriteMarkdownLinks(content, (href) => {
+  content = rewriteMarkdownLinks(content, (href, text) => {
     // Keep external URLs and anchors unchanged
     if (href.startsWith('http://') || href.startsWith('https://') || href.startsWith('mailto:') || href.startsWith('#')) {
-      return href;
+      return rewriteHref(href);
     }
 
     // Split anchor from path
-    const [path, anchor] = href.split('#');
-    if (!path || path === '') {
+    const [linkPath, anchor] = href.split('#');
+    if (!linkPath || linkPath === '') {
       // Pure anchor link - keep as is
-      return href;
+      return rewriteHref(href);
     }
 
     // Resolve old link target (where it currently is)
     // Normalize to handle path separator differences
-    const oldLinkTarget = toForwardSlash(resolve(dirname(sourcePath), path));
+    const resolvedTarget = resolve(dirname(sourcePath), linkPath);
+    const normalizedTarget = toForwardSlash(resolvedTarget);
+
+    // Check if this link targets an excluded file
+    if (excludeCtx?.excludedFiles.has(normalizedTarget)) {
+      const info = excludeCtx.ruleMap.get(normalizedTarget);
+      const rule = info?.rule ?? info?.defaultRule ?? {};
+      const template = rule.template ?? DEFAULT_STRIP_TEMPLATE;
+      const context = {
+        link: {
+          text,
+          uri: href,
+          fileName: basename(resolvedTarget),
+          filePath: toForwardSlash(relative(excludeCtx.skillRoot, resolvedTarget)),
+        },
+        skill: { name: excludeCtx.skillName },
+      };
+      return replaceEntire(renderTemplate(template, context));
+    }
 
     // Look up where this file will be in the flat structure
     // pathMap keys are also normalized, so this should match
-    const newLinkTarget = pathMap.get(oldLinkTarget);
+    const newLinkTarget = pathMap.get(normalizedTarget);
     if (newLinkTarget === undefined) {
       // Link points to file not in package (external link already warned about)
       // Keep original href (will be broken, but user was warned)
-      return href;
+      return rewriteHref(href);
     }
 
     // In flat structure, all files are at same level, so just use basename
@@ -623,7 +660,7 @@ async function copyAndRewriteFile(
     const newHref = anchor ? `${relativePath}#${anchor}` : relativePath;
 
     // Use forward slashes for consistency
-    return toForwardSlash(newHref);
+    return rewriteHref(toForwardSlash(newHref));
   });
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Target path is constructed from validated paths
@@ -631,17 +668,43 @@ async function copyAndRewriteFile(
 }
 
 /**
+ * Result of a link transform operation.
+ * - 'rewrite-href': Replace the href but keep the link structure
+ * - 'replace-entire': Replace the entire link markup with a plain text replacement
+ */
+type LinkTransformResult =
+  | { type: 'rewrite-href'; href: string }
+  | { type: 'replace-entire'; replacement: string };
+
+/** Create a rewrite-href transform result */
+function rewriteHref(href: string): LinkTransformResult {
+  return { type: 'rewrite-href', href };
+}
+
+/** Create a replace-entire transform result */
+function replaceEntire(replacement: string): LinkTransformResult {
+  return { type: REPLACE_ENTIRE, replacement };
+}
+
+/**
+ * Transform function for link rewriting.
+ * Receives the href and link text, returns either a new href or a full replacement.
+ */
+type LinkTransform = (href: string, text: string) => LinkTransformResult;
+
+/**
  * Rewrite markdown links using a transform function
  *
- * Handles both inline links [text](href) and reference links [text][ref].
+ * Handles both inline links [text](href) and reference links [ref]: href.
+ * The transform can either rewrite the href or replace the entire link.
  *
  * @param content - Markdown content
- * @param transform - Function to transform each href
+ * @param transform - Function to transform each link
  * @returns Modified markdown content
  */
 function rewriteMarkdownLinks(
   content: string,
-  transform: (href: string) => string
+  transform: LinkTransform
 ): string {
   // Rewrite inline links: [text](href)
   // Input is from controlled markdown files, not untrusted user input
@@ -651,8 +714,11 @@ function rewriteMarkdownLinks(
     (_match, ...args) => {
       const text = String(args[0]);
       const href = String(args[1]);
-      const newHref = transform(href);
-      return `[${text}](${newHref})`;
+      const transformResult = transform(href, text);
+      if (transformResult.type === REPLACE_ENTIRE) {
+        return transformResult.replacement;
+      }
+      return `[${text}](${transformResult.href})`;
     }
   );
 
@@ -664,8 +730,11 @@ function rewriteMarkdownLinks(
     (_match, ...args) => {
       const ref = String(args[0]);
       const href = String(args[1]);
-      const newHref = transform(href.trim());
-      return `[${ref}]: ${newHref}`;
+      const transformResult = transform(href.trim(), ref);
+      if (transformResult.type === REPLACE_ENTIRE) {
+        return transformResult.replacement;
+      }
+      return `[${ref}]: ${transformResult.href}`;
     }
   );
 

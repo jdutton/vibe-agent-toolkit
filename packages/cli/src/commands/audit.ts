@@ -42,7 +42,7 @@ export function createAuditCommand(): Command {
     .description('Audit Claude plugins, marketplaces, registries, and skills')
     .argument('[path]', 'Path to audit (default: current directory)')
     .option('-r, --recursive', 'Scan directories recursively for all resource types')
-    .option('--user', 'Audit user-level Claude plugins and skills (~/.claude/plugins and ~/.claude/skills)')
+    .option('--user', 'Audit user-level Claude resources (~/.claude/plugins, ~/.claude/skills, ~/.claude/marketplaces)')
     .option('--verbose', 'Show all scanned resources, including those without issues')
     .option('--warn-unreferenced-files', 'Warn about files not referenced in skill markdown')
     .option('--debug', 'Enable debug logging')
@@ -65,7 +65,17 @@ Description:
 
   Path can be: resource directory, registry file, SKILL.md file, or scan directory
   Default: current directory
-  Use --user to audit user-level installation (~/.claude/plugins and ~/.claude/skills) automatically
+  Use --user to audit user-level installation automatically
+
+  --user scans:
+  - ~/.claude/plugins (installed plugins)
+  - ~/.claude/skills (standalone skills)
+  - ~/.claude/marketplaces (marketplace plugins)
+
+  --user skips:
+  - ~/.claude/projects (project-specific files)
+  - ~/.claude/logs (log files)
+  - ~/.claude/cache (cached data)
 
 Validation Behavior:
   Default: Validates SKILL.md and all transitively linked markdown files
@@ -86,10 +96,12 @@ Validation Checks:
   - Unreferenced files detected (with --warn-unreferenced-files)
 
 Exit Codes:
-  0 - Success  |  1 - Errors found  |  2 - System error
+  0 - Success (--user mode: always exits 0 for informational output)
+  1 - Errors found (non-user mode only)
+  2 - System error (directory not found, file not readable)
 
 Examples:
-  $ vat audit --user                   # Audit user-level plugins and skills installation
+  $ vat audit --user                   # Audit user-level installation (informational)
   $ vat audit                          # Audit current directory
   $ vat audit ./my-plugin              # Audit plugin directory
   $ vat audit installed_plugins.json   # Audit registry file
@@ -114,23 +126,26 @@ export async function auditCommand(
 
     // Handle --user flag
     if (options.user) {
-      const { pluginsDir, skillsDir } = getClaudeUserPaths();
+      const { pluginsDir, skillsDir, marketplacesDir } = getClaudeUserPaths();
 
-      // Check both directories exist
+      // Check if any target directories exist
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: path constructed from os.homedir()
       const pluginsDirExists = fs.existsSync(pluginsDir);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: path constructed from os.homedir()
       const skillsDirExists = fs.existsSync(skillsDir);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: path constructed from os.homedir()
+      const marketplacesDirExists = fs.existsSync(marketplacesDir);
 
-      if (!pluginsDirExists && !skillsDirExists) {
-        logger.error(`Neither user plugins nor skills directory found:`);
+      if (!pluginsDirExists && !skillsDirExists && !marketplacesDirExists) {
+        logger.error(`No user-level Claude directories found:`);
         logger.error(`  Plugins: ${pluginsDir}`);
         logger.error(`  Skills: ${skillsDir}`);
-        logger.error('Claude plugins/skills have not been installed yet.');
+        logger.error(`  Marketplaces: ${marketplacesDir}`);
+        logger.error('Claude plugins/skills/marketplaces have not been installed yet.');
         process.exit(2);
       }
 
-      // Scan both directories if they exist
+      // Scan all directories that exist
       const results: ValidationResult[] = [];
       recursive = true; // Always recursive for user-level audit
 
@@ -144,6 +159,12 @@ export async function auditCommand(
         logger.debug(`Auditing user-level skills at: ${skillsDir}`);
         const skillResults = await getValidationResults(skillsDir, recursive, options, logger);
         results.push(...skillResults);
+      }
+
+      if (marketplacesDirExists) {
+        logger.debug(`Auditing user-level marketplaces at: ${marketplacesDir}`);
+        const marketplaceResults = await getValidationResults(marketplacesDir, recursive, options, logger);
+        results.push(...marketplaceResults);
       }
 
       // Use hierarchical output for --user flag

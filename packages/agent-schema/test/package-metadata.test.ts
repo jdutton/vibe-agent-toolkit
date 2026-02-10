@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  PackagingOptionsSchema,
+  ValidationOverrideSchema,
   VatAgentMetadataSchema,
   VatPackageMetadataSchema,
   VatPureFunctionMetadataSchema,
@@ -259,5 +261,319 @@ describe('VatPackageMetadataSchema', () => {
 
     const result = VatPackageMetadataSchema.safeParse(minimalMetadata);
     expect(result.success).toBe(true);
+  });
+});
+
+describe('ValidationOverrideSchema', () => {
+  it('should validate simple string override', () => {
+    const simpleOverride = 'Acceptable because documentation explains workaround';
+
+    const result = ValidationOverrideSchema.safeParse(simpleOverride);
+    expect(result.success).toBe(true);
+  });
+
+  it('should validate object override with reason only', () => {
+    const objectOverride = {
+      reason: 'Legacy API compatibility required until v2.0',
+    };
+
+    const result = ValidationOverrideSchema.safeParse(objectOverride);
+    expect(result.success).toBe(true);
+  });
+
+  it('should validate object override with reason and expiration', () => {
+    const objectOverride = {
+      reason: 'Temporary workaround for upstream bug',
+      expires: '2026-06-30T00:00:00Z',
+    };
+
+    const result = ValidationOverrideSchema.safeParse(objectOverride);
+    expect(result.success).toBe(true);
+  });
+
+  it('should reject empty string override', () => {
+    const invalidOverride = '';
+
+    const result = ValidationOverrideSchema.safeParse(invalidOverride);
+    expect(result.success).toBe(false);
+  });
+
+  it('should reject object override with empty reason', () => {
+    const invalidOverride = {
+      reason: '',
+      expires: '2026-06-30T00:00:00Z',
+    };
+
+    const result = ValidationOverrideSchema.safeParse(invalidOverride);
+    expect(result.success).toBe(false);
+  });
+
+  it('should reject object override with invalid expiration format', () => {
+    const invalidOverride = {
+      reason: 'Valid reason',
+      expires: '2026-06-30', // Not ISO 8601 datetime
+    };
+
+    const result = ValidationOverrideSchema.safeParse(invalidOverride);
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('PackagingOptionsSchema', () => {
+  it('should validate packaging options with resourceNaming', () => {
+    const options = {
+      resourceNaming: 'resource-id' as const,
+    };
+
+    const result = PackagingOptionsSchema.safeParse(options);
+    expect(result.success).toBe(true);
+  });
+
+  it('should validate packaging options with stripPrefix', () => {
+    const options = {
+      stripPrefix: 'src/skills/',
+    };
+
+    const result = PackagingOptionsSchema.safeParse(options);
+    expect(result.success).toBe(true);
+  });
+
+  it('should validate packaging options with both fields', () => {
+    const options = {
+      resourceNaming: 'preserve-path' as const,
+      stripPrefix: 'resources/skills/',
+    };
+
+    const result = PackagingOptionsSchema.safeParse(options);
+    expect(result.success).toBe(true);
+  });
+
+  it('should validate empty packaging options', () => {
+    const options = {};
+
+    const result = PackagingOptionsSchema.safeParse(options);
+    expect(result.success).toBe(true);
+  });
+
+  it('should reject packaging options with invalid field types', () => {
+    const invalidOptions = {
+      resourceNaming: 'invalid-strategy', // Should be one of: basename, resource-id, preserve-path
+    };
+
+    const result = PackagingOptionsSchema.safeParse(invalidOptions);
+    expect(result.success).toBe(false);
+  });
+
+  describe('linkFollowDepth', () => {
+    it('should accept linkFollowDepth: 0', () => {
+      const result = PackagingOptionsSchema.safeParse({ linkFollowDepth: 0 });
+      expect(result.success).toBe(true);
+    });
+
+    it('should accept linkFollowDepth: 5 (not capped)', () => {
+      const result = PackagingOptionsSchema.safeParse({ linkFollowDepth: 5 });
+      expect(result.success).toBe(true);
+    });
+
+    it('should reject linkFollowDepth: -1 (negative)', () => {
+      const result = PackagingOptionsSchema.safeParse({ linkFollowDepth: -1 });
+      expect(result.success).toBe(false);
+    });
+
+    it('should reject linkFollowDepth: 1.5 (non-integer)', () => {
+      const result = PackagingOptionsSchema.safeParse({ linkFollowDepth: 1.5 });
+      expect(result.success).toBe(false);
+    });
+
+    it('should accept linkFollowDepth: "full"', () => {
+      const result = PackagingOptionsSchema.safeParse({ linkFollowDepth: 'full' });
+      expect(result.success).toBe(true);
+    });
+
+    it('should reject linkFollowDepth: "partial" (invalid string)', () => {
+      const result = PackagingOptionsSchema.safeParse({ linkFollowDepth: 'partial' });
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('excludeReferencesFromBundle', () => {
+    it('should accept rules array with defaultTemplate', () => {
+      const options = {
+        excludeReferencesFromBundle: {
+          rules: [
+            {
+              patterns: ['**/*.pdf'],
+            },
+          ],
+          defaultTemplate: '{{link.text}}',
+        },
+      };
+
+      const result = PackagingOptionsSchema.safeParse(options);
+      expect(result.success).toBe(true);
+    });
+
+    it('should accept empty rules array', () => {
+      const options = {
+        excludeReferencesFromBundle: {
+          rules: [],
+        },
+      };
+
+      const result = PackagingOptionsSchema.safeParse(options);
+      expect(result.success).toBe(true);
+    });
+
+    it('should accept rule with custom template', () => {
+      const options = {
+        excludeReferencesFromBundle: {
+          rules: [
+            {
+              patterns: ['knowledge-base/**/*.md'],
+              template: 'Search for: {{link.text}} in {{skill.name}}',
+            },
+          ],
+        },
+      };
+
+      const result = PackagingOptionsSchema.safeParse(options);
+      expect(result.success).toBe(true);
+    });
+
+    it('should default rules to empty array when omitted', () => {
+      const options = {
+        excludeReferencesFromBundle: {},
+      };
+
+      const result = PackagingOptionsSchema.safeParse(options);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.excludeReferencesFromBundle?.rules).toEqual([]);
+      }
+    });
+
+    it('should accept defaultTemplate string', () => {
+      const options = {
+        excludeReferencesFromBundle: {
+          defaultTemplate: '{{link.text}} (see {{link.fileName}})',
+        },
+      };
+
+      const result = PackagingOptionsSchema.safeParse(options);
+      expect(result.success).toBe(true);
+    });
+
+    it('should accept rule with patterns only (no template)', () => {
+      const options = {
+        excludeReferencesFromBundle: {
+          rules: [
+            {
+              patterns: ['**/*.pdf'],
+            },
+          ],
+        },
+      };
+
+      const result = PackagingOptionsSchema.safeParse(options);
+      expect(result.success).toBe(true);
+    });
+  });
+});
+
+describe('VatSkillMetadataSchema with validation overrides', () => {
+  it('should validate skill metadata with simple override', () => {
+    const skillWithOverride = {
+      name: TEST_SKILL_NAME,
+      source: TEST_SKILL_SOURCE,
+      path: TEST_SKILL_PATH,
+      ignoreValidationErrors: {
+        'DUPLICATE_RESOURCE': 'Intentional duplication for testing',
+      },
+    };
+
+    const result = VatSkillMetadataSchema.safeParse(skillWithOverride);
+    expect(result.success).toBe(true);
+  });
+
+  it('should validate skill metadata with extended override', () => {
+    const skillWithOverride = {
+      name: TEST_SKILL_NAME,
+      source: TEST_SKILL_SOURCE,
+      path: TEST_SKILL_PATH,
+      ignoreValidationErrors: {
+        'MISSING_FRONTMATTER': {
+          reason: 'Optional for examples',
+          expires: '2026-12-31T23:59:59Z',
+        },
+      },
+    };
+
+    const result = VatSkillMetadataSchema.safeParse(skillWithOverride);
+    expect(result.success).toBe(true);
+  });
+
+  it('should validate skill metadata with multiple overrides', () => {
+    const skillWithOverrides = {
+      name: TEST_SKILL_NAME,
+      source: TEST_SKILL_SOURCE,
+      path: TEST_SKILL_PATH,
+      ignoreValidationErrors: {
+        'DUPLICATE_RESOURCE': 'Intentional for testing',
+        'MISSING_FRONTMATTER': {
+          reason: 'Optional for examples',
+          expires: '2026-12-31T23:59:59Z',
+        },
+        'BROKEN_LINK': 'External link unavailable during build',
+      },
+    };
+
+    const result = VatSkillMetadataSchema.safeParse(skillWithOverrides);
+    expect(result.success).toBe(true);
+  });
+
+  it('should validate skill metadata with packaging options', () => {
+    const skillWithOptions = {
+      name: TEST_SKILL_NAME,
+      source: TEST_SKILL_SOURCE,
+      path: TEST_SKILL_PATH,
+      packagingOptions: {
+        resourceNaming: 'resource-id' as const,
+        stripPrefix: 'resources/skills/',
+      },
+    };
+
+    const result = VatSkillMetadataSchema.safeParse(skillWithOptions);
+    expect(result.success).toBe(true);
+  });
+
+  it('should validate skill metadata with both overrides and packaging options', () => {
+    const completeSkill = {
+      name: TEST_SKILL_NAME,
+      source: TEST_SKILL_SOURCE,
+      path: TEST_SKILL_PATH,
+      ignoreValidationErrors: {
+        'DUPLICATE_RESOURCE': 'Intentional duplication',
+      },
+      packagingOptions: {
+        resourceNaming: 'preserve-path' as const,
+      },
+    };
+
+    const result = VatSkillMetadataSchema.safeParse(completeSkill);
+    expect(result.success).toBe(true);
+  });
+
+  it('should reject skill metadata with invalid override format', () => {
+    const invalidSkill = {
+      name: TEST_SKILL_NAME,
+      source: TEST_SKILL_SOURCE,
+      path: TEST_SKILL_PATH,
+      ignoreValidationErrors: {
+        'DUPLICATE_RESOURCE': '', // Empty reason
+      },
+    };
+
+    const result = VatSkillMetadataSchema.safeParse(invalidSkill);
+    expect(result.success).toBe(false);
   });
 });

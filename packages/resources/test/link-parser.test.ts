@@ -23,6 +23,8 @@ import { parseMarkdown } from '../src/link-parser.js';
 
 import { expectHeadingStructure, findPackageRoot, writeAndParse } from './test-helpers.js';
 
+const EXAMPLE_URL = 'https://example.com';
+
 describe('link-parser', () => {
   let suiteDir: string;
   let tempDir: string;
@@ -130,7 +132,7 @@ Just plain text content.
       expect(result.links).toHaveLength(2);
       expect(result.links[0]).toMatchObject({
         text: 'Regular link',
-        href: 'https://example.com',
+        href: EXAMPLE_URL,
         type: 'external',
         line: 1,
       });
@@ -153,7 +155,7 @@ Just plain text content.
 
       expect(result.links).toHaveLength(2);
       expect(result.links[0]).toMatchObject({
-        href: 'https://example.com',
+        href: EXAMPLE_URL,
         type: 'external',
       });
       expect(result.links[1]).toMatchObject({
@@ -172,13 +174,20 @@ Just plain text content.
 
       const result = await parseMarkdown(filePath);
 
-      // Reference-style links are classified as 'unknown' since we don't resolve definitions
-      expect(result.links).toHaveLength(1);
+      // Both the linkReference node (unresolved) and the definition node (with URL) are extracted
+      expect(result.links).toHaveLength(2);
       expect(result.links[0]).toMatchObject({
         text: 'Reference link',
         href: 'ref1',
         type: 'unknown',
         line: 1,
+      });
+      // Definition node provides the actual URL
+      expect(result.links[1]).toMatchObject({
+        text: 'ref1',
+        href: EXAMPLE_URL,
+        type: 'external',
+        line: 3,
       });
     });
 

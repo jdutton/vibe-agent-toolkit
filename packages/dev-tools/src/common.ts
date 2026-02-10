@@ -8,7 +8,7 @@
 // File paths derived from PROJECT_ROOT constant (controlled, not user input)
 
 import { spawnSync } from 'node:child_process';
-import { readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -248,4 +248,179 @@ export function processWorkspacePackages<T extends PackageProcessResult>(
   }
 
   return { processed: processedCount, skipped: skippedCount };
+}
+
+/**
+ * Find all publishable packages in the monorepo
+ *
+ * @param packagesDir - Path to packages/ directory
+ * @param options - Configuration options
+ * @param options.skipUmbrellaPackage - Skip the umbrella package (vibe-agent-toolkit) for npm link
+ * @returns Array of package information
+ */
+export function findPublishablePackages(
+  packagesDir: string,
+  options: { skipUmbrellaPackage?: boolean } = {}
+): Array<{ name: string; path: string; packageJson: Record<string, unknown> }> {
+  const packages: Array<{ name: string; path: string; packageJson: Record<string, unknown> }> = [];
+
+  if (!existsSync(packagesDir)) {
+    return packages;
+  }
+
+  const entries = readdirSync(packagesDir, { withFileTypes: true });
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+
+    const packagePath = join(packagesDir, entry.name);
+    const packageJsonPath = join(packagePath, 'package.json');
+
+    if (!existsSync(packageJsonPath)) {
+      continue;
+    }
+
+    try {
+      const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8')) as Record<string, unknown>;
+
+      // Skip private packages (not published to npm)
+      if (packageJson['private'] === true) {
+        continue;
+      }
+
+      // Skip umbrella package if requested (for npm link, to avoid bin conflicts)
+      if (options.skipUmbrellaPackage && packageJson['name'] === 'vibe-agent-toolkit') {
+        continue;
+      }
+
+      packages.push({
+        name: packageJson['name'] as string,
+        path: packagePath,
+        packageJson,
+      });
+    } catch {
+      // Skip packages with invalid package.json
+      continue;
+    }
+  }
+
+  return packages;
+}
+
+type PackageInfo = { name: string; path: string; packageJson: Record<string, unknown> };
+
+/**
+ * Sort packages in topological order: leaf packages (no workspace deps) first,
+ * then packages that depend on them.
+ *
+ * This matters for `npm link` because npm's arborist resolves the full dependency
+ * tree during link. If a package has workspace:* deps on packages that aren't yet
+ * globally linked, arborist can crash with "Cannot read properties of null".
+ */
+function topologicalSort(packages: PackageInfo[]): PackageInfo[] {
+  const packageNames = new Set(packages.map(p => p.name));
+
+  function countWorkspaceDeps(pkg: PackageInfo): number {
+    const deps = pkg.packageJson['dependencies'] as Record<string, string> | undefined;
+    if (!deps) return 0;
+    return Object.entries(deps).filter(
+      ([name, version]) => packageNames.has(name) && typeof version === 'string' && version.startsWith('workspace:')
+    ).length;
+  }
+
+  return [...packages].sort((a, b) => countWorkspaceDeps(a) - countWorkspaceDeps(b));
+}
+
+/** Run handler on each package with a settle delay between operations */
+function runPackageBatch(
+  packages: PackageInfo[],
+  handler: (name: string, path: string) => boolean,
+  settleDelayMs: number,
+): { processed: number; failed: PackageInfo[] } {
+  let processed = 0;
+  const failed: PackageInfo[] = [];
+
+  for (const pkg of packages) {
+    if (handler(pkg.name, pkg.path)) {
+      processed++;
+    } else {
+      failed.push(pkg);
+    }
+    // Let npm's global state settle before the next link/unlink
+    if (settleDelayMs > 0) {
+      const start = Date.now();
+      while (Date.now() - start < settleDelayMs) { /* settle */ }
+    }
+  }
+
+  return { processed, failed };
+}
+
+/**
+ * Process packages with a given action (link or unlink)
+ *
+ * @param options - Configuration for processing packages
+ * @returns Exit code (0 = success, 1 = failure)
+ */
+export function processPackages(options: {
+  action: 'link' | 'unlink';
+  actionVerb: string; // "Linked" or "Unlinked"
+  introMessage: string;
+  successMessage: string;
+  packageHandler: (name: string, path: string) => boolean;
+  /** Milliseconds to wait between each package operation (default: 100) */
+  settleDelayMs?: number;
+}): number {
+  const { actionVerb, introMessage, successMessage, packageHandler, settleDelayMs = 100 } = options;
+
+  console.log(introMessage);
+
+  // Find repo root (2 levels up from dev-tools/dist)
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  const repoRoot = join(__dirname, '../../..');
+  const packagesDir = join(repoRoot, 'packages');
+
+  // Find all publishable packages (skip umbrella package to avoid bin conflicts)
+  const packages = findPublishablePackages(packagesDir, { skipUmbrellaPackage: true });
+
+  if (packages.length === 0) {
+    console.log('⚠️  No publishable packages found');
+    return 0;
+  }
+
+  // Sort: leaf packages first so their global links exist before dependents need them
+  const sorted = topologicalSort(packages);
+
+  console.log(`Found ${sorted.length} publishable package(s)\n`);
+
+  const first = runPackageBatch(sorted, packageHandler, settleDelayMs);
+  let { processed } = first;
+
+  // Retry failed packages once - ordering/timing issues often resolve on second pass
+  // because all leaf dependencies have been linked by now.
+  if (first.failed.length > 0) {
+    console.log(`\n🔄 Retrying ${first.failed.length} failed package(s)...\n`);
+    const retry = runPackageBatch(first.failed, packageHandler, settleDelayMs);
+    processed += retry.processed;
+    first.failed.length = 0;
+    first.failed.push(...retry.failed);
+  }
+
+  const failed = first.failed.length;
+
+  console.log('\n' + '='.repeat(60));
+  console.log(`✅ ${actionVerb}: ${processed} package(s)`);
+  if (failed > 0) {
+    console.log(`❌ Failed: ${failed} package(s)`);
+  }
+  console.log('='.repeat(60));
+
+  if (failed === 0) {
+    console.log(successMessage);
+    return 0;
+  }
+
+  return 1;
 }

@@ -8,6 +8,76 @@
 import { z } from 'zod';
 
 /**
+ * Validation override value
+ *
+ * Supports both simple string format and extended object format with expiration.
+ */
+export const ValidationOverrideSchema = z.union([
+  z.string().min(1).describe('Simple override reason'),
+  z.object({
+    reason: z.string().min(1).describe('Override reason'),
+    expires: z.string().datetime().optional().describe('Optional expiration date (ISO 8601)'),
+  }).describe('Extended override with optional expiration'),
+]).describe('Validation override (reason or reason + expiration)');
+
+export type ValidationOverride = z.infer<typeof ValidationOverrideSchema>;
+
+/**
+ * Packaging options for skill distribution
+ *
+ * Controls how skills are packaged and distributed.
+ */
+export const PackagingOptionsSchema = z.object({
+  resourceNaming: z
+    .enum(['basename', 'resource-id', 'preserve-path'])
+    .optional()
+    .describe(
+      'Strategy for naming packaged resource files:\n' +
+      '  - basename: Use original filename only (default, may conflict)\n' +
+      '  - resource-id: Flatten path to kebab-case filename (e.g., topics-quickstart-overview.md)\n' +
+      '  - preserve-path: Preserve directory structure (e.g., topics/quickstart/overview.md)'
+    ),
+  stripPrefix: z
+    .string()
+    .optional()
+    .describe('Path prefix to strip before applying naming strategy (e.g., "knowledge-base")'),
+  linkFollowDepth: z
+    .union([z.number().int().min(0), z.literal('full')])
+    .optional()
+    .describe(
+      'How deep to follow markdown links from SKILL.md for bundling:\n' +
+      '  0 = skill file only (no link following)\n' +
+      '  1 = direct links only\n' +
+      '  2 = direct + one transitive level (default, recommended)\n' +
+      '  N = N levels of transitive links\n' +
+      '  "full" = complete transitive closure (use with caution)'
+    ),
+  excludeReferencesFromBundle: z.object({
+    rules: z.array(z.object({
+      patterns: z.array(z.string())
+        .describe('Glob patterns matched against path relative to skill root'),
+      template: z.string()
+        .optional()
+        .describe(
+          'Handlebars template for rewriting links to matched files.\n' +
+          'Context: {{link.text}}, {{link.uri}}, {{link.fileName}}, {{link.filePath}}, {{skill.name}}\n' +
+          'Default: "{{link.text}}"'
+        ),
+    })).optional().default([])
+      .describe('Ordered rules evaluated first-match. Each rule matches file paths and specifies a rewrite template.'),
+    defaultTemplate: z.string()
+      .optional()
+      .describe(
+        'Handlebars template for non-bundled links that don\'t match any rule (depth-exceeded links).\n' +
+        'Context: {{link.text}}, {{link.uri}}, {{link.fileName}}, {{link.filePath}}, {{skill.name}}\n' +
+        'Default: "{{link.text}}"'
+      ),
+  }).optional(),
+}).describe('Packaging options for skill distribution');
+
+export type PackagingOptions = z.infer<typeof PackagingOptionsSchema>;
+
+/**
  * Skill metadata for distribution
  *
  * Describes a Claude Skill packaged in this npm package.
@@ -26,6 +96,13 @@ export const VatSkillMetadataSchema = z
       .string()
       .min(1)
       .describe('Built skill directory path (relative to package root)'),
+    ignoreValidationErrors: z
+      .record(z.string(), ValidationOverrideSchema)
+      .optional()
+      .describe('Validation errors to ignore (rule code -> override reason/config)'),
+    packagingOptions: PackagingOptionsSchema
+      .optional()
+      .describe('Packaging configuration options'),
   })
   .describe('Claude Skill metadata for distribution');
 

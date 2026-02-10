@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/utils",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "type": "module",
   "description": "Core utility functions with no external dependencies",
   "keywords": [
@@ -30,6 +30,7 @@
     "clean": "rimraf dist *.tsbuildinfo"
   },
   "dependencies": {
+    "handlebars": "^4.7.8",
     "ignore": "^7.0.5",
     "picomatch": "^4.0.3",
     "which": "^5.0.0"

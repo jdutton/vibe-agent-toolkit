@@ -210,6 +210,80 @@ The build process automatically includes:
 
 **You don't need to manually list files** - the builder follows links automatically.
 
+### Packaging Options
+
+Skills with large linked documentation trees can control what gets bundled using `packagingOptions` in the skill metadata.
+
+#### `linkFollowDepth`
+
+Controls how deep the builder follows markdown links from SKILL.md:
+
+| Value | Behavior |
+|-------|----------|
+| `0` | Skill file only (no links followed) |
+| `1` | Direct links only |
+| `2` | Direct + one transitive level **(default)** |
+| `N` | N levels of transitive links |
+| `"full"` | Complete transitive closure (use with caution) |
+
+Non-markdown assets (images, JSON schemas) linked from bundled files are always bundled regardless of depth.
+
+```json
+{
+  "vat": {
+    "skills": [{
+      "name": "my-skill",
+      "source": "./SKILL.md",
+      "path": "./dist/skills/my-skill",
+      "packagingOptions": {
+        "linkFollowDepth": 1
+      }
+    }]
+  }
+}
+```
+
+#### `excludeReferencesFromBundle`
+
+Controls which files are excluded by glob pattern and how their links are rewritten. Non-bundled links are replaced with rendered Handlebars templates so there are no dead links in the output.
+
+**Rules** are evaluated in order (first match wins). Each rule has glob patterns and an optional template:
+
+```json
+{
+  "packagingOptions": {
+    "linkFollowDepth": 1,
+    "excludeReferencesFromBundle": {
+      "rules": [
+        {
+          "patterns": ["**/concepts/**", "**/patterns/**"],
+          "template": "Use mcp__search to find: {{link.text}}"
+        },
+        {
+          "patterns": ["**/overview.md", "**/README.md"],
+          "template": "{{link.text}}"
+        }
+      ],
+      "defaultTemplate": "{{link.text}} (search knowledge base for details)"
+    }
+  }
+}
+```
+
+**Template variables** available in all templates:
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `{{link.text}}` | Link display text from markdown | `"Setup Guide"` |
+| `{{link.uri}}` | Original href from markdown | `"./docs/setup.md"` |
+| `{{link.fileName}}` | Target filename only | `"setup.md"` |
+| `{{link.filePath}}` | Path relative to skill root | `"docs/setup.md"` |
+| `{{skill.name}}` | Skill name from frontmatter | `"my-skill"` |
+
+**`defaultTemplate`** applies to non-bundled links that don't match any rule (e.g., depth-exceeded links). Default: `"{{link.text}}"` (strips the link, keeps the text).
+
+**When no rules are configured**, depth-exceeded links are stripped to plain text using the default template.
+
 ### Files Array
 
 Include built skills in npm package:
