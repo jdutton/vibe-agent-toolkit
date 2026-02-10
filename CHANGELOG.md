@@ -8,7 +8,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-
 - **External URL validation with caching** (#41)
   - Optional external URL validation via `--check-external-urls` flag
   - Filesystem-based cache with TTLs (24h alive, 1h dead)
@@ -24,24 +23,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `defaultTemplate` for depth-boundary links that don't match explicit rules (default: `"{{link.text}}"`)
   - Template variables: `{{link.text}}`, `{{link.uri}}`, `{{link.fileName}}`, `{{link.filePath}}`, `{{skill.name}}`
   - No dead links in output: every non-bundled link target is rewritten per its matched template
+- **Resource Naming Strategies for Skills** - Flexible control over packaged resource file naming
+  - Three strategies: `basename` (default, simple), `resource-id` (flatten to kebab-case), `preserve-path` (maintain directory structure)
+  - Universal `stripPrefix` option removes path prefixes before applying naming strategy
+  - Filename collision detection prevents duplicate names in flat output
+  - Configure via `packagingOptions` in skill metadata (package.json `vat.skills[]`)
 - **Non-Markdown Asset Bundling** - JSON schemas, images, and other non-markdown files linked from bundled markdown are now included in skill packages
 - **Handlebars Template Utility** - Shared template rendering in `@vibe-agent-toolkit/utils` with compiled template caching
+- **Directory Link Detection** - Links targeting directories now produce actionable validation errors suggesting README.md/index.md alternatives (previously crashed with ENOTSUP)
 - **Expanded Validation Metadata** - `directFileCount`, `excludedReferenceCount`, and `excludedReferences` in validation results
-  - `--verbose` flag on `vat skills validate` shows full excluded reference paths
+  - `--verbose` flag on `vat skills validate` shows excluded reference details with reason (`depth-exceeded` / `pattern-matched`) and matched pattern
+- **Packaging Options Documentation** - Comprehensive reference in VAT SKILL.md covering linkFollowDepth, resourceNaming, excludeReferencesFromBundle, and ignoreValidationErrors
 
 ### Changed
-- **BREAKING: Default link follow depth is now 2** (was unlimited). Skills that already pass validation are within depth 2 and unaffected. Use `linkFollowDepth: "full"` to restore unlimited behavior.
+- **Default link follow depth is now 2** (was unlimited). Use `linkFollowDepth: "full"` to restore unlimited behavior.
+- `LINK_TARGETS_DIRECTORY` validation is now overridable (transitively-bundled docs may contain directory links the skill author cannot control)
 
 ### Improved
 - **Navigation file errors** now include full resolved paths and line numbers (not just basename)
 - **Depth terminology** clarified as "link-chain hops" instead of misleading "levels deep"
-- **Resource Naming Strategies for Skills** - Flexible control over packaged resource file naming
-  - Three strategies: `basename` (default, simple), `resource-id` (flatten to kebab-case), `preserve-path` (maintain directory structure)
-  - Universal `stripPrefix` option removes path prefixes before applying naming strategy
-  - Prevents filename collisions in large knowledge bases with duplicate filenames
-  - Enables descriptive, path-based naming for better organization
-  - Tested in production with 493-file knowledge base (manuscript-tools)
-  - Configure via `packagingOptions` in skill metadata (package.json `vat.skills[]`)
 
 ## [0.1.11] - 2026-02-09
 

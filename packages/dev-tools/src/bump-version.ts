@@ -256,7 +256,7 @@ console.log('');
 // Update bun.lock to reflect version changes
 log('Updating bun.lock...', 'blue');
 try {
-  safeExecSync('bun', ['install'], {
+  safeExecSync('bun', ['install', '--lockfile-only'], {
     cwd: PROJECT_ROOT,
     stdio: ['ignore', 'inherit', 'inherit'], // stdin: ignore to prevent hanging in pipes/bg
   });
