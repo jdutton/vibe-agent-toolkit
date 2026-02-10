@@ -16,7 +16,7 @@ import type { VatSkillMetadata } from '@vibe-agent-toolkit/agent-schema';
 import { safeExecSync } from '@vibe-agent-toolkit/utils';
 import * as tar from 'tar';
 
-export type SkillSource = 'npm' | 'local' | 'zip' | 'npm-postinstall';
+export type SkillSource = 'npm' | 'local' | 'zip' | 'npm-postinstall' | 'dev';
 
 export interface PackageJsonVat {
   version?: string;
@@ -170,4 +170,16 @@ export function isGlobalNpmInstall(): boolean {
   const isInstallCommand = process.env['npm_command'] === 'install';
 
   return isGlobal && isPostinstall && isInstallCommand;
+}
+
+/**
+ * Write the common YAML header for skill command output
+ * Eliminates duplication between install and uninstall output functions
+ */
+export function writeYamlHeader(dryRun?: boolean): void {
+  process.stdout.write('---\n');
+  process.stdout.write(`status: success\n`);
+  if (dryRun) {
+    process.stdout.write(`dryRun: true\n`);
+  }
 }

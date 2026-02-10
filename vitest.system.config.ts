@@ -11,11 +11,11 @@ export default defineConfig({
     exclude: [
       '**/node_modules/**',
       '**/dist/**',
-      // Windows: Skip full-project tests (10-20x slower filesystem), use fast fixture tests instead
+      // Windows: Skip tests that require symlinks (--dev install) or full-project scans (10-20x slower)
       // skills-list-fixture.system.test.ts and skills-validate-fixture.system.test.ts provide Windows coverage
-      // Full-project tests below run on Mac/Linux for comprehensive validation
       ...(process.platform === 'win32'
         ? [
+            'packages/cli/test/system/skills-install-dev.system.test.ts',
             'packages/cli/test/system/skills-list.system.test.ts',
             'packages/cli/test/system/skills-validate.system.test.ts',
           ]

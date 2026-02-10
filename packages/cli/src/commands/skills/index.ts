@@ -10,6 +10,7 @@ import { createBuildCommand } from './build.js';
 import { createInstallCommand } from './install.js';
 import { listCommand } from './list.js';
 import { createPackageCommand } from './package.js';
+import { createUninstallCommand } from './uninstall.js';
 import { createValidateCommand } from './validate-command.js';
 
 export function createSkillsCommand(): Command {
@@ -24,9 +25,10 @@ export function createSkillsCommand(): Command {
 Examples:
   $ vat skills validate                               # Validate all skills
   $ vat skills build                                  # Build skills from package.json
-  $ vat skills package resources/skills/SKILL.md      # Package a skill
-  $ vat skills install ./my-skill.zip                 # Install from ZIP
-  $ vat skills list                                   # List installed skills
+  $ vat skills install --dev                          # Dev-install (symlink) all skills
+  $ vat skills install --build                        # Build then dev-install
+  $ vat skills uninstall --all                        # Uninstall all package skills
+  $ vat skills list --user                            # List installed skills
 
 Distribution Workflow:
   1. Validate: Ensure SKILL.md is valid
@@ -35,12 +37,14 @@ Distribution Workflow:
   4. Share: Distribute via npm or GitHub releases
   5. Install: Users install from npm or extract ZIP to ~/.claude/plugins/
 
+Development Workflow:
+  1. Build: vat skills build
+  2. Install: vat skills install --dev (or --build to combine)
+  3. Iterate: Rebuild, /reload-skills in Claude Code
+  4. Clean up: vat skills uninstall --all
+
 For detailed command help:
-  $ vat skills validate --help
-  $ vat skills build --help
-  $ vat skills package --help
-  $ vat skills install --help
-  $ vat skills list --help
+  $ vat skills <command> --help
 `
     );
 
@@ -49,6 +53,7 @@ For detailed command help:
   command.addCommand(createBuildCommand());
   command.addCommand(createPackageCommand());
   command.addCommand(createInstallCommand());
+  command.addCommand(createUninstallCommand());
   command.addCommand(createListCommand());
 
   return command;

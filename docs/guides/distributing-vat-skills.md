@@ -358,12 +358,18 @@ ls -la dist/skills/
 ### 2. Test Locally
 
 ```bash
-# Install from local directory
-vat skills install ./path/to/your-package --force
+# Dev-install: symlinks skills from package.json (rebuilds reflected instantly)
+vat skills install --dev
 
-# Verify in Claude Code
-vat skills list --installed
+# Or build + dev-install in one step:
+vat skills install --build
+
+# Verify
+vat skills list --user
 ```
+
+> **Why symlinks?** After `vat skills build`, the built output in `dist/skills/` has rewritten links.
+> A symlink means rebuilds are immediately visible to Claude Code after `/reload-skills`.
 
 ### 3. Publish to npm
 
@@ -673,13 +679,74 @@ vat skills install npm:your-package --project
 
 **Would install to:** `.claude/skills/<skill-name>`
 
-### Update and Uninstall
+### Uninstall
 
-**Not yet implemented** - future enhancement:
+Remove installed skills (directories or symlinks):
+
 ```bash
-vat skills update my-skill      # Reinstall from original source
-vat skills uninstall my-skill   # Remove skill directory
+# Remove a single skill
+vat skills uninstall my-skill
+
+# Remove all skills declared in package.json
+vat skills uninstall --all
+
+# Preview removal without deleting
+vat skills uninstall --all --dry-run
 ```
+
+### Update
+
+To update a skill, rebuild and reinstall:
+
+```bash
+# For dev installs (symlinks): just rebuild
+vat skills build
+# Then /reload-skills in Claude Code
+
+# For copied installs: rebuild and reinstall
+vat skills build
+vat skills install ./dist/skills/my-skill --force
+```
+
+## Development Workflow
+
+During development, use symlink-based installation for fast iteration:
+
+```bash
+# 1. Build skills
+vat skills build
+
+# 2. Dev-install (creates symlinks to built output)
+vat skills install --dev
+
+# 3. After changes, rebuild (symlinks reflect updates immediately)
+vat skills build
+# Then /reload-skills in Claude Code
+
+# 4. Clean up when done
+vat skills uninstall --all
+```
+
+**Shortcut:** Combine build + install:
+```bash
+vat skills install --build        # Build then symlink all skills
+vat skills install --build --name my-skill  # Build then symlink one skill
+```
+
+### Post-npm-install Reinstallation
+
+If your project has its own CLI, you can re-run skill installation after `npm install`:
+
+```bash
+# In your project's CLI or package.json scripts:
+vat skills install --dev --force
+
+# Or from your project's postinstall script (only for global installs):
+"postinstall": "vat skills install --npm-postinstall || exit 0"
+```
+
+The `--npm-postinstall` flag only activates during `npm install -g` (not `npm link` or local installs).
+For local development, use `--dev` mode instead.
 
 ## References
 
