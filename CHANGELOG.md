@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.12] - 2026-02-10
+
 ### Added
 - **External URL validation with caching** (#41)
   - Optional external URL validation via `--check-external-urls` flag
@@ -42,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Improved
 - **Navigation file errors** now include full resolved paths and line numbers (not just basename)
 - **Depth terminology** clarified as "link-chain hops" instead of misleading "levels deep"
+
+### Internal
+- **npm link reliability** - Topological sort, `--install-strategy=shallow`, and retry logic for workspace package linking
 
 ## [0.1.11] - 2026-02-09
 

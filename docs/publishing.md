@@ -79,9 +79,9 @@ CHANGELOG.md uses a strict format. **RC/prerelease versions NEVER get their own 
 
 **Normal Release Workflow:**
 
-1. **Update CHANGELOG.md** (if needed)
+1. **Update CHANGELOG.md**
    - **RC releases**: Ensure changes are documented in `[Unreleased]` section
-   - **Stable releases**: Move `[Unreleased]` → `## [X.Y.Z] - YYYY-MM-DD`
+   - **Stable releases**: Move `[Unreleased]` content → `## [X.Y.Z] - YYYY-MM-DD`
 
 2. **Bump version**:
    ```bash
@@ -89,11 +89,18 @@ CHANGELOG.md uses a strict format. **RC/prerelease versions NEVER get their own 
    bun run bump-version 0.1.0       # For stable
    ```
 
-3. **Build and verify**:
+3. **Build and run pre-publish check** (catches CHANGELOG, version, metadata issues):
    ```bash
    bun run build
-   bun run validate-version
+   bun run pre-publish
    ```
+   This runs full validation AND checks:
+   - CHANGELOG has entry for current version (stable releases)
+   - All packages built, versions synchronized
+   - Package metadata complete (repository, author, license)
+   - No uncommitted changes or untracked files
+
+   **Do NOT skip this step** - the CI publish workflow runs the same check and will fail if it finds issues.
 
 4. **Commit and tag**:
    ```bash
