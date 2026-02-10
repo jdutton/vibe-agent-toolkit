@@ -281,4 +281,4 @@ externalUrlValidation:
 
 ## Related Documentation
 
-- [Resources Validation](../packages/resources/README.md#validation)
+- [Resources Package](../packages/resources/README.md)
