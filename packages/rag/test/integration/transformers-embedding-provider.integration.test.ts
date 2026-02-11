@@ -9,6 +9,8 @@ import { describe, it, expect } from 'vitest';
 
 import { TransformersEmbeddingProvider } from '../../src/embedding-providers/transformers-embedding-provider.js';
 
+import { assertBatchEmbedding } from './embedding-test-helpers.js';
+
 const DEFAULT_MODEL = 'Xenova/all-MiniLM-L6-v2';
 
 describe('TransformersEmbeddingProvider', () => {
@@ -79,13 +81,7 @@ describe('TransformersEmbeddingProvider', () => {
   });
 
   it('should embed batch of texts', async () => {
-    const texts = ['Hello', 'world', 'test'];
-    const embeddings = await provider.embedBatch(texts);
-
-    expect(embeddings).toHaveLength(3);
-    expect(embeddings[0]).toHaveLength(384);
-    expect(embeddings[1]).toHaveLength(384);
-    expect(embeddings[2]).toHaveLength(384);
+    await assertBatchEmbedding(provider, 384);
   });
 
   it('should handle empty batch', async () => {
