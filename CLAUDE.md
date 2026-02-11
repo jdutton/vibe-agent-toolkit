@@ -272,7 +272,7 @@ For small test data (<10 files), raw files in `test/fixtures/` are fine.
 
 ### Code Quality Thresholds
 
-- **Test Coverage**: 80% minimum (statements, branches, functions, lines)
+- **Test Coverage**: Currently enforced at 70% (statements, branches, functions, lines). Goal: 80%+. See [Test Pyramid and Coverage](#test-pyramid-and-coverage) for details.
 - **Code Duplication**: **ZERO TOLERANCE** - See Critical Duplication Policy below
 - **SonarQube**: Configured for free tier (sonarway) - ESLint catches issues first
 
@@ -311,13 +311,23 @@ Only the project owner can approve baseline updates. This is non-negotiable.
 3. **Run `bun run duplication-check`** - Before every commit (CI will fail if duplication detected)
 4. **Zero tolerance for duplication** - Refactor to eliminate, never update the baseline
 
-### Test Types
+### Test Pyramid and Coverage
 
-| Type | Location | Command | Speed |
-|------|----------|---------|-------|
-| Unit | `test/*.test.ts` | `bun run test:unit` | < 100ms |
-| Integration | `test/integration/*.integration.test.ts` | `bun run test:integration` | < 5s |
-| System | `test/system/*.system.test.ts` | `bun run test:system` | < 30s |
+Follow the standard test pyramid: **unit > integration > system**.
+
+| Type | Location | Command | Speed | Coverage? |
+|------|----------|---------|-------|-----------|
+| Unit | `test/*.test.ts` | `bun run test:unit` | < 100ms | **Yes** |
+| Integration | `test/integration/*.integration.test.ts` | `bun run test:integration` | < 5s | No |
+| System | `test/system/*.system.test.ts` | `bun run test:system` | < 30s | No |
+
+**Only unit tests are coverage-instrumented.** If Codecov flags low patch coverage, add unit tests.
+
+**When to write unit tests**: Pure logic, data transformations, algorithms, schema validation, anything testable without I/O. These should be the bulk of your tests.
+
+**When to write integration tests**: Wiring between real components — database queries, file system operations, multi-module workflows. Verify the glue, not the logic.
+
+**Design implication**: Extract pure logic into standalone functions so it can be unit tested. Keep I/O orchestration thin and test it via integration tests.
 
 ### Running Tests
 
@@ -340,7 +350,7 @@ bun run test:unit          # Unit tests only
 bun run test:watch         # Watch mode for development
 bun run test:integration   # Integration tests only
 bun run test:system        # System tests only (e2e)
-bun run test:coverage      # All tests with coverage report
+bun run test:coverage      # Unit tests with coverage report
 ```
 
 **For AI assistants:** Never suggest `bun test`. Always use `vv validate` or `bun run test:*` commands.
@@ -473,7 +483,7 @@ See [packages/cli/CLAUDE.md](packages/cli/CLAUDE.md) for more CLI development gu
 
 - Follow Clean Code principles (DRY, SOLID, KISS)
 - No SonarQube "code smells" or vulnerabilities
-- All code must have tests (aim for >80% coverage)
+- All code must have tests (see [Code Quality Thresholds](#code-quality-thresholds) for coverage targets)
 - Document public APIs with JSDoc comments
 - Commit messages follow conventional commits format
 

@@ -11,18 +11,19 @@
  * - When storeDocuments is disabled (default), no documents table is created
  */
 
-import type { ContentTransformOptions } from '@vibe-agent-toolkit/resources';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
-import { createTestMarkdownFile, createTestResource, setupLanceDBTestSuite } from '../test-helpers.js';
+import {
+  createLinkRewriteTransform,
+  createTestMarkdownFile,
+  createTestResource,
+  setupLanceDBTestSuite,
+} from '../test-helpers.js';
 
 /** Shared config for provider creation with document storage enabled */
 const STORE_DOCS_CONFIG = { storeDocuments: true } as const;
 
-// Repeated resource IDs
-const LOCAL_FILE_TYPE = 'local_file';
-const DOC_1_ID = 'doc-1';
 const UPDATE_DOC_ID = 'update-doc';
 const DELETE_DOC_ID = 'delete-doc';
 
@@ -56,17 +57,16 @@ This is a test document for document storage.
 Content in section 1 about testing.`
     );
 
-    const resource = await createTestResource(filePath, DOC_1_ID);
+    const resource = await createTestResource(filePath, 'doc-1');
     const result = await suite.provider.indexResources([resource]);
     expect(result.resourcesIndexed).toBe(1);
     expect(result.errors).toEqual([]);
 
-    // Reconnect to ensure fresh connection for getDocument
     await reconnectProvider();
 
-    const doc = await suite.provider.getDocument(DOC_1_ID);
+    const doc = await suite.provider.getDocument('doc-1');
     expect(doc).not.toBeNull();
-    expect(doc?.resourceId).toBe(DOC_1_ID);
+    expect(doc?.resourceId).toBe('doc-1');
     expect(doc?.filePath).toBe(filePath);
     expect(doc?.content).toContain('Test Document');
     expect(doc?.content).toContain('Content in section 1');
@@ -78,14 +78,7 @@ Content in section 1 about testing.`
   });
 
   it('should store transformed content when contentTransform is configured', async () => {
-    const contentTransform: ContentTransformOptions = {
-      linkRewriteRules: [
-        {
-          match: { type: LOCAL_FILE_TYPE },
-          template: '{{link.text}} (see: {{link.href}})',
-        },
-      ],
-    };
+    const contentTransform = createLinkRewriteTransform('{{link.text}} (see: {{link.href}})');
 
     suite.provider = await LanceDBRAGProvider.create({
       dbPath: suite.dbPath,
@@ -104,7 +97,7 @@ This references [another file](./other.md) for details.`
     const resource = await createTestResource(filePath, 'transformed-doc');
 
     // Verify links were parsed
-    expect(resource.links.some((l) => l.type === LOCAL_FILE_TYPE)).toBe(true);
+    expect(resource.links.some((l) => l.type === 'local_file')).toBe(true);
 
     const result = await suite.provider.indexResources([resource]);
     expect(result.resourcesIndexed).toBe(1);
@@ -113,9 +106,7 @@ This references [another file](./other.md) for details.`
 
     const doc = await suite.provider.getDocument('transformed-doc');
     expect(doc).not.toBeNull();
-    // Content should contain rewritten link format
     expect(doc?.content).toContain('another file (see: ./other.md)');
-    // Original markdown link syntax should NOT be present
     expect(doc?.content).not.toContain('[another file](./other.md)');
   });
 
@@ -147,13 +138,11 @@ Important security information about authentication.`
     const doc = await suite.provider.getDocument('meta-doc');
     expect(doc).not.toBeNull();
     expect(doc?.metadata).toBeDefined();
-    // Default metadata schema fields should be present
     expect(doc?.metadata['title']).toBe('Security Guide');
     expect(doc?.metadata['type']).toBe('guide');
   });
 
   it('should return null when storeDocuments is not enabled', async () => {
-    // Default: storeDocuments = false
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath });
 
     const filePath = await createTestMarkdownFile(
@@ -165,7 +154,6 @@ Important security information about authentication.`
     const resource = await createTestResource(filePath, 'no-store-doc');
     await suite.provider.indexResources([resource]);
 
-    // getDocument should return null because rag_documents table doesn't exist
     const doc = await suite.provider.getDocument('no-store-doc');
     expect(doc).toBeNull();
   });
@@ -191,7 +179,6 @@ Important security information about authentication.`
   it('should update document when resource content changes', async () => {
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath, ...STORE_DOCS_CONFIG });
 
-    // Index original content
     const originalPath = await createTestMarkdownFile(
       suite.tempDir,
       'original.md',
@@ -200,7 +187,6 @@ Important security information about authentication.`
     const resource = await createTestResource(originalPath, UPDATE_DOC_ID);
     await suite.provider.indexResources([resource]);
 
-    // Modify content and re-index with same resourceId
     const modifiedPath = await createTestMarkdownFile(
       suite.tempDir,
       'modified.md',
@@ -233,20 +219,15 @@ Important security information about authentication.`
       const resource = await createTestResource(filePath, DELETE_DOC_ID);
       await suite.provider.indexResources([resource]);
 
-      // Close and reopen to avoid Arrow buffer issues
       await reconnectProvider();
 
-      // Verify document exists
       let doc = await suite.provider.getDocument(DELETE_DOC_ID);
       expect(doc).not.toBeNull();
 
-      // Delete the resource
       await suite.provider.deleteResource(DELETE_DOC_ID);
 
-      // Close and reopen again after deletion
       await reconnectProvider();
 
-      // Document should be gone
       doc = await suite.provider.getDocument(DELETE_DOC_ID);
       expect(doc).toBeNull();
     }
@@ -263,11 +244,9 @@ Important security information about authentication.`
     const resource = await createTestResource(filePath, 'default-doc');
     await suite.provider.indexResources([resource]);
 
-    // Chunks should be indexed
     const stats = await suite.provider.getStats();
     expect(stats.totalChunks).toBeGreaterThan(0);
 
-    // But getDocument returns null (no documents table)
     const doc = await suite.provider.getDocument('default-doc');
     expect(doc).toBeNull();
   });
@@ -306,7 +285,6 @@ Important security information about authentication.`
   it('should preserve existing documents when indexing new resources', async () => {
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath, ...STORE_DOCS_CONFIG });
 
-    // Index first batch
     const file1 = await createTestMarkdownFile(
       suite.tempDir,
       'batch1.md',
@@ -315,7 +293,6 @@ Important security information about authentication.`
     const resource1 = await createTestResource(file1, 'batch-1');
     await suite.provider.indexResources([resource1]);
 
-    // Index second batch (different resource)
     const file2 = await createTestMarkdownFile(
       suite.tempDir,
       'batch2.md',
@@ -326,7 +303,6 @@ Important security information about authentication.`
 
     await reconnectProvider();
 
-    // Both documents should exist
     const doc1 = await suite.provider.getDocument('batch-1');
     expect(doc1).not.toBeNull();
     expect(doc1?.content).toContain('First batch content');

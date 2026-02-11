@@ -10,7 +10,6 @@ import path from 'node:path';
 import type { Connection, Table } from '@lancedb/lancedb';
 import * as lancedb from '@lancedb/lancedb';
 import type {
-  CoreRAGChunk,
   DefaultRAGMetadata,
   DocumentResult,
   EmbeddingProvider,
@@ -37,6 +36,7 @@ import {
 } from '@vibe-agent-toolkit/resources';
 import type { ZodObject, ZodRawShape } from 'zod';
 
+import { createDocumentRecord, overlayChunkMetadata, type DocumentRecord } from './document-helpers.js';
 import { buildWhereClause, escapeSQLString } from './filter-builder.js';
 import {
   chunkToLanceRow,
@@ -123,21 +123,6 @@ function getDirectorySize(dirPath: string): number {
 
 const TABLE_NAME = 'rag_chunks';
 const DOCUMENTS_TABLE_NAME = 'rag_documents';
-
-/**
- * Accumulated document record collected during indexing.
- * Stored to rag_documents table when storeDocuments is enabled.
- */
-interface DocumentRecord {
-  resourceid: string;
-  filepath: string;
-  content: string;
-  contenthash: string;
-  tokencount: number;
-  totalchunks: number;
-  indexedat: number;
-  [key: string]: string | number;
-}
 
 /**
  * Required configuration after defaults applied
@@ -524,67 +509,6 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
   }
 
   /**
-   * Overlay custom metadata from resource frontmatter onto enriched RAG chunks.
-   *
-   * Iterates the metadata schema keys and copies matching frontmatter values
-   * onto each chunk, producing typed chunks with metadata included.
-   */
-  private overlayChunkMetadata(
-    ragChunks: CoreRAGChunk[],
-    frontmatter: Record<string, unknown> | undefined,
-  ): (CoreRAGChunk & TMetadata)[] {
-    return ragChunks.map((chunk) => {
-      const chunkWithMetadata: Record<string, unknown> = { ...chunk };
-
-      if (frontmatter) {
-        for (const key of Object.keys(this.metadataSchema.shape)) {
-          if (key in frontmatter) {
-            chunkWithMetadata[key] = frontmatter[key];
-          }
-        }
-      }
-
-      return chunkWithMetadata as CoreRAGChunk & TMetadata;
-    });
-  }
-
-  /**
-   * Create a DocumentRecord for the rag_documents table.
-   *
-   * Builds the record from resource metadata, transformed content,
-   * and overlays frontmatter fields using the metadata schema.
-   */
-  private createDocumentRecord(
-    resource: ResourceMetadata,
-    content: string,
-    contentHash: string,
-    totalChunks: number,
-  ): DocumentRecord {
-    const documentRecord: DocumentRecord = {
-      resourceid: resource.id,
-      filepath: resource.filePath,
-      content,
-      contenthash: contentHash,
-      tokencount: this.tokenCounter.count(content),
-      totalchunks: totalChunks,
-      indexedat: Date.now(),
-    };
-
-    if (resource.frontmatter) {
-      for (const key of Object.keys(this.metadataSchema.shape)) {
-        if (key in resource.frontmatter) {
-          const value = resource.frontmatter[key];
-          documentRecord[key.toLowerCase()] = typeof value === 'string' || typeof value === 'number'
-            ? value
-            : JSON.stringify(value);
-        }
-      }
-    }
-
-    return documentRecord;
-  }
-
-  /**
    * Index a single resource
    */
   private async indexResource(
@@ -646,7 +570,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     );
 
     // Add custom metadata from resource.frontmatter to each chunk
-    const chunksWithMetadata = this.overlayChunkMetadata(ragChunks, resource.frontmatter);
+    const chunksWithMetadata = overlayChunkMetadata<TMetadata>(ragChunks, resource.frontmatter, this.metadataSchema);
 
     // Convert to LanceDB rows using the metadata schema
     const rows = chunksWithMetadata.map((chunk) =>
@@ -663,7 +587,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     // Accumulate document record for rag_documents table
     if (this.config.storeDocuments) {
       this.pendingDocuments.push(
-        this.createDocumentRecord(resource, content, resourceContentHash, rows.length)
+        createDocumentRecord(resource, content, resourceContentHash, rows.length, this.tokenCounter, this.metadataSchema)
       );
     }
 
