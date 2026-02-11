@@ -423,7 +423,8 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       chunkingResult.chunks,
       chunkableResource,
       embeddings,
-      this.config.embeddingProvider.model
+      this.config.embeddingProvider.model,
+      this.tokenCounter,
     );
 
     // Add custom metadata from resource.frontmatter to each chunk

@@ -69,6 +69,8 @@ function createTestRow(metadata: Record<string, unknown>) {
     contenthash: TEST_CONTENT_HASH,
     resourcecontenthash: TEST_RESOURCE_CONTENT_HASH,
     tokencount: 5,
+    chunkindex: -1,
+    totalchunks: -1,
     vector: TEST_EMBEDDING,
     embeddingmodel: TEST_MODEL,
     embeddedat: TEST_DATE.getTime(),
@@ -431,6 +433,8 @@ describe('round-trip serialization', () => {
       content: TEST_CONTENT,
       contentHash: TEST_CONTENT_HASH,
       tokenCount: 5,
+      chunkIndex: 2,
+      totalChunks: 5,
       embedding: TEST_EMBEDDING,
       embeddingModel: TEST_MODEL,
       embeddedAt: TEST_DATE,
@@ -453,6 +457,8 @@ describe('round-trip serialization', () => {
     expect(restored.content).toBe(chunk.content);
     expect(restored.contentHash).toBe(chunk.contentHash);
     expect(restored.tokenCount).toBe(chunk.tokenCount);
+    expect(restored.chunkIndex).toBe(chunk.chunkIndex);
+    expect(restored.totalChunks).toBe(chunk.totalChunks);
     expect(restored.embedding).toEqual(chunk.embedding);
     expect(restored.embeddingModel).toBe(chunk.embeddingModel);
     expect(restored.embeddedAt).toEqual(chunk.embeddedAt);
@@ -466,5 +472,15 @@ describe('round-trip serialization', () => {
     expect(restored.title).toBe(chunk.title);
     expect(restored.headingPath).toBe(chunk.headingPath);
     expect(restored.headingLevel).toBe(chunk.headingLevel);
+  });
+
+  it('should deserialize sentinel values (-1) for chunkIndex and totalChunks as undefined', () => {
+    const row = createTestRowWithDefaultMetadata();
+    // Simulate row with sentinel values for chunk position
+    const rowWithSentinels = { ...row, chunkindex: -1, totalchunks: -1 };
+    const chunk = lanceRowToChunk(rowWithSentinels, DefaultRAGMetadataSchema);
+
+    expect(chunk.chunkIndex).toBeUndefined();
+    expect(chunk.totalChunks).toBeUndefined();
   });
 });

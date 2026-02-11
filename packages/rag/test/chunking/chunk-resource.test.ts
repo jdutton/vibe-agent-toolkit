@@ -187,8 +187,9 @@ describe('enrichChunks', () => {
   const TEST_MODEL = 'test-model';
   const TEST_FILE_PATH = '/test.md';
 
-  it('should enrich raw chunks with RAGChunk metadata', () => {
-    const resource: ChunkableResource = {
+  /** Create a minimal ChunkableResource for enrichChunks tests */
+  function createResource(overrides?: Partial<ChunkableResource>): ChunkableResource {
+    return {
       id: TEST_RESOURCE_ID,
       filePath: TEST_FILE_PATH,
       content: 'Test content',
@@ -196,8 +197,13 @@ describe('enrichChunks', () => {
       estimatedTokenCount: 10,
       links: [],
       headings: [],
-      frontmatter: { tags: ['test'], title: 'Test' },
+      frontmatter: {},
+      ...overrides,
     };
+  }
+
+  it('should enrich raw chunks with RAGChunk metadata', () => {
+    const resource = createResource({ frontmatter: { tags: ['test'], title: 'Test' } });
 
     const rawChunks = [
       { content: 'Chunk 1', headingPath: 'Section 1', headingLevel: 1 },
@@ -239,25 +245,68 @@ describe('enrichChunks', () => {
     });
   });
 
-  it('should handle single chunk correctly', () => {
-    const resource: ChunkableResource = {
-      id: TEST_RESOURCE_ID,
-      filePath: '/test.md',
-      content: 'Test',
-      contentHash: 'abc123',
-      estimatedTokenCount: 5,
-      links: [],
-      headings: [],
-      frontmatter: {},
-    };
+  it('should set tokenCount to 0 when no tokenCounter is provided', () => {
+    const resource = createResource();
+    const rawChunks = [
+      { content: 'Some text content here' },
+      { content: 'More text content here' },
+    ];
+    const embeddings = [[0.1, 0.2], [0.3, 0.4]];
 
+    const enriched = enrichChunks(rawChunks, resource, embeddings, TEST_MODEL);
+
+    expect(enriched[0]?.tokenCount).toBe(0);
+    expect(enriched[1]?.tokenCount).toBe(0);
+  });
+
+  it('should populate tokenCount when tokenCounter is provided', () => {
+    const resource = createResource();
+    const rawChunks = [
+      { content: 'Some text content here' },
+      { content: 'A longer piece of text content that should have more tokens than the first chunk' },
+    ];
+    const embeddings = [[0.1, 0.2], [0.3, 0.4]];
+
+    const counter = new ApproximateTokenCounter();
+    const enriched = enrichChunks(rawChunks, resource, embeddings, TEST_MODEL, counter);
+
+    // Token counts should be positive (not the default 0)
+    expect(enriched[0]?.tokenCount).toBeGreaterThan(0);
+    expect(enriched[1]?.tokenCount).toBeGreaterThan(0);
+
+    // Token counts should match what the counter returns directly
+    expect(enriched[0]?.tokenCount).toBe(counter.count(rawChunks[0]?.content ?? ''));
+    expect(enriched[1]?.tokenCount).toBe(counter.count(rawChunks[1]?.content ?? ''));
+
+    // Second chunk should have more tokens than the first
+    expect(enriched[1]?.tokenCount).toBeGreaterThan(enriched[0]?.tokenCount ?? 0);
+  });
+
+  it('should populate chunkIndex and totalChunks', () => {
+    const resource = createResource();
+    const rawChunks = [{ content: 'A' }, { content: 'B' }, { content: 'C' }];
+    const embeddings = [[1], [2], [3]];
+
+    const enriched = enrichChunks(rawChunks, resource, embeddings, TEST_MODEL);
+
+    expect(enriched).toHaveLength(3);
+    for (const [i, chunk] of enriched.entries()) {
+      expect(chunk.chunkIndex).toBe(i);
+      expect(chunk.totalChunks).toBe(3);
+    }
+  });
+
+  it('should handle single chunk correctly', () => {
+    const resource = createResource({ content: 'Test', estimatedTokenCount: 5 });
     const rawChunks = [{ content: 'Single chunk' }];
     const embeddings = [[0.1, 0.2]];
 
-    const enriched = enrichChunks(rawChunks, resource, embeddings, 'test-model');
+    const enriched = enrichChunks(rawChunks, resource, embeddings, TEST_MODEL);
 
     expect(enriched).toHaveLength(1);
     expect(enriched[0]?.previousChunkId).toBeUndefined();
     expect(enriched[0]?.nextChunkId).toBeUndefined();
+    expect(enriched[0]?.chunkIndex).toBe(0);
+    expect(enriched[0]?.totalChunks).toBe(1);
   });
 });
