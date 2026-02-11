@@ -56,6 +56,8 @@ export type LanceDBRow<TMetadata extends Record<string, unknown> = DefaultRAGMet
   content: string;
   contenthash: string;
   tokencount: number;
+  chunkindex: number;
+  totalchunks: number;
   embeddingmodel: string;
   embeddedat: number; // Unix timestamp
   previouschunkid: string; // Empty string sentinel
@@ -371,6 +373,7 @@ export function chunkToLanceRow<TMetadata extends Record<string, unknown>>(
 
   // Spread metadata fields at top level for efficient filtering
   // Use lowercase for all column names (SQL convention)
+  // Type assertion needed: TS cannot verify intersection of explicit props + generic spread
   return {
     vector: chunk.embedding,
     chunkid: chunk.chunkId,
@@ -379,13 +382,15 @@ export function chunkToLanceRow<TMetadata extends Record<string, unknown>>(
     contenthash: chunk.contentHash,
     resourcecontenthash: resourceContentHash,
     tokencount: chunk.tokenCount,
+    chunkindex: chunk.chunkIndex ?? -1,
+    totalchunks: chunk.totalChunks ?? -1,
     embeddingmodel: chunk.embeddingModel,
     embeddedat: chunk.embeddedAt.getTime(),
     previouschunkid: chunk.previousChunkId ?? '',
     nextchunkid: chunk.nextChunkId ?? '',
     // Spread serialized metadata fields as top-level columns (already lowercase)
     ...serializedMetadata,
-  };
+  } as LanceDBRow<TMetadata>;
 }
 
 /**
@@ -416,6 +421,16 @@ export function lanceRowToChunk<TMetadata extends Record<string, unknown>>(
     embeddingModel: rowData['embeddingmodel'] as string,
     embeddedAt: new Date(rowData['embeddedat'] as number),
   };
+
+  // Add chunk position fields if present
+  const chunkIndex = rowData['chunkindex'] as number;
+  if (chunkIndex >= 0) {
+    coreChunk.chunkIndex = chunkIndex;
+  }
+  const totalChunks = rowData['totalchunks'] as number;
+  if (totalChunks >= 0) {
+    coreChunk.totalChunks = totalChunks;
+  }
 
   // Add optional context fields if present
   const previousChunkId = rowData['previouschunkid'] as string;

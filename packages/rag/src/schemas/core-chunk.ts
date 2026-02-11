@@ -22,6 +22,10 @@ export const CoreRAGChunkSchema = z.object({
   contentHash: z.string().describe('Hash of content for change detection'),
   tokenCount: z.number().describe('Accurate token count from TokenCounter'),
 
+  // Position within source document
+  chunkIndex: z.number().optional().describe('0-based position of this chunk within the source document'),
+  totalChunks: z.number().optional().describe('Total number of chunks for the source document'),
+
   // Vectors
   embedding: z.array(z.number()).describe('Vector embedding'),
   embeddingModel: z.string().describe('Model used: "text-embedding-3-small", "all-MiniLM-L6-v2", etc.'),

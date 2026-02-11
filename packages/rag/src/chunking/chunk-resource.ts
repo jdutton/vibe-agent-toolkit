@@ -6,6 +6,7 @@
 
 import type { HeadingNode, ResourceMetadata } from '@vibe-agent-toolkit/resources';
 
+import type { TokenCounter } from '../interfaces/token-counter.js';
 import type { RAGChunk } from '../schemas/chunk.js';
 
 import { chunkByTokens } from './chunk-by-tokens.js';
@@ -181,13 +182,15 @@ function buildHeadingPath(
  * @param resource - Source chunkable resource with frontmatter
  * @param embeddings - Embedding array for each chunk
  * @param embeddingModel - Model used for embeddings
+ * @param tokenCounter - Optional token counter to compute token counts (defaults to 0 if not provided)
  * @returns Array of complete RAGChunks
  */
 export function enrichChunks(
   rawChunks: RawChunk[],
   resource: ChunkableResource,
   embeddings: number[][],
-  embeddingModel: string
+  embeddingModel: string,
+  tokenCounter?: TokenCounter,
 ): RAGChunk[] {
   const enrichedChunks: RAGChunk[] = rawChunks.map((raw, index) => {
     const chunkId = generateChunkId(resource.id, index);
@@ -198,7 +201,9 @@ export function enrichChunks(
       resourceId: resource.id,
       content: raw.content,
       contentHash,
-      tokenCount: 0, // Will be set by caller
+      tokenCount: tokenCounter ? tokenCounter.count(raw.content) : 0,
+      chunkIndex: index,
+      totalChunks: rawChunks.length,
       headingPath: raw.headingPath,
       headingLevel: raw.headingLevel,
       startLine: raw.startLine,
