@@ -3,9 +3,9 @@
  *
  * Uses @xenova/transformers for local embedding generation.
  * No API key required, runs entirely in Node.js.
+ *
+ * Requires optional dependency: npm install @xenova/transformers
  */
-
-import { pipeline } from '@xenova/transformers';
 
 import type { EmbeddingProvider } from '../interfaces/embedding.js';
 
@@ -17,6 +17,30 @@ export interface TransformersEmbeddingConfig {
   model?: string;
   /** Embedding dimensions (default: 384) */
   dimensions?: number;
+}
+
+/** Type for the transformers pipeline function */
+type PipelineFunction = (
+  text: string,
+  options: { pooling: string; normalize: boolean },
+) => Promise<{ data: Float32Array }>;
+
+/**
+ * Lazily load @xenova/transformers pipeline
+ */
+async function loadPipeline(
+  model: string,
+): Promise<PipelineFunction> {
+  try {
+    const { pipeline } = await import('@xenova/transformers');
+    return (await pipeline('feature-extraction', model, {
+      quantized: true,
+    })) as PipelineFunction;
+  } catch {
+    throw new Error(
+      '@xenova/transformers is not installed. Install with: npm install @xenova/transformers',
+    );
+  }
 }
 
 /**
@@ -39,7 +63,7 @@ export class TransformersEmbeddingProvider implements EmbeddingProvider {
   readonly model: string;
   readonly dimensions: number;
 
-  private pipelinePromise: Promise<unknown> | null = null;
+  private pipelinePromise: Promise<PipelineFunction> | null = null;
 
   /**
    * Create TransformersEmbeddingProvider
@@ -54,10 +78,8 @@ export class TransformersEmbeddingProvider implements EmbeddingProvider {
   /**
    * Get or initialize the embedding pipeline
    */
-  private async getPipeline(): Promise<unknown> {
-    this.pipelinePromise ??= pipeline('feature-extraction', this.model, {
-      quantized: true, // Use quantized model for better performance
-    });
+  private async getPipeline(): Promise<PipelineFunction> {
+    this.pipelinePromise ??= loadPipeline(this.model);
     return this.pipelinePromise;
   }
 
@@ -68,9 +90,7 @@ export class TransformersEmbeddingProvider implements EmbeddingProvider {
    * @returns Vector embedding (normalized)
    */
   async embed(text: string): Promise<number[]> {
-    const extractor = (await this.getPipeline()) as (text: string, options: { pooling: string; normalize: boolean }) => Promise<{
-        data: Float32Array;
-      }>;
+    const extractor = await this.getPipeline();
 
     const output = await extractor(text, {
       pooling: 'mean',
