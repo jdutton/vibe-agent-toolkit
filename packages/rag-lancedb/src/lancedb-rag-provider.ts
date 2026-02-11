@@ -12,6 +12,7 @@ import * as lancedb from '@lancedb/lancedb';
 import type {
   CoreRAGChunk,
   DefaultRAGMetadata,
+  DocumentResult,
   EmbeddingProvider,
   IndexProgress,
   IndexResult,
@@ -28,7 +29,12 @@ import {
   generateContentHash,
   TransformersEmbeddingProvider,
 } from '@vibe-agent-toolkit/rag';
-import { parseMarkdown, type ResourceMetadata } from '@vibe-agent-toolkit/resources';
+import {
+  parseMarkdown,
+  transformContent,
+  type ContentTransformOptions,
+  type ResourceMetadata,
+} from '@vibe-agent-toolkit/resources';
 import type { ZodObject, ZodRawShape } from 'zod';
 
 import { buildWhereClause, escapeSQLString } from './filter-builder.js';
@@ -59,6 +65,29 @@ export interface LanceDBConfig<_TMetadata extends Record<string, unknown> = Defa
 
   /** Metadata schema for validation and serialization (defaults to DefaultRAGMetadataSchema) */
   metadataSchema?: ZodObject<ZodRawShape>;
+
+  /**
+   * Content transform options applied before chunking and storage.
+   *
+   * When configured, content is transformed (e.g., links rewritten) before
+   * computing the content hash, chunking, embedding, and persisting.
+   * This means the stored chunks contain the transformed content, and the
+   * content hash reflects the transformed output (not the raw file content).
+   *
+   * If not provided, content is stored as-is (original behavior).
+   */
+  contentTransform?: ContentTransformOptions;
+
+  /**
+   * Store full document content in a separate `rag_documents` table.
+   *
+   * When enabled, the complete source document is persisted alongside chunks
+   * so consumers can retrieve the full content after finding relevant chunks
+   * via vector search. Use `getDocument(resourceId)` to retrieve.
+   *
+   * @default false
+   */
+  storeDocuments?: boolean;
 }
 
 /**
@@ -93,6 +122,22 @@ function getDirectorySize(dirPath: string): number {
 }
 
 const TABLE_NAME = 'rag_chunks';
+const DOCUMENTS_TABLE_NAME = 'rag_documents';
+
+/**
+ * Accumulated document record collected during indexing.
+ * Stored to rag_documents table when storeDocuments is enabled.
+ */
+interface DocumentRecord {
+  resourceid: string;
+  filepath: string;
+  content: string;
+  contenthash: string;
+  tokencount: number;
+  totalchunks: number;
+  indexedat: number;
+  [key: string]: string | number;
+}
 
 /**
  * Required configuration after defaults applied
@@ -104,6 +149,8 @@ interface RequiredLanceDBConfig<_TMetadata extends Record<string, unknown>> {
   targetChunkSize: number;
   paddingFactor: number;
   metadataSchema: ZodObject<ZodRawShape>;
+  contentTransform?: ContentTransformOptions;
+  storeDocuments: boolean;
 }
 
 /**
@@ -120,6 +167,9 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
   private table: Table | null = null;
   private readonly tokenCounter = new ApproximateTokenCounter();
 
+  /** Accumulated document records during indexing, flushed in indexResources() */
+  private pendingDocuments: DocumentRecord[] = [];
+
   private constructor(config: LanceDBConfig<TMetadata>) {
     this.config = {
       readonly: false,
@@ -127,6 +177,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       targetChunkSize: 512,
       paddingFactor: 0.9,
       metadataSchema: DefaultRAGMetadataSchema,
+      storeDocuments: false,
       ...config,
     };
     this.metadataSchema = this.config.metadataSchema;
@@ -280,6 +331,65 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
   }
 
   /**
+   * Retrieve the full source document by resource ID.
+   *
+   * Only returns data when `storeDocuments: true` was configured and the
+   * rag_documents table exists. Returns `null` if the document is not found.
+   *
+   * @param resourceId - ID of the resource to retrieve
+   * @returns Full document record or null
+   */
+  async getDocument(resourceId: string): Promise<DocumentResult | null> {
+    if (!this.connection) {
+      return null;
+    }
+
+    let docsTable: Table;
+    try {
+      const tableNames = await this.connection.tableNames();
+      if (!tableNames.includes(DOCUMENTS_TABLE_NAME)) {
+        return null;
+      }
+      docsTable = await this.connection.openTable(DOCUMENTS_TABLE_NAME);
+    } catch {
+      return null; // Table doesn't exist or connection error
+    }
+
+    const rows = await docsTable.query()
+      .where(`resourceid = '${escapeSQLString(resourceId)}'`)
+      .limit(1)
+      .toArray();
+
+    if (rows.length === 0) {
+      return null;
+    }
+
+    // Materialize immediately to avoid Arrow buffer issues
+    // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
+    const row = JSON.parse(JSON.stringify(rows[0])) as DocumentRecord;
+
+    // Extract metadata fields from the row using the metadata schema
+    const metadata: Record<string, unknown> = {};
+    for (const key of Object.keys(this.metadataSchema.shape)) {
+      const lowercaseKey = key.toLowerCase();
+      if (lowercaseKey in row) {
+        metadata[key] = row[lowercaseKey];
+      }
+    }
+
+    return {
+      resourceId: row.resourceid,
+      filePath: row.filepath,
+      content: row.content,
+      contentHash: row.contenthash,
+      tokenCount: row.tokencount,
+      totalChunks: row.totalchunks,
+      indexedAt: new Date(row.indexedat),
+      metadata,
+    };
+  }
+
+  /**
    * Index resources into the RAG database
    */
   async indexResources(
@@ -289,6 +399,9 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     if (this.config.readonly) {
       throw new Error('Cannot index in readonly mode');
     }
+
+    // Reset pending documents for this indexing batch
+    this.pendingDocuments = [];
 
     const startTime = Date.now();
     const totalResources = resources.length;
@@ -337,8 +450,138 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       }
     }
 
+    // Flush accumulated document records to rag_documents table
+    if (this.config.storeDocuments && this.pendingDocuments.length > 0 && this.connection) {
+      await this.flushDocumentRecords();
+    }
+
     result.durationMs = Date.now() - startTime;
     return result;
+  }
+
+  /**
+   * Flush accumulated document records to the rag_documents table.
+   *
+   * Uses 'overwrite' mode to replace the entire table on each indexing run.
+   * This is simpler than incremental updates and ensures consistency.
+   */
+  private async flushDocumentRecords(): Promise<void> {
+    if (!this.connection || this.pendingDocuments.length === 0) {
+      return;
+    }
+
+    const tableNames = await this.connection.tableNames();
+    if (tableNames.includes(DOCUMENTS_TABLE_NAME)) {
+      // Merge: load existing documents, replace those with matching resourceIds, keep the rest
+      const existingTable = await this.connection.openTable(DOCUMENTS_TABLE_NAME);
+      const existingRows = await existingTable.query().where('1 = 1').toArray();
+      // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
+      const existing = JSON.parse(JSON.stringify(existingRows)) as DocumentRecord[];
+
+      const pendingIds = new Set(this.pendingDocuments.map((d) => d.resourceid));
+      const retained = existing.filter((row) => !pendingIds.has(row.resourceid));
+      const merged = [...retained, ...this.pendingDocuments];
+
+      await this.connection.createTable(DOCUMENTS_TABLE_NAME, merged, { mode: 'overwrite' });
+    } else {
+      await this.connection.createTable(DOCUMENTS_TABLE_NAME, this.pendingDocuments);
+    }
+
+    this.pendingDocuments = [];
+  }
+
+  /**
+   * Detect whether a resource needs indexing, updating, or can be skipped.
+   *
+   * Queries existing rows for the resource and compares content hashes.
+   * All Arrow data is materialized before returning to avoid buffer lifecycle issues.
+   *
+   * @returns Object with `action` ('skip' | 'update' | 'new') and `deleteCount` (chunks to remove on update)
+   */
+  private async detectResourceChangeStatus(
+    resourceId: string,
+    contentHash: string,
+  ): Promise<{ action: 'skip' | 'update' | 'new'; deleteCount: number }> {
+    if (!this.table) {
+      return { action: 'new', deleteCount: 0 };
+    }
+
+    const existingRows = await this.table.query().where(`resourceid = '${escapeSQLString(resourceId)}'`).toArray();
+    // Materialize immediately to avoid Arrow buffer issues
+    // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
+    const existing = JSON.parse(JSON.stringify(existingRows)) as LanceDBRow[];
+
+    if (existing.length === 0) {
+      return { action: 'new', deleteCount: 0 };
+    }
+
+    const existingHash = existing[0]?.resourcecontenthash;
+    if (existingHash === contentHash) {
+      return { action: 'skip', deleteCount: existing.length };
+    }
+
+    return { action: 'update', deleteCount: existing.length };
+  }
+
+  /**
+   * Overlay custom metadata from resource frontmatter onto enriched RAG chunks.
+   *
+   * Iterates the metadata schema keys and copies matching frontmatter values
+   * onto each chunk, producing typed chunks with metadata included.
+   */
+  private overlayChunkMetadata(
+    ragChunks: CoreRAGChunk[],
+    frontmatter: Record<string, unknown> | undefined,
+  ): (CoreRAGChunk & TMetadata)[] {
+    return ragChunks.map((chunk) => {
+      const chunkWithMetadata: Record<string, unknown> = { ...chunk };
+
+      if (frontmatter) {
+        for (const key of Object.keys(this.metadataSchema.shape)) {
+          if (key in frontmatter) {
+            chunkWithMetadata[key] = frontmatter[key];
+          }
+        }
+      }
+
+      return chunkWithMetadata as CoreRAGChunk & TMetadata;
+    });
+  }
+
+  /**
+   * Create a DocumentRecord for the rag_documents table.
+   *
+   * Builds the record from resource metadata, transformed content,
+   * and overlays frontmatter fields using the metadata schema.
+   */
+  private createDocumentRecord(
+    resource: ResourceMetadata,
+    content: string,
+    contentHash: string,
+    totalChunks: number,
+  ): DocumentRecord {
+    const documentRecord: DocumentRecord = {
+      resourceid: resource.id,
+      filepath: resource.filePath,
+      content,
+      contenthash: contentHash,
+      tokencount: this.tokenCounter.count(content),
+      totalchunks: totalChunks,
+      indexedat: Date.now(),
+    };
+
+    if (resource.frontmatter) {
+      for (const key of Object.keys(this.metadataSchema.shape)) {
+        if (key in resource.frontmatter) {
+          const value = resource.frontmatter[key];
+          documentRecord[key.toLowerCase()] = typeof value === 'string' || typeof value === 'number'
+            ? value
+            : JSON.stringify(value);
+        }
+      }
+    }
+
+    return documentRecord;
   }
 
   /**
@@ -351,42 +594,23 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     // Read file content using parseMarkdown
     const parseResult = await parseMarkdown(resource.filePath);
 
-    // Generate content hash for change detection
-    const resourceContentHash = generateContentHash(parseResult.content);
+    // Apply content transform if configured (e.g., rewrite links before chunking)
+    const content = this.config.contentTransform
+      ? transformContent(parseResult.content, resource.links, this.config.contentTransform)
+      : parseResult.content;
 
-    // Check if resource already exists with same content hash
-    // Extract all needed data BEFORE any table modifications to avoid Arrow buffer issues
-    let shouldSkip = false;
-    let deleteCount = 0;
-    let shouldUpdate = false;
+    // Generate content hash for change detection (based on transformed content)
+    const resourceContentHash = generateContentHash(content);
 
-    if (this.table) {
-      const existingRows = await this.table.query().where(`resourceid = '${escapeSQLString(resource.id)}'`).toArray();
-      // Materialize immediately to avoid Arrow buffer issues
-      // eslint-disable-next-line unicorn/prefer-structured-clone -- JSON.parse/stringify is intentional workaround for Arrow buffer lifecycle bug
-      const existing = JSON.parse(JSON.stringify(existingRows)) as LanceDBRow[];
+    // Detect whether this resource is new, unchanged (skip), or updated
+    const { action, deleteCount } = await this.detectResourceChangeStatus(resource.id, resourceContentHash);
 
-      // Extract data immediately while Arrow buffers are valid
-      if (existing.length > 0) {
-        const existingHash = existing[0]?.resourcecontenthash;
-        deleteCount = existing.length;
-
-        if (existingHash === resourceContentHash) {
-          shouldSkip = true;
-        } else {
-          shouldUpdate = true;
-        }
-      }
-    }
-
-    // Handle skip case
-    if (shouldSkip) {
+    if (action === 'skip') {
       result.resourcesSkipped++;
       return;
     }
 
-    // Delete old chunks if updating
-    if (shouldUpdate) {
+    if (action === 'update') {
       await this.deleteResource(resource.id);
       result.chunksDeleted += deleteCount;
       result.resourcesUpdated++;
@@ -396,7 +620,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     const chunkingResult = chunkResource(
       {
         ...resource,
-        content: parseResult.content,
+        content,
         frontmatter: {},
       },
       {
@@ -413,36 +637,16 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
     );
 
     // Enrich chunks with full metadata
-    const chunkableResource = {
-      ...resource,
-      content: parseResult.content,
-      frontmatter: {},
-    };
-
     const ragChunks = enrichChunks(
       chunkingResult.chunks,
-      chunkableResource,
+      { ...resource, content, frontmatter: {} },
       embeddings,
       this.config.embeddingProvider.model,
       this.tokenCounter,
     );
 
     // Add custom metadata from resource.frontmatter to each chunk
-    // This allows custom metadata schemas to extract additional fields beyond the default ones
-    const chunksWithMetadata = ragChunks.map((chunk) => {
-      const chunkWithMetadata: Record<string, unknown> = { ...chunk };
-
-      // Add metadata fields from frontmatter according to the schema
-      if (resource.frontmatter) {
-        for (const key of Object.keys(this.metadataSchema.shape)) {
-          if (key in resource.frontmatter) {
-            chunkWithMetadata[key] = resource.frontmatter[key];
-          }
-        }
-      }
-
-      return chunkWithMetadata as CoreRAGChunk & TMetadata;
-    });
+    const chunksWithMetadata = this.overlayChunkMetadata(ragChunks, resource.frontmatter);
 
     // Convert to LanceDB rows using the metadata schema
     const rows = chunksWithMetadata.map((chunk) =>
@@ -454,6 +658,13 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
       this.table = await this.connection.createTable(TABLE_NAME, rows);
     } else if (this.table) {
       await this.table.add(rows);
+    }
+
+    // Accumulate document record for rag_documents table
+    if (this.config.storeDocuments) {
+      this.pendingDocuments.push(
+        this.createDocumentRecord(resource, content, resourceContentHash, rows.length)
+      );
     }
 
     result.resourcesIndexed++;
@@ -468,7 +679,9 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
   }
 
   /**
-   * Delete a specific resource and all its chunks
+   * Delete a specific resource and all its chunks.
+   *
+   * Also removes the document record from rag_documents if it exists.
    *
    * @param resourceId - ID of resource to delete
    */
@@ -483,6 +696,19 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
 
     // Delete chunks (use lowercase column names)
     await this.table.delete(`resourceid = '${escapeSQLString(resourceId)}'`);
+
+    // Also delete from rag_documents table if it exists
+    if (this.connection) {
+      try {
+        const tableNames = await this.connection.tableNames();
+        if (tableNames.includes(DOCUMENTS_TABLE_NAME)) {
+          const docsTable = await this.connection.openTable(DOCUMENTS_TABLE_NAME);
+          await docsTable.delete(`resourceid = '${escapeSQLString(resourceId)}'`);
+        }
+      } catch {
+        // Documents table may not exist; ignore
+      }
+    }
   }
 
   /**

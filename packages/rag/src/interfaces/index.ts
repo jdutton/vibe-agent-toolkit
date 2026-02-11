@@ -10,6 +10,7 @@ export type { DefaultRAGMetadata } from '../schemas/default-metadata.js';
 export type { RAGChunk } from './chunk.js';
 
 export type {
+  DocumentResult,
   RAGQuery,
   RAGResult,
   RAGStats,

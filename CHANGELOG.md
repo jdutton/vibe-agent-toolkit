@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-02-11
+
+### Added
+- **Content transform pipeline** - Shared `transformContent()` engine in `@vibe-agent-toolkit/resources` for rewriting markdown links before persistence
+  - `LinkRewriteRule[]` configuration with match criteria (type, glob pattern, excludeResourceIds) and Handlebars templates
+  - Template variables: `{{link.text}}`, `{{link.href}}`, `{{link.fragment}}`, `{{link.resource.*}}` (id, filePath, extension, mimeType, sizeBytes, estimatedTokenCount, frontmatter.*)
+  - Consumer context variables for skill/project-specific data (e.g., `{{skill.name}}`, `{{kb.baseUrl}}`)
+  - `ResourceLookup` interface decouples transform from full ResourceRegistry
+  - First-match-wins rule ordering; unmatched links preserved as-is
+- **Full document storage** (`rag_documents` table) - Optional `storeDocuments: true` config on LanceDB RAG provider
+  - Stores complete document content alongside vector chunks for retrieval after search
+  - `getDocument(resourceId)` returns full content, metadata, token count, chunk count, and indexing timestamp
+  - Content transforms applied to stored documents
+  - Incremental updates: changed content updates the document record
+  - Cascading deletes: `deleteResource()` removes both chunks and document record
+  - `DocumentResult` interface added to `@vibe-agent-toolkit/rag` provider interfaces
+- **Content transform support in RAG indexing** - `contentTransform` option on LanceDB provider rewrites links before chunking
+  - Content hash computed on transformed output for accurate change detection
+  - Re-indexes automatically when transform rules change
+- **OnnxEmbeddingProvider** - Local ONNX-based embedding generation (#45)
+  - Makes `@lancedb/vectordb` and `onnxruntime-node` optional peer dependencies
+  - Falls back gracefully when native dependencies unavailable
+
+### Fixed
+- **tokenCount in enrichChunks** - `tokenCount` field now populated on enriched chunks; chunk position metadata (`chunkIndex`, `totalChunks`, `isFirstChunk`, `isLastChunk`) added (#46)
+
 ## [0.1.13] - 2026-02-10
 
 ### Added

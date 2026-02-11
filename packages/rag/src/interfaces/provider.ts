@@ -125,6 +125,32 @@ export interface IndexResult {
 }
 
 /**
+ * Full document record stored alongside chunks.
+ *
+ * When `storeDocuments` is enabled on the provider, the complete source
+ * document is persisted so consumers can retrieve it after finding
+ * relevant chunks via vector search.
+ */
+export interface DocumentResult {
+  /** Source resource ID */
+  resourceId: string;
+  /** Absolute file path of the source document */
+  filePath: string;
+  /** Full document content (transformed if contentTransform was configured) */
+  content: string;
+  /** SHA-256 hash of the stored content */
+  contentHash: string;
+  /** Token count of the full document content */
+  tokenCount: number;
+  /** Number of chunks produced from this document */
+  totalChunks: number;
+  /** When the document was indexed */
+  indexedAt: Date;
+  /** Custom metadata from frontmatter */
+  metadata: Record<string, unknown>;
+}
+
+/**
  * RAG Query Provider (read-only)
  *
  * This is what agents use at runtime to query the RAG database.
@@ -140,6 +166,17 @@ export interface RAGQueryProvider<TMetadata extends Record<string, unknown> = De
    * Get database statistics
    */
   getStats(): Promise<RAGStats>;
+
+  /**
+   * Retrieve the full source document by resource ID.
+   *
+   * Only available when the provider was configured with `storeDocuments: true`.
+   * Returns `null` if the document is not found or document storage is not enabled.
+   *
+   * @param resourceId - ID of the resource to retrieve
+   * @returns Full document record or null
+   */
+  getDocument?(resourceId: string): Promise<DocumentResult | null>;
 }
 
 /**

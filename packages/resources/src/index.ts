@@ -79,5 +79,14 @@ export { parseMarkdown, type ParseResult } from './link-parser.js';
 // Export frontmatter validation
 export { validateFrontmatter } from './frontmatter-validator.js';
 
+// Export content transform engine for link rewriting
+export {
+  transformContent,
+  type ContentTransformOptions,
+  type LinkRewriteMatch,
+  type LinkRewriteRule,
+  type ResourceLookup,
+} from './content-transform.js';
+
 // Note: link-parser and link-validator internals are NOT exported
 // They are implementation details. Users should use ResourceRegistry API.

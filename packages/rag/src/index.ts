@@ -6,6 +6,7 @@
 
 // Interfaces
 export type {
+  DocumentResult,
   RAGQuery,
   RAGChunk,
   RAGResult,

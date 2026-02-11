@@ -49,7 +49,7 @@ export async function createTestResource(
   return {
     id: resourceId,
     filePath,
-    links: [],
+    links: parseResult.links,
     headings: parseResult.headings,
     frontmatter: parseResult.frontmatter, // Include frontmatter from parsing
     sizeBytes: parseResult.sizeBytes,
