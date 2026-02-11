@@ -23,6 +23,9 @@ export * from './gitignore-checker.js';
 // Git utilities (using git commands directly)
 export * from './git-utils.js';
 
+// Project root discovery (workspace root -> git root -> fallback)
+export * from './project-utils.js';
+
 // Git tracking cache (for efficient git-ignore checking)
 export * from './git-tracker.js';
 

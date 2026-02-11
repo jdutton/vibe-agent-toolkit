@@ -102,6 +102,10 @@
                     ],
                     "description": "How deep to follow markdown links from SKILL.md for bundling:\n  0 = skill file only (no link following)\n  1 = direct links only\n  2 = direct + one transitive level (default, recommended)\n  N = N levels of transitive links\n  \"full\" = complete transitive closure (use with caution)"
                   },
+                  "excludeNavigationFiles": {
+                    "type": "boolean",
+                    "description": "Whether to exclude navigation files (README.md, index.md, etc.) from bundle.\nDefault: true (matches Anthropic best practices)"
+                  },
                   "excludeReferencesFromBundle": {
                     "type": "object",
                     "properties": {

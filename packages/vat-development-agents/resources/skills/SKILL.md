@@ -209,7 +209,6 @@ The generator incorporates best practices from:
 - [AI Agent Orchestration - Microsoft Azure](https://learn.microsoft.com/en-us/azure/architecture/ai-ml/guide/ai-agent-design-patterns)
 
 **Documentation:**
-- [agent-generator README](../../agents/agent-generator/README.md) - Full documentation
 - [agent-authoring.md](../../../../docs/agent-authoring.md) - Agent patterns and examples
 - [orchestration.md](../../../../docs/orchestration.md) - Multi-agent workflows
 
@@ -518,6 +517,39 @@ The audit checks for:
 - Description length limits
 - Link integrity
 - Console tool availability
+
+### RAG Commands
+
+**Index documentation into a vector database:**
+```bash
+# Index all markdown files in docs/
+vat rag index docs/
+
+# Index with specific database path
+vat rag index docs/ --db ./dist/rag-db
+```
+
+**Search indexed documentation:**
+```bash
+# Semantic search
+vat rag query "How do I configure authentication?"
+
+# Limit results
+vat rag query "error handling" --limit 5
+
+# Query specific database
+vat rag query "setup guide" --db ./dist/rag-db
+```
+
+**Manage the database:**
+```bash
+# View database statistics
+vat rag stats
+
+# Clear and rebuild
+vat rag clear
+vat rag index docs/
+```
 
 ### Resources Commands
 
@@ -976,6 +1008,18 @@ describe('conversational agent flow', () => {
 });
 ```
 
+## RAG Knowledge Bases
+
+VAT includes a full RAG (Retrieval-Augmented Generation) system for building searchable knowledge bases from markdown documentation. Key capabilities:
+
+- **Semantic search** over markdown files using vector embeddings
+- **Content transforms** — rewrite markdown links before indexing (e.g., convert local file links to plain text references)
+- **Document storage** — optionally persist full source documents alongside chunks for search-then-retrieve patterns
+- **Incremental indexing** — skip unchanged files, re-index only modifications
+- **Multiple embedding providers** — offline Transformers.js (default), ONNX Runtime, or OpenAI
+
+For complete usage examples, configuration, and the programmatic TypeScript API, see the [RAG Usage Guide](../../../../docs/guides/rag-usage-guide.md).
+
 ## Best Practices
 
 ### 1. Use Result Envelopes Consistently
@@ -1090,15 +1134,15 @@ Now that you understand VAT basics:
 
 **Getting Started:**
 - [Getting Started Guide](../../../../docs/getting-started.md) - Setup and first steps
-- [Main README](../../../../README.md) - Project overview
 
 **Agent Development:**
-- [agent-generator README](../../agents/agent-generator/README.md) - Meta-agent for creating agents
 - [Agent Authoring Guide](../../../../docs/agent-authoring.md) - Patterns and code examples
 - [Orchestration Guide](../../../../docs/orchestration.md) - Multi-agent workflows
 
+**RAG & Knowledge Bases:**
+- [RAG Usage Guide](../../../../docs/guides/rag-usage-guide.md) - Configuration, content transforms, document storage
+
 **Architecture:**
-- [Architecture Overview](../../../../docs/architecture/README.md) - Package structure
 - [Runtime Adapters](../../../../docs/adding-runtime-adapters.md) - Multi-framework support
 
 **Examples:**
@@ -1129,7 +1173,7 @@ You've successfully adopted VAT when:
 
 ## Getting Help
 
-- **Documentation:** [docs/README.md](../../../../docs/README.md)
+- **Documentation:** See Architecture Overview and Getting Started links above
 - **Examples:** `packages/vat-example-cat-agents/`
 - **GitHub Issues:** Report bugs or ask questions
 - **CLI Help:** `vat --help`, `vat skills --help`, etc.

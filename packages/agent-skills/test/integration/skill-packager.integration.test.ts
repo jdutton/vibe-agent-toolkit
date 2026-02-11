@@ -385,7 +385,7 @@ describe('skill-packager: link rewriting', () => {
     });
 
     const copiedContent = await readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
-    expect(copiedContent).toContain('[guide](guide.md)');
+    expect(copiedContent).toContain('[guide](resources/guide.md)');
   });
 
   it('should preserve links when rewriteLinks is false', async () => {
@@ -441,7 +441,7 @@ describe('skill-packager: link rewriting', () => {
       '# Guide\n\n## Section',
       { linkText: 'section' }
     );
-    expect(copiedContent).toContain('[section](guide.md#section)');
+    expect(copiedContent).toContain('[section](resources/guide.md#section)');
   });
 
   it('should handle subdirectory structure in link rewriting', async () => {
@@ -453,8 +453,8 @@ describe('skill-packager: link rewriting', () => {
       '# Guide',
       { subdirectory: 'docs' }
     );
-    // Flat structure: all files at root, links rewritten to just basename
-    expect(copiedContent).toContain('[guide](guide.md)');
+    // Flat structure: all files under resources/, links rewritten accordingly
+    expect(copiedContent).toContain('[guide](resources/guide.md)');
   });
 
   it('should rewrite reference-style links', async () => {
@@ -474,7 +474,7 @@ describe('skill-packager: link rewriting', () => {
     });
 
     const copiedContent = await readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
-    expect(copiedContent).toContain('[guide-ref]: guide.md');
+    expect(copiedContent).toContain('[guide-ref]: resources/guide.md');
   });
 });
 
@@ -508,8 +508,8 @@ describe('skill-packager: file copying', () => {
 
     const result = await packageSkillForTest(skillPath, { formats: ['directory'] });
 
-    // Flat structure: all files at root level
-    const copiedGuidePath = join(result.outputPath, GUIDE_MD);
+    // Flat structure: all linked files under resources/ subdirectory
+    const copiedGuidePath = join(result.outputPath, 'resources', GUIDE_MD);
     const copiedGuideContent = await readFile(copiedGuidePath, 'utf-8');
 
     expect(copiedGuideContent).toBe(GUIDE_CONTENT);
@@ -594,7 +594,7 @@ describe('skill-packager: depth-limited packaging', () => {
     expect(result.files.dependencies).not.toContain('level2.md');
 
     // The link to level2.md in level1.md should be rewritten to just the link text
-    const level1Content = await readFile(join(result.outputPath, 'level1.md'), 'utf-8');
+    const level1Content = await readFile(join(result.outputPath, 'resources', 'level1.md'), 'utf-8');
     expect(level1Content).toContain('level2');
     expect(level1Content).not.toContain('[level2](');
 
@@ -680,7 +680,7 @@ describe('skill-packager: depth-limited packaging', () => {
     expect(result.files.dependencies).toContain(CONFIG_JSON);
 
     // JSON file should be copied as-is (plain copy, not rewritten)
-    const copiedJson = await readFile(join(result.outputPath, CONFIG_JSON), 'utf-8');
+    const copiedJson = await readFile(join(result.outputPath, 'resources', CONFIG_JSON), 'utf-8');
     expect(copiedJson).toBe(jsonContent);
   });
 
@@ -751,10 +751,10 @@ describe('skill-packager: integration', () => {
     expect(result.files.dependencies).toContain(toForwardSlash(DOCS_GUIDE_MD));
     expect(result.files.dependencies).toContain(toForwardSlash(`docs/${REFERENCE_MD}`));
 
-    // Verify files copied (flat structure: all at root level)
+    // Verify files copied (linked files under resources/ subdirectory)
     const copiedSkill = await readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
-    const copiedGuide = await readFile(join(result.outputPath, GUIDE_MD), 'utf-8');
-    const copiedReference = await readFile(join(result.outputPath, REFERENCE_MD), 'utf-8');
+    const copiedGuide = await readFile(join(result.outputPath, 'resources', GUIDE_MD), 'utf-8');
+    const copiedReference = await readFile(join(result.outputPath, 'resources', REFERENCE_MD), 'utf-8');
 
     expect(copiedSkill).toContain(COMPLEX_SKILL_NAME);
     expect(copiedGuide).toContain('# Guide');

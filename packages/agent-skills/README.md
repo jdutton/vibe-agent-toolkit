@@ -158,7 +158,7 @@ The validator checks for:
 - `SKILL_TOO_LONG` - Skill exceeds 5000 lines
 - `SKILL_CONSOLE_INCOMPATIBLE` - References Write, Edit, Bash, or NotebookEdit tools
 
-See [Best Practices Guide](../../docs/guides/claude-skills-best-practices.md) for detailed guidance.
+See [Best Practices Guide](../../docs/guides/agent-skills-best-practices.md) for detailed guidance.
 
 ### importSkillToAgent(options): Promise<ImportResult>
 
@@ -570,7 +570,7 @@ Tested on:
 
 - [Audit Command](../../docs/cli/audit.md) - CLI validation command
 - [Import Command](../../docs/cli/import.md) - CLI import command
-- [Claude Skills Best Practices](../../docs/guides/claude-skills-best-practices.md) - Comprehensive guide
+- [Agent Skills Best Practices](../../docs/guides/agent-skills-best-practices.md) - Comprehensive guide
 - [Agent Skills Specification](https://agentskills.io/specification) - Official spec
 
 ## Testing

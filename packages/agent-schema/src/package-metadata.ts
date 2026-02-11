@@ -52,6 +52,13 @@ export const PackagingOptionsSchema = z.object({
       '  N = N levels of transitive links\n' +
       '  "full" = complete transitive closure (use with caution)'
     ),
+  excludeNavigationFiles: z
+    .boolean()
+    .optional()
+    .describe(
+      'Whether to exclude navigation files (README.md, index.md, etc.) from bundle.\n' +
+      'Default: true (matches Anthropic best practices)'
+    ),
   excludeReferencesFromBundle: z.object({
     rules: z.array(z.object({
       patterns: z.array(z.string())

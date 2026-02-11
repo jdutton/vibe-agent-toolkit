@@ -1,10 +1,10 @@
-# Claude Skills Best Practices
+# Agent Skills Best Practices
 
-Best practices for creating high-quality, reusable Claude Skills based on the [Agent Skills Specification](https://agentskills.io/specification) and VAT audit validation rules.
+Best practices for creating high-quality, reusable Agent Skills based on the [Agent Skills Specification](https://agentskills.io/specification) and VAT audit validation rules.
 
 ## Overview
 
-This guide covers best practices for creating Claude Skills that:
+This guide covers best practices for creating Agent Skills that:
 - Work reliably across different environments (console, IDE, CLI)
 - Follow naming and documentation conventions
 - Maintain link integrity and file references

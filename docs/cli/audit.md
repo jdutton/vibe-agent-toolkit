@@ -321,5 +321,5 @@ description: Generates TypeScript types from API responses. Useful when building
 ## Reference
 
 - [Agent Skills Specification](https://agentskills.io/specification)
-- [Claude Skills Best Practices](../guides/claude-skills-best-practices.md)
+- [Agent Skills Best Practices](../guides/agent-skills-best-practices.md)
 - [agent-skills Package](../../packages/agent-skills/README.md)

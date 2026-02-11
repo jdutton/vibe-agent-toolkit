@@ -84,7 +84,7 @@ spec:
     expect(skillContent).toContain('## Agent Manifest Format');
     expect(skillContent).toContain('Read `agent-manifest-guide.md`');
 
-    // Verify agent-manifest-guide.md exists
+    // Verify agent-manifest-guide.md exists (builder writes directly, not via packager)
     const guidePath = path.join(result.outputPath, 'agent-manifest-guide.md');
     const guideContent = await fs.readFile(guidePath, 'utf-8');
     expect(guideContent).toContain('# VAT Agent Manifest Guide');
@@ -180,7 +180,7 @@ spec:
 
     const result = await buildClaudeSkill({ agentPath: manifestPath });
 
-    // Verify scripts directory was copied
+    // Verify scripts directory was copied (builder writes directly, not via packager)
     const outputScriptsPath = path.join(result.outputPath, 'scripts');
     const scriptsExist = await fs.access(outputScriptsPath).then(() => true).catch(() => false);
     expect(scriptsExist).toBe(true);
@@ -231,7 +231,7 @@ spec:
 
     const result = await buildClaudeSkill({ agentPath: manifestPath });
 
-    // Verify LICENSE.txt was copied
+    // Verify LICENSE.txt was copied (builder writes directly, not via packager)
     const outputLicensePath = path.join(result.outputPath, 'LICENSE.txt');
     const licenseExists = await fs.access(outputLicensePath).then(() => true).catch(() => false);
     expect(licenseExists).toBe(true);

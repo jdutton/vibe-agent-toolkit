@@ -344,7 +344,7 @@ See [Import Command Documentation](./cli/import.md) for more details.
 ## Next Steps
 
 - Read [CLAUDE.md](../CLAUDE.md) for detailed development guidelines
-- Review [Claude Skills Best Practices](./guides/claude-skills-best-practices.md)
+- Review [Agent Skills Best Practices](./guides/agent-skills-best-practices.md)
 - Review the [utils package](../packages/utils/) for reference patterns
 - Check out [vibe-validate documentation](https://github.com/jdutton/vibe-validate)
 - Set up your CI/CD pipeline on GitHub
