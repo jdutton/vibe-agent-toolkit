@@ -21,12 +21,12 @@ describe('ResourceRegistry factory methods', () => {
   });
 
   describe('empty', () => {
-    it('should create empty registry with rootDir', () => {
+    it('should create empty registry with baseDir', () => {
       const registry = ResourceRegistry.empty(tempDir);
 
       expect(registry.size()).toBe(0);
       expect(registry.isEmpty()).toBe(true);
-      expect(registry.rootDir).toBe(tempDir);
+      expect(registry.baseDir).toBe(tempDir);
     });
 
     it('should create registry that can add resources', async () => {
@@ -50,7 +50,7 @@ describe('ResourceRegistry factory methods', () => {
       const registry = ResourceRegistry.fromResources(tempDir, [resource]);
 
       expect(registry.size()).toBe(1);
-      expect(registry.rootDir).toBe(tempDir);
+      expect(registry.baseDir).toBe(tempDir);
       expect(registry.getAllResources()).toEqual([resource]);
     });
 
@@ -74,7 +74,7 @@ describe('ResourceRegistry factory methods', () => {
 
       expect(registry.size()).toBe(0);
       expect(registry.isEmpty()).toBe(true);
-      expect(registry.rootDir).toBe(tempDir);
+      expect(registry.baseDir).toBe(tempDir);
     });
 
     it('should support name-based lookups', async () => {
@@ -82,7 +82,8 @@ describe('ResourceRegistry factory methods', () => {
       await fs.mkdir(join(tempDir, 'docs'), { recursive: true });
       await fs.writeFile(join(tempDir, 'docs/README.md'), '# Docs', 'utf-8');
 
-      const tempRegistry = new ResourceRegistry();
+      // Use baseDir so same-named files get unique path-relative IDs
+      const tempRegistry = new ResourceRegistry({ baseDir: tempDir });
       const resource1 = await tempRegistry.addResource(join(tempDir, 'README.md'));
       const resource2 = await tempRegistry.addResource(join(tempDir, 'docs/README.md'));
 
@@ -104,7 +105,7 @@ describe('ResourceRegistry factory methods', () => {
       });
 
       expect(registry.size()).toBe(2);
-      expect(registry.rootDir).toBe(tempDir);
+      expect(registry.baseDir).toBe(tempDir);
     });
 
     it('should respect exclude patterns', async () => {

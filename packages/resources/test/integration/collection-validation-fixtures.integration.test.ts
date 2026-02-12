@@ -43,7 +43,7 @@ async function setupAndValidate() {
 
   const registry = new ResourceRegistry({
     config,
-    rootDir: fixturesDir,
+    baseDir: fixturesDir,
   });
 
   await registry.crawl({ baseDir: fixturesDir });
@@ -137,7 +137,7 @@ describe('Collection validation with test fixtures', () => {
 
     // Guide collection uses strict schema (additionalProperties: false)
     // Valid guide has no extra fields, should pass
-    const validGuide = registry.getResourceById('guide-valid');
+    const validGuide = registry.getResourceById('valid-guide-valid');
     expect(validGuide).toBeDefined();
   });
 

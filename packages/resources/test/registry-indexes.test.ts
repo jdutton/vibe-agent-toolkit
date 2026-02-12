@@ -50,10 +50,12 @@ describe('ResourceRegistry indexes', () => {
       // eslint-disable-next-line security/detect-non-literal-fs-filename
       await fs.writeFile(join(dir2, 'README.md'), '# Dir 2', 'utf-8');
 
-      await registry.addResource(join(dir1, 'README.md'));
-      await registry.addResource(join(dir2, 'README.md'));
+      // Use baseDir so same-named files get unique path-relative IDs
+      const baseDirRegistry = new ResourceRegistry({ baseDir: tempDir });
+      await baseDirRegistry.addResource(join(dir1, 'README.md'));
+      await baseDirRegistry.addResource(join(dir2, 'README.md'));
 
-      const resources = registry.getResourcesByName('README.md');
+      const resources = baseDirRegistry.getResourcesByName('README.md');
       expect(resources).toHaveLength(2);
     });
   });

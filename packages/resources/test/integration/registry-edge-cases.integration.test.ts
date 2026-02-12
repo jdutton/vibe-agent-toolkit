@@ -21,7 +21,7 @@ async function createRegistryWithTestFile(
   tempDir: string,
   config: ProjectConfig
 ): Promise<{ registry: ResourceRegistry; resource: ResourceMetadata; filePath: string }> {
-  const registry = new ResourceRegistry({ rootDir: tempDir, config });
+  const registry = new ResourceRegistry({ baseDir: tempDir, config });
   const filePath = join(tempDir, 'test.md');
   await fs.writeFile(filePath, '# Test', 'utf-8');
   const resource = await registry.addResource(filePath);
@@ -32,15 +32,15 @@ describe('ResourceRegistry constructor optionals', () => {
   it('should handle all optional parameters as undefined', () => {
     const registry = new ResourceRegistry();
 
-    expect(registry.rootDir).toBeUndefined();
+    expect(registry.baseDir).toBeUndefined();
     expect(registry.config).toBeUndefined();
     expect(registry.gitTracker).toBeUndefined();
   });
 
-  it('should handle only rootDir provided', () => {
-    const registry = new ResourceRegistry({ rootDir: '/test' });
+  it('should handle only baseDir provided', () => {
+    const registry = new ResourceRegistry({ baseDir: '/test' });
 
-    expect(registry.rootDir).toBe('/test');
+    expect(registry.baseDir).toBe('/test');
     expect(registry.config).toBeUndefined();
     expect(registry.gitTracker).toBeUndefined();
   });
@@ -49,7 +49,7 @@ describe('ResourceRegistry constructor optionals', () => {
     const config: ProjectConfig = { version: 1 };
     const registry = new ResourceRegistry({ config });
 
-    expect(registry.rootDir).toBeUndefined();
+    expect(registry.baseDir).toBeUndefined();
     expect(registry.config).toBe(config);
     expect(registry.gitTracker).toBeUndefined();
   });
@@ -59,12 +59,12 @@ describe('ResourceRegistry constructor optionals', () => {
     const gitTracker = new GitTracker('/test');
 
     const registry = new ResourceRegistry({
-      rootDir: '/test',
+      baseDir: '/test',
       config,
       gitTracker,
     });
 
-    expect(registry.rootDir).toBe('/test');
+    expect(registry.baseDir).toBe('/test');
     expect(registry.config).toBe(config);
     expect(registry.gitTracker).toBe(gitTracker);
   });
@@ -159,7 +159,7 @@ describe('ResourceRegistry.addResource with collections', () => {
   });
 });
 
-describe('ResourceRegistry.validate without rootDir', () => {
+describe('ResourceRegistry.validate without baseDir', () => {
   const suite = setupAsyncTempDirSuite('registry-validate');
   let tempDir: string;
 
@@ -171,8 +171,8 @@ describe('ResourceRegistry.validate without rootDir', () => {
     tempDir = suite.getTempDir();
   });
 
-  it('should validate links when rootDir is undefined', async () => {
-    const registry = new ResourceRegistry(); // No rootDir
+  it('should validate links when baseDir is undefined', async () => {
+    const registry = new ResourceRegistry(); // No baseDir
 
     await fs.writeFile(join(tempDir, 'test.md'), '# Test\n\n[Link](./other.md)', 'utf-8');
     await registry.addResource(join(tempDir, 'test.md'));
@@ -213,7 +213,7 @@ describe('ResourceRegistry schema validation error handling', () => {
       },
     };
 
-    const registry = new ResourceRegistry({ rootDir: tempDir, config });
+    const registry = new ResourceRegistry({ baseDir: tempDir, config });
 
     await fs.writeFile(join(tempDir, 'test.md'), '---\ntitle: Test\n---\n\n# Test', 'utf-8');
     await registry.addResource(join(tempDir, 'test.md'));
@@ -242,7 +242,7 @@ describe('ResourceRegistry schema validation error handling', () => {
       },
     };
 
-    const registry = new ResourceRegistry({ rootDir: tempDir, config });
+    const registry = new ResourceRegistry({ baseDir: tempDir, config });
 
     // Write invalid JSON to schema file
     await fs.writeFile(join(tempDir, 'invalid.json'), '{invalid json}', 'utf-8');
@@ -281,7 +281,7 @@ describe('ResourceRegistry schema validation error handling', () => {
       },
     };
 
-    const registry = new ResourceRegistry({ rootDir: tempDir, config });
+    const registry = new ResourceRegistry({ baseDir: tempDir, config });
 
     // Write valid schema
     await fs.writeFile(join(tempDir, 'schema.json'), JSON.stringify(schema), 'utf-8');
@@ -310,7 +310,7 @@ describe('ResourceRegistry.getCollectionStats edge cases', () => {
   });
 
   it('should return undefined when no collections configured', () => {
-    const registry = new ResourceRegistry({ rootDir: tempDir });
+    const registry = new ResourceRegistry({ baseDir: tempDir });
 
     const stats = registry.getCollectionStats();
 
@@ -319,7 +319,7 @@ describe('ResourceRegistry.getCollectionStats edge cases', () => {
 
   it('should handle config without resources field', () => {
     const config: ProjectConfig = { version: 1 };
-    const registry = new ResourceRegistry({ rootDir: tempDir, config });
+    const registry = new ResourceRegistry({ baseDir: tempDir, config });
 
     const stats = registry.getCollectionStats();
 

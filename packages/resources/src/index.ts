@@ -26,9 +26,10 @@
  * ```
  */
 
-// Export main ResourceRegistry class
+// Export main ResourceRegistry class and ID generation utility
 export {
   ResourceRegistry,
+  generateIdFromPath,
   type CrawlOptions,
   type ResourceRegistryOptions,
   type RegistryStats,

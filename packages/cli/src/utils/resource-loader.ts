@@ -77,7 +77,7 @@ export async function loadResourcesWithConfig(
     registryOptions.config = resourcesConfig;
   }
   if (projectRoot) {
-    registryOptions.rootDir = projectRoot;
+    registryOptions.baseDir = projectRoot;
   }
   if (gitTracker) {
     registryOptions.gitTracker = gitTracker;

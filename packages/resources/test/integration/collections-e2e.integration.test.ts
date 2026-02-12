@@ -19,8 +19,8 @@ describe('Resource Collection System - End to End', () => {
   beforeEach(async () => {
     await suite.beforeEach();
     tempDir = suite.getTempDir();
-    // Initialize registry and create test directory structure
-    registry = new ResourceRegistry();
+    // Initialize registry with baseDir for unique path-relative IDs
+    registry = new ResourceRegistry({ baseDir: tempDir });
 
     // Create test directory structure
     // eslint-disable-next-line security/detect-non-literal-fs-filename
