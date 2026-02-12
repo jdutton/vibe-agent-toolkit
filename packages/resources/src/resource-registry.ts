@@ -11,7 +11,7 @@
 import type fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, type GitTracker, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, type GitTracker, normalizedTmpdir, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { calculateChecksum } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
@@ -44,8 +44,10 @@ export interface CrawlOptions {
  * Options for ResourceRegistry constructor.
  */
 export interface ResourceRegistryOptions {
-  /** Root directory for resources (optional) */
-  rootDir?: string;
+  /** Base directory for resources. Used for relative-path ID generation and schema resolution. */
+  baseDir?: string;
+  /** Frontmatter field name to use as resource ID (optional). When set, the value of this frontmatter field takes priority over path-based ID generation. */
+  idField?: string;
   /** Project configuration (optional, enables collection support) */
   config?: ProjectConfig;
   /** Git tracker for efficient git-ignore checking (optional, improves performance) */
@@ -131,8 +133,11 @@ export interface CollectionStats {
  * ```
  */
 export class ResourceRegistry implements ResourceCollectionInterface {
-  /** Optional root directory for resources */
-  readonly rootDir?: string;
+  /** Base directory for resources. Used for relative-path ID generation and schema resolution. Set via constructor or propagated from crawl(). */
+  baseDir?: string;
+
+  /** Frontmatter field name to use as resource ID. */
+  readonly idField?: string;
 
   /** Optional project configuration (enables collection support) */
   readonly config?: ProjectConfig;
@@ -146,8 +151,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private readonly resourcesByChecksum: Map<SHA256, ResourceMetadata[]> = new Map();
 
   constructor(options?: ResourceRegistryOptions) {
-    if (options?.rootDir !== undefined) {
-      this.rootDir = options.rootDir;
+    if (options?.baseDir !== undefined) {
+      this.baseDir = options.baseDir;
+    }
+    if (options?.idField !== undefined) {
+      this.idField = options.idField;
     }
     if (options?.config !== undefined) {
       this.config = options.config;
@@ -158,32 +166,34 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
-   * Create an empty registry with a root directory.
+   * Create an empty registry with a base directory.
    *
-   * @param rootDir - Root directory for resources
+   * @param baseDir - Base directory for resources
    * @param options - Additional options
    * @returns New empty registry
    *
    * @example
    * ```typescript
    * const registry = ResourceRegistry.empty('/project/docs');
-   * console.log(registry.rootDir); // '/project/docs'
+   * console.log(registry.baseDir); // '/project/docs'
    * console.log(registry.size()); // 0
    * ```
    */
-  static empty(rootDir: string, options?: Omit<ResourceRegistryOptions, 'rootDir'>): ResourceRegistry {
-    return new ResourceRegistry({ ...options, rootDir });
+  static empty(baseDir: string, options?: Omit<ResourceRegistryOptions, 'baseDir'>): ResourceRegistry {
+    return new ResourceRegistry({ ...options, baseDir });
   }
 
   /**
    * Create a registry from an existing array of resources.
    *
    * Initializes all indexes (by path, ID, name, checksum) from the provided resources.
+   * Throws if any resources have duplicate IDs.
    *
-   * @param rootDir - Root directory for resources
+   * @param baseDir - Base directory for resources
    * @param resources - Array of resource metadata
    * @param options - Additional options
    * @returns New registry with resources
+   * @throws Error if duplicate resource IDs are found
    *
    * @example
    * ```typescript
@@ -193,14 +203,22 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * ```
    */
   static fromResources(
-    rootDir: string,
+    baseDir: string,
     resources: ResourceMetadata[],
-    options?: Omit<ResourceRegistryOptions, 'rootDir'>,
+    options?: Omit<ResourceRegistryOptions, 'baseDir'>,
   ): ResourceRegistry {
-    const registry = new ResourceRegistry({ ...options, rootDir });
+    const registry = new ResourceRegistry({ ...options, baseDir });
 
     // Add all resources to indexes
     for (const resource of resources) {
+      // Check for duplicate ID
+      const existingById = registry.resourcesById.get(resource.id);
+      if (existingById) {
+        throw new Error(
+          `Duplicate resource ID '${resource.id}': '${resource.filePath}' conflicts with '${existingById.filePath}'`
+        );
+      }
+
       // Add to path index
       registry.resourcesByPath.set(resource.filePath, resource);
 
@@ -241,9 +259,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   static async fromCrawl(
     crawlOptions: CrawlOptions,
-    registryOptions?: Omit<ResourceRegistryOptions, 'rootDir'>,
+    registryOptions?: Omit<ResourceRegistryOptions, 'baseDir'>,
   ): Promise<ResourceRegistry> {
-    const registry = new ResourceRegistry({ ...registryOptions, rootDir: crawlOptions.baseDir });
+    const registry = new ResourceRegistry({ ...registryOptions, baseDir: crawlOptions.baseDir });
     await registry.crawl(crawlOptions);
     return registry;
   }
@@ -267,11 +285,19 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Normalize path to absolute
     const absolutePath = path.resolve(filePath);
 
-    // Parse the markdown file
+    // Parse the markdown file (needed before ID generation for frontmatter lookup)
     const parseResult = await parseMarkdown(absolutePath);
 
-    // Generate unique ID from file path
-    const id = this.generateUniqueId(absolutePath);
+    // Generate ID using priority chain: frontmatter field → relative path → filename stem
+    const id = this.generateId(absolutePath, parseResult.frontmatter);
+
+    // Check for duplicate ID (allow re-adding same file path)
+    const existingById = this.resourcesById.get(id);
+    if (existingById && existingById.filePath !== absolutePath) {
+      throw new Error(
+        `Duplicate resource ID '${id}': '${absolutePath}' conflicts with '${existingById.filePath}'`
+      );
+    }
 
     // Get file modified time
     const fs = await import('node:fs/promises');
@@ -307,10 +333,13 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
-   * Add multiple resources to the registry in parallel.
+   * Add multiple resources to the registry sequentially.
+   *
+   * Sequential execution ensures deterministic duplicate ID detection.
    *
    * @param filePaths - Array of file paths to add
    * @returns Array of parsed resource metadata
+   * @throws Error if any resource produces a duplicate ID
    *
    * @example
    * ```typescript
@@ -322,7 +351,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * ```
    */
   async addResources(filePaths: string[]): Promise<ResourceMetadata[]> {
-    return await Promise.all(filePaths.map((fp) => this.addResource(fp)));
+    const results: ResourceMetadata[] = [];
+    for (const fp of filePaths) {
+      results.push(await this.addResource(fp));
+    }
+    return results;
   }
 
   /**
@@ -348,6 +381,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       exclude = ['**/node_modules/**', '**/.git/**', '**/dist/**'],
       followSymlinks = false,
     } = options;
+
+    // Propagate baseDir to registry if not already set (enables path-relative IDs)
+    if (baseDir && !this.baseDir) {
+      this.baseDir = baseDir;
+    }
 
     // Use utils file crawler
     const crawlOptions: UtilsCrawlOptions = {
@@ -398,10 +436,10 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     for (const resource of this.resourcesByPath.values()) {
       for (const link of resource.links) {
         // Only pass options if projectRoot is defined (exactOptionalPropertyTypes requirement)
-        const validateOptions = this.rootDir === undefined
+        const validateOptions = this.baseDir === undefined
           ? { skipGitIgnoreCheck }
           : {
-              projectRoot: this.rootDir,
+              projectRoot: this.baseDir,
               skipGitIgnoreCheck,
               ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker })
             };
@@ -515,7 +553,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     }
 
     const schemaPath = path.resolve(
-      this.rootDir ?? process.cwd(),
+      this.baseDir ?? process.cwd(),
       validation.frontmatterSchema
     );
 
@@ -1116,31 +1154,23 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
-   * Generate a unique ID from a file path.
-   *
-   * Process:
-   * 1. Get basename without extension
-   * 2. Convert to kebab-case
-   * 3. Handle collisions by appending suffix (-2, -3, etc.)
+   * Generate a resource ID using the priority chain:
+   * 1. Frontmatter field (if `idField` is configured and field exists)
+   * 2. Relative path from `baseDir` (if `baseDir` is set)
+   * 3. Filename stem (fallback)
    *
    * @param filePath - Absolute file path
-   * @returns Unique ID
+   * @param frontmatter - Parsed frontmatter (optional)
+   * @returns Resource ID
    */
-  private generateUniqueId(filePath: string): string {
-    const baseId = generateIdFromPath(filePath);
-
-    // Check for collision
-    if (!this.resourcesById.has(baseId)) {
-      return baseId;
+  private generateId(filePath: string, frontmatter?: Record<string, unknown>): string {
+    // Priority 1: Frontmatter field
+    if (this.idField && frontmatter?.[this.idField] !== undefined) {
+      return String(frontmatter[this.idField]);
     }
 
-    // Handle collision by appending suffix
-    let suffix = 2;
-    while (this.resourcesById.has(`${baseId}-${suffix}`)) {
-      suffix++;
-    }
-
-    return `${baseId}-${suffix}`;
+    // Priority 2/3: Path-based (relative to baseDir, or filename stem)
+    return generateIdFromPath(filePath, this.baseDir);
   }
 
   /**
@@ -1212,32 +1242,45 @@ export class ResourceRegistry implements ResourceCollectionInterface {
 /**
  * Generate an ID from a file path.
  *
- * Process:
- * 1. Remove extension (.md)
- * 2. Get basename
- * 3. Convert to kebab-case
- * 4. Remove non-alphanumeric characters except hyphens
+ * When `baseDir` is provided, computes a relative path from baseDir and uses the full
+ * directory structure in the ID. When no `baseDir`, uses the filename stem only.
  *
- * @param filePath - File path
- * @returns Generated ID (not yet checked for uniqueness)
+ * @param filePath - Absolute file path
+ * @param baseDir - Base directory for relative path computation (optional)
+ * @returns Generated ID in kebab-case
  *
  * @example
  * ```typescript
+ * // Without baseDir: filename stem only
  * generateIdFromPath('/project/docs/User Guide.md')  // 'user-guide'
- * generateIdFromPath('/project/README.md')           // 'readme'
- * generateIdFromPath('/project/docs/API_v2.md')      // 'api-v2'
+ * generateIdFromPath('/project/README.md')            // 'readme'
+ *
+ * // With baseDir: relative path
+ * generateIdFromPath('/project/docs/concepts/core/overview.md', '/project/docs')  // 'concepts-core-overview'
+ * generateIdFromPath('/project/docs/guide.md', '/project/docs')                   // 'guide'
  * ```
  */
-function generateIdFromPath(filePath: string): string {
-  // Get basename without extension
-  const basename = path.basename(filePath, path.extname(filePath));
+export function generateIdFromPath(filePath: string, baseDir?: string): string {
+  let rawId: string;
+
+  if (baseDir) {
+    // Compute relative path from baseDir, remove extension
+    const relativePath = path.relative(baseDir, filePath);
+    const ext = path.extname(relativePath);
+    const withoutExt = ext ? relativePath.slice(0, -ext.length) : relativePath;
+    // Normalize path separators to forward slashes (cross-platform), then replace with hyphens
+    rawId = toForwardSlash(withoutExt).replaceAll('/', '-');
+  } else {
+    // Fallback: basename only (no directory context)
+    rawId = path.basename(filePath, path.extname(filePath));
+  }
 
   // Convert to kebab-case:
   // 1. Replace underscores and spaces with hyphens
   // 2. Convert to lowercase
   // 3. Remove non-alphanumeric except hyphens
   // 4. Collapse multiple hyphens
-  return basename
+  return rawId
     .replaceAll(/[_\s]+/g, '-')
     .toLowerCase()
     .replaceAll(/[^\da-z-]/g, '')

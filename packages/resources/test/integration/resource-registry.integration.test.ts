@@ -27,6 +27,7 @@ const BROKEN_FILE_MD = 'broken-file.md';
 const BROKEN_FILE_ID = 'broken-file';
 const EXTERNAL_MD = 'external.md';
 const VALID_MD_PATTERN = '**/valid.md';
+const NESTED_FILE_ID = 'subdir-nested';
 
 // Helper to extract resource IDs (avoids nested arrow functions in tests)
 function extractResourceIds(resources: ResourceMetadata[]): string[] {
@@ -36,6 +37,14 @@ function extractResourceIds(resources: ResourceMetadata[]): string[] {
 // Helper to check if all resources have required properties
 function allResourcesHaveIdAndPath(resources: ResourceMetadata[]): boolean {
   return resources.every((r) => Boolean(r.id && r.filePath));
+}
+
+/** Create two readme.md files in dir1/ and dir2/ under the given base directory */
+async function createDuplicateNamedFiles(baseDirectory: string): Promise<void> {
+  await mkdir(path.join(baseDirectory, 'dir1'), { recursive: true });
+  await mkdir(path.join(baseDirectory, 'dir2'), { recursive: true });
+  await writeFile(path.join(baseDirectory, 'dir1', 'readme.md'), '# Dir 1', 'utf-8');
+  await writeFile(path.join(baseDirectory, 'dir2', 'readme.md'), '# Dir 2', 'utf-8');
 }
 
 describe('ResourceRegistry - Integration Tests', () => {
@@ -92,24 +101,16 @@ describe('ResourceRegistry - Integration Tests', () => {
       expect(resource2.id).toBe(BROKEN_FILE_ID);
     });
 
-    it('should handle ID collisions by appending suffix', async () => {
-      // Add same file twice to force collision
+    it('should allow re-adding the same file path', async () => {
       const validPath = path.join(fixturesDir, 'valid.md');
 
       const resource1 = await registry.addResource(validPath);
       expect(resource1.id).toBe('valid');
 
-      // Add same file again - it should overwrite the path entry but generate new ID
+      // Re-adding same path should succeed (update in place)
       const resource2 = await registry.addResource(validPath);
-      expect(resource2.id).toBe('valid-2'); // Gets a suffix due to ID collision
-
-      // Verify the resource by path returns the latest (resource2)
-      const byPath = registry.getResource(validPath);
-      expect(byPath?.id).toBe('valid-2');
-
-      // Both IDs should be in the ID map
+      expect(resource2.id).toBe('valid');
       expect(registry.getResourceById('valid')).toBeDefined();
-      expect(registry.getResourceById('valid-2')).toBeDefined();
     });
 
     it('should normalize relative paths to absolute', async () => {
@@ -207,14 +208,14 @@ describe('ResourceRegistry - Integration Tests', () => {
 
       // Should exclude nested.md in subdir
       const ids = resources.map((r) => r.id);
-      expect(ids).not.toContain('nested');
+      expect(ids).not.toContain(NESTED_FILE_ID);
     });
 
     it('should find nested files by default', async () => {
       const resources = await registry.crawl({ baseDir: fixturesDir });
 
       const ids = resources.map((r) => r.id);
-      expect(ids).toContain('nested');
+      expect(ids).toContain(NESTED_FILE_ID);
     });
 
     it('should use default include/exclude patterns', async () => {
@@ -453,7 +454,7 @@ describe('ResourceRegistry - Integration Tests', () => {
         const resources = registry.getResourcesByPattern('**/subdir/**');
 
         expect(resources.length).toBeGreaterThanOrEqual(1);
-        expect(resources[0]?.id).toBe('nested');
+        expect(resources[0]?.id).toBe(NESTED_FILE_ID);
       });
 
       it('should return empty array for no matches', () => {
@@ -653,6 +654,219 @@ tags: test
       // Should handle validation even with no headings
       const result = await registry.validate();
       expect(result).toBeDefined();
+    });
+  });
+
+  describe('ID Resolution Strategy', () => {
+    let tempDir: string;
+
+    beforeEach(async () => {
+      tempDir = await mkdtemp(path.join(normalizedTmpdir(), 'id-strategy-test-'));
+    });
+
+    afterEach(async () => {
+      await rm(tempDir, { recursive: true, force: true });
+    });
+
+    describe('path-relative IDs with baseDir', () => {
+      it('should generate IDs from relative path when baseDir is set', async () => {
+        await mkdir(path.join(tempDir, 'docs'), { recursive: true });
+        await mkdir(path.join(tempDir, 'api'), { recursive: true });
+        await writeFile(path.join(tempDir, 'docs', 'guide.md'), '# Guide', 'utf-8');
+        await writeFile(path.join(tempDir, 'api', 'reference.md'), '# Reference', 'utf-8');
+
+        const reg = new ResourceRegistry({ baseDir: tempDir });
+        const r1 = await reg.addResource(path.join(tempDir, 'docs', 'guide.md'));
+        const r2 = await reg.addResource(path.join(tempDir, 'api', 'reference.md'));
+
+        expect(r1.id).toBe('docs-guide');
+        expect(r2.id).toBe('api-reference');
+      });
+
+      it('should handle files at baseDir root without directory prefix', async () => {
+        await writeFile(path.join(tempDir, 'readme.md'), '# Readme', 'utf-8');
+
+        const reg = new ResourceRegistry({ baseDir: tempDir });
+        const resource = await reg.addResource(path.join(tempDir, 'readme.md'));
+
+        expect(resource.id).toBe('readme');
+      });
+
+      it('should avoid collisions for same-named files in different dirs', async () => {
+        await createDuplicateNamedFiles(tempDir);
+
+        const reg = new ResourceRegistry({ baseDir: tempDir });
+        const r1 = await reg.addResource(path.join(tempDir, 'dir1', 'readme.md'));
+        const r2 = await reg.addResource(path.join(tempDir, 'dir2', 'readme.md'));
+
+        expect(r1.id).toBe('dir1-readme');
+        expect(r2.id).toBe('dir2-readme');
+      });
+
+      it('should propagate baseDir from crawl() when not set on constructor', async () => {
+        await createDuplicateNamedFiles(tempDir);
+
+        // Create registry WITHOUT baseDir, then crawl WITH baseDir
+        const reg = new ResourceRegistry();
+        expect(reg.baseDir).toBeUndefined();
+
+        await reg.crawl({ baseDir: tempDir, include: ['**/*.md'] });
+
+        // crawl should have propagated baseDir
+        expect(reg.baseDir).toBe(tempDir);
+
+        // IDs should be path-relative, not filename stems
+        const r1 = reg.getResourceById('dir1-readme');
+        const r2 = reg.getResourceById('dir2-readme');
+        expect(r1).toBeDefined();
+        expect(r2).toBeDefined();
+      });
+
+      it('should handle deeply nested paths', async () => {
+        await mkdir(path.join(tempDir, 'concepts', 'core'), { recursive: true });
+        await writeFile(path.join(tempDir, 'concepts', 'core', 'overview.md'), '# Overview', 'utf-8');
+
+        const reg = new ResourceRegistry({ baseDir: tempDir });
+        const resource = await reg.addResource(path.join(tempDir, 'concepts', 'core', 'overview.md'));
+
+        expect(resource.id).toBe('concepts-core-overview');
+      });
+    });
+
+    describe('frontmatter ID with idField', () => {
+      it('should use frontmatter field as ID when idField is configured', async () => {
+        await writeFile(
+          path.join(tempDir, 'doc.md'),
+          '---\nslug: my-custom-id\n---\n# Doc',
+          'utf-8'
+        );
+
+        const reg = new ResourceRegistry({ idField: 'slug' });
+        const resource = await reg.addResource(path.join(tempDir, 'doc.md'));
+
+        expect(resource.id).toBe('my-custom-id');
+      });
+
+      it('should fall back to filename stem when frontmatter field is missing', async () => {
+        await writeFile(path.join(tempDir, 'doc.md'), '# No frontmatter', 'utf-8');
+
+        const reg = new ResourceRegistry({ idField: 'slug' });
+        const resource = await reg.addResource(path.join(tempDir, 'doc.md'));
+
+        expect(resource.id).toBe('doc');
+      });
+
+      it('should fall back to path-based ID when idField not in frontmatter but baseDir set', async () => {
+        await mkdir(path.join(tempDir, 'guides'), { recursive: true });
+        await writeFile(
+          path.join(tempDir, 'guides', 'intro.md'),
+          '---\ntitle: Intro\n---\n# Intro',
+          'utf-8'
+        );
+
+        const reg = new ResourceRegistry({ baseDir: tempDir, idField: 'slug' });
+        const resource = await reg.addResource(path.join(tempDir, 'guides', 'intro.md'));
+
+        // No 'slug' in frontmatter → falls back to path-relative ID
+        expect(resource.id).toBe('guides-intro');
+      });
+
+      it('should prioritize frontmatter ID over path-based ID', async () => {
+        await mkdir(path.join(tempDir, 'deep', 'path'), { recursive: true });
+        await writeFile(
+          path.join(tempDir, 'deep', 'path', 'doc.md'),
+          '---\nslug: custom\n---\n# Doc',
+          'utf-8'
+        );
+
+        const reg = new ResourceRegistry({ baseDir: tempDir, idField: 'slug' });
+        const resource = await reg.addResource(path.join(tempDir, 'deep', 'path', 'doc.md'));
+
+        // Frontmatter takes priority over 'deep-path-doc'
+        expect(resource.id).toBe('custom');
+      });
+    });
+
+    describe('duplicate detection', () => {
+      it('should throw when two files produce the same frontmatter ID', async () => {
+        await writeFile(
+          path.join(tempDir, 'a.md'),
+          '---\nslug: same-id\n---\n# A',
+          'utf-8'
+        );
+        await writeFile(
+          path.join(tempDir, 'b.md'),
+          '---\nslug: same-id\n---\n# B',
+          'utf-8'
+        );
+
+        const reg = new ResourceRegistry({ idField: 'slug' });
+        await reg.addResource(path.join(tempDir, 'a.md'));
+        await expect(
+          reg.addResource(path.join(tempDir, 'b.md'))
+        ).rejects.toThrow(/Duplicate resource ID 'same-id'/);
+      });
+
+      it('should throw when frontmatter ID collides with path-based ID', async () => {
+        await writeFile(path.join(tempDir, 'first.md'), '# First', 'utf-8');
+        await writeFile(
+          path.join(tempDir, 'second.md'),
+          '---\nslug: first\n---\n# Second',
+          'utf-8'
+        );
+
+        const reg = new ResourceRegistry({ idField: 'slug' });
+        await reg.addResource(path.join(tempDir, 'first.md')); // ID = 'first'
+        await expect(
+          reg.addResource(path.join(tempDir, 'second.md')) // frontmatter slug = 'first'
+        ).rejects.toThrow(/Duplicate resource ID 'first'/);
+      });
+
+      it('should throw on duplicate resource ID from different files without baseDir', async () => {
+        await createDuplicateNamedFiles(tempDir);
+
+        const reg = new ResourceRegistry();
+        await reg.addResource(path.join(tempDir, 'dir1', 'readme.md'));
+        await expect(
+          reg.addResource(path.join(tempDir, 'dir2', 'readme.md'))
+        ).rejects.toThrow(/Duplicate resource ID 'readme'/);
+      });
+
+      it('should detect duplicates in fromResources', () => {
+        // Use type assertion for branded checksum type
+        const fakeChecksum = 'a'.repeat(64) as unknown as ResourceMetadata['checksum'];
+        const resource1: ResourceMetadata = {
+          id: 'readme',
+          filePath: '/a/readme.md',
+          links: [],
+          headings: [],
+          sizeBytes: 10,
+          estimatedTokenCount: 3,
+          modifiedAt: new Date(),
+          checksum: fakeChecksum,
+        };
+        const resource2: ResourceMetadata = {
+          ...resource1,
+          filePath: '/b/readme.md',
+        };
+
+        expect(() =>
+          ResourceRegistry.fromResources(tempDir, [resource1, resource2])
+        ).toThrow(/Duplicate resource ID 'readme'/);
+      });
+
+      it('should detect duplicates in addResources', async () => {
+        await createDuplicateNamedFiles(tempDir);
+
+        // Without baseDir, both produce 'readme' → duplicate
+        const reg = new ResourceRegistry();
+        await expect(
+          reg.addResources([
+            path.join(tempDir, 'dir1', 'readme.md'),
+            path.join(tempDir, 'dir2', 'readme.md'),
+          ])
+        ).rejects.toThrow(/Duplicate resource ID 'readme'/);
+      });
     });
   });
 });

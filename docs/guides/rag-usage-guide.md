@@ -18,7 +18,9 @@ This guide provides practical examples for using the VAT RAG system in real-worl
 2. [Configuration Examples](#configuration-examples)
 3. [Agent Integration](#agent-integration)
 4. [Advanced Patterns](#advanced-patterns)
-5. [Example Projects](#example-projects)
+5. [Content Transform](#content-transform)
+6. [Document Storage](#document-storage)
+7. [Example Projects](#example-projects)
 
 ---
 
@@ -497,6 +499,162 @@ jobs:
           git commit -m "chore: update RAG database"
           git push
 ```
+
+---
+
+## Content Transform
+
+Content transforms rewrite markdown links before content is chunked, embedded, and persisted. This is useful when RAG-indexed content needs links rewritten for the consumer context -- for example, converting local file links to MCP resource URIs, or stripping links entirely for cleaner LLM context.
+
+### Programmatic API
+
+Pass `contentTransform` when creating a RAG provider to apply link rewriting during indexing:
+
+```typescript
+import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
+import type { ContentTransformOptions } from '@vibe-agent-toolkit/resources';
+
+const contentTransform: ContentTransformOptions = {
+  linkRewriteRules: [
+    {
+      match: { type: 'local_file' },
+      template: '{{link.text}} (see: {{link.href}})',
+    },
+    {
+      match: { type: 'external' },
+      template: '[{{link.text}}]({{link.href}})',  // Keep external links as-is
+    },
+  ],
+};
+
+const provider = await LanceDBRAGProvider.create({
+  dbPath: './dist/rag-db',
+  contentTransform,
+});
+```
+
+### Template Variables
+
+Templates use Mustache-style `{{variable}}` placeholders. The following variables are available:
+
+| Variable | Description |
+|----------|-------------|
+| `link.text` | Link display text |
+| `link.href` | Original href (without fragment) |
+| `link.fragment` | Fragment portion including `#` (or empty string) |
+| `link.type` | Link type: `local_file`, `anchor`, `external`, `email`, `unknown` |
+| `link.resource.id` | Target resource ID (requires `resourceRegistry`) |
+| `link.resource.filePath` | Target resource file path (requires `resourceRegistry`) |
+| `link.resource.extension` | File extension (requires `resourceRegistry`) |
+| `link.resource.mimeType` | Inferred MIME type (requires `resourceRegistry`) |
+| `link.resource.frontmatter.*` | Frontmatter fields (requires `resourceRegistry`) |
+
+### Match Criteria
+
+Rules are evaluated in order; the first matching rule wins. Each rule's `match` object supports:
+
+- `type` -- link type(s) to match (e.g., `'local_file'`, `'external'`, or an array of types)
+- `pattern` -- glob pattern(s) matched against the target resource's `filePath`
+- `excludeResourceIds` -- resource IDs to exclude from matching
+
+### Advanced Example: Resource Registry
+
+When a `resourceRegistry` is provided, templates can reference resolved resource metadata for richer rewriting:
+
+```typescript
+import { transformContent, type LinkRewriteRule } from '@vibe-agent-toolkit/resources';
+
+const rules: LinkRewriteRule[] = [
+  {
+    match: { type: 'local_file', pattern: 'docs/**/*.md' },
+    template: '{{link.text}} (resource: {{link.resource.id}}, type: {{link.resource.mimeType}})',
+  },
+];
+
+// transformContent is also available as a standalone function
+const transformed = transformContent(content, resource.links, {
+  linkRewriteRules: rules,
+  resourceRegistry: myRegistry,
+});
+```
+
+### Key Behavior Notes
+
+- Content hash is computed on **transformed** content, so changing transform rules triggers re-indexing.
+- Links matching no rule are left untouched.
+- When no `contentTransform` is provided, content is stored as-is (original behavior).
+
+---
+
+## Document Storage
+
+By default, the RAG provider only stores chunked content for vector search. When `storeDocuments: true` is enabled, the full source document is also persisted in a separate `rag_documents` table. This enables the "search then retrieve" pattern -- find relevant chunks via vector search, then fetch the complete document for full context.
+
+### Programmatic API
+
+```typescript
+const provider = await LanceDBRAGProvider.create({
+  dbPath: './dist/rag-db',
+  storeDocuments: true,
+});
+
+// Index resources (documents are stored automatically)
+await provider.indexResources(resources);
+
+// After finding relevant chunks via query...
+const result = await provider.query({ text: 'authentication setup', limit: 5 });
+
+// Retrieve full document for top result
+const chunk = result.chunks[0];
+if (chunk) {
+  const doc = await provider.getDocument(chunk.resourceId);
+  // doc.content — full document text
+  // doc.tokenCount — total tokens
+  // doc.totalChunks — number of chunks produced
+  // doc.metadata — frontmatter metadata
+  // doc.indexedAt — when it was indexed
+}
+```
+
+### DocumentResult Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `resourceId` | `string` | Source resource ID |
+| `filePath` | `string` | Absolute file path |
+| `content` | `string` | Full document content (transformed if applicable) |
+| `contentHash` | `string` | SHA-256 hash of stored content |
+| `tokenCount` | `number` | Token count of full document |
+| `totalChunks` | `number` | Number of chunks produced |
+| `indexedAt` | `Date` | When the document was indexed |
+| `metadata` | `Record<string, unknown>` | Frontmatter metadata |
+
+### Combined Example: Content Transform + Document Storage
+
+Both features compose naturally. When used together, the stored document content reflects the transformed output:
+
+```typescript
+const provider = await LanceDBRAGProvider.create({
+  dbPath: './dist/rag-db',
+  storeDocuments: true,
+  contentTransform: {
+    linkRewriteRules: [
+      {
+        match: { type: 'local_file' },
+        template: '{{link.text}} (see: {{link.href}})',
+      },
+    ],
+  },
+});
+
+// Both chunks AND full documents will have transformed content
+```
+
+### Key Behavior Notes
+
+- When `storeDocuments` is not enabled (default), `getDocument()` returns `null`.
+- Documents are automatically updated/deleted when their resource is updated/deleted.
+- Full document content reflects any `contentTransform` rules applied.
 
 ---
 

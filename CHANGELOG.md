@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.14] - 2026-02-11
+
+### Added
+- **Content transform pipeline** - Shared `transformContent()` engine in `@vibe-agent-toolkit/resources` for rewriting markdown links before persistence
+  - `LinkRewriteRule[]` configuration with match criteria (type, glob pattern, excludeResourceIds) and Handlebars templates
+  - Template variables: `{{link.text}}`, `{{link.href}}`, `{{link.fragment}}`, `{{link.resource.*}}` (id, filePath, extension, mimeType, sizeBytes, estimatedTokenCount, frontmatter.*)
+  - Consumer context variables for skill/project-specific data (e.g., `{{skill.name}}`, `{{kb.baseUrl}}`)
+  - `ResourceLookup` interface decouples transform from full ResourceRegistry
+  - First-match-wins rule ordering; unmatched links preserved as-is
+- **Full document storage** (`rag_documents` table) - Optional `storeDocuments: true` config on LanceDB RAG provider
+  - Stores complete document content alongside vector chunks for retrieval after search
+  - `getDocument(resourceId)` returns full content, metadata, token count, chunk count, and indexing timestamp
+  - Content transforms applied to stored documents
+  - Incremental updates: changed content updates the document record
+  - Cascading deletes: `deleteResource()` removes both chunks and document record
+  - `DocumentResult` interface added to `@vibe-agent-toolkit/rag` provider interfaces
+- **Content transform support in RAG indexing** - `contentTransform` option on LanceDB provider rewrites links before chunking
+  - Content hash computed on transformed output for accurate change detection
+  - Re-indexes automatically when transform rules change
+- **OnnxEmbeddingProvider** - Local ONNX-based embedding generation (#45)
+  - Makes `@lancedb/vectordb` and `onnxruntime-node` optional peer dependencies
+  - Falls back gracefully when native dependencies unavailable
+
+### Fixed
+- **tokenCount in enrichChunks** - `tokenCount` field now populated on enriched chunks; chunk position metadata (`chunkIndex`, `totalChunks`, `isFirstChunk`, `isLastChunk`) added (#46)
+- **Custom metadata overwriting core chunk fields** - `chunkToLanceRow()` now spreads metadata before core fields so `chunkIndex`, `totalChunks`, and other core columns cannot be overwritten by user-defined metadata schemas with colliding names
+- **Path-relative resource IDs** - `ResourceRegistry` generates IDs relative to `baseDir` (e.g., `docs-guide` instead of `guide`), preventing collisions for same-named files in different directories
+
 ## [0.1.13] - 2026-02-10
 
 ### Added
@@ -409,7 +437,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New package: `@vibe-agent-toolkit/agent-config` - agent manifest loading and validation
 - New package: `@vibe-agent-toolkit/runtime-claude-skills` - Claude Skills builder, installer, validator, and import/export
 - New package: `@vibe-agent-toolkit/discovery` - format detection and file scanning utilities
-- New documentation: [Claude Skills Best Practices Guide](./docs/guides/claude-skills-best-practices.md)
+- New documentation: [Agent Skills Best Practices Guide](./docs/guides/agent-skills-best-practices.md)
 - New documentation: [Audit Command Reference](./docs/cli/audit.md)
 - New documentation: [Import Command Reference](./docs/cli/import.md)
 - **Resources System**: Markdown resource scanning and validation of link integrity

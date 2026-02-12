@@ -13,11 +13,11 @@
  */
 
 import { existsSync } from 'node:fs';
-import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
 import { parseMarkdown, type ParseResult } from '@vibe-agent-toolkit/resources';
-import { renderTemplate, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, renderTemplate, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { collectLinks } from './link-collector.js';
 import type { DefaultRule, ExcludeRule } from './link-collector.js';
@@ -90,6 +90,9 @@ export interface PackageSkillOptions {
 
   /** How deep to follow markdown links (default: 2) */
   linkFollowDepth?: number | 'full' | undefined;
+
+  /** Whether to exclude navigation files (README.md, index.md, etc.) from bundle (default: true) */
+  excludeNavigationFiles?: boolean | undefined;
 
   /** Exclude patterns and rewrite templates for non-bundled links */
   excludeReferencesFromBundle?: {
@@ -175,14 +178,14 @@ export async function packageSkill(
   const parseResult = await parseMarkdown(skillPath);
   const skillMetadata = extractSkillMetadata(parseResult, skillPath);
 
-  // 2. Find package boundary (to prevent collecting files from other packages)
-  // If no package.json found, use skill's directory as boundary (for tests)
-  const packageRoot = findPackageRootOrFallback(skillPath);
+  // 2. Find project boundary (workspace root -> git root -> skill dir)
+  const projectRoot = findProjectRoot(dirname(skillPath));
   const skillRoot = dirname(skillPath);
 
   // 3. Collect all linked resources using unified link collector
   const linkFollowDepth = options.linkFollowDepth ?? 2;
   const excludeConfig = options.excludeReferencesFromBundle;
+  const excludeNavigationFiles = options.excludeNavigationFiles ?? true;
   const maxDepth = linkFollowDepth === 'full' ? Infinity : linkFollowDepth;
   const defaultRule: DefaultRule = {
     ...(excludeConfig?.defaultTemplate ? { template: excludeConfig.defaultTemplate } : {}),
@@ -193,7 +196,8 @@ export async function packageSkill(
     excludeRules: excludeConfig?.rules ?? [],
     defaultRule,
     skillRoot,
-    packageRoot,
+    projectRoot,
+    excludeNavigationFiles,
   });
 
   // 4. Calculate common ancestor of all files (for proper relative path calculation)
@@ -218,7 +222,15 @@ export async function packageSkill(
     }
   }
 
-  // 7. Copy SKILL.md and all linked files (flat structure with configurable naming)
+  // 7. Clean stale output (skip when source SKILL.md lives inside the output, e.g. builder flow)
+  const resolvedOutput = toForwardSlash(resolve(outputPath));
+  const sourceInOutput = toForwardSlash(resolve(skillPath)).startsWith(resolvedOutput + '/');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- outputPath is validated
+  if (!sourceInOutput && existsSync(resolvedOutput)) {
+    await rm(resolvedOutput, { recursive: true });
+  }
+
+  // 8. Copy SKILL.md and all linked files (resources/ subdirectory with configurable naming)
   const excludeCtx: ExcludeContext | undefined = excludedFileSet.size > 0
     ? { excludedFiles: excludedFileSet, ruleMap: excludeRuleMap, skillName: skillMetadata.name, skillRoot }
     : undefined;
@@ -227,10 +239,10 @@ export async function packageSkill(
     skillPath,
     bundledFiles,
     outputPath,
-    { rewriteLinks, resourceNaming, stripPrefix, packageRoot, excludeCtx },
+    { rewriteLinks, resourceNaming, stripPrefix, projectRoot, excludeCtx },
   );
 
-  // 8. Generate distribution artifacts
+  // 9. Generate distribution artifacts
   const artifacts = await generatePackageArtifacts(
     outputPath,
     skillMetadata,
@@ -458,7 +470,7 @@ interface CopyResourcesOptions {
   rewriteLinks: boolean;
   resourceNaming?: ResourceNamingStrategy | undefined;
   stripPrefix?: string | undefined;
-  packageRoot?: string | undefined;
+  projectRoot?: string | undefined;
   excludeCtx?: ExcludeContext | undefined;
 }
 
@@ -483,7 +495,7 @@ async function copySkillResources(
     rewriteLinks,
     resourceNaming = 'basename',
     stripPrefix,
-    packageRoot,
+    projectRoot,
     excludeCtx,
   } = options;
   // Ensure output directory exists
@@ -496,7 +508,7 @@ async function copySkillResources(
   pathMap.set(toForwardSlash(skillPath), join(outputPath, 'SKILL.md'));
 
   // Determine base path for resource naming (fallback to skill directory)
-  const namingBasePath = packageRoot ?? dirname(skillPath);
+  const namingBasePath = projectRoot ?? dirname(skillPath);
 
   // Map all linked files (using naming strategy - may create subdirectories)
   // Check for collisions
@@ -507,7 +519,7 @@ async function copySkillResources(
       resourceNaming,
       stripPrefix
     );
-    const targetPath = join(outputPath, targetRelPath);
+    const targetPath = join(outputPath, 'resources', targetRelPath);
 
     // Check for filename collisions
     const existingSource = [...pathMap.entries()].find(
@@ -917,15 +929,3 @@ function findPackageRoot(skillPath: string, fallbackToSkillDir = false): string 
   );
 }
 
-/**
- * Find the package root or fall back to skill's directory
- *
- * Used for package boundary detection - if no package.json found,
- * uses skill's directory as the boundary (useful for tests).
- *
- * @param skillPath - Path to SKILL.md
- * @returns Package root directory or skill's directory
- */
-function findPackageRootOrFallback(skillPath: string): string {
-  return findPackageRoot(skillPath, true);
-}

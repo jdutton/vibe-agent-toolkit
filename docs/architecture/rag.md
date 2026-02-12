@@ -1,7 +1,7 @@
 # RAG (Retrieval-Augmented Generation) Architecture
 
 **Status**: Production Ready
-**Last Updated**: 2025-12-31
+**Last Updated**: 2026-02-11
 
 ---
 
@@ -29,6 +29,8 @@ The VAT RAG system enables semantic search over markdown documentation using vec
 - **Incremental Updates**: Skip unchanged files, update only modifications
 - **Local-First**: LanceDB runs entirely locally, no external services required
 - **Project Configuration**: Named stores and collections for complex projects
+- **Content Transforms**: Rewrite markdown links before indexing with configurable rules
+- **Document Storage**: Optional full-document persistence for search-then-retrieve patterns
 
 ### Primary Use Cases
 
@@ -92,12 +94,16 @@ interface RAGQueryProvider {
     filters?: RAGQueryFilters;
   }): Promise<RAGQueryResult>;
 
+  getDocument?(resourceId: string): Promise<DocumentResult | null>;
+
   stats(): Promise<RAGStats>;
   close(): Promise<void>;
 }
 ```
 
 **Usage**: Agents call `query()` to find relevant chunks, never index data.
+
+The optional `getDocument()` method is available when the provider was created with `storeDocuments: true`. Returns the full source document for a given resource ID.
 
 #### `RAGAdminProvider` (Read-Write)
 
@@ -174,8 +180,52 @@ interface RAGAdminProvider {
 - Resource-level updates (delete old chunks, insert new)
 
 **Storage**: `.rag-db/` directory containing:
-- `chunks.lance` - LanceDB table with vectors + metadata
+- `rag_chunks.lance` - LanceDB table with vectors + metadata
+- `rag_documents.lance` - Full document records (when `storeDocuments: true`)
 - `.last_indexed` - Timestamp tracking
+
+### 6. Content Transform
+
+The content transform engine (`transformContent` from `@vibe-agent-toolkit/resources`) rewrites markdown links before persistence. It is used by the RAG indexing pipeline when `contentTransform` is configured.
+
+- **Pure function**: `transformContent(content, links, options)` -- no side effects
+- **Rule-based**: Ordered `LinkRewriteRule[]`, first match wins
+- **Match criteria**: `type`, `pattern` (glob), `excludeResourceIds`
+- **Handlebars templates**: Variables include `link.text`, `link.href`, `link.type`, `link.resource.*`
+- **Content hash on transformed output**: Changes to transform rules trigger re-indexing
+
+Where it fits in the pipeline:
+
+```
+1. Parse markdown   -> Extract links, headings, frontmatter
+2. Transform content -> Apply linkRewriteRules (if configured)
+3. Compute content hash -> On transformed content (change detection)
+4. Chunk            -> Split into heading-aware chunks
+5. Embed            -> Generate vectors
+6. Persist          -> Store chunks (and optionally full documents)
+```
+
+### 7. Document Storage
+
+Optional full-document persistence via `storeDocuments: true`. Documents are stored in a separate `rag_documents` table alongside the chunked `rag_chunks` table.
+
+```typescript
+interface DocumentResult {
+  resourceId: string;
+  filePath: string;
+  content: string;        // Full text (transformed if applicable)
+  contentHash: string;     // SHA-256 hash
+  tokenCount: number;
+  totalChunks: number;
+  indexedAt: Date;
+  metadata: Record<string, unknown>;  // From frontmatter
+}
+```
+
+- Retrieved via `provider.getDocument(resourceId)`
+- Content reflects any `contentTransform` applied during indexing
+- Documents are updated/deleted when their resource is updated/deleted
+- When `storeDocuments` is not enabled (default), `getDocument()` returns `null`
 
 ---
 
@@ -334,9 +384,15 @@ rag:
     main:
       db: ./dist/rag-db
       resources: project-docs
+      storeDocuments: true        # Persist full documents for retrieval
       embedding:
         provider: openai              # Override for this store
         model: text-embedding-3-small
+      contentTransform:
+        linkRewriteRules:
+          - match:
+              type: local_file
+            template: "{{link.text}} (see: {{link.href}})"
 ```
 
 ### CLI Flags

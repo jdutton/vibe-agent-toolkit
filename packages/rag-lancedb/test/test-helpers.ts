@@ -9,7 +9,7 @@
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
+import type { ContentTransformOptions, LinkType, ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { parseMarkdown } from '@vibe-agent-toolkit/resources';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 
@@ -49,7 +49,7 @@ export async function createTestResource(
   return {
     id: resourceId,
     filePath,
-    links: [],
+    links: parseResult.links,
     headings: parseResult.headings,
     frontmatter: parseResult.frontmatter, // Include frontmatter from parsing
     sizeBytes: parseResult.sizeBytes,
@@ -86,6 +86,69 @@ export async function createTestMarkdownFile(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is controlled temp path
   await writeFile(filePath, content);
   return filePath;
+}
+
+/**
+ * Create a ContentTransformOptions with a single link rewrite rule for local files.
+ *
+ * @param template - Handlebars template for rewritten links (e.g. '{{link.text}} (see: {{link.href}})')
+ * @param matchType - Link type to match (defaults to 'local_file')
+ * @returns ContentTransformOptions ready to pass to LanceDBRAGProvider.create()
+ */
+export function createLinkRewriteTransform(
+  template: string,
+  matchType: LinkType = 'local_file'
+): ContentTransformOptions {
+  return {
+    linkRewriteRules: [
+      {
+        match: { type: matchType },
+        template,
+      },
+    ],
+  };
+}
+
+/**
+ * Create a markdown file with links and return a complete ResourceMetadata.
+ *
+ * Combines createTestMarkdownFile + createTestResource into a single call.
+ * Useful for tests that need resources with parsed link metadata.
+ *
+ * @param tempDir - Temporary directory for the file
+ * @param filename - Filename to create
+ * @param content - Markdown content (typically containing links)
+ * @param resourceId - Optional resource ID (defaults to 'test-1')
+ * @returns ResourceMetadata with populated links array
+ */
+export async function createResourceWithLinks(
+  tempDir: string,
+  filename: string,
+  content: string,
+  resourceId = 'test-1',
+): Promise<ResourceMetadata> {
+  const filePath = await createTestMarkdownFile(tempDir, filename, content);
+  return createTestResource(filePath, resourceId);
+}
+
+/**
+ * Query a provider and return all chunk content joined as a single string.
+ *
+ * Encapsulates the common pattern of querying, extracting chunk content,
+ * and joining for assertion.
+ *
+ * @param provider - LanceDB provider to query
+ * @param text - Search query text
+ * @param limit - Max results (defaults to 10)
+ * @returns All chunk content concatenated with newlines
+ */
+export async function queryAllContent(
+  provider: LanceDBRAGProvider,
+  text: string,
+  limit = 10,
+): Promise<string> {
+  const result = await provider.query({ text, limit });
+  return result.chunks.map((c) => c.content).join('\n');
 }
 
 /**

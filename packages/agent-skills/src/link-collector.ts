@@ -15,11 +15,13 @@
  */
 
 import { existsSync, statSync } from 'node:fs';
-import { dirname, relative, resolve } from 'node:path';
+import { basename, dirname, relative, resolve } from 'node:path';
 
 import { parseMarkdown } from '@vibe-agent-toolkit/resources';
 import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
+
+import { NAVIGATION_FILE_PATTERNS } from './validators/validation-rules.js';
 
 // ============================================================================
 // Types
@@ -34,7 +36,7 @@ export interface LinkResolution {
   /** Whether the file will be bundled */
   bundled: boolean;
   /** Reason it was excluded (only set when bundled is false) */
-  excludeReason?: 'depth-exceeded' | 'pattern-matched' | 'directory-target' | undefined;
+  excludeReason?: 'depth-exceeded' | 'pattern-matched' | 'directory-target' | 'outside-project' | 'navigation-file' | undefined;
   /** The rule that matched (only set for pattern-matched exclusions) */
   matchedRule?: ExcludeRule | undefined;
   /** Link text from the source markdown */
@@ -71,8 +73,10 @@ export interface LinkCollectionOptions {
   defaultRule: DefaultRule;
   /** Skill root directory for resolving relative paths in glob matching */
   skillRoot: string;
-  /** Package root for boundary enforcement (packager only) */
-  packageRoot?: string | undefined;
+  /** Project root for boundary enforcement */
+  projectRoot?: string | undefined;
+  /** Whether to exclude navigation files (README.md, index.md, etc.) */
+  excludeNavigationFiles?: boolean | undefined;
 }
 
 /**
@@ -101,10 +105,52 @@ interface ResolvedLink {
   isMarkdown: boolean;
   /** Whether the target is a directory (not a file) */
   isDirectory?: boolean | undefined;
+  /** Whether the target is outside the project boundary */
+  isOutsideBoundary?: boolean | undefined;
   /** Link text from the source markdown */
   linkText: string;
   /** Original href from the markdown */
   linkHref: string;
+}
+
+// ============================================================================
+// Internal Helpers
+// ============================================================================
+
+/** Create an exclusion record from a resolved link */
+function makeExclusion(
+  link: ResolvedLink,
+  reason: LinkResolution['excludeReason'],
+  matchedRule?: ExcludeRule,
+): LinkResolution {
+  return {
+    path: link.path,
+    bundled: false,
+    excludeReason: reason,
+    ...(matchedRule ? { matchedRule } : {}),
+    linkText: link.linkText,
+    linkHref: link.linkHref,
+  };
+}
+
+/** Check if a link should be excluded before pattern matching */
+function getPrePatternExcludeReason(
+  link: ResolvedLink,
+  options: LinkCollectionOptions,
+): LinkResolution['excludeReason'] | null {
+  if (link.isDirectory) {
+    return 'directory-target';
+  }
+  if (link.isOutsideBoundary) {
+    return 'outside-project';
+  }
+  if (options.excludeNavigationFiles) {
+    const filename = basename(link.path);
+    if ((NAVIGATION_FILE_PATTERNS as readonly string[]).includes(filename)) {
+      return 'navigation-file';
+    }
+  }
+  return null;
 }
 
 // ============================================================================
@@ -169,7 +215,7 @@ async function collectLinksRecursive(
   const parseResult = await parseMarkdown(markdownPath);
 
   // Resolve all local file links (both markdown and non-markdown)
-  const resolvedLinks = resolveLocalLinks(parseResult.links, markdownPath, options.packageRoot);
+  const resolvedLinks = resolveLocalLinks(parseResult.links, markdownPath, options.projectRoot);
 
   const bundledFilesSet = new Set<string>();
   const excludedReferences: LinkResolution[] = [];
@@ -182,36 +228,23 @@ async function collectLinksRecursive(
   }));
 
   for (const link of resolvedLinks) {
-    // Step 0: Directory links are always excluded (directories are not valid bundle targets)
-    if (link.isDirectory) {
-      excludedReferences.push({
-        path: link.path,
-        bundled: false,
-        excludeReason: 'directory-target',
-        linkText: link.linkText,
-        linkHref: link.linkHref,
-      });
+    // Step 0: Check pre-pattern exclusions (directory, outside-project, navigation)
+    const prePatternReason = getPrePatternExcludeReason(link, options);
+    if (prePatternReason !== null) {
+      excludedReferences.push(makeExclusion(link, prePatternReason));
       continue;
     }
 
     // Step 1: Check exclude rules (applies to ALL file types)
-    // Use packageRoot (when available) as the base for glob matching.
+    // Use projectRoot (when available) as the base for glob matching.
     // skillRoot is dirname(SKILL.md) which may be deep inside the package;
     // files outside it produce ../  prefixes that picomatch ** cannot match.
-    const matchBase = options.packageRoot ?? options.skillRoot;
+    const matchBase = options.projectRoot ?? options.skillRoot;
     const relativePath = toForwardSlash(relative(matchBase, link.path));
     const matchedExclude = excludeMatchers.find((m) => m.isMatch(relativePath));
 
     if (matchedExclude) {
-      // Excluded by pattern -- record as excluded reference
-      excludedReferences.push({
-        path: link.path,
-        bundled: false,
-        excludeReason: 'pattern-matched',
-        matchedRule: matchedExclude.rule,
-        linkText: link.linkText,
-        linkHref: link.linkHref,
-      });
+      excludedReferences.push(makeExclusion(link, 'pattern-matched', matchedExclude.rule));
       continue;
     }
 
@@ -223,14 +256,7 @@ async function collectLinksRecursive(
 
     // Step 3: Markdown link -- check depth limit
     if (currentDepth >= options.maxDepth) {
-      // Beyond depth limit -- record as excluded
-      excludedReferences.push({
-        path: link.path,
-        bundled: false,
-        excludeReason: 'depth-exceeded',
-        linkText: link.linkText,
-        linkHref: link.linkHref,
-      });
+      excludedReferences.push(makeExclusion(link, 'depth-exceeded'));
       continue;
     }
 
@@ -270,17 +296,18 @@ async function collectLinksRecursive(
  * and non-markdown targets.
  *
  * Filters to `local_file` type links, strips anchors, resolves relative paths,
- * and checks file existence. Optionally enforces package boundary.
+ * and checks file existence. Marks links outside project boundary instead of
+ * silently dropping them.
  *
  * @param links - Raw links from parseMarkdown result
  * @param markdownPath - Path of the source markdown file (for relative resolution)
- * @param packageRoot - Optional boundary for path enforcement
+ * @param projectRoot - Optional boundary for path enforcement
  * @returns Array of resolved links with metadata
  */
 function resolveLocalLinks(
   links: Array<{ href: string; type: string; text?: string | undefined; line?: number | undefined }>,
   markdownPath: string,
-  packageRoot?: string | undefined,
+  projectRoot?: string | undefined,
 ): ResolvedLink[] {
   const resolved: ResolvedLink[] = [];
 
@@ -304,13 +331,9 @@ function resolveLocalLinks(
       continue;
     }
 
-    // Enforce package boundary if set
-    if (packageRoot) {
-      const rel = relative(packageRoot, resolvedPath);
-      if (rel.startsWith('..')) {
-        continue;
-      }
-    }
+    // Check project boundary (mark, don't drop)
+    const outsideBoundary = projectRoot !== undefined
+      && relative(projectRoot, resolvedPath).startsWith('..');
 
     // Check if target is a directory (not a file)
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path constructed from parsed markdown links
@@ -331,6 +354,7 @@ function resolveLocalLinks(
     resolved.push({
       path: resolvedPath,
       isMarkdown,
+      ...(outsideBoundary ? { isOutsideBoundary: true } : {}),
       linkText: link.text ?? '',
       linkHref: link.href,
     });

@@ -31,7 +31,7 @@ export type ValidationRuleCode =
   | 'RESERVED_WORD_IN_NAME'
   | 'BROKEN_INTERNAL_LINK'
   | 'CIRCULAR_REFERENCE'
-  | 'OUTSIDE_PACKAGE_BOUNDARY'
+  | 'OUTSIDE_PROJECT_BOUNDARY'
   | 'FILENAME_COLLISION'
   | 'WINDOWS_BACKSLASH_IN_PATH'
   | 'LINK_TARGETS_DIRECTORY'
@@ -66,7 +66,7 @@ export const NON_OVERRIDABLE_RULES: ValidationRuleCode[] = [
   'RESERVED_WORD_IN_NAME',
   'BROKEN_INTERNAL_LINK',
   'CIRCULAR_REFERENCE',
-  'OUTSIDE_PACKAGE_BOUNDARY',
+  'OUTSIDE_PROJECT_BOUNDARY',
   'FILENAME_COLLISION',
   'WINDOWS_BACKSLASH_IN_PATH',
 ];
@@ -106,11 +106,11 @@ export const VALIDATION_RULES: Record<ValidationRuleCode, ValidationRule> = {
     message: (ctx) => `Circular reference detected: ${(ctx['chain'] as string) ?? 'unknown'}`,
     fix: 'Remove circular link dependency',
   },
-  OUTSIDE_PACKAGE_BOUNDARY: {
-    code: 'OUTSIDE_PACKAGE_BOUNDARY',
+  OUTSIDE_PROJECT_BOUNDARY: {
+    code: 'OUTSIDE_PROJECT_BOUNDARY',
     category: 'required',
-    message: (ctx) => `Link points outside skill package: ${(ctx['href'] as string) ?? 'unknown'}`,
-    fix: 'Keep skills self-contained - move referenced files into package',
+    message: (ctx) => `Link points outside project: ${(ctx['href'] as string) ?? 'unknown'}`,
+    fix: 'Keep skills self-contained - move referenced files into the project',
   },
   FILENAME_COLLISION: {
     code: 'FILENAME_COLLISION',

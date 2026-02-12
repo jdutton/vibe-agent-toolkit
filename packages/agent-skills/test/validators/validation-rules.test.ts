@@ -46,7 +46,7 @@ describe('NON_OVERRIDABLE_RULES', () => {
 		expect(NON_OVERRIDABLE_RULES).toContain('RESERVED_WORD_IN_NAME');
 		expect(NON_OVERRIDABLE_RULES).toContain('BROKEN_INTERNAL_LINK');
 		expect(NON_OVERRIDABLE_RULES).toContain('CIRCULAR_REFERENCE');
-		expect(NON_OVERRIDABLE_RULES).toContain('OUTSIDE_PACKAGE_BOUNDARY');
+		expect(NON_OVERRIDABLE_RULES).toContain('OUTSIDE_PROJECT_BOUNDARY');
 		expect(NON_OVERRIDABLE_RULES).toContain('FILENAME_COLLISION');
 		expect(NON_OVERRIDABLE_RULES).toContain('WINDOWS_BACKSLASH_IN_PATH');
 	});
@@ -66,7 +66,7 @@ describe('VALIDATION_RULES', () => {
 		expect(VALIDATION_RULES.RESERVED_WORD_IN_NAME).toBeDefined();
 		expect(VALIDATION_RULES.BROKEN_INTERNAL_LINK).toBeDefined();
 		expect(VALIDATION_RULES.CIRCULAR_REFERENCE).toBeDefined();
-		expect(VALIDATION_RULES.OUTSIDE_PACKAGE_BOUNDARY).toBeDefined();
+		expect(VALIDATION_RULES.OUTSIDE_PROJECT_BOUNDARY).toBeDefined();
 		expect(VALIDATION_RULES.FILENAME_COLLISION).toBeDefined();
 		expect(VALIDATION_RULES.WINDOWS_BACKSLASH_IN_PATH).toBeDefined();
 	});
@@ -119,7 +119,7 @@ describe('isOverridable', () => {
 		expect(isOverridable('RESERVED_WORD_IN_NAME')).toBe(false);
 		expect(isOverridable('BROKEN_INTERNAL_LINK')).toBe(false);
 		expect(isOverridable('CIRCULAR_REFERENCE')).toBe(false);
-		expect(isOverridable('OUTSIDE_PACKAGE_BOUNDARY')).toBe(false);
+		expect(isOverridable('OUTSIDE_PROJECT_BOUNDARY')).toBe(false);
 		expect(isOverridable('FILENAME_COLLISION')).toBe(false);
 		expect(isOverridable('WINDOWS_BACKSLASH_IN_PATH')).toBe(false);
 	});

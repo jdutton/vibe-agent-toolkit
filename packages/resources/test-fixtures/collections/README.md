@@ -143,7 +143,7 @@ const fixturesDir = path.join(__dirname, '../test-fixtures/collections');
 const config = await loadProjectConfig(fixturesDir);
 
 // Create registry with config
-const registry = new ResourceRegistry({ config, rootDir: fixturesDir });
+const registry = new ResourceRegistry({ config, baseDir: fixturesDir });
 
 // Crawl and validate
 await registry.crawl({ baseDir: fixturesDir });

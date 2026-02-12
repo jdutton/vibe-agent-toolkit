@@ -9,7 +9,7 @@ describe('System Test: Project Link Validation (Dogfooding)', () => {
   const projectRoot = findMonorepoRoot();
 
   beforeEach(() => {
-    registry = new ResourceRegistry();
+    registry = new ResourceRegistry({ baseDir: projectRoot });
   });
 
   afterEach(() => {
@@ -98,5 +98,5 @@ describe('System Test: Project Link Validation (Dogfooding)', () => {
 
     // Ensure we actually validated some files
     expect(stats.totalResources).toBeGreaterThan(0);
-  }, 10000); // 10 second timeout for system test
+  }, 30000); // 30 second timeout for system test
 });

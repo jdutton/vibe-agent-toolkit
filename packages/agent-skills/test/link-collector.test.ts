@@ -342,16 +342,16 @@ describe('collectLinks', () => {
   // --------------------------------------------------------------------------
 
   describe('edge cases', () => {
-    it('should enforce package boundary when packageRoot is set', async () => {
-      // Create a subdirectory as the "package root"
-      const packageRoot = path.join(tempDir, 'pkg');
-      fs.mkdirSync(packageRoot, { recursive: true });
+    it('should exclude outside-project links when projectRoot is set', async () => {
+      // Create a subdirectory as the "project root"
+      const projectRoot = path.join(tempDir, 'project');
+      fs.mkdirSync(projectRoot, { recursive: true });
 
-      const skillPath = path.join(packageRoot, SKILL_MD_FILENAME);
+      const skillPath = path.join(projectRoot, SKILL_MD_FILENAME);
       fs.writeFileSync(skillPath, [
         '---',
         'name: boundary-test',
-        'description: Test package boundary enforcement',
+        'description: Test project boundary enforcement',
         '---',
         '',
         '# Test',
@@ -359,15 +359,16 @@ describe('collectLinks', () => {
         'See [inside](./inside.md) and [outside](../outside.md).',
       ].join('\n'));
 
-      fs.writeFileSync(path.join(packageRoot, 'inside.md'), '# Inside\n\nInside the boundary.');
+      fs.writeFileSync(path.join(projectRoot, 'inside.md'), '# Inside\n\nInside the boundary.');
       fs.writeFileSync(path.join(tempDir, 'outside.md'), '# Outside\n\nOutside the boundary.');
 
-      const options = makeOptions(packageRoot, { packageRoot });
+      const options = makeOptions(projectRoot, { projectRoot });
       const result = await collectLinks(skillPath, options);
 
-      // Only inside.md should be bundled; outside.md is beyond package boundary
-      expect(relativize(result.bundledFiles, packageRoot)).toEqual(['inside.md']);
-      expect(result.excludedReferences).toHaveLength(0);
+      // inside.md bundled; outside.md excluded as outside-project
+      expect(relativize(result.bundledFiles, projectRoot)).toEqual(['inside.md']);
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe('outside-project');
     });
 
     it('should handle anchor-only links by skipping them', async () => {
@@ -515,11 +516,11 @@ describe('collectLinks', () => {
       expect(result.excludedReferences[0]?.linkText).toBe('Core Concepts');
     });
 
-    it('should match exclude patterns for files outside skillRoot when packageRoot is set', async () => {
+    it('should match exclude patterns for files outside skillRoot when projectRoot is set', async () => {
       // Simulate real-world layout: SKILL.md is deep inside package,
-      // but links to files elsewhere in the package.
+      // but links to files elsewhere in the project.
       //   pkg/resources/skills/SKILL.md  →  ../../knowledge-base/concepts/intro.md
-      // Without packageRoot, relative() produces ../../knowledge-base/concepts/intro.md
+      // Without projectRoot, relative() produces ../../knowledge-base/concepts/intro.md
       // and picomatch ** cannot match .. segments.
       const pkg = path.join(tempDir, 'pkg');
       const skillDir = path.join(pkg, 'resources', 'skills');
@@ -529,7 +530,7 @@ describe('collectLinks', () => {
 
       const skillPath = path.join(skillDir, SKILL_MD_FILENAME);
       fs.writeFileSync(skillPath, [
-        '---', TEST_SKILL_NAME_FIELD, 'description: Test exclude patterns with packageRoot', '---',
+        '---', TEST_SKILL_NAME_FIELD, 'description: Test exclude patterns with projectRoot', '---',
         '', TEST_SKILL_HEADING, '',
         'See [intro](../../knowledge-base/concepts/intro.md).',
       ].join('\n'));
@@ -543,7 +544,7 @@ describe('collectLinks', () => {
 
       const options = makeOptions(skillDir, {
         excludeRules: [excludeRule],
-        packageRoot: pkg,
+        projectRoot: pkg,
       });
       const result = await collectLinks(skillPath, options);
 
@@ -552,6 +553,61 @@ describe('collectLinks', () => {
       expect(result.excludedReferences).toHaveLength(1);
       expect(result.excludedReferences[0]?.excludeReason).toBe(PATTERN_MATCHED);
       expect(result.excludedReferences[0]?.matchedRule).toBe(excludeRule);
+    });
+
+    it('should exclude navigation files when excludeNavigationFiles is enabled', async () => {
+      const skillPath = path.join(tempDir, SKILL_MD_FILENAME);
+
+      fs.writeFileSync(skillPath, [
+        '---',
+        'name: nav-test',
+        'description: Test navigation file exclusion',
+        '---',
+        '',
+        '# Test',
+        '',
+        'See [readme](./README.md) and [guide](./guide.md) and [index](./index.md).',
+      ].join('\n'));
+
+      fs.writeFileSync(path.join(tempDir, 'README.md'), '# README\n\nNavigation.');
+      fs.writeFileSync(path.join(tempDir, 'guide.md'), '# Guide\n\nContent.');
+      fs.writeFileSync(path.join(tempDir, 'index.md'), '# Index\n\nNavigation.');
+
+      const options = makeOptions(tempDir, { excludeNavigationFiles: true });
+      const result = await collectLinks(skillPath, options);
+
+      // guide.md bundled; README.md and index.md excluded as navigation files
+      expect(relativize(result.bundledFiles, tempDir)).toEqual(['guide.md']);
+      expect(result.excludedReferences).toHaveLength(2);
+      const navExclusions = result.excludedReferences.filter(r => r.excludeReason === 'navigation-file');
+      expect(navExclusions).toHaveLength(2);
+    });
+
+    it('should not exclude navigation files when excludeNavigationFiles is disabled', async () => {
+      const skillPath = path.join(tempDir, SKILL_MD_FILENAME);
+
+      fs.writeFileSync(skillPath, [
+        '---',
+        'name: nav-off-test',
+        'description: Test navigation file exclusion disabled',
+        '---',
+        '',
+        '# Test',
+        '',
+        'See [readme](./README.md) and [guide](./guide.md).',
+      ].join('\n'));
+
+      fs.writeFileSync(path.join(tempDir, 'README.md'), '# README\n\nNavigation.');
+      fs.writeFileSync(path.join(tempDir, 'guide.md'), '# Guide\n\nContent.');
+
+      const options = makeOptions(tempDir, { excludeNavigationFiles: false });
+      const result = await collectLinks(skillPath, options);
+
+      // Both files bundled when navigation exclusion is off
+      const bundled = relativize(result.bundledFiles, tempDir);
+      expect(bundled).toHaveLength(2);
+      expect(bundled).toEqual(expect.arrayContaining(['README.md', 'guide.md']));
+      expect(result.excludedReferences).toHaveLength(0);
     });
 
     it('should handle subdirectory structures', async () => {

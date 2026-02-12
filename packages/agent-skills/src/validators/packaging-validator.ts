@@ -20,7 +20,7 @@ import { basename, dirname, relative, resolve } from 'node:path';
 
 import type { ValidationOverride, VatSkillMetadata } from '@vibe-agent-toolkit/agent-schema';
 import { parseMarkdown } from '@vibe-agent-toolkit/resources';
-import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { collectLinks, type LinkResolution } from '../link-collector.js';
 
@@ -34,10 +34,14 @@ import {
   type ValidationRuleCode,
 } from './validation-rules.js';
 
+/** Exclude reason constants to avoid duplicate string literals */
+const EXCLUDE_REASON_DIRECTORY = 'directory-target' as const;
+const EXCLUDE_REASON_OUTSIDE_PROJECT = 'outside-project' as const;
+
 /** Excluded reference detail for verbose output */
 export interface ExcludedReferenceDetail {
   path: string;
-  reason: 'depth-exceeded' | 'pattern-matched';
+  reason: 'depth-exceeded' | 'pattern-matched' | 'outside-project' | 'navigation-file';
   matchedPattern?: string | undefined;
 }
 
@@ -110,7 +114,11 @@ export async function validateSkillForPackaging(
   // Read packaging options for depth/exclude configuration
   const linkFollowDepth = skillMetadata?.packagingOptions?.linkFollowDepth ?? 2;
   const excludeConfig = skillMetadata?.packagingOptions?.excludeReferencesFromBundle;
+  const excludeNavigationFiles = skillMetadata?.packagingOptions?.excludeNavigationFiles ?? true;
   const maxDepth = linkFollowDepth === 'full' ? Infinity : linkFollowDepth;
+
+  // Find project boundary (workspace root -> git root -> skill dir)
+  const projectRoot = findProjectRoot(dirname(skillPath));
 
   // Collect linked files with depth + exclusion
   const { bundledFiles, excludedReferences, maxBundledDepth } = await collectLinks(
@@ -120,6 +128,8 @@ export async function validateSkillForPackaging(
       excludeRules: excludeConfig?.rules ?? [],
       defaultRule: { template: excludeConfig?.defaultTemplate },
       skillRoot: dirname(skillPath),
+      projectRoot,
+      excludeNavigationFiles,
     }
   );
 
@@ -129,10 +139,17 @@ export async function validateSkillForPackaging(
   const directFileCount = directLinks.filter(p => bundledFileSet.has(p)).length;
 
   // Check for directory links (directories are not valid bundle targets)
-  const directoryLinks = excludedReferences.filter(r => r.excludeReason === 'directory-target');
+  const directoryLinks = excludedReferences.filter(r => r.excludeReason === EXCLUDE_REASON_DIRECTORY);
   for (const dirLink of directoryLinks) {
     const dirPath = toForwardSlash(relative(dirname(skillPath), dirLink.path));
     errors.push(createIssue(VALIDATION_RULES.LINK_TARGETS_DIRECTORY, { dirPath }, skillPath));
+  }
+
+  // Check for outside-project links (non-overridable error)
+  const outsideProjectLinks = excludedReferences.filter(r => r.excludeReason === EXCLUDE_REASON_OUTSIDE_PROJECT);
+  for (const extLink of outsideProjectLinks) {
+    const href = toForwardSlash(relative(dirname(skillPath), extLink.path));
+    errors.push(createIssue(VALIDATION_RULES.OUTSIDE_PROJECT_BOUNDARY, { href }, skillPath));
   }
 
   const fileCount = bundledFiles.length + 1; // +1 for SKILL.md itself
@@ -339,8 +356,14 @@ function getResolvedMarkdownLinks(
 }
 
 /**
+ * Reasons that are reported as validation errors instead of excluded references.
+ * These are filtered out of the excluded references list.
+ */
+const VALIDATION_ERROR_REASONS: ReadonlySet<string> = new Set([EXCLUDE_REASON_DIRECTORY, EXCLUDE_REASON_OUTSIDE_PROJECT]);
+
+/**
  * Deduplicate excluded references by path, preserving detail from first occurrence.
- * Filters out directory-target entries (reported as validation errors instead).
+ * Filters out entries reported as validation errors (directory-target, outside-project).
  */
 function deduplicateExcludedReferences(
   excludedReferences: LinkResolution[],
@@ -350,7 +373,7 @@ function deduplicateExcludedReferences(
   const details: ExcludedReferenceDetail[] = [];
 
   for (const ref of excludedReferences) {
-    if (ref.excludeReason === 'directory-target') {
+    if (VALIDATION_ERROR_REASONS.has(ref.excludeReason ?? '')) {
       continue;
     }
     if (seenPaths.has(ref.path)) {
@@ -358,14 +381,30 @@ function deduplicateExcludedReferences(
     }
     seenPaths.add(ref.path);
     const matchedPattern = ref.matchedRule?.patterns[0];
+    const reason = mapExcludeReason(ref.excludeReason);
     details.push({
       path: toForwardSlash(relative(dirname(skillPath), ref.path)),
-      reason: ref.excludeReason === 'pattern-matched' ? 'pattern-matched' : 'depth-exceeded',
+      reason,
       ...(matchedPattern === undefined ? {} : { matchedPattern }),
     });
   }
 
   return details;
+}
+
+/** Map link-collector exclude reasons to detail reasons */
+function mapExcludeReason(
+  excludeReason: LinkResolution['excludeReason'],
+): ExcludedReferenceDetail['reason'] {
+  switch (excludeReason) {
+    case 'pattern-matched': return 'pattern-matched';
+    case 'navigation-file': return 'navigation-file';
+    case 'depth-exceeded':
+    case EXCLUDE_REASON_DIRECTORY:
+    case EXCLUDE_REASON_OUTSIDE_PROJECT:
+    case undefined:
+      return 'depth-exceeded';
+  }
 }
 
 /**

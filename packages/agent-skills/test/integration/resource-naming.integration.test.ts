@@ -13,6 +13,7 @@ import { packageSkill } from '../../src/skill-packager.js';
 
 const KB_PATH = 'knowledge-base';
 const GUIDES_PATH = 'guides';
+const RESOURCES_DIR = 'resources';
 
 const TOPICS_QUICKSTART_PATH = join('topics', 'quickstart');
 const OVERVIEW_MD = 'overview.md';
@@ -78,6 +79,7 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
         packageSkill(skillPath, {
           outputPath,
           resourceNaming: BASENAME_STRATEGY,
+          excludeNavigationFiles: false,
         })
       ).rejects.toThrow(/Filename collision detected/);
     });
@@ -91,11 +93,12 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
       await packageSkill(skillPath, {
         outputPath,
         resourceNaming: RESOURCE_ID_STRATEGY,
+        excludeNavigationFiles: false,
       });
 
-      // Files should be flattened with kebab-case names
+      // Files should be flattened with kebab-case names under resources/
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
-      const files = readdirSync(outputPath);
+      const files = readdirSync(join(outputPath, RESOURCES_DIR));
       expect(files).toContain('knowledge-base-guides-overview.md');
       expect(files).toContain('knowledge-base-guides-topics-quickstart-overview.md');
     });
@@ -108,17 +111,18 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
         outputPath,
         resourceNaming: RESOURCE_ID_STRATEGY,
         stripPrefix: KB_PATH,
+        excludeNavigationFiles: false,
       });
 
       // Prefix should be stripped, no leading dash
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
-      const files = readdirSync(outputPath);
+      const files = readdirSync(join(outputPath, RESOURCES_DIR));
       expect(files).toContain('guides-overview.md');
       expect(files).toContain('guides-topics-quickstart-overview.md');
-      
+
       // Should NOT have knowledge-base- prefix
       expect(files.some(f => f.startsWith('knowledge-base-'))).toBe(false);
-      
+
       // Should NOT have leading dash
       expect(files.some(f => /^-/.exec(f))).toBe(false);
     });
@@ -132,21 +136,23 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
         outputPath: output1,
         resourceNaming: RESOURCE_ID_STRATEGY,
         stripPrefix: 'knowledge-base/',
+        excludeNavigationFiles: false,
       });
-      
+
       // Test without trailing slash
       const output2 = join(tempDir, 'output-without-slash');
       await packageSkill(skillPath, {
         outputPath: output2,
         resourceNaming: RESOURCE_ID_STRATEGY,
         stripPrefix: KB_PATH,
+        excludeNavigationFiles: false,
       });
 
       // Both should produce same result
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
-      const files1 = readdirSync(output1).sort((a, b) => a.localeCompare(b));
+      const files1 = readdirSync(join(output1, RESOURCES_DIR)).sort((a, b) => a.localeCompare(b));
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
-      const files2 = readdirSync(output2).sort((a, b) => a.localeCompare(b));
+      const files2 = readdirSync(join(output2, RESOURCES_DIR)).sort((a, b) => a.localeCompare(b));
       expect(files1).toEqual(files2);
       expect(files1).toContain('guides-overview.md');
     });
@@ -160,13 +166,14 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
       await packageSkill(skillPath, {
         outputPath,
         resourceNaming: PRESERVE_PATH_STRATEGY,
+        excludeNavigationFiles: false,
       });
 
-      // Directory structure should be preserved
+      // Directory structure should be preserved under resources/
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
-      expect(existsSync(join(outputPath, KB_PATH, GUIDES_PATH, OVERVIEW_MD))).toBe(true);
+      expect(existsSync(join(outputPath, RESOURCES_DIR, KB_PATH, GUIDES_PATH, OVERVIEW_MD))).toBe(true);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
-      expect(existsSync(join(outputPath, KB_PATH, GUIDES_PATH, 'topics', 'quickstart', OVERVIEW_MD))).toBe(true);
+      expect(existsSync(join(outputPath, RESOURCES_DIR, KB_PATH, GUIDES_PATH, 'topics', 'quickstart', OVERVIEW_MD))).toBe(true);
     });
 
     it('should strip path prefix and trim leading slash', async () => {
@@ -177,17 +184,18 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
         outputPath,
         resourceNaming: PRESERVE_PATH_STRATEGY,
         stripPrefix: KB_PATH,
+        excludeNavigationFiles: false,
       });
 
-      // Prefix should be stripped from paths
+      // Prefix should be stripped from paths under resources/
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
-      expect(existsSync(join(outputPath, GUIDES_PATH, OVERVIEW_MD))).toBe(true);
+      expect(existsSync(join(outputPath, RESOURCES_DIR, GUIDES_PATH, OVERVIEW_MD))).toBe(true);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
-      expect(existsSync(join(outputPath, GUIDES_PATH, 'topics', 'quickstart', OVERVIEW_MD))).toBe(true);
+      expect(existsSync(join(outputPath, RESOURCES_DIR, GUIDES_PATH, 'topics', 'quickstart', OVERVIEW_MD))).toBe(true);
 
-      // Should NOT have knowledge-base directory
+      // Should NOT have knowledge-base directory under resources/
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
-      expect(existsSync(join(outputPath, KB_PATH))).toBe(false);
+      expect(existsSync(join(outputPath, RESOURCES_DIR, KB_PATH))).toBe(false);
     });
 
     it('should work with stripPrefix with or without trailing slash', async () => {
@@ -199,6 +207,7 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
         outputPath: output1,
         resourceNaming: PRESERVE_PATH_STRATEGY,
         stripPrefix: `${KB_PATH}/`,
+        excludeNavigationFiles: false,
       });
 
       // Test without trailing slash
@@ -207,13 +216,14 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
         outputPath: output2,
         resourceNaming: PRESERVE_PATH_STRATEGY,
         stripPrefix: KB_PATH,
+        excludeNavigationFiles: false,
       });
 
-      // Both should produce same structure
+      // Both should produce same structure under resources/
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
-      expect(existsSync(join(output1, GUIDES_PATH, OVERVIEW_MD))).toBe(true);
+      expect(existsSync(join(output1, RESOURCES_DIR, GUIDES_PATH, OVERVIEW_MD))).toBe(true);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
-      expect(existsSync(join(output2, GUIDES_PATH, OVERVIEW_MD))).toBe(true);
+      expect(existsSync(join(output2, RESOURCES_DIR, GUIDES_PATH, OVERVIEW_MD))).toBe(true);
     });
   });
 
@@ -226,10 +236,11 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
         outputPath,
         resourceNaming: RESOURCE_ID_STRATEGY,
         stripPrefix: `${KB_PATH}/${GUIDES_PATH}`,
+        excludeNavigationFiles: false,
       });
 
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
-      const files = readdirSync(outputPath);
+      const files = readdirSync(join(outputPath, RESOURCES_DIR));
       // Should strip both knowledge-base and guides
       expect(files).toContain(OVERVIEW_MD);
       expect(files).toContain('topics-quickstart-overview.md');
@@ -243,10 +254,11 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
         outputPath,
         resourceNaming: RESOURCE_ID_STRATEGY,
         stripPrefix: 'does-not-exist',
+        excludeNavigationFiles: false,
       });
 
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output validation
-      const files = readdirSync(outputPath);
+      const files = readdirSync(join(outputPath, RESOURCES_DIR));
       // Prefix didn't match, so full path should remain
       expect(files).toContain('knowledge-base-guides-overview.md');
     });

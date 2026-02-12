@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/test-agents",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "private": true,
   "description": "Simple test agents for validating runtime adapters (internal use only)",
   "type": "module",

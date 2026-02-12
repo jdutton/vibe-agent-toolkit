@@ -102,7 +102,7 @@ describe('packageSkill - resource naming: basename (default)', () => {
     const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, 'See [details](./nested/details.md).');
     const result = await packWithOutput(sp);
 
-    expect(existsSync(join(result.outputPath, DETAILS_MD))).toBe(true);
+    expect(existsSync(join(result.outputPath, 'resources', DETAILS_MD))).toBe(true);
     expect(result.files.dependencies.some(f => toForwardSlash(f).includes(DETAILS_MD))).toBe(true);
   });
 });
@@ -121,7 +121,7 @@ describe('packageSkill - resource naming: resource-id with stripPrefix', () => {
     });
 
     // After stripping 'kb', remaining path is section/topic.md -> section-topic.md
-    expect(existsSync(join(result.outputPath, 'section-topic.md'))).toBe(true);
+    expect(existsSync(join(result.outputPath, 'resources', 'section-topic.md'))).toBe(true);
   });
 });
 
@@ -135,7 +135,7 @@ describe('packageSkill - resource naming: preserve-path', () => {
     const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, 'See [welcome](./articles/welcome.md).');
     const result = await packWithOutput(sp, { resourceNaming: 'preserve-path' });
 
-    expect(existsSync(join(result.outputPath, 'articles', 'welcome.md'))).toBe(true);
+    expect(existsSync(join(result.outputPath, 'resources', 'articles', 'welcome.md'))).toBe(true);
   });
 });
 
@@ -164,11 +164,12 @@ describe('packageSkill - preserve-path with stripPrefix (no false collision)', (
     const result = await packWithOutput(sp, {
       resourceNaming: 'preserve-path',
       stripPrefix: kb,
+      excludeNavigationFiles: false,
     });
 
     // Both files should exist at their stripped paths (no collision)
-    expect(existsSync(join(result.outputPath, 'guides', overview))).toBe(true);
-    expect(existsSync(join(result.outputPath, 'guides', 'topics', 'quickstart', overview))).toBe(true);
+    expect(existsSync(join(result.outputPath, 'resources', 'guides', overview))).toBe(true);
+    expect(existsSync(join(result.outputPath, 'resources', 'guides', 'topics', 'quickstart', overview))).toBe(true);
   });
 });
 
@@ -382,7 +383,7 @@ describe('packageSkill - excluded link rewriting', () => {
       },
     });
 
-    const chainContent = await readFile(join(result.outputPath, 'chain.md'), 'utf-8');
+    const chainContent = await readFile(join(result.outputPath, 'resources', 'chain.md'), 'utf-8');
     expect(chainContent).toContain('Look up: end');
     expect(chainContent).not.toContain('[end](');
   });

@@ -18,7 +18,7 @@ async function setupRegistryWithExternalLink(tempDir: string, url: string): Prom
   const testFile = join(tempDir, 'test.md');
   await writeFile(testFile, `# Test\n\n[Link](${url})\n`);
 
-  const registry = new ResourceRegistry({ rootDir: tempDir });
+  const registry = new ResourceRegistry({ baseDir: tempDir });
   await registry.addResource(testFile);
   return registry;
 }

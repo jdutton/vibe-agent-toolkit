@@ -103,7 +103,7 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
     const filePath = join(docsDir, 'test.md');
     await createMarkdownFile(filePath, frontmatter);
 
-    const registry = new ResourceRegistry({ rootDir: suite.tempDir, config });
+    const registry = new ResourceRegistry({ baseDir: suite.tempDir, config });
     await registry.addResource(filePath);
 
     return { registry, filePath };
@@ -270,7 +270,7 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
     await createMarkdownFile(filePath, { title: 'Test' });
 
     // Create registry and add resource
-    const registry = new ResourceRegistry({ rootDir: suite.tempDir, config });
+    const registry = new ResourceRegistry({ baseDir: suite.tempDir, config });
     await registry.addResource(filePath);
 
     // Validate - should not crash, but should report issue
@@ -319,7 +319,7 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
     });
 
     // Create registry and add resource
-    const registry = new ResourceRegistry({ rootDir: suite.tempDir, config });
+    const registry = new ResourceRegistry({ baseDir: suite.tempDir, config });
     await registry.addResource(filePath);
 
     // Validate
@@ -374,7 +374,7 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
     });
 
     // Create registry and add resource
-    const registry = new ResourceRegistry({ rootDir: suite.tempDir, config });
+    const registry = new ResourceRegistry({ baseDir: suite.tempDir, config });
     await registry.addResource(filePath);
 
     // Validate with global schema
@@ -416,7 +416,7 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
       extraField: 'should be allowed in permissive mode',
     });
 
-    const registry = new ResourceRegistry({ rootDir: suite.tempDir, config });
+    const registry = new ResourceRegistry({ baseDir: suite.tempDir, config });
     await registry.addResource(filePath);
 
     const result = await registry.validate();
