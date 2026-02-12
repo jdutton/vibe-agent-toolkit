@@ -649,6 +649,14 @@ tags: test
     });
   });
 
+  /** Create two readme.md files in dir1/ and dir2/ under the given base directory */
+  async function createDuplicateNamedFiles(baseDirectory: string): Promise<void> {
+    await mkdir(path.join(baseDirectory, 'dir1'), { recursive: true });
+    await mkdir(path.join(baseDirectory, 'dir2'), { recursive: true });
+    await writeFile(path.join(baseDirectory, 'dir1', 'readme.md'), '# Dir 1', 'utf-8');
+    await writeFile(path.join(baseDirectory, 'dir2', 'readme.md'), '# Dir 2', 'utf-8');
+  }
+
   describe('ID Resolution Strategy', () => {
     let tempDir: string;
 
@@ -659,14 +667,6 @@ tags: test
     afterEach(async () => {
       await rm(tempDir, { recursive: true, force: true });
     });
-
-    /** Create two readme.md files in dir1/ and dir2/ under the given base directory */
-    async function createDuplicateNamedFiles(baseDirectory: string): Promise<void> {
-      await mkdir(path.join(baseDirectory, 'dir1'), { recursive: true });
-      await mkdir(path.join(baseDirectory, 'dir2'), { recursive: true });
-      await writeFile(path.join(baseDirectory, 'dir1', 'readme.md'), '# Dir 1', 'utf-8');
-      await writeFile(path.join(baseDirectory, 'dir2', 'readme.md'), '# Dir 2', 'utf-8');
-    }
 
     describe('path-relative IDs with baseDir', () => {
       it('should generate IDs from relative path when baseDir is set', async () => {

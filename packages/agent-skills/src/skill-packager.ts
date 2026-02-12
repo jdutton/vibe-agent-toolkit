@@ -223,8 +223,8 @@ export async function packageSkill(
   }
 
   // 7. Clean stale output (skip when source SKILL.md lives inside the output, e.g. builder flow)
-  const resolvedOutput = resolve(outputPath);
-  const sourceInOutput = resolve(skillPath).startsWith(resolvedOutput + '/');
+  const resolvedOutput = toForwardSlash(resolve(outputPath));
+  const sourceInOutput = toForwardSlash(resolve(skillPath)).startsWith(resolvedOutput + '/');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- outputPath is validated
   if (!sourceInOutput && existsSync(resolvedOutput)) {
     await rm(resolvedOutput, { recursive: true });
