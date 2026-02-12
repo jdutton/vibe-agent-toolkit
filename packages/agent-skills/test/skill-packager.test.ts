@@ -1,6 +1,6 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { toForwardSlash } from '@vibe-agent-toolkit/utils';
@@ -425,5 +425,68 @@ describe('packageSkill - excluded link rewriting', () => {
 
     const content = await readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
     expect(content).toContain('Find in branded-skill KB');
+  });
+});
+
+// ============================================================================
+// Output directory structure integrity
+// ============================================================================
+
+describe('packageSkill - output directory structure', () => {
+  const GUIDE_MD = 'guide.md';
+  const REFERENCE_MD = 'reference.md';
+
+  it('should place bundled resources under resources/ not at root', async () => {
+    const tmp = getTempDir();
+    const docsDir = join(tmp, 'docs');
+    await mkdir(docsDir, { recursive: true });
+    await writeFile(join(docsDir, GUIDE_MD), '# Guide\n\nContent here.');
+    await writeFile(join(docsDir, REFERENCE_MD), '# Reference\n\nMore content.');
+
+    const sp = await writeSkillMd(
+      tmp,
+      UNIT_SKILL_NAME,
+      `See [guide](./docs/${GUIDE_MD}) and [reference](./docs/${REFERENCE_MD}).`,
+    );
+    const result = await packWithOutput(sp);
+
+    // Only SKILL.md and resources/ should be at the root
+    const rootEntries = await readdir(result.outputPath);
+    const rootMdFiles = rootEntries.filter(e => e.endsWith('.md'));
+    expect(rootMdFiles).toEqual(['SKILL.md']);
+
+    // Bundled files should be under resources/
+    expect(existsSync(join(result.outputPath, 'resources', GUIDE_MD))).toBe(true);
+    expect(existsSync(join(result.outputPath, 'resources', REFERENCE_MD))).toBe(true);
+
+    // Bundled files must NOT be at the root
+    expect(existsSync(join(result.outputPath, GUIDE_MD))).toBe(false);
+    expect(existsSync(join(result.outputPath, REFERENCE_MD))).toBe(false);
+  });
+
+  it('should clean stale files from output directory on rebuild', async () => {
+    const tmp = getTempDir();
+    const outDir = join(tmp, 'out');
+    await writeFile(join(tmp, 'page.md'), '# Page');
+
+    const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, 'See [page](./page.md).');
+
+    // First build
+    await packageSkill(sp, { outputPath: outDir });
+
+    // Plant stale files
+    await writeFile(join(outDir, 'stale.md'), '# Should be removed');
+    await mkdir(join(outDir, 'old-dir'), { recursive: true });
+    await writeFile(join(outDir, 'old-dir', 'leftover.md'), '# Also gone');
+
+    // Rebuild — should clean stale files
+    await packageSkill(sp, { outputPath: outDir });
+
+    const rootEntries = await readdir(outDir);
+    expect(rootEntries).not.toContain('stale.md');
+    expect(rootEntries).not.toContain('old-dir');
+    expect(rootEntries).toHaveLength(2);
+    expect(rootEntries).toContain('SKILL.md');
+    expect(rootEntries).toContain('resources');
   });
 });
