@@ -8,10 +8,19 @@ export { buildClaudeSkill, type BuildOptions, type BuildResult } from './builder
 export {
   extractH1Title,
   packageSkill,
+  packageSkills,
   type PackageSkillOptions,
   type PackageSkillResult,
+  type SkillBuildSpec,
   type SkillMetadata,
 } from './skill-packager.js';
+
+export {
+  walkLinkGraph,
+  type LinkGraphResult,
+  type WalkableRegistry,
+  type WalkLinkGraphOptions,
+} from './walk-link-graph.js';
 
 export {
   ClaudeSkillFrontmatterSchema,

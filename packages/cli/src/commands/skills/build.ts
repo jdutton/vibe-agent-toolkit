@@ -8,11 +8,13 @@ import { dirname, resolve } from 'node:path';
 
 import type { VatSkillMetadata } from '@vibe-agent-toolkit/agent-schema';
 import {
-  packageSkill,
+  packageSkills,
   validateSkillForPackaging,
   type PackageSkillResult,
   type PackagingValidationResult,
+  type SkillBuildSpec,
 } from '@vibe-agent-toolkit/agent-skills';
+import { findProjectRoot } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../../utils/command-error.js';
@@ -177,43 +179,6 @@ async function validateSkillOrExit(
 }
 
 /**
- * Build a single skill
- */
-async function buildSkill(
-  skill: VatSkillMetadata,
-  sourcePath: string,
-  cwd: string,
-  logger: ReturnType<typeof createLogger>
-): Promise<PackageSkillResult> {
-  const outputPath = resolve(cwd, skill.path);
-  const basePath = dirname(sourcePath);
-
-  logger.info(`\n📦 Building skill: ${skill.name}`);
-  logger.info(`   Source: ${skill.source}`);
-  logger.info(`   Output: ${skill.path}`);
-
-  // Validate before building
-  await validateSkillOrExit(skill, sourcePath, logger);
-
-  // Apply packaging options from skill metadata (only include if defined)
-  const packagingOptions = skill.packagingOptions;
-  const result = await packageSkill(sourcePath, {
-    outputPath,
-    formats: ['directory'],
-    rewriteLinks: true,
-    basePath,
-    ...(packagingOptions?.resourceNaming && { resourceNaming: packagingOptions.resourceNaming }),
-    ...(packagingOptions?.stripPrefix && { stripPrefix: packagingOptions.stripPrefix }),
-    ...(packagingOptions?.linkFollowDepth !== undefined && { linkFollowDepth: packagingOptions.linkFollowDepth }),
-    ...(packagingOptions?.excludeReferencesFromBundle && { excludeReferencesFromBundle: packagingOptions.excludeReferencesFromBundle }),
-  });
-
-  logger.info(`   ✅ Built ${result.files.dependencies.length + 1} files`);
-
-  return result;
-}
-
-/**
  * Output dry-run results
  */
 function outputDryRunYaml(
@@ -321,13 +286,42 @@ async function buildCommand(
       process.exit(0);
     }
 
-    // Build each skill
-    const results: Array<{ skill: VatSkillMetadata; result: PackageSkillResult }> = [];
-
+    // Validate all skills before building
+    const validatedSpecs: Array<{ skill: VatSkillMetadata; sourcePath: string }> = [];
     for (const skill of skillsToBuild) {
       const sourcePath = validateSkillSource(skill, cwd, logger);
-      const result = await buildSkill(skill, sourcePath, cwd, logger);
-      results.push({ skill, result });
+      logger.info(`\n📦 Building skill: ${skill.name}`);
+      logger.info(`   Source: ${skill.source}`);
+      logger.info(`   Output: ${skill.path}`);
+      await validateSkillOrExit(skill, sourcePath, logger);
+      validatedSpecs.push({ skill, sourcePath });
+    }
+
+    // Build all skills with a shared registry
+    const projectRoot = findProjectRoot(cwd);
+    const specs: SkillBuildSpec[] = validatedSpecs.map(({ skill, sourcePath }) => ({
+      skillPath: sourcePath,
+      options: {
+        outputPath: resolve(cwd, skill.path),
+        formats: ['directory' as const],
+        rewriteLinks: true,
+        basePath: dirname(sourcePath),
+        ...(skill.packagingOptions?.resourceNaming && { resourceNaming: skill.packagingOptions.resourceNaming }),
+        ...(skill.packagingOptions?.stripPrefix && { stripPrefix: skill.packagingOptions.stripPrefix }),
+        ...(skill.packagingOptions?.linkFollowDepth !== undefined && { linkFollowDepth: skill.packagingOptions.linkFollowDepth }),
+        ...(skill.packagingOptions?.excludeReferencesFromBundle && { excludeReferencesFromBundle: skill.packagingOptions.excludeReferencesFromBundle }),
+      },
+    }));
+
+    const packageResults = await packageSkills(specs, projectRoot);
+
+    const results: Array<{ skill: VatSkillMetadata; result: PackageSkillResult }> = [];
+    for (const [i, spec] of validatedSpecs.entries()) {
+      const result = packageResults[i];
+      if (result) {
+        logger.info(`   ✅ Built ${result.files.dependencies.length + 1} files`);
+        results.push({ skill: spec.skill, result });
+      }
     }
 
     const duration = Date.now() - startTime;

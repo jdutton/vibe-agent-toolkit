@@ -22,7 +22,7 @@
 
 import path from 'node:path';
 
-import { renderTemplate } from '@vibe-agent-toolkit/utils';
+import { renderTemplate, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import type { LinkType, ResourceLink, ResourceMetadata } from './schemas/resource-metadata.js';
 import { matchesGlobPattern, splitHrefAnchor } from './utils.js';
@@ -122,11 +122,13 @@ export interface LinkRewriteRule {
    * - `link.type` - Link type (local_file, anchor, external, email, unknown)
    * - `link.resource.id` - Target resource ID (if resolved)
    * - `link.resource.filePath` - Target resource file path (if resolved)
+   * - `link.resource.fileName` - Target resource file name with extension (if resolved)
    * - `link.resource.extension` - Target resource file extension (if resolved)
    * - `link.resource.mimeType` - Inferred MIME type (if resolved)
    * - `link.resource.frontmatter.*` - Target resource frontmatter fields (if resolved)
    * - `link.resource.sizeBytes` - Target resource size in bytes (if resolved)
    * - `link.resource.estimatedTokenCount` - Target resource estimated token count (if resolved)
+   * - `link.resource.relativePath` - Relative path from sourceFilePath to resource (if both available)
    * - Plus any variables from `context`
    */
   template: string;
@@ -150,6 +152,20 @@ export interface ContentTransformOptions {
    * These are merged at the top level of the template context.
    */
   context?: Record<string, unknown>;
+
+  /**
+   * Absolute file path of the source document being transformed.
+   * When provided, enables `link.resource.relativePath` computation:
+   * `relative(dirname(sourceFilePath), link.resource.filePath)` using forward slashes.
+   */
+  sourceFilePath?: string;
+
+  /**
+   * Fallback template for links that match no rule.
+   * Without this option, unmatched links are left untouched (original markdown preserved).
+   * With this option, unmatched links are rendered through this template.
+   */
+  defaultTemplate?: string;
 }
 
 /**
@@ -160,6 +176,7 @@ export interface ContentTransformOptions {
  * @param fragment - The fragment string including '#' prefix, or empty string
  * @param resource - The resolved target resource (if available)
  * @param extraContext - Additional context variables
+ * @param sourceFilePath - Absolute path of the source document (for relativePath computation)
  * @returns Template context object
  */
 function buildTemplateContext(
@@ -168,17 +185,22 @@ function buildTemplateContext(
   fragment: string,
   resource: ResourceMetadata | undefined,
   extraContext: Record<string, unknown> | undefined,
+  sourceFilePath: string | undefined,
 ): Record<string, unknown> {
   const resourceContext = resource === undefined
     ? undefined
     : {
         id: resource.id,
         filePath: resource.filePath,
+        fileName: path.basename(resource.filePath),
         extension: path.extname(resource.filePath),
         mimeType: inferMimeType(resource.filePath),
         frontmatter: resource.frontmatter,
         sizeBytes: resource.sizeBytes,
         estimatedTokenCount: resource.estimatedTokenCount,
+        relativePath: sourceFilePath === undefined
+          ? undefined
+          : toForwardSlash(path.relative(path.dirname(sourceFilePath), resource.filePath)),
       };
 
   return {
@@ -311,7 +333,8 @@ const MARKDOWN_LINK_REGEX = /\[([^\]]*)\]\(([^)]*)\)/g;
  *
  * Links are matched by their original markdown syntax `[text](href)`. For each link found
  * in the content, the function checks the provided rules in order. The first matching rule
- * determines the replacement. Links matching no rule are left untouched.
+ * determines the replacement. Links matching no rule are left untouched unless a
+ * `defaultTemplate` is provided, in which case unmatched links are rendered through it.
  *
  * @param content - The markdown content to transform
  * @param links - Parsed links from the content (from ResourceMetadata.links)
@@ -342,10 +365,10 @@ export function transformContent(
   links: ResourceLink[],
   options: ContentTransformOptions,
 ): string {
-  const { linkRewriteRules, resourceRegistry, context } = options;
+  const { linkRewriteRules, resourceRegistry, context, sourceFilePath, defaultTemplate } = options;
 
-  // If there are no rules or no links, return content unchanged
-  if (linkRewriteRules.length === 0 || links.length === 0) {
+  // If there are no rules, no default template, or no links, return content unchanged
+  if ((linkRewriteRules.length === 0 && defaultTemplate === undefined) || links.length === 0) {
     return content;
   }
 
@@ -379,8 +402,10 @@ export function transformContent(
     // Find the first matching rule
     const rule = findMatchingRule(link, resource, linkRewriteRules);
 
-    if (!rule) {
-      // No rule matches - leave untouched
+    // Determine which template to use: matched rule, defaultTemplate, or leave untouched
+    const template = rule?.template ?? defaultTemplate;
+    if (template === undefined) {
+      // No rule matches and no default template - leave untouched
       return fullMatch;
     }
 
@@ -389,7 +414,7 @@ export function transformContent(
     const fragment = anchor === undefined ? '' : `#${anchor}`;
 
     // Build template context and render
-    const templateContext = buildTemplateContext(link, hrefWithoutFragment, fragment, resource, context);
-    return renderTemplate(rule.template, templateContext);
+    const templateContext = buildTemplateContext(link, hrefWithoutFragment, fragment, resource, context, sourceFilePath);
+    return renderTemplate(template, templateContext);
   });
 }
