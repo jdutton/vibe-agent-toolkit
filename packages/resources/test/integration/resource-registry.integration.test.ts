@@ -39,6 +39,14 @@ function allResourcesHaveIdAndPath(resources: ResourceMetadata[]): boolean {
   return resources.every((r) => Boolean(r.id && r.filePath));
 }
 
+/** Create two readme.md files in dir1/ and dir2/ under the given base directory */
+async function createDuplicateNamedFiles(baseDirectory: string): Promise<void> {
+  await mkdir(path.join(baseDirectory, 'dir1'), { recursive: true });
+  await mkdir(path.join(baseDirectory, 'dir2'), { recursive: true });
+  await writeFile(path.join(baseDirectory, 'dir1', 'readme.md'), '# Dir 1', 'utf-8');
+  await writeFile(path.join(baseDirectory, 'dir2', 'readme.md'), '# Dir 2', 'utf-8');
+}
+
 describe('ResourceRegistry - Integration Tests', () => {
   let registry: ResourceRegistry;
 
@@ -648,14 +656,6 @@ tags: test
       expect(result).toBeDefined();
     });
   });
-
-  /** Create two readme.md files in dir1/ and dir2/ under the given base directory */
-  async function createDuplicateNamedFiles(baseDirectory: string): Promise<void> {
-    await mkdir(path.join(baseDirectory, 'dir1'), { recursive: true });
-    await mkdir(path.join(baseDirectory, 'dir2'), { recursive: true });
-    await writeFile(path.join(baseDirectory, 'dir1', 'readme.md'), '# Dir 1', 'utf-8');
-    await writeFile(path.join(baseDirectory, 'dir2', 'readme.md'), '# Dir 2', 'utf-8');
-  }
 
   describe('ID Resolution Strategy', () => {
     let tempDir: string;
