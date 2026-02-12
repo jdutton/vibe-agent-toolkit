@@ -17,7 +17,9 @@ export {
 
 export {
   walkLinkGraph,
+  type ExcludeRule,
   type LinkGraphResult,
+  type LinkResolution,
   type WalkableRegistry,
   type WalkLinkGraphOptions,
 } from './walk-link-graph.js';
@@ -77,14 +79,6 @@ export {
   type ImportResult,
 } from './import.js';
 
-export {
-  collectLinks,
-  type DefaultRule,
-  type ExcludeRule,
-  type LinkCollectionOptions,
-  type LinkCollectionResult,
-  type LinkResolution,
-} from './link-collector.js';
 
 // Re-export ValidationOverride from agent-schema for convenience
 export type { ValidationOverride } from '@vibe-agent-toolkit/agent-schema';

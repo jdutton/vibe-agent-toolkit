@@ -74,7 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Rule-Based Link Exclusion** - Selectively exclude files from bundles with per-pattern link rewriting
   - `excludeReferencesFromBundle` with ordered rules: each rule specifies glob patterns and optional Handlebars template
   - `defaultTemplate` for depth-boundary links that don't match explicit rules (default: `"{{link.text}}"`)
-  - Template variables: `{{link.text}}`, `{{link.uri}}`, `{{link.fileName}}`, `{{link.filePath}}`, `{{skill.name}}`
+  - Template variables: `{{link.text}}`, `{{link.href}}`, `{{link.fragment}}`, `{{link.type}}`, `{{link.resource.id}}`, `{{link.resource.fileName}}`, `{{link.resource.relativePath}}`, `{{skill.name}}`
   - No dead links in output: every non-bundled link target is rewritten per its matched template
 - **Resource Naming Strategies for Skills** - Flexible control over packaged resource file naming
   - Three strategies: `basename` (default, simple), `resource-id` (flatten to kebab-case), `preserve-path` (maintain directory structure)

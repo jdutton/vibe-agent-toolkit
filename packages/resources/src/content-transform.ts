@@ -311,7 +311,7 @@ function findMatchingRule(
 }
 
 /**
- * Regex pattern matching markdown links: `[text](href)`
+ * Regex pattern matching inline markdown links: `[text](href)`
  *
  * Captures:
  * - Group 0: Full match including brackets and parentheses
@@ -326,15 +326,28 @@ function findMatchingRule(
 const MARKDOWN_LINK_REGEX = /\[([^\]]*)\]\(([^)]*)\)/g;
 
 /**
+ * Regex pattern matching reference-style link definitions: `[ref]: url`
+ *
+ * Must appear at the start of a line (multiline flag).
+ * Captures:
+ * - Group 1: Reference identifier
+ * - Group 2: URL (may include trailing whitespace)
+ */
+// eslint-disable-next-line sonarjs/slow-regex -- Controlled markdown reference link definitions on line boundaries
+const MARKDOWN_DEFINITION_REGEX = /^\[([^\]]*?)\]:\s*(.+)$/gm;
+
+/**
  * Transform markdown content by rewriting links according to rules.
  *
  * This is a pure function that takes content, its parsed links, and transform options,
  * and returns the content with matching links rewritten according to the first matching rule.
  *
- * Links are matched by their original markdown syntax `[text](href)`. For each link found
- * in the content, the function checks the provided rules in order. The first matching rule
- * determines the replacement. Links matching no rule are left untouched unless a
- * `defaultTemplate` is provided, in which case unmatched links are rendered through it.
+ * Two passes are performed:
+ * 1. **Inline links** `[text](href)` — matched via rules, rendered through templates
+ * 2. **Definition lines** `[ref]: url` — matched via rules, rewritten in definition format
+ *    or removed if orphaned (target not in registry)
+ *
+ * Links matching no rule are left untouched unless a `defaultTemplate` is provided.
  *
  * @param content - The markdown content to transform
  * @param links - Parsed links from the content (from ResourceMetadata.links)
@@ -372,19 +385,24 @@ export function transformContent(
     return content;
   }
 
+  // === Pass 1: Inline links [text](href) ===
+
   // Build a lookup map from "[text](href)" to the corresponding ResourceLink.
   // Multiple links can share the same text+href combination; we process them all
   // with the first matching ResourceLink (they are identical in terms of match criteria).
   const linkBySignature = new Map<string, ResourceLink>();
   for (const link of links) {
+    if (link.nodeType === 'definition') {
+      continue; // Definitions are handled in pass 2
+    }
     const signature = `[${link.text}](${link.href})`;
     if (!linkBySignature.has(signature)) {
       linkBySignature.set(signature, link);
     }
   }
 
-  // Replace markdown links in content
-  return content.replaceAll(MARKDOWN_LINK_REGEX, (fullMatch, text: string, href: string) => {
+  // Replace inline markdown links in content
+  let result = content.replaceAll(MARKDOWN_LINK_REGEX, (fullMatch, text: string, href: string) => {
     // Find the corresponding ResourceLink
     const signature = `[${text}](${href})`;
     const link = linkBySignature.get(signature);
@@ -417,4 +435,65 @@ export function transformContent(
     const templateContext = buildTemplateContext(link, hrefWithoutFragment, fragment, resource, context, sourceFilePath);
     return renderTemplate(template, templateContext);
   });
+
+  // === Pass 2: Reference-style definitions [ref]: url ===
+
+  // Build lookup map for definition links (keyed by "identifier\0href")
+  const definitionByKey = new Map<string, ResourceLink>();
+  for (const link of links) {
+    if (link.nodeType !== 'definition') {
+      continue;
+    }
+    const key = `${link.text}\0${link.href}`;
+    if (!definitionByKey.has(key)) {
+      definitionByKey.set(key, link);
+    }
+  }
+
+  if (definitionByKey.size > 0) {
+    result = result.replaceAll(
+      MARKDOWN_DEFINITION_REGEX,
+      (fullMatch, ref: string, href: string) => {
+        const trimmedHref = href.trim();
+
+        // Look up the corresponding definition ResourceLink
+        const key = `${ref}\0${trimmedHref}`;
+        const link = definitionByKey.get(key);
+        if (!link) {
+          return fullMatch;
+        }
+
+        // Resolve the target resource if available
+        const resource = link.resolvedId === undefined || resourceRegistry === undefined
+          ? undefined
+          : resourceRegistry.getResourceById(link.resolvedId);
+
+        // Find matching rule (same rule set as inline links)
+        const rule = findMatchingRule(link, resource, linkRewriteRules);
+        const template = rule?.template ?? defaultTemplate;
+
+        if (template === undefined) {
+          return fullMatch;
+        }
+
+        // If resource is in registry and we have sourceFilePath: rewrite URL in definition format
+        if (resource !== undefined && sourceFilePath !== undefined) {
+          const [, anchor] = splitHrefAnchor(trimmedHref);
+          const fragment = anchor === undefined ? '' : `#${anchor}`;
+          const newRelPath = toForwardSlash(
+            path.relative(path.dirname(sourceFilePath), resource.filePath),
+          );
+          return `[${ref}]: ${newRelPath}${fragment}`;
+        }
+
+        // Rule matched but no resource to rewrite to — remove orphaned definition
+        return '';
+      },
+    );
+
+    // Clean up excessive blank lines from removed definitions
+    result = result.replaceAll(/\n{3,}/g, '\n\n');
+  }
+
+  return result;
 }

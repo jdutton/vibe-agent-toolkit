@@ -48,6 +48,7 @@ export type { ResourceCollectionInterface } from './resource-collection-interfac
 
 // Export all type definitions (from schemas)
 export type {
+  LinkNodeType,
   LinkType,
   HeadingNode,
   ResourceLink,
@@ -63,6 +64,7 @@ export type {
 
 // Export schemas for external use (e.g., JSON Schema generation, runtime validation)
 export {
+  LinkNodeTypeSchema,
   LinkTypeSchema,
   HeadingNodeSchema,
   ResourceLinkSchema,

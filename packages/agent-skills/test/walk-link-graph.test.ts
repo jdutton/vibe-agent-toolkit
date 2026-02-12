@@ -1,8 +1,7 @@
 import type { ResourceLink, ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { describe, expect, it } from 'vitest';
 
-import type { ExcludeRule } from '../src/link-collector.js';
-import { walkLinkGraph, type WalkableRegistry, type WalkLinkGraphOptions } from '../src/walk-link-graph.js';
+import { walkLinkGraph, type ExcludeRule, type WalkableRegistry, type WalkLinkGraphOptions } from '../src/walk-link-graph.js';
 
 // ============================================================================
 // Constants

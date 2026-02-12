@@ -67,7 +67,7 @@ export const PackagingOptionsSchema = z.object({
         .optional()
         .describe(
           'Handlebars template for rewriting links to matched files.\n' +
-          'Context: {{link.text}}, {{link.uri}}, {{link.fileName}}, {{link.filePath}}, {{skill.name}}\n' +
+          'Context: {{link.text}}, {{link.href}}, {{link.fragment}}, {{link.type}}, {{link.resource.id}}, {{link.resource.fileName}}, {{link.resource.relativePath}}, {{skill.name}}\n' +
           'Default: "{{link.text}}"'
         ),
     })).optional().default([])
@@ -76,7 +76,7 @@ export const PackagingOptionsSchema = z.object({
       .optional()
       .describe(
         'Handlebars template for non-bundled links that don\'t match any rule (depth-exceeded links).\n' +
-        'Context: {{link.text}}, {{link.uri}}, {{link.fileName}}, {{link.filePath}}, {{skill.name}}\n' +
+        'Context: {{link.text}}, {{link.href}}, {{link.fragment}}, {{link.type}}, {{link.resource.id}}, {{link.resource.fileName}}, {{link.resource.relativePath}}, {{skill.name}}\n' +
         'Default: "{{link.text}}"'
       ),
   }).optional(),

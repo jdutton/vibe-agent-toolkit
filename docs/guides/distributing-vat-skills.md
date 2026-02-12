@@ -275,9 +275,12 @@ Controls which files are excluded by glob pattern and how their links are rewrit
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `{{link.text}}` | Link display text from markdown | `"Setup Guide"` |
-| `{{link.uri}}` | Original href from markdown | `"./docs/setup.md"` |
-| `{{link.fileName}}` | Target filename only | `"setup.md"` |
-| `{{link.filePath}}` | Path relative to skill root | `"docs/setup.md"` |
+| `{{link.href}}` | Original href from markdown (without fragment) | `"./docs/setup.md"` |
+| `{{link.fragment}}` | Fragment including `#` prefix, or empty | `"#section"` |
+| `{{link.type}}` | Link type | `"local_file"` |
+| `{{link.resource.id}}` | Target resource ID (if resolved) | `"docs/setup.md"` |
+| `{{link.resource.fileName}}` | Target filename only (if resolved) | `"setup.md"` |
+| `{{link.resource.relativePath}}` | Relative path from source to target (if resolved) | `"docs/setup.md"` |
 | `{{skill.name}}` | Skill name from frontmatter | `"my-skill"` |
 
 **`defaultTemplate`** applies to non-bundled links that don't match any rule (e.g., depth-exceeded links). Default: `"{{link.text}}"` (strips the link, keeps the text).

@@ -388,7 +388,7 @@ describe('packageSkill - excluded link rewriting', () => {
     expect(chainContent).not.toContain('[end](');
   });
 
-  it('should render link.fileName and link.filePath in template context', async () => {
+  it('should render link.resource.fileName and link.href in template context', async () => {
     const tmp = getTempDir();
     const sub = join(tmp, 'arch');
     await mkdir(sub, { recursive: true });
@@ -403,12 +403,12 @@ describe('packageSkill - excluded link rewriting', () => {
     const result = await packWithOutput(sp, {
       linkFollowDepth: 0,
       excludeReferencesFromBundle: {
-        defaultTemplate: '{{link.fileName}} at {{link.filePath}}',
+        defaultTemplate: '{{link.resource.fileName}} ({{link.href}})',
       },
     });
 
     const content = await readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
-    expect(content).toContain('design.md at arch/design.md');
+    expect(content).toContain('design.md (./arch/design.md)');
   });
 
   it('should render skill.name in template context', async () => {

@@ -17,8 +17,34 @@ import type { ResourceLink, ResourceMetadata } from '@vibe-agent-toolkit/resourc
 import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
-import type { ExcludeRule, LinkResolution } from './link-collector.js';
 import { NAVIGATION_FILE_PATTERNS } from './validators/validation-rules.js';
+
+/**
+ * Resolution result for a single link found in a bundled markdown file.
+ */
+export interface LinkResolution {
+  /** Absolute path to the linked file */
+  path: string;
+  /** Whether the file will be bundled */
+  bundled: boolean;
+  /** Reason it was excluded (only set when bundled is false) */
+  excludeReason?: 'depth-exceeded' | 'pattern-matched' | 'directory-target' | 'outside-project' | 'navigation-file' | undefined;
+  /** The rule that matched (only set for pattern-matched exclusions) */
+  matchedRule?: ExcludeRule | undefined;
+  /** Link text from the source markdown */
+  linkText?: string | undefined;
+  /** Original href from the markdown */
+  linkHref?: string | undefined;
+}
+
+/**
+ * A rule that excludes files from bundling based on glob patterns.
+ * First matching rule wins (ordered evaluation).
+ */
+export interface ExcludeRule {
+  patterns: string[];
+  template?: string | undefined;
+}
 
 // ============================================================================
 // Types

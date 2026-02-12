@@ -180,11 +180,11 @@ This should fail validation.
       await createSkillFile(
         suite.tempDir,
         `---
-name: claude-skill
+name: anthropic-skill
 description: A skill with reserved word in name
 ---
 
-# Claude Skill
+# Anthropic Skill
 
 This should fail pattern validation.
 `,
@@ -236,11 +236,11 @@ This should fail pattern validation.
       await createSkillFile(
         suite.tempDir,
         `---
-name: claude-skill
+name: anthropic-skill
 description: Test skill with multiple errors
 ---
 
-# Claude Skill
+# Anthropic Skill
 
 See [missing file](../../docs/MISSING.md) for more.
 `,
