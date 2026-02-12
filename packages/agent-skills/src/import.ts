@@ -165,7 +165,7 @@ function buildAgentManifest(frontmatter: Record<string, unknown>): Record<string
   const agentManifest: Record<string, unknown> = {
     metadata: agentMetadata,
     spec: {
-      runtime: 'claude-skills',
+      runtime: 'agent-skills',
     },
   };
 

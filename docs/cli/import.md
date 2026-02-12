@@ -122,7 +122,7 @@ metadata:
     - data-processing
     - validation
 spec:
-  runtime: claude-skills
+  runtime: agent-skills
   compatibility: Requires file system access
 ```
 

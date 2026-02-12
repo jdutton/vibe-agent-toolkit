@@ -183,7 +183,7 @@ Description:
 
 Conversion:
   - Extracts name, description, license from SKILL.md frontmatter
-  - Creates agent.yaml with runtime: claude-skills
+  - Creates agent.yaml with runtime: agent-skills
   - Preserves version from metadata.version or defaults to 0.1.0
   - Validates frontmatter before conversion
 

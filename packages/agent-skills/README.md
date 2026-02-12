@@ -223,7 +223,7 @@ metadata:
   description: Skill description
   version: 1.0.0
 spec:
-  runtime: claude-skills
+  runtime: agent-skills
 ```
 
 ### buildAgentSkill(options): Promise<BuildResult>
