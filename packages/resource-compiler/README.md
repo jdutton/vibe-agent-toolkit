@@ -21,6 +21,16 @@ The resource compiler transforms markdown files into TypeScript modules with:
 npm install -D @vibe-agent-toolkit/resource-compiler
 ```
 
+## Use Cases
+
+### Local Development
+Use the compiler to import markdown files directly in your TypeScript projects with full IDE support.
+
+### Publishing Packages
+Create reusable npm packages of markdown content (prompts, documentation, knowledge bases) that other projects can consume with full type safety.
+
+**📚 See the [TypeScript Resource Compiler Guides](../../docs/guides/resource-compiler/README.md)** for complete documentation on compiling, publishing, and consuming markdown resource packages.
+
 ## Quick Start
 
 ### 1. Create a Markdown File

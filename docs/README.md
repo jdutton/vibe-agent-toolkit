@@ -18,6 +18,7 @@ Welcome to the Vibe Agent Toolkit documentation.
 - **[Collection Validation](./guides/collection-validation.md)** - Per-collection frontmatter validation with JSON Schemas
 - **[Writing Tests](./writing-tests.md)** - Test conventions, helpers, and duplication avoidance
 - **[RAG Usage Guide](./guides/rag-usage-guide.md)** - Using the RAG package for semantic search
+- **[Resource Compiler](./guides/resource-compiler/README.md)** - Compiling markdown to TypeScript for type-safe content packages
 - **[Embedding Providers](./embedding-providers.md)** - How embedding providers work and creating custom providers
 
 ## Configuration
