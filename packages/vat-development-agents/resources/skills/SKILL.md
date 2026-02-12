@@ -1020,6 +1020,125 @@ VAT includes a full RAG (Retrieval-Augmented Generation) system for building sea
 
 For complete usage examples, configuration, and the programmatic TypeScript API, see the [RAG Usage Guide](../../../../docs/guides/rag-usage-guide.md).
 
+## Packaging Markdown Content for Reuse
+
+VAT's resource compiler lets you package markdown content (prompts, docs, templates) as type-safe npm packages that can be imported directly into TypeScript.
+
+### Why Package Markdown?
+
+**Key benefits:**
+- **Share agent prompts** across projects with full type safety
+- **Version control** your prompts and documentation like code
+- **Build prompt libraries** that compose dynamically at runtime
+- **Create RAG knowledge bases** packaged as npm modules
+- **IDE support** - Autocomplete, go-to-definition, hover tooltips for markdown content
+
+### How It Works
+
+The resource compiler transforms markdown files into TypeScript modules:
+
+```typescript
+// 1. Author markdown (resources/prompts/system.md)
+---
+title: System Prompts
+---
+## Welcome
+You are a helpful AI assistant.
+
+// 2. Compile to TypeScript
+npx vat-compile-resources compile resources/ generated/resources/
+
+// 3. Import with type safety
+import * as prompts from './generated/resources/prompts/system.js';
+
+console.log(prompts.meta.title);              // "System Prompts"
+console.log(prompts.fragments.welcome.text);  // Full section
+```
+
+### Getting Started
+
+**Understand the basics:**
+- [Compiling Markdown to TypeScript](../../../../docs/guides/resource-compiler/compiling-markdown-to-typescript.md) - Overview, workflows, and when to use resource compilation
+
+**Choose your use case:**
+- [Building Agent Prompt Libraries](../../../../docs/guides/resource-compiler/use-cases/agent-prompt-libraries.md) - Package prompts for AI agents with composition patterns
+- [Creating RAG Knowledge Bases](../../../../docs/guides/resource-compiler/use-cases/rag-knowledge-bases.md) - Package documentation as npm modules for semantic search
+- [Template System Patterns](../../../../docs/guides/resource-compiler/use-cases/template-systems.md) - Dynamic content generation and i18n
+
+**Publishing and consuming:**
+- [Consuming TypeScript Resources](../../../../docs/guides/resource-compiler/consuming-packages.md) - Install and use packaged resources in your projects
+- [Publishing TypeScript Resource Packages](../../../../docs/guides/resource-compiler/publishing-packages.md) - Share your packages via npm with best practices
+
+**Advanced topics:**
+- [Advanced Patterns](../../../../docs/guides/resource-compiler/use-cases/advanced-patterns.md) - Multi-collection packages, versioning, typed metadata schemas
+
+### Common Use Cases
+
+**Agent prompt libraries:**
+```typescript
+// Package: @mycompany/agent-prompts
+import * as CodeReview from '@mycompany/agent-prompts/code-review.js';
+import * as Security from '@mycompany/agent-prompts/security.js';
+
+// Compose prompts dynamically
+const systemPrompt = [
+  CodeReview.fragments.base.text,
+  Security.fragments.rules.text,
+].join('\n\n');
+```
+
+**RAG knowledge bases:**
+```typescript
+// Package: @mycompany/docs
+import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
+
+// Index packaged markdown for search
+const registry = new ResourceRegistry();
+await registry.crawl({ baseDir: './node_modules/@mycompany/docs' });
+
+// Original markdown available for custom chunking
+const doc = registry.getResourceById('setup-guide');
+console.log(doc.content);  // Raw markdown
+```
+
+**Multi-project content sharing:**
+```typescript
+// Shared package: @mycompany/content
+// Used in: web app, mobile app, email service, chatbot
+
+import * as Messages from '@mycompany/content/messages.js';
+
+// Same content, consistent across all platforms
+const greeting = Messages.fragments.welcome.text;
+```
+
+### Quick Reference
+
+**Install compiler:**
+```bash
+npm install -D @vibe-agent-toolkit/resource-compiler
+```
+
+**Compile markdown:**
+```bash
+npx vat-compile-resources compile resources/ generated/resources/
+```
+
+**Import in TypeScript:**
+```typescript
+import * as Doc from './generated/resources/doc.js';
+
+// Access frontmatter
+Doc.meta.title;  // Type-safe
+
+// Access sections (H2 headings)
+Doc.fragments.introduction.text;  // Header + body
+Doc.fragments.introduction.body;  // Body only
+
+// Full content
+Doc.text;  // Complete markdown
+```
+
 ## Best Practices
 
 ### 1. Use Result Envelopes Consistently
@@ -1141,6 +1260,13 @@ Now that you understand VAT basics:
 
 **RAG & Knowledge Bases:**
 - [RAG Usage Guide](../../../../docs/guides/rag-usage-guide.md) - Configuration, content transforms, document storage
+
+**Resource Compilation:**
+- [Compiling Markdown to TypeScript](../../../../docs/guides/resource-compiler/compiling-markdown-to-typescript.md) - Overview and workflows
+- [Agent Prompt Libraries](../../../../docs/guides/resource-compiler/use-cases/agent-prompt-libraries.md) - Package prompts for AI agents
+- [RAG Knowledge Bases](../../../../docs/guides/resource-compiler/use-cases/rag-knowledge-bases.md) - Package documentation as npm modules
+- [Publishing Packages](../../../../docs/guides/resource-compiler/publishing-packages.md) - Share your packages via npm
+- [Consuming Packages](../../../../docs/guides/resource-compiler/consuming-packages.md) - Use packaged resources
 
 **Architecture:**
 - [Runtime Adapters](../../../../docs/adding-runtime-adapters.md) - Multi-framework support
