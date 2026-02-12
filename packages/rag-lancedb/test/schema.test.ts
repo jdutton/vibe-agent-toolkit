@@ -483,4 +483,33 @@ describe('round-trip serialization', () => {
     expect(chunk.chunkIndex).toBeUndefined();
     expect(chunk.totalChunks).toBeUndefined();
   });
+
+  it('should not allow custom metadata to overwrite core chunk fields', () => {
+    // Schema that collides with core field names (chunkindex, totalchunks)
+    const CollidingSchema = z.object({
+      chunkindex: z.number().optional(),
+      totalchunks: z.number().optional(),
+    });
+
+    const chunk: CoreRAGChunk & { chunkindex?: number; totalchunks?: number } = {
+      chunkId: TEST_CHUNK_ID,
+      resourceId: TEST_RESOURCE_ID,
+      content: TEST_CONTENT,
+      contentHash: TEST_CONTENT_HASH,
+      tokenCount: 5,
+      chunkIndex: 5,
+      totalChunks: 10,
+      embedding: TEST_EMBEDDING,
+      embeddingModel: TEST_MODEL,
+      embeddedAt: TEST_DATE,
+      // User does NOT set these metadata fields — they are undefined,
+      // so serializeMetadata produces sentinel -1 for optional numbers
+    };
+
+    const row = chunkToLanceRow(chunk, TEST_RESOURCE_CONTENT_HASH, CollidingSchema);
+
+    // Core values (5 and 10) must win over metadata sentinels (-1)
+    expect(row.chunkindex).toBe(5);
+    expect(row.totalchunks).toBe(10);
+  });
 });

@@ -371,10 +371,13 @@ export function chunkToLanceRow<TMetadata extends Record<string, unknown>>(
 
   const serializedMetadata = serializeMetadata(metadata as TMetadata, metadataSchema);
 
-  // Spread metadata fields at top level for efficient filtering
-  // Use lowercase for all column names (SQL convention)
+  // Spread metadata first, then core fields override any collisions.
+  // This prevents custom metadata schemas that reuse core column names
+  // (e.g., chunkindex, totalchunks) from overwriting correctly populated values.
+  // Use lowercase for all column names (SQL convention).
   // Type assertion needed: TS cannot verify intersection of explicit props + generic spread
   return {
+    ...serializedMetadata,
     vector: chunk.embedding,
     chunkid: chunk.chunkId,
     resourceid: chunk.resourceId,
@@ -388,8 +391,6 @@ export function chunkToLanceRow<TMetadata extends Record<string, unknown>>(
     embeddedat: chunk.embeddedAt.getTime(),
     previouschunkid: chunk.previousChunkId ?? '',
     nextchunkid: chunk.nextChunkId ?? '',
-    // Spread serialized metadata fields as top-level columns (already lowercase)
-    ...serializedMetadata,
   } as LanceDBRow<TMetadata>;
 }
 
