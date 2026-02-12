@@ -1,14 +1,14 @@
 # @vibe-agent-toolkit/agent-skills
 
-Build, validate, and import Claude Skills for Claude Desktop, Claude Code, and VAT agents.
+Build, validate, and import Agent Skills for Claude Desktop, Claude Code, and VAT agents.
 
 ## Overview
 
-This package provides runtime support for Claude Skills including:
-- **Validation** - Audit Claude Skills for quality and compatibility
+This package provides runtime support for Agent Skills including:
+- **Validation** - Audit Agent Skills for quality and compatibility
 - **Import/Export** - Convert between SKILL.md and agent.yaml formats
-- **Building** - Package VAT agents as Claude Skills
-- **Frontmatter Parsing** - Extract and validate Claude Skills frontmatter
+- **Building** - Package VAT agents as Agent Skills
+- **Frontmatter Parsing** - Extract and validate Agent Skills frontmatter
 
 ## Features
 
@@ -27,7 +27,7 @@ npm install @vibe-agent-toolkit/agent-skills
 
 ## Quick Start
 
-### Validate a Claude Skill
+### Validate an Agent Skill
 
 ```typescript
 import { validateSkill } from '@vibe-agent-toolkit/agent-skills';
@@ -62,12 +62,12 @@ if (result.success) {
 }
 ```
 
-### Build Claude Skill from VAT Agent
+### Build Agent Skill from VAT Agent
 
 ```typescript
-import { buildClaudeSkill } from '@vibe-agent-toolkit/agent-skills';
+import { buildAgentSkill } from '@vibe-agent-toolkit/agent-skills';
 
-await buildClaudeSkill({
+await buildAgentSkill({
   agentPath: './my-agent',
   outputPath: './dist/skills/my-agent',
 });
@@ -77,7 +77,7 @@ await buildClaudeSkill({
 
 ### validateSkill(options): Promise<ValidationResult>
 
-Validate a Claude Skill (SKILL.md) for quality and compatibility.
+Validate an Agent Skill (SKILL.md) for quality and compatibility.
 
 **Options:**
 ```typescript
@@ -92,7 +92,7 @@ interface ValidateOptions {
 ```typescript
 interface ValidationResult {
   path: string;                       // Path to skill file
-  type: 'claude-skill' | 'vat-agent'; // Detected type
+  type: 'agent-skill' | 'vat-agent'; // Detected type
   status: 'success' | 'warning' | 'error';
   summary: string;                    // Human-readable summary
   issues: ValidationIssue[];          // All validation issues
@@ -162,7 +162,7 @@ See [Best Practices Guide](../../docs/guides/agent-skills-best-practices.md) for
 
 ### importSkillToAgent(options): Promise<ImportResult>
 
-Convert a Claude Skill (SKILL.md) to VAT agent format (agent.yaml).
+Convert an Agent Skill (SKILL.md) to VAT agent format (agent.yaml).
 
 **Options:**
 ```typescript
@@ -226,9 +226,9 @@ spec:
   runtime: claude-skills
 ```
 
-### buildClaudeSkill(options): Promise<BuildResult>
+### buildAgentSkill(options): Promise<BuildResult>
 
-Build a Claude Skill from a VAT agent manifest.
+Build an Agent Skill from a VAT agent manifest.
 
 **Options:**
 ```typescript
@@ -252,7 +252,7 @@ interface BuildResult {
 
 **Example:**
 ```typescript
-const result = await buildClaudeSkill({
+const result = await buildAgentSkill({
   agentPath: './my-agent',
   outputPath: './dist/skills/my-agent',
 });
@@ -263,12 +263,12 @@ console.log(`Version: ${result.metadata.version}`);
 
 ### Frontmatter Schemas
 
-#### ClaudeSkillFrontmatterSchema
+#### AgentSkillFrontmatterSchema
 
-Strict schema for console-compatible Claude Skills:
+Strict schema for console-compatible Agent Skills:
 
 ```typescript
-import { ClaudeSkillFrontmatterSchema } from '@vibe-agent-toolkit/agent-skills';
+import { AgentSkillFrontmatterSchema } from '@vibe-agent-toolkit/agent-skills';
 import { z } from 'zod';
 
 const frontmatter = {
@@ -277,9 +277,9 @@ const frontmatter = {
   compatibility: 'Requires Node.js 18+',
 };
 
-const result = ClaudeSkillFrontmatterSchema.safeParse(frontmatter);
+const result = AgentSkillFrontmatterSchema.safeParse(frontmatter);
 if (result.success) {
-  // TypeScript type: ClaudeSkillFrontmatter
+  // TypeScript type: AgentSkillFrontmatter
   const validated = result.data;
 }
 ```
@@ -294,12 +294,12 @@ if (result.success) {
 - `metadata` - Additional properties (Record<string, string>)
 - `allowed-tools` - Pre-approved tools (experimental)
 
-#### VATClaudeSkillFrontmatterSchema
+#### VATAgentSkillFrontmatterSchema
 
 Extended schema for VAT-generated skills:
 
 ```typescript
-import { VATClaudeSkillFrontmatterSchema } from '@vibe-agent-toolkit/agent-skills';
+import { VATAgentSkillFrontmatterSchema } from '@vibe-agent-toolkit/agent-skills';
 
 const frontmatter = {
   name: 'my-skill',
@@ -310,7 +310,7 @@ const frontmatter = {
   },
 };
 
-const result = VATClaudeSkillFrontmatterSchema.safeParse(frontmatter);
+const result = VATAgentSkillFrontmatterSchema.safeParse(frontmatter);
 ```
 
 **Additional Requirements:**
@@ -489,8 +489,8 @@ import type {
   ValidationIssue,
   IssueCode,
   IssueSeverity,
-  ClaudeSkillFrontmatter,
-  VATClaudeSkillFrontmatter,
+  AgentSkillFrontmatter,
+  VATAgentSkillFrontmatter,
   ImportOptions,
   ImportResult,
   BuildOptions,

@@ -1,5 +1,5 @@
 /**
- * Uninstall agent from Claude Skills directory
+ * Uninstall agent from Agent Skills directory
  */
 
 import fs from 'node:fs/promises';
@@ -26,7 +26,7 @@ export async function uninstallAgent(
   const startTime = Date.now();
 
   try {
-    const { runtime = 'claude-skill', scope = 'user' } = options;
+    const { runtime = 'agent-skill', scope = 'user' } = options;
 
     // Validate scope and get target location
     const targetLocation = validateAndGetScopeLocation(runtime, scope);

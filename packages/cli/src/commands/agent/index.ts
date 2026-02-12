@@ -19,7 +19,7 @@ const SCOPE_OPTION_DESC = 'Installation scope (user, project)';
 const SCOPE_DEFAULT = 'user';
 const RUNTIME_OPTION = '--runtime <name>';
 const RUNTIME_OPTION_DESC = 'Target runtime';
-const RUNTIME_DEFAULT = 'claude-skill';
+const RUNTIME_DEFAULT = 'agent-skill';
 const DEV_MODE_DESC = 'Development mode (symlink instead of copy)';
 
 export function createAgentCommand(): Command {
@@ -39,7 +39,7 @@ Description:
 Example:
   $ vat agent list                      # List discovered agents
   $ vat agent validate agent-generator  # Validate by name
-  $ vat agent build agent-generator     # Build as Claude Skill
+  $ vat agent build agent-generator     # Build as Agent Skill
   $ vat agent run agent-generator "Create a PR review agent"  # Execute agent
 
 Configuration:
@@ -86,7 +86,7 @@ Description:
   Argument: agent name OR path to agent directory/manifest file
 
 Targets:
-  - skill: Claude Skills (for Claude Desktop/Code)
+  - skill: Agent Skills (for Claude Desktop/Code)
   - More targets coming soon (langchain, etc.)
 
 Output:
@@ -96,7 +96,7 @@ Exit Codes:
   0 - Success  |  1 - Build error  |  2 - System error
 
 Examples:
-  $ vat agent build agent-generator                    # Build as Claude Skill
+  $ vat agent build agent-generator                    # Build as Agent Skill
   $ vat agent build agent-generator --target skill     # Explicit target
   $ vat agent build ./my-agent --output ./my-skill     # Custom output path
 `
@@ -165,7 +165,7 @@ Examples:
 
   agent
     .command('import <skillPath>')
-    .description('Import Claude Skill (SKILL.md) to VAT agent format (agent.yaml)')
+    .description('Import Agent Skill (SKILL.md) to VAT agent format (agent.yaml)')
     .option('-o, --output <path>', 'Output path for agent.yaml (default: same directory as SKILL.md)')
     .option('-f, --force', 'Overwrite existing agent.yaml')
     .option('--debug', DEBUG_OPTION_DESC)
@@ -174,11 +174,11 @@ Examples:
       'after',
       `
 Description:
-  Converts a third-party Claude Skill (SKILL.md) to VAT agent format
+  Converts a third-party Agent Skill (SKILL.md) to VAT agent format
   (agent.yaml). Validates the skill frontmatter and creates a proper VAT
-  agent manifest with the claude-skills runtime.
+  agent manifest with the agent-skills runtime.
 
-  Use this to import existing Claude Skills into your VAT project for
+  Use this to import existing Agent Skills into your VAT project for
   further customization or to use with VAT's build and deployment tools.
 
 Conversion:
@@ -199,7 +199,7 @@ Examples:
 
   agent
     .command('install <agentName>')
-    .description('Install agent to Claude Skills directory')
+    .description('Install agent to Agent Skills directory')
     .option(SCOPE_OPTION, SCOPE_OPTION_DESC, SCOPE_DEFAULT)
     .option('--dev', DEV_MODE_DESC)
     .option('--force', 'Overwrite existing installation')
@@ -210,7 +210,7 @@ Examples:
       'after',
       `
 Description:
-  Installs a built agent skill to Claude Skills directory. By default,
+  Installs a built agent skill to Agent Skills directory. By default,
   copies to user scope (~/.claude/skills/). Use --dev for symlink mode
   (rapid development iteration).
 
@@ -233,7 +233,7 @@ Note: --dev (symlink) not supported on Windows. Use WSL for development.
 
   agent
     .command('uninstall <agentName>')
-    .description('Uninstall agent from Claude Skills directory')
+    .description('Uninstall agent from Agent Skills directory')
     .option(SCOPE_OPTION, SCOPE_OPTION_DESC, SCOPE_DEFAULT)
     .option(RUNTIME_OPTION, RUNTIME_OPTION_DESC, RUNTIME_DEFAULT)
     .option('--debug', DEBUG_OPTION_DESC)
@@ -242,7 +242,7 @@ Note: --dev (symlink) not supported on Windows. Use WSL for development.
       'after',
       `
 Description:
-  Removes an installed agent skill from Claude Skills directory.
+  Removes an installed agent skill from Agent Skills directory.
   Handles both copied installations and symlinks.
 
 Scopes:

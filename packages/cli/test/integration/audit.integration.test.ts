@@ -157,7 +157,7 @@ describe('audit command (integration)', () => {
     });
   });
 
-  describe('Claude Skill validation (backward compatibility)', () => {
+  describe('Agent Skill validation', () => {
     it('should validate a single SKILL.md file', () => {
       const skillFile = join(tempDir, 'test-skill', 'SKILL.md');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync

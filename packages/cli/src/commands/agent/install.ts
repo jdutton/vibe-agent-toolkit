@@ -1,5 +1,5 @@
 /**
- * Install agent to Claude Skills directory
+ * Install agent to Agent Skills directory
  */
 
 import fs from 'node:fs/promises';
@@ -32,7 +32,7 @@ export async function installAgent(
   const startTime = Date.now();
 
   try {
-    const { runtime = 'claude-skill', scope = 'user', dev = false, force = false } = options;
+    const { runtime = 'agent-skill', scope = 'user', dev = false, force = false } = options;
 
     // Windows check for dev mode
     if (dev && process.platform === 'win32') {
@@ -106,7 +106,7 @@ async function findBuiltSkill(
   const packageRoot = await findAgentPackageRoot(manifest.__manifestPath ?? agentPath);
 
   // Runtime-specific bundle location
-  const runtimeDir = runtime === 'claude-skill' ? 'skill' : runtime;
+  const runtimeDir = runtime === 'agent-skill' ? 'skill' : runtime;
   const builtPath = path.join(
     packageRoot,
     'dist',

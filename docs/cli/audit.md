@@ -1,6 +1,6 @@
 # vat agent audit
 
-Audit Claude Skills for quality, compatibility, and best practices.
+Audit Agent Skills for quality, compatibility, and best practices.
 
 ## Synopsis
 
@@ -10,7 +10,7 @@ vat agent audit [path] [options]
 
 ## Description
 
-The `audit` command validates Claude Skills (SKILL.md files) for:
+The `audit` command validates Agent Skills (SKILL.md files) for:
 - **Frontmatter compliance** - Required fields, naming conventions, character limits
 - **Link integrity** - Broken links, invalid paths, missing files
 - **Console compatibility** - Tool usage that won't work in console mode
@@ -63,7 +63,7 @@ issues:
   info: 0
 files:
   - path: /path/to/SKILL.md
-    type: claude-skill|vat-agent
+    type: agent-skill|vat-agent
     status: success|warning|error
     summary: "0 errors, 0 warnings, 0 info"
     issues: []
@@ -183,7 +183,7 @@ fi
 **GitHub Actions example:**
 
 ```yaml
-- name: Audit Claude Skills
+- name: Audit Agent Skills
   run: |
     npm install -g vibe-agent-toolkit
     vat agent audit agents/ --recursive

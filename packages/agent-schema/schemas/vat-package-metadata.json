@@ -152,9 +152,9 @@
               "path"
             ],
             "additionalProperties": false,
-            "description": "Claude Skill metadata for distribution"
+            "description": "Agent Skill metadata for distribution"
           },
-          "description": "Claude Skills for distribution"
+          "description": "Agent Skills for distribution"
         },
         "agents": {
           "type": "array",

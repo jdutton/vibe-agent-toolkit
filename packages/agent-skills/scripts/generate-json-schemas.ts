@@ -12,9 +12,9 @@ import { type ZodType, type ZodTypeDef } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
 import {
-  ClaudeSkillFrontmatterSchema,
-  VATClaudeSkillFrontmatterSchema
-} from '../src/schemas/claude-skill-frontmatter.js';
+  AgentSkillFrontmatterSchema,
+  VATAgentSkillFrontmatterSchema
+} from '../src/schemas/agent-skill-frontmatter.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -33,7 +33,7 @@ function writeJsonSchema(name: string, schema: ZodType<any, ZodTypeDef, any>): v
 
 console.log('🔨 Generating JSON Schemas from Zod...\n');
 
-writeJsonSchema('skill-frontmatter', ClaudeSkillFrontmatterSchema);
-writeJsonSchema('vat-skill-frontmatter', VATClaudeSkillFrontmatterSchema);
+writeJsonSchema('skill-frontmatter', AgentSkillFrontmatterSchema);
+writeJsonSchema('vat-skill-frontmatter', VATAgentSkillFrontmatterSchema);
 
 console.log('\n✨ JSON Schema generation complete!');

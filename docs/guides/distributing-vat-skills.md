@@ -5,7 +5,7 @@
 ## Overview
 
 The VAT Distribution Standard enables you to package and distribute:
-- **Claude Skills** - SKILL.md files for Claude Code
+- **Agent Skills** - SKILL.md files for Claude Code
 - **VAT Agents** - agent.yaml based agents
 - **Pure Functions** - Reusable tools exposed via MCP/CLI
 - **Runtime Adapters** - Multi-platform runtime support
@@ -118,7 +118,7 @@ All VAT metadata lives in the `vat` field of package.json. This is the single so
 - **Purpose:** Identifies the package type
 
 #### `vat.skills[]` (optional)
-- **Purpose:** Declares Claude Skills for distribution
+- **Purpose:** Declares Agent Skills for distribution
 - **Fields:**
   - `name` - Skill name (installation directory name)
   - `source` - Source SKILL.md path (for rebuilding)
@@ -752,7 +752,7 @@ For local development, use `--dev` mode instead.
 
 - [vat-example-cat-agents](../../packages/vat-example-cat-agents/README.md) - Example implementation
 - [vat-development-agents](../../packages/vat-development-agents/README.md) - Example implementation
-- [Claude Code Skills Docs](https://code.claude.com/docs/en/skills) - Claude Skills format
+- [Claude Code Skills Docs](https://code.claude.com/docs/en/skills) - Agent Skills format
 
 ## Getting Help
 

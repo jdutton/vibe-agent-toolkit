@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 
 import { parseFrontmatter } from '../parsers/frontmatter-parser.js';
-import { ClaudeSkillFrontmatterSchema, VATClaudeSkillFrontmatterSchema } from '../schemas/claude-skill-frontmatter.js';
+import { AgentSkillFrontmatterSchema, VATAgentSkillFrontmatterSchema } from '../schemas/agent-skill-frontmatter.js';
 
 import type { ValidateOptions, ValidationIssue, ValidationResult } from './types.js';
 
@@ -11,7 +11,7 @@ const FRONTMATTER_NAME_LOC = 'frontmatter.name';
 const FRONTMATTER_DESC_LOC = 'frontmatter.description';
 
 /**
- * Validate a Claude Skill (SKILL.md file)
+ * Validate an Agent Skill (SKILL.md file)
  *
  * Uses ResourceRegistry for markdown/link validation
  * Adds skill-specific validation (frontmatter schema, skill rules)
@@ -29,7 +29,7 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   if (!fs.existsSync(skillPath)) {
     return {
       path: skillPath,
-      type: isVATGenerated ? 'vat-agent' : 'claude-skill',
+      type: isVATGenerated ? 'vat-agent' : 'agent-skill',
       status: 'error',
       summary: '1 error',
       issues: [{
@@ -86,7 +86,7 @@ function validateFrontmatterSchema(
   isVATGenerated: boolean,
   issues: ValidationIssue[]
 ): void {
-  const schema = isVATGenerated ? VATClaudeSkillFrontmatterSchema : ClaudeSkillFrontmatterSchema;
+  const schema = isVATGenerated ? VATAgentSkillFrontmatterSchema : AgentSkillFrontmatterSchema;
   const schemaResult = schema.safeParse(frontmatter);
 
   if (schemaResult.success) {
@@ -270,7 +270,7 @@ function buildResult(
 
   const result: ValidationResult = {
     path: skillPath,
-    type: isVATGenerated ? 'vat-agent' : 'claude-skill',
+    type: isVATGenerated ? 'vat-agent' : 'agent-skill',
     status,
     summary,
     issues,

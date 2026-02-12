@@ -2,7 +2,7 @@
  * Agent build command - Package agents for deployment targets
  */
 
-import { buildClaudeSkill } from '@vibe-agent-toolkit/agent-skills';
+import { buildAgentSkill } from '@vibe-agent-toolkit/agent-skills';
 
 import { resolveAgentPath } from '../../utils/agent-discovery.js';
 import { handleCommandError } from '../../utils/command-error.js';
@@ -36,12 +36,12 @@ export async function buildCommand(
     // Build based on target
     let result;
     if (target === 'skill') {
-      logger.info('Building Claude Skill...');
+      logger.info('Building Agent Skill...');
       // Only pass outputPath if explicitly provided by user
       const buildOptions = options.output
         ? { agentPath, target, outputPath: options.output }
         : { agentPath, target };
-      result = await buildClaudeSkill(buildOptions);
+      result = await buildAgentSkill(buildOptions);
     } else {
       throw new Error(`Unsupported build target: ${target}`);
     }

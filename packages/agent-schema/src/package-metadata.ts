@@ -87,7 +87,7 @@ export type PackagingOptions = z.infer<typeof PackagingOptionsSchema>;
 /**
  * Skill metadata for distribution
  *
- * Describes a Claude Skill packaged in this npm package.
+ * Describes an Agent Skill packaged in this npm package.
  */
 export const VatSkillMetadataSchema = z
   .object({
@@ -111,7 +111,7 @@ export const VatSkillMetadataSchema = z
       .optional()
       .describe('Packaging configuration options'),
   })
-  .describe('Claude Skill metadata for distribution');
+  .describe('Agent Skill metadata for distribution');
 
 export type VatSkillMetadata = z.infer<typeof VatSkillMetadataSchema>;
 
@@ -190,7 +190,7 @@ export const VatPackageMetadataSchema = z
     skills: z
       .array(VatSkillMetadataSchema)
       .optional()
-      .describe('Claude Skills for distribution'),
+      .describe('Agent Skills for distribution'),
     agents: z
       .array(VatAgentMetadataSchema)
       .optional()

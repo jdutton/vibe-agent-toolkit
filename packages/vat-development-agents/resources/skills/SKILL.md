@@ -487,7 +487,7 @@ Use `stripPrefix` to remove a common directory prefix (e.g., `"knowledge-base"`)
 
 ### Agent Commands
 
-**Import Claude Skills to VAT format:**
+**Import Agent Skills to VAT format:**
 ```bash
 # Import skill to agent.yaml
 vat agent import my-skill/SKILL.md

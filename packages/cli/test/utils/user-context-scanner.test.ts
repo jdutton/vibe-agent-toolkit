@@ -70,7 +70,7 @@ describe('scanUserContext', () => {
 
     expect(result.plugins).toHaveLength(1);
     expect(result.plugins[0]?.path).toContain('SKILL.md');
-    expect(result.plugins[0]?.format).toBe('claude-skill');
+    expect(result.plugins[0]?.format).toBe('agent-skill');
   });
 
   it('should scan skills directory for SKILL.md files', async () => {
@@ -85,7 +85,7 @@ describe('scanUserContext', () => {
 
     expect(result.skills).toHaveLength(1);
     expect(result.skills[0]?.path).toContain('SKILL.md');
-    expect(result.skills[0]?.format).toBe('claude-skill');
+    expect(result.skills[0]?.format).toBe('agent-skill');
   });
 
   it('should return empty arrays when directories are empty', async () => {

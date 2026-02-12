@@ -104,7 +104,7 @@ Examples:
 
 ## Console Compatibility
 
-Claude Skills can run in different environments with different capabilities.
+Agent Skills can run in different environments with different capabilities.
 
 ### Console vs IDE/CLI Mode
 
@@ -242,7 +242,7 @@ VAT's audit tool checks:
 
 ### Skill Structure
 
-Recommended structure for Claude Skills:
+Recommended structure for Agent Skills:
 
 ```
 my-skill/
@@ -359,7 +359,7 @@ fi
 Add to GitHub Actions workflow:
 
 ```yaml
-- name: Validate Claude Skills
+- name: Validate Agent Skills
   run: |
     npm install -g vibe-agent-toolkit
     vat agent audit skills/ --recursive
@@ -591,4 +591,4 @@ Before sharing your skill:
 - [ ] Audit validation passes (`vat agent audit`)
 - [ ] Tested in target environment (console/IDE)
 
-Following these best practices will ensure your Claude Skills are high-quality, maintainable, and work reliably across all environments.
+Following these best practices will ensure your Agent Skills are high-quality, maintainable, and work reliably across all environments.

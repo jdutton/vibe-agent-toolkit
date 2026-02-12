@@ -217,10 +217,10 @@ Transports work with any runtime adapter that implements the conversational func
 
 ```typescript
 import { CLITransport } from '@vibe-agent-toolkit/transports';
-import { createClaudeSkillAdapter } from '@vibe-agent-toolkit/agent-skills';
+import { createAgentSkillAdapter } from '@vibe-agent-toolkit/agent-skills';
 
-// Create adapter from Claude skill
-const adapter = createClaudeSkillAdapter({
+// Create adapter from agent skill
+const adapter = createAgentSkillAdapter({
   skillDir: './my-skill',
   apiKey: process.env.ANTHROPIC_API_KEY,
 });

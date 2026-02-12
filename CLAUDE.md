@@ -158,7 +158,7 @@ vat resources validate docs/ --frontmatter-schema schema.json
 - Example: cross-platform process spawning, schema validation utilities
 - May have external npm dependencies (Zod, etc.)
 
-**resources, rag, claude-skills packages**:
+**resources, rag, agent-skills packages**:
 - Depend on `utils` for shared functionality
 - Define their own schemas using Zod
 - Export both TypeScript types and JSON schemas
@@ -217,7 +217,7 @@ vibe-agent-toolkit/
 │   ├── utils/        # Core shared utilities (no package deps)
 │   ├── resources/    # Resource parsing & validation (planned)
 │   ├── rag/          # Document chunking & embeddings (planned)
-│   ├── claude-skills/ # Claude skill packaging (planned)
+│   ├── agent-skills/ # Agent skill packaging
 │   ├── cli/          # Command-line interface (planned)
 │   └── dev-tools/    # Build and development tools (private)
 ├── docs/             # Documentation
@@ -510,7 +510,7 @@ GitHub Actions runs on every push/PR:
 See [docs/architecture/README.md](docs/architecture/README.md) for complete details:
 
 1. **Clear Package Boundaries** - Single, well-defined purpose per package
-2. **Progressive Dependencies** - utils → resources → rag/claude-skills → cli
+2. **Progressive Dependencies** - utils → resources → rag/agent-skills → cli
 3. **Start Minimal, Evolve As Needed** - Build when needed, not speculatively
 4. **Schemas Co-located, Utilities Shared** - Each package owns its schemas, utils provides validation
 5. **Link Integrity is General** - Not Claude-specific, useful for any markdown project

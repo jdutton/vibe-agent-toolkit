@@ -19,7 +19,7 @@ const PERFORMANCE_POISON = [
 ];
 
 /**
- * Scan local filesystem for VAT agents and Claude Skills
+ * Scan local filesystem for VAT agents and Agent Skills
  *
  * @param options - Scan options
  * @returns Scan summary with all discovered files

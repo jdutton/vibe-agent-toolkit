@@ -6,7 +6,7 @@ import { describe, expect, it } from 'vitest';
 import { buildHierarchicalOutput } from '../../../src/commands/audit/hierarchical-output.js';
 
 // Constants for test data
-const RESOURCE_TYPE_SKILL = 'claude-skill';
+const RESOURCE_TYPE_SKILL = 'agent-skill';
 const SEVERITY_ERROR = 'error';
 const SEVERITY_WARNING = 'warning';
 const TEST_ERROR_CODE = 'TEST_ERROR';

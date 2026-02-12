@@ -2,13 +2,13 @@ import { describe, it, expect } from 'vitest';
 
 import { detectFormat } from '../src/detectors/format-detector.js';
 
-const CLAUDE_SKILL_FORMAT = 'claude-skill';
+const AGENT_SKILL_FORMAT = 'agent-skill';
 
 describe('detectFormat', () => {
-  it('should detect SKILL.md as claude-skill', () => {
-    expect(detectFormat('SKILL.md')).toBe(CLAUDE_SKILL_FORMAT);
-    expect(detectFormat('/path/to/SKILL.md')).toBe(CLAUDE_SKILL_FORMAT);
-    expect(detectFormat('./my-skill/SKILL.md')).toBe(CLAUDE_SKILL_FORMAT);
+  it('should detect SKILL.md as agent-skill', () => {
+    expect(detectFormat('SKILL.md')).toBe(AGENT_SKILL_FORMAT);
+    expect(detectFormat('/path/to/SKILL.md')).toBe(AGENT_SKILL_FORMAT);
+    expect(detectFormat('./my-skill/SKILL.md')).toBe(AGENT_SKILL_FORMAT);
   });
 
   it('should detect agent.yaml as vat-agent', () => {
@@ -28,7 +28,7 @@ describe('detectFormat', () => {
 
   it('should not detect SKILL.md as markdown', () => {
     expect(detectFormat('SKILL.md')).not.toBe('markdown');
-    expect(detectFormat('SKILL.md')).toBe(CLAUDE_SKILL_FORMAT);
+    expect(detectFormat('SKILL.md')).toBe(AGENT_SKILL_FORMAT);
   });
 
   it('should return unknown for other files', () => {

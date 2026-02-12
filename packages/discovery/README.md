@@ -8,7 +8,7 @@ The discovery package provides tools for finding and identifying agent-related f
 
 ## Features
 
-- **Format Detection** - Automatically identify Claude Skills, VAT agents, and markdown resources
+- **Format Detection** - Automatically identify Agent Skills, VAT agents, and markdown resources
 - **Gitignore Awareness** - Skip build outputs and ignored files by default
 - **Pattern Filtering** - Include/exclude files using glob patterns
 - **Recursive Scanning** - Deep directory traversal with symlink control
@@ -28,7 +28,7 @@ npm install @vibe-agent-toolkit/discovery
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
 
 const format = detectFormat('/path/to/SKILL.md');
-// Returns: 'claude-skill' | 'vat-agent' | 'markdown' | 'unknown'
+// Returns: 'agent-skill' | 'vat-agent' | 'markdown' | 'unknown'
 ```
 
 ### Scan Directory
@@ -42,7 +42,7 @@ const summary = await scan({
 });
 
 console.log(`Found ${summary.totalScanned} files`);
-console.log(`Claude Skills: ${summary.byFormat['claude-skill']}`);
+console.log(`Agent Skills: ${summary.byFormat['agent-skill']}`);
 console.log(`VAT Agents: ${summary.byFormat['vat-agent']}`);
 ```
 
@@ -76,14 +76,14 @@ const filtered = summary.results.filter(result =>
 Detect the format of a file based on its name and location.
 
 **Returns:**
-- `'claude-skill'` - SKILL.md file
+- `'agent-skill'` - SKILL.md file
 - `'vat-agent'` - Directory containing agent.yaml
 - `'markdown'` - .md file (resource)
 - `'unknown'` - Other file types
 
 **Example:**
 ```typescript
-detectFormat('/path/to/SKILL.md')        // 'claude-skill'
+detectFormat('/path/to/SKILL.md')        // 'agent-skill'
 detectFormat('/path/to/agent.yaml')      // 'vat-agent'
 detectFormat('/path/to/guide.md')        // 'markdown'
 detectFormat('/path/to/script.js')       // 'unknown'
@@ -170,7 +170,7 @@ if (filter.matches('docs/guide.md')) {
 
 ## Usage Examples
 
-### Find All Claude Skills
+### Find All Agent Skills
 
 ```typescript
 import { scan } from '@vibe-agent-toolkit/discovery';
@@ -181,10 +181,10 @@ const summary = await scan({
 });
 
 const skills = summary.results.filter(
-  result => result.format === 'claude-skill'
+  result => result.format === 'agent-skill'
 );
 
-console.log(`Found ${skills.length} Claude Skills:`);
+console.log(`Found ${skills.length} Agent Skills:`);
 for (const skill of skills) {
   console.log(`  - ${skill.relativePath}`);
 }
@@ -297,7 +297,7 @@ The scanner automatically detects gitignored files using the `isGitIgnored` util
 ### 2. Format Detection
 
 Format detection is based on conventions:
-- **Claude Skills** - Files named SKILL.md
+- **Agent Skills** - Files named SKILL.md
 - **VAT Agents** - Directories containing agent.yaml
 - **Markdown** - Files with .md extension
 - **Unknown** - Everything else

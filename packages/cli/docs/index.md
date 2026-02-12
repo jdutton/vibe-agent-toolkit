@@ -146,7 +146,7 @@ Build agent for deployment to target runtime
 
 ```bash
 vat agent build ./my-agent                # Build for default target
-vat agent build ./my-agent --target claude-skills
+vat agent build ./my-agent --target agent-skills
 vat agent build ./my-agent --output ./dist
 ```
 

@@ -41,7 +41,7 @@ resources:
         frontmatterSchema: "schemas/package-readme-frontmatter.json"
         mode: permissive
 
-    # Claude Skills (SKILL.md files)
+    # Agent Skills (SKILL.md files)
     skills:
       include:
         - "**/resources/skills/SKILL.md"

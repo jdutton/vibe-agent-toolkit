@@ -1,6 +1,6 @@
 # vat agent import
 
-Convert Claude Skills (SKILL.md) to VAT agent format (agent.yaml).
+Convert Agent Skills (SKILL.md) to VAT agent format (agent.yaml).
 
 ## Synopsis
 
@@ -10,7 +10,7 @@ vat agent import <skillPath> [options]
 
 ## Description
 
-The `import` command converts a Claude Skill in SKILL.md format to a VAT agent manifest (agent.yaml). This enables:
+The `import` command converts an Agent Skill in SKILL.md format to a VAT agent manifest (agent.yaml). This enables:
 - **Testing** - Use VAT's testing framework with imported skills
 - **Packaging** - Bundle skills as VAT agents
 - **Deployment** - Deploy skills through VAT's deployment pipeline
@@ -138,7 +138,7 @@ vat agent import my-skill/SKILL.md
 
 Output:
 ```
-Successfully imported Claude Skill to: /path/to/my-skill/agent.yaml
+Successfully imported Agent Skill to: /path/to/my-skill/agent.yaml
 ```
 
 ### Custom Output Path
@@ -185,7 +185,7 @@ done
 
 ```yaml
 # GitHub Actions
-- name: Import Claude Skills
+- name: Import Agent Skills
   run: |
     npm install -g vibe-agent-toolkit
     for skill in skills/*/SKILL.md; do
@@ -197,7 +197,7 @@ done
 
 ### 1. Converting Existing Skills
 
-You have Claude Skills in SKILL.md format and want to use VAT's tooling:
+You have Agent Skills in SKILL.md format and want to use VAT's tooling:
 
 ```bash
 # Import skill
@@ -277,7 +277,7 @@ error: "agent.yaml already exists at /path/to/agent.yaml. Use --force to overwri
 
 ### Typical Workflow
 
-1. **Create or edit SKILL.md** - Write skill in Claude Skills format
+1. **Create or edit SKILL.md** - Write skill in Agent Skills format
 2. **Audit** - Validate skill quality and compatibility
 3. **Import** - Convert to VAT agent format
 4. **Test** - Run VAT agent tests
@@ -380,7 +380,7 @@ vat agent import SKILL.md --force
 
 ## Related Commands
 
-- [`vat agent audit`](./audit.md) - Validate Claude Skills before import
+- [`vat agent audit`](./audit.md) - Validate Agent Skills before import
 
 ## Reference
 

@@ -3,7 +3,7 @@
  * Build, validate, and package agent skills in the Agent Skills format
  */
 
-export { buildClaudeSkill, type BuildOptions, type BuildResult } from './builder.js';
+export { buildAgentSkill, type BuildOptions, type BuildResult } from './builder.js';
 
 export {
   extractH1Title,
@@ -23,11 +23,11 @@ export {
 } from './walk-link-graph.js';
 
 export {
-  ClaudeSkillFrontmatterSchema,
-  VATClaudeSkillFrontmatterSchema,
-  type ClaudeSkillFrontmatter,
-  type VATClaudeSkillFrontmatter,
-} from './schemas/claude-skill-frontmatter.js';
+  AgentSkillFrontmatterSchema,
+  VATAgentSkillFrontmatterSchema,
+  type AgentSkillFrontmatter,
+  type VATAgentSkillFrontmatter,
+} from './schemas/agent-skill-frontmatter.js';
 
 export { ClaudePluginJsonSchema, ClaudePluginSchema, type ClaudePlugin } from './schemas/claude-plugin.js';
 

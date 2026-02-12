@@ -69,7 +69,7 @@ export interface ValidationIssue {
 
 export interface ValidationResult {
   path: string;
-  type: 'claude-skill' | 'vat-agent' | 'claude-plugin' | 'marketplace' | 'registry' | 'unknown';
+  type: 'agent-skill' | 'vat-agent' | 'claude-plugin' | 'marketplace' | 'registry' | 'unknown';
   status: 'success' | 'warning' | 'error';
   summary: string;
   issues: ValidationIssue[];

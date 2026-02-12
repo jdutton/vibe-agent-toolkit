@@ -45,7 +45,7 @@ Document schema refinements and learnings discovered while designing agent-gener
 **Key Design Principles:**
 1. **Agent outputs data, not files**: Wrapper script handles file I/O
 2. **Validation built-in**: Agent validates its own output before returning
-3. **Portability**: Works in any environment (CLI, web, Claude Skills)
+3. **Portability**: Works in any environment (CLI, web, Agent Skills)
 4. **Transparency**: Architecture decisions documented for user understanding
 
 **Validation Strategy:**
@@ -87,7 +87,7 @@ Document schema refinements and learnings discovered while designing agent-gener
 - Phase 4 (GENERATE): Structured output with validation
 
 **Key Design Principle:**
-Agent outputs data (JSON object with file contents), not files. This makes the agent portable across different execution environments (CLI, web, Claude Skills).
+Agent outputs data (JSON object with file contents), not files. This makes the agent portable across different execution environments (CLI, web, Agent Skills).
 
 ### User Prompt Template Design
 
@@ -510,7 +510,7 @@ The four-phase workflow pattern (GATHER → ANALYZE → DESIGN → GENERATE) dis
 4. **Separation of concerns** - Agent outputs data (JSON), not files
    - Wrapper script handles file I/O and portability
    - Agent focuses on design logic, not system integration
-   - Same agent output can be used in CLI, web, Claude Skills without modification
+   - Same agent output can be used in CLI, web, Agent Skills without modification
 
 5. **Examples in input schema** - Providing concrete examples for each input field significantly improves user guidance
    - Users understand what level of detail is needed

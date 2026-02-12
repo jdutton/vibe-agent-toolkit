@@ -26,7 +26,7 @@ export async function importCommand(
   try {
     // Resolve path
     const resolvedSkillPath = path.resolve(skillPath);
-    logger.debug(`Importing Claude Skill: ${resolvedSkillPath}`);
+    logger.debug(`Importing Agent Skill: ${resolvedSkillPath}`);
 
     // Import SKILL.md to agent.yaml
     const importOptions: Parameters<typeof importSkillToAgent>[0] = {
@@ -61,7 +61,7 @@ export async function importCommand(
     };
 
     writeYamlOutput(output);
-    logger.info(`Successfully imported Claude Skill to: ${result.agentPath}`);
+    logger.info(`Successfully imported Agent Skill to: ${result.agentPath}`);
     process.exit(0);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'AgentImport');
