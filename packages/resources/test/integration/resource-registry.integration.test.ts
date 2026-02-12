@@ -27,6 +27,7 @@ const BROKEN_FILE_MD = 'broken-file.md';
 const BROKEN_FILE_ID = 'broken-file';
 const EXTERNAL_MD = 'external.md';
 const VALID_MD_PATTERN = '**/valid.md';
+const NESTED_FILE_ID = 'subdir-nested';
 
 // Helper to extract resource IDs (avoids nested arrow functions in tests)
 function extractResourceIds(resources: ResourceMetadata[]): string[] {
@@ -199,14 +200,14 @@ describe('ResourceRegistry - Integration Tests', () => {
 
       // Should exclude nested.md in subdir
       const ids = resources.map((r) => r.id);
-      expect(ids).not.toContain('nested');
+      expect(ids).not.toContain(NESTED_FILE_ID);
     });
 
     it('should find nested files by default', async () => {
       const resources = await registry.crawl({ baseDir: fixturesDir });
 
       const ids = resources.map((r) => r.id);
-      expect(ids).toContain('nested');
+      expect(ids).toContain(NESTED_FILE_ID);
     });
 
     it('should use default include/exclude patterns', async () => {
@@ -445,7 +446,7 @@ describe('ResourceRegistry - Integration Tests', () => {
         const resources = registry.getResourcesByPattern('**/subdir/**');
 
         expect(resources.length).toBeGreaterThanOrEqual(1);
-        expect(resources[0]?.id).toBe('nested');
+        expect(resources[0]?.id).toBe(NESTED_FILE_ID);
       });
 
       it('should return empty array for no matches', () => {
@@ -700,6 +701,25 @@ tags: test
 
         expect(r1.id).toBe('dir1-readme');
         expect(r2.id).toBe('dir2-readme');
+      });
+
+      it('should propagate baseDir from crawl() when not set on constructor', async () => {
+        await createDuplicateNamedFiles(tempDir);
+
+        // Create registry WITHOUT baseDir, then crawl WITH baseDir
+        const reg = new ResourceRegistry();
+        expect(reg.baseDir).toBeUndefined();
+
+        await reg.crawl({ baseDir: tempDir, include: ['**/*.md'] });
+
+        // crawl should have propagated baseDir
+        expect(reg.baseDir).toBe(tempDir);
+
+        // IDs should be path-relative, not filename stems
+        const r1 = reg.getResourceById('dir1-readme');
+        const r2 = reg.getResourceById('dir2-readme');
+        expect(r1).toBeDefined();
+        expect(r2).toBeDefined();
       });
 
       it('should handle deeply nested paths', async () => {

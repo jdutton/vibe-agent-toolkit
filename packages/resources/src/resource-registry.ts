@@ -133,8 +133,8 @@ export interface CollectionStats {
  * ```
  */
 export class ResourceRegistry implements ResourceCollectionInterface {
-  /** Base directory for resources. Used for relative-path ID generation and schema resolution. */
-  readonly baseDir?: string;
+  /** Base directory for resources. Used for relative-path ID generation and schema resolution. Set via constructor or propagated from crawl(). */
+  baseDir?: string;
 
   /** Frontmatter field name to use as resource ID. */
   readonly idField?: string;
@@ -381,6 +381,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       exclude = ['**/node_modules/**', '**/.git/**', '**/dist/**'],
       followSymlinks = false,
     } = options;
+
+    // Propagate baseDir to registry if not already set (enables path-relative IDs)
+    if (baseDir && !this.baseDir) {
+      this.baseDir = baseDir;
+    }
 
     // Use utils file crawler
     const crawlOptions: UtilsCrawlOptions = {
