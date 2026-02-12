@@ -24,6 +24,7 @@ import { findProjectRoot, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { walkLinkGraph, type LinkResolution, type WalkableRegistry } from '../walk-link-graph.js';
 
+import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
 import type { ValidationIssue } from './types.js';
 import {
   createIssue,
@@ -110,6 +111,12 @@ export async function validateSkillForPackaging(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillPath is validated function parameter
   const skillContent = await readFile(skillPath, 'utf-8');
   const skillLines = skillContent.split('\n').length;
+
+  // Validate frontmatter schema (name format, required fields, etc.)
+  if (parseResult.frontmatter) {
+    errors.push(...validateFrontmatterSchema(parseResult.frontmatter, false));
+    errors.push(...validateFrontmatterRules(parseResult.frontmatter));
+  }
 
   // Read packaging options for depth/exclude configuration
   const linkFollowDepth = skillMetadata?.packagingOptions?.linkFollowDepth ?? 2;
