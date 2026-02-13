@@ -961,5 +961,9 @@ export class MCPTestClient {
         });
       });
     }
+
+    // Prevent unbounded memory growth from accumulated output lines
+    this.stdoutLines.length = 0;
+    this.stderrLines.length = 0;
   }
 }
