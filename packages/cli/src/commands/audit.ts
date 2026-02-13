@@ -191,6 +191,9 @@ export async function auditCommand(
   }
 }
 
+/**
+ * @internal Exported for integration testing only — not part of the public CLI API.
+ */
 export async function getValidationResults(
   scanPath: string,
   recursive: boolean,

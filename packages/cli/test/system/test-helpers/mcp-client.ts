@@ -182,9 +182,10 @@ export class MCPTestClient {
    * Gracefully shut down the server process.
    */
   async close(): Promise<void> {
-    // Clear any pending requests
+    // Reject and clear any pending requests so their promises settle
     for (const [id, entry] of this.pending) {
       clearTimeout(entry.timer);
+      entry.reject(new Error('MCPTestClient closed while request was pending'));
       this.pending.delete(id);
     }
 

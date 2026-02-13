@@ -70,7 +70,7 @@ export function executeCli(
       stdio: ['inherit', stdoutFd, stderrFd],
     });
 
-    // Close file descriptors
+    // Close file descriptors before reading
     fs.closeSync(stdoutFd);
     fs.closeSync(stderrFd);
 
@@ -84,22 +84,22 @@ export function executeCli(
       stderr,
     };
   } finally {
+    // Close FDs if not already closed (e.g., spawnSync threw before closeSync)
+    try { fs.closeSync(stdoutFd); } catch { /* already closed */ }
+    try { fs.closeSync(stderrFd); } catch { /* already closed */ }
     // Cleanup temp files
-    try {
-      fs.unlinkSync(stdoutFile);
-    } catch {
-      // Ignore cleanup errors
-    }
-    try {
-      fs.unlinkSync(stderrFile);
-    } catch {
-      // Ignore cleanup errors
-    }
+    try { fs.unlinkSync(stdoutFile); } catch { /* ignore */ }
+    try { fs.unlinkSync(stderrFile); } catch { /* ignore */ }
   }
 }
 
 /**
- * Execute and parse YAML result
+ * Execute and parse YAML result (strict).
+ *
+ * Always attempts to parse YAML from stdout. Throws if no YAML content found.
+ * Use this when the command is expected to produce YAML output on success.
+ *
+ * @see {@link executeCliAndParseYaml} for a lenient variant that returns `{}` on parse failure
  */
 export function executeAndParseYaml(
   binPath: string,
@@ -197,8 +197,14 @@ export function testConfigError(
 }
 
 /**
- * Execute a CLI command and parse YAML output if successful
- * Returns both raw result and parsed YAML (empty object if parse fails)
+ * Execute a CLI command and parse YAML output if successful (lenient).
+ *
+ * Only parses YAML when the command exits with status 0 and stdout contains
+ * a `---` document marker. Returns `{}` for the parsed field otherwise.
+ * Use this when the command may fail and you want to inspect both the raw
+ * result and any parsed output without catching parse exceptions.
+ *
+ * @see {@link executeAndParseYaml} for a strict variant that always parses (throws on missing YAML)
  */
 export function executeCliAndParseYaml(
   binPath: string,
