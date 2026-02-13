@@ -22,7 +22,7 @@ import {
   getBinPath,
 } from './test-common.js';
 import { getTestFixturesPath } from './test-fixture-loader.js';
-import { executeCli, parseYamlOutput } from './test-helpers.js';
+import { executeCli, parseYamlOutput } from './test-helpers/index.js';
 
 describe('Audit User Plugins Fixture (system test)', () => {
   let binPath: string;

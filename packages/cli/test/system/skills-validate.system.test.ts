@@ -8,7 +8,7 @@ import * as yaml from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 
 import { getBinPath, getFixturePath } from './test-common.js';
-import { executeSkillsCommandAndExpectYaml } from './test-helpers.js';
+import { executeSkillsCommandAndExpectYaml } from './test-helpers/index.js';
 
 // Type for packaging validation result
 interface PackagingValidationOutput {
