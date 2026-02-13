@@ -114,8 +114,10 @@ export async function validateSkillForPackaging(
 
   // Validate frontmatter schema (name format, required fields, etc.)
   if (parseResult.frontmatter) {
-    errors.push(...validateFrontmatterSchema(parseResult.frontmatter, false));
-    errors.push(...validateFrontmatterRules(parseResult.frontmatter));
+    errors.push(
+      ...validateFrontmatterSchema(parseResult.frontmatter, false),
+      ...validateFrontmatterRules(parseResult.frontmatter),
+    );
   }
 
   // Read packaging options for depth/exclude configuration

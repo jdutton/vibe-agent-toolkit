@@ -59,10 +59,10 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   const { frontmatter } = parseResult;
 
   // Validate frontmatter schema (shared with packaging validator)
-  issues.push(...validateFrontmatterSchema(frontmatter, isVATGenerated));
-
-  // Validate additional frontmatter rules (shared with packaging validator)
-  issues.push(...validateFrontmatterRules(frontmatter));
+  issues.push(
+    ...validateFrontmatterSchema(frontmatter, isVATGenerated),
+    ...validateFrontmatterRules(frontmatter),
+  );
 
   // Validate warning-level rules (skill-specific)
   validateWarningRules(content, lineCount, skillPath, issues);

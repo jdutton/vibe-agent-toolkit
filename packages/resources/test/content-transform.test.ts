@@ -52,6 +52,21 @@ function createTestLink(
   };
 }
 
+function createDefinitionLink(
+  ref: string,
+  href: string,
+  resolvedId?: string,
+  type: LinkType = LOCAL_FILE,
+): ResourceLink {
+  return createTestLink({
+    text: ref,
+    href,
+    type,
+    nodeType: 'definition',
+    ...(resolvedId !== undefined && { resolvedId }),
+  });
+}
+
 /**
  * Create a minimal ResourceMetadata for registry lookup testing.
  */
@@ -1044,21 +1059,6 @@ describe('transformContent', () => {
     const DEF_GUIDE_OUTPUT_PATH = '/output/resources/guide.md';
     const DEF_SOURCE_OUTPUT = '/output/SKILL.md';
     const DEF_EXPECTED_REL = 'resources/guide.md';
-
-    function createDefinitionLink(
-      ref: string,
-      href: string,
-      resolvedId?: string,
-      type: LinkType = LOCAL_FILE,
-    ): ResourceLink {
-      return createTestLink({
-        text: ref,
-        href,
-        type,
-        nodeType: 'definition',
-        ...(resolvedId !== undefined && { resolvedId }),
-      });
-    }
 
     it('should rewrite bundled definition to new relative path', () => {
       const content = `See [Guide][guide-ref] for details.\n\n[guide-ref]: ./guide.md`;
