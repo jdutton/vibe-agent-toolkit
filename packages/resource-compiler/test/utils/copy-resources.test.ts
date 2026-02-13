@@ -8,7 +8,7 @@ import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { mkdirSyncReal, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
-import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { copyResources, createPostBuildScript } from '../../src/utils/copy-resources.js';
 
@@ -121,27 +121,18 @@ describe('copyResources', () => {
 
 describe('createPostBuildScript', () => {
   let tempDir: string;
-  let originalCwd: string;
 
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
   beforeEach(() => {
     suite.beforeEach();
     tempDir = suite.getTempDir();
-    // Change to temp dir so relative paths work
-    originalCwd = process.cwd();
-    process.chdir(tempDir);
-  });
-
-  afterEach(() => {
-    // Restore original cwd
-    process.chdir(originalCwd);
   });
 
   it('should copy generated dir to dist/generated', () => {
-    // Setup generated dir (relative path as function expects)
-    const generatedDir = 'generated';
-    const distDir = 'dist';
+    // Setup generated dir using absolute paths
+    const generatedDir = join(tempDir, 'generated');
+    const distDir = join(tempDir, 'dist');
 
     mkdirSyncReal(generatedDir);
     writeFileSync(join(generatedDir, 'output.js'), 'code', 'utf-8');
@@ -163,9 +154,12 @@ describe('createPostBuildScript', () => {
     }) as never;
 
     try {
-      // Try with non-existent source (relative path)
+      // Try with non-existent source (absolute path)
       expect(() => {
-        createPostBuildScript({ generatedDir: 'does-not-exist', distDir: 'dist' });
+        createPostBuildScript({
+          generatedDir: join(tempDir, 'does-not-exist'),
+          distDir: join(tempDir, 'dist'),
+        });
       }).toThrow('process.exit called');
 
       expect(exitCode).toBe(1);
@@ -176,9 +170,9 @@ describe('createPostBuildScript', () => {
   });
 
   it('should support verbose logging', () => {
-    // Setup (relative paths)
-    const generatedDir = 'generated';
-    const distDir = 'dist';
+    // Setup using absolute paths
+    const generatedDir = join(tempDir, 'generated');
+    const distDir = join(tempDir, 'dist');
 
     mkdirSyncReal(generatedDir);
     writeFileSync(join(generatedDir, 'output.js'), 'code', 'utf-8');

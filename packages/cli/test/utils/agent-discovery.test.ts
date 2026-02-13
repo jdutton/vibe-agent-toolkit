@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   discoverAgents,
@@ -15,7 +15,6 @@ import {
 describe('agent-discovery', () => {
   const suite = setupAsyncTempDirSuite('agent-discovery');
   let tempDir: string;
-  let originalCwd: string;
 
   const METADATA_YAML = 'metadata:\n  name:';
   const VERSION_YAML = '\n  version:';
@@ -23,23 +22,21 @@ describe('agent-discovery', () => {
   const CURRENT_AGENT = 'current-agent';
 
   beforeAll(async () => {
-    originalCwd = process.cwd();
     await suite.beforeAll();
   });
 
   afterAll(async () => {
-    process.chdir(originalCwd);
     await suite.afterAll();
   });
 
   beforeEach(async () => {
     await suite.beforeEach();
     tempDir = suite.getTempDir();
-    process.chdir(tempDir);
+    vi.spyOn(process, 'cwd').mockReturnValue(tempDir);
   });
 
   afterEach(() => {
-    process.chdir(originalCwd);
+    vi.restoreAllMocks();
   });
 
   describe('discoverAgents', () => {

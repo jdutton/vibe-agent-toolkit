@@ -5,9 +5,8 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { ResourceRegistry } from '../src/resource-registry.js';
-
-import { setupTempDirTestSuite } from './test-helpers.js';
+import { ResourceRegistry } from '../../src/resource-registry.js';
+import { setupTempDirTestSuite } from '../test-helpers.js';
 
 const TEST_EXTERNAL_URL = 'https://example.com/page';
 

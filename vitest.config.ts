@@ -18,12 +18,14 @@ export default defineConfig({
     ],
     // Enable parallelization for fast unit test execution
     testTimeout: process.platform === 'win32' ? 900000 : 60000, // 15min Windows, 1min Unix
-    pool: 'forks',
+    // Threads on Mac/Unix: shared module cache = ~20% faster collect phase
+    // Forks on Windows: required for process.chdir() compatibility and native module isolation
+    pool: process.platform === 'win32' ? 'forks' : 'threads',
     poolOptions: {
       forks: {
         singleFork: false,
-        // Limit to 2 workers on Windows (sweet spot per arch analysis), unlimited on Unix
-        maxForks: process.platform === 'win32' ? 2 : undefined,
+        // Limit to 2 workers on Windows (sweet spot per arch analysis)
+        maxForks: 2,
       },
     },
     coverage: {
