@@ -22,7 +22,8 @@ async function setupRegistryWithExternalLink(tempDir: string, url: string): Prom
   return registry;
 }
 
-describe('ResourceRegistry external URL validation', () => {
+// Network-dependent tests: skip in CI where egress restrictions cause flaky failures
+describe.skipIf(!!process.env.CI)('ResourceRegistry external URL validation', () => {
   const suite = setupTempDirTestSuite('registry-external-urls-');
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);

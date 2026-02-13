@@ -7,7 +7,8 @@ const GOOGLE_URL = 'https://www.google.com';
 const EXAMPLE_URL = 'https://www.example.com';
 const BROKEN_URL = 'https://this-domain-definitely-does-not-exist-12345.com';
 
-describe('ExternalLinkValidator (integration)', () => {
+// Network-dependent tests: skip in CI where egress restrictions cause flaky failures
+describe.skipIf(!!process.env.CI)('ExternalLinkValidator (integration)', () => {
 	const suite = setupExternalLinkValidatorSuite('link-validator-integration-');
 
 	beforeEach(suite.beforeEach);
