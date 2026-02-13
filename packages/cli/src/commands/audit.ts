@@ -191,7 +191,7 @@ export async function auditCommand(
   }
 }
 
-async function getValidationResults(
+export async function getValidationResults(
   scanPath: string,
   recursive: boolean,
   options: AuditCommandOptions,

@@ -1,10 +1,13 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
+
 import fs from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { runCliCommand } from '../test-helpers.js';
+import type { AuditCommandOptions } from '../../src/commands/audit.js';
+import { getValidationResults } from '../../src/commands/audit.js';
 
 // Constants for test fixtures
 const CLAUDE_PLUGIN_DIRNAME = '.claude-plugin';
@@ -12,17 +15,22 @@ const PLUGIN_JSON_FILENAME = 'plugin.json';
 const MARKETPLACE_JSON_FILENAME = 'marketplace.json';
 const INSTALLED_PLUGINS_FILENAME = 'installed_plugins.json';
 const KNOWN_MARKETPLACES_FILENAME = 'known_marketplaces.json';
-const STATUS_SUCCESS = 'status: success';
-const STATUS_ERROR = 'status: error';
 const TEST_OWNER_NAME = 'Test Owner';
 const MY_MARKETPLACE_NAME = 'my-marketplace';
 const TEST_MARKETPLACE_NAME = 'test-marketplace';
 const TEST_PLUGIN_NAME = 'test-plugin';
 const TEST_PLUGIN_DESCRIPTION = 'Test plugin';
 
-// Helper to run audit command (top-level command)
-function runAuditCommand(...args: string[]) {
-  return runCliCommand('audit', ...args);
+// Silent logger for tests (no stderr output)
+const silentLogger = {
+  info: (_msg: string) => {},
+  error: (_msg: string) => {},
+  debug: (_msg: string) => {},
+};
+
+// Helper to run audit validation directly (no CLI subprocess)
+async function runAudit(targetPath: string, options: AuditCommandOptions = {}) {
+  return getValidationResults(targetPath, options.recursive ?? false, options, silentLogger);
 }
 
 describe('audit command (integration)', () => {
@@ -37,12 +45,10 @@ describe('audit command (integration)', () => {
   });
 
   describe('plugin validation', () => {
-    it('should validate a valid plugin directory', () => {
+    it('should validate a valid plugin directory', async () => {
       const pluginDir = join(tempDir, 'valid-plugin');
       const claudePluginDir = join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.mkdirSync(claudePluginDir, { recursive: true });
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.writeFileSync(
         join(claudePluginDir, PLUGIN_JSON_FILENAME),
         JSON.stringify({
@@ -52,19 +58,17 @@ describe('audit command (integration)', () => {
         })
       );
 
-      const result = runAuditCommand(pluginDir);
+      const results = await runAudit(pluginDir);
 
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain(STATUS_SUCCESS);
-      expect(result.stdout).toContain(TEST_PLUGIN_NAME);
+      expect(results).toHaveLength(1);
+      expect(results[0].status).toBe('success');
+      expect(results[0].metadata?.name).toBe(TEST_PLUGIN_NAME);
     });
 
-    it('should detect plugin validation errors', () => {
+    it('should detect plugin validation errors', async () => {
       const pluginDir = join(tempDir, 'invalid-plugin');
       const claudePluginDir = join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.mkdirSync(claudePluginDir, { recursive: true });
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.writeFileSync(
         join(claudePluginDir, PLUGIN_JSON_FILENAME),
         JSON.stringify({
@@ -73,20 +77,18 @@ describe('audit command (integration)', () => {
         })
       );
 
-      const result = runAuditCommand(pluginDir);
+      const results = await runAudit(pluginDir);
 
-      expect(result.status).toBe(1);
-      expect(result.stdout).toContain(STATUS_ERROR);
+      expect(results).toHaveLength(1);
+      expect(results[0].status).toBe('error');
     });
   });
 
   describe('marketplace validation', () => {
-    it('should validate a valid marketplace directory', () => {
+    it('should validate a valid marketplace directory', async () => {
       const marketplaceDir = join(tempDir, 'valid-marketplace');
       const claudePluginDir = join(marketplaceDir, CLAUDE_PLUGIN_DIRNAME);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.mkdirSync(claudePluginDir, { recursive: true });
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.writeFileSync(
         join(claudePluginDir, MARKETPLACE_JSON_FILENAME),
         JSON.stringify({
@@ -96,18 +98,17 @@ describe('audit command (integration)', () => {
         })
       );
 
-      const result = runAuditCommand(marketplaceDir);
+      const results = await runAudit(marketplaceDir);
 
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain(STATUS_SUCCESS);
-      expect(result.stdout).toContain(TEST_MARKETPLACE_NAME);
+      expect(results).toHaveLength(1);
+      expect(results[0].status).toBe('success');
+      expect(results[0].metadata?.name).toBe(TEST_MARKETPLACE_NAME);
     });
   });
 
   describe('registry validation', () => {
-    it('should validate installed_plugins.json registry', () => {
+    it('should validate installed_plugins.json registry', async () => {
       const registryFile = join(tempDir, INSTALLED_PLUGINS_FILENAME);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.writeFileSync(
         registryFile,
         JSON.stringify({
@@ -127,15 +128,14 @@ describe('audit command (integration)', () => {
         })
       );
 
-      const result = runAuditCommand(registryFile);
+      const results = await runAudit(registryFile);
 
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain(STATUS_SUCCESS);
+      expect(results).toHaveLength(1);
+      expect(results[0].status).toBe('success');
     });
 
-    it('should validate known_marketplaces.json registry', () => {
+    it('should validate known_marketplaces.json registry', async () => {
       const registryFile = join(tempDir, KNOWN_MARKETPLACES_FILENAME);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.writeFileSync(
         registryFile,
         JSON.stringify({
@@ -150,19 +150,17 @@ describe('audit command (integration)', () => {
         })
       );
 
-      const result = runAuditCommand(registryFile);
+      const results = await runAudit(registryFile);
 
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain(STATUS_SUCCESS);
+      expect(results).toHaveLength(1);
+      expect(results[0].status).toBe('success');
     });
   });
 
   describe('Agent Skill validation', () => {
-    it('should validate a single SKILL.md file', () => {
+    it('should validate a single SKILL.md file', async () => {
       const skillFile = join(tempDir, 'test-skill', 'SKILL.md');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.mkdirSync(dirname(skillFile), { recursive: true });
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.writeFileSync(
         skillFile,
         `---
@@ -176,19 +174,17 @@ This is a test skill.
 `
       );
 
-      const result = runAuditCommand(skillFile);
+      const results = await runAudit(skillFile);
 
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain(STATUS_SUCCESS);
+      expect(results).toHaveLength(1);
+      expect(results[0].status).toBe('success');
     });
 
-    it('should validate VAT agent SKILL.md', () => {
+    it('should validate VAT agent SKILL.md', async () => {
       const agentDir = join(tempDir, 'vat-agent');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.mkdirSync(agentDir, { recursive: true });
 
       // Create agent.yaml
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.writeFileSync(
         join(agentDir, 'agent.yaml'),
         `metadata:
@@ -202,7 +198,6 @@ spec:
       );
 
       // Create SKILL.md
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.writeFileSync(
         join(agentDir, 'SKILL.md'),
         `---
@@ -216,24 +211,23 @@ This is a test agent.
 `
       );
 
-      const result = runAuditCommand(agentDir);
+      const results = await runAudit(agentDir);
 
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain(STATUS_SUCCESS);
+      expect(results).toHaveLength(1);
+      expect(results[0].status).toBe('success');
     });
   });
 
   describe('unknown resource handling', () => {
-    it('should report error for unknown resource type', () => {
+    it('should report error for unknown resource type', async () => {
       const unknownFile = join(tempDir, 'unknown.txt');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.writeFileSync(unknownFile, 'not a valid resource');
 
-      const result = runAuditCommand(unknownFile);
+      const results = await runAudit(unknownFile);
 
-      expect(result.status).toBe(1);
-      expect(result.stdout).toContain(STATUS_ERROR);
-      expect(result.stdout).toContain('UNKNOWN_FORMAT');
+      expect(results).toHaveLength(1);
+      expect(results[0].status).toBe('error');
+      expect(results[0].issues.some(i => i.code === 'UNKNOWN_FORMAT')).toBe(true);
     });
   });
 
@@ -243,15 +237,13 @@ This is a test agent.
   // explicitly requested (e.g., bun run test:system).
 
   describe('recursive scanning', () => {
-    it('should discover and validate all resource types recursively', () => {
+    it('should discover and validate all resource types recursively', async () => {
       const projectDir = join(tempDir, 'mixed-project');
 
       // Create plugin
       const pluginDir = join(projectDir, 'plugins', 'my-plugin');
       const pluginClaudeDir = join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.mkdirSync(pluginClaudeDir, { recursive: true });
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.writeFileSync(
         join(pluginClaudeDir, PLUGIN_JSON_FILENAME),
         JSON.stringify({
@@ -264,9 +256,7 @@ This is a test agent.
       // Create marketplace
       const marketplaceDir = join(projectDir, 'marketplaces', MY_MARKETPLACE_NAME);
       const marketplaceClaudeDir = join(marketplaceDir, CLAUDE_PLUGIN_DIRNAME);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.mkdirSync(marketplaceClaudeDir, { recursive: true });
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.writeFileSync(
         join(marketplaceClaudeDir, MARKETPLACE_JSON_FILENAME),
         JSON.stringify({
@@ -278,9 +268,7 @@ This is a test agent.
 
       // Create registry
       const registriesDir = join(projectDir, 'registries');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.mkdirSync(registriesDir, { recursive: true });
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.writeFileSync(
         join(registriesDir, INSTALLED_PLUGINS_FILENAME),
         JSON.stringify({
@@ -291,9 +279,7 @@ This is a test agent.
 
       // Create SKILL.md
       const skillDir = join(projectDir, 'skills', 'my-skill');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.mkdirSync(skillDir, { recursive: true });
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.writeFileSync(
         join(skillDir, 'SKILL.md'),
         `---
@@ -305,28 +291,25 @@ description: My skill
 `
       );
 
-      const result = runAuditCommand(projectDir, '--recursive');
+      const results = await runAudit(projectDir, { recursive: true });
 
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain('filesScanned: 4');
-      expect(result.stdout).toContain('my-plugin');
-      expect(result.stdout).toContain(MY_MARKETPLACE_NAME);
-      expect(result.stdout).toContain(INSTALLED_PLUGINS_FILENAME);
-      expect(result.stdout).toContain('my-skill');
+      expect(results).toHaveLength(4);
+      expect(results.some(r => r.path.includes('my-plugin'))).toBe(true);
+      expect(results.some(r => r.path.includes(MY_MARKETPLACE_NAME))).toBe(true);
+      expect(results.some(r => r.path.includes(INSTALLED_PLUGINS_FILENAME))).toBe(true);
+      expect(results.some(r => r.path.includes('my-skill'))).toBe(true);
     });
   });
 
   describe('hierarchical output (--user flag)', () => {
-    it('should use hierarchical output format for --user flag', () => {
+    it('should find skill with errors when scanning recursively', async () => {
       // Create a mock user plugins directory structure with marketplace
       const mockUserPluginsDir = join(tempDir, 'mock-user-plugins');
       const marketplaceDir = join(mockUserPluginsDir, 'marketplaces', 'test-marketplace', 'test-plugin');
       const skillsDir = join(marketplaceDir, 'skills', 'test-skill');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
       fs.mkdirSync(skillsDir, { recursive: true });
 
-      // Create a SKILL.md with an error
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
+      // Create a SKILL.md with an error (name has spaces)
       fs.writeFileSync(
         join(skillsDir, 'SKILL.md'),
         `---
@@ -338,13 +321,11 @@ description: Test skill
 `
       );
 
-      // Note: This test would require either mocking os.homedir() or using an environment variable
-      // For now, we just verify the basic structure works by testing with a regular directory
-      const result = runAuditCommand(mockUserPluginsDir, '--recursive');
+      const results = await runAudit(mockUserPluginsDir, { recursive: true });
 
-      // Should scan the directory and find the skill with error (name has spaces - reserved word)
-      expect([0, 1]).toContain(result.status); // May have warnings or errors
-      expect(result.stdout).toContain('filesScanned: 1');
+      expect(results).toHaveLength(1);
+      // Should have validation errors (name contains spaces)
+      expect(results[0].issues.length).toBeGreaterThan(0);
     });
   });
 });
