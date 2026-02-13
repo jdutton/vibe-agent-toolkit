@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   executeCommandAndParse,
   setupInstallTestSuite,
-} from './test-helpers.js';
+} from './test-helpers/index.js';
 
 const suite = setupInstallTestSuite('vat-skills-install-test-');
 

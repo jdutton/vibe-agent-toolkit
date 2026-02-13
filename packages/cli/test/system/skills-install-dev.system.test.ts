@@ -16,7 +16,7 @@ import {
   executeCli,
   executeCliAndParseYaml,
   setupDevTestProject,
-} from './test-helpers.js';
+} from './test-helpers/index.js';
 
 const binPath = join(process.cwd(), 'packages', 'cli', 'dist', 'bin.js');
 

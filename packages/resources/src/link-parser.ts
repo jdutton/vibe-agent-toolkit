@@ -111,6 +111,7 @@ function extractLinks(tree: Root): ResourceLink[] {
       href: node.url,
       type: classifyLink(node.url),
       line: node.position?.start.line,
+      nodeType: 'link',
     };
     links.push(link);
   });
@@ -126,6 +127,7 @@ function extractLinks(tree: Root): ResourceLink[] {
       href,
       type: 'unknown', // Reference links need definition resolution
       line: node.position?.start.line,
+      nodeType: 'linkReference',
     };
     links.push(link);
   });
@@ -138,6 +140,7 @@ function extractLinks(tree: Root): ResourceLink[] {
       href: node.url,
       type: classifyLink(node.url),
       line: node.position?.start.line,
+      nodeType: 'definition',
     };
     links.push(link);
   });

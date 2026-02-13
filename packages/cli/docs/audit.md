@@ -2,7 +2,7 @@
 
 ## Overview
 
-The `vat audit` command provides comprehensive validation for Claude plugins, marketplaces, registries, and Claude Skills. It automatically detects resource types and applies appropriate validation rules, outputting structured YAML reports for programmatic parsing.
+The `vat audit` command provides comprehensive validation for Claude plugins, marketplaces, registries, and Agent Skills. It automatically detects resource types and applies appropriate validation rules, outputting structured YAML reports for programmatic parsing.
 
 ## Key Features
 
@@ -78,9 +78,9 @@ Registry files track installed plugins and known marketplaces:
 - Schema validation against registry schema
 - Checksums match installed versions (cache staleness)
 
-### 4. Claude Skills (SKILL.md files)
+### 4. Agent Skills (SKILL.md files)
 
-Individual Claude Skill markdown files with frontmatter:
+Individual Agent Skill markdown files with frontmatter:
 
 ```markdown
 ---

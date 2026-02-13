@@ -2,7 +2,7 @@
  * Format types that discovery can detect
  */
 export type DetectedFormat =
-  | 'claude-skill'    // SKILL.md
+  | 'agent-skill'     // SKILL.md
   | 'vat-agent'       // agent.yaml
   | 'markdown'        // *.md (resource file)
   | 'unknown';        // Other files

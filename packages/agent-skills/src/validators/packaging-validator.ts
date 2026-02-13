@@ -19,11 +19,12 @@ import { readFile } from 'node:fs/promises';
 import { basename, dirname, relative, resolve } from 'node:path';
 
 import type { ValidationOverride, VatSkillMetadata } from '@vibe-agent-toolkit/agent-schema';
-import { parseMarkdown } from '@vibe-agent-toolkit/resources';
+import { parseMarkdown, ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
-import { collectLinks, type LinkResolution } from '../link-collector.js';
+import { walkLinkGraph, type LinkResolution, type WalkableRegistry } from '../walk-link-graph.js';
 
+import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
 import type { ValidationIssue } from './types.js';
 import {
   createIssue,
@@ -111,6 +112,14 @@ export async function validateSkillForPackaging(
   const skillContent = await readFile(skillPath, 'utf-8');
   const skillLines = skillContent.split('\n').length;
 
+  // Validate frontmatter schema (name format, required fields, etc.)
+  if (parseResult.frontmatter) {
+    errors.push(
+      ...validateFrontmatterSchema(parseResult.frontmatter, false),
+      ...validateFrontmatterRules(parseResult.frontmatter),
+    );
+  }
+
   // Read packaging options for depth/exclude configuration
   const linkFollowDepth = skillMetadata?.packagingOptions?.linkFollowDepth ?? 2;
   const excludeConfig = skillMetadata?.packagingOptions?.excludeReferencesFromBundle;
@@ -120,18 +129,25 @@ export async function validateSkillForPackaging(
   // Find project boundary (workspace root -> git root -> skill dir)
   const projectRoot = findProjectRoot(dirname(skillPath));
 
-  // Collect linked files with depth + exclusion
-  const { bundledFiles, excludedReferences, maxBundledDepth } = await collectLinks(
-    skillPath,
+  // Build resource registry and walk the link graph
+  const registry = await ResourceRegistry.fromCrawl({
+    baseDir: projectRoot,
+    include: ['**/*.md'],
+  });
+  registry.resolveLinks();
+
+  const skillResource = registry.getResource(resolve(skillPath));
+  const { bundledResources, bundledAssets, excludedReferences, maxBundledDepth } = walkLinkGraph(
+    skillResource?.id ?? '',
+    registry as WalkableRegistry,
     {
       maxDepth,
       excludeRules: excludeConfig?.rules ?? [],
-      defaultRule: { template: excludeConfig?.defaultTemplate },
-      skillRoot: dirname(skillPath),
       projectRoot,
       excludeNavigationFiles,
-    }
+    },
   );
+  const bundledFiles = [...bundledResources.map(r => r.filePath), ...bundledAssets];
 
   // Count direct links that actually made it into the bundle
   const directLinks = getResolvedMarkdownLinks(parseResult.links, skillPath);
@@ -392,7 +408,7 @@ function deduplicateExcludedReferences(
   return details;
 }
 
-/** Map link-collector exclude reasons to detail reasons */
+/** Map walk-link-graph exclude reasons to detail reasons */
 function mapExcludeReason(
   excludeReason: LinkResolution['excludeReason'],
 ): ExcludedReferenceDetail['reason'] {

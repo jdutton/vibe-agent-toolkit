@@ -5,7 +5,7 @@
 ## Overview
 
 The VAT Distribution Standard enables you to package and distribute:
-- **Claude Skills** - SKILL.md files for Claude Code
+- **Agent Skills** - SKILL.md files for Claude Code
 - **VAT Agents** - agent.yaml based agents
 - **Pure Functions** - Reusable tools exposed via MCP/CLI
 - **Runtime Adapters** - Multi-platform runtime support
@@ -118,7 +118,7 @@ All VAT metadata lives in the `vat` field of package.json. This is the single so
 - **Purpose:** Identifies the package type
 
 #### `vat.skills[]` (optional)
-- **Purpose:** Declares Claude Skills for distribution
+- **Purpose:** Declares Agent Skills for distribution
 - **Fields:**
   - `name` - Skill name (installation directory name)
   - `source` - Source SKILL.md path (for rebuilding)
@@ -275,9 +275,12 @@ Controls which files are excluded by glob pattern and how their links are rewrit
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `{{link.text}}` | Link display text from markdown | `"Setup Guide"` |
-| `{{link.uri}}` | Original href from markdown | `"./docs/setup.md"` |
-| `{{link.fileName}}` | Target filename only | `"setup.md"` |
-| `{{link.filePath}}` | Path relative to skill root | `"docs/setup.md"` |
+| `{{link.href}}` | Original href from markdown (without fragment) | `"./docs/setup.md"` |
+| `{{link.fragment}}` | Fragment including `#` prefix, or empty | `"#section"` |
+| `{{link.type}}` | Link type | `"local_file"` |
+| `{{link.resource.id}}` | Target resource ID (if resolved) | `"docs/setup.md"` |
+| `{{link.resource.fileName}}` | Target filename only (if resolved) | `"setup.md"` |
+| `{{link.resource.relativePath}}` | Relative path from source to target (if resolved) | `"docs/setup.md"` |
 | `{{skill.name}}` | Skill name from frontmatter | `"my-skill"` |
 
 **`defaultTemplate`** applies to non-bundled links that don't match any rule (e.g., depth-exceeded links). Default: `"{{link.text}}"` (strips the link, keeps the text).
@@ -752,7 +755,7 @@ For local development, use `--dev` mode instead.
 
 - [vat-example-cat-agents](../../packages/vat-example-cat-agents/README.md) - Example implementation
 - [vat-development-agents](../../packages/vat-development-agents/README.md) - Example implementation
-- [Claude Code Skills Docs](https://code.claude.com/docs/en/skills) - Claude Skills format
+- [Claude Code Skills Docs](https://code.claude.com/docs/en/skills) - Agent Skills format
 
 ## Getting Help
 

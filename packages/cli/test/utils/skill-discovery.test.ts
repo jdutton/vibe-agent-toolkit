@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import { discoverSkills, validateSkillFilename } from '../../src/utils/skill-discovery.js';
 
 // Test constants to avoid duplication
-const SKILL_FORMAT = 'claude-skill';
+const SKILL_FORMAT = 'agent-skill';
 const MARKDOWN_FORMAT = 'markdown';
 const NOT_GIT_IGNORED = false;
 const PROJECT_ROOT = '/project';

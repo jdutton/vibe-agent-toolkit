@@ -15,7 +15,7 @@ import {
   resolve,
   spawnSync,
 } from './test-common.js';
-import { createTestTempDir, setupTestProject } from './test-helpers.js';
+import { createTestTempDir, setupTestProject } from './test-helpers/index.js';
 
 const wrapperPath = getWrapperPath(import.meta.url);
 const _binPath = getBinPath(import.meta.url); // Available for future tests

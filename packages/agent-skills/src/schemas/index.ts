@@ -3,11 +3,11 @@
  */
 
 export {
-  ClaudeSkillFrontmatterSchema,
-  VATClaudeSkillFrontmatterSchema,
-  type ClaudeSkillFrontmatter,
-  type VATClaudeSkillFrontmatter,
-} from './claude-skill-frontmatter.js';
+  AgentSkillFrontmatterSchema,
+  VATAgentSkillFrontmatterSchema,
+  type AgentSkillFrontmatter,
+  type VATAgentSkillFrontmatter,
+} from './agent-skill-frontmatter.js';
 
 export { ClaudePluginJsonSchema, ClaudePluginSchema, type ClaudePlugin } from './claude-plugin.js';
 

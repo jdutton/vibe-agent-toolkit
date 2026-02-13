@@ -17,6 +17,7 @@ export { SHA256Schema } from './schemas/checksum.js';
 
 // Resource metadata types
 export type {
+  LinkNodeType,
   LinkType,
   HeadingNode,
   ResourceLink,

@@ -1,5 +1,5 @@
 /**
- * Audit command - audits plugins, marketplaces, registries, and Claude Skills
+ * Audit command - audits plugins, marketplaces, registries, and Agent Skills
  * Top-level command: vat audit [path]
  */
 
@@ -51,7 +51,7 @@ export function createAuditCommand(): Command {
       'after',
       `
 Description:
-  Audits Claude plugins, marketplaces, registries, and Claude Skills for
+  Audits Claude plugins, marketplaces, registries, and Agent Skills for
   quality, correctness, and compatibility. Automatically detects resource
   type and validates accordingly. Outputs YAML report to stdout,
   errors/warnings to stderr.
@@ -60,7 +60,7 @@ Description:
   - Plugin directories (.claude-plugin/plugin.json)
   - Marketplace directories (.claude-plugin/marketplace.json)
   - Registry files (installed_plugins.json, known_marketplaces.json)
-  - Claude Skills (SKILL.md files)
+  - Agent Skills (SKILL.md files)
   - VAT agents (agent.yaml + SKILL.md)
 
   Path can be: resource directory, registry file, SKILL.md file, or scan directory
@@ -168,7 +168,7 @@ export async function auditCommand(
       }
 
       // Use hierarchical output for --user flag
-      const skillResults = results.filter((r: ValidationResult) => r.type === 'claude-skill');
+      const skillResults = results.filter((r: ValidationResult) => r.type === 'agent-skill');
       const hierarchical = buildHierarchicalOutput(skillResults, options.verbose ?? false);
       const summary = calculateHierarchicalSummary(results, hierarchical, startTime);
       writeYamlOutput(summary);
@@ -191,7 +191,10 @@ export async function auditCommand(
   }
 }
 
-async function getValidationResults(
+/**
+ * @internal Exported for integration testing only — not part of the public CLI API.
+ */
+export async function getValidationResults(
   scanPath: string,
   recursive: boolean,
   options: AuditCommandOptions,
@@ -200,8 +203,8 @@ async function getValidationResults(
   const format = detectFormat(scanPath);
 
   // Special handling for direct SKILL.md file
-  if (format === 'claude-skill') {
-    logger.debug('Detected single Claude Skill');
+  if (format === 'agent-skill') {
+    logger.debug('Detected single Agent Skill');
     const validateOptions: ValidateOptions = { skillPath: scanPath };
     if (options.warnUnreferencedFiles) {
       validateOptions.checkUnreferencedFiles = true;
@@ -340,7 +343,7 @@ async function handleFileEntry(
 
   // Check for SKILL.md
   if (entry.name === 'SKILL.md') {
-    logger.debug(`Validating Claude Skill: ${fullPath}`);
+    logger.debug(`Validating Agent Skill: ${fullPath}`);
     const validateOptions: ValidateOptions = { skillPath: fullPath };
     if (options.warnUnreferencedFiles) {
       validateOptions.checkUnreferencedFiles = true;

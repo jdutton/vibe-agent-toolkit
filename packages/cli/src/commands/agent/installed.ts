@@ -32,7 +32,7 @@ export async function installedCommand(options: InstalledCommandOptions): Promis
   const startTime = Date.now();
 
   try {
-    const { runtime = 'claude-skill', scope = 'all' } = options;
+    const { runtime = 'agent-skill', scope = 'all' } = options;
 
     const scopeLocations = SCOPE_LOCATIONS[runtime];
     if (!scopeLocations) {

@@ -14,7 +14,7 @@ import {
   getBinPath,
   join,
 } from './test-common.js';
-import { setupRagTestProject, setupTestProject } from './test-helpers.js';
+import { setupRagTestProject, setupTestProject } from './test-helpers/index.js';
 
 const binPath = getBinPath(import.meta.url);
 

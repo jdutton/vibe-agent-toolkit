@@ -468,9 +468,12 @@ Use `stripPrefix` to remove a common directory prefix (e.g., `"knowledge-base"`)
 | Variable | Description | Example |
 |----------|-------------|---------|
 | `{{link.text}}` | Link display text | `"Setup Guide"` |
-| `{{link.uri}}` | Original href | `"./docs/setup.md"` |
-| `{{link.fileName}}` | Target filename | `"setup.md"` |
-| `{{link.filePath}}` | Path relative to skill root | `"docs/setup.md"` |
+| `{{link.href}}` | Original href (without fragment) | `"./docs/setup.md"` |
+| `{{link.fragment}}` | Fragment including `#` prefix, or empty | `"#section"` |
+| `{{link.type}}` | Link type | `"local_file"` |
+| `{{link.resource.id}}` | Target resource ID (if resolved) | `"docs/setup.md"` |
+| `{{link.resource.fileName}}` | Target filename (if resolved) | `"setup.md"` |
+| `{{link.resource.relativePath}}` | Relative path from source to target (if resolved) | `"docs/setup.md"` |
 | `{{skill.name}}` | Skill name from frontmatter | `"my-skill"` |
 
 **`ignoreValidationErrors`** — Override validation rules:
@@ -487,7 +490,7 @@ Use `stripPrefix` to remove a common directory prefix (e.g., `"knowledge-base"`)
 
 ### Agent Commands
 
-**Import Claude Skills to VAT format:**
+**Import Agent Skills to VAT format:**
 ```bash
 # Import skill to agent.yaml
 vat agent import my-skill/SKILL.md

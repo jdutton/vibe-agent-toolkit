@@ -30,6 +30,7 @@ export default [
       '**/*.d.ts',
       'vitest.config.ts',
       'vitest.*.config.ts',
+      'vitest.setup.js',
       '.worktrees/',  // Git worktrees
       'docs/**/*.ts',  // Documentation scripts (not part of build)
       '**/test-fixtures/**',  // Test fixture data (third-party code)

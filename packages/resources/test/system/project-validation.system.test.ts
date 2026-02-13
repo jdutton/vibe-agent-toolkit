@@ -51,8 +51,10 @@ describe('System Test: Project Link Validation (Dogfooding)', () => {
     console.log(`  - email: ${stats.linksByType['email'] ?? 0} (mailto links)`);
     console.log(`  - unknown: ${stats.linksByType['unknown'] ?? 0} (unrecognized link types)`);
 
-    // Validate all resources
-    const validationResult = await registry.validate();
+    // Validate all resources (skip git-ignore checks — this test validates
+    // broken links, not gitignore behavior; skipping avoids 2×N spawnSync
+    // calls to `git check-ignore` which cause 60s+ timeouts at scale)
+    const validationResult = await registry.validate({ skipGitIgnoreCheck: true });
 
     // Log validation results
     console.log(`\n✅ Validation Results:`);
@@ -98,5 +100,5 @@ describe('System Test: Project Link Validation (Dogfooding)', () => {
 
     // Ensure we actually validated some files
     expect(stats.totalResources).toBeGreaterThan(0);
-  }, 60000); // 60 second timeout for system test (increased for larger doc set)
+  }, 60_000); // 60 second timeout — crawls entire monorepo
 });

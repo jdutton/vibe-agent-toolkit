@@ -1,6 +1,6 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
-import { existsSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { existsSync, writeFileSync } from 'node:fs';
+import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { toForwardSlash } from '@vibe-agent-toolkit/utils';
@@ -23,6 +23,7 @@ const { getTempDir } = setupTempDir('skill-packager-unit-');
 const UNIT_SKILL_NAME = 'unit-test-skill';
 const DIRECTORY_FORMAT = 'directory' as const;
 const DETAILS_MD = 'details.md';
+const PRESERVE_PATH = 'preserve-path' as const;
 
 // ============================================================================
 // Helpers - unique to this unit test file
@@ -133,7 +134,7 @@ describe('packageSkill - resource naming: preserve-path', () => {
     await writeFile(join(sub, 'welcome.md'), '# Welcome');
 
     const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, 'See [welcome](./articles/welcome.md).');
-    const result = await packWithOutput(sp, { resourceNaming: 'preserve-path' });
+    const result = await packWithOutput(sp, { resourceNaming: PRESERVE_PATH });
 
     expect(existsSync(join(result.outputPath, 'resources', 'articles', 'welcome.md'))).toBe(true);
   });
@@ -162,7 +163,7 @@ describe('packageSkill - preserve-path with stripPrefix (no false collision)', (
     );
 
     const result = await packWithOutput(sp, {
-      resourceNaming: 'preserve-path',
+      resourceNaming: PRESERVE_PATH,
       stripPrefix: kb,
       excludeNavigationFiles: false,
     });
@@ -388,7 +389,7 @@ describe('packageSkill - excluded link rewriting', () => {
     expect(chainContent).not.toContain('[end](');
   });
 
-  it('should render link.fileName and link.filePath in template context', async () => {
+  it('should render link.resource.fileName and link.href in template context', async () => {
     const tmp = getTempDir();
     const sub = join(tmp, 'arch');
     await mkdir(sub, { recursive: true });
@@ -403,12 +404,12 @@ describe('packageSkill - excluded link rewriting', () => {
     const result = await packWithOutput(sp, {
       linkFollowDepth: 0,
       excludeReferencesFromBundle: {
-        defaultTemplate: '{{link.fileName}} at {{link.filePath}}',
+        defaultTemplate: '{{link.resource.fileName}} ({{link.href}})',
       },
     });
 
     const content = await readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
-    expect(content).toContain('design.md at arch/design.md');
+    expect(content).toContain('design.md (./arch/design.md)');
   });
 
   it('should render skill.name in template context', async () => {
@@ -425,5 +426,296 @@ describe('packageSkill - excluded link rewriting', () => {
 
     const content = await readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
     expect(content).toContain('Find in branded-skill KB');
+  });
+});
+
+// ============================================================================
+// Output directory structure integrity
+// ============================================================================
+
+describe('packageSkill - output directory structure', () => {
+  const GUIDE_MD = 'guide.md';
+  const REFERENCE_MD = 'reference.md';
+
+  it('should place bundled resources under resources/ not at root', async () => {
+    const tmp = getTempDir();
+    const docsDir = join(tmp, 'docs');
+    await mkdir(docsDir, { recursive: true });
+    await writeFile(join(docsDir, GUIDE_MD), '# Guide\n\nContent here.');
+    await writeFile(join(docsDir, REFERENCE_MD), '# Reference\n\nMore content.');
+
+    const sp = await writeSkillMd(
+      tmp,
+      UNIT_SKILL_NAME,
+      `See [guide](./docs/${GUIDE_MD}) and [reference](./docs/${REFERENCE_MD}).`,
+    );
+    const result = await packWithOutput(sp);
+
+    // Only SKILL.md and resources/ should be at the root
+    const rootEntries = await readdir(result.outputPath);
+    const rootMdFiles = rootEntries.filter(e => e.endsWith('.md'));
+    expect(rootMdFiles).toEqual(['SKILL.md']);
+
+    // Bundled files should be under resources/
+    expect(existsSync(join(result.outputPath, 'resources', GUIDE_MD))).toBe(true);
+    expect(existsSync(join(result.outputPath, 'resources', REFERENCE_MD))).toBe(true);
+
+    // Bundled files must NOT be at the root
+    expect(existsSync(join(result.outputPath, GUIDE_MD))).toBe(false);
+    expect(existsSync(join(result.outputPath, REFERENCE_MD))).toBe(false);
+  });
+
+  it('should clean stale files from output directory on rebuild', async () => {
+    const tmp = getTempDir();
+    const outDir = join(tmp, 'out');
+    await writeFile(join(tmp, 'page.md'), '# Page');
+
+    const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, 'See [page](./page.md).');
+
+    // First build
+    await packageSkill(sp, { outputPath: outDir });
+
+    // Plant stale files
+    await writeFile(join(outDir, 'stale.md'), '# Should be removed');
+    await mkdir(join(outDir, 'old-dir'), { recursive: true });
+    await writeFile(join(outDir, 'old-dir', 'leftover.md'), '# Also gone');
+
+    // Rebuild — should clean stale files
+    await packageSkill(sp, { outputPath: outDir });
+
+    const rootEntries = await readdir(outDir);
+    expect(rootEntries).not.toContain('stale.md');
+    expect(rootEntries).not.toContain('old-dir');
+    expect(rootEntries).toHaveLength(2);
+    expect(rootEntries).toContain('SKILL.md');
+    expect(rootEntries).toContain('resources');
+  });
+});
+
+// ============================================================================
+// findPackageRoot error path (no package.json found)
+// ============================================================================
+
+describe('packageSkill - findPackageRoot error path', () => {
+  it('should throw when no package.json is found and outputPath is not specified', async () => {
+    // Use a temp directory outside the monorepo (OS temp) which has no package.json
+    const tmp = getTempDir();
+    const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, '# Standalone Skill');
+
+    // packageSkill without outputPath triggers getDefaultSkillOutputPath -> findPackageRoot
+    await expect(packageSkill(sp)).rejects.toThrow(/package\.json/i);
+  });
+});
+
+// ============================================================================
+// Binary (non-markdown) file copy
+// ============================================================================
+
+describe('packageSkill - binary file copy', () => {
+  it('should copy non-markdown files via plain binary copy', async () => {
+    const tmp = getTempDir();
+
+    // Create a binary-like file (PNG header simulation) — use regular link syntax
+    // since the markdown parser does not extract image syntax (![]) as links
+    const pngContent = Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+    writeFileSync(join(tmp, 'logo.png'), pngContent);
+
+    const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, 'See [logo](./logo.png).');
+    const result = await packWithOutput(sp);
+
+    // Binary file should be copied to resources/
+    expect(existsSync(join(result.outputPath, 'resources', 'logo.png'))).toBe(true);
+
+    // Verify the binary content was preserved (not mangled by text processing)
+    const copiedContent = await readFile(join(result.outputPath, 'resources', 'logo.png'));
+    expect(copiedContent).toEqual(pngContent);
+  });
+
+  it('should copy JSON files without link rewriting', async () => {
+    const tmp = getTempDir();
+    const jsonContent = '{"key": "value"}';
+    await writeFile(join(tmp, 'data.json'), jsonContent);
+
+    const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, 'See [data](./data.json).');
+    const result = await packWithOutput(sp);
+
+    expect(existsSync(join(result.outputPath, 'resources', 'data.json'))).toBe(true);
+    const copiedJson = await readFile(join(result.outputPath, 'resources', 'data.json'), 'utf-8');
+    expect(copiedJson).toBe(jsonContent);
+  });
+});
+
+// ============================================================================
+// copyAndRewriteFile fallback (markdown not in registry)
+// ============================================================================
+
+describe('packageSkill - markdown not in registry fallback', () => {
+  it('should write markdown content as-is when file is not in the registry', async () => {
+    const tmp = getTempDir();
+    // Create a markdown file that has content with links
+    const linkedContent = '# Details\n\nSome [external](https://example.com) content.';
+    await writeFile(join(tmp, DETAILS_MD), linkedContent);
+
+    const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, `See [details](./${DETAILS_MD}).`);
+
+    // When the resource registry is provided but doesn't contain the linked file,
+    // the fallback path writes content as-is. We can test this indirectly by
+    // verifying that the file is written successfully with its original content.
+    const result = await packWithOutput(sp);
+
+    const copiedContent = await readFile(join(result.outputPath, 'resources', DETAILS_MD), 'utf-8');
+    // Content should be preserved (external links are untouched either way)
+    expect(copiedContent).toContain('# Details');
+    expect(copiedContent).toContain('https://example.com');
+  });
+});
+
+// ============================================================================
+// buildRewriteRules catch-all (excluded IDs without custom rules)
+// ============================================================================
+
+describe('packageSkill - catch-all rewrite rule for excluded resources', () => {
+  it('should apply default strip template to depth-exceeded links when no custom rules', async () => {
+    const tmp = getTempDir();
+    await writeFile(join(tmp, 'deep.md'), '# Deep\n\nSee [deeper](./deeper.md).');
+    await writeFile(join(tmp, 'deeper.md'), '# Deeper');
+
+    const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, 'See [deep](./deep.md).');
+    // linkFollowDepth=1 means deep.md is bundled, but deeper.md is excluded
+    // No excludeReferencesFromBundle config means the catch-all uses DEFAULT_STRIP_TEMPLATE
+    const result = await packWithOutput(sp, { linkFollowDepth: 1 });
+
+    // The catch-all rule should strip the link to deeper.md, leaving just the link text
+    const deepContent = await readFile(join(result.outputPath, 'resources', 'deep.md'), 'utf-8');
+    expect(deepContent).toContain('deeper');
+    // The link should be stripped (not a clickable link anymore)
+    expect(deepContent).not.toContain('[deeper](');
+  });
+
+  it('should apply catch-all with custom defaultTemplate when excludedIds exist', async () => {
+    const tmp = getTempDir();
+    await writeFile(join(tmp, 'chain.md'), '# Chain\n\nSee [leaf](./leaf.md).');
+    await writeFile(join(tmp, 'leaf.md'), '# Leaf');
+
+    const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, 'See [chain](./chain.md).');
+    const result = await packWithOutput(sp, {
+      linkFollowDepth: 1,
+      excludeReferencesFromBundle: {
+        // defaultTemplate but no rules — catch-all should use this template
+        defaultTemplate: 'EXCLUDED: {{link.text}}',
+      },
+    });
+
+    const chainContent = await readFile(join(result.outputPath, 'resources', 'chain.md'), 'utf-8');
+    expect(chainContent).toContain('EXCLUDED: leaf');
+  });
+});
+
+// ============================================================================
+// generateTargetPath - stripPrefix edge cases
+// ============================================================================
+
+describe('packageSkill - stripPrefix edge cases', () => {
+  it('should handle stripPrefix that matches without trailing slash', async () => {
+    const tmp = getTempDir();
+    // Create a file where the prefix exactly matches a path segment
+    const sub = join(tmp, 'docs-v2');
+    await mkdir(sub, { recursive: true });
+    await writeFile(join(sub, 'guide.md'), '# Guide');
+
+    const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, 'See [guide](./docs-v2/guide.md).');
+    const result = await packWithOutput(sp, {
+      resourceNaming: 'resource-id',
+      stripPrefix: 'docs-v2',
+    });
+
+    // After stripping 'docs-v2', remaining path is guide.md -> guide.md
+    expect(existsSync(join(result.outputPath, 'resources', 'guide.md'))).toBe(true);
+  });
+
+  it('should handle stripPrefix with trailing slash', async () => {
+    const tmp = getTempDir();
+    const sub = join(tmp, 'kb');
+    await mkdir(sub, { recursive: true });
+    await writeFile(join(sub, 'topic.md'), '# Topic');
+
+    const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, 'See [topic](./kb/topic.md).');
+    const result = await packWithOutput(sp, {
+      resourceNaming: PRESERVE_PATH,
+      stripPrefix: 'kb/',
+    });
+
+    // Trailing slash on prefix should be normalized — file should appear directly
+    expect(existsSync(join(result.outputPath, 'resources', 'topic.md'))).toBe(true);
+  });
+});
+
+// ============================================================================
+// Excluded resource filtering (directory-target, outside-project)
+// ============================================================================
+
+describe('packageSkill - excluded resource filtering', () => {
+  it('should skip directory-target exclusions from output registry', async () => {
+    const tmp = getTempDir();
+    const sub = join(tmp, 'docs');
+    await mkdir(sub, { recursive: true });
+    await writeFile(join(sub, 'page.md'), '# Page');
+
+    // Link to a directory — should be excluded with 'directory-target' reason
+    const sp = await writeSkillMd(
+      tmp,
+      UNIT_SKILL_NAME,
+      'See [docs](./docs/) and [page](./docs/page.md).',
+    );
+
+    const result = await packWithOutput(sp);
+
+    // page.md should be bundled, but directory link should be excluded
+    expect(existsSync(join(result.outputPath, 'resources', 'page.md'))).toBe(true);
+    // The skill should still package without errors
+    expect(result.files.root).toBe('SKILL.md');
+  });
+});
+
+// ============================================================================
+// Source-in-output check (skip cleanup when SKILL.md is inside output dir)
+// ============================================================================
+
+describe('packageSkill - source-in-output check', () => {
+  it('should not delete output dir when SKILL.md lives inside it', async () => {
+    const tmp = getTempDir();
+    const outDir = join(tmp, 'output');
+    await mkdir(outDir, { recursive: true });
+
+    // Place SKILL.md inside the output directory itself
+    const sp = join(outDir, 'SKILL.md');
+    await writeFile(sp, `${createFrontmatter({ name: UNIT_SKILL_NAME })}\n\n# Skill in output`);
+
+    // Place a pre-existing file that should survive (not be cleaned)
+    const markerPath = join(outDir, 'marker.txt');
+    await writeFile(markerPath, 'should survive');
+
+    const result = await packageSkill(sp, { outputPath: outDir });
+
+    // The SKILL.md should be in the output
+    expect(existsSync(join(result.outputPath, 'SKILL.md'))).toBe(true);
+    // The marker file should survive because source is inside output (no cleanup)
+    expect(existsSync(markerPath)).toBe(true);
+  });
+
+  it('should delete output dir when SKILL.md is outside it', async () => {
+    const tmp = getTempDir();
+    const outDir = join(tmp, 'out');
+    await mkdir(outDir, { recursive: true });
+
+    // Place a stale file in output
+    await writeFile(join(outDir, 'stale.md'), '# Stale');
+
+    // SKILL.md is outside the output dir
+    const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, '# Normal Skill');
+    await packageSkill(sp, { outputPath: outDir });
+
+    // Stale file should be gone
+    expect(existsSync(join(outDir, 'stale.md'))).toBe(false);
   });
 });

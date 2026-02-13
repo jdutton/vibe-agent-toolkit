@@ -22,6 +22,21 @@ export const LinkTypeSchema = z.enum([
 export type LinkType = z.infer<typeof LinkTypeSchema>;
 
 /**
+ * AST node type that produced a link entry.
+ *
+ * - `link`: Inline link `[text](href)`
+ * - `linkReference`: Reference-style usage `[text][ref]`
+ * - `definition`: Reference-style definition `[ref]: url`
+ */
+export const LinkNodeTypeSchema = z.enum([
+  'link',
+  'linkReference',
+  'definition',
+]).describe('AST node type that produced this link');
+
+export type LinkNodeType = z.infer<typeof LinkNodeTypeSchema>;
+
+/**
  * Represents a heading node in the document's table of contents.
  *
  * Forms a recursive tree structure where child headings are nested under parent headings
@@ -65,6 +80,7 @@ export const ResourceLinkSchema = z.object({
   resolvedPath: z.string().optional().describe('Absolute file path (for local_file links)'),
   anchorTarget: z.string().optional().describe('Target heading slug (for anchor links)'),
   resolvedId: z.string().optional().describe('Resolved resource ID in the collection (for local_file links)'),
+  nodeType: LinkNodeTypeSchema.optional().describe('AST node type: link, linkReference, or definition'),
 }).describe('Link found in a markdown resource');
 
 export type ResourceLink = z.infer<typeof ResourceLinkSchema>;

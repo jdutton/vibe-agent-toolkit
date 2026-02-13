@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, it } from 'vitest';
 
 import { describe, expect, fs, getBinPath } from './test-common.js';
-import { createTestTempDir, executeCli, setupSchemaAndValidate } from './test-helpers.js';
+import { createTestTempDir, executeCli, setupSchemaAndValidate } from './test-helpers/index.js';
 
 const binPath = getBinPath(import.meta.url);
 

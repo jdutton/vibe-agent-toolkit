@@ -2,7 +2,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ExternalLinkCache } from '../src/external-link-cache.js';
 
@@ -40,15 +40,20 @@ describe('ExternalLinkCache', () => {
 	});
 
 	it('should expire old entries', async () => {
-		const shortLivedCache = new ExternalLinkCache(tempDir, 0); // 0 hours TTL
+		vi.useFakeTimers();
+		try {
+			const shortLivedCache = new ExternalLinkCache(tempDir, 0); // 0 hours TTL
 
-		await shortLivedCache.set(EXAMPLE_URL, 200, 'OK');
+			await shortLivedCache.set(EXAMPLE_URL, 200, 'OK');
 
-		// Wait a tiny bit to ensure timestamp has passed
-		await new Promise((resolve) => setTimeout(resolve, 10));
+			// Advance time by 1ms to ensure TTL=0 entry expires
+			vi.advanceTimersByTime(1);
 
-		const result = await shortLivedCache.get(EXAMPLE_URL);
-		expect(result).toBeNull();
+			const result = await shortLivedCache.get(EXAMPLE_URL);
+			expect(result).toBeNull();
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('should not expire fresh entries', async () => {
@@ -149,16 +154,21 @@ describe('ExternalLinkCache', () => {
 		expect(stats.total).toBe(2);
 		expect(stats.expired).toBe(0);
 
-		// Add expired entry
-		const shortCache = new ExternalLinkCache(tempDir, 0);
-		await shortCache.set(BROKEN_URL, 404, 'Not Found');
+		// Add expired entry using fake timers for deterministic expiry
+		vi.useFakeTimers();
+		try {
+			const shortCache = new ExternalLinkCache(tempDir, 0);
+			await shortCache.set(BROKEN_URL, 404, 'Not Found');
 
-		// Wait for expiration
-		await new Promise((resolve) => setTimeout(resolve, 10));
+			// Advance time by 1ms to ensure TTL=0 entry expires
+			vi.advanceTimersByTime(1);
 
-		stats = await shortCache.getStats();
-		expect(stats.total).toBeGreaterThan(0);
-		expect(stats.expired).toBeGreaterThan(0);
+			stats = await shortCache.getStats();
+			expect(stats.total).toBeGreaterThan(0);
+			expect(stats.expired).toBeGreaterThan(0);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it('should handle cache directory creation', async () => {

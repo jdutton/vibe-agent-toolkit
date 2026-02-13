@@ -135,12 +135,14 @@ Just plain text content.
         href: EXAMPLE_URL,
         type: 'external',
         line: 1,
+        nodeType: 'link',
       });
       expect(result.links[1]).toMatchObject({
         text: 'Another link',
         href: './file.md',
         type: 'local_file',
         line: 2,
+        nodeType: 'link',
       });
     });
 
@@ -181,6 +183,7 @@ Just plain text content.
         href: 'ref1',
         type: 'unknown',
         line: 1,
+        nodeType: 'linkReference',
       });
       // Definition node provides the actual URL
       expect(result.links[1]).toMatchObject({
@@ -188,6 +191,7 @@ Just plain text content.
         href: EXAMPLE_URL,
         type: 'external',
         line: 3,
+        nodeType: 'definition',
       });
     });
 

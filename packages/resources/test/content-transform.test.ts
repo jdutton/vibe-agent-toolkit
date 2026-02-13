@@ -1,3 +1,4 @@
+import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import type { ContentTransformOptions, LinkRewriteRule, ResourceLookup } from '../src/content-transform.js';
@@ -27,6 +28,12 @@ const GUIDE_ORIGINAL_LINK = 'See [Guide](./guide.md).';
 const GOOGLE_URL = 'https://google.com';
 const GUIDE_AND_API_CONTENT = 'See [Guide](./guide.md) and [API](./api.md).';
 const GUIDE_AND_GOOGLE_CONTENT = 'See [Guide](./guide.md) and [Google](https://google.com).';
+const LOCAL_LINK_TEXT_TEMPLATE = 'LOCAL:{{link.text}}';
+const EXT_LINK_TEXT_TEMPLATE = 'EXT:{{link.text}}';
+const RELATIVE_PATH_TEMPLATE = '{{link.resource.relativePath}}';
+const REWRITE_LINK_TEMPLATE = '[{{link.text}}]({{link.resource.relativePath}})';
+const SOURCE_FILE_PATH = '/project/src/index.md';
+const GUIDE_RELATIVE_FROM_SRC = '../docs/guide.md';
 
 // ============================================================================
 // Test helpers
@@ -43,6 +50,21 @@ function createTestLink(
     type: LOCAL_FILE,
     ...overrides,
   };
+}
+
+function createDefinitionLink(
+  ref: string,
+  href: string,
+  resolvedId?: string,
+  type: LinkType = LOCAL_FILE,
+): ResourceLink {
+  return createTestLink({
+    text: ref,
+    href,
+    type,
+    nodeType: 'definition',
+    ...(resolvedId !== undefined && { resolvedId }),
+  });
 }
 
 /**
@@ -341,12 +363,12 @@ describe('transformContent', () => {
       const result = transformContent(content, links, {
         linkRewriteRules: [createTypeRule(
           LOCAL_FILE,
-          '{{link.resource.id}} ({{link.resource.extension}}, {{link.resource.mimeType}}, {{link.resource.sizeBytes}} bytes, ~{{link.resource.estimatedTokenCount}} tokens)',
+          '{{link.resource.id}} {{link.resource.fileName}} ({{link.resource.extension}}, {{link.resource.mimeType}}, {{link.resource.sizeBytes}} bytes, ~{{link.resource.estimatedTokenCount}} tokens)',
         )],
         resourceRegistry: registry,
       });
 
-      expect(result).toBe('See guide (.md, text/markdown, 2048 bytes, ~512 tokens).');
+      expect(result).toBe('See guide guide.md (.md, text/markdown, 2048 bytes, ~512 tokens).');
     });
 
     it('should provide resource frontmatter fields in template', () => {
@@ -543,7 +565,7 @@ describe('transformContent', () => {
       const { content, links } = createScenario(GUIDE_TEXT, GUIDE_HREF);
       const rules: LinkRewriteRule[] = [
         createTypeRule(EXTERNAL, 'EXTERNAL:{{link.text}}'),
-        createTypeRule(LOCAL_FILE, 'LOCAL:{{link.text}}'),
+        createTypeRule(LOCAL_FILE, LOCAL_LINK_TEXT_TEMPLATE),
       ];
 
       const result = transformContent(content, links, { linkRewriteRules: rules });
@@ -621,8 +643,8 @@ describe('transformContent', () => {
     it('should apply different rules to different links by type', () => {
       const { content, links } = createGuideAndGoogleLinks();
       const rules: LinkRewriteRule[] = [
-        createTypeRule(LOCAL_FILE, 'LOCAL:{{link.text}}'),
-        createTypeRule(EXTERNAL, 'EXT:{{link.text}}'),
+        createTypeRule(LOCAL_FILE, LOCAL_LINK_TEXT_TEMPLATE),
+        createTypeRule(EXTERNAL, EXT_LINK_TEXT_TEMPLATE),
       ];
 
       const result = transformContent(content, links, { linkRewriteRules: rules });
@@ -669,7 +691,7 @@ describe('transformContent', () => {
       ];
 
       const result = transformContent(content, links, {
-        linkRewriteRules: [createTypeRule(EXTERNAL, 'EXT:{{link.text}}')],
+        linkRewriteRules: [createTypeRule(EXTERNAL, EXT_LINK_TEXT_TEMPLATE)],
       });
 
       expect(result).toBe('See [Guide](./guide.md), EXT:API, and [Section](#overview).');
@@ -829,6 +851,323 @@ describe('transformContent', () => {
       ].join('\n');
 
       expect(result).toBe(expected);
+    });
+  });
+
+  describe('sourceFilePath and link.resource.relativePath', () => {
+    it('should compute relativePath from sourceFilePath to resource filePath', () => {
+      const resource = createTestResource({ id: GUIDE_ID, filePath: GUIDE_FILE_PATH });
+      const registry = createTestRegistry([resource]);
+      const { content, links } = createScenario(GUIDE_TEXT, GUIDE_HREF, GUIDE_ID);
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [createTypeRule(LOCAL_FILE, RELATIVE_PATH_TEMPLATE)],
+        resourceRegistry: registry,
+        sourceFilePath: SOURCE_FILE_PATH,
+      });
+
+      expect(result).toBe(`See ${toForwardSlash(GUIDE_RELATIVE_FROM_SRC)}.`);
+    });
+
+    it('should compute relativePath for same-directory resources', () => {
+      const resource = createTestResource({ id: GUIDE_ID, filePath: GUIDE_FILE_PATH });
+      const registry = createTestRegistry([resource]);
+      const { content, links } = createScenario(GUIDE_TEXT, GUIDE_HREF, GUIDE_ID);
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [createTypeRule(LOCAL_FILE, RELATIVE_PATH_TEMPLATE)],
+        resourceRegistry: registry,
+        sourceFilePath: '/project/docs/readme.md',
+      });
+
+      expect(result).toBe(`See ${toForwardSlash('guide.md')}.`);
+    });
+
+    it('should compute relativePath for deeply nested resources', () => {
+      const resource = createTestResource({ id: 'deep', filePath: '/project/a/b/c/deep.md' });
+      const registry = createTestRegistry([resource]);
+      const { content, links } = createScenario('Deep', './deep.md', 'deep');
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [createTypeRule(LOCAL_FILE, RELATIVE_PATH_TEMPLATE)],
+        resourceRegistry: registry,
+        sourceFilePath: '/project/x/y/source.md',
+      });
+
+      expect(result).toBe(`See ${toForwardSlash('../../a/b/c/deep.md')}.`);
+    });
+
+    it('should use forward slashes in relativePath for cross-platform compatibility', () => {
+      // This test verifies that toForwardSlash is applied, which converts
+      // backslashes (on Windows) to forward slashes
+      const resource = createTestResource({ id: GUIDE_ID, filePath: '/project/docs/sub/guide.md' });
+      const registry = createTestRegistry([resource]);
+      const { content, links } = createScenario(GUIDE_TEXT, GUIDE_HREF, GUIDE_ID);
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [createTypeRule(LOCAL_FILE, RELATIVE_PATH_TEMPLATE)],
+        resourceRegistry: registry,
+        sourceFilePath: SOURCE_FILE_PATH,
+      });
+
+      // The result must use forward slashes regardless of platform
+      expect(result).not.toContain('\\');
+      expect(result).toBe(`See ${toForwardSlash('../docs/sub/guide.md')}.`);
+    });
+
+    it('should leave relativePath undefined when sourceFilePath is not provided', () => {
+      const { registry, content, links } = createGuideScenarioWithRegistry();
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [createTypeRule(LOCAL_FILE, 'path:{{link.resource.relativePath}}')],
+        resourceRegistry: registry,
+        // No sourceFilePath
+      });
+
+      // Handlebars renders undefined as empty string
+      expect(result).toBe('See path:.');
+    });
+
+    it('should leave relativePath undefined when resource is not resolved', () => {
+      const { content, links } = createScenario(GUIDE_TEXT, GUIDE_HREF);
+      // No resolvedId, no registry
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [createTypeRule(LOCAL_FILE, 'path:{{link.resource.relativePath}}')],
+        sourceFilePath: SOURCE_FILE_PATH,
+      });
+
+      // resource is undefined, so resource.relativePath is also undefined
+      expect(result).toBe('See path:.');
+    });
+
+    it('should provide relativePath alongside other resource fields', () => {
+      const resource = createTestResource({
+        id: GUIDE_ID,
+        filePath: GUIDE_FILE_PATH,
+        frontmatter: { title: GUIDE_TITLE },
+      });
+      const registry = createTestRegistry([resource]);
+      const { content, links } = createScenario(GUIDE_TEXT, GUIDE_HREF, GUIDE_ID);
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [createTypeRule(
+          LOCAL_FILE,
+          '{{link.resource.frontmatter.title}} at {{link.resource.relativePath}}',
+        )],
+        resourceRegistry: registry,
+        sourceFilePath: SOURCE_FILE_PATH,
+      });
+
+      expect(result).toBe(`See ${GUIDE_TITLE} at ${toForwardSlash(GUIDE_RELATIVE_FROM_SRC)}.`);
+    });
+  });
+
+  describe('defaultTemplate for unmatched links', () => {
+    it('should render unmatched links through defaultTemplate', () => {
+      const { content, links } = createScenario(GUIDE_TEXT, GUIDE_HREF);
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [createTypeRule(EXTERNAL, EXT_LINK_TEXT_TEMPLATE)],
+        defaultTemplate: '**{{link.text}}**',
+      });
+
+      // Guide is local_file, no external rule matches, so defaultTemplate applies
+      expect(result).toBe('See **Guide**.');
+    });
+
+    it('should not apply defaultTemplate when a rule matches', () => {
+      const { content, links } = createScenario(GUIDE_TEXT, GUIDE_HREF);
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [createTypeRule(LOCAL_FILE, 'MATCHED:{{link.text}}')],
+        defaultTemplate: 'DEFAULT:{{link.text}}',
+      });
+
+      // The local_file rule matches, so defaultTemplate is NOT used
+      expect(result).toBe('See MATCHED:Guide.');
+    });
+
+    it('should not apply defaultTemplate when not provided (backward compat)', () => {
+      const { content, links } = createScenario(GUIDE_TEXT, GUIDE_HREF);
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [createTypeRule(EXTERNAL, EXT_LINK_TEXT_TEMPLATE)],
+        // No defaultTemplate
+      });
+
+      // No rule matches, no defaultTemplate - original markdown preserved
+      expect(result).toBe(GUIDE_ORIGINAL_LINK);
+    });
+
+    it('should apply defaultTemplate with resource context when available', () => {
+      const { registry, content, links } = createGuideScenarioWithRegistry();
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [createTypeRule(EXTERNAL, EXT_LINK_TEXT_TEMPLATE)],
+        defaultTemplate: '{{link.text}} ({{link.resource.id}})',
+        resourceRegistry: registry,
+      });
+
+      // No external rule matches, defaultTemplate renders with resource data
+      expect(result).toBe('See Guide (guide).');
+    });
+
+    it('should apply defaultTemplate to some links and rules to others', () => {
+      const { content, links } = createGuideAndGoogleLinks();
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [createTypeRule(LOCAL_FILE, LOCAL_LINK_TEXT_TEMPLATE)],
+        defaultTemplate: 'DEFAULT:{{link.text}}',
+      });
+
+      // Guide matches local_file rule, Google (external) falls through to defaultTemplate
+      expect(result).toBe('See LOCAL:Guide and DEFAULT:Google.');
+    });
+
+    it('should work with defaultTemplate and no rules', () => {
+      const { content, links } = createScenario(GUIDE_TEXT, GUIDE_HREF);
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [],
+        defaultTemplate: 'FALLBACK:{{link.text}}',
+      });
+
+      // Empty rules, but defaultTemplate catches everything
+      expect(result).toBe('See FALLBACK:Guide.');
+    });
+
+    it('should support defaultTemplate with sourceFilePath for relativePath', () => {
+      const resource = createTestResource({ id: GUIDE_ID, filePath: GUIDE_FILE_PATH });
+      const registry = createTestRegistry([resource]);
+      const { content, links } = createScenario(GUIDE_TEXT, GUIDE_HREF, GUIDE_ID);
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [],
+        defaultTemplate: REWRITE_LINK_TEMPLATE,
+        resourceRegistry: registry,
+        sourceFilePath: SOURCE_FILE_PATH,
+      });
+
+      expect(result).toBe(`See [Guide](${toForwardSlash(GUIDE_RELATIVE_FROM_SRC)}).`);
+    });
+  });
+
+  describe('reference-style definition rewriting', () => {
+    const DEF_GUIDE_ID = 'guide';
+    const DEF_GUIDE_HREF = './guide.md';
+    const DEF_GUIDE_OUTPUT_PATH = '/output/resources/guide.md';
+    const DEF_SOURCE_OUTPUT = '/output/SKILL.md';
+    const DEF_EXPECTED_REL = 'resources/guide.md';
+
+    it('should rewrite bundled definition to new relative path', () => {
+      const content = `See [Guide][guide-ref] for details.\n\n[guide-ref]: ./guide.md`;
+      const links: ResourceLink[] = [
+        createTestLink({ text: 'Guide', href: 'guide-ref', type: 'unknown', nodeType: 'linkReference' }),
+        createDefinitionLink('guide-ref', DEF_GUIDE_HREF, DEF_GUIDE_ID),
+      ];
+
+      const resource = createTestResource({ id: DEF_GUIDE_ID, filePath: DEF_GUIDE_OUTPUT_PATH });
+      const registry = createTestRegistry([resource]);
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [createTypeRule(LOCAL_FILE, REWRITE_LINK_TEMPLATE)],
+        resourceRegistry: registry,
+        sourceFilePath: DEF_SOURCE_OUTPUT,
+      });
+
+      expect(result).toContain(`[guide-ref]: ${DEF_EXPECTED_REL}`);
+    });
+
+    it('should preserve definition fragment when rewriting', () => {
+      const content = `[guide-ref]: ./guide.md#getting-started`;
+      const links: ResourceLink[] = [
+        createDefinitionLink('guide-ref', './guide.md#getting-started', DEF_GUIDE_ID),
+      ];
+
+      const resource = createTestResource({ id: DEF_GUIDE_ID, filePath: DEF_GUIDE_OUTPUT_PATH });
+      const registry = createTestRegistry([resource]);
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [createTypeRule(LOCAL_FILE, REWRITE_LINK_TEMPLATE)],
+        resourceRegistry: registry,
+        sourceFilePath: DEF_SOURCE_OUTPUT,
+      });
+
+      expect(result).toBe(`[guide-ref]: ${DEF_EXPECTED_REL}#getting-started`);
+    });
+
+    it('should remove excluded definition (orphaned after inline link stripped)', () => {
+      const content = `Some text.\n\n[excluded-ref]: ./excluded.md`;
+      const links: ResourceLink[] = [
+        createDefinitionLink('excluded-ref', './excluded.md', undefined, LOCAL_FILE),
+      ];
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [createTypeRule(LOCAL_FILE, LINK_TEXT_VAR)],
+      });
+
+      // Definition line should be removed (no resource in registry)
+      expect(result).not.toContain('[excluded-ref]');
+      // Should not have triple newlines
+      expect(result).not.toMatch(/\n{3,}/);
+    });
+
+    it('should leave external definition untouched', () => {
+      const content = `[ext-ref]: https://example.com`;
+      const links: ResourceLink[] = [
+        createDefinitionLink('ext-ref', 'https://example.com', undefined, EXTERNAL),
+      ];
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [createTypeRule(LOCAL_FILE, LINK_TEXT_VAR)],
+      });
+
+      expect(result).toBe(`[ext-ref]: https://example.com`);
+    });
+
+    it('should handle mixed inline and definition links together', () => {
+      const content = `See [Guide](./guide.md) and [API Ref][api-ref].\n\n[api-ref]: ./api.md`;
+
+      const apiOutputPath = '/output/resources/api.md';
+      const links: ResourceLink[] = [
+        createTestLink({ text: GUIDE_TEXT, href: DEF_GUIDE_HREF, resolvedId: DEF_GUIDE_ID, nodeType: 'link' }),
+        createTestLink({ text: 'API Ref', href: 'api-ref', type: 'unknown', nodeType: 'linkReference' }),
+        createDefinitionLink('api-ref', './api.md', 'api'),
+      ];
+
+      const guideResource = createTestResource({ id: DEF_GUIDE_ID, filePath: DEF_GUIDE_OUTPUT_PATH });
+      const apiResource = createTestResource({ id: 'api', filePath: apiOutputPath });
+      const registry = createTestRegistry([guideResource, apiResource]);
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [createTypeRule(LOCAL_FILE, REWRITE_LINK_TEMPLATE)],
+        resourceRegistry: registry,
+        sourceFilePath: DEF_SOURCE_OUTPUT,
+      });
+
+      expect(result).toContain(`[Guide](${DEF_EXPECTED_REL})`);
+      expect(result).toContain(`[api-ref]: resources/api.md`);
+    });
+
+    it('should not rewrite definitions when no nodeType is set (backward compat)', () => {
+      const content = `[ref]: ./guide.md`;
+      // Old-style link without nodeType — should be skipped by definition pass
+      const links: ResourceLink[] = [
+        createTestLink({ text: 'ref', href: DEF_GUIDE_HREF, resolvedId: DEF_GUIDE_ID }),
+      ];
+
+      const resource = createTestResource({ id: DEF_GUIDE_ID, filePath: DEF_GUIDE_OUTPUT_PATH });
+      const registry = createTestRegistry([resource]);
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [createTypeRule(LOCAL_FILE, REWRITE_LINK_TEMPLATE)],
+        resourceRegistry: registry,
+        sourceFilePath: DEF_SOURCE_OUTPUT,
+      });
+
+      // Without nodeType: 'definition', the link is NOT matched by definition pass
+      expect(result).toBe(`[ref]: ./guide.md`);
     });
   });
 });

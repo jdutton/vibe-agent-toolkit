@@ -6,7 +6,7 @@ import path from 'node:path';
 import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { buildClaudeSkill } from '../src/builder.js';
+import { buildAgentSkill } from '../src/builder.js';
 
 const AGENT_YAML = 'agent.yaml';
 const PACKAGE_JSON_NAME = 'package.json';
@@ -18,8 +18,8 @@ const TEST_AGENT_SCRIPTS_NAME = 'test-agent-scripts';
 const TEST_AGENT_LICENSE_NAME = 'test-agent-license';
 const TEST_AGENT_NO_PROMPT_NAME = 'test-agent-no-prompt';
 
-describe('buildClaudeSkill', () => {
-  const suite = setupAsyncTempDirSuite('claude-skill');
+describe('buildAgentSkill', () => {
+  const suite = setupAsyncTempDirSuite('agent-skill');
   let tempDir: string;
 
   beforeAll(suite.beforeAll);
@@ -30,7 +30,7 @@ describe('buildClaudeSkill', () => {
     tempDir = suite.getTempDir();
   });
 
-  it('should build a basic Claude Skill', async () => {
+  it('should build a basic Agent Skill', async () => {
     // Create a minimal agent directory structure
     const agentDir = path.join(tempDir, TEST_AGENT_NAME);
     await fs.mkdir(agentDir, { recursive: true });
@@ -67,7 +67,7 @@ spec:
     await fs.writeFile(manifestPath, manifestContent);
 
     // Build the skill
-    const result = await buildClaudeSkill({
+    const result = await buildAgentSkill({
       agentPath: manifestPath,
     });
 
@@ -131,7 +131,7 @@ spec:
     const manifestPath = path.join(agentDir, AGENT_YAML);
     await fs.writeFile(manifestPath, manifestContent);
 
-    const result = await buildClaudeSkill({ agentPath: manifestPath });
+    const result = await buildAgentSkill({ agentPath: manifestPath });
 
     const skillPath = path.join(result.outputPath, 'SKILL.md');
     const skillContent = await fs.readFile(skillPath, 'utf-8');
@@ -178,7 +178,7 @@ spec:
     const manifestPath = path.join(agentDir, AGENT_YAML);
     await fs.writeFile(manifestPath, manifestContent);
 
-    const result = await buildClaudeSkill({ agentPath: manifestPath });
+    const result = await buildAgentSkill({ agentPath: manifestPath });
 
     // Verify scripts directory was copied (builder writes directly, not via packager)
     const outputScriptsPath = path.join(result.outputPath, 'scripts');
@@ -229,7 +229,7 @@ spec:
     const manifestPath = path.join(agentDir, AGENT_YAML);
     await fs.writeFile(manifestPath, manifestContent);
 
-    const result = await buildClaudeSkill({ agentPath: manifestPath });
+    const result = await buildAgentSkill({ agentPath: manifestPath });
 
     // Verify LICENSE.txt was copied (builder writes directly, not via packager)
     const outputLicensePath = path.join(result.outputPath, 'LICENSE.txt');
@@ -261,7 +261,7 @@ spec:
     const manifestPath = path.join(agentDir, AGENT_YAML);
     await fs.writeFile(manifestPath, manifestContent);
 
-    await expect(buildClaudeSkill({ agentPath: manifestPath }))
+    await expect(buildAgentSkill({ agentPath: manifestPath }))
       .rejects
       .toThrow('Agent must have a system prompt');
   });

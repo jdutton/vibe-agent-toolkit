@@ -22,7 +22,7 @@
 
 import path from 'node:path';
 
-import { renderTemplate } from '@vibe-agent-toolkit/utils';
+import { renderTemplate, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import type { LinkType, ResourceLink, ResourceMetadata } from './schemas/resource-metadata.js';
 import { matchesGlobPattern, splitHrefAnchor } from './utils.js';
@@ -122,11 +122,13 @@ export interface LinkRewriteRule {
    * - `link.type` - Link type (local_file, anchor, external, email, unknown)
    * - `link.resource.id` - Target resource ID (if resolved)
    * - `link.resource.filePath` - Target resource file path (if resolved)
+   * - `link.resource.fileName` - Target resource file name with extension (if resolved)
    * - `link.resource.extension` - Target resource file extension (if resolved)
    * - `link.resource.mimeType` - Inferred MIME type (if resolved)
    * - `link.resource.frontmatter.*` - Target resource frontmatter fields (if resolved)
    * - `link.resource.sizeBytes` - Target resource size in bytes (if resolved)
    * - `link.resource.estimatedTokenCount` - Target resource estimated token count (if resolved)
+   * - `link.resource.relativePath` - Relative path from sourceFilePath to resource (if both available)
    * - Plus any variables from `context`
    */
   template: string;
@@ -150,6 +152,20 @@ export interface ContentTransformOptions {
    * These are merged at the top level of the template context.
    */
   context?: Record<string, unknown>;
+
+  /**
+   * Absolute file path of the source document being transformed.
+   * When provided, enables `link.resource.relativePath` computation:
+   * `relative(dirname(sourceFilePath), link.resource.filePath)` using forward slashes.
+   */
+  sourceFilePath?: string;
+
+  /**
+   * Fallback template for links that match no rule.
+   * Without this option, unmatched links are left untouched (original markdown preserved).
+   * With this option, unmatched links are rendered through this template.
+   */
+  defaultTemplate?: string;
 }
 
 /**
@@ -160,6 +176,7 @@ export interface ContentTransformOptions {
  * @param fragment - The fragment string including '#' prefix, or empty string
  * @param resource - The resolved target resource (if available)
  * @param extraContext - Additional context variables
+ * @param sourceFilePath - Absolute path of the source document (for relativePath computation)
  * @returns Template context object
  */
 function buildTemplateContext(
@@ -168,17 +185,22 @@ function buildTemplateContext(
   fragment: string,
   resource: ResourceMetadata | undefined,
   extraContext: Record<string, unknown> | undefined,
+  sourceFilePath: string | undefined,
 ): Record<string, unknown> {
   const resourceContext = resource === undefined
     ? undefined
     : {
         id: resource.id,
         filePath: resource.filePath,
+        fileName: path.basename(resource.filePath),
         extension: path.extname(resource.filePath),
         mimeType: inferMimeType(resource.filePath),
         frontmatter: resource.frontmatter,
         sizeBytes: resource.sizeBytes,
         estimatedTokenCount: resource.estimatedTokenCount,
+        relativePath: sourceFilePath === undefined
+          ? undefined
+          : toForwardSlash(path.relative(path.dirname(sourceFilePath), resource.filePath)),
       };
 
   return {
@@ -289,7 +311,7 @@ function findMatchingRule(
 }
 
 /**
- * Regex pattern matching markdown links: `[text](href)`
+ * Regex pattern matching inline markdown links: `[text](href)`
  *
  * Captures:
  * - Group 0: Full match including brackets and parentheses
@@ -304,14 +326,28 @@ function findMatchingRule(
 const MARKDOWN_LINK_REGEX = /\[([^\]]*)\]\(([^)]*)\)/g;
 
 /**
+ * Regex pattern matching reference-style link definitions: `[ref]: url`
+ *
+ * Must appear at the start of a line (multiline flag).
+ * Captures:
+ * - Group 1: Reference identifier
+ * - Group 2: URL (may include trailing whitespace)
+ */
+// eslint-disable-next-line sonarjs/slow-regex -- Controlled markdown reference link definitions on line boundaries
+const MARKDOWN_DEFINITION_REGEX = /^\[([^\]]*?)\]:\s*(.+)$/gm;
+
+/**
  * Transform markdown content by rewriting links according to rules.
  *
  * This is a pure function that takes content, its parsed links, and transform options,
  * and returns the content with matching links rewritten according to the first matching rule.
  *
- * Links are matched by their original markdown syntax `[text](href)`. For each link found
- * in the content, the function checks the provided rules in order. The first matching rule
- * determines the replacement. Links matching no rule are left untouched.
+ * Two passes are performed:
+ * 1. **Inline links** `[text](href)` — matched via rules, rendered through templates
+ * 2. **Definition lines** `[ref]: url` — matched via rules, rewritten in definition format
+ *    or removed if orphaned (target not in registry)
+ *
+ * Links matching no rule are left untouched unless a `defaultTemplate` is provided.
  *
  * @param content - The markdown content to transform
  * @param links - Parsed links from the content (from ResourceMetadata.links)
@@ -342,26 +378,31 @@ export function transformContent(
   links: ResourceLink[],
   options: ContentTransformOptions,
 ): string {
-  const { linkRewriteRules, resourceRegistry, context } = options;
+  const { linkRewriteRules, resourceRegistry, context, sourceFilePath, defaultTemplate } = options;
 
-  // If there are no rules or no links, return content unchanged
-  if (linkRewriteRules.length === 0 || links.length === 0) {
+  // If there are no rules, no default template, or no links, return content unchanged
+  if ((linkRewriteRules.length === 0 && defaultTemplate === undefined) || links.length === 0) {
     return content;
   }
+
+  // === Pass 1: Inline links [text](href) ===
 
   // Build a lookup map from "[text](href)" to the corresponding ResourceLink.
   // Multiple links can share the same text+href combination; we process them all
   // with the first matching ResourceLink (they are identical in terms of match criteria).
   const linkBySignature = new Map<string, ResourceLink>();
   for (const link of links) {
+    if (link.nodeType === 'definition') {
+      continue; // Definitions are handled in pass 2
+    }
     const signature = `[${link.text}](${link.href})`;
     if (!linkBySignature.has(signature)) {
       linkBySignature.set(signature, link);
     }
   }
 
-  // Replace markdown links in content
-  return content.replaceAll(MARKDOWN_LINK_REGEX, (fullMatch, text: string, href: string) => {
+  // Replace inline markdown links in content
+  let result = content.replaceAll(MARKDOWN_LINK_REGEX, (fullMatch, text: string, href: string) => {
     // Find the corresponding ResourceLink
     const signature = `[${text}](${href})`;
     const link = linkBySignature.get(signature);
@@ -379,8 +420,10 @@ export function transformContent(
     // Find the first matching rule
     const rule = findMatchingRule(link, resource, linkRewriteRules);
 
-    if (!rule) {
-      // No rule matches - leave untouched
+    // Determine which template to use: matched rule, defaultTemplate, or leave untouched
+    const template = rule?.template ?? defaultTemplate;
+    if (template === undefined) {
+      // No rule matches and no default template - leave untouched
       return fullMatch;
     }
 
@@ -389,7 +432,68 @@ export function transformContent(
     const fragment = anchor === undefined ? '' : `#${anchor}`;
 
     // Build template context and render
-    const templateContext = buildTemplateContext(link, hrefWithoutFragment, fragment, resource, context);
-    return renderTemplate(rule.template, templateContext);
+    const templateContext = buildTemplateContext(link, hrefWithoutFragment, fragment, resource, context, sourceFilePath);
+    return renderTemplate(template, templateContext);
   });
+
+  // === Pass 2: Reference-style definitions [ref]: url ===
+
+  // Build lookup map for definition links (keyed by "identifier\0href")
+  const definitionByKey = new Map<string, ResourceLink>();
+  for (const link of links) {
+    if (link.nodeType !== 'definition') {
+      continue;
+    }
+    const key = `${link.text}\0${link.href}`;
+    if (!definitionByKey.has(key)) {
+      definitionByKey.set(key, link);
+    }
+  }
+
+  if (definitionByKey.size > 0) {
+    result = result.replaceAll(
+      MARKDOWN_DEFINITION_REGEX,
+      (fullMatch, ref: string, href: string) => {
+        const trimmedHref = href.trim();
+
+        // Look up the corresponding definition ResourceLink
+        const key = `${ref}\0${trimmedHref}`;
+        const link = definitionByKey.get(key);
+        if (!link) {
+          return fullMatch;
+        }
+
+        // Resolve the target resource if available
+        const resource = link.resolvedId === undefined || resourceRegistry === undefined
+          ? undefined
+          : resourceRegistry.getResourceById(link.resolvedId);
+
+        // Find matching rule (same rule set as inline links)
+        const rule = findMatchingRule(link, resource, linkRewriteRules);
+        const template = rule?.template ?? defaultTemplate;
+
+        if (template === undefined) {
+          return fullMatch;
+        }
+
+        // If resource is in registry and we have sourceFilePath: rewrite URL in definition format
+        if (resource !== undefined && sourceFilePath !== undefined) {
+          const [, anchor] = splitHrefAnchor(trimmedHref);
+          const fragment = anchor === undefined ? '' : `#${anchor}`;
+          const newRelPath = toForwardSlash(
+            path.relative(path.dirname(sourceFilePath), resource.filePath),
+          );
+          return `[${ref}]: ${newRelPath}${fragment}`;
+        }
+
+        // Rule matched but no resource to rewrite to — remove orphaned definition
+        return '';
+      },
+    );
+
+    // Clean up excessive blank lines from removed definitions
+    result = result.replaceAll(/\n{3,}/g, '\n\n');
+  }
+
+  return result;
 }

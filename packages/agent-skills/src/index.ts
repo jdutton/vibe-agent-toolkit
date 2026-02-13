@@ -3,22 +3,33 @@
  * Build, validate, and package agent skills in the Agent Skills format
  */
 
-export { buildClaudeSkill, type BuildOptions, type BuildResult } from './builder.js';
+export { buildAgentSkill, type BuildOptions, type BuildResult } from './builder.js';
 
 export {
   extractH1Title,
   packageSkill,
+  packageSkills,
   type PackageSkillOptions,
   type PackageSkillResult,
+  type SkillBuildSpec,
   type SkillMetadata,
 } from './skill-packager.js';
 
 export {
-  ClaudeSkillFrontmatterSchema,
-  VATClaudeSkillFrontmatterSchema,
-  type ClaudeSkillFrontmatter,
-  type VATClaudeSkillFrontmatter,
-} from './schemas/claude-skill-frontmatter.js';
+  walkLinkGraph,
+  type ExcludeRule,
+  type LinkGraphResult,
+  type LinkResolution,
+  type WalkableRegistry,
+  type WalkLinkGraphOptions,
+} from './walk-link-graph.js';
+
+export {
+  AgentSkillFrontmatterSchema,
+  VATAgentSkillFrontmatterSchema,
+  type AgentSkillFrontmatter,
+  type VATAgentSkillFrontmatter,
+} from './schemas/agent-skill-frontmatter.js';
 
 export { ClaudePluginJsonSchema, ClaudePluginSchema, type ClaudePlugin } from './schemas/claude-plugin.js';
 
@@ -68,14 +79,6 @@ export {
   type ImportResult,
 } from './import.js';
 
-export {
-  collectLinks,
-  type DefaultRule,
-  type ExcludeRule,
-  type LinkCollectionOptions,
-  type LinkCollectionResult,
-  type LinkResolution,
-} from './link-collector.js';
 
 // Re-export ValidationOverride from agent-schema for convenience
 export type { ValidationOverride } from '@vibe-agent-toolkit/agent-schema';

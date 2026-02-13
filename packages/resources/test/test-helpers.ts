@@ -11,6 +11,7 @@ import path, { join } from 'node:path';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import type { Assertion } from 'vitest';
 
+import { ExternalLinkValidator } from '../src/external-link-validator.js';
 import { parseMarkdown } from '../src/link-parser.js';
 import type { ValidateLinkOptions as LinkValidatorOptions } from '../src/link-validator.js';
 import { validateLink } from '../src/link-validator.js';
@@ -174,6 +175,41 @@ export function setupTempDirTestSuite(testPrefix: string): {
     tempDir: '',
     beforeEach: async () => {
       suite.tempDir = await mkdtemp(join(normalizedTmpdir(), testPrefix));
+    },
+    afterEach: async () => {
+      await rm(suite.tempDir, { recursive: true, force: true });
+    },
+  };
+
+  return suite;
+}
+
+/**
+ * Setup external link validator test suite with temp directory and validator.
+ *
+ * Used by both unit tests (with mocked HTTP) and integration tests (with real HTTP)
+ * to eliminate duplication of beforeEach/afterEach setup.
+ *
+ * @param testPrefix - Prefix for temp directory (e.g., 'link-validator-test-')
+ * @param options - ExternalLinkValidator options
+ * @returns Object with refs that will be populated during beforeEach
+ */
+export function setupExternalLinkValidatorSuite(
+  testPrefix: string,
+  options: { cacheTtlHours?: number } = {},
+): {
+  tempDir: string;
+  validator: ExternalLinkValidator;
+  beforeEach: () => Promise<void>;
+  afterEach: () => Promise<void>;
+} {
+  const resolvedOptions = { cacheTtlHours: options.cacheTtlHours ?? 24 };
+  const suite = {
+    tempDir: '',
+    validator: null as unknown as ExternalLinkValidator,
+    beforeEach: async () => {
+      suite.tempDir = await mkdtemp(join(normalizedTmpdir(), testPrefix));
+      suite.validator = new ExternalLinkValidator(suite.tempDir, resolvedOptions);
     },
     afterEach: async () => {
       await rm(suite.tempDir, { recursive: true, force: true });

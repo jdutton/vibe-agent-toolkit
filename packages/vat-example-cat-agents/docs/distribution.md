@@ -173,7 +173,7 @@ npm install @vibe-agent-toolkit/cat-agents-skill
     "skills/**/*.md"
   ],
   "keywords": [
-    "claude-skill",
+    "agent-skill",
     "vat",
     "agents",
     "cat-breeding"

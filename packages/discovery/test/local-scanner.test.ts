@@ -29,7 +29,7 @@ describe('scan', () => {
 
     expect(result.totalScanned).toBe(1);
     expect(result.results).toHaveLength(1);
-    expect(result.results[0]?.format).toBe('claude-skill');
+    expect(result.results[0]?.format).toBe('agent-skill');
     expect(result.results[0]?.path).toBe(skillPath);
   });
 
@@ -42,7 +42,7 @@ describe('scan', () => {
     const result = await scan({ path: tempDir, recursive: false });
 
     expect(result.totalScanned).toBe(2);
-    expect(result.byFormat['claude-skill']).toBe(1);
+    expect(result.byFormat['agent-skill']).toBe(1);
     expect(result.byFormat['markdown']).toBe(1);
   });
 
@@ -54,7 +54,7 @@ describe('scan', () => {
     const result = await scan({ path: tempDir, recursive: true });
 
     expect(result.totalScanned).toBe(2);
-    expect(result.byFormat['claude-skill']).toBe(1);
+    expect(result.byFormat['agent-skill']).toBe(1);
     expect(result.byFormat['vat-agent']).toBe(1);
   });
 

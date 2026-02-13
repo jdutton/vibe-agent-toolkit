@@ -2,11 +2,11 @@ import { describe, it, expect } from 'vitest';
 
 
 import {
-  ClaudeSkillFrontmatterSchema,
-  VATClaudeSkillFrontmatterSchema
-} from '../src/schemas/claude-skill-frontmatter.js';
+  AgentSkillFrontmatterSchema,
+  VATAgentSkillFrontmatterSchema
+} from '../src/schemas/agent-skill-frontmatter.js';
 
-describe('ClaudeSkillFrontmatterSchema', () => {
+describe('AgentSkillFrontmatterSchema', () => {
   describe('required fields', () => {
     it('should validate minimal valid frontmatter', () => {
       const data = {
@@ -14,7 +14,7 @@ describe('ClaudeSkillFrontmatterSchema', () => {
         description: 'Does something useful',
       };
 
-      const result = ClaudeSkillFrontmatterSchema.safeParse(data);
+      const result = AgentSkillFrontmatterSchema.safeParse(data);
 
       expect(result.success).toBe(true);
     });
@@ -24,7 +24,7 @@ describe('ClaudeSkillFrontmatterSchema', () => {
         description: 'Does something useful',
       };
 
-      const result = ClaudeSkillFrontmatterSchema.safeParse(data);
+      const result = AgentSkillFrontmatterSchema.safeParse(data);
 
       expect(result.success).toBe(false);
     });
@@ -34,7 +34,7 @@ describe('ClaudeSkillFrontmatterSchema', () => {
         name: 'my-skill',
       };
 
-      const result = ClaudeSkillFrontmatterSchema.safeParse(data);
+      const result = AgentSkillFrontmatterSchema.safeParse(data);
 
       expect(result.success).toBe(false);
     });
@@ -51,7 +51,7 @@ describe('ClaudeSkillFrontmatterSchema', () => {
       ];
 
       for (const name of validNames) {
-        const result = ClaudeSkillFrontmatterSchema.safeParse({
+        const result = AgentSkillFrontmatterSchema.safeParse({
           name,
           description: 'Test',
         });
@@ -71,7 +71,7 @@ describe('ClaudeSkillFrontmatterSchema', () => {
       ];
 
       for (const name of invalidNames) {
-        const result = ClaudeSkillFrontmatterSchema.safeParse({
+        const result = AgentSkillFrontmatterSchema.safeParse({
           name,
           description: 'Test',
         });
@@ -87,7 +87,7 @@ describe('ClaudeSkillFrontmatterSchema', () => {
         description: 'A short description',
       };
 
-      const result = ClaudeSkillFrontmatterSchema.safeParse(data);
+      const result = AgentSkillFrontmatterSchema.safeParse(data);
 
       expect(result.success).toBe(true);
     });
@@ -98,7 +98,7 @@ describe('ClaudeSkillFrontmatterSchema', () => {
         description: '',
       };
 
-      const result = ClaudeSkillFrontmatterSchema.safeParse(data);
+      const result = AgentSkillFrontmatterSchema.safeParse(data);
 
       expect(result.success).toBe(false);
     });
@@ -109,7 +109,7 @@ describe('ClaudeSkillFrontmatterSchema', () => {
         description: 'x'.repeat(1025),
       };
 
-      const result = ClaudeSkillFrontmatterSchema.safeParse(data);
+      const result = AgentSkillFrontmatterSchema.safeParse(data);
 
       expect(result.success).toBe(false);
     });
@@ -123,7 +123,7 @@ describe('ClaudeSkillFrontmatterSchema', () => {
         license: 'MIT',
       };
 
-      const result = ClaudeSkillFrontmatterSchema.safeParse(data);
+      const result = AgentSkillFrontmatterSchema.safeParse(data);
 
       expect(result.success).toBe(true);
     });
@@ -135,7 +135,7 @@ describe('ClaudeSkillFrontmatterSchema', () => {
         compatibility: 'Requires git and docker',
       };
 
-      const result = ClaudeSkillFrontmatterSchema.safeParse(data);
+      const result = AgentSkillFrontmatterSchema.safeParse(data);
 
       expect(result.success).toBe(true);
     });
@@ -150,7 +150,7 @@ describe('ClaudeSkillFrontmatterSchema', () => {
         },
       };
 
-      const result = ClaudeSkillFrontmatterSchema.safeParse(data);
+      const result = AgentSkillFrontmatterSchema.safeParse(data);
 
       expect(result.success).toBe(true);
     });
@@ -162,7 +162,7 @@ describe('ClaudeSkillFrontmatterSchema', () => {
         'allowed-tools': 'Bash Read Write',
       };
 
-      const result = ClaudeSkillFrontmatterSchema.safeParse(data);
+      const result = AgentSkillFrontmatterSchema.safeParse(data);
 
       expect(result.success).toBe(true);
     });
@@ -176,7 +176,7 @@ describe('ClaudeSkillFrontmatterSchema', () => {
         version: '1.0.0', // Should be in metadata
       };
 
-      const result = ClaudeSkillFrontmatterSchema.safeParse(data);
+      const result = AgentSkillFrontmatterSchema.safeParse(data);
 
       expect(result.success).toBe(false);
     });
@@ -191,14 +191,14 @@ describe('ClaudeSkillFrontmatterSchema', () => {
         },
       };
 
-      const result = ClaudeSkillFrontmatterSchema.safeParse(data);
+      const result = AgentSkillFrontmatterSchema.safeParse(data);
 
       expect(result.success).toBe(true);
     });
   });
 });
 
-describe('VATClaudeSkillFrontmatterSchema', () => {
+describe('VATAgentSkillFrontmatterSchema', () => {
   it('should require metadata.version', () => {
     const data = {
       name: 'my-skill',
@@ -208,7 +208,7 @@ describe('VATClaudeSkillFrontmatterSchema', () => {
       },
     };
 
-    const result = VATClaudeSkillFrontmatterSchema.safeParse(data);
+    const result = VATAgentSkillFrontmatterSchema.safeParse(data);
 
     expect(result.success).toBe(false);
   });
@@ -222,7 +222,7 @@ describe('VATClaudeSkillFrontmatterSchema', () => {
       },
     };
 
-    const result = VATClaudeSkillFrontmatterSchema.safeParse(data);
+    const result = VATAgentSkillFrontmatterSchema.safeParse(data);
 
     expect(result.success).toBe(true);
   });
@@ -238,7 +238,7 @@ describe('VATClaudeSkillFrontmatterSchema', () => {
       },
     };
 
-    const result = VATClaudeSkillFrontmatterSchema.safeParse(data);
+    const result = VATAgentSkillFrontmatterSchema.safeParse(data);
 
     expect(result.success).toBe(true);
   });

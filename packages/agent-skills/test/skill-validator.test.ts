@@ -1,4 +1,6 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
+
+import { validateSkill } from '../src/validators/skill-validator.js';
 
 import {
   createSkillAndValidate,
@@ -20,6 +22,16 @@ describe('validateSkill', () => {
 
     expect(result.status).toBe('success');
     expect(result.issues.filter((i) => i.severity === 'error')).toHaveLength(0);
+  });
+
+  it('should return error when file does not exist', async () => {
+    const result = await validateSkill({ skillPath: '/nonexistent/path/SKILL.md' });
+
+    expect(result.status).toBe('error');
+    expect(result.type).toBe('agent-skill');
+    expectError(result, 'SKILL_MISSING_FRONTMATTER');
+    expect(result.issues).toHaveLength(1);
+    expect(result.issues[0]?.message).toBe('File does not exist');
   });
 
   it('should detect missing frontmatter', async () => {

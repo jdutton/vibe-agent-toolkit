@@ -16,7 +16,7 @@ import {
   getBinPath,
   resolve,
 } from './test-common.js';
-import { MCPTestClient } from './test-helpers.js';
+import { MCPTestClient } from './test-helpers/index.js';
 
 const binPath = getBinPath(import.meta.url);
 const __dirname = dirname(fileURLToPath(import.meta.url));

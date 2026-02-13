@@ -8,7 +8,7 @@ import { existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { mkdirSyncReal, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
-import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { copyResources, createPostBuildScript } from '../../src/utils/copy-resources.js';
 
@@ -119,71 +119,79 @@ describe('copyResources', () => {
   });
 });
 
+// createPostBuildScript joins generatedDir under distDir: join(distDir, generatedDir).
+// On Windows, path.join with two absolute paths creates invalid paths (drive letter in middle).
+// On Windows (forks pool), process.chdir is available — use relative paths.
+// On Unix (threads pool, no chdir), POSIX path.join handles two absolute paths correctly.
+const isWindows = process.platform === 'win32';
+
 describe('createPostBuildScript', () => {
   let tempDir: string;
-  let originalCwd: string;
+  let savedCwd: string | undefined;
 
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
   beforeEach(() => {
     suite.beforeEach();
     tempDir = suite.getTempDir();
-    // Change to temp dir so relative paths work
-    originalCwd = process.cwd();
-    process.chdir(tempDir);
+    if (isWindows) {
+      savedCwd = process.cwd();
+      process.chdir(tempDir);
+    }
+  });
+  afterEach(() => {
+    if (savedCwd !== undefined) {
+      process.chdir(savedCwd);
+      savedCwd = undefined;
+    }
   });
 
-  afterEach(() => {
-    // Restore original cwd
-    process.chdir(originalCwd);
-  });
+  /** Return relative paths on Windows (chdir), absolute on Unix */
+  function testPath(name: string): string {
+    return isWindows ? name : join(tempDir, name);
+  }
 
   it('should copy generated dir to dist/generated', () => {
-    // Setup generated dir (relative path as function expects)
-    const generatedDir = 'generated';
-    const distDir = 'dist';
+    const generatedDir = testPath('generated');
+    const distDir = testPath('dist');
 
-    mkdirSyncReal(generatedDir);
-    writeFileSync(join(generatedDir, 'output.js'), 'code', 'utf-8');
+    mkdirSyncReal(join(tempDir, 'generated'));
+    writeFileSync(join(tempDir, 'generated', 'output.js'), 'code', 'utf-8');
 
-    // Run post-build
     createPostBuildScript({ generatedDir, distDir });
 
-    // Should copy to dist/generated
     expect(existsSync(join(distDir, generatedDir, 'output.js'))).toBe(true);
   });
 
   it('should exit process on error', () => {
-    // Mock process.exit to capture the call
     const originalExit = process.exit;
     let exitCode: number | undefined;
     process.exit = ((code?: number) => {
       exitCode = code;
-      throw new Error('process.exit called'); // Prevent actual exit
+      throw new Error('process.exit called');
     }) as never;
 
     try {
-      // Try with non-existent source (relative path)
       expect(() => {
-        createPostBuildScript({ generatedDir: 'does-not-exist', distDir: 'dist' });
+        createPostBuildScript({
+          generatedDir: testPath('does-not-exist'),
+          distDir: testPath('dist'),
+        });
       }).toThrow('process.exit called');
 
       expect(exitCode).toBe(1);
     } finally {
-      // Restore original
       process.exit = originalExit;
     }
   });
 
   it('should support verbose logging', () => {
-    // Setup (relative paths)
-    const generatedDir = 'generated';
-    const distDir = 'dist';
+    const generatedDir = testPath('generated');
+    const distDir = testPath('dist');
 
-    mkdirSyncReal(generatedDir);
-    writeFileSync(join(generatedDir, 'output.js'), 'code', 'utf-8');
+    mkdirSyncReal(join(tempDir, 'generated'));
+    writeFileSync(join(tempDir, 'generated', 'output.js'), 'code', 'utf-8');
 
-    // Should not throw with verbose
     expect(() => {
       createPostBuildScript({ generatedDir, distDir, verbose: true });
     }).not.toThrow();

@@ -36,6 +36,65 @@ packages/my-package/
 | **Integration** | `test/integration/*.integration.test.ts` | Test multiple modules together | < 5s | Real file system, DBs |
 | **System** | `test/system/*.system.test.ts` | End-to-end workflows | < 30s | Real external services |
 
+### Test Classification Rules
+
+Misclassified tests are the #1 cause of flaky CI and slow unit test suites. If your test does any of the following, it is **NOT a unit test**:
+
+| If your test... | It belongs in... | Why |
+|----------------|-----------------|-----|
+| Makes real HTTP requests | **Integration** | Network flakiness breaks CI; 2-15s per request |
+| Loads ML models (Transformers.js, ONNX) | **Integration** | Model loading costs 2-5s; native bindings crash threads pool |
+| Spawns child processes (`spawnSync`, `exec`) | **System** | Node startup overhead ~1-2s per spawn |
+| Connects to a real database | **Integration** | Requires external service |
+| Reads/writes real files (not mocked) | **Integration** | I/O-dependent, slower |
+
+**Unit tests must be deterministic, fast, and isolated.** Mock all I/O, network, and heavy dependencies. If you're unsure, ask: "Would this test fail on an airplane?" If yes, it's not a unit test.
+
+**Network-dependent integration tests** should use `describe.skipIf(!!process.env.CI)` if they hit external services that may be unreachable in CI:
+
+```typescript
+// Tests that make real HTTP requests — skip in CI where egress may be restricted
+describe.skipIf(!!process.env.CI)('ExternalLinkValidator (integration)', () => {
+  // ...
+});
+```
+
+## Vitest Pool Compatibility
+
+Unit tests run with **threads pool on Mac/Unix** (shared module cache, ~20% faster) and **forks pool on Windows** (required for native module isolation). This affects what you can do in tests.
+
+### `process.chdir()` — Forbidden in unit tests
+
+`process.chdir()` throws in worker threads (all workers share one process). Use `vi.spyOn(process, 'cwd')` instead:
+
+```typescript
+// ❌ WRONG — throws in threads pool (Mac/Unix unit tests)
+beforeEach(() => {
+  originalCwd = process.cwd();
+  process.chdir(tempDir);
+});
+afterEach(() => {
+  process.chdir(originalCwd);
+});
+
+// ✅ CORRECT — works in both threads and forks
+beforeEach(() => {
+  vi.spyOn(process, 'cwd').mockReturnValue(tempDir);
+});
+afterEach(() => {
+  vi.restoreAllMocks();
+});
+```
+
+**Caveat**: `vi.spyOn(process, 'cwd')` only affects code that calls `process.cwd()`. It does NOT affect `fs.existsSync('relative/path')` — Node's `fs` module resolves relative paths against the real OS-level CWD, not the mocked one. If your code under test uses `fs` with relative paths, you need one of:
+- Absolute paths in your test setup
+- `process.chdir()` in integration tests (forks pool)
+- Mocking the `fs` functions
+
+### When `process.chdir()` is acceptable
+
+In **integration** or **system** tests (which use forks pool), `process.chdir()` is safe. If a unit test absolutely requires it, add a comment explaining why and ensure the test restores CWD in `afterEach`.
+
 ## The Test Suite Helper Pattern
 
 **CRITICAL**: The #1 source of test duplication is repeated `beforeEach`/`afterEach` setup across describe blocks.
@@ -295,6 +354,37 @@ const filePath = tempDir + '/' + 'test.md';
 const filePath = join(tempDir, 'test.md');
 ```
 
+### Hardcoded Path Constants
+
+When tests use hardcoded fake paths (not real filesystem paths), always use `path.resolve()` so they include the drive letter on Windows. Functions like `path.resolve()`, `path.dirname()`, and `path.join()` prepend the current drive on Windows — if your constants don't match, lookups and assertions fail.
+
+```typescript
+// ❌ WRONG — '/project/docs/guide.md' becomes 'D:\project\docs\guide.md' after path.resolve()
+const PROJECT_ROOT = '/project';
+const GUIDE_PATH = '/project/docs/guide.md';
+
+// ✅ CORRECT — path.resolve() makes constants platform-appropriate
+import { resolve } from 'node:path';
+const PROJECT_ROOT = resolve('/project');           // '/project' on Unix, 'D:\project' on Windows
+const GUIDE_PATH = resolve('/project/docs/guide.md');
+```
+
+### `path.join()` with Two Absolute Paths on Windows
+
+On POSIX, `path.join('/a/b', '/c/d')` produces `/a/b/c/d` (valid). On Windows, `path.join('C:\\a', 'C:\\b')` produces `C:\\a\\C:\\b` — the colon from the second drive letter creates an **invalid path** that crashes `fs` operations.
+
+```typescript
+// ❌ DANGEROUS — breaks on Windows when both args are absolute
+const targetDir = join(distDir, generatedDir); // C:\dist\C:\gen — invalid!
+
+// ✅ SAFE — use relative paths or basename for the second argument
+const targetDir = join(distDir, 'generated');
+```
+
+If your function joins two user-supplied paths and both could be absolute, you have a Windows compatibility bug. Either:
+1. Ensure one argument is always relative
+2. Use platform-conditional logic (chdir on Windows, absolute paths on Unix)
+
 ## When to Extract Helpers
 
 ### The 2-3 Rule
@@ -352,6 +442,23 @@ bun run duplication-check  # See what's duplicated
 4. ✅ **Do** refactor until the check passes
 
 **The baseline exists to track progress towards zero, not to accept new duplication.**
+
+## Time-Dependent Tests
+
+Never use real `setTimeout` or `Date.now()` waits in tests. They're flaky on loaded CI machines and waste wall-clock time.
+
+```typescript
+// ❌ WRONG — flaky on slow CI, wastes 10ms per test
+await new Promise(resolve => setTimeout(resolve, 10));
+expect(cache.isExpired(key)).toBe(true);
+
+// ✅ CORRECT — deterministic, instant
+vi.useFakeTimers();
+cache.set(key, value, { ttl: 100 });
+vi.advanceTimersByTime(101);
+expect(cache.isExpired(key)).toBe(true);
+vi.useRealTimers();
+```
 
 ## Testing Anti-Patterns
 
@@ -432,13 +539,26 @@ it('test 3', () => { /* uses helper */ });
 
 When writing tests:
 
+**Classification:**
+- [ ] Test is in the right tier (no network/ML/process spawning in unit tests)
+- [ ] Network-dependent integration tests use `describe.skipIf(!!process.env.CI)` if needed
+
+**Cross-platform:**
+- [ ] Used `toForwardSlash()` from utils for path comparisons
+- [ ] Used `path.resolve()` for hardcoded fake path constants
+- [ ] No `path.join()` with two absolute paths (breaks on Windows)
+- [ ] No `process.chdir()` in unit tests (use `vi.spyOn(process, 'cwd')`)
+- [ ] All tests pass on both Windows and Unix systems
+
+**Patterns:**
 - [ ] Created `test/test-helpers.ts` for the package
 - [ ] Extracted `setupXTestSuite()` helper after 2-3 similar describe blocks
-- [ ] Used `toForwardSlash()` from utils for path comparisons
 - [ ] Created factory functions for common test entities
 - [ ] Extracted assertion helpers for repeated validation patterns
+- [ ] Used `vi.useFakeTimers()` instead of real `setTimeout` for time-dependent tests
+
+**Quality:**
 - [ ] Ran `bun run duplication-check` before committing
-- [ ] All tests pass on both Windows and Unix systems
 - [ ] No code duplication detected
 
 ## Real-World Impact

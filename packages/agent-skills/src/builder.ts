@@ -1,5 +1,5 @@
 /**
- * Claude Skill builder - converts VAT agents to Claude Skills
+ * Agent Skill builder - converts VAT agents to Agent Skills
  */
 
 import { existsSync } from 'node:fs';
@@ -68,13 +68,13 @@ export interface BuildResult {
 }
 
 /**
- * Build a Claude Skill from a VAT agent
+ * Build an Agent Skill from a VAT agent
  *
  * This function:
  * 1. Generates SKILL.md from agent.yml (the "extra pre-step")
  * 2. Optionally packages the SKILL.md using unified packaging logic
  */
-export async function buildClaudeSkill(options: BuildOptions): Promise<BuildResult> {
+export async function buildAgentSkill(options: BuildOptions): Promise<BuildResult> {
   const { agentPath, target = 'skill', package: shouldPackage = true } = options;
 
   // Load agent manifest

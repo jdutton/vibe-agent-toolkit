@@ -4,7 +4,7 @@ import * as path from 'node:path';
 import { stringify as stringifyYaml } from 'yaml';
 
 import { parseFrontmatter } from './parsers/frontmatter-parser.js';
-import { ClaudeSkillFrontmatterSchema, VATClaudeSkillFrontmatterSchema } from './schemas/claude-skill-frontmatter.js';
+import { AgentSkillFrontmatterSchema, VATAgentSkillFrontmatterSchema } from './schemas/agent-skill-frontmatter.js';
 
 export interface ImportOptions {
   /**
@@ -38,7 +38,7 @@ export interface ImportError {
 export type ImportResult = ImportSuccess | ImportError;
 
 /**
- * Import a Claude Skill (SKILL.md) and convert to VAT agent format (agent.yaml)
+ * Import an Agent Skill (SKILL.md) and convert to VAT agent format (agent.yaml)
  *
  * @param options - Import options
  * @returns Result with agent.yaml path or error
@@ -72,8 +72,8 @@ export async function importSkillToAgent(options: ImportOptions): Promise<Import
   const { frontmatter } = parseResult;
 
   // Try VAT schema first (allows more flexible metadata), fall back to strict schema
-  const vatValidationResult = VATClaudeSkillFrontmatterSchema.safeParse(frontmatter);
-  const strictValidationResult = ClaudeSkillFrontmatterSchema.safeParse(frontmatter);
+  const vatValidationResult = VATAgentSkillFrontmatterSchema.safeParse(frontmatter);
+  const strictValidationResult = AgentSkillFrontmatterSchema.safeParse(frontmatter);
 
   if (!vatValidationResult.success && !strictValidationResult.success) {
     // Neither schema validates - report error
@@ -126,9 +126,9 @@ export async function importSkillToAgent(options: ImportOptions): Promise<Import
 }
 
 /**
- * Build agent.yaml manifest structure from Claude Skill frontmatter
+ * Build agent.yaml manifest structure from Agent Skill frontmatter
  *
- * @param frontmatter - Validated Claude Skill frontmatter
+ * @param frontmatter - Validated Agent Skill frontmatter
  * @returns Agent manifest object
  */
 function buildAgentManifest(frontmatter: Record<string, unknown>): Record<string, unknown> {
@@ -165,7 +165,7 @@ function buildAgentManifest(frontmatter: Record<string, unknown>): Record<string
   const agentManifest: Record<string, unknown> = {
     metadata: agentMetadata,
     spec: {
-      runtime: 'claude-skills',
+      runtime: 'agent-skills',
     },
   };
 

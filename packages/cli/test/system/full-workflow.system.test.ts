@@ -10,7 +10,7 @@ import {
   executeScanAndParse,
   executeValidateAndParse,
   setupTestProject,
-} from './test-helpers.js';
+} from './test-helpers/index.js';
 
 const binPath = getBinPath(import.meta.url);
 

@@ -280,11 +280,11 @@ curl -fsSL https://bun.sh/install | bash
 bun --version
 ```
 
-## Working with Claude Skills
+## Working with Agent Skills
 
 ### Auditing Skills
 
-Validate Claude Skills for quality and compatibility:
+Validate Agent Skills for quality and compatibility:
 
 ```bash
 # Audit a single skill
@@ -308,7 +308,7 @@ See [Audit Command Documentation](./cli/audit.md) for complete validation rules.
 
 ### Importing Skills
 
-Convert Claude Skills to VAT agent format:
+Convert Agent Skills to VAT agent format:
 
 ```bash
 # Import skill to agent.yaml

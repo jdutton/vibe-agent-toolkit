@@ -98,7 +98,7 @@ describe('importSkillToAgent (integration)', () => {
           description: 'A test skill for import',
         },
         spec: {
-          runtime: 'claude-skills',
+          runtime: 'agent-skills',
         },
       });
     });
@@ -133,7 +133,7 @@ describe('importSkillToAgent (integration)', () => {
         license: 'MIT',
         version: '1.0.0',
       });
-      expect(agentData.spec.runtime).toBe('claude-skills');
+      expect(agentData.spec.runtime).toBe('agent-skills');
       expect(agentData.spec.compatibility).toBe('Requires Node.js 18+');
     });
 

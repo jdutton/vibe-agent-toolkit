@@ -455,7 +455,7 @@ describe('PackagingOptionsSchema', () => {
     it('should accept defaultTemplate string', () => {
       const options = {
         excludeReferencesFromBundle: {
-          defaultTemplate: '{{link.text}} (see {{link.fileName}})',
+          defaultTemplate: '{{link.text}} (see {{link.resource.fileName}})',
         },
       };
 

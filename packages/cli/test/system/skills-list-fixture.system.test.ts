@@ -11,7 +11,7 @@ import * as yaml from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 
 import { getBinPath } from './test-common.js';
-import { executeSkillsCommandAndExpectYaml } from './test-helpers.js';
+import { executeSkillsCommandAndExpectYaml } from './test-helpers/index.js';
 
 describe('skills list command - fixture tests (system test)', () => {
   const binPath = getBinPath(import.meta.url);

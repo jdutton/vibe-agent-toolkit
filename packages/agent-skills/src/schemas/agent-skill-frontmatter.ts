@@ -1,12 +1,12 @@
 import { z } from 'zod';
 
 /**
- * Claude Skill Frontmatter Schema (Strict)
+ * Agent Skill Frontmatter Schema (Strict)
  *
  * Based on official Agent Skills specification at agentskills.io/specification
  * Console-compatible: Only allows fields defined in the spec
  */
-export const ClaudeSkillFrontmatterSchema = z.object({
+export const AgentSkillFrontmatterSchema = z.object({
   // Required fields
   name: z.string()
     .min(1, 'Name is required')
@@ -42,19 +42,19 @@ export const ClaudeSkillFrontmatterSchema = z.object({
     .describe('Pre-approved tools (experimental)'),
 }).strict(); // Reject unknown fields for console compatibility
 
-export type ClaudeSkillFrontmatter = z.infer<typeof ClaudeSkillFrontmatterSchema>;
+export type AgentSkillFrontmatter = z.infer<typeof AgentSkillFrontmatterSchema>;
 
 /**
- * VAT Claude Skill Frontmatter Schema
+ * VAT Agent Skill Frontmatter Schema
  *
  * Extends strict schema with VAT-specific metadata requirements
  * Used when building/validating VAT-generated skills
  */
-export const VATClaudeSkillFrontmatterSchema = ClaudeSkillFrontmatterSchema.extend({
+export const VATAgentSkillFrontmatterSchema = AgentSkillFrontmatterSchema.extend({
   metadata: z.object({
     version: z.string()
       .describe('Semantic version of this skill'),
   }).passthrough(), // Allow additional metadata fields
 });
 
-export type VATClaudeSkillFrontmatter = z.infer<typeof VATClaudeSkillFrontmatterSchema>;
+export type VATAgentSkillFrontmatter = z.infer<typeof VATAgentSkillFrontmatterSchema>;

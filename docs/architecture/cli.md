@@ -54,7 +54,7 @@ packages/cli/
 **Dependencies:**
 - `@vibe-agent-toolkit/resources` - for resource commands
 - `@vibe-agent-toolkit/utils` - shared utilities
-- Future: `rag`, `claude-skills`, etc.
+- Future: `rag`, `agent-skills`, etc.
 
 **Technology:**
 - Commander.js for command structure

@@ -103,7 +103,7 @@ const buildOptions = options.output
   ? { agentPath, target, outputPath: options.output }
   : { agentPath, target };
 // ✅ CLI just passes options, runtime figures out the rest
-result = await buildClaudeSkill(buildOptions);
+result = await buildAgentSkill(buildOptions);
 ```
 
 ```typescript

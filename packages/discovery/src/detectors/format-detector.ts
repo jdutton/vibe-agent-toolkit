@@ -6,7 +6,7 @@ import type { DetectedFormat } from '../types.js';
  * Detect file format based on filename
  *
  * Detection rules:
- * - Exact match "SKILL.md" → claude-skill
+ * - Exact match "SKILL.md" → agent-skill
  * - Exact match "agent.yaml" or "agent.yml" → vat-agent
  * - Extension ".md" → markdown
  * - Everything else → unknown
@@ -19,7 +19,7 @@ export function detectFormat(filePath: string): DetectedFormat {
 
   // Exact matches (case-sensitive)
   if (basename === 'SKILL.md') {
-    return 'claude-skill';
+    return 'agent-skill';
   }
 
   if (basename === 'agent.yaml' || basename === 'agent.yml') {

@@ -8,12 +8,12 @@ This directory contains all packages in the vibe-agent-toolkit monorepo. This RE
 |---------|-------------|--------|---------|
 | agent-schema | `@vibe-agent-toolkit/agent-schema` | Published | JSON Schema definitions and TypeScript types for agent manifests |
 | utils | `@vibe-agent-toolkit/utils` | Published | Core utility functions (no internal dependencies) |
-| discovery | `@vibe-agent-toolkit/discovery` | Published | Intelligent file discovery for agents and Claude Skills |
+| discovery | `@vibe-agent-toolkit/discovery` | Published | Intelligent file discovery for agents and Agent Skills |
 | resources | `@vibe-agent-toolkit/resources` | Published | Markdown resource parsing, validation, and link integrity |
 | rag | `@vibe-agent-toolkit/rag` | Published | Abstract RAG interfaces and shared implementations |
 | rag-lancedb | `@vibe-agent-toolkit/rag-lancedb` | Published | LanceDB implementation of RAG interfaces |
 | agent-config | `@vibe-agent-toolkit/agent-config` | Published | Agent manifest loading and validation |
-| agent-skills | `@vibe-agent-toolkit/agent-skills` | Published | Build and package VAT agents as Claude Skills |
+| agent-skills | `@vibe-agent-toolkit/agent-skills` | Published | Build and package VAT agents as Agent Skills |
 | cli | `@vibe-agent-toolkit/cli` | Published | Command-line interface (provides `vat` binary) |
 | vat-development-agents | `@vibe-agent-toolkit/vat-development-agents` | Published | VAT development agents (agent bundle) |
 | vibe-agent-toolkit | `vibe-agent-toolkit` | Published | Umbrella package (installs everything) |
@@ -133,7 +133,7 @@ Core utility functions with minimal external dependencies. Provides cross-platfo
 #### discovery
 **npm**: `@vibe-agent-toolkit/discovery`
 
-Intelligent file discovery for VAT agents and Claude Skills. Finds agent manifests, skill files, and resources with pattern matching and gitignore support.
+Intelligent file discovery for VAT agents and Agent Skills. Finds agent manifests, skill files, and resources with pattern matching and gitignore support.
 
 **Dependencies**:
 - External: `picomatch`
@@ -195,7 +195,7 @@ Agent manifest loading and validation. Loads agent YAML manifests, validates aga
 #### agent-skills
 **npm**: `@vibe-agent-toolkit/agent-skills`
 
-Build and package VAT agents as Claude Skills. Converts VAT agent manifests to Claude Skill format, bundles resources, generates JSON Schema from Zod definitions, and produces installable skill packages.
+Build and package VAT agents as Agent Skills. Converts VAT agent manifests to Agent Skill format, bundles resources, generates JSON Schema from Zod definitions, and produces installable skill packages.
 
 **Dependencies**:
 - External: `yaml`, `zod`, `zod-to-json-schema`

@@ -9,7 +9,7 @@ import path from 'node:path';
  * Map of runtime to scope locations
  */
 export const SCOPE_LOCATIONS: Record<string, Record<string, string>> = {
-  'claude-skill': {
+  'agent-skill': {
     user: path.join(os.homedir(), '.claude', 'skills'),
     project: path.join(process.cwd(), '.claude', 'skills'),
   },
@@ -19,7 +19,7 @@ export const SCOPE_LOCATIONS: Record<string, Record<string, string>> = {
  * Map of runtime to valid scopes
  */
 export const VALID_SCOPES: Record<string, string[]> = {
-  'claude-skill': ['user', 'project'],
+  'agent-skill': ['user', 'project'],
 };
 
 /**

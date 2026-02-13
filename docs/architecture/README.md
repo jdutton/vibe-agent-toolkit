@@ -25,7 +25,7 @@
 
 **Responsibilities**:
 - CLI commands for validating resources, checking links, building skills, etc.
-- Orchestrates other packages (resources, rag, claude-skills)
+- Orchestrates other packages (resources, rag, agent-skills)
 - User-facing error messages and output formatting
 - Configuration file loading and management
 
@@ -58,7 +58,7 @@ vibe-agent embed docs/ --output db.json  # Generate embeddings
 **Explicitly NOT responsible for**:
 - Chunking (that's RAG concern)
 - Embeddings (that's RAG concern)
-- Claude-specific conventions (that's claude-skills concern)
+- Claude-specific conventions (that's agent-skills concern)
 
 **Dependencies**: `utils`, markdown/HTML parsing libraries
 **Status**: 📋 Planned
@@ -89,21 +89,21 @@ vibe-agent embed docs/ --output db.json  # Generate embeddings
 
 ---
 
-#### `@vibe-agent-toolkit/claude-skills`
-**Purpose**: Claude-specific skill packaging, validation, and testing
+#### `@vibe-agent-toolkit/agent-skills`
+**Purpose**: Agent skill packaging, validation, and testing
 
 **Responsibilities**:
-- **Skill format validation** (Claude skill conventions and structure)
+- **Skill format validation** (Agent Skill conventions and structure)
 - **Skill testing framework** (test skills work with Claude API)
 - **Skill packaging/bundling** (package for distribution to Claude)
-- Claude-specific link conventions and organization patterns
+- Agent-specific link conventions and organization patterns
 - Skill metadata requirements
-- **Defines claude-skill schemas** (skill manifest, configuration, metadata)
+- **Defines agent-skill schemas** (skill manifest, configuration, metadata)
 
 **Reuses from resources**: Link integrity checking, document parsing (general capabilities)
 **Adds on top**: Claude-specific rules, testing harness, packaging workflows
 
-**Dependencies**: `utils`, `resources`, Claude SDK
+**Dependencies**: `utils`, `resources`
 **Status**: 📋 Planned
 
 ---
@@ -147,7 +147,7 @@ Schemas are critical for:
 
 **Schemas live with their packages**:
 - `resources/` defines resource schemas (metadata, document structure)
-- `claude-skills/` defines skill schemas (manifest, configuration)
+- `agent-skills/` defines skill schemas (manifest, configuration)
 - `rag/` defines RAG schemas (chunk metadata, retrieval configs)
 
 **Schema utilities live in `utils`**:
@@ -327,7 +327,7 @@ utils (no package deps)
 resources (→ utils)
   ↓
 ├─ rag (→ utils, resources)
-├─ claude-skills (→ utils, resources)
+├─ agent-skills (→ utils, resources)
 └─ cli (→ all packages, orchestrator)
 ```
 
@@ -344,7 +344,7 @@ resources (→ utils)
 ### 5. Link Integrity is General, Not Claude-Specific
 - Useful for any markdown: docs/, README, tutorials, etc.
 - Lives in `resources` as general capability
-- `claude-skills` can add skill-specific conventions on top
+- `agent-skills` can add skill-specific conventions on top
 
 ---
 
@@ -387,7 +387,7 @@ resources (→ utils)
   - Checksum-based staleness detection
   - Plugin relationship tracking
 - Uses `detectFormat()` from `@vibe-agent-toolkit/discovery`
-  - Detects VAT agents and Claude Skills
+  - Detects VAT agents and Agent Skills
 - Outputs YAML via `utils/output.ts`
 
 **Exit Codes:**
@@ -416,7 +416,7 @@ When using `--user` flag:
 - 📋 **cli**: Command-line interface (build after resources)
 - 📋 **resources**: Next to build
 - 📋 **rag**: Phase 2
-- 📋 **claude-skills**: Phase 2
+- 📋 **agent-skills**: Phase 2
 
 ---
 
@@ -443,4 +443,4 @@ When using `--user` flag:
    - Is resources API ergonomic?
    - Is CLI intuitive?
    - What's missing?
-   - Then build RAG or claude-skills based on priority
+   - Then build RAG or agent-skills based on priority

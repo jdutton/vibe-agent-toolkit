@@ -632,7 +632,7 @@ describe('skill-packager: depth-limited packaging', () => {
     expect(skillContent).not.toContain('[important doc](');
   });
 
-  it('should render all template variables (skill.name, link.fileName, link.filePath)', async () => {
+  it('should render all template variables (skill.name, link.resource.fileName, link.href)', async () => {
     const tempDir = getTempDir();
     const subDir = join(tempDir, 'docs');
     await mkdir(subDir, { recursive: true });
@@ -650,12 +650,12 @@ describe('skill-packager: depth-limited packaging', () => {
       linkFollowDepth: 0,
       rewriteLinks: true,
       excludeReferencesFromBundle: {
-        defaultTemplate: 'Search {{skill.name}} for {{link.fileName}} ({{link.filePath}})',
+        defaultTemplate: 'Search {{skill.name}} for {{link.resource.fileName}} ({{link.href}})',
       },
     });
 
     const skillContent = await readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
-    expect(skillContent).toContain('Search my-test-skill for reference.md (docs/reference.md)');
+    expect(skillContent).toContain('Search my-test-skill for reference.md (./docs/reference.md)');
     expect(skillContent).not.toContain('[ref](');
   });
 

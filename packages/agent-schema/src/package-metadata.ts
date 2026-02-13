@@ -67,7 +67,7 @@ export const PackagingOptionsSchema = z.object({
         .optional()
         .describe(
           'Handlebars template for rewriting links to matched files.\n' +
-          'Context: {{link.text}}, {{link.uri}}, {{link.fileName}}, {{link.filePath}}, {{skill.name}}\n' +
+          'Context: {{link.text}}, {{link.href}}, {{link.fragment}}, {{link.type}}, {{link.resource.id}}, {{link.resource.fileName}}, {{link.resource.relativePath}}, {{skill.name}}\n' +
           'Default: "{{link.text}}"'
         ),
     })).optional().default([])
@@ -76,7 +76,7 @@ export const PackagingOptionsSchema = z.object({
       .optional()
       .describe(
         'Handlebars template for non-bundled links that don\'t match any rule (depth-exceeded links).\n' +
-        'Context: {{link.text}}, {{link.uri}}, {{link.fileName}}, {{link.filePath}}, {{skill.name}}\n' +
+        'Context: {{link.text}}, {{link.href}}, {{link.fragment}}, {{link.type}}, {{link.resource.id}}, {{link.resource.fileName}}, {{link.resource.relativePath}}, {{skill.name}}\n' +
         'Default: "{{link.text}}"'
       ),
   }).optional(),
@@ -87,7 +87,7 @@ export type PackagingOptions = z.infer<typeof PackagingOptionsSchema>;
 /**
  * Skill metadata for distribution
  *
- * Describes a Claude Skill packaged in this npm package.
+ * Describes an Agent Skill packaged in this npm package.
  */
 export const VatSkillMetadataSchema = z
   .object({
@@ -111,7 +111,7 @@ export const VatSkillMetadataSchema = z
       .optional()
       .describe('Packaging configuration options'),
   })
-  .describe('Claude Skill metadata for distribution');
+  .describe('Agent Skill metadata for distribution');
 
 export type VatSkillMetadata = z.infer<typeof VatSkillMetadataSchema>;
 
@@ -190,7 +190,7 @@ export const VatPackageMetadataSchema = z
     skills: z
       .array(VatSkillMetadataSchema)
       .optional()
-      .describe('Claude Skills for distribution'),
+      .describe('Agent Skills for distribution'),
     agents: z
       .array(VatAgentMetadataSchema)
       .optional()
