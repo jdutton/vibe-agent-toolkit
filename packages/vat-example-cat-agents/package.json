@@ -40,13 +40,11 @@
     "@vibe-agent-toolkit/agent-runtime": "workspace:*",
     "@vibe-agent-toolkit/agent-schema": "workspace:*",
     "@vibe-agent-toolkit/transports": "workspace:*",
-    "@vibe-agent-toolkit/utils": "workspace:*",
     "syllable": "^5.0.1",
     "zod": "^3.24.1"
   },
   "devDependencies": {
     "@ai-sdk/openai": "^3.0.18",
-    "@anthropic-ai/claude-agent-sdk": "^0.1.5",
     "@anthropic-ai/sdk": "^0.36.0",
     "@langchain/openai": "^0.3.16",
     "@types/node": "^22.10.5",
@@ -54,7 +52,6 @@
     "@vibe-agent-toolkit/runtime-claude-agent-sdk": "workspace:*",
     "@vibe-agent-toolkit/runtime-langchain": "workspace:*",
     "@vibe-agent-toolkit/runtime-openai": "workspace:*",
-    "@vibe-agent-toolkit/runtime-vercel-ai-sdk": "workspace:*",
     "@vitest/coverage-v8": "2.1.8",
     "ai": "^6.0.48",
     "openai": "^4.77.3",
