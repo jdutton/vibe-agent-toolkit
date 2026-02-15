@@ -29,6 +29,7 @@
   },
   "dependencies": {
     "@vibe-agent-toolkit/agent-config": "workspace:*",
+    "@vibe-agent-toolkit/agent-schema": "workspace:*",
     "@vibe-agent-toolkit/resources": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
     "adm-zip": "^0.5.16",

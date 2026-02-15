@@ -27,6 +27,10 @@ validation:
         - name: 'ESLint'
           command: 'bun run lint'
 
+        - name: 'Dependency check'
+          command: 'bun run dependency-check'
+          description: 'Validates dependencies are correctly declared (unused, missing, misplaced)'
+
         - name: 'Repository structure validation'
           command: 'bun run validate-structure'
           description: 'Validates repo structure conventions (no runtime /examples, no /staging, etc.)'

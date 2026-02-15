@@ -22,12 +22,9 @@
   "dependencies": {
     "@langchain/core": "^0.3.29",
     "@vibe-agent-toolkit/agent-runtime": "workspace:*",
-    "langchain": "^0.3.11",
-    "zod": "^3.24.1",
-    "zod-to-json-schema": "^3.24.1"
+    "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@langchain/anthropic": "^0.3.11",
     "@langchain/openai": "^0.3.16",
     "@types/node": "^22.10.5",
     "@vibe-agent-toolkit/dev-tools": "workspace:*",

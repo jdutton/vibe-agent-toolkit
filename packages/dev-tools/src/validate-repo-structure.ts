@@ -327,8 +327,8 @@ async function validateSourceFileLocations(): Promise<void> {
         return;
       }
 
-      // Allow package-level vitest config files
-      if (/^packages\/[^/]+\/vitest\.(config|integration\.config|system\.config)\.ts$/.test(normalizedPath)) {
+      // Allow package-level config files (vitest, knip, etc.)
+      if (/^packages\/[^/]+\/(vitest\.(config|integration\.config|system\.config)|knip\.config)\.ts$/.test(normalizedPath)) {
         return;
       }
 

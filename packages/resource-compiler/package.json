@@ -43,10 +43,6 @@
   },
   "dependencies": {
     "gray-matter": "^4.0.3",
-    "unified": "^11.0.5",
-    "remark-parse": "^11.0.0",
-    "remark-stringify": "^11.0.0",
-    "@kayvan/markdown-tree-parser": "^1.0.0",
     "slugify": "^1.6.6",
     "glob": "^10.3.10",
     "chokidar": "^3.6.0",
