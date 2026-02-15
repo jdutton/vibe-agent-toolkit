@@ -24,7 +24,9 @@
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit"
   },
-  "dependencies": {},
+  "dependencies": {
+    "yaml": "^2.6.1"
+  },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "~5.7.2",

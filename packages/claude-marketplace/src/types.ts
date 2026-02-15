@@ -13,6 +13,34 @@ export type Target = 'claude-desktop' | 'cowork' | 'claude-code';
 /** All targets in order of restrictiveness (most to least) */
 export const ALL_TARGETS: readonly Target[] = ['claude-desktop', 'cowork', 'claude-code'] as const;
 
+/** Per-target impact level used in evidence records */
+export type ImpactLevel = 'ok' | 'needs-review' | 'incompatible';
+
+/** Common impact patterns reused across scanners */
+export const IMPACT_NEEDS_REVIEW_DESKTOP: Record<Target, ImpactLevel> = {
+  'claude-desktop': 'needs-review',
+  cowork: 'ok',
+  'claude-code': 'ok',
+} as const;
+
+export const IMPACT_ALL_OK: Record<Target, ImpactLevel> = {
+  'claude-desktop': 'ok',
+  cowork: 'ok',
+  'claude-code': 'ok',
+} as const;
+
+export const IMPACT_INCOMPATIBLE_DESKTOP: Record<Target, ImpactLevel> = {
+  'claude-desktop': 'incompatible',
+  cowork: 'ok',
+  'claude-code': 'ok',
+} as const;
+
+export const IMPACT_DESKTOP_INCOMPATIBLE_COWORK_REVIEW: Record<Target, ImpactLevel> = {
+  'claude-desktop': 'incompatible',
+  cowork: 'needs-review',
+  'claude-code': 'ok',
+} as const;
+
 /**
  * Three-tier verdict to handle ambiguity in static analysis.
  * - compatible: High confidence this works on the target
@@ -47,7 +75,7 @@ export interface CompatibilityEvidence {
   /** Human-readable detail explaining what was found */
   detail: string;
   /** Impact on each target surface */
-  impact: Record<Target, 'ok' | 'needs-review' | 'incompatible'>;
+  impact: Record<Target, ImpactLevel>;
 }
 
 /**
