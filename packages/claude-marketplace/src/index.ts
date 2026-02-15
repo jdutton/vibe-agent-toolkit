@@ -12,3 +12,5 @@ export type {
 } from './types.js';
 
 export { ALL_TARGETS } from './types.js';
+
+export { analyzeCompatibility } from './compatibility-analyzer.js';
