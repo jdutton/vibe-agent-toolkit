@@ -7,10 +7,23 @@ import { zodToJsonSchema } from 'zod-to-json-schema';
  * @see https://code.claude.com/docs/en/plugins-reference
  */
 
-// Component path configuration
-const ComponentPathSchema = z.object({
-  path: z.string().describe('Relative path to component directory'),
-});
+/**
+ * Component path schemas per official Claude Code plugin spec.
+ * @see https://code.claude.com/docs/en/plugins-reference#component-path-fields
+ *
+ * Path-only fields (commands, agents, skills, outputStyles): string | string[]
+ * Config-capable fields (hooks, mcpServers, lspServers): string | string[] | object
+ */
+const ComponentPathsSchema = z.union([
+  z.string(),
+  z.array(z.string()),
+]);
+
+const ComponentPathsOrConfigSchema = z.union([
+  z.string(),
+  z.array(z.string()),
+  z.record(z.unknown()),
+]);
 
 export const ClaudePluginSchema = z
   .object({
@@ -44,6 +57,7 @@ export const ClaudePluginSchema = z
       .object({
         name: z.string().optional(),
         email: z.string().email().optional(),
+        url: z.string().url().optional(),
       })
       .optional()
       .describe('Plugin author information'),
@@ -56,43 +70,16 @@ export const ClaudePluginSchema = z
       .optional()
       .describe('Search keywords for plugin discovery'),
 
-    // Component paths (all optional)
-    commands: z
-      .array(ComponentPathSchema)
-      .optional()
-      .describe('Paths to command directories'),
-
-    skills: z
-      .array(ComponentPathSchema)
-      .optional()
-      .describe('Paths to skill directories'),
-
-    agents: z
-      .array(ComponentPathSchema)
-      .optional()
-      .describe('Paths to agent directories'),
-
-    hooks: z
-      .array(ComponentPathSchema)
-      .optional()
-      .describe('Paths to hook directories'),
-
-    mcpServers: z
-      .array(ComponentPathSchema)
-      .optional()
-      .describe('Paths to MCP server directories'),
-
-    outputStyles: z
-      .array(ComponentPathSchema)
-      .optional()
-      .describe('Paths to output style directories'),
-
-    lspServers: z
-      .array(ComponentPathSchema)
-      .optional()
-      .describe('Paths to LSP server directories'),
+    // Component paths (all optional) — per official spec, string | string[] or string | string[] | object
+    commands: ComponentPathsSchema.optional().describe('Command files or directories'),
+    skills: ComponentPathsSchema.optional().describe('Skill directories'),
+    agents: ComponentPathsSchema.optional().describe('Agent files or directories'),
+    hooks: ComponentPathsOrConfigSchema.optional().describe('Hook config path(s) or inline config'),
+    mcpServers: ComponentPathsOrConfigSchema.optional().describe('MCP server config path(s) or inline config'),
+    outputStyles: ComponentPathsSchema.optional().describe('Output style files or directories'),
+    lspServers: ComponentPathsOrConfigSchema.optional().describe('LSP server config path(s) or inline config'),
   })
-  .strict()
+  .passthrough() // Accept unknown fields — official spec evolves
   .describe('Claude Code plugin manifest structure');
 
 export type ClaudePlugin = z.infer<typeof ClaudePluginSchema>;

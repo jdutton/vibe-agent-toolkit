@@ -356,7 +356,7 @@ resources (→ utils)
 
 **Architecture:**
 - **Auto-detection**: Detects resource type based on file structure
-  - Plugin directories: `.claude-plugin/plugin.json`
+  - Plugin directories: `.claude-plugin/plugin.json` ([official spec](https://code.claude.com/docs/en/plugins-reference))
   - Marketplace directories: `.claude-plugin/marketplace.json`
   - Registry files: `installed_plugins.json`, `known_marketplaces.json`
   - Skills: `SKILL.md` files

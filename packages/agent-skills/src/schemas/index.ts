@@ -3,6 +3,7 @@
  */
 
 export {
+  AgentSkillFrontmatterJsonSchema,
   AgentSkillFrontmatterSchema,
   VATAgentSkillFrontmatterSchema,
   type AgentSkillFrontmatter,

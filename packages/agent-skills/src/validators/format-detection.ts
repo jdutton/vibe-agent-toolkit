@@ -106,16 +106,14 @@ function detectDirectoryFormat(dirPath: string): ResourceFormat {
 			if (parseResult.success) {
 				// Check if marketplace contains a plugin with source pointing to current directory
 				const hasColocatedPlugin = parseResult.data.plugins.some((plugin) => {
-					const source =
-						typeof plugin.source === 'string'
-							? plugin.source
-							: plugin.source.url;
+					// Only local path sources can be co-located; URL/GitHub sources are remote
+					if (typeof plugin.source !== 'string') return false;
 					// Check for various forms of "current directory" references
 					return (
-						source === './' ||
-						source === '.' ||
-						source === '.\\' ||
-						source === ''
+						plugin.source === './' ||
+						plugin.source === '.' ||
+						plugin.source === '.\\' ||
+						plugin.source === ''
 					);
 				});
 

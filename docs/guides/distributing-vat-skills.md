@@ -756,6 +756,7 @@ For local development, use `--dev` mode instead.
 - [vat-example-cat-agents](../../packages/vat-example-cat-agents/README.md) - Example implementation
 - [vat-development-agents](../../packages/vat-development-agents/README.md) - Example implementation
 - [Claude Code Skills Docs](https://code.claude.com/docs/en/skills) - Agent Skills format
+- [Claude Code Plugins Reference](https://code.claude.com/docs/en/plugins-reference) - Plugin manifest spec (`plugin.json`)
 
 ## Getting Help
 
