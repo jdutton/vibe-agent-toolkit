@@ -1,0 +1,47 @@
+{
+  "name": "@vibe-agent-toolkit/claude-marketplace",
+  "version": "0.1.14",
+  "description": "Claude plugin marketplace tools: compatibility analysis, provenance tracking, enterprise config",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc --build",
+    "build:watch": "tsc --build --watch",
+    "clean": "rm -rf dist *.tsbuildinfo",
+    "test": "vitest run",
+    "test:watch": "vitest watch",
+    "test:coverage": "vitest run --coverage",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "~5.7.2",
+    "vitest": "^3.0.3"
+  },
+  "keywords": [
+    "claude",
+    "marketplace",
+    "plugin",
+    "compatibility",
+    "enterprise"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jdutton/vibe-agent-toolkit.git",
+    "directory": "packages/claude-marketplace"
+  },
+  "author": "Jeff Dutton",
+  "license": "MIT"
+}
