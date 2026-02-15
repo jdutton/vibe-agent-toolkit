@@ -13,8 +13,9 @@ import {
 const PLUGIN_TYPE = 'claude-plugin' as const;
 
 /**
- * Validate a plugin directory structure
+ * Validate a plugin directory structure against the ClaudePluginSchema.
  *
+ * @see https://code.claude.com/docs/en/plugins-reference — Official plugin manifest spec
  * @param pluginPath - Absolute path to plugin directory
  * @returns Validation result with issues
  */

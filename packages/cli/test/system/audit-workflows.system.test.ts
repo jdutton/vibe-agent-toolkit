@@ -122,7 +122,7 @@ Test content.
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- errorDir is controlled in tests
     fs.mkdirSync(errorDir, { recursive: true });
 
-    // Create an invalid skill (missing required description field)
+    // Create an invalid skill (invalid name format — uppercase not allowed)
     // Note: must create subdirectory since scanDirectory only finds SKILL.md in directories
     const errorDir1 = join(errorDir, 'skill1');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- errorDir1 is controlled in tests
@@ -130,7 +130,8 @@ Test content.
     writeTestFile(
       join(errorDir1, 'SKILL.md'),
       `---
-name: invalid-skill
+name: Invalid_Skill_Name
+description: Has invalid name format
 ---
 
 # Invalid Skill
@@ -139,14 +140,15 @@ Test content.
 `
     );
 
-    // Create another invalid skill (missing required name field)
+    // Create another invalid skill (name too long — exceeds 64 chars)
     const errorDir2 = join(errorDir, 'skill2');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- errorDir2 is controlled in tests
     fs.mkdirSync(errorDir2, { recursive: true });
     writeTestFile(
       join(errorDir2, 'SKILL.md'),
       `---
-description: Missing name
+name: ${'a'.repeat(65)}
+description: Name exceeds max length
 ---
 
 # Another Invalid Skill
@@ -166,7 +168,7 @@ Test content.
     expect(result.stderr).toBeTruthy();
 
     // Should include error details (field validation errors)
-    expect(result.stderr.toLowerCase()).toContain('missing');
+    expect(result.stderr.toLowerCase()).toContain('name');
   });
 
   it('should exit with 0 for fully valid resources', () => {

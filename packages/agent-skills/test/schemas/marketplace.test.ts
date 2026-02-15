@@ -11,17 +11,9 @@ function loadMarketplaceFixture(name: string): unknown {
   return JSON.parse(readFileSync(fixturePath, 'utf-8'));
 }
 
-/**
- * Helper to assert that strict validation rejects unknown fields
- */
-function assertStrictValidationRejects(data: unknown): void {
-  const result = MarketplaceSchema.safeParse(data);
-  expect(result.success).toBe(false);
-  if (!result.success) {
-    const strictError = result.error.issues.find(i => i.code === 'unrecognized_keys');
-    expect(strictError).toBeDefined();
-  }
-}
+
+const TEST_MARKETPLACE_NAME = 'test-marketplace';
+const PASSTHROUGH_VALUE = 'should be preserved';
 
 describe('MarketplaceSchema', () => {
   describe('bundled skills marketplace', () => {
@@ -49,8 +41,7 @@ describe('MarketplaceSchema', () => {
         expect(result.data.plugins).toBeInstanceOf(Array);
         // Check that source can be an object with url
         const firstPlugin = result.data.plugins[0];
-        if (firstPlugin && typeof firstPlugin.source === 'object') {
-          expect(firstPlugin.source.source).toBe('url');
+        if (firstPlugin && typeof firstPlugin.source === 'object' && firstPlugin.source.source === 'url') {
           expect(firstPlugin.source.url).toBeDefined();
         }
       }
@@ -72,8 +63,147 @@ describe('MarketplaceSchema', () => {
     });
   });
 
+  describe('LspServerConfigSchema', () => {
+    it('requires extensionToLanguage', () => {
+      const marketplace = {
+        name: TEST_MARKETPLACE_NAME,
+        owner: { name: 'Test' },
+        plugins: [{
+          name: 'lsp-plugin',
+          source: './',
+          lspServers: {
+            go: { command: 'gopls', args: ['serve'] },  // missing extensionToLanguage
+          },
+        }],
+      };
+      expect(MarketplaceSchema.safeParse(marketplace).success).toBe(false);
+    });
+
+    it('accepts LSP config with all official fields', () => {
+      const marketplace = {
+        name: TEST_MARKETPLACE_NAME,
+        owner: { name: 'Test' },
+        plugins: [{
+          name: 'lsp-plugin',
+          source: './',
+          lspServers: {
+            go: {
+              command: 'gopls',
+              args: ['serve'],
+              extensionToLanguage: { '.go': 'go' },
+              transport: 'stdio',
+              env: { GOPATH: '/usr/local/go' },
+              initializationOptions: { gofumpt: true },
+              settings: { formatting: { gofumpt: true } },
+              workspaceFolder: '.',
+              startupTimeout: 5000,
+              shutdownTimeout: 3000,
+              restartOnCrash: true,
+              maxRestarts: 3,
+            },
+          },
+        }],
+      };
+      expect(MarketplaceSchema.safeParse(marketplace).success).toBe(true);
+    });
+  });
+
+  describe('plugin source types', () => {
+    it('accepts github source with repo', () => {
+      const marketplace = {
+        name: TEST_MARKETPLACE_NAME,
+        owner: { name: 'Test' },
+        plugins: [{
+          name: 'my-plugin',
+          source: { source: 'github', repo: 'owner/repo' },
+        }],
+      };
+      expect(MarketplaceSchema.safeParse(marketplace).success).toBe(true);
+    });
+
+    it('accepts github source with ref and sha', () => {
+      const marketplace = {
+        name: TEST_MARKETPLACE_NAME,
+        owner: { name: 'Test' },
+        plugins: [{
+          name: 'my-plugin',
+          source: { source: 'github', repo: 'owner/repo', ref: 'v1.0.0', sha: 'abc123' },
+        }],
+      };
+      expect(MarketplaceSchema.safeParse(marketplace).success).toBe(true);
+    });
+
+    it('accepts url source with ref and sha', () => {
+      const marketplace = {
+        name: TEST_MARKETPLACE_NAME,
+        owner: { name: 'Test' },
+        plugins: [{
+          name: 'my-plugin',
+          source: { source: 'url', url: 'https://github.com/owner/repo.git', ref: 'main', sha: 'def456' },
+        }],
+      };
+      expect(MarketplaceSchema.safeParse(marketplace).success).toBe(true);
+    });
+  });
+
+  describe('plugin entry fields from official spec', () => {
+    it('accepts plugin without description (optional)', () => {
+      const marketplace = {
+        name: TEST_MARKETPLACE_NAME,
+        owner: { name: 'Test' },
+        plugins: [{
+          name: 'my-plugin',
+          source: './',
+        }],
+      };
+      expect(MarketplaceSchema.safeParse(marketplace).success).toBe(true);
+    });
+
+    it('accepts plugin with component path fields', () => {
+      const marketplace = {
+        name: TEST_MARKETPLACE_NAME,
+        owner: { name: 'Test' },
+        plugins: [{
+          name: 'my-plugin',
+          source: './',
+          commands: './commands/',
+          agents: './agents/',
+          hooks: './hooks/hooks.json',
+          mcpServers: './mcp-config.json',
+        }],
+      };
+      expect(MarketplaceSchema.safeParse(marketplace).success).toBe(true);
+    });
+
+    it('accepts plugin with repository, license, keywords', () => {
+      const marketplace = {
+        name: TEST_MARKETPLACE_NAME,
+        owner: { name: 'Test' },
+        plugins: [{
+          name: 'my-plugin',
+          source: './',
+          repository: 'https://github.com/owner/repo',
+          license: 'MIT',
+          keywords: ['productivity', 'code-review'],
+        }],
+      };
+      expect(MarketplaceSchema.safeParse(marketplace).success).toBe(true);
+    });
+  });
+
+  describe('marketplace metadata', () => {
+    it('accepts metadata.pluginRoot', () => {
+      const marketplace = {
+        name: TEST_MARKETPLACE_NAME,
+        owner: { name: 'Test' },
+        metadata: { description: 'Test', version: '1.0.0', pluginRoot: './plugins' },
+        plugins: [],
+      };
+      expect(MarketplaceSchema.safeParse(marketplace).success).toBe(true);
+    });
+  });
+
   describe('validation errors', () => {
-    const TEST_MARKETPLACE_NAME = 'test-marketplace';
     const TEST_PLUGIN_NAME = 'test-plugin';
 
     it('should reject marketplace without required name field', () => {
@@ -122,8 +252,8 @@ describe('MarketplaceSchema', () => {
       expect(result.success).toBe(false);
     });
 
-    it('should reject plugin without required description field', () => {
-      const invalid = {
+    it('should accept plugin without description (optional field)', () => {
+      const valid = {
         name: TEST_MARKETPLACE_NAME,
         owner: { name: 'Test' },
         plugins: [
@@ -133,9 +263,9 @@ describe('MarketplaceSchema', () => {
           },
         ],
       };
-      const result = MarketplaceSchema.safeParse(invalid);
+      const result = MarketplaceSchema.safeParse(valid);
 
-      expect(result.success).toBe(false);
+      expect(result.success).toBe(true);
     });
 
     it('should reject plugin without required source field', () => {
@@ -154,20 +284,24 @@ describe('MarketplaceSchema', () => {
       expect(result.success).toBe(false);
     });
 
-    it('should reject marketplace with unknown fields', () => {
-      const invalid = {
+    it('should accept marketplace with unknown fields (passthrough)', () => {
+      const data = {
         name: TEST_MARKETPLACE_NAME,
         owner: { name: 'Test Owner' },
         metadata: { description: 'Test', version: '1.0.0' },
         plugins: [],
-        unknownField: 'should be rejected',
+        unknownField: PASSTHROUGH_VALUE,
       };
+      const result = MarketplaceSchema.safeParse(data);
 
-      assertStrictValidationRejects(invalid);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect((result.data as Record<string, unknown>)['unknownField']).toBe(PASSTHROUGH_VALUE);
+      }
     });
 
-    it('should reject plugin with unknown fields', () => {
-      const invalid = {
+    it('should accept plugin with unknown fields (passthrough)', () => {
+      const data = {
         name: TEST_MARKETPLACE_NAME,
         owner: { name: 'Test Owner' },
         metadata: { description: 'Test', version: '1.0.0' },
@@ -175,11 +309,15 @@ describe('MarketplaceSchema', () => {
           name: TEST_PLUGIN_NAME,
           description: 'A test plugin',
           source: './',
-          unknownPluginField: 'should be rejected',
+          unknownPluginField: PASSTHROUGH_VALUE,
         }],
       };
+      const result = MarketplaceSchema.safeParse(data);
 
-      assertStrictValidationRejects(invalid);
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect((result.data.plugins[0] as Record<string, unknown>)['unknownPluginField']).toBe(PASSTHROUGH_VALUE);
+      }
     });
   });
 });

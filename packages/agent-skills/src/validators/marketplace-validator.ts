@@ -15,6 +15,7 @@ const MARKETPLACE_TYPE = 'marketplace' as const;
 /**
  * Validate a marketplace directory structure
  *
+ * @see https://code.claude.com/docs/en/plugins-reference — Official plugin/marketplace spec
  * @param marketplacePath - Absolute path to marketplace directory
  * @returns Validation result with issues
  */

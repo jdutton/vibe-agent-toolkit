@@ -41,24 +41,22 @@ describe('validateSkill', () => {
     expectError(result, 'SKILL_MISSING_FRONTMATTER');
   });
 
-  it('should detect missing name', async () => {
+  it('should accept missing name (optional in base schema)', async () => {
     const result = await createSkillAndValidate(
       getTempDir(),
       createSkillContent({ description: 'Test' }, ''),
     );
 
-    expect(result.status).toBe('error');
-    expectError(result, 'SKILL_MISSING_NAME');
+    expect(result.status).not.toBe('error');
   });
 
-  it('should detect missing description', async () => {
+  it('should accept missing description (optional in base schema)', async () => {
     const result = await createSkillAndValidate(
       getTempDir(),
       createSkillContent({ name: 'my-skill' }, ''),
     );
 
-    expect(result.status).toBe('error');
-    expectError(result, 'SKILL_MISSING_DESCRIPTION');
+    expect(result.status).not.toBe('error');
   });
 
   it('should detect invalid name', async () => {

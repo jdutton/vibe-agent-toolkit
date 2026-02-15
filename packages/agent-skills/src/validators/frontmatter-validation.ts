@@ -4,6 +4,8 @@
  * Validates skill frontmatter (name format, description, reserved words, etc.)
  * Used by both validateSkill() and validateSkillForPackaging() to ensure
  * consistent validation regardless of entry point.
+ *
+ * @see https://code.claude.com/docs/en/skills — Official Claude Code skill frontmatter fields
  */
 
 import { AgentSkillFrontmatterSchema, VATAgentSkillFrontmatterSchema } from '../schemas/agent-skill-frontmatter.js';

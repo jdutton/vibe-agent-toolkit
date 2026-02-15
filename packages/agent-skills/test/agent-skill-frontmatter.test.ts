@@ -7,7 +7,7 @@ import {
 } from '../src/schemas/agent-skill-frontmatter.js';
 
 describe('AgentSkillFrontmatterSchema', () => {
-  describe('required fields', () => {
+  describe('optional fields (name and description)', () => {
     it('should validate minimal valid frontmatter', () => {
       const data = {
         name: 'my-skill',
@@ -19,24 +19,30 @@ describe('AgentSkillFrontmatterSchema', () => {
       expect(result.success).toBe(true);
     });
 
-    it('should reject missing name', () => {
+    it('should accept missing name (defaults to directory name)', () => {
       const data = {
         description: 'Does something useful',
       };
 
       const result = AgentSkillFrontmatterSchema.safeParse(data);
 
-      expect(result.success).toBe(false);
+      expect(result.success).toBe(true);
     });
 
-    it('should reject missing description', () => {
+    it('should accept missing description', () => {
       const data = {
         name: 'my-skill',
       };
 
       const result = AgentSkillFrontmatterSchema.safeParse(data);
 
-      expect(result.success).toBe(false);
+      expect(result.success).toBe(true);
+    });
+
+    it('should accept empty frontmatter', () => {
+      const result = AgentSkillFrontmatterSchema.safeParse({});
+
+      expect(result.success).toBe(true);
     });
   });
 
@@ -168,17 +174,17 @@ describe('AgentSkillFrontmatterSchema', () => {
     });
   });
 
-  describe('strict mode (console compatibility)', () => {
-    it('should reject unknown top-level fields', () => {
+  describe('passthrough mode (forward compatibility)', () => {
+    it('should accept unknown top-level fields', () => {
       const data = {
         name: 'my-skill',
         description: 'Test',
-        version: '1.0.0', // Should be in metadata
+        version: '1.0.0', // Unknown field — passthrough allows it
       };
 
       const result = AgentSkillFrontmatterSchema.safeParse(data);
 
-      expect(result.success).toBe(false);
+      expect(result.success).toBe(true);
     });
 
     it('should allow custom fields in metadata', () => {

@@ -48,14 +48,12 @@ describe('validateFrontmatterSchema', () => {
 		});
 	});
 
-	describe('missing required fields', () => {
-		it('should report SKILL_MISSING_NAME when name is absent', () => {
+	describe('optional name and description in base schema', () => {
+		it('should not report issues when name is absent (optional)', () => {
 			const issues = validateFrontmatterSchema({ description: 'Valid description' }, false);
 
 			const issue = findIssueByCode(issues, 'SKILL_MISSING_NAME');
-			expect(issue).toBeDefined();
-			expect(issue?.severity).toBe('error');
-			expect(issue?.location).toBe('frontmatter');
+			expect(issue).toBeUndefined();
 		});
 
 		it('should report SKILL_MISSING_NAME when name is empty string', () => {
@@ -65,13 +63,11 @@ describe('validateFrontmatterSchema', () => {
 			expect(issue).toBeDefined();
 		});
 
-		it('should report SKILL_MISSING_DESCRIPTION when description is absent', () => {
+		it('should not report issues when description is absent (optional)', () => {
 			const issues = validateFrontmatterSchema({ name: 'my-skill' }, false);
 
 			const issue = findIssueByCode(issues, 'SKILL_MISSING_DESCRIPTION');
-			expect(issue).toBeDefined();
-			expect(issue?.severity).toBe('error');
-			expect(issue?.location).toBe('frontmatter');
+			expect(issue).toBeUndefined();
 		});
 
 		it('should report SKILL_MISSING_DESCRIPTION when description is empty string', () => {
@@ -79,6 +75,32 @@ describe('validateFrontmatterSchema', () => {
 
 			const issue = findIssueByCode(issues, 'SKILL_MISSING_DESCRIPTION');
 			expect(issue).toBeDefined();
+		});
+	});
+
+	describe('required name and description in VAT schema', () => {
+		it('should report SKILL_MISSING_NAME when name is absent in VAT mode', () => {
+			const issues = validateFrontmatterSchema(
+				{ description: 'Valid', metadata: { version: '1.0.0' } },
+				true,
+			);
+
+			const issue = findIssueByCode(issues, 'SKILL_MISSING_NAME');
+			expect(issue).toBeDefined();
+			expect(issue?.severity).toBe('error');
+			expect(issue?.location).toBe('frontmatter');
+		});
+
+		it('should report SKILL_MISSING_DESCRIPTION when description is absent in VAT mode', () => {
+			const issues = validateFrontmatterSchema(
+				{ name: 'my-skill', metadata: { version: '1.0.0' } },
+				true,
+			);
+
+			const issue = findIssueByCode(issues, 'SKILL_MISSING_DESCRIPTION');
+			expect(issue).toBeDefined();
+			expect(issue?.severity).toBe('error');
+			expect(issue?.location).toBe('frontmatter');
 		});
 	});
 

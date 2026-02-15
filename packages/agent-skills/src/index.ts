@@ -25,6 +25,7 @@ export {
 } from './walk-link-graph.js';
 
 export {
+  AgentSkillFrontmatterJsonSchema,
   AgentSkillFrontmatterSchema,
   VATAgentSkillFrontmatterSchema,
   type AgentSkillFrontmatter,

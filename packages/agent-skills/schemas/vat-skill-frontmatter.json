@@ -9,7 +9,7 @@
           "minLength": 1,
           "maxLength": 64,
           "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$",
-          "description": "Skill identifier, must match parent directory name"
+          "description": "Skill identifier (required for VAT skills)"
         },
         "description": {
           "type": "string",
@@ -41,7 +41,36 @@
         },
         "allowed-tools": {
           "type": "string",
-          "description": "Pre-approved tools (experimental)"
+          "description": "Space-separated list of pre-approved tools"
+        },
+        "argument-hint": {
+          "type": "string",
+          "description": "Hint text shown to the user when invoking the skill"
+        },
+        "disable-model-invocation": {
+          "type": "boolean",
+          "description": "Whether the model can invoke this skill automatically (default: false)"
+        },
+        "user-invocable": {
+          "type": "boolean",
+          "description": "Whether the user can invoke this skill via slash command (default: true)"
+        },
+        "model": {
+          "type": "string",
+          "description": "Model to use when running this skill (e.g., \"sonnet\", \"opus\")"
+        },
+        "context": {
+          "type": "string",
+          "description": "Execution context (e.g., \"fork\" for isolated context)"
+        },
+        "agent": {
+          "type": "string",
+          "description": "Agent identity for multi-agent workflows"
+        },
+        "hooks": {
+          "type": "object",
+          "additionalProperties": {},
+          "description": "Lifecycle hooks (e.g., PostToolUse)"
         }
       },
       "required": [
@@ -49,7 +78,7 @@
         "description",
         "metadata"
       ],
-      "additionalProperties": false
+      "additionalProperties": true
     }
   },
   "$schema": "http://json-schema.org/draft-07/schema#"

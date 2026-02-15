@@ -30,6 +30,7 @@ export const PUBLISHED_PACKAGES = [
   'agent-runtime',
   'runtime-claude-agent-sdk',
   'agent-skills',
+  'claude-marketplace',
   'runtime-langchain',
   'runtime-openai',
   'runtime-vercel-ai-sdk',
