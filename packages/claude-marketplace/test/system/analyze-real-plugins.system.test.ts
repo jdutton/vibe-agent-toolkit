@@ -9,21 +9,21 @@
 
 import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
 import { analyzeCompatibility } from '../../src/compatibility-analyzer.js';
 import type { CompatibilityResult } from '../../src/types.js';
 
-const PLUGINS_DIR = resolve(homedir(), '.claude/plugins/cache');
+const PLUGINS_DIR = resolve(homedir(), '.claude', 'plugins', 'cache');
 
 describe('analyzeCompatibility against local plugins', () => {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- PLUGINS_DIR derived from homedir(), safe
   const hasPlugins = existsSync(PLUGINS_DIR);
 
   it('resolves plugins cache path', () => {
-    expect(PLUGINS_DIR).toContain('.claude/plugins/cache');
+    expect(PLUGINS_DIR).toContain(join('.claude', 'plugins', 'cache'));
   });
 
   it.skipIf(!hasPlugins)('analyzes all locally installed plugins without errors', async () => {
