@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { analyzeCompatibility } from '../src/compatibility-analyzer.js';
 import type { CompatibilityEvidence } from '../src/types.js';
 
+import { verdicts } from './test-helpers.js';
+
 const fixtureDir = (name: string) => resolve(import.meta.dirname, 'fixtures', name);
 const hasSource = (evidence: CompatibilityEvidence[], source: string) =>
   evidence.some((e: CompatibilityEvidence) => e.source === source);
@@ -13,17 +15,13 @@ describe('analyzeCompatibility', () => {
   it('marks pure instruction plugin as compatible everywhere', async () => {
     const result = await analyzeCompatibility(fixtureDir('pure-instruction-plugin'));
     expect(result.plugin).toBe('pure-instruction');
-    expect(result.analyzed['claude-desktop']).toBe('compatible');
-    expect(result.analyzed.cowork).toBe('compatible');
-    expect(result.analyzed['claude-code']).toBe('compatible');
+    expect(result.analyzed).toEqual(verdicts('compatible', 'compatible', 'compatible'));
     expect(result.evidence).toEqual([]);
   });
 
   it('flags python script plugin as needs-review for desktop', async () => {
     const result = await analyzeCompatibility(fixtureDir('python-script-plugin'));
-    expect(result.analyzed['claude-desktop']).toBe('needs-review');
-    expect(result.analyzed.cowork).toBe('compatible');
-    expect(result.analyzed['claude-code']).toBe('compatible');
+    expect(result.analyzed).toEqual(verdicts('needs-review', 'compatible', 'compatible'));
     expect(result.evidence.length).toBeGreaterThan(0);
     expect(hasSource(result.evidence, 'code-block')).toBe(true);
     expect(hasSource(result.evidence, 'script')).toBe(true);
@@ -48,9 +46,7 @@ describe('analyzeCompatibility', () => {
 
   it('marks node-bundled plugin as compatible everywhere', async () => {
     const result = await analyzeCompatibility(fixtureDir('node-bundled-plugin'));
-    expect(result.analyzed['claude-desktop']).toBe('compatible');
-    expect(result.analyzed.cowork).toBe('compatible');
-    expect(result.analyzed['claude-code']).toBe('compatible');
+    expect(result.analyzed).toEqual(verdicts('compatible', 'compatible', 'compatible'));
   });
 
   it('includes summary counts', async () => {

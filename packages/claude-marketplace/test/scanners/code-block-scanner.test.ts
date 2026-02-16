@@ -1,8 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { scanCodeBlocks } from '../../src/scanners/code-block-scanner.js';
-
-const NEEDS_REVIEW = 'needs-review';
+import { bashCodeBlock, impact } from '../test-helpers.js';
 
 describe('scanCodeBlocks', () => {
   it('returns empty array for markdown with no code blocks', () => {
@@ -11,114 +10,37 @@ describe('scanCodeBlocks', () => {
     expect(result).toEqual([]);
   });
 
-  it('detects python3 command in bash code block', () => {
+  const NEEDS_REVIEW = impact('needs-review');
+
+  it.each([
+    { cmd: 'python3 scripts/unit-economics.py --sales-costs 500000', signal: 'python3', expected: NEEDS_REVIEW },
+    { cmd: 'pip install pandas numpy', signal: 'pip install', expected: impact('incompatible') },
+    { cmd: 'npm install express', signal: 'npm install', expected: NEEDS_REVIEW },
+    { cmd: 'node scripts/process.mjs --input data.json', signal: 'node', expected: impact() },
+    { cmd: 'bash scripts/setup.sh', signal: 'bash', expected: NEEDS_REVIEW },
+  ])('detects "$signal" command in bash code block', ({ cmd, signal, expected }) => {
+    const result = scanCodeBlocks(bashCodeBlock(cmd), 'SKILL.md');
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ source: 'code-block', signal, impact: expected });
+  });
+
+  it('includes file path and line number in evidence', () => {
     const content = [
       '# Usage',
       '',
       '```bash',
-      'python3 scripts/unit-economics.py --sales-costs 500000',
+      'python3 scripts/unit-economics.py',
       '```',
     ].join('\n');
 
     const result = scanCodeBlocks(content, 'skills/finance/SKILL.md');
     expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      source: 'code-block',
-      file: 'skills/finance/SKILL.md',
-      signal: 'python3',
-      impact: {
-        'claude-desktop': NEEDS_REVIEW,
-        cowork: 'ok',
-        'claude-code': 'ok',
-      },
-    });
+    expect(result[0]?.file).toBe('skills/finance/SKILL.md');
     expect(result[0]?.line).toBeGreaterThan(0);
   });
 
-  it('detects pip install as incompatible with desktop', () => {
-    const content = [
-      '```bash',
-      'pip install pandas numpy',
-      '```',
-    ].join('\n');
-
-    const result = scanCodeBlocks(content, 'SKILL.md');
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      signal: 'pip install',
-      impact: {
-        'claude-desktop': 'incompatible',
-        cowork: 'ok',
-        'claude-code': 'ok',
-      },
-    });
-  });
-
-  it('detects npm install as needs-review for desktop', () => {
-    const content = [
-      '```bash',
-      'npm install express',
-      '```',
-    ].join('\n');
-
-    const result = scanCodeBlocks(content, 'SKILL.md');
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      signal: 'npm install',
-      impact: {
-        'claude-desktop': NEEDS_REVIEW,
-        cowork: 'ok',
-        'claude-code': 'ok',
-      },
-    });
-  });
-
-  it('treats node commands as compatible everywhere', () => {
-    const content = [
-      '```bash',
-      'node scripts/process.mjs --input data.json',
-      '```',
-    ].join('\n');
-
-    const result = scanCodeBlocks(content, 'SKILL.md');
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      signal: 'node',
-      impact: {
-        'claude-desktop': 'ok',
-        cowork: 'ok',
-        'claude-code': 'ok',
-      },
-    });
-  });
-
-  it('detects bash/sh script invocation', () => {
-    const content = [
-      '```bash',
-      'bash scripts/setup.sh',
-      '```',
-    ].join('\n');
-
-    const result = scanCodeBlocks(content, 'SKILL.md');
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      signal: 'bash',
-      impact: {
-        'claude-desktop': NEEDS_REVIEW,
-        cowork: 'ok',
-        'claude-code': 'ok',
-      },
-    });
-  });
-
   it('detects uv run command', () => {
-    const content = [
-      '```bash',
-      'uv run python scripts/analyze.py',
-      '```',
-    ].join('\n');
-
-    const result = scanCodeBlocks(content, 'SKILL.md');
+    const result = scanCodeBlocks(bashCodeBlock('uv run python scripts/analyze.py'), 'SKILL.md');
     expect(result.some(e => e.signal === 'uv')).toBe(true);
   });
 
@@ -155,13 +77,7 @@ describe('scanCodeBlocks', () => {
   });
 
   it('scans unlabeled code blocks for commands', () => {
-    const content = [
-      '```',
-      'python3 scripts/calculate.py',
-      '```',
-    ].join('\n');
-
-    const result = scanCodeBlocks(content, 'SKILL.md');
+    const result = scanCodeBlocks(['```', 'python3 scripts/calculate.py', '```'].join('\n'), 'SKILL.md');
     expect(result.length).toBeGreaterThanOrEqual(1);
   });
 });
