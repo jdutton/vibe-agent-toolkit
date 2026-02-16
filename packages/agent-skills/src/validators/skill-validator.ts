@@ -11,6 +11,7 @@ import type { ValidateOptions, ValidationIssue, ValidationResult } from './types
  * Uses ResourceRegistry for markdown/link validation
  * Adds skill-specific validation (frontmatter schema, skill rules)
  *
+ * @see https://code.claude.com/docs/en/skills — Official Claude Code skill spec
  * @param options - Validation options
  * @returns Validation result with all validation issues
  */

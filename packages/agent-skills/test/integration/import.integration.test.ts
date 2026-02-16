@@ -169,24 +169,22 @@ describe('importSkillToAgent (integration)', () => {
       expect(result.error).toContain('does not exist');
     });
 
-    it('should fail when SKILL.md is missing name field', async () => {
+    it('should succeed when SKILL.md is missing name field (optional per Claude Code spec)', async () => {
       const { result } = await createSkillAndImport(
         getTempDir(),
         createSkillContent({ description: 'Missing name field' }, TEST_CONTENT),
       );
 
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('name');
+      expect(result.success).toBe(true);
     });
 
-    it('should fail when SKILL.md is missing description field', async () => {
+    it('should succeed when SKILL.md is missing description field (optional per Claude Code spec)', async () => {
       const { result } = await createSkillAndImport(
         getTempDir(),
         createSkillContent({ name: TEST_SKILL_NAME }, TEST_CONTENT),
       );
 
-      expect(result.success).toBe(false);
-      expect(result.error).toContain('description');
+      expect(result.success).toBe(true);
     });
 
     it('should fail when SKILL.md has invalid name format', async () => {
