@@ -20,7 +20,7 @@ export function scanHooksConfig(config: Record<string, unknown>, filePath: strin
       const h = handler as Record<string, unknown>;
       if (h['type'] !== 'command' || typeof h['command'] !== 'string') continue;
 
-      const command = h['command'] as string;
+      const command = h['command'];
       const classification = classifyCommand(command);
       if (classification) {
         evidence.push({
