@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/dev-tools",
-  "version": "0.1.14",
+  "version": "0.1.15-rc.1",
   "private": true,
   "type": "module",
   "description": "Development tools for the monorepo",

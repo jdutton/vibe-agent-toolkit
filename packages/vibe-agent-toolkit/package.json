@@ -1,6 +1,6 @@
 {
   "name": "vibe-agent-toolkit",
-  "version": "0.1.14",
+  "version": "0.1.15-rc.1",
   "description": "Modular toolkit for building, testing, and deploying portable AI agents",
   "type": "module",
   "bin": {
@@ -30,7 +30,8 @@
   },
   "homepage": "https://github.com/jdutton/vibe-agent-toolkit#readme",
   "dependencies": {
-    "@vibe-agent-toolkit/cli": "workspace:*"
+    "@vibe-agent-toolkit/cli": "workspace:*",
+    "@vibe-agent-toolkit/vat-development-agents": "workspace:*"
   },
   "publishConfig": {
     "access": "public"

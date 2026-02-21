@@ -83,7 +83,11 @@ const config: KnipConfig = {
 
     // Umbrella package: re-exports CLI for global install
     'packages/vibe-agent-toolkit': {
-      ignoreDependencies: ['@vibe-agent-toolkit/cli'],
+      ignoreDependencies: [
+        '@vibe-agent-toolkit/cli',
+        // Installed so its postinstall hook deploys the vibe-agent-toolkit skill to ~/.claude/skills/
+        '@vibe-agent-toolkit/vat-development-agents',
+      ],
     },
 
   },
