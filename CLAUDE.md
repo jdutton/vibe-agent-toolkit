@@ -167,11 +167,11 @@ resources:
 **Key rules:**
 - A file can belong to multiple collections (all schemas validated)
 - `permissive` mode: required fields must be present, extra fields OK — use for docs with project-specific extras
-- `strict` mode: schema is exact — use for SKILL.md or API specs
+- `strict` mode: respects `additionalProperties: false` in the schema — use for SKILL.md or API specs
 - Schema paths: relative to config file, or npm package reference (`@vibe-agent-toolkit/agent-skills/schemas/...`)
 - `vat resources validate` automatically applies all collection schemas — no extra flags needed
-- `--collection <id>` flag filters validation to a single collection
-- Full docs: `docs/guides/collection-validation.md`
+- `--collection <id>` flag filters validation to a single collection (requires config mode — no path argument)
+- Full docs: [docs/guides/collection-validation.md](docs/guides/collection-validation.md)
 
 **Why this matters:** Without collections, you get one schema for all files. With collections, each doc type enforces its own contract. This is essential for multi-type knowledge bases (systems, teams, ADRs, processes, etc.).
 

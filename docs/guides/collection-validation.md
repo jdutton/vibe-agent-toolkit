@@ -23,19 +23,19 @@ version: 1
 resources:
   collections:
     guides:
-      pattern: "docs/guides/**/*.md"
+      include: ["docs/guides/**/*.md"]
       validation:
         frontmatterSchema: "schemas/guide-frontmatter.json"
         mode: strict  # No extra fields allowed
 
     documentation:
-      pattern: "docs/**/*.md"
+      include: ["docs/**/*.md"]
       validation:
         frontmatterSchema: "schemas/doc-frontmatter.json"
         mode: permissive  # Extra fields allowed
 
     skills:
-      pattern: "**/*-SKILL.md"
+      include: ["**/*-SKILL.md"]
       validation:
         frontmatterSchema: "schemas/skill-frontmatter.json"
         mode: strict
@@ -151,7 +151,7 @@ error: Frontmatter validation failed for '(root)'. Additional property 'custom_f
 ```yaml
 collections:
   documentation:
-    pattern: "docs/**/*.md"
+    include: ["docs/**/*.md"]
     validation:
       frontmatterSchema: "schemas/doc-frontmatter.json"
       mode: permissive  # Allow custom fields
@@ -173,13 +173,13 @@ A resource can belong to multiple collections if it matches multiple patterns:
 resources:
   collections:
     all-docs:
-      pattern: "docs/**/*.md"
+      include: ["docs/**/*.md"]
       validation:
         frontmatterSchema: "schemas/base-doc.json"
         mode: permissive
 
     guides:
-      pattern: "docs/guides/**/*.md"
+      include: ["docs/guides/**/*.md"]
       validation:
         frontmatterSchema: "schemas/guide-frontmatter.json"
         mode: strict
@@ -332,19 +332,20 @@ The test fixtures demonstrate:
 resources:
   collections:
     <collection-name>:
-      pattern: <glob-pattern>        # Required: File pattern to match
+      include: [<glob-pattern>, ...]  # Required: File patterns to match (array)
+      exclude: [<glob-pattern>, ...]  # Optional: Patterns to exclude
       validation:
-        frontmatterSchema: <path>    # Required: Path to JSON Schema file
-        mode: <strict|permissive>    # Optional: Default is 'strict'
+        frontmatterSchema: <path>     # Required: Path to JSON Schema file
+        mode: <strict|permissive>     # Optional: Default is 'strict'
 ```
 
-### Pattern Matching
+### Include/Exclude Matching
 
-Patterns use glob syntax:
-- `docs/**/*.md` - All markdown in docs/ recursively
-- `**/SKILL.md` - All files ending in SKILL.md
-- `docs/*.md` - Only markdown in docs/ (not subdirectories)
-- `**/*-SKILL.md` - Files ending in -SKILL.md anywhere
+`include` and `exclude` use glob syntax (arrays of patterns):
+- `["docs/**/*.md"]` - All markdown in docs/ recursively
+- `["**/SKILL.md"]` - All files ending in SKILL.md
+- `["docs/*.md"]` - Only markdown in docs/ (not subdirectories)
+- `["**/*-SKILL.md"]` - Files ending in -SKILL.md anywhere
 
 ### Schema Paths
 
@@ -389,7 +390,7 @@ Check if pattern matches the files:
 vat resources scan docs/  # Shows which files were found
 ```
 
-Verify pattern in config file matches your file structure.
+Verify the `include` patterns in config file match your file structure.
 
 ### Schema file not found
 
