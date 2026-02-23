@@ -336,6 +336,22 @@ function logIssues(
 }
 
 /**
+ * Check whether a path should be excluded during directory scanning.
+ * For directories, checks both bare path and path with trailing slash
+ * so patterns like "dist/**" prune the directory itself.
+ */
+function isExcludedPath(
+  isMatch: ReturnType<typeof picomatch>,
+  relativePath: string,
+  isDirectory: boolean
+): boolean {
+  if (isDirectory) {
+    return isMatch(relativePath) || isMatch(relativePath + '/');
+  }
+  return isMatch(relativePath);
+}
+
+/**
  * Handle file entry during directory scan
  */
 async function handleFileEntry(
@@ -407,16 +423,18 @@ async function scanDirectory(
   const excludePatterns = options.exclude ?? [];
   const resolvedBaseDir = baseDir ?? dirPath;
 
+  // Compile picomatch once per scanDirectory call (not inside the loop)
+  const isMatch = excludePatterns.length > 0 ? picomatch(excludePatterns) : null;
+
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
 
   for (const entry of entries) {
     const fullPath = path.join(dirPath, entry.name);
 
     // Check exclude patterns against path relative to the base scan directory
-    if (excludePatterns.length > 0) {
+    if (isMatch !== null) {
       const relativePath = path.relative(resolvedBaseDir, fullPath).replaceAll('\\', '/');
-      const isMatch = picomatch(excludePatterns);
-      if (isMatch(relativePath)) {
+      if (isExcludedPath(isMatch, relativePath, entry.isDirectory())) {
         logger.debug(`Excluding path: ${relativePath}`);
         continue;
       }

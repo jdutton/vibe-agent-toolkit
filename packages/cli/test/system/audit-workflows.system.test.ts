@@ -259,8 +259,8 @@ This skill is deeply nested to verify recursive scanning is the default.
     // Should produce output (skill was found and audited)
     expect(result.stdout).toBeTruthy();
 
-    // Should not have system errors
-    expect(result.status).not.toBe(2);
+    // The nested skill should appear in output, confirming recursive scan found it
+    expect(result.stdout).toContain('nested-skill');
   });
 
   it('should NOT scan subdirectories with --no-recursive flag', () => {
@@ -290,6 +290,9 @@ This skill should not be found when using --no-recursive.
 
     // Should exit 0 (no resources found at top level = no errors, just nothing audited)
     expect(result.status).toBe(0);
+
+    // The scan ran and produced output (e.g., filesScanned count)
+    expect(result.stdout).toContain('filesScanned');
 
     // The subdir skill should NOT appear in output
     expect(result.stdout).not.toContain('subdir-skill');
@@ -339,6 +342,9 @@ This skill is in src/ and should be included.
 
     // Should exit 0 (src-skill is valid)
     expect(result.status).toBe(0);
+
+    // src-skill SHOULD appear in output (it was not excluded)
+    expect(result.stdout).toContain('src-skill');
 
     // dist-skill should NOT be in output
     expect(result.stdout).not.toContain('dist-skill');
