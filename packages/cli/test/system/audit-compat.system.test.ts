@@ -92,8 +92,12 @@ function runCompatAuditAndParse(
   return { files };
 }
 
+/** Valid verdict values from CompatibilityResult.analyzed */
+const VALID_VERDICTS = ['compatible', 'needs-review', 'incompatible'] as const;
+
 /**
  * Assert that a compat entry has the expected per-target analyzed verdicts structure.
+ * Also validates that each verdict value is one of the known Verdict types.
  */
 function assertCompatAnalyzed(entry: Record<string, unknown>): void {
   const compat = entry['compatibility'] as Record<string, unknown>;
@@ -103,6 +107,11 @@ function assertCompatAnalyzed(entry: Record<string, unknown>): void {
   expect(analyzed).toHaveProperty('claude-code');
   expect(analyzed).toHaveProperty('cowork');
   expect(analyzed).toHaveProperty('claude-desktop');
+
+  // Validate that each verdict value is one of the known Verdict types
+  for (const target of ['claude-code', 'cowork', 'claude-desktop'] as const) {
+    expect(VALID_VERDICTS).toContain(analyzed[target]);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -199,5 +208,38 @@ This skill has no plugin.json so no compat analysis applies.
     // Should not crash when combined with --no-recursive
     const { status } = executeCli(binPath, ['audit', testDir, '--compat', '--no-recursive']);
     expect(status).not.toBe(2);
+  });
+
+  it('--compat with --user flag produces compatibility analysis', () => {
+    // Create a fake HOME with a .claude/plugins directory containing a plugin
+    const fakeHome = join(tempDir, 'fake-home-compat');
+    const pluginsDir = join(fakeHome, '.claude', 'plugins');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test, path is controlled
+    fs.mkdirSync(pluginsDir, { recursive: true });
+
+    createMinimalPlugin(pluginsDir, 'user-compat-plugin');
+
+    // Override HOME so getClaudeUserPaths() resolves to our temp directory.
+    // Merge with process.env so PATH and other vars are preserved.
+    const { stdout, status } = executeCli(binPath, ['audit', '--user', '--compat'], {
+      env: { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome },
+    });
+
+    expect(status).toBe(0);
+    expect(stdout).toBeTruthy();
+
+    const output = parseYamlOutput(stdout);
+
+    // The --user path outputs a hierarchical summary plus a files array when compat is active
+    expect(output).toHaveProperty('files');
+    const files = output['files'] as Array<Record<string, unknown>>;
+    expect(files.length).toBeGreaterThan(0);
+
+    // At least one file entry should have compatibility data (the plugin)
+    const withCompat = files.filter(f => f['compatibility'] !== undefined);
+    expect(withCompat.length).toBeGreaterThan(0);
+
+    // Verify the compatibility structure and verdict values
+    assertCompatAnalyzed(withCompat[0] as Record<string, unknown>);
   });
 });

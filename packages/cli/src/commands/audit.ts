@@ -174,9 +174,14 @@ async function auditUserDirectories(
     results.push(...await getValidationResults(marketplacesDir, recursive, options, logger));
   }
 
+  // Run compatibility analysis if --compat flag is set
+  const compatMap = options.compat
+    ? await runCompatAnalysis(results, logger)
+    : undefined;
+
   const skillResults = results.filter((r: ValidationResult) => r.type === 'agent-skill');
   const hierarchical = buildHierarchicalOutput(skillResults, options.verbose ?? false);
-  const summary = calculateHierarchicalSummary(results, hierarchical, startTime);
+  const summary = calculateHierarchicalSummary(results, hierarchical, startTime, compatMap);
   writeYamlOutput(summary);
   logHierarchicalSummary(results, hierarchical, logger);
 }
@@ -317,18 +322,29 @@ function mergeCompatIntoResults(
   });
 }
 
+/**
+ * Apply compatibility data to results if a compatMap is provided and non-empty.
+ * Returns the original results array when no compat data is available.
+ */
+function applyCompatMap(
+  results: ValidationResult[],
+  compatMap?: Map<string, CompatibilityResult>
+): Array<ValidationResult & { compatibility?: CompatibilityResult }> {
+  if (compatMap !== undefined && compatMap.size > 0) {
+    return mergeCompatIntoResults(results, compatMap);
+  }
+  return results;
+}
+
 function calculateSummary(
   results: ValidationResult[],
   startTime: number,
   compatMap?: Map<string, CompatibilityResult>
 ) {
   const base = buildBaseSummary(results, startTime);
-  const files = compatMap !== undefined && compatMap.size > 0
-    ? mergeCompatIntoResults(results, compatMap)
-    : results;
   return {
     ...base,
-    files,
+    files: applyCompatMap(results, compatMap),
   };
 }
 
@@ -628,7 +644,8 @@ function buildBaseSummary(
 function calculateHierarchicalSummary(
   results: ValidationResult[],
   hierarchical: ReturnType<typeof buildHierarchicalOutput>,
-  startTime: number
+  startTime: number,
+  compatMap?: Map<string, CompatibilityResult>
 ) {
   const base = buildBaseSummary(results, startTime);
 
@@ -641,6 +658,7 @@ function calculateHierarchicalSummary(
       standalonePlugins: hierarchical.standalonePlugins.length,
       standaloneSkills: hierarchical.standaloneSkills.length,
     },
+    files: applyCompatMap(results, compatMap),
     hierarchical,
   };
 }
