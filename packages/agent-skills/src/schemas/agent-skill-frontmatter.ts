@@ -2,6 +2,14 @@ import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
 /**
+ * Skill name pattern: kebab-case, optionally prefixed with a plugin name (plugin:skill format).
+ * Examples: "my-skill", "vibe-agent-toolkit:resources"
+ */
+// eslint-disable-next-line security/detect-unsafe-regex -- simple pattern for skill names, max length enforced
+const SKILL_NAME_REGEX = /^[a-z0-9]+(-[a-z0-9]+)*(:[a-z0-9]+(-[a-z0-9]+)*)?$/;
+const SKILL_NAME_REGEX_MESSAGE = 'Name must be lowercase alphanumeric with hyphens, no consecutive hyphens, cannot start/end with hyphen';
+
+/**
  * Agent Skill Frontmatter Schema
  *
  * Accepts both agentskills.io specification fields and Claude Code skill fields.
@@ -16,13 +24,9 @@ export const AgentSkillFrontmatterSchema = z.object({
   name: z.string()
     .min(1)
     .max(64, 'Name must be 64 characters or less')
-    .regex(
-      // eslint-disable-next-line security/detect-unsafe-regex -- simple pattern for skill names, max length enforced
-      /^[a-z0-9]+(-[a-z0-9]+)*$/,
-      'Name must be lowercase alphanumeric with hyphens, no consecutive hyphens, cannot start/end with hyphen'
-    )
+    .regex(SKILL_NAME_REGEX, SKILL_NAME_REGEX_MESSAGE)
     .optional()
-    .describe('Skill identifier — defaults to parent directory name if omitted'),
+    .describe('Skill identifier — defaults to parent directory name if omitted. Supports plugin:skill format.'),
 
   description: z.string()
     .min(1)
@@ -103,12 +107,8 @@ export const VATAgentSkillFrontmatterSchema = AgentSkillFrontmatterSchema.extend
   name: z.string()
     .min(1, 'Name is required for VAT skills')
     .max(64, 'Name must be 64 characters or less')
-    .regex(
-      // eslint-disable-next-line security/detect-unsafe-regex -- simple pattern for skill names, max length enforced
-      /^[a-z0-9]+(-[a-z0-9]+)*$/,
-      'Name must be lowercase alphanumeric with hyphens, no consecutive hyphens, cannot start/end with hyphen'
-    )
-    .describe('Skill identifier (required for VAT skills)'),
+    .regex(SKILL_NAME_REGEX, SKILL_NAME_REGEX_MESSAGE)
+    .describe('Skill identifier (required for VAT skills). Supports plugin:skill format.'),
 
   description: z.string()
     .min(1, 'Description is required for VAT skills')

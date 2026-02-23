@@ -1,5 +1,5 @@
 ---
-name: vibe-agent-toolkit-agent-authoring
+name: vibe-agent-toolkit:agent-authoring
 description: Use when authoring SKILL.md files, designing agent architectures, or configuring packaging options. Covers SKILL.md structure, agent archetypes, orchestration patterns, and validation override patterns.
 ---
 

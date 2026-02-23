@@ -6,8 +6,8 @@
       "properties": {
         "name": {
           "type": "string",
-          "pattern": "^[a-z0-9-]+$",
-          "description": "Agent identifier (kebab-case)"
+          "pattern": "^[a-z0-9-]+(:[a-z0-9-]+)?$",
+          "description": "Agent identifier (kebab-case, or plugin:skill format)"
         },
         "version": {
           "type": "string",

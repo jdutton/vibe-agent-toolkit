@@ -1,5 +1,5 @@
 ---
-name: vibe-agent-toolkit-resources
+name: vibe-agent-toolkit:resources
 description: Use when working with VAT resource collections, per-directory frontmatter schema validation, link validation, or the vat resources command. Covers collection configuration, schema mapping, and validation modes.
 ---
 

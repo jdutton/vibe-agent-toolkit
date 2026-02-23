@@ -20,23 +20,23 @@
         "packagingOptions": { "linkFollowDepth": 0 }
       },
       {
-        "name": "vibe-agent-toolkit-resources",
+        "name": "vibe-agent-toolkit:resources",
         "source": "./resources/skills/vat-resources.md",
         "path": "./dist/skills/vibe-agent-toolkit-resources"
       },
       {
-        "name": "vibe-agent-toolkit-distribution",
+        "name": "vibe-agent-toolkit:distribution",
         "source": "./resources/skills/vat-distribution.md",
         "path": "./dist/skills/vibe-agent-toolkit-distribution"
       },
       {
-        "name": "vibe-agent-toolkit-agent-authoring",
+        "name": "vibe-agent-toolkit:agent-authoring",
         "source": "./resources/skills/vat-agent-authoring.md",
         "path": "./dist/skills/vibe-agent-toolkit-agent-authoring",
-        "packagingOptions": { "linkFollowDepth": 1 }
+        "packagingOptions": { "linkFollowDepth": 0 }
       },
       {
-        "name": "vibe-agent-toolkit-audit",
+        "name": "vibe-agent-toolkit:audit",
         "source": "./resources/skills/vat-audit.md",
         "path": "./dist/skills/vibe-agent-toolkit-audit"
       }

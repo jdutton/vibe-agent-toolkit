@@ -1,5 +1,5 @@
 ---
-name: vibe-agent-toolkit-distribution
+name: vibe-agent-toolkit:distribution
 description: Use when packaging, publishing, or sideloading VAT skills. Covers vat skills package (including --target claude-web), vat install for sideloading, npm publishing, and private distribution patterns.
 ---
 

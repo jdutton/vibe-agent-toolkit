@@ -16,8 +16,9 @@ export type BuildMetadata = z.infer<typeof BuildMetadataSchema>;
  */
 export const AgentMetadataSchema = z.object({
   name: z.string()
-    .regex(/^[a-z0-9-]+$/, 'Name must be lowercase alphanumeric with hyphens')
-    .describe('Agent identifier (kebab-case)'),
+    // eslint-disable-next-line security/detect-unsafe-regex -- Safe: anchored with ^ and $, max length implicit from other validation
+    .regex(/^[a-z0-9-]+(:[a-z0-9-]+)?$/, 'Name must be lowercase alphanumeric with hyphens, optionally prefixed with plugin name (plugin:skill)')
+    .describe('Agent identifier (kebab-case, or plugin:skill format)'),
 
   version: z.string()
     // Semver regex: major.minor.patch with optional pre-release and build metadata

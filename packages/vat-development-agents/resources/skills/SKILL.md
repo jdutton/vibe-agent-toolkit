@@ -27,14 +27,14 @@ non-TypeScript/JavaScript projects, or cases where you need deep framework-speci
 
 | If you're working on... | Use this skill |
 |---|---|
-| Writing or structuring a `SKILL.md` file | `vibe-agent-toolkit-agent-authoring` |
-| Agent archetypes, orchestration patterns, result envelopes | `vibe-agent-toolkit-agent-authoring` |
-| `packagingOptions` (linkFollowDepth, excludeReferencesFromBundle) | `vibe-agent-toolkit-agent-authoring` |
-| Resource collections, frontmatter schema validation | `vibe-agent-toolkit-resources` |
-| `vat resources validate`, collection config | `vibe-agent-toolkit-resources` |
-| Packaging skills, `--target claude-web`, ZIP format | `vibe-agent-toolkit-distribution` |
-| Sideloading with `vat install`, npm postinstall hooks | `vibe-agent-toolkit-distribution` |
-| `vat audit`, `--compat`, CI validation | `vibe-agent-toolkit-audit` |
+| Writing or structuring a `SKILL.md` file | `vibe-agent-toolkit:agent-authoring` |
+| Agent archetypes, orchestration patterns, result envelopes | `vibe-agent-toolkit:agent-authoring` |
+| `packagingOptions` (linkFollowDepth, excludeReferencesFromBundle) | `vibe-agent-toolkit:agent-authoring` |
+| Resource collections, frontmatter schema validation | `vibe-agent-toolkit:resources` |
+| `vat resources validate`, collection config | `vibe-agent-toolkit:resources` |
+| Packaging skills, `--target claude-web`, ZIP format | `vibe-agent-toolkit:distribution` |
+| Sideloading with `vat install`, npm postinstall hooks | `vibe-agent-toolkit:distribution` |
+| `vat audit`, `--compat`, CI validation | `vibe-agent-toolkit:audit` |
 
 ## Agent Archetypes (Quick Reference)
 
