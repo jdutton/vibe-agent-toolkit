@@ -15,7 +15,7 @@
  * for link resolution and rewriting (replacing the previous inline regex approach).
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 
@@ -39,6 +39,16 @@ const DEFAULT_STRIP_TEMPLATE = '{{link.text}}';
  * Resource naming strategy type
  */
 export type ResourceNamingStrategy = 'basename' | 'resource-id' | 'preserve-path';
+
+/**
+ * Packaging target: determines ZIP directory structure
+ * - 'claude-code': Standard VAT format with resources/ subdirectory (default)
+ * - 'claude-web': Claude.ai web upload format with references/, scripts/, assets/ subdirectories
+ */
+export type PackagingTarget = 'claude-code' | 'claude-web';
+
+/** Default packaging target */
+const DEFAULT_PACKAGING_TARGET: PackagingTarget = 'claude-code';
 
 export interface PackageSkillOptions {
   /**
@@ -118,6 +128,16 @@ export interface PackageSkillOptions {
    * Used by packageSkills() to share a single registry across multiple skill builds.
    */
   registry?: ResourceRegistry | undefined;
+
+  /**
+   * Packaging target — controls the ZIP directory structure produced.
+   *
+   * - 'claude-code' (default): Standard VAT layout with resources/ subdirectory
+   * - 'claude-web': Claude.ai web upload layout with references/, scripts/, assets/ subdirectories
+   *
+   * Default: 'claude-code'
+   */
+  target?: PackagingTarget | undefined;
 }
 
 export interface SkillMetadata {
@@ -238,6 +258,7 @@ export async function packageSkill(
     rewriteLinks = true,
     resourceNaming = 'basename',
     stripPrefix,
+    target = DEFAULT_PACKAGING_TARGET,
   } = options;
 
   // 1. Parse SKILL.md frontmatter and links
@@ -296,7 +317,7 @@ export async function packageSkill(
 
   // 8. Build path map for file copying and link rewriting
   const namingBasePath = projectRoot;
-  const pathMap = buildPathMap(skillPath, bundledFiles, outputPath, resourceNaming, namingBasePath, stripPrefix);
+  const pathMap = buildPathMap(skillPath, bundledFiles, outputPath, resourceNaming, namingBasePath, stripPrefix, target);
 
   // 9. Build "to" registry for link rewriting (maps same resource IDs to output paths)
   const outputResources = bundledResources.map(resource => ({
@@ -357,7 +378,8 @@ export async function packageSkill(
   const artifacts = await generatePackageArtifacts(
     outputPath,
     skillMetadata,
-    formats
+    formats,
+    target
   );
 
   // Get relative paths for result
@@ -408,6 +430,16 @@ async function createStandaloneRegistry(projectRoot: string): Promise<ResourceRe
 // ============================================================================
 
 /**
+ * Determine the subdirectory name for bundled resources based on the packaging target.
+ *
+ * - 'claude-code': resources/ (standard VAT format)
+ * - 'claude-web': references/ (Claude.ai web upload format)
+ */
+function getResourceSubdir(target: PackagingTarget): string {
+  return target === 'claude-web' ? 'references' : 'resources';
+}
+
+/**
  * Build a map of source paths (forward-slash normalized) to output paths.
  * Checks for filename collisions.
  */
@@ -418,7 +450,9 @@ function buildPathMap(
   resourceNaming: ResourceNamingStrategy,
   namingBasePath: string,
   stripPrefix?: string,
+  target: PackagingTarget = DEFAULT_PACKAGING_TARGET,
 ): Map<string, string> {
+  const resourceSubdir = getResourceSubdir(target);
   const pathMap = new Map<string, string>();
   pathMap.set(toForwardSlash(skillPath), join(outputPath, 'SKILL.md'));
 
@@ -429,7 +463,7 @@ function buildPathMap(
       resourceNaming,
       stripPrefix
     );
-    const targetPath = join(outputPath, 'resources', targetRelPath);
+    const targetPath = join(outputPath, resourceSubdir, targetRelPath);
 
     // Check for filename collisions
     const existingSource = [...pathMap.entries()].find(
@@ -785,18 +819,53 @@ function generateTargetPath(
 // Artifact Generation
 // ============================================================================
 
+/** ZIP size threshold for warning (4 MB in bytes) */
+const ZIP_SIZE_WARN_BYTES = 4 * 1024 * 1024;
+/** ZIP size threshold for error (8 MB in bytes) */
+const ZIP_SIZE_ERROR_BYTES = 8 * 1024 * 1024;
+
+/**
+ * Validate ZIP file size and warn/error as appropriate.
+ * Warns to stderr at 4MB, errors (exits 1) at 8MB.
+ *
+ * @param zipPath - Path to the ZIP file
+ */
+function validateZipSize(zipPath: string): void {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- zipPath is constructed from validated outputPath
+  const stats = statSync(zipPath);
+  const bytes = stats.size;
+
+  if (bytes >= ZIP_SIZE_ERROR_BYTES) {
+    const mb = (bytes / 1024 / 1024).toFixed(1);
+    process.stderr.write(
+      `error: ZIP size ${mb}MB exceeds 8MB limit for Claude.ai upload. ` +
+      `Reduce the number of linked resources or use --target claude-code.\n`
+    );
+    process.exit(1);
+  }
+
+  if (bytes >= ZIP_SIZE_WARN_BYTES) {
+    const mb = (bytes / 1024 / 1024).toFixed(1);
+    process.stderr.write(
+      `warning: ZIP size ${mb}MB is approaching the 8MB Claude.ai upload limit.\n`
+    );
+  }
+}
+
 /**
  * Generate package artifacts in requested formats
  *
  * @param outputPath - Directory containing packaged skill
  * @param metadata - Skill metadata
  * @param formats - Formats to generate
+ * @param target - Packaging target (for ZIP size validation on claude-web)
  * @returns Paths to generated artifacts
  */
 async function generatePackageArtifacts(
   outputPath: string,
   metadata: SkillMetadata,
-  formats: string[]
+  formats: string[],
+  target: PackagingTarget = DEFAULT_PACKAGING_TARGET
 ): Promise<Record<string, string>> {
   const artifacts: Record<string, string> = {};
 
@@ -807,6 +876,10 @@ async function generatePackageArtifacts(
   if (formats.includes('zip')) {
     const zipPath = `${outputPath}.zip`;
     await createZipArchive(outputPath, zipPath);
+    // Validate ZIP size for claude-web target (Anthropic upload limit)
+    if (target === 'claude-web') {
+      validateZipSize(zipPath);
+    }
     artifacts['zip'] = zipPath;
   }
 

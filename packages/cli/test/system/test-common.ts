@@ -67,6 +67,41 @@ export function cleanupTestTempDir(tempDir: string): void {
 }
 
 /**
+ * Create a tracked temp dir factory for use in test suites.
+ *
+ * Returns a `createTempDir` function that tracks created directories, and a
+ * `cleanupTempDirs` function that removes them all. Use this instead of
+ * duplicating the tracking boilerplate in every suite setup function.
+ *
+ * @example
+ * ```typescript
+ * const { createTempDir, cleanupTempDirs } = createTempDirTracker(TEMP_DIR_PREFIX);
+ * afterEach(() => cleanupTempDirs());
+ * ```
+ */
+export function createTempDirTracker(prefix: string): {
+  createTempDir: () => string;
+  cleanupTempDirs: () => void;
+} {
+  const tempDirs: string[] = [];
+
+  const createTempDir = () => {
+    const dir = createTestTempDir(prefix);
+    tempDirs.push(dir);
+    return dir;
+  };
+
+  const cleanupTempDirs = () => {
+    for (const dir of tempDirs) {
+      cleanupTestTempDir(dir);
+    }
+    tempDirs.length = 0;
+  };
+
+  return { createTempDir, cleanupTempDirs };
+}
+
+/**
  * Write a test file with proper ESLint suppressions
  * Path is controlled by test code, so security warning is suppressed
  */

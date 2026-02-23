@@ -11,6 +11,7 @@ export {
   packageSkills,
   type PackageSkillOptions,
   type PackageSkillResult,
+  type PackagingTarget,
   type SkillBuildSpec,
   type SkillMetadata,
 } from './skill-packager.js';
