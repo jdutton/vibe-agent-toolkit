@@ -15,6 +15,7 @@ import {
 } from '@vibe-agent-toolkit/agent-skills';
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
 import { Command } from 'commander';
+import picomatch from 'picomatch';
 
 import { getClaudeUserPaths } from '../utils/claude-paths.js';
 import { handleCommandError } from '../utils/command-error.js';
@@ -25,10 +26,18 @@ import { buildHierarchicalOutput } from './audit/hierarchical-output.js';
 
 export interface AuditCommandOptions {
   debug?: boolean;
-  recursive?: boolean;
+  exclude?: string[];
+  recursive?: boolean; // Commander sets this to false when --no-recursive is used
   user?: boolean;
   verbose?: boolean; // Commander sets this for --verbose
   warnUnreferencedFiles?: boolean; // Commander sets this for --warn-unreferenced-files
+}
+
+/**
+ * Collect repeated option values into an array (used for --exclude)
+ */
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
 }
 
 /**
@@ -41,7 +50,8 @@ export function createAuditCommand(): Command {
   audit
     .description('Audit Claude plugins, marketplaces, registries, and skills')
     .argument('[path]', 'Path to audit (default: current directory)')
-    .option('-r, --recursive', 'Scan directories recursively for all resource types')
+    .option('--no-recursive', 'Disable recursive directory scanning (scans top level only)')
+    .option('--exclude <glob>', 'Exclude paths matching glob pattern (repeatable)', collect, [])
     .option('--user', 'Audit user-level Claude resources (~/.claude/plugins, ~/.claude/skills, ~/.claude/marketplaces)')
     .option('--verbose', 'Show all scanned resources, including those without issues')
     .option('--warn-unreferenced-files', 'Warn about files not referenced in skill markdown')
@@ -101,11 +111,10 @@ Exit Codes:
   2 - System error (directory not found, file not readable)
 
 Examples:
-  $ vat audit --user                   # Audit user-level installation (informational)
-  $ vat audit                          # Audit current directory
-  $ vat audit ./my-plugin              # Audit plugin directory
-  $ vat audit installed_plugins.json   # Audit registry file
-  $ vat audit ./resources --recursive  # Audit all resources recursively
+  $ vat audit ./plugins/              # Audit recursively (default)
+  $ vat audit --user                  # Audit user-level installation (~/.claude/)
+  $ vat audit --no-recursive ./dir/   # Top level only, no subdirectories
+  $ vat audit --exclude "dist/**" --exclude "node_modules/**"  # Filter noise
 `
     );
 
@@ -122,7 +131,8 @@ export async function auditCommand(
 
   try {
     let scanPath: string;
-    let recursive: boolean = options.recursive ?? false;
+    // Commander sets options.recursive to false when --no-recursive is passed, true otherwise
+    const recursive: boolean = options.recursive !== false;
 
     // Handle --user flag
     if (options.user) {
@@ -147,7 +157,6 @@ export async function auditCommand(
 
       // Scan all directories that exist
       const results: ValidationResult[] = [];
-      recursive = true; // Always recursive for user-level audit
 
       if (pluginsDirExists) {
         logger.debug(`Auditing user-level plugins at: ${pluginsDir}`);
@@ -361,7 +370,8 @@ async function handleDirectoryEntry(
   fullPath: string,
   recursive: boolean,
   options: AuditCommandOptions,
-  logger: ReturnType<typeof createLogger>
+  logger: ReturnType<typeof createLogger>,
+  baseDir: string
 ): Promise<ValidationResult[]> {
   const fs = await import('node:fs/promises');
   const results: ValidationResult[] = [];
@@ -378,7 +388,7 @@ async function handleDirectoryEntry(
 
   // Recurse into subdirectories (both plugin/marketplace dirs and regular dirs)
   if (recursive) {
-    const subResults = await scanDirectory(fullPath, recursive, options, logger);
+    const subResults = await scanDirectory(fullPath, recursive, options, logger, baseDir);
     results.push(...subResults);
   }
 
@@ -389,15 +399,28 @@ async function scanDirectory(
   dirPath: string,
   recursive: boolean,
   options: AuditCommandOptions,
-  logger: ReturnType<typeof createLogger>
+  logger: ReturnType<typeof createLogger>,
+  baseDir?: string
 ): Promise<ValidationResult[]> {
   const fs = await import('node:fs/promises');
   const results: ValidationResult[] = [];
+  const excludePatterns = options.exclude ?? [];
+  const resolvedBaseDir = baseDir ?? dirPath;
 
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
 
   for (const entry of entries) {
     const fullPath = path.join(dirPath, entry.name);
+
+    // Check exclude patterns against path relative to the base scan directory
+    if (excludePatterns.length > 0) {
+      const relativePath = path.relative(resolvedBaseDir, fullPath).replaceAll('\\', '/');
+      const isMatch = picomatch(excludePatterns);
+      if (isMatch(relativePath)) {
+        logger.debug(`Excluding path: ${relativePath}`);
+        continue;
+      }
+    }
 
     if (entry.isFile()) {
       const result = await handleFileEntry(entry, fullPath, options, logger);
@@ -405,7 +428,7 @@ async function scanDirectory(
         results.push(result);
       }
     } else if (entry.isDirectory()) {
-      const dirResults = await handleDirectoryEntry(fullPath, recursive, options, logger);
+      const dirResults = await handleDirectoryEntry(fullPath, recursive, options, logger, resolvedBaseDir);
       results.push(...dirResults);
     }
   }
