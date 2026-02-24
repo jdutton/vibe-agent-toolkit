@@ -141,63 +141,81 @@ function validateResourceStructure(sourcePath: string, type: ResourceType): void
 
 /**
  * Prepare the install path: check for conflicts and ensure directory exists.
+ * Returns the install path and whether the target already exists.
  */
 async function prepareInstallPath(
   installDir: string,
   resourceName: string,
   options: InstallCommandOptions
-): Promise<string> {
+): Promise<{ installPath: string; alreadyExists: boolean }> {
   const installPath = join(installDir, resourceName);
 
   // Check whether target already exists (lstatSync detects broken symlinks too)
-  let exists = false;
+  let alreadyExists = false;
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Install path is constructed from config
     lstatSync(installPath);
-    exists = true;
+    alreadyExists = true;
   } catch {
     // Does not exist — continue
   }
 
-  if (exists && !options.force) {
-    throw new InstallError(
-      `Resource already installed at ${installPath}. Use --force to overwrite.`
-    );
-  }
-
-  if (exists && options.force && !options.dryRun) {
-    await rm(installPath, { recursive: true, force: true });
-  }
-
+  // Dry-run: report the current state without modifying anything
   if (!options.dryRun) {
+    if (alreadyExists && !options.force) {
+      throw new InstallError(
+        `Resource already installed at ${installPath}. Use --force to overwrite.`
+      );
+    }
+
+    if (alreadyExists && options.force) {
+      await rm(installPath, { recursive: true, force: true });
+    }
+
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Install directory from config
     await mkdir(installDir, { recursive: true });
   }
 
-  return installPath;
+  return { installPath, alreadyExists };
+}
+
+interface OutputSuccessArgs {
+  resourceName: string;
+  installPath: string;
+  source: string;
+  resourceType: ResourceType;
+  duration: number;
+  options: InstallCommandOptions;
+  logger: ReturnType<typeof createLogger>;
+  alreadyExists?: boolean;
 }
 
 /**
  * Output YAML success result to stdout
  */
-function outputSuccess(
-  resourceName: string,
-  installPath: string,
-  source: string,
-  resourceType: ResourceType,
-  duration: number,
-  options: InstallCommandOptions,
-  logger: ReturnType<typeof createLogger>
-): void {
+function outputSuccess({
+  resourceName,
+  installPath,
+  source,
+  resourceType,
+  duration,
+  options,
+  logger,
+  alreadyExists = false,
+}: OutputSuccessArgs): void {
   writeYamlHeader(options.dryRun);
   process.stdout.write(`source: ${source}\n`);
   process.stdout.write(`sourceType: ${resourceType}\n`);
   process.stdout.write(`name: ${resourceName}\n`);
   process.stdout.write(`installPath: ${installPath}\n`);
+  if (options.dryRun && alreadyExists) {
+    process.stdout.write(`alreadyInstalled: true\n`);
+  }
   process.stdout.write(`duration: ${duration}ms\n`);
 
   if (options.dryRun) {
-    logger.info(`\nDry-run complete: would install ${resourceName} as ${resourceType}`);
+    const action = alreadyExists ? 'already installed (no changes needed)' : `would install as ${resourceType}`;
+    logger.info(`\nDry-run complete: ${resourceName} ${action}`);
   } else {
     logger.info(`\nInstalled ${resourceName} as ${resourceType}`);
     logger.info(`  Path: ${installPath}`);
@@ -243,7 +261,7 @@ async function installCommand(
     const resourceName = options.name ?? basename(sourcePath);
 
     // Prepare install path
-    const installPath = await prepareInstallPath(installDir, resourceName, options);
+    const { installPath, alreadyExists } = await prepareInstallPath(installDir, resourceName, options);
 
     if (!options.dryRun) {
       logger.info(`Installing ${resourceName}...`);
@@ -251,15 +269,16 @@ async function installCommand(
     }
 
     const duration = Date.now() - startTime;
-    outputSuccess(
+    outputSuccess({
       resourceName,
       installPath,
-      `local:${sourcePath}`,
+      source: `local:${sourcePath}`,
       resourceType,
       duration,
       options,
-      logger
-    );
+      logger,
+      alreadyExists,
+    });
 
     process.exit(0);
   } catch (error) {

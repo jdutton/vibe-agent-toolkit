@@ -229,6 +229,33 @@ describe('Unified vat install command (system test)', () => {
     expect(result.status).toBe(2);
   });
 
+  it('--dry-run succeeds when resource is already installed', () => {
+    const sourceDir = join(tempDir, 'dry-run-exists-sources');
+    const installDir = join(tempDir, 'dry-run-exists-install');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
+    fs.mkdirSync(sourceDir, { recursive: true });
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- installDir is controlled in tests
+    fs.mkdirSync(installDir, { recursive: true });
+
+    const skillDir = createSkillDir(sourceDir, 'already-installed-skill');
+
+    // First: actually install it
+    const installResult = executeCli(binPath, ['install', skillDir, SKILLS_DIR_FLAG, installDir], {
+      cwd: tempDir,
+    });
+    expect(installResult.status).toBe(0);
+
+    // Second: dry-run should succeed (not fail with "already installed")
+    const dryRunResult = executeCli(
+      binPath,
+      ['install', skillDir, SKILLS_DIR_FLAG, installDir, '--dry-run'],
+      { cwd: tempDir }
+    );
+    expect(dryRunResult.status).toBe(0);
+    expect(dryRunResult.stdout).toContain('dryRun: true');
+    expect(dryRunResult.stdout).toContain('alreadyInstalled: true');
+  });
+
   it('--force overwrites existing installation', () => {
     const sourceDir = join(tempDir, 'force-sources');
     const installDir = join(tempDir, 'force-install');
