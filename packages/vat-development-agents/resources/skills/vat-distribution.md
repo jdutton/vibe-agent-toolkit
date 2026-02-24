@@ -59,18 +59,13 @@ When your project isn't on a public marketplace, use `vat install` to sideload:
 
 ```bash
 # Sideload an agent skill
-vat install ./my-skill.zip               # → ~/.claude/skills/
 vat install ./my-skill-dir/              # → ~/.claude/skills/
 
 # Sideload an entire Claude plugin
 vat install ./my-plugin/                 # → ~/.claude/plugins/
-vat install ./my-plugin.zip
-
-# Sideload from npm (npm postinstall triggers automatically on global install)
-vat install npm:@myorg/my-skill
 
 # Force overwrite existing installation
-vat install ./my-skill.zip --force
+vat install ./my-skill-dir/ --force
 ```
 
 Type is auto-detected from directory structure:

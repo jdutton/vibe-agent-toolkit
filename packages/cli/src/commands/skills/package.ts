@@ -10,6 +10,7 @@ import { basename, dirname, relative, resolve } from 'node:path';
 import {
   packageSkill,
   validateSkill,
+  ZipSizeLimitError,
   type PackageSkillOptions,
   type PackagingTarget,
   type ValidationResult,
@@ -19,6 +20,7 @@ import { Command } from 'commander';
 
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
+import { writeYamlOutput } from '../../utils/output.js';
 
 /** Default packaging target */
 const DEFAULT_TARGET: PackagingTarget = 'claude-code';
@@ -412,6 +414,12 @@ async function packageCommand(
 
     process.exit(0);
   } catch (error) {
+    if (error instanceof ZipSizeLimitError) {
+      const duration = Date.now() - startTime;
+      logger.error(`Package failed: ${error.message}`);
+      writeYamlOutput({ status: 'error', error: error.message, duration: `${duration}ms` });
+      process.exit(1);
+    }
     handleCommandError(error, logger, startTime, 'SkillsPackage');
   }
 }

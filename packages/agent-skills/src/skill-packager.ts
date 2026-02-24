@@ -825,8 +825,28 @@ const ZIP_SIZE_WARN_BYTES = 4 * 1024 * 1024;
 const ZIP_SIZE_ERROR_BYTES = 8 * 1024 * 1024;
 
 /**
+ * Thrown when a claude-web ZIP exceeds the 8MB Claude.ai upload limit.
+ * The CLI catches this and exits with code 1.
+ */
+export class ZipSizeLimitError extends Error {
+  readonly sizeBytes: number;
+  readonly limitBytes: number;
+
+  constructor(sizeBytes: number, limitBytes: number) {
+    const mb = (sizeBytes / 1024 / 1024).toFixed(1);
+    super(
+      `ZIP size ${mb}MB exceeds 8MB limit for Claude.ai upload. ` +
+      `Reduce the number of linked resources or use --target claude-code.`
+    );
+    this.name = 'ZipSizeLimitError';
+    this.sizeBytes = sizeBytes;
+    this.limitBytes = limitBytes;
+  }
+}
+
+/**
  * Validate ZIP file size and warn/error as appropriate.
- * Warns to stderr at 4MB, errors (exits 1) at 8MB.
+ * Warns to stderr at 4MB, throws ZipSizeLimitError at 8MB.
  *
  * @param zipPath - Path to the ZIP file
  */
@@ -836,12 +856,7 @@ function validateZipSize(zipPath: string): void {
   const bytes = stats.size;
 
   if (bytes >= ZIP_SIZE_ERROR_BYTES) {
-    const mb = (bytes / 1024 / 1024).toFixed(1);
-    process.stderr.write(
-      `error: ZIP size ${mb}MB exceeds 8MB limit for Claude.ai upload. ` +
-      `Reduce the number of linked resources or use --target claude-code.\n`
-    );
-    process.exit(1);
+    throw new ZipSizeLimitError(bytes, ZIP_SIZE_ERROR_BYTES);
   }
 
   if (bytes >= ZIP_SIZE_WARN_BYTES) {

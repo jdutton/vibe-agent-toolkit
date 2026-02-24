@@ -9,6 +9,7 @@ export {
   extractH1Title,
   packageSkill,
   packageSkills,
+  ZipSizeLimitError,
   type PackageSkillOptions,
   type PackageSkillResult,
   type PackagingTarget,
