@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **`plugin:skill` colon notation in skill names** - Skill names may now include a plugin namespace prefix (e.g., `vibe-agent-toolkit:audit`)
+  - Format: `plugin-name:skill-name`; the prefix is the plugin/package namespace, the suffix is the skill's local name
+  - Supported in both SKILL.md `name:` frontmatter and `package.json` `vat.skills[].name`
+- **`vibe-agent-toolkit` skill package split** - Replaced the 1310-line monolith with an umbrella + 4 focused action skills
+  - Umbrella `vibe-agent-toolkit` (~179 lines): concepts, archetypes overview, routing table, CLI quick reference
+  - `vibe-agent-toolkit:resources` — resource collections, per-directory schema validation, `vat resources` commands
+  - `vibe-agent-toolkit:distribution` — packaging, `--target claude-web`, `vat install`, npm and private distribution
+  - `vibe-agent-toolkit:agent-authoring` — SKILL.md authoring, 4 archetypes with examples, packaging options reference
+  - `vibe-agent-toolkit:audit` — `vat audit` flags, auto-detection table, `--compat` output, CI usage patterns
+- **`vat audit --exclude <glob>`** - Filter paths from recursive scans (repeatable flag)
+  - Example: `vat audit plugins/ --exclude "dist/**" --exclude "node_modules/**"`
+  - Prunes directory traversal early for performance; does not just filter output
+- **Unified `vat install` command** - Single command for installing any VAT resource type
+  - Auto-detects resource type from source: `SKILL.md` → agent-skill, `.claude-plugin/plugin.json` → claude-plugin, `.claude-plugin/marketplace.json` → claude-marketplace
+  - Routes to the correct `~/.claude/` subdirectory automatically
+  - Flags: `--type` (explicit override), `--force`, `--dry-run`; YAML output includes `sourceType` field
+  - `vat skills install` remains as an alias constrained to agent skills only
+- **`vat audit --compat`** - Per-surface compatibility analysis for plugins and skills
+  - Reports compatibility with `claude-code`, `cowork`, and `claude-desktop` surfaces with supporting evidence
+  - Detects Python scripts, bash hooks, sqlite dependencies, and other surface-specific constraints
+  - Works in both path mode and `--user` mode; combinable with recursive scanning for full marketplace matrices
+- **`vat skills package --target <target>`** - Target-specific packaging for Claude.ai web upload
+  - `--target claude-web` produces a ZIP with `references/` instead of `resources/`, matching the Claude.ai web upload spec
+  - `--target claude-code` (default) preserves existing behavior unchanged
+  - ZIP size validation for `claude-web`: warn at 4MB, error at 8MB
+
+### Changed
+- **`vat audit` is recursive by default** (**BREAKING**) - `vat audit <path>` now walks the full directory tree automatically
+  - `--recursive` / `-r` flag removed; use `--no-recursive` to scan the top-level directory only
+  - `--user` behavior unchanged: scans `~/.claude/` directories, exit code remains 0 (informational)
+- **`CLAUDE.md` documentation additions** - Resource collections and licensing conventions added to the contributor guide
+  - Resource collections: per-directory schema validation config, `permissive` vs `strict` modes, `vat resources validate` usage
+  - Licensing conventions: table for open source / proprietary / not-yet-licensed packages with enterprise LICENSE template
+
 ## [0.1.14] - 2026-02-11
 
 ### Added
