@@ -10,7 +10,9 @@ import { basename, dirname, relative, resolve } from 'node:path';
 import {
   packageSkill,
   validateSkill,
+  ZipSizeLimitError,
   type PackageSkillOptions,
+  type PackagingTarget,
   type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
 import { parseMarkdown, type ParseResult } from '@vibe-agent-toolkit/resources';
@@ -18,6 +20,12 @@ import { Command } from 'commander';
 
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
+import { writeYamlOutput } from '../../utils/output.js';
+
+/** Default packaging target */
+const DEFAULT_TARGET: PackagingTarget = 'claude-code';
+/** Valid packaging targets */
+const VALID_TARGETS: readonly PackagingTarget[] = ['claude-code', 'claude-web'];
 
 export interface SkillsPackageCommandOptions {
   output: string;
@@ -26,6 +34,7 @@ export interface SkillsPackageCommandOptions {
   'base-path'?: string;
   dryRun?: boolean;
   debug?: boolean;
+  target?: string;
 }
 
 export function createPackageCommand(): Command {
@@ -44,6 +53,11 @@ export function createPackageCommand(): Command {
     .option('-b, --base-path <path>', 'Base path for resolving relative links (default: dirname of SKILL.md)')
     .option('--dry-run', 'Preview packaging without creating files')
     .option('--debug', 'Enable debug logging')
+    .option(
+      '--target <target>',
+      'Packaging target: claude-code (default, resources/ dir) or claude-web (references/, scripts/, assets/ dirs for Claude.ai upload)',
+      DEFAULT_TARGET
+    )
     .action(packageCommand)
     .addHelpText(
       'after',
@@ -333,6 +347,15 @@ async function packageCommand(
   try {
     logger.info(`📦 Packaging skill: ${skillPath}`);
 
+    // Validate --target option
+    const rawTarget = options.target ?? DEFAULT_TARGET;
+    if (!VALID_TARGETS.includes(rawTarget as PackagingTarget)) {
+      throw new Error(
+        `Invalid --target value: "${rawTarget}". Valid targets are: ${VALID_TARGETS.join(', ')}`
+      );
+    }
+    const target = rawTarget as PackagingTarget;
+
     // Parse formats
     const formats = options.formats
       ?.split(',')
@@ -343,6 +366,7 @@ async function packageCommand(
       formats,
       rewriteLinks: options['no-rewrite-links'] !== true,
       outputPath: options.output,
+      target,
     };
 
     if (options['base-path']) {
@@ -390,6 +414,12 @@ async function packageCommand(
 
     process.exit(0);
   } catch (error) {
+    if (error instanceof ZipSizeLimitError) {
+      const duration = Date.now() - startTime;
+      logger.error(`Package failed: ${error.message}`);
+      writeYamlOutput({ status: 'error', error: error.message, duration: `${duration}ms` });
+      process.exit(1);
+    }
     handleCommandError(error, logger, startTime, 'SkillsPackage');
   }
 }

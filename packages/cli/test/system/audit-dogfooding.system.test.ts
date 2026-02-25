@@ -56,8 +56,9 @@ describe('Audit Dogfooding (system test)', () => {
     expectSuccessfulAudit(result);
   });
 
-  it('should audit project with --recursive flag', () => {
-    const result = executeCli(binPath, ['audit', projectRoot, '--recursive'], {
+  it('should audit project recursively (default behavior)', () => {
+    // Recursive is the default — no flag needed
+    const result = executeCli(binPath, ['audit', projectRoot], {
       cwd: tempDir,
     });
 

@@ -139,6 +139,42 @@ vat resources validate docs/ --frontmatter-schema schema.json
 }
 ```
 
+### Resource Collections and Per-Directory Schema Validation
+
+**The `collections` key in `vibe-agent-toolkit.config.yaml` enables per-directory (or per-pattern) frontmatter schema validation.** This is the primary tool for projects with multiple document types, each requiring different frontmatter.
+
+**Config format:**
+```yaml
+version: 1
+
+resources:
+  collections:
+    systems:                                  # collection name (used in reports)
+      include: ["docs/systems/**/*.md"]
+      exclude: ["docs/systems/README.md"]     # README.md files are human ToCs
+      validation:
+        frontmatterSchema: "schemas/system.schema.json"
+        mode: permissive   # permissive = required fields enforced, extras allowed
+                           # strict = no extra fields beyond schema
+
+    adrs:
+      include: ["docs/architecture/adr/**/*.md"]
+      validation:
+        frontmatterSchema: "schemas/adr.schema.json"
+        mode: permissive
+```
+
+**Key rules:**
+- A file can belong to multiple collections (all schemas validated)
+- `permissive` mode: required fields must be present, extra fields OK — use for docs with project-specific extras
+- `strict` mode: respects `additionalProperties: false` in the schema — use for SKILL.md or API specs
+- Schema paths: relative to config file, or npm package reference (`@vibe-agent-toolkit/agent-skills/schemas/...`)
+- `vat resources validate` automatically applies all collection schemas — no extra flags needed
+- `--collection <id>` flag filters validation to a single collection (requires config mode — no path argument)
+- Full docs: [docs/guides/collection-validation.md](docs/guides/collection-validation.md)
+
+**Why this matters:** Without collections, you get one schema for all files. With collections, each doc type enforces its own contract. This is essential for multi-type knowledge bases (systems, teams, ADRs, processes, etc.).
+
 ### CLI Development
 
 **Commander.js for Command-Line Interface**
@@ -497,6 +533,29 @@ See [docs/publishing.md](docs/publishing.md) for complete publishing workflow, v
 - RC versions stay in `[Unreleased]` section of CHANGELOG
 - Publishing is automated via GitHub Actions
 - Commands: `bun run build`, `bun run build:clean`
+
+### Licensing Conventions
+
+Use the correct license field for the package's intended distribution:
+
+| Package type | `"license"` value | Also set | Files to add |
+|---|---|---|---|
+| Open source (MIT, Apache, etc.) | `"MIT"` | — | `LICENSE` |
+| Proprietary/enterprise internal | `"SEE LICENSE IN LICENSE"` | `"private": true` | `LICENSE` |
+| Not yet licensed | `"UNLICENSED"` | `"private": true` | — |
+
+**Standard enterprise proprietary LICENSE template** (for `private: true` packages owned by an organization):
+
+```
+Copyright (c) [YEAR] [Organization Name]. All rights reserved.
+
+This software is proprietary to [Organization Name] and is made available
+solely for use by authorized personnel and contractors under applicable
+confidentiality obligations. Redistribution, modification, or use outside
+this scope requires written consent from [Organization Name].
+```
+
+`"UNLICENSED"` signals "the author forgot to add a license" to npm tooling — do NOT use it for intentionally proprietary packages.
 
 ## CI/CD
 

@@ -29,8 +29,9 @@ const silentLogger = {
 };
 
 // Helper to run audit validation directly (no CLI subprocess)
+// options.recursive defaults to true (recursive by default), set to false to disable
 async function runAudit(targetPath: string, options: AuditCommandOptions = {}) {
-  return getValidationResults(targetPath, options.recursive ?? false, options, silentLogger);
+  return getValidationResults(targetPath, options.recursive !== false, options, silentLogger);
 }
 
 describe('audit command (integration)', () => {

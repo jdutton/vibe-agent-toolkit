@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/cli",
-  "version": "0.1.15-rc.1",
+  "version": "0.1.15-rc.3",
   "description": "Command-line interface for vibe-agent-toolkit",
   "type": "module",
   "bin": {
@@ -44,6 +44,7 @@
     "@vibe-agent-toolkit/agent-config": "workspace:*",
     "@vibe-agent-toolkit/agent-schema": "workspace:*",
     "@vibe-agent-toolkit/agent-skills": "workspace:*",
+    "@vibe-agent-toolkit/claude-marketplace": "workspace:*",
     "@vibe-agent-toolkit/discovery": "workspace:*",
     "@vibe-agent-toolkit/gateway-mcp": "workspace:*",
     "@vibe-agent-toolkit/rag": "workspace:*",

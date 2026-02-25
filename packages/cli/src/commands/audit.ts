@@ -13,8 +13,13 @@ import {
   type ValidateOptions,
   type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
+import {
+  analyzeCompatibility,
+  type CompatibilityResult,
+} from '@vibe-agent-toolkit/claude-marketplace';
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
 import { Command } from 'commander';
+import picomatch from 'picomatch';
 
 import { getClaudeUserPaths } from '../utils/claude-paths.js';
 import { handleCommandError } from '../utils/command-error.js';
@@ -24,11 +29,20 @@ import { writeYamlOutput } from '../utils/output.js';
 import { buildHierarchicalOutput } from './audit/hierarchical-output.js';
 
 export interface AuditCommandOptions {
+  compat?: boolean;
   debug?: boolean;
-  recursive?: boolean;
+  exclude?: string[];
+  recursive?: boolean; // Commander sets this to false when --no-recursive is used
   user?: boolean;
   verbose?: boolean; // Commander sets this for --verbose
   warnUnreferencedFiles?: boolean; // Commander sets this for --warn-unreferenced-files
+}
+
+/**
+ * Collect repeated option values into an array (used for --exclude)
+ */
+function collect(value: string, previous: string[]): string[] {
+  return [...previous, value];
 }
 
 /**
@@ -41,10 +55,12 @@ export function createAuditCommand(): Command {
   audit
     .description('Audit Claude plugins, marketplaces, registries, and skills')
     .argument('[path]', 'Path to audit (default: current directory)')
-    .option('-r, --recursive', 'Scan directories recursively for all resource types')
+    .option('--no-recursive', 'Disable recursive directory scanning (scans top level only)')
+    .option('--exclude <glob>', 'Exclude paths matching glob pattern (repeatable)', collect, [])
     .option('--user', 'Audit user-level Claude resources (~/.claude/plugins, ~/.claude/skills, ~/.claude/marketplaces)')
     .option('--verbose', 'Show all scanned resources, including those without issues')
     .option('--warn-unreferenced-files', 'Warn about files not referenced in skill markdown')
+    .option('--compat', 'Run compatibility analysis for each plugin (shows claude-code, cowork, claude-desktop support)')
     .option('--debug', 'Enable debug logging')
     .action(auditCommand)
     .addHelpText(
@@ -101,17 +117,74 @@ Exit Codes:
   2 - System error (directory not found, file not readable)
 
 Examples:
-  $ vat audit --user                   # Audit user-level installation (informational)
-  $ vat audit                          # Audit current directory
-  $ vat audit ./my-plugin              # Audit plugin directory
-  $ vat audit installed_plugins.json   # Audit registry file
-  $ vat audit ./resources --recursive  # Audit all resources recursively
+  $ vat audit ./plugins/              # Audit recursively (default)
+  $ vat audit --user                  # Audit user-level installation (~/.claude/)
+  $ vat audit --no-recursive ./dir/   # Top level only, no subdirectories
+  $ vat audit --exclude "dist/**" --exclude "node_modules/**"  # Filter noise
+  $ vat audit --compat ./plugin/      # Include per-surface compatibility analysis
 `
     );
 
   return audit;
 }
 
+
+/**
+ * Handle --user audit: scans ~/.claude/plugins, ~/.claude/skills, ~/.claude/marketplaces
+ * and outputs hierarchical YAML. Calls process.exit() when done.
+ */
+async function auditUserDirectories(
+  recursive: boolean,
+  options: AuditCommandOptions,
+  startTime: number,
+  logger: ReturnType<typeof createLogger>
+): Promise<void> {
+  const { pluginsDir, skillsDir, marketplacesDir } = getClaudeUserPaths();
+
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: path constructed from os.homedir()
+  const pluginsDirExists = fs.existsSync(pluginsDir);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: path constructed from os.homedir()
+  const skillsDirExists = fs.existsSync(skillsDir);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: path constructed from os.homedir()
+  const marketplacesDirExists = fs.existsSync(marketplacesDir);
+
+  if (!pluginsDirExists && !skillsDirExists && !marketplacesDirExists) {
+    logger.error(`No user-level Claude directories found:`);
+    logger.error(`  Plugins: ${pluginsDir}`);
+    logger.error(`  Skills: ${skillsDir}`);
+    logger.error(`  Marketplaces: ${marketplacesDir}`);
+    logger.error('Claude plugins/skills/marketplaces have not been installed yet.');
+    process.exit(2);
+  }
+
+  const results: ValidationResult[] = [];
+
+  if (pluginsDirExists) {
+    logger.debug(`Auditing user-level plugins at: ${pluginsDir}`);
+    results.push(...await getValidationResults(pluginsDir, recursive, options, logger));
+  }
+
+  if (skillsDirExists) {
+    logger.debug(`Auditing user-level skills at: ${skillsDir}`);
+    results.push(...await getValidationResults(skillsDir, recursive, options, logger));
+  }
+
+  if (marketplacesDirExists) {
+    logger.debug(`Auditing user-level marketplaces at: ${marketplacesDir}`);
+    results.push(...await getValidationResults(marketplacesDir, recursive, options, logger));
+  }
+
+  // Run compatibility analysis if --compat flag is set
+  const compatMap = options.compat
+    ? await runCompatAnalysis(results, logger)
+    : undefined;
+
+  const skillResults = results.filter((r: ValidationResult) => r.type === 'agent-skill');
+  const hierarchical = buildHierarchicalOutput(skillResults, options.verbose ?? false);
+  const summary = calculateHierarchicalSummary(results, hierarchical, startTime, compatMap);
+  writeYamlOutput(summary);
+  logHierarchicalSummary(results, hierarchical, logger);
+}
 
 export async function auditCommand(
   targetPath: string | undefined,
@@ -121,69 +194,25 @@ export async function auditCommand(
   const startTime = Date.now();
 
   try {
-    let scanPath: string;
-    let recursive: boolean = options.recursive ?? false;
+    // Commander sets options.recursive to false when --no-recursive is passed, true otherwise
+    const recursive: boolean = options.recursive !== false;
 
-    // Handle --user flag
     if (options.user) {
-      const { pluginsDir, skillsDir, marketplacesDir } = getClaudeUserPaths();
-
-      // Check if any target directories exist
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: path constructed from os.homedir()
-      const pluginsDirExists = fs.existsSync(pluginsDir);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: path constructed from os.homedir()
-      const skillsDirExists = fs.existsSync(skillsDir);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: path constructed from os.homedir()
-      const marketplacesDirExists = fs.existsSync(marketplacesDir);
-
-      if (!pluginsDirExists && !skillsDirExists && !marketplacesDirExists) {
-        logger.error(`No user-level Claude directories found:`);
-        logger.error(`  Plugins: ${pluginsDir}`);
-        logger.error(`  Skills: ${skillsDir}`);
-        logger.error(`  Marketplaces: ${marketplacesDir}`);
-        logger.error('Claude plugins/skills/marketplaces have not been installed yet.');
-        process.exit(2);
-      }
-
-      // Scan all directories that exist
-      const results: ValidationResult[] = [];
-      recursive = true; // Always recursive for user-level audit
-
-      if (pluginsDirExists) {
-        logger.debug(`Auditing user-level plugins at: ${pluginsDir}`);
-        const pluginResults = await getValidationResults(pluginsDir, recursive, options, logger);
-        results.push(...pluginResults);
-      }
-
-      if (skillsDirExists) {
-        logger.debug(`Auditing user-level skills at: ${skillsDir}`);
-        const skillResults = await getValidationResults(skillsDir, recursive, options, logger);
-        results.push(...skillResults);
-      }
-
-      if (marketplacesDirExists) {
-        logger.debug(`Auditing user-level marketplaces at: ${marketplacesDir}`);
-        const marketplaceResults = await getValidationResults(marketplacesDir, recursive, options, logger);
-        results.push(...marketplaceResults);
-      }
-
-      // Use hierarchical output for --user flag
-      const skillResults = results.filter((r: ValidationResult) => r.type === 'agent-skill');
-      const hierarchical = buildHierarchicalOutput(skillResults, options.verbose ?? false);
-      const summary = calculateHierarchicalSummary(results, hierarchical, startTime);
-      writeYamlOutput(summary);
-      logHierarchicalSummary(results, hierarchical, logger);
+      await auditUserDirectories(recursive, options, startTime, logger);
       return;
-    } else {
-      scanPath = targetPath ? path.resolve(targetPath) : process.cwd();
-      logger.debug(`Auditing resources at: ${scanPath}`);
     }
 
-    // Get validation results (non-user path)
+    const scanPath = targetPath ? path.resolve(targetPath) : process.cwd();
+    logger.debug(`Auditing resources at: ${scanPath}`);
+
     const results = await getValidationResults(scanPath, recursive, options, logger);
 
-    // Standard flat output
-    const summary = calculateSummary(results, startTime);
+    // Run compatibility analysis if --compat flag is set
+    const compatMap = options.compat
+      ? await runCompatAnalysis(results, logger)
+      : undefined;
+
+    const summary = calculateSummary(results, startTime, compatMap);
     writeYamlOutput(summary);
     handleAuditResults(results, summary, logger);
   } catch (error) {
@@ -252,11 +281,70 @@ export async function getValidationResults(
   return [result];
 }
 
-function calculateSummary(results: ValidationResult[], startTime: number) {
+/**
+ * Run compatibility analysis on plugin results and return a map of path -> CompatibilityResult.
+ * Non-plugin results are skipped silently.
+ */
+async function runCompatAnalysis(
+  results: ValidationResult[],
+  logger: ReturnType<typeof createLogger>
+): Promise<Map<string, CompatibilityResult>> {
+  const compatMap = new Map<string, CompatibilityResult>();
+
+  for (const result of results) {
+    if (result.type !== 'claude-plugin') continue;
+
+    try {
+      logger.debug(`Running compatibility analysis for: ${result.path}`);
+      const compat = await analyzeCompatibility(result.path);
+      compatMap.set(result.path, compat);
+    } catch (err) {
+      // Log but do not fail the audit — compat analysis is best-effort
+      logger.debug(`Compatibility analysis skipped for ${result.path}: ${String(err)}`);
+    }
+  }
+
+  return compatMap;
+}
+
+/**
+ * Merge compatibility analysis results into validation result output objects.
+ * Returns an array of plain objects ready for YAML serialization.
+ */
+function mergeCompatIntoResults(
+  results: ValidationResult[],
+  compatMap: Map<string, CompatibilityResult>
+): Array<ValidationResult & { compatibility?: CompatibilityResult }> {
+  return results.map(r => {
+    const compat = compatMap.get(r.path);
+    if (compat === undefined) return r;
+    return { ...r, compatibility: compat };
+  });
+}
+
+/**
+ * Apply compatibility data to results if a compatMap is provided and non-empty.
+ * Returns the original results array when no compat data is available.
+ */
+function applyCompatMap(
+  results: ValidationResult[],
+  compatMap?: Map<string, CompatibilityResult>
+): Array<ValidationResult & { compatibility?: CompatibilityResult }> {
+  if (compatMap !== undefined && compatMap.size > 0) {
+    return mergeCompatIntoResults(results, compatMap);
+  }
+  return results;
+}
+
+function calculateSummary(
+  results: ValidationResult[],
+  startTime: number,
+  compatMap?: Map<string, CompatibilityResult>
+) {
   const base = buildBaseSummary(results, startTime);
   return {
     ...base,
-    files: results,
+    files: applyCompatMap(results, compatMap),
   };
 }
 
@@ -327,6 +415,22 @@ function logIssues(
 }
 
 /**
+ * Check whether a path should be excluded during directory scanning.
+ * For directories, checks both bare path and path with trailing slash
+ * so patterns like "dist/**" prune the directory itself.
+ */
+function isExcludedPath(
+  isMatch: ReturnType<typeof picomatch>,
+  relativePath: string,
+  isDirectory: boolean
+): boolean {
+  if (isDirectory) {
+    return isMatch(relativePath) || isMatch(relativePath + '/');
+  }
+  return isMatch(relativePath);
+}
+
+/**
  * Handle file entry during directory scan
  */
 async function handleFileEntry(
@@ -361,7 +465,8 @@ async function handleDirectoryEntry(
   fullPath: string,
   recursive: boolean,
   options: AuditCommandOptions,
-  logger: ReturnType<typeof createLogger>
+  logger: ReturnType<typeof createLogger>,
+  baseDir: string
 ): Promise<ValidationResult[]> {
   const fs = await import('node:fs/promises');
   const results: ValidationResult[] = [];
@@ -378,7 +483,7 @@ async function handleDirectoryEntry(
 
   // Recurse into subdirectories (both plugin/marketplace dirs and regular dirs)
   if (recursive) {
-    const subResults = await scanDirectory(fullPath, recursive, options, logger);
+    const subResults = await scanDirectory(fullPath, recursive, options, logger, baseDir);
     results.push(...subResults);
   }
 
@@ -389,15 +494,30 @@ async function scanDirectory(
   dirPath: string,
   recursive: boolean,
   options: AuditCommandOptions,
-  logger: ReturnType<typeof createLogger>
+  logger: ReturnType<typeof createLogger>,
+  baseDir?: string
 ): Promise<ValidationResult[]> {
   const fs = await import('node:fs/promises');
   const results: ValidationResult[] = [];
+  const excludePatterns = options.exclude ?? [];
+  const resolvedBaseDir = baseDir ?? dirPath;
+
+  // Compile picomatch once per scanDirectory call (not inside the loop)
+  const isMatch = excludePatterns.length > 0 ? picomatch(excludePatterns) : null;
 
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
 
   for (const entry of entries) {
     const fullPath = path.join(dirPath, entry.name);
+
+    // Check exclude patterns against path relative to the base scan directory
+    if (isMatch !== null) {
+      const relativePath = path.relative(resolvedBaseDir, fullPath).replaceAll('\\', '/');
+      if (isExcludedPath(isMatch, relativePath, entry.isDirectory())) {
+        logger.debug(`Excluding path: ${relativePath}`);
+        continue;
+      }
+    }
 
     if (entry.isFile()) {
       const result = await handleFileEntry(entry, fullPath, options, logger);
@@ -405,7 +525,7 @@ async function scanDirectory(
         results.push(result);
       }
     } else if (entry.isDirectory()) {
-      const dirResults = await handleDirectoryEntry(fullPath, recursive, options, logger);
+      const dirResults = await handleDirectoryEntry(fullPath, recursive, options, logger, resolvedBaseDir);
       results.push(...dirResults);
     }
   }
@@ -524,7 +644,8 @@ function buildBaseSummary(
 function calculateHierarchicalSummary(
   results: ValidationResult[],
   hierarchical: ReturnType<typeof buildHierarchicalOutput>,
-  startTime: number
+  startTime: number,
+  compatMap?: Map<string, CompatibilityResult>
 ) {
   const base = buildBaseSummary(results, startTime);
 
@@ -537,6 +658,7 @@ function calculateHierarchicalSummary(
       standalonePlugins: hierarchical.standalonePlugins.length,
       standaloneSkills: hierarchical.standaloneSkills.length,
     },
+    files: applyCompatMap(results, compatMap),
     hierarchical,
   };
 }

@@ -29,9 +29,6 @@ describe('Audit User Plugins Fixture (system test)', () => {
   let tempDir: string;
   let fixtureDir: string;
 
-  // Constants
-  const RECURSIVE_FLAG = '--recursive';
-
   beforeAll(async () => {
     binPath = getBinPath(import.meta.url);
     tempDir = createTestTempDir('vat-audit-user-plugins-');
@@ -46,10 +43,10 @@ describe('Audit User Plugins Fixture (system test)', () => {
 
   describe('Real-world fixture validation', () => {
     it('should scan entire fixture directory recursively', () => {
+      // Recursive is the default — no flag needed
       const { stdout, status } = executeCli(binPath, [
         'audit',
         fixtureDir,
-        RECURSIVE_FLAG,
       ]);
 
       // Fixture contains validation errors, should exit with error code
@@ -83,10 +80,10 @@ describe('Audit User Plugins Fixture (system test)', () => {
     });
 
     it('should validate singleton marketplace (anthropic-agent-skills)', () => {
+      // Recursive is the default — no flag needed
       const { stdout, status } = executeCli(binPath, [
         'audit',
         join(fixtureDir, 'marketplaces/anthropic-agent-skills'),
-        RECURSIVE_FLAG,
       ]);
 
       // anthropic-agent-skills has all valid skills, should succeed
@@ -107,10 +104,10 @@ describe('Audit User Plugins Fixture (system test)', () => {
     });
 
     it('should validate standard marketplace (claude-plugins-official)', () => {
+      // Recursive is the default — no flag needed
       const { stdout, status } = executeCli(binPath, [
         'audit',
         join(fixtureDir, 'marketplaces/claude-plugins-official'),
-        RECURSIVE_FLAG,
       ]);
 
       // Should complete scan successfully (exit 0)
@@ -127,10 +124,10 @@ describe('Audit User Plugins Fixture (system test)', () => {
     });
 
     it('should validate cached plugins', () => {
+      // Recursive is the default — no flag needed
       const { stdout } = executeCli(binPath, [
         'audit',
         join(fixtureDir, 'cache'),
-        RECURSIVE_FLAG,
       ]);
 
       const output = parseYamlOutput(stdout);
@@ -146,10 +143,10 @@ describe('Audit User Plugins Fixture (system test)', () => {
 
   describe('Summary statistics', () => {
     it('should provide accurate file counts and scan statistics', () => {
+      // Recursive is the default — no flag needed
       const { stdout } = executeCli(binPath, [
         'audit',
         fixtureDir,
-        RECURSIVE_FLAG,
       ]);
 
       const output = parseYamlOutput(stdout);

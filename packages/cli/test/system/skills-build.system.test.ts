@@ -2,7 +2,7 @@
  * System tests for skills build command
  */
 
-import { readFileSync, rmSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
@@ -11,7 +11,7 @@ import { describe, expect, it, afterEach } from 'vitest';
 import {
   createSkillMarkdown,
   createSkillsPackageJson,
-  createTestTempDir,
+  createTempDirTracker,
   executeCliAndParseYaml,
   executeCli,
   getBinPath,
@@ -33,24 +33,7 @@ const SKILL_B_NAME = 'skill-b';
  */
 function setupSkillsBuildTestSuite() {
   const binPath = getBinPath(import.meta.url);
-  const tempDirs: string[] = [];
-
-  const createTempDir = () => {
-    const dir = createTestTempDir(TEMP_DIR_PREFIX);
-    tempDirs.push(dir);
-    return dir;
-  };
-
-  const cleanup = () => {
-    for (const dir of tempDirs) {
-      try {
-        rmSync(dir, { recursive: true, force: true });
-      } catch {
-        // Ignore cleanup errors
-      }
-    }
-    tempDirs.length = 0;
-  };
+  const { createTempDir, cleanupTempDirs: cleanup } = createTempDirTracker(TEMP_DIR_PREFIX);
 
   const createPackageWithSkills = (tempDir: string, skills: TestVatSkill[]) => {
     writeTestFile(

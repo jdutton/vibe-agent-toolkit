@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/vat-development-agents",
-  "version": "0.1.15-rc.1",
+  "version": "0.1.15-rc.3",
   "description": "VAT development agents - dogfooding the vibe-agent-toolkit",
   "type": "module",
   "keywords": [
@@ -17,16 +17,28 @@
         "name": "vibe-agent-toolkit",
         "source": "./resources/skills/SKILL.md",
         "path": "./dist/skills/vibe-agent-toolkit",
-        "packagingOptions": {
-          "linkFollowDepth": 2
-        },
-        "ignoreValidationErrors": {
-          "SKILL_LENGTH_EXCEEDS_RECOMMENDED": "Comprehensive toolkit documentation requires detailed examples",
-          "SKILL_TOTAL_SIZE_LARGE": "Complete VAT reference includes architecture docs, guides, and API reference",
-          "SKILL_TOO_MANY_FILES": "Toolkit skill aggregates all VAT package documentation",
-          "REFERENCE_TOO_DEEP": "Documentation hierarchy mirrors package structure",
-          "LINK_TARGETS_DIRECTORY": "Transitively-bundled docs from other packages contain directory links"
-        }
+        "packagingOptions": { "linkFollowDepth": 0 }
+      },
+      {
+        "name": "vibe-agent-toolkit:resources",
+        "source": "./resources/skills/vat-resources.md",
+        "path": "./dist/skills/vibe-agent-toolkit-resources"
+      },
+      {
+        "name": "vibe-agent-toolkit:distribution",
+        "source": "./resources/skills/vat-distribution.md",
+        "path": "./dist/skills/vibe-agent-toolkit-distribution"
+      },
+      {
+        "name": "vibe-agent-toolkit:agent-authoring",
+        "source": "./resources/skills/vat-agent-authoring.md",
+        "path": "./dist/skills/vibe-agent-toolkit-agent-authoring",
+        "packagingOptions": { "linkFollowDepth": 0 }
+      },
+      {
+        "name": "vibe-agent-toolkit:audit",
+        "source": "./resources/skills/vat-audit.md",
+        "path": "./dist/skills/vibe-agent-toolkit-audit"
       }
     ],
     "agents": [
