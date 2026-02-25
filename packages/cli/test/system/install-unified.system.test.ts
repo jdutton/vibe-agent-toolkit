@@ -18,6 +18,36 @@ import {
 } from './test-common.js';
 
 /**
+ * Create isolated source and install directories for a test scenario.
+ * Returns both dirs so the caller can create resources in sourceDir and verify installDir.
+ */
+function createTestDirs(
+  tempDir: string,
+  scenario: string,
+): { sourceDir: string; installDir: string } {
+  const sourceDir = join(tempDir, `${scenario}-sources`);
+  const installDir = join(tempDir, `${scenario}-install`);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
+  fs.mkdirSync(sourceDir, { recursive: true });
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
+  fs.mkdirSync(installDir, { recursive: true });
+  return { sourceDir, installDir };
+}
+
+/**
+ * Run `vat install` and return the result.
+ */
+function runInstall(
+  binPath: string,
+  cwd: string,
+  resourcePath: string,
+  installFlags: string[],
+  extraFlags: string[] = [],
+): ReturnType<typeof executeCli> {
+  return executeCli(binPath, ['install', resourcePath, ...installFlags, ...extraFlags], { cwd });
+}
+
+/**
  * Set up a minimal agent skill directory with SKILL.md at root.
  */
 function createSkillDir(parentDir: string, name: string): string {
@@ -97,18 +127,10 @@ describe('Unified vat install command (system test)', () => {
   });
 
   it('auto-detects agent skill from SKILL.md and installs', () => {
-    const sourceDir = join(tempDir, 'sources');
-    const installDir = join(tempDir, 'skills-install-1');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
-    fs.mkdirSync(sourceDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
-    fs.mkdirSync(installDir, { recursive: true });
-
+    const { sourceDir, installDir } = createTestDirs(tempDir, 'skill');
     const skillDir = createSkillDir(sourceDir, 'test-skill');
 
-    const result = executeCli(binPath, ['install', skillDir, SKILLS_DIR_FLAG, installDir], {
-      cwd: tempDir,
-    });
+    const result = runInstall(binPath, tempDir, skillDir, [SKILLS_DIR_FLAG, installDir]);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('agent-skill');
@@ -117,18 +139,10 @@ describe('Unified vat install command (system test)', () => {
   });
 
   it('auto-detects claude plugin and installs to plugins dir', () => {
-    const sourceDir = join(tempDir, 'plugin-sources');
-    const installDir = join(tempDir, 'plugins-install-1');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
-    fs.mkdirSync(sourceDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
-    fs.mkdirSync(installDir, { recursive: true });
-
+    const { sourceDir, installDir } = createTestDirs(tempDir, 'plugin');
     const pluginDir = createPluginDir(sourceDir, 'test-plugin');
 
-    const result = executeCli(binPath, ['install', pluginDir, PLUGINS_DIR_FLAG, installDir], {
-      cwd: tempDir,
-    });
+    const result = runInstall(binPath, tempDir, pluginDir, [PLUGINS_DIR_FLAG, installDir]);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('claude-plugin');
@@ -137,19 +151,14 @@ describe('Unified vat install command (system test)', () => {
   });
 
   it('--type flag overrides auto-detection', () => {
-    const sourceDir = join(tempDir, 'type-override-sources');
-    const installDir = join(tempDir, 'skills-install-2');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
-    fs.mkdirSync(sourceDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
-    fs.mkdirSync(installDir, { recursive: true });
-
+    const { sourceDir, installDir } = createTestDirs(tempDir, 'type-override');
     const skillDir = createSkillDir(sourceDir, 'override-skill');
 
-    const result = executeCli(
+    const result = runInstall(
       binPath,
-      ['install', skillDir, '--type', 'agent-skill', SKILLS_DIR_FLAG, installDir],
-      { cwd: tempDir }
+      tempDir,
+      skillDir,
+      ['--type', 'agent-skill', SKILLS_DIR_FLAG, installDir],
     );
 
     expect(result.status).toBe(0);
@@ -158,20 +167,10 @@ describe('Unified vat install command (system test)', () => {
   });
 
   it('auto-detects claude marketplace and installs to marketplaces dir', () => {
-    const sourceDir = join(tempDir, 'marketplace-sources');
-    const installDir = join(tempDir, 'marketplaces-install-1');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
-    fs.mkdirSync(sourceDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
-    fs.mkdirSync(installDir, { recursive: true });
-
+    const { sourceDir, installDir } = createTestDirs(tempDir, 'marketplace');
     const marketplaceDir = createMarketplaceDir(sourceDir, 'test-marketplace');
 
-    const result = executeCli(
-      binPath,
-      ['install', marketplaceDir, MARKETPLACES_DIR_FLAG, installDir],
-      { cwd: tempDir }
-    );
+    const result = runInstall(binPath, tempDir, marketplaceDir, [MARKETPLACES_DIR_FLAG, installDir]);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('claude-marketplace');
@@ -180,20 +179,10 @@ describe('Unified vat install command (system test)', () => {
   });
 
   it('--dry-run previews without creating files', () => {
-    const sourceDir = join(tempDir, 'dry-run-sources');
-    const installDir = join(tempDir, 'dry-run-install');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
-    fs.mkdirSync(sourceDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- installDir is controlled in tests
-    fs.mkdirSync(installDir, { recursive: true });
-
+    const { sourceDir, installDir } = createTestDirs(tempDir, 'dry-run');
     const skillDir = createSkillDir(sourceDir, 'dry-run-skill');
 
-    const result = executeCli(
-      binPath,
-      ['install', skillDir, SKILLS_DIR_FLAG, installDir, '--dry-run'],
-      { cwd: tempDir }
-    );
+    const result = runInstall(binPath, tempDir, skillDir, [SKILLS_DIR_FLAG, installDir], ['--dry-run']);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('dryRun: true');
@@ -202,20 +191,15 @@ describe('Unified vat install command (system test)', () => {
   });
 
   it('fails with exit code 1 when source does not match detected type', () => {
-    const sourceDir = join(tempDir, 'mismatch-sources');
-    const installDir = join(tempDir, 'mismatch-install');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
-    fs.mkdirSync(sourceDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- installDir is controlled in tests
-    fs.mkdirSync(installDir, { recursive: true });
-
+    const { sourceDir, installDir } = createTestDirs(tempDir, 'mismatch');
     const skillDir = createSkillDir(sourceDir, 'mismatch-skill');
 
     // Pass --type claude-plugin for a skill dir — should fail
-    const result = executeCli(
+    const result = runInstall(
       binPath,
-      ['install', skillDir, '--type', 'claude-plugin', PLUGINS_DIR_FLAG, installDir],
-      { cwd: tempDir }
+      tempDir,
+      skillDir,
+      ['--type', 'claude-plugin', PLUGINS_DIR_FLAG, installDir],
     );
 
     expect(result.status).toBe(1);
@@ -230,26 +214,20 @@ describe('Unified vat install command (system test)', () => {
   });
 
   it('--dry-run succeeds when resource is already installed', () => {
-    const sourceDir = join(tempDir, 'dry-run-exists-sources');
-    const installDir = join(tempDir, 'dry-run-exists-install');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
-    fs.mkdirSync(sourceDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- installDir is controlled in tests
-    fs.mkdirSync(installDir, { recursive: true });
-
+    const { sourceDir, installDir } = createTestDirs(tempDir, 'dry-run-exists');
     const skillDir = createSkillDir(sourceDir, 'already-installed-skill');
 
     // First: actually install it
-    const installResult = executeCli(binPath, ['install', skillDir, SKILLS_DIR_FLAG, installDir], {
-      cwd: tempDir,
-    });
+    const installResult = runInstall(binPath, tempDir, skillDir, [SKILLS_DIR_FLAG, installDir]);
     expect(installResult.status).toBe(0);
 
     // Second: dry-run should succeed (not fail with "already installed")
-    const dryRunResult = executeCli(
+    const dryRunResult = runInstall(
       binPath,
-      ['install', skillDir, SKILLS_DIR_FLAG, installDir, '--dry-run'],
-      { cwd: tempDir }
+      tempDir,
+      skillDir,
+      [SKILLS_DIR_FLAG, installDir],
+      ['--dry-run'],
     );
     expect(dryRunResult.status).toBe(0);
     expect(dryRunResult.stdout).toContain('dryRun: true');
@@ -257,32 +235,24 @@ describe('Unified vat install command (system test)', () => {
   });
 
   it('--force overwrites existing installation', () => {
-    const sourceDir = join(tempDir, 'force-sources');
-    const installDir = join(tempDir, 'force-install');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
-    fs.mkdirSync(sourceDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- installDir is controlled in tests
-    fs.mkdirSync(installDir, { recursive: true });
-
+    const { sourceDir, installDir } = createTestDirs(tempDir, 'force');
     const skillDir = createSkillDir(sourceDir, 'force-skill');
 
     // First install
-    const firstResult = executeCli(binPath, ['install', skillDir, SKILLS_DIR_FLAG, installDir], {
-      cwd: tempDir,
-    });
+    const firstResult = runInstall(binPath, tempDir, skillDir, [SKILLS_DIR_FLAG, installDir]);
     expect(firstResult.status).toBe(0);
 
     // Second install without --force should fail
-    const secondResult = executeCli(binPath, ['install', skillDir, SKILLS_DIR_FLAG, installDir], {
-      cwd: tempDir,
-    });
+    const secondResult = runInstall(binPath, tempDir, skillDir, [SKILLS_DIR_FLAG, installDir]);
     expect(secondResult.status).toBe(1);
 
     // Third install with --force should succeed
-    const thirdResult = executeCli(
+    const thirdResult = runInstall(
       binPath,
-      ['install', skillDir, SKILLS_DIR_FLAG, installDir, '--force'],
-      { cwd: tempDir }
+      tempDir,
+      skillDir,
+      [SKILLS_DIR_FLAG, installDir],
+      ['--force'],
     );
     expect(thirdResult.status).toBe(0);
   });

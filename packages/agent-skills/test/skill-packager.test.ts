@@ -677,6 +677,9 @@ describe('packageSkill - excluded resource filtering', () => {
   });
 });
 
+// Note: ZipSizeLimitError and validateZipSize tests live in
+// zip-size-validation.test.ts (separate file required for vi.mock() scoping)
+
 // ============================================================================
 // Source-in-output check (skip cleanup when SKILL.md is inside output dir)
 // ============================================================================
