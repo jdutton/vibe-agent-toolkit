@@ -1,6 +1,7 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect } from 'vitest';
 
 import { getClaudeUserPaths, getClaudeProjectPaths } from '../src/paths/claude-paths.js';
@@ -57,9 +58,9 @@ describe('getClaudeUserPaths', () => {
 describe('getClaudeProjectPaths', () => {
   it('should return project-relative paths', () => {
     const paths = getClaudeProjectPaths('/my/project');
-    expect(paths.projectSettingsPath).toBe('/my/project/.claude/settings.json');
-    expect(paths.projectSettingsLocalPath).toBe('/my/project/.claude/settings.local.json');
-    expect(paths.claudeMdPath).toBe('/my/project/.claude/CLAUDE.md');
-    expect(paths.mcpJsonPath).toBe('/my/project/.mcp.json');
+    expect(toForwardSlash(paths.projectSettingsPath)).toBe('/my/project/.claude/settings.json');
+    expect(toForwardSlash(paths.projectSettingsLocalPath)).toBe('/my/project/.claude/settings.local.json');
+    expect(toForwardSlash(paths.claudeMdPath)).toBe('/my/project/.claude/CLAUDE.md');
+    expect(toForwardSlash(paths.mcpJsonPath)).toBe('/my/project/.mcp.json');
   });
 });
