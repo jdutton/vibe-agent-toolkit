@@ -74,7 +74,7 @@ async function tryReadLayer(
   return {
     level,
     file: filePath,
-    settings: result.data as SettingsLayer['settings'],
+    settings: result.data,
   };
 }
 
