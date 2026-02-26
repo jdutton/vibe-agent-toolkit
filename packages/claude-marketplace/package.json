@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/claude-marketplace",
-  "version": "0.1.15-rc.3",
+  "version": "0.1.15-rc.4",
   "description": "Claude plugin marketplace tools: compatibility analysis, provenance tracking, enterprise config",
   "type": "module",
   "main": "./dist/index.js",
@@ -26,7 +26,9 @@
   },
   "dependencies": {
     "@vibe-agent-toolkit/utils": "workspace:*",
-    "yaml": "^2.6.1"
+    "ignore": "^6.0.0",
+    "yaml": "^2.6.1",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

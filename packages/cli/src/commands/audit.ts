@@ -15,24 +15,29 @@ import {
 } from '@vibe-agent-toolkit/agent-skills';
 import {
   analyzeCompatibility,
+  checkSettingsCompatibility,
+  readEffectiveSettings,
   type CompatibilityResult,
+  type EffectiveSettings,
 } from '@vibe-agent-toolkit/claude-marketplace';
+import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
 import { Command } from 'commander';
 import picomatch from 'picomatch';
 
-import { getClaudeUserPaths } from '../utils/claude-paths.js';
 import { handleCommandError } from '../utils/command-error.js';
 import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 
 import { buildHierarchicalOutput } from './audit/hierarchical-output.js';
+import { createAuditSettingsCommand } from './audit-settings.js';
 
 export interface AuditCommandOptions {
   compat?: boolean;
   debug?: boolean;
   exclude?: string[];
   recursive?: boolean; // Commander sets this to false when --no-recursive is used
+  settings?: string | boolean; // true = auto-discover, string = explicit path
   user?: boolean;
   verbose?: boolean; // Commander sets this for --verbose
   warnUnreferencedFiles?: boolean; // Commander sets this for --warn-unreferenced-files
@@ -61,8 +66,10 @@ export function createAuditCommand(): Command {
     .option('--verbose', 'Show all scanned resources, including those without issues')
     .option('--warn-unreferenced-files', 'Warn about files not referenced in skill markdown')
     .option('--compat', 'Run compatibility analysis for each plugin (shows claude-code, cowork, claude-desktop support)')
+    .option('--settings [file]', 'Check plugins against Claude settings (auto-discover or specify file; requires --compat)')
     .option('--debug', 'Enable debug logging')
     .action(auditCommand)
+    .addCommand(createAuditSettingsCommand())
     .addHelpText(
       'after',
       `
@@ -176,7 +183,7 @@ async function auditUserDirectories(
 
   // Run compatibility analysis if --compat flag is set
   const compatMap = options.compat
-    ? await runCompatAnalysis(results, logger)
+    ? await runCompatAnalysis(results, logger)  // --settings not supported in --user mode
     : undefined;
 
   const skillResults = results.filter((r: ValidationResult) => r.type === 'agent-skill');
@@ -207,9 +214,24 @@ export async function auditCommand(
 
     const results = await getValidationResults(scanPath, recursive, options, logger);
 
+    // Load effective settings when --settings is used (requires --compat)
+    let effectiveSettings: EffectiveSettings | undefined;
+    if (options.settings) {
+      if (options.compat) {
+        const settingsFile = typeof options.settings === 'string' ? options.settings : undefined;
+        try {
+          effectiveSettings = await readEffectiveSettings({ settingsFile, projectDir: scanPath });
+        } catch (err) {
+          logger.error(`Warning: could not load settings: ${String(err)}`);
+        }
+      } else {
+        logger.error('Warning: --settings requires --compat to be effective');
+      }
+    }
+
     // Run compatibility analysis if --compat flag is set
     const compatMap = options.compat
-      ? await runCompatAnalysis(results, logger)
+      ? await runCompatAnalysis(results, logger, effectiveSettings)
       : undefined;
 
     const summary = calculateSummary(results, startTime, compatMap);
@@ -284,10 +306,12 @@ export async function getValidationResults(
 /**
  * Run compatibility analysis on plugin results and return a map of path -> CompatibilityResult.
  * Non-plugin results are skipped silently.
+ * When effectiveSettings is provided, also runs settings conflict detection.
  */
 async function runCompatAnalysis(
   results: ValidationResult[],
-  logger: ReturnType<typeof createLogger>
+  logger: ReturnType<typeof createLogger>,
+  effectiveSettings?: EffectiveSettings
 ): Promise<Map<string, CompatibilityResult>> {
   const compatMap = new Map<string, CompatibilityResult>();
 
@@ -297,7 +321,19 @@ async function runCompatAnalysis(
     try {
       logger.debug(`Running compatibility analysis for: ${result.path}`);
       const compat = await analyzeCompatibility(result.path);
-      compatMap.set(result.path, compat);
+
+      // Settings conflict detection (when --settings flag is used)
+      if (effectiveSettings === undefined) {
+        compatMap.set(result.path, compat);
+      } else {
+        try {
+          const settingsConflicts = await checkSettingsCompatibility(result.path, effectiveSettings);
+          compatMap.set(result.path, { ...compat, settingsConflicts });
+        } catch (settingsErr) {
+          logger.debug(`Settings compat check skipped for ${result.path}: ${String(settingsErr)}`);
+          compatMap.set(result.path, compat);
+        }
+      }
     } catch (err) {
       // Log but do not fail the audit — compat analysis is best-effort
       logger.debug(`Compatibility analysis skipped for ${result.path}: ${String(err)}`);
@@ -310,14 +346,30 @@ async function runCompatAnalysis(
 /**
  * Merge compatibility analysis results into validation result output objects.
  * Returns an array of plain objects ready for YAML serialization.
+ * When settingsConflicts are present, adds a `settings:` block for cleaner output.
  */
 function mergeCompatIntoResults(
   results: ValidationResult[],
   compatMap: Map<string, CompatibilityResult>
-): Array<ValidationResult & { compatibility?: CompatibilityResult }> {
+): Array<ValidationResult & { compatibility?: Omit<CompatibilityResult, 'settingsConflicts'>; settings?: { compatible: boolean; conflicts: CompatibilityResult['settingsConflicts'] } }> {
   return results.map(r => {
     const compat = compatMap.get(r.path);
     if (compat === undefined) return r;
+
+    // Extract settingsConflicts from compat to render as a separate `settings:` block
+    const { settingsConflicts, ...compatWithoutSettings } = compat;
+
+    if (settingsConflicts !== undefined) {
+      return {
+        ...r,
+        compatibility: compatWithoutSettings,
+        settings: {
+          compatible: settingsConflicts.length === 0,
+          conflicts: settingsConflicts,
+        },
+      };
+    }
+
     return { ...r, compatibility: compat };
   });
 }
@@ -350,10 +402,18 @@ function calculateSummary(
 
 function handleAuditResults(
   results: ValidationResult[],
-  summary: { summary: { errors: number; warnings: number; success: number } },
+  summary: { summary: { errors: number; warnings: number; success: number }; files?: Array<{ compatibility?: CompatibilityResult }> },
   logger: ReturnType<typeof createLogger>
 ): void {
   const { errors: errorCount, warnings: warningCount, success: successCount } = summary.summary;
+
+  // Report settings conflicts (advisory, non-blocking)
+  const totalSettingsConflicts = (summary.files ?? []).reduce((sum, f) => {
+    return sum + (f.compatibility?.settingsConflicts?.length ?? 0);
+  }, 0);
+  if (totalSettingsConflicts > 0) {
+    logger.error(`\u26a0 ${totalSettingsConflicts} settings conflict(s) found — see 'settings' section in YAML output`);
+  }
 
   if (errorCount > 0) {
     logErrors(results, errorCount, logger);

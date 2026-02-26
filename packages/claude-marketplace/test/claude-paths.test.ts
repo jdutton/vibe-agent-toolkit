@@ -3,7 +3,7 @@ import { join } from 'node:path';
 
 import { describe, it, expect } from 'vitest';
 
-import { getClaudeUserPaths } from '../../src/utils/claude-paths.js';
+import { getClaudeUserPaths, getClaudeProjectPaths } from '../src/paths/claude-paths.js';
 
 describe('getClaudeUserPaths', () => {
   it('should return absolute paths to Claude directories', () => {
@@ -24,6 +24,8 @@ describe('getClaudeUserPaths', () => {
     expect(paths.pluginsDir).toBe(join(home, '.claude', 'plugins'));
     expect(paths.skillsDir).toBe(join(home, '.claude', 'skills'));
     expect(paths.marketplacesDir).toBe(join(home, '.claude', 'marketplaces'));
+    expect(paths.userSettingsPath).toBe(join(home, '.claude', 'settings.json'));
+    expect(paths.userDotJsonPath).toBe(join(home, '.claude.json'));
   });
 
   it('should return consistent paths on multiple calls', () => {
@@ -49,5 +51,15 @@ describe('getClaudeUserPaths', () => {
     expect(paths.pluginsDir).toContain('.claude');
     expect(paths.skillsDir).toContain('.claude');
     expect(paths.marketplacesDir).toContain('.claude');
+  });
+});
+
+describe('getClaudeProjectPaths', () => {
+  it('should return project-relative paths', () => {
+    const paths = getClaudeProjectPaths('/my/project');
+    expect(paths.projectSettingsPath).toBe('/my/project/.claude/settings.json');
+    expect(paths.projectSettingsLocalPath).toBe('/my/project/.claude/settings.local.json');
+    expect(paths.claudeMdPath).toBe('/my/project/.claude/CLAUDE.md');
+    expect(paths.mcpJsonPath).toBe('/my/project/.mcp.json');
   });
 });

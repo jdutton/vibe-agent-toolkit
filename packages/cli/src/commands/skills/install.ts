@@ -12,11 +12,11 @@ import { existsSync, lstatSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 
+import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { normalizedTmpdir, safeExecSync } from '@vibe-agent-toolkit/utils';
 import AdmZip from 'adm-zip';
 import { Command } from 'commander';
 
-import { getClaudeUserPaths } from '../../utils/claude-paths.js';
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
 

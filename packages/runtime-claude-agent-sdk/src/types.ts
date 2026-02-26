@@ -1,4 +1,5 @@
 import type { createSdkMcpServer } from '@anthropic-ai/claude-agent-sdk';
+import type { ClaudeAuthConfig, ClaudeModelConfig } from '@vibe-agent-toolkit/claude-marketplace';
 import type { z } from 'zod';
 
 /**
@@ -7,14 +8,13 @@ import type { z } from 'zod';
 export type ClaudeAgentMcpServer = ReturnType<typeof createSdkMcpServer>;
 
 /**
- * Configuration for Claude Agent SDK LLM calls
- * Used by LLM Analyzer agents that make their own LLM calls
+ * Configuration for Claude Agent SDK LLM calls.
+ * Extends ClaudeModelConfig (model, availableModels) and ClaudeAuthConfig (apiKeyHelper, forceLoginMethod, forceLoginOrgUUID)
+ * from claude-marketplace, plus SDK-specific settings.
  */
-export interface ClaudeAgentLLMConfig {
-  /** API key for Anthropic API */
+export interface ClaudeAgentLLMConfig extends ClaudeModelConfig, ClaudeAuthConfig {
+  /** API key for Anthropic API (SDK-specific shorthand) */
   apiKey?: string;
-  /** Model to use (defaults to claude-3-5-haiku-20241022) */
-  model?: string;
   /** Temperature for LLM calls */
   temperature?: number;
   /** Max tokens for LLM calls */

@@ -6,9 +6,9 @@
 
 import { existsSync } from 'node:fs';
 
+import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { scan, type ScanResult } from '@vibe-agent-toolkit/discovery';
 
-import { getClaudeUserPaths } from './claude-paths.js';
 
 /**
  * Scan user-level Claude directories for skills and plugins

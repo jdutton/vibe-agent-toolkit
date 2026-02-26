@@ -6,7 +6,8 @@
     "rootDir": "./src"
   },
   "references": [
-    { "path": "../agent-runtime" }
+    { "path": "../agent-runtime" },
+    { "path": "../claude-marketplace" }
   ],
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "test"]

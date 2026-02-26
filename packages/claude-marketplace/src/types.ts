@@ -51,13 +51,14 @@ export type Verdict = 'compatible' | 'needs-review' | 'incompatible';
 
 /** Where a compatibility signal was detected */
 export type EvidenceSource =
-  | 'declaration'      // Author-declared targets in plugin.json or frontmatter
-  | 'frontmatter'      // allowed-tools in SKILL.md frontmatter
-  | 'code-block'       // Fenced code blocks in markdown
-  | 'script'           // Script files (.py, .sh, .mjs) in plugin directory
-  | 'script-import'    // Import statements inside script files
-  | 'hook'             // Hook handler commands in hooks.json
-  | 'mcp-server';      // MCP server configs in .mcp.json
+  | 'declaration'       // Author-declared targets in plugin.json or frontmatter
+  | 'frontmatter'       // allowed-tools in SKILL.md frontmatter
+  | 'code-block'        // Fenced code blocks in markdown
+  | 'script'            // Script files (.py, .sh, .mjs) in plugin directory
+  | 'script-import'     // Import statements inside script files
+  | 'hook'              // Hook handler commands in hooks.json
+  | 'mcp-server'        // MCP server configs in .mcp.json
+  | 'settings-conflict'; // Conflict with managed/user settings
 
 /**
  * A single piece of compatibility evidence found during analysis.
@@ -78,6 +79,34 @@ export interface CompatibilityEvidence {
   impact: Record<Target, ImpactLevel>;
 }
 
+/** Settings level (highest → lowest precedence) */
+export type SettingsLevel =
+  | 'managed'
+  | 'project-local'
+  | 'project'
+  | 'user';
+
+/** Type of conflict between plugin capabilities and settings policies */
+export type SettingsConflictType =
+  | 'tool-blocked'       // permissions.deny matches a tool the plugin uses
+  | 'hook-disabled'      // disableAllHooks: true but plugin declares hooks
+  | 'mcp-denied'         // deniedMcpServers blocks a server in .mcp.json
+  | 'model-unavailable'; // availableModels doesn't include plugin's required model
+
+/** A conflict between a plugin and active settings policies */
+export interface SettingsConflict {
+  type: SettingsConflictType;
+  /** Human-readable explanation */
+  detail: string;
+  /** Settings key that caused the block, e.g. "permissions.deny" */
+  blockedBy: string;
+  /** The specific blocking value, e.g. "Bash(curl *)" */
+  value: string;
+  /** Absolute path to the settings file */
+  settingsFile: string;
+  settingsLevel: SettingsLevel;
+}
+
 /**
  * Aggregated compatibility result for a single plugin.
  * Plugin verdict = worst verdict across all evidence for each target.
@@ -93,6 +122,8 @@ export interface CompatibilityResult {
   analyzed: Record<Target, Verdict>;
   /** All evidence collected during analysis */
   evidence: CompatibilityEvidence[];
+  /** Settings conflicts found (only present when --settings used) */
+  settingsConflicts?: SettingsConflict[] | undefined;
   /** Summary counts for quick assessment */
   summary: {
     totalFiles: number;
