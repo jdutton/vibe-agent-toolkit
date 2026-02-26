@@ -1,10 +1,10 @@
 import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import * as claudePaths from '@vibe-agent-toolkit/claude-marketplace';
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll, vi } from 'vitest';
 
-import * as claudePaths from '../../src/utils/claude-paths.js';
 import { scanUserContext } from '../../src/utils/user-context-scanner.js';
 
 describe('scanUserContext', () => {
@@ -51,6 +51,8 @@ describe('scanUserContext', () => {
       pluginsDir: mockPluginsDir,
       skillsDir: mockSkillsDir,
       marketplacesDir: mockMarketplacesDir,
+      userSettingsPath: join(mockClaudeDir, 'settings.json'),
+      userDotJsonPath: join(tempDir, '.claude.json'),
     });
   });
 

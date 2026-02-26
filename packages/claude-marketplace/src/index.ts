@@ -7,6 +7,8 @@ export type {
   CompatibilityEvidence,
   CompatibilityResult,
   EvidenceSource,
+  SettingsConflict,
+  SettingsConflictType,
   Target,
   Verdict,
 } from './types.js';
@@ -14,3 +16,74 @@ export type {
 export { ALL_TARGETS } from './types.js';
 
 export { analyzeCompatibility } from './compatibility-analyzer.js';
+
+// Paths
+export type { ClaudeProjectPaths, ClaudeUserPaths } from './paths/claude-paths.js';
+export {
+  getClaudeProjectPaths,
+  getClaudeUserPaths,
+} from './paths/claude-paths.js';
+export {
+  getManagedSettingsCandidatePaths,
+  WINDOWS_LEGACY_MANAGED_SETTINGS_PATH,
+} from './paths/managed-settings-path.js';
+
+// Schemas
+export type {
+  ClaudeAuthConfig,
+  ClaudeModelConfig,
+  HooksConfig,
+  ManagedSettings,
+  McpServerPolicy,
+  PermissionsConfig,
+  ProjectSettings,
+  SandboxConfig,
+  UserSettings,
+} from './schemas/index.js';
+export {
+  ClaudeAuthConfigSchema,
+  ClaudeModelConfigSchema,
+  HooksConfigSchema,
+  ManagedSettingsSchema,
+  McpServerPolicySchema,
+  PermissionsConfigSchema,
+  ProjectSettingsSchema,
+  SandboxConfigSchema,
+  UserSettingsSchema,
+} from './schemas/index.js';
+
+// Settings
+export type {
+  BashRuleType,
+  EffectivePermissions,
+  EffectiveSettings,
+  ParsedBashRule,
+  ProvenanceRule,
+  ProvenanceValue,
+  ReadSettingsOptions,
+  RuleConflict,
+  RuleConflictKind,
+  SettingProvenance,
+  SettingsAuditResult,
+  SettingsLayer,
+  SettingsLevel,
+  SettingsPathEntry,
+  SettingsPathsResult,
+  SettingsValidateResult,
+} from './settings/index.js';
+export {
+  analyzeRuleConflicts,
+  auditSettings,
+  checkSettingsCompatibility,
+  getSettingsFileFields,
+  getSettingsPaths,
+  isSubsumedBy,
+  matchesBashRule,
+  matchesPathRule,
+  matchesPermissionRule,
+  mergeSettingsLayers,
+  readEffectiveSettings,
+  readSettingsLayers,
+  resolveSettingsPaths,
+  validateSettingsFile,
+} from './settings/index.js';

@@ -11,9 +11,9 @@ import { lstatSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { Command } from 'commander';
 
-import { getClaudeUserPaths } from '../../utils/claude-paths.js';
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
 

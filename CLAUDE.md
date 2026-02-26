@@ -27,6 +27,37 @@ While this project is in v0.1.x (pre-1.0):
 
 ## Project-Specific Technical Principles
 
+### Postel's Law (Robustness Principle)
+
+> *"Be conservative in what you send, be liberal in what you accept."*
+
+Apply this consistently across all schema validation in VAT:
+
+**When reading/auditing external data** (files we don't control — Claude settings, user plugins,
+third-party manifests): use `z.object({...}).passthrough()`. Unknown fields are silently passed
+through. We validate what we understand and ignore the rest. This prevents false-positive errors
+against undocumented or future fields.
+
+**When producing/validating data our agents generate** (SKILL.md frontmatter, plugin manifests,
+agent configs, any output VAT writes or emits): use strict schemas with no passthrough. Unknown
+fields are errors — they indicate a typo or bug in our own code that should be caught early.
+
+**Quick rule:** Reading outside world → liberal. Writing from our agents → conservative.
+
+```typescript
+// ✅ Reading external settings (liberal)
+const ExternalSchema = z.object({ model: z.string() }).passthrough();
+
+// ✅ Validating our own output (conservative)
+const OurSchema = z.object({ model: z.string() }).strict();
+```
+
+This principle applies specifically to:
+- Claude settings files (`managed-settings.json`, `settings.json`) → passthrough
+- Third-party plugin manifests during audit → passthrough
+- VAT-generated SKILL.md frontmatter → strict
+- VAT-generated plugin.json / marketplace.json → strict
+
 ### Schema Strategy
 
 **JSON Schema for Agentic Interfaces and Metadata**

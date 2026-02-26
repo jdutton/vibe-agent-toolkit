@@ -11,9 +11,13 @@ import { existsSync, lstatSync } from 'node:fs';
 import { cp, mkdir, rm } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 
+import {
+  checkSettingsCompatibility,
+  getClaudeUserPaths,
+  readEffectiveSettings,
+} from '@vibe-agent-toolkit/claude-marketplace';
 import { Command } from 'commander';
 
-import { getClaudeUserPaths } from '../utils/claude-paths.js';
 import { handleCommandError } from '../utils/command-error.js';
 import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
@@ -51,6 +55,7 @@ export interface InstallCommandOptions {
   name?: string;
   force?: boolean;
   dryRun?: boolean;
+  compatCheck?: boolean; // Commander sets to false when --no-compat-check is used
   debug?: boolean;
 }
 
@@ -222,6 +227,38 @@ function outputSuccess({
   }
 }
 
+/**
+ * Post-install settings advisory: check installed resource against active settings.
+ * Best-effort, non-blocking (only prints to stderr, never throws).
+ */
+async function runPostInstallSettingsAdvisory(
+  installPath: string,
+  logger: ReturnType<typeof createLogger>
+): Promise<void> {
+  try {
+    const effectiveSettings = await readEffectiveSettings({ projectDir: process.cwd() });
+
+    // Only run if there are any deny rules (otherwise there's nothing to conflict with)
+    if (effectiveSettings.permissions.deny.length === 0 && !effectiveSettings.disableAllHooks?.value) {
+      return;
+    }
+
+    const conflicts = await checkSettingsCompatibility(installPath, effectiveSettings);
+
+    if (conflicts.length > 0) {
+      logger.error(`\n\u26a0 Settings advisory: ${conflicts.length} conflict(s) detected`);
+      for (const conflict of conflicts) {
+        const settingsFile = basename(conflict.settingsFile);
+        logger.error(`  ${conflict.detail}`);
+        logger.error(`    blocked by: ${conflict.value} in ${settingsFile} (${conflict.settingsLevel})`);
+      }
+      logger.error(`  Run \`vat audit --compat --settings\` for full analysis.`);
+    }
+  } catch {
+    // Advisory is best-effort — never fail the install
+  }
+}
+
 async function installCommand(
   source: string,
   options: InstallCommandOptions
@@ -280,6 +317,12 @@ async function installCommand(
       alreadyExists,
     });
 
+    // Post-install advisory: check for settings conflicts (best-effort, advisory only)
+    // Skip in dry-run mode and when --no-compat-check is used
+    if (!options.dryRun && options.compatCheck !== false) {
+      await runPostInstallSettingsAdvisory(installPath, logger);
+    }
+
     process.exit(0);
   } catch (error) {
     if (error instanceof InstallError) {
@@ -319,6 +362,7 @@ export function createInstallCommand(): Command {
     .option('-n, --name <name>', 'Custom name for the installed resource (default: directory name)')
     .option('-f, --force', 'Overwrite existing installation', false)
     .option('--dry-run', 'Preview installation without creating files', false)
+    .option('--no-compat-check', 'Skip post-install settings compatibility advisory')
     .option('--debug', 'Enable debug logging')
     .action(installCommand)
     .addHelpText(
