@@ -12,7 +12,8 @@ import { existsSync, lstatSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 
-import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
+import { getClaudeUserPaths, installPlugin } from '@vibe-agent-toolkit/claude-marketplace';
+import { loadConfig } from '@vibe-agent-toolkit/resources';
 import { normalizedTmpdir, safeExecSync } from '@vibe-agent-toolkit/utils';
 import AdmZip from 'adm-zip';
 import { Command } from 'commander';
@@ -38,6 +39,7 @@ export interface SkillsInstallCommandOptions {
   npmPostinstall?: boolean;
   dev?: boolean;
   build?: boolean;
+  userInstallWithoutPlugin?: boolean;
 }
 
 export function createInstallCommand(): Command {
@@ -57,6 +59,7 @@ export function createInstallCommand(): Command {
     .option('--npm-postinstall', 'Run as npm postinstall hook (internal use)', false)
     .option('-d, --dev', 'Development mode: symlink skills from cwd package.json (rebuilds reflected immediately)')
     .option('--build', 'Build skills before installing (implies --dev)')
+    .option('--user-install-without-plugin', 'Force skills-only install (skip plugin registry even if claude.marketplaces configured)', false)
     .option('--debug', 'Enable debug logging')
     .action(installCommand)
     .addHelpText(
@@ -544,11 +547,62 @@ async function handleNpmPostinstall(
     );
   }
 
+  // Check if project has claude.marketplaces configured for plugin registry install
+  if (!options.userInstallWithoutPlugin) {
+    await tryInstallPluginRegistry(cwd, packageJson, logger);
+  }
+
   const duration = Date.now() - startTime;
   logger.info(`✅ Installed ${skills.length} skill(s) from ${packageJson.name}`);
   logger.info(`   Duration: ${duration}ms`);
 
   process.exit(0);
+}
+
+/**
+ * Attempt to register installed plugins with the Claude plugin registry.
+ * If claude.marketplaces is configured, copies plugin artifacts and updates registry files.
+ * Failures are logged as warnings — never throws.
+ */
+async function tryInstallPluginRegistry(
+  cwd: string,
+  packageJson: { name: string; version?: string },
+  logger: ReturnType<typeof createLogger>
+): Promise<void> {
+  const config = await loadConfig(cwd);
+  if (!config?.claude?.marketplaces) return;
+
+  const paths = getClaudeUserPaths();
+  const version = packageJson.version ?? '0.0.0';
+
+  for (const [marketplaceName, marketplaceConfig] of Object.entries(config.claude.marketplaces)) {
+    if (!marketplaceConfig.plugins) continue;
+
+    const pluginsDir = marketplaceConfig.output?.pluginsDir ?? 'dist/plugins';
+
+    for (const plugin of marketplaceConfig.plugins) {
+      const pluginDir = resolve(cwd, pluginsDir, plugin.name);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Resolved from config
+      if (!existsSync(pluginDir)) {
+        logger.info(`   Skipping plugin ${plugin.name}: not built at ${pluginDir}`);
+        continue;
+      }
+
+      try {
+        await installPlugin({
+          marketplaceName,
+          pluginName: plugin.name,
+          pluginDir,
+          version,
+          source: { source: 'npm', package: packageJson.name, version },
+          paths,
+        });
+        logger.info(`   Registered plugin ${plugin.name}@${marketplaceName} in Claude plugin registry`);
+      } catch (error) {
+        logger.info(`   Warning: Could not register plugin ${plugin.name}: ${String(error)}`);
+      }
+    }
+  }
 }
 
 /**
