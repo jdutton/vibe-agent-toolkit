@@ -14,8 +14,14 @@ export interface ClaudeUserPaths {
   pluginsDir: string;
   /** ~/.claude/skills directory */
   skillsDir: string;
-  /** ~/.claude/marketplaces directory */
+  /** ~/.claude/plugins/marketplaces directory (marketplace clone storage) */
   marketplacesDir: string;
+  /** ~/.claude/plugins/cache directory (installed plugin file cache) */
+  pluginsCacheDir: string;
+  /** ~/.claude/plugins/known_marketplaces.json */
+  knownMarketplacesPath: string;
+  /** ~/.claude/plugins/installed_plugins.json */
+  installedPluginsPath: string;
   /** ~/.claude/settings.json */
   userSettingsPath: string;
   /** ~/.claude.json */
@@ -50,12 +56,16 @@ export interface ClaudeProjectPaths {
 export function getClaudeUserPaths(): ClaudeUserPaths {
   const home = homedir();
   const claudeDir = join(home, '.claude');
+  const pluginsDir = join(claudeDir, 'plugins');
 
   return {
     claudeDir,
-    pluginsDir: join(claudeDir, 'plugins'),
+    pluginsDir,
     skillsDir: join(claudeDir, 'skills'),
-    marketplacesDir: join(claudeDir, 'marketplaces'),
+    marketplacesDir: join(pluginsDir, 'marketplaces'),
+    pluginsCacheDir: join(pluginsDir, 'cache'),
+    knownMarketplacesPath: join(pluginsDir, 'known_marketplaces.json'),
+    installedPluginsPath: join(pluginsDir, 'installed_plugins.json'),
     userSettingsPath: join(claudeDir, 'settings.json'),
     userDotJsonPath: join(home, '.claude.json'),
   };

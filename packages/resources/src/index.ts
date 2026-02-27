@@ -60,6 +60,10 @@ export type {
   CollectionConfig,
   CollectionValidation,
   ValidationMode,
+  ClaudeConfig,
+  ClaudeMarketplaceConfig,
+  ClaudeMarketplaceOutput,
+  ClaudeMarketplacePluginEntry,
 } from './types.js';
 
 // Export schemas for external use (e.g., JSON Schema generation, runtime validation)
@@ -93,3 +97,10 @@ export {
 
 // Note: link-parser and link-validator internals are NOT exported
 // They are implementation details. Users should use ResourceRegistry API.
+
+// Export project config parsing
+export {
+  findConfigFile,
+  parseConfigFile,
+  loadConfig,
+} from './config-parser.js';

@@ -9,12 +9,15 @@ import { Command } from 'commander';
 
 import { createAgentCommand, showAgentVerboseHelp } from './commands/agent/index.js';
 import { createAuditCommand } from './commands/audit.js';
+import { createBuildTopLevelCommand } from './commands/build.js';
+import { createClaudeCommand } from './commands/claude/index.js';
 import { doctorCommand } from './commands/doctor.js';
 import { createInstallCommand } from './commands/install.js';
 import { createMCPCommand } from './commands/mcp/index.js';
 import { createRagCommand, showRagVerboseHelp } from './commands/rag/index.js';
 import { createResourcesCommand, showResourcesVerboseHelp } from './commands/resources/index.js';
 import { createSkillsCommand } from './commands/skills/index.js';
+import { createVerifyTopLevelCommand } from './commands/verify.js';
 import { loadVerboseHelp } from './utils/help-loader.js';
 import { createLogger } from './utils/logger.js';
 import { version, getVersionString, type VersionContext } from './version.js';
@@ -117,6 +120,11 @@ program.addCommand(createRagCommand());
 program.addCommand(createAgentCommand());
 program.addCommand(createMCPCommand());
 program.addCommand(createSkillsCommand());
+program.addCommand(createClaudeCommand());
+
+// Add top-level orchestration commands
+program.addCommand(createBuildTopLevelCommand());
+program.addCommand(createVerifyTopLevelCommand());
 
 // Add standalone commands
 doctorCommand(program);
