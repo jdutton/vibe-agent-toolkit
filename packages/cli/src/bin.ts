@@ -5,6 +5,8 @@
  * Uses Commander.js for command structure
  */
 
+import { resolve } from 'node:path';
+
 import { Command } from 'commander';
 
 import { createAgentCommand, showAgentVerboseHelp } from './commands/agent/index.js';
@@ -36,6 +38,7 @@ program
   .name('vat')
   .description('Agent-friendly toolkit for building, testing, and deploying portable AI agents')
   .version(getVersionString(version, context), '-v, --version', 'Output version number')
+  .option('--cwd <dir>', 'Change working directory before running any command')
   .option('--debug', 'Enable debug logging')
   .helpCommand(false) // Disable redundant 'help' command, use --help instead
   .showHelpAfterError()
@@ -48,6 +51,7 @@ program
     `
 Example:
   $ vat resources validate docs/       # Validate markdown links (run before commit)
+  $ vat --cwd packages/my-agents build # Build from a subdirectory
 
 Environment:
   VAT_DEBUG=1                          # Show context detection details
@@ -57,6 +61,15 @@ For comprehensive help: vat --help --verbose
 For agent guidance: docs/cli/CLAUDE.md
 `
   );
+
+// Change working directory before any subcommand runs (if --cwd flag provided)
+program.hook('preAction', () => {
+  const { cwd } = program.opts<{ cwd?: string }>();
+  if (cwd) {
+    // Resolve relative to original cwd BEFORE chdir
+    process.chdir(resolve(cwd));
+  }
+});
 
 // Handle --help --verbose at root level before parsing
 // Manually check process.argv since --verbose is not a root-level option

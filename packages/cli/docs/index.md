@@ -245,6 +245,7 @@ vat rag search "agent deployment" --limit 5
 - `--version` - Show version number (with `-dev` suffix when running from development repo)
 - `--help` - Show help for any command
 - `--help --verbose` - Show comprehensive help (this output)
+- `--cwd <dir>` - Change working directory before running any command
 - `--debug` - Enable debug logging
 
 ## Environment Variables

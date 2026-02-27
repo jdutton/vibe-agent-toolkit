@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { findConfigFile, loadConfig, parseConfigFile } from '../src/config-parser.js';
+import { ProjectConfigSchema } from '../src/schemas/project-config.js';
 
 import { setupTempDirTestSuite } from './test-helpers.js';
 
@@ -367,6 +368,21 @@ claude:
     await writeFile(configPath, content);
 
     await expect(parseConfigFile(configPath)).rejects.toThrow('Invalid config file');
+  });
+});
+
+describe('collections optional', () => {
+  it('should accept resources section without collections field', () => {
+    const result = ProjectConfigSchema.safeParse({ version: 1, resources: { include: ['docs/**/*.md'] } });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.resources?.collections).toBeUndefined();
+  });
+
+  it('should accept resources section with only exclude patterns', () => {
+    const result = ProjectConfigSchema.safeParse({ version: 1, resources: { exclude: ['**/node_modules/**'] } });
+
+    expect(result.success).toBe(true);
   });
 });
 

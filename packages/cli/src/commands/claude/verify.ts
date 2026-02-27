@@ -180,8 +180,11 @@ async function verifyInlineMarketplace(
     const fileErrors = await validateJsonFile(marketplaceJsonPath, MarketplaceSchema, logger);
     errors.push(...fileErrors);
   } catch {
-    // File may not exist yet (not built) — only error if we can determine it should exist
-    logger.debug(`marketplace.json not found at ${marketplaceJsonPath} — skipping (not yet built)`);
+    // File does not exist — report as verification error (run vat build to generate it)
+    errors.push({
+      file: marketplaceJsonPath,
+      error: `marketplace.json not found — run vat build (or vat claude build) to generate it`,
+    });
   }
 
   const pluginsDir = config.output?.pluginsDir
@@ -194,7 +197,11 @@ async function verifyInlineMarketplace(
       const pluginErrors = await validateJsonFile(pluginJsonPath, ClaudePluginSchema, logger);
       errors.push(...pluginErrors);
     } catch {
-      logger.debug(`plugin.json not found at ${pluginJsonPath} — skipping (not yet built)`);
+      // File does not exist — report as verification error (run vat build to generate it)
+      errors.push({
+        file: pluginJsonPath,
+        error: `plugin.json not found — run vat build (or vat claude build) to generate it`,
+      });
     }
   }
 
