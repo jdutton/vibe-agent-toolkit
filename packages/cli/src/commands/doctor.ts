@@ -290,7 +290,7 @@ export function checkConfigValid(): DoctorCheckResult {
       const config = loadConfig(configDir);
 
       // Basic validation passed, now check collections and schema files
-      const collections = config.resources?.collections;
+      const collections = config?.resources?.collections;
 
       if (!collections || Object.keys(collections).length === 0) {
         return {

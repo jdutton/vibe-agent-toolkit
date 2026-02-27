@@ -15,17 +15,7 @@ export { writeYamlOutput, flushStdout, writeTestFormatError } from './utils/outp
 export { loadConfig } from './utils/config-loader.js';
 export {
   ProjectConfigSchema,
-  ResourcesConfigSchema,
-  ResourceCollectionSchema,
-  AgentsConfigSchema,
-  RAGConfigSchema,
-  DEFAULT_CONFIG,
-} from './schemas/config.js';
-export type {
-  ProjectConfig,
-  ResourcesConfig,
-  ResourceCollection,
-  AgentsConfig,
-  RAGConfig,
-  RAGStore,
-} from './schemas/config.js';
+  type ProjectConfig,
+  type ResourcesConfig,
+  type CollectionConfig as ResourceCollection,
+} from '@vibe-agent-toolkit/resources';

@@ -104,3 +104,5 @@ export {
   parseConfigFile,
   loadConfig,
 } from './config-parser.js';
+
+export { ProjectConfigSchema } from './schemas/project-config.js';

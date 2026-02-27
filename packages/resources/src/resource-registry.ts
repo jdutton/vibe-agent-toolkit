@@ -545,7 +545,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   private async validateAgainstCollectionSchema(
     resource: ResourceMetadata,
-    validation: NonNullable<ProjectConfig['resources']>['collections'][string]['validation'],
+    validation: NonNullable<NonNullable<ProjectConfig['resources']>['collections']>[string]['validation'],
     fsModule: typeof fs
   ): Promise<ValidationIssue[]> {
     if (!validation?.frontmatterSchema) {

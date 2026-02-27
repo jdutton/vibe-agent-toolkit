@@ -1,0 +1,18 @@
+# vibe-agent-toolkit configuration for vat-development-agents
+# This package publishes its built skills as a Claude plugin marketplace.
+
+version: 1
+
+claude:
+  marketplaces:
+    vat-skills:
+      owner:
+        name: vibe-agent-toolkit contributors
+      skills:
+        - vibe-agent-toolkit*    # matches all 5 skills: vibe-agent-toolkit, :resources, :distribution, :agent-authoring, :audit
+      plugins:
+        - name: vat-development-agents
+          skills: "*"
+      output:
+        marketplaceJson: dist/.claude-plugin/marketplace.json
+        pluginsDir: dist/plugins/

@@ -76,7 +76,7 @@ export const ResourcesConfigSchema = z.object({
     .describe('Global default include patterns (not used by collections in Phase 2)'),
   exclude: z.array(z.string()).optional()
     .describe('Global default exclude patterns (not used by collections in Phase 2)'),
-  collections: z.record(z.string(), CollectionConfigSchema)
+  collections: z.record(z.string(), CollectionConfigSchema).optional()
     .describe('Named collections of resources'),
 }).describe('Resources section of project configuration');
 

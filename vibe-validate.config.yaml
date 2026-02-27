@@ -6,6 +6,8 @@ ci:
   nodeVersions: ['24']
   os: ['ubuntu-latest', 'windows-latest']
   failFast: false
+  dependencyLockCheck:
+    runOn: pre-commit
 
 # Hooks configuration
 hooks:

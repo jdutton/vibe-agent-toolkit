@@ -6,11 +6,10 @@
  */
 
 import { readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 
+import { ProjectConfigSchema, type ProjectConfig } from '@vibe-agent-toolkit/resources';
 import * as yaml from 'js-yaml';
-
-import { ProjectConfigSchema, DEFAULT_CONFIG, type ProjectConfig } from '../schemas/config.js';
 
 const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 
@@ -39,7 +38,7 @@ export function findConfigPath(startDir?: string): string | null {
  * Load and validate project configuration
  *
  * @param projectRoot - Project root directory
- * @returns Validated configuration or default if not found
+ * @returns Validated configuration or undefined if not found
  * @throws Error if config file exists but is invalid
  *
  * @remarks
@@ -56,13 +55,13 @@ export function findConfigPath(startDir?: string): string | null {
  * const config = loadConfig('/any/path'); // Uses override path
  * ```
  */
-export function loadConfig(projectRoot: string): ProjectConfig {
+export function loadConfig(projectRoot: string): ProjectConfig | undefined {
   // Override for testing: VAT_TEST_CONFIG provides explicit config path
   const configPath = process.env['VAT_TEST_CONFIG'] ?? join(projectRoot, CONFIG_FILENAME);
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- configPath is derived from projectRoot parameter or env override
   if (!existsSync(configPath)) {
-    return DEFAULT_CONFIG;
+    return undefined;
   }
 
   try {
@@ -70,7 +69,7 @@ export function loadConfig(projectRoot: string): ProjectConfig {
     const content = readFileSync(configPath, 'utf-8');
     const parsed = yaml.load(content);
 
-    // Validate with Zod schema
+    // Validate with canonical schema from resources package
     const result = ProjectConfigSchema.safeParse(parsed);
 
     if (!result.success) {
@@ -86,4 +85,11 @@ export function loadConfig(projectRoot: string): ProjectConfig {
     }
     throw error;
   }
+}
+
+/**
+ * Get the directory containing a config file path.
+ */
+export function getConfigDir(configPath: string): string {
+  return dirname(configPath);
 }
