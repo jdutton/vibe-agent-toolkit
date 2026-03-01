@@ -230,8 +230,17 @@ export async function validateCommand(
   try {
     // Read package.json and filter skills
     const packageJson = await readPackageJson(cwd);
-    const skills = packageJson.vat?.skills ?? [];
+    const configuredSkills = packageJson.vat?.skills;
 
+    // Distinguish "not configured" (vat.skills absent) from "configured but empty" (vat.skills: []).
+    // When vat.skills is absent the project simply doesn't use skills — exit silently so that
+    // `vat verify` produces no noise for projects like lfa-cc-marketplace that only have claude
+    // artifacts. When vat.skills is explicitly [] the user likely has a config mistake worth noting.
+    if (configuredSkills === undefined) {
+      process.exit(0);
+    }
+
+    const skills = configuredSkills;
     if (skills.length === 0) {
       logger.info('ℹ️  No skills found in package.json vat.skills');
       logger.info('   To add skills, define them in package.json under the vat.skills field');
