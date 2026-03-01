@@ -20,6 +20,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   createTempDirTracker,
   executeCli,
+  fakeHomeEnv,
   getBinPath,
   writeTestFile,
 } from './test-common.js';
@@ -193,13 +194,7 @@ function setupPostinstallRegistryTestSuite() {
   const runPostinstall = (packageDir: string, fakeHome: string, extraArgs: string[] = []) => {
     return executeCli(binPath, ['skills', 'install', '--npm-postinstall', ...extraArgs], {
       cwd: packageDir,
-      env: {
-        ...NPM_POSTINSTALL_ENV,
-        HOME: fakeHome,
-        // Windows: os.homedir() reads USERPROFILE (not HOME), so set both to
-        // ensure the fake home directory is used on all platforms.
-        USERPROFILE: fakeHome,
-      },
+      env: { ...NPM_POSTINSTALL_ENV, ...fakeHomeEnv(fakeHome) },
     });
   };
 

@@ -27,7 +27,9 @@
               "name": {
                 "type": "string",
                 "minLength": 1,
-                "description": "Skill name (used for installation directory)"
+                "maxLength": 64,
+                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*(:[a-z0-9]+(-[a-z0-9]+)*)?$",
+                "description": "Skill identifier. Must be lowercase kebab-case, optionally colon-namespaced as {plugin}:{skill} (e.g. \"vibe-agent-toolkit:resources\"). Colons are sanitized to \"__\" when deriving filesystem paths."
               },
               "source": {
                 "type": "string",

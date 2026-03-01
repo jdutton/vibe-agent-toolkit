@@ -173,6 +173,34 @@ export function executeBunVat(
 }
 
 /**
+ * Build an env object that overrides the home directory for both Unix and Windows.
+ *
+ * `os.homedir()` reads different env vars depending on platform:
+ *   - Unix/macOS → `HOME`
+ *   - Windows    → `USERPROFILE`
+ *
+ * Always set both so tests that spawn child processes receive the fake home on
+ * every platform. Pass the result as (or merge into) `options.env` whenever a
+ * spawned process calls `os.homedir()` internally.
+ *
+ * @example
+ * ```typescript
+ * executeCli(binPath, args, {
+ *   cwd: packageDir,
+ *   env: { ...NPM_POSTINSTALL_ENV, ...fakeHomeEnv(fakeHome) },
+ * });
+ * ```
+ */
+export function fakeHomeEnv(fakeHome: string): Record<string, string> {
+  return {
+    HOME: fakeHome,
+    // Windows: os.homedir() reads USERPROFILE, not HOME. Set both to ensure
+    // the fake directory is used on all platforms.
+    USERPROFILE: fakeHome,
+  };
+}
+
+/**
  * Skills test fixture - VAT skill metadata
  */
 export interface TestVatSkill {

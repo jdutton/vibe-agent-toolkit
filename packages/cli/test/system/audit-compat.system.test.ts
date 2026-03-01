@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   cleanupTestTempDir,
   createTestTempDir,
+  fakeHomeEnv,
   getBinPath,
   writeTestFile,
 } from './test-common.js';
@@ -222,7 +223,7 @@ This skill has no plugin.json so no compat analysis applies.
     // Override HOME so getClaudeUserPaths() resolves to our temp directory.
     // Merge with process.env so PATH and other vars are preserved.
     const { stdout, status } = executeCli(binPath, ['audit', '--user', '--compat'], {
-      env: { ...process.env, HOME: fakeHome, USERPROFILE: fakeHome },
+      env: { ...process.env, ...fakeHomeEnv(fakeHome) },
     });
 
     expect(status).toBe(0);
