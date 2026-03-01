@@ -6,6 +6,18 @@
       "outputs": ["dist/**", "**/*.schema.json"],
       "cache": true
     },
+    // --- Adopter packages ---
+    // These packages live in the monorepo but depend on the CLI *binary* at
+    // build time (they run `node ../cli/dist/bin/vat.js build` as adopters would).
+    // They must NOT be listed as workspace deps of CLI — that creates a cycle.
+    // Instead, declare the binary dependency here using package#task syntax so
+    // turbo waits for CLI before building each adopter.
+    // To register a new adopter package, add a "<pkg>#build" entry below.
+    "@vibe-agent-toolkit/vat-development-agents#build": {
+      "dependsOn": ["@vibe-agent-toolkit/cli#build", "^build"],
+      "outputs": ["dist/**", "agents/**"],
+      "cache": true
+    },
     "build:skills": {
       "dependsOn": ["build"],
       "outputs": ["dist/skills/**"],

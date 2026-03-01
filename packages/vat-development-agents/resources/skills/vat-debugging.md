@@ -108,4 +108,4 @@ is safe to commit. Do not commit until `bun run validate` passes.
 
 - [docs/debug-and-test-vat-fixes.md](../../../../docs/debug-and-test-vat-fixes.md) — Full reference
 - [docs/writing-tests.md](../../../../docs/writing-tests.md) — Test patterns and classification
-- [packages/cli/CLAUDE.md](../../cli/CLAUDE.md) — CLI development guidelines
+- [packages/cli/CLAUDE.md](../../../cli/CLAUDE.md) — CLI development guidelines

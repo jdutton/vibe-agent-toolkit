@@ -143,7 +143,6 @@
         "@vibe-agent-toolkit/rag-lancedb": "workspace:*",
         "@vibe-agent-toolkit/resources": "workspace:*",
         "@vibe-agent-toolkit/utils": "workspace:*",
-        "@vibe-agent-toolkit/vat-development-agents": "workspace:*",
         "adm-zip": "^0.5.16",
         "commander": "^12.1.0",
         "js-yaml": "^4.1.0",
