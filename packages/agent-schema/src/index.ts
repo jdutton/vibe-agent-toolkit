@@ -69,6 +69,8 @@ export {
 
 export {
   PackagingOptionsSchema,
+  SKILL_NAME_REGEX,
+  SKILL_NAME_REGEX_MESSAGE,
   ValidationOverrideSchema,
   VatAgentMetadataSchema,
   VatPackageMetadataSchema,

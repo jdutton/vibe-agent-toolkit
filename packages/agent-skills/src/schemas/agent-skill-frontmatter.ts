@@ -1,13 +1,6 @@
+import { SKILL_NAME_REGEX, SKILL_NAME_REGEX_MESSAGE } from '@vibe-agent-toolkit/agent-schema';
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
-
-/**
- * Skill name pattern: kebab-case, optionally prefixed with a plugin name (plugin:skill format).
- * Examples: "my-skill", "vibe-agent-toolkit:resources"
- */
-// eslint-disable-next-line security/detect-unsafe-regex -- simple pattern for skill names, max length enforced
-const SKILL_NAME_REGEX = /^[a-z0-9]+(-[a-z0-9]+)*(:[a-z0-9]+(-[a-z0-9]+)*)?$/;
-const SKILL_NAME_REGEX_MESSAGE = 'Name must be lowercase alphanumeric with hyphens, no consecutive hyphens, cannot start/end with hyphen';
 
 /**
  * Agent Skill Frontmatter Schema
