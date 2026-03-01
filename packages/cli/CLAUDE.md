@@ -42,6 +42,20 @@ npx vat skills build
 bunx vat skills build
 ```
 
+## Debugging VAT Behavior & Testing Fixes
+
+When VAT produces unexpected results and you need to test a code change in an adopter
+project, use `VAT_ROOT_DIR` to redirect the installed `vat` binary to your local build:
+
+```bash
+export VAT_ROOT_DIR=/path/to/vibe-agent-toolkit
+bun run build   # always build first
+cd /path/to/adopter-project
+vat resources validate .   # now uses your local build
+```
+
+Full debugging guide: [docs/debug-and-test-vat-fixes.md](../../docs/debug-and-test-vat-fixes.md)
+
 ## CLI Package Architecture Principles
 
 ### The CLI Must Remain "Dumb"

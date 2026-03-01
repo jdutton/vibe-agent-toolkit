@@ -172,7 +172,7 @@ Content of second section.`;
       const slugs = result.fragments.map((f) => f.slug);
 
       expect(slugs).toContain('purpose-driven');
-      expect(slugs).toContain('api-v20'); // slugify removes dots with strict mode
+      expect(slugs).toContain('api-v20'); // github-slugger removes dots
       expect(slugs).toContain('hello-world');
     });
 
@@ -186,24 +186,28 @@ ${TEST_CONTENT}`;
       expect(result.fragments[0]?.slug).toBe('hello-world');
     });
 
-    it('should handle numbers in slugs', () => {
+    it('should handle numbers and trailing punctuation in slugs', () => {
+      // github-slugger keeps a trailing hyphen when heading ends with punctuation
+      // that maps to a separator (e.g. "!!!" → "-"). This matches GitHub's behavior.
       const content = `## Numbers 123 and Symbols !!!
 
 ${TEST_CONTENT}`;
 
       const result = parseMarkdown(content);
 
-      expect(result.fragments[0]?.slug).toBe('numbers-123-and-symbols');
+      expect(result.fragments[0]?.slug).toBe('numbers-123-and-symbols-');
     });
 
     it('should handle multiple spaces in slugs', () => {
+      // github-slugger maps each space to a hyphen, so double-space → double-hyphen.
+      // This matches GitHub's actual anchor generation behavior.
       const content = `## Spaces  Everywhere
 
 ${TEST_CONTENT}`;
 
       const result = parseMarkdown(content);
 
-      expect(result.fragments[0]?.slug).toBe('spaces-everywhere');
+      expect(result.fragments[0]?.slug).toBe('spaces--everywhere');
     });
 
     it('should handle leading and trailing whitespace', () => {
