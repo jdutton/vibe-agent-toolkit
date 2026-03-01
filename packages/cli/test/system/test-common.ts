@@ -111,6 +111,40 @@ export function writeTestFile(filePath: string, content: string): void {
 }
 
 /**
+ * Merge base environment with overrides, deduplicating case-insensitive keys.
+ *
+ * On Windows, environment variable names are case-insensitive. A plain object spread
+ * `{ ...process.env, npm_config_global: 'true' }` can produce an object with BOTH
+ * `NPM_CONFIG_GLOBAL` (from process.env, uppercase as Windows stores it) AND
+ * `npm_config_global` (our lowercase override) as *separate* JavaScript properties.
+ * Node.js passes both to Windows `CreateProcess`, and its behavior for duplicate
+ * case-insensitive names is undefined — the uppercase version from process.env
+ * often wins, silently defeating our intended override.
+ *
+ * This function builds the merged env so that each case-insensitive key appears
+ * exactly once, with the override value winning.
+ */
+function mergeEnvWithOverrides(overrides: Record<string, string>): NodeJS.ProcessEnv {
+  // Start with process.env and then apply overrides, removing any existing
+  // case-insensitive duplicate before setting each override value.
+  const merged: NodeJS.ProcessEnv = { ...process.env };
+
+  for (const [overrideKey, overrideValue] of Object.entries(overrides)) {
+    // Remove any existing key that is case-insensitively equivalent to the override key
+    // (handles Windows normalizing npm_config_global → NPM_CONFIG_GLOBAL).
+    const lowerOverride = overrideKey.toLowerCase();
+    for (const existingKey of Object.keys(merged)) {
+      if (existingKey !== overrideKey && existingKey.toLowerCase() === lowerOverride) {
+        delete merged[existingKey];
+      }
+    }
+    merged[overrideKey] = overrideValue;
+  }
+
+  return merged;
+}
+
+/**
  * Execute CLI command and return result
  * Handles ESLint suppressions for test execution
  */
@@ -123,7 +157,7 @@ export function executeCli(
   return nodeSpawnSync('node', [binPath, ...args], {
     encoding: 'utf-8',
     cwd: options?.cwd,
-    env: options?.env ? { ...process.env, ...options.env } : undefined,
+    env: options?.env ? mergeEnvWithOverrides(options.env) : undefined,
     maxBuffer: 10 * 1024 * 1024, // 10MB buffer for large audit outputs
   });
 }
