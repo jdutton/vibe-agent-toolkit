@@ -196,6 +196,9 @@ function setupPostinstallRegistryTestSuite() {
       env: {
         ...NPM_POSTINSTALL_ENV,
         HOME: fakeHome,
+        // Windows: os.homedir() reads USERPROFILE (not HOME), so set both to
+        // ensure the fake home directory is used on all platforms.
+        USERPROFILE: fakeHome,
       },
     });
   };
