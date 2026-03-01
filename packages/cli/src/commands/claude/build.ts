@@ -249,6 +249,17 @@ async function buildMarketplace(
   };
 }
 
+/**
+ * Convert a skill name to a filesystem-safe path segment.
+ *
+ * Skill names use colon-namespacing (e.g. "vibe-agent-toolkit:resources") which is
+ * valid in YAML/JSON but invalid as a directory name on Windows. Replace colons with
+ * double-underscore — unambiguous, reversible, and safe on all platforms.
+ */
+function skillNameToFsPath(name: string): string {
+  return name.replaceAll(':', '__');
+}
+
 async function buildPlugin(
   pluginName: string,
   skills: VatSkillMetadata[],
@@ -273,13 +284,16 @@ async function buildPlugin(
       );
     }
 
-    // Copy skill into plugin directory structure
-    const destPath = join(pluginDir, 'skills', skill.name);
+    // Copy skill into plugin directory structure.
+    // Use skillNameToFsPath to strip colons — colon-namespaced skill names (e.g.
+    // "pkg:sub-skill") are valid VAT identifiers but invalid directory names on Windows.
+    const fsPath = skillNameToFsPath(skill.name);
+    const destPath = join(pluginDir, 'skills', fsPath);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
     await mkdir(destPath, { recursive: true });
     await cp(skillDistPath, destPath, { recursive: true });
-    skillsCopied.push(skill.name);
-    logger.info(`      ✅ ${skill.name} → skills/${skill.name}`);
+    skillsCopied.push(fsPath);
+    logger.info(`      ✅ ${skill.name} → skills/${fsPath}`);
   }
 
   // Generate plugin.json

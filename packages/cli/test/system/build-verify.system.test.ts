@@ -145,6 +145,40 @@ describe('vat build command (system test)', () => {
     expect(existsSync(join(tempDir, DIST_SKILLS_DIR, TEST_SKILL_NAME, 'SKILL.md'))).toBe(true);
   });
 
+  it('should sanitize colon-namespaced skill names to fs-safe directory names', () => {
+    // Regression test: skill names like "pkg:sub-skill" contain a colon, which is an
+    // invalid directory name character on Windows. The build must replace ":" with "__".
+    const NAMESPACED_SKILL_NAME = 'test-pkg:sub-skill';
+    const NAMESPACED_SKILL_FS_PATH = 'test-pkg__sub-skill'; // expected on-disk name
+    const NAMESPACED_SKILL_DIST = `./dist/skills/${NAMESPACED_SKILL_FS_PATH}`;
+
+    const tempDir = suite.createTempDir();
+    writeTestFile(
+      join(tempDir, PACKAGE_JSON_FILENAME),
+      createSkillsPackageJson(PACKAGE_NAME, [
+        { name: NAMESPACED_SKILL_NAME, source: SKILL_SOURCE_PATH, path: NAMESPACED_SKILL_DIST },
+      ])
+    );
+    suite.createSkillSource(tempDir, SKILL_SOURCE_PATH, NAMESPACED_SKILL_NAME);
+    createVatConfig(tempDir, MARKETPLACE_NAME, PLUGIN_NAME, NAMESPACED_SKILL_NAME);
+
+    const result = suite.runBuild(tempDir);
+
+    expect(result.status).toBe(0);
+
+    // Plugin skills directory must use "__" form, never ":"
+    const pluginSkillsDir = join(tempDir, DIST_PLUGINS_DIR, PLUGIN_NAME, 'skills');
+    expect(existsSync(join(pluginSkillsDir, NAMESPACED_SKILL_FS_PATH, 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(pluginSkillsDir, NAMESPACED_SKILL_NAME))).toBe(false); // colon form must not exist
+
+    // plugin.json must reference the fs-safe path, not the colon form
+    const pluginJson = JSON.parse(
+      readFileSync(join(tempDir, DIST_PLUGINS_DIR, PLUGIN_NAME, '.claude-plugin', 'plugin.json'), 'utf-8')
+    ) as { skills: string[] };
+    expect(pluginJson.skills).toContain(`skills/${NAMESPACED_SKILL_FS_PATH}`);
+    expect(pluginJson.skills.some((s) => s.includes(':'))).toBe(false);
+  });
+
   it('should fail build when skill source missing', () => {
     const tempDir = suite.createTempDir();
     // package.json references a skill with missing source file
