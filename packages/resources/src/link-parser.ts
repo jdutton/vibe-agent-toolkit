@@ -11,6 +11,7 @@
 
 import { readFile, stat } from 'node:fs/promises';
 
+import GithubSlugger from 'github-slugger';
 import * as yaml from 'js-yaml';
 import type { Definition, Heading, Link, LinkReference, Root } from 'mdast';
 import remarkFrontmatter from 'remark-frontmatter';
@@ -243,14 +244,16 @@ function classifyLink(href: string): LinkType {
  */
 function extractHeadings(tree: Root): HeadingNode[] {
   const flatHeadings: HeadingNode[] = [];
+  const slugger = new GithubSlugger();
 
   // First pass: collect all headings in document order
+  // GithubSlugger processes headings in order, deduplicating exactly as GitHub does
   visit(tree, 'heading', (node: Heading) => {
     const text = extractHeadingText(node);
     const heading: HeadingNode = {
       level: node.depth,
       text,
-      slug: generateSlug(text),
+      slug: slugger.slug(text),
       line: node.position?.start.line,
     };
     flatHeadings.push(heading);
@@ -299,33 +302,6 @@ function extractTextFromChildren(
     .join('');
 }
 
-/**
- * Generate a GitHub-style slug from heading text.
- *
- * Rules:
- * - Convert to lowercase
- * - Replace spaces with hyphens
- * - Remove special characters
- * - Collapse multiple hyphens
- *
- * @param text - Heading text
- * @returns GitHub-style slug for anchor links
- *
- * @example
- * ```typescript
- * generateSlug('Hello World') // 'hello-world'
- * generateSlug('Section 1.1') // 'section-11'
- * generateSlug('API Reference (v2)') // 'api-reference-v2'
- * ```
- */
-function generateSlug(text: string): string {
-  return text
-    .toLowerCase()
-    .trim()
-    .replaceAll(/[^\w\s-]/g, '') // Remove special chars
-    .replaceAll(/\s+/g, '-') // Replace spaces with hyphens
-    .replaceAll(/-+/g, '-'); // Collapse multiple hyphens
-}
 
 /**
  * Build a nested heading tree from a flat list of headings.

@@ -1,6 +1,6 @@
 ---
 name: vibe-agent-toolkit
-description: User adoption guide for building portable AI agents with VAT - agent creation, CLI workflows, and best practices
+description: Use when building, adopting, or learning vibe-agent-toolkit (VAT). Covers agent creation, CLI commands (vat skills, vat resources, vat audit, vat rag), runtime adapters, skill packaging, and resource validation. Routes to specialized sub-skills.
 ---
 
 # Vibe Agent Toolkit Skill
@@ -13,6 +13,7 @@ framework adapters. No vendor lock-in.
 ## Purpose: For Users, Not Contributors
 
 - **This skill** = How to USE VAT to build agents
+- **`vibe-agent-toolkit:debugging`** = When VAT itself behaves unexpectedly or you need to test a fix
 - **Root CLAUDE.md** = How to DEVELOP the VAT codebase itself
 
 ## When to Use VAT
@@ -35,6 +36,7 @@ non-TypeScript/JavaScript projects, or cases where you need deep framework-speci
 | Packaging skills, `--target claude-web`, ZIP format | `vibe-agent-toolkit:distribution` |
 | Sideloading with `vat install`, npm postinstall hooks | `vibe-agent-toolkit:distribution` |
 | `vat audit`, `--compat`, CI validation | `vibe-agent-toolkit:audit` |
+| VAT behaves unexpectedly, debugging VAT, testing local VAT changes, VAT_ROOT_DIR | `vibe-agent-toolkit:debugging` |
 
 ## Agent Archetypes (Quick Reference)
 

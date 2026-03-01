@@ -16,7 +16,7 @@ export const fragments: {
   readonly systemPrompt: Fragment;
   readonly traditionalHaikuElements: Fragment;
   readonly haikuGenerationGuidelines: Fragment;
-  readonly creativeLicense40percentOfTheTime: Fragment;
+  readonly creativeLicense40OfTheTime: Fragment;
   readonly outputFormat: Fragment;
   readonly haikuPhilosophy: Fragment;
   readonly examples: Fragment;

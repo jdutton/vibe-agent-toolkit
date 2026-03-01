@@ -42,7 +42,10 @@ export function buildClaudePhaseArgs(subcommand: string, options: PhaseOptions):
  * This file lives in commands/, one level above bin/.
  */
 export function resolveBinPath(): string {
-  return resolve(join(import.meta.dirname, '../bin/vat.js'));
+  // Use bin.js directly (not the vat.js wrapper) so phase subprocesses always
+  // run the same binary that is currently executing, regardless of cwd or
+  // context detection (which would pick up the adopter project's local install).
+  return resolve(join(import.meta.dirname, '../bin.js'));
 }
 
 export interface PhaseContext {

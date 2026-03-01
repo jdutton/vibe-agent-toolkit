@@ -9,7 +9,7 @@ claude:
       owner:
         name: vibe-agent-toolkit contributors
       skills:
-        - vibe-agent-toolkit*    # matches all 5 skills: vibe-agent-toolkit, :resources, :distribution, :agent-authoring, :audit
+        - vibe-agent-toolkit*    # matches all 6 skills: vibe-agent-toolkit, :resources, :distribution, :agent-authoring, :audit, :debugging
       plugins:
         - name: vat-development-agents
           skills: "*"
