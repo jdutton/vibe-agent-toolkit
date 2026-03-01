@@ -8,7 +8,7 @@
 
 import { existsSync } from 'node:fs';
 import { cp, mkdir, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 import type { VatSkillMetadata } from '@vibe-agent-toolkit/agent-schema';
 import { type ClaudeMarketplaceConfig } from '@vibe-agent-toolkit/resources';
@@ -214,14 +214,17 @@ async function buildMarketplace(
     );
     plugins.push(pluginResult);
 
-    // Build plugin entry for marketplace.json
+    // Build plugin entry for marketplace.json.
+    // `source` is required by the Claude marketplace format — use a relative path from
+    // the marketplace.json location to the plugin directory so the artifact is portable
+    // regardless of where the npm package is installed.
+    const pluginDir = join(pluginsDir, pluginDef.name);
+    const relativeSource = relative(dirname(marketplaceJsonPath), pluginDir);
     pluginEntries.push({
       name: pluginDef.name,
+      source: relativeSource,
       ...(pluginDef.version ? { version: pluginDef.version } : {}),
-      source: join(pluginsDir, pluginDef.name),
-      skills: pluginResult.skillsCopied.map((skillName) =>
-        join('skills', skillName)
-      ),
+      skills: pluginResult.skillsCopied.map((skillName) => `skills/${skillName}`),
     });
   }
 
