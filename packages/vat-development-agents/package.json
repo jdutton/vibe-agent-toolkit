@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/vat-development-agents",
-  "version": "0.1.15",
+  "version": "0.1.16-rc.1",
   "description": "VAT development agents - dogfooding the vibe-agent-toolkit",
   "type": "module",
   "keywords": [
@@ -25,9 +25,9 @@
         "path": "./dist/skills/vibe-agent-toolkit-resources"
       },
       {
-        "name": "vibe-agent-toolkit:distribution",
-        "source": "./resources/skills/vat-distribution.md",
-        "path": "./dist/skills/vibe-agent-toolkit-distribution"
+        "name": "vibe-agent-toolkit:skills-distribution",
+        "source": "./resources/skills/vat-skills-distribution.md",
+        "path": "./dist/skills/vibe-agent-toolkit-skills-distribution"
       },
       {
         "name": "vibe-agent-toolkit:agent-authoring",
