@@ -29,6 +29,10 @@ import {
   writeYamlHeader,
 } from './install-helpers.js';
 
+/** Relative path within a VAT npm package to its marketplace manifest. */
+const MARKETPLACE_JSON_SUBPATH = join('dist', '.claude-plugin', 'marketplace.json');
+const PACKAGE_JSON = 'package.json';
+
 export interface SkillsInstallCommandOptions {
   skillsDir?: string;
   name?: string;
@@ -187,7 +191,26 @@ async function handleNpmInstall(
     logger.info('   Downloading package...');
     const extractedPath = downloadNpmPackage(packageName, tempDir);
 
-    // Read vat metadata from package.json
+    // If the package ships a plugin, install via the plugin system (namespaced skills).
+    // Only fall back to ~/.claude/skills/ when no plugin is present or the caller
+    // explicitly opts out with --user-install-without-plugin.
+    const marketplaceJsonPath = join(extractedPath, MARKETPLACE_JSON_SUBPATH);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from controlled extractedPath + constant subpath
+    const hasPlugin = !options.userInstallWithoutPlugin && existsSync(marketplaceJsonPath);
+
+    if (hasPlugin) {
+      logger.info('   Plugin detected — installing via Claude plugin system (skills will be namespaced)');
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from controlled extractedPath + constant subpath
+      const pkgRaw = readFileSync(join(extractedPath, PACKAGE_JSON), 'utf-8');
+      const packageJson = JSON.parse(pkgRaw) as { name: string; version?: string };
+      await tryInstallPluginRegistry(extractedPath, packageJson, logger);
+
+      const duration = Date.now() - startTime;
+      outputInstallSuccess([], `npm:${packageName}`, 'npm', duration, logger, options.dryRun);
+      process.exit(0);
+    }
+
+    // No plugin — install skills directly to ~/.claude/skills/
     const { skills } = await readPackageJsonVatMetadata(extractedPath);
 
     if (skills.length === 0) {
@@ -208,7 +231,6 @@ async function handleNpmInstall(
 
     const skillsDir = options.skillsDir ?? getClaudeUserPaths().skillsDir;
 
-    // Install all matching skills
     for (const skill of skillsToInstall) {
       const skillPath = resolve(extractedPath, skill.path);
       await installSkillFromPath(skillPath, skill.name, options, logger);
@@ -530,12 +552,39 @@ async function handleNpmPostinstall(
 
   // Read package.json from current directory
   const cwd = process.cwd();
+
+  // If the package ships a plugin, install via the plugin system (namespaced skills).
+  // Only fall back to ~/.claude/skills/ when explicitly opted out with --user-install-without-plugin.
+  const marketplaceJsonPath = join(cwd, MARKETPLACE_JSON_SUBPATH);
+  const marketplaceExists = existsSync(marketplaceJsonPath);
+
+  if (!options.userInstallWithoutPlugin) {
+    if (marketplaceExists) {
+      const pkgRaw = readFileSync(join(cwd, PACKAGE_JSON), 'utf-8');
+      const packageJson = JSON.parse(pkgRaw) as { name: string; version?: string };
+      logger.info(`   Package: ${packageJson.name}@${packageJson.version ?? 'unknown'}`);
+      logger.info(`   Plugin detected — installing via Claude plugin system (skills will be namespaced)`);
+      await tryInstallPluginRegistry(cwd, packageJson, logger);
+
+      const duration = Date.now() - startTime;
+      logger.info(`✅ Installed plugin from ${packageJson.name}`);
+      logger.info(`   Duration: ${duration}ms`);
+    } else {
+      // Plugin not built yet — guide the publisher to run vat build first.
+      logger.info(`   No plugin found at ${MARKETPLACE_JSON_SUBPATH}`);
+      logger.info(`   Run 'vat build' to generate dist/.claude-plugin/marketplace.json before publishing.`);
+      logger.info(`   Skipping install — no skills registered.`);
+    }
+
+    process.exit(0);
+  }
+
+  // --user-install-without-plugin: install skills directly to ~/.claude/skills/
   const { packageJson, skills } = await readPackageJsonVatMetadata(cwd);
 
   logger.info(`   Package: ${packageJson.name}@${packageJson.version}`);
   logger.info(`   Skills found: ${skills.length}`);
 
-  // Install all skills from package
   for (const skill of skills) {
     const skillPath = resolve(cwd, skill.path);
     await installSkillFromPath(
@@ -544,11 +593,6 @@ async function handleNpmPostinstall(
       options,
       logger
     );
-  }
-
-  // Check if project has claude.marketplaces configured for plugin registry install
-  if (!options.userInstallWithoutPlugin) {
-    await tryInstallPluginRegistry(cwd, packageJson, logger);
   }
 
   const duration = Date.now() - startTime;
@@ -578,7 +622,7 @@ async function tryInstallPluginRegistry(
   packageJson: { name: string; version?: string },
   logger: ReturnType<typeof createLogger>
 ): Promise<void> {
-  const marketplaceJsonPath = join(cwd, 'dist', '.claude-plugin', 'marketplace.json');
+  const marketplaceJsonPath = join(cwd, MARKETPLACE_JSON_SUBPATH);
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Resolved from known cwd + constant subpath
   if (!existsSync(marketplaceJsonPath)) {
