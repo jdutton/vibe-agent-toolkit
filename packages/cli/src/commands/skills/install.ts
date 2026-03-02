@@ -8,11 +8,11 @@
  * - npm postinstall hook (--npm-postinstall)
  */
 
-import { existsSync, lstatSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { basename, join, resolve } from 'node:path';
 
-import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
+import { getClaudeUserPaths, installPlugin } from '@vibe-agent-toolkit/claude-marketplace';
 import { normalizedTmpdir, safeExecSync } from '@vibe-agent-toolkit/utils';
 import AdmZip from 'adm-zip';
 import { Command } from 'commander';
@@ -29,6 +29,10 @@ import {
   writeYamlHeader,
 } from './install-helpers.js';
 
+/** Relative path within a VAT npm package to its marketplace manifest. */
+const MARKETPLACE_JSON_SUBPATH = join('dist', '.claude-plugin', 'marketplace.json');
+const PACKAGE_JSON = 'package.json';
+
 export interface SkillsInstallCommandOptions {
   skillsDir?: string;
   name?: string;
@@ -38,6 +42,7 @@ export interface SkillsInstallCommandOptions {
   npmPostinstall?: boolean;
   dev?: boolean;
   build?: boolean;
+  userInstallWithoutPlugin?: boolean;
 }
 
 export function createInstallCommand(): Command {
@@ -57,6 +62,7 @@ export function createInstallCommand(): Command {
     .option('--npm-postinstall', 'Run as npm postinstall hook (internal use)', false)
     .option('-d, --dev', 'Development mode: symlink skills from cwd package.json (rebuilds reflected immediately)')
     .option('--build', 'Build skills before installing (implies --dev)')
+    .option('--user-install-without-plugin', 'Force skills-only install (skip plugin registry even if claude.marketplaces configured)', false)
     .option('--debug', 'Enable debug logging')
     .action(installCommand)
     .addHelpText(
@@ -185,7 +191,26 @@ async function handleNpmInstall(
     logger.info('   Downloading package...');
     const extractedPath = downloadNpmPackage(packageName, tempDir);
 
-    // Read vat metadata from package.json
+    // If the package ships a plugin, install via the plugin system (namespaced skills).
+    // Only fall back to ~/.claude/skills/ when no plugin is present or the caller
+    // explicitly opts out with --user-install-without-plugin.
+    const marketplaceJsonPath = join(extractedPath, MARKETPLACE_JSON_SUBPATH);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from controlled extractedPath + constant subpath
+    const hasPlugin = !options.userInstallWithoutPlugin && existsSync(marketplaceJsonPath);
+
+    if (hasPlugin) {
+      logger.info('   Plugin detected — installing via Claude plugin system (skills will be namespaced)');
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from controlled extractedPath + constant subpath
+      const pkgRaw = readFileSync(join(extractedPath, PACKAGE_JSON), 'utf-8');
+      const packageJson = JSON.parse(pkgRaw) as { name: string; version?: string };
+      await tryInstallPluginRegistry(extractedPath, packageJson, logger);
+
+      const duration = Date.now() - startTime;
+      outputInstallSuccess([], `npm:${packageName}`, 'npm', duration, logger, options.dryRun);
+      process.exit(0);
+    }
+
+    // No plugin — install skills directly to ~/.claude/skills/
     const { skills } = await readPackageJsonVatMetadata(extractedPath);
 
     if (skills.length === 0) {
@@ -206,7 +231,6 @@ async function handleNpmInstall(
 
     const skillsDir = options.skillsDir ?? getClaudeUserPaths().skillsDir;
 
-    // Install all matching skills
     for (const skill of skillsToInstall) {
       const skillPath = resolve(extractedPath, skill.path);
       await installSkillFromPath(skillPath, skill.name, options, logger);
@@ -528,12 +552,39 @@ async function handleNpmPostinstall(
 
   // Read package.json from current directory
   const cwd = process.cwd();
+
+  // If the package ships a plugin, install via the plugin system (namespaced skills).
+  // Only fall back to ~/.claude/skills/ when explicitly opted out with --user-install-without-plugin.
+  const marketplaceJsonPath = join(cwd, MARKETPLACE_JSON_SUBPATH);
+  const marketplaceExists = existsSync(marketplaceJsonPath);
+
+  if (!options.userInstallWithoutPlugin) {
+    if (marketplaceExists) {
+      const pkgRaw = readFileSync(join(cwd, PACKAGE_JSON), 'utf-8');
+      const packageJson = JSON.parse(pkgRaw) as { name: string; version?: string };
+      logger.info(`   Package: ${packageJson.name}@${packageJson.version ?? 'unknown'}`);
+      logger.info(`   Plugin detected — installing via Claude plugin system (skills will be namespaced)`);
+      await tryInstallPluginRegistry(cwd, packageJson, logger);
+
+      const duration = Date.now() - startTime;
+      logger.info(`✅ Installed plugin from ${packageJson.name}`);
+      logger.info(`   Duration: ${duration}ms`);
+    } else {
+      // Plugin not built yet — guide the publisher to run vat build first.
+      logger.info(`   No plugin found at ${MARKETPLACE_JSON_SUBPATH}`);
+      logger.info(`   Run 'vat build' to generate dist/.claude-plugin/marketplace.json before publishing.`);
+      logger.info(`   Skipping install — no skills registered.`);
+    }
+
+    process.exit(0);
+  }
+
+  // --user-install-without-plugin: install skills directly to ~/.claude/skills/
   const { packageJson, skills } = await readPackageJsonVatMetadata(cwd);
 
   logger.info(`   Package: ${packageJson.name}@${packageJson.version}`);
   logger.info(`   Skills found: ${skills.length}`);
 
-  // Install all skills from package
   for (const skill of skills) {
     const skillPath = resolve(cwd, skill.path);
     await installSkillFromPath(
@@ -549,6 +600,74 @@ async function handleNpmPostinstall(
   logger.info(`   Duration: ${duration}ms`);
 
   process.exit(0);
+}
+
+/** Minimal type for marketplace.json — external data, parsed defensively (Postel's Law). */
+type MarketplaceJsonPlugin = {
+  name: string;
+};
+
+type MarketplaceJson = {
+  name: string;
+  plugins?: MarketplaceJsonPlugin[];
+};
+
+/**
+ * Attempt to register installed plugins with the Claude plugin registry.
+ * Reads dist/.claude-plugin/marketplace.json (published in the npm package's dist/).
+ * Failures are logged as warnings — never throws.
+ */
+async function tryInstallPluginRegistry(
+  cwd: string,
+  packageJson: { name: string; version?: string },
+  logger: ReturnType<typeof createLogger>
+): Promise<void> {
+  const marketplaceJsonPath = join(cwd, MARKETPLACE_JSON_SUBPATH);
+
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Resolved from known cwd + constant subpath
+  if (!existsSync(marketplaceJsonPath)) {
+    logger.info(`   ℹ️  No plugin artifacts found (dist/.claude-plugin/marketplace.json)`);
+    logger.info(`      Run 'vat build' before publishing to register plugins in Claude`);
+    return;
+  }
+
+  let marketplace: MarketplaceJson;
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Resolved from known cwd + constant subpath
+    const raw = readFileSync(marketplaceJsonPath, 'utf-8');
+    marketplace = JSON.parse(raw) as MarketplaceJson;
+  } catch (error) {
+    logger.info(`   Warning: Could not parse dist/.claude-plugin/marketplace.json: ${String(error)}`);
+    return;
+  }
+
+  const marketplaceName = marketplace.name;
+  const plugins = marketplace.plugins ?? [];
+  const paths = getClaudeUserPaths();
+  const version = packageJson.version ?? '0.0.0';
+
+  for (const plugin of plugins) {
+    const pluginDir = join(cwd, 'dist', 'plugins', plugin.name);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Resolved from known cwd + marketplace data
+    if (!existsSync(pluginDir)) {
+      logger.info(`   Skipping plugin ${plugin.name}: not built at ${pluginDir}`);
+      continue;
+    }
+
+    try {
+      await installPlugin({
+        marketplaceName,
+        pluginName: plugin.name,
+        pluginDir,
+        version,
+        source: { source: 'npm', package: packageJson.name, version },
+        paths,
+      });
+      logger.info(`   Registered plugin ${plugin.name}@${marketplaceName} in Claude plugin registry`);
+    } catch (error) {
+      logger.info(`   Warning: Could not register plugin ${plugin.name}: ${String(error)}`);
+    }
+  }
 }
 
 /**

@@ -2,23 +2,10 @@
  * Markdown parser for extracting frontmatter and H2 fragments
  */
 
+import GithubSlugger from 'github-slugger';
 import matter from 'gray-matter';
-import slugifyModule from 'slugify';
 
 import type { MarkdownResource, MarkdownFragment } from './types.js';
-
-// Import slugify with type assertion to handle CJS module
-const slugifyFn = slugifyModule as unknown as (
-  string: string,
-  options?: {
-    replacement?: string;
-    remove?: RegExp;
-    lower?: boolean;
-    strict?: boolean;
-    locale?: string;
-    trim?: boolean;
-  },
-) => string;
 
 /**
  * Parse markdown file content into a MarkdownResource
@@ -116,25 +103,24 @@ function extractH2Fragments(content: string): MarkdownFragment[] {
 }
 
 /**
- * Generate a URL-safe slug from heading text
+ * Generate a GitHub-compatible URL slug from heading text
+ *
+ * Uses github-slugger to match GitHub's markdown anchor generation exactly,
+ * including correct handling of special characters like & (ampersand).
  *
  * @param heading - Original heading text
- * @returns Kebab-case slug
+ * @returns Kebab-case slug matching GitHub's anchor format
  *
  * @example
  * ```typescript
- * generateSlug("Purpose Driven")        // "purpose-driven"
- * generateSlug("API v2.0")              // "api-v2-0"
- * generateSlug("Hello, World!")         // "hello-world"
- * generateSlug("  Spaces  Everywhere  ") // "spaces-everywhere"
+ * generateSlug("Purpose Driven")            // "purpose-driven"
+ * generateSlug("Workflow & User Experience") // "workflow--user-experience"
+ * generateSlug("API v2.0")                  // "api-v20"
+ * generateSlug("Hello, World!")             // "hello-world"
  * ```
  */
 function generateSlug(heading: string): string {
-  return slugifyFn(heading, {
-    lower: true,
-    strict: true,
-    trim: true,
-  });
+  return new GithubSlugger().slug(heading);
 }
 
 /**
@@ -146,7 +132,7 @@ function generateSlug(heading: string): string {
  * @example
  * ```typescript
  * slugToCamelCase("purpose-driven")  // "purposeDriven"
- * slugToCamelCase("api-v2-0")        // "apiV20"
+ * slugToCamelCase("api-v20")         // "apiV20"
  * slugToCamelCase("single")          // "single"
  * ```
  */

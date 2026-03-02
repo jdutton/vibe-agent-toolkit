@@ -8,7 +8,7 @@
  * Deny always blocks. Ask always prompts. Allow only fires if no deny/ask matched.
  */
 
-import type { ManagedSettings, ProjectSettings, UserSettings } from '../schemas/settings.js';
+import type { ManagedSettings, MarketplaceSource, ProjectSettings, UserSettings } from '../schemas/settings.js';
 import type { SettingsLevel } from '../types.js';
 
 
@@ -57,6 +57,9 @@ export interface EffectiveSettings {
   allowManagedHooksOnly?: ProvenanceValue<boolean> | undefined;
   outputStyle?: ProvenanceValue<string> | undefined;
   language?: ProvenanceValue<string> | undefined;
+  extraKnownMarketplaces?: ProvenanceValue<Record<string, { source: MarketplaceSource; autoUpdate?: boolean }>> | undefined;
+  enabledPlugins?: ProvenanceValue<Record<string, boolean>> | undefined;
+  strictKnownMarketplaces?: ProvenanceValue<MarketplaceSource[]> | undefined;
   permissions: EffectivePermissions;
 }
 
@@ -110,6 +113,15 @@ function mergeScalarFields(
     effective.model = mergeScalar(effective.model, settings.model, provenance);
   }
 
+  // Shared fields available at all levels (cast; extra fields are safe — passthrough schema)
+  const shared = settings as UserSettings;
+  effective.extraKnownMarketplaces = setFirst(
+    effective.extraKnownMarketplaces,
+    shared.extraKnownMarketplaces as Record<string, { source: MarketplaceSource; autoUpdate?: boolean }> | undefined,
+    provenance
+  );
+  effective.enabledPlugins = setFirst(effective.enabledPlugins, shared.enabledPlugins, provenance);
+
   // Managed-settings-only scalars (cast; extra fields are safe — passthrough schema)
   const managed = settings as ManagedSettings;
   effective.availableModels = setFirst(effective.availableModels, managed.availableModels, provenance);
@@ -121,6 +133,11 @@ function mergeScalarFields(
   effective.allowManagedHooksOnly = setFirst(effective.allowManagedHooksOnly, managed.allowManagedHooksOnly, provenance);
   effective.outputStyle = setFirst(effective.outputStyle, managed.outputStyle, provenance);
   effective.language = setFirst(effective.language, managed.language, provenance);
+  effective.strictKnownMarketplaces = setFirst(
+    effective.strictKnownMarketplaces,
+    managed.strictKnownMarketplaces as MarketplaceSource[] | undefined,
+    provenance
+  );
 }
 
 function mergePermissionFields(

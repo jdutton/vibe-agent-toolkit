@@ -22,6 +22,46 @@ When you see duplication across packages:
 
 Wait for 3+ instances before extracting (avoid premature abstraction).
 
+## Approved Parsing & Library Stack
+
+**Policy: Do not implement parsers with regular expressions when a well-tested library exists.**
+
+When a new parsing need arises, find the established library first. Only implement custom
+parsing logic when no suitable library exists, and document why in a code comment.
+
+### Approved Libraries (use these — do not reinvent)
+
+| Domain | Library | Notes |
+|---|---|---|
+| Markdown AST parsing | `unified` + `remark-parse` + `remark-gfm` + `remark-frontmatter` | Standard markdown pipeline |
+| Markdown heading → anchor slug | `github-slugger` | GitHub-compatible slug generation |
+| YAML | `js-yaml` | Used for config and frontmatter |
+| JSON Schema validation | `ajv` | Validating user-provided schemas only |
+| TypeScript schemas + types | `zod` | Internal schemas; convert to JSON Schema via `zod-to-json-schema` |
+| Path operations | Node.js `path` built-in | No third-party needed |
+
+### Adding a New Library
+
+Before adding a new parsing/processing library:
+1. Check if an approved library above already covers the use case
+2. If not, find the most widely-used library for that domain (check npm weekly downloads)
+3. Add it to this table with a note on its purpose
+4. Do not add two libraries that do the same thing
+
+### What Not To Do
+
+```typescript
+// ❌ Custom slug generation with regex
+function generateSlug(text: string) {
+  return text.toLowerCase().replace(/\s+/g, '-').replace(/[^\w-]/g, '');
+}
+
+// ✅ Use github-slugger — handles all edge cases correctly
+import GithubSlugger from 'github-slugger';
+const slugger = new GithubSlugger();
+const slug = slugger.slug(headingText);
+```
+
 ## Error Handling Patterns
 
 Use these approaches:

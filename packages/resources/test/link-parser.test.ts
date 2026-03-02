@@ -377,12 +377,12 @@ Just plain text content.
 
       const result = await parseMarkdown(filePath);
 
-      // Both "Introduction" headings should have the same slug
+      // GithubSlugger deduplicates: first occurrence gets base slug, subsequent get -1, -2, etc.
       expect(result.headings[0]!.slug).toBe('introduction');
-      expect(result.headings[1]!.slug).toBe('introduction');
-      // Both "Details" headings should have the same slug
+      expect(result.headings[1]!.slug).toBe('introduction-1');
+      // Details slugs are also deduplicated across the whole document
       expect(result.headings[0]!.children![0]!.slug).toBe('details');
-      expect(result.headings[1]!.children![0]!.slug).toBe('details');
+      expect(result.headings[1]!.children![0]!.slug).toBe('details-1');
     });
 
     it('should capture line numbers for headings', async () => {

@@ -153,21 +153,52 @@ export function downloadNpmPackage(packageName: string, tempDir: string): string
 }
 
 /**
+ * Case-insensitive environment variable lookup.
+ *
+ * npm sets lifecycle env vars lowercase (e.g. `npm_config_global`), but Windows
+ * normalizes env var names to uppercase in the process environment block. When a
+ * test passes `{ npm_config_global: 'true' }` and process.env already contains
+ * `NPM_CONFIG_GLOBAL`, the merged object ends up with BOTH keys as separate
+ * JavaScript properties. Windows `CreateProcess` behavior with duplicate
+ * case-insensitive env var names is undefined — the uppercase version may win.
+ *
+ * This helper searches case-insensitively so the check works regardless of which
+ * casing Windows chose to preserve.
+ */
+function getEnvCI(key: string): string | undefined {
+  // Direct lookup first — on Windows, Node.js process.env is already case-insensitive
+  // when reading from the real OS env. This fast path covers the normal runtime case.
+  const direct = process.env[key];
+  if (direct !== undefined) return direct;
+
+  // Fallback: iterate to find a case-insensitive match. Handles the case where a
+  // spawned child process received the key under a different casing than expected
+  // (e.g. NPM_CONFIG_GLOBAL instead of npm_config_global).
+  const lower = key.toLowerCase();
+  for (const [k, v] of Object.entries(process.env)) {
+    if (k.toLowerCase() === lower) return v;
+  }
+  return undefined;
+}
+
+/**
  * Validate npm postinstall environment
  * Returns true if running in global install context (but not during npm link)
  */
 export function isGlobalNpmInstall(): boolean {
-  // Check if npm_config_global is set (npm sets this during global installs)
-  const isGlobal = process.env['npm_config_global'] === 'true';
+  // Check if npm_config_global is set (npm sets this during global installs).
+  // Uses case-insensitive lookup because Windows normalizes env var names to
+  // uppercase, which can cause the lowercase key to be missed on Windows CI.
+  const isGlobal = getEnvCI('npm_config_global') === 'true';
 
   // Check if running as postinstall script
-  const isPostinstall = process.env['npm_lifecycle_event'] === 'postinstall';
+  const isPostinstall = getEnvCI('npm_lifecycle_event') === 'postinstall';
 
   // Check npm command to distinguish between:
   // - npm install -g → npm_command === 'install' → Run postinstall ✅
   // - npm link → npm_command === 'link' → Skip postinstall ✅
   // This prevents npm link from corrupting npm's internal state
-  const isInstallCommand = process.env['npm_command'] === 'install';
+  const isInstallCommand = getEnvCI('npm_command') === 'install';
 
   return isGlobal && isPostinstall && isInstallCommand;
 }

@@ -139,8 +139,8 @@ export async function listCommand(
       const scanResult: ScanSummary = await scan({
         path: rootDir,
         recursive: true,
-        include: config.resources?.include ?? [],
-        exclude: config.resources?.exclude ?? [],
+        include: config?.resources?.include ?? [],
+        exclude: config?.resources?.exclude ?? [],
       });
 
       const discoveredSkills = discoverSkills(scanResult.results);

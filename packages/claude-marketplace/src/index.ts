@@ -45,12 +45,31 @@ export {
   ClaudeModelConfigSchema,
   HooksConfigSchema,
   ManagedSettingsSchema,
+  MarketplaceSourceSchema,
   McpServerPolicySchema,
   PermissionsConfigSchema,
   ProjectSettingsSchema,
   SandboxConfigSchema,
   UserSettingsSchema,
 } from './schemas/index.js';
+
+// Plugin registry
+export type {
+  InstalledPluginEntry,
+  InstalledPlugins,
+  InstallPluginOptions,
+  InstallPluginSource,
+  KnownMarketplaceEntry,
+  KnownMarketplaces,
+  MarketplaceSource,
+} from './install/plugin-registry.js';
+export {
+  installPlugin,
+  readInstalledPlugins,
+  readKnownMarketplaces,
+  writeInstalledPlugins,
+  writeKnownMarketplaces,
+} from './install/plugin-registry.js';
 
 // Settings
 export type {

@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/vat-development-agents",
-  "version": "0.1.15-rc.4",
+  "version": "0.1.15",
   "description": "VAT development agents - dogfooding the vibe-agent-toolkit",
   "type": "module",
   "keywords": [
@@ -39,6 +39,12 @@
         "name": "vibe-agent-toolkit:audit",
         "source": "./resources/skills/vat-audit.md",
         "path": "./dist/skills/vibe-agent-toolkit-audit"
+      },
+      {
+        "name": "vibe-agent-toolkit:debugging",
+        "source": "./resources/skills/vat-debugging.md",
+        "path": "./dist/skills/vibe-agent-toolkit-debugging",
+        "packagingOptions": { "linkFollowDepth": 0 }
       }
     ],
     "agents": [
@@ -66,9 +72,10 @@
   "scripts": {
     "generate:resources": "vat-compile-resources compile resources/ generated/resources/",
     "build:code": "bun run generate:resources && tspc && bun scripts/post-build.ts",
-    "build": "bun run build:code",
     "build:skills": "node ../cli/dist/bin/vat.js skills build",
-    "test:pipeline": "bun run build && bun run build:skills && bun run dist/src/test-pipeline.js",
+    "build:vat": "node ../cli/dist/bin/vat.js build",
+    "build": "bun run build:code && bun run build:vat",
+    "test:pipeline": "bun run build && bun run dist/src/test-pipeline.js",
     "typecheck": "tsc --noEmit",
     "validate": "bun run agents/agent-generator/validate-agent.ts",
     "postinstall": "vat skills install --npm-postinstall || exit 0"

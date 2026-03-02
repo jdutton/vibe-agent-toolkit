@@ -5,16 +5,21 @@
  * Uses Commander.js for command structure
  */
 
+import { resolve } from 'node:path';
+
 import { Command } from 'commander';
 
 import { createAgentCommand, showAgentVerboseHelp } from './commands/agent/index.js';
 import { createAuditCommand } from './commands/audit.js';
+import { createBuildTopLevelCommand } from './commands/build.js';
+import { createClaudeCommand } from './commands/claude/index.js';
 import { doctorCommand } from './commands/doctor.js';
 import { createInstallCommand } from './commands/install.js';
 import { createMCPCommand } from './commands/mcp/index.js';
 import { createRagCommand, showRagVerboseHelp } from './commands/rag/index.js';
 import { createResourcesCommand, showResourcesVerboseHelp } from './commands/resources/index.js';
 import { createSkillsCommand } from './commands/skills/index.js';
+import { createVerifyTopLevelCommand } from './commands/verify.js';
 import { loadVerboseHelp } from './utils/help-loader.js';
 import { createLogger } from './utils/logger.js';
 import { version, getVersionString, type VersionContext } from './version.js';
@@ -33,6 +38,7 @@ program
   .name('vat')
   .description('Agent-friendly toolkit for building, testing, and deploying portable AI agents')
   .version(getVersionString(version, context), '-v, --version', 'Output version number')
+  .option('--cwd <dir>', 'Change working directory before running any command')
   .option('--debug', 'Enable debug logging')
   .helpCommand(false) // Disable redundant 'help' command, use --help instead
   .showHelpAfterError()
@@ -45,6 +51,7 @@ program
     `
 Example:
   $ vat resources validate docs/       # Validate markdown links (run before commit)
+  $ vat --cwd packages/my-agents build # Build from a subdirectory
 
 Environment:
   VAT_DEBUG=1                          # Show context detection details
@@ -54,6 +61,15 @@ For comprehensive help: vat --help --verbose
 For agent guidance: docs/cli/CLAUDE.md
 `
   );
+
+// Change working directory before any subcommand runs (if --cwd flag provided)
+program.hook('preAction', () => {
+  const { cwd } = program.opts<{ cwd?: string }>();
+  if (cwd) {
+    // Resolve relative to original cwd BEFORE chdir
+    process.chdir(resolve(cwd));
+  }
+});
 
 // Handle --help --verbose at root level before parsing
 // Manually check process.argv since --verbose is not a root-level option
@@ -117,6 +133,11 @@ program.addCommand(createRagCommand());
 program.addCommand(createAgentCommand());
 program.addCommand(createMCPCommand());
 program.addCommand(createSkillsCommand());
+program.addCommand(createClaudeCommand());
+
+// Add top-level orchestration commands
+program.addCommand(createBuildTopLevelCommand());
+program.addCommand(createVerifyTopLevelCommand());
 
 // Add standalone commands
 doctorCommand(program);

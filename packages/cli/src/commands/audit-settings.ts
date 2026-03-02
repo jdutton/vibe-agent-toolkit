@@ -140,6 +140,56 @@ function buildPermissionsSummary(
   return summary;
 }
 
+function buildMarketplacesSummary(effective: EffectiveSettings): Record<string, unknown> {
+  const summary: Record<string, unknown> = {};
+
+  if (effective.extraKnownMarketplaces) {
+    const pv = effective.extraKnownMarketplaces;
+    const registered = Object.entries(
+      pv.value
+    ).map(([name, entry]) => ({
+      name,
+      source: entry.source,
+      layer: pv.provenance.level,
+      ...(entry.autoUpdate === undefined ? {} : { autoUpdate: entry.autoUpdate }),
+    }));
+    if (registered.length > 0) {
+      summary['registered'] = registered;
+    }
+
+    // Check for GitHub repos without GITHUB_TOKEN
+    const warnings: string[] = [];
+    for (const [name, entry] of Object.entries(pv.value)) {
+      if (entry.source.source === 'github' && !process.env['GITHUB_TOKEN']) {
+        warnings.push(`Marketplace '${name}' sources from a private GitHub repo but GITHUB_TOKEN is not set`);
+      }
+    }
+    if (warnings.length > 0) {
+      summary['warnings'] = warnings;
+    }
+  }
+
+  if (effective.enabledPlugins) {
+    const pv = effective.enabledPlugins;
+    const enabled = Object.entries(pv.value)
+      .filter(([, v]) => v)
+      .map(([name]) => ({ plugin: name, layer: pv.provenance.level }));
+    if (enabled.length > 0) {
+      summary['enabledPlugins'] = enabled;
+    }
+  }
+
+  if (effective.strictKnownMarketplaces) {
+    const pv = effective.strictKnownMarketplaces;
+    summary['governance'] = {
+      strictKnownMarketplaces: pv.value,
+      layer: pv.provenance.level,
+    };
+  }
+
+  return summary;
+}
+
 function formatConflicts(conflicts: RuleConflict[]): Record<string, unknown>[] {
   return conflicts.map(c => ({
     kind: c.kind,
@@ -187,6 +237,11 @@ async function runShowEffective(startTime: number, logger: Logger): Promise<void
   const permissionsSummary = buildPermissionsSummary(effective.permissions);
   if (Object.keys(permissionsSummary).length > 0) {
     effectiveSummary['permissions'] = permissionsSummary;
+  }
+
+  const marketplacesSummary = buildMarketplacesSummary(effective);
+  if (Object.keys(marketplacesSummary).length > 0) {
+    effectiveSummary['marketplaces'] = marketplacesSummary;
   }
 
   const conflicts = analyzeRuleConflicts(effective);

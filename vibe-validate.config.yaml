@@ -6,6 +6,8 @@ ci:
   nodeVersions: ['24']
   os: ['ubuntu-latest', 'windows-latest']
   failFast: false
+  dependencyLockCheck:
+    runOn: pre-commit
 
 # Hooks configuration
 hooks:
@@ -49,6 +51,14 @@ validation:
         - name: 'Skills validation'
           command: 'bun run vat skills validate'
           description: 'Validates all SKILL.md files (unified: resources + skill-specific rules)'
+
+        - name: 'VAT dogfood: build skills and claude artifacts'
+          command: 'bun run vat build --cwd packages/vat-development-agents'
+          description: 'Builds vat-development-agents skills and claude plugin artifacts (dogfoods vat build)'
+
+        - name: 'VAT dogfood: verify all artifacts'
+          command: 'bun run vat verify --cwd packages/vat-development-agents'
+          description: 'Verifies vat-development-agents resources, skills, and claude artifacts (dogfoods vat verify)'
 
         - name: 'Unit tests with coverage'
           command: 'bun run test:coverage'

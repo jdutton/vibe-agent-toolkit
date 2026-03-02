@@ -7,7 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.15] - 2026-03-02
+
 ### Added
+- **`vat build` and `vat verify` top-level commands** — orchestrate the full build and verification pipeline in dependency order
+  - `vat build`: skills → claude plugins (future: cursor, etc.)
+  - `vat verify`: resources → skills → claude artifacts
+  - `--only <phase>` flag to run a single phase; `--marketplace <name>` to target a specific marketplace
+- **`vat claude build`** — generates Claude plugin marketplace artifacts from pre-built skills
+  - Reads `claude:` section from `vibe-agent-toolkit.config.yaml`; resolves skill selectors (exact names and globs)
+  - Copies pre-built `dist/skills/<name>/` into `dist/plugins/<plugin>/skills/` (no re-bundling)
+  - Generates `dist/plugins/<plugin>/.claude-plugin/plugin.json` and `dist/.claude-plugin/marketplace.json`
+  - Sanitizes colon-namespaced skill names (e.g. `plugin:skill`) to double-underscore for Windows filesystem safety
+- **`vat claude verify`** — validates Claude marketplace and plugin artifacts against schemas
+  - Validates `marketplace.json` against `MarketplaceSchema`, `plugin.json` against `ClaudePluginSchema`
+  - Validates `managed-settings.json` against `ManagedSettingsSchema` when `claude.managedSettings` is configured
+  - Supports both source-layout (`file:`) and build-to-dist patterns
+- **`claude:` config section in `vibe-agent-toolkit.config.yaml`** — configure Claude plugin distribution
+  - `claude.marketplaces` — named map of marketplace definitions (inline or `file:` source-layout)
+  - `claude.managedSettings` — path to managed-settings.json for schema validation
+  - Marketplace config: `owner`, `skills` selector (exact or glob), `plugins` grouping, `output` paths
+- **Claude plugin registry installer** (`packages/claude-marketplace`) — writes directly to Claude Code's plugin registry
+  - Five-step install: copies plugin files to `~/.claude/plugins/marketplaces/` and `cache/`, updates `known_marketplaces.json`, `installed_plugins.json`, and `settings.json enabledPlugins`
+  - Called automatically by `vat skills install --npm-postinstall` when `dist/.claude-plugin/marketplace.json` exists
+- **`vat skills install` now routes through Claude plugin system** when package ships a plugin
+  - If `dist/.claude-plugin/marketplace.json` exists: installs via plugin registry (namespaced, version-tracked)
+  - If marketplace.json is absent: emits guidance to run `vat build` and exits 0 (no raw skill install)
+  - `--user-install-without-plugin` flag: explicit opt-in to force `~/.claude/skills/` install
+- **`vat --cwd <dir>` root flag** — change working directory before any command runs
+  - Enables CI pipelines to run `vat build --cwd packages/my-agents` from the monorepo root
+- **Marketplace settings schema fields** in `ClaudeSettingsSchema` and `ManagedSettingsSchema`
+  - `extraKnownMarketplaces`, `enabledPlugins` added to settings/settings.local
+  - `strictKnownMarketplaces` added to managed-settings only
+  - `vat audit settings` output gains `marketplaces:` section showing registered marketplaces and enabled plugins
 - **`plugin:skill` colon notation in skill names** - Skill names may now include a plugin namespace prefix (e.g., `vibe-agent-toolkit:audit`)
   - Format: `plugin-name:skill-name`; the prefix is the plugin/package namespace, the suffix is the skill's local name
   - Supported in both SKILL.md `name:` frontmatter and `package.json` `vat.skills[].name`

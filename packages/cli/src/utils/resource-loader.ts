@@ -4,12 +4,10 @@
 
 import {
   ResourceRegistry,
-  type ProjectConfig as ResourcesProjectConfig,
+  type ProjectConfig,
   type ResourceRegistryOptions,
 } from '@vibe-agent-toolkit/resources';
 import { GitTracker } from '@vibe-agent-toolkit/utils';
-
-import type { ProjectConfig } from '../schemas/config.js';
 
 import { loadConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
@@ -64,17 +62,7 @@ export async function loadResourcesWithConfig(
   // Build options conditionally to satisfy exactOptionalPropertyTypes
   const registryOptions: ResourceRegistryOptions = {};
   if (config?.resources?.collections) {
-    // Convert CLI config to resources package config
-    // Only pass the collections field that resources package needs
-    const resourcesConfig: ResourcesProjectConfig = {
-      version: 1,
-      resources: {
-        collections: config.resources.collections,
-        include: config.resources.include,
-        exclude: config.resources.exclude,
-      },
-    };
-    registryOptions.config = resourcesConfig;
+    registryOptions.config = config;
   }
   if (projectRoot) {
     registryOptions.baseDir = projectRoot;

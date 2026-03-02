@@ -8,6 +8,23 @@
 import { z } from 'zod';
 
 /**
+ * Skill name pattern: kebab-case segments, optionally colon-namespaced as {plugin}:{skill}.
+ *
+ * Examples: "my-skill", "vibe-agent-toolkit:resources"
+ *
+ * The colon namespace is intentional design — it is the `{plugin-name}:{sub-skill}` separator
+ * used both in SKILL.md frontmatter and in vat.skills[].name in package.json.
+ *
+ * Important: colons are sanitized to "__" when used as filesystem paths (Windows-safe).
+ * Do not use the name directly as a directory name — use a sanitization helper.
+ */
+// eslint-disable-next-line security/detect-unsafe-regex -- simple pattern for skill names, max length enforced externally
+export const SKILL_NAME_REGEX = /^[a-z0-9]+(-[a-z0-9]+)*(:[a-z0-9]+(-[a-z0-9]+)*)?$/;
+export const SKILL_NAME_REGEX_MESSAGE =
+  'Skill name must be lowercase kebab-case, optionally namespaced as {plugin}:{skill} ' +
+  '(e.g. "my-skill" or "vibe-agent-toolkit:resources")';
+
+/**
  * Validation override value
  *
  * Supports both simple string format and extended object format with expiration.
@@ -94,7 +111,13 @@ export const VatSkillMetadataSchema = z
     name: z
       .string()
       .min(1)
-      .describe('Skill name (used for installation directory)'),
+      .max(64, 'Name must be 64 characters or less')
+      .regex(SKILL_NAME_REGEX, SKILL_NAME_REGEX_MESSAGE)
+      .describe(
+        'Skill identifier. Must be lowercase kebab-case, optionally colon-namespaced ' +
+        'as {plugin}:{skill} (e.g. "vibe-agent-toolkit:resources"). ' +
+        'Colons are sanitized to "__" when deriving filesystem paths.'
+      ),
     source: z
       .string()
       .min(1)

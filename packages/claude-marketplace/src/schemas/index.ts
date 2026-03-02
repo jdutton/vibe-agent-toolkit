@@ -10,9 +10,10 @@ export type { PermissionsConfig } from './permissions.js';
 export { PermissionsConfigSchema } from './permissions.js';
 export type { SandboxConfig } from './sandbox-config.js';
 export { SandboxConfigSchema } from './sandbox-config.js';
-export type { ManagedSettings, ProjectSettings, UserSettings } from './settings.js';
+export type { ManagedSettings, MarketplaceSource, ProjectSettings, UserSettings } from './settings.js';
 export {
   ManagedSettingsSchema,
+  MarketplaceSourceSchema,
   ProjectSettingsSchema,
   UserSettingsSchema,
 } from './settings.js';

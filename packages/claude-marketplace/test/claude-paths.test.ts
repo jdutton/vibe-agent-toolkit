@@ -24,7 +24,10 @@ describe('getClaudeUserPaths', () => {
     expect(paths.claudeDir).toBe(join(home, '.claude'));
     expect(paths.pluginsDir).toBe(join(home, '.claude', 'plugins'));
     expect(paths.skillsDir).toBe(join(home, '.claude', 'skills'));
-    expect(paths.marketplacesDir).toBe(join(home, '.claude', 'marketplaces'));
+    expect(paths.marketplacesDir).toBe(join(home, '.claude', 'plugins', 'marketplaces'));
+    expect(paths.pluginsCacheDir).toBe(join(home, '.claude', 'plugins', 'cache'));
+    expect(paths.knownMarketplacesPath).toBe(join(home, '.claude', 'plugins', 'known_marketplaces.json'));
+    expect(paths.installedPluginsPath).toBe(join(home, '.claude', 'plugins', 'installed_plugins.json'));
     expect(paths.userSettingsPath).toBe(join(home, '.claude', 'settings.json'));
     expect(paths.userDotJsonPath).toBe(join(home, '.claude.json'));
   });

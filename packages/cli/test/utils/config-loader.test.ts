@@ -4,7 +4,6 @@ import * as path from 'node:path';
 import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
-import { DEFAULT_CONFIG } from '../../src/schemas/config.js';
 import { loadConfig } from '../../src/utils/config-loader.js';
 
 describe('loadConfig', () => {
@@ -20,9 +19,9 @@ describe('loadConfig', () => {
     tempDir = suite.getTempDir();
   });
 
-  it('should return default config when no file exists', () => {
+  it('should return undefined when no file exists', () => {
     const result = loadConfig(tempDir);
-    expect(result).toEqual(DEFAULT_CONFIG);
+    expect(result).toBeUndefined();
   });
 
   it('should load and parse valid config file', () => {
@@ -40,8 +39,8 @@ resources:
     fs.writeFileSync(configPath, configContent);
 
     const result = loadConfig(tempDir);
-    expect(result.resources?.exclude).toEqual(['node_modules/**']);
-    expect(result.resources?.collections?.docs?.include).toEqual(['docs/**/*.md']);
+    expect(result?.resources?.exclude).toEqual(['node_modules/**']);
+    expect(result?.resources?.collections?.docs?.include).toEqual(['docs/**/*.md']);
   });
 
   it('should throw on invalid config schema', () => {
@@ -51,45 +50,6 @@ resources:
     fs.writeFileSync(configPath, configContent);
 
     expect(() => loadConfig(tempDir)).toThrow();
-  });
-
-  it('should reject unknown properties at root level (strict validation)', () => {
-    const configPath = path.join(tempDir, CONFIG_FILENAME);
-    const configContent = `version: 1
-unknownProperty: "should fail"
-`;
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
-    fs.writeFileSync(configPath, configContent);
-
-    expect(() => loadConfig(tempDir)).toThrow(/unrecognized_keys/);
-  });
-
-  it('should reject unknown properties in resources section (strict validation)', () => {
-    const configPath = path.join(tempDir, CONFIG_FILENAME);
-    const configContent = `version: 1
-resources:
-  defaults:
-    exclude: ["node_modules/**"]
-`;
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
-    fs.writeFileSync(configPath, configContent);
-
-    expect(() => loadConfig(tempDir)).toThrow(/unrecognized_keys/);
-    expect(() => loadConfig(tempDir)).toThrow(/defaults/);
-  });
-
-  it('should reject unknown properties in resources alongside valid ones', () => {
-    const configPath = path.join(tempDir, CONFIG_FILENAME);
-    const configContent = `version: 1
-resources:
-  exclude: ["node_modules/**"]
-  unknownField: "should fail"
-`;
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
-    fs.writeFileSync(configPath, configContent);
-
-    expect(() => loadConfig(tempDir)).toThrow(/unrecognized_keys/);
-    expect(() => loadConfig(tempDir)).toThrow(/unknownField/);
   });
 
   it('should throw on invalid YAML syntax', () => {
@@ -113,123 +73,82 @@ resources:
       include:
         - "./docs/**/*.md"
         - "./README.md"
-      metadata:
-        defaults:
-          type: documentation
     examples:
       include:
         - "./examples/**/*.yaml"
-      metadata:
-        defaults:
-          type: example
-          tags: [example]
+      validation:
+        mode: permissive
 `;
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(configPath, configContent);
 
     const result = loadConfig(tempDir);
-    expect(result.resources?.collections).toBeDefined();
-    expect(result.resources?.collections?.['project-docs']).toBeDefined();
-    expect(result.resources?.collections?.['project-docs']?.include).toEqual([
+    expect(result?.resources?.collections).toBeDefined();
+    expect(result?.resources?.collections?.['project-docs']).toBeDefined();
+    expect(result?.resources?.collections?.['project-docs']?.include).toEqual([
       './docs/**/*.md',
       './README.md',
     ]);
-    expect(result.resources?.collections?.['examples']?.metadata?.defaults?.type).toBe(
-      'example'
-    );
+    expect(result?.resources?.collections?.['examples']?.validation?.mode).toBe('permissive');
   });
 
-  it('should load config with agents discovery', () => {
+  it('should load config with claude: section', () => {
     const configPath = path.join(tempDir, CONFIG_FILENAME);
     const configContent = `version: 1
-agents:
-  include:
-    - "./packages/vat-development-agents/**"
-    - "./tools/custom-validator/agent.yaml"
-  exclude:
-    - "**/node_modules/**"
-  external:
-    - "@vat-agents/schema-validator@^1.2.0"
+claude:
+  marketplaces:
+    my-tools:
+      owner:
+        name: My Org
+      skills:
+        - "my-skill-*"
+      plugins:
+        - name: my-tools
+          skills: "*"
+      output:
+        marketplaceJson: dist/.claude-plugin/marketplace.json
+        pluginsDir: dist/plugins/
 `;
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(configPath, configContent);
 
     const result = loadConfig(tempDir);
-    expect(result.agents).toBeDefined();
-    expect(result.agents?.include).toEqual([
-      './packages/vat-development-agents/**',
-      './tools/custom-validator/agent.yaml',
-    ]);
-    expect(result.agents?.external).toEqual(['@vat-agents/schema-validator@^1.2.0']);
+    expect(result?.claude).toBeDefined();
+    expect(result?.claude?.marketplaces?.['my-tools']).toBeDefined();
+    expect(result?.claude?.marketplaces?.['my-tools']?.owner?.name).toBe('My Org');
+    expect(result?.claude?.marketplaces?.['my-tools']?.skills).toEqual(['my-skill-*']);
+    expect(result?.claude?.marketplaces?.['my-tools']?.plugins?.[0]?.name).toBe('my-tools');
   });
 
-  it('should load config with RAG stores', () => {
-    const configPath = path.join(tempDir, CONFIG_FILENAME);
-    const configContent = `version: 1
-rag:
-  defaults:
-    embedding:
-      provider: transformers-js
-      model: all-MiniLM-L6-v2
-    chunking:
-      targetSize: 512
-      paddingFactor: 0.9
-  stores:
-    docs-rag:
-      db: ./dist/docs-rag
-      resources: project-docs
-      embedding:
-        provider: openai
-        model: text-embedding-3-small
-    examples-rag:
-      db: ./dist/examples-rag
-      resources: examples
-`;
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
-    fs.writeFileSync(configPath, configContent);
-
-    const result = loadConfig(tempDir);
-    expect(result.rag).toBeDefined();
-    expect(result.rag?.defaults?.embedding?.provider).toBe('transformers-js');
-    expect(result.rag?.stores).toBeDefined();
-    expect(result.rag?.stores?.['docs-rag']).toBeDefined();
-    expect(result.rag?.stores?.['docs-rag']?.db).toBe('./dist/docs-rag');
-    expect(result.rag?.stores?.['docs-rag']?.resources).toBe('project-docs');
-    expect(result.rag?.stores?.['docs-rag']?.embedding?.provider).toBe('openai');
-  });
-
-  it('should load complete config with all sections', () => {
+  it('should load complete config with resources and claude sections', () => {
     const configPath = path.join(tempDir, CONFIG_FILENAME);
     const configContent = `version: 1
 resources:
   exclude:
     - "**/node_modules/**"
-  metadata:
-    frontmatter: true
   collections:
     docs:
       include:
         - "./docs/**/*.md"
-agents:
-  include:
-    - "./agents/**"
-rag:
-  defaults:
-    embedding:
-      provider: transformers-js
-      model: Xenova/all-MiniLM-L6-v2
-  stores:
-    main:
-      db: ./dist/rag-db
-      resources: docs
+claude:
+  marketplaces:
+    vat-skills:
+      owner:
+        name: vibe-agent-toolkit contributors
+      skills:
+        - "vibe-agent-toolkit*"
+      plugins:
+        - name: vat-development-agents
+          skills: "*"
 `;
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(configPath, configContent);
 
     const result = loadConfig(tempDir);
-    expect(result.version).toBe(1);
-    expect(result.resources?.collections?.docs).toBeDefined();
-    expect(result.agents?.include).toEqual(['./agents/**']);
-    expect(result.rag?.stores?.main?.db).toBe('./dist/rag-db');
+    expect(result?.version).toBe(1);
+    expect(result?.resources?.collections?.docs).toBeDefined();
+    expect(result?.claude?.marketplaces?.['vat-skills']?.owner?.name).toBe(
+      'vibe-agent-toolkit contributors'
+    );
   });
 });

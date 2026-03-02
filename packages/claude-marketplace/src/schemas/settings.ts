@@ -5,6 +5,19 @@ import { McpServerPolicySchema } from './mcp-policy-config.js';
 import { PermissionsConfigSchema } from './permissions.js';
 import { SandboxConfigSchema } from './sandbox-config.js';
 
+/**
+ * Source descriptor for a known marketplace.
+ * Uses .passthrough() per Postel's Law — liberal reading of external settings files.
+ */
+export const MarketplaceSourceSchema = z.discriminatedUnion('source', [
+  z.object({ source: z.literal('github'), repo: z.string(), ref: z.string().optional(), sha: z.string().optional() }),
+  z.object({ source: z.literal('url'), url: z.string(), ref: z.string().optional() }),
+  z.object({ source: z.literal('npm'), package: z.string(), version: z.string().optional(), registry: z.string().optional() }),
+  z.object({ source: z.literal('hostPattern'), hostPattern: z.string() }),
+]).and(z.object({}).passthrough());
+
+export type MarketplaceSource = z.infer<typeof MarketplaceSourceSchema>;
+
 // Fields valid at ALL levels (user + project + managed)
 const SharedSettingsSchema = z
   .object({
@@ -15,6 +28,11 @@ const SharedSettingsSchema = z
     enabledMcpjsonServers: z.array(z.string()).optional(),
     allowedMcpServers: z.array(McpServerPolicySchema).optional(),
     deniedMcpServers: z.array(McpServerPolicySchema).optional(),
+    extraKnownMarketplaces: z.record(z.string(), z.object({
+      source: MarketplaceSourceSchema,
+      autoUpdate: z.boolean().optional(),
+    }).passthrough()).optional(),
+    enabledPlugins: z.record(z.string(), z.boolean()).optional(),
   })
   .passthrough();
 
@@ -34,6 +52,7 @@ export const ManagedSettingsSchema = SharedSettingsSchema.extend({
   allowManagedHooksOnly: z.boolean().optional(),
   sandbox: SandboxConfigSchema.optional(),
   enableAllProjectMcpServers: z.boolean().optional(),
+  strictKnownMarketplaces: z.array(MarketplaceSourceSchema).optional(),
 }).passthrough();
 
 export const UserSettingsSchema = SharedSettingsSchema;
