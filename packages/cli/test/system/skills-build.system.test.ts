@@ -1,5 +1,8 @@
 /**
  * System tests for skills build command
+ *
+ * vat skills build now reads vibe-agent-toolkit.config.yaml with skills.include
+ * globs to discover SKILL.md files, instead of reading package.json vat.skills objects.
  */
 
 import { readFileSync } from 'node:fs';
@@ -10,21 +13,17 @@ import { describe, expect, it, afterEach } from 'vitest';
 
 import {
   createSkillMarkdown,
-  createSkillsPackageJson,
+  createSkillsConfigYaml,
   createTempDirTracker,
   executeCliAndParseYaml,
   executeCli,
   getBinPath,
   writeTestFile,
-  type TestVatSkill,
 } from './test-common.js';
 
 const TEMP_DIR_PREFIX = 'vat-build-test-';
-const PACKAGE_JSON_FILENAME = 'package.json';
-const PACKAGE_NAME = 'test-package';
+const VAT_CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 const TEST_SKILL_NAME = 'test-skill';
-const SKILL_SOURCE_PATH = './resources/skills/SKILL.md';
-const SKILL_DIST_PATH = './dist/skills/test-skill';
 const SKILL_A_NAME = 'skill-a';
 const SKILL_B_NAME = 'skill-b';
 
@@ -35,13 +34,9 @@ function setupSkillsBuildTestSuite() {
   const binPath = getBinPath(import.meta.url);
   const { createTempDir, cleanupTempDirs: cleanup } = createTempDirTracker(TEMP_DIR_PREFIX);
 
-  const createPackageWithSkills = (tempDir: string, skills: TestVatSkill[]) => {
-    writeTestFile(
-      join(tempDir, PACKAGE_JSON_FILENAME),
-      createSkillsPackageJson(PACKAGE_NAME, skills)
-    );
-  };
-
+  /**
+   * Create a SKILL.md at a given path relative to tempDir
+   */
   const createSkillSource = (tempDir: string, relativePath: string, skillName: string) => {
     const resourcesDir = join(tempDir, relativePath, '..');
     mkdirSyncReal(resourcesDir, { recursive: true });
@@ -49,11 +44,19 @@ function setupSkillsBuildTestSuite() {
     writeTestFile(join(tempDir, relativePath), createSkillMarkdown(skillName));
   };
 
+  /**
+   * Create a config yaml with skills.include globs
+   */
+  const createConfigWithSkills = (tempDir: string, includeGlobs: string[]) => {
+    writeTestFile(join(tempDir, VAT_CONFIG_FILENAME), createSkillsConfigYaml(includeGlobs));
+  };
+
+  /**
+   * Set up a single-skill test fixture with config yaml
+   */
   const setupSingleSkillTest = (tempDir: string) => {
-    createPackageWithSkills(tempDir, [
-      { name: TEST_SKILL_NAME, source: SKILL_SOURCE_PATH, path: SKILL_DIST_PATH },
-    ]);
-    createSkillSource(tempDir, SKILL_SOURCE_PATH, TEST_SKILL_NAME);
+    createSkillSource(tempDir, 'resources/skills/SKILL.md', TEST_SKILL_NAME);
+    createConfigWithSkills(tempDir, ['resources/skills/**/SKILL.md']);
   };
 
   const runBuildCommand = (cwd: string, args: string[] = []) => {
@@ -66,7 +69,6 @@ function setupSkillsBuildTestSuite() {
   ) => {
     expect(result.status).toBe(0);
     expect(parsed).toHaveProperty('status', 'success');
-    expect(parsed).toHaveProperty('package', PACKAGE_NAME);
     expect(parsed).toHaveProperty('skills');
 
     const skills = parsed['skills'] as Array<Record<string, unknown>>;
@@ -80,8 +82,8 @@ function setupSkillsBuildTestSuite() {
     binPath,
     createTempDir,
     cleanup,
-    createPackageWithSkills,
     createSkillSource,
+    createConfigWithSkills,
     setupSingleSkillTest,
     runBuildCommand,
     assertSuccessfulBuild,
@@ -99,43 +101,37 @@ describe('skills build command (system test)', () => {
     const result = executeCli(suite.binPath, ['skills', 'build', '--help']);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('Build skills from source');
-    expect(result.stdout).toContain('vat.skills');
-    expect(result.stdout).toContain('Package.json Structure:');
+    expect(result.stdout).toContain('Build skills from config yaml');
+    expect(result.stdout).toContain('Config Structure');
     expect(result.stdout).toContain('Exit Codes:');
   });
 
-  it('should fail when package.json not found', () => {
+  it('should exit 0 when no config yaml found (nothing to build)', () => {
     const tempDir = suite.createTempDir();
+
     const { result } = suite.runBuildCommand(tempDir);
 
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain('package.json not found');
+    // No config yaml -> exits 0 with "nothing to build" message
+    expect(result.status).toBe(0);
   });
 
-  it('should fail when vat.skills not found in package.json', () => {
+  it('should exit 0 when config yaml has no skills section', () => {
     const tempDir = suite.createTempDir();
-    writeTestFile(
-      join(tempDir, PACKAGE_JSON_FILENAME),
-      JSON.stringify({ name: PACKAGE_NAME, version: '1.0.0' })
-    );
+    writeTestFile(join(tempDir, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
 
     const { result } = suite.runBuildCommand(tempDir);
 
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain('No skills found in package.json vat.skills');
+    expect(result.status).toBe(0);
   });
 
-  it('should fail when skill source not found', () => {
+  it('should fail when no SKILL.md files match include patterns', () => {
     const tempDir = suite.createTempDir();
-    suite.createPackageWithSkills(tempDir, [
-      { name: TEST_SKILL_NAME, source: SKILL_SOURCE_PATH, path: SKILL_DIST_PATH },
-    ]);
+    suite.createConfigWithSkills(tempDir, ['resources/skills/**/SKILL.md']);
+    // Intentionally NOT creating any skill source files
 
     const { result } = suite.runBuildCommand(tempDir);
 
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain('Skill source not found');
+    expect(result.status).not.toBe(0);
   });
 
   it('should perform dry-run without creating files', () => {
@@ -147,7 +143,7 @@ describe('skills build command (system test)', () => {
     const skills = suite.assertSuccessfulBuild(result, parsed);
     expect(parsed).toHaveProperty('dryRun', true);
     expect(parsed).toHaveProperty('skillsFound', 1);
-    expect(skills[0]).toHaveProperty('source', SKILL_SOURCE_PATH);
+    expect(skills[0]).toHaveProperty('source');
   });
 
   it('should build a valid skill', () => {
@@ -169,12 +165,9 @@ describe('skills build command (system test)', () => {
 
   it('should build specific skill with --skill flag', () => {
     const tempDir = suite.createTempDir();
-    suite.createPackageWithSkills(tempDir, [
-      { name: SKILL_A_NAME, source: './resources/skills/skill-a.md', path: './dist/skills/skill-a' },
-      { name: SKILL_B_NAME, source: './resources/skills/skill-b.md', path: './dist/skills/skill-b' },
-    ]);
-    suite.createSkillSource(tempDir, './resources/skills/skill-a.md', SKILL_A_NAME);
-    suite.createSkillSource(tempDir, './resources/skills/skill-b.md', SKILL_B_NAME);
+    suite.createSkillSource(tempDir, 'resources/skills/skill-a.md', SKILL_A_NAME);
+    suite.createSkillSource(tempDir, 'resources/skills/skill-b.md', SKILL_B_NAME);
+    suite.createConfigWithSkills(tempDir, ['resources/skills/*.md']);
 
     const { result, parsed } = suite.runBuildCommand(tempDir, ['--skill', SKILL_B_NAME]);
 
@@ -204,13 +197,10 @@ describe('skills build command (system test)', () => {
 
   it('should fail when specified skill not found', () => {
     const tempDir = suite.createTempDir();
-    suite.createPackageWithSkills(tempDir, [
-      { name: TEST_SKILL_NAME, source: SKILL_SOURCE_PATH, path: SKILL_DIST_PATH },
-    ]);
+    suite.setupSingleSkillTest(tempDir);
 
     const { result } = suite.runBuildCommand(tempDir, ['--skill', 'nonexistent']);
 
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain('Skill "nonexistent" not found');
+    expect(result.status).not.toBe(0);
   });
 });

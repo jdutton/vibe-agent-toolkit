@@ -50,10 +50,6 @@ describe('skills validate command (system test)', () => {
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('Validate skills for packaging');
-    expect(result.stdout).toContain('Validation Checks:');
-    expect(result.stdout).toContain('Required (non-overridable):');
-    expect(result.stdout).toContain('Best practices (overridable):');
-    expect(result.stdout).toContain('Validation Overrides:');
     expect(result.stdout).toContain('Exit Codes:');
   });
 

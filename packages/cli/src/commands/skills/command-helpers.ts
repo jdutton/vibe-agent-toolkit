@@ -4,8 +4,6 @@
 
 import { resolve } from 'node:path';
 
-import type { VatSkillMetadata } from '@vibe-agent-toolkit/agent-schema';
-
 import { createLogger, type Logger } from '../../utils/logger.js';
 
 /**
@@ -38,17 +36,27 @@ export function handleCommandError(
 }
 
 /**
- * Filter skills by name if specified
+ * Discovered skill with its source path and frontmatter name
+ */
+export interface DiscoveredSkill {
+  /** Skill name from SKILL.md frontmatter */
+  name: string;
+  /** Absolute path to SKILL.md */
+  sourcePath: string;
+}
+
+/**
+ * Filter discovered skills by name if specified
  *
- * @param skills - All skills from package.json
+ * @param skills - All discovered skills
  * @param skillName - Optional skill name to filter by
  * @returns Filtered skills array
  * @throws Error if skillName specified but not found
  */
-export function filterSkillsByName(
-  skills: VatSkillMetadata[],
+export function filterSkillsByName<T extends DiscoveredSkill>(
+  skills: T[],
   skillName?: string
-): VatSkillMetadata[] {
+): T[] {
   if (!skillName) {
     return skills;
   }
@@ -56,8 +64,9 @@ export function filterSkillsByName(
   const filtered = skills.filter(s => s.name === skillName);
 
   if (filtered.length === 0) {
+    const available = skills.map(s => s.name).join(', ');
     throw new Error(
-      `Skill "${skillName}" not found in package.json vat.skills`
+      `Skill "${skillName}" not found. Available skills: ${available}`
     );
   }
 
@@ -99,8 +108,6 @@ export function setupCommandContext(
   const logger = createLogger(debug ? { debug: true } : {});
   const startTime = Date.now();
   const cwd = pathArg ? resolve(pathArg) : process.cwd();
-
-  logger.info(`📖 Reading package.json from ${cwd}`);
 
   return { logger, cwd, startTime };
 }

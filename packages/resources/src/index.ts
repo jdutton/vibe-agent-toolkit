@@ -60,9 +60,10 @@ export type {
   CollectionConfig,
   CollectionValidation,
   ValidationMode,
+  SkillPackagingConfig,
+  SkillsConfig,
   ClaudeConfig,
   ClaudeMarketplaceConfig,
-  ClaudeMarketplaceOutput,
   ClaudeMarketplacePluginEntry,
 } from './types.js';
 
@@ -105,4 +106,8 @@ export {
   loadConfig,
 } from './config-parser.js';
 
-export { ProjectConfigSchema } from './schemas/project-config.js';
+export {
+  ProjectConfigSchema,
+  SkillsConfigSchema,
+  SkillPackagingConfigSchema,
+} from './schemas/project-config.js';

@@ -33,6 +33,7 @@
   "author": "Jeff Dutton",
   "license": "MIT",
   "dependencies": {
+    "@vibe-agent-toolkit/agent-schema": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
     "ajv": "^8.17.1",
     "github-slugger": "^2.0.0",

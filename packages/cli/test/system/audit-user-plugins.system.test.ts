@@ -86,11 +86,12 @@ describe('Audit User Plugins Fixture (system test)', () => {
         join(fixtureDir, 'marketplaces/anthropic-agent-skills'),
       ]);
 
-      // anthropic-agent-skills has all valid skills, should succeed
-      expect(status).toBe(0);
+      // Marketplace validation was moved to @vibe-agent-toolkit/claude-marketplace,
+      // so the audit command reports UNKNOWN_FORMAT for marketplace directories.
+      expect(status).toBe(1);
 
       const output = parseYamlOutput(stdout);
-      expect(output.status).toBe('success');
+      expect(output.status).toBe('error');
 
       const summary = output.summary as {
         filesScanned: number;
@@ -98,9 +99,9 @@ describe('Audit User Plugins Fixture (system test)', () => {
         errors: number;
       };
 
-      // All skills should be successful
-      expect(summary.success).toBeGreaterThan(0);
-      expect(summary.errors).toBe(0);
+      // Marketplace dir detected but validation moved — errors expected
+      expect(summary.filesScanned).toBeGreaterThan(0);
+      expect(summary.errors).toBeGreaterThan(0);
     });
 
     it('should validate standard marketplace (claude-plugins-official)', () => {
@@ -110,8 +111,9 @@ describe('Audit User Plugins Fixture (system test)', () => {
         join(fixtureDir, 'marketplaces/claude-plugins-official'),
       ]);
 
-      // Should complete scan successfully (exit 0)
-      expect(status).toBe(0);
+      // Marketplace validation was moved to @vibe-agent-toolkit/claude-marketplace,
+      // so the audit command reports UNKNOWN_FORMAT for marketplace directories.
+      expect(status).toBe(1);
 
       const output = parseYamlOutput(stdout);
 

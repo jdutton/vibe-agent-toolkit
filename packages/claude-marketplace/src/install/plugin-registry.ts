@@ -9,7 +9,7 @@
  */
 
 import { cpSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
 
@@ -122,9 +122,12 @@ export async function installPlugin(opts: InstallPluginOptions): Promise<void> {
     const pluginKey = `${pluginName}@${marketplaceName}`;
 
     // Step 1: Copy plugin to marketplacesDir/<marketplaceName>/plugins/<pluginName>/
+    // Skip if pluginDir is already at the destination (e.g. copyPluginTree already did the copy)
     const marketplacePluginDest = join(paths.marketplacesDir, marketplaceName, 'plugins', pluginName);
-    mkdirSyncReal(marketplacePluginDest, { recursive: true });
-    cpSync(pluginDir, marketplacePluginDest, { recursive: true });
+    if (resolve(pluginDir) !== resolve(marketplacePluginDest)) {
+      mkdirSyncReal(marketplacePluginDest, { recursive: true });
+      cpSync(pluginDir, marketplacePluginDest, { recursive: true });
+    }
 
     // Step 2: Update known_marketplaces.json
     const knownMarketplaces = readKnownMarketplaces(paths);
@@ -136,9 +139,12 @@ export async function installPlugin(opts: InstallPluginOptions): Promise<void> {
     writeKnownMarketplaces(paths, knownMarketplaces);
 
     // Step 3: Copy plugin to pluginsCacheDir/<marketplaceName>/<pluginName>/<version>/
+    // Skip if source and destination are the same
     const cacheDest = join(paths.pluginsCacheDir, marketplaceName, pluginName, version);
-    mkdirSyncReal(cacheDest, { recursive: true });
-    cpSync(pluginDir, cacheDest, { recursive: true });
+    if (resolve(pluginDir) !== resolve(cacheDest)) {
+      mkdirSyncReal(cacheDest, { recursive: true });
+      cpSync(pluginDir, cacheDest, { recursive: true });
+    }
 
     // Step 4: Update installed_plugins.json
     const installedPlugins = readInstalledPlugins(paths);

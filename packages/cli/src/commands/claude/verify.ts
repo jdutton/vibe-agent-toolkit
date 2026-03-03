@@ -1,17 +1,20 @@
 /**
- * `vat claude verify` — validate Claude plugin marketplace artifacts
+ * `vat claude verify` — validate Claude plugin artifacts at conventional paths
  *
- * Validates existing marketplace.json, plugin.json, and managed-settings.json files
- * against their schemas. Does not build anything — validates what exists.
+ * For each marketplace in claude.marketplaces, verifies built artifacts at:
+ *   dist/.claude/plugins/marketplaces/<marketplaceName>/plugins/<pluginName>/
+ *
+ * For each plugin:
+ *   - .claude-plugin/plugin.json must exist and validate against PluginJsonSchema
+ *   - At least one skills/{name}/SKILL.md must exist
+ *
+ * If claude.managedSettings is configured: validates against ManagedSettingsSchema
  */
 
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 
-import {
-  ClaudePluginSchema,
-  MarketplaceSchema,
-} from '@vibe-agent-toolkit/agent-skills';
+import { PluginJsonSchema } from '@vibe-agent-toolkit/agent-skills';
 import { ManagedSettingsSchema } from '@vibe-agent-toolkit/claude-marketplace';
 import { type ClaudeMarketplaceConfig } from '@vibe-agent-toolkit/resources';
 import { Command } from 'commander';
@@ -36,7 +39,6 @@ interface VerifyError {
 
 interface MarketplaceResult {
   name: string;
-  file?: string;
   status: VerifyStatus;
   errors: VerifyError[];
 }
@@ -53,12 +55,14 @@ export function createVerifyCommand(): Command {
       'after',
       `
 Description:
-  Validates existing Claude plugin artifacts against their schemas.
+  Validates built Claude plugin artifacts at conventional paths.
   Does not build anything — validates what already exists.
 
-  For each marketplace in claude.marketplaces:
-  - file: variant: validates that marketplace.json against MarketplaceSchema
-  - inline variant: validates generated marketplace.json and each plugin.json
+  For each marketplace in claude.marketplaces, checks:
+    dist/.claude/plugins/marketplaces/<name>/plugins/<plugin>/
+      .claude-plugin/plugin.json  — validates against PluginJsonSchema
+      skills/*/SKILL.md           — at least one must exist
+
   If claude.managedSettings is configured: validates against ManagedSettingsSchema
 
 Output:
@@ -142,7 +146,6 @@ async function verifyCommand(options: ClaudeVerifyCommandOptions): Promise<void>
       marketplaces: marketplaceResults.map((r) => ({
         name: r.name,
         status: r.status,
-        ...(r.file ? { file: r.file } : {}),
         ...(r.errors.length > 0 ? { errors: r.errors.map((e) => e.error) } : {}),
       })),
       ...(claudeConfig.managedSettings
@@ -165,49 +168,6 @@ async function verifyCommand(options: ClaudeVerifyCommandOptions): Promise<void>
   }
 }
 
-async function verifyInlineMarketplace(
-  config: ClaudeMarketplaceConfig,
-  configDir: string,
-  logger: ReturnType<typeof createLogger>
-): Promise<{ file: string; errors: VerifyError[] }> {
-  const marketplaceJsonPath = config.output?.marketplaceJson
-    ? resolveRelativePath(config.output.marketplaceJson, configDir)
-    : join(configDir, 'dist', '.claude-plugin', 'marketplace.json');
-
-  const errors: VerifyError[] = [];
-
-  try {
-    const fileErrors = await validateJsonFile(marketplaceJsonPath, MarketplaceSchema, logger);
-    errors.push(...fileErrors);
-  } catch {
-    // File does not exist — report as verification error (run vat build to generate it)
-    errors.push({
-      file: marketplaceJsonPath,
-      error: `marketplace.json not found — run vat build (or vat claude build) to generate it`,
-    });
-  }
-
-  const pluginsDir = config.output?.pluginsDir
-    ? resolveRelativePath(config.output.pluginsDir, configDir)
-    : join(configDir, 'dist', 'plugins');
-
-  for (const plugin of config.plugins ?? []) {
-    const pluginJsonPath = join(pluginsDir, plugin.name, '.claude-plugin', 'plugin.json');
-    try {
-      const pluginErrors = await validateJsonFile(pluginJsonPath, ClaudePluginSchema, logger);
-      errors.push(...pluginErrors);
-    } catch {
-      // File does not exist — report as verification error (run vat build to generate it)
-      errors.push({
-        file: pluginJsonPath,
-        error: `plugin.json not found — run vat build (or vat claude build) to generate it`,
-      });
-    }
-  }
-
-  return { file: marketplaceJsonPath, errors };
-}
-
 async function verifyMarketplace(
   name: string,
   config: ClaudeMarketplaceConfig,
@@ -216,21 +176,62 @@ async function verifyMarketplace(
 ): Promise<MarketplaceResult> {
   const result: MarketplaceResult = { name, errors: [], status: 'valid' };
 
-  if (config.file) {
-    // Source-layout: validate the referenced marketplace.json
-    const filePath = resolveRelativePath(config.file, configDir);
-    result.file = filePath;
-    const fileErrors = await validateJsonFile(filePath, MarketplaceSchema, logger);
-    result.errors.push(...fileErrors);
-  } else {
-    // Inline: validate generated artifacts if they exist
-    const { file, errors } = await verifyInlineMarketplace(config, configDir, logger);
-    result.file = file;
-    result.errors.push(...errors);
+  for (const plugin of config.plugins) {
+    const pluginDir = join(
+      configDir, 'dist', '.claude', 'plugins', 'marketplaces', name, 'plugins', plugin.name
+    );
+
+    // Verify .claude-plugin/plugin.json exists and validates
+    const pluginJsonPath = join(pluginDir, '.claude-plugin', 'plugin.json');
+    try {
+      const pluginErrors = await validateJsonFile(pluginJsonPath, PluginJsonSchema, logger);
+      result.errors.push(...pluginErrors);
+    } catch {
+      result.errors.push({
+        file: pluginJsonPath,
+        error: 'plugin.json not found — run vat build (or vat claude build) to generate it',
+      });
+    }
+
+    // Verify at least one skills/*/SKILL.md exists
+    const skillsDir = join(pluginDir, 'skills');
+    const hasSkills = await verifySkillsExist(skillsDir);
+    if (!hasSkills) {
+      result.errors.push({
+        file: skillsDir,
+        error: 'No skills/*/SKILL.md found — run vat build (or vat claude build) to generate skills',
+      });
+    }
   }
 
   result.status = result.errors.length > 0 ? 'error' : 'valid';
   return result;
+}
+
+/**
+ * Check that at least one skills/{name}/SKILL.md file exists in the given directory.
+ */
+async function verifySkillsExist(skillsDir: string): Promise<boolean> {
+  let entries: string[];
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillsDir resolved from config
+    entries = await readdir(skillsDir);
+  } catch {
+    return false;
+  }
+
+  for (const entry of entries) {
+    try {
+      const skillMdPath = join(skillsDir, entry, 'SKILL.md');
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from config
+      await readFile(skillMdPath, 'utf-8');
+      return true;
+    } catch {
+      // This entry doesn't have a SKILL.md, check the next one
+    }
+  }
+
+  return false;
 }
 
 async function verifyManagedSettings(

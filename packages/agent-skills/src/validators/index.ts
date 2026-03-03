@@ -1,5 +1,4 @@
 export { detectResourceFormat } from './format-detection.js';
-export { validateMarketplace } from './marketplace-validator.js';
 export { validatePlugin } from './plugin-validator.js';
 export {
 	validateInstalledPluginsRegistry,

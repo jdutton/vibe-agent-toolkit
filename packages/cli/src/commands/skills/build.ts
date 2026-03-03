@@ -1,27 +1,36 @@
 /**
  * Build skills from source into dist/skills/ during package build
  *
- * Reads vat.skills from package.json and builds each skill using packageSkill()
+ * Reads skills config from vibe-agent-toolkit.config.yaml, discovers SKILL.md
+ * files via include/exclude globs, reads frontmatter for skill names, merges
+ * packaging config (schema defaults -> config defaults -> per-skill overrides),
+ * validates, and packages into dist/skills/<name>/.
  */
 
 import { dirname, resolve } from 'node:path';
 
-import type { VatSkillMetadata } from '@vibe-agent-toolkit/agent-schema';
 import {
   packageSkills,
   validateSkillForPackaging,
   type PackageSkillResult,
   type PackagingValidationResult,
   type SkillBuildSpec,
+  type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
-import { findProjectRoot } from '@vibe-agent-toolkit/utils';
+import type { SkillPackagingConfig as ConfigSkillPackagingConfig } from '@vibe-agent-toolkit/resources';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../../utils/command-error.js';
+import { loadConfig } from '../../utils/config-loader.js';
 import { type createLogger } from '../../utils/logger.js';
 
-import { filterSkillsByName, setupCommandContext, writeYamlHeader } from './command-helpers.js';
-import { readPackageJson, validateSkillSource } from './shared.js';
+import {
+  filterSkillsByName,
+  setupCommandContext,
+  writeYamlHeader,
+  type DiscoveredSkill,
+} from './command-helpers.js';
+import { discoverSkillsFromConfig } from './skill-discovery.js';
 
 export interface SkillsBuildCommandOptions {
   skill?: string;
@@ -29,12 +38,23 @@ export interface SkillsBuildCommandOptions {
   debug?: boolean;
 }
 
+/**
+ * Sanitize skill names with colon namespaces for filesystem paths.
+ *
+ * Skill names use colon-namespacing (e.g. "vibe-agent-toolkit:resources") which is
+ * valid in YAML/JSON but invalid as a directory name on Windows. Replace colons with
+ * double-underscore -- unambiguous, reversible, and safe on all platforms.
+ */
+function skillNameToFsPath(name: string): string {
+  return name.replaceAll(':', '__');
+}
+
 export function createBuildCommand(): Command {
   const command = new Command('build');
 
   command
-    .description('Build skills from source (reads vat.skills from package.json)')
-    .argument('[path]', 'Path to directory with package.json (default: current directory)')
+    .description('Build skills from config yaml (discovers SKILL.md files via globs)')
+    .argument('[path]', 'Path to project directory (default: current directory)')
     .option('--skill <name>', 'Build specific skill only')
     .option('--dry-run', 'Preview build without creating files')
     .option('--debug', 'Enable debug logging')
@@ -43,49 +63,37 @@ export function createBuildCommand(): Command {
       'after',
       `
 Description:
-  Builds all skills declared in package.json vat.skills field. For each
-  skill, validates the skill for packaging (using validateSkillForPackaging),
-  then runs packageSkill() and outputs to the configured path directory.
+  Discovers SKILL.md files using include/exclude globs from the skills
+  section of vibe-agent-toolkit.config.yaml. Reads each SKILL.md's
+  frontmatter to extract the skill name, merges packaging config
+  (schema defaults -> config yaml defaults -> per-skill overrides),
+  validates, and packages into dist/skills/<name>/.
 
-  Validation runs before packaging to catch errors early. Build fails if
-  any active validation errors exist (after applying overrides).
-
-  Typically run as part of package build: "build": "tsc && vat skills build"
-
-Package.json Structure:
-  {
-    "vat": {
-      "version": "1.0",
-      "type": "agent-bundle",
-      "skills": [
-        {
-          "name": "my-skill",
-          "source": "./resources/skills/SKILL.md",
-          "path": "./dist/skills/my-skill"
-        }
-      ]
-    }
-  }
+Config Structure (vibe-agent-toolkit.config.yaml):
+  version: 1
+  skills:
+    include: ["resources/skills/**/SKILL.md"]
+    exclude: ["resources/skills/draft/**"]
+    defaults:
+      linkFollowDepth: 2
+      resourceNaming: basename
+    config:
+      my-skill:
+        linkFollowDepth: full
+        ignoreValidationErrors:
+          NAV_FILE_INCLUDED: "Navigation files needed for this skill"
 
 Output:
-  YAML summary → stdout (for programmatic parsing)
-  Build progress → stderr (for human reading)
+  YAML summary -> stdout (for programmatic parsing)
+  Build progress -> stderr (for human reading)
 
 Exit Codes:
   0 - Build successful (or dry-run preview)
   1 - Validation error or build error
-  2 - System error (missing package.json, invalid config)
+  2 - System error (missing config, invalid config)
 
-Validation:
-  Skills are validated before packaging using validateSkillForPackaging().
-  Validation checks size, complexity, link depth, and navigation patterns.
-  Supports overrides via ignoreValidationErrors in skill metadata.
-  Build fails if active errors exist (after applying valid overrides).
-
-Examples:
-  $ vat skills build                    # Build all skills
-  $ vat skills build --skill my-skill   # Build specific skill
-  $ vat skills build --dry-run          # Preview without building
+Example:
+  $ vat skills build                    # Build all skills from config
 `
     );
 
@@ -145,29 +153,57 @@ function displayIgnoredErrors(
 }
 
 /**
+ * Merge packaging config: schema defaults -> config yaml defaults -> per-skill overrides.
+ *
+ * Uses shallow merge (spread) since all SkillPackagingConfig fields are top-level.
+ * The ignoreValidationErrors and excludeReferencesFromBundle fields are objects,
+ * but per-skill overrides should fully replace (not deep-merge) the defaults for those fields.
+ */
+function mergePackagingConfig(
+  defaults: ConfigSkillPackagingConfig | undefined,
+  perSkill: ConfigSkillPackagingConfig | undefined,
+): SkillPackagingConfig {
+  const merged = {
+    ...defaults,
+    ...perSkill,
+  };
+
+  // Strip undefined values to satisfy exactOptionalPropertyTypes.
+  // Spread of optional Zod-inferred types can produce explicit `undefined` values
+  // which are not assignable to optional-but-not-undefined properties.
+  const result: SkillPackagingConfig = {};
+  for (const [key, value] of Object.entries(merged)) {
+    if (value !== undefined) {
+      (result as Record<string, unknown>)[key] = value;
+    }
+  }
+  return result;
+}
+
+/**
  * Validate skill before building
  */
 async function validateSkillOrExit(
-  skill: VatSkillMetadata,
+  skillName: string,
   sourcePath: string,
+  packagingConfig: SkillPackagingConfig,
   logger: ReturnType<typeof createLogger>
 ): Promise<void> {
-  logger.debug(`   Validating skill: ${skill.name}`);
+  logger.debug(`   Validating skill: ${skillName}`);
 
-  const validationResult = await validateSkillForPackaging(sourcePath, skill);
+  const validationResult = await validateSkillForPackaging(sourcePath, packagingConfig);
   const hasActiveErrors =
     validationResult.activeErrors.length > 0 || validationResult.expiredOverrides.length > 0;
 
   if (!hasActiveErrors) {
-    // Validation passed - log ignored errors if any
     if (validationResult.ignoredErrors.length > 0) {
-      logger.debug(`   ℹ️  ${validationResult.ignoredErrors.length} error(s) ignored by overrides`);
+      logger.debug(`   ${validationResult.ignoredErrors.length} error(s) ignored by overrides`);
     }
     return;
   }
 
   // Validation failed - display all errors and exit
-  logger.error(`\n❌ Skill validation failed: ${skill.name}`);
+  logger.error(`\nSkill validation failed: ${skillName}`);
   logger.error(`   Source: ${sourcePath}`);
 
   displayActiveErrors(validationResult, logger);
@@ -182,21 +218,19 @@ async function validateSkillOrExit(
  * Output dry-run results
  */
 function outputDryRunYaml(
-  skills: VatSkillMetadata[],
-  packageName: string,
+  skills: DiscoveredSkill[],
   duration: number
 ): void {
   writeYamlHeader({
     status: 'success',
     dryRun: true,
-    package: packageName,
     skillsFound: skills.length,
   });
   process.stdout.write(`skills:\n`);
   for (const skill of skills) {
     process.stdout.write(`  - name: ${skill.name}\n`);
-    process.stdout.write(`    source: ${skill.source}\n`);
-    process.stdout.write(`    path: ${skill.path}\n`);
+    process.stdout.write(`    source: ${skill.sourcePath}\n`);
+    process.stdout.write(`    output: dist/skills/${skillNameToFsPath(skill.name)}\n`);
   }
   process.stdout.write(`duration: ${duration}ms\n`);
 }
@@ -204,34 +238,24 @@ function outputDryRunYaml(
 /**
  * Perform dry-run preview
  */
-async function performDryRun(
-  skillsToBuild: VatSkillMetadata[],
-  packageName: string,
+function performDryRun(
+  skillsToBuild: DiscoveredSkill[],
+  duration: number,
   logger: ReturnType<typeof createLogger>
-): Promise<void> {
-  const startTime = Date.now();
-  const cwd = process.cwd();
-
-  logger.info(`🔍 Dry-run: Analyzing skill build...`);
-  logger.info(`   Package: ${packageName}`);
+): void {
+  logger.info(`Dry-run: Analyzing skill build...`);
   logger.info(`   Skills to build: ${skillsToBuild.length}`);
 
-  // Validate all sources exist
-  logger.info(`\n📋 Skills:`);
+  logger.info(`\nSkills:`);
   for (const skill of skillsToBuild) {
-    // Validate source exists (throws if missing)
-    validateSkillSource(skill, cwd, logger);
-    logger.info(`   ✅ ${skill.name}`);
-    logger.info(`      Source: ${skill.source} (exists)`);
-    logger.info(`      Output: ${skill.path}`);
+    logger.info(`   ${skill.name}`);
+    logger.info(`      Source: ${skill.sourcePath}`);
+    logger.info(`      Output: dist/skills/${skillNameToFsPath(skill.name)}`);
   }
 
-  const duration = Date.now() - startTime;
+  outputDryRunYaml(skillsToBuild, duration);
 
-  // Output YAML results
-  outputDryRunYaml(skillsToBuild, packageName, duration);
-
-  logger.info(`\n✅ Dry-run complete (no files created)`);
+  logger.info(`\nDry-run complete (no files created)`);
   logger.info(`   Run without --dry-run to build the skills`);
 }
 
@@ -239,18 +263,16 @@ async function performDryRun(
  * Output build results
  */
 function outputBuildYaml(
-  results: Array<{ skill: VatSkillMetadata; result: PackageSkillResult }>,
-  packageName: string,
+  results: Array<{ name: string; result: PackageSkillResult }>,
   duration: number
 ): void {
   writeYamlHeader({
     status: 'success',
-    package: packageName,
     skillsBuilt: results.length,
   });
   process.stdout.write(`skills:\n`);
-  for (const { skill, result } of results) {
-    process.stdout.write(`  - name: ${skill.name}\n`);
+  for (const { name, result } of results) {
+    process.stdout.write(`  - name: ${name}\n`);
     process.stdout.write(`    outputPath: ${result.outputPath}\n`);
     process.stdout.write(`    filesPackaged: ${result.files.dependencies.length + 1}\n`);
   }
@@ -264,72 +286,91 @@ async function buildCommand(
   const { logger, cwd, startTime } = setupCommandContext(pathArg, options.debug);
 
   try {
-    // Read package.json
-    const packageJson = await readPackageJson(cwd);
-    const skills = packageJson.vat?.skills ?? [];
+    // Load config yaml from cwd (not workspace root — config lives next to the package)
+    const config = loadConfig(cwd);
 
-    if (skills.length === 0) {
-      throw new Error('No skills found in package.json vat.skills');
+    if (!config?.skills) {
+      logger.info('No skills configuration found — nothing to build');
+      process.exit(0);
+    }
+
+    const skillsConfig = config.skills;
+
+    // Discover SKILL.md files from config globs (relative to cwd where config lives)
+    logger.info(`Discovering skills from config...`);
+    const discoveredSkills = await discoverSkillsFromConfig(skillsConfig, cwd);
+
+    if (discoveredSkills.length === 0) {
+      throw new Error(
+        `No SKILL.md files found matching include patterns: ${skillsConfig.include.join(', ')}`
+      );
     }
 
     // Filter by skill name if specified
-    const skillsToBuild = filterSkillsByName(skills, options.skill);
+    const skillsToBuild = filterSkillsByName(discoveredSkills, options.skill);
 
-    logger.info(`📦 Found ${skillsToBuild.length} skill(s) to build`);
-
-    // Ensure package has a name
-    const packageName = packageJson.name ?? 'unnamed-package';
+    logger.info(`Found ${skillsToBuild.length} skill(s) to build`);
 
     // Handle dry-run mode
     if (options.dryRun) {
-      await performDryRun(skillsToBuild, packageName, logger);
+      const duration = Date.now() - startTime;
+      performDryRun(skillsToBuild, duration, logger);
       process.exit(0);
     }
 
     // Validate all skills before building
-    const validatedSpecs: Array<{ skill: VatSkillMetadata; sourcePath: string }> = [];
+    const validatedSpecs: Array<{
+      skill: DiscoveredSkill;
+      packagingConfig: SkillPackagingConfig;
+    }> = [];
+
     for (const skill of skillsToBuild) {
-      const sourcePath = validateSkillSource(skill, cwd, logger);
-      logger.info(`\n📦 Building skill: ${skill.name}`);
-      logger.info(`   Source: ${skill.source}`);
-      logger.info(`   Output: ${skill.path}`);
-      await validateSkillOrExit(skill, sourcePath, logger);
-      validatedSpecs.push({ skill, sourcePath });
+      const packagingConfig = mergePackagingConfig(
+        skillsConfig.defaults,
+        skillsConfig.config?.[skill.name],
+      );
+
+      const outputDir = resolve(cwd, 'dist', 'skills', skillNameToFsPath(skill.name));
+      logger.info(`\nBuilding skill: ${skill.name}`);
+      logger.info(`   Source: ${skill.sourcePath}`);
+      logger.info(`   Output: ${outputDir}`);
+
+      await validateSkillOrExit(skill.name, skill.sourcePath, packagingConfig, logger);
+      validatedSpecs.push({ skill, packagingConfig });
     }
 
     // Build all skills with a shared registry
-    const projectRoot = findProjectRoot(cwd);
-    const specs: SkillBuildSpec[] = validatedSpecs.map(({ skill, sourcePath }) => ({
-      skillPath: sourcePath,
+    const specs: SkillBuildSpec[] = validatedSpecs.map(({ skill, packagingConfig }) => ({
+      skillPath: skill.sourcePath,
       options: {
-        outputPath: resolve(cwd, skill.path),
+        outputPath: resolve(cwd, 'dist', 'skills', skillNameToFsPath(skill.name)),
         formats: ['directory' as const],
         rewriteLinks: true,
-        basePath: dirname(sourcePath),
-        ...(skill.packagingOptions?.resourceNaming && { resourceNaming: skill.packagingOptions.resourceNaming }),
-        ...(skill.packagingOptions?.stripPrefix && { stripPrefix: skill.packagingOptions.stripPrefix }),
-        ...(skill.packagingOptions?.linkFollowDepth !== undefined && { linkFollowDepth: skill.packagingOptions.linkFollowDepth }),
-        ...(skill.packagingOptions?.excludeReferencesFromBundle && { excludeReferencesFromBundle: skill.packagingOptions.excludeReferencesFromBundle }),
+        basePath: dirname(skill.sourcePath),
+        ...(packagingConfig.resourceNaming && { resourceNaming: packagingConfig.resourceNaming }),
+        ...(packagingConfig.stripPrefix && { stripPrefix: packagingConfig.stripPrefix }),
+        ...(packagingConfig.linkFollowDepth !== undefined && { linkFollowDepth: packagingConfig.linkFollowDepth }),
+        ...(packagingConfig.excludeReferencesFromBundle && { excludeReferencesFromBundle: packagingConfig.excludeReferencesFromBundle }),
       },
     }));
 
-    const packageResults = await packageSkills(specs, projectRoot);
+    const packageResults = await packageSkills(specs, cwd);
 
-    const results: Array<{ skill: VatSkillMetadata; result: PackageSkillResult }> = [];
+    const results: Array<{ name: string; result: PackageSkillResult }> = [];
     for (const [i, spec] of validatedSpecs.entries()) {
       const result = packageResults[i];
       if (result) {
-        logger.info(`   ✅ Built ${result.files.dependencies.length + 1} files`);
-        results.push({ skill: spec.skill, result });
+        logger.info(`   Built ${result.files.dependencies.length + 1} files`);
+        results.push({ name: spec.skill.name, result });
       }
     }
 
     const duration = Date.now() - startTime;
 
     // Output YAML results
-    outputBuildYaml(results, packageName, duration);
+    outputBuildYaml(results, duration);
 
-    logger.info(`\n✅ Built ${results.length} skill(s) successfully`);
+    logger.info(`\nBuilt ${results.length} skill(s) successfully`);
 
     process.exit(0);
   } catch (error) {

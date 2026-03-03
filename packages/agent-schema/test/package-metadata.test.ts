@@ -11,9 +11,7 @@ import {
 
 // Test constants to avoid string duplication
 const TEST_SKILL_NAME = 'vat-cat-agents';
-// eslint-disable-next-line sonarjs/no-duplicate-string -- Constant definition for test data
-const TEST_SKILL_SOURCE = './resources/skills/SKILL.md';
-const TEST_SKILL_PATH = './dist/skills/vat-cat-agents';
+const TEST_NAMESPACED_SKILL = 'vibe-agent-toolkit:resources';
 const TEST_AGENT_NAME = 'agent-generator';
 const TEST_AGENT_PATH = './agents/agent-generator';
 const TEST_FUNCTION_NAME = 'haiku-validator';
@@ -22,35 +20,34 @@ const VAT_VERSION = '1.0';
 const AGENT_BUNDLE_TYPE = 'agent-bundle' as const;
 
 describe('VatSkillMetadataSchema', () => {
-  it('should validate valid skill metadata', () => {
-    const validSkill = {
-      name: TEST_SKILL_NAME,
-      source: TEST_SKILL_SOURCE,
-      path: TEST_SKILL_PATH,
-    };
-
-    const result = VatSkillMetadataSchema.safeParse(validSkill);
+  it('should validate valid skill name string', () => {
+    const result = VatSkillMetadataSchema.safeParse(TEST_SKILL_NAME);
     expect(result.success).toBe(true);
   });
 
-  it('should reject skill metadata with missing required fields', () => {
-    const invalidSkill = {
-      name: TEST_SKILL_NAME,
-      // Missing source and path
-    };
+  it('should validate namespaced skill name', () => {
+    const result = VatSkillMetadataSchema.safeParse(TEST_NAMESPACED_SKILL);
+    expect(result.success).toBe(true);
+  });
 
-    const result = VatSkillMetadataSchema.safeParse(invalidSkill);
+  it('should reject non-string input', () => {
+    const result = VatSkillMetadataSchema.safeParse({ name: TEST_SKILL_NAME });
     expect(result.success).toBe(false);
   });
 
   it('should reject empty skill name', () => {
-    const invalidSkill = {
-      name: '',
-      source: TEST_SKILL_SOURCE,
-      path: TEST_SKILL_PATH,
-    };
+    const result = VatSkillMetadataSchema.safeParse('');
+    expect(result.success).toBe(false);
+  });
 
-    const result = VatSkillMetadataSchema.safeParse(invalidSkill);
+  it('should reject skill name with invalid characters', () => {
+    const result = VatSkillMetadataSchema.safeParse('My Skill');
+    expect(result.success).toBe(false);
+  });
+
+  it('should reject skill name exceeding max length', () => {
+    const longName = 'a-' + 'b'.repeat(63);
+    const result = VatSkillMetadataSchema.safeParse(longName);
     expect(result.success).toBe(false);
   });
 });
@@ -132,13 +129,7 @@ describe('VatPackageMetadataSchema', () => {
     const catAgentsMetadata = {
       version: VAT_VERSION,
       type: AGENT_BUNDLE_TYPE,
-      skills: [
-        {
-          name: TEST_SKILL_NAME,
-          source: TEST_SKILL_SOURCE,
-          path: TEST_SKILL_PATH,
-        },
-      ],
+      skills: [TEST_SKILL_NAME],
     };
 
     const result = VatPackageMetadataSchema.safeParse(catAgentsMetadata);
@@ -149,13 +140,7 @@ describe('VatPackageMetadataSchema', () => {
     const devAgentsMetadata = {
       version: VAT_VERSION,
       type: AGENT_BUNDLE_TYPE,
-      skills: [
-        {
-          name: 'vibe-agent-toolkit',
-          source: './resources/skills/SKILL.md',
-          path: './dist/skills/vibe-agent-toolkit',
-        },
-      ],
+      skills: ['vibe-agent-toolkit'],
       agents: [
         {
           name: 'agent-generator',
@@ -178,13 +163,7 @@ describe('VatPackageMetadataSchema', () => {
     const completeMetadata = {
       version: VAT_VERSION,
       type: 'toolkit' as const,
-      skills: [
-        {
-          name: 'my-skill',
-          source: './resources/skills/SKILL.md',
-          path: './dist/skills/my-skill',
-        },
-      ],
+      skills: ['my-skill'],
       agents: [
         {
           name: 'my-agent',
@@ -480,100 +459,3 @@ describe('PackagingOptionsSchema', () => {
   });
 });
 
-describe('VatSkillMetadataSchema with validation overrides', () => {
-  it('should validate skill metadata with simple override', () => {
-    const skillWithOverride = {
-      name: TEST_SKILL_NAME,
-      source: TEST_SKILL_SOURCE,
-      path: TEST_SKILL_PATH,
-      ignoreValidationErrors: {
-        'DUPLICATE_RESOURCE': 'Intentional duplication for testing',
-      },
-    };
-
-    const result = VatSkillMetadataSchema.safeParse(skillWithOverride);
-    expect(result.success).toBe(true);
-  });
-
-  it('should validate skill metadata with extended override', () => {
-    const skillWithOverride = {
-      name: TEST_SKILL_NAME,
-      source: TEST_SKILL_SOURCE,
-      path: TEST_SKILL_PATH,
-      ignoreValidationErrors: {
-        'MISSING_FRONTMATTER': {
-          reason: 'Optional for examples',
-          expires: '2026-12-31T23:59:59Z',
-        },
-      },
-    };
-
-    const result = VatSkillMetadataSchema.safeParse(skillWithOverride);
-    expect(result.success).toBe(true);
-  });
-
-  it('should validate skill metadata with multiple overrides', () => {
-    const skillWithOverrides = {
-      name: TEST_SKILL_NAME,
-      source: TEST_SKILL_SOURCE,
-      path: TEST_SKILL_PATH,
-      ignoreValidationErrors: {
-        'DUPLICATE_RESOURCE': 'Intentional for testing',
-        'MISSING_FRONTMATTER': {
-          reason: 'Optional for examples',
-          expires: '2026-12-31T23:59:59Z',
-        },
-        'BROKEN_LINK': 'External link unavailable during build',
-      },
-    };
-
-    const result = VatSkillMetadataSchema.safeParse(skillWithOverrides);
-    expect(result.success).toBe(true);
-  });
-
-  it('should validate skill metadata with packaging options', () => {
-    const skillWithOptions = {
-      name: TEST_SKILL_NAME,
-      source: TEST_SKILL_SOURCE,
-      path: TEST_SKILL_PATH,
-      packagingOptions: {
-        resourceNaming: 'resource-id' as const,
-        stripPrefix: 'resources/skills/',
-      },
-    };
-
-    const result = VatSkillMetadataSchema.safeParse(skillWithOptions);
-    expect(result.success).toBe(true);
-  });
-
-  it('should validate skill metadata with both overrides and packaging options', () => {
-    const completeSkill = {
-      name: TEST_SKILL_NAME,
-      source: TEST_SKILL_SOURCE,
-      path: TEST_SKILL_PATH,
-      ignoreValidationErrors: {
-        'DUPLICATE_RESOURCE': 'Intentional duplication',
-      },
-      packagingOptions: {
-        resourceNaming: 'preserve-path' as const,
-      },
-    };
-
-    const result = VatSkillMetadataSchema.safeParse(completeSkill);
-    expect(result.success).toBe(true);
-  });
-
-  it('should reject skill metadata with invalid override format', () => {
-    const invalidSkill = {
-      name: TEST_SKILL_NAME,
-      source: TEST_SKILL_SOURCE,
-      path: TEST_SKILL_PATH,
-      ignoreValidationErrors: {
-        'DUPLICATE_RESOURCE': '', // Empty reason
-      },
-    };
-
-    const result = VatSkillMetadataSchema.safeParse(invalidSkill);
-    expect(result.success).toBe(false);
-  });
-});

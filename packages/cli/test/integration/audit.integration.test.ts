@@ -86,7 +86,7 @@ describe('audit command (integration)', () => {
   });
 
   describe('marketplace validation', () => {
-    it('should validate a valid marketplace directory', async () => {
+    it('should return error for marketplace directory (validation moved to claude-marketplace)', async () => {
       const marketplaceDir = join(tempDir, 'valid-marketplace');
       const claudePluginDir = join(marketplaceDir, CLAUDE_PLUGIN_DIRNAME);
       fs.mkdirSync(claudePluginDir, { recursive: true });
@@ -102,8 +102,9 @@ describe('audit command (integration)', () => {
       const results = await runAudit(marketplaceDir);
 
       expect(results).toHaveLength(1);
-      expect(results[0].status).toBe('success');
-      expect(results[0].metadata?.name).toBe(TEST_MARKETPLACE_NAME);
+      expect(results[0].status).toBe('error');
+      expect(results[0].type).toBe('marketplace');
+      expect(results[0].issues.some(i => i.code === 'UNKNOWN_FORMAT')).toBe(true);
     });
   });
 

@@ -224,7 +224,7 @@ describe('validateSkillForPackaging - Link depth validation', () => {
 		const { skillPath } = createThreeLevelChain(getTempDir());
 
 		// With linkFollowDepth: 'full', all links are followed regardless of depth
-		const metadata = { packagingOptions: { linkFollowDepth: 'full' as const } };
+		const metadata = { linkFollowDepth: 'full' as const };
 		const result = await validateSkillForPackaging(skillPath, metadata as never);
 
 		expect(result.status).toBe('error');
@@ -563,7 +563,7 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 	it('should limit bundled files to depth 1 when linkFollowDepth is 1', async () => {
 		const { skillPath } = createThreeLevelChain(getTempDir());
 
-		const metadata = { packagingOptions: { linkFollowDepth: 1 } };
+		const metadata = { linkFollowDepth: 1 };
 		const result = await validateSkillForPackaging(skillPath, metadata as never);
 
 		// Only level1.md should be bundled (depth 1), level2.md excluded at depth boundary
@@ -585,12 +585,10 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 
 		const metadata = {
-			packagingOptions: {
-				excludeReferencesFromBundle: {
-					rules: [
-						{ patterns: ['internal/**'] },
-					],
-				},
+			excludeReferencesFromBundle: {
+				rules: [
+					{ patterns: ['internal/**'] },
+				],
 			},
 		};
 		const result = await validateSkillForPackaging(skillPath, metadata as never);
@@ -660,7 +658,7 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 
 		// depth=0 means no links followed
-		const metadata = { packagingOptions: { linkFollowDepth: 0 } };
+		const metadata = { linkFollowDepth: 0 };
 		const result = await validateSkillForPackaging(skillPath, metadata as never);
 
 		// fileCount=1 (SKILL.md only), directFileCount should NOT exceed fileCount
@@ -679,7 +677,7 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
 
-		const metadata = { packagingOptions: { linkFollowDepth: 0 } };
+		const metadata = { linkFollowDepth: 0 };
 		const result = await validateSkillForPackaging(skillPath, metadata as never);
 
 		// Only SKILL.md should be bundled, reference.md excluded

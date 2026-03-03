@@ -37,7 +37,7 @@ describe('validate (unified validator)', () => {
 	});
 
 	describe('marketplace validation', () => {
-		it('should route to marketplace validator for marketplace directory', async () => {
+		it('should return error for marketplace directory (validation moved to claude-marketplace)', async () => {
 			const tempDir = getTempDir();
 			const marketplaceDir = createTestMarketplace(tempDir, {
 				name: 'test-marketplace',
@@ -48,9 +48,9 @@ describe('validate (unified validator)', () => {
 
 			const result = await validate(marketplaceDir);
 
-			assertValidationSuccess(result);
+			expect(result.status).toBe('error');
 			expect(result.type).toBe('marketplace');
-			expect(result.metadata?.name).toBe('test-marketplace');
+			expect(result.issues[0]?.message).toContain('moved to @vibe-agent-toolkit/claude-marketplace');
 		});
 	});
 

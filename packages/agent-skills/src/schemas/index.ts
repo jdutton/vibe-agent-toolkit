@@ -12,14 +12,7 @@ export {
 
 export { ClaudePluginJsonSchema, ClaudePluginSchema, type ClaudePlugin } from './claude-plugin.js';
 
-export {
-  MarketplaceJsonSchema,
-  MarketplaceSchema,
-  type LspServerConfig,
-  type Marketplace,
-  type MarketplacePlugin,
-  type PluginSource,
-} from './marketplace.js';
+export { PluginJsonSchema, type PluginJson } from './plugin-json.js';
 
 export {
   InstalledPluginsRegistryJsonSchema,

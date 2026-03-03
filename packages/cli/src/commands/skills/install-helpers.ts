@@ -12,7 +12,6 @@ import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 
-import type { VatSkillMetadata } from '@vibe-agent-toolkit/agent-schema';
 import { safeExecSync } from '@vibe-agent-toolkit/utils';
 import * as tar from 'tar';
 
@@ -20,8 +19,9 @@ export type SkillSource = 'npm' | 'local' | 'zip' | 'npm-postinstall' | 'dev';
 
 export interface PackageJsonVat {
   version?: string;
+  // DEPRECATED(v0.1.x): vat.type — tolerated but ignored
   type?: string;
-  skills?: VatSkillMetadata[];
+  skills?: string[];
 }
 
 export interface PackageJson {
@@ -77,7 +77,7 @@ export function detectSource(input: string): SkillSource {
  */
 export async function readPackageJsonVatMetadata(
   dir: string
-): Promise<{ packageJson: PackageJson; skills: VatSkillMetadata[] }> {
+): Promise<{ packageJson: PackageJson; skills: string[] }> {
   const packageJsonPath = join(dir, 'package.json');
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Directory path validated by caller

@@ -2,8 +2,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { MarketplaceSchema } from '../schemas/marketplace.js';
-
 import type { ResourceFormat } from './types.js';
 
 /**
@@ -100,20 +98,22 @@ function detectDirectoryFormat(dirPath: string): ResourceFormat {
 		// Read marketplace.json to check for co-located plugin pattern
 		try {
 			const marketplaceContent = fs.readFileSync(marketplaceJsonPath, 'utf-8');
-			const marketplaceData = JSON.parse(marketplaceContent);
-			const parseResult = MarketplaceSchema.safeParse(marketplaceData);
+			const marketplaceData = JSON.parse(marketplaceContent) as Record<string, unknown>;
+			const plugins = marketplaceData['plugins'];
 
-			if (parseResult.success) {
+			if (Array.isArray(plugins)) {
 				// Check if marketplace contains a plugin with source pointing to current directory
-				const hasColocatedPlugin = parseResult.data.plugins.some((plugin) => {
+				const hasColocatedPlugin = plugins.some((plugin: unknown) => {
+					if (typeof plugin !== 'object' || plugin === null) return false;
+					const source = (plugin as Record<string, unknown>)['source'];
 					// Only local path sources can be co-located; URL/GitHub sources are remote
-					if (typeof plugin.source !== 'string') return false;
+					if (typeof source !== 'string') return false;
 					// Check for various forms of "current directory" references
 					return (
-						plugin.source === './' ||
-						plugin.source === '.' ||
-						plugin.source === '.\\' ||
-						plugin.source === ''
+						source === './' ||
+						source === '.' ||
+						source === '.\\' ||
+						source === ''
 					);
 				});
 

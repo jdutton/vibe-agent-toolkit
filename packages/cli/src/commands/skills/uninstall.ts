@@ -117,7 +117,7 @@ async function resolveSkillNames(
     const cwd = process.cwd();
     const { packageJson, skills } = await readPackageJsonVatMetadata(cwd);
     logger.info(`📦 Uninstalling all skills from ${packageJson.name}`);
-    return skills.map(s => s.name);
+    return skills;
   }
 
   if (!name) {
