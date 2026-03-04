@@ -276,6 +276,8 @@ function detectUnreferencedFiles(
   // Glob all .md files in the skill directory
   const allMdFiles = fs.globSync('**/*.md', { cwd: skillDir });
 
+  const unreferencedFiles: string[] = [];
+
   for (const relPath of allMdFiles) {
     const absPath = resolve(skillDir, relPath);
     const fileName = basename(relPath);
@@ -290,14 +292,212 @@ function detectUnreferencedFiles(
       continue;
     }
 
-    issues.push({
-      severity: 'info',
-      code: 'SKILL_UNREFERENCED_FILE',
-      message: `Markdown file not referenced from SKILL.md link graph: ${relPath}`,
-      location: absPath,
-      fix: 'Add a link to this file from SKILL.md or a linked document, or remove the file',
-    });
+    unreferencedFiles.push(relPath);
   }
+
+  // Check for implicit references among unreferenced files
+  const implicitRefs = extractImplicitReferences(skillDir, unreferencedFiles, visitedPaths);
+
+  for (const relPath of unreferencedFiles) {
+    const absPath = resolve(skillDir, relPath);
+
+    const ref = implicitRefs.find((r) => r.referencedFile === relPath);
+    if (ref) {
+      issues.push({
+        severity: 'info',
+        code: 'SKILL_IMPLICIT_REFERENCE',
+        message: `File implicitly referenced (not via markdown link) in ${basename(ref.foundIn)}: ${ref.matchedText}`,
+        location: absPath,
+        fix: 'Consider using a standard markdown link [text](path) for better tooling support',
+      });
+    } else {
+      issues.push({
+        severity: 'info',
+        code: 'SKILL_UNREFERENCED_FILE',
+        message: `Markdown file not referenced from SKILL.md link graph: ${relPath}`,
+        location: absPath,
+        fix: 'Add a link to this file from SKILL.md or a linked document, or remove the file',
+      });
+    }
+  }
+}
+
+// ============================================================================
+// Implicit Reference Detection
+// ============================================================================
+
+/** Result of finding an implicit (non-markdown-link) reference to a file */
+export interface ImplicitReference {
+  /** Relative path of the referenced file (e.g., "references/domain-template.md") */
+  referencedFile: string;
+  /** Absolute path of the file containing the reference */
+  foundIn: string;
+  /** The matched text snippet (for diagnostics) */
+  matchedText: string;
+  /** Line number where found (1-based) */
+  line: number;
+}
+
+/** Characters that can appear immediately before/after a file path in text */
+const BOUNDARY_CHARS = new Set([
+  ' ', '\t',        // whitespace
+  '`',              // backtick (inline code)
+  '(', ')',         // parentheses
+  '"', "'",         // quotes
+  '@',              // Claude force-load prefix
+  '*',              // bold/italic markers
+  '[', ']',         // brackets
+  ':', ',', ';',    // punctuation (colon, comma, semicolon)
+  '.', '!', '?',   // sentence-ending punctuation after "see filename.md."
+]);
+
+/**
+ * Check if a candidate path appears as a self-contained reference at position `index` in `line`.
+ * The character before and after the candidate must be a boundary character, or BOL/EOL.
+ */
+function isSelfContainedMatch(line: string, index: number, candidateLength: number): boolean {
+  // Check character before (BOL is ok)
+  if (index > 0 && !BOUNDARY_CHARS.has(line.charAt(index - 1))) {
+    return false;
+  }
+
+  // Check character after (EOL is ok)
+  const afterIndex = index + candidateLength;
+  if (afterIndex < line.length && !BOUNDARY_CHARS.has(line.charAt(afterIndex))) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Check if the match is inside a URL (contains :// nearby)
+ */
+function isInsideUrl(line: string, index: number): boolean {
+  // Look for :// pattern before the match (within reasonable distance)
+  const lookback = line.slice(Math.max(0, index - 100), index);
+  return lookback.includes('://');
+}
+
+/**
+ * Build a map of candidate search strings to their source file paths.
+ * Each unreferenced file generates 2-3 candidate strings.
+ */
+function buildCandidateMap(
+  unreferencedFiles: readonly string[],
+): Map<string, string> {
+  const candidates = new Map<string, string>();
+
+  // Count basenames to detect ambiguity
+  const basenameCounts = new Map<string, number>();
+  for (const relPath of unreferencedFiles) {
+    const base = basename(relPath);
+    basenameCounts.set(base, (basenameCounts.get(base) ?? 0) + 1);
+  }
+
+  for (const relPath of unreferencedFiles) {
+    // Always add the relative path as-is
+    candidates.set(relPath, relPath);
+
+    // Add ./prefixed variant
+    candidates.set(`./${relPath}`, relPath);
+
+    // Add basename only if unambiguous
+    const base = basename(relPath);
+    if (base !== relPath && (basenameCounts.get(base) ?? 0) <= 1) {
+      candidates.set(base, relPath);
+    }
+  }
+
+  return candidates;
+}
+
+/**
+ * Find the first self-contained, non-URL occurrence of `candidate` in `line`.
+ * Returns the match index or -1 if no valid match found.
+ */
+function findBoundedMatch(line: string, candidate: string): number {
+  let searchFrom = 0;
+  let matchIndex: number;
+
+  while ((matchIndex = line.indexOf(candidate, searchFrom)) !== -1) {
+    searchFrom = matchIndex + 1;
+
+    if (isSelfContainedMatch(line, matchIndex, candidate.length) && !isInsideUrl(line, matchIndex)) {
+      return matchIndex;
+    }
+  }
+
+  return -1;
+}
+
+/**
+ * Scan a single file's lines for implicit references to unreferenced files.
+ */
+function scanFileForReferences(
+  visitedPath: string,
+  candidates: Map<string, string>,
+  results: ImplicitReference[],
+): void {
+  let content: string;
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- visitedPath from BFS traversal
+    content = fs.readFileSync(visitedPath, 'utf-8');
+  } catch {
+    return; // File unreadable, skip
+  }
+
+  const lines = content.split('\n');
+  for (const [lineIndex, line] of lines.entries()) {
+    for (const [candidate, referencedFile] of candidates) {
+      const matchIndex = findBoundedMatch(line, candidate);
+      if (matchIndex === -1) {
+        continue;
+      }
+
+      // Extract a reasonable snippet around the match
+      const snippetStart = Math.max(0, matchIndex - 20);
+      const snippetEnd = Math.min(line.length, matchIndex + candidate.length + 20);
+      const matchedText = line.slice(snippetStart, snippetEnd).trim();
+
+      results.push({
+        referencedFile,
+        foundIn: visitedPath,
+        matchedText,
+        line: lineIndex + 1,
+      });
+    }
+  }
+}
+
+/**
+ * Scan BFS-visited files for implicit (non-markdown-link) references to unreferenced files.
+ *
+ * "Implicit reference" means the file path appears in the text bounded by delimiter
+ * characters (backticks, parens, whitespace, etc.) but NOT as a standard markdown link.
+ *
+ * @param skillDir - Absolute path to the skill directory
+ * @param unreferencedFiles - Relative paths of .md files not found by BFS traversal
+ * @param visitedFiles - Absolute paths of files visited during BFS (to scan for references)
+ * @returns Array of implicit references found
+ */
+export function extractImplicitReferences(
+  _skillDir: string,
+  unreferencedFiles: readonly string[],
+  visitedFiles: ReadonlySet<string>,
+): ImplicitReference[] {
+  if (unreferencedFiles.length === 0) {
+    return [];
+  }
+
+  const candidates = buildCandidateMap(unreferencedFiles);
+  const results: ImplicitReference[] = [];
+
+  for (const visitedPath of visitedFiles) {
+    scanFileForReferences(visitedPath, candidates, results);
+  }
+
+  return results;
 }
 
 function validateWarningRules(

@@ -154,6 +154,54 @@ describe('transitive link traversal — unreferenced files', () => {
 });
 
 // ---------------------------------------------------------------------------
+// 4b. Unreferenced files — implicit references
+// ---------------------------------------------------------------------------
+
+describe('transitive link traversal — implicit references', () => {
+  const { getTempDir } = setupTempDir('skill-implicit-refs-');
+
+  it('should emit SKILL_IMPLICIT_REFERENCE instead of SKILL_UNREFERENCED_FILE for implicitly referenced files', async () => {
+    const { skillPath } = createTransitiveSkillStructure(
+      getTempDir(),
+      { 'companion.md': '# Companion\n\nContent.' },
+      createSkillContent(skillFrontmatter(), '\n# Skill\n\nSee `companion.md` for details.'),
+    );
+    const result = await validateSkillWithUnreferencedFileCheck(skillPath, getTempDir());
+
+    expect(findIssues(result, 'SKILL_UNREFERENCED_FILE')).toHaveLength(0);
+    expect(findIssues(result, 'SKILL_IMPLICIT_REFERENCE')).toHaveLength(1);
+    expect(findIssues(result, 'SKILL_IMPLICIT_REFERENCE')[0]?.message).toContain('companion.md');
+  });
+
+  it('should still emit SKILL_UNREFERENCED_FILE for truly orphaned files', async () => {
+    const { skillPath } = createTransitiveSkillStructure(
+      getTempDir(),
+      { 'orphan.md': '# Orphan\n\nNot mentioned anywhere.' },
+      createSkillContent(skillFrontmatter(), '\n# Skill\n\nNo mentions of any files.'),
+    );
+    const result = await validateSkillWithUnreferencedFileCheck(skillPath, getTempDir());
+
+    expect(findIssues(result, 'SKILL_UNREFERENCED_FILE')).toHaveLength(1);
+    expect(findIssues(result, 'SKILL_IMPLICIT_REFERENCE')).toHaveLength(0);
+  });
+
+  it('should handle mixed: some implicit, some orphaned', async () => {
+    const { skillPath } = createTransitiveSkillStructure(
+      getTempDir(),
+      {
+        'referenced.md': '# Referenced\n\nContent.',
+        'orphan.md': '# Orphan\n\nContent.',
+      },
+      createSkillContent(skillFrontmatter(), '\n# Skill\n\nSee `referenced.md` for details.'),
+    );
+    const result = await validateSkillWithUnreferencedFileCheck(skillPath, getTempDir());
+
+    expect(findIssues(result, 'SKILL_IMPLICIT_REFERENCE')).toHaveLength(1);
+    expect(findIssues(result, 'SKILL_UNREFERENCED_FILE')).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // 5. Unreferenced files — checkUnreferencedFiles=false
 // ---------------------------------------------------------------------------
 
