@@ -1,9 +1,13 @@
 import * as fs from 'node:fs';
+import { basename, dirname, relative, resolve } from 'node:path';
+
+import { parseMarkdown } from '@vibe-agent-toolkit/resources';
 
 import { parseFrontmatter } from '../parsers/frontmatter-parser.js';
 
 import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
-import type { ValidateOptions, ValidationIssue, ValidationResult } from './types.js';
+import type { LinkedFileValidationResult, ValidateOptions, ValidationIssue, ValidationResult } from './types.js';
+import { NAVIGATION_FILE_PATTERNS } from './validation-rules.js';
 
 /**
  * Validate an Agent Skill (SKILL.md file)
@@ -68,15 +72,227 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   // Validate warning-level rules (skill-specific)
   validateWarningRules(content, lineCount, skillPath, issues);
 
-  // NOTE: Link validation is handled by resource validation (vat resources validate)
-  // We don't duplicate that logic here. Trust that SKILL.md is validated as a markdown resource.
+  // Transitive link traversal (BFS)
+  const skillDir = options.rootDir ?? dirname(skillPath);
+  const linkedFiles = await traverseLinks(skillPath, skillDir, issues);
+
+  // Unreferenced file detection
+  if (options.checkUnreferencedFiles) {
+    detectUnreferencedFiles(skillPath, skillDir, linkedFiles, issues);
+  }
 
   // Build metadata
   const metadata = buildMetadata(frontmatter, lineCount);
 
-  return buildResult(skillPath, isVATGenerated, issues, metadata);
+  const result = buildResult(skillPath, isVATGenerated, issues, metadata);
+
+  if (linkedFiles.length > 0) {
+    result.linkedFiles = linkedFiles;
+  }
+
+  return result;
 }
 
+
+// ============================================================================
+// Link Traversal (BFS)
+// ============================================================================
+
+/** Files to never flag as unreferenced */
+const UNREFERENCED_EXCLUDE_PATTERNS = new Set([
+  'SKILL.md',
+  'CLAUDE.md',
+  ...(NAVIGATION_FILE_PATTERNS as readonly string[]),
+]);
+
+/**
+ * Validate a single local_file link: boundary check, existence check.
+ *
+ * @returns 'boundary' | 'broken' | 'valid' indicating the link status
+ */
+function validateLocalLink(
+  link: { href: string; line?: number | undefined },
+  currentPath: string,
+  skillDir: string,
+  fileIssues: ValidationIssue[],
+  issues: ValidationIssue[],
+): { status: 'skip' | 'boundary' | 'broken' | 'valid'; resolvedPath: string } {
+  // Strip anchor fragment before resolving
+  const hrefWithoutAnchor = link.href.split('#')[0] ?? link.href;
+  if (hrefWithoutAnchor === '') {
+    return { status: 'skip', resolvedPath: '' };
+  }
+
+  const resolvedPath = resolve(dirname(currentPath), hrefWithoutAnchor);
+  const relativeToBoundary = relative(skillDir, resolvedPath);
+
+  // Check boundary escape
+  if (relativeToBoundary.startsWith('..')) {
+    const issue: ValidationIssue = {
+      severity: 'warning',
+      code: 'OUTSIDE_PROJECT_BOUNDARY',
+      message: `Link points outside skill directory: ${link.href}`,
+      location: `${currentPath}:${link.line ?? 0}`,
+      fix: 'Keep skills self-contained — move referenced files into the skill directory',
+    };
+    fileIssues.push(issue);
+    issues.push(issue);
+    return { status: 'boundary', resolvedPath };
+  }
+
+  // Check existence
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolvedPath from parsed markdown
+  if (!fs.existsSync(resolvedPath)) {
+    const issue: ValidationIssue = {
+      severity: 'error',
+      code: 'LINK_INTEGRITY_BROKEN',
+      message: `Link target not found: ${link.href}`,
+      location: `${currentPath}:${link.line ?? 0}`,
+      fix: 'Fix link path or restore missing file',
+    };
+    fileIssues.push(issue);
+    issues.push(issue);
+    return { status: 'broken', resolvedPath };
+  }
+
+  return { status: 'valid', resolvedPath };
+}
+
+/** Result of processing a single file's links */
+interface FileProcessResult {
+  localLinkCount: number;
+  linksValidated: number;
+  fileIssues: ValidationIssue[];
+  newPaths: string[];
+  content: string;
+}
+
+/**
+ * Process all local links in a parsed markdown file.
+ * Returns link validation results and newly discovered paths for BFS.
+ */
+function processFileLinks(
+  parseResult: { links: Array<{ type: string; href: string; line?: number | undefined }>; content: string },
+  currentPath: string,
+  skillDir: string,
+  issues: ValidationIssue[],
+  visited: Set<string>,
+): FileProcessResult {
+  const localLinks = parseResult.links.filter(link => link.type === 'local_file');
+  const fileIssues: ValidationIssue[] = [];
+  const newPaths: string[] = [];
+  let linksValidated = 0;
+
+  for (const link of localLinks) {
+    const { status, resolvedPath } = validateLocalLink(link, currentPath, skillDir, fileIssues, issues);
+
+    if (status === 'skip') {
+      continue;
+    }
+
+    linksValidated++;
+
+    if (status === 'valid' && resolvedPath.endsWith('.md') && !visited.has(resolvedPath)) {
+      visited.add(resolvedPath);
+      newPaths.push(resolvedPath);
+    }
+  }
+
+  return { localLinkCount: localLinks.length, linksValidated, fileIssues, newPaths, content: parseResult.content };
+}
+
+/**
+ * Traverse links from SKILL.md using BFS, validating each link target.
+ *
+ * - Missing file -> LINK_INTEGRITY_BROKEN error
+ * - Outside skill directory -> OUTSIDE_PROJECT_BOUNDARY warning
+ * - Existing .md file -> recurse (add to BFS queue)
+ * - Non-markdown asset -> existence check only
+ */
+async function traverseLinks(
+  skillPath: string,
+  skillDir: string,
+  issues: ValidationIssue[],
+): Promise<LinkedFileValidationResult[]> {
+  const resolvedSkillPath = resolve(skillPath);
+  const visited = new Set<string>([resolvedSkillPath]);
+  const linkedFiles: LinkedFileValidationResult[] = [];
+  const queue: string[] = [resolvedSkillPath];
+
+  while (queue.length > 0) {
+    const currentPath = queue.shift();
+    if (!currentPath) {
+      break;
+    }
+
+    let parseResult;
+    try {
+      parseResult = await parseMarkdown(currentPath);
+    } catch {
+      continue;
+    }
+
+    const processed = processFileLinks(parseResult, currentPath, skillDir, issues, visited);
+    queue.push(...processed.newPaths);
+
+    // Record linked file result (skip SKILL.md itself — it's the root)
+    if (currentPath !== resolvedSkillPath) {
+      linkedFiles.push({
+        path: currentPath,
+        lineCount: processed.content.split('\n').length,
+        linksFound: processed.localLinkCount,
+        linksValidated: processed.linksValidated,
+        issues: processed.fileIssues,
+      });
+    }
+  }
+
+  return linkedFiles;
+}
+
+/**
+ * Detect .md files in the skill directory that are not reachable from SKILL.md.
+ *
+ * Excludes SKILL.md, CLAUDE.md, and navigation file patterns (README.md, etc.).
+ */
+function detectUnreferencedFiles(
+  skillPath: string,
+  skillDir: string,
+  linkedFiles: LinkedFileValidationResult[],
+  issues: ValidationIssue[],
+): void {
+  // Collect all visited paths (SKILL.md + linked files)
+  const visitedPaths = new Set<string>([resolve(skillPath)]);
+  for (const lf of linkedFiles) {
+    visitedPaths.add(lf.path);
+  }
+
+  // Glob all .md files in the skill directory
+  const allMdFiles = fs.globSync('**/*.md', { cwd: skillDir });
+
+  for (const relPath of allMdFiles) {
+    const absPath = resolve(skillDir, relPath);
+    const fileName = basename(relPath);
+
+    // Skip excluded patterns
+    if (UNREFERENCED_EXCLUDE_PATTERNS.has(fileName)) {
+      continue;
+    }
+
+    // Skip files that were visited during traversal
+    if (visitedPaths.has(absPath)) {
+      continue;
+    }
+
+    issues.push({
+      severity: 'info',
+      code: 'SKILL_UNREFERENCED_FILE',
+      message: `Markdown file not referenced from SKILL.md link graph: ${relPath}`,
+      location: absPath,
+      fix: 'Add a link to this file from SKILL.md or a linked document, or remove the file',
+    });
+  }
+}
 
 function validateWarningRules(
   content: string,
