@@ -1,0 +1,5 @@
+version: 1
+skills:
+  include:
+    - "resources/skills/SKILL.md"
+    - "packages/*/resources/skills/SKILL.md"

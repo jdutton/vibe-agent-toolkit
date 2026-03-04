@@ -4,19 +4,20 @@
 
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
-
-import type { VatSkillMetadata } from '@vibe-agent-toolkit/agent-schema';
+import { join } from 'node:path';
 
 import type { createLogger } from '../../utils/logger.js';
 
 /**
  * Package.json with VAT skill metadata
+ *
+ * In v0.1.16+, vat.skills is an array of skill name strings.
+ * All packaging configuration now lives in vibe-agent-toolkit.config.yaml.
  */
 export interface PackageJson {
 	name?: string;
 	vat?: {
-		skills: VatSkillMetadata[];
+		skills: string[];
 	};
 }
 
@@ -37,21 +38,21 @@ export async function readPackageJson(cwd: string): Promise<PackageJson> {
 }
 
 /**
- * Validate skill source exists
+ * Validate that a skill source file exists on disk
+ *
+ * @param skillPath - Absolute path to the SKILL.md file
+ * @param logger - Logger instance
+ * @returns The validated absolute path (same as input)
  */
-export function validateSkillSource(
-	skill: VatSkillMetadata,
-	cwd: string,
+export function validateSkillSourcePath(
+	skillPath: string,
 	logger: ReturnType<typeof createLogger>
 ): string {
-	const sourcePath = resolve(cwd, skill.source);
-
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- Path resolved from package.json
-	if (!existsSync(sourcePath)) {
-		logger.error(`❌ Skill source not found: ${skill.source}`);
-		logger.error(`   Expected path: ${sourcePath}`);
+	// eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from config-driven glob discovery
+	if (!existsSync(skillPath)) {
+		logger.error(`Skill source not found: ${skillPath}`);
 		process.exit(1);
 	}
 
-	return sourcePath;
+	return skillPath;
 }

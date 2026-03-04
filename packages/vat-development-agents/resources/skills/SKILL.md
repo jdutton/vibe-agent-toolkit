@@ -33,8 +33,11 @@ non-TypeScript/JavaScript projects, or cases where you need deep framework-speci
 | `packagingOptions` (linkFollowDepth, excludeReferencesFromBundle) | `vibe-agent-toolkit:agent-authoring` |
 | Resource collections, frontmatter schema validation | `vibe-agent-toolkit:resources` |
 | `vat resources validate`, collection config | `vibe-agent-toolkit:resources` |
-| Packaging skills, `--target claude-web`, ZIP format | `vibe-agent-toolkit:distribution` |
-| Sideloading with `vat install`, npm postinstall hooks | `vibe-agent-toolkit:distribution` |
+| Setting up `vat build` + `vat claude build` for a project | `vibe-agent-toolkit:skills-distribution` |
+| Configuring `claude:` section in vibe-agent-toolkit.config.yaml | `vibe-agent-toolkit:skills-distribution` |
+| npm publishing with plugin postinstall | `vibe-agent-toolkit:skills-distribution` |
+| `vat build` / `vat verify` orchestration | `vibe-agent-toolkit:skills-distribution` |
+| `--target claude-web` ZIP format | `vibe-agent-toolkit:skills-distribution` |
 | `vat audit`, `--compat`, CI validation | `vibe-agent-toolkit:audit` |
 | VAT behaves unexpectedly, debugging VAT, testing local VAT changes, VAT_ROOT_DIR | `vibe-agent-toolkit:debugging` |
 
@@ -55,11 +58,19 @@ Four patterns cover most use cases. For full code examples, see `vibe-agent-tool
 # Install VAT CLI globally
 npm install -g vibe-agent-toolkit
 
+# Top-level orchestration
+vat build                                # build all artifacts (skills then claude plugins)
+vat verify                               # verify all artifacts (resources, skills, claude)
+
+# Claude plugin commands
+vat claude build                         # generate plugin artifacts from built skills
+vat claude verify                        # validate plugin artifacts
+
 # Skills
 vat skills list                          # list skills in current project
 vat skills list --user                   # list user-installed skills
-vat skills install npm:@org/my-skills    # install from npm
-vat skills build                         # build skills for distribution
+vat skills install npm:@org/my-skills    # install from npm (routes through plugin system)
+vat skills build                         # build portable skills only
 vat skills validate                      # validate skill quality
 
 # Resources
@@ -141,14 +152,16 @@ vat skills build                      # package for distribution
 ```bash
 vat skills install npm:@vibe-agent-toolkit/vat-cat-agents
 vat skills list --user
-# Skills appear in ~/.claude/skills/ and are auto-loaded by Claude Code
+# Plugin-aware packages register in Claude's plugin system
+# Skills are invoked as /plugin-name:skill-name in Claude Code
 ```
 
 **Build and publish your own skill package:**
 ```bash
-# Add vat.skills to package.json, then:
-vat skills build          # builds all declared skills
-npm publish               # publishes to npm
+# Configure vat.skills in package.json + claude: in vibe-agent-toolkit.config.yaml, then:
+vat build                 # builds skills + claude plugin artifacts
+vat verify                # validates everything
+npm publish               # publishes to npm (postinstall registers the plugin)
 # Users install with: vat skills install npm:@myorg/my-skills
 ```
 

@@ -129,20 +129,14 @@ describe('skills install command (system test)', () => {
       await mkdir(skillOutputDir, { recursive: true });
       await writeFile(join(skillOutputDir, 'SKILL.md'), '# VAT Skill\nFrom package');
 
-      // Create package.json with vat metadata
+      // Create package.json with new vat metadata (skills as string array)
       const packageJson = {
         name: '@test/my-package',
         version: '1.0.0',
         vat: {
           version: '1.0',
           type: 'agent-bundle',
-          skills: [
-            {
-              name: skillName,
-              source: './resources/skills/SKILL.md',
-              path: `./dist/skills/${skillName}`,
-            },
-          ],
+          skills: [skillName],
         },
       };
       await writeFile(join(packageDir, 'package.json'), JSON.stringify(packageJson, null, 2));

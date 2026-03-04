@@ -36,14 +36,7 @@ export {
 
 export { ClaudePluginJsonSchema, ClaudePluginSchema, type ClaudePlugin } from './schemas/claude-plugin.js';
 
-export {
-  MarketplaceJsonSchema,
-  MarketplaceSchema,
-  type LspServerConfig,
-  type Marketplace,
-  type MarketplacePlugin,
-  type PluginSource,
-} from './schemas/marketplace.js';
+export { PluginJsonSchema, type PluginJson } from './schemas/plugin-json.js';
 
 export {
   parseFrontmatter,
@@ -57,6 +50,7 @@ export {
   validateSkillForPackaging,
   type ExcludedReferenceDetail,
   type PackagingValidationResult,
+  type SkillPackagingConfig,
 } from './validators/packaging-validator.js';
 export {
   createIssue,

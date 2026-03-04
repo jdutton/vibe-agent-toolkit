@@ -100,14 +100,10 @@ claude:
     my-tools:
       owner:
         name: My Org
-      skills:
-        - "my-skill-*"
       plugins:
         - name: my-tools
+          description: My tools plugin
           skills: "*"
-      output:
-        marketplaceJson: dist/.claude-plugin/marketplace.json
-        pluginsDir: dist/plugins/
 `;
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(configPath, configContent);
@@ -116,8 +112,8 @@ claude:
     expect(result?.claude).toBeDefined();
     expect(result?.claude?.marketplaces?.['my-tools']).toBeDefined();
     expect(result?.claude?.marketplaces?.['my-tools']?.owner?.name).toBe('My Org');
-    expect(result?.claude?.marketplaces?.['my-tools']?.skills).toEqual(['my-skill-*']);
     expect(result?.claude?.marketplaces?.['my-tools']?.plugins?.[0]?.name).toBe('my-tools');
+    expect(result?.claude?.marketplaces?.['my-tools']?.plugins?.[0]?.description).toBe('My tools plugin');
   });
 
   it('should load complete config with resources and claude sections', () => {
@@ -135,10 +131,9 @@ claude:
     vat-skills:
       owner:
         name: vibe-agent-toolkit contributors
-      skills:
-        - "vibe-agent-toolkit*"
       plugins:
         - name: vat-development-agents
+          description: VAT development agents plugin
           skills: "*"
 `;
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory

@@ -1,9 +1,16 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- All file paths are in temp directories controlled by tests */
 /**
  * System tests for vat build and vat verify commands (with --cwd flag)
+ *
+ * After v0.1.16, the dist output structure changed:
+ * - Skills: dist/skills/<name>/SKILL.md (unchanged)
+ * - Claude plugins: dist/.claude/plugins/marketplaces/<mp>/plugins/<plugin>/
+ *     .claude-plugin/plugin.json
+ *     skills/<skillName>/SKILL.md
+ * - No more marketplace.json
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
@@ -11,51 +18,70 @@ import { describe, expect, it, afterEach } from 'vitest';
 
 import {
   createSkillMarkdown,
-  createSkillsPackageJson,
+  createSkillsConfigYaml,
   createTempDirTracker,
   executeCli,
   getBinPath,
   writeTestFile,
-  type TestVatSkill,
 } from './test-common.js';
 
 const TEMP_DIR_PREFIX = 'vat-build-verify-test-';
-const PACKAGE_JSON_FILENAME = 'package.json';
-const PACKAGE_NAME = 'test-package';
 const TEST_SKILL_NAME = 'test-skill';
-const SKILL_SOURCE_PATH = './resources/skills/SKILL.md';
-const SKILL_DIST_PATH = './dist/skills/test-skill';
 const MARKETPLACE_NAME = 'test-tools';
 const PLUGIN_NAME = 'test-plugin';
 const VAT_CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 const DIST_SKILLS_DIR = join('dist', 'skills');
-const DIST_CLAUDE_PLUGIN_DIR = join('dist', '.claude-plugin');
-const DIST_PLUGINS_DIR = join('dist', 'plugins');
-const MARKETPLACE_JSON = join(DIST_CLAUDE_PLUGIN_DIR, 'marketplace.json');
+const SKILL_INCLUDE_GLOB = 'resources/skills/**/SKILL.md';
+const SKILL_SOURCE_PATH = 'resources/skills/SKILL.md';
 
 /**
- * Write a vibe-agent-toolkit.config.yaml with a minimal claude marketplace config
+ * Path to a plugin's .claude-plugin/plugin.json in the new dist structure
+ */
+function pluginJsonPath(tempDir: string, mpName: string, pluginName: string): string {
+  return join(
+    tempDir, 'dist', '.claude', 'plugins', 'marketplaces',
+    mpName, 'plugins', pluginName, '.claude-plugin', 'plugin.json'
+  );
+}
+
+/**
+ * Path to a plugin's skills directory in the new dist structure
+ */
+function pluginSkillsDir(tempDir: string, mpName: string, pluginName: string): string {
+  return join(
+    tempDir, 'dist', '.claude', 'plugins', 'marketplaces',
+    mpName, 'plugins', pluginName, 'skills'
+  );
+}
+
+/**
+ * Write a vibe-agent-toolkit.config.yaml with skills + claude marketplace config
  */
 function createVatConfig(
   dir: string,
   marketplaceName: string,
   pluginName: string,
-  skillSelector: string
+  skillSelector: string,
+  skillIncludeGlobs: string[] = [SKILL_INCLUDE_GLOB]
 ): void {
+  // skills field accepts "*" literal or an array of selectors
+  const skillsYaml = skillSelector === '*'
+    ? `          skills: "*"`
+    : `          skills:\n            - "${skillSelector}"`;
+
   const content = `version: 1
+skills:
+  include:
+${skillIncludeGlobs.map(g => `    - "${g}"`).join('\n')}
 claude:
   marketplaces:
     ${marketplaceName}:
       owner:
         name: Test Org
-      skills:
-        - "${skillSelector}"
       plugins:
         - name: ${pluginName}
-          skills: "*"
-      output:
-        marketplaceJson: dist/.claude-plugin/marketplace.json
-        pluginsDir: dist/plugins/
+          description: Test plugin for build-verify tests
+${skillsYaml}
 `;
   writeTestFile(join(dir, VAT_CONFIG_FILENAME), content);
 }
@@ -77,9 +103,7 @@ function setupBuildVerifyTestSuite() {
     tempDir: string,
     marketplaceName: string,
     pluginName: string,
-    skills: TestVatSkill[] = [{ name: TEST_SKILL_NAME, source: SKILL_SOURCE_PATH, path: SKILL_DIST_PATH }]
   ) => {
-    writeTestFile(join(tempDir, PACKAGE_JSON_FILENAME), createSkillsPackageJson(PACKAGE_NAME, skills));
     createSkillSource(tempDir, SKILL_SOURCE_PATH, TEST_SKILL_NAME);
     createVatConfig(tempDir, marketplaceName, pluginName, TEST_SKILL_NAME);
   };
@@ -118,24 +142,18 @@ describe('vat build command (system test)', () => {
 
     expect(result.status).toBe(0);
     expect(existsSync(join(tempDir, DIST_SKILLS_DIR, TEST_SKILL_NAME, 'SKILL.md'))).toBe(true);
-    expect(existsSync(join(tempDir, MARKETPLACE_JSON))).toBe(true);
-    expect(existsSync(join(tempDir, DIST_PLUGINS_DIR, PLUGIN_NAME))).toBe(true);
-
-    // Verify marketplace.json contains the marketplace name
-    const marketplaceJson = JSON.parse(
-      readFileSync(join(tempDir, MARKETPLACE_JSON), 'utf-8')
-    ) as { name: string };
-    expect(marketplaceJson.name).toBe(MARKETPLACE_NAME);
+    // New: plugin.json at dist/.claude/plugins/marketplaces/<mp>/plugins/<plugin>/.claude-plugin/plugin.json
+    expect(existsSync(pluginJsonPath(tempDir, MARKETPLACE_NAME, PLUGIN_NAME))).toBe(true);
+    // New: skills copied inside plugin
+    expect(existsSync(join(pluginSkillsDir(tempDir, MARKETPLACE_NAME, PLUGIN_NAME), TEST_SKILL_NAME, 'SKILL.md'))).toBe(true);
   });
 
   it('should build --only skills when no claude config', () => {
     const tempDir = suite.createTempDir();
-    // Only package.json and SKILL.md, no config file
+    // Config with skills only, no claude section
     writeTestFile(
-      join(tempDir, PACKAGE_JSON_FILENAME),
-      createSkillsPackageJson(PACKAGE_NAME, [
-        { name: TEST_SKILL_NAME, source: SKILL_SOURCE_PATH, path: SKILL_DIST_PATH },
-      ])
+      join(tempDir, VAT_CONFIG_FILENAME),
+      createSkillsConfigYaml([SKILL_INCLUDE_GLOB])
     );
     suite.createSkillSource(tempDir, SKILL_SOURCE_PATH, TEST_SKILL_NAME);
 
@@ -150,15 +168,8 @@ describe('vat build command (system test)', () => {
     // invalid directory name character on Windows. The build must replace ":" with "__".
     const NAMESPACED_SKILL_NAME = 'test-pkg:sub-skill';
     const NAMESPACED_SKILL_FS_PATH = 'test-pkg__sub-skill'; // expected on-disk name
-    const NAMESPACED_SKILL_DIST = `./dist/skills/${NAMESPACED_SKILL_FS_PATH}`;
 
     const tempDir = suite.createTempDir();
-    writeTestFile(
-      join(tempDir, PACKAGE_JSON_FILENAME),
-      createSkillsPackageJson(PACKAGE_NAME, [
-        { name: NAMESPACED_SKILL_NAME, source: SKILL_SOURCE_PATH, path: NAMESPACED_SKILL_DIST },
-      ])
-    );
     suite.createSkillSource(tempDir, SKILL_SOURCE_PATH, NAMESPACED_SKILL_NAME);
     createVatConfig(tempDir, MARKETPLACE_NAME, PLUGIN_NAME, NAMESPACED_SKILL_NAME);
 
@@ -167,28 +178,18 @@ describe('vat build command (system test)', () => {
     expect(result.status).toBe(0);
 
     // Plugin skills directory must use "__" form, never ":"
-    const pluginSkillsDir = join(tempDir, DIST_PLUGINS_DIR, PLUGIN_NAME, 'skills');
-    expect(existsSync(join(pluginSkillsDir, NAMESPACED_SKILL_FS_PATH, 'SKILL.md'))).toBe(true);
-    expect(existsSync(join(pluginSkillsDir, NAMESPACED_SKILL_NAME))).toBe(false); // colon form must not exist
-
-    // plugin.json must reference the fs-safe path, not the colon form
-    const pluginJson = JSON.parse(
-      readFileSync(join(tempDir, DIST_PLUGINS_DIR, PLUGIN_NAME, '.claude-plugin', 'plugin.json'), 'utf-8')
-    ) as { skills: string[] };
-    expect(pluginJson.skills).toContain(`skills/${NAMESPACED_SKILL_FS_PATH}`);
-    expect(pluginJson.skills.some((s) => s.includes(':'))).toBe(false);
+    const pSkillsDir = pluginSkillsDir(tempDir, MARKETPLACE_NAME, PLUGIN_NAME);
+    expect(existsSync(join(pSkillsDir, NAMESPACED_SKILL_FS_PATH, 'SKILL.md'))).toBe(true);
+    expect(existsSync(join(pSkillsDir, NAMESPACED_SKILL_NAME))).toBe(false); // colon form must not exist
   });
 
   it('should fail build when skill source missing', () => {
     const tempDir = suite.createTempDir();
-    // package.json references a skill with missing source file
+    // Config references skills but no SKILL.md files exist
     writeTestFile(
-      join(tempDir, PACKAGE_JSON_FILENAME),
-      createSkillsPackageJson(PACKAGE_NAME, [
-        { name: TEST_SKILL_NAME, source: SKILL_SOURCE_PATH, path: SKILL_DIST_PATH },
-      ])
+      join(tempDir, VAT_CONFIG_FILENAME),
+      createSkillsConfigYaml([SKILL_INCLUDE_GLOB])
     );
-    createVatConfig(tempDir, MARKETPLACE_NAME, PLUGIN_NAME, TEST_SKILL_NAME);
     // Intentionally NOT creating the skill source file
 
     const result = suite.runBuild(tempDir);
@@ -225,7 +226,7 @@ describe('vat verify command (system test)', () => {
     expect(result.stdout).toContain('status: success');
   });
 
-  it('should verify --only claude passes with valid marketplace.json', () => {
+  it('should verify --only claude passes with valid plugin artifacts', () => {
     const tempDir = setupBuiltFixture();
 
     const result = suite.runVerify(tempDir, ['--only', 'claude']);
@@ -234,16 +235,10 @@ describe('vat verify command (system test)', () => {
     expect(result.stdout).toContain('status: success');
   });
 
-  it('should verify --only claude fails when marketplace.json is missing', () => {
+  it('should verify --only claude fails when plugin.json is missing', () => {
     const tempDir = suite.createTempDir();
     // Set up config but do NOT run build (no artifacts)
-    writeTestFile(
-      join(tempDir, PACKAGE_JSON_FILENAME),
-      createSkillsPackageJson(PACKAGE_NAME, [
-        { name: TEST_SKILL_NAME, source: SKILL_SOURCE_PATH, path: SKILL_DIST_PATH },
-      ])
-    );
-    createVatConfig(tempDir, MARKETPLACE_NAME, PLUGIN_NAME, TEST_SKILL_NAME);
+    suite.setupSingleSkillFixture(tempDir, MARKETPLACE_NAME, PLUGIN_NAME);
     // Intentionally NOT running build, so no dist/ artifacts exist
 
     const result = suite.runVerify(tempDir, ['--only', 'claude']);

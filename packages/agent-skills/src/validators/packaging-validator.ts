@@ -18,7 +18,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { basename, dirname, relative, resolve } from 'node:path';
 
-import type { ValidationOverride, VatSkillMetadata } from '@vibe-agent-toolkit/agent-schema';
+import type { ValidationOverride } from '@vibe-agent-toolkit/agent-schema';
 import { parseMarkdown, ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
@@ -38,6 +38,22 @@ import {
 /** Exclude reason constants to avoid duplicate string literals */
 const EXCLUDE_REASON_DIRECTORY = 'directory-target' as const;
 const EXCLUDE_REASON_OUTSIDE_PROJECT = 'outside-project' as const;
+
+/**
+ * Packaging configuration for skill validation.
+ * Replaces the old VatSkillMetadata parameter — accepts packaging options directly.
+ */
+export interface SkillPackagingConfig {
+  linkFollowDepth?: number | 'full';
+  resourceNaming?: 'basename' | 'resource-id' | 'preserve-path';
+  stripPrefix?: string;
+  excludeNavigationFiles?: boolean;
+  excludeReferencesFromBundle?: {
+    rules?: Array<{ patterns: string[]; template?: string }>;
+    defaultTemplate?: string;
+  };
+  ignoreValidationErrors?: Record<string, string | { reason: string; expires?: string }>;
+}
 
 /** Excluded reference detail for verbose output */
 export interface ExcludedReferenceDetail {
@@ -97,12 +113,12 @@ export interface PackagingValidationResult {
  * - Override application
  *
  * @param skillPath - Path to SKILL.md
- * @param skillMetadata - Optional skill metadata (for overrides)
+ * @param packagingConfig - Optional packaging configuration (depth, excludes, overrides)
  * @returns Validation result with active and ignored errors
  */
 export async function validateSkillForPackaging(
   skillPath: string,
-  skillMetadata?: VatSkillMetadata
+  packagingConfig?: SkillPackagingConfig
 ): Promise<PackagingValidationResult> {
   const errors: ValidationIssue[] = [];
 
@@ -121,9 +137,9 @@ export async function validateSkillForPackaging(
   }
 
   // Read packaging options for depth/exclude configuration
-  const linkFollowDepth = skillMetadata?.packagingOptions?.linkFollowDepth ?? 2;
-  const excludeConfig = skillMetadata?.packagingOptions?.excludeReferencesFromBundle;
-  const excludeNavigationFiles = skillMetadata?.packagingOptions?.excludeNavigationFiles ?? true;
+  const linkFollowDepth = packagingConfig?.linkFollowDepth ?? 2;
+  const excludeConfig = packagingConfig?.excludeReferencesFromBundle;
+  const excludeNavigationFiles = packagingConfig?.excludeNavigationFiles ?? true;
   const maxDepth = linkFollowDepth === 'full' ? Infinity : linkFollowDepth;
 
   // Find project boundary (workspace root -> git root -> skill dir)
@@ -194,7 +210,7 @@ export async function validateSkillForPackaging(
 
   // Apply overrides
   const skillName = extractSkillName(parseResult, skillPath);
-  const overrides = skillMetadata?.ignoreValidationErrors ?? {};
+  const overrides = packagingConfig?.ignoreValidationErrors ?? {};
 
   const { activeErrors, ignoredErrors, expiredOverrides } = applyOverrides(errors, overrides);
 

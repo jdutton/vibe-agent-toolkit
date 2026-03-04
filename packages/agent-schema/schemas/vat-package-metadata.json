@@ -17,146 +17,18 @@
             "runtime",
             "toolkit"
           ],
-          "description": "Package type"
+          "description": "DEPRECATED: Do not use. Will be removed in v1.0. A package can contain multiple artifact types."
         },
         "skills": {
           "type": "array",
           "items": {
-            "type": "object",
-            "properties": {
-              "name": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 64,
-                "pattern": "^[a-z0-9]+(-[a-z0-9]+)*(:[a-z0-9]+(-[a-z0-9]+)*)?$",
-                "description": "Skill identifier. Must be lowercase kebab-case, optionally colon-namespaced as {plugin}:{skill} (e.g. \"vibe-agent-toolkit:resources\"). Colons are sanitized to \"__\" when deriving filesystem paths."
-              },
-              "source": {
-                "type": "string",
-                "minLength": 1,
-                "description": "Source SKILL.md path (relative to package root, for rebuilding)"
-              },
-              "path": {
-                "type": "string",
-                "minLength": 1,
-                "description": "Built skill directory path (relative to package root)"
-              },
-              "ignoreValidationErrors": {
-                "type": "object",
-                "additionalProperties": {
-                  "anyOf": [
-                    {
-                      "type": "string",
-                      "minLength": 1,
-                      "description": "Simple override reason"
-                    },
-                    {
-                      "type": "object",
-                      "properties": {
-                        "reason": {
-                          "type": "string",
-                          "minLength": 1,
-                          "description": "Override reason"
-                        },
-                        "expires": {
-                          "type": "string",
-                          "format": "date-time",
-                          "description": "Optional expiration date (ISO 8601)"
-                        }
-                      },
-                      "required": [
-                        "reason"
-                      ],
-                      "additionalProperties": false,
-                      "description": "Extended override with optional expiration"
-                    }
-                  ],
-                  "description": "Validation override (reason or reason + expiration)"
-                },
-                "description": "Validation errors to ignore (rule code -> override reason/config)"
-              },
-              "packagingOptions": {
-                "type": "object",
-                "properties": {
-                  "resourceNaming": {
-                    "type": "string",
-                    "enum": [
-                      "basename",
-                      "resource-id",
-                      "preserve-path"
-                    ],
-                    "description": "Strategy for naming packaged resource files:\n  - basename: Use original filename only (default, may conflict)\n  - resource-id: Flatten path to kebab-case filename (e.g., topics-quickstart-overview.md)\n  - preserve-path: Preserve directory structure (e.g., topics/quickstart/overview.md)"
-                  },
-                  "stripPrefix": {
-                    "type": "string",
-                    "description": "Path prefix to strip before applying naming strategy (e.g., \"knowledge-base\")"
-                  },
-                  "linkFollowDepth": {
-                    "anyOf": [
-                      {
-                        "type": "integer",
-                        "minimum": 0
-                      },
-                      {
-                        "type": "string",
-                        "const": "full"
-                      }
-                    ],
-                    "description": "How deep to follow markdown links from SKILL.md for bundling:\n  0 = skill file only (no link following)\n  1 = direct links only\n  2 = direct + one transitive level (default, recommended)\n  N = N levels of transitive links\n  \"full\" = complete transitive closure (use with caution)"
-                  },
-                  "excludeNavigationFiles": {
-                    "type": "boolean",
-                    "description": "Whether to exclude navigation files (README.md, index.md, etc.) from bundle.\nDefault: true (matches Anthropic best practices)"
-                  },
-                  "excludeReferencesFromBundle": {
-                    "type": "object",
-                    "properties": {
-                      "rules": {
-                        "type": "array",
-                        "items": {
-                          "type": "object",
-                          "properties": {
-                            "patterns": {
-                              "type": "array",
-                              "items": {
-                                "type": "string"
-                              },
-                              "description": "Glob patterns matched against path relative to skill root"
-                            },
-                            "template": {
-                              "type": "string",
-                              "description": "Handlebars template for rewriting links to matched files.\nContext: {{link.text}}, {{link.href}}, {{link.fragment}}, {{link.type}}, {{link.resource.id}}, {{link.resource.fileName}}, {{link.resource.relativePath}}, {{skill.name}}\nDefault: \"{{link.text}}\""
-                            }
-                          },
-                          "required": [
-                            "patterns"
-                          ],
-                          "additionalProperties": false
-                        },
-                        "default": [],
-                        "description": "Ordered rules evaluated first-match. Each rule matches file paths and specifies a rewrite template."
-                      },
-                      "defaultTemplate": {
-                        "type": "string",
-                        "description": "Handlebars template for non-bundled links that don't match any rule (depth-exceeded links).\nContext: {{link.text}}, {{link.href}}, {{link.fragment}}, {{link.type}}, {{link.resource.id}}, {{link.resource.fileName}}, {{link.resource.relativePath}}, {{skill.name}}\nDefault: \"{{link.text}}\""
-                      }
-                    },
-                    "additionalProperties": false
-                  }
-                },
-                "additionalProperties": false,
-                "description": "Packaging configuration options"
-              }
-            },
-            "required": [
-              "name",
-              "source",
-              "path"
-            ],
-            "additionalProperties": false,
-            "description": "Agent Skill metadata for distribution"
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "^[a-z0-9]+(-[a-z0-9]+)*(:[a-z0-9]+(-[a-z0-9]+)*)?$",
+            "description": "Skill name for distribution (must match a discovered skill in config yaml)"
           },
-          "description": "Agent Skills for distribution"
+          "description": "Skill names for npm discoverability"
         },
         "agents": {
           "type": "array",
@@ -236,8 +108,7 @@
         }
       },
       "required": [
-        "version",
-        "type"
+        "version"
       ],
       "additionalProperties": false,
       "description": "VAT package metadata (package.json \"vat\" field)"

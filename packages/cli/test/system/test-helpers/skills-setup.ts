@@ -78,6 +78,8 @@ export function executeSkillsCommandAndExpectYaml(
  * Create a test project with package.json containing vat.skills[] metadata
  * and optionally create built skill directories under dist/skills/
  *
+ * In the new API, vat.skills is a flat string array (just names).
+ *
  * Shared between skills-install-dev and skills-uninstall system tests
  */
 export function setupDevTestProject(
@@ -88,18 +90,12 @@ export function setupDevTestProject(
   const projectDir = join(baseDir, name);
   mkdirSyncReal(projectDir, { recursive: true });
 
-  const vatSkills = skills.map(s => ({
-    name: s.name,
-    source: `./resources/skills/SKILL.md`,
-    path: `./dist/skills/${s.name}`,
-  }));
-
   fs.writeFileSync(
     join(projectDir, 'package.json'),
     JSON.stringify({
       name: '@test/my-package',
       version: '1.0.0',
-      vat: { version: '1.0', type: 'agent-bundle', skills: vatSkills },
+      vat: { version: '1.0', type: 'agent-bundle', skills: skills.map(s => s.name) },
     })
   );
 

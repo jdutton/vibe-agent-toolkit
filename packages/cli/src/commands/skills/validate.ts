@@ -1,17 +1,18 @@
 /**
  * Skills validate command - validate skills for packaging
  *
- * Validates skills declared in package.json vat.skills using validateSkillForPackaging.
- * Supports validation overrides and expiration checking.
+ * Discovers skills from config yaml skills.include/exclude, validates each
+ * using validateSkillForPackaging with merged packaging config.
  */
 
-import type { VatSkillMetadata } from '@vibe-agent-toolkit/agent-schema';
 import {
   validateSkillForPackaging,
   type PackagingValidationResult,
+  type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
 import * as yaml from 'js-yaml';
 
+import { loadConfig } from '../../utils/config-loader.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import { type createLogger } from '../../utils/logger.js';
 
@@ -19,8 +20,9 @@ import {
   filterSkillsByName,
   handleCommandError,
   setupCommandContext,
+  type DiscoveredSkill,
 } from './command-helpers.js';
-import { readPackageJson, validateSkillSource } from './shared.js';
+import { discoverSkillsFromConfig } from './skill-discovery.js';
 
 /**
  * Skills validate command options
@@ -32,9 +34,14 @@ export interface SkillsValidateCommandOptions {
 }
 
 /**
+ * Discovered skill with merged packaging config for validation
+ */
+interface ValidatableSkill extends DiscoveredSkill {
+  packagingConfig: SkillPackagingConfig;
+}
+
+/**
  * Strip excludedReferences from results metadata for non-verbose YAML output.
- * Keeps excludedReferenceCount for summary info, but removes the full path list
- * which can be noisy. Operates on a deep copy to avoid mutating original results.
  */
 function stripExcludedReferencePaths(results: PackagingValidationResult[]): unknown[] {
   return results.map((result) => {
@@ -90,7 +97,6 @@ function outputSingleError(error: {
 function outputSkillErrors(result: PackagingValidationResult): void {
   console.error(`Skill: ${result.skillName}`);
 
-  // Show active errors
   if (result.activeErrors.length > 0) {
     console.error(`  Active errors (${result.activeErrors.length}):`);
     for (const error of result.activeErrors) {
@@ -98,7 +104,6 @@ function outputSkillErrors(result: PackagingValidationResult): void {
     }
   }
 
-  // Show ignored errors (with reasons)
   if (result.ignoredErrors.length > 0) {
     console.error(`  Ignored errors (${result.ignoredErrors.length}):`);
     for (const { error, reason } of result.ignoredErrors) {
@@ -108,7 +113,6 @@ function outputSkillErrors(result: PackagingValidationResult): void {
     }
   }
 
-  // Show expired overrides as errors
   if (result.expiredOverrides.length > 0) {
     console.error(`  Expired overrides (${result.expiredOverrides.length}):`);
     for (const { error, reason, expiredDate } of result.expiredOverrides) {
@@ -129,10 +133,8 @@ function outputValidationReport(
   logger: ReturnType<typeof createLogger>,
   verbose: boolean
 ): void {
-  // Output YAML to stdout (for programmatic parsing)
   outputYamlSummary(results, duration, verbose);
 
-  // Output human-readable summary to stderr
   const failedSkills = results.filter((r) => r.status === 'error');
 
   if (failedSkills.length === 0) {
@@ -147,75 +149,30 @@ function outputValidationReport(
 }
 
 /**
- * Log error status progress
- */
-function logErrorProgress(
-  skill: VatSkillMetadata,
-  result: PackagingValidationResult,
-  logger: ReturnType<typeof createLogger>
-): void {
-  const activeCount = result.activeErrors.length;
-  const ignoredCount = result.ignoredErrors.length;
-  const expiredCount = result.expiredOverrides.length;
-
-  if (activeCount > 0) {
-    logger.error(`   ❌ ${skill.name}: ${activeCount} error${activeCount === 1 ? '' : 's'}`);
-  }
-  if (ignoredCount > 0) {
-    logger.info(`      (${ignoredCount} ignored by overrides)`);
-  }
-  if (expiredCount > 0) {
-    logger.error(`      (${expiredCount} expired override${expiredCount === 1 ? '' : 's'})`);
-  }
-}
-
-/**
- * Log success status progress
- */
-function logSuccessProgress(
-  skill: VatSkillMetadata,
-  ignoredCount: number,
-  logger: ReturnType<typeof createLogger>
-): void {
-  if (ignoredCount > 0) {
-    logger.info(`   ✅ ${skill.name} (${ignoredCount} ignored by overrides)`);
-  } else {
-    logger.info(`   ✅ ${skill.name}`);
-  }
-}
-
-/**
  * Log validation progress for a single skill
  */
 function logSkillProgress(
-  skill: VatSkillMetadata,
+  skillName: string,
   result: PackagingValidationResult,
   logger: ReturnType<typeof createLogger>
 ): void {
   if (result.status === 'error') {
-    logErrorProgress(skill, result, logger);
+    const activeCount = result.activeErrors.length;
+    const ignoredCount = result.ignoredErrors.length;
+    const expiredCount = result.expiredOverrides.length;
+
+    logger.error(`   ❌ ${skillName}: ${activeCount} error${activeCount === 1 ? '' : 's'}`);
+    if (ignoredCount > 0) {
+      logger.info(`      (${ignoredCount} ignored by overrides)`);
+    }
+    if (expiredCount > 0) {
+      logger.error(`      (${expiredCount} expired override${expiredCount === 1 ? '' : 's'})`);
+    }
+  } else if (result.ignoredErrors.length > 0) {
+    logger.info(`   ✅ ${skillName} (${result.ignoredErrors.length} ignored by overrides)`);
   } else {
-    logSuccessProgress(skill, result.ignoredErrors.length, logger);
+    logger.info(`   ✅ ${skillName}`);
   }
-}
-
-/**
- * Validate a single skill
- */
-async function validateSingleSkill(
-  skill: VatSkillMetadata,
-  cwd: string,
-  logger: ReturnType<typeof createLogger>
-): Promise<PackagingValidationResult> {
-  const sourcePath = validateSkillSource(skill, cwd, logger);
-
-  logger.info(`   Validating: ${skill.name}`);
-  logger.debug(`   Source: ${skill.source}`);
-
-  const result = await validateSkillForPackaging(sourcePath, skill);
-  logSkillProgress(skill, result, logger);
-
-  return result;
 }
 
 /**
@@ -228,32 +185,50 @@ export async function validateCommand(
   const { logger, cwd, startTime } = setupCommandContext(pathArg, options.debug);
 
   try {
-    // Read package.json and filter skills
-    const packageJson = await readPackageJson(cwd);
-    const configuredSkills = packageJson.vat?.skills;
+    // Load config yaml from cwd (not workspace root — config lives next to the package)
+    const config = loadConfig(cwd);
 
-    // Distinguish "not configured" (vat.skills absent) from "configured but empty" (vat.skills: []).
-    // When vat.skills is absent the project simply doesn't use skills — exit silently so that
-    // `vat verify` produces no noise for projects like lfa-cc-marketplace that only have claude
-    // artifacts. When vat.skills is explicitly [] the user likely has a config mistake worth noting.
-    if (configuredSkills === undefined) {
+    if (!config?.skills) {
+      logger.info('No skills section in config yaml — nothing to validate');
       process.exit(0);
     }
 
-    const skills = configuredSkills;
-    if (skills.length === 0) {
-      logger.info('ℹ️  No skills found in package.json vat.skills');
-      logger.info('   To add skills, define them in package.json under the vat.skills field');
+    // Discover skills from config yaml (relative to cwd where config lives)
+    const discovered = await discoverSkillsFromConfig(config.skills, cwd);
+
+    if (discovered.length === 0) {
+      logger.info('ℹ️  No skills found matching config yaml skills.include patterns');
       process.exit(0);
     }
 
-    const skillsToValidate = filterSkillsByName(skills, options.skill);
+    // Merge packaging config for each skill.
+    // Strip undefined values from the spread to satisfy exactOptionalPropertyTypes —
+    // Zod-inferred optional types produce explicit `undefined` which is not assignable
+    // to optional-but-not-undefined properties.
+    const { defaults, config: perSkillConfig } = config.skills;
+    const validatableSkills: ValidatableSkill[] = discovered.map(skill => {
+      const merged = { ...defaults, ...perSkillConfig?.[skill.name] };
+      const packagingConfig: SkillPackagingConfig = {};
+      for (const [key, value] of Object.entries(merged)) {
+        if (value !== undefined) {
+          (packagingConfig as Record<string, unknown>)[key] = value;
+        }
+      }
+      return { ...skill, packagingConfig };
+    });
+
+    // Filter by name if specified
+    const skillsToValidate = filterSkillsByName(validatableSkills, options.skill);
     logger.info(`🔍 Found ${skillsToValidate.length} skill(s) to validate\n`);
 
     // Validate each skill
     const results: PackagingValidationResult[] = [];
     for (const skill of skillsToValidate) {
-      const result = await validateSingleSkill(skill, cwd, logger);
+      logger.info(`   Validating: ${skill.name}`);
+      logger.debug(`   Source: ${skill.sourcePath}`);
+
+      const result = await validateSkillForPackaging(skill.sourcePath, skill.packagingConfig);
+      logSkillProgress(skill.name, result, logger);
       results.push(result);
     }
 

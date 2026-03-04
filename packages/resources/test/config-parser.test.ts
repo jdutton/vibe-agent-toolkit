@@ -257,25 +257,7 @@ claude:
     expect(config.claude?.marketplaces).toBeUndefined();
   });
 
-  it('should parse source-layout (file:) marketplace variant', async () => {
-    const configPath = join(suite.tempDir, CONFIG_FILENAME);
-    const content = `
-version: 1
-claude:
-  marketplaces:
-    my-marketplace:
-      file: .claude-plugin/marketplace.json
-`;
-    await writeFile(configPath, content);
-
-    const config = await parseConfigFile(configPath);
-
-    const mp = config.claude?.marketplaces?.['my-marketplace'];
-    expect(mp?.file).toBe('.claude-plugin/marketplace.json');
-    expect(mp?.owner).toBeUndefined();
-  });
-
-  it('should parse inline marketplace with skills selector and plugins', async () => {
+  it('should parse inline marketplace with plugins', async () => {
     const configPath = join(suite.tempDir, CONFIG_FILENAME);
     const content = `
 version: 1
@@ -285,19 +267,10 @@ claude:
       owner:
         name: Acme Corp
         email: devtools@acme.com
-      metadata:
-        description: Acme developer tools
-      skills:
-        - acme-*
-        - shared-utils
       plugins:
         - name: acme-tools
+          description: Acme developer tools plugin
           skills: '*'
-          version: 1.0.0
-          license: MIT
-      output:
-        marketplaceJson: dist/.claude-plugin/marketplace.json
-        pluginsDir: dist/plugins/
 `;
     await writeFile(configPath, content);
 
@@ -306,14 +279,10 @@ claude:
     const mp = config.claude?.marketplaces?.['acme-tools'];
     expect(mp?.owner?.name).toBe('Acme Corp');
     expect(mp?.owner?.email).toBe('devtools@acme.com');
-    expect(mp?.metadata?.description).toBe('Acme developer tools');
-    expect(mp?.skills).toEqual(['acme-*', 'shared-utils']);
     expect(mp?.plugins).toHaveLength(1);
     expect(mp?.plugins?.[0]?.name).toBe('acme-tools');
+    expect(mp?.plugins?.[0]?.description).toBe('Acme developer tools plugin');
     expect(mp?.plugins?.[0]?.skills).toBe('*');
-    expect(mp?.plugins?.[0]?.version).toBe('1.0.0');
-    expect(mp?.output?.marketplaceJson).toBe('dist/.claude-plugin/marketplace.json');
-    expect(mp?.output?.pluginsDir).toBe('dist/plugins/');
   });
 
   it('should parse multiple marketplaces', async () => {
@@ -323,14 +292,18 @@ version: 1
 claude:
   marketplaces:
     first:
-      file: .claude-plugin/marketplace.json
+      owner:
+        name: First Org
+      plugins:
+        - name: first-plugin
+          description: First plugin
+          skills: '*'
     second:
       owner:
         name: My Org
-      skills:
-        - my-skill
       plugins:
         - name: my-plugin
+          description: My plugin
           skills: '*'
 `;
     await writeFile(configPath, content);
@@ -338,7 +311,7 @@ claude:
     const config = await parseConfigFile(configPath);
 
     expect(Object.keys(config.claude?.marketplaces ?? {})).toHaveLength(2);
-    expect(config.claude?.marketplaces?.['first']?.file).toBe('.claude-plugin/marketplace.json');
+    expect(config.claude?.marketplaces?.['first']?.owner?.name).toBe('First Org');
     expect(config.claude?.marketplaces?.['second']?.owner?.name).toBe('My Org');
   });
 
@@ -361,8 +334,12 @@ version: 1
 claude:
   marketplaces:
     acme-tools:
+      owner:
+        name: Acme Corp
       plugins:
         - name: acme-tools
+          description: Acme tools
+          skills: '*'
           unknownField: oops
 `;
     await writeFile(configPath, content);

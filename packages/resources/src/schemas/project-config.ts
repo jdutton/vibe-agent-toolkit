@@ -1,4 +1,8 @@
+import { ValidationOverrideSchema } from '@vibe-agent-toolkit/agent-schema';
 import { z } from 'zod';
+
+// Re-export for downstream consumers (unicorn/prefer-export-from satisfied by the import above)
+export { ValidationOverrideSchema } from '@vibe-agent-toolkit/agent-schema';
 
 /**
  * Validation mode for frontmatter schema validation.
@@ -82,18 +86,60 @@ export const ResourcesConfigSchema = z.object({
 
 export type ResourcesConfig = z.infer<typeof ResourcesConfigSchema>;
 
-/**
- * Output paths for a Claude marketplace.
- */
-export const ClaudeMarketplaceOutputSchema = z.object({
-  marketplaceJson: z.string().optional()
-    .describe('Output path for marketplace.json (default: dist/.claude-plugin/marketplace.json)'),
-  pluginsDir: z.string().optional()
-    .describe('Output directory for plugin artifacts (default: dist/plugins/)'),
-}).strict().optional()
-  .describe('Output paths for generated marketplace artifacts');
+// ---------------------------------------------------------------------------
+// Skill packaging configuration (self-contained — no agent-schema dependency)
+// ---------------------------------------------------------------------------
 
-export type ClaudeMarketplaceOutput = z.infer<typeof ClaudeMarketplaceOutputSchema>;
+/**
+ * A rule for excluding references from a skill bundle.
+ */
+export const ExcludeReferenceRuleSchema = z.object({
+  patterns: z.array(z.string()).describe('Glob patterns matched against path relative to skill root'),
+  template: z.string().optional().describe('Handlebars template for rewriting links to matched files'),
+});
+
+/**
+ * Configuration for excluding references from a skill bundle.
+ */
+export const ExcludeReferencesFromBundleSchema = z.object({
+  rules: z.array(ExcludeReferenceRuleSchema).optional().default([]),
+  defaultTemplate: z.string().optional().describe('Handlebars template for non-bundled links that don\'t match any rule'),
+});
+
+/**
+ * Skill packaging configuration.
+ *
+ * Controls how a skill is bundled: link-follow depth, resource naming,
+ * reference exclusion rules, and validation overrides.
+ */
+export const SkillPackagingConfigSchema = z.object({
+  linkFollowDepth: z.union([z.number().int().min(0), z.literal('full')]).optional(),
+  resourceNaming: z.enum(['basename', 'resource-id', 'preserve-path']).optional(),
+  stripPrefix: z.string().optional(),
+  excludeNavigationFiles: z.boolean().optional(),
+  excludeReferencesFromBundle: ExcludeReferencesFromBundleSchema.optional(),
+  ignoreValidationErrors: z.record(z.string(), ValidationOverrideSchema).optional(),
+}).describe('Skill packaging configuration');
+
+export type SkillPackagingConfig = z.infer<typeof SkillPackagingConfigSchema>;
+
+/**
+ * Skills discovery and packaging configuration.
+ *
+ * Defines how to find SKILL.md files and how to package them.
+ */
+export const SkillsConfigSchema = z.object({
+  include: z.array(z.string()).min(1).describe('Glob patterns to find SKILL.md files (e.g., "skills/**/SKILL.md")'),
+  exclude: z.array(z.string()).optional().describe('Glob patterns to exclude'),
+  defaults: SkillPackagingConfigSchema.optional().describe('Default packaging config for all skills'),
+  config: z.record(z.string(), SkillPackagingConfigSchema).optional().describe('Per-skill packaging config overrides (keyed by skill name)'),
+}).describe('Skills discovery and packaging configuration');
+
+export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
+
+// ---------------------------------------------------------------------------
+// Claude marketplace configuration
+// ---------------------------------------------------------------------------
 
 /**
  * A plugin entry within a Claude marketplace configuration.
@@ -101,48 +147,25 @@ export type ClaudeMarketplaceOutput = z.infer<typeof ClaudeMarketplaceOutputSche
 export const ClaudeMarketplacePluginEntrySchema = z.object({
   name: z.string()
     .describe('Plugin name (lowercase alphanumeric with hyphens)'),
-  skills: z.union([z.literal('*'), z.array(z.string())]).optional()
+  description: z.string()
+    .describe('Plugin description'),
+  skills: z.union([z.literal('*'), z.array(z.string())])
     .describe('Skills to include: "*" for all, or array of skill name selectors'),
-  version: z.string().optional()
-    .describe('Plugin version (default: from package.json)'),
-  license: z.string().optional()
-    .describe('License identifier (e.g., MIT)'),
 }).strict().describe('Plugin entry within a marketplace configuration');
 
 export type ClaudeMarketplacePluginEntry = z.infer<typeof ClaudeMarketplacePluginEntrySchema>;
 
 /**
  * Configuration for a single Claude marketplace.
- *
- * Supports two variants:
- * - Source-layout: `file:` points to existing marketplace.json — VAT verifies but does not generate
- * - Inline: owner/skills/plugins define what to build — VAT generates the artifacts
  */
 export const ClaudeMarketplaceSchema = z.object({
-  // Source-layout pattern: point to existing file for verify-only
-  file: z.string().optional()
-    .describe('Path to existing marketplace.json (source-layout — VAT verifies only, does not generate)'),
-
-  // Inline definition (used when VAT generates the marketplace artifacts)
   owner: z.object({
     name: z.string(),
     email: z.string().optional(),
-  }).strict().optional()
-    .describe('Marketplace owner information'),
+  }).strict().describe('Marketplace owner information'),
 
-  metadata: z.object({
-    description: z.string().optional(),
-    version: z.string().optional(),
-  }).strict().optional()
-    .describe('Marketplace metadata'),
-
-  skills: z.array(z.string()).optional()
-    .describe('Skill name selectors (exact names or glob patterns matching vat.skills names)'),
-
-  plugins: z.array(ClaudeMarketplacePluginEntrySchema).optional()
+  plugins: z.array(ClaudeMarketplacePluginEntrySchema).min(1)
     .describe('Plugin groupings within this marketplace'),
-
-  output: ClaudeMarketplaceOutputSchema,
 }).strict().describe('Configuration for a Claude plugin marketplace');
 
 export type ClaudeMarketplaceConfig = z.infer<typeof ClaudeMarketplaceSchema>;
@@ -165,6 +188,8 @@ export type ClaudeConfig = z.infer<typeof ClaudeConfigSchema>;
 export const ProjectConfigSchema = z.object({
   version: z.literal(1)
     .describe('Config file version (must be 1)'),
+  skills: SkillsConfigSchema.optional()
+    .describe('Skills discovery and packaging configuration'),
   resources: ResourcesConfigSchema.optional()
     .describe('Resources configuration'),
   claude: ClaudeConfigSchema.optional()

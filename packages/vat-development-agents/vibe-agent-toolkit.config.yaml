@@ -1,18 +1,28 @@
 # vibe-agent-toolkit configuration for vat-development-agents
-# This package publishes its built skills as a Claude plugin marketplace.
+# Skills are discovered from SKILL.md files, built to dist/skills/, then
+# wrapped into Claude plugin structure at dist/.claude/plugins/marketplaces/.
 
 version: 1
+
+skills:
+  include: ["resources/skills/SKILL.md", "resources/skills/vat-*.md"]
+  defaults:
+    linkFollowDepth: 2
+    excludeNavigationFiles: true
+  config:
+    vibe-agent-toolkit:
+      linkFollowDepth: 0
+    vibe-agent-toolkit:agent-authoring:
+      linkFollowDepth: 0
+    vibe-agent-toolkit:debugging:
+      linkFollowDepth: 0
 
 claude:
   marketplaces:
     vat-skills:
       owner:
         name: vibe-agent-toolkit contributors
-      skills:
-        - vibe-agent-toolkit*    # matches all 6 skills: vibe-agent-toolkit, :resources, :distribution, :agent-authoring, :audit, :debugging
       plugins:
         - name: vat-development-agents
+          description: Development agents and skills for building with vibe-agent-toolkit
           skills: "*"
-      output:
-        marketplaceJson: dist/.claude-plugin/marketplace.json
-        pluginsDir: dist/plugins/

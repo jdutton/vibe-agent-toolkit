@@ -235,18 +235,19 @@ export function fakeHomeEnv(fakeHome: string): Record<string, string> {
 }
 
 /**
- * Skills test fixture - VAT skill metadata
+ * Skills test fixture - VAT skill metadata (new format: just skill name strings)
  */
 export interface TestVatSkill {
   name: string;
-  source: string;
-  path: string;
 }
 
 /**
- * Create package.json content for skills testing
+ * Create package.json content for skills testing.
+ * In the new API, vat.skills is a flat string array (just names for npm discoverability).
+ * Build config comes from vibe-agent-toolkit.config.yaml, not package.json.
+ *
  * @param packageName - Name of the package
- * @param skills - Array of skill configurations
+ * @param skills - Array of skill configurations (only name is used)
  * @returns Package.json content as string
  */
 export function createSkillsPackageJson(packageName: string, skills: TestVatSkill[]): string {
@@ -256,9 +257,34 @@ export function createSkillsPackageJson(packageName: string, skills: TestVatSkil
     vat: {
       version: '1.0',
       type: 'agent-bundle',
-      skills,
+      skills: skills.map(s => s.name),
     },
   });
+}
+
+/**
+ * Create a vibe-agent-toolkit.config.yaml content for skills build testing.
+ * The new skills build reads globs from this config instead of package.json.
+ *
+ * @param includeGlobs - Glob patterns for finding SKILL.md files
+ * @param excludeGlobs - Optional exclude patterns
+ * @returns YAML config content as string
+ */
+export function createSkillsConfigYaml(
+  includeGlobs: string[],
+  excludeGlobs?: string[]
+): string {
+  let content = `version: 1\nskills:\n  include:\n`;
+  for (const glob of includeGlobs) {
+    content += `    - "${glob}"\n`;
+  }
+  if (excludeGlobs && excludeGlobs.length > 0) {
+    content += `  exclude:\n`;
+    for (const glob of excludeGlobs) {
+      content += `    - "${glob}"\n`;
+    }
+  }
+  return content;
 }
 
 /**

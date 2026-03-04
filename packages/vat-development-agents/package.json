@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/vat-development-agents",
-  "version": "0.1.15",
+  "version": "0.1.16-rc.2",
   "description": "VAT development agents - dogfooding the vibe-agent-toolkit",
   "type": "module",
   "keywords": [
@@ -11,41 +11,13 @@
   ],
   "vat": {
     "version": "1.0",
-    "type": "agent-bundle",
     "skills": [
-      {
-        "name": "vibe-agent-toolkit",
-        "source": "./resources/skills/SKILL.md",
-        "path": "./dist/skills/vibe-agent-toolkit",
-        "packagingOptions": { "linkFollowDepth": 0 }
-      },
-      {
-        "name": "vibe-agent-toolkit:resources",
-        "source": "./resources/skills/vat-resources.md",
-        "path": "./dist/skills/vibe-agent-toolkit-resources"
-      },
-      {
-        "name": "vibe-agent-toolkit:distribution",
-        "source": "./resources/skills/vat-distribution.md",
-        "path": "./dist/skills/vibe-agent-toolkit-distribution"
-      },
-      {
-        "name": "vibe-agent-toolkit:agent-authoring",
-        "source": "./resources/skills/vat-agent-authoring.md",
-        "path": "./dist/skills/vibe-agent-toolkit-agent-authoring",
-        "packagingOptions": { "linkFollowDepth": 0 }
-      },
-      {
-        "name": "vibe-agent-toolkit:audit",
-        "source": "./resources/skills/vat-audit.md",
-        "path": "./dist/skills/vibe-agent-toolkit-audit"
-      },
-      {
-        "name": "vibe-agent-toolkit:debugging",
-        "source": "./resources/skills/vat-debugging.md",
-        "path": "./dist/skills/vibe-agent-toolkit-debugging",
-        "packagingOptions": { "linkFollowDepth": 0 }
-      }
+      "vibe-agent-toolkit",
+      "vibe-agent-toolkit:resources",
+      "vibe-agent-toolkit:skills-distribution",
+      "vibe-agent-toolkit:agent-authoring",
+      "vibe-agent-toolkit:audit",
+      "vibe-agent-toolkit:debugging"
     ],
     "agents": [
       {

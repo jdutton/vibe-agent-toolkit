@@ -102,39 +102,17 @@ export const PackagingOptionsSchema = z.object({
 export type PackagingOptions = z.infer<typeof PackagingOptionsSchema>;
 
 /**
- * Skill metadata for distribution
+ * Skill name for distribution.
  *
- * Describes an Agent Skill packaged in this npm package.
+ * In package.json vat.skills, each entry is just the skill name string.
+ * All packaging configuration now lives in vibe-agent-toolkit.config.yaml.
  */
 export const VatSkillMetadataSchema = z
-  .object({
-    name: z
-      .string()
-      .min(1)
-      .max(64, 'Name must be 64 characters or less')
-      .regex(SKILL_NAME_REGEX, SKILL_NAME_REGEX_MESSAGE)
-      .describe(
-        'Skill identifier. Must be lowercase kebab-case, optionally colon-namespaced ' +
-        'as {plugin}:{skill} (e.g. "vibe-agent-toolkit:resources"). ' +
-        'Colons are sanitized to "__" when deriving filesystem paths.'
-      ),
-    source: z
-      .string()
-      .min(1)
-      .describe('Source SKILL.md path (relative to package root, for rebuilding)'),
-    path: z
-      .string()
-      .min(1)
-      .describe('Built skill directory path (relative to package root)'),
-    ignoreValidationErrors: z
-      .record(z.string(), ValidationOverrideSchema)
-      .optional()
-      .describe('Validation errors to ignore (rule code -> override reason/config)'),
-    packagingOptions: PackagingOptionsSchema
-      .optional()
-      .describe('Packaging configuration options'),
-  })
-  .describe('Agent Skill metadata for distribution');
+  .string()
+  .min(1)
+  .max(64, 'Name must be 64 characters or less')
+  .regex(SKILL_NAME_REGEX, SKILL_NAME_REGEX_MESSAGE)
+  .describe('Skill name for distribution (must match a discovered skill in config yaml)');
 
 export type VatSkillMetadata = z.infer<typeof VatSkillMetadataSchema>;
 
@@ -207,13 +185,19 @@ export const VatPackageMetadataSchema = z
       .string()
       .regex(/^\d+\.\d+$/)
       .describe('VAT metadata schema version (currently "1.0")'),
+    // DEPRECATED(v0.1.x): vat.type is a single choice for the whole package which
+    // is meaningless — a package can contain skills AND agents AND pure functions.
+    // Tolerated in schema for backward compat with existing package.json files.
+    // NO CODE should read, branch on, or generate this field.
+    // Remove entirely after v1.0
     type: z
       .enum(['agent-bundle', 'skill', 'runtime', 'toolkit'])
-      .describe('Package type'),
+      .optional()
+      .describe('DEPRECATED: Do not use. Will be removed in v1.0. A package can contain multiple artifact types.'),
     skills: z
       .array(VatSkillMetadataSchema)
       .optional()
-      .describe('Agent Skills for distribution'),
+      .describe('Skill names for npm discoverability'),
     agents: z
       .array(VatAgentMetadataSchema)
       .optional()

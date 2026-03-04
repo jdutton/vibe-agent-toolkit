@@ -1,5 +1,4 @@
 import { detectResourceFormat } from './format-detection.js';
-import { validateMarketplace } from './marketplace-validator.js';
 import { validatePlugin } from './plugin-validator.js';
 import {
 	validateInstalledPluginsRegistry,
@@ -37,7 +36,19 @@ export async function validate(resourcePath: string): Promise<ValidationResult> 
 				return await validatePlugin(format.path);
 
 			case 'marketplace':
-				return await validateMarketplace(format.path);
+				// Marketplace validation has been moved to @vibe-agent-toolkit/claude-marketplace
+				return {
+					path: format.path,
+					type: 'marketplace',
+					status: 'error',
+					summary: 'Marketplace validation is not available in agent-skills. Use @vibe-agent-toolkit/claude-marketplace instead.',
+					issues: [{
+						severity: 'error',
+						code: 'UNKNOWN_FORMAT',
+						message: 'Marketplace validation has been moved to @vibe-agent-toolkit/claude-marketplace',
+						location: format.path,
+					}],
+				};
 
 			case 'installed-plugins-registry':
 				return await validateInstalledPluginsRegistry(format.path);

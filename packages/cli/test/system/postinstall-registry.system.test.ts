@@ -4,11 +4,11 @@
 /**
  * System tests for `vat skills install --npm-postinstall` plugin registry flow.
  *
- * Verifies that `tryInstallPluginRegistry` correctly:
- * - Finds dist/.claude-plugin/marketplace.json in cwd
+ * Verifies that the postinstall handler correctly:
+ * - Finds dist/.claude/plugins/marketplaces/ directory tree in cwd
  * - Copies plugin files to Claude's plugin dirs
  * - Updates known_marketplaces.json and installed_plugins.json registry files
- * - Exits 0 and emits guidance when no marketplace.json is present
+ * - Exits 0 and emits guidance when no plugin tree is present
  */
 
 import { existsSync, readFileSync } from 'node:fs';
@@ -36,7 +36,6 @@ const SKILL_NAME = 'acme-skill';
 const PACKAGE_JSON_FILE = 'package.json';
 const PLUGIN_JSON_FILE = 'plugin.json';
 const CLAUDE_PLUGIN_SUBDIR = '.claude-plugin';
-const VAT_AGENT_BUNDLE_TYPE = 'agent-bundle';
 
 /** npm env vars that mimic a real global npm postinstall context */
 const NPM_POSTINSTALL_ENV: Record<string, string> = {
@@ -63,7 +62,6 @@ This is a test skill for the postinstall registry test.
 
 /**
  * Create a minimal package.json with vat skills metadata and built skill artifacts.
- * Used as the base for both the full marketplace fixture and the no-marketplace fixture.
  */
 function createBasePackageWithSkill(
   packageDir: string,
@@ -78,14 +76,8 @@ function createBasePackageWithSkill(
       version,
       vat: {
         version: '1.0',
-        type: VAT_AGENT_BUNDLE_TYPE,
-        skills: [
-          {
-            name: skillName,
-            source: `./resources/skills/${skillName}.md`,
-            path: `./dist/skills/${skillName}`,
-          },
-        ],
+        type: 'agent-bundle',
+        skills: [skillName],
       },
     })
   );
@@ -99,8 +91,9 @@ function createBasePackageWithSkill(
  * Build all fixture files for a fake installed npm package that has:
  * - package.json with vat metadata
  * - dist/skills/<skill>/ with SKILL.md
- * - dist/.claude-plugin/marketplace.json
- * - dist/plugins/<plugin>/ with .claude-plugin/plugin.json
+ * - dist/.claude/plugins/marketplaces/<marketplace>/plugins/<plugin>/ with .claude-plugin/plugin.json and skills/
+ *
+ * This matches the new output structure from vat claude build.
  */
 function createFakeNpmPackage(
   packageDir: string,
@@ -116,32 +109,28 @@ function createFakeNpmPackage(
 
   createBasePackageWithSkill(packageDir, { packageName, version, skillName });
 
-  const marketplaceDir = join(packageDir, 'dist', CLAUDE_PLUGIN_SUBDIR);
-  mkdirSyncReal(marketplaceDir, { recursive: true });
-  writeTestFile(
-    join(marketplaceDir, 'marketplace.json'),
-    JSON.stringify({
-      name: marketplaceName,
-      plugins: [
-        {
-          name: pluginName,
-          source: `../plugins/${pluginName}`,
-          skills: [`skills/${skillName}`],
-        },
-      ],
-    })
+  // New dist structure: dist/.claude/plugins/marketplaces/<mp>/plugins/<plugin>/
+  const pluginDir = join(
+    packageDir, 'dist', '.claude', 'plugins', 'marketplaces',
+    marketplaceName, 'plugins', pluginName
   );
 
-  const pluginClaudeDir = join(packageDir, 'dist', 'plugins', pluginName, CLAUDE_PLUGIN_SUBDIR);
+  // .claude-plugin/plugin.json
+  const pluginClaudeDir = join(pluginDir, CLAUDE_PLUGIN_SUBDIR);
   mkdirSyncReal(pluginClaudeDir, { recursive: true });
   writeTestFile(
     join(pluginClaudeDir, PLUGIN_JSON_FILE),
     JSON.stringify({
-      type: 'plugin',
       name: pluginName,
-      skills: [skillName],
+      description: 'Test plugin for postinstall',
+      author: { name: 'Test Org' },
     })
   );
+
+  // skills/<skillName>/SKILL.md inside plugin
+  const pluginSkillDir = join(pluginDir, 'skills', skillName);
+  mkdirSyncReal(pluginSkillDir, { recursive: true });
+  writeTestFile(join(pluginSkillDir, 'SKILL.md'), minimalSkillMd(skillName));
 }
 
 /** Context object for tests that need isolated packageDir + fakeHome. */
@@ -159,7 +148,6 @@ function setupPostinstallRegistryTestSuite() {
 
   /**
    * Create an isolated packageDir + fakeHome inside a fresh temp dir.
-   * Keeps each test's filesystem state fully independent.
    */
   const createTestContext = (): RegistryTestContext => {
     const tempDir = createTempDir();
@@ -171,8 +159,7 @@ function setupPostinstallRegistryTestSuite() {
   };
 
   /**
-   * Create test context with a full fake npm package (skills + marketplace + plugin artifacts).
-   * Eliminates per-test boilerplate for the common case.
+   * Create test context with a full fake npm package (skills + plugin artifacts).
    */
   const createFullPackageContext = (): RegistryTestContext => {
     const ctx = createTestContext();
@@ -188,8 +175,6 @@ function setupPostinstallRegistryTestSuite() {
 
   /**
    * Run `vat skills install --npm-postinstall` with a fake Claude home.
-   * `HOME` is overridden so homedir() → fakeHome, keeping real ~/.claude untouched.
-   * The npm postinstall env vars make isGlobalNpmInstall() return true.
    */
   const runPostinstall = (packageDir: string, fakeHome: string, extraArgs: string[] = []) => {
     return executeCli(binPath, ['skills', 'install', '--npm-postinstall', ...extraArgs], {
@@ -208,7 +193,7 @@ describe('skills install --npm-postinstall plugin registry (system test)', () =>
     suite.cleanup();
   });
 
-  describe('when dist/.claude-plugin/marketplace.json exists', () => {
+  describe('when dist/.claude/plugins/marketplaces/ exists', () => {
     it('exits 0 and registers plugin in known_marketplaces.json', () => {
       const { packageDir, fakeHome } = suite.createFullPackageContext();
       const result = suite.runPostinstall(packageDir, fakeHome);
@@ -293,7 +278,7 @@ describe('skills install --npm-postinstall plugin registry (system test)', () =>
       expect(existsSync(cacheDest)).toBe(true);
     });
 
-    it('skips missing plugin dir and still exits 0', () => {
+    it('skips when plugin tree has no plugin subdirectories and still exits 0', () => {
       const { packageDir, fakeHome } = suite.createTestContext();
 
       createBasePackageWithSkill(packageDir, {
@@ -302,27 +287,23 @@ describe('skills install --npm-postinstall plugin registry (system test)', () =>
         skillName: SKILL_NAME,
       });
 
-      const marketplaceDir = join(packageDir, 'dist', CLAUDE_PLUGIN_SUBDIR);
-      mkdirSyncReal(marketplaceDir, { recursive: true });
-      writeTestFile(
-        join(marketplaceDir, 'marketplace.json'),
-        JSON.stringify({
-          name: MARKETPLACE_NAME,
-          plugins: [{ name: 'missing-plugin', source: '../plugins/missing-plugin', skills: [] }],
-        })
+      // Create marketplace dir without any plugin subdirectories
+      const mpDir = join(
+        packageDir, 'dist', '.claude', 'plugins', 'marketplaces', MARKETPLACE_NAME
       );
-      // NOTE: dist/plugins/missing-plugin/ is intentionally NOT created
+      mkdirSyncReal(mpDir, { recursive: true });
+      // NOTE: no plugins/ subdirectory — test that this doesn't crash
 
       const result = suite.runPostinstall(packageDir, fakeHome);
 
       expect(result.status).toBe(0);
-      // No registry files should have been created since plugin dir is missing
+      // No registry files should have been created since no plugins exist
       const knownPath = join(fakeHome, '.claude', 'plugins', 'known_marketplaces.json');
       expect(existsSync(knownPath)).toBe(false);
     });
   });
 
-  describe('when dist/.claude-plugin/marketplace.json does NOT exist', () => {
+  describe('when dist/.claude/plugins/marketplaces/ does NOT exist', () => {
     it('exits 0 and emits guidance message about running vat build', () => {
       const { packageDir, fakeHome } = suite.createTestContext();
       createBasePackageWithSkill(packageDir, {
@@ -330,7 +311,7 @@ describe('skills install --npm-postinstall plugin registry (system test)', () =>
         version: PACKAGE_VERSION,
         skillName: SKILL_NAME,
       });
-      // dist/.claude-plugin/ is intentionally absent
+      // dist/.claude/plugins/marketplaces/ is intentionally absent
 
       const result = suite.runPostinstall(packageDir, fakeHome);
 
@@ -339,7 +320,7 @@ describe('skills install --npm-postinstall plugin registry (system test)', () =>
       expect(combined).toContain('vat build');
     });
 
-    it('exits 0 and mentions dist/.claude-plugin/marketplace.json in output', () => {
+    it('exits 0 and mentions dist/.claude/plugins/marketplaces/ in output', () => {
       const { packageDir, fakeHome } = suite.createTestContext();
       createBasePackageWithSkill(packageDir, {
         packageName: PACKAGE_NAME,
@@ -351,7 +332,7 @@ describe('skills install --npm-postinstall plugin registry (system test)', () =>
 
       expect(result.status).toBe(0);
       const combined = result.stdout + result.stderr;
-      expect(combined).toContain('dist/.claude-plugin/marketplace.json');
+      expect(combined).toContain('dist/.claude/plugins/marketplaces/');
     });
   });
 });
