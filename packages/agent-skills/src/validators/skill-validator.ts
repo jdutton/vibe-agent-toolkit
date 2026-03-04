@@ -229,6 +229,12 @@ async function traverseLinks(
     try {
       parseResult = await parseMarkdown(currentPath);
     } catch {
+      issues.push({
+        severity: 'warning',
+        code: 'LINK_INTEGRITY_BROKEN',
+        message: `File exists but could not be parsed: ${currentPath}`,
+        location: currentPath,
+      });
       continue;
     }
 
