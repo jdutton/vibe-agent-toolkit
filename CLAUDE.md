@@ -484,6 +484,26 @@ Pre-commit hooks via Husky will enforce these automatically.
 
 **IMPORTANT**: If `duplication-check` fails, refactor to eliminate duplication. Never update the baseline without explicit permission.
 
+### Dogfooding: Best-Effort Audit Before Commit
+
+**For AI assistants (optional, not a hard gate):** After validation passes but before committing, run `vat audit --user` to dogfood the audit command against the user's installed skills and plugins. This is a best-effort QA check, not a blocking gate — it helps detect regressions in real-world usability (false errors, unexpected warnings, crashes on valid skills).
+
+```bash
+# Dogfood: audit the user's installed skills/plugins
+bun run vat audit --user --verbose 2>&1 | head -20
+
+# Check for unexpected errors in our own dist skills
+bun run vat audit packages/vat-development-agents/dist/skills/
+```
+
+**What to look for:**
+- New errors or warnings that weren't there before (regression)
+- Crashes or unhandled exceptions (bug in audit code)
+- False positives on valid skills (overly strict validation)
+- Skills that scan 0 linked files when they should scan more (link traversal not triggering)
+
+**This is not enforced by vibe-validate or pre-commit hooks.** It's agentic guidance — run it when you've changed audit, skill validation, or link traversal code to catch regressions before they ship. If something looks wrong, investigate before committing.
+
 ### Running vat CLI During Development
 
 **In this monorepo**, use the convenience script to run vat commands:

@@ -176,6 +176,31 @@ IDE/CLI mode: I can also read files directly from your file system.
 
 Broken links create poor user experience and failed skill execution.
 
+### Inline Links vs Implicit References
+
+Skills support two ways to reference files:
+
+**Inline links** — standard markdown `[text](path.md)` syntax. These are machine-parseable and validated by `vat audit`. Always prefer these for file references.
+
+**Implicit references** — filenames mentioned in prose, code blocks, or diagrams (e.g., `./implementer-prompt.md` inside a graphviz block). Since skills are LLM-interpreted, the LLM *will* find and use these files — but tooling cannot reliably validate them.
+
+**Real-world example:** The official Claude Marketplace `superpowers` plugin references prompt template files (`./implementer-prompt.md`, `./spec-reviewer-prompt.md`) only inside graphviz code blocks, not via inline links. The LLM follows these references correctly, but `vat audit --warn-unreferenced-files` flags them as unreferenced because they aren't reachable through the formal link graph.
+
+**Best practice:** Use inline links for all file references, even when the reference also appears in code blocks or prose. This makes the link graph machine-auditable while preserving LLM discoverability:
+
+```markdown
+## Prompt Templates
+
+- [Implementer prompt](./implementer-prompt.md)
+- [Spec reviewer prompt](./spec-reviewer-prompt.md)
+
+```dot
+digraph { "Use implementer-prompt.md" -> "Use spec-reviewer-prompt.md" }
+```​
+```
+
+If you cannot use inline links (e.g., third-party skills you don't control), `vat audit` will not flag implicit references as broken links — only `--warn-unreferenced-files` will note them as unreachable from the link graph.
+
 ### Link Best Practices
 
 **1. Use relative paths**

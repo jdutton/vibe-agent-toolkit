@@ -57,6 +57,7 @@ export type IssueCode =
   | 'FILE_STRUCTURE_REPORT'
   | 'RESOURCE_INVENTORY'
   | 'METADATA_SUMMARY'
+  | 'SKILL_IMPLICIT_REFERENCE'
   | 'SKILL_UNREFERENCED_FILE';
 
 export interface ValidationIssue {
