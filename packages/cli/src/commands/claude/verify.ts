@@ -14,7 +14,7 @@
 import { readFile, readdir } from 'node:fs/promises';
 import { isAbsolute, join, resolve } from 'node:path';
 
-import { PluginJsonSchema } from '@vibe-agent-toolkit/agent-skills';
+import { MarketplaceManifestSchema, PluginJsonSchema } from '@vibe-agent-toolkit/agent-skills';
 import { ManagedSettingsSchema } from '@vibe-agent-toolkit/claude-marketplace';
 import { type ClaudeMarketplaceConfig } from '@vibe-agent-toolkit/resources';
 import { Command } from 'commander';
@@ -60,8 +60,9 @@ Description:
 
   For each marketplace in claude.marketplaces, checks:
     dist/.claude/plugins/marketplaces/<name>/plugins/<plugin>/
-      .claude-plugin/plugin.json  — validates against PluginJsonSchema
-      skills/*/SKILL.md           — at least one must exist
+      .claude-plugin/plugin.json       — validates against PluginJsonSchema
+      .claude-plugin/marketplace.json  — validates against MarketplaceManifestSchema
+      skills/*/SKILL.md                — at least one must exist
 
   If claude.managedSettings is configured: validates against ManagedSettingsSchema
 
@@ -202,6 +203,21 @@ async function verifyMarketplace(
         error: 'No skills/*/SKILL.md found — run vat build (or vat claude build) to generate skills',
       });
     }
+  }
+
+  // Verify .claude-plugin/marketplace.json
+  const marketplaceDir = join(
+    configDir, 'dist', '.claude', 'plugins', 'marketplaces', name
+  );
+  const marketplaceJsonPath = join(marketplaceDir, '.claude-plugin', 'marketplace.json');
+  try {
+    const mpErrors = await validateJsonFile(marketplaceJsonPath, MarketplaceManifestSchema, logger);
+    result.errors.push(...mpErrors);
+  } catch {
+    result.errors.push({
+      file: marketplaceJsonPath,
+      error: 'marketplace.json not found — run vat build (or vat claude build) to generate it',
+    });
   }
 
   result.status = result.errors.length > 0 ? 'error' : 'valid';

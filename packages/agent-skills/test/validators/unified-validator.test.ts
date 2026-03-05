@@ -18,12 +18,13 @@ import {
 
 describe('validate (unified validator)', () => {
 	const { getTempDir } = setupTempDir('unified-validator-');
+	const TEST_PLUGIN_NAME = 'test-plugin';
 
 	describe('plugin validation', () => {
 		it('should route to plugin validator for plugin directory', async () => {
 			const tempDir = getTempDir();
 			const pluginDir = createTestPlugin(tempDir, {
-				name: 'test-plugin',
+				name: TEST_PLUGIN_NAME,
 				description: 'Test plugin',
 				version: '1.0.0',
 			});
@@ -32,25 +33,24 @@ describe('validate (unified validator)', () => {
 
 			assertValidationSuccess(result);
 			expect(result.type).toBe('claude-plugin');
-			expect(result.metadata?.name).toBe('test-plugin');
+			expect(result.metadata?.name).toBe(TEST_PLUGIN_NAME);
 		});
 	});
 
 	describe('marketplace validation', () => {
-		it('should return error for marketplace directory (validation moved to claude-marketplace)', async () => {
+		it('should validate marketplace directory successfully', async () => {
 			const tempDir = getTempDir();
 			const marketplaceDir = createTestMarketplace(tempDir, {
 				name: 'test-marketplace',
 				owner: { name: 'Test Owner', email: 'test@example.com' },
-				metadata: { description: 'Test marketplace', version: '2.0.0' },
-				plugins: [],
+				plugins: [{ name: TEST_PLUGIN_NAME, source: `../plugins/${TEST_PLUGIN_NAME}` }],
 			});
 
 			const result = await validate(marketplaceDir);
 
-			expect(result.status).toBe('error');
+			expect(result.status).toBe('success');
 			expect(result.type).toBe('marketplace');
-			expect(result.issues[0]?.message).toContain('moved to @vibe-agent-toolkit/claude-marketplace');
+			expect(result.metadata?.name).toBe('test-marketplace');
 		});
 	});
 

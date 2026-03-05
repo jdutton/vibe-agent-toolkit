@@ -147,7 +147,7 @@ export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
 export const ClaudeMarketplacePluginEntrySchema = z.object({
   name: z.string()
     .describe('Plugin name (lowercase alphanumeric with hyphens)'),
-  description: z.string()
+  description: z.string().optional()
     .describe('Plugin description'),
   skills: z.union([z.literal('*'), z.array(z.string())])
     .describe('Skills to include: "*" for all, or array of skill name selectors'),
@@ -163,6 +163,9 @@ export const ClaudeMarketplaceSchema = z.object({
     name: z.string(),
     email: z.string().optional(),
   }).strict().describe('Marketplace owner information'),
+
+  skills: z.union([z.literal('*'), z.array(z.string())]).optional()
+    .describe('Default skill selectors for this marketplace (used when plugins specify skills: "*")'),
 
   plugins: z.array(ClaudeMarketplacePluginEntrySchema).min(1)
     .describe('Plugin groupings within this marketplace'),
