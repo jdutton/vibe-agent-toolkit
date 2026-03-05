@@ -56,11 +56,14 @@ Description:
   - Resolves skill selectors ("*" or name list) against dist/skills/ directories
   - Copies matched skills into plugin directory structure
   - Generates plugin.json with name, description, and author
+  - Generates marketplace.json with plugin registry and relative source paths
 
 Output structure:
-  dist/.claude/plugins/marketplaces/<marketplace>/plugins/<plugin>/
-    .claude-plugin/plugin.json
-    skills/<skillName>/SKILL.md
+  dist/.claude/plugins/marketplaces/<marketplace>/
+    .claude-plugin/marketplace.json
+    plugins/<plugin>/
+      .claude-plugin/plugin.json
+      skills/<skillName>/SKILL.md
 
 Output:
   YAML summary -> stdout
@@ -203,6 +206,37 @@ async function buildMarketplace(
     plugins.push(pluginResult);
   }
 
+  // Generate .claude-plugin/marketplace.json
+  const marketplaceDir = join(configDir, 'dist', '.claude', 'plugins', 'marketplaces', name);
+  const claudePluginDir = join(marketplaceDir, '.claude-plugin');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
+  await mkdir(claudePluginDir, { recursive: true });
+
+  const marketplaceJson: Record<string, unknown> = {
+    $schema: 'https://anthropic.com/claude-code/marketplace.schema.json',
+    name,
+    owner: {
+      name: config.owner.name,
+      ...(config.owner.email ? { email: config.owner.email } : {}),
+    },
+    plugins: plugins.map((p) => {
+      const pluginDesc = config.plugins.find((pd) => pd.name === p.pluginName)?.description;
+      return {
+        name: p.pluginName,
+        ...(pluginDesc ? { description: pluginDesc } : {}),
+        source: `../plugins/${p.pluginName}`,
+        author: {
+          name: config.owner.name,
+          ...(config.owner.email ? { email: config.owner.email } : {}),
+        },
+      };
+    }),
+  };
+
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
+  await writeFile(join(claudePluginDir, 'marketplace.json'), JSON.stringify(marketplaceJson, null, 2));
+  logger.info(`   .claude-plugin/marketplace.json`);
+
   return { name, status: 'built', plugins };
 }
 
@@ -291,7 +325,7 @@ async function buildPlugin(
 
   const pluginJson: Record<string, unknown> = {
     name: pluginDef.name,
-    description: pluginDef.description,
+    description: pluginDef.description ?? `${pluginDef.name} plugin`,
     author: {
       name: owner.name,
       ...(owner.email ? { email: owner.email } : {}),

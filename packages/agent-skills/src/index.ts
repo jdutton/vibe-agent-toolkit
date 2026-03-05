@@ -36,6 +36,8 @@ export {
 
 export { ClaudePluginJsonSchema, ClaudePluginSchema, type ClaudePlugin } from './schemas/claude-plugin.js';
 
+export { MarketplaceManifestJsonSchema, MarketplaceManifestSchema, type MarketplaceManifest } from './schemas/marketplace-manifest.js';
+
 export { PluginJsonSchema, type PluginJson } from './schemas/plugin-json.js';
 
 export {
@@ -43,6 +45,7 @@ export {
   type FrontmatterResult,
 } from './parsers/frontmatter-parser.js';
 
+export { validateMarketplace } from './validators/marketplace-validator.js';
 export { validateSkill } from './validators/skill-validator.js';
 export { validate } from './validators/unified-validator.js';
 export { detectResourceFormat } from './validators/format-detection.js';

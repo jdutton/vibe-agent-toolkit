@@ -504,6 +504,21 @@ bun run vat audit packages/vat-development-agents/dist/skills/
 
 **This is not enforced by vibe-validate or pre-commit hooks.** It's agentic guidance — run it when you've changed audit, skill validation, or link traversal code to catch regressions before they ship. If something looks wrong, investigate before committing.
 
+### Pre-Pull-Request Checklist (MANDATORY)
+
+**Before creating a pull request, you MUST complete these steps:**
+
+1. **Update CHANGELOG.md** — Add an entry under `## [Unreleased]` describing the change. Follow the existing format (see previous entries for style). This is not optional — every PR must have a changelog entry.
+
+2. **Ask about version bump** — Ask the developer: *"Would you like to bump the version or create an RC for this change?"*
+   - If yes: run `bun run bump-version <version>` (e.g., `0.1.16-rc.5`) and commit the version bump
+   - If no: proceed with just the changelog update
+   - RC versions (e.g., `0.1.16-rc.5`) stay in the `[Unreleased]` section — they are NOT given their own version heading
+
+3. **Run `bun run validate`** one final time after the changelog/version changes to ensure nothing broke
+
+**For AI assistants:** This is a hard gate. Do NOT create a PR without updating the changelog and asking about the version bump first. Forgetting this creates extra work for the maintainer.
+
 ### Running vat CLI During Development
 
 **In this monorepo**, use the convenience script to run vat commands:

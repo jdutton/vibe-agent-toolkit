@@ -28,3 +28,9 @@ export {
   type MarketplaceEntry,
   type MarketplaceSource,
 } from './known-marketplaces-registry.js';
+
+export {
+  MarketplaceManifestJsonSchema,
+  MarketplaceManifestSchema,
+  type MarketplaceManifest,
+} from './marketplace-manifest.js';

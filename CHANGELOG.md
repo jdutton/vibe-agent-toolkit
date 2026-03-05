@@ -14,6 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Removed `MarketplaceSchema`, `marketplace-validator.ts`, and all related code
 
 ### Added
+- **marketplace.json build, validate, and audit** (PR #57) — full marketplace manifest lifecycle
+  - `MarketplaceManifestSchema` in agent-skills with passthrough for all official source types (string, github, url, npm, pip)
+  - `validateMarketplace()` validator mirroring the plugin-validator pattern
+  - `vat claude build` now generates `.claude-plugin/marketplace.json` with relative source paths
+  - `vat claude verify` validates marketplace.json against the schema
+  - Unified validator routes marketplace type to `validateMarketplace()` (replaces placeholder UNKNOWN_FORMAT error)
+  - `vat audit --user` now correctly validates marketplace directories
+  - Plugin `description` is now optional in VAT project config (adopter compatibility)
+  - Added marketplace-level `skills` selector to config schema
 - **Transitive link traversal for `vat audit`** (PR #56) — follows all local file links from SKILL.md via BFS with cycle detection
   - Reports broken links (`LINK_INTEGRITY_BROKEN` error), boundary escapes (`OUTSIDE_PROJECT_BOUNDARY` warning), and unreferenced markdown files (`SKILL_UNREFERENCED_FILE` info with `--warn-unreferenced-files`)
   - Excludes CLAUDE.md, README.md, and other navigation files from unreferenced file detection
