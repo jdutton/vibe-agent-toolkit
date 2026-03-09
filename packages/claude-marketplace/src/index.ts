@@ -38,6 +38,8 @@ export type {
   PermissionsConfig,
   ProjectSettings,
   SandboxConfig,
+  SandboxFilesystem,
+  SandboxNetwork,
   UserSettings,
 } from './schemas/index.js';
 export {
@@ -50,6 +52,8 @@ export {
   PermissionsConfigSchema,
   ProjectSettingsSchema,
   SandboxConfigSchema,
+  SandboxFilesystemSchema,
+  SandboxNetworkSchema,
   UserSettingsSchema,
 } from './schemas/index.js';
 
