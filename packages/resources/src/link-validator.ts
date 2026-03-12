@@ -240,9 +240,17 @@ async function validateLocalFile(
   href: string,
   sourceFilePath: string
 ): Promise<{ exists: boolean; resolvedPath: string; actualName?: string }> {
+  // URL-decode percent-encoded characters (e.g., %20 → space) before resolving
+  let decodedHref: string;
+  try {
+    decodedHref = decodeURIComponent(href);
+  } catch {
+    decodedHref = href;
+  }
+
   // Resolve the path relative to the source file's directory
   const sourceDir = path.dirname(sourceFilePath);
-  const resolvedPath = path.resolve(sourceDir, href);
+  const resolvedPath = path.resolve(sourceDir, decodedHref);
 
   // Check if file exists with correct case
   const verification = await verifyCaseSensitiveFilename(resolvedPath);

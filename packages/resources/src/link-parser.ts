@@ -202,6 +202,21 @@ function classifyLink(href: string): LinkType {
   if (lastDot === -1 || lastDot < lastSlash) {
     return 'local_file';
   }
+  // Bare relative paths with file extensions (e.g., "files/doc.pdf")
+  // If it contains a slash but doesn't look like a protocol (no "://"), it's a file path
+  if (lastSlash >= 0 && !href.includes('://')) {
+    return 'local_file';
+  }
+  // URL-decode and check if it looks like a relative file path
+  // (e.g., "My%20Document.pdf" decodes to "My Document.pdf")
+  try {
+    const decoded = decodeURIComponent(href);
+    if (decoded !== href) {
+      return 'local_file';
+    }
+  } catch {
+    // Invalid percent encoding — leave as unknown
+  }
   return 'unknown';
 }
 
