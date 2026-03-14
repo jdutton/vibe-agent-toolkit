@@ -150,6 +150,29 @@ describe('validateLink', () => {
 
       expect(result).toBeNull();
     });
+
+    it('should resolve percent-encoded paths to existing files', async () => {
+      const fs = await import('node:fs');
+      const tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'encoded-path-'));
+      const filesDir = path.join(tempDir, 'files');
+      fs.mkdirSync(filesDir, { recursive: true });
+      const targetFile = path.join(filesDir, 'My Document Name.pdf');
+      const sourceFile = path.join(tempDir, 'index.md');
+
+      try {
+        fs.writeFileSync(targetFile, 'fake pdf content');
+        fs.writeFileSync(sourceFile, '');
+
+        const link = createLink('local_file', 'files/My%20Document%20Name.pdf', 'PDF link', 3);
+        const headingsMap = new Map<string, HeadingNode[]>();
+
+        const result = await validateLink(link, sourceFile, headingsMap);
+
+        expect(result).toBeNull();
+      } finally {
+        fs.rmSync(tempDir, { recursive: true, force: true });
+      }
+    });
   });
 
   describe('anchor links', () => {

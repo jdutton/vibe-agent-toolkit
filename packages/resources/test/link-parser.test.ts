@@ -309,6 +309,21 @@ Just plain text content.
       // Unknown protocol is truly unknown
       expect(result.links[2]!.type).toBe('unknown');
     });
+
+    it('should classify percent-encoded relative paths as local_file', async () => {
+      await writeAndParse({
+        filePath: join(tempDir, 'encoded-paths.md'),
+        content: `[PDF with spaces](files/My%20Document%20Name.pdf)
+[Encoded subdir](docs/path%20with%20spaces/file.md)
+[Bare encoded filename](My%20Document.pdf)
+`,
+        assertions: (result) => {
+          expect(result.links[0]!.type).toBe('local_file');
+          expect(result.links[1]!.type).toBe('local_file');
+          expect(result.links[2]!.type).toBe('local_file');
+        },
+      });
+    });
   });
 
   describe('heading extraction', () => {
