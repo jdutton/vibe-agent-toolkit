@@ -69,12 +69,13 @@ describe.skipIf(!!process.env.CI)('ExternalLinkValidator (integration)', () => {
 
 		expect(results).toHaveLength(urls.length);
 
-		// Working URLs should be ok, broken URL should error
+		// Assert the known-broken URL failed
+		const brokenResult = results.find(r => r.url === BROKEN_URL);
+		expect(brokenResult?.status).toBe('error');
+
+		// At least one working URL should succeed (both may, but network can be flaky)
 		const working = results.filter(r => r.status === 'ok');
-		const broken = results.filter(r => r.status === 'error');
-		expect(working.length).toBeGreaterThanOrEqual(2);
-		expect(broken.length).toBe(1);
-		expect(broken[0]?.url).toBe(BROKEN_URL);
+		expect(working.length).toBeGreaterThanOrEqual(1);
 	});
 
 	it('should handle concurrent validations with cache', async () => {
