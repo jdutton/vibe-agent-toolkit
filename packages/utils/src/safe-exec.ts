@@ -9,7 +9,7 @@ export interface SafeExecOptions {
   /** Character encoding for output (default: undefined = Buffer) */
   encoding?: BufferEncoding;
   /** Standard I/O configuration */
-  stdio?: 'pipe' | 'ignore' | Array<'pipe' | 'ignore' | 'inherit'>;
+  stdio?: 'pipe' | 'ignore' | 'inherit' | Array<'pipe' | 'ignore' | 'inherit'>;
   /** Environment variables (merged with process.env if not fully specified) */
   env?: NodeJS.ProcessEnv;
   /** Working directory */
@@ -24,6 +24,8 @@ export interface SafeExecOptions {
  * Result of a safe command execution
  */
 export interface SafeExecResult {
+  /** Whether the command exited successfully (status === 0) */
+  success: boolean;
   /** Exit code (0 = success) */
   status: number;
   /** Standard output */
@@ -200,7 +202,7 @@ export function safeExecSync(
  *
  * @example
  * const result = safeExecResult('git', ['status']);
- * if (result.status === 0) {
+ * if (result.success) {
  *   console.log(result.stdout.toString());
  * } else {
  *   console.error(`Failed: ${result.stderr.toString()}`);
@@ -231,8 +233,10 @@ export function safeExecResult(
     const execCommand = useShell ? command : commandPath;
     const result = spawnSync(execCommand, args, spawnOptions);
 
+    const status = result.status ?? -1;
     const execResult: SafeExecResult = {
-      status: result.status ?? -1,
+      success: status === 0,
+      status,
       stdout: result.stdout ?? Buffer.from(''),
       stderr: result.stderr ?? Buffer.from(''),
     };
@@ -246,6 +250,7 @@ export function safeExecResult(
   } catch (error) {
     // which.sync throws if command not found
     return {
+      success: false,
       status: -1,
       stdout: Buffer.from(''),
       stderr: Buffer.from(''),
