@@ -187,6 +187,7 @@ describe('safeExecResult', () => {
   it('should return result object without throwing on success', () => {
     const result = safeExecResult('node', ['--version'], { encoding: 'utf8' });
 
+    expect(result.success).toBe(true);
     expect(result.status).toBe(0);
     expect(typeof result.stdout).toBe('string');
     expect((result.stdout as string).trim()).toMatch(/^v\d+\.\d+\.\d+/);
@@ -198,6 +199,7 @@ describe('safeExecResult', () => {
       encoding: 'utf8',
     });
 
+    expect(result.success).toBe(false);
     expect(result.status).toBe(1);
     expect(result.error).toBeUndefined(); // No spawn error, just non-zero exit
   });
@@ -205,6 +207,7 @@ describe('safeExecResult', () => {
   it('should return error object if command not found', () => {
     const result = safeExecResult('nonexistent-command-xyz-123', ['--version']);
 
+    expect(result.success).toBe(false);
     expect(result.status).toBe(-1);
     expect(result.error).toBeDefined();
     expect(result.error?.message).toBeTruthy();
