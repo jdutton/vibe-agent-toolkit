@@ -350,6 +350,44 @@ describe('transitive link traversal — links with anchors', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Edge: URL-encoded paths (%20, %26, etc.)
+// ---------------------------------------------------------------------------
+
+describe('transitive link traversal — URL-encoded paths', () => {
+  const { getTempDir } = setupTempDir('skill-url-encoded-');
+
+  it('should resolve %20-encoded spaces in link paths', async () => {
+    const files = { 'My Folder/target.md': '# Target\n\nContent.' };
+    const { result } = await createAndValidateTransitiveSkill(
+      getTempDir(), files, skillWithLink('My%20Folder/target.md', 'target'),
+    );
+
+    expect(findIssues(result, 'LINK_INTEGRITY_BROKEN')).toHaveLength(0);
+    expect(result.linkedFiles).toHaveLength(1);
+    expect(result.linkedFiles?.[0]?.path).toContain('target.md');
+  });
+
+  it('should resolve %26-encoded ampersands in link paths', async () => {
+    const files = { 'Fraud & Investigations/CLAUDE.md': '# Fraud\n\nContent.' };
+    const { result } = await createAndValidateTransitiveSkill(
+      getTempDir(), files, skillWithLink('Fraud%20%26%20Investigations/CLAUDE.md', 'fraud'),
+    );
+
+    expect(findIssues(result, 'LINK_INTEGRITY_BROKEN')).toHaveLength(0);
+  });
+
+  it('should handle invalid percent-encoding gracefully', async () => {
+    const { result } = await createAndValidateTransitiveSkill(
+      getTempDir(), {}, skillWithLink('bad%ZZencoding.md', 'bad'),
+    );
+
+    // Should not crash — falls back to raw href, reports broken link
+    const issues = findIssues(result, 'LINK_INTEGRITY_BROKEN');
+    expect(issues).toHaveLength(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Edge: no rootDir provided — defaults to dirname(skillPath)
 // ---------------------------------------------------------------------------
 

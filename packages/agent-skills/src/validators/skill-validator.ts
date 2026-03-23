@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import { basename, dirname, relative, resolve } from 'node:path';
 
-import { parseMarkdown } from '@vibe-agent-toolkit/resources';
+import { parseMarkdown, resolveLocalHref } from '@vibe-agent-toolkit/resources';
 
 import { parseFrontmatter } from '../parsers/frontmatter-parser.js';
 
@@ -117,13 +117,13 @@ function validateLocalLink(
   fileIssues: ValidationIssue[],
   issues: ValidationIssue[],
 ): { status: 'skip' | 'boundary' | 'broken' | 'valid'; resolvedPath: string } {
-  // Strip anchor fragment before resolving
-  const hrefWithoutAnchor = link.href.split('#')[0] ?? link.href;
-  if (hrefWithoutAnchor === '') {
+  // Resolve href to filesystem path (strips anchor, decodes percent-encoding)
+  const resolved = resolveLocalHref(link.href, currentPath);
+  if (!resolved) {
     return { status: 'skip', resolvedPath: '' };
   }
 
-  const resolvedPath = resolve(dirname(currentPath), hrefWithoutAnchor);
+  const resolvedPath = resolved.resolvedPath;
   const relativeToBoundary = relative(skillDir, resolvedPath);
 
   // Check boundary escape

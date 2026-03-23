@@ -73,6 +73,51 @@ export function splitHrefAnchor(href: string): [string, string | undefined] {
 }
 
 /**
+ * Resolve a markdown link href to an absolute filesystem path.
+ *
+ * Performs the standard href → path conversion used by both audit and validate:
+ * 1. Strips anchor fragment (`#section`)
+ * 2. Decodes URL-encoded characters (`%20` → space, `%26` → `&`)
+ * 3. Resolves the path relative to the source file's directory
+ *
+ * Returns `null` for anchor-only links (e.g., `#heading`).
+ *
+ * @param href - Raw href from a markdown link
+ * @param sourceFilePath - Absolute path of the file containing the link
+ * @returns Resolved path info, or null for anchor-only links
+ *
+ * @example
+ * ```typescript
+ * resolveLocalHref('My%20Folder/doc.md#intro', '/project/README.md')
+ * // { resolvedPath: '/project/My Folder/doc.md', anchor: 'intro' }
+ *
+ * resolveLocalHref('#heading', '/project/README.md')
+ * // null
+ * ```
+ */
+export function resolveLocalHref(
+  href: string,
+  sourceFilePath: string,
+): { resolvedPath: string; anchor: string | undefined } | null {
+  const [fileHref, anchor] = splitHrefAnchor(href);
+  if (fileHref === '') {
+    return null;
+  }
+
+  let decodedHref: string;
+  try {
+    decodedHref = decodeURIComponent(fileHref);
+  } catch {
+    decodedHref = fileHref;
+  }
+
+  const sourceDir = path.dirname(sourceFilePath);
+  const resolvedPath = path.resolve(sourceDir, decodedHref);
+
+  return { resolvedPath, anchor };
+}
+
+/**
  * Check if a file path is within a project directory.
  *
  * Resolves symlinks before comparison to handle cases where symlinks
