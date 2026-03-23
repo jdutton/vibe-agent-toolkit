@@ -62,12 +62,7 @@ jobs:
 
       - name: Extract changelog
         if: steps.version.outputs.is_stable == 'true'
-        id: changelog
-        run: |
-          CHANGELOG=$(bun run extract-changelog ${{ steps.version.outputs.version }})
-          echo "changelog<<EOF" >> $GITHUB_OUTPUT
-          echo "$CHANGELOG" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+        run: bun run extract-changelog ${{ steps.version.outputs.version }} > /tmp/release-notes.md
 
       - name: Create GitHub Release
         if: steps.version.outputs.is_stable == 'true'
@@ -76,4 +71,4 @@ jobs:
         run: |
           gh release create "v${{ steps.version.outputs.version }}" \
             --title "Release v${{ steps.version.outputs.version }}" \
-            --notes "${{ steps.changelog.outputs.changelog }}"
+            --notes-file /tmp/release-notes.md
