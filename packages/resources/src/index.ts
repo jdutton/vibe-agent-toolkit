@@ -99,6 +99,9 @@ export {
 // Note: link-parser and link-validator internals are NOT exported
 // They are implementation details. Users should use ResourceRegistry API.
 
+// Export href resolution utility (shared by audit and validate code paths)
+export { resolveLocalHref } from './utils.js';
+
 // Export project config parsing
 export {
   findConfigFile,
