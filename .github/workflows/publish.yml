@@ -49,6 +49,10 @@ jobs:
       - name: Build all packages
         run: bun run build
 
+      - name: Determine version type and npm tags
+        id: version_type
+        run: bun run tsx packages/dev-tools/src/determine-publish-tags.ts ${{ steps.version.outputs.version }}
+
       - name: Pre-publish checks
         run: bun run pre-publish
 
@@ -59,6 +63,7 @@ jobs:
         run: bun run publish-with-rollback ${{ steps.version.outputs.version }}
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          UPDATE_NEXT: ${{ steps.version_type.outputs.update_next }}
 
       - name: Extract changelog
         if: steps.version.outputs.is_stable == 'true'
