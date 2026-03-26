@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking Changes
+- **`vat skills install` removed** — replaced by `vat claude plugin install`. Update postinstall scripts to use `node ./node_modules/vibe-agent-toolkit/dist/bin/vat.js claude plugin install --npm-postinstall || exit 0` and add `vibe-agent-toolkit` to your package's `dependencies`.
+- **`vat skills uninstall` removed** — replaced by `vat claude plugin uninstall`.
+- **`vat claude build` removed** — use `vat build` (config-driven top-level command).
+- **`vat claude verify` removed** — use `vat verify` (config-driven top-level command).
+
+### Added
+- `vat claude plugin install` — installs skill packages into Claude Code. Accepts `--target code|api.anthropic.com|claude.ai` (`code` is default; `claude.ai` returns a structured not-available stub). Correct postinstall pattern uses the local `node_modules` binary, never assumes a global `vat`.
+- `vat claude plugin list` — lists installed plugins from the plugin registry and legacy skills directory.
+- `vat claude plugin uninstall` — removes a plugin and all 5 install artifacts (marketplace dir, cache dir, `installed_plugins.json`, `known_marketplaces.json`, `settings.json`). Idempotent; `--all` finds plugins by npm package name; `--dry-run` previews without changes.
+- `vat-development-agents` self-adoption: postinstall now uses the local `vibe-agent-toolkit` binary and the correct `claude plugin install` command.
+
 ### Fixed
 - **`@next` dist-tag now updated on stable npm releases** — `publish.yml` now runs `determine-publish-tags.ts` to compute `update_next` and passes it to `publish-with-rollback.ts` via `UPDATE_NEXT` env; `publish-with-rollback.ts` now has a Phase 2 that applies `npm dist-tag add <pkg>@<version> next` to all packages when `UPDATE_NEXT=true`, with rollback on failure
 
