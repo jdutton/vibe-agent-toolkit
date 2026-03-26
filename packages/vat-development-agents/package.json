@@ -50,7 +50,7 @@
     "test:pipeline": "bun run build && bun run dist/src/test-pipeline.js",
     "typecheck": "tsc --noEmit",
     "validate": "bun run agents/agent-generator/validate-agent.ts",
-    "postinstall": "vat skills install --npm-postinstall || exit 0"
+    "postinstall": "node ./node_modules/vibe-agent-toolkit/dist/bin/vat.js claude plugin install --npm-postinstall 2>/dev/null || exit 0"
   },
   "dependencies": {
     "@vibe-agent-toolkit/agent-schema": "workspace:*",
