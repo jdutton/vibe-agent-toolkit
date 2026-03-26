@@ -42,9 +42,12 @@ my-project/
     "version": "1.0",
     "skills": ["my-skill"]
   },
+  "dependencies": {
+    "vibe-agent-toolkit": "latest"
+  },
   "scripts": {
     "build:vat": "vat build",
-    "postinstall": "vat skills install --npm-postinstall || exit 0"
+    "postinstall": "node ./node_modules/vibe-agent-toolkit/dist/bin/vat.js skills install --npm-postinstall || exit 0"
   },
   "files": ["dist", "README.md"],
   "publishConfig": {
@@ -52,6 +55,8 @@ my-project/
   }
 }
 ```
+
+**`vibe-agent-toolkit` must be in `dependencies` (not `devDependencies`)** so it is present in `node_modules` when the postinstall hook runs on the user's machine. Never assume `vat` is available globally — your users may not be developers.
 
 The `vat.skills` array contains skill name strings for npm discoverability. Skill source paths and packaging config live in `vibe-agent-toolkit.config.yaml` (see Step 2).
 
@@ -63,11 +68,13 @@ For private GitHub Packages registry:
 }
 ```
 
-Users installing from GitHub Packages need `.npmrc` with the scope registry and auth token:
+Users (or IT) installing from GitHub Packages need `.npmrc` configured with the scope registry and a read-only token:
 ```
 @myorg:registry=https://npm.pkg.github.com
 //npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
 ```
+
+IT deploying to managed machines should pre-configure `.npmrc` at the system or user level before running install commands. End users do not need to understand npm or the registry — IT handles it once.
 
 ## Step 2: vibe-agent-toolkit.config.yaml
 
@@ -148,18 +155,25 @@ npm publish               # stable release
 
 ## Step 5: User Install
 
-```bash
-vat skills install npm:@myorg/my-skills
-```
+### Recommended: npm global install (postinstall runs automatically)
 
-Or via standard npm install (postinstall hook triggers automatically):
 ```bash
 npm install -g @myorg/my-skills
 ```
 
+The postinstall hook fires automatically and registers the plugin in Claude. This is the correct path for IT-managed deployments — no other tools required on the user's machine.
+
+### Developer/IT one-off install via npx
+
+```bash
+npx vibe-agent-toolkit skills install npm:@myorg/my-skills
+```
+
+Downloads and runs VAT via npx to install a package without a global install. Useful for CI, scripting, or testing from a developer machine. Requires the npm scope registry to be configured (`.npmrc`) if installing from a private registry.
+
 ### How plugin installation works
 
-When `npm install` runs the postinstall hook (`vat skills install --npm-postinstall`):
+When `npm install` runs the postinstall hook (`node ./node_modules/vibe-agent-toolkit/dist/bin/vat.js skills install --npm-postinstall`):
 
 - VAT detects `dist/.claude/plugins/marketplaces/` directory in the installed package
 - Copies the plugin tree to Claude's plugin directory (dumb recursive copy)
@@ -224,5 +238,10 @@ TypeScript files in `scripts` are tree-shaken and compiled to standalone `.mjs`.
 | Build skills only | `vat skills build` |
 | Build claude artifacts only | `vat claude build` |
 | Verify claude artifacts only | `vat claude verify` |
-| Install from npm | `vat skills install npm:@org/pkg` |
+| Install via npm (end user) | `npm install -g @org/pkg` |
+| Install via npx (developer/IT) | `npx vibe-agent-toolkit skills install npm:@org/pkg` |
 | Package for claude.ai upload | `vat skills package ./SKILL.md -o ./dist/ --target claude-web` |
+
+## Future: Zero-Dependency Postinstall (Option B)
+
+A planned improvement: `vat build` would bundle the plugin install logic into `dist/postinstall.js` — a fully self-contained script with no npm dependencies. The postinstall script would become simply `node ./dist/postinstall.js`. This eliminates `vibe-agent-toolkit` as a runtime dependency entirely, reducing install footprint for end users. Until then, Option C (runtime `vibe-agent-toolkit` dep) is the correct approach.
