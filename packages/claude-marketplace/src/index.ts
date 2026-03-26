@@ -75,6 +75,21 @@ export {
   writeKnownMarketplaces,
 } from './install/plugin-registry.js';
 
+// Plugin uninstall
+export type {
+  UninstallPluginOptions,
+  UninstallPluginResult,
+} from './install/plugin-uninstall.js';
+export { findPluginsByPackage, uninstallPlugin } from './install/plugin-uninstall.js';
+
+// Plugin list
+export type {
+  ListedLegacySkill,
+  ListedPlugin,
+  PluginListResult,
+} from './install/plugin-list.js';
+export { listLocalPlugins } from './install/plugin-list.js';
+
 // Settings
 export type {
   BashRuleType,

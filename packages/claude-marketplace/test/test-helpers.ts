@@ -1,4 +1,64 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+import { afterEach, beforeEach } from 'vitest';
+
+import type { ClaudeUserPaths } from '../src/paths/claude-paths.js';
 import type { ImpactLevel, Target, Verdict } from '../src/types.js';
+
+export interface SetupPluginTestPathsOptions {
+  /** If true, also creates paths.skillsDir for legacy skill tests */
+  withSkillsDir?: boolean;
+}
+
+/**
+ * Set up a fresh temp directory with Claude paths for each test suite.
+ *
+ * Always creates marketplacesDir and pluginsCacheDir.
+ * Pass `{ withSkillsDir: true }` to also create skillsDir (needed by plugin-list tests).
+ *
+ * Usage:
+ *   const { getPaths } = setupPluginTestPaths();
+ *   // or
+ *   const { getPaths } = setupPluginTestPaths({ withSkillsDir: true });
+ */
+export function setupPluginTestPaths(opts: SetupPluginTestPathsOptions = {}): { getPaths: () => ClaudeUserPaths } {
+  let tempDir = '';
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(normalizedTmpdir(), 'vat-plugin-test-'));
+    const paths = buildTestPaths(tempDir);
+    mkdirSyncReal(paths.marketplacesDir, { recursive: true });
+    mkdirSyncReal(paths.pluginsCacheDir, { recursive: true });
+    if (opts.withSkillsDir === true) {
+      mkdirSyncReal(paths.skillsDir, { recursive: true });
+    }
+  });
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+  return { getPaths: () => buildTestPaths(tempDir) };
+}
+
+/**
+ * Build test ClaudeUserPaths rooted in a temp base directory.
+ * Uses a flat structure: base/.claude/plugins/... to avoid duplicating getClaudeUserPaths.
+ */
+export function buildTestPaths(base: string): ClaudeUserPaths {
+  const root = join(base, '.claude');
+  const plugins = join(root, 'plugins');
+  return {
+    claudeDir: root,
+    pluginsDir: plugins,
+    skillsDir: join(root, 'skills'),
+    marketplacesDir: join(plugins, 'marketplaces'),
+    pluginsCacheDir: join(plugins, 'cache'),
+    knownMarketplacesPath: join(plugins, 'known_marketplaces.json'),
+    installedPluginsPath: join(plugins, 'installed_plugins.json'),
+    userSettingsPath: join(root, 'settings.json'),
+    userDotJsonPath: join(base, '.claude.json'),
+  };
+}
 
 /** Build a markdown bash code block containing a single command */
 export function bashCodeBlock(command: string): string {

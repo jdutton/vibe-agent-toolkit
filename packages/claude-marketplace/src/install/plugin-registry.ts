@@ -166,18 +166,26 @@ export async function installPlugin(opts: InstallPluginOptions): Promise<void> {
   }
 }
 
-function updateUserSettings(paths: ClaudeUserPaths, pluginKey: string): void {
-  let settingsData: Record<string, unknown> = {};
+/**
+ * Read user settings.json as a plain object.
+ * Returns an empty object if the file does not exist or is invalid.
+ */
+export function readUserSettings(paths: ClaudeUserPaths): Record<string, unknown> {
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated paths from ClaudeUserPaths
     const raw = readFileSync(paths.userSettingsPath, 'utf-8');
     const parsed: unknown = JSON.parse(raw);
     if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      settingsData = parsed as Record<string, unknown>;
+      return parsed as Record<string, unknown>;
     }
   } catch {
     // File does not exist or is invalid — start from empty
   }
+  return {};
+}
+
+function updateUserSettings(paths: ClaudeUserPaths, pluginKey: string): void {
+  const settingsData = readUserSettings(paths);
 
   const existingEnabled =
     settingsData['enabledPlugins'] !== null &&
