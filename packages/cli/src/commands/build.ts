@@ -3,7 +3,6 @@
  *
  * Builds everything the project describes, in dependency order:
  *   1. vat skills build  (portable dist/skills/ output)
- *   2. vat claude build  (Claude plugin artifacts)
  */
 
 import { spawnSync } from 'node:child_process';
@@ -13,11 +12,10 @@ import { Command } from 'commander';
 import { handleCommandError } from '../utils/command-error.js';
 import { writeYamlOutput } from '../utils/output.js';
 
-import { buildClaudePhaseArgs, createPhaseContext, type Phase } from './phase-utils.js';
+import { createPhaseContext, type Phase } from './phase-utils.js';
 
 export interface BuildCommandOptions {
   only?: string;
-  marketplace?: string;
   debug?: boolean;
 }
 
@@ -25,9 +23,8 @@ export function createBuildTopLevelCommand(): Command {
   const command = new Command('build');
 
   command
-    .description('Build all project artifacts in dependency order (skills → claude plugins)')
-    .option('--only <phase>', 'Build only a specific phase: skills, claude')
-    .option('--marketplace <name>', 'Build specific marketplace only (claude phase)')
+    .description('Build all project artifacts in dependency order (skills)')
+    .option('--only <phase>', 'Build only a specific phase: skills')
     .option('--debug', 'Enable debug logging')
     .action(buildTopLevelCommand)
     .addHelpText(
@@ -35,11 +32,10 @@ export function createBuildTopLevelCommand(): Command {
       `
 Description:
   Builds all project artifacts in dependency order. Equivalent to running
-  vat skills build followed by vat claude build.
+  vat skills build.
 
   Phases:
     skills  → builds dist/skills/ from package.json vat.skills (platform-agnostic)
-    claude  → wraps dist/skills/ into Claude plugin structure (requires skills phase)
 
 Output:
   YAML summary for each phase → stdout
@@ -50,11 +46,9 @@ Exit Codes:
   1 - Build error
   2 - System error
 
-Examples:
+Example:
   $ vat build                         # Build everything
   $ vat build --only skills           # Build portable skills only
-  $ vat build --only claude           # Build Claude artifacts only (skills must be pre-built)
-  $ vat build --marketplace acme      # Build specific marketplace
 `
     );
 
@@ -69,16 +63,12 @@ function buildPhaseList(options: BuildCommandOptions): Phase[] {
     phases.push({ name: 'skills', args: ['skills', 'build'] });
   }
 
-  if (!only || only === 'claude') {
-    phases.push({ name: 'claude', args: buildClaudePhaseArgs('build', options) });
-  }
-
   return phases;
 }
 
 async function buildTopLevelCommand(options: BuildCommandOptions): Promise<void> {
   const phases = buildPhaseList(options);
-  const { logger, startTime, binPath } = createPhaseContext(options.debug, phases, options.only, 'skills, claude');
+  const { logger, startTime, binPath } = createPhaseContext(options.debug, phases, options.only, 'skills');
 
   try {
     logger.info(`🔨 vat build (phases: ${phases.map((p) => p.name).join(' → ')})`);

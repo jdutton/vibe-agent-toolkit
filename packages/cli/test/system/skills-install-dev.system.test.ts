@@ -2,7 +2,7 @@
 // Test fixtures legitimately use dynamic file paths
 
 /**
- * System tests for skills install --dev command
+ * System tests for claude plugin install --dev command
  * Tests symlink-based development installation from package.json vat.skills[]
  */
 
@@ -13,7 +13,6 @@ import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
-  executeCli,
   executeCliAndParseYaml,
   setupDevTestProject,
 } from './test-helpers/index.js';
@@ -53,12 +52,12 @@ function executeDevInstall(
 ): ReturnType<typeof executeCliAndParseYaml> {
   return executeCliAndParseYaml(
     binPath,
-    ['skills', 'install', '--dev', '-s', skillsDir, ...extraArgs],
+    ['claude', 'plugin', 'install', '--dev', '-s', skillsDir, ...extraArgs],
     { cwd: projectDir }
   );
 }
 
-describe('skills install --dev command (system test)', () => {
+describe('claude plugin install --dev command (system test)', () => {
   it('should symlink a single skill', () => {
     const { skillsDir, projectDir } = setupTestCase('single', [
       { name: 'my-skill', built: true },
@@ -111,14 +110,10 @@ describe('skills install --dev command (system test)', () => {
       { name: 'unbuilt-skill', built: false },
     ]);
 
-    const result = executeCli(
-      binPath,
-      ['skills', 'install', '--dev', '-s', skillsDir],
-      { cwd: projectDir }
-    );
+    const { status, stderr } = executeDevInstall(skillsDir, projectDir);
 
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('not built');
+    expect(status).not.toBe(0);
+    expect(stderr).toContain('not built');
   });
 
   it('should not create symlinks with --dry-run', () => {
@@ -145,14 +140,10 @@ describe('skills install --dev command (system test)', () => {
     expect(first.status).toBe(0);
 
     // Second install without --force fails
-    const result = executeCli(
-      binPath,
-      ['skills', 'install', '--dev', '-s', skillsDir],
-      { cwd: projectDir }
-    );
+    const { status: secondStatus, stderr } = executeDevInstall(skillsDir, projectDir);
 
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('already installed');
+    expect(secondStatus).not.toBe(0);
+    expect(stderr).toContain('already installed');
   });
 
   it('should overwrite with --force', () => {

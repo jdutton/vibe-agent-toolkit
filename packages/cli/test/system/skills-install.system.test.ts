@@ -2,7 +2,7 @@
 // Test fixtures legitimately use dynamic file paths
 
 /**
- * System tests for skills install command
+ * System tests for claude plugin install command
  */
 
 import { existsSync } from 'node:fs';
@@ -49,7 +49,7 @@ function executeInstallAndExpectSuccess(
   expect(skills[0]).toHaveProperty('name', expectedSkillName);
 }
 
-describe('skills install command (system test)', () => {
+describe('claude plugin install command (system test)', () => {
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
 
@@ -60,7 +60,7 @@ describe('skills install command (system test)', () => {
 
       const { result, parsed } = executeCommandAndParse(
         suite.binPath,
-        ['skills', 'install', zipPath, '-s', suite.skillsDir, '--dry-run'],
+        ['claude', 'plugin', 'install', zipPath, '-s', suite.skillsDir, '--dry-run'],
         suite.projectDir
       );
 
@@ -76,7 +76,7 @@ describe('skills install command (system test)', () => {
 
       const { result, parsed } = executeCommandAndParse(
         suite.binPath,
-        ['skills', 'install', dirPath, '-s', suite.skillsDir, '--dry-run'],
+        ['claude', 'plugin', 'install', dirPath, '-s', suite.skillsDir, '--dry-run'],
         suite.projectDir
       );
 
@@ -89,7 +89,7 @@ describe('skills install command (system test)', () => {
     it('should throw error for invalid source', () => {
       const { result } = executeCommandAndParse(
         suite.binPath,
-        ['skills', 'install', '/nonexistent/path', '-s', suite.skillsDir],
+        ['claude', 'plugin', 'install', '/nonexistent/path', '-s', suite.skillsDir],
         suite.projectDir
       );
 
@@ -105,7 +105,7 @@ describe('skills install command (system test)', () => {
 
       executeInstallAndExpectSuccess(
         suite.binPath,
-        ['skills', 'install', skillDir, '-s', suite.skillsDir],
+        ['claude', 'plugin', 'install', skillDir, '-s', suite.skillsDir],
         suite.projectDir,
         'my-skill',
         'local'
@@ -143,7 +143,7 @@ describe('skills install command (system test)', () => {
 
       const { result, parsed } = executeCommandAndParse(
         suite.binPath,
-        ['skills', 'install', packageDir, '-s', suite.skillsDir],
+        ['claude', 'plugin', 'install', packageDir, '-s', suite.skillsDir],
         suite.projectDir
       );
 
@@ -170,7 +170,7 @@ describe('skills install command (system test)', () => {
 
       const { result, parsed } = executeCommandAndParse(
         suite.binPath,
-        ['skills', 'install', skillDir, '-s', suite.skillsDir, '--name', customName],
+        ['claude', 'plugin', 'install', skillDir, '-s', suite.skillsDir, '--name', customName],
         suite.projectDir
       );
 
@@ -193,7 +193,7 @@ describe('skills install command (system test)', () => {
 
       executeInstallAndExpectSuccess(
         suite.binPath,
-        ['skills', 'install', zipPath, '-s', suite.skillsDir, '--dry-run'],
+        ['claude', 'plugin', 'install', zipPath, '-s', suite.skillsDir, '--dry-run'],
         suite.projectDir,
         'skill',
         'zip'
@@ -201,7 +201,7 @@ describe('skills install command (system test)', () => {
 
       const { parsed } = executeCommandAndParse(
         suite.binPath,
-        ['skills', 'install', zipPath, '-s', suite.skillsDir, '--dry-run'],
+        ['claude', 'plugin', 'install', zipPath, '-s', suite.skillsDir, '--dry-run'],
         suite.projectDir
       );
       expect(parsed.dryRun).toBe(true);
@@ -217,7 +217,7 @@ describe('skills install command (system test)', () => {
       // Install first time
       executeCommandAndParse(
         suite.binPath,
-        ['skills', 'install', skillDir, '-s', suite.skillsDir],
+        ['claude', 'plugin', 'install', skillDir, '-s', suite.skillsDir],
         suite.projectDir
       );
 
@@ -227,7 +227,7 @@ describe('skills install command (system test)', () => {
       // Install again with --force
       const { result, parsed } = executeCommandAndParse(
         suite.binPath,
-        ['skills', 'install', skillDir, '-s', suite.skillsDir, '--force'],
+        ['claude', 'plugin', 'install', skillDir, '-s', suite.skillsDir, '--force'],
         suite.projectDir
       );
 
@@ -243,14 +243,14 @@ describe('skills install command (system test)', () => {
       // Install first time
       executeCommandAndParse(
         suite.binPath,
-        ['skills', 'install', skillDir, '-s', suite.skillsDir],
+        ['claude', 'plugin', 'install', skillDir, '-s', suite.skillsDir],
         suite.projectDir
       );
 
       // Try to install again without --force
       const { result } = executeCommandAndParse(
         suite.binPath,
-        ['skills', 'install', skillDir, '-s', suite.skillsDir],
+        ['claude', 'plugin', 'install', skillDir, '-s', suite.skillsDir],
         suite.projectDir
       );
 
@@ -266,7 +266,7 @@ describe('skills install command (system test)', () => {
 
       executeInstallAndExpectSuccess(
         suite.binPath,
-        ['skills', 'install', skillDir, '-s', suite.skillsDir, '--dry-run'],
+        ['claude', 'plugin', 'install', skillDir, '-s', suite.skillsDir, '--dry-run'],
         suite.projectDir,
         'my-skill',
         'local'
@@ -274,7 +274,7 @@ describe('skills install command (system test)', () => {
 
       const { parsed } = executeCommandAndParse(
         suite.binPath,
-        ['skills', 'install', skillDir, '-s', suite.skillsDir, '--dry-run'],
+        ['claude', 'plugin', 'install', skillDir, '-s', suite.skillsDir, '--dry-run'],
         suite.projectDir
       );
       expect(parsed.dryRun).toBe(true);

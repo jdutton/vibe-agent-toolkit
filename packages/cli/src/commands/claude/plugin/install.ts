@@ -1,5 +1,5 @@
 /**
- * Install skills to Claude's plugins directory
+ * Install skill packages to Claude Code plugins directory
  *
  * Supports installing from:
  * - npm packages (npm:@scope/package)
@@ -22,8 +22,8 @@ import { normalizedTmpdir, safeExecSync } from '@vibe-agent-toolkit/utils';
 import AdmZip from 'adm-zip';
 import { Command } from 'commander';
 
-import { handleCommandError } from '../../utils/command-error.js';
-import { createLogger } from '../../utils/logger.js';
+import { handleCommandError } from '../../../utils/command-error.js';
+import { createLogger } from '../../../utils/logger.js';
 
 import {
   detectSource,
@@ -32,7 +32,7 @@ import {
   readPackageJsonVatMetadata,
   type SkillSource,
   writeYamlHeader,
-} from './install-helpers.js';
+} from './helpers.js';
 
 /** Relative path within a VAT npm package to its pre-built plugin structure. */
 const PLUGIN_MARKETPLACES_SUBPATH = join('dist', '.claude', 'plugins', 'marketplaces');
@@ -69,7 +69,7 @@ function skillNameToFsPath(name: string): string {
   return name.replaceAll(':', '__');
 }
 
-export interface SkillsInstallCommandOptions {
+export interface PluginInstallCommandOptions {
   skillsDir?: string;
   name?: string;
   force?: boolean;
@@ -79,13 +79,14 @@ export interface SkillsInstallCommandOptions {
   dev?: boolean;
   build?: boolean;
   userInstallWithoutPlugin?: boolean;
+  target?: string;
 }
 
-export function createInstallCommand(): Command {
+export function createPluginInstallCommand(): Command {
   const command = new Command('install');
 
   command
-    .description('Install skills to Claude Code plugins directory')
+    .description('Install skill packages to Claude Code plugins directory')
     .argument('[source]', 'Source to install from (npm:package, ZIP file, or directory path)')
     .option(
       '-s, --skills-dir <path>',
@@ -99,13 +100,14 @@ export function createInstallCommand(): Command {
     .option('-d, --dev', 'Development mode: symlink skills from dist/skills/ (rebuilds reflected immediately)')
     .option('--build', 'Build skills before installing (implies --dev)')
     .option('--user-install-without-plugin', 'Force skills-only install (skip plugin registry even if dist/.claude/ exists)', false)
+    .option('--target <target>', 'Target surface: code (default), claude.ai', 'code')
     .option('--debug', 'Enable debug logging')
     .action(installCommand)
     .addHelpText(
       'after',
       `
 Description:
-  Installs skills to Claude Code's plugins directory from various sources.
+  Installs skill packages to Claude Code's plugins directory from various sources.
 
   Plugin detection: If the package contains dist/.claude/plugins/marketplaces/,
   the pre-built directory tree is copied to ~/.claude/plugins/ (dumb copy).
@@ -129,9 +131,9 @@ Exit Codes:
   2 - System error
 
 Example:
-  $ vat skills install --dev                        # Symlink all skills from cwd
-  $ vat skills install --build                      # Build + symlink
-  $ vat skills install npm:@scope/package           # Install from npm
+  $ vat claude plugin install --dev                        # Symlink all skills from cwd
+  $ vat claude plugin install --build                      # Build + symlink
+  $ vat claude plugin install npm:@scope/package           # Install from npm
 `
     );
 
@@ -140,12 +142,24 @@ Example:
 
 async function installCommand(
   source: string | undefined,
-  options: SkillsInstallCommandOptions
+  options: PluginInstallCommandOptions
 ): Promise<void> {
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
 
   try {
+    // Handle --target claude.ai stub
+    const target = options.target ?? 'code';
+    if (target === 'claude.ai') {
+      // Write separator directly — cannot use writeYamlHeader() which outputs status: success
+      process.stdout.write(`---\n`);
+      process.stdout.write(`status: not-available\n`);
+      process.stdout.write(`reason: "claude.ai org provisioning API not yet confirmed as public"\n`);
+      process.stdout.write(`requestedTarget: claude.ai\n`);
+      process.stdout.write(`guidance: "Use claude.ai admin console to upload a .zip manually, or use --target api.anthropic.com for workspace-scoped skill management"\n`);
+      process.exit(1);
+    }
+
     // Handle --build (implies --dev)
     if (options.build) {
       options.dev = true;
@@ -194,7 +208,7 @@ async function installCommand(
       }
     }
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'SkillsInstall');
+    handleCommandError(error, logger, startTime, 'PluginInstall');
   }
 }
 
@@ -203,7 +217,7 @@ async function installCommand(
  */
 async function handleNpmInstall(
   source: string,
-  options: SkillsInstallCommandOptions,
+  options: PluginInstallCommandOptions,
   logger: ReturnType<typeof createLogger>,
   startTime: number
 ): Promise<void> {
@@ -279,7 +293,7 @@ async function handleNpmInstall(
  */
 async function handleLocalInstall(
   source: string,
-  options: SkillsInstallCommandOptions,
+  options: PluginInstallCommandOptions,
   logger: ReturnType<typeof createLogger>,
   startTime: number
 ): Promise<void> {
@@ -337,7 +351,7 @@ async function handleLocalInstall(
  */
 async function handleZipInstall(
   source: string,
-  options: SkillsInstallCommandOptions,
+  options: PluginInstallCommandOptions,
   logger: ReturnType<typeof createLogger>,
   startTime: number
 ): Promise<void> {
@@ -381,7 +395,7 @@ async function installDevSkill(
   skillName: string,
   cwd: string,
   skillsDir: string,
-  options: SkillsInstallCommandOptions,
+  options: PluginInstallCommandOptions,
   logger: ReturnType<typeof createLogger>,
 ): Promise<{ name: string; installPath: string; sourcePath: string }> {
   const fsPath = skillNameToFsPath(skillName);
@@ -394,7 +408,7 @@ async function installDevSkill(
     throw new Error(
       `Skill "${skillName}" not built at ${sourcePath}\n` +
         `Run: ${buildCmd}\n` +
-        `Or use: vat skills install --build`
+        `Or use: vat claude plugin install --build`
     );
   }
 
@@ -417,7 +431,7 @@ async function installDevSkill(
  * Reads package.json vat.skills[] (skill name strings), symlinks each built skill to ~/.claude/skills/
  */
 async function handleDevInstall(
-  options: SkillsInstallCommandOptions,
+  options: PluginInstallCommandOptions,
   logger: ReturnType<typeof createLogger>,
   startTime: number
 ): Promise<void> {
@@ -472,7 +486,7 @@ function runSkillsBuild(
   logger: ReturnType<typeof createLogger>
 ): void {
   logger.info('🔨 Building skills first...');
-  const binPath = resolve(join(import.meta.dirname, '../../bin/vat.js'));
+  const binPath = resolve(join(import.meta.dirname, '../../../../bin/vat.js'));
   const buildArgs = ['skills', 'build'];
   if (skillName) {
     buildArgs.push('--skill', skillName);
@@ -490,20 +504,19 @@ function runSkillsBuild(
 async function handleExistingDevInstall(
   installPath: string,
   skillName: string,
-  options: SkillsInstallCommandOptions
+  options: PluginInstallCommandOptions
 ): Promise<boolean> {
   let existingIsSymlink = false;
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated install path
-    lstatSync(installPath);
+    const stat = lstatSync(installPath);
     if (!options.force) {
       throw new Error(
         `Skill "${skillName}" already installed at ${installPath}.\n` +
           `Use --force to overwrite.`
       );
     }
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated install path
-    existingIsSymlink = lstatSync(installPath).isSymbolicLink();
+    existingIsSymlink = stat.isSymbolicLink();
     if (!options.dryRun) {
       await rm(installPath, { recursive: true, force: true });
     }
@@ -519,7 +532,7 @@ async function handleExistingDevInstall(
  * Handle npm postinstall hook
  */
 async function handleNpmPostinstall(
-  options: SkillsInstallCommandOptions,
+  options: PluginInstallCommandOptions,
   logger: ReturnType<typeof createLogger>,
   startTime: number
 ): Promise<void> {
@@ -643,7 +656,7 @@ async function copyPluginTree(
  */
 async function prepareInstallation(
   skillName: string,
-  options: SkillsInstallCommandOptions
+  options: PluginInstallCommandOptions
 ): Promise<{ skillsDir: string; installPath: string }> {
   const skillsDir = options.skillsDir ?? getClaudeUserPaths().skillsDir;
   const installPath = join(skillsDir, skillName);
@@ -681,7 +694,7 @@ async function prepareInstallation(
 async function installSkillFromPath(
   skillPath: string,
   skillName: string,
-  options: SkillsInstallCommandOptions,
+  options: PluginInstallCommandOptions,
   logger: ReturnType<typeof createLogger>
 ): Promise<void> {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated path
@@ -754,7 +767,7 @@ function outputInstallSuccess(
     logger.info(`\n✅ Dry-run complete: ${skills.length} skill(s) would be installed`);
   } else {
     logger.info(`\n✅ Installed ${skills.length} skill(s)`);
-    logger.info(`\n💡 Run 'vat skills list' to verify installation`);
+    logger.info(`\n💡 Run 'vat claude plugin list' to verify installation`);
     logger.info(`   Restart Claude Code or run /reload-skills to use the new skill`);
   }
 }

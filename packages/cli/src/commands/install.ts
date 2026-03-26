@@ -22,7 +22,7 @@ import { handleCommandError } from '../utils/command-error.js';
 import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 
-import { writeYamlHeader } from './skills/install-helpers.js';
+import { writeYamlHeader } from './claude/plugin/helpers.js';
 
 export type ResourceType = 'agent-skill' | 'claude-plugin' | 'claude-marketplace';
 

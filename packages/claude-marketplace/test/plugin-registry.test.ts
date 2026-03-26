@@ -19,7 +19,8 @@ import {
   writeInstalledPlugins,
   writeKnownMarketplaces,
 } from '../src/install/plugin-registry.js';
-import type { ClaudeUserPaths } from '../src/paths/claude-paths.js';
+
+import { buildTestPaths } from './test-helpers.js';
 
 // String constants to avoid sonarjs/no-duplicate-string
 const MARKETPLACE_NAME = 'my-marketplace';
@@ -27,26 +28,6 @@ const PLUGIN_NAME = 'acme-tools';
 const VERSION = '1.0.0';
 const NPM_PACKAGE = '@acme/tools';
 const FIXED_TIMESTAMP = '2026-02-26T00:00:00.000Z';
-
-/**
- * Build test ClaudeUserPaths rooted in a temp base directory.
- * Uses a flat structure: base/.claude/plugins/... to avoid duplicating getClaudeUserPaths.
- */
-function buildTestPaths(base: string): ClaudeUserPaths {
-  const root = join(base, '.claude');
-  const plugins = join(root, 'plugins');
-  return {
-    claudeDir: root,
-    pluginsDir: plugins,
-    skillsDir: join(root, 'skills'),
-    marketplacesDir: join(plugins, 'marketplaces'),
-    pluginsCacheDir: join(plugins, 'cache'),
-    knownMarketplacesPath: join(plugins, 'known_marketplaces.json'),
-    installedPluginsPath: join(plugins, 'installed_plugins.json'),
-    userSettingsPath: join(root, 'settings.json'),
-    userDotJsonPath: join(base, '.claude.json'),
-  };
-}
 
 /**
  * Set up a fresh temp directory for a test suite and clean up after each test.
