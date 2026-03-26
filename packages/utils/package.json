@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/utils",
-  "version": "0.1.19",
+  "version": "0.1.20",
   "type": "module",
   "description": "Core utility functions with no external dependencies",
   "keywords": [
