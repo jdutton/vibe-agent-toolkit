@@ -178,6 +178,31 @@ function deprecatePackage(packageName: string, version: string, dryRun: boolean)
   return { success: false };
 }
 
+function addDistTag(packageName: string, version: string, tag: string, dryRun: boolean): { success: boolean; dryRun?: boolean } {
+  const fullPackageName = packageName === UMBRELLA_PACKAGE_NAME
+    ? UMBRELLA_PACKAGE_NAME
+    : `${VIBE_AGENT_TOOLKIT_SCOPE}${packageName}`;
+
+  log(`  Adding @${tag} tag to ${fullPackageName}@${version}...`, 'blue');
+
+  if (dryRun) {
+    log('    [DRY-RUN] Skipping actual tag addition', 'yellow');
+    return { success: true, dryRun: true };
+  }
+
+  const result = safeExecResult('npm', ['dist-tag', 'add', `${fullPackageName}@${version}`, tag], {
+    stdio: 'pipe',
+  });
+
+  if (result.success) {
+    log(`    ✅ @${tag} tag added`, 'green');
+    return { success: true };
+  }
+
+  log(`    ❌ Failed to add @${tag} tag`, 'red');
+  return { success: false };
+}
+
 function rollback(dryRun: boolean): void {
   log('\n🔄 ROLLBACK: Attempting to unpublish packages...', 'yellow');
   log('─'.repeat(60), 'yellow');
@@ -200,6 +225,31 @@ function rollback(dryRun: boolean): void {
   }
 
   cleanupManifest();
+}
+
+/**
+ * Phase 2: Update @next tag for stable releases if needed
+ */
+function updateNextTag(version: string, dryRun: boolean): void {
+  log('\n📋 Phase 2: Updating @next tag...', 'blue');
+  log('─'.repeat(60), 'blue');
+
+  for (const pkg of PACKAGES) {
+    const result = addDistTag(pkg, version, 'next', dryRun);
+
+    if (!result.success) {
+      log('\n❌ Failed to add @next tag!', 'red');
+      log(`   Package: ${pkg}`, 'red');
+      log('   All packages published but @next tag incomplete', 'red');
+      rollback(dryRun);
+      process.exit(1);
+    }
+  }
+
+  manifest.nextTagAdded = true;
+  saveManifest();
+  log('\n  ✅ @next tag added to all packages', 'green');
+  log('\n✅ Phase 2 complete', 'green');
 }
 
 function main(): void {
@@ -235,6 +285,7 @@ Examples:
 
   const isStable = semver.prerelease(version) === null;
   const primaryTag = isStable ? 'latest' : 'next';
+  const updateNext = isStable && process.env['UPDATE_NEXT'] === 'true';
 
   manifest.version = version;
   manifest.primaryTag = primaryTag;
@@ -243,12 +294,18 @@ Examples:
   log('\n' + '='.repeat(60), 'blue');
   log(`📦 Publishing vibe-agent-toolkit v${version}`, 'blue');
   log(`🏷️  Primary npm tag: @${primaryTag}`, 'blue');
+  if (updateNext) {
+    log('🏷️  Will also update @next tag', 'blue');
+  }
   if (dryRun) {
     log('🧪 DRY-RUN MODE', 'yellow');
   }
   log('='.repeat(60) + '\n', 'blue');
 
-  // Publish all packages
+  // Phase 1: Publish all packages with primary tag
+  log('📋 Phase 1: Publishing packages...', 'blue');
+  log('─'.repeat(60), 'blue');
+
   for (const pkg of PACKAGES) {
     const result = publishPackage(pkg, version, primaryTag, dryRun);
 
@@ -262,8 +319,24 @@ Examples:
     }
   }
 
+  log('\n✅ Phase 1 complete - all packages published', 'green');
+
+  // Phase 2: For stable versions, add @next tag if requested
+  if (updateNext) {
+    updateNextTag(version, dryRun);
+  }
+
   cleanupManifest();
-  log('\n✅ PUBLISH SUCCESSFUL', 'green');
+
+  log('\n' + '='.repeat(60), 'green');
+  log('✅ PUBLISH SUCCESSFUL', 'green');
+  log(`Version: ${version}`, 'green');
+  log(`Primary tag: @${primaryTag}`, 'green');
+  if (manifest.nextTagAdded) {
+    log('@next tag: Updated', 'green');
+  }
+  log('='.repeat(60), 'green');
+
   process.exit(0);
 }
 
