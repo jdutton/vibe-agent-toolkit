@@ -5,13 +5,22 @@ description: Use when setting up vat build, configuring plugin distribution for 
 
 # VAT Distribution: Build, Publish & Install
 
+## Scope
+
+This skill covers the **file-based install method for Claude Code CLI** (`~/.claude/plugins/`).
+This is the only install method VAT currently supports.
+
+For the full install landscape — Claude Desktop paths, enterprise CI deployment,
+Anthropic Cloud org management, MDM integration, and the `vat plugins uninstall`
+design — see [Install & Uninstall Architecture](vat-install-architecture.md).
+
 ## Overview
 
 VAT distributes skills as **Claude plugins** via npm packages. The pipeline:
 
 1. `vat build` compiles SKILL.md sources into plugin artifacts
 2. `npm publish` pushes the package to a registry
-3. `npm install` triggers a postinstall hook that registers the plugin in Claude's plugin system
+3. `npm install` triggers a postinstall hook that registers the plugin in Claude Code's plugin system
 
 Skills installed this way appear in Claude Code as `/plugin-name:skill-name`.
 

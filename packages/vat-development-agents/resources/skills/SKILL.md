@@ -38,6 +38,7 @@ non-TypeScript/JavaScript projects, or cases where you need deep framework-speci
 | npm publishing with plugin postinstall | `vibe-agent-toolkit:skills-distribution` |
 | `vat build` / `vat verify` orchestration | `vibe-agent-toolkit:skills-distribution` |
 | `--target claude-web` ZIP format | `vibe-agent-toolkit:skills-distribution` |
+| Install/uninstall methods, enterprise deployment, Desktop vs CLI paths | `vibe-agent-toolkit:install-architecture` |
 | `vat audit`, `--compat`, CI validation | `vibe-agent-toolkit:audit` |
 | VAT behaves unexpectedly, debugging VAT, testing local VAT changes, VAT_ROOT_DIR | `vibe-agent-toolkit:debugging` |
 
