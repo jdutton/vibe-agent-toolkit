@@ -597,7 +597,8 @@ See [docs/publishing.md](docs/publishing.md) for complete publishing workflow, v
 - Use `bun run bump-version <version>` for all version changes
 - All packages share same version (unified versioning)
 - RC versions stay in `[Unreleased]` section of CHANGELOG
-- Publishing is automated via GitHub Actions
+- Publishing is triggered by pushing a git tag: `git tag vX.Y.Z && git push origin main vX.Y.Z`
+- GitHub Actions then auto-publishes to npm and creates the GitHub release
 - Commands: `bun run build`, `bun run build:clean`
 
 ### Licensing Conventions
