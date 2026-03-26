@@ -301,6 +301,57 @@ describe('skills install --npm-postinstall plugin registry (system test)', () =>
       const knownPath = join(fakeHome, '.claude', 'plugins', 'known_marketplaces.json');
       expect(existsSync(knownPath)).toBe(false);
     });
+
+    it('removes stale skills from marketplace dir when reinstalled with fewer skills', () => {
+      const { packageDir: v1Dir, fakeHome } = suite.createTestContext();
+      const EXTRA_SKILL = 'acme-skill-extra';
+
+      // v1: base package with SKILL_NAME + EXTRA_SKILL in the plugin tree
+      createFakeNpmPackage(v1Dir, {
+        packageName: PACKAGE_NAME,
+        version: '1.0.0',
+        marketplaceName: MARKETPLACE_NAME,
+        pluginName: PLUGIN_NAME,
+        skillName: SKILL_NAME,
+      });
+      const extraSkillDir = join(
+        v1Dir, 'dist', '.claude', 'plugins', 'marketplaces',
+        MARKETPLACE_NAME, 'plugins', PLUGIN_NAME, 'skills', EXTRA_SKILL
+      );
+      mkdirSyncReal(extraSkillDir, { recursive: true });
+      writeTestFile(join(extraSkillDir, 'SKILL.md'), minimalSkillMd(EXTRA_SKILL));
+
+      // Install v1 — both skills land in the marketplace dir
+      const v1Result = suite.runPostinstall(v1Dir, fakeHome);
+      expect(v1Result.status).toBe(0);
+
+      const pluginSkillsDir = join(
+        fakeHome, '.claude', 'plugins', 'marketplaces',
+        MARKETPLACE_NAME, 'plugins', PLUGIN_NAME, 'skills'
+      );
+      expect(existsSync(join(pluginSkillsDir, SKILL_NAME))).toBe(true);
+      expect(existsSync(join(pluginSkillsDir, EXTRA_SKILL))).toBe(true);
+
+      // v2: package with only SKILL_NAME — EXTRA_SKILL has been removed
+      const v2Dir = join(fakeHome, '..', 'v2-package');
+      mkdirSyncReal(v2Dir, { recursive: true });
+      createFakeNpmPackage(v2Dir, {
+        packageName: PACKAGE_NAME,
+        version: '2.0.0',
+        marketplaceName: MARKETPLACE_NAME,
+        pluginName: PLUGIN_NAME,
+        skillName: SKILL_NAME,
+      });
+
+      // Reinstall via v2 against the same Claude installation (same fakeHome)
+      const v2Result = suite.runPostinstall(v2Dir, fakeHome);
+      expect(v2Result.status).toBe(0);
+
+      // SKILL_NAME must still be present
+      expect(existsSync(join(pluginSkillsDir, SKILL_NAME))).toBe(true);
+      // EXTRA_SKILL must be gone — stale files from the previous version must not persist
+      expect(existsSync(join(pluginSkillsDir, EXTRA_SKILL))).toBe(false);
+    });
   });
 
   describe('when dist/.claude/plugins/marketplaces/ does NOT exist', () => {

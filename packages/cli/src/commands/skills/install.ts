@@ -599,8 +599,10 @@ async function copyPluginTree(
     const srcMpDir = join(marketplacesDir, mpName);
     const destMpDir = join(paths.marketplacesDir, mpName);
 
-    // Copy entire marketplace directory tree
+    // Replace the marketplace directory entirely so skills removed from the
+    // package do not persist in the user's Claude installation.
     logger.info(`   Copying marketplace: ${mpName} → ${destMpDir}`);
+    await rm(destMpDir, { recursive: true, force: true });
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Resolved from constant subpath
     await mkdir(destMpDir, { recursive: true });
     await cp(srcMpDir, destMpDir, { recursive: true, force: true });
