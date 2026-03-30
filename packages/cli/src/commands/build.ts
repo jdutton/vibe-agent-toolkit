@@ -2,7 +2,8 @@
  * `vat build` — top-level build orchestration
  *
  * Builds everything the project describes, in dependency order:
- *   1. vat skills build  (portable dist/skills/ output)
+ *   1. vat skills build       (portable dist/skills/ output)
+ *   2. vat claude plugin build (Claude plugin tree, skipped if no claude config)
  */
 
 import { spawnSync } from 'node:child_process';
@@ -10,6 +11,7 @@ import { spawnSync } from 'node:child_process';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../utils/command-error.js';
+import { loadConfig } from '../utils/config-loader.js';
 import { writeYamlOutput } from '../utils/output.js';
 
 import { createPhaseContext, type Phase } from './phase-utils.js';
@@ -23,19 +25,19 @@ export function createBuildTopLevelCommand(): Command {
   const command = new Command('build');
 
   command
-    .description('Build all project artifacts in dependency order (skills)')
-    .option('--only <phase>', 'Build only a specific phase: skills')
+    .description('Build all project artifacts in dependency order (skills → claude plugin tree)')
+    .option('--only <phase>', 'Build only a specific phase: skills, claude')
     .option('--debug', 'Enable debug logging')
     .action(buildTopLevelCommand)
     .addHelpText(
       'after',
       `
 Description:
-  Builds all project artifacts in dependency order. Equivalent to running
-  vat skills build.
+  Builds all project artifacts in dependency order.
 
   Phases:
-    skills  → builds dist/skills/ from package.json vat.skills (platform-agnostic)
+    skills  → builds dist/skills/ from vibe-agent-toolkit.config.yaml (platform-agnostic)
+    claude  → builds dist/.claude/plugins/ from dist/skills/ + config (skipped if no claude config)
 
 Output:
   YAML summary for each phase → stdout
@@ -49,13 +51,27 @@ Exit Codes:
 Example:
   $ vat build                         # Build everything
   $ vat build --only skills           # Build portable skills only
+  $ vat build --only claude           # Build Claude plugin tree only
 `
     );
 
   return command;
 }
 
-function buildPhaseList(options: BuildCommandOptions): Phase[] {
+/**
+ * Check whether the current project has a claude.marketplaces config.
+ * Returns false if no config file found or no claude section.
+ */
+function hasClaudeMarketplacesConfig(cwd: string): boolean {
+  try {
+    const config = loadConfig(cwd);
+    return Boolean(config?.claude?.marketplaces && Object.keys(config.claude.marketplaces).length > 0);
+  } catch {
+    return false;
+  }
+}
+
+function buildPhaseList(options: BuildCommandOptions, cwd: string): Phase[] {
   const { only } = options;
   const phases: Phase[] = [];
 
@@ -63,12 +79,20 @@ function buildPhaseList(options: BuildCommandOptions): Phase[] {
     phases.push({ name: 'skills', args: ['skills', 'build'] });
   }
 
+  if (!only || only === 'claude') {
+    // Only include the claude phase when a marketplace config is present
+    if (hasClaudeMarketplacesConfig(cwd)) {
+      phases.push({ name: 'claude', args: ['claude', 'plugin', 'build'] });
+    }
+  }
+
   return phases;
 }
 
 async function buildTopLevelCommand(options: BuildCommandOptions): Promise<void> {
-  const phases = buildPhaseList(options);
-  const { logger, startTime, binPath } = createPhaseContext(options.debug, phases, options.only, 'skills');
+  const cwd = process.cwd();
+  const phases = buildPhaseList(options, cwd);
+  const { logger, startTime, binPath } = createPhaseContext(options.debug, phases, options.only, 'skills, claude');
 
   try {
     logger.info(`🔨 vat build (phases: ${phases.map((p) => p.name).join(' → ')})`);

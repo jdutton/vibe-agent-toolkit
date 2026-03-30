@@ -3,67 +3,133 @@
 
 /**
  * System tests for claude plugin install --dev command
- * Tests symlink-based development installation from package.json vat.skills[]
+ *
+ * The --dev command now reads the pre-built plugin tree from
+ * dist/.claude/plugins/marketplaces/ and creates symlinks to dist/skills/.
+ * Skills appear in Claude Code as {plugin}:{skill} instead of the flat {skill} name.
  */
 
-import { existsSync, lstatSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync } from 'node:fs';
+import * as fs from 'node:fs';
 import { join } from 'node:path';
 
-import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+import { afterAll, describe, expect, it } from 'vitest';
 
 import {
+  createPackageAndHomeContext,
+  createTempDirTracker,
   executeCliAndParseYaml,
-  setupDevTestProject,
-} from './test-helpers/index.js';
+  fakeHomeEnv,
+  getBinPath,
+  writeTestFile,
+} from './test-common.js';
 
-const binPath = join(process.cwd(), 'packages', 'cli', 'dist', 'bin.js');
+const binPath = getBinPath(import.meta.url);
 
-let tmpDir: string;
-
-beforeAll(() => {
-  tmpDir = mkdtempSync(join(normalizedTmpdir(), 'vat-install-dev-test-'));
-});
+const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-install-dev-test-');
 
 afterAll(() => {
-  rmSync(tmpDir, { recursive: true, force: true });
+  cleanupTempDirs();
 });
 
+const MARKETPLACE_NAME = 'test-market';
+const PLUGIN_NAME = 'test-plugin';
+
 /**
- * Setup a dev test case: creates skillsDir and projectDir with given skills
+ * Create a test project with:
+ * - package.json containing vat.skills[] metadata
+ * - dist/skills/{name}/ for built skills
+ * - dist/.claude/plugins/marketplaces/{market}/plugins/{plugin}/skills/{name}/ for the plugin tree
+ * - dist/.claude/plugins/marketplaces/{market}/.claude-plugin/marketplace.json
+ * - dist/.claude/plugins/marketplaces/{market}/plugins/{plugin}/.claude-plugin/plugin.json
  */
-function setupTestCase(
+function createDevTestProject(
+  baseDir: string,
   name: string,
   skills: Array<{ name: string; built: boolean }>
-): { skillsDir: string; projectDir: string } {
-  const skillsDir = join(tmpDir, `skills-${name}`);
-  mkdirSyncReal(skillsDir, { recursive: true });
-  const projectDir = setupDevTestProject(tmpDir, `proj-${name}`, skills);
-  return { skillsDir, projectDir };
+): { projectDir: string; fakeHome: string } {
+  const { packageDir: projectDir, fakeHome } = createPackageAndHomeContext(join(baseDir, name));
+
+  fs.writeFileSync(
+    join(projectDir, 'package.json'),
+    JSON.stringify({
+      name: '@test/my-package',
+      version: '1.0.0',
+      vat: { version: '1.0', skills: skills.map(s => s.name) },
+    })
+  );
+
+  // Create dist/skills/ directories for built skills
+  for (const skill of skills) {
+    if (skill.built) {
+      const skillDir = join(projectDir, 'dist', 'skills', skill.name);
+      mkdirSyncReal(skillDir, { recursive: true });
+      writeTestFile(join(skillDir, 'SKILL.md'), `# ${skill.name}\nTest skill content`);
+    }
+  }
+
+  // Create plugin tree structure (mirrors what vat claude plugin build produces)
+  const mpDir = join(projectDir, 'dist', '.claude', 'plugins', 'marketplaces', MARKETPLACE_NAME);
+  const claudePluginDir = join(mpDir, '.claude-plugin');
+  const pluginDir = join(mpDir, 'plugins', PLUGIN_NAME);
+  const pluginClaudePluginDir = join(pluginDir, '.claude-plugin');
+
+  mkdirSyncReal(claudePluginDir, { recursive: true });
+  mkdirSyncReal(pluginClaudePluginDir, { recursive: true });
+
+  writeTestFile(
+    join(claudePluginDir, 'marketplace.json'),
+    JSON.stringify({ name: MARKETPLACE_NAME, owner: { name: 'test' }, plugins: [{ name: PLUGIN_NAME }] })
+  );
+  writeTestFile(
+    join(pluginClaudePluginDir, 'plugin.json'),
+    JSON.stringify({ name: PLUGIN_NAME, description: 'test plugin' })
+  );
+
+  // Add skill dirs to plugin tree (only for built skills)
+  for (const skill of skills) {
+    if (skill.built) {
+      const skillInPluginDir = join(pluginDir, 'skills', skill.name);
+      mkdirSyncReal(skillInPluginDir, { recursive: true });
+      writeTestFile(join(skillInPluginDir, 'SKILL.md'), `# ${skill.name}\nTest skill content`);
+    }
+  }
+
+  return { projectDir, fakeHome };
 }
 
 /**
- * Execute --dev install and return parsed YAML result
+ * Execute --dev install with a fake home directory
  */
 function executeDevInstall(
-  skillsDir: string,
   projectDir: string,
+  fakeHome: string,
   extraArgs: string[] = []
-): ReturnType<typeof executeCliAndParseYaml> {
-  return executeCliAndParseYaml(
+): { status: number | null; stderr: string; parsed: Record<string, unknown> } {
+  const { result, parsed } = executeCliAndParseYaml(
     binPath,
-    ['claude', 'plugin', 'install', '--dev', '-s', skillsDir, ...extraArgs],
-    { cwd: projectDir }
+    ['claude', 'plugin', 'install', '--dev', ...extraArgs],
+    { cwd: projectDir, env: fakeHomeEnv(fakeHome) }
   );
+  return { status: result.status, stderr: result.stderr, parsed };
+}
+
+/**
+ * Get expected symlink path for a skill in the fake home
+ */
+function expectedSkillPath(fakeHome: string, skillName: string): string {
+  return join(fakeHome, '.claude', 'plugins', 'marketplaces', MARKETPLACE_NAME, 'plugins', PLUGIN_NAME, 'skills', skillName);
 }
 
 describe('claude plugin install --dev command (system test)', () => {
   it('should symlink a single skill', () => {
-    const { skillsDir, projectDir } = setupTestCase('single', [
+    const tempDir = createTempDir();
+    const { projectDir, fakeHome } = createDevTestProject(tempDir, 'single', [
       { name: 'my-skill', built: true },
     ]);
 
-    const { status, parsed } = executeDevInstall(skillsDir, projectDir);
+    const { status, parsed } = executeDevInstall(projectDir, fakeHome);
 
     expect(status).toBe(0);
     expect(parsed.status).toBe('success');
@@ -71,96 +137,102 @@ describe('claude plugin install --dev command (system test)', () => {
     expect(parsed.symlink).toBe(true);
     expect(parsed.skillsInstalled).toBe(1);
 
-    const installedPath = join(skillsDir, 'my-skill');
+    const installedPath = expectedSkillPath(fakeHome, 'my-skill');
     expect(existsSync(installedPath)).toBe(true);
     expect(lstatSync(installedPath).isSymbolicLink()).toBe(true);
   });
 
   it('should symlink all skills from multi-skill package', () => {
-    const { skillsDir, projectDir } = setupTestCase('multi', [
+    const tempDir = createTempDir();
+    const { projectDir, fakeHome } = createDevTestProject(tempDir, 'multi', [
       { name: 'skill-alpha', built: true },
       { name: 'skill-beta', built: true },
     ]);
 
-    const { status, parsed } = executeDevInstall(skillsDir, projectDir);
+    const { status, parsed } = executeDevInstall(projectDir, fakeHome);
 
     expect(status).toBe(0);
     expect(parsed.status).toBe('success');
     expect(parsed.skillsInstalled).toBe(2);
-    expect(lstatSync(join(skillsDir, 'skill-alpha')).isSymbolicLink()).toBe(true);
-    expect(lstatSync(join(skillsDir, 'skill-beta')).isSymbolicLink()).toBe(true);
+    expect(lstatSync(expectedSkillPath(fakeHome, 'skill-alpha')).isSymbolicLink()).toBe(true);
+    expect(lstatSync(expectedSkillPath(fakeHome, 'skill-beta')).isSymbolicLink()).toBe(true);
   });
 
-  it('should filter by --name', () => {
-    const { skillsDir, projectDir } = setupTestCase('filter', [
-      { name: 'wanted-skill', built: true },
-      { name: 'other-skill', built: true },
-    ]);
+  it('should fail when plugin tree not found', () => {
+    const tempDir = createTempDir();
+    const { packageDir: projectDir, fakeHome } = createPackageAndHomeContext(join(tempDir, 'no-tree'));
 
-    const { status, parsed } = executeDevInstall(skillsDir, projectDir, ['--name', 'wanted-skill']);
+    fs.writeFileSync(
+      join(projectDir, 'package.json'),
+      JSON.stringify({ name: '@test/my-package', version: '1.0.0', vat: { skills: ['my-skill'] } })
+    );
+    // No plugin tree created
 
-    expect(status).toBe(0);
-    expect(parsed.skillsInstalled).toBe(1);
-    expect(existsSync(join(skillsDir, 'wanted-skill'))).toBe(true);
-    expect(existsSync(join(skillsDir, 'other-skill'))).toBe(false);
-  });
-
-  it('should fail when skill not built', () => {
-    const { skillsDir, projectDir } = setupTestCase('not-built', [
-      { name: 'unbuilt-skill', built: false },
-    ]);
-
-    const { status, stderr } = executeDevInstall(skillsDir, projectDir);
+    const { status, stderr } = executeDevInstall(projectDir, fakeHome);
 
     expect(status).not.toBe(0);
-    expect(stderr).toContain('not built');
+    expect(stderr).toContain('Plugin tree not found');
   });
 
   it('should not create symlinks with --dry-run', () => {
-    const { skillsDir, projectDir } = setupTestCase('dryrun', [
+    const tempDir = createTempDir();
+    const { projectDir, fakeHome } = createDevTestProject(tempDir, 'dryrun', [
       { name: 'dry-skill', built: true },
     ]);
 
-    const { status, parsed } = executeDevInstall(skillsDir, projectDir, ['--dry-run']);
+    const { status, parsed } = executeDevInstall(projectDir, fakeHome, ['--dry-run']);
 
     expect(status).toBe(0);
     expect(parsed.status).toBe('success');
     expect(parsed.dryRun).toBe(true);
     expect(parsed.skillsInstalled).toBe(1);
-    expect(existsSync(join(skillsDir, 'dry-skill'))).toBe(false);
+    expect(existsSync(expectedSkillPath(fakeHome, 'dry-skill'))).toBe(false);
   });
 
-  it('should fail without --force when skill exists', () => {
-    const { skillsDir, projectDir } = setupTestCase('exists', [
+  it('should be idempotent on re-run (overwrites without --force)', () => {
+    const tempDir = createTempDir();
+    const { projectDir, fakeHome } = createDevTestProject(tempDir, 'idempotent', [
       { name: 'dup-skill', built: true },
     ]);
 
     // First install succeeds
-    const first = executeDevInstall(skillsDir, projectDir);
+    const first = executeDevInstall(projectDir, fakeHome);
     expect(first.status).toBe(0);
 
-    // Second install without --force fails
-    const { status: secondStatus, stderr } = executeDevInstall(skillsDir, projectDir);
-
-    expect(secondStatus).not.toBe(0);
-    expect(stderr).toContain('already installed');
-  });
-
-  it('should overwrite with --force', () => {
-    const { skillsDir, projectDir } = setupTestCase('force', [
-      { name: 'force-skill', built: true },
-    ]);
-
-    // First install
-    const first = executeDevInstall(skillsDir, projectDir);
-    expect(first.status).toBe(0);
-
-    // Second install with --force
-    const { status, parsed } = executeDevInstall(skillsDir, projectDir, ['--force']);
+    // Second install also succeeds — marketplace dir is always reset
+    const { status, parsed } = executeDevInstall(projectDir, fakeHome);
 
     expect(status).toBe(0);
     expect(parsed.status).toBe('success');
     expect(parsed.skillsInstalled).toBe(1);
-    expect(lstatSync(join(skillsDir, 'force-skill')).isSymbolicLink()).toBe(true);
+    expect(lstatSync(expectedSkillPath(fakeHome, 'dup-skill')).isSymbolicLink()).toBe(true);
+  });
+
+  it('should warn and skip skills not in dist/skills/', () => {
+    const tempDir = createTempDir();
+    // Create plugin tree with unbuilt-skill referenced but no dist/skills/unbuilt-skill/
+    const { packageDir: projectDir, fakeHome } = createPackageAndHomeContext(join(tempDir, 'missing-built'));
+
+    fs.writeFileSync(
+      join(projectDir, 'package.json'),
+      JSON.stringify({ name: '@test/my-package', version: '1.0.0', vat: { skills: ['unbuilt-skill'] } })
+    );
+
+    // Create plugin tree but no dist/skills/unbuilt-skill
+    const mpDir = join(projectDir, 'dist', '.claude', 'plugins', 'marketplaces', MARKETPLACE_NAME);
+    const pluginDir = join(mpDir, 'plugins', PLUGIN_NAME);
+    const skillInPluginDir = join(pluginDir, 'skills', 'unbuilt-skill');
+    mkdirSyncReal(join(mpDir, '.claude-plugin'), { recursive: true });
+    mkdirSyncReal(join(pluginDir, '.claude-plugin'), { recursive: true });
+    mkdirSyncReal(skillInPluginDir, { recursive: true });
+    writeTestFile(join(mpDir, '.claude-plugin', 'marketplace.json'), JSON.stringify({ name: MARKETPLACE_NAME }));
+    writeTestFile(join(pluginDir, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: PLUGIN_NAME }));
+    writeTestFile(join(skillInPluginDir, 'SKILL.md'), '# unbuilt-skill');
+
+    const { status, parsed } = executeDevInstall(projectDir, fakeHome);
+
+    // Should exit 0 but 0 skills installed (all skipped due to missing dist)
+    expect(status).toBe(0);
+    expect(parsed.skillsInstalled).toBe(0);
   });
 });

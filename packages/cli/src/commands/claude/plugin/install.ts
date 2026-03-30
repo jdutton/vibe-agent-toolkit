@@ -15,7 +15,7 @@
 
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { basename, join, relative, resolve } from 'node:path';
 
 import { getClaudeUserPaths, installPlugin } from '@vibe-agent-toolkit/claude-marketplace';
 import { normalizedTmpdir, safeExecSync } from '@vibe-agent-toolkit/utils';
@@ -37,6 +37,46 @@ import {
 /** Relative path within a VAT npm package to its pre-built plugin structure. */
 const PLUGIN_MARKETPLACES_SUBPATH = join('dist', '.claude', 'plugins', 'marketplaces');
 const PACKAGE_JSON = 'package.json';
+
+/**
+ * List immediate subdirectory names inside a directory.
+ * Returns empty array when the directory does not exist.
+ */
+function listSubdirectories(dir: string): string[] {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller validates dir
+  if (!existsSync(dir)) return [];
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller validates dir
+  return readdirSync(dir, { withFileTypes: true })
+    .filter(d => d.isDirectory())
+    .map(d => d.name);
+}
+
+/**
+ * Register a plugin in the Claude plugin registry, logging a warning on failure.
+ */
+async function registerPlugin(
+  mpName: string,
+  pluginName: string,
+  pluginDir: string,
+  version: string,
+  packageName: string,
+  paths: ReturnType<typeof getClaudeUserPaths>,
+  logger: ReturnType<typeof createLogger>
+): Promise<void> {
+  try {
+    await installPlugin({
+      marketplaceName: mpName,
+      pluginName,
+      pluginDir,
+      version,
+      source: { source: 'npm', package: packageName, version },
+      paths,
+    });
+    logger.info(`   Registered plugin ${pluginName}@${mpName} in Claude plugin registry`);
+  } catch (error) {
+    logger.info(`   Warning: Could not register plugin ${pluginName}: ${String(error)}`);
+  }
+}
 
 /**
  * Install from a pre-built plugin tree: read package.json, copy tree, output success.
@@ -387,48 +427,220 @@ async function handleZipInstall(
   process.exit(0);
 }
 
+
 /**
- * Install a single skill as a dev symlink.
- * Extracted from handleDevInstall to reduce cognitive complexity.
+ * Prepare destination for a dev symlink: remove any existing entry if --force.
+ * Throws if the path exists and --force was not passed.
  */
-async function installDevSkill(
-  skillName: string,
-  cwd: string,
-  skillsDir: string,
-  options: PluginInstallCommandOptions,
-  logger: ReturnType<typeof createLogger>,
-): Promise<{ name: string; installPath: string; sourcePath: string }> {
-  const fsPath = skillNameToFsPath(skillName);
-  const sourcePath = resolve(cwd, 'dist', 'skills', fsPath);
-  const installPath = join(skillsDir, skillName);
-
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated path from package.json
-  if (!existsSync(sourcePath)) {
-    const buildCmd = options.name ? `vat skills build --skill ${skillName}` : 'vat skills build';
-    throw new Error(
-      `Skill "${skillName}" not built at ${sourcePath}\n` +
-        `Run: ${buildCmd}\n` +
-        `Or use: vat claude plugin install --build`
-    );
+async function prepareDevSymlinkDest(
+  destPath: string,
+  skillFsName: string,
+  options: PluginInstallCommandOptions
+): Promise<void> {
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
+    lstatSync(destPath);
+    if (!options.force) {
+      throw new Error(
+        `Skill "${skillFsName}" already installed at ${destPath}.\n` +
+          `Use --force to overwrite.`
+      );
+    }
+    if (!options.dryRun) {
+      await rm(destPath, { recursive: true, force: true });
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('already installed')) {
+      throw error;
+    }
+    // Does not exist — that's fine
   }
-
-  const existingIsSymlink = await handleExistingDevInstall(installPath, skillName, options);
-
-  if (!options.dryRun) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Skills directory from config
-    await mkdir(skillsDir, { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated paths
-    await symlink(sourcePath, installPath, 'dir');
-  }
-
-  const action = existingIsSymlink ? 'Re-symlinked' : 'Symlinked';
-  logger.info(`   ${options.dryRun ? 'Would symlink' : action}: ${skillName} → ${sourcePath}`);
-  return { name: skillName, installPath, sourcePath };
 }
 
 /**
- * Handle development mode installation (symlinks)
- * Reads package.json vat.skills[] (skill name strings), symlinks each built skill to ~/.claude/skills/
+ * Symlink a single skill directory from dist/skills/{name} into the plugin tree.
+ * Returns install info, or null when the skill is not built (skips with a warning).
+ */
+async function symlinkDevSkill(
+  skillFsName: string,
+  destSkillsDir: string,
+  cwd: string,
+  pluginName: string,
+  options: PluginInstallCommandOptions,
+  logger: ReturnType<typeof createLogger>
+): Promise<{ name: string; installPath: string; sourcePath: string } | null> {
+  const srcSkillPath = resolve(cwd, 'dist', 'skills', skillFsName);
+  const destSkillPath = join(destSkillsDir, skillFsName);
+
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
+  if (!existsSync(srcSkillPath)) {
+    logger.info(`   Warning: skill not built at ${srcSkillPath} — skipping symlink`);
+    return null;
+  }
+
+  await prepareDevSymlinkDest(destSkillPath, skillFsName, options);
+
+  if (!options.dryRun) {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
+    await symlink(srcSkillPath, destSkillPath, 'dir');
+  }
+
+  logger.info(`   Symlinked: ${relative(cwd, destSkillPath)} → ${srcSkillPath}`);
+  return {
+    name: `${pluginName}:${skillFsName}`,
+    installPath: destSkillPath,
+    sourcePath: srcSkillPath,
+  };
+}
+
+interface DevPluginContext {
+  mpName: string;
+  pluginName: string;
+  srcPluginDir: string;
+  destPluginDir: string;
+  packageName: string;
+  version: string;
+  paths: ReturnType<typeof getClaudeUserPaths>;
+}
+
+/**
+ * Symlink all skill directories from a plugin's source skills dir into the destination.
+ */
+async function symlinkPluginSkills(
+  srcPluginDir: string,
+  destPluginDir: string,
+  pluginName: string,
+  cwd: string,
+  options: PluginInstallCommandOptions,
+  logger: ReturnType<typeof createLogger>
+): Promise<Array<{ name: string; installPath: string; sourcePath: string }>> {
+  const installed: Array<{ name: string; installPath: string; sourcePath: string }> = [];
+  const srcSkillsDir = join(srcPluginDir, 'skills');
+
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
+  if (!existsSync(srcSkillsDir)) {
+    return installed;
+  }
+
+  const destSkillsDir = join(destPluginDir, 'skills');
+  if (!options.dryRun) {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
+    await mkdir(destSkillsDir, { recursive: true });
+  }
+
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
+  const skillEntries = readdirSync(srcSkillsDir, { withFileTypes: true }).filter(d => d.isDirectory());
+  for (const skillEntry of skillEntries) {
+    const result = await symlinkDevSkill(skillEntry.name, destSkillsDir, cwd, pluginName, options, logger);
+    if (result) {
+      installed.push(result);
+    }
+  }
+
+  return installed;
+}
+
+/**
+ * Dev-install a single plugin: copy non-skill content, symlink skills, register.
+ */
+async function devInstallPlugin(
+  ctx: DevPluginContext,
+  cwd: string,
+  options: PluginInstallCommandOptions,
+  logger: ReturnType<typeof createLogger>
+): Promise<Array<{ name: string; installPath: string; sourcePath: string }>> {
+  const { mpName, pluginName, srcPluginDir, destPluginDir, packageName, version, paths } = ctx;
+
+  if (!options.dryRun) {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
+    await mkdir(destPluginDir, { recursive: true });
+  }
+
+  // Copy non-skill entries (e.g. .claude-plugin/)
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
+  for (const entry of readdirSync(srcPluginDir, { withFileTypes: true })) {
+    if (entry.name !== 'skills' && !options.dryRun) {
+      const srcEntry = join(srcPluginDir, entry.name);
+      const destEntry = join(destPluginDir, entry.name);
+      await cp(srcEntry, destEntry, { recursive: true, force: true });
+    }
+  }
+
+  const installed = await symlinkPluginSkills(srcPluginDir, destPluginDir, pluginName, cwd, options, logger);
+
+  // Register plugin in Claude plugin registry
+  if (!options.dryRun) {
+    await registerPlugin(mpName, pluginName, destPluginDir, version, packageName, paths, logger);
+  }
+
+  return installed;
+}
+
+/**
+ * Dev-install a single marketplace: reset dir, copy non-plugin content, install each plugin.
+ */
+async function devInstallMarketplace(
+  mpName: string,
+  srcMpDir: string,
+  packageInfo: { name: string; version: string },
+  cwd: string,
+  options: PluginInstallCommandOptions,
+  logger: ReturnType<typeof createLogger>
+): Promise<Array<{ name: string; installPath: string; sourcePath: string }>> {
+  const paths = getClaudeUserPaths();
+  const destMpDir = join(paths.marketplacesDir, mpName);
+  const installed: Array<{ name: string; installPath: string; sourcePath: string }> = [];
+
+  if (!options.dryRun) {
+    await rm(destMpDir, { recursive: true, force: true });
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
+    await mkdir(destMpDir, { recursive: true });
+  }
+  logger.info(`   Marketplace: ${mpName} → ${destMpDir}`);
+
+  // Copy non-plugin content (e.g. .claude-plugin/marketplace.json)
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
+  for (const entry of readdirSync(srcMpDir, { withFileTypes: true })) {
+    if (entry.name !== 'plugins' && !options.dryRun) {
+      const srcEntry = join(srcMpDir, entry.name);
+      const destEntry = join(destMpDir, entry.name);
+      await cp(srcEntry, destEntry, { recursive: true, force: true });
+    }
+  }
+
+  const pluginsDir = join(srcMpDir, 'plugins');
+
+  for (const pluginName of listSubdirectories(pluginsDir)) {
+    const results = await devInstallPlugin(
+      {
+        mpName,
+        pluginName,
+        srcPluginDir: join(pluginsDir, pluginName),
+        destPluginDir: join(destMpDir, 'plugins', pluginName),
+        packageName: packageInfo.name,
+        version: packageInfo.version,
+        paths,
+      },
+      cwd,
+      options,
+      logger
+    );
+    installed.push(...results);
+  }
+
+  return installed;
+}
+
+/**
+ * Handle development mode installation via plugin tree (symlinks).
+ *
+ * Reads the pre-built plugin tree from dist/.claude/plugins/marketplaces/:
+ * - Copies non-skill content (.claude-plugin/ dirs) to ~/.claude/plugins/
+ * - For each skill directory under plugins/{plugin}/skills/{name}/, creates a
+ *   symlink to the corresponding dist/skills/{name}/ directory
+ * - Registers each plugin in the Claude plugin registry (same as copyPluginTree)
+ *
+ * Skills appear in Claude Code as {plugin}:{skill} instead of the flat {skill} name.
  */
 async function handleDevInstall(
   options: PluginInstallCommandOptions,
@@ -445,31 +657,30 @@ async function handleDevInstall(
   const cwd = process.cwd();
 
   if (options.build) {
-    runSkillsBuild(cwd, options.name, logger);
+    runBuild(cwd, logger);
   }
 
-  // Read package.json for skill names
-  const { packageJson, skills } = await readPackageJsonVatMetadata(cwd);
-  logger.info(`📥 Dev-installing skills from ${packageJson.name}`);
-
-  // Filter by --name if specified
-  const skillNames = options.name
-    ? skills.filter(s => s === options.name)
-    : skills;
-
-  if (skillNames.length === 0) {
-    const msg = options.name
-      ? `Skill "${options.name}" not found in package. Available: ${skills.join(', ')}`
-      : `No skills found in ${packageJson.name}`;
-    throw new Error(msg);
+  // Check for pre-built plugin tree
+  const marketplacesDir = join(cwd, PLUGIN_MARKETPLACES_SUBPATH);
+  if (!existsSync(marketplacesDir)) {
+    throw new Error(
+      `Plugin tree not found at ${marketplacesDir}\n` +
+        `Run: vat build first (builds the plugin tree)`
+    );
   }
 
-  const skillsDir = options.skillsDir ?? getClaudeUserPaths().skillsDir;
+  // Read package.json for package name/version
+  const pkgRaw = readFileSync(join(cwd, PACKAGE_JSON), 'utf-8');
+  const packageJson = JSON.parse(pkgRaw) as { name: string; version?: string };
+  logger.info(`📥 Dev-installing plugin tree from ${packageJson.name}`);
+
+  const packageInfo = { name: packageJson.name, version: packageJson.version ?? '0.0.0' };
   const installed: Array<{ name: string; installPath: string; sourcePath: string }> = [];
 
-  for (const skillName of skillNames) {
-    const result = await installDevSkill(skillName, cwd, skillsDir, options, logger);
-    installed.push(result);
+  for (const mpName of listSubdirectories(marketplacesDir)) {
+    const srcMpDir = join(marketplacesDir, mpName);
+    const results = await devInstallMarketplace(mpName, srcMpDir, packageInfo, cwd, options, logger);
+    installed.push(...results);
   }
 
   const duration = Date.now() - startTime;
@@ -478,55 +689,21 @@ async function handleDevInstall(
 }
 
 /**
- * Shell out to vat skills build
+ * Shell out to vat build (skills + claude plugin tree)
  */
-function runSkillsBuild(
+function runBuild(
   cwd: string,
-  skillName: string | undefined,
   logger: ReturnType<typeof createLogger>
 ): void {
-  logger.info('🔨 Building skills first...');
+  logger.info('🔨 Building first (skills + plugin tree)...');
   const binPath = resolve(join(import.meta.dirname, '../../../../bin/vat.js'));
-  const buildArgs = ['skills', 'build'];
-  if (skillName) {
-    buildArgs.push('--skill', skillName);
-  }
-  safeExecSync('node', [binPath, ...buildArgs], {
+  safeExecSync('node', [binPath, 'build'], {
     cwd,
     stdio: ['inherit', 'inherit', 'inherit'],
   });
   logger.info('');
 }
 
-/**
- * Check if a skill is already installed at the target path
- */
-async function handleExistingDevInstall(
-  installPath: string,
-  skillName: string,
-  options: PluginInstallCommandOptions
-): Promise<boolean> {
-  let existingIsSymlink = false;
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated install path
-    const stat = lstatSync(installPath);
-    if (!options.force) {
-      throw new Error(
-        `Skill "${skillName}" already installed at ${installPath}.\n` +
-          `Use --force to overwrite.`
-      );
-    }
-    existingIsSymlink = stat.isSymbolicLink();
-    if (!options.dryRun) {
-      await rm(installPath, { recursive: true, force: true });
-    }
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('already installed')) {
-      throw error;
-    }
-  }
-  return existingIsSymlink;
-}
 
 /**
  * Handle npm postinstall hook
@@ -602,13 +779,7 @@ async function copyPluginTree(
   const paths = getClaudeUserPaths();
   const version = packageJson.version ?? '0.0.0';
 
-  // Scan for marketplace directories
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Resolved from constant subpath
-  const marketplaceNames = readdirSync(marketplacesDir, { withFileTypes: true })
-    .filter(d => d.isDirectory())
-    .map(d => d.name);
-
-  for (const mpName of marketplaceNames) {
+  for (const mpName of listSubdirectories(marketplacesDir)) {
     const srcMpDir = join(marketplacesDir, mpName);
     const destMpDir = join(paths.marketplacesDir, mpName);
 
@@ -620,33 +791,10 @@ async function copyPluginTree(
     await mkdir(destMpDir, { recursive: true });
     await cp(srcMpDir, destMpDir, { recursive: true, force: true });
 
-    // Discover plugins within the marketplace for registry updates
-    const pluginsDir = join(srcMpDir, 'plugins');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Resolved from constant subpath
-    if (!existsSync(pluginsDir)) {
-      continue;
-    }
-
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Resolved from constant subpath
-    const pluginNames = readdirSync(pluginsDir, { withFileTypes: true })
-      .filter(d => d.isDirectory())
-      .map(d => d.name);
-
-    for (const pluginName of pluginNames) {
+    // Register each plugin within the marketplace
+    for (const pluginName of listSubdirectories(join(srcMpDir, 'plugins'))) {
       const pluginDir = join(destMpDir, 'plugins', pluginName);
-      try {
-        await installPlugin({
-          marketplaceName: mpName,
-          pluginName,
-          pluginDir,
-          version,
-          source: { source: 'npm', package: packageJson.name, version },
-          paths,
-        });
-        logger.info(`   Registered plugin ${pluginName}@${mpName} in Claude plugin registry`);
-      } catch (error) {
-        logger.info(`   Warning: Could not register plugin ${pluginName}: ${String(error)}`);
-      }
+      await registerPlugin(mpName, pluginName, pluginDir, version, packageJson.name, paths, logger);
     }
   }
 }

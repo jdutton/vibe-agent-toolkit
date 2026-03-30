@@ -1,6 +1,7 @@
 // packages/cli/src/commands/claude/plugin/index.ts
 import { Command } from 'commander';
 
+import { createPluginBuildCommand } from './build.js';
 import { createPluginInstallCommand } from './install.js';
 import { createPluginListCommand } from './list.js';
 import { createPluginUninstallCommand } from './uninstall.js';
@@ -13,14 +14,16 @@ export function createPluginCommand(): Command {
     .helpCommand(false)
     .addHelpText('after', `
 Description:
-  Install, list, and uninstall skill packages in Claude Code (~/.claude/).
+  Build, install, list, and uninstall skill packages in Claude Code (~/.claude/).
 
 Example:
+  $ vat claude plugin build                           # Build plugin tree from dist/skills/
   $ vat claude plugin install npm:@myorg/my-skills    # Install from npm
   $ vat claude plugin list                            # List installed plugins
   $ vat claude plugin uninstall my-skill@my-market   # Remove a plugin
 `);
 
+  command.addCommand(createPluginBuildCommand());
   command.addCommand(createPluginInstallCommand());
   command.addCommand(createPluginListCommand());
   command.addCommand(createPluginUninstallCommand());
