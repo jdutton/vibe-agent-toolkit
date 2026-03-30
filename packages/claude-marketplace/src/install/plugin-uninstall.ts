@@ -100,7 +100,7 @@ async function removeRegistryEntries(
   const knownMarketplacesData = readKnownMarketplaces(paths);
   const hasOthers = marketplaceHasOtherPlugins(installedPluginsData.plugins, pluginKey, marketplace);
   let knownMarketplacesRemoved = false;
-  if (!hasOthers && Object.prototype.hasOwnProperty.call(knownMarketplacesData, marketplace)) {
+  if (!hasOthers && Object.hasOwn(knownMarketplacesData, marketplace)) {
     if (!dryRun) {
       delete knownMarketplacesData[marketplace];
       writeKnownMarketplaces(paths, knownMarketplacesData);
@@ -127,7 +127,7 @@ export async function uninstallPlugin(opts: UninstallPluginOptions): Promise<Uni
   const mpPluginExists = existsSync(mpPluginDir);
 
   const installedPlugins = readInstalledPlugins(paths);
-  const inRegistry = Object.prototype.hasOwnProperty.call(installedPlugins.plugins, pluginKey);
+  const inRegistry = Object.hasOwn(installedPlugins.plugins, pluginKey);
 
   if (!mpPluginExists && !inRegistry) {
     await removeFromSettings(paths, pluginKey, dryRun);
