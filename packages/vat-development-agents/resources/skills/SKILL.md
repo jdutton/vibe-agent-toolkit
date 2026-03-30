@@ -28,23 +28,23 @@ non-TypeScript/JavaScript projects, or cases where you need deep framework-speci
 
 | If you're working on... | Use this skill |
 |---|---|
-| Writing or structuring a `SKILL.md` file | `vibe-agent-toolkit:agent-authoring` |
-| Agent archetypes, orchestration patterns, result envelopes | `vibe-agent-toolkit:agent-authoring` |
-| `packagingOptions` (linkFollowDepth, excludeReferencesFromBundle) | `vibe-agent-toolkit:agent-authoring` |
+| Writing or structuring a `SKILL.md` file | `vibe-agent-toolkit:authoring` |
+| Agent archetypes, orchestration patterns, result envelopes | `vibe-agent-toolkit:authoring` |
+| `packagingOptions` (linkFollowDepth, excludeReferencesFromBundle) | `vibe-agent-toolkit:authoring` |
 | Resource collections, frontmatter schema validation | `vibe-agent-toolkit:resources` |
 | `vat resources validate`, collection config | `vibe-agent-toolkit:resources` |
-| Setting up `vat build` + `vat claude build` for a project | `vibe-agent-toolkit:skills-distribution` |
-| Configuring `claude:` section in vibe-agent-toolkit.config.yaml | `vibe-agent-toolkit:skills-distribution` |
-| npm publishing with plugin postinstall | `vibe-agent-toolkit:skills-distribution` |
-| `vat build` / `vat verify` orchestration | `vibe-agent-toolkit:skills-distribution` |
-| `--target claude-web` ZIP format | `vibe-agent-toolkit:skills-distribution` |
-| Install/uninstall methods, enterprise deployment, Desktop vs CLI paths | `vibe-agent-toolkit:install-architecture` |
+| Setting up `vat build` + `vat claude build` for a project | `vibe-agent-toolkit:distribution` |
+| Configuring `claude:` section in vibe-agent-toolkit.config.yaml | `vibe-agent-toolkit:distribution` |
+| npm publishing with plugin postinstall | `vibe-agent-toolkit:distribution` |
+| `vat build` / `vat verify` orchestration | `vibe-agent-toolkit:distribution` |
+| `--target claude-web` ZIP format | `vibe-agent-toolkit:distribution` |
+| Install/uninstall methods, enterprise deployment, Desktop vs CLI paths | `vibe-agent-toolkit:install` |
 | `vat audit`, `--compat`, CI validation | `vibe-agent-toolkit:audit` |
 | VAT behaves unexpectedly, debugging VAT, testing local VAT changes, VAT_ROOT_DIR | `vibe-agent-toolkit:debugging` |
 
 ## Agent Archetypes (Quick Reference)
 
-Four patterns cover most use cases. For full code examples, see `vibe-agent-toolkit:agent-authoring`.
+Four patterns cover most use cases. For full code examples, see `vibe-agent-toolkit:authoring`.
 
 | Archetype | When to Use |
 |---|---|

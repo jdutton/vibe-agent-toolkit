@@ -1,5 +1,5 @@
 ---
-name: vibe-agent-toolkit:install-architecture
+name: install
 description: Architecture reference for VAT skill/plugin install and uninstall — what is currently supported, what is not, and the full design vision across install methods (file-based, cloud, MDM, enterprise CI). Read this before designing or advising on any install/uninstall feature.
 ---
 

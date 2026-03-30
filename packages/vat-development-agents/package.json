@@ -13,11 +13,12 @@
     "version": "1.0",
     "skills": [
       "vibe-agent-toolkit",
-      "vibe-agent-toolkit:resources",
-      "vibe-agent-toolkit:skills-distribution",
-      "vibe-agent-toolkit:agent-authoring",
-      "vibe-agent-toolkit:audit",
-      "vibe-agent-toolkit:debugging"
+      "resources",
+      "distribution",
+      "authoring",
+      "audit",
+      "debugging",
+      "install"
     ],
     "agents": [
       {

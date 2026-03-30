@@ -12,9 +12,9 @@ skills:
   config:
     vibe-agent-toolkit:
       linkFollowDepth: 0
-    vibe-agent-toolkit:agent-authoring:
+    authoring:
       linkFollowDepth: 0
-    vibe-agent-toolkit:debugging:
+    debugging:
       linkFollowDepth: 0
 
 claude:
@@ -23,6 +23,6 @@ claude:
       owner:
         name: vibe-agent-toolkit contributors
       plugins:
-        - name: vat-development-agents
+        - name: vibe-agent-toolkit
           description: Development agents and skills for building with vibe-agent-toolkit
           skills: "*"
