@@ -56,7 +56,7 @@ my-project/
   },
   "scripts": {
     "build:vat": "vat build",
-    "postinstall": "node ./node_modules/vibe-agent-toolkit/dist/bin/vat.js skills install --npm-postinstall || exit 0"
+    "postinstall": "node ./node_modules/vibe-agent-toolkit/dist/bin/vat.js claude plugin install --npm-postinstall 2>/dev/null || exit 0"
   },
   "files": ["dist", "README.md"],
   "publishConfig": {
@@ -146,13 +146,12 @@ vat verify       # validates resources + skills + claude artifacts
 Two phases, run in dependency order:
 
 1. **`vat skills build`** — reads `vibe-agent-toolkit.config.yaml skills:` section, discovers SKILL.md files via include/exclude globs, compiles each into `dist/skills/<name>/`
-2. **`vat claude build`** — reads `vibe-agent-toolkit.config.yaml claude:` section, wraps built skills into `dist/.claude/plugins/marketplaces/<mp>/plugins/<plugin>/` structure with `.claude-plugin/plugin.json`
+2. **`vat claude plugin build`** — reads `vibe-agent-toolkit.config.yaml claude:` section, wraps built skills into `dist/.claude/plugins/marketplaces/<mp>/plugins/<plugin>/` structure with `.claude-plugin/plugin.json`. Cleans stale output before each build.
 
 Individual commands still work:
 ```bash
-vat skills build       # skills phase only
-vat claude build       # claude plugin phase only (requires skills already built)
-vat claude verify      # validate plugin artifacts only
+vat skills build            # skills phase only
+vat claude plugin build     # claude plugin phase only (requires skills already built)
 ```
 
 ## Step 4: Publish
@@ -175,14 +174,14 @@ The postinstall hook fires automatically and registers the plugin in Claude. Thi
 ### Developer/IT one-off install via npx
 
 ```bash
-npx vibe-agent-toolkit skills install npm:@myorg/my-skills
+npx vibe-agent-toolkit claude plugin install npm:@myorg/my-skills
 ```
 
 Downloads and runs VAT via npx to install a package without a global install. Useful for CI, scripting, or testing from a developer machine. Requires the npm scope registry to be configured (`.npmrc`) if installing from a private registry.
 
 ### How plugin installation works
 
-When `npm install` runs the postinstall hook (`node ./node_modules/vibe-agent-toolkit/dist/bin/vat.js skills install --npm-postinstall`):
+When `npm install` runs the postinstall hook (`node ./node_modules/vibe-agent-toolkit/dist/bin/vat.js claude plugin install --npm-postinstall`):
 
 - VAT detects `dist/.claude/plugins/marketplaces/` directory in the installed package
 - Copies the plugin tree to Claude's plugin directory (dumb recursive copy)
@@ -245,10 +244,11 @@ TypeScript files in `scripts` are tree-shaken and compiled to standalone `.mjs`.
 | Build everything | `vat build` |
 | Verify everything | `vat verify` |
 | Build skills only | `vat skills build` |
-| Build claude artifacts only | `vat claude build` |
-| Verify claude artifacts only | `vat claude verify` |
+| Build claude plugin artifacts only | `vat claude plugin build` |
 | Install via npm (end user) | `npm install -g @org/pkg` |
-| Install via npx (developer/IT) | `npx vibe-agent-toolkit skills install npm:@org/pkg` |
+| Install via npx (developer/IT) | `npx vibe-agent-toolkit claude plugin install npm:@org/pkg` |
+| List installed plugins | `vat claude plugin list` |
+| Uninstall a plugin | `vat claude plugin uninstall --all` |
 | Package for claude.ai upload | `vat skills package ./SKILL.md -o ./dist/ --target claude-web` |
 
 ## Future: Zero-Dependency Postinstall (Option B)
