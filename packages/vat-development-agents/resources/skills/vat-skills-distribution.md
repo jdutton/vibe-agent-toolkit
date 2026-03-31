@@ -56,7 +56,7 @@ my-project/
   },
   "scripts": {
     "build:vat": "vat build",
-    "postinstall": "node ./node_modules/vibe-agent-toolkit/bin/vat claude plugin install --npm-postinstall 2>/dev/null || exit 0"
+    "postinstall": "vat claude plugin install --npm-postinstall 2>/dev/null || exit 0"
   },
   "files": ["dist", "README.md"],
   "publishConfig": {
@@ -65,7 +65,7 @@ my-project/
 }
 ```
 
-**`vibe-agent-toolkit` must be in `dependencies` (not `devDependencies`)** so it is present in `node_modules` when the postinstall hook runs on the user's machine. Never assume `vat` is available globally — your users may not be developers.
+**`vibe-agent-toolkit` must be in `dependencies` (not `devDependencies`).** npm adds all `bin` entries from runtime dependencies to `./node_modules/.bin/` and puts that on PATH when running lifecycle scripts. This is how `vat` is available during your postinstall without being globally installed. If it is in `devDependencies`, npm will not install it on the user's machine and the postinstall will fail with "command not found".
 
 The `vat.skills` array contains skill name strings for npm discoverability. Skill source paths and packaging config live in `vibe-agent-toolkit.config.yaml` (see Step 2).
 
@@ -260,7 +260,7 @@ Downloads and runs VAT via npx to install a package without a global install. Us
 
 ### How plugin installation works
 
-When `npm install` runs the postinstall hook (`node ./node_modules/vibe-agent-toolkit/bin/vat claude plugin install --npm-postinstall`):
+When `npm install` runs the postinstall hook (`vat claude plugin install --npm-postinstall`):
 
 - VAT detects `dist/.claude/plugins/marketplaces/` directory in the installed package
 - Copies the plugin tree to Claude's plugin directory (dumb recursive copy)

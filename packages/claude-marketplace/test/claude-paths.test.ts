@@ -2,11 +2,14 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 
 import { toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { describe, it, expect } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect } from 'vitest';
 
 import { getClaudeUserPaths, getClaudeProjectPaths } from '../src/paths/claude-paths.js';
 
 describe('getClaudeUserPaths', () => {
+  beforeEach(() => { delete process.env['CLAUDE_CONFIG_DIR']; });
+  afterEach(() => { delete process.env['CLAUDE_CONFIG_DIR']; });
+
   it('should return absolute paths to Claude directories', () => {
     const paths = getClaudeUserPaths();
 
@@ -17,7 +20,7 @@ describe('getClaudeUserPaths', () => {
     expect(paths.marketplacesDir).toMatch(/^[/\\]|^[A-Za-z]:[/\\]/);
   });
 
-  it('should return paths based on user home directory', () => {
+  it('should default to ~/.claude when CLAUDE_CONFIG_DIR is not set', () => {
     const paths = getClaudeUserPaths();
     const home = homedir();
 
@@ -32,6 +35,17 @@ describe('getClaudeUserPaths', () => {
     expect(paths.userDotJsonPath).toBe(join(home, '.claude.json'));
   });
 
+  it('should use CLAUDE_CONFIG_DIR when set', () => {
+    const customDir = '/custom/claude';
+    process.env['CLAUDE_CONFIG_DIR'] = customDir;
+    const paths = getClaudeUserPaths();
+
+    expect(paths.claudeDir).toBe(customDir);
+    expect(paths.pluginsDir).toBe(join(customDir, 'plugins'));
+    expect(paths.skillsDir).toBe(join(customDir, 'skills'));
+    expect(paths.userSettingsPath).toBe(join(customDir, 'settings.json'));
+  });
+
   it('should return consistent paths on multiple calls', () => {
     const paths1 = getClaudeUserPaths();
     const paths2 = getClaudeUserPaths();
@@ -40,21 +54,6 @@ describe('getClaudeUserPaths', () => {
     expect(paths1.pluginsDir).toBe(paths2.pluginsDir);
     expect(paths1.skillsDir).toBe(paths2.skillsDir);
     expect(paths1.marketplacesDir).toBe(paths2.marketplacesDir);
-  });
-
-  it('should use path.join for proper path construction', () => {
-    const paths = getClaudeUserPaths();
-    const home = homedir();
-
-    // Verify no double slashes or backslashes
-    expect(paths.claudeDir).not.toContain('//');
-    expect(paths.claudeDir).not.toContain('\\\\');
-
-    // Verify proper subdirectories relative to home
-    expect(paths.pluginsDir).toContain(home);
-    expect(paths.pluginsDir).toContain('.claude');
-    expect(paths.skillsDir).toContain('.claude');
-    expect(paths.marketplacesDir).toContain('.claude');
   });
 });
 

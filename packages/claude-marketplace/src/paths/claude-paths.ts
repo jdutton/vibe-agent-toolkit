@@ -55,7 +55,7 @@ export interface ClaudeProjectPaths {
  */
 export function getClaudeUserPaths(): ClaudeUserPaths {
   const home = homedir();
-  const claudeDir = join(home, '.claude');
+  const claudeDir = process.env['CLAUDE_CONFIG_DIR'] ?? join(home, '.claude');
   const pluginsDir = join(claudeDir, 'plugins');
 
   return {

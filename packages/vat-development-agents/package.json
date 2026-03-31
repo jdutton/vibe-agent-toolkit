@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/vat-development-agents",
-  "version": "0.1.21-rc.4",
+  "version": "0.1.21-rc.5",
   "description": "VAT development agents - dogfooding the vibe-agent-toolkit",
   "type": "module",
   "keywords": [
@@ -38,6 +38,7 @@
     ]
   },
   "exports": {
+    "./package.json": "./package.json",
     "./agents/agent-generator": "./agents/agent-generator/agent.yaml",
     "./agents/resource-optimizer": "./agents/resource-optimizer/SCOPE.md"
   },
@@ -55,10 +56,11 @@
     "test:pipeline": "bun run build && bun run dist/src/test-pipeline.js",
     "typecheck": "tsc --noEmit",
     "validate": "bun run agents/agent-generator/validate-agent.ts",
-    "postinstall": "node ./node_modules/vibe-agent-toolkit/bin/vat claude plugin install --npm-postinstall 2>/dev/null || exit 0"
+    "postinstall": "vat claude plugin install --npm-postinstall || exit 0"
   },
   "dependencies": {
     "@vibe-agent-toolkit/agent-schema": "workspace:*",
+    "@vibe-agent-toolkit/cli": "workspace:*",
     "yaml": "^2.8.2"
   },
   "devDependencies": {
