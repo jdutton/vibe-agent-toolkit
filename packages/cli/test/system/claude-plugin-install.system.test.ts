@@ -26,6 +26,8 @@ const TEMP_DIR_PREFIX = 'vat-plugin-install-test-';
 // Used as suffix after claudeDir (which already includes '.claude')
 const PLUGINS_MARKETPLACES = join('plugins', 'marketplaces');
 const MULTI_MARKET = 'multi-market';
+const SKILL_ALPHA = 'skill-alpha';
+const SKILL_BETA = 'skill-beta';
 
 /**
  * Create an isolated temp/home/claudeDir context for a single test.
@@ -46,12 +48,16 @@ function createInstallTestContext(createTempDir: () => string): {
 /**
  * Create a plugin tree directory structure that mirrors the output of `vat build`.
  * Places files at: <projectDir>/dist/.claude/plugins/marketplaces/<marketplace>/plugins/<plugin>/
+ *
+ * When `skills` is provided on a plugin entry, they are placed in the proper
+ * `plugins/<plugin>/skills/<skillName>/` subdirectory (real `vat build` layout).
+ * When omitted, a flat `SKILL.md` is written at the plugin root (legacy test layout).
  */
 function setupPluginTestProject(
   baseDir: string,
   name: string,
   marketplaceName: string,
-  plugins: Array<{ name: string }>
+  plugins: Array<{ name: string; skills?: string[] }>
 ): { projectDir: string; marketplacesDir: string } {
   const projectDir = join(baseDir, name);
   mkdirSyncReal(projectDir, { recursive: true });
@@ -65,11 +71,37 @@ function setupPluginTestProject(
   for (const plugin of plugins) {
     const pluginDir = join(marketplacesDir, marketplaceName, 'plugins', plugin.name);
     mkdirSyncReal(pluginDir, { recursive: true });
-    writeTestFile(join(pluginDir, 'SKILL.md'), `# ${plugin.name}\nTest plugin content`);
     writeTestFile(join(pluginDir, 'plugin.json'), JSON.stringify({ name: plugin.name, version: '1.2.3' }));
+
+    if (plugin.skills) {
+      for (const skillName of plugin.skills) {
+        const skillDir = join(pluginDir, 'skills', skillName);
+        mkdirSyncReal(skillDir, { recursive: true });
+        writeTestFile(join(skillDir, 'SKILL.md'), `# ${skillName}\nTest skill content`);
+      }
+    } else {
+      writeTestFile(join(pluginDir, 'SKILL.md'), `# ${plugin.name}\nTest plugin content`);
+    }
   }
 
   return { projectDir, marketplacesDir };
+}
+
+/**
+ * Run `vat claude plugin install <projectDir>` and assert it exits 0 with status: success.
+ * Returns parsed YAML output for further assertions.
+ */
+function runPluginInstall(
+  binPath: string,
+  projectDir: string,
+  fakeHome: string
+): ReturnType<typeof executeCliAndParseYaml> {
+  const out = executeCliAndParseYaml(binPath, [
+    'claude', 'plugin', 'install', projectDir,
+  ], { env: fakeHomeEnv(fakeHome) });
+  expect(out.result.status).toBe(0);
+  expect(out.parsed.status).toBe('success');
+  return out;
 }
 
 describe('claude plugin install command (system test)', () => {
@@ -87,12 +119,8 @@ describe('claude plugin install command (system test)', () => {
       { name: 'my-skill' },
     ]);
 
-    const { result, parsed } = executeCliAndParseYaml(binPath, [
-      'claude', 'plugin', 'install', projectDir,
-    ], { env: fakeHomeEnv(fakeHome) });
+    runPluginInstall(binPath, projectDir, fakeHome);
 
-    expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
     expect(
       fs.existsSync(join(claudeDir, PLUGINS_MARKETPLACES, 'test-market', 'plugins', 'my-skill'))
     ).toBe(true);
@@ -134,17 +162,14 @@ describe('claude plugin install command (system test)', () => {
     const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
 
     const { projectDir } = setupPluginTestProject(tempDir, 'multi-pkg', MULTI_MARKET, [
-      { name: 'skill-alpha' },
-      { name: 'skill-beta' },
+      { name: SKILL_ALPHA },
+      { name: SKILL_BETA },
     ]);
 
-    const { result } = executeCliAndParseYaml(binPath, [
-      'claude', 'plugin', 'install', projectDir,
-    ], { env: fakeHomeEnv(fakeHome) });
+    runPluginInstall(binPath, projectDir, fakeHome);
 
-    expect(result.status).toBe(0);
-    expect(fs.existsSync(join(claudeDir, PLUGINS_MARKETPLACES, MULTI_MARKET, 'plugins', 'skill-alpha'))).toBe(true);
-    expect(fs.existsSync(join(claudeDir, PLUGINS_MARKETPLACES, MULTI_MARKET, 'plugins', 'skill-beta'))).toBe(true);
+    expect(fs.existsSync(join(claudeDir, PLUGINS_MARKETPLACES, MULTI_MARKET, 'plugins', SKILL_ALPHA))).toBe(true);
+    expect(fs.existsSync(join(claudeDir, PLUGINS_MARKETPLACES, MULTI_MARKET, 'plugins', SKILL_BETA))).toBe(true);
   });
 
   it('installs from npm tarball (.tgz) with plugin tree', async () => {
@@ -195,5 +220,24 @@ describe('claude plugin install command (system test)', () => {
     // After reinstall the skill dir should exist but the sentinel should be gone
     expect(fs.existsSync(installedSkillDir)).toBe(true);
     expect(fs.existsSync(join(installedSkillDir, 'extra-sentinel.txt'))).toBe(false);
+  });
+
+  it('reports correct skillsInstalled count when plugin has skills/ subdirectory', () => {
+    // Regression test: installPluginTreeAndExit previously passed [] to outputInstallSuccess
+    // regardless of how many skills were actually copied, always reporting skillsInstalled: 0.
+    const { tempDir, fakeHome } = createInstallTestContext(createTempDir);
+
+    const { projectDir } = setupPluginTestProject(tempDir, 'pkg-skills-count', 'skills-market', [
+      { name: 'my-plugin', skills: [SKILL_ALPHA, SKILL_BETA, 'skill-gamma'] },
+    ]);
+
+    const { parsed } = runPluginInstall(binPath, projectDir, fakeHome);
+
+    expect(parsed.skillsInstalled).toBe(3);
+    expect(parsed.skills).toHaveLength(3);
+    const skillNames = (parsed.skills as Array<{ name: string }>).map(s => s.name);
+    expect(skillNames).toContain(SKILL_ALPHA);
+    expect(skillNames).toContain(SKILL_BETA);
+    expect(skillNames).toContain('skill-gamma');
   });
 });

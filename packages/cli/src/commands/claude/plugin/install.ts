@@ -96,10 +96,10 @@ async function installPluginTreeAndExit(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- rootDir from controlled source
   const pkgRaw = readFileSync(join(rootDir, PACKAGE_JSON), 'utf-8');
   const packageJson = JSON.parse(pkgRaw) as { name: string; version?: string; vat?: { replaces?: PackageJsonVatReplaces } };
-  await copyPluginTree(marketplacesDir, packageJson, logger, dryRun);
+  const installedSkills = await copyPluginTree(marketplacesDir, packageJson, logger, dryRun);
 
   const duration = Date.now() - startTime;
-  outputInstallSuccess([], sourceLabel, sourceType, duration, logger, dryRun);
+  outputInstallSuccess(installedSkills, sourceLabel, sourceType, duration, logger, dryRun);
   process.exit(0);
 }
 
@@ -814,10 +814,10 @@ async function handleNpmPostinstall(
       const packageJson = JSON.parse(pkgRaw) as { name: string; version?: string; vat?: { replaces?: PackageJsonVatReplaces } };
       logger.info(`   Package: ${packageJson.name}@${packageJson.version ?? 'unknown'}`);
       logger.info(`   Plugin tree detected — copying to ~/.claude/plugins/`);
-      await copyPluginTree(marketplacesDir, packageJson, logger, options.dryRun);
+      const installedSkills = await copyPluginTree(marketplacesDir, packageJson, logger, options.dryRun);
 
       const duration = Date.now() - startTime;
-      logger.info(`✅ Installed plugin from ${packageJson.name}`);
+      logger.info(`✅ Installed plugin from ${packageJson.name} (${installedSkills.length} skill(s))`);
       logger.info(`   Duration: ${duration}ms`);
     } else {
       logger.info(`   No plugin tree found at dist/.claude/plugins/marketplaces/`);
@@ -928,10 +928,11 @@ async function copyPluginTree(
   packageJson: { name: string; version?: string; vat?: { replaces?: PackageJsonVatReplaces } },
   logger: ReturnType<typeof createLogger>,
   dryRun?: boolean
-): Promise<void> {
+): Promise<Array<{ name: string; installPath: string }>> {
   const paths = getClaudeUserPaths();
   const version = packageJson.version ?? '0.0.0';
   const marketplaceNames = listSubdirectories(marketplacesDir);
+  const installedSkills: Array<{ name: string; installPath: string }> = [];
 
   // Remove any old plugins/flat skills this package replaces, before installing
   if (packageJson.vat?.replaces) {
@@ -950,12 +951,22 @@ async function copyPluginTree(
     await mkdir(destMpDir, { recursive: true });
     await cp(srcMpDir, destMpDir, { recursive: true, force: true });
 
-    // Register each plugin within the marketplace
+    // Register each plugin and collect installed skill names
     for (const pluginName of listSubdirectories(join(srcMpDir, 'plugins'))) {
       const pluginDir = join(destMpDir, 'plugins', pluginName);
       await registerPlugin(mpName, pluginName, pluginDir, version, packageJson.name, paths, logger);
+
+      const skillNames = listSubdirectories(join(srcMpDir, 'plugins', pluginName, 'skills'));
+      for (const skillName of skillNames) {
+        installedSkills.push({
+          name: skillName,
+          installPath: join(destMpDir, 'plugins', pluginName, 'skills', skillName),
+        });
+      }
     }
   }
+
+  return installedSkills;
 }
 
 /**
