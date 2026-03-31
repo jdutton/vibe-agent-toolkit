@@ -90,6 +90,10 @@ export type {
 } from './install/plugin-list.js';
 export { listLocalPlugins } from './install/plugin-list.js';
 
+// Org API client
+export type { OrgApiClientOptions, PaginationParams, ReportPaginationParams } from './org/org-api-client.js';
+export { createOrgApiClientFromEnv, OrgApiClient } from './org/org-api-client.js';
+
 // Settings
 export type {
   BashRuleType,
