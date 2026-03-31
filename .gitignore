@@ -69,6 +69,7 @@ Thumbs.db
 # Claude Code - user-specific settings
 .claude/settings.local.json
 .claude/commands/
+.claude/scheduled_tasks.lock
 
 # Temporary files
 *.tmp

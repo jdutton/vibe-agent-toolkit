@@ -781,16 +781,24 @@ async function handleNpmPostinstall(
  *
  * Idempotent — uninstallPlugin handles "not found" gracefully.
  */
-async function executeReplaces(
-  replaces: PackageJsonVatReplaces,
+async function removeFlatSkill(skillPath: string, logger: ReturnType<typeof createLogger>): Promise<void> {
+  logger.info(`   Removing legacy flat skill: ${skillPath}`);
+  await rm(skillPath, { recursive: true, force: true });
+}
+
+function logFlatSkillRemoval(skillPath: string, logger: ReturnType<typeof createLogger>): void {
+  logger.info(`   [dry-run] Would remove legacy flat skill: ${skillPath}`);
+}
+
+async function removeOldPlugins(
+  oldPlugins: string[] | undefined,
   marketplaceNames: string[],
   paths: ReturnType<typeof getClaudeUserPaths>,
   dryRun: boolean,
   logger: ReturnType<typeof createLogger>
 ): Promise<void> {
-  // Remove old plugin entries from all marketplaces this package ships into
   for (const mp of marketplaceNames) {
-    for (const oldPlugin of replaces.plugins ?? []) {
+    for (const oldPlugin of oldPlugins ?? []) {
       const pluginKey = `${oldPlugin}@${mp}`;
       if (dryRun) {
         logger.info(`   [dry-run] Would uninstall old plugin: ${pluginKey}`);
@@ -800,17 +808,35 @@ async function executeReplaces(
       }
     }
   }
+}
+
+async function executeReplaces(
+  replaces: PackageJsonVatReplaces,
+  marketplaceNames: string[],
+  paths: ReturnType<typeof getClaudeUserPaths>,
+  dryRun: boolean,
+  logger: ReturnType<typeof createLogger>
+): Promise<void> {
+  // Remove old plugin entries from all marketplaces this package ships into
+  await removeOldPlugins(replaces.plugins, marketplaceNames, paths, dryRun, logger);
 
   // Remove legacy flat-skill installs from ~/.claude/skills/<name>
   for (const skillName of replaces.flatSkills ?? []) {
     const skillPath = join(paths.skillsDir, skillName);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from Claude user paths + skill name
-    if (existsSync(skillPath)) {
+    let pathExists = false;
+    try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from Claude user paths + skill name
+      lstatSync(skillPath); // throws if path itself doesn't exist (doesn't follow symlinks)
+      pathExists = true;
+    } catch {
+      // path doesn't exist or is inaccessible — nothing to remove
+    }
+
+    if (pathExists) {
       if (dryRun) {
-        logger.info(`   [dry-run] Would remove legacy flat skill: ${skillPath}`);
+        logFlatSkillRemoval(skillPath, logger);
       } else {
-        logger.info(`   Removing legacy flat skill: ${skillPath}`);
-        await rm(skillPath, { recursive: true, force: true });
+        await removeFlatSkill(skillPath, logger);
       }
     }
   }

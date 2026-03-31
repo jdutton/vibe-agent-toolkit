@@ -85,6 +85,85 @@ Users (or IT) installing from GitHub Packages need `.npmrc` configured with the 
 
 IT deploying to managed machines should pre-configure `.npmrc` at the system or user level before running install commands. End users do not need to understand npm or the registry — IT handles it once.
 
+## Handling Plugin Renames: vat.replaces
+
+> **Use this only when renaming a plugin, merging plugins, or cleaning up legacy flat-skill installs. Normal upgrades (same plugin name, same skills) do NOT need `vat.replaces` — the installer already overwrites the plugin directory on every install.**
+
+### The problem: silent stale skills
+
+When you rename a plugin or reorganize skills across packages, the old registration remains in Claude Code. Claude Code **does not warn you** when two plugins provide conflicting skill names — the first-registered (stale) skill silently wins. Users continue loading old content from the renamed plugin unless the old registration is explicitly removed.
+
+This is the scenario where `vat.replaces` is needed:
+- Plugin renamed: `old-plugin-name` → `new-plugin-name`
+- Two old plugins merged into one new plugin
+- Skills previously installed to `~/.claude/skills/<name>` (legacy pre-0.1.20 flat install) now delivered via the plugin tree
+
+### How it works
+
+When a VAT package is installed (via postinstall hook or `--dev`), the installer reads `vat.replaces` from `package.json` and — **before** installing the new plugin:
+
+1. For each name in `replaces.plugins`: uninstalls `<name>@<marketplace>` — removes plugin directory, cache entry, registry entry, and `settings.json` entry
+2. For each name in `replaces.flatSkills`: deletes `~/.claude/skills/<name>` — removes legacy pre-0.1.20 flat installs
+
+Both operations are idempotent — "not found" is handled gracefully.
+
+### Schema
+
+```json
+"vat": {
+  "version": "1.0",
+  "skills": ["authoring", "audit"],
+  "replaces": {
+    "plugins": ["my-old-plugin-name"],
+    "flatSkills": ["my-old-skill", "another-old-skill"]
+  }
+}
+```
+
+Both `plugins` and `flatSkills` are optional arrays. The entire `replaces` key is optional — omit it when there is nothing to clean up.
+
+### Real example: vat-development-agents 0.1.21
+
+This package (`vat-development-agents`) renamed its plugin from `vat-development-agents` to `vibe-agent-toolkit` in v0.1.21. Without `vat.replaces`, users who had already installed v0.1.20 would have both `vat-development-agents@vat-skills` and `vibe-agent-toolkit@vat-skills` registered — Claude Code would serve stale skill content from the old plugin.
+
+The fix in `package.json`:
+
+```json
+"vat": {
+  "version": "1.0",
+  "skills": ["vibe-agent-toolkit", "resources", "distribution", "authoring", "audit", "debugging", "install"],
+  "replaces": {
+    "plugins": ["vat-development-agents"],
+    "flatSkills": ["vibe-agent-toolkit", "resources"]
+  }
+}
+```
+
+- `plugins`: removes the old plugin registration (same marketplace, old plugin name)
+- `flatSkills`: removes legacy `~/.claude/skills/vibe-agent-toolkit` and `~/.claude/skills/resources` entries from users who installed before 0.1.20 switched to the plugin tree
+
+### Non-obvious gotchas
+
+**1. Plugin names in `replaces.plugins` have NO `@marketplace`**
+
+The format is just the plugin name — e.g. `"vat-development-agents"` — NOT `"vat-development-agents@vat-skills"`. The installer infers the marketplace from the current package's dist tree. Using `@marketplace` syntax here would be wrong.
+
+**2. `replaces.plugins` is for old plugin registrations, not for skills that moved between plugins**
+
+If a skill moved from `plugin-a` to `plugin-b` within the same marketplace, list `"plugin-a"` in `replaces.plugins` to clean up the entire old plugin. You do not manage individual skills — you manage plugins.
+
+**3. `replaces.flatSkills` is ONLY for the legacy `~/.claude/skills/` location**
+
+This is specifically for skills that were previously installed as flat files to `~/.claude/skills/<name>` (pre-plugin-tree, before v0.1.20). Skills within the plugin tree (under `~/.claude/plugins/`) are handled via `replaces.plugins`. Do not mix them up.
+
+**4. Normal upgrades need nothing**
+
+If you publish a new version of the same package with the same plugin name, the installer overwrites the plugin directory automatically. `vat.replaces` is only for the case where the old name is different from the new name.
+
+**5. The symptom is subtle and delayed**
+
+You will not see an error. Claude Code simply loads the first-registered skill with a given name. If the stale plugin is registered first (alphabetically or by install order), your new content is invisible until you remove the old registration.
+
 ## Step 2: vibe-agent-toolkit.config.yaml
 
 ```yaml
