@@ -21,6 +21,7 @@ import { getClaudeUserPaths, installPlugin, uninstallPlugin } from '@vibe-agent-
 import { normalizedTmpdir, safeExecSync } from '@vibe-agent-toolkit/utils';
 import AdmZip from 'adm-zip';
 import { Command } from 'commander';
+import * as tar from 'tar';
 
 import { handleCommandError } from '../../../utils/command-error.js';
 import { createLogger } from '../../../utils/logger.js';
@@ -244,6 +245,10 @@ async function installCommand(
         await handleZipInstall(source, options, logger, startTime);
         break;
       }
+      case 'tgz': {
+        await handleTgzInstall(source, options, logger, startTime);
+        break;
+      }
       case 'npm-postinstall': {
         throw new Error('npm-postinstall source type should be handled by --npm-postinstall flag');
       }
@@ -431,6 +436,69 @@ async function handleZipInstall(
   process.exit(0);
 }
 
+
+/**
+ * Handle npm tarball (.tgz / .tar.gz) installation.
+ * npm pack format: all package files are under a `package/` subdirectory in the tarball.
+ * Extracts to a temp directory then delegates to the local install path.
+ */
+async function handleTgzInstall(
+  source: string,
+  options: PluginInstallCommandOptions,
+  logger: ReturnType<typeof createLogger>,
+  startTime: number
+): Promise<void> {
+  const sourcePath = resolve(source);
+
+  logger.info(`📥 Installing skill from tarball: ${sourcePath}`);
+
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- User-provided CLI argument
+  if (!existsSync(sourcePath)) {
+    throw new Error(`Tarball not found: ${sourcePath}`);
+  }
+
+  const tempDir = await mkdtemp(join(normalizedTmpdir(), 'vat-install-tgz-'));
+
+  try {
+    logger.info('   Extracting tarball...');
+    await tar.extract({ file: sourcePath, cwd: tempDir });
+
+    // npm pack tarballs extract under package/ subdirectory
+    const packageDir = join(tempDir, 'package');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is controlled
+    const extractedDir = existsSync(packageDir) ? packageDir : tempDir;
+
+    // Delegate to local install logic
+    const marketplacesDir = join(extractedDir, PLUGIN_MARKETPLACES_SUBPATH);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is controlled
+    if (!options.userInstallWithoutPlugin && existsSync(marketplacesDir)) {
+      await installPluginTreeAndExit(extractedDir, marketplacesDir, sourcePath, 'tgz', startTime, logger, options.dryRun);
+    }
+
+    // Fallback: skills-only install
+    const { skills } = await readPackageJsonVatMetadata(extractedDir);
+    const skillsDir = options.skillsDir ?? getClaudeUserPaths().skillsDir;
+    const skillNames = options.name ? skills.filter(s => s === options.name) : skills;
+
+    for (const skillName of skillNames) {
+      const skillPath = join(extractedDir, 'dist', 'skills', skillNameToFsPath(skillName));
+      await installSkillFromPath(skillPath, skillName, options, logger);
+    }
+
+    const duration = Date.now() - startTime;
+    outputInstallSuccess(
+      skillNames.map(name => ({ name, installPath: join(skillsDir, name) })),
+      sourcePath,
+      'tgz',
+      duration,
+      logger,
+      options.dryRun
+    );
+    process.exit(0);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
+  }
+}
 
 /**
  * Prepare destination for a dev symlink: remove any existing entry if --force.

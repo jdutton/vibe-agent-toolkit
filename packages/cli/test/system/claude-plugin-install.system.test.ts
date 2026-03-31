@@ -9,6 +9,7 @@ import * as fs from 'node:fs';
 import { join } from 'node:path';
 
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+import * as tar from 'tar';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -144,6 +145,28 @@ describe('claude plugin install command (system test)', () => {
     expect(result.status).toBe(0);
     expect(fs.existsSync(join(claudeDir, PLUGINS_MARKETPLACES, MULTI_MARKET, 'plugins', 'skill-alpha'))).toBe(true);
     expect(fs.existsSync(join(claudeDir, PLUGINS_MARKETPLACES, MULTI_MARKET, 'plugins', 'skill-beta'))).toBe(true);
+  });
+
+  it('installs from npm tarball (.tgz) with plugin tree', async () => {
+    const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
+
+    const { projectDir } = setupPluginTestProject(tempDir, 'pkg-tgz', 'tgz-market', [
+      { name: 'tgz-skill' },
+    ]);
+
+    // Create tarball in npm pack format: all files under package/ prefix
+    const tgzPath = join(tempDir, 'my-pkg-1.0.0.tgz');
+    await tar.create({ gzip: true, file: tgzPath, cwd: projectDir, prefix: 'package' }, ['.']);
+
+    const { result, parsed } = executeCliAndParseYaml(binPath, [
+      'claude', 'plugin', 'install', tgzPath,
+    ], { env: fakeHomeEnv(fakeHome) });
+
+    expect(result.status).toBe(0);
+    expect(parsed.status).toBe('success');
+    expect(
+      fs.existsSync(join(claudeDir, PLUGINS_MARKETPLACES, 'tgz-market', 'plugins', 'tgz-skill'))
+    ).toBe(true);
   });
 
   it('reinstall overwrites existing plugin tree', () => {
