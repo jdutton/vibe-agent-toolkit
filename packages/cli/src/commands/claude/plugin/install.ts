@@ -17,7 +17,7 @@ import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { basename, join, relative, resolve } from 'node:path';
 
-import { getClaudeUserPaths, installPlugin } from '@vibe-agent-toolkit/claude-marketplace';
+import { getClaudeUserPaths, installPlugin, uninstallPlugin } from '@vibe-agent-toolkit/claude-marketplace';
 import { normalizedTmpdir, safeExecSync } from '@vibe-agent-toolkit/utils';
 import AdmZip from 'adm-zip';
 import { Command } from 'commander';
@@ -30,6 +30,7 @@ import {
   downloadNpmPackage,
   isGlobalNpmInstall,
   readPackageJsonVatMetadata,
+  type PackageJsonVatReplaces,
   type SkillSource,
   writeYamlHeader,
 } from './helpers.js';
@@ -93,8 +94,8 @@ async function installPluginTreeAndExit(
 ): Promise<never> {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- rootDir from controlled source
   const pkgRaw = readFileSync(join(rootDir, PACKAGE_JSON), 'utf-8');
-  const packageJson = JSON.parse(pkgRaw) as { name: string; version?: string };
-  await copyPluginTree(marketplacesDir, packageJson, logger);
+  const packageJson = JSON.parse(pkgRaw) as { name: string; version?: string; vat?: { replaces?: PackageJsonVatReplaces } };
+  await copyPluginTree(marketplacesDir, packageJson, logger, dryRun);
 
   const duration = Date.now() - startTime;
   outputInstallSuccess([], sourceLabel, sourceType, duration, logger, dryRun);
@@ -671,11 +672,18 @@ async function handleDevInstall(
 
   // Read package.json for package name/version
   const pkgRaw = readFileSync(join(cwd, PACKAGE_JSON), 'utf-8');
-  const packageJson = JSON.parse(pkgRaw) as { name: string; version?: string };
+  const packageJson = JSON.parse(pkgRaw) as { name: string; version?: string; vat?: { replaces?: PackageJsonVatReplaces } };
   logger.info(`📥 Dev-installing plugin tree from ${packageJson.name}`);
 
   const packageInfo = { name: packageJson.name, version: packageJson.version ?? '0.0.0' };
   const installed: Array<{ name: string; installPath: string; sourcePath: string }> = [];
+
+  // Remove old plugins/flat skills this package replaces, before installing
+  if (packageJson.vat?.replaces) {
+    const paths = getClaudeUserPaths();
+    const marketplaceNames = listSubdirectories(marketplacesDir);
+    await executeReplaces(packageJson.vat.replaces, marketplaceNames, paths, options.dryRun ?? false, logger);
+  }
 
   for (const mpName of listSubdirectories(marketplacesDir)) {
     const srcMpDir = join(marketplacesDir, mpName);
@@ -729,10 +737,10 @@ async function handleNpmPostinstall(
   if (!options.userInstallWithoutPlugin) {
     if (hasPluginTree) {
       const pkgRaw = readFileSync(join(cwd, PACKAGE_JSON), 'utf-8');
-      const packageJson = JSON.parse(pkgRaw) as { name: string; version?: string };
+      const packageJson = JSON.parse(pkgRaw) as { name: string; version?: string; vat?: { replaces?: PackageJsonVatReplaces } };
       logger.info(`   Package: ${packageJson.name}@${packageJson.version ?? 'unknown'}`);
       logger.info(`   Plugin tree detected — copying to ~/.claude/plugins/`);
-      await copyPluginTree(marketplacesDir, packageJson, logger);
+      await copyPluginTree(marketplacesDir, packageJson, logger, options.dryRun);
 
       const duration = Date.now() - startTime;
       logger.info(`✅ Installed plugin from ${packageJson.name}`);
@@ -765,6 +773,50 @@ async function handleNpmPostinstall(
 }
 
 /**
+ * Execute vat.replaces cleanup before installing the new plugin.
+ *
+ * Removes old plugin registrations and legacy flat-skill installs that this
+ * package now supersedes. Runs before the new plugin is copied/symlinked so
+ * Claude Code never sees stale duplicate entries.
+ *
+ * Idempotent — uninstallPlugin handles "not found" gracefully.
+ */
+async function executeReplaces(
+  replaces: PackageJsonVatReplaces,
+  marketplaceNames: string[],
+  paths: ReturnType<typeof getClaudeUserPaths>,
+  dryRun: boolean,
+  logger: ReturnType<typeof createLogger>
+): Promise<void> {
+  // Remove old plugin entries from all marketplaces this package ships into
+  for (const mp of marketplaceNames) {
+    for (const oldPlugin of replaces.plugins ?? []) {
+      const pluginKey = `${oldPlugin}@${mp}`;
+      if (dryRun) {
+        logger.info(`   [dry-run] Would uninstall old plugin: ${pluginKey}`);
+      } else {
+        logger.info(`   Removing old plugin: ${pluginKey}`);
+        await uninstallPlugin({ pluginKey, paths, dryRun: false });
+      }
+    }
+  }
+
+  // Remove legacy flat-skill installs from ~/.claude/skills/<name>
+  for (const skillName of replaces.flatSkills ?? []) {
+    const skillPath = join(paths.skillsDir, skillName);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from Claude user paths + skill name
+    if (existsSync(skillPath)) {
+      if (dryRun) {
+        logger.info(`   [dry-run] Would remove legacy flat skill: ${skillPath}`);
+      } else {
+        logger.info(`   Removing legacy flat skill: ${skillPath}`);
+        await rm(skillPath, { recursive: true, force: true });
+      }
+    }
+  }
+}
+
+/**
  * Copy pre-built plugin tree to ~/.claude/plugins/ and update registry.
  *
  * This is a "dumb copy" — the dist/.claude/plugins/marketplaces/ tree mirrors
@@ -773,13 +825,20 @@ async function handleNpmPostinstall(
  */
 async function copyPluginTree(
   marketplacesDir: string,
-  packageJson: { name: string; version?: string },
-  logger: ReturnType<typeof createLogger>
+  packageJson: { name: string; version?: string; vat?: { replaces?: PackageJsonVatReplaces } },
+  logger: ReturnType<typeof createLogger>,
+  dryRun?: boolean
 ): Promise<void> {
   const paths = getClaudeUserPaths();
   const version = packageJson.version ?? '0.0.0';
+  const marketplaceNames = listSubdirectories(marketplacesDir);
 
-  for (const mpName of listSubdirectories(marketplacesDir)) {
+  // Remove any old plugins/flat skills this package replaces, before installing
+  if (packageJson.vat?.replaces) {
+    await executeReplaces(packageJson.vat.replaces, marketplaceNames, paths, dryRun ?? false, logger);
+  }
+
+  for (const mpName of marketplaceNames) {
     const srcMpDir = join(marketplacesDir, mpName);
     const destMpDir = join(paths.marketplacesDir, mpName);
 

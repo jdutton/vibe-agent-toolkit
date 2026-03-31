@@ -17,11 +17,19 @@ import * as tar from 'tar';
 
 export type SkillSource = 'npm' | 'local' | 'zip' | 'npm-postinstall' | 'dev';
 
+export interface PackageJsonVatReplaces {
+  /** Old plugin names (without marketplace) this package used to publish under */
+  plugins?: string[];
+  /** Old skill names previously installed to ~/.claude/skills/<name> (legacy flat location) */
+  flatSkills?: string[];
+}
+
 export interface PackageJsonVat {
   version?: string;
   // DEPRECATED(v0.1.x): vat.type — tolerated but ignored
   type?: string;
   skills?: string[];
+  replaces?: PackageJsonVatReplaces;
 }
 
 export interface PackageJson {

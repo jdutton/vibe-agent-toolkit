@@ -20,6 +20,10 @@
       "debugging",
       "install"
     ],
+    "replaces": {
+      "plugins": ["vat-development-agents"],
+      "flatSkills": ["vibe-agent-toolkit", "resources"]
+    },
     "agents": [
       {
         "name": "agent-generator",
