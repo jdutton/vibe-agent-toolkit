@@ -28,9 +28,18 @@ const OwnerSchema = z
  * Plugin source — relative path string or source object.
  * We validate the discriminant (`source` field on objects) but use
  * .passthrough() for provider-specific fields (repo, url, package, etc.).
+ *
+ * String paths must not use .. directory traversal — Claude Code rejects
+ * source paths that resolve outside the marketplace directory.
  */
 const PluginSourceSchema = z.union([
-	z.string().min(1),
+	z
+		.string()
+		.min(1)
+		// eslint-disable-next-line local/no-hardcoded-path-split -- source is a URL-style path, not a filesystem path; forward-slash split is correct
+		.refine((s) => !s.split('/').includes('..'), {
+			message: 'source path must not use .. directory traversal',
+		}),
 	z.object({ source: z.string() }).passthrough(),
 ]);
 

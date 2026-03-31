@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/vat-development-agents",
-  "version": "0.1.20",
+  "version": "0.1.21",
   "description": "VAT development agents - dogfooding the vibe-agent-toolkit",
   "type": "module",
   "keywords": [
@@ -13,12 +13,17 @@
     "version": "1.0",
     "skills": [
       "vibe-agent-toolkit",
-      "vibe-agent-toolkit:resources",
-      "vibe-agent-toolkit:skills-distribution",
-      "vibe-agent-toolkit:agent-authoring",
-      "vibe-agent-toolkit:audit",
-      "vibe-agent-toolkit:debugging"
+      "resources",
+      "distribution",
+      "authoring",
+      "audit",
+      "debugging",
+      "install"
     ],
+    "replaces": {
+      "plugins": ["vat-development-agents"],
+      "flatSkills": ["vibe-agent-toolkit", "resources"]
+    },
     "agents": [
       {
         "name": "agent-generator",
@@ -33,6 +38,7 @@
     ]
   },
   "exports": {
+    "./package.json": "./package.json",
     "./agents/agent-generator": "./agents/agent-generator/agent.yaml",
     "./agents/resource-optimizer": "./agents/resource-optimizer/SCOPE.md"
   },
@@ -50,10 +56,11 @@
     "test:pipeline": "bun run build && bun run dist/src/test-pipeline.js",
     "typecheck": "tsc --noEmit",
     "validate": "bun run agents/agent-generator/validate-agent.ts",
-    "postinstall": "vat skills install --npm-postinstall || exit 0"
+    "postinstall": "vat claude plugin install --npm-postinstall || exit 0"
   },
   "dependencies": {
     "@vibe-agent-toolkit/agent-schema": "workspace:*",
+    "@vibe-agent-toolkit/cli": "workspace:*",
     "yaml": "^2.8.2"
   },
   "devDependencies": {

@@ -15,13 +15,22 @@ import { join, resolve } from 'node:path';
 import { safeExecSync } from '@vibe-agent-toolkit/utils';
 import * as tar from 'tar';
 
-export type SkillSource = 'npm' | 'local' | 'zip' | 'npm-postinstall' | 'dev';
+
+export type SkillSource = 'npm' | 'local' | 'zip' | 'tgz' | 'npm-postinstall' | 'dev';
+
+export interface PackageJsonVatReplaces {
+  /** Old plugin names (without marketplace) this package used to publish under */
+  plugins?: string[];
+  /** Old skill names previously installed to ~/.claude/skills/<name> (legacy flat location) */
+  flatSkills?: string[];
+}
 
 export interface PackageJsonVat {
   version?: string;
   // DEPRECATED(v0.1.x): vat.type — tolerated but ignored
   type?: string;
   skills?: string[];
+  replaces?: PackageJsonVatReplaces;
 }
 
 export interface PackageJson {
@@ -49,6 +58,11 @@ export function detectSource(input: string): SkillSource {
     return 'zip';
   }
 
+  // npm tarball (explicit extension)
+  if (input.endsWith('.tgz') || input.endsWith('.tar.gz')) {
+    return 'tgz';
+  }
+
   // Check filesystem
   const absolutePath = resolve(input);
 
@@ -62,6 +76,9 @@ export function detectSource(input: string): SkillSource {
     }
 
     if (stat.isFile()) {
+      if (absolutePath.endsWith('.tgz') || absolutePath.endsWith('.tar.gz')) {
+        return 'tgz';
+      }
       return 'zip';
     }
   }

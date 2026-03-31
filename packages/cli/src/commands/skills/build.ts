@@ -7,6 +7,8 @@
  * validates, and packages into dist/skills/<name>/.
  */
 
+import { existsSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 import {
@@ -279,6 +281,26 @@ function outputBuildYaml(
   process.stdout.write(`duration: ${duration}ms\n`);
 }
 
+/**
+ * Clean stale skill output directories before building.
+ * Full build: clear entire dist/skills/. Single skill: clear just that skill's dir.
+ */
+async function cleanStaleSkillOutputs(cwd: string, skillName: string | undefined): Promise<void> {
+  if (skillName) {
+    const singleSkillDir = resolve(cwd, 'dist', 'skills', skillNameToFsPath(skillName));
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from validated option
+    if (existsSync(singleSkillDir)) {
+      await rm(singleSkillDir, { recursive: true, force: true });
+    }
+  } else {
+    const allSkillsDir = resolve(cwd, 'dist', 'skills');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
+    if (existsSync(allSkillsDir)) {
+      await rm(allSkillsDir, { recursive: true, force: true });
+    }
+  }
+}
+
 async function buildCommand(
   pathArg: string | undefined,
   options: SkillsBuildCommandOptions
@@ -310,6 +332,10 @@ async function buildCommand(
     const skillsToBuild = filterSkillsByName(discoveredSkills, options.skill);
 
     logger.info(`Found ${skillsToBuild.length} skill(s) to build`);
+
+    if (!options.dryRun) {
+      await cleanStaleSkillOutputs(cwd, options.skill);
+    }
 
     // Handle dry-run mode
     if (options.dryRun) {

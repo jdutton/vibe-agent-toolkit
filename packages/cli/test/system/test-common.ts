@@ -9,7 +9,7 @@ import * as fs from 'node:fs';
 import { dirname as pathDirname, join as pathJoin, resolve as pathResolve } from 'node:path';
 import { fileURLToPath as urlFileURLToPath } from 'node:url';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
 
 // Re-export commonly used functions
@@ -99,6 +99,22 @@ export function createTempDirTracker(prefix: string): {
   };
 
   return { createTempDir, cleanupTempDirs };
+}
+
+/**
+ * Create an isolated package + home directory pair inside a temp dir.
+ * Used by postinstall and uninstall tests that need a fake npm package context
+ * and a fake Claude home directory.
+ */
+export function createPackageAndHomeContext(tempDir: string): {
+  packageDir: string;
+  fakeHome: string;
+} {
+  const packageDir = pathJoin(tempDir, 'package');
+  const fakeHome = pathJoin(tempDir, 'home');
+  mkdirSyncReal(packageDir, { recursive: true });
+  mkdirSyncReal(fakeHome, { recursive: true });
+  return { packageDir, fakeHome };
 }
 
 /**

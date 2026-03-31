@@ -17,7 +17,7 @@ describe('validateMarketplace', () => {
     plugins: [
       {
         name: 'test-plugin',
-        source: '../plugins/test-plugin',
+        source: './test-plugin',
       },
     ],
   };

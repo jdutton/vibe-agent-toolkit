@@ -1,46 +1,36 @@
+// packages/cli/src/commands/claude/index.ts
 /**
- * Claude command group
+ * Claude command group — gateway to the Claude ecosystem.
  *
- * Commands for building and verifying Claude plugin marketplace artifacts
+ * Local plugin management: vat claude plugin install/list/uninstall
+ * Org administration:      vat claude org ... (coming in this release)
  */
 
 import { Command } from 'commander';
 
-import { createBuildCommand } from './build.js';
-import { createVerifyCommand } from './verify.js';
+import { createPluginCommand } from './plugin/index.js';
 
 export function createClaudeCommand(): Command {
   const command = new Command('claude');
 
   command
-    .description('Build and verify Claude plugin marketplace artifacts')
+    .description('Manage Claude Code plugins and org administration')
     .helpCommand(false)
-    .addHelpText(
-      'after',
-      `
+    .addHelpText('after', `
 Description:
-  Commands for working with Claude Code plugin marketplaces and plugin.json artifacts.
-  Reads claude: section from vibe-agent-toolkit.config.yaml.
+  Gateway to the Claude ecosystem — local plugin management and org administration.
+
+  Plugin management: install, list, and uninstall skill packages in ~/.claude/
+  Org administration: manage users, workspaces, API keys, and usage (coming soon)
 
 Examples:
-  $ vat claude build                     # Generate plugin artifacts from pre-built skills
-  $ vat claude verify                    # Validate marketplace.json and plugin.json files
-  $ vat claude verify --marketplace lfa  # Verify a specific marketplace
+  $ vat claude plugin install npm:@myorg/my-skills    # Install from npm
+  $ vat claude plugin install --npm-postinstall       # From npm postinstall hook
+  $ vat claude plugin list                            # List installed plugins
+  $ vat claude plugin uninstall my-skill@my-market   # Remove a plugin
+`);
 
-Workflow:
-  1. Configure: Add claude: section to vibe-agent-toolkit.config.yaml
-  2. Build: vat skills build (build portable skills first)
-  3. Package: vat claude build (wrap skills into Claude plugin format)
-  4. Verify: vat claude verify (validate generated artifacts)
-
-Or use the top-level commands:
-  $ vat build     # Runs skills build then claude build
-  $ vat verify    # Validates everything (resources, skills, claude)
-`
-    );
-
-  command.addCommand(createBuildCommand());
-  command.addCommand(createVerifyCommand());
+  command.addCommand(createPluginCommand());
 
   return command;
 }

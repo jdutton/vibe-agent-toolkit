@@ -1,5 +1,5 @@
 /**
- * `vat claude build` — generate Claude plugin artifacts from pre-built skills
+ * `vat claude plugin build` — generate Claude plugin artifacts from pre-built skills
  *
  * Reads vibe-agent-toolkit.config.yaml → claude.marketplaces.
  * Discovers available skills from dist/skills/ (built by `vat skills build`).
@@ -7,19 +7,18 @@
  */
 
 import { existsSync } from 'node:fs';
-import { cp, mkdir, readdir, writeFile } from 'node:fs/promises';
+import { cp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry } from '@vibe-agent-toolkit/resources';
 import { Command } from 'commander';
 
-import { handleCommandError } from '../../utils/command-error.js';
-import { createLogger } from '../../utils/logger.js';
-import { writeYamlOutput } from '../../utils/output.js';
+import { handleCommandError } from '../../../utils/command-error.js';
+import { createLogger } from '../../../utils/logger.js';
+import { writeYamlOutput } from '../../../utils/output.js';
+import { loadClaudeProjectConfig } from '../claude-config.js';
 
-import { loadClaudeProjectConfig } from './claude-config.js';
-
-export interface ClaudeBuildCommandOptions {
+export interface PluginBuildCommandOptions {
   marketplace?: string;
   debug?: boolean;
 }
@@ -37,14 +36,14 @@ interface MarketplaceBuildResult {
   plugins: PluginBuildResult[];
 }
 
-export function createBuildCommand(): Command {
+export function createPluginBuildCommand(): Command {
   const command = new Command('build');
 
   command
     .description('Generate Claude plugin artifacts from pre-built skills')
     .option('--marketplace <name>', 'Build specific marketplace only')
     .option('--debug', 'Enable debug logging')
-    .action(buildCommand)
+    .action(pluginBuildCommand)
     .addHelpText(
       'after',
       `
@@ -75,7 +74,7 @@ Exit Codes:
   2 - System error
 
 Example:
-  $ vat skills build && vat claude build    # Build skills then wrap for Claude
+  $ vat skills build && vat claude plugin build    # Build skills then wrap for Claude
 `
     );
 
@@ -98,7 +97,7 @@ async function discoverBuiltSkills(configDir: string): Promise<string[]> {
   return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
 }
 
-async function buildCommand(options: ClaudeBuildCommandOptions): Promise<void> {
+async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<void> {
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
 
@@ -173,7 +172,7 @@ async function buildCommand(options: ClaudeBuildCommandOptions): Promise<void> {
 
     process.exit(0);
   } catch (error) {
-    handleCommandError(error, logger, startTime, 'ClaudeBuild');
+    handleCommandError(error, logger, startTime, 'ClaudePluginBuild');
   }
 }
 
@@ -185,6 +184,13 @@ async function buildMarketplace(
   logger: ReturnType<typeof createLogger>
 ): Promise<MarketplaceBuildResult> {
   const plugins: PluginBuildResult[] = [];
+
+  // Clean stale marketplace directory before rebuilding — removes orphaned plugins
+  const marketplaceOutputDir = join(configDir, 'dist', '.claude', 'plugins', 'marketplaces', name);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from config
+  if (existsSync(marketplaceOutputDir)) {
+    await rm(marketplaceOutputDir, { recursive: true, force: true });
+  }
 
   for (const pluginDef of config.plugins) {
     // Resolve which skills this plugin gets
@@ -224,7 +230,7 @@ async function buildMarketplace(
       return {
         name: p.pluginName,
         ...(pluginDesc ? { description: pluginDesc } : {}),
-        source: `../plugins/${p.pluginName}`,
+        source: `./plugins/${p.pluginName}`,
         author: {
           name: config.owner.name,
           ...(config.owner.email ? { email: config.owner.email } : {}),
@@ -353,5 +359,3 @@ function matchesSelector(skillName: string, selector: string): boolean {
   const regex = new RegExp(`^${selector.replaceAll('*', '.*')}$`);
   return regex.test(skillName);
 }
-
-

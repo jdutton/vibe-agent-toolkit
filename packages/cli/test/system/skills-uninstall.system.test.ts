@@ -1,156 +1,212 @@
-/* eslint-disable security/detect-non-literal-fs-filename, sonarjs/no-duplicate-string */
-// Test fixtures legitimately use dynamic file paths
-
 /**
- * System tests for skills uninstall command
- * Tests removal of installed skills (directories and symlinks)
+ * System tests for claude plugin uninstall command
+ * Tests removal of installed plugins from the Claude plugin registry
  */
 
-import { existsSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
-  createInstalledSkillDir,
+  createPackageAndHomeContext,
+  createTempDirTracker,
   executeCli,
-  executeCliAndParseYaml,
-  parseYamlOutput,
-  setupDevTestProject,
-} from './test-helpers/index.js';
+  fakeHomeEnv,
+  fs,
+  getBinPath,
+  writeTestFile,
+} from './test-common.js';
 
-const binPath = join(process.cwd(), 'packages', 'cli', 'dist', 'bin.js');
+const TEMP_DIR_PREFIX = 'vat-uninstall-test-';
+const MARKETPLACE_NAME = 'test-marketplace';
+const PLUGIN_NAME = 'test-plugin';
+const SKILL_NAME = 'test-skill';
+const PACKAGE_NAME = 'test-tools';
+const PACKAGE_VERSION = '1.0.0';
 
-let tmpDir: string;
+const PLUGIN_JSON_FILE = 'plugin.json';
+const CLAUDE_PLUGIN_SUBDIR = '.claude-plugin';
 
-beforeAll(() => {
-  tmpDir = mkdtempSync(join(normalizedTmpdir(), 'vat-uninstall-test-'));
-});
+/** npm env vars that mimic a real global npm postinstall context */
+const NPM_POSTINSTALL_ENV: Record<string, string> = {
+  npm_config_global: 'true',
+  npm_lifecycle_event: 'postinstall',
+  npm_command: 'install',
+};
 
-afterAll(() => {
-  rmSync(tmpDir, { recursive: true, force: true });
-});
+function minimalSkillMd(skillName: string): string {
+  return `---
+name: ${skillName}
+description: ${skillName} test skill
+version: 1.0.0
+---
 
-/**
- * Execute uninstall and return parsed YAML result
- */
-function executeUninstall(
-  args: string[]
-): ReturnType<typeof executeCliAndParseYaml> {
-  return executeCliAndParseYaml(binPath, ['skills', 'uninstall', ...args]);
+# ${skillName}
+`;
 }
 
 /**
- * Execute uninstall and assert success with 1 skill removed
+ * Create a fake npm package with dist plugin tree ready for postinstall
  */
-function executeUninstallAndExpectOneRemoved(
-  skillName: string,
-  skillsDir: string
-): { parsed: Record<string, unknown>; skills: Array<Record<string, unknown>> } {
-  const { status, parsed } = executeUninstall([skillName, '-s', skillsDir]);
+function createFakeNpmPackage(packageDir: string): void {
+  writeTestFile(
+    join(packageDir, 'package.json'),
+    JSON.stringify({
+      name: PACKAGE_NAME,
+      version: PACKAGE_VERSION,
+      vat: { version: '1.0', type: 'agent-bundle', skills: [SKILL_NAME] },
+    })
+  );
 
-  expect(status).toBe(0);
-  expect(parsed.status).toBe('success');
-  expect(parsed.skillsRemoved).toBe(1);
+  // dist/.claude/plugins/marketplaces/<mp>/plugins/<plugin>/
+  const pluginClaudeDir = join(
+    packageDir, 'dist', '.claude', 'plugins', 'marketplaces',
+    MARKETPLACE_NAME, 'plugins', PLUGIN_NAME, CLAUDE_PLUGIN_SUBDIR
+  );
+  mkdirSyncReal(pluginClaudeDir, { recursive: true });
+  writeTestFile(
+    join(pluginClaudeDir, PLUGIN_JSON_FILE),
+    JSON.stringify({ name: PLUGIN_NAME, description: 'Test plugin', author: { name: 'Test Org' } })
+  );
 
-  const skills = parsed.skills as Array<Record<string, unknown>>;
-  return { parsed, skills };
+  // skills inside plugin
+  const pluginSkillDir = join(
+    packageDir, 'dist', '.claude', 'plugins', 'marketplaces',
+    MARKETPLACE_NAME, 'plugins', PLUGIN_NAME, 'skills', SKILL_NAME
+  );
+  mkdirSyncReal(pluginSkillDir, { recursive: true });
+  writeTestFile(join(pluginSkillDir, 'SKILL.md'), minimalSkillMd(SKILL_NAME));
 }
 
-describe('skills uninstall command (system test)', () => {
-  it('should remove a regular directory', () => {
-    const skillsDir = join(tmpDir, 'skills-dir-remove');
-    mkdirSyncReal(skillsDir, { recursive: true });
-    createInstalledSkillDir(skillsDir, 'dir-skill');
+function setupUninstallTestSuite() {
+  const binPath = getBinPath(import.meta.url);
+  const { createTempDir, cleanupTempDirs: cleanup } = createTempDirTracker(TEMP_DIR_PREFIX);
 
-    expect(existsSync(join(skillsDir, 'dir-skill'))).toBe(true);
+  const createInstalledContext = () => {
+    const tempDir = createTempDir();
+    const { packageDir, fakeHome } = createPackageAndHomeContext(tempDir);
+    createFakeNpmPackage(packageDir);
 
-    const { skills } = executeUninstallAndExpectOneRemoved('dir-skill', skillsDir);
-    expect(skills).toHaveLength(1);
-    expect(skills[0]).toHaveProperty('name', 'dir-skill');
-    expect(skills[0]).toHaveProperty('wasSymlink', false);
-
-    expect(existsSync(join(skillsDir, 'dir-skill'))).toBe(false);
-  });
-
-  it('should remove a symlink (target preserved)', () => {
-    const skillsDir = join(tmpDir, 'skills-sym-remove');
-    mkdirSyncReal(skillsDir, { recursive: true });
-
-    // Create the symlink target (the "built" skill directory)
-    const targetDir = join(tmpDir, 'sym-target');
-    mkdirSyncReal(targetDir, { recursive: true });
-    writeFileSync(join(targetDir, 'SKILL.md'), '# Symlinked Skill\nTarget content');
-
-    // Create a symlink in the skills directory pointing to the target
-    symlinkSync(targetDir, join(skillsDir, 'sym-skill'), 'dir');
-
-    const { skills } = executeUninstallAndExpectOneRemoved('sym-skill', skillsDir);
-    expect(skills[0]).toHaveProperty('wasSymlink', true);
-
-    // Symlink removed, but target still exists
-    expect(existsSync(join(skillsDir, 'sym-skill'))).toBe(false);
-    expect(existsSync(targetDir)).toBe(true);
-    expect(existsSync(join(targetDir, 'SKILL.md'))).toBe(true);
-  });
-
-  it('should uninstall all skills from package.json with --all', () => {
-    const skillsDir = join(tmpDir, 'skills-all-remove');
-    mkdirSyncReal(skillsDir, { recursive: true });
-
-    // Create a project with package.json that declares two skills
-    const projectDir = setupDevTestProject(tmpDir, 'proj-all-remove', [
-      { name: 'skill-one', built: false },
-      { name: 'skill-two', built: false },
-    ]);
-
-    // Create the installed skills in the skills directory
-    createInstalledSkillDir(skillsDir, 'skill-one');
-    createInstalledSkillDir(skillsDir, 'skill-two');
-
-    const result = executeCli(
+    // Install via postinstall to populate registry
+    const installResult = executeCli(
       binPath,
-      ['skills', 'uninstall', '--all', '-s', skillsDir],
-      { cwd: projectDir }
+      ['claude', 'plugin', 'install', '--npm-postinstall'],
+      {
+        cwd: packageDir,
+        env: { ...NPM_POSTINSTALL_ENV, ...fakeHomeEnv(fakeHome) },
+      }
     );
+    return { packageDir, fakeHome, installResult };
+  };
+
+  const runUninstall = (
+    fakeHome: string,
+    args: string[],
+    cwd?: string
+  ) => executeCli(
+    binPath,
+    ['claude', 'plugin', 'uninstall', ...args],
+    { cwd: cwd ?? process.cwd(), env: fakeHomeEnv(fakeHome) }
+  );
+
+  return { binPath, createInstalledContext, cleanup, runUninstall };
+}
+
+describe('claude plugin uninstall command (system test)', () => {
+  const suite = setupUninstallTestSuite();
+
+  afterEach(() => {
+    suite.cleanup();
+  });
+
+  /**
+   * Install a plugin and return context needed for uninstall tests.
+   * Verifies install succeeded and plugin dir exists before returning.
+   */
+  function setupInstalledPlugin() {
+    const { fakeHome, installResult } = suite.createInstalledContext();
+    expect(installResult.status).toBe(0);
+    const pluginDir = join(
+      fakeHome, '.claude', 'plugins', 'marketplaces',
+      MARKETPLACE_NAME, 'plugins', PLUGIN_NAME
+    );
+    expect(fs.existsSync(pluginDir)).toBe(true);
+    const pluginKey = `${PLUGIN_NAME}@${MARKETPLACE_NAME}`;
+    return { fakeHome, pluginDir, pluginKey };
+  }
+
+  it('exits 0 and removes plugin files when given plugin@marketplace key', () => {
+    const { fakeHome, pluginKey } = setupInstalledPlugin();
+
+    const result = suite.runUninstall(fakeHome, [pluginKey]);
 
     expect(result.status).toBe(0);
-
-    const parsed = parseYamlOutput(result.stdout);
-    expect(parsed.status).toBe('success');
-    expect(parsed.skillsRemoved).toBe(2);
-
-    expect(existsSync(join(skillsDir, 'skill-one'))).toBe(false);
-    expect(existsSync(join(skillsDir, 'skill-two'))).toBe(false);
+    const combined = result.stdout;
+    expect(combined).toContain('status: success');
+    expect(combined).toContain('pluginsRemoved: 1');
   });
 
-  it('should fail when skill not installed', () => {
-    const skillsDir = join(tmpDir, 'skills-not-found');
-    mkdirSyncReal(skillsDir, { recursive: true });
+  it('removes plugin directory from marketplacesDir after uninstall', () => {
+    const { fakeHome, pluginDir, pluginKey } = setupInstalledPlugin();
 
-    const result = executeCli(
-      binPath,
-      ['skills', 'uninstall', 'nonexistent-skill', '-s', skillsDir]
+    suite.runUninstall(fakeHome, [pluginKey]);
+
+    expect(fs.existsSync(pluginDir)).toBe(false);
+  });
+
+  it('removes plugin from installed_plugins.json after uninstall', () => {
+    const { fakeHome, pluginKey } = setupInstalledPlugin();
+
+    const installedPath = join(fakeHome, '.claude', 'plugins', 'installed_plugins.json');
+    const beforeUninstall = JSON.parse(fs.readFileSync(installedPath, 'utf-8')) as {
+      plugins: Record<string, unknown[]>;
+    };
+    expect(beforeUninstall.plugins).toHaveProperty(pluginKey);
+
+    suite.runUninstall(fakeHome, [pluginKey]);
+
+    const afterUninstall = JSON.parse(fs.readFileSync(installedPath, 'utf-8')) as {
+      plugins: Record<string, unknown[]>;
+    };
+    expect(afterUninstall.plugins).not.toHaveProperty(pluginKey);
+  });
+
+  it('exits 0 (idempotent) when plugin is not installed', () => {
+    const { createTempDir } = createTempDirTracker(TEMP_DIR_PREFIX);
+    const fakeHome = createTempDir();
+    mkdirSyncReal(join(fakeHome, '.claude'), { recursive: true });
+
+    const result = suite.runUninstall(fakeHome, ['nonexistent@nonexistent-market']);
+
+    // idempotent — not installed is a valid no-op success
+    expect(result.status).toBe(0);
+  });
+
+  it('exits 0 with pluginsRemoved: 0 when --all and nothing installed', () => {
+    const { createTempDir } = createTempDirTracker(TEMP_DIR_PREFIX);
+    const tempDir = createTempDir();
+    const { fakeHome, packageDir } = createPackageAndHomeContext(tempDir);
+
+    writeTestFile(
+      join(packageDir, 'package.json'),
+      JSON.stringify({ name: 'some-uninstalled-package', version: '1.0.0' })
     );
 
-    expect(result.status).not.toBe(0);
+    const result = suite.runUninstall(fakeHome, ['--all'], packageDir);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('pluginsRemoved: 0');
   });
 
-  it('should not remove with --dry-run', () => {
-    const skillsDir = join(tmpDir, 'skills-dryrun-remove');
-    mkdirSyncReal(skillsDir, { recursive: true });
-    createInstalledSkillDir(skillsDir, 'kept-skill');
+  it('previews removal with --dry-run without deleting files', () => {
+    const { fakeHome, pluginDir, pluginKey } = setupInstalledPlugin();
 
-    const { status, parsed } = executeUninstall(['kept-skill', '-s', skillsDir, '--dry-run']);
+    const result = suite.runUninstall(fakeHome, [pluginKey, '--dry-run']);
 
-    expect(status).toBe(0);
-    expect(parsed.status).toBe('success');
-    expect(parsed.dryRun).toBe(true);
-    expect(parsed.skillsRemoved).toBe(1);
-
-    // Skill should still exist after dry-run
-    expect(existsSync(join(skillsDir, 'kept-skill'))).toBe(true);
-    expect(existsSync(join(skillsDir, 'kept-skill', 'SKILL.md'))).toBe(true);
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('status: success');
+    // Plugin directory must still exist after dry-run
+    expect(fs.existsSync(pluginDir)).toBe(true);
   });
 });

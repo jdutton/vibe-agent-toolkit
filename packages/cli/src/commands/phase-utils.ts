@@ -7,11 +7,6 @@ import { join, resolve } from 'node:path';
 
 import { createLogger } from '../utils/logger.js';
 
-export interface PhaseOptions {
-  marketplace?: string;
-  debug?: boolean;
-}
-
 export interface Phase {
   name: string;
   args: string[];
@@ -20,21 +15,6 @@ export interface Phase {
 export interface PhaseResult {
   name: string;
   status: string;
-}
-
-/**
- * Build the args array for a claude subcommand phase, appending optional
- * --marketplace and --debug flags when present in options.
- */
-export function buildClaudePhaseArgs(subcommand: string, options: PhaseOptions): string[] {
-  const args = ['claude', subcommand];
-  if (options.marketplace) {
-    args.push('--marketplace', options.marketplace);
-  }
-  if (options.debug) {
-    args.push('--debug');
-  }
-  return args;
 }
 
 /**

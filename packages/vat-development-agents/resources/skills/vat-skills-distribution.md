@@ -1,9 +1,18 @@
 ---
-name: vibe-agent-toolkit:skills-distribution
+name: distribution
 description: Use when setting up vat build, configuring plugin distribution for the Claude ecosystem (marketplace, plugins, managed settings), npm publishing with postinstall hooks, or vat verify orchestration. Covers the full pipeline from skill source to installed plugin.
 ---
 
 # VAT Distribution: Build, Publish & Install
+
+## Scope
+
+This skill covers the **file-based install method for Claude Code CLI** (`~/.claude/plugins/`).
+This is the only install method VAT currently supports.
+
+For the full install landscape — Claude Desktop paths, enterprise CI deployment,
+Anthropic Cloud org management, MDM integration, and the `vat plugins uninstall`
+design — see [Install & Uninstall Architecture](vat-install-architecture.md).
 
 ## Overview
 
@@ -11,7 +20,7 @@ VAT distributes skills as **Claude plugins** via npm packages. The pipeline:
 
 1. `vat build` compiles SKILL.md sources into plugin artifacts
 2. `npm publish` pushes the package to a registry
-3. `npm install` triggers a postinstall hook that registers the plugin in Claude's plugin system
+3. `npm install` triggers a postinstall hook that registers the plugin in Claude Code's plugin system
 
 Skills installed this way appear in Claude Code as `/plugin-name:skill-name`.
 
@@ -42,9 +51,12 @@ my-project/
     "version": "1.0",
     "skills": ["my-skill"]
   },
+  "dependencies": {
+    "vibe-agent-toolkit": "latest"
+  },
   "scripts": {
     "build:vat": "vat build",
-    "postinstall": "vat skills install --npm-postinstall || exit 0"
+    "postinstall": "vat claude plugin install --npm-postinstall 2>/dev/null || exit 0"
   },
   "files": ["dist", "README.md"],
   "publishConfig": {
@@ -52,6 +64,8 @@ my-project/
   }
 }
 ```
+
+**`vibe-agent-toolkit` must be in `dependencies` (not `devDependencies`).** npm adds all `bin` entries from runtime dependencies to `./node_modules/.bin/` and puts that on PATH when running lifecycle scripts. This is how `vat` is available during your postinstall without being globally installed. If it is in `devDependencies`, npm will not install it on the user's machine and the postinstall will fail with "command not found".
 
 The `vat.skills` array contains skill name strings for npm discoverability. Skill source paths and packaging config live in `vibe-agent-toolkit.config.yaml` (see Step 2).
 
@@ -63,11 +77,92 @@ For private GitHub Packages registry:
 }
 ```
 
-Users installing from GitHub Packages need `.npmrc` with the scope registry and auth token:
+Users (or IT) installing from GitHub Packages need `.npmrc` configured with the scope registry and a read-only token:
 ```
 @myorg:registry=https://npm.pkg.github.com
 //npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
 ```
+
+IT deploying to managed machines should pre-configure `.npmrc` at the system or user level before running install commands. End users do not need to understand npm or the registry — IT handles it once.
+
+## Handling Plugin Renames: vat.replaces
+
+> **Use this only when renaming a plugin, merging plugins, or cleaning up legacy flat-skill installs. Normal upgrades (same plugin name, same skills) do NOT need `vat.replaces` — the installer already overwrites the plugin directory on every install.**
+
+### The problem: silent stale skills
+
+When you rename a plugin or reorganize skills across packages, the old registration remains in Claude Code. Claude Code **does not warn you** when two plugins provide conflicting skill names — the first-registered (stale) skill silently wins. Users continue loading old content from the renamed plugin unless the old registration is explicitly removed.
+
+This is the scenario where `vat.replaces` is needed:
+- Plugin renamed: `old-plugin-name` → `new-plugin-name`
+- Two old plugins merged into one new plugin
+- Skills previously installed to `~/.claude/skills/<name>` (legacy pre-0.1.20 flat install) now delivered via the plugin tree
+
+### How it works
+
+When a VAT package is installed (via postinstall hook or `--dev`), the installer reads `vat.replaces` from `package.json` and — **before** installing the new plugin:
+
+1. For each name in `replaces.plugins`: uninstalls `<name>@<marketplace>` — removes plugin directory, cache entry, registry entry, and `settings.json` entry
+2. For each name in `replaces.flatSkills`: deletes `~/.claude/skills/<name>` — removes legacy pre-0.1.20 flat installs
+
+Both operations are idempotent — "not found" is handled gracefully.
+
+### Schema
+
+```json
+"vat": {
+  "version": "1.0",
+  "skills": ["authoring", "audit"],
+  "replaces": {
+    "plugins": ["my-old-plugin-name"],
+    "flatSkills": ["my-old-skill", "another-old-skill"]
+  }
+}
+```
+
+Both `plugins` and `flatSkills` are optional arrays. The entire `replaces` key is optional — omit it when there is nothing to clean up.
+
+### Real example: vat-development-agents 0.1.21
+
+This package (`vat-development-agents`) renamed its plugin from `vat-development-agents` to `vibe-agent-toolkit` in v0.1.21. Without `vat.replaces`, users who had already installed v0.1.20 would have both `vat-development-agents@vat-skills` and `vibe-agent-toolkit@vat-skills` registered — Claude Code would serve stale skill content from the old plugin.
+
+The fix in `package.json`:
+
+```json
+"vat": {
+  "version": "1.0",
+  "skills": ["vibe-agent-toolkit", "resources", "distribution", "authoring", "audit", "debugging", "install"],
+  "replaces": {
+    "plugins": ["vat-development-agents"],
+    "flatSkills": ["vibe-agent-toolkit", "resources"]
+  }
+}
+```
+
+- `plugins`: removes the old plugin registration (same marketplace, old plugin name)
+- `flatSkills`: removes legacy `~/.claude/skills/vibe-agent-toolkit` and `~/.claude/skills/resources` entries from users who installed before 0.1.20 switched to the plugin tree
+
+### Non-obvious gotchas
+
+**1. Plugin names in `replaces.plugins` have NO `@marketplace`**
+
+The format is just the plugin name — e.g. `"vat-development-agents"` — NOT `"vat-development-agents@vat-skills"`. The installer infers the marketplace from the current package's dist tree. Using `@marketplace` syntax here would be wrong.
+
+**2. `replaces.plugins` is for old plugin registrations, not for skills that moved between plugins**
+
+If a skill moved from `plugin-a` to `plugin-b` within the same marketplace, list `"plugin-a"` in `replaces.plugins` to clean up the entire old plugin. You do not manage individual skills — you manage plugins.
+
+**3. `replaces.flatSkills` is ONLY for the legacy `~/.claude/skills/` location**
+
+This is specifically for skills that were previously installed as flat files to `~/.claude/skills/<name>` (pre-plugin-tree, before v0.1.20). Skills within the plugin tree (under `~/.claude/plugins/`) are handled via `replaces.plugins`. Do not mix them up.
+
+**4. Normal upgrades need nothing**
+
+If you publish a new version of the same package with the same plugin name, the installer overwrites the plugin directory automatically. `vat.replaces` is only for the case where the old name is different from the new name.
+
+**5. The symptom is subtle and delayed**
+
+You will not see an error. Claude Code simply loads the first-registered skill with a given name. If the stale plugin is registered first (alphabetically or by install order), your new content is invisible until you remove the old registration.
 
 ## Step 2: vibe-agent-toolkit.config.yaml
 
@@ -130,13 +225,12 @@ vat verify       # validates resources + skills + claude artifacts
 Two phases, run in dependency order:
 
 1. **`vat skills build`** — reads `vibe-agent-toolkit.config.yaml skills:` section, discovers SKILL.md files via include/exclude globs, compiles each into `dist/skills/<name>/`
-2. **`vat claude build`** — reads `vibe-agent-toolkit.config.yaml claude:` section, wraps built skills into `dist/.claude/plugins/marketplaces/<mp>/plugins/<plugin>/` structure with `.claude-plugin/plugin.json`
+2. **`vat claude plugin build`** — reads `vibe-agent-toolkit.config.yaml claude:` section, wraps built skills into `dist/.claude/plugins/marketplaces/<mp>/plugins/<plugin>/` structure with `.claude-plugin/plugin.json`. Cleans stale output before each build.
 
 Individual commands still work:
 ```bash
-vat skills build       # skills phase only
-vat claude build       # claude plugin phase only (requires skills already built)
-vat claude verify      # validate plugin artifacts only
+vat skills build            # skills phase only
+vat claude plugin build     # claude plugin phase only (requires skills already built)
 ```
 
 ## Step 4: Publish
@@ -148,18 +242,25 @@ npm publish               # stable release
 
 ## Step 5: User Install
 
-```bash
-vat skills install npm:@myorg/my-skills
-```
+### Recommended: npm global install (postinstall runs automatically)
 
-Or via standard npm install (postinstall hook triggers automatically):
 ```bash
 npm install -g @myorg/my-skills
 ```
 
+The postinstall hook fires automatically and registers the plugin in Claude. This is the correct path for IT-managed deployments — no other tools required on the user's machine.
+
+### Developer/IT one-off install via npx
+
+```bash
+npx vibe-agent-toolkit claude plugin install npm:@myorg/my-skills
+```
+
+Downloads and runs VAT via npx to install a package without a global install. Useful for CI, scripting, or testing from a developer machine. Requires the npm scope registry to be configured (`.npmrc`) if installing from a private registry.
+
 ### How plugin installation works
 
-When `npm install` runs the postinstall hook (`vat skills install --npm-postinstall`):
+When `npm install` runs the postinstall hook (`vat claude plugin install --npm-postinstall`):
 
 - VAT detects `dist/.claude/plugins/marketplaces/` directory in the installed package
 - Copies the plugin tree to Claude's plugin directory (dumb recursive copy)
@@ -222,7 +323,13 @@ TypeScript files in `scripts` are tree-shaken and compiled to standalone `.mjs`.
 | Build everything | `vat build` |
 | Verify everything | `vat verify` |
 | Build skills only | `vat skills build` |
-| Build claude artifacts only | `vat claude build` |
-| Verify claude artifacts only | `vat claude verify` |
-| Install from npm | `vat skills install npm:@org/pkg` |
+| Build claude plugin artifacts only | `vat claude plugin build` |
+| Install via npm (end user) | `npm install -g @org/pkg` |
+| Install via npx (developer/IT) | `npx vibe-agent-toolkit claude plugin install npm:@org/pkg` |
+| List installed plugins | `vat claude plugin list` |
+| Uninstall a plugin | `vat claude plugin uninstall --all` |
 | Package for claude.ai upload | `vat skills package ./SKILL.md -o ./dist/ --target claude-web` |
+
+## Future: Zero-Dependency Postinstall (Option B)
+
+A planned improvement: `vat build` would bundle the plugin install logic into `dist/postinstall.js` — a fully self-contained script with no npm dependencies. The postinstall script would become simply `node ./dist/postinstall.js`. This eliminates `vibe-agent-toolkit` as a runtime dependency entirely, reducing install footprint for end users. Until then, Option C (runtime `vibe-agent-toolkit` dep) is the correct approach.

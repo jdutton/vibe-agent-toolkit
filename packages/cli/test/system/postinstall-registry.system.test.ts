@@ -2,7 +2,7 @@
 // Test fixtures legitimately use dynamic file paths
 
 /**
- * System tests for `vat skills install --npm-postinstall` plugin registry flow.
+ * System tests for `vat claude plugin install --npm-postinstall` plugin registry flow.
  *
  * Verifies that the postinstall handler correctly:
  * - Finds dist/.claude/plugins/marketplaces/ directory tree in cwd
@@ -18,6 +18,7 @@ import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  createPackageAndHomeContext,
   createTempDirTracker,
   executeCli,
   fakeHomeEnv,
@@ -151,11 +152,7 @@ function setupPostinstallRegistryTestSuite() {
    */
   const createTestContext = (): RegistryTestContext => {
     const tempDir = createTempDir();
-    const packageDir = join(tempDir, 'package');
-    const fakeHome = join(tempDir, 'home');
-    mkdirSyncReal(packageDir, { recursive: true });
-    mkdirSyncReal(fakeHome, { recursive: true });
-    return { packageDir, fakeHome };
+    return createPackageAndHomeContext(tempDir);
   };
 
   /**
@@ -174,10 +171,10 @@ function setupPostinstallRegistryTestSuite() {
   };
 
   /**
-   * Run `vat skills install --npm-postinstall` with a fake Claude home.
+   * Run `vat claude plugin install --npm-postinstall` with a fake Claude home.
    */
   const runPostinstall = (packageDir: string, fakeHome: string, extraArgs: string[] = []) => {
-    return executeCli(binPath, ['skills', 'install', '--npm-postinstall', ...extraArgs], {
+    return executeCli(binPath, ['claude', 'plugin', 'install', '--npm-postinstall', ...extraArgs], {
       cwd: packageDir,
       env: { ...NPM_POSTINSTALL_ENV, ...fakeHomeEnv(fakeHome) },
     });
@@ -186,7 +183,7 @@ function setupPostinstallRegistryTestSuite() {
   return { binPath, createTestContext, createFullPackageContext, cleanup, runPostinstall };
 }
 
-describe('skills install --npm-postinstall plugin registry (system test)', () => {
+describe('claude plugin install --npm-postinstall plugin registry (system test)', () => {
   const suite = setupPostinstallRegistryTestSuite();
 
   afterEach(() => {

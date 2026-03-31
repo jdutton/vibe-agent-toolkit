@@ -1,5 +1,5 @@
 ---
-name: vibe-agent-toolkit:debugging
+name: debugging
 description: >-
   Debug unexpected VAT behavior, reproduce bugs, test local vibe-agent-toolkit
   changes in adopter projects (VAT_ROOT_DIR), write failing tests before fixing,
