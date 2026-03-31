@@ -181,7 +181,7 @@ async function removeFromSettings(paths: ClaudeUserPaths, pluginKey: string, dry
   const enabled = settingsData['enabledPlugins'];
   if (enabled === null || typeof enabled !== 'object' || Array.isArray(enabled)) return false;
   const ep = enabled as Record<string, unknown>;
-  if (!Object.prototype.hasOwnProperty.call(ep, pluginKey)) return false;
+  if (!Object.hasOwn(ep, pluginKey)) return false;
 
   if (!dryRun) {
     delete ep[pluginKey];

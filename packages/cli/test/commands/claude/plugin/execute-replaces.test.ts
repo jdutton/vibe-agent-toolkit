@@ -8,9 +8,11 @@
 
 import { lstatSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
+import { join } from 'node:path';
 
 import type { ClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { uninstallPlugin } from '@vibe-agent-toolkit/claude-marketplace';
+import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { PackageJsonVatReplaces } from '../../../../src/commands/claude/plugin/helpers.js';
@@ -195,9 +197,9 @@ describe('executeReplaces — flatSkills', () => {
   it('removes existing flat skill when lstatSync succeeds', async () => {
     const logger = await runFlatSkillTest(OLD_FLAT_SKILL, false);
 
-    const expectedPath = `${SKILLS_DIR}/${OLD_FLAT_SKILL}`;
+    const expectedPath = join(SKILLS_DIR, OLD_FLAT_SKILL);
     expect(rm).toHaveBeenCalledWith(expectedPath, { recursive: true, force: true });
-    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining(expectedPath));
+    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining(toForwardSlash(expectedPath)));
   });
 
   it('skips removal when lstatSync throws (path does not exist)', async () => {
@@ -224,7 +226,7 @@ describe('executeReplaces — flatSkills', () => {
     await runFlatSkillTest('dangling-skill', false);
 
     // rm IS called because lstatSync found the symlink inode (even though target is gone)
-    const expectedPath = `${SKILLS_DIR}/dangling-skill`;
+    const expectedPath = join(SKILLS_DIR, 'dangling-skill');
     expect(rm).toHaveBeenCalledWith(expectedPath, { recursive: true, force: true });
   });
 
@@ -279,7 +281,7 @@ describe('executeReplaces — edge cases', () => {
       dryRun: false,
     });
 
-    const expectedSkillPath = `${SKILLS_DIR}/old-flat-skill`;
+    const expectedSkillPath = join(SKILLS_DIR, 'old-flat-skill');
     expect(rm).toHaveBeenCalledWith(expectedSkillPath, { recursive: true, force: true });
   });
 });
