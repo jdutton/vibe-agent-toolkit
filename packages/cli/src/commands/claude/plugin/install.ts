@@ -781,16 +781,16 @@ async function handleNpmPostinstall(
  *
  * Idempotent — uninstallPlugin handles "not found" gracefully.
  */
-async function removeFlatSkill(skillPath: string, logger: ReturnType<typeof createLogger>): Promise<void> {
+export async function removeFlatSkill(skillPath: string, logger: ReturnType<typeof createLogger>): Promise<void> {
   logger.info(`   Removing legacy flat skill: ${skillPath}`);
   await rm(skillPath, { recursive: true, force: true });
 }
 
-function logFlatSkillRemoval(skillPath: string, logger: ReturnType<typeof createLogger>): void {
+export function logFlatSkillRemoval(skillPath: string, logger: ReturnType<typeof createLogger>): void {
   logger.info(`   [dry-run] Would remove legacy flat skill: ${skillPath}`);
 }
 
-async function removeOldPlugins(
+export async function removeOldPlugins(
   oldPlugins: string[] | undefined,
   marketplaceNames: string[],
   paths: ReturnType<typeof getClaudeUserPaths>,
@@ -810,7 +810,7 @@ async function removeOldPlugins(
   }
 }
 
-async function executeReplaces(
+export async function executeReplaces(
   replaces: PackageJsonVatReplaces,
   marketplaceNames: string[],
   paths: ReturnType<typeof getClaudeUserPaths>,
