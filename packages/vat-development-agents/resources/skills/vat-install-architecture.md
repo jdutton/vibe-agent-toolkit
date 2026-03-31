@@ -64,7 +64,7 @@ vat skills install ./path/to/package
 vat skills install ./my-skills.zip
 
 # npm postinstall hook (triggered by npm install -g)
-# package.json: "postinstall": "node ./node_modules/vibe-agent-toolkit/dist/bin/vat.js skills install --npm-postinstall"
+# package.json: "postinstall": "node ./node_modules/vibe-agent-toolkit/bin/vat claude plugin install --npm-postinstall"
 ```
 
 ### Uninstall (current state)
@@ -195,7 +195,7 @@ the local node_modules binary in postinstall. Never assume `vat` is globally ins
 {
   "dependencies": { "vibe-agent-toolkit": "latest" },
   "scripts": {
-    "postinstall": "node ./node_modules/vibe-agent-toolkit/dist/bin/vat.js skills install --npm-postinstall || exit 0"
+    "postinstall": "node ./node_modules/vibe-agent-toolkit/bin/vat claude plugin install --npm-postinstall || exit 0"
   }
 }
 ```

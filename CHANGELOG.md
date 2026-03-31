@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Breaking Changes
-- **`vat skills install` removed** — replaced by `vat claude plugin install`. Update postinstall scripts to use `node ./node_modules/vibe-agent-toolkit/dist/bin/vat.js claude plugin install --npm-postinstall || exit 0` and add `vibe-agent-toolkit` to your package's `dependencies`.
+- **`vat skills install` removed** — replaced by `vat claude plugin install`. Update postinstall scripts to use `node ./node_modules/vibe-agent-toolkit/bin/vat claude plugin install --npm-postinstall || exit 0` and add `vibe-agent-toolkit` to your package's `dependencies`.
 - **`vat skills uninstall` removed** — replaced by `vat claude plugin uninstall`.
 - **`vat claude build` replaced** — superseded by `vat claude plugin build` (same function, new location under the plugin command group). `vat build` now runs both `skills` and `claude` phases automatically; no separate step needed.
 - **`vat claude verify` removed** — use `vat verify` (config-driven top-level command).

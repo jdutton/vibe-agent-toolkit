@@ -56,7 +56,7 @@ my-project/
   },
   "scripts": {
     "build:vat": "vat build",
-    "postinstall": "node ./node_modules/vibe-agent-toolkit/dist/bin/vat.js claude plugin install --npm-postinstall 2>/dev/null || exit 0"
+    "postinstall": "node ./node_modules/vibe-agent-toolkit/bin/vat claude plugin install --npm-postinstall 2>/dev/null || exit 0"
   },
   "files": ["dist", "README.md"],
   "publishConfig": {
@@ -260,7 +260,7 @@ Downloads and runs VAT via npx to install a package without a global install. Us
 
 ### How plugin installation works
 
-When `npm install` runs the postinstall hook (`node ./node_modules/vibe-agent-toolkit/dist/bin/vat.js claude plugin install --npm-postinstall`):
+When `npm install` runs the postinstall hook (`node ./node_modules/vibe-agent-toolkit/bin/vat claude plugin install --npm-postinstall`):
 
 - VAT detects `dist/.claude/plugins/marketplaces/` directory in the installed package
 - Copies the plugin tree to Claude's plugin directory (dumb recursive copy)
