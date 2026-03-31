@@ -18,7 +18,7 @@ import { cp, mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { basename, join, relative, resolve } from 'node:path';
 
 import { getClaudeUserPaths, installPlugin, uninstallPlugin } from '@vibe-agent-toolkit/claude-marketplace';
-import { normalizedTmpdir, safeExecSync } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safeExecSync, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import AdmZip from 'adm-zip';
 import { Command } from 'commander';
 import * as tar from 'tar';
@@ -856,12 +856,12 @@ async function handleNpmPostinstall(
  * Idempotent — uninstallPlugin handles "not found" gracefully.
  */
 export async function removeFlatSkill(skillPath: string, logger: ReturnType<typeof createLogger>): Promise<void> {
-  logger.info(`   Removing legacy flat skill: ${skillPath}`);
+  logger.info(`   Removing legacy flat skill: ${toForwardSlash(skillPath)}`);
   await rm(skillPath, { recursive: true, force: true });
 }
 
 export function logFlatSkillRemoval(skillPath: string, logger: ReturnType<typeof createLogger>): void {
-  logger.info(`   [dry-run] Would remove legacy flat skill: ${skillPath}`);
+  logger.info(`   [dry-run] Would remove legacy flat skill: ${toForwardSlash(skillPath)}`);
 }
 
 export async function removeOldPlugins(
