@@ -22,7 +22,9 @@ const FIXTURES_DIR = join(__dirname, 'fixtures', 'schema-validation');
 
 const SKILL_FRONTMATTER_SCHEMA = 'skill-frontmatter';
 const VAT_SKILL_FRONTMATTER_SCHEMA = 'vat-skill-frontmatter';
+const MARKETPLACE_MANIFEST_SCHEMA = 'marketplace-manifest';
 const FRONTMATTER_PATTERN = /^---\n([\s\S]*?)\n---/;
+const TEST_PLUGIN_NAME = 'test-plugin';
 
 /** Load and parse a JSON schema file */
 function loadSchema(schemaName: string) {
@@ -117,6 +119,44 @@ describe('Schema Export', () => {
       }
 
       expect(valid).toBe(true);
+    });
+  });
+
+  describe('Marketplace Manifest Schema (marketplace-manifest.json)', () => {
+    const marketplaceAjv = new Ajv({ strict: false });
+
+    const validManifest = {
+      name: 'test-marketplace',
+      owner: { name: 'Test Org' },
+      plugins: [{ name: TEST_PLUGIN_NAME, source: `./${TEST_PLUGIN_NAME}` }],
+    };
+
+    it('should generate marketplace-manifest.json schema', () => {
+      const schema = loadSchema(MARKETPLACE_MANIFEST_SCHEMA);
+      expect(schema).toHaveProperty('definitions');
+    });
+
+    it('should accept a valid manifest with relative source path', () => {
+      const validate = compileSchema(MARKETPLACE_MANIFEST_SCHEMA, marketplaceAjv);
+      expect(validate(validManifest)).toBe(true);
+    });
+
+    it('should reject plugin source with leading path traversal (../)', () => {
+      const validate = compileSchema(MARKETPLACE_MANIFEST_SCHEMA, marketplaceAjv);
+      const invalid = {
+        ...validManifest,
+        plugins: [{ name: TEST_PLUGIN_NAME, source: `../plugins/${TEST_PLUGIN_NAME}` }],
+      };
+      expect(validate(invalid)).toBe(false);
+    });
+
+    it('should reject plugin source with embedded path traversal (foo/../bar)', () => {
+      const validate = compileSchema(MARKETPLACE_MANIFEST_SCHEMA, marketplaceAjv);
+      const invalid = {
+        ...validManifest,
+        plugins: [{ name: TEST_PLUGIN_NAME, source: './foo/../bar' }],
+      };
+      expect(validate(invalid)).toBe(false);
     });
   });
 

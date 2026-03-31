@@ -1,0 +1,118 @@
+{
+  "$ref": "#/definitions/marketplace-manifest",
+  "definitions": {
+    "marketplace-manifest": {
+      "type": "object",
+      "properties": {
+        "$schema": {
+          "type": "string",
+          "description": "JSON Schema reference"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Marketplace identifier"
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of the marketplace"
+        },
+        "version": {
+          "type": "string",
+          "description": "Marketplace manifest version"
+        },
+        "owner": {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1
+            },
+            "email": {
+              "type": "string",
+              "format": "email"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "additionalProperties": true,
+          "description": "Marketplace owner information"
+        },
+        "plugins": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1
+              },
+              "source": {
+                "anyOf": [
+                  {
+                    "type": "string",
+                    "minLength": 1,
+                    "not": {
+                      "pattern": "\\.\\."
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "properties": {
+                      "source": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "source"
+                    ],
+                    "additionalProperties": true
+                  }
+                ],
+                "description": "Plugin source — relative path or source object"
+              },
+              "description": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              },
+              "author": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "email": {
+                    "type": "string",
+                    "format": "email"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": true
+              }
+            },
+            "required": [
+              "name",
+              "source"
+            ],
+            "additionalProperties": true
+          },
+          "description": "List of plugins available in this marketplace"
+        }
+      },
+      "required": [
+        "name",
+        "owner",
+        "plugins"
+      ],
+      "additionalProperties": true,
+      "description": "Claude Code marketplace manifest (.claude-plugin/marketplace.json)"
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

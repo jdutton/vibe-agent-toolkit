@@ -95,7 +95,7 @@ describe('audit command (integration)', () => {
         JSON.stringify({
           name: TEST_MARKETPLACE_NAME,
           owner: { name: TEST_OWNER_NAME },
-          plugins: [{ name: TEST_PLUGIN_NAME, source: `../plugins/${TEST_PLUGIN_NAME}` }],
+          plugins: [{ name: TEST_PLUGIN_NAME, source: `./${TEST_PLUGIN_NAME}` }],
         })
       );
 

@@ -10,7 +10,7 @@ describe('MarketplaceManifestSchema', () => {
     plugins: [
       {
         name: PLUGIN_NAME,
-        source: `../plugins/${PLUGIN_NAME}`,
+        source: `./${PLUGIN_NAME}`,
       },
     ],
   };
@@ -36,7 +36,7 @@ describe('MarketplaceManifestSchema', () => {
       plugins: [
         {
           name: PLUGIN_NAME,
-          source: `../plugins/${PLUGIN_NAME}`,
+          source: `./${PLUGIN_NAME}`,
           description: 'A test plugin',
           version: '1.0.0',
           author: { name: 'Author', email: 'author@example.com' },
@@ -114,7 +114,7 @@ describe('MarketplaceManifestSchema', () => {
   it('should fail when plugin entry is missing name', () => {
     const result = MarketplaceManifestSchema.safeParse({
       ...validMarketplace,
-      plugins: [{ source: '../plugins/test' }],
+      plugins: [{ source: './test' }],
     });
     expect(result.success).toBe(false);
   });
@@ -133,5 +133,29 @@ describe('MarketplaceManifestSchema', () => {
       owner: {},
     });
     expect(result.success).toBe(false);
+  });
+
+  it('should reject plugin source with path traversal (../)', () => {
+    const result = MarketplaceManifestSchema.safeParse({
+      ...validMarketplace,
+      plugins: [{ name: PLUGIN_NAME, source: '../plugins/test-plugin' }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('should reject plugin source with embedded path traversal (foo/../bar)', () => {
+    const result = MarketplaceManifestSchema.safeParse({
+      ...validMarketplace,
+      plugins: [{ name: PLUGIN_NAME, source: './foo/../bar' }],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('should accept plugin source with relative path (./name)', () => {
+    const result = MarketplaceManifestSchema.safeParse({
+      ...validMarketplace,
+      plugins: [{ name: PLUGIN_NAME, source: './test-plugin' }],
+    });
+    expect(result.success).toBe(true);
   });
 });

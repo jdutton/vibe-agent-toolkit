@@ -230,7 +230,7 @@ async function buildMarketplace(
       return {
         name: p.pluginName,
         ...(pluginDesc ? { description: pluginDesc } : {}),
-        source: `../plugins/${p.pluginName}`,
+        source: `./plugins/${p.pluginName}`,
         author: {
           name: config.owner.name,
           ...(config.owner.email ? { email: config.owner.email } : {}),

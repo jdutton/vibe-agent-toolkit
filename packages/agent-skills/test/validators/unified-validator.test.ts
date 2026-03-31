@@ -43,7 +43,7 @@ describe('validate (unified validator)', () => {
 			const marketplaceDir = createTestMarketplace(tempDir, {
 				name: 'test-marketplace',
 				owner: { name: 'Test Owner', email: 'test@example.com' },
-				plugins: [{ name: TEST_PLUGIN_NAME, source: `../plugins/${TEST_PLUGIN_NAME}` }],
+				plugins: [{ name: TEST_PLUGIN_NAME, source: `./${TEST_PLUGIN_NAME}` }],
 			});
 
 			const result = await validate(marketplaceDir);

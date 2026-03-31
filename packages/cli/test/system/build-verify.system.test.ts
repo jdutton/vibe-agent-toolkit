@@ -7,7 +7,7 @@
  * package author's own build tooling; vat build no longer includes a claude phase.
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
@@ -153,6 +153,28 @@ describe('vat build command (system test)', () => {
     // dist/skills/ must use "__" form, never ":"
     expect(existsSync(join(tempDir, DIST_SKILLS_DIR, NAMESPACED_SKILL_FS_PATH, 'SKILL.md'))).toBe(true);
     expect(existsSync(join(tempDir, DIST_SKILLS_DIR, NAMESPACED_SKILL_NAME))).toBe(false); // colon form must not exist
+  });
+
+  it('should generate marketplace.json with source paths that do not use .. traversal', () => {
+    const tempDir = suite.createTempDir();
+    suite.setupSingleSkillFixture(tempDir, MARKETPLACE_NAME, PLUGIN_NAME);
+
+    const result = suite.runBuild(tempDir);
+    expect(result.status).toBe(0);
+
+    const marketplaceJsonPath = join(
+      tempDir, 'dist', '.claude', 'plugins', 'marketplaces',
+      MARKETPLACE_NAME, '.claude-plugin', 'marketplace.json'
+    );
+    const marketplaceJson = JSON.parse(readFileSync(marketplaceJsonPath, 'utf-8')) as {
+      plugins: Array<{ source: unknown }>;
+    };
+
+    for (const plugin of marketplaceJson.plugins) {
+      if (typeof plugin.source === 'string') {
+        expect(plugin.source).not.toContain('..');
+      }
+    }
   });
 
   it('should fail build when skill source missing', () => {
