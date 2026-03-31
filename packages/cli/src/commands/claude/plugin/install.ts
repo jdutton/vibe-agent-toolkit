@@ -121,6 +121,7 @@ export interface PluginInstallCommandOptions {
   build?: boolean;
   userInstallWithoutPlugin?: boolean;
   target?: string;
+  cwd?: string;
 }
 
 export function createPluginInstallCommand(): Command {
@@ -143,6 +144,7 @@ export function createPluginInstallCommand(): Command {
     .option('--user-install-without-plugin', 'Force skills-only install (skip plugin registry even if dist/.claude/ exists)', false)
     .option('--target <target>', 'Target surface: code (default), claude.ai', 'code')
     .option('--debug', 'Enable debug logging')
+    .option('--cwd <path>', 'Working directory for --dev install (default: current directory)')
     .action(installCommand)
     .addHelpText(
       'after',
@@ -175,6 +177,7 @@ Example:
   $ vat claude plugin install --dev                        # Symlink all skills from cwd
   $ vat claude plugin install --build                      # Build + symlink
   $ vat claude plugin install npm:@scope/package           # Install from npm
+  $ vat claude plugin install --dev --cwd packages/vat-development-agents  # From monorepo root
 `
     );
 
@@ -655,7 +658,8 @@ async function handleDevInstall(
     );
   }
 
-  const cwd = process.cwd();
+  // --cwd only applies to --dev mode; other paths (npm postinstall, etc.) use process.cwd()
+  const cwd = options.cwd ? resolve(options.cwd) : process.cwd();
 
   if (options.build) {
     runBuild(cwd, logger);
@@ -663,6 +667,7 @@ async function handleDevInstall(
 
   // Check for pre-built plugin tree
   const marketplacesDir = join(cwd, PLUGIN_MARKETPLACES_SUBPATH);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- cwd from CLI option or process.cwd()
   if (!existsSync(marketplacesDir)) {
     throw new Error(
       `Plugin tree not found at ${marketplacesDir}\n` +
@@ -671,6 +676,7 @@ async function handleDevInstall(
   }
 
   // Read package.json for package name/version
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- cwd from CLI option or process.cwd()
   const pkgRaw = readFileSync(join(cwd, PACKAGE_JSON), 'utf-8');
   const packageJson = JSON.parse(pkgRaw) as { name: string; version?: string; vat?: { replaces?: PackageJsonVatReplaces } };
   logger.info(`📥 Dev-installing plugin tree from ${packageJson.name}`);
