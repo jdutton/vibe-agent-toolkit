@@ -70,10 +70,14 @@ export function matchesCollection(filePath: string, collection: CollectionConfig
   const excludeRootPatterns = excludePatterns.filter(isRootLevelPattern);
   const excludeNonRootPatterns = excludePatterns.filter((p) => !isRootLevelPattern(p));
 
+  // Use dot:true so paths containing dotfile segments (e.g. .claude, .git) are matched correctly.
+  // Without this option, picomatch ** does not descend into directories whose names start with a dot.
+  const picoOptions = { dot: true };
+
   // Check excludes first (exclude wins)
   // Check non-root excludes against full path
   if (excludeNonRootPatterns.length > 0) {
-    const excludeMatcher = picomatch(excludeNonRootPatterns);
+    const excludeMatcher = picomatch(excludeNonRootPatterns, picoOptions);
     if (excludeMatcher(normalizedPath)) {
       return false;
     }
@@ -81,7 +85,7 @@ export function matchesCollection(filePath: string, collection: CollectionConfig
 
   // Check root-level excludes against basename
   if (excludeRootPatterns.length > 0) {
-    const excludeRootMatcher = picomatch(excludeRootPatterns);
+    const excludeRootMatcher = picomatch(excludeRootPatterns, picoOptions);
     if (excludeRootMatcher(basename)) {
       return false;
     }
@@ -92,7 +96,7 @@ export function matchesCollection(filePath: string, collection: CollectionConfig
 
   // Check non-root includes against full path
   if (includeNonRootPatterns.length > 0) {
-    const includeMatcher = picomatch(includeNonRootPatterns);
+    const includeMatcher = picomatch(includeNonRootPatterns, picoOptions);
     if (includeMatcher(normalizedPath)) {
       matched = true;
     }
@@ -100,7 +104,7 @@ export function matchesCollection(filePath: string, collection: CollectionConfig
 
   // Check root-level includes against basename
   if (!matched && includeRootPatterns.length > 0) {
-    const includeRootMatcher = picomatch(includeRootPatterns);
+    const includeRootMatcher = picomatch(includeRootPatterns, picoOptions);
     if (includeRootMatcher(basename)) {
       matched = true;
     }

@@ -21,7 +21,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { parseMarkdown } from '../src/link-parser.js';
 
-import { expectHeadingStructure, findPackageRoot, writeAndParse } from './test-helpers.js';
+import { assertAllLinksClassifiedAs, expectHeadingStructure, findPackageRoot, writeAndParse } from './test-helpers.js';
 
 const EXAMPLE_URL = 'https://example.com';
 
@@ -176,12 +176,12 @@ Just plain text content.
 
       const result = await parseMarkdown(filePath);
 
-      // Both the linkReference node (unresolved) and the definition node (with URL) are extracted
+      // Both the resolved linkReference node and the definition node (with URL) are extracted
       expect(result.links).toHaveLength(2);
       expect(result.links[0]).toMatchObject({
         text: 'Reference link',
-        href: 'ref1',
-        type: 'unknown',
+        href: EXAMPLE_URL,
+        type: 'external',
         line: 1,
         nodeType: 'linkReference',
       });
@@ -192,6 +192,39 @@ Just plain text content.
         type: 'external',
         line: 3,
         nodeType: 'definition',
+      });
+    });
+
+    it('should resolve defined linkReferences and skip unresolved ones', async () => {
+      const content = `## [Unreleased]
+
+## [0.1.0] - 2026-01-01
+
+See [the docs][docs] for details.
+
+[docs]: https://example.com/docs
+`;
+      await writeAndParse({
+        filePath: join(tempDir, 'mixed-link-refs.md'),
+        content,
+        assertions: (result) => {
+          // Unresolved linkReferences (Unreleased, 0.1.0) must not appear
+          const linkRefs = result.links.filter((l) => l.nodeType === 'linkReference');
+          expect(linkRefs).toHaveLength(1);
+          expect(linkRefs[0]).toMatchObject({
+            text: 'the docs',
+            href: 'https://example.com/docs',
+            type: 'external',
+            nodeType: 'linkReference',
+          });
+          // The definition node must still appear
+          const definitions = result.links.filter((l) => l.nodeType === 'definition');
+          expect(definitions).toHaveLength(1);
+          expect(definitions[0]).toMatchObject({
+            text: 'docs',
+            href: 'https://example.com/docs',
+          });
+        },
       });
     });
 
@@ -310,19 +343,25 @@ Just plain text content.
       expect(result.links[2]!.type).toBe('unknown');
     });
 
+    it('should classify bare filenames with extensions as local_file', async () => {
+      await assertAllLinksClassifiedAs(tempDir, 'bare-filenames.md', `[Schema](config.schema.json)
+[Image](image.png)
+[Archive](backup.tar.gz)
+`, 'local_file');
+    });
+
+    it('should classify protocol-like hrefs as unknown', async () => {
+      await assertAllLinksClassifiedAs(tempDir, 'protocol-like.md', `[JS](javascript:void(0))
+[Tel](tel:+1234567890)
+[Data](data:text/plain;base64,SGVsbG8=)
+`, 'unknown');
+    });
+
     it('should classify percent-encoded relative paths as local_file', async () => {
-      await writeAndParse({
-        filePath: join(tempDir, 'encoded-paths.md'),
-        content: `[PDF with spaces](files/My%20Document%20Name.pdf)
+      await assertAllLinksClassifiedAs(tempDir, 'encoded-paths.md', `[PDF with spaces](files/My%20Document%20Name.pdf)
 [Encoded subdir](docs/path%20with%20spaces/file.md)
 [Bare encoded filename](My%20Document.pdf)
-`,
-        assertions: (result) => {
-          expect(result.links[0]!.type).toBe('local_file');
-          expect(result.links[1]!.type).toBe('local_file');
-          expect(result.links[2]!.type).toBe('local_file');
-        },
-      });
+`, 'local_file');
     });
   });
 

@@ -69,6 +69,7 @@ export async function discoverSkillsFromConfig(
       ...DISCOVERY_EXCLUDE,
       ...(exclude ?? []),
     ],
+    dot: true, // Match through dot-directories (e.g., .claude/worktrees/)
   });
 
   const discovered: DiscoveredSkill[] = [];
