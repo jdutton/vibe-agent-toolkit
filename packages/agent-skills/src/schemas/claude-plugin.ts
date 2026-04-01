@@ -40,11 +40,11 @@ export const ClaudePluginSchema = z
     version: z
       .string()
       .regex(
-        /^\d+\.\d+\.\d+$/,
-        'Version must follow semver format (e.g., 1.0.0)'
+        /^\d+\.\d+\.\d+(-[\w.]+)?$/, // eslint-disable-line security/detect-unsafe-regex -- Simple semver pattern, bounded, safe from ReDoS
+        'Version must follow semver format (e.g., 1.0.0 or 1.0.0-rc.1)'
       )
       .optional()
-      .describe('Semantic version (optional)'),
+      .describe('Semantic version with optional pre-release suffix'),
 
     description: z
       .string()

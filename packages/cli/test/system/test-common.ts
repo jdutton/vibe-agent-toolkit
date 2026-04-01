@@ -247,6 +247,9 @@ export function fakeHomeEnv(fakeHome: string): Record<string, string> {
     // Windows: os.homedir() reads USERPROFILE, not HOME. Set both to ensure
     // the fake directory is used on all platforms.
     USERPROFILE: fakeHome,
+    // Override CLAUDE_CONFIG_DIR so the CLI uses the fake home's .claude dir,
+    // not any shell-level CLAUDE_CONFIG_DIR that may be set in the test runner's env.
+    CLAUDE_CONFIG_DIR: pathJoin(fakeHome, '.claude'),
   };
 }
 

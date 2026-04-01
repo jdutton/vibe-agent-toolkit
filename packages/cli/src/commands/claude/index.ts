@@ -8,6 +8,7 @@
 
 import { Command } from 'commander';
 
+import { createOrgCommand } from './org/index.js';
 import { createPluginCommand } from './plugin/index.js';
 
 export function createClaudeCommand(): Command {
@@ -21,16 +22,18 @@ Description:
   Gateway to the Claude ecosystem — local plugin management and org administration.
 
   Plugin management: install, list, and uninstall skill packages in ~/.claude/
-  Org administration: manage users, workspaces, API keys, and usage (coming soon)
+  Org administration: manage users, workspaces, API keys, and usage via Admin API
 
 Examples:
   $ vat claude plugin install npm:@myorg/my-skills    # Install from npm
-  $ vat claude plugin install --npm-postinstall       # From npm postinstall hook
   $ vat claude plugin list                            # List installed plugins
-  $ vat claude plugin uninstall my-skill@my-market   # Remove a plugin
+  $ vat claude org info                               # Show org details
+  $ vat claude org users list                         # List org users
+  $ vat claude org usage --from 2025-01-01T00:00:00Z  # Token usage report
 `);
 
   command.addCommand(createPluginCommand());
+  command.addCommand(createOrgCommand());
 
   return command;
 }

@@ -40,6 +40,7 @@ non-TypeScript/JavaScript projects, or cases where you need deep framework-speci
 | `--target claude-web` ZIP format | `vibe-agent-toolkit:distribution` |
 | Install/uninstall methods, enterprise deployment, Desktop vs CLI paths | `vibe-agent-toolkit:install` |
 | `vat audit`, `--compat`, CI validation | `vibe-agent-toolkit:audit` |
+| `vat claude org`, Admin API, org users/cost/usage/skills, ANTHROPIC_ADMIN_API_KEY | `vibe-agent-toolkit:org-admin` |
 | VAT behaves unexpectedly, debugging VAT, testing local VAT changes, VAT_ROOT_DIR | `vibe-agent-toolkit:debugging` |
 
 ## Agent Archetypes (Quick Reference)
