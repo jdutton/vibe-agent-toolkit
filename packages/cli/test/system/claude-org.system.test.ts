@@ -184,38 +184,29 @@ describe('vat claude org', () => {
       expect(parsed.command).toBe('org api-keys update');
     });
 
-    it('org skills install outputs not-yet-implemented and exits 1', () => {
-      const { result, parsed } = runStubCommand(['skills', 'install', 'my-skill']);
-      expect(result.status).toBe(1);
-      expect(parsed.status).toBe(NOT_YET_IMPLEMENTED);
-      expect(parsed.command).toBe('org skills install');
+    it('org skills install exits 2 with API key message when no key', () => {
+      const result = runOrgWithoutKeys(['skills', 'install', './fake-skill']);
+      expect(result.status).toBe(2);
+      // Client constructor throws about admin key first
+      expect(result.stderr).toContain('ANTHROPIC_ADMIN_API_KEY');
     });
 
-    it('org skills delete outputs not-yet-implemented and exits 1', () => {
-      const { result, parsed } = runStubCommand(['skills', 'delete', 'my-skill']);
-      expect(result.status).toBe(1);
-      expect(parsed.status).toBe(NOT_YET_IMPLEMENTED);
-      expect(parsed.command).toBe('org skills delete');
+    it('org skills delete exits 2 with API key message when no key', () => {
+      const result = runOrgWithoutKeys(['skills', 'delete', 'skill_abc123']);
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain('ANTHROPIC_ADMIN_API_KEY');
     });
 
-    it('org skills versions list outputs not-yet-implemented and exits 1', () => {
-      const { result, parsed } = runStubCommand(['skills', 'versions', 'list', 'my-skill']);
-      expect(result.status).toBe(1);
-      expect(parsed.status).toBe(NOT_YET_IMPLEMENTED);
-      expect(parsed.command).toBe('org skills versions list');
+    it('org skills versions list exits 2 with API key message when no key', () => {
+      const result = runOrgWithoutKeys(['skills', 'versions', 'list', 'my-skill']);
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain('ANTHROPIC_ADMIN_API_KEY');
     });
 
-    it('org skills versions delete outputs not-yet-implemented and exits 1', () => {
-      const { result, parsed } = runStubCommand([
-        'skills',
-        'versions',
-        'delete',
-        'my-skill',
-        '1.0.0',
-      ]);
-      expect(result.status).toBe(1);
-      expect(parsed.status).toBe(NOT_YET_IMPLEMENTED);
-      expect(parsed.command).toBe('org skills versions delete');
+    it('org skills versions delete exits 2 with API key message when no key', () => {
+      const result = runOrgWithoutKeys(['skills', 'versions', 'delete', 'my-skill', '1.0.0']);
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain('ANTHROPIC_ADMIN_API_KEY');
     });
   });
 

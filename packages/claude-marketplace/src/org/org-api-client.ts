@@ -1,8 +1,64 @@
+import { randomBytes } from 'node:crypto';
 import https from 'node:https';
 
 const ANTHROPIC_API_BASE = 'https://api.anthropic.com';
 const ANTHROPIC_VERSION = '2023-06-01';
 const SKILLS_BETA_HEADER = 'skills-2025-10-02';
+
+// ── Multipart form-data builder ────────────────────────────────────────
+
+export interface MultipartFile {
+  /** Form field name (e.g. 'files[]') */
+  fieldName: string;
+  /** Filename as seen by the server */
+  filename: string;
+  /** File content */
+  content: Buffer;
+}
+
+export interface MultipartResult {
+  body: Buffer;
+  boundary: string;
+  contentType: string;
+}
+
+/**
+ * Build a multipart/form-data body from string fields and file entries.
+ * Pure function — no external dependencies.
+ */
+export function buildMultipartFormData(
+  fields: Record<string, string>,
+  files: MultipartFile[],
+): MultipartResult {
+  const boundary = `----VATBoundary${randomBytes(16).toString('hex')}`;
+  const parts: Buffer[] = [];
+
+  for (const [name, value] of Object.entries(fields)) {
+    parts.push(Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="${name}"\r\n\r\n` +
+      `${value}\r\n`,
+    ));
+  }
+
+  for (const file of files) {
+    parts.push(Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="${file.fieldName}"; filename="${file.filename}"\r\n` +
+      `Content-Type: application/octet-stream\r\n\r\n`,
+    ));
+    parts.push(file.content);
+    parts.push(Buffer.from('\r\n'));
+  }
+
+  parts.push(Buffer.from(`--${boundary}--\r\n`));
+
+  return {
+    body: Buffer.concat(parts),
+    boundary,
+    contentType: `multipart/form-data; boundary=${boundary}`,
+  };
+}
 
 export interface OrgApiClientOptions {
   /** Admin API key (sk-ant-admin...) — required for /v1/organizations/* */
@@ -93,7 +149,34 @@ export class OrgApiClient {
     return this.request<T>('GET', url, headers);
   }
 
-  private request<T>(method: string, url: string, headers: Record<string, string>): Promise<T> {
+  /** DELETE a skill by ID. All versions must be deleted first. */
+  async deleteSkill<T>(skillId: string): Promise<T> {
+    const url = this.buildUrl(`/v1/skills/${encodeURIComponent(skillId)}`);
+    const headers = this.buildSkillsHeaders();
+    return this.request<T>('DELETE', url, headers);
+  }
+
+  /** DELETE a specific version of a skill. */
+  async deleteSkillVersion<T>(skillId: string, version: string): Promise<T> {
+    const url = this.buildUrl(
+      `/v1/skills/${encodeURIComponent(skillId)}/versions/${encodeURIComponent(version)}`,
+    );
+    const headers = this.buildSkillsHeaders();
+    return this.request<T>('DELETE', url, headers);
+  }
+
+  /** Upload a skill via multipart/form-data POST to /v1/skills. */
+  async uploadSkill<T>(multipart: MultipartResult): Promise<T> {
+    const url = this.buildUrl('/v1/skills');
+    const headers: Record<string, string> = {
+      ...this.buildSkillsHeaders(),
+      'content-type': multipart.contentType, // overrides application/json from buildSkillsHeaders
+      'content-length': String(multipart.body.length),
+    };
+    return this.request<T>('POST', url, headers, multipart.body);
+  }
+
+  private request<T>(method: string, url: string, headers: Record<string, string>, body?: Buffer): Promise<T> {
     return new Promise((resolve, reject) => {
       const parsed = new URL(url);
       const options = {
@@ -107,24 +190,27 @@ export class OrgApiClient {
         const chunks: Buffer[] = [];
         res.on('data', (chunk: Buffer) => chunks.push(chunk));
         res.on('end', () => {
-          const body = Buffer.concat(chunks).toString('utf-8');
+          const responseText = Buffer.concat(chunks).toString('utf-8');
           try {
-            const parsedBody: unknown = JSON.parse(body);
+            const parsedBody: unknown = JSON.parse(responseText);
             if (res.statusCode !== undefined && res.statusCode >= 400) {
               const err = parsedBody as { error?: { message?: string } };
               reject(
-                new Error(`API error ${String(res.statusCode)}: ${err.error?.message ?? body}`),
+                new Error(`API error ${String(res.statusCode)}: ${err.error?.message ?? responseText}`),
               );
               return;
             }
             resolve(parsedBody as T);
           } catch {
-            reject(new Error(`Failed to parse API response: ${body}`));
+            reject(new Error(`Failed to parse API response: ${responseText}`));
           }
         });
       });
 
       req.on('error', reject);
+      if (body) {
+        req.write(body);
+      }
       req.end();
     });
   }

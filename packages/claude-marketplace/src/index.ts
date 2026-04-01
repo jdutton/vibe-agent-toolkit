@@ -91,8 +91,8 @@ export type {
 export { listLocalPlugins } from './install/plugin-list.js';
 
 // Org API client
-export type { OrgApiClientOptions, PaginationParams, ReportPaginationParams } from './org/org-api-client.js';
-export { createOrgApiClientFromEnv, OrgApiClient } from './org/org-api-client.js';
+export type { OrgApiClientOptions, PaginationParams, ReportPaginationParams, MultipartFile, MultipartResult } from './org/org-api-client.js';
+export { createOrgApiClientFromEnv, OrgApiClient, buildMultipartFormData } from './org/org-api-client.js';
 
 // Settings
 export type {

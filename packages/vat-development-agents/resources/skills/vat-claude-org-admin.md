@@ -93,8 +93,20 @@ const keys = await client.get<{ data: ApiKey[]; has_more: boolean }>(
 
 **Skills (beta — uses regular API key):**
 ```typescript
+// List skills
 const skills = await client.getSkills<{ data: Skill[]; has_more: boolean }>('/v1/skills');
 // Adds anthropic-beta: skills-2025-10-02 header automatically
+
+// Upload a skill (multipart/form-data)
+import { buildMultipartFormData } from '@vibe-agent-toolkit/claude-marketplace';
+const multipart = buildMultipartFormData(
+  { display_title: 'My Skill' },
+  [{ fieldName: 'files[]', filename: 'SKILL.md', content: Buffer.from(skillContent) }],
+);
+const created = await client.uploadSkill<{ id: string; latest_version: string }>(multipart);
+
+// Delete a skill
+const deleted = await client.deleteSkill<{ id: string; type: string }>(skillId);
 ```
 
 ### Report Endpoints — Pagination Quirk
@@ -254,9 +266,16 @@ vat claude org usage [--from DT] [--to DT]       Token usage report
 vat claude org cost [--from DT] [--group-by F]   USD cost report
 vat claude org code-analytics [--from DATE]      Claude Code metrics (YYYY-MM-DD)
 vat claude org skills list                       Workspace skills (needs ANTHROPIC_API_KEY)
+vat claude org skills install <source>           Upload skill dir or ZIP to org
+vat claude org skills delete <skill-id>          Delete a skill (versions first)
+vat claude org skills versions list <skill-id>   List skill versions
+vat claude org skills versions delete <id> <ver> Delete a skill version
 ```
 
 Exit codes: `0` success, `1` expected failure (stubs), `2` system error (missing key, API error).
+
+**Skill deletion lifecycle:** The API requires all versions to be deleted before the skill itself.
+Use `versions list` to find versions, `versions delete` each one, then `delete` the skill.
 
 ## Not Yet Implemented
 
@@ -268,4 +287,3 @@ These commands exist with the correct CLI shape but return structured
 - `org workspaces create/archive` — workspace lifecycle
 - `org workspaces members add/update/remove` — workspace membership
 - `org api-keys update` — rename keys
-- `org skills install/delete` — enterprise skill distribution via API
