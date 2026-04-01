@@ -6,7 +6,7 @@
  * Wraps skills into Claude plugin directory structure with plugin.json metadata.
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { cp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -113,6 +113,19 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
       process.exit(0);
     }
 
+    // Read version from package.json — used in plugin.json so Claude Code
+    // caches by version instead of "unknown/"
+    let packageVersion: string | undefined;
+    try {
+      const pkgPath = join(configDir, 'package.json');
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- configDir from loadClaudeProjectConfig
+      const pkgRaw = readFileSync(pkgPath, 'utf-8');
+      const pkg = JSON.parse(pkgRaw) as { version?: string };
+      packageVersion = pkg.version;
+    } catch {
+      // No package.json or unreadable — version will be omitted
+    }
+
     // Discover available skills from dist/skills/
     const availableSkills = await discoverBuiltSkills(configDir);
 
@@ -132,7 +145,7 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
       }
 
       logger.info(`\n   Building marketplace: ${name}`);
-      const result = await buildMarketplace(name, mpConfig, availableSkills, configDir, logger);
+      const result = await buildMarketplace(name, mpConfig, availableSkills, configDir, packageVersion, logger);
       results.push(result);
 
       if (result.status === 'error') {
@@ -181,6 +194,7 @@ async function buildMarketplace(
   config: ClaudeMarketplaceConfig,
   availableSkills: string[],
   configDir: string,
+  packageVersion: string | undefined,
   logger: ReturnType<typeof createLogger>
 ): Promise<MarketplaceBuildResult> {
   const plugins: PluginBuildResult[] = [];
@@ -207,6 +221,7 @@ async function buildMarketplace(
       resolvedSkills,
       configDir,
       config.owner,
+      packageVersion,
       logger
     );
     plugins.push(pluginResult);
@@ -290,6 +305,7 @@ async function buildPlugin(
   skills: string[],
   configDir: string,
   owner: ClaudeMarketplaceConfig['owner'],
+  packageVersion: string | undefined,
   logger: ReturnType<typeof createLogger>
 ): Promise<PluginBuildResult> {
   const pluginDir = join(
@@ -332,6 +348,7 @@ async function buildPlugin(
   const pluginJson: Record<string, unknown> = {
     name: pluginDef.name,
     description: pluginDef.description ?? `${pluginDef.name} plugin`,
+    ...(packageVersion ? { version: packageVersion } : {}),
     author: {
       name: owner.name,
       ...(owner.email ? { email: owner.email } : {}),

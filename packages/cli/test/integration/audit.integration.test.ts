@@ -83,6 +83,29 @@ describe('audit command (integration)', () => {
       expect(results).toHaveLength(1);
       expect(results[0].status).toBe('error');
     });
+
+    it('should warn when plugin.json is missing version field', async () => {
+      const pluginDir = join(tempDir, 'no-version-plugin');
+      const claudePluginDir = join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
+      fs.mkdirSync(claudePluginDir, { recursive: true });
+      fs.writeFileSync(
+        join(claudePluginDir, PLUGIN_JSON_FILENAME),
+        JSON.stringify({
+          name: TEST_PLUGIN_NAME,
+          description: TEST_PLUGIN_DESCRIPTION,
+          // No version field — Claude Code will cache as "unknown/"
+        })
+      );
+
+      const results = await runAudit(pluginDir);
+
+      expect(results).toHaveLength(1);
+      expect(results[0].status).toBe('warning');
+      const versionIssue = results[0].issues.find(i => i.code === 'PLUGIN_MISSING_VERSION');
+      expect(versionIssue).toBeDefined();
+      expect(versionIssue?.severity).toBe('warning');
+      expect(versionIssue?.message).toContain('unknown');
+    });
   });
 
   describe('marketplace validation', () => {

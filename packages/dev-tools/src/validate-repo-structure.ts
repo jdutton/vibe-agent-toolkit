@@ -48,7 +48,7 @@ const ERROR_TYPES = {
  * Common directories to skip during validation
  */
 const WORKTREES_DIR = '.worktrees';
-const COMMON_SKIP_DIRS = new Set(['node_modules', 'dist', '.git']);
+const COMMON_SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.claude']);
 const SKIP_DIRS_WITH_HUSKY = new Set([...COMMON_SKIP_DIRS, '.husky', WORKTREES_DIR]);
 
 interface ValidationError {
@@ -302,7 +302,7 @@ async function validateNoNestedPackageJson(): Promise<void> {
  * Prevents .ts files in wrong locations
  */
 async function validateSourceFileLocations(): Promise<void> {
-  const skipDirs = new Set(['node_modules', 'dist', '.git', '.husky', '.worktrees']);
+  const skipDirs = SKIP_DIRS_WITH_HUSKY;
 
   const ALLOWED_ROOT_TS_FILES = new Set([
     // Root config files

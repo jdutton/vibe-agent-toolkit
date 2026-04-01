@@ -95,6 +95,21 @@ export async function validatePlugin(pluginPath: string): Promise<ValidationResu
 			name: result.data.name,
 			...(result.data.version !== undefined && { version: result.data.version }),
 		};
+
+		// Warn when version is missing — Claude Code caches plugins by version,
+		// and without it the cache directory becomes "unknown/", causing stale
+		// skill resolution across upgrades.
+		if (result.data.version === undefined) {
+			issues.push({
+				severity: 'warning',
+				code: 'PLUGIN_MISSING_VERSION',
+				message: 'plugin.json missing version field — Claude Code will cache as "unknown/", causing stale skill resolution across upgrades',
+				location: pluginJsonPath,
+				fix: 'Add a "version" field to plugin.json (semver format, e.g. "1.0.0")',
+			});
+			validationResult.status = calculateValidationStatus(issues);
+			validationResult.summary = `Found ${issues.length} issue(s)`;
+		}
 	}
 
 	return validationResult;
