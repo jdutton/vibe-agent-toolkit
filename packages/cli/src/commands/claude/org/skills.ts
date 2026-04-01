@@ -355,9 +355,21 @@ Examples:
 	deleteCmd
 		.description('Delete a skill from the organization')
 		.argument(SKILL_ID_ARG, SKILL_ID_DESC)
+		.option('--all', 'Auto-delete all versions before deleting the skill')
 		.option('--debug', DEBUG_OPT_DESC)
-		.action(async (skillId: string, options: { debug?: boolean }) => {
+		.action(async (skillId: string, options: { all?: boolean; debug?: boolean }) => {
 			await executeOrgCommand('OrgSkillsDelete', options.debug, async ({ client, logger }) => {
+				if (options.all) {
+					// Fetch and delete all versions first
+					const versions = await autopaginateSkills(client, `/v1/skills/${encodeURIComponent(skillId)}/versions`);
+					const versionData = versions.data as Array<{ id: string; version: string }>;
+					logger.info(`Deleting ${versionData.length} version(s) of ${skillId}`);
+					for (const ver of versionData) {
+						await client.deleteSkillVersion(skillId, ver.version);
+						logger.info(`   Deleted version ${ver.version}`);
+					}
+				}
+
 				logger.info(`Deleting skill: ${skillId}`);
 				const result = await client.deleteSkill<{ id: string; type: string }>(skillId);
 				return { id: result.id, deleted: result.type === 'skill_deleted' };
@@ -366,11 +378,11 @@ Examples:
 		.addHelpText('after', `
 Description:
   Deletes a skill from the organization. Uses the Skills API (beta).
-  All versions must be deleted first (use: skills versions delete).
+  Use --all to auto-delete all versions before the skill.
   Requires ANTHROPIC_API_KEY (regular key, not admin key).
 
 Example:
-  $ vat claude org skills delete skill_abc123
+  $ vat claude org skills delete skill_abc123 --all
 `);
 
 	// versions subgroup
