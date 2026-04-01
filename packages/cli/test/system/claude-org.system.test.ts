@@ -14,85 +14,52 @@ import { executeCli, executeCliAndParseYaml, getBinPath } from './test-common.js
 
 const binPath = getBinPath(import.meta.url);
 const NOT_YET_IMPLEMENTED = 'not-yet-implemented';
+const ADMIN_KEY_ENV = { ANTHROPIC_ADMIN_API_KEY: '', ANTHROPIC_API_KEY: '' };
 
-/**
- * Run an org command with no API keys set (empty env override).
- * Returns the CLI result for assertion.
- */
 function runOrgWithoutKeys(args: string[]): ReturnType<typeof executeCli> {
-  return executeCli(binPath, ['claude', 'org', ...args], {
-    env: { ANTHROPIC_ADMIN_API_KEY: '', ANTHROPIC_API_KEY: '' },
-  });
+  return executeCli(binPath, ['claude', 'org', ...args], { env: ADMIN_KEY_ENV });
 }
 
-/**
- * Run a stub command and parse the YAML output.
- */
 function runStubCommand(args: string[]): {
   result: ReturnType<typeof executeCli>;
   parsed: Record<string, unknown>;
 } {
-  return executeCliAndParseYaml(binPath, ['claude', 'org', ...args], {
-    env: { ANTHROPIC_ADMIN_API_KEY: '', ANTHROPIC_API_KEY: '' },
-  });
+  return executeCliAndParseYaml(binPath, ['claude', 'org', ...args], { env: ADMIN_KEY_ENV });
+}
+
+/** Expect exit 2 with ANTHROPIC_ADMIN_API_KEY error. */
+function expectAdminKeyError(args: string[]): void {
+  const result = runOrgWithoutKeys(args);
+  expect(result.status).toBe(2);
+  expect(result.stderr).toContain('ANTHROPIC_ADMIN_API_KEY');
+}
+
+/** Expect exit 1 with not-yet-implemented stub for the given command name. */
+function expectStub(args: string[], commandName: string): void {
+  const { result, parsed } = runStubCommand(args);
+  expect(result.status).toBe(1);
+  expect(parsed.status).toBe(NOT_YET_IMPLEMENTED);
+  expect(parsed.command).toBe(commandName);
 }
 
 describe('vat claude org', () => {
   describe('missing admin key errors', () => {
-    it('org info exits 2 with ANTHROPIC_ADMIN_API_KEY message', () => {
-      const result = runOrgWithoutKeys(['info']);
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain('ANTHROPIC_ADMIN_API_KEY');
-    });
-
-    it('org users list exits 2 with ANTHROPIC_ADMIN_API_KEY message', () => {
-      const result = runOrgWithoutKeys(['users', 'list']);
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain('ANTHROPIC_ADMIN_API_KEY');
-    });
-
-    it('org workspaces list exits 2 with ANTHROPIC_ADMIN_API_KEY message', () => {
-      const result = runOrgWithoutKeys(['workspaces', 'list']);
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain('ANTHROPIC_ADMIN_API_KEY');
-    });
-
-    it('org invites list exits 2 with ANTHROPIC_ADMIN_API_KEY message', () => {
-      const result = runOrgWithoutKeys(['invites', 'list']);
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain('ANTHROPIC_ADMIN_API_KEY');
-    });
-
-    it('org api-keys list exits 2 with ANTHROPIC_ADMIN_API_KEY message', () => {
-      const result = runOrgWithoutKeys(['api-keys', 'list']);
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain('ANTHROPIC_ADMIN_API_KEY');
-    });
-
-    it('org usage exits 2 with ANTHROPIC_ADMIN_API_KEY message', () => {
-      const result = runOrgWithoutKeys(['usage']);
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain('ANTHROPIC_ADMIN_API_KEY');
-    });
-
-    it('org cost exits 2 with ANTHROPIC_ADMIN_API_KEY message', () => {
-      const result = runOrgWithoutKeys(['cost']);
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain('ANTHROPIC_ADMIN_API_KEY');
-    });
-
-    it('org code-analytics exits 2 with ANTHROPIC_ADMIN_API_KEY message', () => {
-      const result = runOrgWithoutKeys(['code-analytics']);
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain('ANTHROPIC_ADMIN_API_KEY');
+    it.each([
+      { cmd: 'info', args: ['info'] },
+      { cmd: 'users list', args: ['users', 'list'] },
+      { cmd: 'workspaces list', args: ['workspaces', 'list'] },
+      { cmd: 'invites list', args: ['invites', 'list'] },
+      { cmd: 'api-keys list', args: ['api-keys', 'list'] },
+      { cmd: 'usage', args: ['usage'] },
+      { cmd: 'cost', args: ['cost'] },
+      { cmd: 'code-analytics', args: ['code-analytics'] },
+    ])('org $cmd exits 2 with ANTHROPIC_ADMIN_API_KEY message', ({ args }) => {
+      expectAdminKeyError(args);
     });
   });
 
   describe('missing regular API key for skills', () => {
-    it('org skills list exits 2 with ANTHROPIC_API_KEY message', () => {
-      // Skills commands need a valid admin key to construct the client,
-      // but fail when getSkills() is called without ANTHROPIC_API_KEY.
-      // With an empty admin key, the client constructor throws about admin key first.
+    it('org skills list exits 2 with API key message', () => {
       const result = runOrgWithoutKeys(['skills', 'list']);
       expect(result.status).toBe(2);
       // Either message is acceptable — depends on which key is checked first
@@ -104,109 +71,38 @@ describe('vat claude org', () => {
   });
 
   describe('stub commands (mutating operations)', () => {
-    it('org users update outputs not-yet-implemented and exits 1', () => {
-      const { result, parsed } = runStubCommand(['users', 'update', 'user_123', '--role', 'admin']);
-      expect(result.status).toBe(1);
-      expect(parsed.status).toBe(NOT_YET_IMPLEMENTED);
-      expect(parsed.command).toBe('org users update');
+    it.each([
+      { cmd: 'org users update', args: ['users', 'update', 'user_123', '--role', 'admin'] },
+      { cmd: 'org users remove', args: ['users', 'remove', 'user_123'] },
+      { cmd: 'org invites create', args: ['invites', 'create', '--email', 'test@example.com', '--role', 'user'] },
+      { cmd: 'org invites delete', args: ['invites', 'delete', 'inv_123'] },
+      { cmd: 'org workspaces create', args: ['workspaces', 'create', '--name', 'test'] },
+      { cmd: 'org workspaces archive', args: ['workspaces', 'archive', 'ws_123'] },
+      { cmd: 'org api-keys update', args: ['api-keys', 'update', 'key_123', '--name', 'new-name'] },
+    ])('$cmd outputs not-yet-implemented and exits 1', ({ cmd, args }) => {
+      expectStub(args, cmd);
     });
 
-    it('org users remove outputs not-yet-implemented and exits 1', () => {
-      const { result, parsed } = runStubCommand(['users', 'remove', 'user_123']);
-      expect(result.status).toBe(1);
-      expect(parsed.status).toBe(NOT_YET_IMPLEMENTED);
-      expect(parsed.command).toBe('org users remove');
-    });
-
-    it('org invites create outputs not-yet-implemented and exits 1', () => {
-      const { result, parsed } = runStubCommand([
-        'invites',
-        'create',
-        '--email',
-        'test@example.com',
-        '--role',
-        'user',
-      ]);
-      expect(result.status).toBe(1);
-      expect(parsed.status).toBe(NOT_YET_IMPLEMENTED);
-      expect(parsed.command).toBe('org invites create');
-    });
-
-    it('org invites delete outputs not-yet-implemented and exits 1', () => {
-      const { result, parsed } = runStubCommand(['invites', 'delete', 'inv_123']);
-      expect(result.status).toBe(1);
-      expect(parsed.status).toBe(NOT_YET_IMPLEMENTED);
-      expect(parsed.command).toBe('org invites delete');
-    });
-
-    it('org workspaces members add outputs not-yet-implemented and exits 1', () => {
-      const { result, parsed } = runStubCommand(['workspaces', 'members', 'add', 'ws_123', '--user-id', 'u1', '--role', 'admin']);
+    // Workspace member stubs don't include command name in output
+    it.each([
+      { cmd: 'workspaces members add', args: ['workspaces', 'members', 'add', 'ws_123', '--user-id', 'u1', '--role', 'admin'] },
+      { cmd: 'workspaces members update', args: ['workspaces', 'members', 'update', 'ws_123', '--user-id', 'u1', '--role', 'developer'] },
+      { cmd: 'workspaces members remove', args: ['workspaces', 'members', 'remove', 'ws_123', '--user-id', 'u1'] },
+    ])('org $cmd outputs not-yet-implemented and exits 1', ({ args }) => {
+      const { result, parsed } = runStubCommand(args);
       expect(result.status).toBe(1);
       expect(parsed.status).toBe(NOT_YET_IMPLEMENTED);
     });
+  });
 
-    it('org workspaces members update outputs not-yet-implemented and exits 1', () => {
-      const { result, parsed } = runStubCommand(['workspaces', 'members', 'update', 'ws_123', '--user-id', 'u1', '--role', 'developer']);
-      expect(result.status).toBe(1);
-      expect(parsed.status).toBe(NOT_YET_IMPLEMENTED);
-    });
-
-    it('org workspaces members remove outputs not-yet-implemented and exits 1', () => {
-      const { result, parsed } = runStubCommand(['workspaces', 'members', 'remove', 'ws_123', '--user-id', 'u1']);
-      expect(result.status).toBe(1);
-      expect(parsed.status).toBe(NOT_YET_IMPLEMENTED);
-    });
-
-    it('org workspaces create outputs not-yet-implemented and exits 1', () => {
-      const { result, parsed } = runStubCommand(['workspaces', 'create', '--name', 'test']);
-      expect(result.status).toBe(1);
-      expect(parsed.status).toBe(NOT_YET_IMPLEMENTED);
-      expect(parsed.command).toBe('org workspaces create');
-    });
-
-    it('org workspaces archive outputs not-yet-implemented and exits 1', () => {
-      const { result, parsed } = runStubCommand(['workspaces', 'archive', 'ws_123']);
-      expect(result.status).toBe(1);
-      expect(parsed.status).toBe(NOT_YET_IMPLEMENTED);
-      expect(parsed.command).toBe('org workspaces archive');
-    });
-
-    it('org api-keys update outputs not-yet-implemented and exits 1', () => {
-      const { result, parsed } = runStubCommand([
-        'api-keys',
-        'update',
-        'key_123',
-        '--name',
-        'new-name',
-      ]);
-      expect(result.status).toBe(1);
-      expect(parsed.status).toBe(NOT_YET_IMPLEMENTED);
-      expect(parsed.command).toBe('org api-keys update');
-    });
-
-    it('org skills install exits 2 with API key message when no key', () => {
-      const result = runOrgWithoutKeys(['skills', 'install', './fake-skill']);
-      expect(result.status).toBe(2);
-      // Client constructor throws about admin key first
-      expect(result.stderr).toContain('ANTHROPIC_ADMIN_API_KEY');
-    });
-
-    it('org skills delete exits 2 with API key message when no key', () => {
-      const result = runOrgWithoutKeys(['skills', 'delete', 'skill_abc123']);
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain('ANTHROPIC_ADMIN_API_KEY');
-    });
-
-    it('org skills versions list exits 2 with API key message when no key', () => {
-      const result = runOrgWithoutKeys(['skills', 'versions', 'list', 'my-skill']);
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain('ANTHROPIC_ADMIN_API_KEY');
-    });
-
-    it('org skills versions delete exits 2 with API key message when no key', () => {
-      const result = runOrgWithoutKeys(['skills', 'versions', 'delete', 'my-skill', '1.0.0']);
-      expect(result.status).toBe(2);
-      expect(result.stderr).toContain('ANTHROPIC_ADMIN_API_KEY');
+  describe('implemented skills commands (key errors without credentials)', () => {
+    it.each([
+      { cmd: 'skills install', args: ['skills', 'install', './fake-skill'] },
+      { cmd: 'skills delete', args: ['skills', 'delete', 'skill_abc123'] },
+      { cmd: 'skills versions list', args: ['skills', 'versions', 'list', 'my-skill'] },
+      { cmd: 'skills versions delete', args: ['skills', 'versions', 'delete', 'my-skill', '1.0.0'] },
+    ])('org $cmd exits 2 with API key message when no key', ({ args }) => {
+      expectAdminKeyError(args);
     });
   });
 

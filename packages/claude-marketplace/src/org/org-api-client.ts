@@ -42,13 +42,15 @@ export function buildMultipartFormData(
   }
 
   for (const file of files) {
-    parts.push(Buffer.from(
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="${file.fieldName}"; filename="${file.filename}"\r\n` +
-      `Content-Type: application/octet-stream\r\n\r\n`,
-    ));
-    parts.push(file.content);
-    parts.push(Buffer.from('\r\n'));
+    parts.push(
+      Buffer.from(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="${file.fieldName}"; filename="${file.filename}"\r\n` +
+        `Content-Type: application/octet-stream\r\n\r\n`,
+      ),
+      file.content,
+      Buffer.from('\r\n'),
+    );
   }
 
   parts.push(Buffer.from(`--${boundary}--\r\n`));
