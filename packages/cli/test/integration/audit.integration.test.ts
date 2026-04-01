@@ -101,10 +101,9 @@ describe('audit command (integration)', () => {
 
       expect(results).toHaveLength(1);
       expect(results[0].status).toBe('warning');
-      const versionIssue = results[0].issues.find(i => i.code === 'PLUGIN_MISSING_VERSION');
-      expect(versionIssue).toBeDefined();
-      expect(versionIssue?.severity).toBe('warning');
-      expect(versionIssue?.message).toContain('unknown');
+      expect(results[0].issues).toHaveLength(1);
+      expect(results[0].issues[0].code).toBe('PLUGIN_MISSING_VERSION');
+      // Detailed assertion coverage in plugin-validator.test.ts unit test
     });
   });
 

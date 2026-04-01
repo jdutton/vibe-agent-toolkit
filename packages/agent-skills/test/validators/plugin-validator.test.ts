@@ -107,6 +107,37 @@ describe('validatePlugin', () => {
 		).toBe(true);
 	});
 
+	it('should warn when plugin.json is missing version field', async () => {
+		const tempDir = getTempDir();
+		const pluginPath = createTestPlugin(tempDir, {
+			name: 'no-version-plugin',
+			description: 'A plugin without a version',
+		});
+
+		const result = await validatePlugin(pluginPath);
+
+		expect(result.status).toBe('warning');
+		expect(result.metadata?.name).toBe('no-version-plugin');
+		const versionIssue = result.issues.find(i => i.code === 'PLUGIN_MISSING_VERSION');
+		expect(versionIssue).toBeDefined();
+		expect(versionIssue?.severity).toBe('warning');
+		expect(versionIssue?.message).toContain('unknown');
+	});
+
+	it('should accept pre-release version format', async () => {
+		const tempDir = getTempDir();
+		const pluginPath = createTestPlugin(tempDir, {
+			name: 'rc-plugin',
+			description: 'A plugin with pre-release version',
+			version: '1.0.0-rc.3',
+		});
+
+		const result = await validatePlugin(pluginPath);
+
+		assertValidationSuccess(result);
+		expect(result.metadata?.version).toBe('1.0.0-rc.3');
+	});
+
 	it('should validate semver version format', async () => {
 		const tempDir = getTempDir();
 		const pluginPath = createTestPlugin(tempDir, {

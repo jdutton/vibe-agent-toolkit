@@ -1,9 +1,11 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
 
-import { OrgApiClient } from '../../src/org/org-api-client.js';
+import { OrgApiClient, buildMultipartFormData, createOrgApiClientFromEnv } from '../../src/org/org-api-client.js';
 
 const ADMIN_KEY = 'sk-ant-admin-test';
 const API_KEY = 'sk-ant-api-test';
+const ENV_ADMIN_KEY = 'sk-ant-admin-env-test';
+const ENV_API_KEY = 'sk-ant-api-env-test';
 
 describe('OrgApiClient', () => {
   afterEach(() => vi.restoreAllMocks());
@@ -64,5 +66,82 @@ describe('OrgApiClient', () => {
       const client = new OrgApiClient({ adminApiKey: ADMIN_KEY });
       expect(client.buildQueryString({ limit: 100, after_id: undefined })).toBe('?limit=100');
     });
+  });
+});
+
+describe('buildMultipartFormData', () => {
+  it('builds multipart body with string fields', () => {
+    const result = buildMultipartFormData({ display_title: 'My Skill' }, []);
+    const bodyStr = result.body.toString('utf-8');
+
+    expect(result.contentType).toContain('multipart/form-data; boundary=');
+    expect(bodyStr).toContain('Content-Disposition: form-data; name="display_title"');
+    expect(bodyStr).toContain('My Skill');
+    expect(bodyStr).toContain(`--${result.boundary}--`);
+  });
+
+  it('builds multipart body with files', () => {
+    const content = Buffer.from('# Test SKILL.md');
+    const result = buildMultipartFormData(
+      { display_title: 'test' },
+      [{ fieldName: 'files[]', filename: 'skill/SKILL.md', content }],
+    );
+    const bodyStr = result.body.toString('utf-8');
+
+    expect(bodyStr).toContain('filename="skill/SKILL.md"');
+    expect(bodyStr).toContain('Content-Type: application/octet-stream');
+    expect(bodyStr).toContain('# Test SKILL.md');
+  });
+
+  it('includes multiple files with correct boundaries', () => {
+    const result = buildMultipartFormData(
+      { display_title: 'multi' },
+      [
+        { fieldName: 'files[]', filename: 'a/SKILL.md', content: Buffer.from('skill') },
+        { fieldName: 'files[]', filename: 'a/ref.md', content: Buffer.from('ref') },
+      ],
+    );
+    const bodyStr = result.body.toString('utf-8');
+
+    expect(bodyStr).toContain('filename="a/SKILL.md"');
+    expect(bodyStr).toContain('filename="a/ref.md"');
+    // Final boundary marker
+    expect(bodyStr).toContain(`--${result.boundary}--`);
+  });
+
+  it('generates unique boundaries', () => {
+    const r1 = buildMultipartFormData({}, []);
+    const r2 = buildMultipartFormData({}, []);
+    expect(r1.boundary).not.toBe(r2.boundary);
+  });
+});
+
+describe('createOrgApiClientFromEnv', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('reads ANTHROPIC_ADMIN_API_KEY from environment', () => {
+    vi.stubEnv('ANTHROPIC_ADMIN_API_KEY', ENV_ADMIN_KEY);
+    vi.stubEnv('ANTHROPIC_API_KEY', ENV_API_KEY);
+
+    const client = createOrgApiClientFromEnv();
+    const headers = client.buildAdminHeaders();
+    expect(headers['x-api-key']).toBe(ENV_ADMIN_KEY);
+  });
+
+  it('passes API key when present', () => {
+    vi.stubEnv('ANTHROPIC_ADMIN_API_KEY', ENV_ADMIN_KEY);
+    vi.stubEnv('ANTHROPIC_API_KEY', ENV_API_KEY);
+
+    const client = createOrgApiClientFromEnv();
+    const headers = client.buildSkillsHeaders();
+    expect(headers['x-api-key']).toBe(ENV_API_KEY);
+  });
+
+  it('works without API key (skills headers will throw later)', () => {
+    vi.stubEnv('ANTHROPIC_ADMIN_API_KEY', ENV_ADMIN_KEY);
+    delete process.env['ANTHROPIC_API_KEY'];
+
+    const client = createOrgApiClientFromEnv();
+    expect(() => client.buildSkillsHeaders()).toThrow('ANTHROPIC_API_KEY');
   });
 });
