@@ -1,18 +1,54 @@
 /**
  * `vat claude org skills` — manage organization skills via Skills API.
  */
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { join, relative, basename } from 'node:path';
 
 import { buildMultipartFormData } from '@vibe-agent-toolkit/claude-marketplace';
-import type { MultipartFile } from '@vibe-agent-toolkit/claude-marketplace';
+import type { MultipartFile, OrgApiClient } from '@vibe-agent-toolkit/claude-marketplace';
+import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
+
+import { downloadNpmPackage } from '../plugin/helpers.js';
 
 import { autopaginateSkills, executeOrgCommand } from './helpers.js';
 
 const SKILL_ID_ARG = '<skill-id>';
 const SKILL_ID_DESC = 'Skill ID (slug)';
 const DEBUG_OPT_DESC = 'Enable debug logging';
+
+// ── Helpers ────────────────────────────────────────────────────────────
+
+interface SkillUploadResult {
+	id: string;
+	displayTitle: string;
+	version: string;
+	createdAt: string;
+}
+
+interface UploadLogger {
+	info: (msg: string) => void;
+}
+
+/**
+ * Send multipart files to the Skills API and return a normalized result.
+ */
+async function sendSkillUpload(
+	client: OrgApiClient,
+	displayTitle: string,
+	files: MultipartFile[],
+): Promise<SkillUploadResult> {
+	const multipart = buildMultipartFormData({ display_title: displayTitle }, files);
+	const result = await client.uploadSkill<{
+		id: string; type: string; display_title: string; latest_version: string; created_at: string;
+	}>(multipart);
+	return {
+		id: result.id,
+		displayTitle: result.display_title,
+		version: result.latest_version,
+		createdAt: result.created_at,
+	};
+}
 
 /**
  * Extract display_title from SKILL.md frontmatter.
@@ -26,7 +62,6 @@ function extractDisplayTitle(skillMdPath: string): string {
 	if (!match?.[1]) {
 		throw new Error(`SKILL.md has no frontmatter: ${skillMdPath}`);
 	}
-	// Extract name field from YAML
 	// eslint-disable-next-line sonarjs/slow-regex -- single-line match on small YAML block
 	const nameMatch = /^name:\s*(.+)$/m.exec(match[1]);
 	if (!nameMatch?.[1]) {
@@ -58,6 +93,196 @@ function collectFiles(dir: string, baseDir?: string): Array<{ relativePath: stri
 	return results;
 }
 
+/**
+ * Upload a single skill directory to the org via Skills API.
+ */
+async function uploadSkillDir(
+	client: OrgApiClient,
+	skillDir: string,
+	titleOverride: string | undefined,
+	logger: UploadLogger,
+): Promise<SkillUploadResult> {
+	const skillMdPath = join(skillDir, 'SKILL.md');
+	// eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from CLI arg
+	if (!existsSync(skillMdPath)) {
+		throw new Error(`SKILL.md not found in ${skillDir}. Is this a built skill directory?`);
+	}
+
+	const displayTitle = titleOverride ?? extractDisplayTitle(skillMdPath);
+
+	// API requires files inside a top-level directory (e.g. skill_name/SKILL.md)
+	const dirName = basename(skillDir);
+	const allFiles = collectFiles(skillDir);
+	const files: MultipartFile[] = [];
+
+	for (const file of allFiles) {
+		// eslint-disable-next-line security/detect-non-literal-fs-filename -- collected from dir walk
+		const content = readFileSync(file.absolutePath);
+		files.push({
+			fieldName: 'files[]',
+			filename: `${dirName}/${file.relativePath}`,
+			content,
+		});
+	}
+
+	const totalSize = files.reduce((sum, f) => sum + f.content.length, 0);
+	logger.info(`   ${dirName}: ${files.length} files, ${(totalSize / 1024).toFixed(1)}KB, title="${displayTitle}"`);
+
+	return sendSkillUpload(client, displayTitle, files);
+}
+
+/**
+ * List candidate package directories in node_modules (scoped + unscoped).
+ */
+function listNodeModulePackages(nodeModulesDir: string): string[] {
+	// eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from temp dir
+	if (!existsSync(nodeModulesDir)) return [];
+
+	const results: string[] = [];
+	// eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from temp dir
+	for (const entry of readdirSync(nodeModulesDir, { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue;
+		if (entry.name.startsWith('@')) {
+			const scopeDir = join(nodeModulesDir, entry.name);
+			// eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from temp dir
+			for (const scopedEntry of readdirSync(scopeDir, { withFileTypes: true })) {
+				if (scopedEntry.isDirectory()) results.push(join(scopeDir, scopedEntry.name));
+			}
+		} else {
+			results.push(join(nodeModulesDir, entry.name));
+		}
+	}
+	return results;
+}
+
+/**
+ * Find the dist/skills/ directory in a package. Checks the package itself
+ * first, then scans node_modules for sub-packages that contain built skills.
+ */
+function findSkillsDir(packageDir: string): string | undefined {
+	const direct = join(packageDir, 'dist', 'skills');
+	// eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from temp dir
+	if (existsSync(direct)) return direct;
+
+	const candidates = listNodeModulePackages(join(packageDir, 'node_modules'));
+	for (const pkgDir of candidates) {
+		const candidate = join(pkgDir, 'dist', 'skills');
+		// eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from temp dir
+		if (existsSync(candidate)) return candidate;
+	}
+
+	return undefined;
+}
+
+/**
+ * Upload skills from an npm package.
+ */
+async function installFromNpm(
+	npmPackage: string,
+	skillFilter: string | undefined,
+	client: OrgApiClient,
+	logger: UploadLogger,
+): Promise<object> {
+	const tempDir = mkdtempSync(join(normalizedTmpdir(), 'vat-org-skills-'));
+	try {
+		logger.info(`Downloading: ${npmPackage}`);
+		const packageDir = downloadNpmPackage(npmPackage, tempDir);
+
+		const skillsDir = findSkillsDir(packageDir);
+		if (!skillsDir) {
+			throw new Error(`No dist/skills/ directory found in ${npmPackage}. Was the package built with vat skills build?`);
+		}
+		logger.info(`Found skills at: ${relative(packageDir, skillsDir) || 'dist/skills/'}`);
+
+		// eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from temp dir
+		const skillDirs = readdirSync(skillsDir, { withFileTypes: true })
+			.filter(e => e.isDirectory())
+			.map(e => e.name);
+
+		if (skillDirs.length === 0) {
+			throw new Error(`No skills found in dist/skills/ of ${npmPackage}`);
+		}
+
+		const toUpload = skillFilter
+			? skillDirs.filter(name => name === skillFilter)
+			: skillDirs;
+
+		if (toUpload.length === 0) {
+			throw new Error(`Skill "${String(skillFilter)}" not found in ${npmPackage}. Available: ${skillDirs.join(', ')}`);
+		}
+
+		logger.info(`Found ${toUpload.length} skill(s) to upload from ${npmPackage}`);
+
+		const results: SkillUploadResult[] = [];
+		const errors: Array<{ skill: string; error: string }> = [];
+
+		for (const skillName of toUpload) {
+			const skillDir = join(skillsDir, skillName);
+			try {
+				const result = await uploadSkillDir(client, skillDir, undefined, logger);
+				results.push(result);
+			} catch (error) {
+				const msg = error instanceof Error ? error.message : String(error);
+				logger.info(`   ⚠ ${skillName}: ${msg}`);
+				errors.push({ skill: skillName, error: msg });
+			}
+		}
+
+		return {
+			source: npmPackage,
+			skillsUploaded: results.length,
+			...(errors.length > 0 ? { skillsFailed: errors.length, errors } : {}),
+			skills: results,
+		};
+	} finally {
+		rmSync(tempDir, { recursive: true, force: true });
+	}
+}
+
+/**
+ * Upload a local skill directory or ZIP file.
+ */
+async function installFromLocal(
+	source: string,
+	titleOverride: string | undefined,
+	client: OrgApiClient,
+	logger: UploadLogger,
+): Promise<object> {
+	const sourcePath = source.startsWith('/') ? source : join(process.cwd(), source);
+
+	// eslint-disable-next-line security/detect-non-literal-fs-filename -- path from CLI arg
+	if (!existsSync(sourcePath)) {
+		throw new Error(`Source not found: ${sourcePath}`);
+	}
+
+	// eslint-disable-next-line security/detect-non-literal-fs-filename -- path from CLI arg
+	const stat = statSync(sourcePath);
+
+	if (!stat.isDirectory() && sourcePath.endsWith('.zip')) {
+		const displayTitle = titleOverride ?? basename(sourcePath, '.zip');
+		// eslint-disable-next-line security/detect-non-literal-fs-filename -- path from CLI arg
+		const zipContent = readFileSync(sourcePath);
+		const files: MultipartFile[] = [{
+			fieldName: 'files[]',
+			filename: basename(sourcePath),
+			content: zipContent,
+		}];
+		logger.info(`Uploading ZIP: ${sourcePath} (${(zipContent.length / 1024).toFixed(1)}KB)`);
+		logger.info(`Display title: ${displayTitle}`);
+
+		return sendSkillUpload(client, displayTitle, files);
+	}
+
+	if (!stat.isDirectory()) {
+		throw new Error(`Source must be a directory or .zip file: ${sourcePath}`);
+	}
+
+	logger.info(`Uploading skill directory: ${sourcePath}`);
+	return uploadSkillDir(client, sourcePath, titleOverride, logger);
+}
+
+// ── Commands ───────────────────────────────────────────────────────────
+
 export function createOrgSkillsCommand(): Command {
 	const command = new Command('skills');
 
@@ -88,102 +313,41 @@ Example:
 	// install
 	const installCmd = new Command('install');
 	installCmd
-		.description('Upload a skill to the organization via Skills API')
-		.argument('<source>', 'Path to built skill directory or ZIP file')
-		.option('--title <title>', 'Display title (defaults to SKILL.md name field)')
+		.description('Upload skill(s) to the organization via Skills API')
+		.argument('[source]', 'Path to built skill directory or ZIP file')
+		.option('--from-npm <package>', 'Download skills from an npm package (e.g. vibe-agent-toolkit@0.1.22-rc.3)')
+		.option('--skill <name>', 'Upload only this skill (with --from-npm)')
+		.option('--title <title>', 'Display title override (single skill only)')
 		.option('--debug', DEBUG_OPT_DESC)
-		.action(async (source: string, options: { title?: string; debug?: boolean }) => {
-			await executeOrgCommand('OrgSkillsInstall', options.debug, async ({ client, logger }) => {
-				// Resolve source path
-				const sourcePath = source.startsWith('/') ? source : join(process.cwd(), source);
+		.action(async (source: string | undefined, options: { fromNpm?: string; skill?: string; title?: string; debug?: boolean }) => {
+			if (!source && !options.fromNpm) {
+				throw new Error('Provide a <source> path or use --from-npm <package>');
+			}
+			if (source && options.fromNpm) {
+				throw new Error('Provide either <source> or --from-npm, not both');
+			}
 
-				// eslint-disable-next-line security/detect-non-literal-fs-filename -- path from CLI arg, validated by user
-				if (!existsSync(sourcePath)) {
-					throw new Error(`Source not found: ${sourcePath}`);
+			const commandName = options.fromNpm ? 'OrgSkillsInstallNpm' : 'OrgSkillsInstall';
+			await executeOrgCommand(commandName, options.debug, async ({ client, logger }) => {
+				if (options.fromNpm) {
+					return installFromNpm(options.fromNpm, options.skill, client, logger);
 				}
-
-				// eslint-disable-next-line security/detect-non-literal-fs-filename -- path from CLI arg
-				const stat = statSync(sourcePath);
-				const isZip = !stat.isDirectory() && sourcePath.endsWith('.zip');
-
-				let displayTitle: string;
-				const files: MultipartFile[] = [];
-
-				if (isZip) {
-					// ZIP upload — send as single file, API auto-extracts
-					displayTitle = options.title ?? basename(sourcePath, '.zip');
-					// eslint-disable-next-line security/detect-non-literal-fs-filename -- path from CLI arg
-					const zipContent = readFileSync(sourcePath);
-					files.push({
-						fieldName: 'files[]',
-						filename: basename(sourcePath),
-						content: zipContent,
-					});
-					logger.info(`Uploading ZIP: ${sourcePath} (${(zipContent.length / 1024).toFixed(1)}KB)`);
-				} else if (stat.isDirectory()) {
-					// Directory upload — send each file as separate files[] entry
-					const skillMdPath = join(sourcePath, 'SKILL.md');
-					// eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from CLI arg
-					if (!existsSync(skillMdPath)) {
-						throw new Error(`SKILL.md not found in ${sourcePath}. Is this a built skill directory?`);
-					}
-
-					displayTitle = options.title ?? extractDisplayTitle(skillMdPath);
-
-					// API requires files inside a top-level directory (e.g. skill_name/SKILL.md)
-					const dirName = basename(sourcePath);
-					const allFiles = collectFiles(sourcePath);
-					for (const file of allFiles) {
-						// eslint-disable-next-line security/detect-non-literal-fs-filename -- collected from dir walk
-						const content = readFileSync(file.absolutePath);
-						files.push({
-							fieldName: 'files[]',
-							filename: `${dirName}/${file.relativePath}`,
-							content,
-						});
-					}
-
-					const totalSize = files.reduce((sum, f) => sum + f.content.length, 0);
-					logger.info(`Uploading directory: ${sourcePath} (${files.length} files, ${(totalSize / 1024).toFixed(1)}KB)`);
-				} else {
-					throw new Error(`Source must be a directory or .zip file: ${sourcePath}`);
-				}
-
-				logger.info(`Display title: ${displayTitle}`);
-
-				const multipart = buildMultipartFormData(
-					{ display_title: displayTitle },
-					files,
-				);
-
-				const result = await client.uploadSkill<{
-					id: string;
-					type: string;
-					display_title: string;
-					latest_version: string;
-					created_at: string;
-				}>(multipart);
-
-				return {
-					id: result.id,
-					displayTitle: result.display_title,
-					version: result.latest_version,
-					createdAt: result.created_at,
-				};
+				return installFromLocal(source as string, options.title, client, logger);
 			});
 		})
 		.addHelpText('after', `
 Description:
-  Uploads a skill to the organization via the Anthropic Skills API (beta).
-  Accepts a built skill directory (with SKILL.md at root) or a ZIP file.
+  Uploads skill(s) to the organization via the Anthropic Skills API (beta).
+  Accepts a built skill directory, a ZIP file, or an npm package.
   Requires ANTHROPIC_API_KEY (regular key, not admin key).
 
   The display_title defaults to the "name" field from SKILL.md frontmatter.
-  Use --title to override.
 
-Example:
+Examples:
   $ vat claude org skills install dist/skills/org-admin
   $ vat claude org skills install my-skill.zip --title "My Custom Skill"
+  $ vat claude org skills install --from-npm vibe-agent-toolkit@0.1.22-rc.3
+  $ vat claude org skills install --from-npm vibe-agent-toolkit@0.1.22-rc.3 --skill org-admin
 `);
 
 	// delete
@@ -202,6 +366,7 @@ Example:
 		.addHelpText('after', `
 Description:
   Deletes a skill from the organization. Uses the Skills API (beta).
+  All versions must be deleted first (use: skills versions delete).
   Requires ANTHROPIC_API_KEY (regular key, not admin key).
 
 Example:

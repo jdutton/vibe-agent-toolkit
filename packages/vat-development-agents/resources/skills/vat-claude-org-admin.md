@@ -277,6 +277,54 @@ Exit codes: `0` success, `1` expected failure (stubs), `2` system error (missing
 **Skill deletion lifecycle:** The API requires all versions to be deleted before the skill itself.
 Use `versions list` to find versions, `versions delete` each one, then `delete` the skill.
 
+## Enterprise Skill Distribution
+
+### Skills API (claude.ai / Console)
+
+Skills uploaded via `POST /v1/skills` are **workspace-scoped** and **automatically available to
+all workspace members**. There is no per-user enable/disable via the API — visibility is
+workspace-level only. The admin UI may have additional controls not exposed in the API.
+
+**Upload from npm package:**
+```bash
+# Upload all skills from a package
+vat claude org skills install --from-npm @scope/my-skills-package@1.0.0
+
+# Upload a single skill
+vat claude org skills install --from-npm @scope/my-skills-package@1.0.0 --skill my-skill
+```
+
+The package must contain `dist/skills/<name>/SKILL.md` (produced by `vat skills build`).
+If skills are in a sub-dependency, the command searches `node_modules/*/dist/skills/` too.
+
+**Duplicate titles are rejected** — the API enforces unique `display_title` per workspace.
+When uploading multiple skills, failures are non-fatal; partial results are reported.
+
+### Managed Settings (Claude Code plugins)
+
+For enterprise-wide Claude Code plugin deployment (not the Skills API), use managed settings
+pushed via MDM (Jamf, Intune, SCCM, etc.):
+
+| Platform | Path |
+|---|---|
+| macOS | `/Library/Application Support/ClaudeCode/managed-settings.json` |
+| Linux | `/etc/claude-code/managed-settings.json` |
+| Windows | `C:\Program Files\ClaudeCode\managed-settings.json` |
+
+Managed settings are **highest priority** in the settings cascade — they override user settings.
+Use this to force-enable plugins, lock down permissions, or configure organization defaults.
+
+```json
+{
+  "enabledPlugins": {
+    "my-plugin@my-marketplace": true
+  }
+}
+```
+
+Combine with `npm install -g <package>` (via IT software deployment) to install the plugin
+binary, then managed settings to enable it across all machines.
+
 ## Not Yet Implemented
 
 These commands exist with the correct CLI shape but return structured
