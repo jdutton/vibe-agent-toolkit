@@ -24,6 +24,8 @@ export interface CrawlOptions {
   filesOnly?: boolean;
   /** Respect .gitignore files (default: true) */
   respectGitignore?: boolean;
+  /** Match through dot-directories like .claude/ (default: false) */
+  dot?: boolean;
 }
 
 /**
@@ -76,7 +78,10 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     absolute = true,
     filesOnly = true,
     respectGitignore = true,
+    dot = false,
   } = options;
+
+  const picoOptions = dot ? { dot: true } : undefined;
 
   // Resolve base directory to absolute path
   const resolvedBaseDir = path.resolve(baseDir);
@@ -108,8 +113,8 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
 
       if (gitFiles !== null) {
         // Git ls-files succeeded - filter using glob patterns
-        const isIncluded = picomatch(include);
-        const isExcluded = exclude.length > 0 ? picomatch(exclude) : (): boolean => false;
+        const isIncluded = picomatch(include, picoOptions);
+        const isExcluded = exclude.length > 0 ? picomatch(exclude, picoOptions) : (): boolean => false;
 
         return gitFiles
           .filter((relativePath) => {
@@ -128,8 +133,8 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
 
   // Fall back to manual directory crawling (not in git repo or git ls-files failed)
   // Compile glob patterns using picomatch
-  const isIncluded = picomatch(include);
-  const isExcluded = exclude.length > 0 ? picomatch(exclude) : (): boolean => false;
+  const isIncluded = picomatch(include, picoOptions);
+  const isExcluded = exclude.length > 0 ? picomatch(exclude, picoOptions) : (): boolean => false;
 
   const results: string[] = [];
 

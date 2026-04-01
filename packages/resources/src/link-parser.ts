@@ -105,6 +105,13 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
 function extractLinks(tree: Root): ResourceLink[] {
   const links: ResourceLink[] = [];
 
+  // First pass: collect all definition nodes (identifier → url)
+  // This allows us to resolve linkReference nodes against their definitions
+  const definitions = new Map<string, string>();
+  visit(tree, 'definition', (node: Definition) => {
+    definitions.set(node.identifier, node.url);
+  });
+
   // Visit link nodes (regular links and autolinks)
   visit(tree, 'link', (node: Link) => {
     const link: ResourceLink = {
@@ -118,15 +125,17 @@ function extractLinks(tree: Root): ResourceLink[] {
   });
 
   // Visit linkReference nodes (reference-style links)
+  // Only include resolved references — unresolved ones are literal text in rendered markdown, not links
   visit(tree, 'linkReference', (node: LinkReference) => {
-    // For reference-style links, we use the identifier as href
-    // In a full implementation, we'd resolve the definition, but for now
-    // we'll classify based on the identifier pattern
-    const href = node.identifier;
+    const resolvedUrl = definitions.get(node.identifier);
+    if (resolvedUrl === undefined) {
+      // No matching definition — skip this node (it renders as plain text, not a link)
+      return;
+    }
     const link: ResourceLink = {
       text: extractLinkText(node),
-      href,
-      type: 'unknown', // Reference links need definition resolution
+      href: resolvedUrl,
+      type: classifyLink(resolvedUrl),
       line: node.position?.start.line,
       nodeType: 'linkReference',
     };
@@ -184,6 +193,11 @@ function classifyLink(href: string): LinkType {
   if (href.startsWith('#')) {
     return 'anchor';
   }
+  // Any remaining href containing ':' is a protocol-like pattern we don't recognise
+  // (e.g., javascript:, tel:, data:, ftp:) — classify as unknown rather than local file
+  if (href.includes(':')) {
+    return 'unknown';
+  }
   // Links with anchors are still local file links
   if (href.includes('#')) {
     return 'local_file';
@@ -216,6 +230,10 @@ function classifyLink(href: string): LinkType {
     }
   } catch {
     // Invalid percent encoding — leave as unknown
+  }
+  // Bare filenames with extensions (e.g., "config.schema.json", "image.png")
+  if (href.includes('.')) {
+    return 'local_file';
   }
   return 'unknown';
 }

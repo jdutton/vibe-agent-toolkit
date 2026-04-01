@@ -9,7 +9,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path, { join } from 'node:path';
 
 import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
-import type { Assertion } from 'vitest';
+import { expect, type Assertion } from 'vitest';
 
 import { ExternalLinkValidator } from '../src/external-link-validator.js';
 import { parseMarkdown } from '../src/link-parser.js';
@@ -406,6 +406,27 @@ export function expectHeadingStructure(
       }
     }
   }
+}
+
+/**
+ * Write markdown, parse it, and assert all links have the expected type.
+ * Eliminates duplication in classification tests that check every link.
+ */
+export async function assertAllLinksClassifiedAs(
+  tempDir: string,
+  filename: string,
+  content: string,
+  expectedType: ResourceLink['type'],
+): Promise<void> {
+  await writeAndParse({
+    filePath: join(tempDir, filename),
+    content,
+    assertions: (result) => {
+      for (const link of result.links) {
+        expect(link.type).toBe(expectedType);
+      }
+    },
+  });
 }
 
 // ============================================================================

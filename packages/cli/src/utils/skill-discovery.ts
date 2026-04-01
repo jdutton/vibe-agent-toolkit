@@ -19,6 +19,7 @@ import picomatch from 'picomatch';
 const isSkillFile = picomatch('**/SKILL.md', {
   nocase: true,      // Case-insensitive matching
   matchBase: true,   // Match basename anywhere in path
+  dot: true,         // Match through dot-directories (e.g., .claude/worktrees/)
 });
 
 /**
