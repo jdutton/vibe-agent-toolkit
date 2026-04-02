@@ -86,16 +86,27 @@ function git(
 /**
  * Resolve a remote name (e.g., "origin") to a URL.
  * If the value already looks like a URL, returns it as-is.
+ * In CI, injects GITHUB_TOKEN into HTTPS URLs for push authentication.
  */
 function resolveRemoteUrl(remote: string, cwd: string): string {
+  let url: string;
   if (remote.includes('/') || remote.includes(':')) {
-    return remote;
+    url = remote;
+  } else {
+    const urlResult = git(['remote', 'get-url', remote], { cwd, allowFailure: true });
+    if (urlResult.status !== 0) {
+      throw new Error(`Git remote "${remote}" not found. Configure it or use a full URL.`);
+    }
+    url = urlResult.stdout;
   }
-  const urlResult = git(['remote', 'get-url', remote], { cwd, allowFailure: true });
-  if (urlResult.status === 0) {
-    return urlResult.stdout;
+
+  // In CI, inject token into HTTPS URLs for push authentication.
+  // The temp repo doesn't inherit the credential helper from actions/checkout.
+  const token = process.env['GH_TOKEN'] ?? process.env['GITHUB_TOKEN'];
+  if (token && url.startsWith('https://github.com/')) {
+    return url.replace('https://github.com/', `https://x-access-token:${token}@github.com/`);
   }
-  throw new Error(`Git remote "${remote}" not found. Configure it or use a full URL.`);
+  return url;
 }
 
 /**
