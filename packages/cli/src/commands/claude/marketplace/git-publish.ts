@@ -59,13 +59,14 @@ export function createCommitMessage(
  */
 function git(
   args: string[],
-  options: { cwd: string; allowFailure?: boolean }
+  options: { cwd: string; allowFailure?: boolean; timeout?: number }
 ): { stdout: string; stderr: string; status: number } {
   // eslint-disable-next-line sonarjs/no-os-command-from-path -- git is a standard system command
   const result = spawnSync('git', args, {
     cwd: options.cwd,
     encoding: 'utf-8',
     stdio: ['pipe', 'pipe', 'pipe'],
+    timeout: options.timeout,
   });
 
   const status = result.status ?? 1;
@@ -162,13 +163,15 @@ export async function publishToGitBranch(options: PublishGitOptions): Promise<vo
     git(['init'], { cwd: tmpRepo });
     git(['checkout', '-b', branch], { cwd: tmpRepo });
 
-    // Try to fetch existing branch history
-    const fetchResult = git(
-      ['fetch', remoteUrl, `${branch}:${branch}`],
-      { cwd: tmpRepo, allowFailure: true }
-    );
-    if (fetchResult.status === 0 && !force) {
-      git(['reset', '--soft', branch], { cwd: tmpRepo });
+    // Try to fetch existing branch history (skip for dry-run — commit parent doesn't matter)
+    if (!dryRun) {
+      const fetchResult = git(
+        ['fetch', remoteUrl, `${branch}:${branch}`],
+        { cwd: tmpRepo, allowFailure: true, timeout: 30_000 }
+      );
+      if (fetchResult.status === 0 && !force) {
+        git(['reset', '--soft', branch], { cwd: tmpRepo });
+      }
     }
 
     // Copy publish tree content into temp repo

@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Marketplace publish system test on CI** — replaced fake remote path (`/tmp/fake-remote.git`) with a real bare git repo to prevent `git fetch` timeouts on Ubuntu CI. Added explicit `-b main` to `git init` for Git 2.43+ compatibility.
+- **Marketplace dry-run skips git fetch** — `git fetch` during `--dry-run` was hanging on Ubuntu CI (no timeout on `spawnSync`). Dry-run now skips the fetch entirely (commit parent doesn't matter for preview). Real publishes get a 30s timeout on fetch.
 
 ## [0.1.22] - 2026-04-01
 
