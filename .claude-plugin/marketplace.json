@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "vat-skills",
+  "owner": {
+    "name": "vibe-agent-toolkit contributors"
+  },
+  "plugins": [
+    {
+      "name": "vibe-agent-toolkit",
+      "description": "Development agents and skills for building with vibe-agent-toolkit",
+      "source": "./plugins/vibe-agent-toolkit",
+      "author": {
+        "name": "vibe-agent-toolkit contributors"
+      }
+    }
+  ]
+}

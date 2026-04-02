@@ -1,0 +1,8 @@
+{
+  "name": "vibe-agent-toolkit",
+  "description": "Development agents and skills for building with vibe-agent-toolkit",
+  "version": "0.1.23-rc.1",
+  "author": {
+    "name": "vibe-agent-toolkit contributors"
+  }
+}
