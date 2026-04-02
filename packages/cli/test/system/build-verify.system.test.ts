@@ -192,6 +192,8 @@ describe('vat build command (system test)', () => {
   });
 });
 
+const VERIFY_SUCCESS_MARKER = 'status: success';
+
 describe('vat verify command (system test)', () => {
   const suite = setupBuildVerifyTestSuite();
 
@@ -202,12 +204,26 @@ describe('vat verify command (system test)', () => {
   /**
    * Set up a temp dir with a complete fixture, build it, and return the tempDir.
    * Shared setup for tests that need pre-built artifacts.
+   *
+   * Adds package.json (so build emits plugin version) and LICENSE (required by
+   * marketplace validate) so that `vat verify` with marketplace phase passes.
    */
   function setupBuiltFixture(): string {
     const tempDir = suite.createTempDir();
     suite.setupSingleSkillFixture(tempDir, MARKETPLACE_NAME, PLUGIN_NAME);
+
+    // Build reads version from package.json for plugin.json — required by strict marketplace validate
+    writeTestFile(join(tempDir, 'package.json'), JSON.stringify({ name: 'test-pkg', version: '1.0.0' }));
+
     const buildResult = suite.runBuild(tempDir);
     expect(buildResult.status).toBe(0);
+
+    // Marketplace validate requires LICENSE in the marketplace root
+    const marketplaceDir = join(
+      tempDir, 'dist', '.claude', 'plugins', 'marketplaces', MARKETPLACE_NAME
+    );
+    writeTestFile(join(marketplaceDir, 'LICENSE'), 'MIT License - Test');
+
     return tempDir;
   }
 
@@ -217,7 +233,39 @@ describe('vat verify command (system test)', () => {
     const result = suite.runVerify(tempDir);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('status: success');
+    expect(result.stdout).toContain(VERIFY_SUCCESS_MARKER);
+  });
+
+  it('should include marketplace phase when claude.marketplaces config exists', () => {
+    const tempDir = setupBuiltFixture();
+
+    const result = suite.runVerify(tempDir);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(VERIFY_SUCCESS_MARKER);
+    // Verify the marketplace phase was included in output
+    expect(result.stdout).toContain(`marketplace:${MARKETPLACE_NAME}`);
+  });
+
+  it('should skip marketplace phase when no claude config exists', () => {
+    const tempDir = suite.createTempDir();
+    // Config with skills only, no claude section
+    writeTestFile(
+      join(tempDir, VAT_CONFIG_FILENAME),
+      createSkillsConfigYaml([SKILL_INCLUDE_GLOB])
+    );
+    suite.createSkillSource(tempDir, SKILL_SOURCE_PATH, TEST_SKILL_NAME);
+
+    // Build first (skills only)
+    const buildResult = suite.runBuild(tempDir);
+    expect(buildResult.status).toBe(0);
+
+    const result = suite.runVerify(tempDir);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain(VERIFY_SUCCESS_MARKER);
+    // Marketplace phase should NOT appear
+    expect(result.stdout).not.toContain('marketplace:');
   });
 
 });
