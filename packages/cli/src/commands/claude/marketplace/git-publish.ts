@@ -160,8 +160,9 @@ export async function publishToGitBranch(options: PublishGitOptions): Promise<vo
   logger.debug(`   Staging repo: ${tmpRepo}`);
 
   try {
-    git(['init'], { cwd: tmpRepo });
-    git(['checkout', '-b', branch], { cwd: tmpRepo });
+    git(['init', '-b', branch], { cwd: tmpRepo });
+    git(['config', 'user.email', 'vat-publish@localhost'], { cwd: tmpRepo });
+    git(['config', 'user.name', 'vat marketplace publish'], { cwd: tmpRepo });
 
     // Try to fetch existing branch history (skip for dry-run — commit parent doesn't matter)
     if (!dryRun) {
