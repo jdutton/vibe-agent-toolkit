@@ -17,7 +17,7 @@
         "@types/semver": "^7.7.1",
         "@typescript-eslint/eslint-plugin": "^8.50.1",
         "@typescript-eslint/parser": "^8.50.1",
-        "@vibe-validate/cli": "next",
+        "@vibe-validate/cli": "^0.19.1",
         "@vitest/coverage-v8": "^3.2.4",
         "adm-zip": "^0.5.16",
         "eslint": "^9.39.2",
@@ -36,7 +36,7 @@
         "tsx": "^4.21.0",
         "turbo": "^2.8.3",
         "typescript": "^5.9.3",
-        "vibe-validate": "next",
+        "vibe-validate": "^0.19.1",
         "vitest": "^3.2.4",
         "yaml": "^2.8.2",
       },
@@ -1005,19 +1005,19 @@
 
     "@vibe-agent-toolkit/vat-example-cat-agents": ["@vibe-agent-toolkit/vat-example-cat-agents@workspace:packages/vat-example-cat-agents"],
 
-    "@vibe-validate/cli": ["@vibe-validate/cli@0.19.0-rc.14", "", { "dependencies": { "@vibe-validate/config": "0.19.0-rc.14", "@vibe-validate/core": "0.19.0-rc.14", "@vibe-validate/extractors": "0.19.0-rc.14", "@vibe-validate/git": "0.19.0-rc.14", "@vibe-validate/history": "0.19.0-rc.14", "chalk": "^5.6.2", "commander": "^12.1.0", "prompts": "^2.4.2", "proper-lockfile": "^4.1.2", "semver": "^7.7.3", "yaml": "^2.8.2", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" }, "bin": { "vibe-validate": "dist/bin/vibe-validate", "vv": "dist/bin/vv" } }, "sha512-hQVUlK5OtOfEm6ztOTzcIbhl94fUwI1ApB42VICqqvcp7ToLepCn5ic/beV/8j3+d1aB6TYgnRnEkVvU51qtKg=="],
+    "@vibe-validate/cli": ["@vibe-validate/cli@0.19.1", "", { "dependencies": { "@vibe-validate/config": "0.19.1", "@vibe-validate/core": "0.19.1", "@vibe-validate/extractors": "0.19.1", "@vibe-validate/git": "0.19.1", "@vibe-validate/history": "0.19.1", "chalk": "^5.6.2", "commander": "^12.1.0", "prompts": "^2.4.2", "proper-lockfile": "^4.1.2", "semver": "^7.7.3", "yaml": "^2.8.2", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" }, "bin": { "vv": "dist/bin/vv", "vibe-validate": "dist/bin/vibe-validate" } }, "sha512-UFOGICFkWu/0xfTqiT0/c7YRzaV38c9zb33BxLG4lIoBQvi/21aNnrW76uDUJgId7fbXeicRE6aMMeqMmWA9Mg=="],
 
-    "@vibe-validate/config": ["@vibe-validate/config@0.19.0-rc.14", "", { "dependencies": { "@vibe-validate/utils": "0.19.0-rc.14", "tsx": "^4.21.0", "yaml": "^2.8.2", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" } }, "sha512-sVo2MxI6ePqfqvGMzRdyRRs51/t8LB6M0FOBAtPoKfCHenO1HuAGmsubRR+hN0XWU60pjC/8bmrm0jqh6G/c8w=="],
+    "@vibe-validate/config": ["@vibe-validate/config@0.19.1", "", { "dependencies": { "@vibe-validate/utils": "0.19.1", "tsx": "^4.21.0", "yaml": "^2.8.2", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" } }, "sha512-jANQosi7JbwDgUqqJOd7tuUAQQFAthfqhyFYmAgIhzCNtrygTlrf6je+ZSRUaGtPdi6JKhGOSXAh2dy+DPq8Qg=="],
 
-    "@vibe-validate/core": ["@vibe-validate/core@0.19.0-rc.14", "", { "dependencies": { "@vibe-validate/config": "0.19.0-rc.14", "@vibe-validate/extractors": "0.19.0-rc.14", "@vibe-validate/git": "0.19.0-rc.14", "@vibe-validate/utils": "0.19.0-rc.14", "strip-ansi": "^7.1.2", "yaml": "^2.8.2", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" } }, "sha512-jO/a2sIvOkNX9rs+X3CvWRJI+rgJdLONfDK35AXh4VkkXU81qIT//Q9ny706g1Rta5zffZlHf93p9+R3VmFUlg=="],
+    "@vibe-validate/core": ["@vibe-validate/core@0.19.1", "", { "dependencies": { "@vibe-validate/config": "0.19.1", "@vibe-validate/extractors": "0.19.1", "@vibe-validate/git": "0.19.1", "@vibe-validate/utils": "0.19.1", "strip-ansi": "^7.1.2", "yaml": "^2.8.2", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" } }, "sha512-bOqquRA/XNSFVhvNvBbXHZ4qp3YksPH9qg8YzzSqJy0lq8U//c7mWGX1sAzXMpYi+XkK/J+8UsQHN6/hbhc9aA=="],
 
-    "@vibe-validate/extractors": ["@vibe-validate/extractors@0.19.0-rc.14", "", { "dependencies": { "@vibe-validate/config": "0.19.0-rc.14", "@vibe-validate/utils": "0.19.0-rc.14", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" } }, "sha512-qcuDm0xVFjY3Y6Fab153vdnSri9BEuFKKfEwk76FTypmdKkbHcD6iY4GhbFZEs5O8i/WwvB7kYwCCiI/vPikkw=="],
+    "@vibe-validate/extractors": ["@vibe-validate/extractors@0.19.1", "", { "dependencies": { "@vibe-validate/config": "0.19.1", "@vibe-validate/utils": "0.19.1", "zod": "^3.25.76", "zod-to-json-schema": "^3.25.0" } }, "sha512-gF92o1TAtQLqjqGRU/feZSSHdZPegCvhxVKpEwkcZqIz6SGTAh7BCHG+ZKwtMi4CP5V1xZpF4zTWotxLirFhVg=="],
 
-    "@vibe-validate/git": ["@vibe-validate/git@0.19.0-rc.14", "", { "dependencies": { "@vibe-validate/utils": "0.19.0-rc.14", "yaml": "^2.8.2" } }, "sha512-MUMUyrn7UN5lzl/Sj6rJvqDVMqmd99CLGjqkg9zKM8mm6KEr0IctRzqmtMAPzC6aty5dTl2aMVAo8fwiIguklw=="],
+    "@vibe-validate/git": ["@vibe-validate/git@0.19.1", "", { "dependencies": { "@vibe-validate/utils": "0.19.1", "yaml": "^2.8.2" } }, "sha512-J2Zw+CPN2LXp7wDHAgJbJxR/XhDk++D3T5z95RZKYZGTagv6WbX/wpd8lIL8j3PpyrEP2kP7ho4NiQ5M8i5/oQ=="],
 
-    "@vibe-validate/history": ["@vibe-validate/history@0.19.0-rc.14", "", { "dependencies": { "@vibe-validate/core": "0.19.0-rc.14", "@vibe-validate/git": "0.19.0-rc.14", "yaml": "^2.8.2", "zod": "^3.25.76" } }, "sha512-rGsvo6z6w4Li252fnRT+Hn+7bpREaHjBLnwIvCDufZYciAiiOwErxtvYcE9h4yGXjVeznkgi7BIcjucErze40A=="],
+    "@vibe-validate/history": ["@vibe-validate/history@0.19.1", "", { "dependencies": { "@vibe-validate/core": "0.19.1", "@vibe-validate/git": "0.19.1", "yaml": "^2.8.2", "zod": "^3.25.76" } }, "sha512-vnGb4i4DEZFBF7dQlQ+VuNxbDS6IDh576HJ1DPYz9HwkjuwONVFkYcQy9duTYQcHREY3sCM40jqTiZb9Unox5Q=="],
 
-    "@vibe-validate/utils": ["@vibe-validate/utils@0.19.0-rc.14", "", { "dependencies": { "which": "^5.0.0" } }, "sha512-YwnIHgwZFHGPjO/C6xoalbdar9xnxJaobCPlbpZMNlBEUW36MvfXiw9oHRlTdMULaahlyRNe7zEtl4EfY1f7lA=="],
+    "@vibe-validate/utils": ["@vibe-validate/utils@0.19.1", "", { "dependencies": { "which": "^5.0.0" } }, "sha512-VuhynwrEb1IL5Y3RXV+bjegum8XHF9imR1Fyngsz/arlDQTcnuexjuhZ3YzEESylOi5Q6tgSUHmxw3TZWWEcdw=="],
 
     "@vitest/coverage-v8": ["@vitest/coverage-v8@3.2.4", "", { "dependencies": { "@ampproject/remapping": "^2.3.0", "@bcoe/v8-coverage": "^1.0.2", "ast-v8-to-istanbul": "^0.3.3", "debug": "^4.4.1", "istanbul-lib-coverage": "^3.2.2", "istanbul-lib-report": "^3.0.1", "istanbul-lib-source-maps": "^5.0.6", "istanbul-reports": "^3.1.7", "magic-string": "^0.30.17", "magicast": "^0.3.5", "std-env": "^3.9.0", "test-exclude": "^7.0.1", "tinyrainbow": "^2.0.0" }, "peerDependencies": { "@vitest/browser": "3.2.4", "vitest": "3.2.4" }, "optionalPeers": ["@vitest/browser"] }, "sha512-EyF9SXU6kS5Ku/U82E259WSnvg6c8KTjppUncuNdm5QHpe17mwREHnjDzozC8x9MZ0xfBUFSaLkRv4TMA75ALQ=="],
 
@@ -2369,7 +2369,7 @@
 
     "vibe-agent-toolkit": ["vibe-agent-toolkit@workspace:packages/vibe-agent-toolkit"],
 
-    "vibe-validate": ["vibe-validate@0.19.0-rc.14", "", { "dependencies": { "@vibe-validate/cli": "0.19.0-rc.14", "@vibe-validate/utils": "0.19.0-rc.14" }, "bin": { "vibe-validate": "bin/vibe-validate", "vv": "bin/vv" } }, "sha512-lcwVcW1oNGllLIkDF9KGaYm81TzvgjUnNFF1ItGt7RosjdO3PusrkQWvH4kFkYv4m82EJ56QmxrCH1cdtwwnDA=="],
+    "vibe-validate": ["vibe-validate@0.19.1", "", { "dependencies": { "@vibe-validate/cli": "0.19.1", "@vibe-validate/utils": "0.19.1", "vibe-agent-toolkit": "^0.1.22" }, "bin": { "vv": "bin/vv", "vibe-validate": "bin/vibe-validate" } }, "sha512-EimIeJRDX3j4/2w76D7DD3KTv2fl7EbFwqYYl74YjRFL0HxIy5aXYAG/MRJshf2dFX2vODR3Er3l2NPNDj2wfg=="],
 
     "vite": ["vite@7.3.1", "", { "dependencies": { "esbuild": "^0.27.0", "fdir": "^6.5.0", "picomatch": "^4.0.3", "postcss": "^8.5.6", "rollup": "^4.43.0", "tinyglobby": "^0.2.15" }, "optionalDependencies": { "fsevents": "~2.3.3" }, "peerDependencies": { "@types/node": "^20.19.0 || >=22.12.0", "jiti": ">=1.21.0", "less": "^4.0.0", "lightningcss": "^1.21.0", "sass": "^1.70.0", "sass-embedded": "^1.70.0", "stylus": ">=0.54.8", "sugarss": "^5.0.0", "terser": "^5.16.0", "tsx": "^4.8.1", "yaml": "^2.4.2" }, "optionalPeers": ["@types/node", "jiti", "less", "lightningcss", "sass", "sass-embedded", "stylus", "sugarss", "terser", "tsx", "yaml"], "bin": { "vite": "bin/vite.js" } }, "sha512-w+N7Hifpc3gRjZ63vYBXA56dvvRlNWRczTdmCBBa+CotUzAPf5b7YMdMR/8CQoeYE5LX3W4wj6RYTgonm1b9DA=="],
 
@@ -2690,6 +2690,8 @@
     "test-exclude/minimatch": ["minimatch@9.0.5", "", { "dependencies": { "brace-expansion": "^2.0.1" } }, "sha512-G6T0ZX48xgozx7587koeX9Ys2NYy6Gmv//P89sEte9V9whIapMNF4idKxnW2QtCcLiTWlb/wfCabAtAFWhhBow=="],
 
     "ts-patch/chalk": ["chalk@4.1.2", "", { "dependencies": { "ansi-styles": "^4.1.0", "supports-color": "^7.1.0" } }, "sha512-oKnbhFyRIXpUuez8iBMmyEa4nbj4IOQyuhc/wy9kY7/WVPcwIO9VA668Pu8RkO7+0G76SLROeyw9CpQ061i4mA=="],
+
+    "vibe-validate/vibe-agent-toolkit": ["vibe-agent-toolkit@0.1.22", "", { "dependencies": { "@vibe-agent-toolkit/cli": "0.1.22", "@vibe-agent-toolkit/vat-development-agents": "0.1.22" }, "bin": { "vat": "bin/vat" } }, "sha512-uiN9x02HG+C1yqtk/IMQFwc9OVakMPZaBstxSL7maJffNHV49KI5tYZcpbou6zjdVLDeE/GIUvv6GVHb70UL2w=="],
 
     "whatwg-encoding/iconv-lite": ["iconv-lite@0.6.3", "", { "dependencies": { "safer-buffer": ">= 2.1.2 < 3.0.0" } }, "sha512-4fCk79wshMdzMp2rH06qWrJE4iolqLhCUH+OiuIgU++RB0+94NlDL81atO7GX55uUKueo0txHNtvEyI6D7WdMw=="],
 
@@ -3081,6 +3083,10 @@
 
     "ts-patch/chalk/ansi-styles": ["ansi-styles@4.3.0", "", { "dependencies": { "color-convert": "^2.0.1" } }, "sha512-zbB9rCJAT1rbjiVDb2hqKFHNYLxgtk8NURxZ3IZwD3F6NtxbXZQCnnSi1Lkx+IDohdPlFp222wVALIheZJQSEg=="],
 
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli": ["@vibe-agent-toolkit/cli@0.1.22", "", { "dependencies": { "@anthropic-ai/sdk": "^0.71.2", "@vibe-agent-toolkit/agent-config": "0.1.22", "@vibe-agent-toolkit/agent-schema": "0.1.22", "@vibe-agent-toolkit/agent-skills": "0.1.22", "@vibe-agent-toolkit/claude-marketplace": "0.1.22", "@vibe-agent-toolkit/discovery": "0.1.22", "@vibe-agent-toolkit/gateway-mcp": "0.1.22", "@vibe-agent-toolkit/rag": "0.1.22", "@vibe-agent-toolkit/rag-lancedb": "0.1.22", "@vibe-agent-toolkit/resources": "0.1.22", "@vibe-agent-toolkit/utils": "0.1.22", "adm-zip": "^0.5.16", "commander": "^12.1.0", "js-yaml": "^4.1.0", "picomatch": "^4.0.3", "semver": "^7.7.3", "tar": "^7.5.7", "zod": "^3.24.1" }, "bin": { "vat": "dist/bin/vat.js" } }, "sha512-u+tNcrINruabK7igv+dEfCy9Hxc13G+dsJm6BgW2s3zUBEs+5y6oRWUWusjiRjZdYVPWe9LuKTKWYupsYaxG2A=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/vat-development-agents": ["@vibe-agent-toolkit/vat-development-agents@0.1.22", "", { "dependencies": { "@vibe-agent-toolkit/agent-schema": "0.1.22", "@vibe-agent-toolkit/cli": "0.1.22", "yaml": "^2.8.2" } }, "sha512-6IHn8rC0XnTWYORZr0w5EnIMMnIcm0jCHbCxZX4aP7zIZcIxtHdVy/alIY2zKLU/oef7IvUNAFvJt/7ECldaMQ=="],
+
     "wrap-ansi/string-width/emoji-regex": ["emoji-regex@9.2.2", "", {}, "sha512-L18DaJsXSUk2+42pv8mLs5jJT2hqFkFE4j21wOmgbUqsZ2hL72NsUU785g9RXgo3s0ZNgVl42TiHp3ZtOv/Vyg=="],
 
     "wrap-ansi/strip-ansi/ansi-regex": ["ansi-regex@6.2.2", "", {}, "sha512-Bq3SmSpyFHaWjPk8If9yc6svM8c56dB5BAtW4Qbw5jHTwwXXcTLoRMkpDJp6VL0XzlWaCHTXrkFURMYmD0sLqg=="],
@@ -3166,6 +3172,28 @@
     "gray-matter/js-yaml/argparse/sprintf-js": ["sprintf-js@1.0.3", "", {}, "sha512-D9cPgkvLlV3t3IzL0D0YLvGA9Ahk4PcvVwUbN0dSGr1aP0Nrt4AEnTUbuGvquEC0mA64Gqt1fzirlRs5ibXx8g=="],
 
     "rimraf/glob/path-scurry/lru-cache": ["lru-cache@11.2.5", "", {}, "sha512-vFrFJkWtJvJnD5hg+hJvVE8Lh/TcMzKnTgCWmtBipwI5yLX/iX+5UB2tfuyODF5E7k9xEzMdYgGqaSb1c0c5Yw=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/agent-config": ["@vibe-agent-toolkit/agent-config@0.1.22", "", { "dependencies": { "@vibe-agent-toolkit/agent-schema": "0.1.22", "@vibe-agent-toolkit/utils": "0.1.22", "yaml": "^2.3.4" } }, "sha512-Gs2pDYzltdx/srAF+0Pvl7QvzW+F8x2OvqcjJPznW+Z73dWZPHkDyK7I+qWNVMeOffujX+UTszp56YVm80oRnQ=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/agent-schema": ["@vibe-agent-toolkit/agent-schema@0.1.22", "", { "dependencies": { "zod": "^3.23.8", "zod-to-json-schema": "^3.23.5" } }, "sha512-vh/LyamYn/WwPgZvP6YK0Od4ZJyiW4mcSnTJ9sEUm9wCfi3IkLPmoHHhWOcx6oepXwKGMkmAmOhYI45rtntbzA=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/agent-skills": ["@vibe-agent-toolkit/agent-skills@0.1.22", "", { "dependencies": { "@vibe-agent-toolkit/agent-config": "0.1.22", "@vibe-agent-toolkit/agent-schema": "0.1.22", "@vibe-agent-toolkit/resources": "0.1.22", "@vibe-agent-toolkit/utils": "0.1.22", "adm-zip": "^0.5.16", "picomatch": "^4.0.3", "yaml": "^2.6.1", "zod": "^3.24.1", "zod-to-json-schema": "^3.23.5" } }, "sha512-+aLSXE6aq2gzHd0FSnmzFkEPWB1sF+jYjfwqqaOvRKrVhb7pNdFtS21PJD0Y7WYvJgcfixTqedP/WWLjVXcRwA=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/claude-marketplace": ["@vibe-agent-toolkit/claude-marketplace@0.1.22", "", { "dependencies": { "@vibe-agent-toolkit/utils": "0.1.22", "ignore": "^6.0.0", "yaml": "^2.6.1", "zod": "^3.24.1" } }, "sha512-uHOPSJ2m8NEJcUDJw1Ve7SHfhFHjCkVP8DNKeJHF37b73IeSZokZ0gEaJR+1W7hC816O8WJen6kM4kd6v2jxFA=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/discovery": ["@vibe-agent-toolkit/discovery@0.1.22", "", { "dependencies": { "@vibe-agent-toolkit/utils": "0.1.22", "picomatch": "^4.0.2" } }, "sha512-DrjFJfqfWl9pTttvxE0p/9zZlcC/tpAQTOVFK6MmBBU/CGGaokRtl04wd8Pq7UIz8w/Dl8Fe0IbmmOwL1P+Vqg=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/gateway-mcp": ["@vibe-agent-toolkit/gateway-mcp@0.1.22", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.0.4", "@vibe-agent-toolkit/agent-schema": "0.1.22", "zod": "^3.24.1" } }, "sha512-BNUrNyueNzvSbZfEZVCKOVji60Pa2beNZo501HZgGk+c7y7SgtkX6ZInFHpf5ws9uwCXozshzrQSVnNHkPBvpg=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/rag": ["@vibe-agent-toolkit/rag@0.1.22", "", { "dependencies": { "@vibe-agent-toolkit/resources": "0.1.22", "@vibe-agent-toolkit/utils": "0.1.22", "gpt-tokenizer": "^2.6.0", "zod": "^3.22.0", "zod-to-json-schema": "^3.22.0" }, "optionalDependencies": { "@xenova/transformers": "^2.17.0", "onnxruntime-node": "^1.24.0", "openai": "^6.16.0" } }, "sha512-EStRqDWwSjD9PnXOdwzEAfo3vUdCorVngV+AzFKreQUw85Vxl/axEfGFUayLewlJs28nAvF0YRhiHBk/TTcBIg=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/rag-lancedb": ["@vibe-agent-toolkit/rag-lancedb@0.1.22", "", { "dependencies": { "@lancedb/lancedb": "^0.23.0", "@vibe-agent-toolkit/rag": "0.1.22", "@vibe-agent-toolkit/resources": "0.1.22", "@vibe-agent-toolkit/utils": "0.1.22", "apache-arrow": "^18.1.0", "zod": "^3.24.1" } }, "sha512-YysdDymbNlA0q6uR9BJ+a/yA2MsULAKZM9+5GkwXkiLPDddOxPhID8ERYQqUiLK5OZY9ifBNs4RVKuKDhqi3OQ=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/resources": ["@vibe-agent-toolkit/resources@0.1.22", "", { "dependencies": { "@vibe-agent-toolkit/agent-schema": "0.1.22", "@vibe-agent-toolkit/utils": "0.1.22", "ajv": "^8.17.1", "github-slugger": "^2.0.0", "js-yaml": "^4.1.1", "markdown-link-check": "^3.14.2", "picomatch": "^4.0.3", "remark-frontmatter": "^5.0.0", "remark-gfm": "^4.0.0", "remark-parse": "^11.0.0", "unified": "^11.0.5", "unist-util-visit": "^5.0.0", "zod": "^3.24.1" } }, "sha512-83YkeaLideUm1+Ggj06jP+MMmYaH69VKeHYQX8ZfnjLMhXbo5ewv8nWYE44IPgfY4sWwhz+RyE3R2AwUMcVmzQ=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/utils": ["@vibe-agent-toolkit/utils@0.1.22", "", { "dependencies": { "handlebars": "^4.7.8", "ignore": "^7.0.5", "picomatch": "^4.0.3", "which": "^5.0.0" }, "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" } }, "sha512-8NGIAetVpMeihAa5B8rx9ZlbQLLD/K7FZ9cItIaJ5+Sii7HP0BO18xF0FhWGAJXhkZj5GXeMeX7www89C+aVeA=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/vat-development-agents/@vibe-agent-toolkit/agent-schema": ["@vibe-agent-toolkit/agent-schema@0.1.22", "", { "dependencies": { "zod": "^3.23.8", "zod-to-json-schema": "^3.23.5" } }, "sha512-vh/LyamYn/WwPgZvP6YK0Od4ZJyiW4mcSnTJ9sEUm9wCfi3IkLPmoHHhWOcx6oepXwKGMkmAmOhYI45rtntbzA=="],
 
     "@vibe-agent-toolkit/cli/vitest/vite/esbuild/@esbuild/aix-ppc64": ["@esbuild/aix-ppc64@0.21.5", "", { "os": "aix", "cpu": "ppc64" }, "sha512-1SDgH6ZSPTlggy1yI6+Dbkiz8xzpHJEVAlF/AM1tHPLsf5STom9rwtjE4hKAF20FfXXNTFqEYXyJNWh1GiZedQ=="],
 
@@ -3629,6 +3657,32 @@
 
     "@vibe-agent-toolkit/vat-example-cat-agents/vitest/vite/esbuild/@esbuild/win32-x64": ["@esbuild/win32-x64@0.21.5", "", { "os": "win32", "cpu": "x64" }, "sha512-tQd/1efJuzPC6rCFwEvLtci/xNFcTZknmXs98FYDfGE4wP9ClFV98nyKrzJKVPMhdDnjzLhdUyMX4PsQAPjwIw=="],
 
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/rag-lancedb/@lancedb/lancedb": ["@lancedb/lancedb@0.23.0", "", { "dependencies": { "reflect-metadata": "^0.2.2" }, "optionalDependencies": { "@lancedb/lancedb-darwin-arm64": "0.23.0", "@lancedb/lancedb-darwin-x64": "0.23.0", "@lancedb/lancedb-linux-arm64-gnu": "0.23.0", "@lancedb/lancedb-linux-arm64-musl": "0.23.0", "@lancedb/lancedb-linux-x64-gnu": "0.23.0", "@lancedb/lancedb-linux-x64-musl": "0.23.0", "@lancedb/lancedb-win32-arm64-msvc": "0.23.0", "@lancedb/lancedb-win32-x64-msvc": "0.23.0" }, "peerDependencies": { "apache-arrow": ">=15.0.0 <=18.1.0" }, "os": [ "linux", "win32", "darwin", ], "cpu": [ "x64", "arm64", ] }, "sha512-aYrIoEG24AC+wILCL57Ius/Y4yU+xFHDPKLvmjzzN4byAjzeIGF0TC86S5RBt4Ji+dxS7yIWV5Q/gE5/fybIFQ=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/rag-lancedb/apache-arrow": ["apache-arrow@18.1.0", "", { "dependencies": { "@swc/helpers": "^0.5.11", "@types/command-line-args": "^5.2.3", "@types/command-line-usage": "^5.0.4", "@types/node": "^20.13.0", "command-line-args": "^5.2.1", "command-line-usage": "^7.0.1", "flatbuffers": "^24.3.25", "json-bignum": "^0.0.3", "tslib": "^2.6.2" }, "bin": { "arrow2csv": "bin/arrow2csv.js" } }, "sha512-v/ShMp57iBnBp4lDgV8Jx3d3Q5/Hac25FWmQ98eMahUiHPXcvwIMKJD0hBIgclm/FCG+LwPkAKtkRO1O/W0YGg=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/utils/ignore": ["ignore@7.0.5", "", {}, "sha512-Hs59xBNfUIunMFgWAbGX5cq6893IbWg4KnrjbYwX3tx0ztorVgTDA6B2sxf8ejHJ4wz8BqGUMYlnzNBer5NvGg=="],
+
     "@vibe-agent-toolkit/resource-compiler/eslint/file-entry-cache/flat-cache/rimraf/glob": ["glob@7.2.3", "", { "dependencies": { "fs.realpath": "^1.0.0", "inflight": "^1.0.4", "inherits": "2", "minimatch": "^3.1.1", "once": "^1.3.0", "path-is-absolute": "^1.0.0" } }, "sha512-nFR0zLpU2YCaRxwoCJvL6UvCH2JFyFVIvwTLsIf21AuHlMskA1hhTdk+LlYJtOlYt9v6dvszD2BGRqBL+iQK9Q=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/rag-lancedb/@lancedb/lancedb/@lancedb/lancedb-darwin-arm64": ["@lancedb/lancedb-darwin-arm64@0.23.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-8w0sMCNMwBv2kv5+fczGeSVlNOL+BOKChSsO4usM0hMw3PmxasONPctQBsESDuPS8lQ6/AKAQc2HT/ddd5Mg5w=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/rag-lancedb/@lancedb/lancedb/@lancedb/lancedb-linux-arm64-gnu": ["@lancedb/lancedb-linux-arm64-gnu@0.23.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-+xse2IspO7hbuHT4H62q8Ct00fTojnuBxXp1X1I3/27dDvW8E+/itFiJuTZ0YMaJc7nNr9qh9YFXZ9hZdEmReg=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/rag-lancedb/@lancedb/lancedb/@lancedb/lancedb-linux-arm64-musl": ["@lancedb/lancedb-linux-arm64-musl@0.23.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-c2UCtGoYjA3oDdw5y3RLK7J2th3rSjYBng+1I03vU9g092y8KATAJO/lV2AtyxSC+esSuyY1dMEaj8ADcXjZAA=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/rag-lancedb/@lancedb/lancedb/@lancedb/lancedb-linux-x64-gnu": ["@lancedb/lancedb-linux-x64-gnu@0.23.0", "", { "os": "linux", "cpu": "x64" }, "sha512-OPL7tK3JCTx43ZxvbVs+CljfCer0KrojANQbcJ2V4VAp6XBhKx1sBAlIVGuCrd93pA8UOUP3iHsM7aglPo6rCg=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/rag-lancedb/@lancedb/lancedb/@lancedb/lancedb-linux-x64-musl": ["@lancedb/lancedb-linux-x64-musl@0.23.0", "", { "os": "linux", "cpu": "x64" }, "sha512-1ZEoQDwOrKvwPyAG+95/r1NYqX8Ca5bRek8Vr62CzWCEmHd/pFeEGWZ5STrkh+Bt3GLdi2JOivFtRbmuBAJypQ=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/rag-lancedb/@lancedb/lancedb/@lancedb/lancedb-win32-arm64-msvc": ["@lancedb/lancedb-win32-arm64-msvc@0.23.0", "", { "os": "win32", "cpu": "arm64" }, "sha512-OuD1mkrgXvijRlXdbx3LvfuorO04FD5qHegnTOWGXh1sIwwrvvhcJAvXUGBNLY4n/lsWvA+xTjtMwRjUitvPKg=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/rag-lancedb/@lancedb/lancedb/@lancedb/lancedb-win32-x64-msvc": ["@lancedb/lancedb-win32-x64-msvc@0.23.0", "", { "os": "win32", "cpu": "x64" }, "sha512-5ve1hvVtp8zWxSE9A+MOQaicXl2Rn0ZG/NUaMTjTD3/CQHPKFmtrqDnM5khoPICTj2O2b10F6mn4cUzl5PASgA=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/rag-lancedb/apache-arrow/@types/node": ["@types/node@20.19.33", "", { "dependencies": { "undici-types": "~6.21.0" } }, "sha512-Rs1bVAIdBs5gbTIKza/tgpMuG1k3U/UMJLWecIMxNdJFDMzcM5LOiLVRYh3PilWEYDIeUDv7bpiHPLPsbydGcw=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/rag-lancedb/apache-arrow/flatbuffers": ["flatbuffers@24.12.23", "", {}, "sha512-dLVCAISd5mhls514keQzmEG6QHmUUsNuWsb4tFafIUwvvgDjXhtfAYSKOzt5SWOy+qByV5pbsDZ+Vb7HUOBEdA=="],
+
+    "vibe-validate/vibe-agent-toolkit/@vibe-agent-toolkit/cli/@vibe-agent-toolkit/rag-lancedb/apache-arrow/@types/node/undici-types": ["undici-types@6.21.0", "", {}, "sha512-iwDZqg0QAGrg9Rav5H4n0M64c3mkR59cJ6wQp+7C4nI0gsmExaedaYLNO44eT4AtBBwjbTiGPMlt2Md0T9H9JQ=="],
   }
 }
