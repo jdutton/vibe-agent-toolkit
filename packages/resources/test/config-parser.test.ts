@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { findConfigFile, loadConfig, parseConfigFile } from '../src/config-parser.js';
-import { ProjectConfigSchema } from '../src/schemas/project-config.js';
+import { ClaudeMarketplaceSchema, ProjectConfigSchema } from '../src/schemas/project-config.js';
 
 import { setupTempDirTestSuite } from './test-helpers.js';
 
@@ -359,6 +359,50 @@ describe('collections optional', () => {
   it('should accept resources section with only exclude patterns', () => {
     const result = ProjectConfigSchema.safeParse({ version: 1, resources: { exclude: ['**/node_modules/**'] } });
 
+    expect(result.success).toBe(true);
+  });
+});
+
+describe('ClaudeMarketplaceSchema with publish config', () => {
+  it('should accept valid publish config with all fields', () => {
+    const result = ClaudeMarketplaceSchema.safeParse({
+      owner: { name: 'Test Org' },
+      publish: {
+        branch: 'claude-marketplace',
+        remote: 'origin',
+        changelog: 'docs/marketplace-changelog.md',
+        readme: 'docs/marketplace-readme.md',
+        license: 'mit',
+        sourceRepo: false,
+      },
+      plugins: [{ name: 'test', skills: '*' }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('should accept publish config with only license', () => {
+    const result = ClaudeMarketplaceSchema.safeParse({
+      owner: { name: 'Test Org' },
+      publish: { license: 'mit' },
+      plugins: [{ name: 'test', skills: '*' }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('should accept license as file path', () => {
+    const result = ClaudeMarketplaceSchema.safeParse({
+      owner: { name: 'Test Org' },
+      publish: { license: './LICENSE' },
+      plugins: [{ name: 'test', skills: '*' }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('should accept marketplace config without publish section', () => {
+    const result = ClaudeMarketplaceSchema.safeParse({
+      owner: { name: 'Test Org' },
+      plugins: [{ name: 'test', skills: '*' }],
+    });
     expect(result.success).toBe(true);
   });
 });

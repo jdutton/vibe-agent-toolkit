@@ -156,6 +156,27 @@ export const ClaudeMarketplacePluginEntrySchema = z.object({
 export type ClaudeMarketplacePluginEntry = z.infer<typeof ClaudeMarketplacePluginEntrySchema>;
 
 /**
+ * Publish configuration for a Claude marketplace.
+ * Controls where and how the marketplace is published to a Git branch or repo.
+ */
+export const ClaudeMarketplacePublishSchema = z.object({
+  branch: z.string().optional()
+    .describe('Target branch name (default: claude-marketplace)'),
+  remote: z.string().optional()
+    .describe('Git remote name or URL (default: origin)'),
+  changelog: z.string().optional()
+    .describe('Path to source changelog file (Keep a Changelog format)'),
+  readme: z.string().optional()
+    .describe('Path to source README file for the marketplace'),
+  license: z.string().optional()
+    .describe('SPDX license identifier (e.g., "mit") or file path (e.g., "./LICENSE")'),
+  sourceRepo: z.union([z.boolean(), z.string()]).optional()
+    .describe('Source repo URL for commit metadata (false to disable, string to override)'),
+}).strict().describe('Publish configuration for marketplace distribution');
+
+export type ClaudeMarketplacePublish = z.infer<typeof ClaudeMarketplacePublishSchema>;
+
+/**
  * Configuration for a single Claude marketplace.
  */
 export const ClaudeMarketplaceSchema = z.object({
@@ -166,6 +187,9 @@ export const ClaudeMarketplaceSchema = z.object({
 
   skills: z.union([z.literal('*'), z.array(z.string())]).optional()
     .describe('Default skill selectors for this marketplace (used when plugins specify skills: "*")'),
+
+  publish: ClaudeMarketplacePublishSchema.optional()
+    .describe('Publish configuration for marketplace distribution'),
 
   plugins: z.array(ClaudeMarketplacePluginEntrySchema).min(1)
     .describe('Plugin groupings within this marketplace'),
