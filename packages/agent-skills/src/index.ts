@@ -46,6 +46,7 @@ export {
 } from './parsers/frontmatter-parser.js';
 
 export { validateMarketplace } from './validators/marketplace-validator.js';
+export { validatePlugin } from './validators/plugin-validator.js';
 export { validateSkill } from './validators/skill-validator.js';
 export { validate } from './validators/unified-validator.js';
 export { detectResourceFormat } from './validators/format-detection.js';
