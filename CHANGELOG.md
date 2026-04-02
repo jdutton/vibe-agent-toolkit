@@ -16,6 +16,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Main README** — added "Claude Plugin Marketplace" section with install commands and links to marketplace branch and distribution guide.
 - **Distribution skill** — added local marketplace testing subsection with commands and known-issue notes.
 
+### Changed
+- **Publish workflow** — added marketplace publish step to CI; stable tags push to `claude-marketplace` branch, RC tags push to `claude-marketplace-next`.
+- **Pre-publish checks** — added marketplace dry-run validation (Check 12) to catch build/changelog issues before any npm mutations.
+
+### Fixed
+- **Marketplace publish system test on CI** — replaced fake remote path (`/tmp/fake-remote.git`) with a real bare git repo to prevent `git fetch` timeouts on Ubuntu CI. Added explicit `-b main` to `git init` for Git 2.43+ compatibility.
+
 ## [0.1.22] - 2026-04-01
 
 ### Added

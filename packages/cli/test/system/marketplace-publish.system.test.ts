@@ -1,4 +1,4 @@
-/* eslint-disable sonarjs/no-duplicate-string, sonarjs/no-os-command-from-path, sonarjs/publicly-writable-directories */
+/* eslint-disable sonarjs/no-duplicate-string, sonarjs/no-os-command-from-path */
 import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 
@@ -79,13 +79,24 @@ function createBuildOutput(tempDir: string): void {
 /**
  * Initialize a git repo in the temp directory with a fake remote.
  */
+/**
+ * Create a bare git repo to serve as a fake remote.
+ * Using a real bare repo avoids git fetch timeouts on CI (Ubuntu).
+ */
+function createBareRemote(tempDir: string): string {
+  const bareDir = join(tempDir, '.bare-remote');
+  spawnSync('git', ['init', '--bare', '-b', 'main', bareDir], { encoding: 'utf-8' });
+  return bareDir;
+}
+
 function initGitRepo(tempDir: string): void {
-  spawnSync('git', ['init'], { cwd: tempDir, encoding: 'utf-8' });
+  const bareRemote = createBareRemote(tempDir);
+  spawnSync('git', ['init', '-b', 'main'], { cwd: tempDir, encoding: 'utf-8' });
   spawnSync('git', ['config', 'user.email', 'test@test.com'], { cwd: tempDir, encoding: 'utf-8' });
   spawnSync('git', ['config', 'user.name', 'Test'], { cwd: tempDir, encoding: 'utf-8' });
   spawnSync('git', ['add', '.'], { cwd: tempDir, encoding: 'utf-8' });
   spawnSync('git', ['commit', '-m', 'init'], { cwd: tempDir, encoding: 'utf-8' });
-  spawnSync('git', ['remote', 'add', 'origin', '/tmp/fake-remote.git'], { cwd: tempDir, encoding: 'utf-8' });
+  spawnSync('git', ['remote', 'add', 'origin', bareRemote], { cwd: tempDir, encoding: 'utf-8' });
 }
 
 describe('vat claude marketplace publish (system)', () => {
@@ -104,7 +115,7 @@ describe('vat claude marketplace publish (system)', () => {
 
     const result = executeCli(binPath, [...PUBLISH_ARGS, '--dry-run'], { cwd: tempDir });
 
-    expect(result.status).toBe(0);
+    expect(result.status, `Expected exit 0 but got ${String(result.status)}. stderr: ${result.stderr}`).toBe(0);
     expect(result.stdout).toContain('success');
   });
 

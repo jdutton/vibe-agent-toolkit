@@ -13,6 +13,7 @@
  * 9. All packages have proper "files" field
  * 10. All packages have required metadata (repository, author, license)
  * 11. CHANGELOG.md has entry for current version (publish mode only)
+ * 12. Marketplace publish dry-run (validates build artifacts, changelog, tree composition)
  *
  * Usage:
  *   tsx tools/pre-publish-check.ts [--allow-branch BRANCH] [--skip-git-checks]
@@ -587,6 +588,35 @@ if (skipGitChecks) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(message);
     process.exit(1);
+  }
+}
+
+// Check 12: Marketplace publish dry-run (validates build artifacts, changelog, tree composition)
+if (skipGitChecks) {
+  log('⊘ Marketplace dry-run skipped (development mode)', 'yellow');
+} else {
+  console.log('');
+  console.log('Checking marketplace publish readiness...');
+
+  const vatDevAgentsDir = join(packagesDir, 'vat-development-agents');
+  const vatConfigPath = join(vatDevAgentsDir, 'vibe-agent-toolkit.config.yaml');
+
+  if (existsSync(vatConfigPath)) {
+    try {
+      safeExecSync('bun', ['run', 'vat', 'claude', 'marketplace', 'publish', '--dry-run', '--cwd', vatDevAgentsDir], {
+        stdio: 'pipe',
+        cwd: PROJECT_ROOT,
+      });
+      log('✓ Marketplace publish dry-run passed', 'green');
+    } catch (error) {
+      log('✗ Marketplace publish dry-run failed', 'red');
+      const message = error instanceof Error ? error.message : String(error);
+      console.error(`  ${message}`);
+      console.log('  Ensure vat build has run and marketplace changelog has [Unreleased] content');
+      process.exit(1);
+    }
+  } else {
+    log('⊘ Marketplace dry-run skipped (no vat-development-agents config)', 'yellow');
   }
 }
 
