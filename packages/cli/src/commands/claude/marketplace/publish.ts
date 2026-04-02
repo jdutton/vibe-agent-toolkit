@@ -24,6 +24,7 @@ import { composePublishTree, type ComposeOptions, type LicenseOptions } from './
 
 export interface MarketplacePublishOptions {
   dryRun?: boolean;
+  push?: boolean;
   branch?: string;
   force?: boolean;
   marketplace?: string;
@@ -44,6 +45,7 @@ export function createMarketplacePublishCommand(): Command {
   command
     .description('Publish built marketplace to a Git branch')
     .option('--dry-run', 'Show what would be published without pushing')
+    .option('--no-push', 'Create local branch only, do not push to remote')
     .option('--branch <name>', 'Override publish branch')
     .option('--force', 'Force-push (first publish or recovery)')
     .option('--marketplace <name>', 'Publish specific marketplace only')
@@ -72,7 +74,8 @@ Exit Codes:
   2 - System error
 
 Example:
-  $ vat build && vat claude marketplace publish
+  $ vat build && vat claude marketplace publish --no-push  # Create local branch
+  $ git push origin claude-marketplace                     # Push when ready
 `);
 
   return command;
@@ -190,6 +193,8 @@ async function publishOneMarketplace(ctx: PublishOneOptions): Promise<PublishRes
     logger.info(`[dry-run] Would publish to ${remote}/${branch}`);
     logger.info(`[dry-run] Version: ${version}`);
     logger.info(`[dry-run] Files: ${composeResult.files.join(', ')}`);
+  } else if (options.push === false) {
+    logger.info(`[no-push] Creating local branch ${branch}`);
   }
 
   await publishToGitBranch({
@@ -199,6 +204,7 @@ async function publishOneMarketplace(ctx: PublishOneOptions): Promise<PublishRes
     commitMessage,
     force: options.force ?? false,
     dryRun: options.dryRun ?? false,
+    noPush: options.push === false,
     logger,
   });
 

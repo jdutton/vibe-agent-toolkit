@@ -25,6 +25,7 @@ export interface PublishGitOptions {
   commitMessage: string;
   force: boolean;
   dryRun: boolean;
+  noPush: boolean;
   logger: Logger;
 }
 
@@ -82,6 +83,60 @@ function git(
 }
 
 /**
+ * Resolve a remote name (e.g., "origin") to a URL.
+ * If the value already looks like a URL, returns it as-is.
+ */
+function resolveRemoteUrl(remote: string, cwd: string): string {
+  if (remote.includes('/') || remote.includes(':')) {
+    return remote;
+  }
+  const urlResult = git(['remote', 'get-url', remote], { cwd, allowFailure: true });
+  if (urlResult.status === 0) {
+    return urlResult.stdout;
+  }
+  throw new Error(`Git remote "${remote}" not found. Configure it or use a full URL.`);
+}
+
+/**
+ * Deliver the commit: dry-run (show info), no-push (local branch), or push to remote.
+ */
+function deliverCommit(
+  tmpRepo: string,
+  cwd: string,
+  options: Pick<PublishGitOptions, 'branch' | 'remote' | 'force' | 'dryRun' | 'noPush' | 'logger'>,
+  remoteUrl: string,
+): void {
+  const { branch, remote, force, dryRun, noPush, logger } = options;
+
+  if (dryRun) {
+    logger.info('   [dry-run] Would push to remote. Commit staged at:');
+    logger.info(`   ${tmpRepo}`);
+    const diffStat = git(['diff', '--stat', 'HEAD~1..HEAD'], { cwd: tmpRepo, allowFailure: true });
+    if (diffStat.status === 0) {
+      logger.info(`   Changes:\n${diffStat.stdout}`);
+    }
+    return;
+  }
+
+  if (noPush) {
+    const fetchSpec = force
+      ? `+refs/heads/${branch}:refs/heads/${branch}`
+      : `refs/heads/${branch}:refs/heads/${branch}`;
+    git(['fetch', tmpRepo, fetchSpec], { cwd });
+    logger.info(`   Created local branch "${branch}" (not pushed)`);
+    logger.info(`   To push later: git push ${remote} ${branch}`);
+    return;
+  }
+
+  const pushArgs = ['push', remoteUrl, `${branch}:${branch}`];
+  if (force) {
+    pushArgs.splice(1, 0, '--force');
+  }
+  git(pushArgs, { cwd: tmpRepo });
+  logger.info(`   Pushed to ${remoteUrl} branch ${branch}`);
+}
+
+/**
  * Publish the composed tree to a git branch.
  *
  * Strategy:
@@ -89,33 +144,21 @@ function git(
  * 2. Init it and add the publish tree content
  * 3. Fetch the existing branch (if any) from the remote
  * 4. Create a new commit on top of the branch history
- * 5. Push to the remote
+ * 5. Deliver: dry-run (preview), no-push (local branch), or push to remote
  */
 export async function publishToGitBranch(options: PublishGitOptions): Promise<void> {
-  const { publishDir, branch, remote, commitMessage, force, dryRun, logger } = options;
+  const { publishDir, branch, commitMessage, force, dryRun, logger } = options;
 
-  // Resolve the remote URL if it's a name (e.g., "origin")
   const cwd = process.cwd();
-  let remoteUrl = remote;
-  if (!remote.includes('/') && !remote.includes(':')) {
-    // It's a remote name — resolve to URL
-    const urlResult = git(['remote', 'get-url', remote], { cwd, allowFailure: true });
-    if (urlResult.status === 0) {
-      remoteUrl = urlResult.stdout;
-    } else {
-      throw new Error(`Git remote "${remote}" not found. Configure it or use a full URL.`);
-    }
-  }
+  const remoteUrl = resolveRemoteUrl(options.remote, cwd);
 
   logger.info(`   Remote: ${remoteUrl}`);
   logger.info(`   Branch: ${branch}`);
 
-  // Create a temporary git repo for staging
   const tmpRepo = mkdtempSync(join(normalizedTmpdir(), 'vat-marketplace-publish-'));
   logger.debug(`   Staging repo: ${tmpRepo}`);
 
   try {
-    // Init temp repo
     git(['init'], { cwd: tmpRepo });
     git(['checkout', '-b', branch], { cwd: tmpRepo });
 
@@ -124,17 +167,12 @@ export async function publishToGitBranch(options: PublishGitOptions): Promise<vo
       ['fetch', remoteUrl, `${branch}:${branch}`],
       { cwd: tmpRepo, allowFailure: true }
     );
-
-    const branchExists = fetchResult.status === 0;
-    if (branchExists && !force) {
-      // Reset to the fetched branch to build on top of existing history
+    if (fetchResult.status === 0 && !force) {
       git(['reset', '--soft', branch], { cwd: tmpRepo });
     }
 
     // Copy publish tree content into temp repo
     cpSync(publishDir, tmpRepo, { recursive: true });
-
-    // Stage all files
     git(['add', '-A'], { cwd: tmpRepo });
 
     // Check if there are changes to commit
@@ -144,33 +182,14 @@ export async function publishToGitBranch(options: PublishGitOptions): Promise<vo
       return;
     }
 
-    // Create commit
     git(['commit', '-m', commitMessage], { cwd: tmpRepo });
 
-    if (dryRun) {
-      logger.info('   [dry-run] Would push to remote. Commit created locally at:');
-      logger.info(`   ${tmpRepo}`);
+    const log = git(['log', '--oneline', '-1'], { cwd: tmpRepo });
+    logger.info(`   Commit: ${log.stdout}`);
 
-      // Show what would be pushed
-      const log = git(['log', '--oneline', '-1'], { cwd: tmpRepo });
-      logger.info(`   Commit: ${log.stdout}`);
-
-      const diffStat = git(['diff', '--stat', 'HEAD~1..HEAD'], { cwd: tmpRepo, allowFailure: true });
-      if (diffStat.status === 0) {
-        logger.info(`   Changes:\n${diffStat.stdout}`);
-      }
-      return;
-    }
-
-    // Push
-    const pushArgs = ['push', remoteUrl, `${branch}:${branch}`];
-    if (force) {
-      pushArgs.splice(1, 0, '--force');
-    }
-    git(pushArgs, { cwd: tmpRepo });
-    logger.info(`   Pushed to ${remoteUrl} branch ${branch}`);
+    deliverCommit(tmpRepo, cwd, options, remoteUrl);
   } finally {
-    // Cleanup temp repo (unless dry-run, where user might want to inspect)
+    // Keep temp repo for dry-run so user can inspect
     if (!dryRun) {
       rmSync(tmpRepo, { recursive: true, force: true });
     }
