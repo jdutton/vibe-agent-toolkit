@@ -171,18 +171,20 @@ export async function publishToGitBranch(options: PublishGitOptions): Promise<vo
   logger.debug(`   Staging repo: ${tmpRepo}`);
 
   try {
-    git(['init', '-b', branch], { cwd: tmpRepo });
+    git(['init'], { cwd: tmpRepo });
     git(['config', 'user.email', 'vat-publish@localhost'], { cwd: tmpRepo });
     git(['config', 'user.name', 'vat marketplace publish'], { cwd: tmpRepo });
+    git(['checkout', '-b', branch], { cwd: tmpRepo });
 
     // Try to fetch existing branch history (skip for dry-run — commit parent doesn't matter)
     if (!dryRun) {
       const fetchResult = git(
-        ['fetch', remoteUrl, `${branch}:${branch}`],
+        ['fetch', remoteUrl, `refs/heads/${branch}`],
         { cwd: tmpRepo, allowFailure: true, timeout: 30_000 }
       );
       if (fetchResult.status === 0 && !force) {
-        git(['reset', '--soft', branch], { cwd: tmpRepo });
+        // Reset to fetched branch tip so our commit builds on top of it
+        git(['reset', '--soft', 'FETCH_HEAD'], { cwd: tmpRepo });
       }
     }
 
