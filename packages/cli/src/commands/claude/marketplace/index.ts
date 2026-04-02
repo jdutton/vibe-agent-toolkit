@@ -1,5 +1,6 @@
 import { Command } from 'commander';
 
+import { createMarketplacePublishCommand } from './publish.js';
 import { createMarketplaceValidateCommand } from './validate.js';
 
 export function createMarketplaceCommand(): Command {
@@ -22,7 +23,7 @@ Example:
 `);
 
   command.addCommand(createMarketplaceValidateCommand());
-  // publish command will be added in Task 7
+  command.addCommand(createMarketplacePublishCommand());
 
   return command;
 }
