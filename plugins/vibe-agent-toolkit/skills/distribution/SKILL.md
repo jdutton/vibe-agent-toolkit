@@ -288,6 +288,21 @@ Once published, users install with:
 
 No npm, no registry, no token required. Claude Code fetches the branch directly from GitHub.
 
+### Testing locally
+
+After publishing, verify the marketplace works end-to-end:
+
+```bash
+claude plugin marketplace add owner/repo#claude-marketplace
+claude plugin install my-plugin@my-marketplace
+claude plugin validate ~/.claude/plugins/cache/my-marketplace/my-plugin/<version>
+claude plugin list   # verify status: enabled
+```
+
+Start a new Claude Code session to confirm skills load. See the [Marketplace Distribution Guide](https://github.com/jdutton/vibe-agent-toolkit/blob/main/docs/guides/marketplace-distribution.md#testing-your-marketplace) for the full testing checklist and known issues.
+
+**Note (Claude Code v2.1.81):** If re-adding a marketplace with the same name as an existing one (e.g., switching from npm to GitHub source), remove the old marketplace first: `claude plugin marketplace remove <name>` then re-add. Otherwise the old source is silently reused.
+
 ## Step 5: User Install
 
 ### Recommended: npm global install (postinstall runs automatically)
