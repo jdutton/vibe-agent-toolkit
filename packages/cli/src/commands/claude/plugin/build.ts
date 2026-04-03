@@ -189,6 +189,36 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
   }
 }
 
+/**
+ * Copy distribution files (LICENSE, README.md, CHANGELOG.md) to marketplace output.
+ * README.md and CHANGELOG.md can be overridden via publish.readme / publish.changelog config.
+ */
+async function copyDistributionFiles(
+  marketplaceDir: string,
+  configDir: string,
+  config: ClaudeMarketplaceConfig,
+  logger: ReturnType<typeof createLogger>,
+): Promise<void> {
+  const overrides: Record<string, string | undefined> = {
+    'README.md': config.publish?.readme,
+    'CHANGELOG.md': config.publish?.changelog,
+  };
+
+  for (const file of ['LICENSE', 'README.md', 'CHANGELOG.md']) {
+    const override = overrides[file];
+    const srcPath = override ? join(configDir, override) : join(configDir, file);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- file is from static list or config
+    if (existsSync(srcPath)) {
+      await cp(srcPath, join(marketplaceDir, file));
+      if (override) {
+        logger.info(`   ${file} (from publish.${file === 'README.md' ? 'readme' : 'changelog'}: ${override})`);
+      } else {
+        logger.info(`   ${file} (copied from project root)`);
+      }
+    }
+  }
+}
+
 async function buildMarketplace(
   name: string,
   config: ClaudeMarketplaceConfig,
@@ -258,17 +288,7 @@ async function buildMarketplace(
   await writeFile(join(claudePluginDir, 'marketplace.json'), JSON.stringify(marketplaceJson, null, 2));
   logger.info(`   .claude-plugin/marketplace.json`);
 
-  // Copy distribution files (LICENSE, README.md, CHANGELOG.md) from project root
-  // to marketplace output when they exist — required/recommended by marketplace validate.
-  const distFiles = ['LICENSE', 'README.md', 'CHANGELOG.md'];
-  for (const file of distFiles) {
-    const srcPath = join(configDir, file);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- file is from static list
-    if (existsSync(srcPath)) {
-      await cp(srcPath, join(marketplaceDir, file));
-      logger.info(`   ${file} (copied from project root)`);
-    }
-  }
+  await copyDistributionFiles(marketplaceDir, configDir, config, logger);
 
   return { name, status: 'built', plugins };
 }

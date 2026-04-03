@@ -163,11 +163,11 @@ export const ClaudeMarketplacePublishSchema = z.object({
   branch: z.string().optional()
     .describe('Target branch name (default: claude-marketplace)'),
   remote: z.string().optional()
-    .describe('Git remote name or URL (default: origin)'),
+    .describe('Git remote name (e.g., "origin") or full URL (e.g., "https://github.com/org/marketplace-repo.git") for cross-repo publishing (default: origin)'),
   changelog: z.string().optional()
-    .describe('Path to source changelog file (Keep a Changelog format)'),
+    .describe('Path to marketplace changelog (Keep a Changelog format; used during both build and publish, overriding project root CHANGELOG.md)'),
   readme: z.string().optional()
-    .describe('Path to source README file for the marketplace'),
+    .describe('Path to marketplace README (used during both build and publish, overriding project root README.md)'),
   license: z.string().optional()
     .describe('SPDX license identifier (e.g., "mit") or file path (e.g., "./LICENSE")'),
   sourceRepo: z.union([z.boolean(), z.string()]).optional()
@@ -186,7 +186,7 @@ export const ClaudeMarketplaceSchema = z.object({
   }).strict().describe('Marketplace owner information'),
 
   skills: z.union([z.literal('*'), z.array(z.string())]).optional()
-    .describe('Default skill selectors for this marketplace (used when plugins specify skills: "*")'),
+    .describe('Default skill filter for the marketplace — restricts which skills are available when plugins use skills: "*". Omit to allow all skills. This does NOT add skills directly; skills are always selected per-plugin.'),
 
   publish: ClaudeMarketplacePublishSchema.optional()
     .describe('Publish configuration for marketplace distribution'),

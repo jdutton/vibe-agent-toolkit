@@ -20,9 +20,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Publish workflow** — added marketplace publish step to CI; stable tags push to `claude-marketplace` branch, RC tags push to `claude-marketplace-next`.
 - **Pre-publish checks** — added marketplace dry-run validation (Check 12) to catch build/changelog issues before any npm mutations.
 
-### Fixed
-- **Marketplace publish CI compatibility** — fixed several issues preventing `vat claude marketplace publish` from working in GitHub Actions CI environments (git identity, authentication, branch history).
-
 ## [0.1.22] - 2026-04-01
 
 ### Added

@@ -72,7 +72,17 @@ Plugin version defaults to the marketplace version when not explicitly set. The 
 - Extensible: `claude-marketplace-beta`, `claude-marketplace-next` for staging channels
 - Configurable via `publish.branch` in config or `--branch` flag
 
-**Cowork limitation:** Cowork syncs from the default branch only. For Cowork distribution, use the separate-repo mode where the target repo's default branch IS the marketplace.
+**Default-branch-only surfaces:** Both Cowork (claude.ai) and Claude Enterprise GitHub sync read from the repository's **default branch only** — they cannot target a specific branch. This means the branch-based publish pattern (`claude-marketplace` / `claude-marketplace-next`) does not work for these surfaces.
+
+**Workaround: dedicated marketplace repo.** Create a separate repository where the default branch (`main`) IS the marketplace. Configure `publish.remote` to point to this repo:
+
+```yaml
+publish:
+  remote: https://github.com/org/my-marketplace-repo.git
+  branch: main
+```
+
+This keeps your source code and SDLC on the original repo while the marketplace repo contains only the published artifacts.
 
 **Enterprise lockdown:** `managed-settings.json` supports `ref` on marketplace sources:
 
@@ -98,7 +108,7 @@ claude:
         name: Your Name or Org
       publish:
         branch: claude-marketplace          # default
-        remote: origin                      # or git URL for separate repo
+        remote: origin                      # git remote name, or full URL for cross-repo publish
         changelog: docs/marketplace-changelog.md
         readme: docs/marketplace-readme.md
         license: mit                        # SPDX identifier or file path
@@ -159,6 +169,28 @@ vat claude marketplace publish --dry-run
 - `--force` — force-push (first publish or recovery only)
 
 **Commit history:** Each publish adds one commit. The `claude-marketplace` branch accumulates a clean release timeline — `git log` shows the version history of the marketplace.
+
+## CI/CD: Cross-Repo Publishing
+
+When publishing to a **separate repository** (via `publish.remote`), the default `GITHUB_TOKEN` in GitHub Actions is scoped to the source repo and cannot push to the target. You need a Personal Access Token (PAT) or fine-grained token with write access to the marketplace repo.
+
+**Setup:**
+
+1. Create a PAT with `contents: write` permission on the marketplace repo
+2. Store it as a repository secret (e.g., `MARKETPLACE_GITHUB_PUSH_TOKEN`)
+3. Expose it as `GH_TOKEN` in your workflow — `vat claude marketplace publish` uses `GH_TOKEN` (or `GITHUB_TOKEN`) to authenticate pushes
+
+```yaml
+# .github/workflows/marketplace-publish.yml
+- name: Publish marketplace
+  env:
+    GH_TOKEN: ${{ secrets.MARKETPLACE_GITHUB_PUSH_TOKEN }}
+  run: |
+    vat build
+    vat claude marketplace publish --branch main
+```
+
+**Why a separate token?** GitHub Actions' built-in `GITHUB_TOKEN` has repo-scoped permissions and cannot push to other repositories. This is a standard pattern for any cross-repo CI operation.
 
 ## Validation
 

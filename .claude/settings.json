@@ -28,6 +28,9 @@
       "Bash(gh pr list:*)",
       "Bash(gh pr status:*)",
       "Bash(gh pr view:*)",
+      "Bash(gh run list:*)",
+      "Bash(gh run view:*)",
+      "Bash(gh run watch:*)",
       "Bash(git add:*)",
       "Bash(git branch:*)",
       "Bash(git check-ignore:*)",
@@ -96,16 +99,13 @@
       "Skill(superpowers:using-git-worktrees)",
       "Skill(superpowers:writing-plans)",
       "Skill(vibe-validate)",
-      "WebFetch(domain:oracle.github.io)",
+      "WebFetch(domain:github.io)",
       "WebFetch(domain:sonarcloud.io)",
       "WebFetch(domain:www.anthropic.com)",
       "WebSearch"
     ],
     "ask": [
-      "Bash(gh run list:*)",
-      "Bash(gh run view:*)",
-      "Bash(git commit:*)",
-      "Bash(sed:*)"
+      "Bash(git commit:*)"
     ]
   },
   "hooks": {
