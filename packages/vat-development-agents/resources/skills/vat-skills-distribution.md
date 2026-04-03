@@ -240,6 +240,69 @@ npm publish --tag next    # RC/pre-release
 npm publish               # stable release
 ```
 
+## Marketplace Distribution
+
+Marketplace distribution publishes a dedicated branch to GitHub that Claude Code users can install directly — no npm account or registry required.
+
+### How it works
+
+1. `vat build` compiles skills and plugin artifacts into `dist/`
+2. `vat claude marketplace publish` pushes the `dist/.claude/` tree to a dedicated branch (e.g. `claude-marketplace`) in your GitHub repo
+3. Users install via the slash command: `/plugin marketplace add owner/repo#claude-marketplace`
+
+### Configuration
+
+Add a `publish` section under your marketplace in `vibe-agent-toolkit.config.yaml`:
+
+```yaml
+claude:
+  marketplaces:
+    my-marketplace:
+      owner:
+        name: My Organization
+      plugins:
+        - name: my-plugin
+          description: My plugin description
+          skills: "*"
+      publish:
+        github:
+          repo: owner/repo          # GitHub repo to publish to
+          branch: claude-marketplace # branch that stores the installable artifacts
+```
+
+### Publish workflow
+
+```bash
+vat build                                    # build all artifacts first
+vat claude marketplace publish               # push dist/.claude/ to the publish branch
+vat claude marketplace publish --dry-run     # preview what would be published (no push)
+```
+
+### Consumer install
+
+Once published, users install with:
+
+```
+/plugin marketplace add owner/repo#claude-marketplace
+```
+
+No npm, no registry, no token required. Claude Code fetches the branch directly from GitHub.
+
+### Testing locally
+
+After publishing, verify the marketplace works end-to-end:
+
+```bash
+claude plugin marketplace add owner/repo#claude-marketplace
+claude plugin install my-plugin@my-marketplace
+claude plugin validate ~/.claude/plugins/cache/my-marketplace/my-plugin/<version>
+claude plugin list   # verify status: enabled
+```
+
+Start a new Claude Code session to confirm skills load. See the [Marketplace Distribution Guide](https://github.com/jdutton/vibe-agent-toolkit/blob/main/docs/guides/marketplace-distribution.md#testing-your-marketplace) for the full testing checklist and known issues.
+
+**Note (Claude Code v2.1.81):** If re-adding a marketplace with the same name as an existing one (e.g., switching from npm to GitHub source), remove the old marketplace first: `claude plugin marketplace remove <name>` then re-add. Otherwise the old source is silently reused.
+
 ## Step 5: User Install
 
 ### Recommended: npm global install (postinstall runs automatically)
@@ -329,6 +392,15 @@ TypeScript files in `scripts` are tree-shaken and compiled to standalone `.mjs`.
 | List installed plugins | `vat claude plugin list` |
 | Uninstall a plugin | `vat claude plugin uninstall --all` |
 | Package for claude.ai upload | `vat skills package ./SKILL.md -o ./dist/ --target claude-web` |
+
+## Running VAT Without Global Install
+
+```bash
+npx vibe-agent-toolkit <command>    # npm/Node.js
+bunx vibe-agent-toolkit <command>   # Bun
+```
+
+All `vat` commands in this skill work with these alternatives.
 
 ## Future: Zero-Dependency Postinstall (Option B)
 

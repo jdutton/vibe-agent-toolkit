@@ -19,7 +19,10 @@ const PLUGIN_TYPE = 'claude-plugin' as const;
  * @param pluginPath - Absolute path to plugin directory
  * @returns Validation result with issues
  */
-export async function validatePlugin(pluginPath: string): Promise<ValidationResult> {
+export async function validatePlugin(
+	pluginPath: string,
+	options?: { strict?: boolean }
+): Promise<ValidationResult> {
 	const issues: ValidationIssue[] = [];
 	const pluginJsonPath = join(pluginPath, '.claude-plugin', 'plugin.json');
 
@@ -101,7 +104,7 @@ export async function validatePlugin(pluginPath: string): Promise<ValidationResu
 		// skill resolution across upgrades.
 		if (result.data.version === undefined) {
 			issues.push({
-				severity: 'warning',
+				severity: options?.strict ? 'error' : 'warning',
 				code: 'PLUGIN_MISSING_VERSION',
 				message: 'plugin.json missing version field — Claude Code will cache as "unknown/", causing stale skill resolution across upgrades',
 				location: pluginJsonPath,

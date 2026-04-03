@@ -60,6 +60,10 @@ Four patterns cover most use cases. For full code examples, see `vibe-agent-tool
 # Install VAT CLI globally
 npm install -g vibe-agent-toolkit
 
+# Or run without installing (works anywhere vat commands appear below)
+npx vibe-agent-toolkit <command>    # npm/Node.js
+bunx vibe-agent-toolkit <command>   # Bun
+
 # Top-level orchestration
 vat build                                # build all artifacts (skills then claude plugins)
 vat verify                               # verify all artifacts (resources, skills, claude)
@@ -185,6 +189,18 @@ You've successfully adopted VAT when:
 - [Resource Compiler Guide](../../../../docs/guides/resource-compiler/compiling-markdown-to-typescript.md)
 - [Runtime Adapters](../../../../docs/adding-runtime-adapters.md)
 - Examples: `@vibe-agent-toolkit/vat-example-cat-agents`
+
+## Running VAT
+
+VAT can be run without a global install:
+
+```bash
+vat <command>                     # If installed globally
+npx vibe-agent-toolkit <command>  # npm (downloads on demand)
+bunx vibe-agent-toolkit <command> # Bun (downloads on demand)
+```
+
+All `vat` commands in this skill and sub-skills accept these alternatives.
 
 ## Getting Help
 

@@ -8,6 +8,7 @@
 
 import { Command } from 'commander';
 
+import { createMarketplaceCommand } from './marketplace/index.js';
 import { createOrgCommand } from './org/index.js';
 import { createPluginCommand } from './plugin/index.js';
 
@@ -15,13 +16,14 @@ export function createClaudeCommand(): Command {
   const command = new Command('claude');
 
   command
-    .description('Manage Claude Code plugins and org administration')
+    .description('Manage Claude Code plugins, marketplaces, and org administration')
     .helpCommand(false)
     .addHelpText('after', `
 Description:
-  Gateway to the Claude ecosystem — local plugin management and org administration.
+  Gateway to the Claude ecosystem — plugin management, marketplaces, and org administration.
 
   Plugin management: install, list, and uninstall skill packages in ~/.claude/
+  Marketplace:       validate and publish marketplace directories
   Org administration: manage users, workspaces, API keys, and usage via Admin API
 
 Examples:
@@ -33,6 +35,7 @@ Examples:
 `);
 
   command.addCommand(createPluginCommand());
+  command.addCommand(createMarketplaceCommand());
   command.addCommand(createOrgCommand());
 
   return command;

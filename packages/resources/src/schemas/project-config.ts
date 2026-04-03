@@ -156,6 +156,27 @@ export const ClaudeMarketplacePluginEntrySchema = z.object({
 export type ClaudeMarketplacePluginEntry = z.infer<typeof ClaudeMarketplacePluginEntrySchema>;
 
 /**
+ * Publish configuration for a Claude marketplace.
+ * Controls where and how the marketplace is published to a Git branch or repo.
+ */
+export const ClaudeMarketplacePublishSchema = z.object({
+  branch: z.string().optional()
+    .describe('Target branch name (default: claude-marketplace)'),
+  remote: z.string().optional()
+    .describe('Git remote name (e.g., "origin") or full URL (e.g., "https://github.com/org/marketplace-repo.git") for cross-repo publishing (default: origin)'),
+  changelog: z.string().optional()
+    .describe('Path to marketplace changelog (Keep a Changelog format; used during both build and publish, overriding project root CHANGELOG.md)'),
+  readme: z.string().optional()
+    .describe('Path to marketplace README (used during both build and publish, overriding project root README.md)'),
+  license: z.string().optional()
+    .describe('SPDX license identifier (e.g., "mit") or file path (e.g., "./LICENSE")'),
+  sourceRepo: z.union([z.boolean(), z.string()]).optional()
+    .describe('Source repo URL for commit metadata (false to disable, string to override)'),
+}).strict().describe('Publish configuration for marketplace distribution');
+
+export type ClaudeMarketplacePublish = z.infer<typeof ClaudeMarketplacePublishSchema>;
+
+/**
  * Configuration for a single Claude marketplace.
  */
 export const ClaudeMarketplaceSchema = z.object({
@@ -165,7 +186,10 @@ export const ClaudeMarketplaceSchema = z.object({
   }).strict().describe('Marketplace owner information'),
 
   skills: z.union([z.literal('*'), z.array(z.string())]).optional()
-    .describe('Default skill selectors for this marketplace (used when plugins specify skills: "*")'),
+    .describe('Default skill filter for the marketplace — restricts which skills are available when plugins use skills: "*". Omit to allow all skills. This does NOT add skills directly; skills are always selected per-plugin.'),
+
+  publish: ClaudeMarketplacePublishSchema.optional()
+    .describe('Publish configuration for marketplace distribution'),
 
   plugins: z.array(ClaudeMarketplacePluginEntrySchema).min(1)
     .describe('Plugin groupings within this marketplace'),

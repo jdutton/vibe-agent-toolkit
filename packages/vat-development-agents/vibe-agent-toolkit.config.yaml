@@ -22,6 +22,11 @@ claude:
     vat-skills:
       owner:
         name: vibe-agent-toolkit contributors
+      publish:
+        branch: claude-marketplace
+        changelog: ../../docs/marketplace-changelog.md
+        readme: ../../docs/marketplace-readme.md
+        license: mit
       plugins:
         - name: vibe-agent-toolkit
           description: Development agents and skills for building with vibe-agent-toolkit
