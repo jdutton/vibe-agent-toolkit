@@ -234,7 +234,7 @@ describe('path-utils', () => {
 
       it('should produce absolute paths', () => {
         const result = safePath.resolve('docs', 'file.md');
-        expect(result).toMatch(/^\//); // Unix absolute (CI runs on Ubuntu/Mac)
+        expect(result).toMatch(/^\/|^[A-Z]:\//); // Unix /... or Windows C:/...
       });
     });
 
