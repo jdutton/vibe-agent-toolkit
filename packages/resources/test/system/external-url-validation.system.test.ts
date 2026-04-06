@@ -18,6 +18,18 @@ import { fileURLToPath } from 'node:url';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+/**
+ * Helper to run vat validation command.
+ */
+function runValidate(binPathValue: string, cwd: string, args: string[]) {
+  // eslint-disable-next-line sonarjs/no-os-command-from-path -- binPath from import.meta.url, safe
+  return spawnSync('node', [binPathValue, ...args], {
+    cwd,
+    encoding: 'utf-8',
+    timeout: 10000,
+  });
+}
+
 describe('External URL validation CLI flags (system test)', () => {
   let tempDir: string;
   let binPath: string;
@@ -26,18 +38,6 @@ describe('External URL validation CLI flags (system test)', () => {
   const VALIDATE_CMD = [...BASE_CMD, '--check-external-urls'];
   const SUCCESS_OUTPUT = 'status: success';
   const NO_CACHE_CMD = [...BASE_CMD, '--no-cache'];
-
-  /**
-   * Helper to run vat validation command.
-   */
-  function runValidate(args: string[]) {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- binPath from import.meta.url, safe
-    return spawnSync('node', [binPath, ...args], {
-      cwd: tempDir,
-      encoding: 'utf-8',
-      timeout: 10000,
-    });
-  }
 
   beforeAll(() => {
     // Create temp directory
@@ -79,7 +79,7 @@ resources:
   });
 
   it('should accept --check-external-urls flag', () => {
-    const result = runValidate(VALIDATE_CMD);
+    const result = runValidate(binPath, tempDir, VALIDATE_CMD);
 
     // Should succeed (no external URLs to check)
     expect(result.status).toBe(0);
@@ -87,7 +87,7 @@ resources:
   });
 
   it('should accept --no-cache flag', () => {
-    const result = runValidate(NO_CACHE_CMD);
+    const result = runValidate(binPath, tempDir, NO_CACHE_CMD);
 
     // Should succeed
     expect(result.status).toBe(0);
@@ -95,7 +95,7 @@ resources:
   });
 
   it('should accept both flags together', () => {
-    const result = runValidate([...VALIDATE_CMD, '--no-cache']);
+    const result = runValidate(binPath, tempDir, [...VALIDATE_CMD, '--no-cache']);
 
     // Should succeed
     expect(result.status).toBe(0);

@@ -20,6 +20,48 @@ import type { HeadingNode } from '../../src/types.js';
 import { isWithinProject } from '../../src/utils.js';
 import { createGitRepo, createLink, setupTempDirTestSuite } from '../test-helpers.js';
 
+/**
+ * Setup a test project with git and gitignore
+ */
+async function setupGitProject(tempDir: string): Promise<{
+  projectRoot: string;
+  sourceFile: string;
+  ignoredFile: string;
+  nonIgnoredFile: string;
+}> {
+  const projectRoot = tempDir;
+
+  // Initialize git repo properly (git check-ignore needs a real repo)
+  createGitRepo(projectRoot);
+
+  // Create .gitignore
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- projectRoot is from temp dir
+  fs.writeFileSync(
+    safePath.join(projectRoot, '.gitignore'),
+    '# Test gitignore\nignored/\n*.secret\n'
+  );
+
+  // Create directory structure
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- projectRoot is from temp dir
+  fs.mkdirSync(safePath.join(projectRoot, 'docs'));
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- projectRoot is from temp dir
+  fs.mkdirSync(safePath.join(projectRoot, 'ignored'));
+
+  // Create files
+  const sourceFile = safePath.join(projectRoot, 'docs', 'guide.md');
+  const ignoredFile = safePath.join(projectRoot, 'ignored', 'secret.md');
+  const nonIgnoredFile = safePath.join(projectRoot, 'docs', 'public.md');
+
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
+  fs.writeFileSync(sourceFile, '# Guide\n[Link](../ignored/secret.md)\n');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
+  fs.writeFileSync(ignoredFile, '# Secret\n');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
+  fs.writeFileSync(nonIgnoredFile, '# Public\n');
+
+  return { projectRoot, sourceFile, ignoredFile, nonIgnoredFile };
+}
+
 const suite = setupTempDirTestSuite('link-validator-gitignore-');
 
 /**
@@ -86,50 +128,8 @@ describe('validateLink - git-ignore safety', () => {
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
 
-  /**
-   * Setup a test project with git and gitignore
-   */
-  async function setupGitProject(): Promise<{
-    projectRoot: string;
-    sourceFile: string;
-    ignoredFile: string;
-    nonIgnoredFile: string;
-  }> {
-    const projectRoot = suite.tempDir;
-
-    // Initialize git repo properly (git check-ignore needs a real repo)
-    createGitRepo(projectRoot);
-
-    // Create .gitignore
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- projectRoot is from temp dir
-    fs.writeFileSync(
-      safePath.join(projectRoot, '.gitignore'),
-      '# Test gitignore\nignored/\n*.secret\n'
-    );
-
-    // Create directory structure
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- projectRoot is from temp dir
-    fs.mkdirSync(safePath.join(projectRoot, 'docs'));
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- projectRoot is from temp dir
-    fs.mkdirSync(safePath.join(projectRoot, 'ignored'));
-
-    // Create files
-    const sourceFile = safePath.join(projectRoot, 'docs', 'guide.md');
-    const ignoredFile = safePath.join(projectRoot, 'ignored', 'secret.md');
-    const nonIgnoredFile = safePath.join(projectRoot, 'docs', 'public.md');
-
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
-    fs.writeFileSync(sourceFile, '# Guide\n[Link](../ignored/secret.md)\n');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
-    fs.writeFileSync(ignoredFile, '# Secret\n');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
-    fs.writeFileSync(nonIgnoredFile, '# Public\n');
-
-    return { projectRoot, sourceFile, ignoredFile, nonIgnoredFile };
-  }
-
   it('should error when non-ignored file links to ignored file', async () => {
-    const { projectRoot, sourceFile, ignoredFile } = await setupGitProject();
+    const { projectRoot, sourceFile, ignoredFile } = await setupGitProject(suite.tempDir);
 
     const result = await validateWithGitIgnoreCheck(sourceFile, '../ignored/secret.md', projectRoot);
 
@@ -141,7 +141,7 @@ describe('validateLink - git-ignore safety', () => {
   });
 
   it('should allow ignored file to link to another ignored file', async () => {
-    await setupGitProject();
+    await setupGitProject(suite.tempDir);
     const projectRoot = suite.tempDir;
 
     // Create another ignored file
@@ -161,7 +161,7 @@ describe('validateLink - git-ignore safety', () => {
   });
 
   it('should allow ignored file to link to non-ignored file', async () => {
-    await setupGitProject();
+    await setupGitProject(suite.tempDir);
     const projectRoot = suite.tempDir;
 
     // Create ignored source file
@@ -176,7 +176,7 @@ describe('validateLink - git-ignore safety', () => {
   });
 
   it('should skip git-ignore check for external resources', async () => {
-    const { projectRoot, sourceFile } = await setupGitProject();
+    const { projectRoot, sourceFile } = await setupGitProject(suite.tempDir);
 
     // Create an external file (outside project)
     const externalDir = safePath.join(normalizedTmpdir(), 'external-project');
@@ -196,7 +196,7 @@ describe('validateLink - git-ignore safety', () => {
   });
 
   it('should validate non-ignored file to non-ignored file normally', async () => {
-    const { projectRoot, sourceFile } = await setupGitProject();
+    const { projectRoot, sourceFile } = await setupGitProject(suite.tempDir);
 
     const result = await validateWithGitIgnoreCheck(sourceFile, './public.md', projectRoot);
 
@@ -205,7 +205,7 @@ describe('validateLink - git-ignore safety', () => {
   });
 
   it('should handle files matching gitignore patterns', async () => {
-    const { projectRoot, sourceFile } = await setupGitProject();
+    const { projectRoot, sourceFile } = await setupGitProject(suite.tempDir);
 
     // Create a file matching *.secret pattern
     const secretFile = safePath.join(projectRoot, 'docs', 'password.secret');

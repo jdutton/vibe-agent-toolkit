@@ -8,14 +8,14 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { composePublishTree } from '../../../../src/commands/claude/marketplace/publish-tree.js';
 
+function makeTempDir(tempDirs: string[]): string {
+  const dir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-publish-tree-'));
+  tempDirs.push(dir);
+  return dir;
+}
+
 describe('publish-tree', () => {
   const tempDirs: string[] = [];
-
-  function makeTempDir(): string {
-    const dir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-publish-tree-'));
-    tempDirs.push(dir);
-    return dir;
-  }
 
   afterEach(() => {
     for (const dir of tempDirs) {
@@ -25,8 +25,8 @@ describe('publish-tree', () => {
   });
 
   it('should compose tree with marketplace artifacts, changelog, readme, and license', async () => {
-    const sourceDir = makeTempDir();
-    const outputDir = makeTempDir();
+    const sourceDir = makeTempDir(tempDirs);
+    const outputDir = makeTempDir(tempDirs);
 
     // Create mock marketplace build output
     const mpDir = safePath.join(sourceDir, 'dist', '.claude', 'plugins', 'marketplaces', 'test-mp');
@@ -63,8 +63,8 @@ describe('publish-tree', () => {
   });
 
   it('should fail when build output does not exist', async () => {
-    const sourceDir = makeTempDir();
-    const outputDir = makeTempDir();
+    const sourceDir = makeTempDir(tempDirs);
+    const outputDir = makeTempDir(tempDirs);
 
     await expect(composePublishTree({
       marketplaceName: 'nonexistent',
@@ -76,8 +76,8 @@ describe('publish-tree', () => {
   });
 
   it('should fail when changelog has empty unreleased section', async () => {
-    const sourceDir = makeTempDir();
-    const outputDir = makeTempDir();
+    const sourceDir = makeTempDir(tempDirs);
+    const outputDir = makeTempDir(tempDirs);
 
     // Create marketplace build output
     const mpDir = safePath.join(sourceDir, 'dist', '.claude', 'plugins', 'marketplaces', 'test-mp', '.claude-plugin');

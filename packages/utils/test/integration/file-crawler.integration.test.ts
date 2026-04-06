@@ -10,6 +10,35 @@ import { mkdirSyncReal, toForwardSlash } from '../../src/path-utils.js';
 import { setupSyncTempDirSuite } from '../../src/test-helpers.js';
 import { createGitRepo } from '../test-helpers.js';
 
+/**
+ * Helper to create test file structure
+ */
+function createTestStructure(testDir: string): void {
+  /* eslint-disable security/detect-non-literal-fs-filename -- testDir is controlled temp directory from mkdtemp */
+  // Root files
+  writeFileSync(safePath.join(testDir, 'README.md'), '# Root README');
+  writeFileSync(safePath.join(testDir, 'package.json'), '{}');
+
+  // docs directory
+  mkdirSyncReal(safePath.join(testDir, 'docs'));
+  writeFileSync(safePath.join(testDir, 'docs', 'guide.md'), '# Guide');
+  writeFileSync(safePath.join(testDir, 'docs', 'api.md'), '# API');
+
+  // docs/advanced subdirectory
+  mkdirSyncReal(safePath.join(testDir, 'docs', 'advanced'));
+  writeFileSync(safePath.join(testDir, 'docs', 'advanced', 'performance.md'), '# Performance');
+
+  // src directory
+  mkdirSyncReal(safePath.join(testDir, 'src'));
+  writeFileSync(safePath.join(testDir, 'src', 'index.ts'), '// code');
+  writeFileSync(safePath.join(testDir, 'src', 'utils.ts'), '// utils');
+
+  // node_modules (should be excluded by default)
+  mkdirSyncReal(safePath.join(testDir, 'node_modules'));
+  writeFileSync(safePath.join(testDir, 'node_modules', 'package.md'), '# Should be excluded');
+  /* eslint-enable security/detect-non-literal-fs-filename */
+}
+
 describe('file-crawler', () => {
   const suite = setupSyncTempDirSuite('file-crawler');
   let testDir: string;
@@ -22,38 +51,10 @@ describe('file-crawler', () => {
     testDir = suite.getTempDir();
   });
 
-  /**
-   * Helper to create test file structure
-   */
-  function createTestStructure(): void {
-    /* eslint-disable security/detect-non-literal-fs-filename -- testDir is controlled temp directory from mkdtemp */
-    // Root files
-    writeFileSync(safePath.join(testDir, 'README.md'), '# Root README');
-    writeFileSync(safePath.join(testDir, 'package.json'), '{}');
-
-    // docs directory
-    mkdirSyncReal(safePath.join(testDir, 'docs'));
-    writeFileSync(safePath.join(testDir, 'docs', 'guide.md'), '# Guide');
-    writeFileSync(safePath.join(testDir, 'docs', 'api.md'), '# API');
-
-    // docs/advanced subdirectory
-    mkdirSyncReal(safePath.join(testDir, 'docs', 'advanced'));
-    writeFileSync(safePath.join(testDir, 'docs', 'advanced', 'performance.md'), '# Performance');
-
-    // src directory
-    mkdirSyncReal(safePath.join(testDir, 'src'));
-    writeFileSync(safePath.join(testDir, 'src', 'index.ts'), '// code');
-    writeFileSync(safePath.join(testDir, 'src', 'utils.ts'), '// utils');
-
-    // node_modules (should be excluded by default)
-    mkdirSyncReal(safePath.join(testDir, 'node_modules'));
-    writeFileSync(safePath.join(testDir, 'node_modules', 'package.md'), '# Should be excluded');
-    /* eslint-enable security/detect-non-literal-fs-filename */
-  }
 
   describe('crawlDirectorySync', () => {
     it('should find all files with default options', () => {
-      createTestStructure();
+      createTestStructure(testDir);
 
       const files = crawlDirectorySync({
         baseDir: testDir,
@@ -66,7 +67,7 @@ describe('file-crawler', () => {
     });
 
     it('should find markdown files with include pattern', () => {
-      createTestStructure();
+      createTestStructure(testDir);
 
       const files = crawlDirectorySync({
         baseDir: testDir,
@@ -80,7 +81,7 @@ describe('file-crawler', () => {
     });
 
     it('should exclude specified patterns', () => {
-      createTestStructure();
+      createTestStructure(testDir);
 
       const files = crawlDirectorySync({
         baseDir: testDir,
@@ -93,7 +94,7 @@ describe('file-crawler', () => {
     });
 
     it('should find files in specific directory with pattern', () => {
-      createTestStructure();
+      createTestStructure(testDir);
 
       const files = crawlDirectorySync({
         baseDir: testDir,
@@ -105,7 +106,7 @@ describe('file-crawler', () => {
     });
 
     it('should return relative paths when absolute=false', () => {
-      createTestStructure();
+      createTestStructure(testDir);
 
       const files = crawlDirectorySync({
         baseDir: testDir,
@@ -119,7 +120,7 @@ describe('file-crawler', () => {
     });
 
     it('should handle multiple include patterns', () => {
-      createTestStructure();
+      createTestStructure(testDir);
 
       const files = crawlDirectorySync({
         baseDir: testDir,
@@ -164,7 +165,7 @@ describe('file-crawler', () => {
     });
 
     it('should include directories when filesOnly=false', () => {
-      createTestStructure();
+      createTestStructure(testDir);
 
       const results = crawlDirectorySync({
         baseDir: testDir,
@@ -177,7 +178,7 @@ describe('file-crawler', () => {
     });
 
     it('should handle nested exclude patterns', () => {
-      createTestStructure();
+      createTestStructure(testDir);
 
       const files = crawlDirectorySync({
         baseDir: testDir,
@@ -191,7 +192,7 @@ describe('file-crawler', () => {
     });
 
     it('should handle glob patterns with wildcards', () => {
-      createTestStructure();
+      createTestStructure(testDir);
 
       const files = crawlDirectorySync({
         baseDir: testDir,
@@ -204,7 +205,7 @@ describe('file-crawler', () => {
 
     describe('symlink handling', () => {
       it('should skip symlinks by default', () => {
-        createTestStructure();
+        createTestStructure(testDir);
 
         // Create a symlink to a markdown file
         const targetFile = safePath.join(testDir, 'docs', 'guide.md');
@@ -230,7 +231,7 @@ describe('file-crawler', () => {
       });
 
       it('should follow symlinks when followSymlinks=true', () => {
-        createTestStructure();
+        createTestStructure(testDir);
 
         const targetFile = safePath.join(testDir, 'docs', 'guide.md');
         const symlinkPath = safePath.join(testDir, 'link.md');
@@ -257,7 +258,7 @@ describe('file-crawler', () => {
 
   describe('crawlDirectory (async)', () => {
     it('should find all markdown files', async () => {
-      createTestStructure();
+      createTestStructure(testDir);
 
       const files = await crawlDirectory({
         baseDir: testDir,
@@ -269,7 +270,7 @@ describe('file-crawler', () => {
     });
 
     it('should return same results as sync version', async () => {
-      createTestStructure();
+      createTestStructure(testDir);
 
       const asyncFiles = await crawlDirectory({
         baseDir: testDir,
@@ -290,7 +291,7 @@ describe('file-crawler', () => {
 
   describe('cross-platform behavior', () => {
     it('should handle paths with different separators', () => {
-      createTestStructure();
+      createTestStructure(testDir);
 
       // Test that pattern matching works regardless of platform separator
       const files = crawlDirectorySync({
@@ -303,7 +304,7 @@ describe('file-crawler', () => {
     });
 
     it('should return consistent absolute paths', () => {
-      createTestStructure();
+      createTestStructure(testDir);
 
       const files = crawlDirectorySync({
         baseDir: testDir,
@@ -318,7 +319,7 @@ describe('file-crawler', () => {
 
   describe('gitignore integration', () => {
     it('should respect .gitignore by default', () => {
-      createTestStructure();
+      createTestStructure(testDir);
 
       // Initialize git repo properly (git ls-files needs a real repo)
       createGitRepo(testDir);
@@ -343,7 +344,7 @@ describe('file-crawler', () => {
     });
 
     it('should allow disabling gitignore', () => {
-      createTestStructure();
+      createTestStructure(testDir);
 
       // Create .git directory
        

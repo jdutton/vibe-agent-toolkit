@@ -182,28 +182,32 @@ describe('chunkResource', () => {
   });
 });
 
+/** Create a minimal ChunkableResource for enrichChunks tests */
+function createResource(
+  resourceId: string,
+  filePath: string,
+  overrides?: Partial<ChunkableResource>,
+): ChunkableResource {
+  return {
+    id: resourceId,
+    filePath,
+    content: 'Test content',
+    contentHash: 'abc123',
+    estimatedTokenCount: 10,
+    links: [],
+    headings: [],
+    frontmatter: {},
+    ...overrides,
+  };
+}
+
 describe('enrichChunks', () => {
   const TEST_RESOURCE_ID = 'test-resource';
   const TEST_MODEL = 'test-model';
   const TEST_FILE_PATH = '/test.md';
 
-  /** Create a minimal ChunkableResource for enrichChunks tests */
-  function createResource(overrides?: Partial<ChunkableResource>): ChunkableResource {
-    return {
-      id: TEST_RESOURCE_ID,
-      filePath: TEST_FILE_PATH,
-      content: 'Test content',
-      contentHash: 'abc123',
-      estimatedTokenCount: 10,
-      links: [],
-      headings: [],
-      frontmatter: {},
-      ...overrides,
-    };
-  }
-
   it('should enrich raw chunks with RAGChunk metadata', () => {
-    const resource = createResource({ frontmatter: { tags: ['test'], title: 'Test' } });
+    const resource = createResource(TEST_RESOURCE_ID, TEST_FILE_PATH, { frontmatter: { tags: ['test'], title: 'Test' } });
 
     const rawChunks = [
       { content: 'Chunk 1', headingPath: 'Section 1', headingLevel: 1 },
@@ -246,7 +250,7 @@ describe('enrichChunks', () => {
   });
 
   it('should set tokenCount to 0 when no tokenCounter is provided', () => {
-    const resource = createResource();
+    const resource = createResource(TEST_RESOURCE_ID, TEST_FILE_PATH);
     const rawChunks = [
       { content: 'Some text content here' },
       { content: 'More text content here' },
@@ -260,7 +264,7 @@ describe('enrichChunks', () => {
   });
 
   it('should populate tokenCount when tokenCounter is provided', () => {
-    const resource = createResource();
+    const resource = createResource(TEST_RESOURCE_ID, TEST_FILE_PATH);
     const rawChunks = [
       { content: 'Some text content here' },
       { content: 'A longer piece of text content that should have more tokens than the first chunk' },
@@ -283,7 +287,7 @@ describe('enrichChunks', () => {
   });
 
   it('should populate chunkIndex and totalChunks', () => {
-    const resource = createResource();
+    const resource = createResource(TEST_RESOURCE_ID, TEST_FILE_PATH);
     const rawChunks = [{ content: 'A' }, { content: 'B' }, { content: 'C' }];
     const embeddings = [[1], [2], [3]];
 
@@ -297,7 +301,7 @@ describe('enrichChunks', () => {
   });
 
   it('should handle single chunk correctly', () => {
-    const resource = createResource({ content: 'Test', estimatedTokenCount: 5 });
+    const resource = createResource(TEST_RESOURCE_ID, TEST_FILE_PATH, { content: 'Test', estimatedTokenCount: 5 });
     const rawChunks = [{ content: 'Single chunk' }];
     const embeddings = [[0.1, 0.2]];
 

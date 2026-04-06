@@ -125,6 +125,19 @@ describe('copyResources', () => {
 // On Unix (threads pool, no chdir), POSIX path.join handles two absolute paths correctly.
 const isWindows = process.platform === 'win32';
 
+/** Return relative paths on Windows (chdir), absolute on Unix */
+function testPath(tempDir: string, name: string): string {
+  return isWindows ? name : safePath.join(tempDir, name);
+}
+
+function setupGeneratedDir(tempDir: string): { generatedDir: string; distDir: string } {
+  const generatedDir = testPath(tempDir, 'generated');
+  const distDir = testPath(tempDir, 'dist');
+  mkdirSyncReal(safePath.join(tempDir, 'generated'));
+  writeFileSync(safePath.join(tempDir, 'generated', 'output.js'), 'code', 'utf-8');
+  return { generatedDir, distDir };
+}
+
 describe('createPostBuildScript', () => {
   let tempDir: string;
   let savedCwd: string | undefined;
@@ -146,21 +159,8 @@ describe('createPostBuildScript', () => {
     }
   });
 
-  /** Return relative paths on Windows (chdir), absolute on Unix */
-  function testPath(name: string): string {
-    return isWindows ? name : safePath.join(tempDir, name);
-  }
-
-  function setupGeneratedDir(): { generatedDir: string; distDir: string } {
-    const generatedDir = testPath('generated');
-    const distDir = testPath('dist');
-    mkdirSyncReal(safePath.join(tempDir, 'generated'));
-    writeFileSync(safePath.join(tempDir, 'generated', 'output.js'), 'code', 'utf-8');
-    return { generatedDir, distDir };
-  }
-
   it('should copy generated dir to dist/generated', () => {
-    const { generatedDir, distDir } = setupGeneratedDir();
+    const { generatedDir, distDir } = setupGeneratedDir(tempDir);
 
     createPostBuildScript({ generatedDir, distDir });
 
@@ -178,8 +178,8 @@ describe('createPostBuildScript', () => {
     try {
       expect(() => {
         createPostBuildScript({
-          generatedDir: testPath('does-not-exist'),
-          distDir: testPath('dist'),
+          generatedDir: testPath(tempDir, 'does-not-exist'),
+          distDir: testPath(tempDir, 'dist'),
         });
       }).toThrow('process.exit called');
 
@@ -190,7 +190,7 @@ describe('createPostBuildScript', () => {
   });
 
   it('should support verbose logging', () => {
-    const { generatedDir, distDir } = setupGeneratedDir();
+    const { generatedDir, distDir } = setupGeneratedDir(tempDir);
 
     expect(() => {
       createPostBuildScript({ generatedDir, distDir, verbose: true });

@@ -30,6 +30,21 @@ const TITLE_ONLY_SCHEMA = {
   },
 };
 
+/**
+ * Helper to validate with text format and return stderr output
+ */
+function validateWithTextFormat(dir: string, schemaFilename: string) {
+  return executeCli(binPath, [
+    'resources',
+    'validate',
+    dir,
+    '--format',
+    'text',
+    '--frontmatter-schema',
+    `${dir}/${schemaFilename}`,
+  ]);
+}
+
 describe('vat resources validate --frontmatter-schema (system test)', () => {
   let tempDir: string;
 
@@ -40,21 +55,6 @@ describe('vat resources validate --frontmatter-schema (system test)', () => {
   afterEach(() => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
-
-  /**
-   * Helper to validate with text format and return stderr output
-   */
-  function validateWithTextFormat(schemaFilename: string) {
-    return executeCli(binPath, [
-      'resources',
-      'validate',
-      tempDir,
-      '--format',
-      'text',
-      '--frontmatter-schema',
-      `${tempDir}/${schemaFilename}`,
-    ]);
-  }
 
   it('should validate frontmatter successfully', () => {
     const result = setupSchemaAndValidate(
@@ -91,7 +91,7 @@ describe('vat resources validate --frontmatter-schema (system test)', () => {
     expect(result.status).toBe(1);
 
     // Check error details in stderr (use text format)
-    const textResult = validateWithTextFormat(SCHEMA_JSON);
+    const textResult = validateWithTextFormat(tempDir, SCHEMA_JSON);
     expect(textResult.stderr).toContain('Frontmatter validation');
     expect(textResult.stderr).toContain('description');
   });
@@ -146,7 +146,7 @@ describe('vat resources validate --frontmatter-schema (system test)', () => {
     expect(result.status).toBe(1);
 
     // Check error details in stderr (use text format)
-    const textResult = validateWithTextFormat(SCHEMA_JSON);
+    const textResult = validateWithTextFormat(tempDir, SCHEMA_JSON);
     expect(textResult.stderr).toContain('No frontmatter found');
     expect(textResult.stderr).toContain('title');
   });

@@ -8,33 +8,100 @@ import {
   type ConversationalSessionState,
 } from '../../src/adapters/conversational-assistant.js';
 
+// Constants for duplicated strings
+const TEST_NAME = 'test-chat';
+const TEST_DESCRIPTION = 'Test conversational assistant';
+const TEST_VERSION = '1.0.0';
+const TEST_MODEL = 'gpt-4o-mini';
+const TEST_MODEL_GPT4O = 'gpt-4o';
+const TEST_RESPONSE_HELLO = 'Hello! How can I help you?';
+
+// Test schemas
+const InputSchema = z.object({
+  message: z.string(),
+  sessionState: z
+    .object({
+      context: z.string().optional(),
+    })
+    .optional(),
+});
+
+const OutputSchema = z.object({
+  reply: z.string(),
+  updatedContext: z.string().optional(),
+});
+
+type Input = z.infer<typeof InputSchema>;
+type Output = z.infer<typeof OutputSchema>;
+
+/**
+ * Factory function to create a test agent with standard behavior
+ * Reduces duplication across test cases
+ */
+function createTestAgent(systemPrompt?: string, options?: { skipHistoryUpdate?: boolean; customLLMCall?: boolean }) {
+  return defineConversationalAssistant<Input, Output>(
+    {
+      name: TEST_NAME,
+      description: TEST_DESCRIPTION,
+      version: TEST_VERSION,
+      inputSchema: InputSchema,
+      outputSchema: OutputSchema,
+      ...(systemPrompt && { systemPrompt }),
+    },
+    async (input, ctx) => {
+      if (options?.customLLMCall) {
+        // Custom LLM call (for specific tests)
+        const response = await ctx.callLLM([{ role: 'user', content: input.message }]);
+        return { reply: response };
+      }
+
+      ctx.addToHistory('user', input.message);
+      const response = await ctx.callLLM(ctx.history);
+
+      if (!options?.skipHistoryUpdate) {
+        ctx.addToHistory('assistant', response);
+      }
+
+      return { reply: response };
+    },
+  );
+}
+
+/**
+ * Helper to setup a test with agent, mock response, and converted function
+ * Reduces boilerplate in test cases
+ */
+function setupTest(
+  mockCreate: ReturnType<typeof vi.fn>,
+  mockClient: OpenAI,
+  options?: {
+    systemPrompt?: string;
+    agentOptions?: { skipHistoryUpdate?: boolean; customLLMCall?: boolean };
+    mockResponse?: string;
+    model?: string;
+    temperature?: number;
+    maxTokens?: number;
+  },
+) {
+  const agent = createTestAgent(options?.systemPrompt, options?.agentOptions);
+
+  if (options?.mockResponse !== undefined) {
+    mockCreate.mockResolvedValue({
+      choices: [{ message: { content: options.mockResponse } }],
+    });
+  }
+
+  const chat = convertConversationalAssistantToFunction(agent, InputSchema, OutputSchema, {
+    client: mockClient,
+    model: options?.model ?? TEST_MODEL,
+    ...(options?.temperature !== undefined && { temperature: options.temperature }),
+    ...(options?.maxTokens !== undefined && { maxTokens: options.maxTokens }),
+  });
+
+  return { agent, chat };
+}
+
 describe('convertConversationalAssistantToFunction', () => {
-  // Constants for duplicated strings
-  const TEST_NAME = 'test-chat';
-  const TEST_DESCRIPTION = 'Test conversational assistant';
-  const TEST_VERSION = '1.0.0';
-  const TEST_MODEL = 'gpt-4o-mini';
-  const TEST_MODEL_GPT4O = 'gpt-4o';
-  const TEST_RESPONSE_HELLO = 'Hello! How can I help you?';
-
-  // Test schemas
-  const InputSchema = z.object({
-    message: z.string(),
-    sessionState: z
-      .object({
-        context: z.string().optional(),
-      })
-      .optional(),
-  });
-
-  const OutputSchema = z.object({
-    reply: z.string(),
-    updatedContext: z.string().optional(),
-  });
-
-  type Input = z.infer<typeof InputSchema>;
-  type Output = z.infer<typeof OutputSchema>;
-
   // Mock OpenAI client
   let mockClient: OpenAI;
   let mockCreate: ReturnType<typeof vi.fn>;
@@ -49,69 +116,6 @@ describe('convertConversationalAssistantToFunction', () => {
       },
     } as unknown as OpenAI;
   });
-
-  /**
-   * Factory function to create a test agent with standard behavior
-   * Reduces duplication across test cases
-   */
-  function createTestAgent(systemPrompt?: string, options?: { skipHistoryUpdate?: boolean; customLLMCall?: boolean }) {
-    return defineConversationalAssistant<Input, Output>(
-      {
-        name: TEST_NAME,
-        description: TEST_DESCRIPTION,
-        version: TEST_VERSION,
-        inputSchema: InputSchema,
-        outputSchema: OutputSchema,
-        ...(systemPrompt && { systemPrompt }),
-      },
-      async (input, ctx) => {
-        if (options?.customLLMCall) {
-          // Custom LLM call (for specific tests)
-          const response = await ctx.callLLM([{ role: 'user', content: input.message }]);
-          return { reply: response };
-        }
-
-        ctx.addToHistory('user', input.message);
-        const response = await ctx.callLLM(ctx.history);
-
-        if (!options?.skipHistoryUpdate) {
-          ctx.addToHistory('assistant', response);
-        }
-
-        return { reply: response };
-      },
-    );
-  }
-
-  /**
-   * Helper to setup a test with agent, mock response, and converted function
-   * Reduces boilerplate in test cases
-   */
-  function setupTest(options?: {
-    systemPrompt?: string;
-    agentOptions?: { skipHistoryUpdate?: boolean; customLLMCall?: boolean };
-    mockResponse?: string;
-    model?: string;
-    temperature?: number;
-    maxTokens?: number;
-  }) {
-    const agent = createTestAgent(options?.systemPrompt, options?.agentOptions);
-
-    if (options?.mockResponse !== undefined) {
-      mockCreate.mockResolvedValue({
-        choices: [{ message: { content: options.mockResponse } }],
-      });
-    }
-
-    const chat = convertConversationalAssistantToFunction(agent, InputSchema, OutputSchema, {
-      client: mockClient,
-      model: options?.model ?? TEST_MODEL,
-      ...(options?.temperature !== undefined && { temperature: options.temperature }),
-      ...(options?.maxTokens !== undefined && { maxTokens: options.maxTokens }),
-    });
-
-    return { agent, chat };
-  }
 
   it('should convert conversational assistant to executable function', async () => {
     // Define test agent
@@ -200,7 +204,7 @@ describe('convertConversationalAssistantToFunction', () => {
   });
 
   it('should pass temperature and maxTokens to OpenAI', async () => {
-    const { chat } = setupTest({
+    const { chat } = setupTest(mockCreate, mockClient, {
       agentOptions: { customLLMCall: true },
       mockResponse: 'Response',
       model: TEST_MODEL_GPT4O,
@@ -221,7 +225,7 @@ describe('convertConversationalAssistantToFunction', () => {
   });
 
   it('should validate input and output schemas', async () => {
-    const { chat } = setupTest({
+    const { chat } = setupTest(mockCreate, mockClient, {
       agentOptions: { customLLMCall: true },
       mockResponse: 'Response',
     });
@@ -236,7 +240,7 @@ describe('convertConversationalAssistantToFunction', () => {
   });
 
   it('should handle empty LLM response gracefully', async () => {
-    const { chat } = setupTest({
+    const { chat } = setupTest(mockCreate, mockClient, {
       agentOptions: { skipHistoryUpdate: true },
       mockResponse: '',
     });

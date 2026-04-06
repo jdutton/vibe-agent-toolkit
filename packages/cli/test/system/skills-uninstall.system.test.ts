@@ -113,6 +113,22 @@ function setupUninstallTestSuite() {
   return { binPath, createInstalledContext, cleanup, runUninstall };
 }
 
+/**
+ * Install a plugin and return context needed for uninstall tests.
+ * Verifies install succeeded and plugin dir exists before returning.
+ */
+function setupInstalledPlugin(suite: ReturnType<typeof setupUninstallTestSuite>) {
+  const { fakeHome, installResult } = suite.createInstalledContext();
+  expect(installResult.status).toBe(0);
+  const pluginDir = safePath.join(
+    fakeHome, '.claude', 'plugins', 'marketplaces',
+    MARKETPLACE_NAME, 'plugins', PLUGIN_NAME
+  );
+  expect(fs.existsSync(pluginDir)).toBe(true);
+  const pluginKey = `${PLUGIN_NAME}@${MARKETPLACE_NAME}`;
+  return { fakeHome, pluginDir, pluginKey };
+}
+
 describe('claude plugin uninstall command (system test)', () => {
   const suite = setupUninstallTestSuite();
 
@@ -120,24 +136,8 @@ describe('claude plugin uninstall command (system test)', () => {
     suite.cleanup();
   });
 
-  /**
-   * Install a plugin and return context needed for uninstall tests.
-   * Verifies install succeeded and plugin dir exists before returning.
-   */
-  function setupInstalledPlugin() {
-    const { fakeHome, installResult } = suite.createInstalledContext();
-    expect(installResult.status).toBe(0);
-    const pluginDir = safePath.join(
-      fakeHome, '.claude', 'plugins', 'marketplaces',
-      MARKETPLACE_NAME, 'plugins', PLUGIN_NAME
-    );
-    expect(fs.existsSync(pluginDir)).toBe(true);
-    const pluginKey = `${PLUGIN_NAME}@${MARKETPLACE_NAME}`;
-    return { fakeHome, pluginDir, pluginKey };
-  }
-
   it('exits 0 and removes plugin files when given plugin@marketplace key', () => {
-    const { fakeHome, pluginKey } = setupInstalledPlugin();
+    const { fakeHome, pluginKey } = setupInstalledPlugin(suite);
 
     const result = suite.runUninstall(fakeHome, [pluginKey]);
 
@@ -148,7 +148,7 @@ describe('claude plugin uninstall command (system test)', () => {
   });
 
   it('removes plugin directory from marketplacesDir after uninstall', () => {
-    const { fakeHome, pluginDir, pluginKey } = setupInstalledPlugin();
+    const { fakeHome, pluginDir, pluginKey } = setupInstalledPlugin(suite);
 
     suite.runUninstall(fakeHome, [pluginKey]);
 
@@ -156,7 +156,7 @@ describe('claude plugin uninstall command (system test)', () => {
   });
 
   it('removes plugin from installed_plugins.json after uninstall', () => {
-    const { fakeHome, pluginKey } = setupInstalledPlugin();
+    const { fakeHome, pluginKey } = setupInstalledPlugin(suite);
 
     const installedPath = safePath.join(fakeHome, '.claude', 'plugins', 'installed_plugins.json');
     const beforeUninstall = JSON.parse(fs.readFileSync(installedPath, 'utf-8')) as {
@@ -200,7 +200,7 @@ describe('claude plugin uninstall command (system test)', () => {
   });
 
   it('previews removal with --dry-run without deleting files', () => {
-    const { fakeHome, pluginDir, pluginKey } = setupInstalledPlugin();
+    const { fakeHome, pluginDir, pluginKey } = setupInstalledPlugin(suite);
 
     const result = suite.runUninstall(fakeHome, [pluginKey, '--dry-run']);
 

@@ -30,6 +30,55 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
 import { createTempDir, createTestMarkdownFile, createTestResource } from '../test-helpers.js';
 
+const TEST_MARKDOWN_CONTENT_FOR_METADATA = '# Test\n\nContent here.';
+
+/**
+ * Helper to create and index test chunks with custom metadata
+ */
+async function indexTestChunksWithMetadata<TMetadata extends Record<string, unknown>>(
+  provider: LanceDBRAGProvider<TMetadata>,
+  tempDir: string,
+  schema: { shape: Record<string, unknown> },
+  metadataValues: TMetadata
+): Promise<void> {
+  const doc = await createTestMarkdownFile(tempDir, 'doc.md', TEST_MARKDOWN_CONTENT_FOR_METADATA);
+
+  const { chunkToLanceRow } = await import('../../src/schema.js');
+  const { enrichChunks, chunkResource, generateContentHash } = await import('@vibe-agent-toolkit/rag');
+  const { ApproximateTokenCounter } = await import('@vibe-agent-toolkit/rag');
+
+  const resource = await createTestResource(doc, 'test-doc');
+  const parseResult = await import('@vibe-agent-toolkit/resources').then((m) =>
+    m.parseMarkdown(doc)
+  );
+  const chunks = chunkResource(
+    { ...resource, content: parseResult.content, frontmatter: {} },
+    { targetChunkSize: 512, modelTokenLimit: 8191, paddingFactor: 0.9, tokenCounter: new ApproximateTokenCounter() }
+  );
+  const embeddings = await provider['config'].embeddingProvider.embedBatch(
+    chunks.chunks.map((c) => c.content)
+  );
+  const ragChunks = enrichChunks(
+    chunks.chunks,
+    { ...resource, content: parseResult.content, frontmatter: {} },
+    embeddings,
+    provider['config'].embeddingProvider.model
+  );
+
+  const rows = ragChunks.map((chunk) => {
+    type ChunkWithCustomMetadata = typeof chunk & TMetadata;
+    return chunkToLanceRow<TMetadata>(
+      { ...chunk, ...metadataValues } as ChunkWithCustomMetadata,
+      generateContentHash(parseResult.content),
+      schema
+    );
+  });
+
+  if (!provider['table'] && provider['connection']) {
+    provider['table'] = await provider['connection'].createTable('rag_chunks', rows);
+  }
+}
+
 describe('LanceDB Indexing Integration', () => {
   const SPECIFIC_RESOURCE_ID = 'specific-resource-id';
 
@@ -367,55 +416,6 @@ Content for section 4 with even more text.`
   });
 
   describe('Custom Metadata Filtering', () => {
-    const TEST_MARKDOWN_CONTENT = '# Test\n\nContent here.';
-
-    /**
-     * Helper to create and index test chunks with custom metadata
-     */
-    async function indexTestChunksWithMetadata<TMetadata extends Record<string, unknown>>(
-      provider: LanceDBRAGProvider<TMetadata>,
-      tempDir: string,
-      schema: { shape: Record<string, unknown> },
-      metadataValues: TMetadata
-    ): Promise<void> {
-      const doc = await createTestMarkdownFile(tempDir, 'doc.md', TEST_MARKDOWN_CONTENT);
-
-      const { chunkToLanceRow } = await import('../../src/schema.js');
-      const { enrichChunks, chunkResource, generateContentHash } = await import('@vibe-agent-toolkit/rag');
-      const { ApproximateTokenCounter } = await import('@vibe-agent-toolkit/rag');
-
-      const resource = await createTestResource(doc, 'test-doc');
-      const parseResult = await import('@vibe-agent-toolkit/resources').then((m) =>
-        m.parseMarkdown(doc)
-      );
-      const chunks = chunkResource(
-        { ...resource, content: parseResult.content, frontmatter: {} },
-        { targetChunkSize: 512, modelTokenLimit: 8191, paddingFactor: 0.9, tokenCounter: new ApproximateTokenCounter() }
-      );
-      const embeddings = await provider['config'].embeddingProvider.embedBatch(
-        chunks.chunks.map((c) => c.content)
-      );
-      const ragChunks = enrichChunks(
-        chunks.chunks,
-        { ...resource, content: parseResult.content, frontmatter: {} },
-        embeddings,
-        provider['config'].embeddingProvider.model
-      );
-
-      const rows = ragChunks.map((chunk) => {
-        type ChunkWithCustomMetadata = typeof chunk & TMetadata;
-        return chunkToLanceRow<TMetadata>(
-          { ...chunk, ...metadataValues } as ChunkWithCustomMetadata,
-          generateContentHash(parseResult.content),
-          schema
-        );
-      });
-
-      if (!provider['table'] && provider['connection']) {
-        provider['table'] = await provider['connection'].createTable('rag_chunks', rows);
-      }
-    }
-
     it('should filter by string metadata field', async () => {
       const { z } = await import('zod');
 

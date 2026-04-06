@@ -169,15 +169,9 @@ describe('language-service utils', () => {
       `;
       const sourceFile = ts.createSourceFile('test.ts', sourceCode, ts.ScriptTarget.ES2024, true);
 
-      let result: { markdownPath: string; fragmentName: string } | null = null;
-      function visit(node: ts.Node): void {
-        const info = getMarkdownPathFromExpression(ts, node, sourceFile);
-        if (info) {
-          result = info;
-        }
-        ts.forEachChild(node, visit);
-      }
-      visit(sourceFile);
+      const result = findExpressionInfoInAST(sourceFile, (node) =>
+        getMarkdownPathFromExpression(ts, node, sourceFile),
+      );
 
       expect(result).not.toBeNull();
       expect(result?.markdownPath).toBe('./core.md');

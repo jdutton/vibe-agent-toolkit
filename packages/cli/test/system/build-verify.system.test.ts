@@ -192,6 +192,32 @@ describe('vat build command (system test)', () => {
   });
 });
 
+/**
+ * Set up a temp dir with a complete fixture, build it, and return the tempDir.
+ * Shared setup for tests that need pre-built artifacts.
+ *
+ * Adds package.json (so build emits plugin version) and LICENSE (required by
+ * marketplace validate) so that `vat verify` with marketplace phase passes.
+ */
+function setupBuiltFixture(suite: ReturnType<typeof setupBuildVerifyTestSuite>): string {
+  const tempDir = suite.createTempDir();
+  suite.setupSingleSkillFixture(tempDir, MARKETPLACE_NAME, PLUGIN_NAME);
+
+  // Build reads version from package.json for plugin.json — required by strict marketplace validate
+  writeTestFile(safePath.join(tempDir, 'package.json'), JSON.stringify({ name: 'test-pkg', version: '1.0.0' }));
+
+  const buildResult = suite.runBuild(tempDir);
+  expect(buildResult.status).toBe(0);
+
+  // Marketplace validate requires LICENSE in the marketplace root
+  const marketplaceDir = safePath.join(
+    tempDir, 'dist', '.claude', 'plugins', 'marketplaces', MARKETPLACE_NAME
+  );
+  writeTestFile(safePath.join(marketplaceDir, 'LICENSE'), 'MIT License - Test');
+
+  return tempDir;
+}
+
 const VERIFY_SUCCESS_MARKER = 'status: success';
 
 describe('vat verify command (system test)', () => {
@@ -201,34 +227,8 @@ describe('vat verify command (system test)', () => {
     suite.cleanup();
   });
 
-  /**
-   * Set up a temp dir with a complete fixture, build it, and return the tempDir.
-   * Shared setup for tests that need pre-built artifacts.
-   *
-   * Adds package.json (so build emits plugin version) and LICENSE (required by
-   * marketplace validate) so that `vat verify` with marketplace phase passes.
-   */
-  function setupBuiltFixture(): string {
-    const tempDir = suite.createTempDir();
-    suite.setupSingleSkillFixture(tempDir, MARKETPLACE_NAME, PLUGIN_NAME);
-
-    // Build reads version from package.json for plugin.json — required by strict marketplace validate
-    writeTestFile(safePath.join(tempDir, 'package.json'), JSON.stringify({ name: 'test-pkg', version: '1.0.0' }));
-
-    const buildResult = suite.runBuild(tempDir);
-    expect(buildResult.status).toBe(0);
-
-    // Marketplace validate requires LICENSE in the marketplace root
-    const marketplaceDir = safePath.join(
-      tempDir, 'dist', '.claude', 'plugins', 'marketplaces', MARKETPLACE_NAME
-    );
-    writeTestFile(safePath.join(marketplaceDir, 'LICENSE'), 'MIT License - Test');
-
-    return tempDir;
-  }
-
   it('should verify all phases pass when artifacts are valid', () => {
-    const tempDir = setupBuiltFixture();
+    const tempDir = setupBuiltFixture(suite);
 
     const result = suite.runVerify(tempDir);
 
@@ -237,7 +237,7 @@ describe('vat verify command (system test)', () => {
   });
 
   it('should include marketplace phase when claude.marketplaces config exists', () => {
-    const tempDir = setupBuiltFixture();
+    const tempDir = setupBuiltFixture(suite);
 
     const result = suite.runVerify(tempDir);
 
