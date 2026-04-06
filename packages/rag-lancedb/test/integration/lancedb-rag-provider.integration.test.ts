@@ -2,8 +2,8 @@
  * Unit tests for LanceDB RAG Provider - Database Size Calculation
  */
 
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
@@ -51,7 +51,7 @@ describe('LanceDBRAGProvider - Database Size Calculation', () => {
   });
 
   it('should handle missing database directory gracefully', async () => {
-    const nonExistentPath = join(suite.tempDir, 'nonexistent', 'db');
+    const nonExistentPath = safePath.join(suite.tempDir, 'nonexistent', 'db');
     suite.provider = await LanceDBRAGProvider.create({ dbPath: nonExistentPath });
 
     const stats = await suite.provider.getStats();

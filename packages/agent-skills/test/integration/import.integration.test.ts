@@ -2,9 +2,8 @@
 /* eslint-disable security/detect-non-literal-fs-filename */
 // Test file requires dynamic paths for fixtures and temporary files
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 
@@ -32,7 +31,7 @@ async function createSkillAndImport(
     ...importOptions,
   });
 
-  const agentPath = importOptions?.outputPath ?? path.join(tempDir, AGENT_YAML_FILENAME);
+  const agentPath = importOptions?.outputPath ?? safePath.join(tempDir, AGENT_YAML_FILENAME);
 
   return { result, skillPath, agentPath };
 }
@@ -86,7 +85,7 @@ describe('importSkillToAgent (integration)', () => {
       expect(result.success).toBe(true);
       expect(result.agentPath).toBeDefined();
 
-      const agentYamlPath = path.join(getTempDir(), AGENT_YAML_FILENAME);
+      const agentYamlPath = safePath.join(getTempDir(), AGENT_YAML_FILENAME);
       expect(fs.existsSync(agentYamlPath)).toBe(true);
 
       const agentContent = fs.readFileSync(agentYamlPath, 'utf-8');
@@ -123,7 +122,7 @@ describe('importSkillToAgent (integration)', () => {
 
       expect(result.success).toBe(true);
 
-      const agentYamlPath = path.join(getTempDir(), AGENT_YAML_FILENAME);
+      const agentYamlPath = safePath.join(getTempDir(), AGENT_YAML_FILENAME);
       const agentContent = fs.readFileSync(agentYamlPath, 'utf-8');
       const agentData = parseYaml(agentContent);
 
@@ -138,7 +137,7 @@ describe('importSkillToAgent (integration)', () => {
     });
 
     it('should place agent.yaml in same directory as SKILL.md', async () => {
-      const subDir = path.join(getTempDir(), 'my-skill');
+      const subDir = safePath.join(getTempDir(), 'my-skill');
       mkdirSyncReal(subDir, { recursive: true });
 
       const skillContent = createSkillContent(
@@ -153,7 +152,7 @@ describe('importSkillToAgent (integration)', () => {
       const result = await importSkillToAgent({ skillPath });
 
       expect(result.success).toBe(true);
-      const expectedAgentPath = path.join(subDir, 'agent.yaml');
+      const expectedAgentPath = safePath.join(subDir, 'agent.yaml');
       expect(result.agentPath).toBe(expectedAgentPath);
       expect(fs.existsSync(expectedAgentPath)).toBe(true);
     });
@@ -161,7 +160,7 @@ describe('importSkillToAgent (integration)', () => {
 
   describe('validation', () => {
     it('should fail when SKILL.md does not exist', async () => {
-      const skillPath = path.join(getTempDir(), 'nonexistent.md');
+      const skillPath = safePath.join(getTempDir(), 'nonexistent.md');
 
       const result = await importSkillToAgent({ skillPath });
 
@@ -214,7 +213,7 @@ describe('importSkillToAgent (integration)', () => {
         '\nContent.\n',
       );
       const skillPath = createSkillFile(getTempDir(), skillContent);
-      const customOutputPath = path.join(getTempDir(), 'custom-agent.yaml');
+      const customOutputPath = safePath.join(getTempDir(), 'custom-agent.yaml');
 
       const result = await importSkillToAgent({
         skillPath,
@@ -227,7 +226,7 @@ describe('importSkillToAgent (integration)', () => {
     });
 
     it('should not overwrite existing agent.yaml without force flag', async () => {
-      const agentPath = path.join(getTempDir(), AGENT_YAML_FILENAME);
+      const agentPath = safePath.join(getTempDir(), AGENT_YAML_FILENAME);
       fs.writeFileSync(agentPath, EXISTING_AGENT_CONTENT);
 
       const { result } = await createSkillAndImport(getTempDir(), createTestSkill());
@@ -240,7 +239,7 @@ describe('importSkillToAgent (integration)', () => {
     });
 
     it('should overwrite existing agent.yaml with force flag', async () => {
-      const agentPath = path.join(getTempDir(), AGENT_YAML_FILENAME);
+      const agentPath = safePath.join(getTempDir(), AGENT_YAML_FILENAME);
       fs.writeFileSync(agentPath, EXISTING_AGENT_CONTENT);
 
       const { result } = await createSkillAndImport(getTempDir(), createTestSkill(), {

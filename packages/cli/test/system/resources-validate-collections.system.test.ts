@@ -3,7 +3,7 @@
 
 import { afterAll, beforeAll, it } from 'vitest';
 
-import { describe, expect, fs, getBinPath, join } from './test-common.js';
+import { describe, expect, fs, getBinPath, safePath } from './test-common.js';
 import {
   assertValidationFailureWithErrorInStderr,
   createMarkdownWithFrontmatter,
@@ -34,7 +34,7 @@ function setupCollectionTestProject(
 
   // Create directories
   for (const dir of directories) {
-    const fullPath = join(projectDir, dir);
+    const fullPath = safePath.join(projectDir, dir);
     fs.mkdirSync(fullPath, { recursive: true });
   }
 
@@ -105,7 +105,7 @@ resources:
     createSchemaFile(projectDir, 'strict-schema.json', STRICT_SCHEMA);
 
     // Create docs directory
-    const docsDir = join(projectDir, 'docs');
+    const docsDir = safePath.join(projectDir, 'docs');
     fs.mkdirSync(docsDir, { recursive: true });
 
     // Valid document
@@ -150,7 +150,7 @@ resources:
     createSchemaFile(projectDir, 'permissive-schema.json', PERMISSIVE_SCHEMA);
 
     // Create guides directory
-    const guidesDir = join(projectDir, 'guides');
+    const guidesDir = safePath.join(projectDir, 'guides');
     fs.mkdirSync(guidesDir, { recursive: true });
 
     // Document with extra fields (should be OK in permissive mode)
@@ -199,7 +199,7 @@ resources:
     createSchemaFile(projectDir, 'guides-schema.json', GUIDES_SCHEMA);
 
     // Create docs directory
-    const docsDir = join(projectDir, 'docs');
+    const docsDir = safePath.join(projectDir, 'docs');
     fs.mkdirSync(docsDir, { recursive: true });
 
     // File matching both collections: docs/guide-intro.md
@@ -248,7 +248,7 @@ resources:
     createSchemaFile(projectDir, 'guides-schema.json', GUIDES_SCHEMA);
 
     // Create docs directory
-    const docsDir = join(projectDir, 'docs');
+    const docsDir = safePath.join(projectDir, 'docs');
     fs.mkdirSync(docsDir, { recursive: true });
 
     // File matching both collections but missing required field from guides-schema
@@ -289,7 +289,7 @@ resources:
     createSchemaFile(projectDir, 'strict-schema.json', STRICT_SCHEMA);
 
     // Create docs directory
-    const docsDir = join(projectDir, 'docs');
+    const docsDir = safePath.join(projectDir, 'docs');
     fs.mkdirSync(docsDir, { recursive: true });
 
     // Document in collection
@@ -331,7 +331,7 @@ resources:
     });
 
     // Create docs directory
-    const docsDir = join(projectDir, 'docs');
+    const docsDir = safePath.join(projectDir, 'docs');
     fs.mkdirSync(docsDir, { recursive: true });
 
     // Create markdown file
@@ -373,8 +373,8 @@ resources:
       ['docs', 'guides']
     );
 
-    const docsDir = join(projectDir, 'docs');
-    const guidesDir = join(projectDir, 'guides');
+    const docsDir = safePath.join(projectDir, 'docs');
+    const guidesDir = safePath.join(projectDir, 'guides');
 
     // Strict doc - must follow schema exactly
     createMarkdownWithFrontmatter(
@@ -422,7 +422,7 @@ resources:
     createSchemaFile(projectDir, 'strict-schema.json', STRICT_SCHEMA);
 
     // Create docs directory
-    const docsDir = join(projectDir, 'docs');
+    const docsDir = safePath.join(projectDir, 'docs');
     fs.mkdirSync(docsDir, { recursive: true });
 
     // Document with extra field (not allowed in strict mode with additionalProperties: false)
@@ -470,8 +470,8 @@ resources:
     createSchemaFile(projectDir, 'guides-schema.json', GUIDES_SCHEMA);
 
     // Create nested directory structure
-    const apiDir = join(projectDir, 'docs/api/auth');
-    const tutorialsDir = join(projectDir, 'docs/tutorials/getting-started');
+    const apiDir = safePath.join(projectDir, 'docs/api/auth');
+    const tutorialsDir = safePath.join(projectDir, 'docs/tutorials/getting-started');
     fs.mkdirSync(apiDir, { recursive: true });
     fs.mkdirSync(tutorialsDir, { recursive: true });
 
@@ -525,8 +525,8 @@ resources:
       ['docs', 'guides']
     );
 
-    const docsDir = join(projectDir, 'docs');
-    const guidesDir = join(projectDir, 'guides');
+    const docsDir = safePath.join(projectDir, 'docs');
+    const guidesDir = safePath.join(projectDir, 'guides');
 
     // Invalid doc - missing category
     createMarkdownWithFrontmatter(

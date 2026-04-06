@@ -7,6 +7,7 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { load as loadYaml } from 'js-yaml';
 
 import { ProjectConfigSchema, type ProjectConfig } from './schemas/project-config.js';
@@ -31,11 +32,11 @@ const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
  * ```
  */
 export async function findConfigFile(startDir: string = process.cwd()): Promise<string | undefined> {
-  let currentDir = path.resolve(startDir);
+  let currentDir = safePath.resolve(startDir);
   const { root } = path.parse(currentDir);
 
   while (true) {
-    const configPath = path.join(currentDir, CONFIG_FILENAME);
+    const configPath = safePath.join(currentDir, CONFIG_FILENAME);
 
     try {
       // Check if file exists by attempting to read metadata

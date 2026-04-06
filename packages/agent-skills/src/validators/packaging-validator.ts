@@ -16,11 +16,11 @@
 
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { basename, dirname, relative, resolve } from 'node:path';
+import { basename, dirname } from 'node:path';
 
 import type { ValidationOverride } from '@vibe-agent-toolkit/agent-schema';
 import { parseMarkdown, ResourceRegistry } from '@vibe-agent-toolkit/resources';
-import { findProjectRoot, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 
 import { walkLinkGraph, type LinkResolution, type WalkableRegistry } from '../walk-link-graph.js';
 
@@ -152,7 +152,7 @@ export async function validateSkillForPackaging(
   });
   registry.resolveLinks();
 
-  const skillResource = registry.getResource(resolve(skillPath));
+  const skillResource = registry.getResource(safePath.resolve(skillPath));
   const { bundledResources, bundledAssets, excludedReferences, maxBundledDepth } = walkLinkGraph(
     skillResource?.id ?? '',
     registry as WalkableRegistry,
@@ -173,14 +173,14 @@ export async function validateSkillForPackaging(
   // Check for directory links (directories are not valid bundle targets)
   const directoryLinks = excludedReferences.filter(r => r.excludeReason === EXCLUDE_REASON_DIRECTORY);
   for (const dirLink of directoryLinks) {
-    const dirPath = toForwardSlash(relative(dirname(skillPath), dirLink.path));
+    const dirPath = toForwardSlash(safePath.relative(dirname(skillPath), dirLink.path));
     errors.push(createIssue(VALIDATION_RULES.LINK_TARGETS_DIRECTORY, { dirPath }, skillPath));
   }
 
   // Check for outside-project links (non-overridable error)
   const outsideProjectLinks = excludedReferences.filter(r => r.excludeReason === EXCLUDE_REASON_OUTSIDE_PROJECT);
   for (const extLink of outsideProjectLinks) {
-    const href = toForwardSlash(relative(dirname(skillPath), extLink.path));
+    const href = toForwardSlash(safePath.relative(dirname(skillPath), extLink.path));
     errors.push(createIssue(VALIDATION_RULES.OUTSIDE_PROJECT_BOUNDARY, { href }, skillPath));
   }
 
@@ -308,7 +308,7 @@ async function validateNavigationLinks(
   if (navigationLinks.length > 0) {
     const files = navigationLinks.map((l) => {
       const hrefBase = l.href.split('#')[0] ?? l.href;
-      const resolvedPath = resolve(dirname(skillPath), hrefBase);
+      const resolvedPath = safePath.resolve(dirname(skillPath), hrefBase);
       const lineInfo = l.line === undefined ? '' : `:${l.line}`;
       return `${resolvedPath}${lineInfo}`;
     }).join(', ');
@@ -373,7 +373,7 @@ function getResolvedMarkdownLinks(
     }
 
     // Resolve path
-    const resolvedPath = resolve(dirname(markdownPath), hrefWithoutAnchor);
+    const resolvedPath = safePath.resolve(dirname(markdownPath), hrefWithoutAnchor);
 
     // Only include .md files that exist
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path constructed from parsed markdown
@@ -415,7 +415,7 @@ function deduplicateExcludedReferences(
     const matchedPattern = ref.matchedRule?.patterns[0];
     const reason = mapExcludeReason(ref.excludeReason);
     details.push({
-      path: toForwardSlash(relative(dirname(skillPath), ref.path)),
+      path: toForwardSlash(safePath.relative(dirname(skillPath), ref.path)),
       reason,
       ...(matchedPattern === undefined ? {} : { matchedPattern }),
     });

@@ -1,7 +1,6 @@
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 
-import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 
@@ -23,15 +22,15 @@ describe('prepareBinaries', () => {
 
   it('should copy and chmod binary files', () => {
     // Create source file
-    const distDir = path.join(tempDir, 'dist', 'bin');
+    const distDir = safePath.join(tempDir, 'dist', 'bin');
     fs.mkdirSync(distDir, { recursive: true });
-    fs.writeFileSync(path.join(distDir, 'vat.js'), '#!/usr/bin/env node\nconsole.log("test")');
+    fs.writeFileSync(safePath.join(distDir, 'vat.js'), '#!/usr/bin/env node\nconsole.log("test")');
 
     // Run prepare
     prepareBinaries(tempDir);
 
     // Verify copy
-    const binPath = path.join(distDir, 'vat');
+    const binPath = safePath.join(distDir, 'vat');
     expect(fs.existsSync(binPath)).toBe(true);
 
     // Verify executable bit (on Unix)
@@ -46,7 +45,7 @@ describe('prepareBinaries', () => {
   });
 
   it('should handle missing source file gracefully', () => {
-    const distDir = path.join(tempDir, 'dist', 'bin');
+    const distDir = safePath.join(tempDir, 'dist', 'bin');
     fs.mkdirSync(distDir, { recursive: true });
 
     expect(() => prepareBinaries(tempDir)).toThrow(/vat.js not found/);

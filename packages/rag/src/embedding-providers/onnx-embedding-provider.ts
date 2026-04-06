@@ -14,7 +14,8 @@
  */
 
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import type { EmbeddingProvider } from '../interfaces/embedding.js';
 
@@ -169,7 +170,7 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
     this.model = config.model ?? 'sentence-transformers/all-MiniLM-L6-v2';
     this.dimensions = config.dimensions ?? 384;
     this.configModelPath = config.modelPath;
-    this.cacheDir = config.cacheDir ?? join(homedir(), '.cache', 'vat-onnx-models');
+    this.cacheDir = config.cacheDir ?? safePath.join(homedir(), '.cache', 'vat-onnx-models');
     this.executionProviders = config.executionProviders;
     this.maxSequenceLength = config.maxSequenceLength ?? 256;
   }
@@ -198,8 +199,8 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
     let vocabPath: string;
 
     if (this.configModelPath) {
-      modelPath = join(this.configModelPath, 'model.onnx');
-      vocabPath = join(this.configModelPath, 'vocab.txt');
+      modelPath = safePath.join(this.configModelPath, 'model.onnx');
+      vocabPath = safePath.join(this.configModelPath, 'vocab.txt');
     } else {
       const files = await ensureModelFiles(this.model, this.cacheDir);
       modelPath = files.modelPath;

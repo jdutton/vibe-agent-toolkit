@@ -11,9 +11,9 @@
 /* eslint-disable security/detect-non-literal-fs-filename */
 
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import AdmZip from 'adm-zip';
 
 let extractedFixturesPath: string | null = null;
@@ -32,11 +32,11 @@ export async function getTestFixturesPath(): Promise<string> {
   }
 
   // Create temp directory for this test run
-  const tempBase = join(normalizedTmpdir(), `vat-test-fixtures-${Date.now()}`);
+  const tempBase = safePath.join(normalizedTmpdir(), `vat-test-fixtures-${Date.now()}`);
   mkdirSyncReal(tempBase, { recursive: true });
 
   // Path to ZIP file (trusted, committed to repository)
-  const zipPath = join(__dirname, '../fixtures/claude-plugins-snapshot.zip');
+  const zipPath = safePath.join(__dirname, '../fixtures/claude-plugins-snapshot.zip');
 
   // Extract ZIP (fast on Windows, cross-platform using adm-zip)
   const zip = new AdmZip(zipPath);
@@ -44,10 +44,10 @@ export async function getTestFixturesPath(): Promise<string> {
   zip.extractAllTo(tempBase, true);
 
   // Path to extracted fixtures
-  extractedFixturesPath = join(tempBase, 'claude-plugins-snapshot');
+  extractedFixturesPath = safePath.join(tempBase, 'claude-plugins-snapshot');
 
   if (!existsSync(extractedFixturesPath)) {
-    throw new Error(`Extraction failed: ${extractedFixturesPath} does not exist after extraction`);
+    throw new Error(`Extraction failed: ${String(extractedFixturesPath)} does not exist after extraction`);
   }
 
   return extractedFixturesPath;

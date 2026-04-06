@@ -3,8 +3,8 @@
  * Tests path normalization, validation, and absolutePath computation
  */
 
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -181,26 +181,26 @@ describe('getResourceAbsolutePath', () => {
   it('should compute absolute path from project root and relative path', () => {
     const projectRoot = '/Users/test/project';
     const result = getResourceAbsolutePath(projectRoot, DOCS_GUIDE_MD);
-    expect(result).toBe(join(projectRoot, DOCS_GUIDE_MD));
+    expect(result).toBe(safePath.join(projectRoot, DOCS_GUIDE_MD));
   });
 
   it('should handle Windows-style project root', () => {
     const projectRoot = String.raw`C:\Users\test\project`;
     const result = getResourceAbsolutePath(projectRoot, DOCS_GUIDE_MD);
-    expect(result).toBe(join(projectRoot, DOCS_GUIDE_MD));
+    expect(result).toBe(safePath.join(projectRoot, DOCS_GUIDE_MD));
   });
 
   it('should handle nested paths', () => {
     const projectRoot = '/project';
     const projectPath = 'a/b/c/file.txt';
     const result = getResourceAbsolutePath(projectRoot, projectPath);
-    expect(result).toBe(join(projectRoot, projectPath));
+    expect(result).toBe(safePath.join(projectRoot, projectPath));
   });
 
   it('should handle root-level file', () => {
     const projectRoot = '/project';
     const projectPath = 'README.md';
     const result = getResourceAbsolutePath(projectRoot, projectPath);
-    expect(result).toBe(join(projectRoot, projectPath));
+    expect(result).toBe(safePath.join(projectRoot, projectPath));
   });
 });

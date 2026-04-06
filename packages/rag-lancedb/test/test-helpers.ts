@@ -7,11 +7,11 @@
  */
 
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+
 
 import type { ContentTransformOptions, LinkType, ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { parseMarkdown } from '@vibe-agent-toolkit/resources';
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 
 import { LanceDBRAGProvider } from '../src/lancedb-rag-provider.js';
 
@@ -22,10 +22,10 @@ import { LanceDBRAGProvider } from '../src/lancedb-rag-provider.js';
  *
  * @example
  * const tempDir = await createTempDir();
- * const dbPath = join(tempDir, 'db');
+ * const dbPath = safePath.join(tempDir, 'db');
  */
 export async function createTempDir(): Promise<string> {
-  return await mkdtemp(join(normalizedTmpdir(), 'rag-lancedb-test-'));
+  return await mkdtemp(safePath.join(normalizedTmpdir(), 'rag-lancedb-test-'));
 }
 
 /**
@@ -82,7 +82,7 @@ export async function createTestMarkdownFile(
   filename: string,
   content: string
 ): Promise<string> {
-  const filePath = join(tempDir, filename);
+  const filePath = safePath.join(tempDir, filename);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is controlled temp path
   await writeFile(filePath, content);
   return filePath;
@@ -185,7 +185,7 @@ export function setupLanceDBTestSuite(autoCreateProvider = false): {
     provider: null as LanceDBRAGProvider | null,
     beforeEach: async () => {
       suite.tempDir = await createTempDir();
-      suite.dbPath = join(suite.tempDir, 'db');
+      suite.dbPath = safePath.join(suite.tempDir, 'db');
       if (autoCreateProvider) {
         suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath });
       }

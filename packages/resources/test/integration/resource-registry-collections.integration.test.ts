@@ -1,8 +1,8 @@
 /* eslint-disable security/detect-non-literal-fs-filename */
 // Test file - all file operations are in temp directories
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ResourceRegistry } from '../../src/resource-registry.js';
@@ -22,10 +22,10 @@ describe('ResourceRegistry with collections', () => {
 
   it('should assign collections to resources based on config', async () => {
     // Create test files
-    const docsDir = join(suite.tempDir, 'docs');
+    const docsDir = safePath.join(suite.tempDir, 'docs');
     await mkdir(docsDir);
-    await writeFile(join(docsDir, 'guide.md'), '# Guide\n\nContent here.');
-    await writeFile(join(suite.tempDir, 'README.md'), '# Project\n\nReadme content.');
+    await writeFile(safePath.join(docsDir, 'guide.md'), '# Guide\n\nContent here.');
+    await writeFile(safePath.join(suite.tempDir, 'README.md'), '# Project\n\nReadme content.');
 
     // Create config
     const config: ProjectConfig = {
@@ -46,19 +46,19 @@ describe('ResourceRegistry with collections', () => {
     const registry = new ResourceRegistry({ config });
 
     // Add resources
-    await registry.addResource(join(docsDir, 'guide.md'));
-    await registry.addResource(join(suite.tempDir, 'README.md'));
+    await registry.addResource(safePath.join(docsDir, 'guide.md'));
+    await registry.addResource(safePath.join(suite.tempDir, 'README.md'));
 
     // Check collections
-    const guide = registry.getResource(join(docsDir, 'guide.md'));
+    const guide = registry.getResource(safePath.join(docsDir, 'guide.md'));
     expectCollectionsEqual(guide?.collections, ['all-docs', 'rag-kb']);
 
-    const readme = registry.getResource(join(suite.tempDir, 'README.md'));
+    const readme = registry.getResource(safePath.join(suite.tempDir, 'README.md'));
     expect(readme?.collections).toEqual(['all-docs']);
   });
 
   it('should not assign collections when config is absent', async () => {
-    const filePath = join(suite.tempDir, 'test.md');
+    const filePath = safePath.join(suite.tempDir, 'test.md');
     await writeFile(filePath, '# Test\n\nContent.');
 
     const registry = new ResourceRegistry();
@@ -69,7 +69,7 @@ describe('ResourceRegistry with collections', () => {
   });
 
   it('should assign empty collections array when file matches no collections', async () => {
-    const filePath = join(suite.tempDir, 'test.ts');
+    const filePath = safePath.join(suite.tempDir, 'test.ts');
     await writeFile(filePath, 'console.log("test");');
 
     const config: ProjectConfig = {
@@ -92,10 +92,10 @@ describe('ResourceRegistry with collections', () => {
 
   it('should respect exclude patterns', async () => {
     // Create test files
-    const docsDir = join(suite.tempDir, 'docs');
+    const docsDir = safePath.join(suite.tempDir, 'docs');
     await mkdir(docsDir);
-    await writeFile(join(docsDir, 'guide.md'), '# Guide');
-    await writeFile(join(docsDir, 'README.md'), '# Readme');
+    await writeFile(safePath.join(docsDir, 'guide.md'), '# Guide');
+    await writeFile(safePath.join(docsDir, 'README.md'), '# Readme');
 
     const config: ProjectConfig = {
       version: 1,
@@ -113,18 +113,18 @@ describe('ResourceRegistry with collections', () => {
     };
 
     const registry = new ResourceRegistry({ config });
-    await registry.addResource(join(docsDir, 'guide.md'));
-    await registry.addResource(join(docsDir, 'README.md'));
+    await registry.addResource(safePath.join(docsDir, 'guide.md'));
+    await registry.addResource(safePath.join(docsDir, 'README.md'));
 
-    const guide = registry.getResource(join(docsDir, 'guide.md'));
+    const guide = registry.getResource(safePath.join(docsDir, 'guide.md'));
     expectCollectionsEqual(guide?.collections, ['all-md', 'rag-kb']);
 
-    const readme = registry.getResource(join(docsDir, 'README.md'));
+    const readme = registry.getResource(safePath.join(docsDir, 'README.md'));
     expect(readme?.collections).toEqual(['all-md']);
   });
 
   it('should handle overlapping collections', async () => {
-    const skillPath = join(suite.tempDir, 'SKILL.md');
+    const skillPath = safePath.join(suite.tempDir, 'SKILL.md');
     await writeFile(skillPath, '# Skill\n\n## Usage');
 
     const config: ProjectConfig = {
@@ -153,14 +153,14 @@ describe('ResourceRegistry with collections', () => {
 
   it('should work with crawl method', async () => {
     // Create directory structure
-    const docsDir = join(suite.tempDir, 'docs');
-    const guidesDir = join(suite.tempDir, 'guides');
+    const docsDir = safePath.join(suite.tempDir, 'docs');
+    const guidesDir = safePath.join(suite.tempDir, 'guides');
     await mkdir(docsDir);
     await mkdir(guidesDir);
 
-    await writeFile(join(docsDir, 'api.md'), '# API');
-    await writeFile(join(guidesDir, 'tutorial.md'), '# Tutorial');
-    await writeFile(join(suite.tempDir, 'README.md'), '# Project');
+    await writeFile(safePath.join(docsDir, 'api.md'), '# API');
+    await writeFile(safePath.join(guidesDir, 'tutorial.md'), '# Tutorial');
+    await writeFile(safePath.join(suite.tempDir, 'README.md'), '# Project');
 
     const config: ProjectConfig = {
       version: 1,
@@ -182,13 +182,13 @@ describe('ResourceRegistry with collections', () => {
       include: ['**/*.md'],
     });
 
-    const api = registry.getResource(join(docsDir, 'api.md'));
+    const api = registry.getResource(safePath.join(docsDir, 'api.md'));
     expect(api?.collections).toEqual(['docs']);
 
-    const tutorial = registry.getResource(join(guidesDir, 'tutorial.md'));
+    const tutorial = registry.getResource(safePath.join(guidesDir, 'tutorial.md'));
     expect(tutorial?.collections).toEqual(['guides']);
 
-    const readme = registry.getResource(join(suite.tempDir, 'README.md'));
+    const readme = registry.getResource(safePath.join(suite.tempDir, 'README.md'));
     expect(readme?.collections).toBeUndefined();
   });
 });

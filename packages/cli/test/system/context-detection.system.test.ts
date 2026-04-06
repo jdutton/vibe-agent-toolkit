@@ -11,8 +11,7 @@ import {
   fs,
   getBinPath,
   getWrapperPath,
-  join,
-  resolve,
+  safePath,
   spawnSync,
 } from './test-common.js';
 import { createTestTempDir, setupTestProject } from './test-helpers/index.js';
@@ -37,7 +36,7 @@ describe('Context detection (system test)', () => {
   });
 
   it('should detect dev context via VAT_ROOT_DIR', () => {
-    const repoRoot = resolve(__dirname, '../../../..');
+    const repoRoot = safePath.resolve(__dirname, '../../../..');
     const result = spawnSync('node', [wrapperPath, '--version'], {
       encoding: 'utf-8',
       env: { ...process.env, VAT_ROOT_DIR: repoRoot },
@@ -50,8 +49,8 @@ describe('Context detection (system test)', () => {
 
   it('should detect dev context when running from repo', () => {
     // Skip if not in actual repo
-    const repoRoot = resolve(__dirname, '../../../..');
-    const wrapperExists = fs.existsSync(join(repoRoot, 'vibe-agent-toolkit/bin/vat'));
+    const repoRoot = safePath.resolve(__dirname, '../../../..');
+    const wrapperExists = fs.existsSync(safePath.join(repoRoot, 'vibe-agent-toolkit/bin/vat'));
 
     if (!wrapperExists) {
       console.log('Skipping dev context test - not in repo structure');

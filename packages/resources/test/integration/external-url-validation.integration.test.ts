@@ -1,8 +1,8 @@
 /* eslint-disable security/detect-non-literal-fs-filename */
 // Test file - all file operations are in temp directories
 import { writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ResourceRegistry } from '../../src/resource-registry.js';
@@ -14,7 +14,7 @@ const TEST_EXTERNAL_URL = 'https://example.com/page';
  * Create a test file with external link and return registry
  */
 async function setupRegistryWithExternalLink(tempDir: string, url: string): Promise<ResourceRegistry> {
-  const testFile = join(tempDir, 'test.md');
+  const testFile = safePath.join(tempDir, 'test.md');
   await writeFile(testFile, `# Test\n\n[Link](${url})\n`);
 
   const registry = new ResourceRegistry({ baseDir: tempDir });

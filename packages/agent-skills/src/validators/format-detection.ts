@@ -2,6 +2,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
+
 import type { ResourceFormat } from './types.js';
 
 /**
@@ -75,7 +77,7 @@ export async function detectResourceFormat(
  * Detects format for directory resources
  */
 function detectDirectoryFormat(dirPath: string): ResourceFormat {
-	const claudePluginDir = path.join(dirPath, '.claude-plugin');
+	const claudePluginDir = safePath.join(dirPath, '.claude-plugin');
 
 	// Check if .claude-plugin directory exists
 	if (!fs.existsSync(claudePluginDir)) {
@@ -87,8 +89,8 @@ function detectDirectoryFormat(dirPath: string): ResourceFormat {
 	}
 
 	// Check for both plugin.json and marketplace.json
-	const pluginJsonPath = path.join(claudePluginDir, 'plugin.json');
-	const marketplaceJsonPath = path.join(claudePluginDir, 'marketplace.json');
+	const pluginJsonPath = safePath.join(claudePluginDir, 'plugin.json');
+	const marketplaceJsonPath = safePath.join(claudePluginDir, 'marketplace.json');
 
 	const hasPlugin = fs.existsSync(pluginJsonPath);
 	const hasMarketplace = fs.existsSync(marketplaceJsonPath);

@@ -6,9 +6,11 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname } from 'node:path';
 
 import { gitFindRoot } from './git-utils.js';
+import { safePath } from './path-utils.js';
+
 
 const PACKAGE_JSON_FILENAME = 'package.json';
 
@@ -24,12 +26,12 @@ const PACKAGE_JSON_FILENAME = 'package.json';
  * @returns Project root directory
  */
 export function findProjectRoot(startDir: string): string {
-  let currentDir = resolve(startDir);
+  let currentDir = safePath.resolve(startDir);
   const resolvedStartDir = currentDir;
 
   // 1. Walk up looking for workspace root (package.json with "workspaces")
   while (currentDir !== dirname(currentDir)) {
-    const packageJsonPath = join(currentDir, PACKAGE_JSON_FILENAME);
+    const packageJsonPath = safePath.join(currentDir, PACKAGE_JSON_FILENAME);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Walking up from validated startDir
     if (existsSync(packageJsonPath)) {
       try {

@@ -27,20 +27,23 @@ const STORE_DOCS_CONFIG = { storeDocuments: true } as const;
 const UPDATE_DOC_ID = 'update-doc';
 const DELETE_DOC_ID = 'delete-doc';
 
+/** Close the current provider and reopen with given options (defaults to STORE_DOCS_CONFIG) */
+async function reconnectProvider(
+  suite: ReturnType<typeof setupLanceDBTestSuite>,
+  options?: Record<string, unknown>,
+) {
+  if (suite.provider) await suite.provider.close();
+  suite.provider = await LanceDBRAGProvider.create({
+    dbPath: suite.dbPath,
+    ...STORE_DOCS_CONFIG,
+    ...options,
+  });
+}
+
 describe('LanceDB Document Storage Integration', () => {
   const suite = setupLanceDBTestSuite();
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
-
-  /** Close the current provider and reopen with given options (defaults to STORE_DOCS_CONFIG) */
-  async function reconnectProvider(options?: Record<string, unknown>) {
-    if (suite.provider) await suite.provider.close();
-    suite.provider = await LanceDBRAGProvider.create({
-      dbPath: suite.dbPath,
-      ...STORE_DOCS_CONFIG,
-      ...options,
-    });
-  }
 
   it('should store and retrieve a document by resourceId', async () => {
     suite.provider = await LanceDBRAGProvider.create({ dbPath: suite.dbPath, ...STORE_DOCS_CONFIG });
@@ -62,7 +65,7 @@ Content in section 1 about testing.`
     expect(result.resourcesIndexed).toBe(1);
     expect(result.errors).toEqual([]);
 
-    await reconnectProvider();
+    await reconnectProvider(suite);
 
     const doc = await suite.provider.getDocument('doc-1');
     expect(doc).not.toBeNull();
@@ -102,7 +105,7 @@ This references [another file](./other.md) for details.`
     const result = await suite.provider.indexResources([resource]);
     expect(result.resourcesIndexed).toBe(1);
 
-    await reconnectProvider({ contentTransform });
+    await reconnectProvider(suite, { contentTransform });
 
     const doc = await suite.provider.getDocument('transformed-doc');
     expect(doc).not.toBeNull();
@@ -133,7 +136,7 @@ Important security information about authentication.`
     const result = await suite.provider.indexResources([resource]);
     expect(result.resourcesIndexed).toBe(1);
 
-    await reconnectProvider();
+    await reconnectProvider(suite);
 
     const doc = await suite.provider.getDocument('meta-doc');
     expect(doc).not.toBeNull();
@@ -170,7 +173,7 @@ Important security information about authentication.`
     const resource = await createTestResource(filePath, 'existing-doc');
     await suite.provider.indexResources([resource]);
 
-    await reconnectProvider();
+    await reconnectProvider(suite);
 
     const doc = await suite.provider.getDocument('nonexistent-doc');
     expect(doc).toBeNull();
@@ -196,7 +199,7 @@ Important security information about authentication.`
     const updateResult = await suite.provider.indexResources([modifiedResource]);
     expect(updateResult.resourcesUpdated).toBe(1);
 
-    await reconnectProvider();
+    await reconnectProvider(suite);
 
     const doc = await suite.provider.getDocument(UPDATE_DOC_ID);
     expect(doc).not.toBeNull();
@@ -219,14 +222,14 @@ Important security information about authentication.`
       const resource = await createTestResource(filePath, DELETE_DOC_ID);
       await suite.provider.indexResources([resource]);
 
-      await reconnectProvider();
+      await reconnectProvider(suite);
 
       let doc = await suite.provider.getDocument(DELETE_DOC_ID);
       expect(doc).not.toBeNull();
 
       await suite.provider.deleteResource(DELETE_DOC_ID);
 
-      await reconnectProvider();
+      await reconnectProvider(suite);
 
       doc = await suite.provider.getDocument(DELETE_DOC_ID);
       expect(doc).toBeNull();
@@ -271,7 +274,7 @@ Important security information about authentication.`
     const result = await suite.provider.indexResources([resource1, resource2]);
     expect(result.resourcesIndexed).toBe(2);
 
-    await reconnectProvider();
+    await reconnectProvider(suite);
 
     const doc1 = await suite.provider.getDocument('multi-1');
     expect(doc1).not.toBeNull();
@@ -301,7 +304,7 @@ Important security information about authentication.`
     const resource2 = await createTestResource(file2, 'batch-2');
     await suite.provider.indexResources([resource2]);
 
-    await reconnectProvider();
+    await reconnectProvider(suite);
 
     const doc1 = await suite.provider.getDocument('batch-1');
     expect(doc1).not.toBeNull();
@@ -323,7 +326,7 @@ Important security information about authentication.`
     const resource = await createTestResource(filePath, 'chunk-doc');
     const result = await suite.provider.indexResources([resource]);
 
-    await reconnectProvider();
+    await reconnectProvider(suite);
 
     const doc = await suite.provider.getDocument('chunk-doc');
     expect(doc).not.toBeNull();

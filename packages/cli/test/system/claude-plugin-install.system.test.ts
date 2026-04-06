@@ -6,9 +6,9 @@
  */
 
 import * as fs from 'node:fs';
-import { join } from 'node:path';
 
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import * as tar from 'tar';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -24,7 +24,7 @@ const TEMP_DIR_PREFIX = 'vat-plugin-install-test-';
 
 // String constants to avoid sonarjs/no-duplicate-string violations
 // Used as suffix after claudeDir (which already includes '.claude')
-const PLUGINS_MARKETPLACES = join('plugins', 'marketplaces');
+const PLUGINS_MARKETPLACES = safePath.join('plugins', 'marketplaces');
 const MULTI_MARKET = 'multi-market';
 const SKILL_ALPHA = 'skill-alpha';
 const SKILL_BETA = 'skill-beta';
@@ -39,8 +39,8 @@ function createInstallTestContext(createTempDir: () => string): {
   claudeDir: string;
 } {
   const tempDir = createTempDir();
-  const fakeHome = join(tempDir, 'home');
-  const claudeDir = join(fakeHome, '.claude');
+  const fakeHome = safePath.join(tempDir, 'home');
+  const claudeDir = safePath.join(fakeHome, '.claude');
   mkdirSyncReal(fakeHome, { recursive: true });
   return { tempDir, fakeHome, claudeDir };
 }
@@ -59,28 +59,28 @@ function setupPluginTestProject(
   marketplaceName: string,
   plugins: Array<{ name: string; skills?: string[] }>
 ): { projectDir: string; marketplacesDir: string } {
-  const projectDir = join(baseDir, name);
+  const projectDir = safePath.join(baseDir, name);
   mkdirSyncReal(projectDir, { recursive: true });
 
   writeTestFile(
-    join(projectDir, 'package.json'),
+    safePath.join(projectDir, 'package.json'),
     JSON.stringify({ name: '@test/my-plugin-pkg', version: '1.2.3' })
   );
 
-  const marketplacesDir = join(projectDir, 'dist', '.claude', 'plugins', 'marketplaces');
+  const marketplacesDir = safePath.join(projectDir, 'dist', '.claude', 'plugins', 'marketplaces');
   for (const plugin of plugins) {
-    const pluginDir = join(marketplacesDir, marketplaceName, 'plugins', plugin.name);
+    const pluginDir = safePath.join(marketplacesDir, marketplaceName, 'plugins', plugin.name);
     mkdirSyncReal(pluginDir, { recursive: true });
-    writeTestFile(join(pluginDir, 'plugin.json'), JSON.stringify({ name: plugin.name, version: '1.2.3' }));
+    writeTestFile(safePath.join(pluginDir, 'plugin.json'), JSON.stringify({ name: plugin.name, version: '1.2.3' }));
 
     if (plugin.skills) {
       for (const skillName of plugin.skills) {
-        const skillDir = join(pluginDir, 'skills', skillName);
+        const skillDir = safePath.join(pluginDir, 'skills', skillName);
         mkdirSyncReal(skillDir, { recursive: true });
-        writeTestFile(join(skillDir, 'SKILL.md'), `# ${skillName}\nTest skill content`);
+        writeTestFile(safePath.join(skillDir, 'SKILL.md'), `# ${skillName}\nTest skill content`);
       }
     } else {
-      writeTestFile(join(pluginDir, 'SKILL.md'), `# ${plugin.name}\nTest plugin content`);
+      writeTestFile(safePath.join(pluginDir, 'SKILL.md'), `# ${plugin.name}\nTest plugin content`);
     }
   }
 
@@ -122,11 +122,11 @@ describe('claude plugin install command (system test)', () => {
     runPluginInstall(binPath, projectDir, fakeHome);
 
     expect(
-      fs.existsSync(join(claudeDir, PLUGINS_MARKETPLACES, 'test-market', 'plugins', 'my-skill'))
+      fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES, 'test-market', 'plugins', 'my-skill'))
     ).toBe(true);
 
     const installed = JSON.parse(
-      fs.readFileSync(join(claudeDir, 'plugins', 'installed_plugins.json'), 'utf-8')
+      fs.readFileSync(safePath.join(claudeDir, 'plugins', 'installed_plugins.json'), 'utf-8')
     ) as { plugins: Record<string, unknown> };
     expect(Object.keys(installed.plugins)).toContain('my-skill@test-market');
   });
@@ -136,7 +136,7 @@ describe('claude plugin install command (system test)', () => {
     const { result, parsed } = executeCliAndParseYaml(binPath, [
       'claude', 'plugin', 'install', 'npm:@test/fake',
       '--target', 'claude.ai',
-    ], { env: fakeHomeEnv(join(tempDir, 'home')) });
+    ], { env: fakeHomeEnv(safePath.join(tempDir, 'home')) });
 
     expect(result.status).toBe(1);
     expect(parsed.status).toBe('not-available');
@@ -145,7 +145,7 @@ describe('claude plugin install command (system test)', () => {
 
   it('skips install when not a global npm install (--npm-postinstall)', () => {
     const tempDir = createTempDir();
-    const fakeHome = join(tempDir, 'home');
+    const fakeHome = safePath.join(tempDir, 'home');
     mkdirSyncReal(fakeHome, { recursive: true });
 
     // Build env without npm_config_global so isGlobalNpmInstall() returns false
@@ -168,8 +168,8 @@ describe('claude plugin install command (system test)', () => {
 
     runPluginInstall(binPath, projectDir, fakeHome);
 
-    expect(fs.existsSync(join(claudeDir, PLUGINS_MARKETPLACES, MULTI_MARKET, 'plugins', SKILL_ALPHA))).toBe(true);
-    expect(fs.existsSync(join(claudeDir, PLUGINS_MARKETPLACES, MULTI_MARKET, 'plugins', SKILL_BETA))).toBe(true);
+    expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES, MULTI_MARKET, 'plugins', SKILL_ALPHA))).toBe(true);
+    expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES, MULTI_MARKET, 'plugins', SKILL_BETA))).toBe(true);
   });
 
   it('installs from npm tarball (.tgz) with plugin tree', async () => {
@@ -180,7 +180,7 @@ describe('claude plugin install command (system test)', () => {
     ]);
 
     // Create tarball in npm pack format: all files under package/ prefix
-    const tgzPath = join(tempDir, 'my-pkg-1.0.0.tgz');
+    const tgzPath = safePath.join(tempDir, 'my-pkg-1.0.0.tgz');
     await tar.create({ gzip: true, file: tgzPath, cwd: projectDir, prefix: 'package' }, ['.']);
 
     const { result, parsed } = executeCliAndParseYaml(binPath, [
@@ -190,7 +190,7 @@ describe('claude plugin install command (system test)', () => {
     expect(result.status).toBe(0);
     expect(parsed.status).toBe('success');
     expect(
-      fs.existsSync(join(claudeDir, PLUGINS_MARKETPLACES, 'tgz-market', 'plugins', 'tgz-skill'))
+      fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES, 'tgz-market', 'plugins', 'tgz-skill'))
     ).toBe(true);
   });
 
@@ -208,8 +208,8 @@ describe('claude plugin install command (system test)', () => {
     expect(first.result.status).toBe(0);
 
     // Modify the skill file so we can detect the overwrite
-    const installedSkillDir = join(claudeDir, PLUGINS_MARKETPLACES, 'ow-market', 'plugins', 'ow-skill');
-    fs.writeFileSync(join(installedSkillDir, 'extra-sentinel.txt'), 'sentinel');
+    const installedSkillDir = safePath.join(claudeDir, PLUGINS_MARKETPLACES, 'ow-market', 'plugins', 'ow-skill');
+    fs.writeFileSync(safePath.join(installedSkillDir, 'extra-sentinel.txt'), 'sentinel');
 
     // Second install (should overwrite — marketplace dir is rm-ed and re-copied)
     const second = executeCliAndParseYaml(binPath, ['claude', 'plugin', 'install', projectDir], {
@@ -219,7 +219,7 @@ describe('claude plugin install command (system test)', () => {
 
     // After reinstall the skill dir should exist but the sentinel should be gone
     expect(fs.existsSync(installedSkillDir)).toBe(true);
-    expect(fs.existsSync(join(installedSkillDir, 'extra-sentinel.txt'))).toBe(false);
+    expect(fs.existsSync(safePath.join(installedSkillDir, 'extra-sentinel.txt'))).toBe(false);
   });
 
   it('reports correct skillsInstalled count when plugin has skills/ subdirectory', () => {

@@ -1,9 +1,9 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 
 import fs from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { AuditCommandOptions } from '../../src/commands/audit.js';
@@ -38,7 +38,7 @@ describe('audit command (integration)', () => {
   let tempDir: string;
 
   beforeAll(() => {
-    tempDir = fs.mkdtempSync(join(normalizedTmpdir(), 'vat-agent-audit-'));
+    tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-agent-audit-'));
   });
 
   afterAll(() => {
@@ -47,11 +47,11 @@ describe('audit command (integration)', () => {
 
   describe('plugin validation', () => {
     it('should validate a valid plugin directory', async () => {
-      const pluginDir = join(tempDir, 'valid-plugin');
-      const claudePluginDir = join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
+      const pluginDir = safePath.join(tempDir, 'valid-plugin');
+      const claudePluginDir = safePath.join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
       fs.mkdirSync(claudePluginDir, { recursive: true });
       fs.writeFileSync(
-        join(claudePluginDir, PLUGIN_JSON_FILENAME),
+        safePath.join(claudePluginDir, PLUGIN_JSON_FILENAME),
         JSON.stringify({
           name: TEST_PLUGIN_NAME,
           version: '1.0.0',
@@ -67,11 +67,11 @@ describe('audit command (integration)', () => {
     });
 
     it('should detect plugin validation errors', async () => {
-      const pluginDir = join(tempDir, 'invalid-plugin');
-      const claudePluginDir = join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
+      const pluginDir = safePath.join(tempDir, 'invalid-plugin');
+      const claudePluginDir = safePath.join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
       fs.mkdirSync(claudePluginDir, { recursive: true });
       fs.writeFileSync(
-        join(claudePluginDir, PLUGIN_JSON_FILENAME),
+        safePath.join(claudePluginDir, PLUGIN_JSON_FILENAME),
         JSON.stringify({
           // Invalid name format (must be lowercase-alphanumeric-with-hyphens)
           name: 'Invalid_Plugin_Name',
@@ -85,11 +85,11 @@ describe('audit command (integration)', () => {
     });
 
     it('should warn when plugin.json is missing version field', async () => {
-      const pluginDir = join(tempDir, 'no-version-plugin');
-      const claudePluginDir = join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
+      const pluginDir = safePath.join(tempDir, 'no-version-plugin');
+      const claudePluginDir = safePath.join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
       fs.mkdirSync(claudePluginDir, { recursive: true });
       fs.writeFileSync(
-        join(claudePluginDir, PLUGIN_JSON_FILENAME),
+        safePath.join(claudePluginDir, PLUGIN_JSON_FILENAME),
         JSON.stringify({
           name: TEST_PLUGIN_NAME,
           description: TEST_PLUGIN_DESCRIPTION,
@@ -109,11 +109,11 @@ describe('audit command (integration)', () => {
 
   describe('marketplace validation', () => {
     it('should validate marketplace directory successfully', async () => {
-      const marketplaceDir = join(tempDir, 'valid-marketplace');
-      const claudePluginDir = join(marketplaceDir, CLAUDE_PLUGIN_DIRNAME);
+      const marketplaceDir = safePath.join(tempDir, 'valid-marketplace');
+      const claudePluginDir = safePath.join(marketplaceDir, CLAUDE_PLUGIN_DIRNAME);
       fs.mkdirSync(claudePluginDir, { recursive: true });
       fs.writeFileSync(
-        join(claudePluginDir, MARKETPLACE_JSON_FILENAME),
+        safePath.join(claudePluginDir, MARKETPLACE_JSON_FILENAME),
         JSON.stringify({
           name: TEST_MARKETPLACE_NAME,
           owner: { name: TEST_OWNER_NAME },
@@ -132,7 +132,7 @@ describe('audit command (integration)', () => {
 
   describe('registry validation', () => {
     it('should validate installed_plugins.json registry', async () => {
-      const registryFile = join(tempDir, INSTALLED_PLUGINS_FILENAME);
+      const registryFile = safePath.join(tempDir, INSTALLED_PLUGINS_FILENAME);
       fs.writeFileSync(
         registryFile,
         JSON.stringify({
@@ -159,7 +159,7 @@ describe('audit command (integration)', () => {
     });
 
     it('should validate known_marketplaces.json registry', async () => {
-      const registryFile = join(tempDir, KNOWN_MARKETPLACES_FILENAME);
+      const registryFile = safePath.join(tempDir, KNOWN_MARKETPLACES_FILENAME);
       fs.writeFileSync(
         registryFile,
         JSON.stringify({
@@ -183,7 +183,7 @@ describe('audit command (integration)', () => {
 
   describe('Agent Skill validation', () => {
     it('should validate a single SKILL.md file', async () => {
-      const skillFile = join(tempDir, 'test-skill', 'SKILL.md');
+      const skillFile = safePath.join(tempDir, 'test-skill', 'SKILL.md');
       fs.mkdirSync(dirname(skillFile), { recursive: true });
       fs.writeFileSync(
         skillFile,
@@ -205,12 +205,12 @@ This is a test skill.
     });
 
     it('should validate VAT agent SKILL.md', async () => {
-      const agentDir = join(tempDir, 'vat-agent');
+      const agentDir = safePath.join(tempDir, 'vat-agent');
       fs.mkdirSync(agentDir, { recursive: true });
 
       // Create agent.yaml
       fs.writeFileSync(
-        join(agentDir, 'agent.yaml'),
+        safePath.join(agentDir, 'agent.yaml'),
         `metadata:
   name: test-agent
   version: 0.1.0
@@ -223,7 +223,7 @@ spec:
 
       // Create SKILL.md
       fs.writeFileSync(
-        join(agentDir, 'SKILL.md'),
+        safePath.join(agentDir, 'SKILL.md'),
         `---
 name: test-agent
 description: A test agent skill
@@ -244,7 +244,7 @@ This is a test agent.
 
   describe('unknown resource handling', () => {
     it('should report error for unknown resource type', async () => {
-      const unknownFile = join(tempDir, 'unknown.txt');
+      const unknownFile = safePath.join(tempDir, 'unknown.txt');
       fs.writeFileSync(unknownFile, 'not a valid resource');
 
       const results = await runAudit(unknownFile);
@@ -262,14 +262,14 @@ This is a test agent.
 
   describe('recursive scanning', () => {
     it('should discover and validate all resource types recursively', async () => {
-      const projectDir = join(tempDir, 'mixed-project');
+      const projectDir = safePath.join(tempDir, 'mixed-project');
 
       // Create plugin
-      const pluginDir = join(projectDir, 'plugins', 'my-plugin');
-      const pluginClaudeDir = join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
+      const pluginDir = safePath.join(projectDir, 'plugins', 'my-plugin');
+      const pluginClaudeDir = safePath.join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
       fs.mkdirSync(pluginClaudeDir, { recursive: true });
       fs.writeFileSync(
-        join(pluginClaudeDir, PLUGIN_JSON_FILENAME),
+        safePath.join(pluginClaudeDir, PLUGIN_JSON_FILENAME),
         JSON.stringify({
           name: 'my-plugin',
           version: '1.0.0',
@@ -278,11 +278,11 @@ This is a test agent.
       );
 
       // Create marketplace
-      const marketplaceDir = join(projectDir, 'marketplaces', MY_MARKETPLACE_NAME);
-      const marketplaceClaudeDir = join(marketplaceDir, CLAUDE_PLUGIN_DIRNAME);
+      const marketplaceDir = safePath.join(projectDir, 'marketplaces', MY_MARKETPLACE_NAME);
+      const marketplaceClaudeDir = safePath.join(marketplaceDir, CLAUDE_PLUGIN_DIRNAME);
       fs.mkdirSync(marketplaceClaudeDir, { recursive: true });
       fs.writeFileSync(
-        join(marketplaceClaudeDir, MARKETPLACE_JSON_FILENAME),
+        safePath.join(marketplaceClaudeDir, MARKETPLACE_JSON_FILENAME),
         JSON.stringify({
           name: MY_MARKETPLACE_NAME,
           owner: { name: TEST_OWNER_NAME },
@@ -291,10 +291,10 @@ This is a test agent.
       );
 
       // Create registry
-      const registriesDir = join(projectDir, 'registries');
+      const registriesDir = safePath.join(projectDir, 'registries');
       fs.mkdirSync(registriesDir, { recursive: true });
       fs.writeFileSync(
-        join(registriesDir, INSTALLED_PLUGINS_FILENAME),
+        safePath.join(registriesDir, INSTALLED_PLUGINS_FILENAME),
         JSON.stringify({
           version: 2,
           plugins: {},
@@ -302,10 +302,10 @@ This is a test agent.
       );
 
       // Create SKILL.md
-      const skillDir = join(projectDir, 'skills', 'my-skill');
+      const skillDir = safePath.join(projectDir, 'skills', 'my-skill');
       fs.mkdirSync(skillDir, { recursive: true });
       fs.writeFileSync(
-        join(skillDir, 'SKILL.md'),
+        safePath.join(skillDir, 'SKILL.md'),
         `---
 name: my-skill
 description: My skill
@@ -328,14 +328,14 @@ description: My skill
   describe('hierarchical output (--user flag)', () => {
     it('should find skill with errors when scanning recursively', async () => {
       // Create a mock user plugins directory structure with marketplace
-      const mockUserPluginsDir = join(tempDir, 'mock-user-plugins');
-      const marketplaceDir = join(mockUserPluginsDir, 'marketplaces', 'test-marketplace', 'test-plugin');
-      const skillsDir = join(marketplaceDir, 'skills', 'test-skill');
+      const mockUserPluginsDir = safePath.join(tempDir, 'mock-user-plugins');
+      const marketplaceDir = safePath.join(mockUserPluginsDir, 'marketplaces', 'test-marketplace', 'test-plugin');
+      const skillsDir = safePath.join(marketplaceDir, 'skills', 'test-skill');
       fs.mkdirSync(skillsDir, { recursive: true });
 
       // Create a SKILL.md with an error (name has spaces)
       fs.writeFileSync(
-        join(skillsDir, 'SKILL.md'),
+        safePath.join(skillsDir, 'SKILL.md'),
         `---
 name: test skill with spaces
 description: Test skill

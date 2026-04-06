@@ -22,7 +22,7 @@
 
 import path from 'node:path';
 
-import { renderTemplate, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { renderTemplate, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { LinkType, ResourceLink, ResourceMetadata } from './schemas/resource-metadata.js';
 import { matchesGlobPattern, splitHrefAnchor } from './utils.js';
@@ -200,7 +200,7 @@ function buildTemplateContext(
         estimatedTokenCount: resource.estimatedTokenCount,
         relativePath: sourceFilePath === undefined
           ? undefined
-          : toForwardSlash(path.relative(path.dirname(sourceFilePath), resource.filePath)),
+          : toForwardSlash(safePath.relative(path.dirname(sourceFilePath), resource.filePath)),
       };
 
   return {
@@ -481,7 +481,7 @@ export function transformContent(
           const [, anchor] = splitHrefAnchor(trimmedHref);
           const fragment = anchor === undefined ? '' : `#${anchor}`;
           const newRelPath = toForwardSlash(
-            path.relative(path.dirname(sourceFilePath), resource.filePath),
+            safePath.relative(path.dirname(sourceFilePath), resource.filePath),
           );
           return `[${ref}]: ${newRelPath}${fragment}`;
         }

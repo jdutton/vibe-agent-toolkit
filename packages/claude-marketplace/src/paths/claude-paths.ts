@@ -5,7 +5,8 @@
  */
 
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 export interface ClaudeUserPaths {
   /** ~/.claude directory */
@@ -55,19 +56,19 @@ export interface ClaudeProjectPaths {
  */
 export function getClaudeUserPaths(): ClaudeUserPaths {
   const home = homedir();
-  const claudeDir = process.env['CLAUDE_CONFIG_DIR'] ?? join(home, '.claude');
-  const pluginsDir = join(claudeDir, 'plugins');
+  const claudeDir = process.env['CLAUDE_CONFIG_DIR'] ?? safePath.join(home, '.claude');
+  const pluginsDir = safePath.join(claudeDir, 'plugins');
 
   return {
     claudeDir,
     pluginsDir,
-    skillsDir: join(claudeDir, 'skills'),
-    marketplacesDir: join(pluginsDir, 'marketplaces'),
-    pluginsCacheDir: join(pluginsDir, 'cache'),
-    knownMarketplacesPath: join(pluginsDir, 'known_marketplaces.json'),
-    installedPluginsPath: join(pluginsDir, 'installed_plugins.json'),
-    userSettingsPath: join(claudeDir, 'settings.json'),
-    userDotJsonPath: join(home, '.claude.json'),
+    skillsDir: safePath.join(claudeDir, 'skills'),
+    marketplacesDir: safePath.join(pluginsDir, 'marketplaces'),
+    pluginsCacheDir: safePath.join(pluginsDir, 'cache'),
+    knownMarketplacesPath: safePath.join(pluginsDir, 'known_marketplaces.json'),
+    installedPluginsPath: safePath.join(pluginsDir, 'installed_plugins.json'),
+    userSettingsPath: safePath.join(claudeDir, 'settings.json'),
+    userDotJsonPath: safePath.join(home, '.claude.json'),
   };
 }
 
@@ -77,12 +78,12 @@ export function getClaudeUserPaths(): ClaudeUserPaths {
  * @param projectDir - Absolute path to the project root
  */
 export function getClaudeProjectPaths(projectDir: string): ClaudeProjectPaths {
-  const claudeDir = join(projectDir, '.claude');
+  const claudeDir = safePath.join(projectDir, '.claude');
 
   return {
-    projectSettingsPath: join(claudeDir, 'settings.json'),
-    projectSettingsLocalPath: join(claudeDir, 'settings.local.json'),
-    claudeMdPath: join(claudeDir, 'CLAUDE.md'),
-    mcpJsonPath: join(projectDir, '.mcp.json'),
+    projectSettingsPath: safePath.join(claudeDir, 'settings.json'),
+    projectSettingsLocalPath: safePath.join(claudeDir, 'settings.local.json'),
+    claudeMdPath: safePath.join(claudeDir, 'CLAUDE.md'),
+    mcpJsonPath: safePath.join(projectDir, '.mcp.json'),
   };
 }

@@ -19,6 +19,7 @@
  */
 
 /* eslint-disable security/detect-non-literal-fs-filename -- All paths derived from curated WORKSPACE_PACKAGES list */
+/* eslint-disable local/no-path-join, local/no-path-resolve -- Runs at postinstall before build; cannot import safePath from utils */
 
 import { existsSync, mkdirSync, symlinkSync, unlinkSync, lstatSync } from 'node:fs';
 import { join, resolve } from 'node:path';

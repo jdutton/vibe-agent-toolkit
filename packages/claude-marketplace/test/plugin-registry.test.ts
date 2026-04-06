@@ -7,9 +7,9 @@
 // Test helper — file paths are controlled by test code, not user input
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { mkdirSyncReal, normalizedTmpdir, toForwardSlash } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, normalizedTmpdir, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -35,7 +35,7 @@ const FIXED_TIMESTAMP = '2026-02-26T00:00:00.000Z';
 function setupTempDir(prefix: string): { getDir: () => string } {
   let tempDir = '';
   beforeEach(() => {
-    tempDir = mkdtempSync(join(normalizedTmpdir(), prefix));
+    tempDir = mkdtempSync(safePath.join(normalizedTmpdir(), prefix));
   });
   afterEach(() => {
     rmSync(tempDir, { recursive: true, force: true });
@@ -56,7 +56,7 @@ describe('readKnownMarketplaces', () => {
     const data = {
       [MARKETPLACE_NAME]: {
         source: { source: 'npm' as const, package: NPM_PACKAGE, version: VERSION },
-        installLocation: toForwardSlash(join(paths.marketplacesDir, MARKETPLACE_NAME)),
+        installLocation: toForwardSlash(safePath.join(paths.marketplacesDir, MARKETPLACE_NAME)),
         lastUpdated: FIXED_TIMESTAMP,
       },
     };
@@ -67,7 +67,7 @@ describe('readKnownMarketplaces', () => {
     expect(result[MARKETPLACE_NAME]).toBeDefined();
     expect(result[MARKETPLACE_NAME]?.source.source).toBe('npm');
     expect(result[MARKETPLACE_NAME]?.installLocation).toBe(
-      toForwardSlash(join(paths.marketplacesDir, MARKETPLACE_NAME))
+      toForwardSlash(safePath.join(paths.marketplacesDir, MARKETPLACE_NAME))
     );
   });
 });
@@ -83,7 +83,7 @@ describe('readInstalledPlugins', () => {
   it('round-trips with writeInstalledPlugins', () => {
     const paths = buildTestPaths(getDir());
     const pluginKey = `${PLUGIN_NAME}@${MARKETPLACE_NAME}`;
-    const cacheInstallPath = toForwardSlash(join(paths.pluginsCacheDir, MARKETPLACE_NAME, PLUGIN_NAME, VERSION));
+    const cacheInstallPath = toForwardSlash(safePath.join(paths.pluginsCacheDir, MARKETPLACE_NAME, PLUGIN_NAME, VERSION));
     const data = {
       version: 2 as const,
       plugins: {
@@ -117,9 +117,9 @@ describe('installPlugin', () => {
     const paths = buildTestPaths(getDir());
 
     // Create a fake pluginDir with a dummy file
-    const pluginDir = join(getDir(), 'dist', 'plugins', PLUGIN_NAME);
+    const pluginDir = safePath.join(getDir(), 'dist', 'plugins', PLUGIN_NAME);
     mkdirSyncReal(pluginDir, { recursive: true });
-    writeFileSync(join(pluginDir, 'plugin.json'), JSON.stringify({ name: PLUGIN_NAME }));
+    writeFileSync(safePath.join(pluginDir, 'plugin.json'), JSON.stringify({ name: PLUGIN_NAME }));
 
     await installPlugin({
       marketplaceName: MARKETPLACE_NAME,
@@ -131,9 +131,9 @@ describe('installPlugin', () => {
     });
 
     // Verify plugin was copied to marketplacesDir
-    const marketplacePluginPath = join(paths.marketplacesDir, MARKETPLACE_NAME, 'plugins', PLUGIN_NAME);
+    const marketplacePluginPath = safePath.join(paths.marketplacesDir, MARKETPLACE_NAME, 'plugins', PLUGIN_NAME);
     expect(existsSync(marketplacePluginPath)).toBe(true);
-    expect(existsSync(join(marketplacePluginPath, 'plugin.json'))).toBe(true);
+    expect(existsSync(safePath.join(marketplacePluginPath, 'plugin.json'))).toBe(true);
 
     // Verify known_marketplaces.json was written
     expect(existsSync(paths.knownMarketplacesPath)).toBe(true);

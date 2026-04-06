@@ -11,9 +11,9 @@
 
 import { existsSync, lstatSync } from 'node:fs';
 import * as fs from 'node:fs';
-import { join } from 'node:path';
 
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, describe, expect, it } from 'vitest';
 
 import {
@@ -49,10 +49,10 @@ function createDevTestProject(
   name: string,
   skills: Array<{ name: string; built: boolean }>
 ): { projectDir: string; fakeHome: string } {
-  const { packageDir: projectDir, fakeHome } = createPackageAndHomeContext(join(baseDir, name));
+  const { packageDir: projectDir, fakeHome } = createPackageAndHomeContext(safePath.join(baseDir, name));
 
   fs.writeFileSync(
-    join(projectDir, 'package.json'),
+    safePath.join(projectDir, 'package.json'),
     JSON.stringify({
       name: '@test/my-package',
       version: '1.0.0',
@@ -63,36 +63,36 @@ function createDevTestProject(
   // Create dist/skills/ directories for built skills
   for (const skill of skills) {
     if (skill.built) {
-      const skillDir = join(projectDir, 'dist', 'skills', skill.name);
+      const skillDir = safePath.join(projectDir, 'dist', 'skills', skill.name);
       mkdirSyncReal(skillDir, { recursive: true });
-      writeTestFile(join(skillDir, 'SKILL.md'), `# ${skill.name}\nTest skill content`);
+      writeTestFile(safePath.join(skillDir, 'SKILL.md'), `# ${skill.name}\nTest skill content`);
     }
   }
 
   // Create plugin tree structure (mirrors what vat claude plugin build produces)
-  const mpDir = join(projectDir, 'dist', '.claude', 'plugins', 'marketplaces', MARKETPLACE_NAME);
-  const claudePluginDir = join(mpDir, '.claude-plugin');
-  const pluginDir = join(mpDir, 'plugins', PLUGIN_NAME);
-  const pluginClaudePluginDir = join(pluginDir, '.claude-plugin');
+  const mpDir = safePath.join(projectDir, 'dist', '.claude', 'plugins', 'marketplaces', MARKETPLACE_NAME);
+  const claudePluginDir = safePath.join(mpDir, '.claude-plugin');
+  const pluginDir = safePath.join(mpDir, 'plugins', PLUGIN_NAME);
+  const pluginClaudePluginDir = safePath.join(pluginDir, '.claude-plugin');
 
   mkdirSyncReal(claudePluginDir, { recursive: true });
   mkdirSyncReal(pluginClaudePluginDir, { recursive: true });
 
   writeTestFile(
-    join(claudePluginDir, 'marketplace.json'),
+    safePath.join(claudePluginDir, 'marketplace.json'),
     JSON.stringify({ name: MARKETPLACE_NAME, owner: { name: 'test' }, plugins: [{ name: PLUGIN_NAME }] })
   );
   writeTestFile(
-    join(pluginClaudePluginDir, 'plugin.json'),
+    safePath.join(pluginClaudePluginDir, 'plugin.json'),
     JSON.stringify({ name: PLUGIN_NAME, description: 'test plugin' })
   );
 
   // Add skill dirs to plugin tree (only for built skills)
   for (const skill of skills) {
     if (skill.built) {
-      const skillInPluginDir = join(pluginDir, 'skills', skill.name);
+      const skillInPluginDir = safePath.join(pluginDir, 'skills', skill.name);
       mkdirSyncReal(skillInPluginDir, { recursive: true });
-      writeTestFile(join(skillInPluginDir, 'SKILL.md'), `# ${skill.name}\nTest skill content`);
+      writeTestFile(safePath.join(skillInPluginDir, 'SKILL.md'), `# ${skill.name}\nTest skill content`);
     }
   }
 
@@ -119,7 +119,7 @@ function executeDevInstall(
  * Get expected symlink path for a skill in the fake home
  */
 function expectedSkillPath(fakeHome: string, skillName: string): string {
-  return join(fakeHome, '.claude', 'plugins', 'marketplaces', MARKETPLACE_NAME, 'plugins', PLUGIN_NAME, 'skills', skillName);
+  return safePath.join(fakeHome, '.claude', 'plugins', 'marketplaces', MARKETPLACE_NAME, 'plugins', PLUGIN_NAME, 'skills', skillName);
 }
 
 describe('claude plugin install --dev command (system test)', () => {
@@ -160,10 +160,10 @@ describe('claude plugin install --dev command (system test)', () => {
 
   it('should fail when plugin tree not found', () => {
     const tempDir = createTempDir();
-    const { packageDir: projectDir, fakeHome } = createPackageAndHomeContext(join(tempDir, 'no-tree'));
+    const { packageDir: projectDir, fakeHome } = createPackageAndHomeContext(safePath.join(tempDir, 'no-tree'));
 
     fs.writeFileSync(
-      join(projectDir, 'package.json'),
+      safePath.join(projectDir, 'package.json'),
       JSON.stringify({ name: '@test/my-package', version: '1.0.0', vat: { skills: ['my-skill'] } })
     );
     // No plugin tree created
@@ -211,23 +211,23 @@ describe('claude plugin install --dev command (system test)', () => {
   it('should warn and skip skills not in dist/skills/', () => {
     const tempDir = createTempDir();
     // Create plugin tree with unbuilt-skill referenced but no dist/skills/unbuilt-skill/
-    const { packageDir: projectDir, fakeHome } = createPackageAndHomeContext(join(tempDir, 'missing-built'));
+    const { packageDir: projectDir, fakeHome } = createPackageAndHomeContext(safePath.join(tempDir, 'missing-built'));
 
     fs.writeFileSync(
-      join(projectDir, 'package.json'),
+      safePath.join(projectDir, 'package.json'),
       JSON.stringify({ name: '@test/my-package', version: '1.0.0', vat: { skills: ['unbuilt-skill'] } })
     );
 
     // Create plugin tree but no dist/skills/unbuilt-skill
-    const mpDir = join(projectDir, 'dist', '.claude', 'plugins', 'marketplaces', MARKETPLACE_NAME);
-    const pluginDir = join(mpDir, 'plugins', PLUGIN_NAME);
-    const skillInPluginDir = join(pluginDir, 'skills', 'unbuilt-skill');
-    mkdirSyncReal(join(mpDir, '.claude-plugin'), { recursive: true });
-    mkdirSyncReal(join(pluginDir, '.claude-plugin'), { recursive: true });
+    const mpDir = safePath.join(projectDir, 'dist', '.claude', 'plugins', 'marketplaces', MARKETPLACE_NAME);
+    const pluginDir = safePath.join(mpDir, 'plugins', PLUGIN_NAME);
+    const skillInPluginDir = safePath.join(pluginDir, 'skills', 'unbuilt-skill');
+    mkdirSyncReal(safePath.join(mpDir, '.claude-plugin'), { recursive: true });
+    mkdirSyncReal(safePath.join(pluginDir, '.claude-plugin'), { recursive: true });
     mkdirSyncReal(skillInPluginDir, { recursive: true });
-    writeTestFile(join(mpDir, '.claude-plugin', 'marketplace.json'), JSON.stringify({ name: MARKETPLACE_NAME }));
-    writeTestFile(join(pluginDir, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: PLUGIN_NAME }));
-    writeTestFile(join(skillInPluginDir, 'SKILL.md'), '# unbuilt-skill');
+    writeTestFile(safePath.join(mpDir, '.claude-plugin', 'marketplace.json'), JSON.stringify({ name: MARKETPLACE_NAME }));
+    writeTestFile(safePath.join(pluginDir, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: PLUGIN_NAME }));
+    writeTestFile(safePath.join(skillInPluginDir, 'SKILL.md'), '# unbuilt-skill');
 
     const { status, parsed } = executeDevInstall(projectDir, fakeHome);
 

@@ -1,6 +1,6 @@
 import { it, beforeAll, afterAll } from 'vitest';
 
-import { describe, expect, fs, getBinPath, join, spawnSync } from './test-common.js';
+import { describe, expect, fs, getBinPath, safePath, spawnSync } from './test-common.js';
 import {
   createTestTempDir,
   executeAndParseYaml,
@@ -47,7 +47,7 @@ describe('Error scenarios (system test)', () => {
   });
 
   it('should handle non-existent directory path', () => {
-    const nonExistentPath = join(tempDir, 'does-not-exist');
+    const nonExistentPath = safePath.join(tempDir, 'does-not-exist');
 
     const { result, parsed } = executeAndParseYaml(
       binPath,
@@ -59,7 +59,7 @@ describe('Error scenarios (system test)', () => {
   });
 
   it('should handle empty directory gracefully', () => {
-    const emptyDir = join(tempDir, 'empty');
+    const emptyDir = safePath.join(tempDir, 'empty');
     fs.mkdirSync(emptyDir);
 
     const { result, parsed } = executeAndParseYaml(binPath, ['resources', 'scan', emptyDir]);
@@ -77,7 +77,7 @@ describe('Error scenarios (system test)', () => {
 
     // Create technically valid but edge-case markdown
     fs.writeFileSync(
-      join(projectDir, 'docs/weird.md'),
+      safePath.join(projectDir, 'docs/weird.md'),
       '# Test\n\n[]()' // Empty link - valid markdown, but edge case
     );
 
@@ -96,7 +96,7 @@ describe('Error scenarios (system test)', () => {
     });
 
     fs.writeFileSync(
-      join(projectDir, 'docs/test.md'),
+      safePath.join(projectDir, 'docs/test.md'),
       '# Test\n\n[Broken link](./missing.md)'
     );
 
@@ -117,7 +117,7 @@ describe('Error scenarios (system test)', () => {
       withDocs: true,
     });
 
-    fs.writeFileSync(join(projectDir, 'docs/test.md'), '# Test');
+    fs.writeFileSync(safePath.join(projectDir, 'docs/test.md'), '# Test');
 
     const result = spawnSync('node', [binPath, 'resources', 'scan', projectDir, '--debug'], {
       encoding: 'utf-8',
@@ -139,7 +139,7 @@ describe('Error scenarios (system test)', () => {
 
     // Create file with multiple broken links
     fs.writeFileSync(
-      join(projectDir, 'docs/broken.md'),
+      safePath.join(projectDir, 'docs/broken.md'),
       '# Test\n\n[Link 1](./missing1.md)\n[Link 2](./missing2.md)\n[Link 3](#bad-anchor)'
     );
 
@@ -167,11 +167,11 @@ describe('Error scenarios (system test)', () => {
 
     // Create circular references
     fs.writeFileSync(
-      join(projectDir, 'docs/a.md'),
+      safePath.join(projectDir, 'docs/a.md'),
       '# A\n\n[Go to B](./b.md)'
     );
     fs.writeFileSync(
-      join(projectDir, 'docs/b.md'),
+      safePath.join(projectDir, 'docs/b.md'),
       '# B\n\n[Go to A](./a.md)'
     );
 

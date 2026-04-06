@@ -3,7 +3,8 @@
  */
 
 import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import type { SettingsConflict } from '../types.js';
 
@@ -100,9 +101,9 @@ async function findSkillFiles(pluginDir: string): Promise<string[]> {
 
       for (const entry of entries) {
         if (entry.name === 'SKILL.md' && entry.isFile()) {
-          skillFiles.push(path.join(dir, entry.name));
+          skillFiles.push(safePath.join(dir, entry.name));
         } else if (entry.isDirectory()) {
-          await scanDir(path.join(dir, entry.name));
+          await scanDir(safePath.join(dir, entry.name));
         }
       }
     } catch {
@@ -118,7 +119,7 @@ async function findSkillFiles(pluginDir: string): Promise<string[]> {
  * Check if a plugin has a hooks.json file.
  */
 async function hasHooksFile(pluginDir: string): Promise<boolean> {
-  const hooksPath = path.join(pluginDir, 'hooks.json');
+  const hooksPath = safePath.join(pluginDir, 'hooks.json');
   try {
     await fs.access(hooksPath);
     return true;
@@ -168,7 +169,7 @@ async function checkToolBlockingConflicts(
         if (isToolBlocked(toolName, toolInput, rule, pluginDir)) {
           conflicts.push({
             type: 'tool-blocked',
-            detail: `Tool "${tool}" in ${path.relative(pluginDir, skillFile)} blocked by org policy (permissions.deny)`,
+            detail: `Tool "${tool}" in ${safePath.relative(pluginDir, skillFile)} blocked by org policy (permissions.deny)`,
             blockedBy: 'permissions.deny',
             value: rule,
             settingsFile: provenance.file,
@@ -223,7 +224,7 @@ async function checkModelUnavailabilityConflicts(
     if (!allowedModels.has(frontmatter.model)) {
       conflicts.push({
         type: 'model-unavailable',
-        detail: `Model "${frontmatter.model}" required by ${path.relative(pluginDir, skillFile)} is not in org's availableModels`,
+        detail: `Model "${frontmatter.model}" required by ${safePath.relative(pluginDir, skillFile)} is not in org's availableModels`,
         blockedBy: 'availableModels',
         value: effectiveSettings.availableModels.value.join(', '),
         settingsFile: provenance.file,

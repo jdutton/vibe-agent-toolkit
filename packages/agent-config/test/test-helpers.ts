@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { expect } from 'vitest';
 
 import { type ValidationResult } from '../src/validator/agent-validator.js';
@@ -131,13 +131,13 @@ export function createTestAgent(
   manifestOptions: AgentManifestOptions,
   additionalFiles?: Record<string, string>
 ): string {
-  const agentDir = path.join(tempDir, dirName);
+  const agentDir = safePath.join(tempDir, dirName);
   mkdirSyncReal(agentDir, { recursive: true });
 
   // Create additional files first (may include nested directories)
   if (additionalFiles) {
     for (const [filePath, content] of Object.entries(additionalFiles)) {
-      const fullPath = path.join(agentDir, filePath);
+      const fullPath = safePath.join(agentDir, filePath);
       const dir = path.dirname(fullPath);
       if (dir !== agentDir) {
         mkdirSyncReal(dir, { recursive: true });
@@ -147,7 +147,7 @@ export function createTestAgent(
   }
 
   // Create manifest
-  fs.writeFileSync(path.join(agentDir, AGENT_YAML), createAgentManifest(manifestOptions));
+  fs.writeFileSync(safePath.join(agentDir, AGENT_YAML), createAgentManifest(manifestOptions));
 
   return agentDir;
 }

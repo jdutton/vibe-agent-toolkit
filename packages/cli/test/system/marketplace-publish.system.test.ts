@@ -1,8 +1,8 @@
 /* eslint-disable sonarjs/no-duplicate-string, sonarjs/no-os-command-from-path */
 import { spawnSync } from 'node:child_process';
-import { join } from 'node:path';
 
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -20,7 +20,7 @@ const PUBLISH_ARGS = ['claude', 'marketplace', 'publish'] as const;
  * Write the standard config YAML used by most publish tests.
  */
 function writePublishConfig(tempDir: string): void {
-  writeTestFile(join(tempDir, 'vibe-agent-toolkit.config.yaml'), `version: 1
+  writeTestFile(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), `version: 1
 skills:
   include:
     - "skills/**/SKILL.md"
@@ -46,19 +46,19 @@ claude:
  */
 function writeProjectFiles(tempDir: string, changelogContent: string): void {
   writePublishConfig(tempDir);
-  writeTestFile(join(tempDir, 'package.json'), JSON.stringify({ name: 'test-project', version: '1.0.0' }));
-  writeTestFile(join(tempDir, 'CHANGELOG.md'), changelogContent);
-  writeTestFile(join(tempDir, 'README.md'), '# Test Marketplace\n');
+  writeTestFile(safePath.join(tempDir, 'package.json'), JSON.stringify({ name: 'test-project', version: '1.0.0' }));
+  writeTestFile(safePath.join(tempDir, 'CHANGELOG.md'), changelogContent);
+  writeTestFile(safePath.join(tempDir, 'README.md'), '# Test Marketplace\n');
 }
 
 /**
  * Create built marketplace artifacts that the publish command expects.
  */
 function createBuildOutput(tempDir: string): void {
-  const mpDir = join(tempDir, 'dist', '.claude', 'plugins', 'marketplaces', 'test-mp');
-  mkdirSyncReal(join(mpDir, '.claude-plugin'), { recursive: true });
+  const mpDir = safePath.join(tempDir, 'dist', '.claude', 'plugins', 'marketplaces', 'test-mp');
+  mkdirSyncReal(safePath.join(mpDir, '.claude-plugin'), { recursive: true });
   writeTestFile(
-    join(mpDir, '.claude-plugin', 'marketplace.json'),
+    safePath.join(mpDir, '.claude-plugin', 'marketplace.json'),
     JSON.stringify({
       name: 'test-mp',
       description: 'Test marketplace',
@@ -68,10 +68,10 @@ function createBuildOutput(tempDir: string): void {
     }),
   );
 
-  const pluginDir = join(mpDir, 'plugins', 'test-plugin', '.claude-plugin');
+  const pluginDir = safePath.join(mpDir, 'plugins', 'test-plugin', '.claude-plugin');
   mkdirSyncReal(pluginDir, { recursive: true });
   writeTestFile(
-    join(pluginDir, 'plugin.json'),
+    safePath.join(pluginDir, 'plugin.json'),
     JSON.stringify({ name: 'test-plugin', description: 'Test plugin', version: '1.0.0' }),
   );
 }
@@ -84,7 +84,7 @@ function createBuildOutput(tempDir: string): void {
  * Using a real bare repo avoids git fetch timeouts on CI (Ubuntu).
  */
 function createBareRemote(tempDir: string): string {
-  const bareDir = join(tempDir, '.bare-remote');
+  const bareDir = safePath.join(tempDir, '.bare-remote');
   spawnSync('git', ['init', '--bare', '-b', 'main', bareDir], { encoding: 'utf-8' });
   return bareDir;
 }
@@ -135,7 +135,7 @@ describe('vat claude marketplace publish (system)', () => {
     const tempDir = createTempDir();
 
     // Config without publish section
-    writeTestFile(join(tempDir, 'vibe-agent-toolkit.config.yaml'), `version: 1
+    writeTestFile(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), `version: 1
 skills:
   include:
     - "skills/**/SKILL.md"
@@ -148,7 +148,7 @@ claude:
         - name: test-plugin
           skills: "*"
 `);
-    writeTestFile(join(tempDir, 'package.json'), JSON.stringify({ name: 'test-project', version: '1.0.0' }));
+    writeTestFile(safePath.join(tempDir, 'package.json'), JSON.stringify({ name: 'test-project', version: '1.0.0' }));
     initGitRepo(tempDir);
 
     const result = executeCli(binPath, [...PUBLISH_ARGS, '--dry-run'], { cwd: tempDir });

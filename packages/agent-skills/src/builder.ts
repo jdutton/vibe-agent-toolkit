@@ -7,7 +7,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { loadAgentManifest, type LoadedAgentManifest } from '@vibe-agent-toolkit/agent-config';
-import { copyDirectory } from '@vibe-agent-toolkit/utils';
+import { copyDirectory, safePath } from '@vibe-agent-toolkit/utils';
 
 import { packageSkill } from './skill-packager.js';
 
@@ -89,7 +89,7 @@ export async function buildAgentSkill(options: BuildOptions): Promise<BuildResul
     options.outputPath ?? getDefaultOutputPath(manifest.__manifestPath, target);
 
   // Append agent name to output path
-  const outputPath = path.join(baseOutputPath, manifest.metadata.name);
+  const outputPath = safePath.join(baseOutputPath, manifest.metadata.name);
 
   // Ensure output directory exists
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path constructed from validated manifest
@@ -106,10 +106,10 @@ export async function buildAgentSkill(options: BuildOptions): Promise<BuildResul
   files.push(guidePath);
 
   // Copy scripts/ directory if it exists (supports .js and .py)
-  const scriptsPath = path.join(agentDir, 'scripts');
+  const scriptsPath = safePath.join(agentDir, 'scripts');
   try {
     await fs.access(scriptsPath);
-    const outputScriptsPath = path.join(outputPath, 'scripts');
+    const outputScriptsPath = safePath.join(outputPath, 'scripts');
     await copyDirectory(scriptsPath, outputScriptsPath);
     files.push(outputScriptsPath);
   } catch {
@@ -117,10 +117,10 @@ export async function buildAgentSkill(options: BuildOptions): Promise<BuildResul
   }
 
   // Copy LICENSE.txt if it exists
-  const licensePath = path.join(agentDir, 'LICENSE.txt');
+  const licensePath = safePath.join(agentDir, 'LICENSE.txt');
   try {
     await fs.access(licensePath);
-    const outputLicensePath = path.join(outputPath, 'LICENSE.txt');
+    const outputLicensePath = safePath.join(outputPath, 'LICENSE.txt');
     await fs.copyFile(licensePath, outputLicensePath);
     files.push(outputLicensePath);
   } catch {
@@ -141,7 +141,7 @@ export async function buildAgentSkill(options: BuildOptions): Promise<BuildResul
         name: manifest.metadata.name,
         version: manifest.metadata.version,
       },
-      files: [...files, ...packageResult.files.dependencies.map(f => path.join(agentDir, f))],
+      files: [...files, ...packageResult.files.dependencies.map(f => safePath.join(agentDir, f))],
     };
 
     // Conditionally add packageArtifacts (exactOptionalPropertyTypes)
@@ -178,7 +178,7 @@ async function generateSkillFile(
     throw new Error('Agent must have a system prompt (spec.prompts.system.$ref)');
   }
 
-  const fullSystemPromptPath = path.resolve(agentDir, systemPromptRef);
+  const fullSystemPromptPath = safePath.resolve(agentDir, systemPromptRef);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path constructed from manifest reference
   const systemPrompt = await fs.readFile(fullSystemPromptPath, 'utf-8');
 
@@ -231,7 +231,7 @@ spec:
   const skillContent = frontmatter + systemPrompt + manifestSection + toolsSection;
 
   // Write SKILL.md
-  const skillPath = path.join(outputPath, 'SKILL.md');
+  const skillPath = safePath.join(outputPath, 'SKILL.md');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Output path is validated
   await fs.writeFile(skillPath, skillContent, 'utf-8');
 
@@ -606,7 +606,7 @@ spec:
 - Check \`examples/\` for real-world usage patterns
 `;
 
-  const guidePath = path.join(outputPath, 'agent-manifest-guide.md');
+  const guidePath = safePath.join(outputPath, 'agent-manifest-guide.md');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Output path is validated
   await fs.writeFile(guidePath, guide, 'utf-8');
 
@@ -620,7 +620,7 @@ spec:
  */
 function getDefaultOutputPath(manifestPath: string, target: string): string {
   const agentPackageRoot = findAgentPackageRoot(manifestPath);
-  return path.join(agentPackageRoot, 'dist', 'vat-bundles', target);
+  return safePath.join(agentPackageRoot, 'dist', 'vat-bundles', target);
 }
 
 /**
@@ -628,11 +628,11 @@ function getDefaultOutputPath(manifestPath: string, target: string): string {
  * Walks up from the agent directory to find the nearest package.json
  */
 function findAgentPackageRoot(manifestPath: string): string {
-  let currentDir = path.dirname(path.resolve(manifestPath));
+  let currentDir = path.dirname(safePath.resolve(manifestPath));
 
   // Walk up until we find a package.json or hit the filesystem root
   while (currentDir !== path.dirname(currentDir)) {
-    const packageJsonPath = path.join(currentDir, 'package.json');
+    const packageJsonPath = safePath.join(currentDir, 'package.json');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Searching for package.json
     if (existsSync(packageJsonPath)) {
       return currentDir;

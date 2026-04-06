@@ -8,10 +8,11 @@
  */
 
 import { rm } from 'node:fs/promises';
-import { join } from 'node:path';
+
 
 import { TransformersEmbeddingProvider } from '@vibe-agent-toolkit/rag';
 import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { z } from 'zod';
 
@@ -32,7 +33,7 @@ describe('Custom metadata system tests', () => {
 
   beforeEach(async () => {
     tempDir = await createTempDir();
-    dbPath = join(tempDir, 'db');
+    dbPath = safePath.join(tempDir, 'db');
   });
 
   afterEach(async () => {

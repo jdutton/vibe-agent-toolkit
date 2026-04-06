@@ -1,33 +1,33 @@
 
 
 import { promises as fs } from 'node:fs';
-import { join } from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect } from 'vitest';
 
 import { calculateChecksum } from '../src/checksum.js';
 
+/**
+ * Helper to create two test files with given content
+ */
+async function createTwoFiles(tempDirPrefix: string, content1: string, content2: string): Promise<{ tempDir: string; file1: string; file2: string }> {
+  const tempDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), tempDirPrefix));
+  const file1 = safePath.join(tempDir, 'file1.txt');
+  const file2 = safePath.join(tempDir, 'file2.txt');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename
+  await fs.writeFile(file1, content1, 'utf-8');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename
+  await fs.writeFile(file2, content2, 'utf-8');
+  return { tempDir, file1, file2 };
+}
+
 describe('calculateChecksum', () => {
   const TEMP_DIR_PREFIX = 'checksum-test-';
 
-  /**
-   * Helper to create two test files with given content
-   */
-  async function createTwoFiles(content1: string, content2: string): Promise<{ tempDir: string; file1: string; file2: string }> {
-    const tempDir = await fs.mkdtemp(join(normalizedTmpdir(), TEMP_DIR_PREFIX));
-    const file1 = join(tempDir, 'file1.txt');
-    const file2 = join(tempDir, 'file2.txt');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
-    await fs.writeFile(file1, content1, 'utf-8');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
-    await fs.writeFile(file2, content2, 'utf-8');
-    return { tempDir, file1, file2 };
-  }
-
   it('should calculate SHA-256 checksum for file content', async () => {
-    const tempDir = await fs.mkdtemp(join(normalizedTmpdir(), TEMP_DIR_PREFIX));
-    const testFile = join(tempDir, 'test.txt');
+    const tempDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), TEMP_DIR_PREFIX));
+    const testFile = safePath.join(tempDir, 'test.txt');
     // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.writeFile(testFile, 'Hello, World!', 'utf-8');
 
@@ -40,7 +40,7 @@ describe('calculateChecksum', () => {
   });
 
   it('should return same checksum for same content', async () => {
-    const { tempDir, file1, file2 } = await createTwoFiles('identical content', 'identical content');
+    const { tempDir, file1, file2 } = await createTwoFiles(TEMP_DIR_PREFIX, 'identical content', 'identical content');
 
     const checksum1 = await calculateChecksum(file1);
     const checksum2 = await calculateChecksum(file2);
@@ -51,7 +51,7 @@ describe('calculateChecksum', () => {
   });
 
   it('should return different checksums for different content', async () => {
-    const { tempDir, file1, file2 } = await createTwoFiles('content A', 'content B');
+    const { tempDir, file1, file2 } = await createTwoFiles(TEMP_DIR_PREFIX, 'content A', 'content B');
 
     const checksum1 = await calculateChecksum(file1);
     const checksum2 = await calculateChecksum(file2);

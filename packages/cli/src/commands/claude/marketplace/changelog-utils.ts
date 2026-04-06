@@ -6,7 +6,8 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 /**
  * Regex to match the [Unreleased] heading (case-insensitive).
@@ -48,7 +49,7 @@ export function stampChangelog(changelog: string, version: string, date: string)
  * Read a changelog file from disk.
  */
 export function readChangelog(filePath: string, baseDir: string): string {
-  const resolved = resolve(baseDir, filePath);
+  const resolved = safePath.resolve(baseDir, filePath);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from validated config
   return readFileSync(resolved, 'utf-8');
 }

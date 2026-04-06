@@ -6,7 +6,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { loadAgentManifest } from '@vibe-agent-toolkit/agent-config';
-import { copyDirectory } from '@vibe-agent-toolkit/utils';
+import { copyDirectory, safePath } from '@vibe-agent-toolkit/utils';
 
 import { resolveAgentPath } from '../../utils/agent-discovery.js';
 import { handleCommandError } from '../../utils/command-error.js';
@@ -47,7 +47,7 @@ export async function installAgent(
 
     // Find built skill
     const builtSkillPath = await findBuiltSkill(agentName, runtime, logger);
-    const installPath = path.join(targetLocation, agentName);
+    const installPath = safePath.join(targetLocation, agentName);
 
     // Ensure target directory exists
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path constructed from validated scope location
@@ -107,7 +107,7 @@ async function findBuiltSkill(
 
   // Runtime-specific bundle location
   const runtimeDir = runtime === 'agent-skill' ? 'skill' : runtime;
-  const builtPath = path.join(
+  const builtPath = safePath.join(
     packageRoot,
     'dist',
     'vat-bundles',
@@ -130,11 +130,11 @@ async function findBuiltSkill(
  * Find the agent package root (directory containing package.json)
  */
 async function findAgentPackageRoot(manifestPath: string): Promise<string> {
-  let currentDir = path.dirname(path.resolve(manifestPath));
+  let currentDir = path.dirname(safePath.resolve(manifestPath));
 
   // Walk up until we find a package.json or hit the filesystem root
   while (currentDir !== path.dirname(currentDir)) {
-    const packageJsonPath = path.join(currentDir, 'package.json');
+    const packageJsonPath = safePath.join(currentDir, 'package.json');
     try {
       await fs.access(packageJsonPath);
       return currentDir;

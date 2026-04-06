@@ -6,9 +6,9 @@
  */
 
 import * as fs from 'node:fs';
-import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -39,14 +39,14 @@ function expectSuccessfulAudit(result: ReturnType<typeof executeCli>): void {
  * Create a test skill directory with linked markdown files
  */
 function createLinkedSkill(baseDir: string): string {
-  const skillDir = join(baseDir, 'test-skill');
-  const resourcesDir = join(skillDir, 'resources');
+  const skillDir = safePath.join(baseDir, 'test-skill');
+  const resourcesDir = safePath.join(skillDir, 'resources');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- test directory
   fs.mkdirSync(resourcesDir, { recursive: true });
 
   // SKILL.md with links to resources
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file
-  fs.writeFileSync(join(skillDir, 'SKILL.md'), `---
+  fs.writeFileSync(safePath.join(skillDir, 'SKILL.md'), `---
 name: test-linked-skill
 description: A test skill with linked markdown resources
 ---
@@ -59,20 +59,20 @@ description: A test skill with linked markdown resources
 
   // guide-a.md links to guide-c.md (transitive)
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file
-  fs.writeFileSync(join(resourcesDir, 'guide-a.md'), `# Guide A
+  fs.writeFileSync(safePath.join(resourcesDir, 'guide-a.md'), `# Guide A
 
 See also [Guide C](guide-c.md) for more details.
 `);
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file
-  fs.writeFileSync(join(resourcesDir, 'guide-b.md'), `# Guide B
+  fs.writeFileSync(safePath.join(resourcesDir, 'guide-b.md'), `# Guide B
 
 Standalone reference document.
 `);
 
   // guide-c.md (transitively linked from guide-a)
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file
-  fs.writeFileSync(join(resourcesDir, 'guide-c.md'), `# Guide C
+  fs.writeFileSync(safePath.join(resourcesDir, 'guide-c.md'), `# Guide C
 
 Deep reference document.
 `);
@@ -105,7 +105,7 @@ describe('Audit Dogfooding (system test)', () => {
   });
 
   it('should audit dist skills without errors', () => {
-    const distSkillsDir = join(projectRoot, 'packages/vat-development-agents/dist/skills');
+    const distSkillsDir = safePath.join(projectRoot, 'packages/vat-development-agents/dist/skills');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- project path
     if (!fs.existsSync(distSkillsDir)) {
       // dist may not exist if build hasn't run — skip gracefully
@@ -131,7 +131,7 @@ describe('Audit Dogfooding (system test)', () => {
   describe('link traversal (end-to-end)', () => {
     it('should follow transitive links and report linkedFiles', () => {
       const skillDir = createLinkedSkill(tempDir);
-      const skillPath = join(skillDir, 'SKILL.md');
+      const skillPath = safePath.join(skillDir, 'SKILL.md');
 
       const { result, parsed } = executeCliAndParseYaml(
         binPath,
@@ -159,12 +159,12 @@ describe('Audit Dogfooding (system test)', () => {
     });
 
     it('should detect broken links via CLI', () => {
-      const brokenDir = join(tempDir, 'broken-skill');
+      const brokenDir = safePath.join(tempDir, 'broken-skill');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- test directory
       fs.mkdirSync(brokenDir, { recursive: true });
 
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file
-      fs.writeFileSync(join(brokenDir, 'SKILL.md'), `---
+      fs.writeFileSync(safePath.join(brokenDir, 'SKILL.md'), `---
 name: broken-links-skill
 description: Skill with broken links
 ---
@@ -176,7 +176,7 @@ description: Skill with broken links
 
       const { result, parsed } = executeCliAndParseYaml(
         binPath,
-        ['audit', join(brokenDir, 'SKILL.md')],
+        ['audit', safePath.join(brokenDir, 'SKILL.md')],
         { cwd: tempDir },
       );
 
@@ -190,15 +190,15 @@ description: Skill with broken links
 
     it('should detect unreferenced files with --warn-unreferenced-files', () => {
       const skillDir = createLinkedSkill(tempDir);
-      const resourcesDir = join(skillDir, 'resources');
+      const resourcesDir = safePath.join(skillDir, 'resources');
 
       // Add an orphaned file not linked from anywhere
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file
-      fs.writeFileSync(join(resourcesDir, 'orphan.md'), '# Orphan\n\nNot linked from anywhere.\n');
+      fs.writeFileSync(safePath.join(resourcesDir, 'orphan.md'), '# Orphan\n\nNot linked from anywhere.\n');
 
       const { result, parsed } = executeCliAndParseYaml(
         binPath,
-        ['audit', '--warn-unreferenced-files', join(skillDir, 'SKILL.md')],
+        ['audit', '--warn-unreferenced-files', safePath.join(skillDir, 'SKILL.md')],
         { cwd: tempDir },
       );
 
@@ -218,13 +218,13 @@ description: Skill with broken links
 
       // Add CLAUDE.md and README.md — should NOT be flagged
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file
-      fs.writeFileSync(join(skillDir, 'CLAUDE.md'), '# Claude\n');
+      fs.writeFileSync(safePath.join(skillDir, 'CLAUDE.md'), '# Claude\n');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file
-      fs.writeFileSync(join(skillDir, 'README.md'), '# Readme\n');
+      fs.writeFileSync(safePath.join(skillDir, 'README.md'), '# Readme\n');
 
       const { parsed } = executeCliAndParseYaml(
         binPath,
-        ['audit', '--warn-unreferenced-files', '--verbose', join(skillDir, 'SKILL.md')],
+        ['audit', '--warn-unreferenced-files', '--verbose', safePath.join(skillDir, 'SKILL.md')],
         { cwd: tempDir },
       );
 

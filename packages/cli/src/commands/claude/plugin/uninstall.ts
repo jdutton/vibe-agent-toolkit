@@ -1,8 +1,8 @@
 // packages/cli/src/commands/claude/plugin/uninstall.ts
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
 import { findPluginsByPackage, getClaudeUserPaths, uninstallPlugin } from '@vibe-agent-toolkit/claude-marketplace';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../../../utils/command-error.js';
@@ -119,7 +119,8 @@ function resolvePluginKeys(
 ): string[] {
   if (options.all) {
     const cwd = process.cwd();
-    const pkgRaw = readFileSync(join(cwd, 'package.json'), 'utf-8');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated cwd and constant package.json name
+    const pkgRaw = readFileSync(safePath.join(cwd, 'package.json'), 'utf-8');
     const pkg = JSON.parse(pkgRaw) as { name: string };
     logger.info(`📦 Finding all plugins from ${pkg.name}...`);
     return findPluginsByPackage(pkg.name, getClaudeUserPaths());

@@ -2,8 +2,8 @@
  * Tests for path resolver
  */
 
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect } from 'vitest';
 
 import {
@@ -11,8 +11,8 @@ import {
   createDefaultCompilerOptions,
 } from '../../src/transformer/path-resolver.js';
 
-const FIXTURES_DIR = join(import.meta.dirname, '../transformer-fixtures');
-const SAMPLE_FILE = join(FIXTURES_DIR, 'namespace-import.ts');
+const FIXTURES_DIR = safePath.join(import.meta.dirname, '../transformer-fixtures');
+const SAMPLE_FILE = safePath.join(FIXTURES_DIR, 'namespace-import.ts');
 
 describe('resolveMarkdownPath', () => {
   const compilerOptions = createDefaultCompilerOptions();
@@ -26,7 +26,7 @@ describe('resolveMarkdownPath', () => {
     });
 
     it('should resolve parent directory paths', () => {
-      const nestedFile = join(FIXTURES_DIR, 'nested', 'file.ts');
+      const nestedFile = safePath.join(FIXTURES_DIR, 'nested', 'file.ts');
       const result = resolveMarkdownPath('../sample.md', nestedFile, compilerOptions);
 
       expect(result).toBeDefined();
@@ -40,7 +40,7 @@ describe('resolveMarkdownPath', () => {
     });
 
     it('should handle multiple parent directory traversals', () => {
-      const deepFile = join(FIXTURES_DIR, 'a', 'b', 'c', 'file.ts');
+      const deepFile = safePath.join(FIXTURES_DIR, 'a', 'b', 'c', 'file.ts');
       const result = resolveMarkdownPath('../../../sample.md', deepFile, compilerOptions);
 
       expect(result).toBeDefined();
@@ -50,7 +50,7 @@ describe('resolveMarkdownPath', () => {
 
   describe('absolute paths', () => {
     it('should handle absolute paths that exist', () => {
-      const absolutePath = join(FIXTURES_DIR, 'sample.md');
+      const absolutePath = safePath.join(FIXTURES_DIR, 'sample.md');
       const result = resolveMarkdownPath(absolutePath, SAMPLE_FILE, compilerOptions);
 
       expect(result).toBe(absolutePath);
@@ -58,7 +58,7 @@ describe('resolveMarkdownPath', () => {
 
     it('should return null for non-existent absolute paths', () => {
       // Use a path in fixtures dir to avoid publicly-writable /tmp warning
-      const absolutePath = join(FIXTURES_DIR, 'nonexistent-12345.md');
+      const absolutePath = safePath.join(FIXTURES_DIR, 'nonexistent-12345.md');
       const result = resolveMarkdownPath(absolutePath, SAMPLE_FILE, compilerOptions);
 
       expect(result).toBeNull();

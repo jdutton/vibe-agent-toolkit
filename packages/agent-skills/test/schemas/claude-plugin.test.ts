@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { ClaudePluginSchema } from '../../src/schemas/claude-plugin.js';
@@ -8,7 +8,7 @@ import { ClaudePluginSchema } from '../../src/schemas/claude-plugin.js';
 const TEST_PLUGIN_NAME = 'test-plugin';
 
 function loadPluginFixture(name: string): unknown {
-  const fixturePath = resolve(__dirname, '../fixtures/plugins', name);
+  const fixturePath = safePath.resolve(__dirname, '../fixtures/plugins', name);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test helper loading fixtures from known directory
   return JSON.parse(readFileSync(fixturePath, 'utf-8'));
 }

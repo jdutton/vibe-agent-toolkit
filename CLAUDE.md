@@ -224,6 +224,7 @@ resources:
 - Avoid creating string/array/object helpers without real use cases
 - Example: cross-platform process spawning, schema validation utilities
 - May have external npm dependencies (Zod, etc.)
+- `safePath.join()`, `safePath.resolve()`, `safePath.relative()` — cross-platform path wrappers that always return forward slashes. ESLint rules (`no-path-join`, `no-path-resolve`, `no-path-relative`) enforce their use over raw `node:path` functions. Import from `@vibe-agent-toolkit/utils`.
 
 **resources, rag, agent-skills packages**:
 - Depend on `utils` for shared functionality

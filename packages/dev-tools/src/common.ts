@@ -9,9 +9,10 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import which from 'which';
 
 /**
@@ -65,7 +66,7 @@ export function getDirname(importMetaUrl: string): string {
 /**
  * Project root directory (../../.. from packages/dev-tools/src/)
  */
-export const PROJECT_ROOT = join(getDirname(import.meta.url), '../../..');
+export const PROJECT_ROOT = safePath.join(getDirname(import.meta.url), '../../..');
 
 /**
  * ANSI color codes for terminal output
@@ -207,7 +208,7 @@ export function processWorkspacePackages<T extends PackageProcessResult>(
   onSkip: SkipHandler<T>,
   onError?: ErrorHandler
 ): { processed: number; skipped: number } {
-  const packagesDir = join(PROJECT_ROOT, 'packages');
+  const packagesDir = safePath.join(PROJECT_ROOT, 'packages');
   let processedCount = 0;
   let skippedCount = 0;
 
@@ -220,7 +221,7 @@ export function processWorkspacePackages<T extends PackageProcessResult>(
       .sort((a, b) => a.localeCompare(b));
 
     for (const pkg of packages) {
-      const pkgPath = join(packagesDir, pkg, 'package.json');
+      const pkgPath = safePath.join(packagesDir, pkg, 'package.json');
       try {
         const result = processor(pkgPath, pkg);
 
@@ -275,8 +276,8 @@ export function findPublishablePackages(
       continue;
     }
 
-    const packagePath = join(packagesDir, entry.name);
-    const packageJsonPath = join(packagePath, 'package.json');
+    const packagePath = safePath.join(packagesDir, entry.name);
+    const packageJsonPath = safePath.join(packagePath, 'package.json');
 
     if (!existsSync(packageJsonPath)) {
       continue;
@@ -379,8 +380,8 @@ export function processPackages(options: {
 
   // Find repo root (2 levels up from dev-tools/dist)
   const __dirname = dirname(fileURLToPath(import.meta.url));
-  const repoRoot = join(__dirname, '../../..');
-  const packagesDir = join(repoRoot, 'packages');
+  const repoRoot = safePath.join(__dirname, '../../..');
+  const packagesDir = safePath.join(repoRoot, 'packages');
 
   // Find all publishable packages (skip umbrella package to avoid bin conflicts)
   const packages = findPublishablePackages(packagesDir, { skipUmbrellaPackage: true });

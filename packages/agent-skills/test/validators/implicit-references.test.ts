@@ -3,8 +3,7 @@
  * file references (backtick, bold, DOT, bare prose, @-prefix).
  */
 
-import * as path from 'node:path';
-
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { extractImplicitReferences } from '../../src/validators/skill-validator.js';
@@ -24,9 +23,9 @@ const COMPANION_CONTENT = '# Companion\n\nContent.';
 
 /** Create a visited-files set containing just SKILL.md in the given dir */
 function visitedSet(tempDir: string, ...extraFiles: string[]): Set<string> {
-  const files = new Set<string>([path.resolve(tempDir, 'SKILL.md')]);
+  const files = new Set<string>([safePath.resolve(tempDir, 'SKILL.md')]);
   for (const f of extraFiles) {
-    files.add(path.resolve(tempDir, f));
+    files.add(safePath.resolve(tempDir, f));
   }
   return files;
 }
@@ -135,7 +134,7 @@ describe('extractImplicitReferences', () => {
 
     expect(results).toHaveLength(1);
     expect(results[0]?.referencedFile).toBe('orphan.md');
-    expect(results[0]?.foundIn).toBe(path.resolve(tempDir, 'linked.md'));
+    expect(results[0]?.foundIn).toBe(safePath.resolve(tempDir, 'linked.md'));
   });
 
   it('should return empty array when no implicit references found', () => {

@@ -6,9 +6,9 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test file with controlled inputs */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { mkdirSyncReal, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
 import ts from 'typescript';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
@@ -28,14 +28,14 @@ function createTestProject(
   markdownFiles: Record<string, string>,
 ): void {
   // Create src directory
-  const srcDir = join(projectDir, 'src');
+  const srcDir = safePath.join(projectDir, 'src');
   mkdirSyncReal(srcDir, { recursive: true });
 
   // Write TypeScript file
-  writeFileSync(join(srcDir, 'index.ts'), tsCode, 'utf-8');
+  writeFileSync(safePath.join(srcDir, 'index.ts'), tsCode, 'utf-8');
 
   // Create resources directory
-  const resourcesDir = join(srcDir, 'resources');
+  const resourcesDir = safePath.join(srcDir, 'resources');
   mkdirSyncReal(resourcesDir, { recursive: true });
 
   // Write markdown files and their declarations
@@ -57,7 +57,7 @@ function compileTestProjectSuccess(
   const result = compileWithTransformer(projectDir);
   expect(result.success).toBe(true);
   expect(result.diagnostics).toHaveLength(0);
-  const outputPath = join(projectDir, DIST_INDEX_PATH);
+  const outputPath = safePath.join(projectDir, DIST_INDEX_PATH);
   return { result, outputPath };
 }
 
@@ -65,7 +65,7 @@ function compileTestProjectSuccess(
  * Helper to compile TypeScript project with transformer
  */
 function compileWithTransformer(projectDir: string): { success: boolean; diagnostics: ts.Diagnostic[] } {
-  const configPath = join(projectDir, 'tsconfig.json');
+  const configPath = safePath.join(projectDir, 'tsconfig.json');
   const configFile = ts.readConfigFile(configPath, ts.sys.readFile);
 
   if (configFile.error) {
@@ -162,7 +162,7 @@ Thank you for using our system.`,
       expect(result.diagnostics).toHaveLength(0);
 
       // Verify output file exists
-      const outputPath = join(projectDir, DIST_INDEX_PATH);
+      const outputPath = safePath.join(projectDir, DIST_INDEX_PATH);
       expect(existsSync(outputPath)).toBe(true);
 
       // Verify generated code contains inlined resource

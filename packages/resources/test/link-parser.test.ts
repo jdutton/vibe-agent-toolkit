@@ -14,9 +14,9 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- tests use dynamic file paths in temp directory */
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { parseMarkdown } from '../src/link-parser.js';
@@ -32,7 +32,7 @@ describe('link-parser', () => {
 
   beforeAll(async () => {
     // Create temp directory for the entire test suite
-    suiteDir = await mkdtemp(join(normalizedTmpdir(), 'link-parser-suite-'));
+    suiteDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'link-parser-suite-'));
   });
 
   afterAll(async () => {
@@ -43,7 +43,7 @@ describe('link-parser', () => {
   beforeEach(async () => {
     // Create subdirectory for each test (fast - no mkdtemp overhead)
     testCounter++;
-    tempDir = join(suiteDir, `test-${testCounter}`);
+    tempDir = safePath.join(suiteDir, `test-${testCounter}`);
     await mkdir(tempDir, { recursive: true });
   });
 
@@ -58,7 +58,7 @@ describe('link-parser', () => {
 
 Content here.
 `;
-      const filePath = join(tempDir, 'test.md');
+      const filePath = safePath.join(tempDir, 'test.md');
       await writeFile(filePath, content, 'utf-8');
 
       const result = await parseMarkdown(filePath);
@@ -72,7 +72,7 @@ Content here.
 
     it('should handle empty files', async () => {
       const content = '';
-      const filePath = join(tempDir, 'empty.md');
+      const filePath = safePath.join(tempDir, 'empty.md');
       await writeFile(filePath, content, 'utf-8');
 
       const result = await parseMarkdown(filePath);
@@ -89,7 +89,7 @@ Content here.
 
 Just plain text content.
 `;
-      const filePath = join(tempDir, 'no-links.md');
+      const filePath = safePath.join(tempDir, 'no-links.md');
       await writeFile(filePath, content, 'utf-8');
 
       const result = await parseMarkdown(filePath);
@@ -103,7 +103,7 @@ Just plain text content.
       const content = `[Link](./file.md)
 [Another link](https://example.com)
 `;
-      const filePath = join(tempDir, 'no-headings.md');
+      const filePath = safePath.join(tempDir, 'no-headings.md');
       await writeFile(filePath, content, 'utf-8');
 
       const result = await parseMarkdown(filePath);
@@ -113,7 +113,7 @@ Just plain text content.
     });
 
     it('should throw error for non-existent files', async () => {
-      const filePath = join(tempDir, 'non-existent.md');
+      const filePath = safePath.join(tempDir, 'non-existent.md');
 
       await expect(parseMarkdown(filePath)).rejects.toThrow();
     });
@@ -124,7 +124,7 @@ Just plain text content.
       const content = `[Regular link](https://example.com)
 [Another link](./file.md)
 `;
-      const filePath = join(tempDir, 'regular-links.md');
+      const filePath = safePath.join(tempDir, 'regular-links.md');
       await writeFile(filePath, content, 'utf-8');
 
       const result = await parseMarkdown(filePath);
@@ -150,7 +150,7 @@ Just plain text content.
       const content = `<https://example.com>
 <mailto:test@example.com>
 `;
-      const filePath = join(tempDir, 'autolinks.md');
+      const filePath = safePath.join(tempDir, 'autolinks.md');
       await writeFile(filePath, content, 'utf-8');
 
       const result = await parseMarkdown(filePath);
@@ -171,7 +171,7 @@ Just plain text content.
 
 [ref1]: https://example.com
 `;
-      const filePath = join(tempDir, 'reference-links.md');
+      const filePath = safePath.join(tempDir, 'reference-links.md');
       await writeFile(filePath, content, 'utf-8');
 
       const result = await parseMarkdown(filePath);
@@ -205,7 +205,7 @@ See [the docs][docs] for details.
 [docs]: https://example.com/docs
 `;
       await writeAndParse({
-        filePath: join(tempDir, 'mixed-link-refs.md'),
+        filePath: safePath.join(tempDir, 'mixed-link-refs.md'),
         content,
         assertions: (result) => {
           // Unresolved linkReferences (Unreleased, 0.1.0) must not appear
@@ -236,7 +236,7 @@ See [the docs][docs] for details.
 
 [ref]: https://example.com
 `;
-      const filePath = join(tempDir, 'mixed-links.md');
+      const filePath = safePath.join(tempDir, 'mixed-links.md');
       await writeFile(filePath, content, 'utf-8');
 
       const result = await parseMarkdown(filePath);
@@ -255,7 +255,7 @@ See [the docs][docs] for details.
 
 [Link on line 5](https://example.com)
 `;
-      const filePath = join(tempDir, 'link-lines.md');
+      const filePath = safePath.join(tempDir, 'link-lines.md');
       await writeFile(filePath, content, 'utf-8');
 
       const result = await parseMarkdown(filePath);
@@ -270,7 +270,7 @@ See [the docs][docs] for details.
       const content = `[HTTP](http://example.com)
 [HTTPS](https://example.com)
 `;
-      const filePath = join(tempDir, 'external.md');
+      const filePath = safePath.join(tempDir, 'external.md');
       await writeFile(filePath, content, 'utf-8');
 
       const result = await parseMarkdown(filePath);
@@ -281,7 +281,7 @@ See [the docs][docs] for details.
 
     it('should classify email links', async () => {
       const content = `[Email](mailto:test@example.com)`;
-      const filePath = join(tempDir, 'email.md');
+      const filePath = safePath.join(tempDir, 'email.md');
       await writeFile(filePath, content, 'utf-8');
 
       const result = await parseMarkdown(filePath);
@@ -291,7 +291,7 @@ See [the docs][docs] for details.
 
     it('should classify anchor links', async () => {
       const content = `[Anchor](#heading)`;
-      const filePath = join(tempDir, 'anchor.md');
+      const filePath = safePath.join(tempDir, 'anchor.md');
       await writeFile(filePath, content, 'utf-8');
 
       const result = await parseMarkdown(filePath);
@@ -305,7 +305,7 @@ See [the docs][docs] for details.
 [Absolute](/path/to/file.md)
 [No extension](./file)
 `;
-      const filePath = join(tempDir, 'local-files.md');
+      const filePath = safePath.join(tempDir, 'local-files.md');
       await writeFile(filePath, content, 'utf-8');
 
       const result = await parseMarkdown(filePath);
@@ -318,7 +318,7 @@ See [the docs][docs] for details.
 
     it('should classify local file links with anchors', async () => {
       const content = `[File with anchor](./file.md#heading)`;
-      const filePath = join(tempDir, 'file-anchor.md');
+      const filePath = safePath.join(tempDir, 'file-anchor.md');
       await writeFile(filePath, content, 'utf-8');
 
       const result = await parseMarkdown(filePath);
@@ -331,7 +331,7 @@ See [the docs][docs] for details.
 [PDF](./document.pdf)
 [Unknown protocol](ftp://example.com)
 `;
-      const filePath = join(tempDir, 'unknown.md');
+      const filePath = safePath.join(tempDir, 'unknown.md');
       await writeFile(filePath, content, 'utf-8');
 
       const result = await parseMarkdown(filePath);
@@ -374,7 +374,7 @@ See [the docs][docs] for details.
 ##### Level 5
 ###### Level 6
 `;
-      const filePath = join(tempDir, 'headings.md');
+      const filePath = safePath.join(tempDir, 'headings.md');
       await writeFile(filePath, content, 'utf-8');
 
       const result = await parseMarkdown(filePath);
@@ -393,7 +393,7 @@ See [the docs][docs] for details.
 #### Test_Case-Example
 `;
       await writeAndParse({
-        filePath: join(tempDir, 'slugs.md'),
+        filePath: safePath.join(tempDir, 'slugs.md'),
         content,
         assertions: (result) => {
           expect(result.headings[0]!.slug).toBe('hello-world');
@@ -410,7 +410,7 @@ See [the docs][docs] for details.
 ### API (v2.0)
 `;
       await writeAndParse({
-        filePath: join(tempDir, 'special-chars.md'),
+        filePath: safePath.join(tempDir, 'special-chars.md'),
         content,
         assertions: (result) => {
           expect(result.headings[0]!.slug).toBe('hello-world');
@@ -426,7 +426,7 @@ See [the docs][docs] for details.
 # Introduction
 ## Details
 `;
-      const filePath = join(tempDir, 'duplicates.md');
+      const filePath = safePath.join(tempDir, 'duplicates.md');
       await writeFile(filePath, content, 'utf-8');
 
       const result = await parseMarkdown(filePath);
@@ -448,7 +448,7 @@ Content
 
 ## Heading on line 7
 `;
-      const filePath = join(tempDir, 'heading-lines.md');
+      const filePath = safePath.join(tempDir, 'heading-lines.md');
       await writeFile(filePath, content, 'utf-8');
 
       const result = await parseMarkdown(filePath);
@@ -467,7 +467,7 @@ Content
 ## Sub2
 `;
       await writeAndParse({
-        filePath: join(tempDir, 'tree1.md'),
+        filePath: safePath.join(tempDir, 'tree1.md'),
         content,
         assertions: (result) => {
           expect(result.headings).toHaveLength(1);
@@ -493,7 +493,7 @@ Content
 ## Child of Second
 `;
       await writeAndParse({
-        filePath: join(tempDir, 'multiple-roots.md'),
+        filePath: safePath.join(tempDir, 'multiple-roots.md'),
         content,
         assertions: (result) => {
           expect(result.headings).toHaveLength(2);
@@ -511,7 +511,7 @@ Content
 ## Back to h2
 `;
       await writeAndParse({
-        filePath: join(tempDir, 'skipped-levels.md'),
+        filePath: safePath.join(tempDir, 'skipped-levels.md'),
         content,
         assertions: (result) => {
           expect(result.headings).toHaveLength(1);
@@ -538,7 +538,7 @@ Content
 ##### L5
 ###### L6
 `;
-      const filePath = join(tempDir, 'deep-nesting.md');
+      const filePath = safePath.join(tempDir, 'deep-nesting.md');
       await writeFile(filePath, content, 'utf-8');
 
       const result = await parseMarkdown(filePath);
@@ -573,7 +573,7 @@ Content
 ### h3 under h2
 ## Second h2
 `;
-      const filePath = join(tempDir, 'start-h2.md');
+      const filePath = safePath.join(tempDir, 'start-h2.md');
       await writeFile(filePath, content, 'utf-8');
 
       const result = await parseMarkdown(filePath);
@@ -589,10 +589,10 @@ Content
   });
 
   describe('test fixtures', () => {
-    const FIXTURES_DIR = join(findPackageRoot(), 'test-fixtures');
+    const FIXTURES_DIR = safePath.join(findPackageRoot(), 'test-fixtures');
 
     it('should parse valid.md fixture', async () => {
-      const fixturePath = join(FIXTURES_DIR, 'valid.md');
+      const fixturePath = safePath.join(FIXTURES_DIR, 'valid.md');
 
       const result = await parseMarkdown(fixturePath);
 
@@ -607,7 +607,7 @@ Content
     });
 
     it('should parse external.md fixture', async () => {
-      const fixturePath = join(FIXTURES_DIR, 'external.md');
+      const fixturePath = safePath.join(FIXTURES_DIR, 'external.md');
 
       const result = await parseMarkdown(fixturePath);
 
@@ -618,7 +618,7 @@ Content
     });
 
     it('should parse complex.md fixture', async () => {
-      const fixturePath = join(FIXTURES_DIR, 'complex.md');
+      const fixturePath = safePath.join(FIXTURES_DIR, 'complex.md');
 
       const result = await parseMarkdown(fixturePath);
 
@@ -644,7 +644,7 @@ Content
   describe('token estimation', () => {
     it('should estimate tokens as 1 token per 4 characters', async () => {
       const content = 'a'.repeat(400); // 400 characters
-      const filePath = join(tempDir, 'tokens.md');
+      const filePath = safePath.join(tempDir, 'tokens.md');
       await writeFile(filePath, content, 'utf-8');
 
       const result = await parseMarkdown(filePath);
@@ -654,7 +654,7 @@ Content
 
     it('should round up token estimates', async () => {
       const content = 'a'.repeat(401); // 401 characters
-      const filePath = join(tempDir, 'tokens-round.md');
+      const filePath = safePath.join(tempDir, 'tokens-round.md');
       await writeFile(filePath, content, 'utf-8');
 
       const result = await parseMarkdown(filePath);
@@ -665,7 +665,7 @@ Content
 
   describe('frontmatter extraction', () => {
     it('should extract frontmatter from markdown', async () => {
-      const mdPath = join(tempDir, 'with-frontmatter.md');
+      const mdPath = safePath.join(tempDir, 'with-frontmatter.md');
       await writeFile(
         mdPath,
         `---
@@ -689,7 +689,7 @@ Some content here.`,
     });
 
     it('should return undefined for markdown without frontmatter', async () => {
-      const mdPath = join(tempDir, 'no-frontmatter.md');
+      const mdPath = safePath.join(tempDir, 'no-frontmatter.md');
       await writeFile(mdPath, '# Just Content\n\nNo frontmatter here.');
 
       const result = await parseMarkdown(mdPath);
@@ -698,7 +698,7 @@ Some content here.`,
     });
 
     it('should handle empty frontmatter', async () => {
-      const mdPath = join(tempDir, 'empty-frontmatter.md');
+      const mdPath = safePath.join(tempDir, 'empty-frontmatter.md');
       await writeFile(
         mdPath,
         `---
@@ -713,7 +713,7 @@ Some content here.`,
     });
 
     it('should capture YAML parsing errors', async () => {
-      const mdPath = join(tempDir, 'invalid-yaml.md');
+      const mdPath = safePath.join(tempDir, 'invalid-yaml.md');
       await writeFile(
         mdPath,
         `---

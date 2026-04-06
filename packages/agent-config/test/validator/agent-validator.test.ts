@@ -1,9 +1,8 @@
 
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with safe temp directories */
 import fs from 'node:fs';
-import path from 'node:path';
 
-import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { validateAgent } from '../../src/validator/agent-validator.js';
@@ -21,7 +20,7 @@ describe('agent-validator', () => {
   const INFO_AGENT = 'info-agent';
 
   beforeAll(() => {
-    tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'vat-validator-test-'));
+    tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-validator-test-'));
   });
 
   afterAll(() => {
@@ -214,10 +213,10 @@ describe('agent-validator', () => {
     });
 
     it('should handle invalid manifest file', async () => {
-      const agentDir = path.join(tempDir, 'invalid-manifest-agent');
+      const agentDir = safePath.join(tempDir, 'invalid-manifest-agent');
       mkdirSyncReal(agentDir);
       fs.writeFileSync(
-        path.join(agentDir, AGENT_YAML),
+        safePath.join(agentDir, AGENT_YAML),
         'invalid: yaml: [[[{'
       );
 
@@ -226,7 +225,7 @@ describe('agent-validator', () => {
     });
 
     it('should handle nonexistent manifest file', async () => {
-      const agentDir = path.join(tempDir, 'nonexistent-agent');
+      const agentDir = safePath.join(tempDir, 'nonexistent-agent');
       mkdirSyncReal(agentDir);
 
       const result = await validateAgent(agentDir);

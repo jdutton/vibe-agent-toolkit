@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { importSkillToAgent } from '../src/import.js';
@@ -12,7 +12,7 @@ const { getTempDir } = setupTempDir('import-unit-');
 describe('importSkillToAgent', () => {
   it('should return error for invalid YAML frontmatter', async () => {
     const tmp = getTempDir();
-    const skillPath = path.join(tmp, 'SKILL.md');
+    const skillPath = safePath.join(tmp, 'SKILL.md');
     // Write content with syntactically invalid YAML (unclosed bracket)
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test uses controlled temp directory
     fs.writeFileSync(skillPath, '---\nname: [invalid yaml\n---\n# Skill');

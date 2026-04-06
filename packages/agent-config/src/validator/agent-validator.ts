@@ -1,6 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
+
 import { loadAgentManifest, type LoadedAgentManifest } from '../loader/manifest-loader.js';
 
 export interface ValidationResult {
@@ -81,7 +83,7 @@ async function validateRAGConfig(
 ): Promise<void> {
   // Check if RAG database exists
   // Default location is .rag-db in agent directory
-  const ragDbPath = path.join(agentDir, '.rag-db');
+  const ragDbPath = safePath.join(agentDir, '.rag-db');
 
   try {
     await fs.access(ragDbPath);
@@ -132,7 +134,7 @@ async function validateSingleResource(
   resourcePath: string,
   errors: string[]
 ): Promise<void> {
-  const fullPath = path.resolve(agentDir, resourcePath);
+  const fullPath = safePath.resolve(agentDir, resourcePath);
 
   try {
     await fs.access(fullPath);
@@ -155,7 +157,7 @@ async function validateNestedResources(
       continue;
     }
 
-    const resourcePath = path.resolve(agentDir, nestedResource.path as string);
+    const resourcePath = safePath.resolve(agentDir, nestedResource.path as string);
 
     try {
       await fs.access(resourcePath);
@@ -177,7 +179,7 @@ async function validatePrompts(
   if (!manifest.spec.prompts) return;
 
   if (manifest.spec.prompts.system) {
-    const systemPath = path.resolve(agentDir, manifest.spec.prompts.system.$ref);
+    const systemPath = safePath.resolve(agentDir, manifest.spec.prompts.system.$ref);
     try {
       await fs.access(systemPath);
     } catch {
@@ -186,7 +188,7 @@ async function validatePrompts(
   }
 
   if (manifest.spec.prompts.user) {
-    const userPath = path.resolve(agentDir, manifest.spec.prompts.user.$ref);
+    const userPath = safePath.resolve(agentDir, manifest.spec.prompts.user.$ref);
     try {
       await fs.access(userPath);
     } catch {

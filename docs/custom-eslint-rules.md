@@ -27,6 +27,22 @@ Enforces `safeExecSync()` instead of raw `execSync()`.
 
 **Auto-fix**: Replaces `execSync` with `safeExecSync` and adds import
 
+### `no-path-join` / `no-path-resolve` / `no-path-relative`
+
+Enforces `safePath.join()`, `safePath.resolve()`, `safePath.relative()` from `@vibe-agent-toolkit/utils` instead of the corresponding `node:path` functions.
+
+**Why it's dangerous:**
+- `path.join()`, `path.resolve()`, `path.relative()` return backslashes on Windows
+- Backslash paths break Map key lookups, string comparisons, and glob matching
+- `safePath.*` wraps the native function + `toForwardSlash()` to always return forward slashes
+- See issue [#38](https://github.com/jdutton/vibe-agent-toolkit/issues/38)
+
+**Auto-fix**: Replaces `path.join(...)` / `join(...)` with `safePath.join(...)` and adds import. Handles both named imports (`import { join } from 'node:path'`) and default imports (`import path from 'node:path'`).
+
+**Implementation**: Uses a shared `path-function-rule-factory.cjs` (separate from `eslint-rule-factory.cjs`) because the replacement target is an object method (`safePath.join`), not a standalone function.
+
+**Exempt**: `packages/utils/src/path-utils.ts` (the implementation file).
+
 ## Creating New Rules
 
 When you identify a dangerous pattern (security, platform-specific, error-prone):

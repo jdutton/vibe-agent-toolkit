@@ -6,9 +6,9 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test helper with controlled inputs */
 
 import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { expect } from 'vitest';
 
 /**
@@ -27,8 +27,8 @@ export function createMultipleMarkdownFiles(
     const content = contentTemplate
       ? contentTemplate(file)
       : `# ${file}\n\n## Section\n\nContent for ${file}`;
-    const filePath = join(inputDir, file);
-    const dir = join(filePath, '..');
+    const filePath = safePath.join(inputDir, file);
+    const dir = safePath.join(filePath, '..');
     mkdirSyncReal(dir, { recursive: true });
     writeFileSync(filePath, content, 'utf-8');
   }

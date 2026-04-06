@@ -12,7 +12,7 @@ import path from 'node:path';
 import ignore, { type Ignore } from 'ignore';
 
 import { gitFindRoot } from './git-utils.js';
-import { toForwardSlash } from './path-utils.js';
+import { safePath , toForwardSlash } from './path-utils.js';
 
 /**
  * Find the git repository root by walking up from the given directory.
@@ -44,8 +44,8 @@ export function loadGitignoreRules(gitRoot: string, baseDir?: string): Ignore | 
 
   // Collect all directories from gitRoot to baseDir
   const dirsToCheck: string[] = [];
-  let currentDir = path.resolve(baseDir ?? gitRoot);
-  const resolvedGitRoot = path.resolve(gitRoot);
+  let currentDir = safePath.resolve(baseDir ?? gitRoot);
+  const resolvedGitRoot = safePath.resolve(gitRoot);
 
   // Normalize for cross-platform path comparison
   const normalizedGitRoot = toForwardSlash(resolvedGitRoot);
@@ -60,7 +60,7 @@ export function loadGitignoreRules(gitRoot: string, baseDir?: string): Ignore | 
 
   // Load .gitignore files from git root down to baseDir
   for (const dir of dirsToCheck) {
-    const gitignorePath = path.join(dir, '.gitignore');
+    const gitignorePath = safePath.join(dir, '.gitignore');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from validated gitRoot and baseDir
     if (fs.existsSync(gitignorePath)) {
       try {

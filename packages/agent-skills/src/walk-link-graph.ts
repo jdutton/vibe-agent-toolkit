@@ -11,10 +11,10 @@
  */
 
 import { existsSync, statSync } from 'node:fs';
-import { basename, dirname, relative, resolve } from 'node:path';
+import { basename, dirname } from 'node:path';
 
 import type { ResourceLink, ResourceMetadata } from '@vibe-agent-toolkit/resources';
-import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
 import { NAVIGATION_FILE_PATTERNS } from './validators/validation-rules.js';
@@ -95,12 +95,12 @@ export interface WalkLinkGraphOptions {
 function resolveHrefToPath(href: string, sourceFilePath: string): string {
   const anchorIndex = href.indexOf('#');
   const hrefWithoutAnchor = anchorIndex === -1 ? href : href.slice(0, anchorIndex);
-  return resolve(dirname(sourceFilePath), hrefWithoutAnchor);
+  return safePath.resolve(dirname(sourceFilePath), hrefWithoutAnchor);
 }
 
 /** Check if a link targets a file outside the project boundary */
 function isOutsideProject(targetPath: string, projectRoot: string): boolean {
-  return relative(projectRoot, targetPath).startsWith('..');
+  return safePath.relative(projectRoot, targetPath).startsWith('..');
 }
 
 /** Check if a filename is a navigation file */
@@ -183,7 +183,7 @@ function checkExclusions(
   }
 
   // Check exclude patterns (relative to projectRoot)
-  const relativePath = toForwardSlash(relative(options.projectRoot, targetPath));
+  const relativePath = toForwardSlash(safePath.relative(options.projectRoot, targetPath));
   const matchedExclude = excludeMatchers.find((m) => m.isMatch(relativePath));
   if (matchedExclude) {
     excludedReferences.push(makeExclusion(targetPath, 'pattern-matched', link, matchedExclude.rule));

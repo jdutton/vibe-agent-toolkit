@@ -6,7 +6,8 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 /** Known SPDX identifiers (lowercase). Extend as needed. */
 const KNOWN_SPDX_IDS = new Set([
@@ -48,7 +49,7 @@ export function isSpdxIdentifier(value: string): boolean {
  * Read a license file from disk.
  */
 export function readLicenseFile(filePath: string, baseDir: string): string {
-  const resolved = resolve(baseDir, filePath);
+  const resolved = safePath.resolve(baseDir, filePath);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from validated config
   return readFileSync(resolved, 'utf-8');
 }

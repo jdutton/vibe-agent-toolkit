@@ -1,10 +1,9 @@
 import fs from 'node:fs';
-import path from 'node:path';
 
-import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
 import { gitFindRoot, gitLsFiles } from './git-utils.js';
+import { toForwardSlash, safePath } from './path-utils.js';
 
 /**
  * Options for directory crawling
@@ -84,7 +83,7 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
   const picoOptions = dot ? { dot: true } : undefined;
 
   // Resolve base directory to absolute path
-  const resolvedBaseDir = path.resolve(baseDir);
+  const resolvedBaseDir = safePath.resolve(baseDir);
 
   // Ensure base directory exists
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- baseDir is from controlled config, not user input
@@ -124,7 +123,7 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
           })
           .map((relativePath) => {
             // git ls-files returns paths relative to cwd
-            return absolute ? path.resolve(resolvedBaseDir, relativePath) : relativePath;
+            return absolute ? safePath.resolve(resolvedBaseDir, relativePath) : relativePath;
           });
       }
       // Git ls-files failed - fall through to manual crawling
@@ -215,8 +214,8 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     }
 
     for (const entry of entries) {
-      const fullPath = path.join(currentDir, entry.name);
-      const relativePath = path.relative(resolvedBaseDir, fullPath);
+      const fullPath = safePath.join(currentDir, entry.name);
+      const relativePath = safePath.relative(resolvedBaseDir, fullPath);
       const normalizedPath = toForwardSlash(relativePath);
 
       // Skip excluded paths

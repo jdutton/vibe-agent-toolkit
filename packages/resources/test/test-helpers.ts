@@ -6,9 +6,9 @@
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
-import path, { join } from 'node:path';
+import path from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { expect, type Assertion } from 'vitest';
 
 import { ExternalLinkValidator } from '../src/external-link-validator.js';
@@ -54,7 +54,7 @@ function findPackageDirectory(
   let currentDir = startDir;
   while (currentDir !== path.dirname(currentDir)) {
     try {
-      const pkgPath = path.join(currentDir, 'package.json');
+      const pkgPath = safePath.join(currentDir, 'package.json');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path is safe in test helper, pkgPath constructed from trusted directory traversal
       const pkgContent = readFileSync(pkgPath, 'utf-8');
       const pkg = JSON.parse(pkgContent) as { name: string; workspaces?: unknown };
@@ -147,7 +147,7 @@ export function setupResourceTestSuite(testPrefix: string): {
     tempDir: '',
     registry: null as unknown as ResourceRegistry,
     beforeEach: async () => {
-      suite.tempDir = await mkdtemp(join(normalizedTmpdir(), testPrefix));
+      suite.tempDir = await mkdtemp(safePath.join(normalizedTmpdir(), testPrefix));
       suite.registry = new ResourceRegistry();
     },
     afterEach: async () => {
@@ -174,7 +174,7 @@ export function setupTempDirTestSuite(testPrefix: string): {
   const suite = {
     tempDir: '',
     beforeEach: async () => {
-      suite.tempDir = await mkdtemp(join(normalizedTmpdir(), testPrefix));
+      suite.tempDir = await mkdtemp(safePath.join(normalizedTmpdir(), testPrefix));
     },
     afterEach: async () => {
       await rm(suite.tempDir, { recursive: true, force: true });
@@ -208,7 +208,7 @@ export function setupExternalLinkValidatorSuite(
     tempDir: '',
     validator: null as unknown as ExternalLinkValidator,
     beforeEach: async () => {
-      suite.tempDir = await mkdtemp(join(normalizedTmpdir(), testPrefix));
+      suite.tempDir = await mkdtemp(safePath.join(normalizedTmpdir(), testPrefix));
       suite.validator = new ExternalLinkValidator(suite.tempDir, resolvedOptions);
     },
     afterEach: async () => {
@@ -419,7 +419,7 @@ export async function assertAllLinksClassifiedAs(
   expectedType: ResourceLink['type'],
 ): Promise<void> {
   await writeAndParse({
-    filePath: join(tempDir, filename),
+    filePath: safePath.join(tempDir, filename),
     content,
     assertions: (result) => {
       for (const link of result.links) {
@@ -447,7 +447,7 @@ export async function createSchemaFile(
 ): Promise<void> {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir and filename are from test caller, safe in test context
   await writeFile(
-    join(tempDir, filename),
+    safePath.join(tempDir, filename),
     JSON.stringify(schema),
     'utf-8'
   );
@@ -507,4 +507,21 @@ export function expectFirstSchemaHasErrors(
   expectFn(results[0]?.valid).toBe(false);
   expectFn(results[0]?.errors).toBeDefined();
   expectFn(results[0]?.errors?.length).toBeGreaterThan(0);
+}
+
+/**
+ * Create two markdown files with the same content in a temp directory.
+ * Useful for testing checksum/dedup behavior.
+ */
+export async function createTwoFilesWithSameContent(
+  tempDir: string,
+  content: string,
+): Promise<{ file1: string; file2: string }> {
+  const file1 = safePath.join(tempDir, 'file1.md');
+  const file2 = safePath.join(tempDir, 'file2.md');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test helper
+  await writeFile(file1, content, 'utf-8');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test helper
+  await writeFile(file2, content, 'utf-8');
+  return { file1, file2 };
 }

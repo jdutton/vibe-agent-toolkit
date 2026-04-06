@@ -1,17 +1,20 @@
 #!/usr/bin/env tsx
 import { readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { log } from './common.js';
 
 function extractChangelog(version: string): string {
-  const changelogPath = join(process.cwd(), 'CHANGELOG.md');
+  const changelogPath = safePath.join(process.cwd(), 'CHANGELOG.md');
 
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from cwd and constant CHANGELOG.md filename
   if (!existsSync(changelogPath)) {
     log('✗ CHANGELOG.md not found', 'red');
     process.exit(1);
   }
 
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- same validated changelogPath as existsSync above
   const content = readFileSync(changelogPath, 'utf-8');
   const versionHeader = `## [${version}]`;
   const lines = content.split('\n');

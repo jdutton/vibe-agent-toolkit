@@ -2,9 +2,9 @@
  * System tests for `vat claude plugin list` command.
  */
 
-import { join } from 'node:path';
 
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -23,7 +23,7 @@ const TEMP_DIR_PREFIX = 'vat-plugin-list-test-';
  */
 function createListTestHome(createTempDir: () => string): string {
   const tempDir = createTempDir();
-  const fakeHome = join(tempDir, 'home');
+  const fakeHome = safePath.join(tempDir, 'home');
   mkdirSyncReal(fakeHome, { recursive: true });
   return fakeHome;
 }
@@ -68,12 +68,12 @@ describe('claude plugin list command (system test)', () => {
 
   it('lists plugins from registry', () => {
     const tempDir = createTempDir();
-    const fakeHome = join(tempDir, 'home');
-    const pluginsDir = join(fakeHome, '.claude', 'plugins');
-    mkdirSyncReal(join(pluginsDir, 'marketplaces', 'test-market', 'plugins', 'my-skill'), { recursive: true });
+    const fakeHome = safePath.join(tempDir, 'home');
+    const pluginsDir = safePath.join(fakeHome, '.claude', 'plugins');
+    mkdirSyncReal(safePath.join(pluginsDir, 'marketplaces', 'test-market', 'plugins', 'my-skill'), { recursive: true });
 
     const now = new Date().toISOString();
-    writeTestFile(join(pluginsDir, 'installed_plugins.json'), JSON.stringify({
+    writeTestFile(safePath.join(pluginsDir, 'installed_plugins.json'), JSON.stringify({
       version: 2,
       plugins: {
         'my-skill@test-market': [
@@ -94,10 +94,10 @@ describe('claude plugin list command (system test)', () => {
 
   it('counts legacy skills from ~/.claude/skills/', () => {
     const tempDir = createTempDir();
-    const fakeHome = join(tempDir, 'home');
-    const skillsDir = join(fakeHome, '.claude', 'skills', 'legacy-skill');
+    const fakeHome = safePath.join(tempDir, 'home');
+    const skillsDir = safePath.join(fakeHome, '.claude', 'skills', 'legacy-skill');
     mkdirSyncReal(skillsDir, { recursive: true });
-    writeTestFile(join(skillsDir, 'SKILL.md'), '# legacy-skill\nOld-style skill');
+    writeTestFile(safePath.join(skillsDir, 'SKILL.md'), '# legacy-skill\nOld-style skill');
 
     const { status, parsed } = runPluginList(binPath, fakeHome);
 

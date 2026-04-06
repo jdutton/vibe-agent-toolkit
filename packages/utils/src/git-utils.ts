@@ -5,11 +5,12 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { dirname, join, parse, resolve } from 'node:path';
+import { dirname, parse } from 'node:path';
 
 import which from 'which';
 
-import { toForwardSlash } from './path-utils.js';
+import { safePath , toForwardSlash } from './path-utils.js';
+
 
 /**
  * Find the git repository root by walking up from the given directory.
@@ -18,11 +19,11 @@ import { toForwardSlash } from './path-utils.js';
  * @returns Path to git root, or null if not in a git repository
  */
 export function gitFindRoot(startDir: string): string | null {
-  let currentDir = resolve(startDir);
+  let currentDir = safePath.resolve(startDir);
   const root = parse(currentDir).root;
 
   while (currentDir !== root) {
-    const gitDir = join(currentDir, '.git');
+    const gitDir = safePath.join(currentDir, '.git');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- walking up from validated startDir
     if (existsSync(gitDir)) {
       return currentDir;

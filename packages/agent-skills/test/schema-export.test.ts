@@ -9,16 +9,16 @@
 // Test files need to read fixtures dynamically
 
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import Ajv, { type ValidateFunction } from 'ajv';
 import { load as parseYaml } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
-const SCHEMAS_DIR = join(__dirname, '..', 'schemas');
-const FIXTURES_DIR = join(__dirname, 'fixtures', 'schema-validation');
+const SCHEMAS_DIR = safePath.join(__dirname, '..', 'schemas');
+const FIXTURES_DIR = safePath.join(__dirname, 'fixtures', 'schema-validation');
 
 const SKILL_FRONTMATTER_SCHEMA = 'skill-frontmatter';
 const VAT_SKILL_FRONTMATTER_SCHEMA = 'vat-skill-frontmatter';
@@ -28,7 +28,7 @@ const TEST_PLUGIN_NAME = 'test-plugin';
 
 /** Load and parse a JSON schema file */
 function loadSchema(schemaName: string) {
-  const schemaPath = join(SCHEMAS_DIR, `${schemaName}.json`);
+  const schemaPath = safePath.join(SCHEMAS_DIR, `${schemaName}.json`);
   expect(existsSync(schemaPath)).toBe(true);
   return JSON.parse(readFileSync(schemaPath, 'utf-8'));
 }
@@ -76,7 +76,7 @@ describe('Schema Export', () => {
 
     it('should validate correct frontmatter using exported schema', () => {
       const validate = compileSchema(SKILL_FRONTMATTER_SCHEMA, ajv);
-      const frontmatter = extractFrontmatter(join(FIXTURES_DIR, 'valid-skill.md'));
+      const frontmatter = extractFrontmatter(safePath.join(FIXTURES_DIR, 'valid-skill.md'));
       const valid = validate(frontmatter);
 
       if (!valid) {
@@ -88,7 +88,7 @@ describe('Schema Export', () => {
 
     it('should reject invalid frontmatter using exported schema', () => {
       const validate = compileSchema(SKILL_FRONTMATTER_SCHEMA, ajv);
-      const frontmatter = extractFrontmatter(join(FIXTURES_DIR, 'invalid-skill.md'));
+      const frontmatter = extractFrontmatter(safePath.join(FIXTURES_DIR, 'invalid-skill.md'));
       const valid = validate(frontmatter);
 
       expect(valid).toBe(false);
@@ -162,7 +162,7 @@ describe('Schema Export', () => {
 
   describe('Schema Exportability', () => {
     it('should export schemas in package.json exports field', () => {
-      const packageJsonPath = join(__dirname, '..', 'package.json');
+      const packageJsonPath = safePath.join(__dirname, '..', 'package.json');
       const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
 
       expect(packageJson.exports).toHaveProperty('./schemas/*');
@@ -170,7 +170,7 @@ describe('Schema Export', () => {
     });
 
     it('should include schemas in package files', () => {
-      const packageJsonPath = join(__dirname, '..', 'package.json');
+      const packageJsonPath = safePath.join(__dirname, '..', 'package.json');
       const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf-8'));
 
       expect(packageJson.files).toContain('schemas/');

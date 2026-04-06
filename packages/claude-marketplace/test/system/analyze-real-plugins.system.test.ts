@@ -9,21 +9,21 @@
 
 import { existsSync, readdirSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { analyzeCompatibility } from '../../src/compatibility-analyzer.js';
 import type { CompatibilityResult } from '../../src/types.js';
 
-const PLUGINS_DIR = resolve(homedir(), '.claude', 'plugins', 'cache');
+const PLUGINS_DIR = safePath.resolve(homedir(), '.claude', 'plugins', 'cache');
 
 describe('analyzeCompatibility against local plugins', () => {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- PLUGINS_DIR derived from homedir(), safe
   const hasPlugins = existsSync(PLUGINS_DIR);
 
   it('resolves plugins cache path', () => {
-    expect(PLUGINS_DIR).toContain(join('.claude', 'plugins', 'cache'));
+    expect(PLUGINS_DIR).toContain(safePath.join('.claude', 'plugins', 'cache'));
   });
 
   it.skipIf(!hasPlugins)('analyzes all locally installed plugins without errors', async () => {
@@ -34,22 +34,22 @@ describe('analyzeCompatibility against local plugins', () => {
     const results: CompatibilityResult[] = [];
 
     for (const marketplace of marketplaces) {
-      const mDir = resolve(PLUGINS_DIR, marketplace.name);
+      const mDir = safePath.resolve(PLUGINS_DIR, marketplace.name);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- mDir derived from PLUGINS_DIR + readdir entry
       const plugins = readdirSync(mDir, { withFileTypes: true })
         .filter(d => d.isDirectory());
 
       for (const plugin of plugins) {
-        const pDir = resolve(mDir, plugin.name);
+        const pDir = safePath.resolve(mDir, plugin.name);
         // eslint-disable-next-line security/detect-non-literal-fs-filename -- pDir derived from PLUGINS_DIR + readdir entries
         const versions = readdirSync(pDir, { withFileTypes: true })
           .filter(d => d.isDirectory());
         const lastVersion = versions.at(-1);
         if (!lastVersion) continue;
-        const latestDir = resolve(pDir, lastVersion.name);
+        const latestDir = safePath.resolve(pDir, lastVersion.name);
 
         // eslint-disable-next-line security/detect-non-literal-fs-filename -- latestDir derived from PLUGINS_DIR + readdir entries
-        if (!existsSync(resolve(latestDir, '.claude-plugin/plugin.json'))) continue;
+        if (!existsSync(safePath.resolve(latestDir, '.claude-plugin/plugin.json'))) continue;
 
         const result = await analyzeCompatibility(latestDir);
         results.push(result);

@@ -6,9 +6,9 @@
  */
 
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
-import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+
+import { setupAsyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, beforeEach, beforeAll, afterAll } from 'vitest';
 
 // Test constants
@@ -20,16 +20,16 @@ const SCHEMAS_LOCAL_JSON = './schemas/local.json';
 async function setupTestDir(testDir: string) {
   // Create directory structure
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is from suite helper
-  await mkdir(join(testDir, 'schemas'), { recursive: true });
+  await mkdir(safePath.join(testDir, 'schemas'), { recursive: true });
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is from suite helper
-  await mkdir(join(testDir, 'config'), { recursive: true });
+  await mkdir(safePath.join(testDir, 'config'), { recursive: true });
 
   // Create test schema files
   const testSchema = { type: 'object', properties: { name: { type: 'string' } } };
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is from suite helper
-  await writeFile(join(testDir, 'schemas', 'local.json'), JSON.stringify(testSchema));
+  await writeFile(safePath.join(testDir, 'schemas', 'local.json'), JSON.stringify(testSchema));
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is from suite helper
-  await writeFile(join(testDir, 'config', 'schema.json'), JSON.stringify(testSchema));
+  await writeFile(safePath.join(testDir, 'config', 'schema.json'), JSON.stringify(testSchema));
 }
 
 describe('Schema Path Resolution', () => {
@@ -47,7 +47,7 @@ describe('Schema Path Resolution', () => {
 
   describe('File Path Resolution', () => {
     it('should resolve absolute paths', async () => {
-      const schemaPath = join(testDir, 'schemas', 'local.json');
+      const schemaPath = safePath.join(testDir, 'schemas', 'local.json');
 
       // Dynamically import to avoid top-level await issues
       const { resolveSchemaPath } = await import('../../src/commands/resources/validate.js');
@@ -76,7 +76,7 @@ describe('Schema Path Resolution', () => {
   });
 
   describe('Package Path Resolution', () => {
-    // NOTE: import.meta.resolve() is not available in Vitest environment
+    // NOTE: import.meta.safePath.resolve() is not available in Vitest environment
     // These tests work in real Node.js but not in Vitest's SSR transform
     // Manual testing required for package resolution
     it.skip('should resolve scoped package paths', async () => {
@@ -241,7 +241,7 @@ describe('Schema Path Resolution', () => {
     });
 
     it('should handle absolute paths from environment variables', async () => {
-      const schemaPath = join(testDir, 'config', 'schema.json');
+      const schemaPath = safePath.join(testDir, 'config', 'schema.json');
 
       const { resolveSchemaPath } = await import('../../src/commands/resources/validate.js');
 

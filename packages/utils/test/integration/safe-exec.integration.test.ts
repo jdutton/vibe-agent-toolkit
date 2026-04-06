@@ -1,8 +1,9 @@
 /* eslint-disable @typescript-eslint/no-explicit-any, sonarjs/no-duplicate-string, security/detect-non-literal-fs-filename */
 // Test file: allows test-specific patterns (any types for error testing, duplicate strings, dynamic fs paths)
 import { mkdtempSync, writeFileSync, chmodSync, rmSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect } from 'vitest';
 
 import { normalizedTmpdir } from '../../src/path-utils.js';
@@ -21,8 +22,8 @@ import {
  * Used to test error handling for tools that exist but fail
  */
 function withFailingTool(toolName: string, testFn: () => void): void {
-  const tempDir = mkdtempSync(join(normalizedTmpdir(), 'safe-exec-test-'));
-  const scriptPath = join(tempDir, toolName);
+  const tempDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'safe-exec-test-'));
+  const scriptPath = safePath.join(tempDir, toolName);
 
   try {
     writeFileSync(scriptPath, '#!/bin/sh\nexit 1\n');
@@ -70,7 +71,7 @@ describe('safeExecSync', () => {
   });
 
   it('should support custom working directory', () => {
-    const tempDir = mkdtempSync(join(normalizedTmpdir(), 'safe-exec-test-'));
+    const tempDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'safe-exec-test-'));
     try {
       const result = safeExecSync('node', ['-e', 'console.log(process.cwd())'], {
         encoding: 'utf8',
@@ -322,11 +323,11 @@ describe('Security - Command Injection Prevention', () => {
   it('should prevent PATH manipulation attacks', () => {
     // Even if PATH is manipulated, we use which.sync which resolves at call time
     const originalPath = process.env['PATH'];
-    const tempDir = mkdtempSync(join(normalizedTmpdir(), 'safe-exec-test-'));
+    const tempDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'safe-exec-test-'));
 
     try {
       // Create malicious "node" script
-      const maliciousScript = join(tempDir, 'node');
+      const maliciousScript = safePath.join(tempDir, 'node');
       writeFileSync(maliciousScript, '#!/bin/sh\necho "HACKED"\n');
       chmodSync(maliciousScript, 0o755);
 

@@ -4,8 +4,8 @@
 
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import type { PackagingValidationResult } from '../../src/validators/packaging-validator.js';
@@ -277,7 +277,7 @@ describe('validateSkillForPackaging - Navigation file detection', () => {
 		const navError = result.activeErrors.find((e) => e.code === 'LINKS_TO_NAVIGATION_FILES');
 		expect(navError).toBeDefined();
 		// Should contain full resolved path, not just basename
-		expect(navError?.message).toContain(path.resolve(tempDir, 'docs/README.md'));
+		expect(navError?.message).toContain(safePath.resolve(tempDir, 'docs/README.md'));
 		// Should contain a line number (colon followed by digits)
 		expect(navError?.message).toMatch(/:\d+/);
 	});
@@ -626,9 +626,9 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 
 	it('should error when skill links to a directory', async () => {
 		const tempDir = getTempDir();
-		const conceptsDir = path.join(tempDir, 'concepts');
+		const conceptsDir = safePath.join(tempDir, 'concepts');
 		fs.mkdirSync(conceptsDir, { recursive: true });
-		fs.writeFileSync(path.join(conceptsDir, 'README.md'), '# Concepts');
+		fs.writeFileSync(safePath.join(conceptsDir, 'README.md'), '# Concepts');
 
 		const skillContent = createSkillContent(
 			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },

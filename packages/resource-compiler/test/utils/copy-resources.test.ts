@@ -5,9 +5,9 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test file with controlled inputs */
 
 import { existsSync, readdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { mkdirSyncReal, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, afterEach, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { copyResources, createPostBuildScript } from '../../src/utils/copy-resources.js';
@@ -24,41 +24,41 @@ describe('copyResources', () => {
   beforeEach(() => {
     suite.beforeEach();
     tempDir = suite.getTempDir();
-    sourceDir = join(tempDir, 'source');
-    targetDir = join(tempDir, 'target');
+    sourceDir = safePath.join(tempDir, 'source');
+    targetDir = safePath.join(tempDir, 'target');
   });
 
   it('should copy single file', () => {
     // Setup source
     mkdirSyncReal(sourceDir);
-    writeFileSync(join(sourceDir, 'test.txt'), 'content', 'utf-8');
+    writeFileSync(safePath.join(sourceDir, 'test.txt'), 'content', 'utf-8');
 
     // Copy
     copyResources({ sourceDir, targetDir });
 
     // Verify
     expect(existsSync(targetDir)).toBe(true);
-    expect(existsSync(join(targetDir, 'test.txt'))).toBe(true);
+    expect(existsSync(safePath.join(targetDir, 'test.txt'))).toBe(true);
   });
 
   it('should copy directory structure recursively', () => {
     // Setup nested structure
-    mkdirSyncReal(join(sourceDir, 'nested', 'deep'), { recursive: true });
-    writeFileSync(join(sourceDir, 'root.txt'), 'root', 'utf-8');
-    writeFileSync(join(sourceDir, 'nested', 'mid.txt'), 'mid', 'utf-8');
-    writeFileSync(join(sourceDir, 'nested', 'deep', 'leaf.txt'), 'leaf', 'utf-8');
+    mkdirSyncReal(safePath.join(sourceDir, 'nested', 'deep'), { recursive: true });
+    writeFileSync(safePath.join(sourceDir, 'root.txt'), 'root', 'utf-8');
+    writeFileSync(safePath.join(sourceDir, 'nested', 'mid.txt'), 'mid', 'utf-8');
+    writeFileSync(safePath.join(sourceDir, 'nested', 'deep', 'leaf.txt'), 'leaf', 'utf-8');
 
     // Copy
     copyResources({ sourceDir, targetDir });
 
     // Verify structure preserved
-    expect(existsSync(join(targetDir, 'root.txt'))).toBe(true);
-    expect(existsSync(join(targetDir, 'nested', 'mid.txt'))).toBe(true);
-    expect(existsSync(join(targetDir, 'nested', 'deep', 'leaf.txt'))).toBe(true);
+    expect(existsSync(safePath.join(targetDir, 'root.txt'))).toBe(true);
+    expect(existsSync(safePath.join(targetDir, 'nested', 'mid.txt'))).toBe(true);
+    expect(existsSync(safePath.join(targetDir, 'nested', 'deep', 'leaf.txt'))).toBe(true);
   });
 
   it('should throw error if source does not exist', () => {
-    const nonexistentSource = join(tempDir, 'does-not-exist');
+    const nonexistentSource = safePath.join(tempDir, 'does-not-exist');
 
     expect(() => {
       copyResources({ sourceDir: nonexistentSource, targetDir });
@@ -68,16 +68,16 @@ describe('copyResources', () => {
   it('should create target parent directory if needed', () => {
     // Setup source
     mkdirSyncReal(sourceDir);
-    writeFileSync(join(sourceDir, 'test.txt'), 'content', 'utf-8');
+    writeFileSync(safePath.join(sourceDir, 'test.txt'), 'content', 'utf-8');
 
     // Target parent doesn't exist
-    const deepTarget = join(tempDir, 'nested', 'path', 'target');
+    const deepTarget = safePath.join(tempDir, 'nested', 'path', 'target');
 
     // Should create parent and succeed
     copyResources({ sourceDir, targetDir: deepTarget });
 
     expect(existsSync(deepTarget)).toBe(true);
-    expect(existsSync(join(deepTarget, 'test.txt'))).toBe(true);
+    expect(existsSync(safePath.join(deepTarget, 'test.txt'))).toBe(true);
   });
 
   it('should handle empty source directory', () => {
@@ -95,23 +95,23 @@ describe('copyResources', () => {
   it('should support verbose logging', () => {
     // Setup source
     mkdirSyncReal(sourceDir);
-    writeFileSync(join(sourceDir, 'test.txt'), 'content', 'utf-8');
+    writeFileSync(safePath.join(sourceDir, 'test.txt'), 'content', 'utf-8');
 
     // Should not throw with verbose enabled
     expect(() => {
       copyResources({ sourceDir, targetDir, verbose: true });
     }).not.toThrow();
 
-    expect(existsSync(join(targetDir, 'test.txt'))).toBe(true);
+    expect(existsSync(safePath.join(targetDir, 'test.txt'))).toBe(true);
   });
 
   it('should wrap copy errors with context', () => {
     // Setup source
     mkdirSyncReal(sourceDir);
-    writeFileSync(join(sourceDir, 'test.txt'), 'content', 'utf-8');
+    writeFileSync(safePath.join(sourceDir, 'test.txt'), 'content', 'utf-8');
 
     // Try to copy to invalid target (simulate permission error by using null character)
-    const invalidTarget = join(tempDir, 'target\0invalid');
+    const invalidTarget = safePath.join(tempDir, 'target\0invalid');
 
     expect(() => {
       copyResources({ sourceDir, targetDir: invalidTarget });
@@ -119,11 +119,24 @@ describe('copyResources', () => {
   });
 });
 
-// createPostBuildScript joins generatedDir under distDir: join(distDir, generatedDir).
+// createPostBuildScript joins generatedDir under distDir: safePath.join(distDir, generatedDir).
 // On Windows, path.join with two absolute paths creates invalid paths (drive letter in middle).
 // On Windows (forks pool), process.chdir is available — use relative paths.
 // On Unix (threads pool, no chdir), POSIX path.join handles two absolute paths correctly.
 const isWindows = process.platform === 'win32';
+
+/** Return relative paths on Windows (chdir), absolute on Unix */
+function testPath(tempDir: string, name: string): string {
+  return isWindows ? name : safePath.join(tempDir, name);
+}
+
+function setupGeneratedDir(tempDir: string): { generatedDir: string; distDir: string } {
+  const generatedDir = testPath(tempDir, 'generated');
+  const distDir = testPath(tempDir, 'dist');
+  mkdirSyncReal(safePath.join(tempDir, 'generated'));
+  writeFileSync(safePath.join(tempDir, 'generated', 'output.js'), 'code', 'utf-8');
+  return { generatedDir, distDir };
+}
 
 describe('createPostBuildScript', () => {
   let tempDir: string;
@@ -146,21 +159,12 @@ describe('createPostBuildScript', () => {
     }
   });
 
-  /** Return relative paths on Windows (chdir), absolute on Unix */
-  function testPath(name: string): string {
-    return isWindows ? name : join(tempDir, name);
-  }
-
   it('should copy generated dir to dist/generated', () => {
-    const generatedDir = testPath('generated');
-    const distDir = testPath('dist');
-
-    mkdirSyncReal(join(tempDir, 'generated'));
-    writeFileSync(join(tempDir, 'generated', 'output.js'), 'code', 'utf-8');
+    const { generatedDir, distDir } = setupGeneratedDir(tempDir);
 
     createPostBuildScript({ generatedDir, distDir });
 
-    expect(existsSync(join(distDir, generatedDir, 'output.js'))).toBe(true);
+    expect(existsSync(safePath.join(distDir, generatedDir, 'output.js'))).toBe(true);
   });
 
   it('should exit process on error', () => {
@@ -174,8 +178,8 @@ describe('createPostBuildScript', () => {
     try {
       expect(() => {
         createPostBuildScript({
-          generatedDir: testPath('does-not-exist'),
-          distDir: testPath('dist'),
+          generatedDir: testPath(tempDir, 'does-not-exist'),
+          distDir: testPath(tempDir, 'dist'),
         });
       }).toThrow('process.exit called');
 
@@ -186,16 +190,12 @@ describe('createPostBuildScript', () => {
   });
 
   it('should support verbose logging', () => {
-    const generatedDir = testPath('generated');
-    const distDir = testPath('dist');
-
-    mkdirSyncReal(join(tempDir, 'generated'));
-    writeFileSync(join(tempDir, 'generated', 'output.js'), 'code', 'utf-8');
+    const { generatedDir, distDir } = setupGeneratedDir(tempDir);
 
     expect(() => {
       createPostBuildScript({ generatedDir, distDir, verbose: true });
     }).not.toThrow();
 
-    expect(existsSync(join(distDir, generatedDir))).toBe(true);
+    expect(existsSync(safePath.join(distDir, generatedDir))).toBe(true);
   });
 });

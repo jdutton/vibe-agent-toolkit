@@ -5,8 +5,8 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import * as path from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 
@@ -16,7 +16,7 @@ import { executeSkillsCommandAndExpectYaml } from './test-helpers/index.js';
 describe('skills list command - fixture tests (system test)', () => {
   const binPath = getBinPath(import.meta.url);
   // Use committed fixture instead of creating files at runtime (faster on Windows)
-  const fixtureDir = path.join(process.cwd(), 'packages/cli/test/fixtures/skills-minimal');
+  const fixtureDir = safePath.join(process.cwd(), 'packages/cli/test/fixtures/skills-minimal');
 
   it('should list skills in fixture directory', () => {
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command

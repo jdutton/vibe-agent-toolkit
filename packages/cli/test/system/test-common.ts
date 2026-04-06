@@ -9,15 +9,18 @@ import * as fs from 'node:fs';
 import { dirname as pathDirname, join as pathJoin, resolve as pathResolve } from 'node:path';
 import { fileURLToPath as urlFileURLToPath } from 'node:url';
 
-import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
 
 // Re-export commonly used functions
 export { spawnSync } from 'node:child_process';
 export * as fs from 'node:fs';
-export { join, resolve, dirname } from 'node:path';
+export { dirname } from 'node:path';
+export const join = safePath.join.bind(safePath);
+export const resolve = safePath.resolve.bind(safePath);
 export { fileURLToPath } from 'node:url';
 export { describe, expect } from 'vitest';
+export { safePath } from '@vibe-agent-toolkit/utils';
 
 /**
  * Get bin path from current test file location

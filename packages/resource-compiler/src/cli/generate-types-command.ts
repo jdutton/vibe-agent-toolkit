@@ -5,8 +5,8 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- CLI tool with user-provided paths */
 
 import { readFileSync, writeFileSync } from 'node:fs';
-import { relative } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import type { Command } from 'commander';
 import { glob } from 'glob';
 
@@ -44,7 +44,7 @@ function processMarkdownFile(
 ): GenerateTypeResult {
   try {
     if (verbose) {
-      const relativePath = relative(inputDir, filePath);
+      const relativePath = safePath.relative(inputDir, filePath);
       console.log(`Processing: ${relativePath}`);
     }
 
@@ -60,7 +60,7 @@ function processMarkdownFile(
     writeFileSync(declarationPath, declaration, 'utf-8');
 
     if (verbose) {
-      const relativeDeclarationPath = relative(inputDir, declarationPath);
+      const relativeDeclarationPath = safePath.relative(inputDir, declarationPath);
       console.log(`  Generated: ${relativeDeclarationPath}`);
     }
 

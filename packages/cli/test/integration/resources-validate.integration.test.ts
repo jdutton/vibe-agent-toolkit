@@ -1,5 +1,5 @@
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -25,8 +25,8 @@ describe('vat resources validate (integration)', () => {
   });
 
   it('should validate valid resources and exit 0', () => {
-    writeTestFile(join(tempDir, 'README.md'), '# Test\n[link](./other.md)');
-    writeTestFile(join(tempDir, 'other.md'), '# Other');
+    writeTestFile(safePath.join(tempDir, 'README.md'), '# Test\n[link](./other.md)');
+    writeTestFile(safePath.join(tempDir, 'other.md'), '# Other');
 
     const { result, parsed } = executeCliAndParseYaml(binPath, [
       'resources',
@@ -40,7 +40,7 @@ describe('vat resources validate (integration)', () => {
   });
 
   it('should detect broken links and exit 1', () => {
-    writeTestFile(join(tempDir, 'README.md'), '[broken](./missing.md)');
+    writeTestFile(safePath.join(tempDir, 'README.md'), '[broken](./missing.md)');
 
     const { result, parsed } = executeCliAndParseYaml(binPath, [
       'resources',
@@ -55,7 +55,7 @@ describe('vat resources validate (integration)', () => {
   });
 
   it('should output test-format errors to stderr', () => {
-    writeTestFile(join(tempDir, 'test.md'), '[broken](./missing.md)');
+    writeTestFile(safePath.join(tempDir, 'test.md'), '[broken](./missing.md)');
 
     const result = executeCli(binPath, ['resources', 'validate', tempDir, '--format', 'text']);
 
@@ -64,7 +64,7 @@ describe('vat resources validate (integration)', () => {
   });
 
   it('should detect broken anchors', () => {
-    writeTestFile(join(tempDir, 'test.md'), '# Test\n[link](#missing)');
+    writeTestFile(safePath.join(tempDir, 'test.md'), '# Test\n[link](#missing)');
 
     const result = executeCli(binPath, ['resources', 'validate', tempDir, '--format', 'text']);
 

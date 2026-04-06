@@ -3,8 +3,8 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import * as path from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 
@@ -142,7 +142,7 @@ describe('skills list command (system test)', () => {
   });
 
   it('should list skills at specific path', () => {
-    const catAgentsPath = path.join(process.cwd(), 'packages/vat-example-cat-agents');
+    const catAgentsPath = safePath.join(process.cwd(), 'packages/vat-example-cat-agents');
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
     const result = spawnSync('node', [binPath, 'skills', 'list', catAgentsPath], {
       encoding: 'utf-8',

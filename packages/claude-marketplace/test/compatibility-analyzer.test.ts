@@ -1,5 +1,5 @@
-import { resolve } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { analyzeCompatibility } from '../src/compatibility-analyzer.js';
@@ -7,7 +7,7 @@ import type { CompatibilityEvidence } from '../src/types.js';
 
 import { verdicts } from './test-helpers.js';
 
-const fixtureDir = (name: string) => resolve(import.meta.dirname, 'fixtures', name);
+const fixtureDir = (name: string) => safePath.resolve(import.meta.dirname, 'fixtures', name);
 const hasSource = (evidence: CompatibilityEvidence[], source: string) =>
   evidence.some((e: CompatibilityEvidence) => e.source === source);
 
@@ -57,7 +57,7 @@ describe('analyzeCompatibility', () => {
   });
 
   it('throws for directory without plugin.json', async () => {
-    const nonexistent = resolve(import.meta.dirname, 'fixtures', 'nonexistent');
+    const nonexistent = safePath.resolve(import.meta.dirname, 'fixtures', 'nonexistent');
     await expect(analyzeCompatibility(nonexistent))
       .rejects.toThrow();
   });

@@ -5,7 +5,8 @@
  */
 
 import { existsSync, statSync } from 'node:fs';
-import { basename, dirname, relative, resolve } from 'node:path';
+import { basename, dirname } from 'node:path';
+
 
 import {
   packageSkill,
@@ -16,6 +17,7 @@ import {
   type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
 import { parseMarkdown, type ParseResult } from '@vibe-agent-toolkit/resources';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../../utils/command-error.js';
@@ -177,7 +179,7 @@ async function collectLinkedFiles(
   basePath: string,
   visited: Set<string>
 ): Promise<string[]> {
-  const normalizedPath = resolve(markdownPath);
+  const normalizedPath = safePath.resolve(markdownPath);
   if (visited.has(normalizedPath)) {
     return [];
   }
@@ -192,7 +194,7 @@ async function collectLinkedFiles(
     const hrefWithoutAnchor = link.href.split('#')[0] ?? link.href;
     if (hrefWithoutAnchor === '') continue;
 
-    const resolvedPath = resolve(dirname(markdownPath), hrefWithoutAnchor);
+    const resolvedPath = safePath.resolve(dirname(markdownPath), hrefWithoutAnchor);
 
     // Only include markdown files (no basePath filtering - collect all valid linked files)
     if (!resolvedPath.endsWith('.md')) continue;
@@ -310,7 +312,7 @@ async function performDryRun(
   logger.info(`\n📁 Files to be packaged:`);
   logger.info(`   - SKILL.md (root)`);
   for (const file of linkedFiles) {
-    const relPath = relative(basePath, file);
+    const relPath = safePath.relative(basePath, file);
     logger.info(`   - ${relPath}`);
   }
   logger.info(`\n   Total: ${linkedFiles.length + 1} files`);

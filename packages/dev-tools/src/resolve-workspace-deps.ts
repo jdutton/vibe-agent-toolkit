@@ -23,11 +23,12 @@
  */
 
 import { readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { log } from './common.js';
 
-const PACKAGES_DIR = join(import.meta.dirname, '../../../packages');
+const PACKAGES_DIR = safePath.join(import.meta.dirname, '../../../packages');
 const SCOPE = '@vibe-agent-toolkit';
 
 interface PackageJson {
@@ -52,7 +53,7 @@ function resolveDependencies(deps: Record<string, string> | undefined, version: 
 }
 
 function processPackage(packageDir: string, version: string): number {
-  const packageJsonPath = join(PACKAGES_DIR, packageDir, 'package.json');
+  const packageJsonPath = safePath.join(PACKAGES_DIR, packageDir, 'package.json');
   const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as PackageJson;
 
   const resolvedDeps = resolveDependencies(packageJson.dependencies, version);
@@ -70,7 +71,7 @@ function processPackage(packageDir: string, version: string): number {
 
 function getAllPackageDirs(): string[] {
   return readdirSync(PACKAGES_DIR).filter((dir) => {
-    const fullPath = join(PACKAGES_DIR, dir);
+    const fullPath = safePath.join(PACKAGES_DIR, dir);
     const isDirectory = statSync(fullPath).isDirectory();
     if (!isDirectory) return false;
     const hasPackageJson = readdirSync(fullPath).includes('package.json');

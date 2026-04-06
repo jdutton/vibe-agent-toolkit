@@ -2,8 +2,8 @@
 /* eslint-disable sonarjs/no-duplicate-string -- Test descriptions naturally repeat */
 /* eslint-disable security/detect-non-literal-fs-filename -- Test files use controlled temp directories */
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -25,7 +25,7 @@ async function createAndValidateRegistry(
 	data: unknown,
 	validatorFn: (path: string) => Promise<unknown>,
 ): Promise<unknown> {
-	const registryPath = path.join(tempDir, fileName);
+	const registryPath = safePath.join(tempDir, fileName);
 	fs.writeFileSync(registryPath, JSON.stringify(data, null, 2));
 	return validatorFn(registryPath);
 }
@@ -62,7 +62,7 @@ describe('validateInstalledPluginsRegistry', () => {
 			},
 		};
 
-		const registryPath = path.join(getTempDir(), 'installed_plugins.json');
+		const registryPath = safePath.join(getTempDir(), 'installed_plugins.json');
 		fs.writeFileSync(registryPath, JSON.stringify(validRegistry, null, 2));
 
 		const result = await validateInstalledPluginsRegistry(registryPath);
@@ -74,7 +74,7 @@ describe('validateInstalledPluginsRegistry', () => {
 	});
 
 	it('should fail when registry file does not exist', async () => {
-		const nonExistentPath = path.join(getTempDir(), 'nonexistent.json');
+		const nonExistentPath = safePath.join(getTempDir(), 'nonexistent.json');
 
 		const result = await validateInstalledPluginsRegistry(nonExistentPath);
 
@@ -85,7 +85,7 @@ describe('validateInstalledPluginsRegistry', () => {
 	});
 
 	it('should fail when registry file has invalid JSON', async () => {
-		const registryPath = path.join(getTempDir(), 'invalid.json');
+		const registryPath = safePath.join(getTempDir(), 'invalid.json');
 		fs.writeFileSync(registryPath, '{ invalid json }');
 
 		const result = await validateInstalledPluginsRegistry(registryPath);
@@ -191,7 +191,7 @@ describe('validateKnownMarketplacesRegistry', () => {
 			},
 		};
 
-		const registryPath = path.join(getTempDir(), 'known_marketplaces.json');
+		const registryPath = safePath.join(getTempDir(), 'known_marketplaces.json');
 		fs.writeFileSync(registryPath, JSON.stringify(validRegistry, null, 2));
 
 		const result = await validateKnownMarketplacesRegistry(registryPath);
@@ -203,7 +203,7 @@ describe('validateKnownMarketplacesRegistry', () => {
 	});
 
 	it('should fail when registry file does not exist', async () => {
-		const nonExistentPath = path.join(getTempDir(), 'nonexistent.json');
+		const nonExistentPath = safePath.join(getTempDir(), 'nonexistent.json');
 
 		const result = await validateKnownMarketplacesRegistry(nonExistentPath);
 
@@ -213,7 +213,7 @@ describe('validateKnownMarketplacesRegistry', () => {
 	});
 
 	it('should fail when registry file has invalid JSON', async () => {
-		const registryPath = path.join(getTempDir(), 'invalid.json');
+		const registryPath = safePath.join(getTempDir(), 'invalid.json');
 		fs.writeFileSync(registryPath, '{ bad: json }');
 
 		const result = await validateKnownMarketplacesRegistry(registryPath);

@@ -1,5 +1,5 @@
-import { resolve } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { validatePlugin } from '../../src/validators/plugin-validator.js';
@@ -19,7 +19,7 @@ describe('validatePlugin', () => {
 	});
 
 	it('should validate a simple plugin directory successfully', async () => {
-		const pluginPath = resolve(
+		const pluginPath = safePath.resolve(
 			__dirname,
 			'../fixtures/plugins/valid-simple-plugin',
 		);
@@ -33,7 +33,7 @@ describe('validatePlugin', () => {
 
 	it('should return error when plugin.json is missing', async () => {
 		const tempDir = getTempDir();
-		const pluginPath = resolve(tempDir, 'missing-manifest');
+		const pluginPath = safePath.resolve(tempDir, 'missing-manifest');
 
 		const result = await validatePlugin(pluginPath);
 
@@ -46,9 +46,8 @@ describe('validatePlugin', () => {
 
 		// Overwrite with invalid JSON
 		const fs = await import('node:fs');
-		const path = await import('node:path');
 		fs.writeFileSync(
-			path.join(pluginPath, '.claude-plugin', 'plugin.json'),
+			safePath.join(pluginPath, '.claude-plugin', 'plugin.json'),
 			'{ invalid json }',
 		);
 

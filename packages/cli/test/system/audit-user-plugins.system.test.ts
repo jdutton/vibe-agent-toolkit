@@ -12,8 +12,8 @@
  * SonarQube analyzing third-party code as production code.
  */
 
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -83,7 +83,7 @@ describe('Audit User Plugins Fixture (system test)', () => {
       // Recursive is the default — no flag needed
       const { stdout, status } = executeCli(binPath, [
         'audit',
-        join(fixtureDir, 'marketplaces/anthropic-agent-skills'),
+        safePath.join(fixtureDir, 'marketplaces/anthropic-agent-skills'),
       ]);
 
       // Marketplace validation now works — should succeed
@@ -105,7 +105,7 @@ describe('Audit User Plugins Fixture (system test)', () => {
       // Recursive is the default — no flag needed
       const { stdout, status } = executeCli(binPath, [
         'audit',
-        join(fixtureDir, 'marketplaces/claude-plugins-official'),
+        safePath.join(fixtureDir, 'marketplaces/claude-plugins-official'),
       ]);
 
       // Marketplace validation now works — should succeed
@@ -127,7 +127,7 @@ describe('Audit User Plugins Fixture (system test)', () => {
       // Recursive is the default — no flag needed
       const { stdout } = executeCli(binPath, [
         'audit',
-        join(fixtureDir, 'cache'),
+        safePath.join(fixtureDir, 'cache'),
       ]);
 
       const output = parseYamlOutput(stdout);

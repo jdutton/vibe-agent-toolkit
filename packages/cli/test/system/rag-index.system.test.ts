@@ -12,7 +12,7 @@ import {
   expect,
   fs,
   getBinPath,
-  join,
+  safePath,
 } from './test-common.js';
 import { setupRagTestProject, setupTestProject } from './test-helpers/index.js';
 
@@ -59,9 +59,9 @@ describe('RAG index command (system test)', () => {
     });
     const reindexDbPath = getTestOutputDir('cli', 'system', 'rag-index-reindex-db');
 
-    const docsDir = join(reindexProjectDir, 'docs');
+    const docsDir = safePath.join(reindexProjectDir, 'docs');
     fs.writeFileSync(
-      join(docsDir, 'README.md'),
+      safePath.join(docsDir, 'README.md'),
       '# Test\n\nContent for re-index test.\n\n## Section\n\nMore content here.'
     );
 
@@ -93,7 +93,7 @@ describe('RAG index command (system test)', () => {
 
   it('should error when no path and no project root', () => {
     // Create a temp dir without .git (no project root)
-    const nonProjectDir = join(tempDir, 'non-project');
+    const nonProjectDir = safePath.join(tempDir, 'non-project');
     fs.mkdirSync(nonProjectDir);
 
     const { result, parsed } = executeCliAndParseYaml(

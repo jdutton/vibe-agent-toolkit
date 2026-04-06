@@ -10,7 +10,8 @@
 
 import * as fs from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { getManagedSettingsCandidatePaths } from '../paths/managed-settings-path.js';
 import {
@@ -121,7 +122,7 @@ export async function readSettingsLayers(
   }
 
   // 4. User settings
-  await tryAddLayer(layers, join(home, '.claude', 'settings.json'), 'user');
+  await tryAddLayer(layers, safePath.join(home, '.claude', 'settings.json'), 'user');
 
   return layers;
 }

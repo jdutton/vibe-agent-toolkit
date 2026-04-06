@@ -4,7 +4,8 @@
 
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs/promises';
-import path from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 /**
  * Initialize a git repository in the specified directory.
@@ -15,7 +16,7 @@ import path from 'node:path';
  *
  * @example
  * ```typescript
- * const tempDir = mkdtempSync(path.join(tmpdir(), 'my-test-'));
+ * const tempDir = mkdtempSync(safePath.join(tmpdir(), 'my-test-'));
  * createGitRepo(tempDir);
  * // Now tempDir is a valid git repository
  * ```
@@ -54,11 +55,11 @@ export async function setupNestedDirectory(
   nestedFile: string,
   nestedContent: string
 ): Promise<{ srcDir: string; destDir: string }> {
-  const srcDir = path.join(tempDir, 'src');
-  const destDir = path.join(tempDir, 'dest');
+  const srcDir = safePath.join(tempDir, 'src');
+  const destDir = safePath.join(tempDir, 'dest');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is controlled temp directory in tests
-  await fs.mkdir(path.join(srcDir, subdir), { recursive: true });
+  await fs.mkdir(safePath.join(srcDir, subdir), { recursive: true });
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is controlled temp directory in tests
-  await fs.writeFile(path.join(srcDir, subdir, nestedFile), nestedContent);
+  await fs.writeFile(safePath.join(srcDir, subdir, nestedFile), nestedContent);
   return { srcDir, destDir };
 }

@@ -15,10 +15,10 @@
 
 import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
 import { cp, mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
-import { basename, join, relative, resolve } from 'node:path';
+import { basename } from 'node:path';
 
 import { getClaudeUserPaths, installPlugin, uninstallPlugin } from '@vibe-agent-toolkit/claude-marketplace';
-import { normalizedTmpdir, safeExecSync, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safeExecSync, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import AdmZip from 'adm-zip';
 import { Command } from 'commander';
 import * as tar from 'tar';
@@ -37,7 +37,7 @@ import {
 } from './helpers.js';
 
 /** Relative path within a VAT npm package to its pre-built plugin structure. */
-const PLUGIN_MARKETPLACES_SUBPATH = join('dist', '.claude', 'plugins', 'marketplaces');
+const PLUGIN_MARKETPLACES_SUBPATH = safePath.join('dist', '.claude', 'plugins', 'marketplaces');
 const PACKAGE_JSON = 'package.json';
 
 /**
@@ -94,7 +94,7 @@ async function installPluginTreeAndExit(
   dryRun?: boolean,
 ): Promise<never> {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- rootDir from controlled source
-  const pkgRaw = readFileSync(join(rootDir, PACKAGE_JSON), 'utf-8');
+  const pkgRaw = readFileSync(safePath.join(rootDir, PACKAGE_JSON), 'utf-8');
   const packageJson = JSON.parse(pkgRaw) as { name: string; version?: string; vat?: { replaces?: PackageJsonVatReplaces } };
   const installedSkills = await copyPluginTree(marketplacesDir, packageJson, logger, dryRun);
 
@@ -275,7 +275,7 @@ async function handleNpmInstall(
   logger.info(`📥 Installing skill from npm: ${packageName}`);
 
   // Create temp directory
-  const tempDir = await mkdtemp(join(normalizedTmpdir(), 'vat-install-npm-'));
+  const tempDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'vat-install-npm-'));
 
   try {
     // Download and extract npm package
@@ -283,7 +283,7 @@ async function handleNpmInstall(
     const extractedPath = downloadNpmPackage(packageName, tempDir);
 
     // If the package ships a pre-built plugin tree, install via dumb copy.
-    const marketplacesDir = join(extractedPath, PLUGIN_MARKETPLACES_SUBPATH);
+    const marketplacesDir = safePath.join(extractedPath, PLUGIN_MARKETPLACES_SUBPATH);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from controlled extractedPath + constant subpath
     const hasPlugin = !options.userInstallWithoutPlugin && existsSync(marketplacesDir);
 
@@ -314,7 +314,7 @@ async function handleNpmInstall(
     const skillsDir = options.skillsDir ?? getClaudeUserPaths().skillsDir;
 
     for (const skillName of skillNames) {
-      const skillPath = join(extractedPath, 'dist', 'skills', skillNameToFsPath(skillName));
+      const skillPath = safePath.join(extractedPath, 'dist', 'skills', skillNameToFsPath(skillName));
       await installSkillFromPath(skillPath, skillName, options, logger);
     }
 
@@ -322,7 +322,7 @@ async function handleNpmInstall(
     outputInstallSuccess(
       skillNames.map(name => ({
         name,
-        installPath: join(skillsDir, name),
+        installPath: safePath.join(skillsDir, name),
       })),
       `npm:${packageName}`,
       'npm',
@@ -346,21 +346,21 @@ async function handleLocalInstall(
   logger: ReturnType<typeof createLogger>,
   startTime: number
 ): Promise<void> {
-  const sourcePath = resolve(source);
+  const sourcePath = safePath.resolve(source);
 
   logger.info(`📥 Installing skill from directory: ${sourcePath}`);
 
   const skillsDir = options.skillsDir ?? getClaudeUserPaths().skillsDir;
 
   // Check for pre-built plugin tree first
-  const marketplacesDir = join(sourcePath, PLUGIN_MARKETPLACES_SUBPATH);
+  const marketplacesDir = safePath.join(sourcePath, PLUGIN_MARKETPLACES_SUBPATH);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- User-provided CLI argument
   if (!options.userInstallWithoutPlugin && existsSync(marketplacesDir)) {
     await installPluginTreeAndExit(sourcePath, marketplacesDir, `local:${sourcePath}`, 'local', startTime, logger, options.dryRun);
   }
 
   // Check if directory contains package.json with vat.skills
-  const packageJsonPath = join(sourcePath, 'package.json');
+  const packageJsonPath = safePath.join(sourcePath, 'package.json');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- User-provided CLI argument
   const hasPackageJson = existsSync(packageJsonPath);
 
@@ -378,16 +378,16 @@ async function handleLocalInstall(
     }
 
     for (const skillName of skillNames) {
-      const skillPath = join(sourcePath, 'dist', 'skills', skillNameToFsPath(skillName));
+      const skillPath = safePath.join(sourcePath, 'dist', 'skills', skillNameToFsPath(skillName));
       await installSkillFromPath(skillPath, skillName, options, logger);
     }
 
-    installed = skillNames.map(name => ({ name, installPath: join(skillsDir, name) }));
+    installed = skillNames.map(name => ({ name, installPath: safePath.join(skillsDir, name) }));
   } else {
     // Plain directory - use directory name
     const skillName = options.name ?? basename(sourcePath);
     await installSkillFromPath(sourcePath, skillName, options, logger);
-    installed = [{ name: skillName, installPath: join(skillsDir, skillName) }];
+    installed = [{ name: skillName, installPath: safePath.join(skillsDir, skillName) }];
   }
 
   const duration = Date.now() - startTime;
@@ -404,7 +404,7 @@ async function handleZipInstall(
   logger: ReturnType<typeof createLogger>,
   startTime: number
 ): Promise<void> {
-  const sourcePath = resolve(source);
+  const sourcePath = safePath.resolve(source);
 
   logger.info(`📥 Installing skill from ZIP: ${sourcePath}`);
 
@@ -448,7 +448,7 @@ async function handleTgzInstall(
   logger: ReturnType<typeof createLogger>,
   startTime: number
 ): Promise<void> {
-  const sourcePath = resolve(source);
+  const sourcePath = safePath.resolve(source);
 
   logger.info(`📥 Installing skill from tarball: ${sourcePath}`);
 
@@ -457,19 +457,19 @@ async function handleTgzInstall(
     throw new Error(`Tarball not found: ${sourcePath}`);
   }
 
-  const tempDir = await mkdtemp(join(normalizedTmpdir(), 'vat-install-tgz-'));
+  const tempDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'vat-install-tgz-'));
 
   try {
     logger.info('   Extracting tarball...');
     await tar.extract({ file: sourcePath, cwd: tempDir });
 
     // npm pack tarballs extract under package/ subdirectory
-    const packageDir = join(tempDir, 'package');
+    const packageDir = safePath.join(tempDir, 'package');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is controlled
     const extractedDir = existsSync(packageDir) ? packageDir : tempDir;
 
     // Delegate to local install logic
-    const marketplacesDir = join(extractedDir, PLUGIN_MARKETPLACES_SUBPATH);
+    const marketplacesDir = safePath.join(extractedDir, PLUGIN_MARKETPLACES_SUBPATH);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is controlled
     if (!options.userInstallWithoutPlugin && existsSync(marketplacesDir)) {
       await installPluginTreeAndExit(extractedDir, marketplacesDir, sourcePath, 'tgz', startTime, logger, options.dryRun);
@@ -481,13 +481,13 @@ async function handleTgzInstall(
     const skillNames = options.name ? skills.filter(s => s === options.name) : skills;
 
     for (const skillName of skillNames) {
-      const skillPath = join(extractedDir, 'dist', 'skills', skillNameToFsPath(skillName));
+      const skillPath = safePath.join(extractedDir, 'dist', 'skills', skillNameToFsPath(skillName));
       await installSkillFromPath(skillPath, skillName, options, logger);
     }
 
     const duration = Date.now() - startTime;
     outputInstallSuccess(
-      skillNames.map(name => ({ name, installPath: join(skillsDir, name) })),
+      skillNames.map(name => ({ name, installPath: safePath.join(skillsDir, name) })),
       sourcePath,
       'tgz',
       duration,
@@ -541,8 +541,8 @@ async function symlinkDevSkill(
   options: PluginInstallCommandOptions,
   logger: ReturnType<typeof createLogger>
 ): Promise<{ name: string; installPath: string; sourcePath: string } | null> {
-  const srcSkillPath = resolve(cwd, 'dist', 'skills', skillFsName);
-  const destSkillPath = join(destSkillsDir, skillFsName);
+  const srcSkillPath = safePath.resolve(cwd, 'dist', 'skills', skillFsName);
+  const destSkillPath = safePath.join(destSkillsDir, skillFsName);
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
   if (!existsSync(srcSkillPath)) {
@@ -557,7 +557,7 @@ async function symlinkDevSkill(
     await symlink(srcSkillPath, destSkillPath, 'dir');
   }
 
-  logger.info(`   Symlinked: ${relative(cwd, destSkillPath)} → ${srcSkillPath}`);
+  logger.info(`   Symlinked: ${safePath.relative(cwd, destSkillPath)} → ${srcSkillPath}`);
   return {
     name: `${pluginName}:${skillFsName}`,
     installPath: destSkillPath,
@@ -587,14 +587,14 @@ async function symlinkPluginSkills(
   logger: ReturnType<typeof createLogger>
 ): Promise<Array<{ name: string; installPath: string; sourcePath: string }>> {
   const installed: Array<{ name: string; installPath: string; sourcePath: string }> = [];
-  const srcSkillsDir = join(srcPluginDir, 'skills');
+  const srcSkillsDir = safePath.join(srcPluginDir, 'skills');
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
   if (!existsSync(srcSkillsDir)) {
     return installed;
   }
 
-  const destSkillsDir = join(destPluginDir, 'skills');
+  const destSkillsDir = safePath.join(destPluginDir, 'skills');
   if (!options.dryRun) {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
     await mkdir(destSkillsDir, { recursive: true });
@@ -632,8 +632,8 @@ async function devInstallPlugin(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
   for (const entry of readdirSync(srcPluginDir, { withFileTypes: true })) {
     if (entry.name !== 'skills' && !options.dryRun) {
-      const srcEntry = join(srcPluginDir, entry.name);
-      const destEntry = join(destPluginDir, entry.name);
+      const srcEntry = safePath.join(srcPluginDir, entry.name);
+      const destEntry = safePath.join(destPluginDir, entry.name);
       await cp(srcEntry, destEntry, { recursive: true, force: true });
     }
   }
@@ -660,7 +660,7 @@ async function devInstallMarketplace(
   logger: ReturnType<typeof createLogger>
 ): Promise<Array<{ name: string; installPath: string; sourcePath: string }>> {
   const paths = getClaudeUserPaths();
-  const destMpDir = join(paths.marketplacesDir, mpName);
+  const destMpDir = safePath.join(paths.marketplacesDir, mpName);
   const installed: Array<{ name: string; installPath: string; sourcePath: string }> = [];
 
   if (!options.dryRun) {
@@ -674,21 +674,21 @@ async function devInstallMarketplace(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
   for (const entry of readdirSync(srcMpDir, { withFileTypes: true })) {
     if (entry.name !== 'plugins' && !options.dryRun) {
-      const srcEntry = join(srcMpDir, entry.name);
-      const destEntry = join(destMpDir, entry.name);
+      const srcEntry = safePath.join(srcMpDir, entry.name);
+      const destEntry = safePath.join(destMpDir, entry.name);
       await cp(srcEntry, destEntry, { recursive: true, force: true });
     }
   }
 
-  const pluginsDir = join(srcMpDir, 'plugins');
+  const pluginsDir = safePath.join(srcMpDir, 'plugins');
 
   for (const pluginName of listSubdirectories(pluginsDir)) {
     const results = await devInstallPlugin(
       {
         mpName,
         pluginName,
-        srcPluginDir: join(pluginsDir, pluginName),
-        destPluginDir: join(destMpDir, 'plugins', pluginName),
+        srcPluginDir: safePath.join(pluginsDir, pluginName),
+        destPluginDir: safePath.join(destMpDir, 'plugins', pluginName),
         packageName: packageInfo.name,
         version: packageInfo.version,
         paths,
@@ -727,14 +727,14 @@ async function handleDevInstall(
   }
 
   // --cwd only applies to --dev mode; other paths (npm postinstall, etc.) use process.cwd()
-  const cwd = options.cwd ? resolve(options.cwd) : process.cwd();
+  const cwd = options.cwd ? safePath.resolve(options.cwd) : process.cwd();
 
   if (options.build) {
     runBuild(cwd, logger);
   }
 
   // Check for pre-built plugin tree
-  const marketplacesDir = join(cwd, PLUGIN_MARKETPLACES_SUBPATH);
+  const marketplacesDir = safePath.join(cwd, PLUGIN_MARKETPLACES_SUBPATH);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- cwd from CLI option or process.cwd()
   if (!existsSync(marketplacesDir)) {
     throw new Error(
@@ -745,7 +745,7 @@ async function handleDevInstall(
 
   // Read package.json for package name/version
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- cwd from CLI option or process.cwd()
-  const pkgRaw = readFileSync(join(cwd, PACKAGE_JSON), 'utf-8');
+  const pkgRaw = readFileSync(safePath.join(cwd, PACKAGE_JSON), 'utf-8');
   const packageJson = JSON.parse(pkgRaw) as { name: string; version?: string; vat?: { replaces?: PackageJsonVatReplaces } };
   logger.info(`📥 Dev-installing plugin tree from ${packageJson.name}`);
 
@@ -760,7 +760,7 @@ async function handleDevInstall(
   }
 
   for (const mpName of listSubdirectories(marketplacesDir)) {
-    const srcMpDir = join(marketplacesDir, mpName);
+    const srcMpDir = safePath.join(marketplacesDir, mpName);
     const results = await devInstallMarketplace(mpName, srcMpDir, packageInfo, cwd, options, logger);
     installed.push(...results);
   }
@@ -778,7 +778,7 @@ function runBuild(
   logger: ReturnType<typeof createLogger>
 ): void {
   logger.info('🔨 Building first (skills + plugin tree)...');
-  const binPath = resolve(join(import.meta.dirname, '../../../../bin/vat.js'));
+  const binPath = safePath.resolve(safePath.join(import.meta.dirname, '../../../../bin/vat.js'));
   safeExecSync('node', [binPath, 'build'], {
     cwd,
     stdio: ['inherit', 'inherit', 'inherit'],
@@ -805,12 +805,14 @@ async function handleNpmPostinstall(
   const cwd = process.cwd();
 
   // Check for pre-built plugin tree (dist/.claude/plugins/marketplaces/)
-  const marketplacesDir = join(cwd, PLUGIN_MARKETPLACES_SUBPATH);
+  const marketplacesDir = safePath.join(cwd, PLUGIN_MARKETPLACES_SUBPATH);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated cwd and constant subpath
   const hasPluginTree = existsSync(marketplacesDir);
 
   if (!options.userInstallWithoutPlugin) {
     if (hasPluginTree) {
-      const pkgRaw = readFileSync(join(cwd, PACKAGE_JSON), 'utf-8');
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated cwd and constant package.json name
+      const pkgRaw = readFileSync(safePath.join(cwd, PACKAGE_JSON), 'utf-8');
       const packageJson = JSON.parse(pkgRaw) as { name: string; version?: string; vat?: { replaces?: PackageJsonVatReplaces } };
       logger.info(`   Package: ${packageJson.name}@${packageJson.version ?? 'unknown'}`);
       logger.info(`   Plugin tree detected — copying to ~/.claude/plugins/`);
@@ -835,7 +837,7 @@ async function handleNpmPostinstall(
   logger.info(`   Skills found: ${skills.length}`);
 
   for (const skillName of skills) {
-    const skillPath = join(cwd, 'dist', 'skills', skillNameToFsPath(skillName));
+    const skillPath = safePath.join(cwd, 'dist', 'skills', skillNameToFsPath(skillName));
     await installSkillFromPath(skillPath, skillName, options, logger);
   }
 
@@ -896,7 +898,7 @@ export async function executeReplaces(
 
   // Remove legacy flat-skill installs from ~/.claude/skills/<name>
   for (const skillName of replaces.flatSkills ?? []) {
-    const skillPath = join(paths.skillsDir, skillName);
+    const skillPath = safePath.join(paths.skillsDir, skillName);
     let pathExists = false;
     try {
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from Claude user paths + skill name
@@ -940,8 +942,8 @@ async function copyPluginTree(
   }
 
   for (const mpName of marketplaceNames) {
-    const srcMpDir = join(marketplacesDir, mpName);
-    const destMpDir = join(paths.marketplacesDir, mpName);
+    const srcMpDir = safePath.join(marketplacesDir, mpName);
+    const destMpDir = safePath.join(paths.marketplacesDir, mpName);
 
     // Replace the marketplace directory entirely so skills removed from the
     // package do not persist in the user's Claude installation.
@@ -952,15 +954,15 @@ async function copyPluginTree(
     await cp(srcMpDir, destMpDir, { recursive: true, force: true });
 
     // Register each plugin and collect installed skill names
-    for (const pluginName of listSubdirectories(join(srcMpDir, 'plugins'))) {
-      const pluginDir = join(destMpDir, 'plugins', pluginName);
+    for (const pluginName of listSubdirectories(safePath.join(srcMpDir, 'plugins'))) {
+      const pluginDir = safePath.join(destMpDir, 'plugins', pluginName);
       await registerPlugin(mpName, pluginName, pluginDir, version, packageJson.name, paths, logger);
 
-      const skillNames = listSubdirectories(join(srcMpDir, 'plugins', pluginName, 'skills'));
+      const skillNames = listSubdirectories(safePath.join(srcMpDir, 'plugins', pluginName, 'skills'));
       for (const skillName of skillNames) {
         installedSkills.push({
           name: skillName,
-          installPath: join(destMpDir, 'plugins', pluginName, 'skills', skillName),
+          installPath: safePath.join(destMpDir, 'plugins', pluginName, 'skills', skillName),
         });
       }
     }
@@ -977,7 +979,7 @@ async function prepareInstallation(
   options: PluginInstallCommandOptions
 ): Promise<{ skillsDir: string; installPath: string }> {
   const skillsDir = options.skillsDir ?? getClaudeUserPaths().skillsDir;
-  const installPath = join(skillsDir, skillName);
+  const installPath = safePath.join(skillsDir, skillName);
 
   let exists = false;
   try {

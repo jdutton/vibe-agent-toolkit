@@ -1,3 +1,4 @@
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { validateMarketplace } from '../../src/validators/marketplace-validator.js';
@@ -34,8 +35,7 @@ describe('validateMarketplace', () => {
 
   it('should return error when marketplace.json is missing', async () => {
     const tempDir = getTempDir();
-    const path = await import('node:path');
-    const missingPath = path.resolve(tempDir, 'missing-marketplace');
+    const missingPath = safePath.resolve(tempDir, 'missing-marketplace');
 
     const result = await validateMarketplace(missingPath);
 
@@ -48,9 +48,8 @@ describe('validateMarketplace', () => {
 
     // Overwrite with invalid JSON
     const fs = await import('node:fs');
-    const path = await import('node:path');
     fs.writeFileSync(
-      path.join(marketplacePath, '.claude-plugin', 'marketplace.json'),
+      safePath.join(marketplacePath, '.claude-plugin', 'marketplace.json'),
       '{ invalid json }',
     );
 

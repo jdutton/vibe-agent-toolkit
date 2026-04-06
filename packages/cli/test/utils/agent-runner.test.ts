@@ -10,9 +10,9 @@
  */
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as agentRunner from '../../src/utils/agent-runner.js';
@@ -51,6 +51,16 @@ const MOCK_RESPONSE_TEXT = 'Mocked response';
 const SYSTEM_PROMPT_CONTENT = 'You are a helpful assistant.';
 const USER_PROMPT_CONTENT = 'User input: {{userInput}}';
 
+// Helper to mock loadAgentManifest with custom manifest for a single test
+async function mockAgentManifestOnce(mPath: string, partialManifest: Record<string, unknown>): Promise<void> {
+  const agentConfig = await import('@vibe-agent-toolkit/agent-config');
+  const mockLoadAgentManifest = agentConfig.loadAgentManifest as ReturnType<typeof vi.fn>;
+  mockLoadAgentManifest.mockResolvedValueOnce({
+    __manifestPath: mPath,
+    ...partialManifest,
+  } as never);
+}
+
 describe('agent-runner', () => {
   let tempDir: string;
   let manifestPath: string;
@@ -61,17 +71,17 @@ describe('agent-runner', () => {
     process.env = { ...originalEnv };
 
     // Create temp directory structure for test agent
-    tempDir = await mkdtemp(join(normalizedTmpdir(), 'agent-runner-test-'));
-    manifestPath = join(tempDir, 'agent.yaml');
+    tempDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'agent-runner-test-'));
+    manifestPath = safePath.join(tempDir, 'agent.yaml');
 
     // Create prompts directory and files
-    const promptsDir = join(tempDir, 'prompts');
+    const promptsDir = safePath.join(tempDir, 'prompts');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtemp (safe)
     await mkdir(promptsDir, { recursive: true });
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- promptsDir is from mkdtemp (safe)
-    await writeFile(join(promptsDir, 'system.md'), SYSTEM_PROMPT_CONTENT);
+    await writeFile(safePath.join(promptsDir, 'system.md'), SYSTEM_PROMPT_CONTENT);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- promptsDir is from mkdtemp (safe)
-    await writeFile(join(promptsDir, 'user.md'), USER_PROMPT_CONTENT);
+    await writeFile(safePath.join(promptsDir, 'user.md'), USER_PROMPT_CONTENT);
 
     // Setup default mock for loadAgentManifest
     const agentConfig = await import('@vibe-agent-toolkit/agent-config');
@@ -105,16 +115,6 @@ describe('agent-runner', () => {
     vi.restoreAllMocks();
   });
 
-  // Helper to mock loadAgentManifest with custom manifest for a single test
-  async function mockAgentManifestOnce(partialManifest: Record<string, unknown>): Promise<void> {
-    const agentConfig = await import('@vibe-agent-toolkit/agent-config');
-    const mockLoadAgentManifest = agentConfig.loadAgentManifest as ReturnType<typeof vi.fn>;
-    mockLoadAgentManifest.mockResolvedValueOnce({
-      __manifestPath: manifestPath,
-      ...partialManifest,
-    } as never);
-  }
-
   describe('runAgent', () => {
     it('should run agent successfully with valid inputs', async () => {
       process.env['ANTHROPIC_API_KEY'] = 'test-key';
@@ -145,7 +145,7 @@ describe('agent-runner', () => {
     it('should throw error for unsupported provider', async () => {
       process.env['ANTHROPIC_API_KEY'] = 'test-key';
 
-      await mockAgentManifestOnce({
+      await mockAgentManifestOnce(manifestPath, {
         metadata: { name: TEST_AGENT_NAME, version: TEST_AGENT_VERSION },
         spec: {
           llm: {
@@ -183,7 +183,7 @@ describe('agent-runner', () => {
     it('should use default values when maxTokens and temperature are not set', async () => {
       process.env['ANTHROPIC_API_KEY'] = 'test-key';
 
-      await mockAgentManifestOnce({
+      await mockAgentManifestOnce(manifestPath, {
         metadata: { name: TEST_AGENT_NAME, version: TEST_AGENT_VERSION },
         spec: {
           llm: {

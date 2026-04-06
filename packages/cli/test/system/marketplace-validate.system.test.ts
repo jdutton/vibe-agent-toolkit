@@ -1,8 +1,8 @@
 /* eslint-disable security/detect-non-literal-fs-filename, sonarjs/no-duplicate-string */
 import { existsSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -21,9 +21,9 @@ const VALIDATE_ARGS = ['claude', 'marketplace', 'validate'] as const;
  */
 function createValidMarketplace(tempDir: string): void {
   // marketplace.json
-  mkdirSyncReal(join(tempDir, '.claude-plugin'), { recursive: true });
+  mkdirSyncReal(safePath.join(tempDir, '.claude-plugin'), { recursive: true });
   writeTestFile(
-    join(tempDir, '.claude-plugin', 'marketplace.json'),
+    safePath.join(tempDir, '.claude-plugin', 'marketplace.json'),
     JSON.stringify({
       name: 'test-mp',
       description: 'Test marketplace',
@@ -34,16 +34,16 @@ function createValidMarketplace(tempDir: string): void {
   );
 
   // plugin with valid plugin.json
-  mkdirSyncReal(join(tempDir, 'plugins', 'test-plugin', '.claude-plugin'), { recursive: true });
+  mkdirSyncReal(safePath.join(tempDir, 'plugins', 'test-plugin', '.claude-plugin'), { recursive: true });
   writeTestFile(
-    join(tempDir, 'plugins', 'test-plugin', '.claude-plugin', 'plugin.json'),
+    safePath.join(tempDir, 'plugins', 'test-plugin', '.claude-plugin', 'plugin.json'),
     JSON.stringify({ name: 'test-plugin', description: 'Test plugin', version: '1.0.0' }),
   );
 
   // skill within plugin
-  mkdirSyncReal(join(tempDir, 'plugins', 'test-plugin', 'skills', 'test-skill'), { recursive: true });
+  mkdirSyncReal(safePath.join(tempDir, 'plugins', 'test-plugin', 'skills', 'test-skill'), { recursive: true });
   writeTestFile(
-    join(tempDir, 'plugins', 'test-plugin', 'skills', 'test-skill', 'SKILL.md'),
+    safePath.join(tempDir, 'plugins', 'test-plugin', 'skills', 'test-skill', 'SKILL.md'),
     [
       '---',
       'name: test-skill',
@@ -58,9 +58,9 @@ function createValidMarketplace(tempDir: string): void {
   );
 
   // Required files
-  writeTestFile(join(tempDir, 'LICENSE'), 'MIT License\n\nCopyright (c) 2025 Test');
-  writeTestFile(join(tempDir, 'README.md'), '# Test Marketplace\n\nA test marketplace.');
-  writeTestFile(join(tempDir, 'CHANGELOG.md'), '# Changelog\n\n## 1.0.0\n\n- Initial release');
+  writeTestFile(safePath.join(tempDir, 'LICENSE'), 'MIT License\n\nCopyright (c) 2025 Test');
+  writeTestFile(safePath.join(tempDir, 'README.md'), '# Test Marketplace\n\nA test marketplace.');
+  writeTestFile(safePath.join(tempDir, 'CHANGELOG.md'), '# Changelog\n\n## 1.0.0\n\n- Initial release');
 }
 
 /**
@@ -92,7 +92,7 @@ describe('vat claude marketplace validate (system)', () => {
     const tempDir = createTempDir();
     createValidMarketplace(tempDir);
 
-    expect(existsSync(join(tempDir, '.claude-plugin', 'marketplace.json'))).toBe(true);
+    expect(existsSync(safePath.join(tempDir, '.claude-plugin', 'marketplace.json'))).toBe(true);
 
     const { result, parsed } = executeCliAndParseYaml(binPath, [...VALIDATE_ARGS, tempDir]);
 
@@ -113,7 +113,7 @@ describe('vat claude marketplace validate (system)', () => {
   it('should report MARKETPLACE_MISSING_LICENSE as error when LICENSE is missing', () => {
     const tempDir = createTempDir();
     createValidMarketplace(tempDir);
-    rmSync(join(tempDir, 'LICENSE'));
+    rmSync(safePath.join(tempDir, 'LICENSE'));
 
     validateAndExpectIssue(tempDir, 'MARKETPLACE_MISSING_LICENSE', 'error', 1);
   });
@@ -124,7 +124,7 @@ describe('vat claude marketplace validate (system)', () => {
 
     // Overwrite plugin.json without version
     writeTestFile(
-      join(tempDir, 'plugins', 'test-plugin', '.claude-plugin', 'plugin.json'),
+      safePath.join(tempDir, 'plugins', 'test-plugin', '.claude-plugin', 'plugin.json'),
       JSON.stringify({ name: 'test-plugin', description: 'Test plugin' }),
     );
 
@@ -134,7 +134,7 @@ describe('vat claude marketplace validate (system)', () => {
   it('should exit 0 with warning when README.md is missing', () => {
     const tempDir = createTempDir();
     createValidMarketplace(tempDir);
-    rmSync(join(tempDir, 'README.md'));
+    rmSync(safePath.join(tempDir, 'README.md'));
 
     validateAndExpectIssue(tempDir, 'MARKETPLACE_MISSING_README', 'warning', 0);
   });

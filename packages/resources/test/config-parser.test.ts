@@ -1,8 +1,8 @@
 /* eslint-disable security/detect-non-literal-fs-filename, sonarjs/no-duplicate-string */
 // Test file - all file operations are in temp directories, duplicated strings acceptable
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { findConfigFile, loadConfig, parseConfigFile } from '../src/config-parser.js';
@@ -19,7 +19,7 @@ describe('parseConfigFile', () => {
   afterEach(suite.afterEach);
 
   it('should parse valid config file', async () => {
-    const configPath = join(suite.tempDir, CONFIG_FILENAME);
+    const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
     const content = `
 version: 1
 resources:
@@ -37,7 +37,7 @@ resources:
   });
 
   it('should parse config with validation settings', async () => {
-    const configPath = join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
+    const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     const content = `
 version: 1
 resources:
@@ -60,7 +60,7 @@ resources:
   });
 
   it('should parse config with exclude patterns', async () => {
-    const configPath = join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
+    const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     const content = `
 version: 1
 resources:
@@ -78,7 +78,7 @@ resources:
   });
 
   it('should throw on invalid YAML', async () => {
-    const configPath = join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
+    const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     const content = `
 version: 1
   invalid: yaml: syntax
@@ -89,7 +89,7 @@ version: 1
   });
 
   it('should throw on missing version field', async () => {
-    const configPath = join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
+    const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     const content = `
 resources:
   collections:
@@ -101,7 +101,7 @@ resources:
   });
 
   it('should throw on wrong version number', async () => {
-    const configPath = join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
+    const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     const content = `
 version: 2
 `;
@@ -111,7 +111,7 @@ version: 2
   });
 
   it('should throw on collection without include', async () => {
-    const configPath = join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
+    const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     const content = `
 version: 1
 resources:
@@ -125,7 +125,7 @@ resources:
   });
 
   it('should throw on empty include array', async () => {
-    const configPath = join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
+    const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     const content = `
 version: 1
 resources:
@@ -145,7 +145,7 @@ describe('findConfigFile', () => {
   afterEach(suite.afterEach);
 
   it('should find config in current directory', async () => {
-    const configPath = join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
+    const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     await writeFile(configPath, 'version: 1\n');
 
     const found = await findConfigFile(suite.tempDir);
@@ -153,10 +153,10 @@ describe('findConfigFile', () => {
   });
 
   it('should find config in parent directory', async () => {
-    const configPath = join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
+    const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     await writeFile(configPath, 'version: 1\n');
 
-    const subDir = join(suite.tempDir, 'sub', 'deep');
+    const subDir = safePath.join(suite.tempDir, 'sub', 'deep');
     await mkdir(subDir, { recursive: true });
 
     const found = await findConfigFile(subDir);
@@ -180,7 +180,7 @@ describe('loadConfig', () => {
   afterEach(suite.afterEach);
 
   it('should load config from current directory', async () => {
-    const configPath = join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
+    const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     const content = `
 version: 1
 resources:
@@ -197,7 +197,7 @@ resources:
   });
 
   it('should load config from parent directory', async () => {
-    const configPath = join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
+    const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     const content = `
 version: 1
 resources:
@@ -206,7 +206,7 @@ resources:
 `;
     await writeFile(configPath, content);
 
-    const subDir = join(suite.tempDir, 'sub');
+    const subDir = safePath.join(suite.tempDir, 'sub');
     await mkdir(subDir);
 
     const config = await loadConfig(subDir);
@@ -221,7 +221,7 @@ resources:
   });
 
   it('should throw on invalid config', async () => {
-    const configPath = join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
+    const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     await writeFile(configPath, 'invalid yaml: {');
 
     await expect(loadConfig(suite.tempDir)).rejects.toThrow('Invalid YAML');
@@ -234,7 +234,7 @@ describe('claude: config section', () => {
   afterEach(suite.afterEach);
 
   it('should parse config with no claude: section', async () => {
-    const configPath = join(suite.tempDir, CONFIG_FILENAME);
+    const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
     await writeFile(configPath, 'version: 1\n');
 
     const config = await parseConfigFile(configPath);
@@ -243,7 +243,7 @@ describe('claude: config section', () => {
   });
 
   it('should parse config with claude.managedSettings', async () => {
-    const configPath = join(suite.tempDir, CONFIG_FILENAME);
+    const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
     const content = `
 version: 1
 claude:
@@ -258,7 +258,7 @@ claude:
   });
 
   it('should parse inline marketplace with plugins', async () => {
-    const configPath = join(suite.tempDir, CONFIG_FILENAME);
+    const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
     const content = `
 version: 1
 claude:
@@ -286,7 +286,7 @@ claude:
   });
 
   it('should parse multiple marketplaces', async () => {
-    const configPath = join(suite.tempDir, CONFIG_FILENAME);
+    const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
     const content = `
 version: 1
 claude:
@@ -316,7 +316,7 @@ claude:
   });
 
   it('should reject unknown fields in claude: section (strict schema)', async () => {
-    const configPath = join(suite.tempDir, CONFIG_FILENAME);
+    const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
     const content = `
 version: 1
 claude:
@@ -328,7 +328,7 @@ claude:
   });
 
   it('should reject unknown fields in marketplace plugin entry (strict schema)', async () => {
-    const configPath = join(suite.tempDir, CONFIG_FILENAME);
+    const configPath = safePath.join(suite.tempDir, CONFIG_FILENAME);
     const content = `
 version: 1
 claude:
@@ -413,7 +413,7 @@ describe('external URL validation config', () => {
   afterEach(suite.afterEach);
 
   it('should parse externalUrls config', async () => {
-    const configPath = join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
+    const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
     const content = `
 version: 1
 resources:

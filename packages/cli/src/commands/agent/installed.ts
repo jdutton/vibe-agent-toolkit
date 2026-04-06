@@ -3,8 +3,8 @@
  */
 
 import fs from 'node:fs/promises';
-import path from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import yaml from 'yaml';
 
 import { handleCommandError } from '../../utils/command-error.js';
@@ -123,7 +123,7 @@ async function scanForInstalledSkills(
     for (const entry of entries) {
       if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
 
-      const skillPath = path.join(location, entry.name);
+      const skillPath = safePath.join(location, entry.name);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from validated scope + entry name
       const stats = await fs.lstat(skillPath);
       const isSymlink = stats.isSymbolicLink();

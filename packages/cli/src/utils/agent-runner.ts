@@ -10,6 +10,7 @@ import * as path from 'node:path';
 
 import Anthropic from '@anthropic-ai/sdk';
 import { loadAgentManifest, type LoadedAgentManifest } from '@vibe-agent-toolkit/agent-config';
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 export interface RunAgentOptions {
   userInput: string;
@@ -29,7 +30,7 @@ export interface RunAgentResult {
  */
 async function loadPromptFile(manifestPath: string, promptRef: string): Promise<string> {
   const agentDir = path.dirname(manifestPath);
-  const promptPath = path.resolve(agentDir, promptRef.replace(/^\.\//u, ''));
+  const promptPath = safePath.resolve(agentDir, promptRef.replace(/^\.\//u, ''));
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path is derived from validated manifest
   return await fs.readFile(promptPath, 'utf-8');
 }

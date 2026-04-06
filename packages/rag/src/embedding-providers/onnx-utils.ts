@@ -8,7 +8,9 @@
  */
 
 import { readFile, stat, mkdir, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 // ---------------------------------------------------------------------------
 // WordPiece Tokenizer
@@ -420,9 +422,9 @@ export async function ensureModelFiles(
   modelId: string,
   cacheDir: string,
 ): Promise<{ modelPath: string; vocabPath: string }> {
-  const modelDir = join(cacheDir, modelId.replaceAll('/', '_'));
-  const modelPath = join(modelDir, 'model.onnx');
-  const vocabPath = join(modelDir, 'vocab.txt');
+  const modelDir = safePath.join(cacheDir, modelId.replaceAll('/', '_'));
+  const modelPath = safePath.join(modelDir, 'model.onnx');
+  const vocabPath = safePath.join(modelDir, 'vocab.txt');
 
   const baseUrl = `https://huggingface.co/${modelId}/resolve/main`;
 

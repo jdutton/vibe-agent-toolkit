@@ -6,11 +6,12 @@
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { buildJscpdArgs, safeExecSync } from './common.js';
 
-const BASELINE_FILE = join('.github', '.jscpd-baseline.json');
+const BASELINE_FILE = safePath.join('.github', '.jscpd-baseline.json');
 
 /**
  * IMPORTANT: Test files are INTENTIONALLY included in duplication checks.
@@ -36,6 +37,7 @@ const currentReport = JSON.parse(readFileSync(reportPath, 'utf-8'));
 const currentClones = currentReport.duplicates ?? [];
 
 // Save as new baseline
+// eslint-disable-next-line security/detect-non-literal-fs-filename -- BASELINE_FILE is a constant path
 writeFileSync(BASELINE_FILE, JSON.stringify({ duplicates: currentClones }, null, 2));
 
 console.log('✅ Baseline updated!');

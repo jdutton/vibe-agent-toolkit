@@ -3,7 +3,7 @@
 
 import { it, beforeAll, afterAll } from 'vitest';
 
-import { describe, expect, fs, getBinPath, join, spawnSync } from './test-common.js';
+import { describe, expect, fs, getBinPath, safePath, spawnSync } from './test-common.js';
 import {
   createTestTempDir,
   executeCli,
@@ -34,19 +34,19 @@ resources:
       withDocs: true,
     });
 
-    const docsDir = join(projectDir, 'docs');
+    const docsDir = safePath.join(projectDir, 'docs');
     fs.writeFileSync(
-      join(docsDir, 'README.md'),
+      safePath.join(docsDir, 'README.md'),
       '# Documentation\n\n[Guide](./guide.md)\n[API](#api)\n\n## API\n\nAPI docs here.'
     );
 
     fs.writeFileSync(
-      join(docsDir, 'guide.md'),
+      safePath.join(docsDir, 'guide.md'),
       '# Guide\n\n[Back to README](./README.md)'
     );
 
     fs.writeFileSync(
-      join(docsDir, 'broken.md'),
+      safePath.join(docsDir, 'broken.md'),
       '# Broken\n\n[Missing](./missing.md)\n[Bad anchor](./README.md#nonexistent)'
     );
   });
@@ -81,7 +81,7 @@ resources:
   it('should validate successfully after fixing links', () => {
     // Fix broken.md
     fs.writeFileSync(
-      join(projectDir, 'docs/broken.md'),
+      safePath.join(projectDir, 'docs/broken.md'),
       '# Fixed\n\n[Back](./README.md#api)'
     );
 
@@ -127,7 +127,7 @@ resources:
   it('should ignore external URLs and not report them as errors', () => {
     // Create a file with only external URLs (no broken internal links)
     fs.writeFileSync(
-      join(projectDir, 'docs/external.md'),
+      safePath.join(projectDir, 'docs/external.md'),
       '# External Links\n\n[GitHub](https://github.com)\n[NPM](https://npmjs.com)\n[Docs](https://example.com/docs)'
     );
 

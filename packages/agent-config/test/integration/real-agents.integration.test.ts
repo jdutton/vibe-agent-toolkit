@@ -1,11 +1,11 @@
-import path from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { loadAgentManifest, validateAgent } from '../../src/index.js';
 
 describe('Real agents integration', () => {
-  const agentGeneratorPath = path.resolve(
+  const agentGeneratorPath = safePath.resolve(
     __dirname,
     '../../../vat-development-agents/agents/agent-generator'
   );

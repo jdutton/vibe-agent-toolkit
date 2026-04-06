@@ -1,6 +1,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- File paths are validated before use */
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
 
@@ -24,7 +25,7 @@ export async function validatePlugin(
 	options?: { strict?: boolean }
 ): Promise<ValidationResult> {
 	const issues: ValidationIssue[] = [];
-	const pluginJsonPath = join(pluginPath, '.claude-plugin', 'plugin.json');
+	const pluginJsonPath = safePath.join(pluginPath, '.claude-plugin', 'plugin.json');
 
 	// Check plugin.json exists
 	if (!existsSync(pluginJsonPath)) {

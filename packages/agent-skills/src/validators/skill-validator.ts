@@ -1,7 +1,9 @@
 import * as fs from 'node:fs';
-import { basename, dirname, relative, resolve } from 'node:path';
+import { basename, dirname } from 'node:path';
 
 import { parseMarkdown, resolveLocalHref } from '@vibe-agent-toolkit/resources';
+import { safePath } from '@vibe-agent-toolkit/utils';
+
 
 import { parseFrontmatter } from '../parsers/frontmatter-parser.js';
 
@@ -124,7 +126,7 @@ function validateLocalLink(
   }
 
   const resolvedPath = resolved.resolvedPath;
-  const relativeToBoundary = relative(skillDir, resolvedPath);
+  const relativeToBoundary = safePath.relative(skillDir, resolvedPath);
 
   // Check boundary escape
   if (relativeToBoundary.startsWith('..')) {
@@ -214,7 +216,7 @@ async function traverseLinks(
   skillDir: string,
   issues: ValidationIssue[],
 ): Promise<LinkedFileValidationResult[]> {
-  const resolvedSkillPath = resolve(skillPath);
+  const resolvedSkillPath = safePath.resolve(skillPath);
   const visited = new Set<string>([resolvedSkillPath]);
   const linkedFiles: LinkedFileValidationResult[] = [];
   const queue: string[] = [resolvedSkillPath];
@@ -268,7 +270,7 @@ function detectUnreferencedFiles(
   issues: ValidationIssue[],
 ): void {
   // Collect all visited paths (SKILL.md + linked files)
-  const visitedPaths = new Set<string>([resolve(skillPath)]);
+  const visitedPaths = new Set<string>([safePath.resolve(skillPath)]);
   for (const lf of linkedFiles) {
     visitedPaths.add(lf.path);
   }
@@ -279,7 +281,7 @@ function detectUnreferencedFiles(
   const unreferencedFiles: string[] = [];
 
   for (const relPath of allMdFiles) {
-    const absPath = resolve(skillDir, relPath);
+    const absPath = safePath.resolve(skillDir, relPath);
     const fileName = basename(relPath);
 
     // Skip excluded patterns
@@ -299,7 +301,7 @@ function detectUnreferencedFiles(
   const implicitRefs = extractImplicitReferences(skillDir, unreferencedFiles, visitedPaths);
 
   for (const relPath of unreferencedFiles) {
-    const absPath = resolve(skillDir, relPath);
+    const absPath = safePath.resolve(skillDir, relPath);
 
     const ref = implicitRefs.find((r) => r.referencedFile === relPath);
     if (ref) {

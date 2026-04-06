@@ -59,6 +59,30 @@ function expectSavedSessionStructure(mockStore: SessionStore<unknown>, expectedS
   expect(savedSession.metadata).toBeDefined();
 }
 
+/**
+ * Helper to create a transport with a new session (not found in store)
+ */
+function createTransportWithNewSession<TState>(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  mockFn: ConversationalFunction<string, string, any>,
+  initialState: TState,
+): { transport: CLITransport<TState>; mockStore: SessionStore<TState> } {
+  const mockStore = createMockStore<TState>({
+    exists: vi.fn().mockResolvedValue(false),
+    load: vi.fn().mockRejectedValue(new Error(SESSION_NOT_FOUND_ERROR)),
+  });
+
+  const newTransport = new CLITransport({
+    fn: mockFn,
+    sessionId: TEST_SESSION_ID,
+    sessionStore: mockStore,
+    initialHistory: [],
+    initialState,
+  });
+
+  return { transport: newTransport, mockStore };
+}
+
 describe('CLITransport', () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let mockFn: ConversationalFunction<string, string, any>;
@@ -163,27 +187,6 @@ describe('CLITransport with SessionStore', () => {
     vi.restoreAllMocks();
   });
 
-  /**
-   * Helper to create a transport with a new session (not found in store)
-   */
-  async function createTransportWithNewSession<TState>(
-    initialState: TState
-  ): Promise<{ transport: CLITransport<TState>; mockStore: SessionStore<TState> }> {
-    const mockStore = createMockStore<TState>({
-      exists: vi.fn().mockResolvedValue(false),
-      load: vi.fn().mockRejectedValue(new Error(SESSION_NOT_FOUND_ERROR)),
-    });
-
-    const newTransport = new CLITransport({
-      fn: mockFn,
-      sessionId: TEST_SESSION_ID,
-      sessionStore: mockStore,
-      initialHistory: [],
-      initialState,
-    });
-
-    return { transport: newTransport, mockStore };
-  }
 
   describe('High Priority #1: Session loading on start()', () => {
     it('should load existing session from store on start()', async () => {
@@ -297,7 +300,7 @@ describe('CLITransport with SessionStore', () => {
 
   describe('High Priority #3: Session saving on stop()', () => {
     it('should save session on stop()', async () => {
-      const { transport: newTransport, mockStore } = await createTransportWithNewSession({ count: 0 });
+      const { transport: newTransport, mockStore } = createTransportWithNewSession(mockFn, { count: 0 });
       transport = newTransport;
 
       await transport.start();
@@ -338,7 +341,7 @@ describe('CLITransport with SessionStore', () => {
     });
 
     it('should handle multiple stops safely', async () => {
-      const { transport: newTransport, mockStore } = await createTransportWithNewSession({});
+      const { transport: newTransport, mockStore } = createTransportWithNewSession(mockFn, {});
       transport = newTransport;
 
       await transport.start();
@@ -376,7 +379,7 @@ describe('CLITransport with SessionStore', () => {
     });
 
     it('should handle session store errors gracefully on stop', async () => {
-      const { transport: newTransport, mockStore } = await createTransportWithNewSession({});
+      const { transport: newTransport, mockStore } = createTransportWithNewSession(mockFn, {});
       transport = newTransport;
 
       // Override save to throw error

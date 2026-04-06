@@ -6,9 +6,9 @@
  */
 
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -32,16 +32,16 @@ function setupInstalledPlugin(
   version = '1.0.0'
 ): void {
   const pluginKey = `${pluginName}@${marketplace}`;
-  const claudeDir = join(fakeHome, '.claude');
-  const pluginsDir = join(claudeDir, 'plugins');
-  const mpPluginDir = join(pluginsDir, 'marketplaces', marketplace, 'plugins', pluginName);
-  const cacheDir = join(pluginsDir, 'cache', marketplace, pluginName, version);
+  const claudeDir = safePath.join(fakeHome, '.claude');
+  const pluginsDir = safePath.join(claudeDir, 'plugins');
+  const mpPluginDir = safePath.join(pluginsDir, 'marketplaces', marketplace, 'plugins', pluginName);
+  const cacheDir = safePath.join(pluginsDir, 'cache', marketplace, pluginName, version);
 
   mkdirSyncReal(mpPluginDir, { recursive: true });
   mkdirSyncReal(cacheDir, { recursive: true });
 
-  writeTestFile(join(mpPluginDir, 'SKILL.md'), `# ${pluginName}`);
-  writeTestFile(join(pluginsDir, 'installed_plugins.json'), JSON.stringify({
+  writeTestFile(safePath.join(mpPluginDir, 'SKILL.md'), `# ${pluginName}`);
+  writeTestFile(safePath.join(pluginsDir, 'installed_plugins.json'), JSON.stringify({
     version: 2,
     plugins: {
       [pluginKey]: [
@@ -49,14 +49,14 @@ function setupInstalledPlugin(
       ],
     },
   }));
-  writeTestFile(join(pluginsDir, 'known_marketplaces.json'), JSON.stringify({
+  writeTestFile(safePath.join(pluginsDir, 'known_marketplaces.json'), JSON.stringify({
     [marketplace]: {
       source: { source: 'npm', package: '@test/pkg', version },
       installLocation: '',
       lastUpdated: '',
     },
   }));
-  writeTestFile(join(claudeDir, 'settings.json'), JSON.stringify({
+  writeTestFile(safePath.join(claudeDir, 'settings.json'), JSON.stringify({
     enabledPlugins: { [pluginKey]: true },
   }));
 }
@@ -71,7 +71,7 @@ describe('claude plugin uninstall command (system test)', () => {
 
   it('uninstalls a plugin and removes all artifacts', () => {
     const tempDir = createTempDir();
-    const fakeHome = join(tempDir, 'home');
+    const fakeHome = safePath.join(tempDir, 'home');
     mkdirSyncReal(fakeHome, { recursive: true });
     setupInstalledPlugin(fakeHome, 'my-skill', 'my-market');
 
@@ -83,14 +83,14 @@ describe('claude plugin uninstall command (system test)', () => {
     expect(parsed.status).toBe('success');
     expect(parsed.pluginsRemoved).toBe(1);
     expect(
-      existsSync(join(fakeHome, '.claude', 'plugins', 'marketplaces', 'my-market', 'plugins', 'my-skill'))
+      existsSync(safePath.join(fakeHome, '.claude', 'plugins', 'marketplaces', 'my-market', 'plugins', 'my-skill'))
     ).toBe(false);
   });
 
   it('is idempotent when plugin is not installed', () => {
     const tempDir = createTempDir();
-    const fakeHome = join(tempDir, 'home');
-    mkdirSyncReal(join(fakeHome, '.claude'), { recursive: true });
+    const fakeHome = safePath.join(tempDir, 'home');
+    mkdirSyncReal(safePath.join(fakeHome, '.claude'), { recursive: true });
 
     const { result, parsed } = executeCliAndParseYaml(binPath, [
       'claude', 'plugin', 'uninstall', 'missing@market',
@@ -103,7 +103,7 @@ describe('claude plugin uninstall command (system test)', () => {
 
   it('dry-run shows what would be removed without removing files', () => {
     const tempDir = createTempDir();
-    const fakeHome = join(tempDir, 'home');
+    const fakeHome = safePath.join(tempDir, 'home');
     mkdirSyncReal(fakeHome, { recursive: true });
     setupInstalledPlugin(fakeHome, 'dry-skill', 'dry-market');
 
@@ -116,13 +116,13 @@ describe('claude plugin uninstall command (system test)', () => {
     expect(parsed.pluginsRemoved).toBe(1);
     // Files must still exist — dry-run must not remove anything
     expect(
-      existsSync(join(fakeHome, '.claude', 'plugins', 'marketplaces', 'dry-market', 'plugins', 'dry-skill'))
+      existsSync(safePath.join(fakeHome, '.claude', 'plugins', 'marketplaces', 'dry-market', 'plugins', 'dry-skill'))
     ).toBe(true);
   });
 
   it('fails with non-zero exit code when no plugin key given and --all not specified', () => {
     const tempDir = createTempDir();
-    const fakeHome = join(tempDir, 'home');
+    const fakeHome = safePath.join(tempDir, 'home');
     mkdirSyncReal(fakeHome, { recursive: true });
 
     const { result } = executeCliAndParseYaml(binPath, [

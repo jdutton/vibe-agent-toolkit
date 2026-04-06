@@ -7,10 +7,10 @@
  */
 
 import { mkdtempSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+
 
 import type { ClaudeMarketplaceConfig } from '@vibe-agent-toolkit/resources';
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../../../utils/command-error.js';
@@ -85,7 +85,7 @@ Example:
  * Read version from package.json in the given directory.
  */
 function readProjectVersion(configDir: string): string {
-  const packageJsonPath = join(configDir, 'package.json');
+  const packageJsonPath = safePath.join(configDir, 'package.json');
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated config dir
     const raw = readFileSync(packageJsonPath, 'utf-8');
@@ -134,7 +134,7 @@ function buildComposeOptions(
   const opts: ComposeOptions = {
     marketplaceName: mpName,
     configDir,
-    outputDir: mkdtempSync(join(normalizedTmpdir(), `vat-publish-tree-${mpName}-`)),
+    outputDir: mkdtempSync(safePath.join(normalizedTmpdir(), `vat-publish-tree-${mpName}-`)),
     version,
     date,
   };

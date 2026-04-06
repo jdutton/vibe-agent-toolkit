@@ -1,9 +1,8 @@
 
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code using temp directories */
 import fs from 'node:fs/promises';
-import path from 'node:path';
 
-import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { setupAsyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -42,10 +41,10 @@ describe('agent-discovery', () => {
   describe('discoverAgents', () => {
     it('should discover agents in packages/vat-development-agents/agents', async () => {
       // Setup
-      const agentPath = path.join(tempDir, 'packages/vat-development-agents/agents/test-agent');
+      const agentPath = safePath.join(tempDir, 'packages/vat-development-agents/agents/test-agent');
       await fs.mkdir(agentPath, { recursive: true });
       await fs.writeFile(
-        path.join(agentPath, AGENT_YAML),
+        safePath.join(agentPath, AGENT_YAML),
         `${METADATA_YAML} test-agent${VERSION_YAML} 1.0.0\n`
       );
 
@@ -62,10 +61,10 @@ describe('agent-discovery', () => {
 
     it('should discover agents in agents directory', async () => {
       // Setup
-      const agentPath = path.join(tempDir, 'agents/my-agent');
+      const agentPath = safePath.join(tempDir, 'agents/my-agent');
       await fs.mkdir(agentPath, { recursive: true });
       await fs.writeFile(
-        path.join(agentPath, 'agent.yml'),
+        safePath.join(agentPath, 'agent.yml'),
         `${METADATA_YAML} my-agent${VERSION_YAML} 2.0.0\n`
       );
 
@@ -82,10 +81,10 @@ describe('agent-discovery', () => {
 
     it('should discover agents in current directory', async () => {
       // Setup
-      const agentPath = path.join(tempDir, CURRENT_AGENT);
+      const agentPath = safePath.join(tempDir, CURRENT_AGENT);
       await fs.mkdir(agentPath, { recursive: true });
       await fs.writeFile(
-        path.join(agentPath, AGENT_YAML),
+        safePath.join(agentPath, AGENT_YAML),
         `${METADATA_YAML} current-agent${VERSION_YAML} 3.0.0\n`
       );
 
@@ -102,25 +101,25 @@ describe('agent-discovery', () => {
 
     it('should discover agents in all locations', async () => {
       // Setup multiple agents
-      const vatPath = path.join(tempDir, 'packages/vat-development-agents/agents/vat-agent');
-      const agentsPath = path.join(tempDir, 'agents/agents-agent');
-      const currentPath = path.join(tempDir, CURRENT_AGENT);
+      const vatPath = safePath.join(tempDir, 'packages/vat-development-agents/agents/vat-agent');
+      const agentsPath = safePath.join(tempDir, 'agents/agents-agent');
+      const currentPath = safePath.join(tempDir, CURRENT_AGENT);
 
       await fs.mkdir(vatPath, { recursive: true });
       await fs.writeFile(
-        path.join(vatPath, AGENT_YAML),
+        safePath.join(vatPath, AGENT_YAML),
         `${METADATA_YAML} vat-agent${VERSION_YAML} 1.0.0\n`
       );
 
       await fs.mkdir(agentsPath, { recursive: true });
       await fs.writeFile(
-        path.join(agentsPath, AGENT_YAML),
+        safePath.join(agentsPath, AGENT_YAML),
         `${METADATA_YAML} agents-agent${VERSION_YAML} 2.0.0\n`
       );
 
       await fs.mkdir(currentPath, { recursive: true });
       await fs.writeFile(
-        path.join(currentPath, AGENT_YAML),
+        safePath.join(currentPath, AGENT_YAML),
         `${METADATA_YAML} current-agent${VERSION_YAML} 3.0.0\n`
       );
 
@@ -142,17 +141,17 @@ describe('agent-discovery', () => {
 
     it('should skip directories without manifests', async () => {
       // Setup
-      const agentWithManifest = path.join(tempDir, 'agents/has-manifest');
-      const agentWithoutManifest = path.join(tempDir, 'agents/no-manifest');
+      const agentWithManifest = safePath.join(tempDir, 'agents/has-manifest');
+      const agentWithoutManifest = safePath.join(tempDir, 'agents/no-manifest');
 
       await fs.mkdir(agentWithManifest, { recursive: true });
       await fs.writeFile(
-        path.join(agentWithManifest, AGENT_YAML),
+        safePath.join(agentWithManifest, AGENT_YAML),
         `${METADATA_YAML} has-manifest${VERSION_YAML} 1.0.0\n`
       );
 
       await fs.mkdir(agentWithoutManifest, { recursive: true });
-      await fs.writeFile(path.join(agentWithoutManifest, 'README.md'), '# No manifest');
+      await fs.writeFile(safePath.join(agentWithoutManifest, 'README.md'), '# No manifest');
 
       // Execute
       const agents = await discoverAgents();
@@ -164,25 +163,25 @@ describe('agent-discovery', () => {
 
     it('should skip manifests with missing metadata', async () => {
       // Setup
-      const validAgent = path.join(tempDir, 'agents/valid');
-      const invalidAgent1 = path.join(tempDir, 'agents/no-name');
-      const invalidAgent2 = path.join(tempDir, 'agents/no-version');
+      const validAgent = safePath.join(tempDir, 'agents/valid');
+      const invalidAgent1 = safePath.join(tempDir, 'agents/no-name');
+      const invalidAgent2 = safePath.join(tempDir, 'agents/no-version');
 
       await fs.mkdir(validAgent, { recursive: true });
       await fs.writeFile(
-        path.join(validAgent, AGENT_YAML),
+        safePath.join(validAgent, AGENT_YAML),
         `${METADATA_YAML} valid${VERSION_YAML} 1.0.0\n`
       );
 
       await fs.mkdir(invalidAgent1, { recursive: true });
       await fs.writeFile(
-        path.join(invalidAgent1, AGENT_YAML),
+        safePath.join(invalidAgent1, AGENT_YAML),
         `${METADATA_YAML.replace('name:', 'version:')} 1.0.0\n`
       );
 
       await fs.mkdir(invalidAgent2, { recursive: true });
       await fs.writeFile(
-        path.join(invalidAgent2, AGENT_YAML),
+        safePath.join(invalidAgent2, AGENT_YAML),
         `${METADATA_YAML} no-version\n`
       );
 
@@ -196,18 +195,18 @@ describe('agent-discovery', () => {
 
     it('should skip manifests with invalid YAML', async () => {
       // Setup
-      const validAgent = path.join(tempDir, 'agents/valid');
-      const invalidAgent = path.join(tempDir, 'agents/invalid-yaml');
+      const validAgent = safePath.join(tempDir, 'agents/valid');
+      const invalidAgent = safePath.join(tempDir, 'agents/invalid-yaml');
 
       await fs.mkdir(validAgent, { recursive: true });
       await fs.writeFile(
-        path.join(validAgent, AGENT_YAML),
+        safePath.join(validAgent, AGENT_YAML),
         `${METADATA_YAML} valid${VERSION_YAML} 1.0.0\n`
       );
 
       await fs.mkdir(invalidAgent, { recursive: true });
       await fs.writeFile(
-        path.join(invalidAgent, AGENT_YAML),
+        safePath.join(invalidAgent, AGENT_YAML),
         'invalid: yaml: content: [[[{'
       );
 
@@ -221,16 +220,16 @@ describe('agent-discovery', () => {
 
     it('should prefer agent.yaml over agent.yml', async () => {
       // Setup
-      const agentPath = path.join(tempDir, 'agents/test-agent');
+      const agentPath = safePath.join(tempDir, 'agents/test-agent');
       await fs.mkdir(agentPath, { recursive: true });
 
       // Create both files, but .yaml should be preferred
       await fs.writeFile(
-        path.join(agentPath, AGENT_YAML),
+        safePath.join(agentPath, AGENT_YAML),
         `${METADATA_YAML} from-yaml${VERSION_YAML} 1.0.0\n`
       );
       await fs.writeFile(
-        path.join(agentPath, 'agent.yml'),
+        safePath.join(agentPath, 'agent.yml'),
         `${METADATA_YAML} from-yml${VERSION_YAML} 2.0.0\n`
       );
 
@@ -247,18 +246,18 @@ describe('agent-discovery', () => {
   describe('findAgentByName', () => {
     beforeEach(async () => {
       // Setup test agents
-      const agent1Path = path.join(tempDir, 'agents/agent-one');
-      const agent2Path = path.join(tempDir, 'agents/agent-two');
+      const agent1Path = safePath.join(tempDir, 'agents/agent-one');
+      const agent2Path = safePath.join(tempDir, 'agents/agent-two');
 
       await fs.mkdir(agent1Path, { recursive: true });
       await fs.writeFile(
-        path.join(agent1Path, AGENT_YAML),
+        safePath.join(agent1Path, AGENT_YAML),
         `${METADATA_YAML} agent-one${VERSION_YAML} 1.0.0\n`
       );
 
       await fs.mkdir(agent2Path, { recursive: true });
       await fs.writeFile(
-        path.join(agent2Path, AGENT_YAML),
+        safePath.join(agent2Path, AGENT_YAML),
         `${METADATA_YAML} agent-two${VERSION_YAML} 2.0.0\n`
       );
     });
@@ -295,10 +294,10 @@ describe('agent-discovery', () => {
   describe('resolveAgentPath', () => {
     beforeEach(async () => {
       // Setup test agent
-      const agentPath = path.join(tempDir, 'agents/my-agent');
+      const agentPath = safePath.join(tempDir, 'agents/my-agent');
       await fs.mkdir(agentPath, { recursive: true });
       await fs.writeFile(
-        path.join(agentPath, AGENT_YAML),
+        safePath.join(agentPath, AGENT_YAML),
         `${METADATA_YAML} my-agent${VERSION_YAML} 1.0.0\n`
       );
     });

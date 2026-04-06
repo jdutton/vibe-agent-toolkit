@@ -5,9 +5,9 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test file uses dynamic temp paths */
 
 import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
-import { normalizedTmpdir, normalizePath } from '@vibe-agent-toolkit/utils';
+
+import { normalizedTmpdir, normalizePath, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createLogger } from '../../src/utils/logger.js';
@@ -72,23 +72,23 @@ describe('loadResourcesWithConfig (integration test)', () => {
 
   beforeEach(async () => {
     // Create temporary directories
-    testDir = join(normalizedTmpdir(), `resource-loader-test-${Date.now()}`);
-    projectDir = join(testDir, 'project');
+    testDir = safePath.join(normalizedTmpdir(), `resource-loader-test-${Date.now()}`);
+    projectDir = safePath.join(testDir, 'project');
 
     await mkdir(projectDir, { recursive: true });
 
     // Create a basic project structure
-    await mkdir(join(projectDir, 'docs'), { recursive: true });
-    await mkdir(join(projectDir, 'other'), { recursive: true });
+    await mkdir(safePath.join(projectDir, 'docs'), { recursive: true });
+    await mkdir(safePath.join(projectDir, 'other'), { recursive: true });
 
     // Create some markdown files
-    await writeFile(join(projectDir, 'README.md'), '# Root README\n');
-    await writeFile(join(projectDir, 'docs', 'guide.md'), '# Guide\n');
-    await writeFile(join(projectDir, 'other', 'notes.md'), '# Notes\n');
+    await writeFile(safePath.join(projectDir, 'README.md'), '# Root README\n');
+    await writeFile(safePath.join(projectDir, 'docs', 'guide.md'), '# Guide\n');
+    await writeFile(safePath.join(projectDir, 'other', 'notes.md'), '# Notes\n');
 
     // Create package.json to mark as project root
     await writeFile(
-      join(projectDir, 'package.json'),
+      safePath.join(projectDir, 'package.json'),
       JSON.stringify({ name: 'test-project' })
     );
 
@@ -103,12 +103,12 @@ describe('loadResourcesWithConfig (integration test)', () => {
     it('should use pathArg as baseDir and ignore config patterns', async () => {
       // Create config with patterns
       await writeFile(
-        join(projectDir, CONFIG_FILE),
+        safePath.join(projectDir, CONFIG_FILE),
         'version: 1\nresources:\n  include:\n    - "docs/**/*.md"\n  exclude:\n    - "other/**"\n'
       );
 
       await inProjectDir(projectDir, async () => {
-        const docsPath = join(projectDir, 'docs');
+        const docsPath = safePath.join(projectDir, 'docs');
         const result = await loadResourcesWithConfig(docsPath, logger);
 
         expect(normalizePath(result.scanPath)).toBe(normalizePath(docsPath));
@@ -123,7 +123,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
 
     it('should crawl from pathArg with default patterns', async () => {
       await inProjectDir(projectDir, async () => {
-        const otherPath = join(projectDir, 'other');
+        const otherPath = safePath.join(projectDir, 'other');
         const result = await loadResourcesWithConfig(otherPath, logger);
 
         expect(normalizePath(result.scanPath)).toBe(normalizePath(otherPath));
@@ -138,7 +138,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
     it('should use project root and apply config patterns', async () => {
       // Create config that excludes 'other'
       await writeFile(
-        join(projectDir, CONFIG_FILE),
+        safePath.join(projectDir, CONFIG_FILE),
         'version: 1\nresources:\n  exclude:\n    - "other/**"\n'
       );
 
@@ -161,7 +161,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
     it('should use include patterns from config', async () => {
       // Create config that only includes docs/
         await writeFile(
-        join(projectDir, CONFIG_FILE),
+        safePath.join(projectDir, CONFIG_FILE),
         'version: 1\nresources:\n  include:\n    - "docs/**/*.md"\n'
       );
 
@@ -197,9 +197,9 @@ describe('loadResourcesWithConfig (integration test)', () => {
 
     it('should not create GitTracker when no project root', async () => {
       // Create isolated directory without package.json
-      const isolatedDir = join(testDir, 'isolated');
+      const isolatedDir = safePath.join(testDir, 'isolated');
       await mkdir(isolatedDir, { recursive: true });
-      await writeFile(join(isolatedDir, 'test.md'), '# Test\n');
+      await writeFile(safePath.join(isolatedDir, 'test.md'), '# Test\n');
 
       await inProjectDir(isolatedDir, async () => {
         const result = await loadResourcesWithConfig(isolatedDir, logger);
@@ -214,7 +214,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
     it('should convert CLI config to resources package format', async () => {
       // Create config with collections
         await writeFile(
-        join(projectDir, CONFIG_FILE),
+        safePath.join(projectDir, CONFIG_FILE),
         `version: 1
 resources:
   collections:

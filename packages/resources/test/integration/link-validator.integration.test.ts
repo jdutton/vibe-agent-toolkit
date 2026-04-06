@@ -9,17 +9,43 @@
  * - unknown link types
  */
 
-import path from 'node:path';
 
-import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { validateLink } from '../../src/link-validator.js';
 import type { HeadingNode } from '../../src/types.js';
 import { assertValidation, createGitRepo, createHeadings, createLink } from '../test-helpers.js';
 
+/**
+ * Helper to test that a non-ignored file linking to a gitignored file returns an error
+ */
+async function assertGitignoreError(gitRoot: string, linkHref: string, linkText: string): Promise<void> {
+  const sourceFile = safePath.join(gitRoot, 'source.md');
+  const link = createLink('local_file', linkHref, linkText, 1);
+  const headingsMap = new Map<string, HeadingNode[]>();
+
+  await assertValidation(
+    {
+      sourceFile,
+      link,
+      headingsMap,
+      expected: {
+        type: 'link_to_gitignored',
+        messageContains: 'gitignored',
+        hasSuggestion: true,
+      },
+      validationOptions: {
+        projectRoot: gitRoot,
+        skipGitIgnoreCheck: false,
+      },
+    },
+    expect
+  );
+}
+
 // Test fixtures directory
-const FIXTURES_DIR = path.resolve(import.meta.dirname, '../../test-fixtures');
+const FIXTURES_DIR = safePath.resolve(import.meta.dirname, '../../test-fixtures');
 
 // Common test file paths
 const VALID_MD = 'valid.md';
@@ -38,7 +64,7 @@ const TARGET_FILE_LINK = './target.md';
 describe('validateLink', () => {
   describe('local_file links', () => {
     it('should validate valid relative path', async () => {
-      const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
+      const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('local_file', TARGET_FILE_LINK, 'Link to target', 3);
       const headingsMap = new Map<string, HeadingNode[]>();
 
@@ -48,7 +74,7 @@ describe('validateLink', () => {
     });
 
     it('should validate valid relative path with ../', async () => {
-      const sourceFile = path.join(FIXTURES_DIR, 'subdir', 'nested.md');
+      const sourceFile = safePath.join(FIXTURES_DIR, 'subdir', 'nested.md');
       const link = createLink('local_file', '../target.md', 'Link to parent', 1);
       const headingsMap = new Map<string, HeadingNode[]>();
 
@@ -61,7 +87,7 @@ describe('validateLink', () => {
       expect(true).toBe(true); // Assertion for SonarJS (assertValidation performs detailed assertions)
       await assertValidation(
         {
-          sourceFile: path.join(FIXTURES_DIR, BROKEN_FILE_MD),
+          sourceFile: safePath.join(FIXTURES_DIR, BROKEN_FILE_MD),
           link: createLink('local_file', NONEXISTENT_FILE_LINK, 'Broken link', 3),
           headingsMap: new Map<string, HeadingNode[]>(),
           expected: {
@@ -78,10 +104,10 @@ describe('validateLink', () => {
       expect(true).toBe(true); // Assertion for SonarJS (assertValidation performs detailed assertions)
       // Create a temporary file with specific case
       const fs = await import('node:fs');
-      const tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'case-test-'));
+      const tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'case-test-'));
       const actualFileName = 'TestFile.md';
-      const targetFile = path.join(tempDir, actualFileName);
-      const sourceFile = path.join(tempDir, 'source.md');
+      const targetFile = safePath.join(tempDir, actualFileName);
+      const sourceFile = safePath.join(tempDir, 'source.md');
 
       try {
         fs.writeFileSync(targetFile, '# Test\n');
@@ -107,8 +133,8 @@ describe('validateLink', () => {
     });
 
     it('should validate local file with valid anchor', async () => {
-      const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
-      const targetFile = path.join(FIXTURES_DIR, TARGET_MD);
+      const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
+      const targetFile = safePath.join(FIXTURES_DIR, TARGET_MD);
       const link = createLink('local_file', './target.md#valid-anchor', 'Link with anchor', 5);
 
       const headingsMap = new Map<string, HeadingNode[]>([
@@ -122,10 +148,10 @@ describe('validateLink', () => {
 
     it('should detect broken anchor in local file', async () => {
       expect(true).toBe(true); // Assertion for SonarJS (assertValidation performs detailed assertions)
-      const targetFile = path.join(FIXTURES_DIR, TARGET_MD);
+      const targetFile = safePath.join(FIXTURES_DIR, TARGET_MD);
       await assertValidation(
         {
-          sourceFile: path.join(FIXTURES_DIR, 'broken-anchor.md'),
+          sourceFile: safePath.join(FIXTURES_DIR, 'broken-anchor.md'),
           link: createLink('local_file', './target.md#nonexistent-heading', 'Broken anchor', 3),
           headingsMap: new Map<string, HeadingNode[]>([
             [targetFile, createHeadings(VALID_ANCHOR_HEADING)],
@@ -141,8 +167,8 @@ describe('validateLink', () => {
     });
 
     it('should handle absolute paths', async () => {
-      const targetFile = path.join(FIXTURES_DIR, TARGET_MD);
-      const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
+      const targetFile = safePath.join(FIXTURES_DIR, TARGET_MD);
+      const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('local_file', targetFile, 'Absolute path');
       const headingsMap = new Map<string, HeadingNode[]>();
 
@@ -153,11 +179,11 @@ describe('validateLink', () => {
 
     it('should resolve percent-encoded paths to existing files', async () => {
       const fs = await import('node:fs');
-      const tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'encoded-path-'));
-      const filesDir = path.join(tempDir, 'files');
+      const tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'encoded-path-'));
+      const filesDir = safePath.join(tempDir, 'files');
       fs.mkdirSync(filesDir, { recursive: true });
-      const targetFile = path.join(filesDir, 'My Document Name.pdf');
-      const sourceFile = path.join(tempDir, 'index.md');
+      const targetFile = safePath.join(filesDir, 'My Document Name.pdf');
+      const sourceFile = safePath.join(tempDir, 'index.md');
 
       try {
         fs.writeFileSync(targetFile, 'fake pdf content');
@@ -178,7 +204,7 @@ describe('validateLink', () => {
   describe('anchor links', () => {
     it('should validate valid anchor in current file', async () => {
       expect(true).toBe(true); // Assertion for SonarJS (assertValidation performs detailed assertions)
-      const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
+      const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       await assertValidation(
         {
           sourceFile,
@@ -194,7 +220,7 @@ describe('validateLink', () => {
 
     it('should detect broken anchor in current file', async () => {
       expect(true).toBe(true); // Assertion for SonarJS (assertValidation performs detailed assertions)
-      const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
+      const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       await assertValidation(
         {
           sourceFile,
@@ -213,7 +239,7 @@ describe('validateLink', () => {
 
     it('should perform case-insensitive anchor matching', async () => {
       expect(true).toBe(true); // Assertion for SonarJS (assertValidation performs detailed assertions)
-      const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
+      const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       await assertValidation(
         {
           sourceFile,
@@ -228,7 +254,7 @@ describe('validateLink', () => {
     });
 
     it('should validate anchors in nested headings', async () => {
-      const sourceFile = path.join(FIXTURES_DIR, 'complex.md');
+      const sourceFile = safePath.join(FIXTURES_DIR, 'complex.md');
       const link = createLink('anchor', '#nested-child', 'Nested heading', 10);
 
       const headingsMap = new Map<string, HeadingNode[]>([
@@ -253,7 +279,7 @@ describe('validateLink', () => {
       expect(true).toBe(true); // Assertion for SonarJS (assertValidation performs detailed assertions)
       await assertValidation(
         {
-          sourceFile: path.join(FIXTURES_DIR, VALID_MD),
+          sourceFile: safePath.join(FIXTURES_DIR, VALID_MD),
           link: createLink('anchor', '#any-heading', 'No headings', 5),
           headingsMap: new Map<string, HeadingNode[]>(),
           expected: {
@@ -267,7 +293,7 @@ describe('validateLink', () => {
 
   describe('external links', () => {
     it('should return null for HTTP URL (external links not validated)', async () => {
-      const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
+      const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('external', 'http://example.com', 'HTTP link', 6);
       const headingsMap = new Map<string, HeadingNode[]>();
 
@@ -277,7 +303,7 @@ describe('validateLink', () => {
     });
 
     it('should return null for HTTPS URL (external links not validated)', async () => {
-      const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
+      const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('external', 'https://example.com/path', 'HTTPS link', 7);
       const headingsMap = new Map<string, HeadingNode[]>();
 
@@ -289,7 +315,7 @@ describe('validateLink', () => {
 
   describe('email links', () => {
     it('should return null for valid email', async () => {
-      const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
+      const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('email', 'mailto:test@example.com', 'Email link', 8);
       const headingsMap = new Map<string, HeadingNode[]>();
 
@@ -299,7 +325,7 @@ describe('validateLink', () => {
     });
 
     it('should return null for email without mailto:', async () => {
-      const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
+      const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('email', 'test@example.com', 'Plain email', 9);
       const headingsMap = new Map<string, HeadingNode[]>();
 
@@ -314,7 +340,7 @@ describe('validateLink', () => {
       expect(true).toBe(true); // Assertion for SonarJS (assertValidation performs detailed assertions)
       await assertValidation(
         {
-          sourceFile: path.join(FIXTURES_DIR, VALID_MD),
+          sourceFile: safePath.join(FIXTURES_DIR, VALID_MD),
           link: createLink('unknown', 'ftp://example.com/file', 'FTP link', 10),
           headingsMap: new Map<string, HeadingNode[]>(),
           expected: {
@@ -331,7 +357,7 @@ describe('validateLink', () => {
       expect(true).toBe(true); // Assertion for SonarJS (assertValidation performs detailed assertions)
       await assertValidation(
         {
-          sourceFile: path.join(FIXTURES_DIR, VALID_MD),
+          sourceFile: safePath.join(FIXTURES_DIR, VALID_MD),
           link: createLink('unknown', 'tel:+1234567890', 'Tel link', 11),
           headingsMap: new Map<string, HeadingNode[]>(),
           expected: {
@@ -345,7 +371,7 @@ describe('validateLink', () => {
 
   describe('cross-platform path handling', () => {
     it('should handle Unix-style paths', async () => {
-      const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
+      const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('local_file', TARGET_FILE_LINK, 'Unix path');
       const headingsMap = new Map<string, HeadingNode[]>();
 
@@ -355,7 +381,7 @@ describe('validateLink', () => {
     });
 
     it('should handle paths with mixed separators', async () => {
-      const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
+      const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       // Node's path.resolve will normalize this correctly on all platforms
       const link = createLink('local_file', './subdir/nested.md', 'Mixed path');
       const headingsMap = new Map<string, HeadingNode[]>();
@@ -368,7 +394,7 @@ describe('validateLink', () => {
 
   describe('edge cases', () => {
     it('should handle link without line number', async () => {
-      const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
+      const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('anchor', '#heading-anchor', 'No line number');
       delete link.line;
 
@@ -382,7 +408,7 @@ describe('validateLink', () => {
     });
 
     it('should handle empty anchor after #', async () => {
-      const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
+      const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('anchor', '#', 'Empty anchor', 5);
 
       const headingsMap = new Map<string, HeadingNode[]>([
@@ -396,7 +422,7 @@ describe('validateLink', () => {
     });
 
     it('should handle file path with anchor where file does not exist', async () => {
-      const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
+      const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('local_file', './nonexistent.md#heading', 'Broken file with anchor', 5);
       const headingsMap = new Map<string, HeadingNode[]>();
 
@@ -408,11 +434,11 @@ describe('validateLink', () => {
     });
 
     it('should handle file with only anchor (empty file path)', async () => {
-      const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
+      const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       // This would be classified as 'anchor' type by the parser, not 'local_file'
       const link = createLink('local_file', '#heading', 'Anchor as file', 5);
 
-      const targetFile = path.join(FIXTURES_DIR, 'target.md');
+      const targetFile = safePath.join(FIXTURES_DIR, 'target.md');
       const headingsMap = new Map<string, HeadingNode[]>([
         [targetFile, createHeadings({ text: 'Heading', slug: 'heading' })],
       ]);
@@ -425,7 +451,7 @@ describe('validateLink', () => {
     });
 
     it('should handle multiple nested levels', async () => {
-      const sourceFile = path.join(FIXTURES_DIR, 'complex.md');
+      const sourceFile = safePath.join(FIXTURES_DIR, 'complex.md');
       const link = createLink('anchor', '#deeply-nested', 'Deep nesting', 20);
 
       const headingsMap = new Map<string, HeadingNode[]>([
@@ -459,7 +485,7 @@ describe('validateLink', () => {
 
   describe('validation issue structure', () => {
     it('should include all required fields in error issue', async () => {
-      const sourceFile = path.join(FIXTURES_DIR, BROKEN_FILE_MD);
+      const sourceFile = safePath.join(FIXTURES_DIR, BROKEN_FILE_MD);
       const link = createLink('local_file', NONEXISTENT_FILE_LINK, 'Broken', 3);
       const headingsMap = new Map<string, HeadingNode[]>();
 
@@ -479,7 +505,7 @@ describe('validateLink', () => {
     });
 
     it('should include empty suggestion in broken file issue', async () => {
-      const sourceFile = path.join(FIXTURES_DIR, BROKEN_FILE_MD);
+      const sourceFile = safePath.join(FIXTURES_DIR, BROKEN_FILE_MD);
       const link = createLink('local_file', NONEXISTENT_FILE_LINK, 'Broken');
       const headingsMap = new Map<string, HeadingNode[]>();
 
@@ -490,7 +516,7 @@ describe('validateLink', () => {
     });
 
     it('should include empty suggestion in broken anchor issue', async () => {
-      const sourceFile = path.join(FIXTURES_DIR, VALID_MD);
+      const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('anchor', NONEXISTENT_ANCHOR, 'Broken');
       const headingsMap = new Map<string, HeadingNode[]>([
         [sourceFile, createHeadings({ text: 'Valid', slug: 'valid' })],
@@ -512,7 +538,7 @@ describe('validateLink', () => {
       const fs = await import('node:fs');
 
       // Create temp directory with git repo
-      tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'link-validator-gitignore-'));
+      tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'link-validator-gitignore-'));
       gitRoot = tempDir;
 
       // Initialize git repo properly (git check-ignore needs a real repo)
@@ -524,64 +550,37 @@ describe('validateLink', () => {
       fs.rmSync(tempDir, { recursive: true, force: true });
     });
 
-    /**
-     * Helper to test that a non-ignored file linking to a gitignored file returns an error
-     */
-    async function assertGitignoreError(linkHref: string, linkText: string): Promise<void> {
-      const sourceFile = path.join(gitRoot, 'source.md');
-      const link = createLink('local_file', linkHref, linkText, 1);
-      const headingsMap = new Map<string, HeadingNode[]>();
-
-      await assertValidation(
-        {
-          sourceFile,
-          link,
-          headingsMap,
-          expected: {
-            type: 'link_to_gitignored',
-            messageContains: 'gitignored',
-            hasSuggestion: true,
-          },
-          validationOptions: {
-            projectRoot: gitRoot,
-            skipGitIgnoreCheck: false,
-          },
-        },
-        expect
-      );
-    }
-
     it('should return error for links to gitignored files', async () => {
       const fs = await import('node:fs');
 
       // Create .gitignore file
-      const gitignorePath = path.join(gitRoot, GITIGNORE_FILE);
+      const gitignorePath = safePath.join(gitRoot, GITIGNORE_FILE);
       fs.writeFileSync(gitignorePath, 'ignored.md\n');
 
       // Create gitignored file
-      const ignoredFile = path.join(gitRoot, 'ignored.md');
+      const ignoredFile = safePath.join(gitRoot, 'ignored.md');
       fs.writeFileSync(ignoredFile, '# Ignored');
 
       // Create source file
-      const sourceFile = path.join(gitRoot, 'source.md');
+      const sourceFile = safePath.join(gitRoot, 'source.md');
       fs.writeFileSync(sourceFile, '# Source');
 
-      await assertGitignoreError('./ignored.md', 'Link to ignored');
+      await assertGitignoreError(gitRoot, './ignored.md', 'Link to ignored');
     });
 
     it('should pass for links to non-gitignored files in git repo', async () => {
       const fs = await import('node:fs');
 
       // Create .gitignore file (ignoring other files)
-      const gitignorePath = path.join(gitRoot, GITIGNORE_FILE);
+      const gitignorePath = safePath.join(gitRoot, GITIGNORE_FILE);
       fs.writeFileSync(gitignorePath, 'other.md\n');
 
       // Create non-gitignored file
-      const targetFile = path.join(gitRoot, 'target.md');
+      const targetFile = safePath.join(gitRoot, 'target.md');
       fs.writeFileSync(targetFile, '# Target');
 
       // Create source file
-      const sourceFile = path.join(gitRoot, 'source.md');
+      const sourceFile = safePath.join(gitRoot, 'source.md');
       fs.writeFileSync(sourceFile, '# Source');
 
       const link = createLink('local_file', TARGET_FILE_LINK, 'Link to target', 1);
@@ -606,20 +605,20 @@ describe('validateLink', () => {
       const fs = await import('node:fs');
 
       // Create .gitignore file
-      const gitignorePath = path.join(gitRoot, GITIGNORE_FILE);
+      const gitignorePath = safePath.join(gitRoot, GITIGNORE_FILE);
       fs.writeFileSync(gitignorePath, 'private/\n');
 
       // Create gitignored directory with file
-      const privateDir = path.join(gitRoot, 'private');
+      const privateDir = safePath.join(gitRoot, 'private');
       mkdirSyncReal(privateDir);
-      const ignoredFile = path.join(privateDir, 'secret.md');
+      const ignoredFile = safePath.join(privateDir, 'secret.md');
       fs.writeFileSync(ignoredFile, '# Secret');
 
       // Create source file
-      const sourceFile = path.join(gitRoot, 'source.md');
+      const sourceFile = safePath.join(gitRoot, 'source.md');
       fs.writeFileSync(sourceFile, '# Source');
 
-      await assertGitignoreError('./private/secret.md', 'Link to secret');
+      await assertGitignoreError(gitRoot, './private/secret.md', 'Link to secret');
     });
   });
 });

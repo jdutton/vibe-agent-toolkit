@@ -7,10 +7,10 @@
  */
 
 import { writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
 // Import all Zod schemas
@@ -25,7 +25,7 @@ import { ToolSchema } from '../src/tool.js';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const SCHEMAS_DIR = join(__dirname, '..', 'schemas');
+const SCHEMAS_DIR = safePath.join(__dirname, '..', 'schemas');
 
 // Ensure schemas directory exists
 mkdirSyncReal(SCHEMAS_DIR, { recursive: true });
@@ -35,7 +35,7 @@ mkdirSyncReal(SCHEMAS_DIR, { recursive: true });
  */
 function writeJsonSchema(name: string, schema: Parameters<typeof zodToJsonSchema>[0]): void {
   const jsonSchema = zodToJsonSchema(schema, name);
-  const path = join(SCHEMAS_DIR, `${name}.json`);
+  const path = safePath.join(SCHEMAS_DIR, `${name}.json`);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path is constructed from trusted schema name
   writeFileSync(path, JSON.stringify(jsonSchema, null, 2) + '\n');
   console.log(`✅ Generated: ${name}.json`);

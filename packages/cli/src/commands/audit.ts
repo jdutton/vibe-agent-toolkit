@@ -4,7 +4,6 @@
  */
 
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 
 import {
   detectResourceFormat,
@@ -22,6 +21,7 @@ import {
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import picomatch from 'picomatch';
 
@@ -209,7 +209,7 @@ export async function auditCommand(
       return;
     }
 
-    const scanPath = targetPath ? path.resolve(targetPath) : process.cwd();
+    const scanPath = targetPath ? safePath.resolve(targetPath) : process.cwd();
     logger.debug(`Auditing resources at: ${scanPath}`);
 
     const results = await getValidationResults(scanPath, recursive, options, logger);
@@ -266,7 +266,7 @@ export async function getValidationResults(
 
   // Special handling for VAT agent: validate its SKILL.md
   if (format === 'vat-agent') {
-    const skillPath = path.join(scanPath, 'SKILL.md');
+    const skillPath = safePath.join(scanPath, 'SKILL.md');
     logger.debug('Detected VAT agent, validating SKILL.md');
     const validateOptions: ValidateOptions = { skillPath, isVATGenerated: true };
     if (options.warnUnreferencedFiles) {
@@ -532,7 +532,7 @@ async function handleDirectoryEntry(
   const results: ValidationResult[] = [];
 
   // Check if directory contains a plugin or marketplace
-  const claudePluginDir = path.join(fullPath, '.claude-plugin');
+  const claudePluginDir = safePath.join(fullPath, '.claude-plugin');
   const hasClaudePlugin = await fs.access(claudePluginDir).then(() => true).catch(() => false);
 
   if (hasClaudePlugin) {
@@ -568,11 +568,11 @@ async function scanDirectory(
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
 
   for (const entry of entries) {
-    const fullPath = path.join(dirPath, entry.name);
+    const fullPath = safePath.join(dirPath, entry.name);
 
     // Check exclude patterns against path relative to the base scan directory
     if (isMatch !== null) {
-      const relativePath = path.relative(resolvedBaseDir, fullPath).replaceAll('\\', '/');
+      const relativePath = safePath.relative(resolvedBaseDir, fullPath).replaceAll('\\', '/');
       if (isExcludedPath(isMatch, relativePath, entry.isDirectory())) {
         logger.debug(`Excluding path: ${relativePath}`);
         continue;

@@ -4,9 +4,9 @@
  */
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -39,14 +39,14 @@ const suite = {
   suiteDir: '',
   tempDir: '',
   beforeAll: async () => {
-    suite.suiteDir = await mkdtemp(join(normalizedTmpdir(), 'resource-parser-suite-'));
+    suite.suiteDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'resource-parser-suite-'));
   },
   afterAll: async () => {
     await rm(suite.suiteDir, { recursive: true, force: true });
   },
   beforeEach: async () => {
     testCounter++;
-    suite.tempDir = join(suite.suiteDir, `test-${testCounter}`);
+    suite.tempDir = safePath.join(suite.suiteDir, `test-${testCounter}`);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtemp
     await mkdir(suite.tempDir, { recursive: true });
   },
@@ -63,7 +63,7 @@ describe('parseMarkdownResource', () => {
   afterEach(suite.afterEach);
 
   it('should parse markdown with frontmatter', async () => {
-    const filePath = join(suite.tempDir, 'doc.md');
+    const filePath = safePath.join(suite.tempDir, 'doc.md');
     const content = `---
 title: Test Document
 tags: [test, demo]
@@ -102,7 +102,7 @@ More content.`;
   });
 
   it('should parse markdown without frontmatter', async () => {
-    const filePath = join(suite.tempDir, 'simple.md');
+    const filePath = safePath.join(suite.tempDir, 'simple.md');
     const content = '# Simple Doc\n\nJust content.';
 
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test file in controlled temp directory
@@ -117,7 +117,7 @@ More content.`;
   });
 
   it('should handle markdown with no links', async () => {
-    const filePath = join(suite.tempDir, 'no-links.md');
+    const filePath = safePath.join(suite.tempDir, 'no-links.md');
     const content = '# Title\n\nText without links.';
 
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test file in controlled temp directory
@@ -129,7 +129,7 @@ More content.`;
   });
 
   it('should estimate token count correctly', async () => {
-    const filePath = join(suite.tempDir, 'tokens.md');
+    const filePath = safePath.join(suite.tempDir, 'tokens.md');
     const content = 'a'.repeat(400); // 400 chars = ~100 tokens
 
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test file in controlled temp directory
@@ -141,7 +141,7 @@ More content.`;
   });
 
   it('should handle $schema as string in frontmatter', async () => {
-    const filePath = join(suite.tempDir, 'with-schema.md');
+    const filePath = safePath.join(suite.tempDir, 'with-schema.md');
     const content = `---
 title: Test
 $schema: https://example.com/schema.json
@@ -161,7 +161,7 @@ $schema: https://example.com/schema.json
   });
 
   it('should ignore non-string $schema in frontmatter', async () => {
-    const filePath = join(suite.tempDir, 'bad-schema.md');
+    const filePath = safePath.join(suite.tempDir, 'bad-schema.md');
     const content = `---
 title: Test
 $schema: 123
@@ -179,7 +179,7 @@ $schema: 123
   });
 
   it('should handle frontmatter without $schema field', async () => {
-    const filePath = join(suite.tempDir, 'no-schema.md');
+    const filePath = safePath.join(suite.tempDir, 'no-schema.md');
     const content = `---
 title: Test
 author: John Doe
@@ -205,7 +205,7 @@ describe('parseJsonSchemaResource', () => {
   afterEach(suite.afterEach);
 
   it('should parse JSON Schema with $schema keyword', async () => {
-    const filePath = join(suite.tempDir, USER_SCHEMA_FILE);
+    const filePath = safePath.join(suite.tempDir, USER_SCHEMA_FILE);
     const schema = {
       $schema: DRAFT_07_SCHEMA,
       $id: 'https://example.com/schemas/user',
@@ -237,7 +237,7 @@ describe('parseJsonSchemaResource', () => {
   });
 
   it('should parse JSON Schema without $schema keyword', async () => {
-    const filePath = join(suite.tempDir, 'config.schema.json');
+    const filePath = safePath.join(suite.tempDir, 'config.schema.json');
     const schema = {
       title: 'Config',
       type: 'object',
@@ -257,7 +257,7 @@ describe('parseJsonSchemaResource', () => {
   });
 
   it('should handle schema without any optional fields', async () => {
-    const filePath = join(suite.tempDir, 'minimal.schema.json');
+    const filePath = safePath.join(suite.tempDir, 'minimal.schema.json');
     const schema = {
       type: 'object',
       properties: {
@@ -284,7 +284,7 @@ describe('parseJsonResource', () => {
   afterEach(suite.afterEach);
 
   it('should parse regular JSON data', async () => {
-    const filePath = join(suite.tempDir, 'data.json');
+    const filePath = safePath.join(suite.tempDir, 'data.json');
     const data = {
       users: [
         { name: 'Alice', age: 30 },
@@ -306,7 +306,7 @@ describe('parseJsonResource', () => {
   });
 
   it('should handle empty JSON object', async () => {
-    const filePath = join(suite.tempDir, 'empty.json');
+    const filePath = safePath.join(suite.tempDir, 'empty.json');
 
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test file in controlled temp directory
     await writeFile(filePath, '{}', 'utf-8');
@@ -317,7 +317,7 @@ describe('parseJsonResource', () => {
   });
 
   it('should handle JSON arrays', async () => {
-    const filePath = join(suite.tempDir, 'array.json');
+    const filePath = safePath.join(suite.tempDir, 'array.json');
     const data = [1, 2, 3, 4, 5];
 
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test file in controlled temp directory
@@ -334,7 +334,7 @@ describe('parseYamlResource', () => {
   afterEach(suite.afterEach);
 
   it('should parse YAML data', async () => {
-    const filePath = join(suite.tempDir, CONFIG_YAML_FILE);
+    const filePath = safePath.join(suite.tempDir, CONFIG_YAML_FILE);
     const yaml = `
 name: MyApp
 version: 1.0.0
@@ -363,7 +363,7 @@ settings:
   });
 
   it('should handle YAML with arrays', async () => {
-    const filePath = join(suite.tempDir, 'list.yml');
+    const filePath = safePath.join(suite.tempDir, 'list.yml');
     const yaml = `
 items:
   - name: Item 1

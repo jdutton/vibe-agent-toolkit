@@ -5,8 +5,8 @@
  */
 
 import * as fs from 'node:fs';
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -25,8 +25,8 @@ function createTestDirs(
   tempDir: string,
   scenario: string,
 ): { sourceDir: string; installDir: string } {
-  const sourceDir = join(tempDir, `${scenario}-sources`);
-  const installDir = join(tempDir, `${scenario}-install`);
+  const sourceDir = safePath.join(tempDir, `${scenario}-sources`);
+  const installDir = safePath.join(tempDir, `${scenario}-install`);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
   fs.mkdirSync(sourceDir, { recursive: true });
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
@@ -51,11 +51,11 @@ function runInstall(
  * Set up a minimal agent skill directory with SKILL.md at root.
  */
 function createSkillDir(parentDir: string, name: string): string {
-  const skillDir = join(parentDir, name);
+  const skillDir = safePath.join(parentDir, name);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillDir is controlled in tests
   fs.mkdirSync(skillDir, { recursive: true });
   writeTestFile(
-    join(skillDir, 'SKILL.md'),
+    safePath.join(skillDir, 'SKILL.md'),
     `---
 name: ${name}
 description: Test skill for unified install command
@@ -74,12 +74,12 @@ This is a test skill.
  * Set up a minimal claude plugin directory with .claude-plugin/plugin.json.
  */
 function createPluginDir(parentDir: string, name: string): string {
-  const pluginDir = join(parentDir, name);
-  const claudePluginDir = join(pluginDir, '.claude-plugin');
+  const pluginDir = safePath.join(parentDir, name);
+  const claudePluginDir = safePath.join(pluginDir, '.claude-plugin');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
   fs.mkdirSync(claudePluginDir, { recursive: true });
   writeTestFile(
-    join(claudePluginDir, 'plugin.json'),
+    safePath.join(claudePluginDir, 'plugin.json'),
     JSON.stringify({
       type: 'plugin',
       name,
@@ -93,12 +93,12 @@ function createPluginDir(parentDir: string, name: string): string {
  * Set up a minimal claude marketplace directory with .claude-plugin/marketplace.json.
  */
 function createMarketplaceDir(parentDir: string, name: string): string {
-  const marketplaceDir = join(parentDir, name);
-  const claudePluginDir = join(marketplaceDir, '.claude-plugin');
+  const marketplaceDir = safePath.join(parentDir, name);
+  const claudePluginDir = safePath.join(marketplaceDir, '.claude-plugin');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
   fs.mkdirSync(claudePluginDir, { recursive: true });
   writeTestFile(
-    join(claudePluginDir, 'marketplace.json'),
+    safePath.join(claudePluginDir, 'marketplace.json'),
     JSON.stringify({
       type: 'marketplace',
       name,
@@ -135,7 +135,7 @@ describe('Unified vat install command (system test)', () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('agent-skill');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- installDir is controlled in tests
-    expect(fs.existsSync(join(installDir, 'test-skill'))).toBe(true);
+    expect(fs.existsSync(safePath.join(installDir, 'test-skill'))).toBe(true);
   });
 
   it('auto-detects claude plugin and installs to plugins dir', () => {
@@ -147,7 +147,7 @@ describe('Unified vat install command (system test)', () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('claude-plugin');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- installDir is controlled in tests
-    expect(fs.existsSync(join(installDir, 'test-plugin'))).toBe(true);
+    expect(fs.existsSync(safePath.join(installDir, 'test-plugin'))).toBe(true);
   });
 
   it('--type flag overrides auto-detection', () => {
@@ -163,7 +163,7 @@ describe('Unified vat install command (system test)', () => {
 
     expect(result.status).toBe(0);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- installDir is controlled in tests
-    expect(fs.existsSync(join(installDir, 'override-skill'))).toBe(true);
+    expect(fs.existsSync(safePath.join(installDir, 'override-skill'))).toBe(true);
   });
 
   it('auto-detects claude marketplace and installs to marketplaces dir', () => {
@@ -175,7 +175,7 @@ describe('Unified vat install command (system test)', () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('claude-marketplace');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- installDir is controlled in tests
-    expect(fs.existsSync(join(installDir, 'test-marketplace'))).toBe(true);
+    expect(fs.existsSync(safePath.join(installDir, 'test-marketplace'))).toBe(true);
   });
 
   it('--dry-run previews without creating files', () => {
@@ -187,7 +187,7 @@ describe('Unified vat install command (system test)', () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('dryRun: true');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- installDir is controlled in tests
-    expect(fs.existsSync(join(installDir, 'dry-run-skill'))).toBe(false);
+    expect(fs.existsSync(safePath.join(installDir, 'dry-run-skill'))).toBe(false);
   });
 
   it('fails with exit code 1 when source does not match detected type', () => {

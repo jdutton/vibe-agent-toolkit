@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { promises as fs } from 'node:fs';
-import path from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 /**
  * Cache entry for external link validation results
@@ -56,7 +57,7 @@ export class ExternalLinkCache {
 	constructor(cacheDir: string, ttlHours = 24) {
 		this.cacheDir = cacheDir;
 		this.ttlHours = ttlHours;
-		this.cacheFile = path.join(cacheDir, 'external-links.json');
+		this.cacheFile = safePath.join(cacheDir, 'external-links.json');
 	}
 
 	/**

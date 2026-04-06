@@ -28,9 +28,13 @@ import {
 vi.mock('node:child_process', () => ({
   execSync: vi.fn(),
 }));
-vi.mock('@vibe-agent-toolkit/utils', () => ({
-  getToolVersion: vi.fn(),
-}));
+vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...(actual as Record<string, unknown>),
+    getToolVersion: vi.fn(),
+  };
+});
 vi.mock('node:fs', () => ({
   existsSync: vi.fn(),
   readFileSync: vi.fn(),
@@ -277,7 +281,7 @@ describe('doctor command - unit tests', () => {
       // Mock: source has v0.2.0, running CLI has v0.1.0
       // The challenge is that both paths read the same file in reality,
       // but we need to differentiate them for testing.
-      // Running version is read via file:// URL, source is read via path.join()
+      // Running version is read via file:// URL, source is read via safePath.join()
       let readCallCount = 0;
       (readFileSync as ReturnType<typeof vi.fn>).mockImplementation((path: string | Buffer | URL): string => {
         const locationStr = path.toString();

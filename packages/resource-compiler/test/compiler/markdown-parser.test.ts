@@ -3,8 +3,8 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect } from 'vitest';
 
 import { parseMarkdown } from '../../src/compiler/markdown-parser.js';
@@ -22,7 +22,7 @@ const FIXTURE_EDGE_CASES = 'edge-cases.md';
  * Helper to load fixture file content
  */
 function loadFixture(filename: string): string {
-  const fixturePath = join(import.meta.dirname, FIXTURES_DIR, filename);
+  const fixturePath = safePath.join(import.meta.dirname, FIXTURES_DIR, filename);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test helper with controlled input
   return readFileSync(fixturePath, 'utf-8');
 }

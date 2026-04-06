@@ -5,9 +5,9 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test file with controlled inputs */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { mkdirSyncReal, setupSyncTempDirSuite, toForwardSlash } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, setupSyncTempDirSuite, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { compileMarkdownResources } from '../../src/compiler/markdown-compiler.js';
@@ -23,7 +23,7 @@ async function compileAndVerifyFile(
   fileName: string,
   content: string,
 ): Promise<CompileResult[]> {
-  const inputFile = join(inputDir, fileName);
+  const inputFile = safePath.join(inputDir, fileName);
   writeFileSync(inputFile, content, 'utf-8');
 
   return compileMarkdownResources({
@@ -43,8 +43,8 @@ describe('compileMarkdownResources', () => {
   beforeEach(() => {
     suite.beforeEach();
     const tempDir = suite.getTempDir();
-    inputDir = join(tempDir, 'input');
-    outputDir = join(tempDir, 'output');
+    inputDir = safePath.join(tempDir, 'input');
+    outputDir = safePath.join(tempDir, 'output');
     mkdirSyncReal(inputDir);
     mkdirSyncReal(outputDir);
   });
@@ -62,7 +62,7 @@ This is a test document.
 
 Final thoughts.`;
 
-      const inputFile = join(inputDir, 'test.md');
+      const inputFile = safePath.join(inputDir, 'test.md');
       writeFileSync(inputFile, mdContent, 'utf-8');
 
       // Compile
@@ -76,8 +76,8 @@ Final thoughts.`;
       expect(results[0]?.success).toBe(true);
 
       // Verify output files exist
-      const jsPath = join(outputDir, 'test.js');
-      const dtsPath = join(outputDir, 'test.d.ts');
+      const jsPath = safePath.join(outputDir, 'test.js');
+      const dtsPath = safePath.join(outputDir, 'test.d.ts');
 
       expect(existsSync(jsPath)).toBe(true);
       expect(existsSync(dtsPath)).toBe(true);
@@ -122,7 +122,7 @@ Content here.`;
       expect(results).toHaveLength(1);
       expect(results[0]?.success).toBe(true);
 
-      const jsPath = join(outputDir, 'with-frontmatter.js');
+      const jsPath = safePath.join(outputDir, 'with-frontmatter.js');
       const jsContent = readFileSync(jsPath, 'utf-8');
 
       expect(jsContent).toContain('title: "Test Document"');
@@ -169,8 +169,8 @@ broken: [unclosed
       // Verify all output files exist
       for (const file of files) {
         const baseName = file.replace('.md', '');
-        expect(existsSync(join(outputDir, `${baseName}.js`))).toBe(true);
-        expect(existsSync(join(outputDir, `${baseName}.d.ts`))).toBe(true);
+        expect(existsSync(safePath.join(outputDir, `${baseName}.js`))).toBe(true);
+        expect(existsSync(safePath.join(outputDir, `${baseName}.d.ts`))).toBe(true);
       }
     });
 
@@ -194,22 +194,22 @@ broken: [unclosed
       expect(results.every((r) => r.success)).toBe(true);
 
       // Verify directory structure is maintained
-      expect(existsSync(join(outputDir, 'root.js'))).toBe(true);
-      expect(existsSync(join(outputDir, 'docs/guide.js'))).toBe(true);
-      expect(existsSync(join(outputDir, 'docs/api/reference.js'))).toBe(true);
-      expect(existsSync(join(outputDir, 'examples/basic.js'))).toBe(true);
+      expect(existsSync(safePath.join(outputDir, 'root.js'))).toBe(true);
+      expect(existsSync(safePath.join(outputDir, 'docs/guide.js'))).toBe(true);
+      expect(existsSync(safePath.join(outputDir, 'docs/api/reference.js'))).toBe(true);
+      expect(existsSync(safePath.join(outputDir, 'examples/basic.js'))).toBe(true);
 
-      expect(existsSync(join(outputDir, 'root.d.ts'))).toBe(true);
-      expect(existsSync(join(outputDir, 'docs/guide.d.ts'))).toBe(true);
-      expect(existsSync(join(outputDir, 'docs/api/reference.d.ts'))).toBe(true);
-      expect(existsSync(join(outputDir, 'examples/basic.d.ts'))).toBe(true);
+      expect(existsSync(safePath.join(outputDir, 'root.d.ts'))).toBe(true);
+      expect(existsSync(safePath.join(outputDir, 'docs/guide.d.ts'))).toBe(true);
+      expect(existsSync(safePath.join(outputDir, 'docs/api/reference.d.ts'))).toBe(true);
+      expect(existsSync(safePath.join(outputDir, 'examples/basic.d.ts'))).toBe(true);
     });
 
     it('should respect glob pattern', async () => {
       // Create multiple files with different extensions
-      writeFileSync(join(inputDir, 'include.md'), '# Test\n\n## Section\n\nContent', 'utf-8');
-      writeFileSync(join(inputDir, 'exclude.txt'), 'Not markdown', 'utf-8');
-      writeFileSync(join(inputDir, 'also-include.md'), '# Test 2\n\n## Section\n\nContent', 'utf-8');
+      writeFileSync(safePath.join(inputDir, 'include.md'), '# Test\n\n## Section\n\nContent', 'utf-8');
+      writeFileSync(safePath.join(inputDir, 'exclude.txt'), 'Not markdown', 'utf-8');
+      writeFileSync(safePath.join(inputDir, 'also-include.md'), '# Test 2\n\n## Section\n\nContent', 'utf-8');
 
       const results = await compileMarkdownResources({
         inputDir: inputDir,
@@ -221,18 +221,18 @@ broken: [unclosed
       expect(results).toHaveLength(2);
       expect(results.every((r) => r.success)).toBe(true);
 
-      expect(existsSync(join(outputDir, 'include.js'))).toBe(true);
-      expect(existsSync(join(outputDir, 'also-include.js'))).toBe(true);
-      expect(existsSync(join(outputDir, 'exclude.js'))).toBe(false);
+      expect(existsSync(safePath.join(outputDir, 'include.js'))).toBe(true);
+      expect(existsSync(safePath.join(outputDir, 'also-include.js'))).toBe(true);
+      expect(existsSync(safePath.join(outputDir, 'exclude.js'))).toBe(false);
     });
   });
 
   describe('error handling', () => {
     it('should report errors without stopping compilation', async () => {
       // Create mix of valid and invalid files
-      writeFileSync(join(inputDir, 'valid.md'), '# Valid\n\n## Section\n\nContent', 'utf-8');
-      writeFileSync(join(inputDir, 'broken.md'), '---\nbroken: [unclosed\n---\n\n## Test', 'utf-8');
-      writeFileSync(join(inputDir, 'also-valid.md'), '# Also Valid\n\n## Section\n\nMore', 'utf-8');
+      writeFileSync(safePath.join(inputDir, 'valid.md'), '# Valid\n\n## Section\n\nContent', 'utf-8');
+      writeFileSync(safePath.join(inputDir, 'broken.md'), '---\nbroken: [unclosed\n---\n\n## Test', 'utf-8');
+      writeFileSync(safePath.join(inputDir, 'also-valid.md'), '# Also Valid\n\n## Section\n\nMore', 'utf-8');
 
       const results = await compileMarkdownResources({
         inputDir: inputDir,
@@ -242,11 +242,11 @@ broken: [unclosed
       verifyOperationResults(results, 3, 2);
 
       // Valid files should be compiled
-      expect(existsSync(join(outputDir, 'valid.js'))).toBe(true);
-      expect(existsSync(join(outputDir, 'also-valid.js'))).toBe(true);
+      expect(existsSync(safePath.join(outputDir, 'valid.js'))).toBe(true);
+      expect(existsSync(safePath.join(outputDir, 'also-valid.js'))).toBe(true);
 
       // Broken file should not produce output
-      expect(existsSync(join(outputDir, 'broken.js'))).toBe(false);
+      expect(existsSync(safePath.join(outputDir, 'broken.js'))).toBe(false);
     });
 
     it('should handle empty input directory', async () => {
@@ -270,7 +270,7 @@ tags: [one, two]
 
 Content with "quotes" and 'apostrophes'.`;
 
-      writeFileSync(join(inputDir, 'quotes.md'), mdContent, 'utf-8');
+      writeFileSync(safePath.join(inputDir, 'quotes.md'), mdContent, 'utf-8');
 
       const results = await compileMarkdownResources({
         inputDir: inputDir,
@@ -279,7 +279,7 @@ Content with "quotes" and 'apostrophes'.`;
 
       expect(results[0]?.success).toBe(true);
 
-      const jsPath = join(outputDir, 'quotes.js');
+      const jsPath = safePath.join(outputDir, 'quotes.js');
       const jsContent = readFileSync(jsPath, 'utf-8');
 
       // Should escape quotes properly
@@ -312,7 +312,7 @@ Content`;
 
       expect(results[0]?.success).toBe(true);
 
-      const dtsPath = join(outputDir, 'types.d.ts');
+      const dtsPath = safePath.join(outputDir, 'types.d.ts');
       const dtsContent = readFileSync(dtsPath, 'utf-8');
 
       // Should infer correct types
@@ -341,8 +341,8 @@ Content`;
 
     it('should preserve relative paths in nested directories', async () => {
       const nestedPath = 'docs/guides/getting-started.md';
-      const filePath = join(inputDir, nestedPath);
-      const dir = join(filePath, '..');
+      const filePath = safePath.join(inputDir, nestedPath);
+      const dir = safePath.join(filePath, '..');
 
       mkdirSyncReal(dir, { recursive: true });
       writeFileSync(filePath, '# Guide\n\n## Step 1\n\nContent', 'utf-8');

@@ -6,15 +6,15 @@
  */
 
 import * as fs from 'node:fs';
-import { join } from 'node:path';
 
-import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 
 /**
  * Create a temporary test project directory
  */
 export function createTempProject(baseTempDir: string, name: string): string {
-  const projectDir = join(baseTempDir, name);
+  const projectDir = safePath.join(baseTempDir, name);
   mkdirSyncReal(projectDir);
   return projectDir;
 }
@@ -24,10 +24,10 @@ export function createTempProject(baseTempDir: string, name: string): string {
  */
 function setupProjectRoot(projectDir: string, config?: string): void {
   // Create .git to mark as project root
-  mkdirSyncReal(join(projectDir, '.git'));
+  mkdirSyncReal(safePath.join(projectDir, '.git'));
 
   if (config) {
-    fs.writeFileSync(join(projectDir, 'vibe-agent-toolkit.config.yaml'), config);
+    fs.writeFileSync(safePath.join(projectDir, 'vibe-agent-toolkit.config.yaml'), config);
   }
 }
 
@@ -48,7 +48,7 @@ export function setupTestProject(
   setupProjectRoot(projectDir, options.config);
 
   if (options.withDocs) {
-    mkdirSyncReal(join(projectDir, 'docs'));
+    mkdirSyncReal(safePath.join(projectDir, 'docs'));
   }
 
   return projectDir;
@@ -58,5 +58,5 @@ export function setupTestProject(
  * Create a temporary directory for tests
  */
 export function createTestTempDir(prefix: string): string {
-  return fs.mkdtempSync(join(normalizedTmpdir(), prefix));
+  return fs.mkdtempSync(safePath.join(normalizedTmpdir(), prefix));
 }

@@ -11,7 +11,7 @@
 import type fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, type GitTracker, normalizedTmpdir, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, type GitTracker, normalizedTmpdir, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 
 import { calculateChecksum } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
@@ -283,7 +283,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   async addResource(filePath: string): Promise<ResourceMetadata> {
     // Normalize path to absolute
-    const absolutePath = path.resolve(filePath);
+    const absolutePath = safePath.resolve(filePath);
 
     // Parse the markdown file (needed before ID generation for frontmatter lookup)
     const parseResult = await parseMarkdown(absolutePath);
@@ -552,7 +552,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       return [];
     }
 
-    const schemaPath = path.resolve(
+    const schemaPath = safePath.resolve(
       this.baseDir ?? process.cwd(),
       validation.frontmatterSchema
     );
@@ -717,7 +717,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * @private
    */
   private getCacheDirectory(): string {
-    return path.join(normalizedTmpdir(), '.vat-cache');
+    return safePath.join(normalizedTmpdir(), '.vat-cache');
   }
 
   /**
@@ -852,7 +852,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * ```
    */
   getResource(filePath: string): ResourceMetadata | undefined {
-    const absolutePath = path.resolve(filePath);
+    const absolutePath = safePath.resolve(filePath);
     return this.resourcesByPath.get(absolutePath);
   }
 
@@ -1235,7 +1235,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
 
     // Resolve relative to source file's directory
     const sourceDir = path.dirname(sourceFilePath);
-    return path.resolve(sourceDir, filePath);
+    return safePath.resolve(sourceDir, filePath);
   }
 }
 
@@ -1265,7 +1265,7 @@ export function generateIdFromPath(filePath: string, baseDir?: string): string {
 
   if (baseDir) {
     // Compute relative path from baseDir, remove extension
-    const relativePath = path.relative(baseDir, filePath);
+    const relativePath = safePath.relative(baseDir, filePath);
     const ext = path.extname(relativePath);
     const withoutExt = ext ? relativePath.slice(0, -ext.length) : relativePath;
     // Normalize path separators to forward slashes (cross-platform), then replace with hyphens

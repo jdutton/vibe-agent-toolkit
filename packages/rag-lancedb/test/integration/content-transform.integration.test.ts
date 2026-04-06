@@ -7,9 +7,9 @@
  * the original behavior.
  */
 
-import { join } from 'node:path';
 
 import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
@@ -22,20 +22,24 @@ import {
   setupLanceDBTestSuite,
 } from '../test-helpers.js';
 
+/** Index resources, assert success (indexed count + no errors), and query all content. */
+async function indexAndQuery(
+  suite: ReturnType<typeof setupLanceDBTestSuite>,
+  resources: ResourceMetadata[],
+  queryText: string,
+): Promise<string> {
+  const provider = suite.provider;
+  if (!provider) throw new Error('Provider not initialized');
+  const result = await provider.indexResources(resources);
+  expect(result.resourcesIndexed).toBe(resources.length);
+  expect(result.errors).toEqual([]);
+  return queryAllContent(provider, queryText);
+}
+
 describe('LanceDB Content Transform Integration', () => {
   const suite = setupLanceDBTestSuite();
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
-
-  /** Index resources, assert success (indexed count + no errors), and query all content. */
-  async function indexAndQuery(resources: ResourceMetadata[], queryText: string): Promise<string> {
-    const provider = suite.provider;
-    if (!provider) throw new Error('Provider not initialized');
-    const result = await provider.indexResources(resources);
-    expect(result.resourcesIndexed).toBe(resources.length);
-    expect(result.errors).toEqual([]);
-    return queryAllContent(provider, queryText);
-  }
 
   it('should rewrite links in stored chunks when contentTransform is configured', async () => {
     const contentTransform = createLinkRewriteTransform('{{link.text}} (see: {{link.href}})');
@@ -57,7 +61,7 @@ Content in section 1 that mentions [the other doc](./other.md) again.`,
     expect(resource.links.length).toBeGreaterThan(0);
     expect(resource.links.some((l) => l.type === 'local_file')).toBe(true);
 
-    const allContent = await indexAndQuery([resource], 'document references');
+    const allContent = await indexAndQuery(suite, [resource], 'document references');
     expect(allContent).toContain('another file (see: ./other.md)');
     expect(allContent).not.toContain('[another file](./other.md)');
   });
@@ -65,7 +69,7 @@ Content in section 1 that mentions [the other doc](./other.md) again.`,
   it('should compute contentHash on transformed content', async () => {
     // Index WITHOUT transform
     const providerNoTransform = await LanceDBRAGProvider.create({
-      dbPath: join(suite.tempDir, 'db-no-transform'),
+      dbPath: safePath.join(suite.tempDir, 'db-no-transform'),
     });
 
     const resource = await createResourceWithLinks(
@@ -85,7 +89,7 @@ See [local link](./other.md) for info.`,
     const contentTransform = createLinkRewriteTransform('LINK: {{link.text}}');
 
     const providerWithTransform = await LanceDBRAGProvider.create({
-      dbPath: join(suite.tempDir, 'db-with-transform'),
+      dbPath: safePath.join(suite.tempDir, 'db-with-transform'),
       contentTransform,
     });
 
@@ -96,7 +100,7 @@ See [local link](./other.md) for info.`,
     // Re-indexing the same file with transform should NOT skip
     // because the content hash is different (transformed vs original)
     const providerReindex = await LanceDBRAGProvider.create({
-      dbPath: join(suite.tempDir, 'db-no-transform'),
+      dbPath: safePath.join(suite.tempDir, 'db-no-transform'),
       contentTransform,
     });
 
@@ -147,7 +151,7 @@ Check [the guide](./guide.md) for details.`,
 This has a [local link](./other.md) that should be preserved.`,
     );
 
-    const allContent = await indexAndQuery([resource], 'local link');
+    const allContent = await indexAndQuery(suite, [resource], 'local link');
     expect(allContent).toContain('[local link](./other.md)');
   });
 
@@ -184,7 +188,7 @@ This document has no links at all. Just plain text content.`,
     );
     const resource = await createTestResource(filePath);
 
-    const allContent = await indexAndQuery([resource], 'no links');
+    const allContent = await indexAndQuery(suite, [resource], 'no links');
     expect(allContent).toContain('This document has no links at all');
   });
 

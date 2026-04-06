@@ -6,9 +6,9 @@
 /* eslint-disable security/detect-non-literal-fs-filename, sonarjs/no-duplicate-string -- Test file with controlled inputs */
 
 import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { mkdirSyncReal, setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
 import ts from 'typescript/lib/tsserverlibrary';
 import { describe, it, expect, beforeEach, afterEach, beforeAll } from 'vitest';
 
@@ -45,15 +45,15 @@ function createLanguageServiceProject(
   fileName: string;
 } {
   // Create src directory
-  const srcDir = join(projectDir, 'src');
+  const srcDir = safePath.join(projectDir, 'src');
   mkdirSyncReal(srcDir, { recursive: true });
 
   // Write TypeScript file
-  const fileName = join(srcDir, 'index.ts');
+  const fileName = safePath.join(srcDir, 'index.ts');
   writeFileSync(fileName, tsCode, 'utf-8');
 
   // Create resources directory
-  const resourcesDir = join(srcDir, 'resources');
+  const resourcesDir = safePath.join(srcDir, 'resources');
   mkdirSyncReal(resourcesDir, { recursive: true });
 
   // Write markdown files and their declarations
@@ -63,7 +63,7 @@ function createLanguageServiceProject(
   createTsConfig(projectDir);
 
   // Create Language Service
-  const configPath = join(projectDir, 'tsconfig.json');
+  const configPath = safePath.join(projectDir, 'tsconfig.json');
   const configFile = ts.readConfigFile(configPath, ts.sys.readFile);
   const parsedConfig = ts.parseJsonConfigFileContent(
     configFile.config,

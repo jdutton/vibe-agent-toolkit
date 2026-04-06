@@ -8,9 +8,9 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { getToolVersion } from '@vibe-agent-toolkit/utils';
+
+import { getToolVersion, safePath } from '@vibe-agent-toolkit/utils';
 import type { Command } from 'commander';
 import * as semver from 'semver';
 
@@ -182,7 +182,7 @@ export function checkGitRepository(): DoctorCheckResult {
     // Loop until we reach root (works on both Unix / and Windows C:\)
     while (currentDir !== previousDir) {
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path walking is required for git repo detection
-      if (existsSync(join(currentDir, '.git'))) {
+      if (existsSync(safePath.join(currentDir, '.git'))) {
         return {
           name: CHECK_NAME_GIT_REPOSITORY,
           passed: true,
@@ -190,7 +190,7 @@ export function checkGitRepository(): DoctorCheckResult {
         };
       }
       previousDir = currentDir;
-      currentDir = join(currentDir, '..');
+      currentDir = safePath.join(currentDir, '..');
     }
 
     return {
@@ -258,7 +258,7 @@ function checkSchemaFiles(
     const schemaPath = collectionConfig.validation?.frontmatterSchema;
     if (schemaPath) {
       schemaFiles.push(schemaPath);
-      const absoluteSchemaPath = join(configDir, schemaPath);
+      const absoluteSchemaPath = safePath.join(configDir, schemaPath);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- schemaPath is from validated config
       if (!existsSync(absoluteSchemaPath)) {
         missingSchemas.push(schemaPath);
@@ -286,7 +286,7 @@ export function checkConfigValid(): DoctorCheckResult {
 
     try {
       // loadConfig expects project root directory, not config file path
-      const configDir = join(configPath, '..');
+      const configDir = safePath.join(configPath, '..');
       const config = loadConfig(configDir);
 
       // Basic validation passed, now check collections and schema files
@@ -432,15 +432,15 @@ function findProjectRoot(): string | null {
   // Loop until we reach root (works on both Unix / and Windows C:\)
   while (currentDir !== previousDir) {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path walking is required for project root detection
-    const hasConfig = existsSync(join(currentDir, 'vibe-agent-toolkit.config.yaml'));
+    const hasConfig = existsSync(safePath.join(currentDir, 'vibe-agent-toolkit.config.yaml'));
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path walking is required for project root detection
-    const hasGit = existsSync(join(currentDir, '.git'));
+    const hasGit = existsSync(safePath.join(currentDir, '.git'));
 
     if (hasConfig || hasGit) {
       return currentDir;
     }
     previousDir = currentDir;
-    currentDir = join(currentDir, '..');
+    currentDir = safePath.join(currentDir, '..');
   }
 
   return null;
@@ -454,7 +454,7 @@ function isVatSourceTree(): boolean {
     const projectRoot = findProjectRoot();
     if (!projectRoot) return false;
 
-    const cliPackagePath = join(projectRoot, 'packages/cli/package.json');
+    const cliPackagePath = safePath.join(projectRoot, 'packages/cli/package.json');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path for VAT source detection
     if (!existsSync(cliPackagePath)) return false;
 
@@ -495,7 +495,7 @@ export function checkCliBuildSync(): DoctorCheckResult {
     const runningVersion = runningPackage.version;
 
     // Get source version
-    const sourcePackagePath = join(projectRoot, 'packages/cli/package.json');
+    const sourcePackagePath = safePath.join(projectRoot, 'packages/cli/package.json');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Project root path construction
     const sourcePackage = JSON.parse(readFileSync(sourcePackagePath, 'utf8'));
     const sourceVersion = sourcePackage.version;

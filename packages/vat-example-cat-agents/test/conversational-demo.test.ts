@@ -1,3 +1,4 @@
+/* eslint-disable local/no-path-join -- standalone test, no utils dependency */
 /**
  * Test: Conversational demo startup verification
  *

@@ -1,8 +1,8 @@
 /* eslint-disable security/detect-non-literal-fs-filename, sonarjs/no-duplicate-string */
 // Test file - all file operations are in temp directories, duplicated strings acceptable
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ResourceRegistry } from '../../src/resource-registry.js';
@@ -86,86 +86,90 @@ function createSingleCollectionConfig(
   };
 }
 
+/**
+ * Create markdown file in docs directory and registry
+ */
+async function createResourceWithRegistry(
+  tempDir: string,
+  config: ProjectConfig,
+  frontmatter: Record<string, unknown> | null
+): Promise<{ registry: ResourceRegistry; filePath: string }> {
+  const docsDir = safePath.join(tempDir, 'docs');
+  await mkdir(docsDir, { recursive: true });
+  const filePath = safePath.join(docsDir, 'test.md');
+  await createMarkdownFile(filePath, frontmatter);
+
+  const registry = new ResourceRegistry({ baseDir: tempDir, config });
+  await registry.addResource(filePath);
+
+  return { registry, filePath };
+}
+
+/**
+ * Setup test with schema, config, and markdown file
+ */
+async function setupCollectionTest(
+  tempDir: string,
+  schema: object,
+  schemaFile: string,
+  mode: 'strict' | 'permissive',
+  frontmatter: Record<string, unknown> | null
+): Promise<{ registry: ResourceRegistry; filePath: string }> {
+  await createSchemaFile(tempDir, schemaFile, schema);
+  const config = createSingleCollectionConfig(schemaFile, mode);
+  return await createResourceWithRegistry(tempDir, config, frontmatter);
+}
+
+/**
+ * Setup test with multiple collections
+ */
+async function setupMultiCollectionTest(
+  tempDir: string,
+  frontmatter: Record<string, unknown> | null
+): Promise<{ registry: ResourceRegistry; filePath: string }> {
+  const titleSchema = {
+    type: 'object',
+    required: ['title'],
+    properties: {
+      title: { type: 'string' },
+    },
+  };
+  await createSchemaFile(tempDir, 'base.schema.json', titleSchema);
+  await createSchemaFile(tempDir, 'skill.schema.json', categorySchema);
+
+  const config: ProjectConfig = {
+    version: 1,
+    resources: {
+      collections: {
+        docs: {
+          include: ['**/*.md'],
+          validation: {
+            frontmatterSchema: 'base.schema.json',
+            mode: 'strict',
+          },
+        },
+        skills: {
+          include: ['**/*.md'],
+          validation: {
+            frontmatterSchema: 'skill.schema.json',
+            mode: 'strict',
+          },
+        },
+      },
+    },
+  };
+
+  return await createResourceWithRegistry(tempDir, config, frontmatter);
+}
+
 describe('ResourceRegistry - per-collection frontmatter validation', () => {
   const suite = setupTempDirTestSuite('collection-validation-');
   beforeEach(suite.beforeEach);
   afterEach(suite.afterEach);
 
-  /**
-   * Create markdown file in docs directory and registry
-   */
-  async function createResourceWithRegistry(
-    config: ProjectConfig,
-    frontmatter: Record<string, unknown> | null
-  ): Promise<{ registry: ResourceRegistry; filePath: string }> {
-    const docsDir = join(suite.tempDir, 'docs');
-    await mkdir(docsDir, { recursive: true });
-    const filePath = join(docsDir, 'test.md');
-    await createMarkdownFile(filePath, frontmatter);
-
-    const registry = new ResourceRegistry({ baseDir: suite.tempDir, config });
-    await registry.addResource(filePath);
-
-    return { registry, filePath };
-  }
-
-  /**
-   * Setup test with schema, config, and markdown file
-   */
-  async function setupCollectionTest(
-    schema: object,
-    schemaFile: string,
-    mode: 'strict' | 'permissive',
-    frontmatter: Record<string, unknown> | null
-  ): Promise<{ registry: ResourceRegistry; filePath: string }> {
-    await createSchemaFile(suite.tempDir, schemaFile, schema);
-    const config = createSingleCollectionConfig(schemaFile, mode);
-    return await createResourceWithRegistry(config, frontmatter);
-  }
-
-  /**
-   * Setup test with multiple collections
-   */
-  async function setupMultiCollectionTest(
-    frontmatter: Record<string, unknown> | null
-  ): Promise<{ registry: ResourceRegistry; filePath: string }> {
-    const titleSchema = {
-      type: 'object',
-      required: ['title'],
-      properties: {
-        title: { type: 'string' },
-      },
-    };
-    await createSchemaFile(suite.tempDir, 'base.schema.json', titleSchema);
-    await createSchemaFile(suite.tempDir, 'skill.schema.json', categorySchema);
-
-    const config: ProjectConfig = {
-      version: 1,
-      resources: {
-        collections: {
-          docs: {
-            include: ['**/*.md'],
-            validation: {
-              frontmatterSchema: 'base.schema.json',
-              mode: 'strict',
-            },
-          },
-          skills: {
-            include: ['**/*.md'],
-            validation: {
-              frontmatterSchema: 'skill.schema.json',
-              mode: 'strict',
-            },
-          },
-        },
-      },
-    };
-
-    return await createResourceWithRegistry(config, frontmatter);
-  }
-
   it('should validate resource against collection schema in strict mode', async () => {
     const { registry } = await setupCollectionTest(
+      suite.tempDir,
       titleDescriptionSchema,
       'skill.schema.json',
       'strict',
@@ -183,6 +187,7 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
 
   it('should report error for invalid frontmatter in strict mode', async () => {
     const { registry } = await setupCollectionTest(
+      suite.tempDir,
       titleDescriptionSchema,
       'skill.schema.json',
       'strict',
@@ -203,6 +208,7 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
 
   it('should report warning for invalid frontmatter in permissive mode', async () => {
     const { registry } = await setupCollectionTest(
+      suite.tempDir,
       titleOnlySchema,
       'skill.schema.json',
       'permissive',
@@ -219,7 +225,7 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
   });
 
   it('should validate resource in multiple collections with different schemas', async () => {
-    const { registry } = await setupMultiCollectionTest({
+    const { registry } = await setupMultiCollectionTest(suite.tempDir, {
       title: 'Test Doc',
       category: 'tutorial',
     });
@@ -231,7 +237,7 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
   });
 
   it('should report errors for each failed schema in multiple collections', async () => {
-    const { registry } = await setupMultiCollectionTest({
+    const { registry } = await setupMultiCollectionTest(suite.tempDir, {
       author: 'John Doe', // doesn't satisfy either schema
     });
 
@@ -264,9 +270,9 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
     };
 
     // Create markdown file
-    const docsDir = join(suite.tempDir, 'docs');
+    const docsDir = safePath.join(suite.tempDir, 'docs');
     await mkdir(docsDir, { recursive: true });
-    const filePath = join(docsDir, 'test.md');
+    const filePath = safePath.join(docsDir, 'test.md');
     await createMarkdownFile(filePath, { title: 'Test' });
 
     // Create registry and add resource
@@ -311,9 +317,9 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
     };
 
     // Create markdown file in DIFFERENT directory (not in collection)
-    const docsDir = join(suite.tempDir, 'docs');
+    const docsDir = safePath.join(suite.tempDir, 'docs');
     await mkdir(docsDir, { recursive: true });
-    const filePath = join(docsDir, 'test.md');
+    const filePath = safePath.join(docsDir, 'test.md');
     await createMarkdownFile(filePath, {
       // No title - would fail schema if validated
     });
@@ -365,9 +371,9 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
     };
 
     // Create markdown file with title but no author
-    const docsDir = join(suite.tempDir, 'docs');
+    const docsDir = safePath.join(suite.tempDir, 'docs');
     await mkdir(docsDir, { recursive: true });
-    const filePath = join(docsDir, 'test.md');
+    const filePath = safePath.join(docsDir, 'test.md');
     await createMarkdownFile(filePath, {
       title: 'Test Doc',
       // missing author (required by global schema)
@@ -408,9 +414,9 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
       },
     };
 
-    const docsDir = join(suite.tempDir, 'docs');
+    const docsDir = safePath.join(suite.tempDir, 'docs');
     await mkdir(docsDir, { recursive: true });
-    const filePath = join(docsDir, 'test.md');
+    const filePath = safePath.join(docsDir, 'test.md');
     await createMarkdownFile(filePath, {
       title: 'Test Skill',
       extraField: 'should be allowed in permissive mode',

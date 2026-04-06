@@ -2,7 +2,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { getRelativePath, isAbsolutePath, normalizePath, toAbsolutePath, toForwardSlash } from '../src/path-utils.js';
+import { getRelativePath, isAbsolutePath, normalizePath, safePath, toAbsolutePath, toForwardSlash } from '../src/path-utils.js';
 
 describe('path-utils', () => {
   const TEST_PROJECT_PATH = '/project';
@@ -89,6 +89,7 @@ describe('path-utils', () => {
     });
 
     it('should resolve parent directory references', () => {
+      // eslint-disable-next-line sonarjs/no-duplicate-string -- test-specific path fragment repeated across related test cases
       const result = toAbsolutePath('../README.md', `${TEST_PROJECT_PATH}/docs`);
       expect(result).toBe(path.resolve(`${TEST_PROJECT_PATH}/docs`, '../README.md'));
     });
@@ -202,6 +203,52 @@ describe('path-utils', () => {
       const path1 = toAbsolutePath('./docs/../README.md', '/project');
       const path2 = toAbsolutePath('./README.md', '/project');
       expect(path1).toBe(path2);
+    });
+  });
+
+  describe('safePath', () => {
+    describe('safePath.join', () => {
+      // eslint-disable-next-line sonarjs/no-duplicate-string -- expected output string repeated across related Windows path test cases
+      it('should return forward slashes on all platforms', () => {
+        const result = safePath.join(String.raw`C:\Users`, 'docs', 'file.md');
+        expect(result).not.toContain('\\');
+        expect(result).toBe('C:/Users/docs/file.md');
+      });
+
+      it('should handle already-forward paths', () => {
+        const result = safePath.join('/project', 'docs', 'file.md');
+        expect(result).toBe('/project/docs/file.md');
+      });
+
+      it('should handle single argument', () => {
+        const result = safePath.join('docs');
+        expect(result).toBe('docs');
+      });
+    });
+
+    describe('safePath.resolve', () => {
+      it('should return forward slashes on all platforms', () => {
+        const result = safePath.resolve('/project', 'docs', 'file.md');
+        expect(result).not.toContain('\\');
+      });
+
+      it('should produce absolute paths', () => {
+        const result = safePath.resolve('docs', 'file.md');
+        expect(result).toMatch(/^\/|^[A-Z]:\//); // Unix /... or Windows C:/...
+      });
+    });
+
+    describe('safePath.relative', () => {
+      it('should return forward slashes on all platforms', () => {
+        const result = safePath.relative('/project/docs', '/project/README.md');
+        expect(result).not.toContain('\\');
+        expect(result).toBe('../README.md');
+      });
+
+      it('should handle same-directory paths', () => {
+        const result = safePath.relative('/project/docs', '/project/docs/file.md');
+        expect(result).toBe('file.md');
+      });
     });
   });
 });
