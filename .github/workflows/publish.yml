@@ -43,11 +43,11 @@ jobs:
             echo "is_stable=true" >> $GITHUB_OUTPUT
           fi
 
-      - name: Validate version
-        run: bun run validate-version
-
       - name: Build all packages
         run: bun run build
+
+      - name: Validate version
+        run: bun run validate-version
 
       - name: Determine version type and npm tags
         id: version_type
