@@ -5,7 +5,8 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test file with controlled inputs */
 
 import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { parseMarkdown } from '../../src/compiler/markdown-parser.js';
 import { generateMarkdownDeclarationFile, getDeclarationPath } from '../../src/transformer/declaration-generator.js';
@@ -18,7 +19,7 @@ export function setupMarkdownFiles(
   markdownFiles: Record<string, string>,
 ): void {
   for (const [mdFileName, content] of Object.entries(markdownFiles)) {
-    const mdPath = join(resourcesDir, mdFileName);
+    const mdPath = safePath.join(resourcesDir, mdFileName);
     writeFileSync(mdPath, content, 'utf-8');
 
     // Generate and write declaration file
@@ -50,5 +51,5 @@ export function createTsConfig(
     },
     include: ['src/**/*'],
   };
-  writeFileSync(join(projectDir, 'tsconfig.json'), JSON.stringify(tsConfig, null, 2), 'utf-8');
+  writeFileSync(safePath.join(projectDir, 'tsconfig.json'), JSON.stringify(tsConfig, null, 2), 'utf-8');
 }

@@ -1,9 +1,8 @@
 
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with safe temp directories */
 import fs from 'node:fs';
-import path from 'node:path';
 
-import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { findManifestPath, loadAgentManifest } from '../../src/loader/manifest-loader.js';
@@ -13,7 +12,7 @@ describe('manifest-loader', () => {
   const AGENT_YAML = 'agent.yaml';
 
   beforeAll(() => {
-    tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'vat-manifest-test-'));
+    tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-manifest-test-'));
   });
 
   afterAll(() => {
@@ -22,27 +21,27 @@ describe('manifest-loader', () => {
 
   describe('findManifestPath', () => {
     it('should find agent.yaml in directory', async () => {
-      const agentDir = path.join(tempDir, 'agent1');
+      const agentDir = safePath.join(tempDir, 'agent1');
       mkdirSyncReal(agentDir);
-      fs.writeFileSync(path.join(agentDir, AGENT_YAML), 'test');
+      fs.writeFileSync(safePath.join(agentDir, AGENT_YAML), 'test');
 
       const manifestPath = await findManifestPath(agentDir);
-      expect(manifestPath).toBe(path.join(agentDir, AGENT_YAML));
+      expect(manifestPath).toBe(safePath.join(agentDir, AGENT_YAML));
     });
 
     it('should find agent.yml in directory', async () => {
-      const agentDir = path.join(tempDir, 'agent2');
+      const agentDir = safePath.join(tempDir, 'agent2');
       mkdirSyncReal(agentDir);
-      fs.writeFileSync(path.join(agentDir, 'agent.yml'), 'test');
+      fs.writeFileSync(safePath.join(agentDir, 'agent.yml'), 'test');
 
       const manifestPath = await findManifestPath(agentDir);
-      expect(manifestPath).toBe(path.join(agentDir, 'agent.yml'));
+      expect(manifestPath).toBe(safePath.join(agentDir, 'agent.yml'));
     });
 
     it('should return direct path to manifest file', async () => {
-      const agentDir = path.join(tempDir, 'agent3');
+      const agentDir = safePath.join(tempDir, 'agent3');
       mkdirSyncReal(agentDir);
-      const manifestPath = path.join(agentDir, AGENT_YAML);
+      const manifestPath = safePath.join(agentDir, AGENT_YAML);
       fs.writeFileSync(manifestPath, 'test');
 
       const result = await findManifestPath(manifestPath);
@@ -50,7 +49,7 @@ describe('manifest-loader', () => {
     });
 
     it('should throw when no manifest found in directory', async () => {
-      const agentDir = path.join(tempDir, 'empty-agent');
+      const agentDir = safePath.join(tempDir, 'empty-agent');
       mkdirSyncReal(agentDir);
 
       await expect(findManifestPath(agentDir)).rejects.toThrow(
@@ -59,7 +58,7 @@ describe('manifest-loader', () => {
     });
 
     it('should throw when manifest file does not exist', async () => {
-      const nonexistent = path.join(tempDir, 'nonexistent', AGENT_YAML);
+      const nonexistent = safePath.join(tempDir, 'nonexistent', AGENT_YAML);
 
       await expect(findManifestPath(nonexistent)).rejects.toThrow();
     });
@@ -67,10 +66,10 @@ describe('manifest-loader', () => {
 
   describe('loadAgentManifest', () => {
     it('should load valid agent manifest', async () => {
-      const agentDir = path.join(tempDir, 'valid-agent');
+      const agentDir = safePath.join(tempDir, 'valid-agent');
       mkdirSyncReal(agentDir);
       fs.writeFileSync(
-        path.join(agentDir, AGENT_YAML),
+        safePath.join(agentDir, AGENT_YAML),
         `
 metadata:
   name: test-agent
@@ -90,18 +89,18 @@ spec:
     });
 
     it('should throw on invalid YAML', async () => {
-      const agentDir = path.join(tempDir, 'invalid-yaml');
+      const agentDir = safePath.join(tempDir, 'invalid-yaml');
       mkdirSyncReal(agentDir);
-      fs.writeFileSync(path.join(agentDir, AGENT_YAML), '{ invalid yaml [');
+      fs.writeFileSync(safePath.join(agentDir, AGENT_YAML), '{ invalid yaml [');
 
       await expect(loadAgentManifest(agentDir)).rejects.toThrow();
     });
 
     it('should throw on schema validation failure', async () => {
-      const agentDir = path.join(tempDir, 'invalid-schema');
+      const agentDir = safePath.join(tempDir, 'invalid-schema');
       mkdirSyncReal(agentDir);
       fs.writeFileSync(
-        path.join(agentDir, AGENT_YAML),
+        safePath.join(agentDir, AGENT_YAML),
         `
 metadata:
   name: INVALID_NAME_WITH_CAPS
@@ -117,9 +116,9 @@ spec:
     });
 
     it('should include manifest path in loaded result', async () => {
-      const agentDir = path.join(tempDir, 'agent-with-path');
+      const agentDir = safePath.join(tempDir, 'agent-with-path');
       mkdirSyncReal(agentDir);
-      const manifestPath = path.join(agentDir, AGENT_YAML);
+      const manifestPath = safePath.join(agentDir, AGENT_YAML);
       fs.writeFileSync(
         manifestPath,
         `

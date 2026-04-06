@@ -3,7 +3,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { mkdirSyncReal,normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal,normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, expect } from 'vitest';
 import type { z } from 'zod';
 
@@ -18,7 +18,7 @@ export function setupTempDir(prefix: string): { getTempDir: () => string } {
   let tempDir: string;
 
   beforeEach(() => {
-    tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), prefix));
+    tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), prefix));
   });
 
   afterEach(() => {
@@ -37,7 +37,7 @@ export async function createSkillAndValidate(
   tempDir: string,
   content: string,
 ): Promise<ValidationResult> {
-  const skillPath = path.join(tempDir, 'SKILL.md');
+  const skillPath = safePath.join(tempDir, 'SKILL.md');
   fs.writeFileSync(skillPath, content);
   return validateSkill({ skillPath });
 }
@@ -59,7 +59,7 @@ export function createTransitiveSkillStructure(
   const filePaths: Record<string, string> = {};
 
   for (const [relativePath, content] of Object.entries(files)) {
-    const fullPath = path.join(tempDir, relativePath);
+    const fullPath = safePath.join(tempDir, relativePath);
     const dir = path.dirname(fullPath);
 
     if (dir !== tempDir) {
@@ -71,7 +71,7 @@ export function createTransitiveSkillStructure(
   }
 
   // Create SKILL.md
-  const skillPath = path.join(tempDir, 'SKILL.md');
+  const skillPath = safePath.join(tempDir, 'SKILL.md');
   fs.writeFileSync(skillPath, skillBody);
 
   return { skillPath, filePaths };
@@ -226,7 +226,7 @@ export function expectWarning(result: ValidationResult, code: string): void {
  * Create a SKILL.md file with given content (for integration tests)
  */
 export function createSkillFile(tempDir: string, content: string): string {
-  const skillPath = path.join(tempDir, 'SKILL.md');
+  const skillPath = safePath.join(tempDir, 'SKILL.md');
   fs.writeFileSync(skillPath, content);
   return skillPath;
 }
@@ -239,7 +239,7 @@ export function createSkillFile(tempDir: string, content: string): string {
  * Load a registry fixture file from test/fixtures/registries/
  */
 export function loadRegistryFixture(name: string): unknown {
-	const fixturePath = path.resolve(__dirname, 'fixtures/registries', name);
+	const fixturePath = safePath.resolve(__dirname, 'fixtures/registries', name);
 	return JSON.parse(fs.readFileSync(fixturePath, 'utf-8'));
 }
 
@@ -328,12 +328,12 @@ export function createTestPlugin(
 	pluginData: Record<string, unknown>,
 	pluginName = 'test-plugin',
 ): string {
-	const pluginDir = path.join(baseDir, pluginName);
-	const claudePluginDir = path.join(pluginDir, CLAUDE_PLUGIN_DIR);
+	const pluginDir = safePath.join(baseDir, pluginName);
+	const claudePluginDir = safePath.join(pluginDir, CLAUDE_PLUGIN_DIR);
 
 	mkdirSyncReal(claudePluginDir, { recursive: true });
 
-	const pluginJsonPath = path.join(claudePluginDir, 'plugin.json');
+	const pluginJsonPath = safePath.join(claudePluginDir, 'plugin.json');
 	fs.writeFileSync(pluginJsonPath, JSON.stringify(pluginData, null, 2));
 
 	return pluginDir;
@@ -348,12 +348,12 @@ export function createTestMarketplace(
 	marketplaceData: Record<string, unknown>,
 	marketplaceName = 'test-marketplace',
 ): string {
-	const marketplaceDir = path.join(baseDir, marketplaceName);
-	const claudePluginDir = path.join(marketplaceDir, CLAUDE_PLUGIN_DIR);
+	const marketplaceDir = safePath.join(baseDir, marketplaceName);
+	const claudePluginDir = safePath.join(marketplaceDir, CLAUDE_PLUGIN_DIR);
 
 	mkdirSyncReal(claudePluginDir, { recursive: true });
 
-	const marketplaceJsonPath = path.join(claudePluginDir, 'marketplace.json');
+	const marketplaceJsonPath = safePath.join(claudePluginDir, 'marketplace.json');
 	fs.writeFileSync(
 		marketplaceJsonPath,
 		JSON.stringify(marketplaceData, null, 2),
@@ -372,17 +372,17 @@ export function createAmbiguousDirectory(
 	marketplaceData: Record<string, unknown>,
 	dirName = 'ambiguous',
 ): string {
-	const ambiguousDir = path.join(baseDir, dirName);
-	const claudePluginDir = path.join(ambiguousDir, CLAUDE_PLUGIN_DIR);
+	const ambiguousDir = safePath.join(baseDir, dirName);
+	const claudePluginDir = safePath.join(ambiguousDir, CLAUDE_PLUGIN_DIR);
 	mkdirSyncReal(claudePluginDir, { recursive: true });
 
 	// Create both plugin.json and marketplace.json
 	fs.writeFileSync(
-		path.join(claudePluginDir, 'plugin.json'),
+		safePath.join(claudePluginDir, 'plugin.json'),
 		JSON.stringify(pluginData, null, 2),
 	);
 	fs.writeFileSync(
-		path.join(claudePluginDir, 'marketplace.json'),
+		safePath.join(claudePluginDir, 'marketplace.json'),
 		JSON.stringify(marketplaceData, null, 2),
 	);
 

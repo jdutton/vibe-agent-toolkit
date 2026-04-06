@@ -6,8 +6,8 @@
  */
 
 import * as fs from 'node:fs';
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -35,16 +35,16 @@ describe('Audit Workflows (system test)', () => {
   });
 
   it('should handle mixed resource directory (marketplace + plugins + skills)', () => {
-    const mixedDir = join(tempDir, 'mixed');
+    const mixedDir = safePath.join(tempDir, 'mixed');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- mixedDir is controlled in tests
     fs.mkdirSync(mixedDir, { recursive: true });
 
     // Create a marketplace structure
-    const marketplaceDir = join(mixedDir, 'my-marketplace');
+    const marketplaceDir = safePath.join(mixedDir, 'my-marketplace');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- marketplaceDir is controlled in tests
     fs.mkdirSync(marketplaceDir, { recursive: true });
     writeTestFile(
-      join(marketplaceDir, '.claude-plugin'),
+      safePath.join(marketplaceDir, '.claude-plugin'),
       JSON.stringify({
         type: 'marketplace',
         name: 'my-marketplace',
@@ -52,7 +52,7 @@ describe('Audit Workflows (system test)', () => {
       })
     );
     writeTestFile(
-      join(marketplaceDir, 'SKILL.md'),
+      safePath.join(marketplaceDir, 'SKILL.md'),
       `---
 name: marketplace-skill
 description: Marketplace skill
@@ -65,11 +65,11 @@ Test content.
     );
 
     // Create a standalone plugin
-    const pluginDir = join(mixedDir, 'my-plugin');
+    const pluginDir = safePath.join(mixedDir, 'my-plugin');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- pluginDir is controlled in tests
     fs.mkdirSync(pluginDir, { recursive: true });
     writeTestFile(
-      join(pluginDir, '.claude-plugin'),
+      safePath.join(pluginDir, '.claude-plugin'),
       JSON.stringify({
         type: 'plugin',
         name: 'my-plugin',
@@ -77,7 +77,7 @@ Test content.
       })
     );
     writeTestFile(
-      join(pluginDir, 'SKILL.md'),
+      safePath.join(pluginDir, 'SKILL.md'),
       `---
 name: plugin-skill
 description: Plugin skill
@@ -91,7 +91,7 @@ Test content.
 
     // Create a standalone skill (no .claude-plugin)
     writeTestFile(
-      join(mixedDir, 'SKILL.md'),
+      safePath.join(mixedDir, 'SKILL.md'),
       `---
 name: standalone-skill
 description: Standalone skill
@@ -119,17 +119,17 @@ Test content.
   });
 
   it('should detect and report multiple validation errors', () => {
-    const errorDir = join(tempDir, 'errors');
+    const errorDir = safePath.join(tempDir, 'errors');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- errorDir is controlled in tests
     fs.mkdirSync(errorDir, { recursive: true });
 
     // Create an invalid skill (invalid name format — uppercase not allowed)
     // Note: must create subdirectory since scanDirectory only finds SKILL.md in directories
-    const errorDir1 = join(errorDir, 'skill1');
+    const errorDir1 = safePath.join(errorDir, 'skill1');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- errorDir1 is controlled in tests
     fs.mkdirSync(errorDir1, { recursive: true });
     writeTestFile(
-      join(errorDir1, 'SKILL.md'),
+      safePath.join(errorDir1, 'SKILL.md'),
       `---
 name: Invalid_Skill_Name
 description: Has invalid name format
@@ -142,11 +142,11 @@ Test content.
     );
 
     // Create another invalid skill (name too long — exceeds 64 chars)
-    const errorDir2 = join(errorDir, 'skill2');
+    const errorDir2 = safePath.join(errorDir, 'skill2');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- errorDir2 is controlled in tests
     fs.mkdirSync(errorDir2, { recursive: true });
     writeTestFile(
-      join(errorDir2, 'SKILL.md'),
+      safePath.join(errorDir2, 'SKILL.md'),
       `---
 name: ${'a'.repeat(65)}
 description: Name exceeds max length
@@ -174,16 +174,16 @@ Test content.
   });
 
   it('should exit with 0 for fully valid resources', () => {
-    const validDir = join(tempDir, 'valid');
+    const validDir = safePath.join(tempDir, 'valid');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- validDir is controlled in tests
     fs.mkdirSync(validDir, { recursive: true });
 
     // Create valid skills (each in subdirectory since scanDirectory looks for SKILL.md)
-    const validDir1 = join(validDir, 'skill1');
+    const validDir1 = safePath.join(validDir, 'skill1');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- validDir1 is controlled in tests
     fs.mkdirSync(validDir1, { recursive: true });
     writeTestFile(
-      join(validDir1, 'SKILL.md'),
+      safePath.join(validDir1, 'SKILL.md'),
       `---
 name: valid-skill-1
 description: Valid skill 1
@@ -195,11 +195,11 @@ Test content.
 `
     );
 
-    const validDir2 = join(validDir, 'skill2');
+    const validDir2 = safePath.join(validDir, 'skill2');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- validDir2 is controlled in tests
     fs.mkdirSync(validDir2, { recursive: true });
     writeTestFile(
-      join(validDir2, 'SKILL.md'),
+      safePath.join(validDir2, 'SKILL.md'),
       `---
 name: valid-skill-2
 description: Valid skill 2
@@ -230,13 +230,13 @@ Test content.
   });
 
   it('should scan recursively by default without --recursive flag', () => {
-    const nestedDir = join(tempDir, 'nested-default');
-    const nestedSkillDir = join(nestedDir, 'deeply', 'nested', 'skill-dir');
+    const nestedDir = safePath.join(tempDir, 'nested-default');
+    const nestedSkillDir = safePath.join(nestedDir, 'deeply', 'nested', 'skill-dir');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- nestedSkillDir is controlled in tests
     fs.mkdirSync(nestedSkillDir, { recursive: true });
 
     writeTestFile(
-      join(nestedSkillDir, 'SKILL.md'),
+      safePath.join(nestedSkillDir, 'SKILL.md'),
       `---
 name: nested-skill
 description: A deeply nested skill for testing recursive default
@@ -264,14 +264,14 @@ This skill is deeply nested to verify recursive scanning is the default.
   });
 
   it('should NOT scan subdirectories with --no-recursive flag', () => {
-    const noRecurseDir = join(tempDir, 'no-recurse');
-    const subDir = join(noRecurseDir, 'subdir');
+    const noRecurseDir = safePath.join(tempDir, 'no-recurse');
+    const subDir = safePath.join(noRecurseDir, 'subdir');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- subDir is controlled in tests
     fs.mkdirSync(subDir, { recursive: true });
 
     // Create SKILL.md only in the subdirectory (not the top level)
     writeTestFile(
-      join(subDir, 'SKILL.md'),
+      safePath.join(subDir, 'SKILL.md'),
       `---
 name: subdir-skill
 description: A skill in a subdirectory that should not be found with --no-recursive
@@ -299,9 +299,9 @@ This skill should not be found when using --no-recursive.
   });
 
   it('should exclude paths matching --exclude glob', () => {
-    const excludeDir = join(tempDir, 'exclude-test');
-    const distDir = join(excludeDir, 'dist');
-    const srcDir = join(excludeDir, 'src');
+    const excludeDir = safePath.join(tempDir, 'exclude-test');
+    const distDir = safePath.join(excludeDir, 'dist');
+    const srcDir = safePath.join(excludeDir, 'src');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
     fs.mkdirSync(distDir, { recursive: true });
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- dirs are controlled in tests
@@ -309,7 +309,7 @@ This skill should not be found when using --no-recursive.
 
     // Create a skill in dist/ (should be excluded)
     writeTestFile(
-      join(distDir, 'SKILL.md'),
+      safePath.join(distDir, 'SKILL.md'),
       `---
 name: dist-skill
 description: A skill in the dist directory that should be excluded
@@ -323,7 +323,7 @@ This skill is in dist/ and should be excluded by --exclude.
 
     // Create a valid skill in src/ (should NOT be excluded)
     writeTestFile(
-      join(srcDir, 'SKILL.md'),
+      safePath.join(srcDir, 'SKILL.md'),
       `---
 name: src-skill
 description: A skill in the src directory that should be included

@@ -18,8 +18,10 @@
 
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve, dirname, join } from 'node:path';
+import {  dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { findProjectRoot } from '../utils/project-root.js';
 
@@ -51,8 +53,8 @@ function spawnCli(binPath: string, context: Context, contextPath?: string): neve
  * @returns Path to bin.js if detected, null otherwise
  */
 function getDevModeBinary(projectRoot: string): string | null {
-  const wrapperPath = join(projectRoot, 'packages/cli/dist/bin/vat.js');
-  const binPath = join(projectRoot, 'packages/cli/dist/bin.js');
+  const wrapperPath = safePath.join(projectRoot, 'packages/cli/dist/bin/vat.js');
+  const binPath = safePath.join(projectRoot, 'packages/cli/dist/bin.js');
 
   if (process.env['VAT_DEBUG'] === '1') {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- checking project structure files for debug
@@ -80,7 +82,7 @@ function getDevModeBinary(projectRoot: string): string | null {
 function findLocalInstall(projectRoot: string): string | null {
   let current = projectRoot;
   while (true) {
-    const localBin = join(current, 'node_modules/@vibe-agent-toolkit/cli/dist/bin.js');
+    const localBin = safePath.join(current, 'node_modules/@vibe-agent-toolkit/cli/dist/bin.js');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- checking for local install
     if (existsSync(localBin)) {
       return localBin;
@@ -125,7 +127,7 @@ function main(): void {
 
   // Priority 1: Explicit override via VAT_ROOT_DIR
   if (process.env['VAT_ROOT_DIR']) {
-    const binPath = join(process.env['VAT_ROOT_DIR'], 'packages/cli/dist/bin.js');
+    const binPath = safePath.join(process.env['VAT_ROOT_DIR'], 'packages/cli/dist/bin.js');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- dynamic path from env is expected
     if (existsSync(binPath)) {
       if (debug) {
@@ -160,7 +162,7 @@ function main(): void {
     }
     // Priority 4: Use global install (this script's location)
     else {
-      binPath = resolve(__dirname, '../bin.js');
+      binPath = safePath.resolve(__dirname, '../bin.js');
       context = 'global';
       binDir = dirname(__dirname); // dist -> cli root
     }
@@ -168,11 +170,11 @@ function main(): void {
 
   // Read versions for comparison
   // __dirname = dist/bin, so go up twice to reach package.json at cli root
-  const globalPkgPath = join(dirname(dirname(__dirname)), 'package.json');
+  const globalPkgPath = safePath.join(dirname(dirname(__dirname)), 'package.json');
   const globalVersion = readVersion(globalPkgPath);
   let localVersion: string | null = null;
   if (context === 'local') {
-    const localPkgPath = join(binDir, 'package.json');
+    const localPkgPath = safePath.join(binDir, 'package.json');
     localVersion = readVersion(localPkgPath);
   }
 

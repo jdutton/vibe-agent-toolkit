@@ -1,5 +1,7 @@
 import { promises as fs } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ResourceRegistry } from '../src/resource-registry.js';
 import type { ResourceMetadata } from '../src/schemas/resource-metadata.js';
@@ -21,7 +23,7 @@ export async function createAndAddResource(
   content: string,
   registry: ResourceRegistry
 ): Promise<ResourceMetadata> {
-  const filePath = join(tempDir, filename);
+  const filePath = safePath.join(tempDir, filename);
   const dir = dirname(filePath);
 
   // Create parent directories if they don't exist

@@ -15,7 +15,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 describe('External URL validation CLI flags (system test)', () => {
@@ -41,21 +41,21 @@ describe('External URL validation CLI flags (system test)', () => {
 
   beforeAll(() => {
     // Create temp directory
-    tempDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'vat-external-url-test-'));
+    tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-external-url-test-'));
 
     // Path to vat CLI binary (use fileURLToPath for cross-platform compatibility)
     const currentDir = path.dirname(fileURLToPath(import.meta.url));
-    binPath = path.resolve(currentDir, '../../../cli/dist/bin/vat.js');
+    binPath = safePath.resolve(currentDir, '../../../cli/dist/bin/vat.js');
 
     // Create minimal test structure
-    const docsDir = path.join(tempDir, 'docs');
+    const docsDir = safePath.join(tempDir, 'docs');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir from mkdtempSync, safe
     fs.mkdirSync(docsDir, { recursive: true });
 
     // File with no external links (ensures validation passes)
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir from mkdtempSync, safe
     fs.writeFileSync(
-      path.join(docsDir, 'test.md'),
+      safePath.join(docsDir, 'test.md'),
       `# Test
 
 This file has no external links.
@@ -71,7 +71,7 @@ resources:
 `;
 
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir from mkdtempSync, safe
-    fs.writeFileSync(path.join(tempDir, 'vibe-agent-toolkit.config.yaml'), configContent);
+    fs.writeFileSync(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), configContent);
   });
 
   afterAll(() => {

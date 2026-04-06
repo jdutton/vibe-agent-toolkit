@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import { symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { crawlDirectory, crawlDirectorySync } from '../../src/file-crawler.js';
@@ -27,26 +28,26 @@ describe('file-crawler', () => {
   function createTestStructure(): void {
     /* eslint-disable security/detect-non-literal-fs-filename -- testDir is controlled temp directory from mkdtemp */
     // Root files
-    writeFileSync(path.join(testDir, 'README.md'), '# Root README');
-    writeFileSync(path.join(testDir, 'package.json'), '{}');
+    writeFileSync(safePath.join(testDir, 'README.md'), '# Root README');
+    writeFileSync(safePath.join(testDir, 'package.json'), '{}');
 
     // docs directory
-    mkdirSyncReal(path.join(testDir, 'docs'));
-    writeFileSync(path.join(testDir, 'docs', 'guide.md'), '# Guide');
-    writeFileSync(path.join(testDir, 'docs', 'api.md'), '# API');
+    mkdirSyncReal(safePath.join(testDir, 'docs'));
+    writeFileSync(safePath.join(testDir, 'docs', 'guide.md'), '# Guide');
+    writeFileSync(safePath.join(testDir, 'docs', 'api.md'), '# API');
 
     // docs/advanced subdirectory
-    mkdirSyncReal(path.join(testDir, 'docs', 'advanced'));
-    writeFileSync(path.join(testDir, 'docs', 'advanced', 'performance.md'), '# Performance');
+    mkdirSyncReal(safePath.join(testDir, 'docs', 'advanced'));
+    writeFileSync(safePath.join(testDir, 'docs', 'advanced', 'performance.md'), '# Performance');
 
     // src directory
-    mkdirSyncReal(path.join(testDir, 'src'));
-    writeFileSync(path.join(testDir, 'src', 'index.ts'), '// code');
-    writeFileSync(path.join(testDir, 'src', 'utils.ts'), '// utils');
+    mkdirSyncReal(safePath.join(testDir, 'src'));
+    writeFileSync(safePath.join(testDir, 'src', 'index.ts'), '// code');
+    writeFileSync(safePath.join(testDir, 'src', 'utils.ts'), '// utils');
 
     // node_modules (should be excluded by default)
-    mkdirSyncReal(path.join(testDir, 'node_modules'));
-    writeFileSync(path.join(testDir, 'node_modules', 'package.md'), '# Should be excluded');
+    mkdirSyncReal(safePath.join(testDir, 'node_modules'));
+    writeFileSync(safePath.join(testDir, 'node_modules', 'package.md'), '# Should be excluded');
     /* eslint-enable security/detect-non-literal-fs-filename */
   }
 
@@ -61,7 +62,7 @@ describe('file-crawler', () => {
       // Should find all files except node_modules
       expect(files.length).toBeGreaterThan(0);
       expect(files.every((f) => f.startsWith(testDir))).toBe(true); // absolute paths
-      expect(files.map(toForwardSlash).includes(toForwardSlash(path.join(testDir, 'node_modules', 'package.md')))).toBe(false); // excluded by default
+      expect(files.map(toForwardSlash).includes(toForwardSlash(safePath.join(testDir, 'node_modules', 'package.md')))).toBe(false); // excluded by default
     });
 
     it('should find markdown files with include pattern', () => {
@@ -131,7 +132,7 @@ describe('file-crawler', () => {
     });
 
     it('should handle empty directory', () => {
-      const emptyDir = path.join(testDir, 'empty');
+      const emptyDir = safePath.join(testDir, 'empty');
        
       mkdirSyncReal(emptyDir);
 
@@ -151,7 +152,7 @@ describe('file-crawler', () => {
     });
 
     it('should throw error when baseDir is a file', () => {
-      const filePath = path.join(testDir, 'file.txt');
+      const filePath = safePath.join(testDir, 'file.txt');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is controlled temp directory
       writeFileSync(filePath, 'content');
 
@@ -206,8 +207,8 @@ describe('file-crawler', () => {
         createTestStructure();
 
         // Create a symlink to a markdown file
-        const targetFile = path.join(testDir, 'docs', 'guide.md');
-        const symlinkPath = path.join(testDir, 'link.md');
+        const targetFile = safePath.join(testDir, 'docs', 'guide.md');
+        const symlinkPath = safePath.join(testDir, 'link.md');
 
         try {
           // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is controlled temp directory
@@ -231,8 +232,8 @@ describe('file-crawler', () => {
       it('should follow symlinks when followSymlinks=true', () => {
         createTestStructure();
 
-        const targetFile = path.join(testDir, 'docs', 'guide.md');
-        const symlinkPath = path.join(testDir, 'link.md');
+        const targetFile = safePath.join(testDir, 'docs', 'guide.md');
+        const symlinkPath = safePath.join(testDir, 'link.md');
 
         try {
           // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is controlled temp directory
@@ -323,7 +324,7 @@ describe('file-crawler', () => {
       createGitRepo(testDir);
 
       // Create .gitignore file
-      const gitignorePath = path.join(testDir, '.gitignore');
+      const gitignorePath = safePath.join(testDir, '.gitignore');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is controlled temp directory
       writeFileSync(gitignorePath, 'docs/\n*.log\n');
 
@@ -346,10 +347,10 @@ describe('file-crawler', () => {
 
       // Create .git directory
        
-      mkdirSyncReal(path.join(testDir, '.git'));
+      mkdirSyncReal(safePath.join(testDir, '.git'));
 
       // Create .gitignore file
-      const gitignorePath = path.join(testDir, '.gitignore');
+      const gitignorePath = safePath.join(testDir, '.gitignore');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is controlled temp directory
       writeFileSync(gitignorePath, 'docs/\n');
 

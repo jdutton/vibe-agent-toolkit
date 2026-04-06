@@ -81,6 +81,9 @@ export default [
       'local/no-manual-path-normalize': 'error',
       'local/no-path-sep-in-strings': 'error',
       'local/no-path-operations-in-comparisons': 'error',
+      'local/no-path-join': 'error',
+      'local/no-path-resolve': 'error',
+      'local/no-path-relative': 'error',
 
       // TypeScript
       'no-unused-vars': 'off', // Use @typescript-eslint/no-unused-vars instead

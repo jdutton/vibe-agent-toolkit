@@ -11,7 +11,7 @@ import path from 'node:path';
 
 /* eslint-disable security/detect-non-literal-fs-filename -- tests use dynamic file paths in temp directory */
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 
 import { ResourceRegistry } from '../../src/resource-registry.js';
@@ -20,7 +20,7 @@ import { findPackageRoot } from '../test-helpers.js';
 
 // Get test fixtures directory
 const packageRoot = findPackageRoot(import.meta.dirname);
-const fixturesDir = path.join(packageRoot, 'test-fixtures');
+const fixturesDir = safePath.join(packageRoot, 'test-fixtures');
 
 // Constants for commonly used file names and patterns (avoid string duplication)
 const BROKEN_FILE_MD = 'broken-file.md';
@@ -41,10 +41,10 @@ function allResourcesHaveIdAndPath(resources: ResourceMetadata[]): boolean {
 
 /** Create two readme.md files in dir1/ and dir2/ under the given base directory */
 async function createDuplicateNamedFiles(baseDirectory: string): Promise<void> {
-  await mkdir(path.join(baseDirectory, 'dir1'), { recursive: true });
-  await mkdir(path.join(baseDirectory, 'dir2'), { recursive: true });
-  await writeFile(path.join(baseDirectory, 'dir1', 'readme.md'), '# Dir 1', 'utf-8');
-  await writeFile(path.join(baseDirectory, 'dir2', 'readme.md'), '# Dir 2', 'utf-8');
+  await mkdir(safePath.join(baseDirectory, 'dir1'), { recursive: true });
+  await mkdir(safePath.join(baseDirectory, 'dir2'), { recursive: true });
+  await writeFile(safePath.join(baseDirectory, 'dir1', 'readme.md'), '# Dir 1', 'utf-8');
+  await writeFile(safePath.join(baseDirectory, 'dir2', 'readme.md'), '# Dir 2', 'utf-8');
 }
 
 describe('ResourceRegistry - Integration Tests', () => {
@@ -65,7 +65,7 @@ describe('ResourceRegistry - Integration Tests', () => {
 
   describe('addResource()', () => {
     it('should add a single resource and parse it correctly', async () => {
-      const validPath = path.join(fixturesDir, 'valid.md');
+      const validPath = safePath.join(fixturesDir, 'valid.md');
       const resource = await registry.addResource(validPath);
 
       expect(resource).toBeDefined();
@@ -79,7 +79,7 @@ describe('ResourceRegistry - Integration Tests', () => {
 
     it('should store frontmatter in resource metadata', async () => {
       const registry = new ResourceRegistry();
-      const mdPath = path.join(fixturesDir, 'with-frontmatter.md');
+      const mdPath = safePath.join(fixturesDir, 'with-frontmatter.md');
 
       const resource = await registry.addResource(mdPath);
 
@@ -91,8 +91,8 @@ describe('ResourceRegistry - Integration Tests', () => {
     });
 
     it('should generate correct IDs from file paths', async () => {
-      const validPath = path.join(fixturesDir, 'valid.md');
-      const brokenPath = path.join(fixturesDir, BROKEN_FILE_MD);
+      const validPath = safePath.join(fixturesDir, 'valid.md');
+      const brokenPath = safePath.join(fixturesDir, BROKEN_FILE_MD);
 
       const resource1 = await registry.addResource(validPath);
       const resource2 = await registry.addResource(brokenPath);
@@ -102,7 +102,7 @@ describe('ResourceRegistry - Integration Tests', () => {
     });
 
     it('should allow re-adding the same file path', async () => {
-      const validPath = path.join(fixturesDir, 'valid.md');
+      const validPath = safePath.join(fixturesDir, 'valid.md');
 
       const resource1 = await registry.addResource(validPath);
       expect(resource1.id).toBe('valid');
@@ -115,8 +115,8 @@ describe('ResourceRegistry - Integration Tests', () => {
 
     it('should normalize relative paths to absolute', async () => {
       // Use a relative path from CWD to the fixtures
-      const absoluteFixturePath = path.join(fixturesDir, 'valid.md');
-      const relativePath = path.relative(process.cwd(), absoluteFixturePath);
+      const absoluteFixturePath = safePath.join(fixturesDir, 'valid.md');
+      const relativePath = safePath.relative(process.cwd(), absoluteFixturePath);
 
       const resource = await registry.addResource(relativePath);
       expect(path.isAbsolute(resource.filePath)).toBe(true);
@@ -124,7 +124,7 @@ describe('ResourceRegistry - Integration Tests', () => {
     });
 
     it('should parse links correctly', async () => {
-      const validPath = path.join(fixturesDir, 'valid.md');
+      const validPath = safePath.join(fixturesDir, 'valid.md');
       const resource = await registry.addResource(validPath);
 
       expect(resource.links.length).toBe(4);
@@ -137,7 +137,7 @@ describe('ResourceRegistry - Integration Tests', () => {
     });
 
     it('should parse headings correctly', async () => {
-      const validPath = path.join(fixturesDir, 'valid.md');
+      const validPath = safePath.join(fixturesDir, 'valid.md');
       const resource = await registry.addResource(validPath);
 
       expect(resource.headings.length).toBeGreaterThan(0);
@@ -151,9 +151,9 @@ describe('ResourceRegistry - Integration Tests', () => {
   describe('addResources()', () => {
     it('should add multiple resources at once', async () => {
       const paths = [
-        path.join(fixturesDir, 'valid.md'),
-        path.join(fixturesDir, BROKEN_FILE_MD),
-        path.join(fixturesDir, EXTERNAL_MD),
+        safePath.join(fixturesDir, 'valid.md'),
+        safePath.join(fixturesDir, BROKEN_FILE_MD),
+        safePath.join(fixturesDir, EXTERNAL_MD),
       ];
 
       const resources = await registry.addResources(paths);
@@ -164,8 +164,8 @@ describe('ResourceRegistry - Integration Tests', () => {
 
     it('should process files in parallel', async () => {
       const paths = [
-        path.join(fixturesDir, 'valid.md'),
-        path.join(fixturesDir, 'target.md'),
+        safePath.join(fixturesDir, 'valid.md'),
+        safePath.join(fixturesDir, 'target.md'),
       ];
 
       const startTime = Date.now();
@@ -248,7 +248,7 @@ describe('ResourceRegistry - Integration Tests', () => {
     });
 
     it('should detect broken file links', async () => {
-      const brokenPath = path.join(fixturesDir, BROKEN_FILE_MD);
+      const brokenPath = safePath.join(fixturesDir, BROKEN_FILE_MD);
       await registry.addResource(brokenPath);
 
       const result = await registry.validate();
@@ -263,8 +263,8 @@ describe('ResourceRegistry - Integration Tests', () => {
 
     it('should detect broken anchor links', async () => {
       // Add both broken-anchor.md and target.md (target exists but anchor doesn't)
-      await registry.addResource(path.join(fixturesDir, 'broken-anchor.md'));
-      await registry.addResource(path.join(fixturesDir, 'target.md'));
+      await registry.addResource(safePath.join(fixturesDir, 'broken-anchor.md'));
+      await registry.addResource(safePath.join(fixturesDir, 'target.md'));
 
       const result = await registry.validate();
 
@@ -278,9 +278,9 @@ describe('ResourceRegistry - Integration Tests', () => {
 
     it('should validate valid.md without errors', async () => {
       // Add all files that valid.md links to
-      await registry.addResource(path.join(fixturesDir, 'valid.md'));
-      await registry.addResource(path.join(fixturesDir, 'target.md'));
-      await registry.addResource(path.join(fixturesDir, 'subdir/nested.md'));
+      await registry.addResource(safePath.join(fixturesDir, 'valid.md'));
+      await registry.addResource(safePath.join(fixturesDir, 'target.md'));
+      await registry.addResource(safePath.join(fixturesDir, 'subdir/nested.md'));
 
       const result = await registry.validate();
 
@@ -292,7 +292,7 @@ describe('ResourceRegistry - Integration Tests', () => {
     });
 
     it('should report external links', async () => {
-      await registry.addResource(path.join(fixturesDir, EXTERNAL_MD));
+      await registry.addResource(safePath.join(fixturesDir, EXTERNAL_MD));
 
       const result = await registry.validate();
 
@@ -315,9 +315,9 @@ describe('ResourceRegistry - Integration Tests', () => {
 
   describe('resolveLinks()', () => {
     it('should resolve local_file links to resource IDs', async () => {
-      await registry.addResource(path.join(fixturesDir, 'valid.md'));
-      await registry.addResource(path.join(fixturesDir, 'target.md'));
-      await registry.addResource(path.join(fixturesDir, 'subdir/nested.md'));
+      await registry.addResource(safePath.join(fixturesDir, 'valid.md'));
+      await registry.addResource(safePath.join(fixturesDir, 'target.md'));
+      await registry.addResource(safePath.join(fixturesDir, 'subdir/nested.md'));
 
       registry.resolveLinks();
 
@@ -340,7 +340,7 @@ describe('ResourceRegistry - Integration Tests', () => {
     });
 
     it('should not set resolvedId for non-existent targets', async () => {
-      await registry.addResource(path.join(fixturesDir, BROKEN_FILE_MD));
+      await registry.addResource(safePath.join(fixturesDir, BROKEN_FILE_MD));
 
       registry.resolveLinks();
 
@@ -355,8 +355,8 @@ describe('ResourceRegistry - Integration Tests', () => {
     });
 
     it('should mutate links in place', async () => {
-      await registry.addResource(path.join(fixturesDir, 'valid.md'));
-      await registry.addResource(path.join(fixturesDir, 'target.md'));
+      await registry.addResource(safePath.join(fixturesDir, 'valid.md'));
+      await registry.addResource(safePath.join(fixturesDir, 'target.md'));
 
       const validResource = registry.getResourceById('valid');
       const originalLinks = validResource?.links;
@@ -379,7 +379,7 @@ describe('ResourceRegistry - Integration Tests', () => {
 
     describe('getResource()', () => {
       it('should get resource by absolute path', () => {
-        const validPath = path.join(fixturesDir, 'valid.md');
+        const validPath = safePath.join(fixturesDir, 'valid.md');
         const resource = registry.getResource(validPath);
 
         expect(resource).toBeDefined();
@@ -388,8 +388,8 @@ describe('ResourceRegistry - Integration Tests', () => {
 
       it('should get resource by relative path', () => {
         // Use a relative path from CWD to the fixtures
-        const absoluteFixturePath = path.join(fixturesDir, 'valid.md');
-        const relativePath = path.relative(process.cwd(), absoluteFixturePath);
+        const absoluteFixturePath = safePath.join(fixturesDir, 'valid.md');
+        const relativePath = safePath.relative(process.cwd(), absoluteFixturePath);
 
         const resource = registry.getResource(relativePath);
 
@@ -476,8 +476,8 @@ describe('ResourceRegistry - Integration Tests', () => {
 
   describe('getStats()', () => {
     it('should return correct statistics', async () => {
-      await registry.addResource(path.join(fixturesDir, 'valid.md'));
-      await registry.addResource(path.join(fixturesDir, EXTERNAL_MD));
+      await registry.addResource(safePath.join(fixturesDir, 'valid.md'));
+      await registry.addResource(safePath.join(fixturesDir, EXTERNAL_MD));
 
       const stats = registry.getStats();
 
@@ -520,10 +520,10 @@ describe('ResourceRegistry - Integration Tests', () => {
     });
 
     it('should allow adding resources after clear', async () => {
-      await registry.addResource(path.join(fixturesDir, 'valid.md'));
+      await registry.addResource(safePath.join(fixturesDir, 'valid.md'));
       registry.clear();
 
-      await registry.addResource(path.join(fixturesDir, 'target.md'));
+      await registry.addResource(safePath.join(fixturesDir, 'target.md'));
 
       expect(registry.getAllResources()).toHaveLength(1);
       expect(registry.getResourceById('target')).toBeDefined();
@@ -536,7 +536,7 @@ describe('ResourceRegistry - Integration Tests', () => {
     let testCounter = 0;
 
     beforeAll(async () => {
-      suiteDir = await mkdtemp(path.join(normalizedTmpdir(), 'frontmatter-suite-'));
+      suiteDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'frontmatter-suite-'));
     });
 
     afterAll(async () => {
@@ -545,7 +545,7 @@ describe('ResourceRegistry - Integration Tests', () => {
 
     beforeEach(async () => {
       testCounter++;
-      tempDir = path.join(suiteDir, `test-${testCounter}`);
+      tempDir = safePath.join(suiteDir, `test-${testCounter}`);
       await mkdir(tempDir, { recursive: true });
     });
 
@@ -557,11 +557,11 @@ describe('ResourceRegistry - Integration Tests', () => {
       const registry = new ResourceRegistry();
 
       // Add resource with valid frontmatter
-      const validPath = path.join(fixturesDir, 'with-frontmatter.md');
+      const validPath = safePath.join(fixturesDir, 'with-frontmatter.md');
       await registry.addResource(validPath);
 
       // Add resource without frontmatter
-      const noFrontmatterPath = path.join(fixturesDir, 'target.md');
+      const noFrontmatterPath = safePath.join(fixturesDir, 'target.md');
       await registry.addResource(noFrontmatterPath);
 
       const schema = {
@@ -586,7 +586,7 @@ describe('ResourceRegistry - Integration Tests', () => {
       const registry = new ResourceRegistry();
 
       // Create a file with invalid YAML
-      const invalidYamlPath = path.join(tempDir, 'invalid-yaml.md');
+      const invalidYamlPath = safePath.join(tempDir, 'invalid-yaml.md');
       await writeFile(
         invalidYamlPath,
         `---
@@ -613,7 +613,7 @@ tags: test
 
   describe('Edge Cases', () => {
     it('should handle adding same file multiple times', async () => {
-      const validPath = path.join(fixturesDir, 'valid.md');
+      const validPath = safePath.join(fixturesDir, 'valid.md');
 
       await registry.addResource(validPath);
       await registry.addResource(validPath);
@@ -636,7 +636,7 @@ tags: test
 
     it('should handle resources with no links', async () => {
       // Assuming target.md might have minimal content
-      await registry.addResource(path.join(fixturesDir, 'target.md'));
+      await registry.addResource(safePath.join(fixturesDir, 'target.md'));
 
       const result = await registry.validate();
 
@@ -646,7 +646,7 @@ tags: test
 
     it('should handle resources with no headings', async () => {
       // Any file should work, as headings are optional
-      await registry.addResource(path.join(fixturesDir, EXTERNAL_MD));
+      await registry.addResource(safePath.join(fixturesDir, EXTERNAL_MD));
 
       const resource = registry.getResourceById('external');
       expect(resource).toBeDefined();
@@ -661,7 +661,7 @@ tags: test
     let tempDir: string;
 
     beforeEach(async () => {
-      tempDir = await mkdtemp(path.join(normalizedTmpdir(), 'id-strategy-test-'));
+      tempDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'id-strategy-test-'));
     });
 
     afterEach(async () => {
@@ -670,24 +670,24 @@ tags: test
 
     describe('path-relative IDs with baseDir', () => {
       it('should generate IDs from relative path when baseDir is set', async () => {
-        await mkdir(path.join(tempDir, 'docs'), { recursive: true });
-        await mkdir(path.join(tempDir, 'api'), { recursive: true });
-        await writeFile(path.join(tempDir, 'docs', 'guide.md'), '# Guide', 'utf-8');
-        await writeFile(path.join(tempDir, 'api', 'reference.md'), '# Reference', 'utf-8');
+        await mkdir(safePath.join(tempDir, 'docs'), { recursive: true });
+        await mkdir(safePath.join(tempDir, 'api'), { recursive: true });
+        await writeFile(safePath.join(tempDir, 'docs', 'guide.md'), '# Guide', 'utf-8');
+        await writeFile(safePath.join(tempDir, 'api', 'reference.md'), '# Reference', 'utf-8');
 
         const reg = new ResourceRegistry({ baseDir: tempDir });
-        const r1 = await reg.addResource(path.join(tempDir, 'docs', 'guide.md'));
-        const r2 = await reg.addResource(path.join(tempDir, 'api', 'reference.md'));
+        const r1 = await reg.addResource(safePath.join(tempDir, 'docs', 'guide.md'));
+        const r2 = await reg.addResource(safePath.join(tempDir, 'api', 'reference.md'));
 
         expect(r1.id).toBe('docs-guide');
         expect(r2.id).toBe('api-reference');
       });
 
       it('should handle files at baseDir root without directory prefix', async () => {
-        await writeFile(path.join(tempDir, 'readme.md'), '# Readme', 'utf-8');
+        await writeFile(safePath.join(tempDir, 'readme.md'), '# Readme', 'utf-8');
 
         const reg = new ResourceRegistry({ baseDir: tempDir });
-        const resource = await reg.addResource(path.join(tempDir, 'readme.md'));
+        const resource = await reg.addResource(safePath.join(tempDir, 'readme.md'));
 
         expect(resource.id).toBe('readme');
       });
@@ -696,8 +696,8 @@ tags: test
         await createDuplicateNamedFiles(tempDir);
 
         const reg = new ResourceRegistry({ baseDir: tempDir });
-        const r1 = await reg.addResource(path.join(tempDir, 'dir1', 'readme.md'));
-        const r2 = await reg.addResource(path.join(tempDir, 'dir2', 'readme.md'));
+        const r1 = await reg.addResource(safePath.join(tempDir, 'dir1', 'readme.md'));
+        const r2 = await reg.addResource(safePath.join(tempDir, 'dir2', 'readme.md'));
 
         expect(r1.id).toBe('dir1-readme');
         expect(r2.id).toBe('dir2-readme');
@@ -723,11 +723,11 @@ tags: test
       });
 
       it('should handle deeply nested paths', async () => {
-        await mkdir(path.join(tempDir, 'concepts', 'core'), { recursive: true });
-        await writeFile(path.join(tempDir, 'concepts', 'core', 'overview.md'), '# Overview', 'utf-8');
+        await mkdir(safePath.join(tempDir, 'concepts', 'core'), { recursive: true });
+        await writeFile(safePath.join(tempDir, 'concepts', 'core', 'overview.md'), '# Overview', 'utf-8');
 
         const reg = new ResourceRegistry({ baseDir: tempDir });
-        const resource = await reg.addResource(path.join(tempDir, 'concepts', 'core', 'overview.md'));
+        const resource = await reg.addResource(safePath.join(tempDir, 'concepts', 'core', 'overview.md'));
 
         expect(resource.id).toBe('concepts-core-overview');
       });
@@ -736,51 +736,51 @@ tags: test
     describe('frontmatter ID with idField', () => {
       it('should use frontmatter field as ID when idField is configured', async () => {
         await writeFile(
-          path.join(tempDir, 'doc.md'),
+          safePath.join(tempDir, 'doc.md'),
           '---\nslug: my-custom-id\n---\n# Doc',
           'utf-8'
         );
 
         const reg = new ResourceRegistry({ idField: 'slug' });
-        const resource = await reg.addResource(path.join(tempDir, 'doc.md'));
+        const resource = await reg.addResource(safePath.join(tempDir, 'doc.md'));
 
         expect(resource.id).toBe('my-custom-id');
       });
 
       it('should fall back to filename stem when frontmatter field is missing', async () => {
-        await writeFile(path.join(tempDir, 'doc.md'), '# No frontmatter', 'utf-8');
+        await writeFile(safePath.join(tempDir, 'doc.md'), '# No frontmatter', 'utf-8');
 
         const reg = new ResourceRegistry({ idField: 'slug' });
-        const resource = await reg.addResource(path.join(tempDir, 'doc.md'));
+        const resource = await reg.addResource(safePath.join(tempDir, 'doc.md'));
 
         expect(resource.id).toBe('doc');
       });
 
       it('should fall back to path-based ID when idField not in frontmatter but baseDir set', async () => {
-        await mkdir(path.join(tempDir, 'guides'), { recursive: true });
+        await mkdir(safePath.join(tempDir, 'guides'), { recursive: true });
         await writeFile(
-          path.join(tempDir, 'guides', 'intro.md'),
+          safePath.join(tempDir, 'guides', 'intro.md'),
           '---\ntitle: Intro\n---\n# Intro',
           'utf-8'
         );
 
         const reg = new ResourceRegistry({ baseDir: tempDir, idField: 'slug' });
-        const resource = await reg.addResource(path.join(tempDir, 'guides', 'intro.md'));
+        const resource = await reg.addResource(safePath.join(tempDir, 'guides', 'intro.md'));
 
         // No 'slug' in frontmatter → falls back to path-relative ID
         expect(resource.id).toBe('guides-intro');
       });
 
       it('should prioritize frontmatter ID over path-based ID', async () => {
-        await mkdir(path.join(tempDir, 'deep', 'path'), { recursive: true });
+        await mkdir(safePath.join(tempDir, 'deep', 'path'), { recursive: true });
         await writeFile(
-          path.join(tempDir, 'deep', 'path', 'doc.md'),
+          safePath.join(tempDir, 'deep', 'path', 'doc.md'),
           '---\nslug: custom\n---\n# Doc',
           'utf-8'
         );
 
         const reg = new ResourceRegistry({ baseDir: tempDir, idField: 'slug' });
-        const resource = await reg.addResource(path.join(tempDir, 'deep', 'path', 'doc.md'));
+        const resource = await reg.addResource(safePath.join(tempDir, 'deep', 'path', 'doc.md'));
 
         // Frontmatter takes priority over 'deep-path-doc'
         expect(resource.id).toBe('custom');
@@ -790,35 +790,35 @@ tags: test
     describe('duplicate detection', () => {
       it('should throw when two files produce the same frontmatter ID', async () => {
         await writeFile(
-          path.join(tempDir, 'a.md'),
+          safePath.join(tempDir, 'a.md'),
           '---\nslug: same-id\n---\n# A',
           'utf-8'
         );
         await writeFile(
-          path.join(tempDir, 'b.md'),
+          safePath.join(tempDir, 'b.md'),
           '---\nslug: same-id\n---\n# B',
           'utf-8'
         );
 
         const reg = new ResourceRegistry({ idField: 'slug' });
-        await reg.addResource(path.join(tempDir, 'a.md'));
+        await reg.addResource(safePath.join(tempDir, 'a.md'));
         await expect(
-          reg.addResource(path.join(tempDir, 'b.md'))
+          reg.addResource(safePath.join(tempDir, 'b.md'))
         ).rejects.toThrow(/Duplicate resource ID 'same-id'/);
       });
 
       it('should throw when frontmatter ID collides with path-based ID', async () => {
-        await writeFile(path.join(tempDir, 'first.md'), '# First', 'utf-8');
+        await writeFile(safePath.join(tempDir, 'first.md'), '# First', 'utf-8');
         await writeFile(
-          path.join(tempDir, 'second.md'),
+          safePath.join(tempDir, 'second.md'),
           '---\nslug: first\n---\n# Second',
           'utf-8'
         );
 
         const reg = new ResourceRegistry({ idField: 'slug' });
-        await reg.addResource(path.join(tempDir, 'first.md')); // ID = 'first'
+        await reg.addResource(safePath.join(tempDir, 'first.md')); // ID = 'first'
         await expect(
-          reg.addResource(path.join(tempDir, 'second.md')) // frontmatter slug = 'first'
+          reg.addResource(safePath.join(tempDir, 'second.md')) // frontmatter slug = 'first'
         ).rejects.toThrow(/Duplicate resource ID 'first'/);
       });
 
@@ -826,9 +826,9 @@ tags: test
         await createDuplicateNamedFiles(tempDir);
 
         const reg = new ResourceRegistry();
-        await reg.addResource(path.join(tempDir, 'dir1', 'readme.md'));
+        await reg.addResource(safePath.join(tempDir, 'dir1', 'readme.md'));
         await expect(
-          reg.addResource(path.join(tempDir, 'dir2', 'readme.md'))
+          reg.addResource(safePath.join(tempDir, 'dir2', 'readme.md'))
         ).rejects.toThrow(/Duplicate resource ID 'readme'/);
       });
 
@@ -862,8 +862,8 @@ tags: test
         const reg = new ResourceRegistry();
         await expect(
           reg.addResources([
-            path.join(tempDir, 'dir1', 'readme.md'),
-            path.join(tempDir, 'dir2', 'readme.md'),
+            safePath.join(tempDir, 'dir1', 'readme.md'),
+            safePath.join(tempDir, 'dir2', 'readme.md'),
           ])
         ).rejects.toThrow(/Duplicate resource ID 'readme'/);
       });

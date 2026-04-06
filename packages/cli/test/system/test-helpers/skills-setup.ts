@@ -7,9 +7,9 @@
 
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import { join } from 'node:path';
 
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
 
 import type { CliResult } from './cli-runner.js';
@@ -34,11 +34,11 @@ export function setupInstallTestSuite(testPrefix: string): {
     tempDir: '',
     projectDir: '',
     skillsDir: '',
-    binPath: join(process.cwd(), 'packages', 'cli', 'dist', 'bin.js'),
+    binPath: safePath.join(process.cwd(), 'packages', 'cli', 'dist', 'bin.js'),
     beforeEach: () => {
       suite.tempDir = createTestTempDir(testPrefix);
-      suite.projectDir = join(suite.tempDir, 'project');
-      suite.skillsDir = join(suite.projectDir, '.claude', 'skills');
+      suite.projectDir = safePath.join(suite.tempDir, 'project');
+      suite.skillsDir = safePath.join(suite.projectDir, '.claude', 'skills');
       fs.mkdirSync(suite.skillsDir, { recursive: true });
     },
     afterEach: () => {
@@ -87,11 +87,11 @@ export function setupDevTestProject(
   name: string,
   skills: Array<{ name: string; built: boolean }>
 ): string {
-  const projectDir = join(baseDir, name);
+  const projectDir = safePath.join(baseDir, name);
   mkdirSyncReal(projectDir, { recursive: true });
 
   fs.writeFileSync(
-    join(projectDir, 'package.json'),
+    safePath.join(projectDir, 'package.json'),
     JSON.stringify({
       name: '@test/my-package',
       version: '1.0.0',
@@ -101,9 +101,9 @@ export function setupDevTestProject(
 
   for (const skill of skills) {
     if (skill.built) {
-      const skillDir = join(projectDir, 'dist', 'skills', skill.name);
+      const skillDir = safePath.join(projectDir, 'dist', 'skills', skill.name);
       mkdirSyncReal(skillDir, { recursive: true });
-      fs.writeFileSync(join(skillDir, 'SKILL.md'), `# ${skill.name}\nTest skill content`);
+      fs.writeFileSync(safePath.join(skillDir, 'SKILL.md'), `# ${skill.name}\nTest skill content`);
     }
   }
 
@@ -114,7 +114,7 @@ export function setupDevTestProject(
  * Create an installed skill directory (non-symlink) for uninstall testing
  */
 export function createInstalledSkillDir(skillsDir: string, skillName: string): void {
-  const skillPath = join(skillsDir, skillName);
+  const skillPath = safePath.join(skillsDir, skillName);
   mkdirSyncReal(skillPath, { recursive: true });
-  fs.writeFileSync(join(skillPath, 'SKILL.md'), `# ${skillName}\nTest skill content`);
+  fs.writeFileSync(safePath.join(skillPath, 'SKILL.md'), `# ${skillName}\nTest skill content`);
 }

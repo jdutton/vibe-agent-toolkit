@@ -1,10 +1,10 @@
  
 // Test file - paths are controlled by test code, not user input
 
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { mkdirSyncReal, safeExecSync } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { createTestTempDir, cleanupTestTempDir, createMockPackageJson } from '../test-helpers.js';
@@ -19,7 +19,7 @@ describe('validate-version', () => {
   beforeEach(() => {
     tempDir = createTestTempDir({ prefix: 'validate-version-' });
     // Resolve path relative to this test file: test/integration/ -> src/
-    validateVersionPath = join(__dirname, '../../src/validate-version.ts');
+    validateVersionPath = safePath.join(__dirname, '../../src/validate-version.ts');
   });
 
   afterEach(() => {
@@ -27,12 +27,12 @@ describe('validate-version', () => {
   });
 
   function setupPackages(versions: { pkg1: string; pkg2: string }): void {
-    const packagesDir = join(tempDir, 'packages');
+    const packagesDir = safePath.join(tempDir, 'packages');
     mkdirSyncReal(packagesDir, { recursive: true });
-    mkdirSyncReal(join(packagesDir, 'pkg1'), { recursive: true });
-    mkdirSyncReal(join(packagesDir, 'pkg2'), { recursive: true });
-    createMockPackageJson(join(packagesDir, 'pkg1'), { name: 'pkg1', version: versions.pkg1 });
-    createMockPackageJson(join(packagesDir, 'pkg2'), { name: 'pkg2', version: versions.pkg2 });
+    mkdirSyncReal(safePath.join(packagesDir, 'pkg1'), { recursive: true });
+    mkdirSyncReal(safePath.join(packagesDir, 'pkg2'), { recursive: true });
+    createMockPackageJson(safePath.join(packagesDir, 'pkg1'), { name: 'pkg1', version: versions.pkg1 });
+    createMockPackageJson(safePath.join(packagesDir, 'pkg2'), { name: 'pkg2', version: versions.pkg2 });
   }
 
   it('should pass when all packages have same version', () => {

@@ -7,8 +7,10 @@
  */
 
 import { existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 /**
  * Required help documentation files
@@ -28,13 +30,13 @@ const REQUIRED_HELP_FILES = [
  */
 export function validateHelpFiles(): void {
   const __dirname = dirname(fileURLToPath(import.meta.url));
-  const packageRoot = join(__dirname, '../..');
-  const docsDir = join(packageRoot, 'docs');
+  const packageRoot = safePath.join(__dirname, '../..');
+  const docsDir = safePath.join(packageRoot, 'docs');
 
   const missingFiles: string[] = [];
 
   for (const filename of REQUIRED_HELP_FILES) {
-    const helpPath = join(docsDir, filename);
+    const helpPath = safePath.join(docsDir, filename);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is constructed from known safe components
     if (!existsSync(helpPath)) {
       missingFiles.push(filename);

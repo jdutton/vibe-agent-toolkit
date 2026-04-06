@@ -1,6 +1,6 @@
 import os from 'node:os';
-import path from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -15,13 +15,13 @@ describe('scope-locations', () => {
   describe('SCOPE_LOCATIONS', () => {
     it('should define agent-skill user scope', () => {
       expect(SCOPE_LOCATIONS[AGENT_SKILL]?.user).toBe(
-        path.join(os.homedir(), '.claude', 'skills')
+        safePath.join(os.homedir(), '.claude', 'skills')
       );
     });
 
     it('should define agent-skill project scope', () => {
       expect(SCOPE_LOCATIONS[AGENT_SKILL]?.project).toBe(
-        path.join(process.cwd(), '.claude', 'skills')
+        safePath.join(process.cwd(), '.claude', 'skills')
       );
     });
 
@@ -45,12 +45,12 @@ describe('scope-locations', () => {
   describe('validateAndGetScopeLocation', () => {
     it('should return user scope location for agent-skill', () => {
       const location = validateAndGetScopeLocation(AGENT_SKILL, 'user');
-      expect(location).toBe(path.join(os.homedir(), '.claude', 'skills'));
+      expect(location).toBe(safePath.join(os.homedir(), '.claude', 'skills'));
     });
 
     it('should return project scope location for agent-skill', () => {
       const location = validateAndGetScopeLocation(AGENT_SKILL, 'project');
-      expect(location).toBe(path.join(process.cwd(), '.claude', 'skills'));
+      expect(location).toBe(safePath.join(process.cwd(), '.claude', 'skills'));
     });
 
     it('should throw error for invalid scope', () => {

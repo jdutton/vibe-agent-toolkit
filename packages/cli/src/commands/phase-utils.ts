@@ -3,7 +3,8 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { join, resolve } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { createLogger } from '../utils/logger.js';
 
@@ -25,7 +26,7 @@ export function resolveBinPath(): string {
   // Use bin.js directly (not the vat.js wrapper) so phase subprocesses always
   // run the same binary that is currently executing, regardless of cwd or
   // context detection (which would pick up the adopter project's local install).
-  return resolve(join(import.meta.dirname, '../bin.js'));
+  return safePath.resolve(safePath.join(import.meta.dirname, '../bin.js'));
 }
 
 export interface PhaseContext {

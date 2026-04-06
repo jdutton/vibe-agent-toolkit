@@ -9,13 +9,14 @@
 
 import { existsSync, lstatSync } from 'node:fs';
 import { cp, mkdir, rm } from 'node:fs/promises';
-import { basename, join, resolve } from 'node:path';
+import { basename } from 'node:path';
 
 import {
   checkSettingsCompatibility,
   getClaudeUserPaths,
   readEffectiveSettings,
 } from '@vibe-agent-toolkit/claude-marketplace';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../utils/command-error.js';
@@ -65,12 +66,12 @@ export interface InstallCommandOptions {
  * Throws a descriptive error if no recognised structure is found.
  */
 export function detectResourceType(sourcePath: string): ResourceType {
-  const claudePluginDir = join(sourcePath, CLAUDE_PLUGIN_DIR);
+  const claudePluginDir = safePath.join(sourcePath, CLAUDE_PLUGIN_DIR);
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path constructed from user-provided CLI argument
   if (existsSync(claudePluginDir)) {
-    const marketplaceJson = join(claudePluginDir, 'marketplace.json');
-    const pluginJson = join(claudePluginDir, 'plugin.json');
+    const marketplaceJson = safePath.join(claudePluginDir, 'marketplace.json');
+    const pluginJson = safePath.join(claudePluginDir, 'plugin.json');
 
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path constructed from validated directory
     if (existsSync(marketplaceJson)) {
@@ -83,7 +84,7 @@ export function detectResourceType(sourcePath: string): ResourceType {
     }
   }
 
-  const skillMd = join(sourcePath, 'SKILL.md');
+  const skillMd = safePath.join(sourcePath, 'SKILL.md');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path constructed from user-provided CLI argument
   if (existsSync(skillMd)) {
     return RT_AGENT_SKILL;
@@ -124,8 +125,8 @@ function resolveInstallDir(type: ResourceType, options: InstallCommandOptions): 
  */
 const TYPE_VALIDATION_PATHS: Record<ResourceType, string> = {
   [RT_AGENT_SKILL]: 'SKILL.md',
-  [RT_CLAUDE_PLUGIN]: join(CLAUDE_PLUGIN_DIR, 'plugin.json'),
-  [RT_CLAUDE_MARKETPLACE]: join(CLAUDE_PLUGIN_DIR, 'marketplace.json'),
+  [RT_CLAUDE_PLUGIN]: safePath.join(CLAUDE_PLUGIN_DIR, 'plugin.json'),
+  [RT_CLAUDE_MARKETPLACE]: safePath.join(CLAUDE_PLUGIN_DIR, 'marketplace.json'),
 };
 
 /**
@@ -135,7 +136,7 @@ const TYPE_VALIDATION_PATHS: Record<ResourceType, string> = {
  */
 function validateResourceStructure(sourcePath: string, type: ResourceType): void {
   const expectedRelPath = TYPE_VALIDATION_PATHS[type];
-  const expectedPath = join(sourcePath, expectedRelPath);
+  const expectedPath = safePath.join(sourcePath, expectedRelPath);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path constructed from CLI argument
   if (!existsSync(expectedPath)) {
     throw new InstallError(
@@ -153,7 +154,7 @@ async function prepareInstallPath(
   resourceName: string,
   options: InstallCommandOptions
 ): Promise<{ installPath: string; alreadyExists: boolean }> {
-  const installPath = join(installDir, resourceName);
+  const installPath = safePath.join(installDir, resourceName);
 
   // Check whether target already exists (lstatSync detects broken symlinks too)
   let alreadyExists = false;
@@ -267,7 +268,7 @@ async function installCommand(
   const startTime = Date.now();
 
   try {
-    const sourcePath = resolve(source);
+    const sourcePath = safePath.resolve(source);
 
     // Validate source path exists
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- User-provided CLI argument

@@ -248,3 +248,41 @@ export function getRelativePath(from: string, to: string): string {
 export function toForwardSlash(p: string): string {
   return p.replaceAll('\\', '/');
 }
+
+/**
+ * Cross-platform safe path operations.
+ *
+ * Wraps Node's `path.join()`, `path.resolve()`, and `path.relative()` to always
+ * return forward-slash paths. On Windows, the native `path.*` functions return
+ * backslashes, which causes bugs when paths are used as Map keys, compared as
+ * strings, or matched with glob patterns.
+ *
+ * **Use these instead of importing from `node:path` directly.**
+ * ESLint rules enforce this — see `no-path-join`, `no-path-resolve`, `no-path-relative`.
+ *
+ * @example
+ * ```typescript
+ * import { safePath } from '@vibe-agent-toolkit/utils';
+ *
+ * // Always forward slashes, even on Windows
+ * safePath.join('C:\\Users', 'docs', 'file.md')   // → 'C:/Users/docs/file.md'
+ * safePath.resolve('/project', './docs')            // → '/project/docs'
+ * safePath.relative('/project/docs', '/project')    // → '..'
+ * ```
+ */
+export const safePath = {
+  /** Like `path.join()` but always returns forward slashes. */
+  join(...paths: string[]): string {
+    return toForwardSlash(path.join(...paths));
+  },
+
+  /** Like `path.resolve()` but always returns forward slashes. */
+  resolve(...paths: string[]): string {
+    return toForwardSlash(path.resolve(...paths));
+  },
+
+  /** Like `path.relative()` but always returns forward slashes. */
+  relative(from: string, to: string): string {
+    return toForwardSlash(path.relative(from, to));
+  },
+} as const;

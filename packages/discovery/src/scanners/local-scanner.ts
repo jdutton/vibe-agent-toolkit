@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { crawlDirectory, gitCheckIgnoredBatch } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, gitCheckIgnoredBatch, safePath } from '@vibe-agent-toolkit/utils';
 
 import { detectFormat } from '../detectors/format-detector.js';
 import { createPatternFilter } from '../filters/pattern-filter.js';
@@ -28,7 +28,7 @@ export async function scan(options: ScanOptions): Promise<ScanSummary> {
   const { path: targetPath, recursive = false, include, exclude } = options;
 
   // Resolve to absolute path
-  const absolutePath = path.resolve(targetPath);
+  const absolutePath = safePath.resolve(targetPath);
 
   // Check if target exists
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- absolutePath is validated user input
@@ -62,7 +62,7 @@ export async function scan(options: ScanOptions): Promise<ScanSummary> {
       // Non-recursive: only immediate children
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- absolutePath validated above
       filePaths = fs.readdirSync(absolutePath)
-        .map(name => path.join(absolutePath, name))
+        .map(name => safePath.join(absolutePath, name))
         // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from validated directory
         .filter(p => fs.statSync(p).isFile());
     }
@@ -83,7 +83,7 @@ export async function scan(options: ScanOptions): Promise<ScanSummary> {
   const filteredFiles: Array<{ path: string; relativePath: string; format: DetectedFormat }> = [];
 
   for (const filePath of filePaths) {
-    const relativePath = path.relative(scanRoot, filePath);
+    const relativePath = safePath.relative(scanRoot, filePath);
 
     // Apply pattern filter (include patterns, and exclude for non-recursive)
     if (!patternFilter(relativePath)) {

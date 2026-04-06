@@ -2,7 +2,8 @@
  * Helper functions for skill commands
  */
 
-import { resolve } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { createLogger, type Logger } from '../../utils/logger.js';
 
@@ -107,7 +108,7 @@ export function setupCommandContext(
 ): CommandContext {
   const logger = createLogger(debug ? { debug: true } : {});
   const startTime = Date.now();
-  const cwd = pathArg ? resolve(pathArg) : process.cwd();
+  const cwd = pathArg ? safePath.resolve(pathArg) : process.cwd();
 
   return { logger, cwd, startTime };
 }

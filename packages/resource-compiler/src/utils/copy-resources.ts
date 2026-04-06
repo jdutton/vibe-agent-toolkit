@@ -4,9 +4,9 @@
  */
 
 import { cpSync, existsSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 
 export interface CopyResourcesOptions {
   /**
@@ -97,7 +97,7 @@ export function createPostBuildScript(options: {
   try {
     copyResources({
       sourceDir: generatedDir,
-      targetDir: join(distDir, generatedDir),
+      targetDir: safePath.join(distDir, generatedDir),
       verbose,
     });
   } catch (error) {

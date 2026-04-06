@@ -1,6 +1,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- File paths are validated before use */
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { MarketplaceManifestSchema } from '../schemas/marketplace-manifest.js';
 
@@ -21,7 +22,7 @@ const MARKETPLACE_TYPE = 'marketplace' as const;
  */
 export async function validateMarketplace(marketplacePath: string): Promise<ValidationResult> {
 	const issues: ValidationIssue[] = [];
-	const marketplaceJsonPath = join(marketplacePath, '.claude-plugin', 'marketplace.json');
+	const marketplaceJsonPath = safePath.join(marketplacePath, '.claude-plugin', 'marketplace.json');
 
 	// Check marketplace.json exists
 	if (!existsSync(marketplaceJsonPath)) {

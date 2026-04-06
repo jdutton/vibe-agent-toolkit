@@ -1,9 +1,11 @@
 import { type SpawnSyncReturns, spawnSync } from 'node:child_process';
-import { dirname, resolve } from 'node:path';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
-export const binPath = resolve(__dirname, '../dist/bin.js');
+export const binPath = safePath.resolve(__dirname, '../dist/bin.js');
 
 /**
  * Execute a CLI command using the built bin.js

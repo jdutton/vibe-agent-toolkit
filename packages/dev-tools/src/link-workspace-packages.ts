@@ -21,17 +21,18 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- All paths derived from curated WORKSPACE_PACKAGES list */
 
 import { existsSync, mkdirSync, symlinkSync, unlinkSync, lstatSync } from 'node:fs';
-import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
+
 const __filename = fileURLToPath(import.meta.url);
-const __dirname = resolve(__filename, '..');
+const __dirname = safePath.resolve(__filename, '..');
 
 // Find repo root (3 levels up from packages/dev-tools/src/)
-const REPO_ROOT = resolve(__dirname, '../../..');
+const REPO_ROOT = safePath.resolve(__dirname, '../../..');
 const WORKSPACE_SCOPE = '@vibe-agent-toolkit';
-const PACKAGES_DIR = join(REPO_ROOT, 'packages');
-const NODE_MODULES_DIR = join(REPO_ROOT, 'node_modules');
+const PACKAGES_DIR = safePath.join(REPO_ROOT, 'packages');
+const NODE_MODULES_DIR = safePath.join(REPO_ROOT, 'node_modules');
 
 // All workspace packages that need Node.js-compatible symlinks
 const WORKSPACE_PACKAGES = [
@@ -82,8 +83,8 @@ function removeExistingSymlink(linkPath: string, packageName: string): void {
 }
 
 function linkPackage(packageName: string, scopeDir: string): boolean {
-  const packageDir = join(PACKAGES_DIR, packageName);
-  const linkPath = join(scopeDir, packageName);
+  const packageDir = safePath.join(PACKAGES_DIR, packageName);
+  const linkPath = safePath.join(scopeDir, packageName);
 
   if (!existsSync(packageDir)) {
     console.warn(`⚠️  Package not found: ${packageName} (skipping)`);
@@ -92,7 +93,7 @@ function linkPackage(packageName: string, scopeDir: string): boolean {
 
   removeExistingSymlink(linkPath, packageName);
 
-  const relativePath = join('..', '..', 'packages', packageName);
+  const relativePath = safePath.join('..', '..', 'packages', packageName);
   try {
     symlinkSync(relativePath, linkPath, 'dir');
     return true;
@@ -103,7 +104,7 @@ function linkPackage(packageName: string, scopeDir: string): boolean {
 }
 
 function main() {
-  const scopeDir = join(NODE_MODULES_DIR, WORKSPACE_SCOPE);
+  const scopeDir = safePath.join(NODE_MODULES_DIR, WORKSPACE_SCOPE);
   ensureScopeDirectory(scopeDir);
 
   let linked = 0;

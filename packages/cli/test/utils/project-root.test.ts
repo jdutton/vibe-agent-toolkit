@@ -1,7 +1,6 @@
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 
-import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { findProjectRoot } from '../../src/utils/project-root.js';
@@ -20,14 +19,14 @@ describe('findProjectRoot', () => {
 
   // Helper to create subdirectory
   function createSubDir(): string {
-    const subDir = path.join(tempDir, 'sub', 'dir');
+    const subDir = safePath.join(tempDir, 'sub', 'dir');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test setup with safe tempDir
     fs.mkdirSync(subDir, { recursive: true });
     return subDir;
   }
 
   it('should find project root with .git directory', () => {
-    const gitDir = path.join(tempDir, '.git');
+    const gitDir = safePath.join(tempDir, '.git');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test setup with safe tempDir
     fs.mkdirSync(gitDir);
     const subDir = createSubDir();
@@ -37,7 +36,7 @@ describe('findProjectRoot', () => {
   });
 
   it('should find project root with config file', () => {
-    const configFile = path.join(tempDir, 'vibe-agent-toolkit.config.yaml');
+    const configFile = safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test setup with safe tempDir
     fs.writeFileSync(configFile, '');
     const subDir = createSubDir();
@@ -54,7 +53,7 @@ describe('findProjectRoot', () => {
   });
 
   it('should return current directory if it is the root', () => {
-    const gitDir = path.join(tempDir, '.git');
+    const gitDir = safePath.join(tempDir, '.git');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test setup with safe tempDir
     fs.mkdirSync(gitDir);
 

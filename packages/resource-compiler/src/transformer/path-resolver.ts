@@ -4,9 +4,9 @@
  */
 
 import { existsSync } from 'node:fs';
-import { dirname, resolve, join, isAbsolute } from 'node:path';
+import { dirname,   isAbsolute } from 'node:path';
 
-import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import ts from 'typescript';
 
 /**
@@ -58,7 +58,7 @@ export function resolveMarkdownPath(
  */
 function resolveRelativePath(modulePath: string, containingFile: string): string | null {
   const containingDir = dirname(containingFile);
-  const absolutePath = resolve(containingDir, modulePath);
+  const absolutePath = safePath.resolve(containingDir, modulePath);
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated path from module resolution
   return existsSync(absolutePath) ? absolutePath : null;
@@ -105,7 +105,7 @@ function searchNodeModules(modulePath: string, containingFile: string): string |
 
   // Walk up the directory tree looking for node_modules
   while (true) {
-    const nodeModulesPath = join(currentDir, 'node_modules', modulePath);
+    const nodeModulesPath = safePath.join(currentDir, 'node_modules', modulePath);
 
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated path from module resolution
     if (existsSync(nodeModulesPath)) {

@@ -2,7 +2,7 @@ import path from 'node:path';
 
 import { describe, expect, it } from 'vitest';
 
-import { getRelativePath, isAbsolutePath, normalizePath, toAbsolutePath, toForwardSlash } from '../src/path-utils.js';
+import { getRelativePath, isAbsolutePath, normalizePath, safePath, toAbsolutePath, toForwardSlash } from '../src/path-utils.js';
 
 describe('path-utils', () => {
   const TEST_PROJECT_PATH = '/project';
@@ -17,12 +17,12 @@ describe('path-utils', () => {
 
     it('should resolve relative path with baseDir', () => {
       const result = normalizePath(TEST_DOCS_README, TEST_PROJECT_PATH);
-      expect(result).toBe(path.resolve(TEST_PROJECT_PATH, TEST_DOCS_README));
+      expect(result).toBe(safePath.resolve(TEST_PROJECT_PATH, TEST_DOCS_README));
     });
 
     it('should resolve parent directory references', () => {
       const result = normalizePath('./docs/../README.md', TEST_PROJECT_PATH);
-      expect(result).toBe(path.resolve(TEST_PROJECT_PATH, 'README.md'));
+      expect(result).toBe(safePath.resolve(TEST_PROJECT_PATH, 'README.md'));
     });
 
     it('should remove trailing slashes', () => {
@@ -31,7 +31,7 @@ describe('path-utils', () => {
     });
 
     it('should handle absolute paths without baseDir', () => {
-      const absolutePath = path.resolve(`${TEST_PROJECT_PATH}/docs/README.md`);
+      const absolutePath = safePath.resolve(`${TEST_PROJECT_PATH}/docs/README.md`);
       const result = normalizePath(absolutePath);
       expect(result).toBe(absolutePath);
     });
@@ -77,7 +77,7 @@ describe('path-utils', () => {
   describe('toAbsolutePath', () => {
     it('should convert relative path to absolute', () => {
       const result = toAbsolutePath(TEST_DOCS_README, TEST_PROJECT_PATH);
-      expect(result).toBe(path.resolve(TEST_PROJECT_PATH, TEST_DOCS_README));
+      expect(result).toBe(safePath.resolve(TEST_PROJECT_PATH, TEST_DOCS_README));
       expect(path.isAbsolute(result)).toBe(true);
     });
 
@@ -89,18 +89,19 @@ describe('path-utils', () => {
     });
 
     it('should resolve parent directory references', () => {
+      // eslint-disable-next-line sonarjs/no-duplicate-string -- test-specific path fragment repeated across related test cases
       const result = toAbsolutePath('../README.md', `${TEST_PROJECT_PATH}/docs`);
-      expect(result).toBe(path.resolve(`${TEST_PROJECT_PATH}/docs`, '../README.md'));
+      expect(result).toBe(safePath.resolve(`${TEST_PROJECT_PATH}/docs`, '../README.md'));
     });
 
     it('should handle current directory reference', () => {
       const result = toAbsolutePath('./file.md', TEST_PROJECT_PATH);
-      expect(result).toBe(path.resolve(TEST_PROJECT_PATH, './file.md'));
+      expect(result).toBe(safePath.resolve(TEST_PROJECT_PATH, './file.md'));
     });
 
     it('should resolve deep relative paths', () => {
       const result = toAbsolutePath('../../root/file.md', `${TEST_PROJECT_PATH}/a/b`);
-      expect(result).toBe(path.resolve(`${TEST_PROJECT_PATH}/a/b`, '../../root/file.md'));
+      expect(result).toBe(safePath.resolve(`${TEST_PROJECT_PATH}/a/b`, '../../root/file.md'));
     });
   });
 
@@ -112,17 +113,17 @@ describe('path-utils', () => {
 
     it('should get relative path to parent directory', () => {
       const result = getRelativePath(`${TEST_PROJECT_PATH}/docs/guide.md`, `${TEST_PROJECT_PATH}/README.md`);
-      expect(result).toBe(path.join('..', 'README.md'));
+      expect(result).toBe(safePath.join('..', 'README.md'));
     });
 
     it('should get relative path to subdirectory', () => {
       const result = getRelativePath(`${TEST_PROJECT_PATH}/README.md`, `${TEST_PROJECT_PATH}/docs/api.md`);
-      expect(result).toBe(path.join('docs', 'api.md'));
+      expect(result).toBe(safePath.join('docs', 'api.md'));
     });
 
     it('should get relative path across directories', () => {
       const result = getRelativePath(`${TEST_PROJECT_PATH}/docs/guide.md`, `${TEST_PROJECT_PATH}/examples/demo.md`);
-      expect(result).toBe(path.join('..', 'examples', 'demo.md'));
+      expect(result).toBe(safePath.join('..', 'examples', 'demo.md'));
     });
 
     it('should handle deep nesting', () => {
@@ -131,7 +132,7 @@ describe('path-utils', () => {
         '/project/x/y/z/target.md'
       );
       // Should go up 3 levels (c, b, a) then down (x, y, z)
-      expect(result).toBe(path.join('..', '..', '..', 'x', 'y', 'z', 'target.md'));
+      expect(result).toBe(safePath.join('..', '..', '..', 'x', 'y', 'z', 'target.md'));
     });
 
     it('should return file name when paths are in same directory', () => {
@@ -142,7 +143,7 @@ describe('path-utils', () => {
     it('should handle paths with different depths', () => {
       const result = getRelativePath('/a/b/c.md', '/x.md');
       // From /a/b/ to /x.md is ../../x.md
-      expect(result).toBe(path.join('..', '..', 'x.md'));
+      expect(result).toBe(safePath.join('..', '..', 'x.md'));
     });
 
     // Cross-platform test
@@ -202,6 +203,52 @@ describe('path-utils', () => {
       const path1 = toAbsolutePath('./docs/../README.md', '/project');
       const path2 = toAbsolutePath('./README.md', '/project');
       expect(path1).toBe(path2);
+    });
+  });
+
+  describe('safePath', () => {
+    describe('safePath.join', () => {
+      // eslint-disable-next-line sonarjs/no-duplicate-string -- expected output string repeated across related Windows path test cases
+      it('should return forward slashes on all platforms', () => {
+        const result = safePath.join(String.raw`C:\Users`, 'docs', 'file.md');
+        expect(result).not.toContain('\\');
+        expect(result).toBe('C:/Users/docs/file.md');
+      });
+
+      it('should handle already-forward paths', () => {
+        const result = safePath.join('/project', 'docs', 'file.md');
+        expect(result).toBe('/project/docs/file.md');
+      });
+
+      it('should handle single argument', () => {
+        const result = safePath.join('docs');
+        expect(result).toBe('docs');
+      });
+    });
+
+    describe('safePath.resolve', () => {
+      it('should return forward slashes on all platforms', () => {
+        const result = safePath.resolve('/project', 'docs', 'file.md');
+        expect(result).not.toContain('\\');
+      });
+
+      it('should produce absolute paths', () => {
+        const result = safePath.resolve('docs', 'file.md');
+        expect(result).toMatch(/^\//); // Unix absolute (CI runs on Ubuntu/Mac)
+      });
+    });
+
+    describe('safePath.relative', () => {
+      it('should return forward slashes on all platforms', () => {
+        const result = safePath.relative('/project/docs', '/project/README.md');
+        expect(result).not.toContain('\\');
+        expect(result).toBe('../README.md');
+      });
+
+      it('should handle same-directory paths', () => {
+        const result = safePath.relative('/project/docs', '/project/docs/file.md');
+        expect(result).toBe('file.md');
+      });
     });
   });
 });

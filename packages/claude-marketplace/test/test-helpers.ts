@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach } from 'vitest';
 
 import type { ClaudeUserPaths } from '../src/paths/claude-paths.js';
@@ -26,7 +26,7 @@ export interface SetupPluginTestPathsOptions {
 export function setupPluginTestPaths(opts: SetupPluginTestPathsOptions = {}): { getPaths: () => ClaudeUserPaths } {
   let tempDir = '';
   beforeEach(() => {
-    tempDir = mkdtempSync(join(normalizedTmpdir(), 'vat-plugin-test-'));
+    tempDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-plugin-test-'));
     const paths = buildTestPaths(tempDir);
     mkdirSyncReal(paths.marketplacesDir, { recursive: true });
     mkdirSyncReal(paths.pluginsCacheDir, { recursive: true });
@@ -45,18 +45,18 @@ export function setupPluginTestPaths(opts: SetupPluginTestPathsOptions = {}): { 
  * Uses a flat structure: base/.claude/plugins/... to avoid duplicating getClaudeUserPaths.
  */
 export function buildTestPaths(base: string): ClaudeUserPaths {
-  const root = join(base, '.claude');
-  const plugins = join(root, 'plugins');
+  const root = safePath.join(base, '.claude');
+  const plugins = safePath.join(root, 'plugins');
   return {
     claudeDir: root,
     pluginsDir: plugins,
-    skillsDir: join(root, 'skills'),
-    marketplacesDir: join(plugins, 'marketplaces'),
-    pluginsCacheDir: join(plugins, 'cache'),
-    knownMarketplacesPath: join(plugins, 'known_marketplaces.json'),
-    installedPluginsPath: join(plugins, 'installed_plugins.json'),
-    userSettingsPath: join(root, 'settings.json'),
-    userDotJsonPath: join(base, '.claude.json'),
+    skillsDir: safePath.join(root, 'skills'),
+    marketplacesDir: safePath.join(plugins, 'marketplaces'),
+    pluginsCacheDir: safePath.join(plugins, 'cache'),
+    knownMarketplacesPath: safePath.join(plugins, 'known_marketplaces.json'),
+    installedPluginsPath: safePath.join(plugins, 'installed_plugins.json'),
+    userSettingsPath: safePath.join(root, 'settings.json'),
+    userDotJsonPath: safePath.join(base, '.claude.json'),
   };
 }
 

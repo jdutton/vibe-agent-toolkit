@@ -2,14 +2,14 @@
  * Tests for TypeScript transformer
  */
 
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import ts from 'typescript';
 import { describe, it, expect } from 'vitest';
 
 import { createTransformer } from '../../src/transformer/transformer.js';
 
-const FIXTURES_DIR = join(import.meta.dirname, '../transformer-fixtures');
+const FIXTURES_DIR = safePath.join(import.meta.dirname, '../transformer-fixtures');
 const IMPORT_SAMPLE_CODE = `import * as Sample from './sample.md';`;
 const TEST_TS_FILE = 'test.ts';
 const CONST_SAMPLE = 'const Sample';
@@ -44,7 +44,7 @@ function transformCode(sourceCode: string, fileName: string): string {
 describe('createTransformer', () => {
   describe('namespace imports', () => {
     it('should transform namespace import to const declaration', () => {
-      const fileName = join(FIXTURES_DIR, TEST_TS_FILE);
+      const fileName = safePath.join(FIXTURES_DIR, TEST_TS_FILE);
 
       const result = transformCode(IMPORT_SAMPLE_CODE, fileName);
 
@@ -57,7 +57,7 @@ describe('createTransformer', () => {
 
     it('should preserve identifier name', () => {
       const code = `import * as MyResource from './sample.md';`;
-      const fileName = join(FIXTURES_DIR, TEST_TS_FILE);
+      const fileName = safePath.join(FIXTURES_DIR, TEST_TS_FILE);
 
       const result = transformCode(code, fileName);
 
@@ -69,7 +69,7 @@ describe('createTransformer', () => {
   describe('default imports', () => {
     it('should transform default import to const declaration', () => {
       const code = `import Sample from './sample.md';`;
-      const fileName = join(FIXTURES_DIR, TEST_TS_FILE);
+      const fileName = safePath.join(FIXTURES_DIR, TEST_TS_FILE);
 
       const result = transformCode(code, fileName);
 
@@ -85,7 +85,7 @@ describe('createTransformer', () => {
         import { readFileSync } from 'node:fs';
         import * as Empty from './empty.md';
       `;
-      const fileName = join(FIXTURES_DIR, TEST_TS_FILE);
+      const fileName = safePath.join(FIXTURES_DIR, TEST_TS_FILE);
 
       const result = transformCode(code, fileName);
 
@@ -102,7 +102,7 @@ describe('createTransformer', () => {
         import { readFileSync } from 'node:fs';
         const x = 5;
       `;
-      const fileName = join(FIXTURES_DIR, TEST_TS_FILE);
+      const fileName = safePath.join(FIXTURES_DIR, TEST_TS_FILE);
 
       const result = transformCode(code, fileName);
 
@@ -121,7 +121,7 @@ describe('createTransformer', () => {
           return Sample.meta.title;
         }
       `;
-      const fileName = join(FIXTURES_DIR, TEST_TS_FILE);
+      const fileName = safePath.join(FIXTURES_DIR, TEST_TS_FILE);
 
       const result = transformCode(code, fileName);
 
@@ -135,7 +135,7 @@ describe('createTransformer', () => {
         import * as Sample from './sample.md';
         /* Block comment */
       `;
-      const fileName = join(FIXTURES_DIR, TEST_TS_FILE);
+      const fileName = safePath.join(FIXTURES_DIR, TEST_TS_FILE);
 
       const result = transformCode(code, fileName);
 
@@ -147,7 +147,7 @@ describe('createTransformer', () => {
   describe('error handling', () => {
     it('should handle non-existent .md file gracefully', () => {
       const code = `import * as Missing from './nonexistent.md';`;
-      const fileName = join(FIXTURES_DIR, TEST_TS_FILE);
+      const fileName = safePath.join(FIXTURES_DIR, TEST_TS_FILE);
 
       // Should not throw, but should preserve original import
       const result = transformCode(code, fileName);
@@ -159,7 +159,7 @@ describe('createTransformer', () => {
 
   describe('resource content', () => {
     it('should include frontmatter in transformed output', () => {
-      const fileName = join(FIXTURES_DIR, TEST_TS_FILE);
+      const fileName = safePath.join(FIXTURES_DIR, TEST_TS_FILE);
 
       const result = transformCode(IMPORT_SAMPLE_CODE, fileName);
 
@@ -169,7 +169,7 @@ describe('createTransformer', () => {
     });
 
     it('should include markdown content', () => {
-      const fileName = join(FIXTURES_DIR, TEST_TS_FILE);
+      const fileName = safePath.join(FIXTURES_DIR, TEST_TS_FILE);
 
       const result = transformCode(IMPORT_SAMPLE_CODE, fileName);
 
@@ -177,7 +177,7 @@ describe('createTransformer', () => {
     });
 
     it('should include fragments', () => {
-      const fileName = join(FIXTURES_DIR, TEST_TS_FILE);
+      const fileName = safePath.join(FIXTURES_DIR, TEST_TS_FILE);
 
       const result = transformCode(IMPORT_SAMPLE_CODE, fileName);
 

@@ -3,7 +3,8 @@
 // File paths derived from projectRoot parameter (controlled, not user input)
 
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { log } from './common.js';
 
@@ -14,7 +15,7 @@ interface PackageInfo {
 }
 
 function readPackageVersion(packagePath: string): PackageInfo | null {
-  const packageJsonPath = join(packagePath, 'package.json');
+  const packageJsonPath = safePath.join(packagePath, 'package.json');
   if (!existsSync(packageJsonPath)) {
     return null;
   }
@@ -36,7 +37,7 @@ function readPackageVersion(packagePath: string): PackageInfo | null {
 }
 
 function validateVersion(projectRoot: string): void {
-  const packagesDir = join(projectRoot, 'packages');
+  const packagesDir = safePath.join(projectRoot, 'packages');
 
   if (!existsSync(packagesDir)) {
     log('✗ No packages directory found', 'red');
@@ -47,7 +48,7 @@ function validateVersion(projectRoot: string): void {
   const dirs = readdirSync(packagesDir);
 
   for (const dir of dirs) {
-    const packagePath = join(packagesDir, dir);
+    const packagePath = safePath.join(packagesDir, dir);
     const info = readPackageVersion(packagePath);
     if (info && !info.name.includes('dev-tools')) {
       packages.push(info);

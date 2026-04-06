@@ -8,9 +8,9 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { cp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
 import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry } from '@vibe-agent-toolkit/resources';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../../../utils/command-error.js';
@@ -85,7 +85,7 @@ Example:
  * Discover available skill names by listing directories in dist/skills/.
  */
 async function discoverBuiltSkills(configDir: string): Promise<string[]> {
-  const skillsDir = join(configDir, 'dist', 'skills');
+  const skillsDir = safePath.join(configDir, 'dist', 'skills');
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from config
   if (!existsSync(skillsDir)) {
@@ -117,7 +117,7 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
     // caches by version instead of "unknown/"
     let packageVersion: string | undefined;
     try {
-      const pkgPath = join(configDir, 'package.json');
+      const pkgPath = safePath.join(configDir, 'package.json');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- configDir from loadClaudeProjectConfig
       const pkgRaw = readFileSync(pkgPath, 'utf-8');
       const pkg = JSON.parse(pkgRaw) as { version?: string };
@@ -206,10 +206,10 @@ async function copyDistributionFiles(
 
   for (const file of ['LICENSE', 'README.md', 'CHANGELOG.md']) {
     const override = overrides[file];
-    const srcPath = override ? join(configDir, override) : join(configDir, file);
+    const srcPath = override ? safePath.join(configDir, override) : safePath.join(configDir, file);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- file is from static list or config
     if (existsSync(srcPath)) {
-      await cp(srcPath, join(marketplaceDir, file));
+      await cp(srcPath, safePath.join(marketplaceDir, file));
       if (override) {
         logger.info(`   ${file} (from publish.${file === 'README.md' ? 'readme' : 'changelog'}: ${override})`);
       } else {
@@ -230,7 +230,7 @@ async function buildMarketplace(
   const plugins: PluginBuildResult[] = [];
 
   // Clean stale marketplace directory before rebuilding — removes orphaned plugins
-  const marketplaceOutputDir = join(configDir, 'dist', '.claude', 'plugins', 'marketplaces', name);
+  const marketplaceOutputDir = safePath.join(configDir, 'dist', '.claude', 'plugins', 'marketplaces', name);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from config
   if (existsSync(marketplaceOutputDir)) {
     await rm(marketplaceOutputDir, { recursive: true, force: true });
@@ -258,8 +258,8 @@ async function buildMarketplace(
   }
 
   // Generate .claude-plugin/marketplace.json
-  const marketplaceDir = join(configDir, 'dist', '.claude', 'plugins', 'marketplaces', name);
-  const claudePluginDir = join(marketplaceDir, '.claude-plugin');
+  const marketplaceDir = safePath.join(configDir, 'dist', '.claude', 'plugins', 'marketplaces', name);
+  const claudePluginDir = safePath.join(marketplaceDir, '.claude-plugin');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
   await mkdir(claudePluginDir, { recursive: true });
 
@@ -285,7 +285,7 @@ async function buildMarketplace(
   };
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
-  await writeFile(join(claudePluginDir, 'marketplace.json'), JSON.stringify(marketplaceJson, null, 2));
+  await writeFile(safePath.join(claudePluginDir, 'marketplace.json'), JSON.stringify(marketplaceJson, null, 2));
   logger.info(`   .claude-plugin/marketplace.json`);
 
   await copyDistributionFiles(marketplaceDir, configDir, config, logger);
@@ -340,7 +340,7 @@ async function buildPlugin(
   packageVersion: string | undefined,
   logger: ReturnType<typeof createLogger>
 ): Promise<PluginBuildResult> {
-  const pluginDir = join(
+  const pluginDir = safePath.join(
     configDir, 'dist', '.claude', 'plugins', 'marketplaces',
     marketplaceName, 'plugins', pluginDef.name
   );
@@ -349,7 +349,7 @@ async function buildPlugin(
   logger.info(`      Building plugin: ${pluginDef.name}`);
 
   for (const skillName of skills) {
-    const skillDistPath = join(configDir, 'dist', 'skills', skillName);
+    const skillDistPath = safePath.join(configDir, 'dist', 'skills', skillName);
 
     // Verify skill is built
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from config
@@ -364,7 +364,7 @@ async function buildPlugin(
     // Use skillNameToFsPath to strip colons — colon-namespaced skill names (e.g.
     // "pkg:sub-skill") are valid VAT identifiers but invalid directory names on Windows.
     const fsPath = skillNameToFsPath(skillName);
-    const destPath = join(pluginDir, 'skills', fsPath);
+    const destPath = safePath.join(pluginDir, 'skills', fsPath);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
     await mkdir(destPath, { recursive: true });
     await cp(skillDistPath, destPath, { recursive: true });
@@ -373,7 +373,7 @@ async function buildPlugin(
   }
 
   // Generate plugin.json — STRICT: only name, description, author
-  const pluginJsonDir = join(pluginDir, '.claude-plugin');
+  const pluginJsonDir = safePath.join(pluginDir, '.claude-plugin');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
   await mkdir(pluginJsonDir, { recursive: true });
 
@@ -388,7 +388,7 @@ async function buildPlugin(
   };
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
-  await writeFile(join(pluginJsonDir, 'plugin.json'), JSON.stringify(pluginJson, null, 2));
+  await writeFile(safePath.join(pluginJsonDir, 'plugin.json'), JSON.stringify(pluginJson, null, 2));
   logger.info(`         .claude-plugin/plugin.json`);
 
   return { pluginName: pluginDef.name, pluginDir, skillsCopied };

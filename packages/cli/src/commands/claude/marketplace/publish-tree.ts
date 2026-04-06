@@ -8,7 +8,8 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { cp, writeFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { parseUnreleasedSection, readChangelog, stampChangelog } from './changelog-utils.js';
 import { generateLicenseText, readLicenseFile } from './license-utils.js';
@@ -48,7 +49,7 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
   let changelogDelta = '';
 
   // 1. Verify build output exists
-  const buildDir = join(configDir, 'dist', '.claude', 'plugins', 'marketplaces', marketplaceName);
+  const buildDir = safePath.join(configDir, 'dist', '.claude', 'plugins', 'marketplaces', marketplaceName);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated config
   if (!existsSync(buildDir)) {
     throw new Error(
@@ -75,17 +76,17 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
     changelogDelta = unreleased.trim();
     const stamped = stampChangelog(rawChangelog, version, date);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated config
-    await writeFile(join(outputDir, 'CHANGELOG.md'), stamped);
+    await writeFile(safePath.join(outputDir, 'CHANGELOG.md'), stamped);
     files.push('CHANGELOG.md');
   }
 
   // 4. Process readme
   if (options.readme) {
-    const readmePath = resolve(configDir, options.readme.sourcePath);
+    const readmePath = safePath.resolve(configDir, options.readme.sourcePath);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from validated config
     const readmeContent = readFileSync(readmePath, 'utf-8');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated config
-    await writeFile(join(outputDir, 'README.md'), readmeContent);
+    await writeFile(safePath.join(outputDir, 'README.md'), readmeContent);
     files.push('README.md');
   }
 
@@ -102,7 +103,7 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
       licenseContent = readLicenseFile(options.license.filePath, configDir);
     }
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated config
-    await writeFile(join(outputDir, 'LICENSE'), licenseContent);
+    await writeFile(safePath.join(outputDir, 'LICENSE'), licenseContent);
     files.push('LICENSE');
   }
 

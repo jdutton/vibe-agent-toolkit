@@ -6,9 +6,9 @@
 
 import { existsSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
 
@@ -71,7 +71,7 @@ async function removePluginDirs(
     pluginDir = true;
   }
 
-  const cachePluginDir = join(paths.pluginsCacheDir, marketplace, pluginName);
+  const cachePluginDir = safePath.join(paths.pluginsCacheDir, marketplace, pluginName);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated paths from ClaudeUserPaths
   const cacheDir = existsSync(cachePluginDir);
   if (cacheDir && !dryRun) await rm(cachePluginDir, { recursive: true, force: true });
@@ -122,7 +122,7 @@ export async function uninstallPlugin(opts: UninstallPluginOptions): Promise<Uni
 
   const emptyArtifacts = { pluginDir: false, cacheDir: false, installedPlugins: false, knownMarketplaces: false, settings: false };
 
-  const mpPluginDir = join(paths.marketplacesDir, marketplace, 'plugins', pluginName);
+  const mpPluginDir = safePath.join(paths.marketplacesDir, marketplace, 'plugins', pluginName);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated paths from ClaudeUserPaths
   const mpPluginExists = existsSync(mpPluginDir);
 

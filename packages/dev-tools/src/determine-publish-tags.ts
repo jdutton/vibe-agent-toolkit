@@ -27,8 +27,8 @@
 // readFileSync reads from PROJECT_ROOT constant (controlled, not user input)
 
 import { appendFileSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import semver from 'semver';
 
 import { log, getNpmTagVersion, PROJECT_ROOT } from './common.js';
@@ -118,7 +118,7 @@ if (isStable) {
   // Read package name from root package.json
   let packageName: string | undefined;
   try {
-    const rootPkgPath = join(PROJECT_ROOT, 'package.json');
+    const rootPkgPath = safePath.join(PROJECT_ROOT, 'package.json');
     const rootPkg = JSON.parse(readFileSync(rootPkgPath, 'utf8'));
     packageName = rootPkg.name;
 

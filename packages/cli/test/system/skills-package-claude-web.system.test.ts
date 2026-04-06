@@ -8,9 +8,9 @@
  */
 
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import AdmZip from 'adm-zip';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
@@ -45,9 +45,9 @@ function setupSkillsPackageClaudeWebTestSuite() {
    * Create a minimal skill directory with a SKILL.md for packaging tests
    */
   const createMinimalSkill = (tempDir: string): string => {
-    const skillDir = join(tempDir, 'my-skill');
+    const skillDir = safePath.join(tempDir, 'my-skill');
     mkdirSyncReal(skillDir, { recursive: true });
-    writeTestFile(join(skillDir, 'SKILL.md'), createSkillMarkdown(SKILL_NAME));
+    writeTestFile(safePath.join(skillDir, 'SKILL.md'), createSkillMarkdown(SKILL_NAME));
     return skillDir;
   };
 
@@ -133,8 +133,8 @@ describe('skills package --target (system test)', () => {
   it('--target claude-web produces references/ and no resources/ directory', () => {
     const tempDir = suite.createTempDir();
     const skillDir = suite.createMinimalSkill(tempDir);
-    const skillMdPath = join(skillDir, 'SKILL.md');
-    const outputDir = join(tempDir, 'output-claude-web');
+    const skillMdPath = safePath.join(skillDir, 'SKILL.md');
+    const outputDir = safePath.join(tempDir, 'output-claude-web');
 
     // Verify ZIP structure: no linked resources → neither references/ nor resources/ dir
     const { hasReferences, hasResources } = suite.runPackageAndAssertSuccess(
@@ -150,7 +150,7 @@ describe('skills package --target (system test)', () => {
     const tempDir = suite.createTempDir();
 
     // Create a skill with a linked resource
-    const skillDir = join(tempDir, 'skill-with-refs');
+    const skillDir = safePath.join(tempDir, 'skill-with-refs');
     mkdirSyncReal(skillDir, { recursive: true });
 
     const refContent = `---
@@ -161,7 +161,7 @@ title: Reference Doc
 
 This is a reference document.
 `;
-    writeTestFile(join(skillDir, 'reference.md'), refContent);
+    writeTestFile(safePath.join(skillDir, 'reference.md'), refContent);
     const skillContent = `---
 name: ${SKILL_NAME}
 description: ${SKILL_NAME} - comprehensive test skill for validation and packaging
@@ -172,10 +172,10 @@ version: 1.0.0
 
 See [Reference](./reference.md) for details.
 `;
-    writeTestFile(join(skillDir, 'SKILL.md'), skillContent);
+    writeTestFile(safePath.join(skillDir, 'SKILL.md'), skillContent);
 
-    const skillMdPath = join(skillDir, 'SKILL.md');
-    const outputDir = join(tempDir, 'output-refs');
+    const skillMdPath = safePath.join(skillDir, 'SKILL.md');
+    const outputDir = safePath.join(tempDir, 'output-refs');
 
     // references/ must exist (linked resource goes there); resources/ must NOT exist
     const { hasReferences, hasResources } = suite.runPackageAndAssertSuccess(
@@ -191,11 +191,11 @@ See [Reference](./reference.md) for details.
     const tempDir = suite.createTempDir();
 
     // Create skill with a linked resource so resources/ gets populated
-    const skillDir = join(tempDir, 'skill-with-resource');
+    const skillDir = safePath.join(tempDir, 'skill-with-resource');
     mkdirSyncReal(skillDir, { recursive: true });
 
     writeTestFile(
-      join(skillDir, 'guide.md'),
+      safePath.join(skillDir, 'guide.md'),
       `---
 title: Guide
 ---
@@ -216,10 +216,10 @@ version: 1.0.0
 
 See [Guide](./guide.md) for usage.
 `;
-    writeTestFile(join(skillDir, 'SKILL.md'), skillContent);
+    writeTestFile(safePath.join(skillDir, 'SKILL.md'), skillContent);
 
-    const skillMdPath = join(skillDir, 'SKILL.md');
-    const outputDir = join(tempDir, 'output-claude-code');
+    const skillMdPath = safePath.join(skillDir, 'SKILL.md');
+    const outputDir = safePath.join(tempDir, 'output-claude-code');
 
     // resources/ must exist (claude-code uses resources/); references/ must NOT exist
     const { hasResources, hasReferences } = suite.runPackageAndAssertSuccess(
@@ -234,11 +234,11 @@ See [Guide](./guide.md) for usage.
   it('no --target flag defaults to claude-code behavior (resources/ directory)', () => {
     const tempDir = suite.createTempDir();
 
-    const skillDir = join(tempDir, 'default-skill');
+    const skillDir = safePath.join(tempDir, 'default-skill');
     mkdirSyncReal(skillDir, { recursive: true });
 
     writeTestFile(
-      join(skillDir, 'extra.md'),
+      safePath.join(skillDir, 'extra.md'),
       `---
 title: Extra
 ---
@@ -259,10 +259,10 @@ version: 1.0.0
 
 See [Extra](./extra.md).
 `;
-    writeTestFile(join(skillDir, 'SKILL.md'), skillContent);
+    writeTestFile(safePath.join(skillDir, 'SKILL.md'), skillContent);
 
-    const skillMdPath = join(skillDir, 'SKILL.md');
-    const outputDir = join(tempDir, 'output-default');
+    const skillMdPath = safePath.join(skillDir, 'SKILL.md');
+    const outputDir = safePath.join(tempDir, 'output-default');
 
     // No --target flag at all — default should behave like claude-code
     const { result, parsed } = suite.runPackageCommand(skillMdPath, outputDir, ['-f', 'zip']);
@@ -278,8 +278,8 @@ See [Extra](./extra.md).
   it('--target with invalid value exits with error', () => {
     const tempDir = suite.createTempDir();
     const skillDir = suite.createMinimalSkill(tempDir);
-    const skillMdPath = join(skillDir, 'SKILL.md');
-    const outputDir = join(tempDir, 'output-bad-target');
+    const skillMdPath = safePath.join(skillDir, 'SKILL.md');
+    const outputDir = safePath.join(tempDir, 'output-bad-target');
 
     const result = executeCli(
       suite.binPath,

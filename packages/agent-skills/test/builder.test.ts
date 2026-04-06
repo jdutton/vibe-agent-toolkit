@@ -1,9 +1,8 @@
 
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import fs from 'node:fs/promises';
-import path from 'node:path';
 
-import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { setupAsyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { buildAgentSkill } from '../src/builder.js';
@@ -32,20 +31,20 @@ describe('buildAgentSkill', () => {
 
   it('should build a basic Agent Skill', async () => {
     // Create a minimal agent directory structure
-    const agentDir = path.join(tempDir, TEST_AGENT_NAME);
+    const agentDir = safePath.join(tempDir, TEST_AGENT_NAME);
     await fs.mkdir(agentDir, { recursive: true });
 
     // Create package.json (required for findAgentPackageRoot)
     await fs.writeFile(
-      path.join(agentDir, PACKAGE_JSON_NAME),
+      safePath.join(agentDir, PACKAGE_JSON_NAME),
       JSON.stringify({ name: TEST_AGENT_NAME })
     );
 
     // Create prompts directory
-    const promptsDir = path.join(agentDir, PROMPTS_DIR);
+    const promptsDir = safePath.join(agentDir, PROMPTS_DIR);
     await fs.mkdir(promptsDir);
     await fs.writeFile(
-      path.join(promptsDir, SYSTEM_MD),
+      safePath.join(promptsDir, SYSTEM_MD),
       '# Test Agent\n\nYou are a helpful test agent.'
     );
 
@@ -63,7 +62,7 @@ spec:
     system:
       $ref: ./prompts/system.md
 `;
-    const manifestPath = path.join(agentDir, AGENT_YAML);
+    const manifestPath = safePath.join(agentDir, AGENT_YAML);
     await fs.writeFile(manifestPath, manifestContent);
 
     // Build the skill
@@ -76,7 +75,7 @@ spec:
     expect(result.files).toHaveLength(2);
 
     // Verify SKILL.md exists and has correct structure
-    const skillPath = path.join(result.outputPath, 'SKILL.md');
+    const skillPath = safePath.join(result.outputPath, 'SKILL.md');
     const skillContent = await fs.readFile(skillPath, 'utf-8');
     expect(skillContent).toContain(`---\nname: ${TEST_AGENT_NAME}`);
     expect(skillContent).toContain('description: A test agent');
@@ -85,7 +84,7 @@ spec:
     expect(skillContent).toContain('Read `agent-manifest-guide.md`');
 
     // Verify agent-manifest-guide.md exists (builder writes directly, not via packager)
-    const guidePath = path.join(result.outputPath, 'agent-manifest-guide.md');
+    const guidePath = safePath.join(result.outputPath, 'agent-manifest-guide.md');
     const guideContent = await fs.readFile(guidePath, 'utf-8');
     expect(guideContent).toContain('# VAT Agent Manifest Guide');
     expect(guideContent).toContain('## Manifest Structure');
@@ -97,18 +96,18 @@ spec:
 
   it('should include tools section when tools are defined', async () => {
     // Create agent with tools
-    const agentDir = path.join(tempDir, TEST_AGENT_TOOLS_NAME);
+    const agentDir = safePath.join(tempDir, TEST_AGENT_TOOLS_NAME);
     await fs.mkdir(agentDir, { recursive: true });
 
     await fs.writeFile(
-      path.join(agentDir, PACKAGE_JSON_NAME),
+      safePath.join(agentDir, PACKAGE_JSON_NAME),
       JSON.stringify({ name: TEST_AGENT_TOOLS_NAME })
     );
 
-    const promptsDir = path.join(agentDir, PROMPTS_DIR);
+    const promptsDir = safePath.join(agentDir, PROMPTS_DIR);
     await fs.mkdir(promptsDir);
     await fs.writeFile(
-      path.join(promptsDir, SYSTEM_MD),
+      safePath.join(promptsDir, SYSTEM_MD),
       'Test agent with tools'
     );
 
@@ -128,38 +127,38 @@ spec:
       type: library
       description: A test tool
 `;
-    const manifestPath = path.join(agentDir, AGENT_YAML);
+    const manifestPath = safePath.join(agentDir, AGENT_YAML);
     await fs.writeFile(manifestPath, manifestContent);
 
     const result = await buildAgentSkill({ agentPath: manifestPath });
 
-    const skillPath = path.join(result.outputPath, 'SKILL.md');
+    const skillPath = safePath.join(result.outputPath, 'SKILL.md');
     const skillContent = await fs.readFile(skillPath, 'utf-8');
     expect(skillContent).toContain('## Available Tools');
     expect(skillContent).toContain('`test-tool`: A test tool');
   });
 
   it('should copy scripts directory if present', async () => {
-    const agentDir = path.join(tempDir, TEST_AGENT_SCRIPTS_NAME);
+    const agentDir = safePath.join(tempDir, TEST_AGENT_SCRIPTS_NAME);
     await fs.mkdir(agentDir, { recursive: true });
 
     await fs.writeFile(
-      path.join(agentDir, PACKAGE_JSON_NAME),
+      safePath.join(agentDir, PACKAGE_JSON_NAME),
       JSON.stringify({ name: TEST_AGENT_SCRIPTS_NAME })
     );
 
-    const promptsDir = path.join(agentDir, PROMPTS_DIR);
+    const promptsDir = safePath.join(agentDir, PROMPTS_DIR);
     await fs.mkdir(promptsDir);
     await fs.writeFile(
-      path.join(promptsDir, SYSTEM_MD),
+      safePath.join(promptsDir, SYSTEM_MD),
       'Test agent'
     );
 
     // Create scripts directory
-    const scriptsDir = path.join(agentDir, 'scripts');
+    const scriptsDir = safePath.join(agentDir, 'scripts');
     await fs.mkdir(scriptsDir);
     await fs.writeFile(
-      path.join(scriptsDir, 'test-script.js'),
+      safePath.join(scriptsDir, 'test-script.js'),
       'console.log("test");'
     );
 
@@ -175,42 +174,42 @@ spec:
     system:
       $ref: ./prompts/system.md
 `;
-    const manifestPath = path.join(agentDir, AGENT_YAML);
+    const manifestPath = safePath.join(agentDir, AGENT_YAML);
     await fs.writeFile(manifestPath, manifestContent);
 
     const result = await buildAgentSkill({ agentPath: manifestPath });
 
     // Verify scripts directory was copied (builder writes directly, not via packager)
-    const outputScriptsPath = path.join(result.outputPath, 'scripts');
+    const outputScriptsPath = safePath.join(result.outputPath, 'scripts');
     const scriptsExist = await fs.access(outputScriptsPath).then(() => true).catch(() => false);
     expect(scriptsExist).toBe(true);
 
     const scriptContent = await fs.readFile(
-      path.join(outputScriptsPath, 'test-script.js'),
+      safePath.join(outputScriptsPath, 'test-script.js'),
       'utf-8'
     );
     expect(scriptContent).toBe('console.log("test");');
   });
 
   it('should copy LICENSE.txt if present', async () => {
-    const agentDir = path.join(tempDir, TEST_AGENT_LICENSE_NAME);
+    const agentDir = safePath.join(tempDir, TEST_AGENT_LICENSE_NAME);
     await fs.mkdir(agentDir, { recursive: true });
 
     await fs.writeFile(
-      path.join(agentDir, PACKAGE_JSON_NAME),
+      safePath.join(agentDir, PACKAGE_JSON_NAME),
       JSON.stringify({ name: TEST_AGENT_LICENSE_NAME })
     );
 
-    const promptsDir = path.join(agentDir, PROMPTS_DIR);
+    const promptsDir = safePath.join(agentDir, PROMPTS_DIR);
     await fs.mkdir(promptsDir);
     await fs.writeFile(
-      path.join(promptsDir, SYSTEM_MD),
+      safePath.join(promptsDir, SYSTEM_MD),
       'Test agent'
     );
 
     // Create LICENSE.txt
     await fs.writeFile(
-      path.join(agentDir, 'LICENSE.txt'),
+      safePath.join(agentDir, 'LICENSE.txt'),
       'MIT License...'
     );
 
@@ -226,13 +225,13 @@ spec:
     system:
       $ref: ./prompts/system.md
 `;
-    const manifestPath = path.join(agentDir, AGENT_YAML);
+    const manifestPath = safePath.join(agentDir, AGENT_YAML);
     await fs.writeFile(manifestPath, manifestContent);
 
     const result = await buildAgentSkill({ agentPath: manifestPath });
 
     // Verify LICENSE.txt was copied (builder writes directly, not via packager)
-    const outputLicensePath = path.join(result.outputPath, 'LICENSE.txt');
+    const outputLicensePath = safePath.join(result.outputPath, 'LICENSE.txt');
     const licenseExists = await fs.access(outputLicensePath).then(() => true).catch(() => false);
     expect(licenseExists).toBe(true);
 
@@ -241,11 +240,11 @@ spec:
   });
 
   it('should throw error if system prompt is missing', async () => {
-    const agentDir = path.join(tempDir, TEST_AGENT_NO_PROMPT_NAME);
+    const agentDir = safePath.join(tempDir, TEST_AGENT_NO_PROMPT_NAME);
     await fs.mkdir(agentDir, { recursive: true });
 
     await fs.writeFile(
-      path.join(agentDir, PACKAGE_JSON_NAME),
+      safePath.join(agentDir, PACKAGE_JSON_NAME),
       JSON.stringify({ name: TEST_AGENT_NO_PROMPT_NAME })
     );
 
@@ -258,7 +257,7 @@ spec:
     provider: anthropic
     model: claude-sonnet-4-20250514
 `;
-    const manifestPath = path.join(agentDir, AGENT_YAML);
+    const manifestPath = safePath.join(agentDir, AGENT_YAML);
     await fs.writeFile(manifestPath, manifestContent);
 
     await expect(buildAgentSkill({ agentPath: manifestPath }))

@@ -9,7 +9,8 @@
 
 import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { dirname, resolve } from 'node:path';
+import { dirname } from 'node:path';
+
 
 import {
   packageSkills,
@@ -20,6 +21,7 @@ import {
   type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { SkillPackagingConfig as ConfigSkillPackagingConfig } from '@vibe-agent-toolkit/resources';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../../utils/command-error.js';
@@ -287,13 +289,13 @@ function outputBuildYaml(
  */
 async function cleanStaleSkillOutputs(cwd: string, skillName: string | undefined): Promise<void> {
   if (skillName) {
-    const singleSkillDir = resolve(cwd, 'dist', 'skills', skillNameToFsPath(skillName));
+    const singleSkillDir = safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skillName));
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from validated option
     if (existsSync(singleSkillDir)) {
       await rm(singleSkillDir, { recursive: true, force: true });
     }
   } else {
-    const allSkillsDir = resolve(cwd, 'dist', 'skills');
+    const allSkillsDir = safePath.resolve(cwd, 'dist', 'skills');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
     if (existsSync(allSkillsDir)) {
       await rm(allSkillsDir, { recursive: true, force: true });
@@ -356,7 +358,7 @@ async function buildCommand(
         skillsConfig.config?.[skill.name],
       );
 
-      const outputDir = resolve(cwd, 'dist', 'skills', skillNameToFsPath(skill.name));
+      const outputDir = safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skill.name));
       logger.info(`\nBuilding skill: ${skill.name}`);
       logger.info(`   Source: ${skill.sourcePath}`);
       logger.info(`   Output: ${outputDir}`);
@@ -369,7 +371,7 @@ async function buildCommand(
     const specs: SkillBuildSpec[] = validatedSpecs.map(({ skill, packagingConfig }) => ({
       skillPath: skill.sourcePath,
       options: {
-        outputPath: resolve(cwd, 'dist', 'skills', skillNameToFsPath(skill.name)),
+        outputPath: safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skill.name)),
         formats: ['directory' as const],
         rewriteLinks: true,
         basePath: dirname(skill.sourcePath),

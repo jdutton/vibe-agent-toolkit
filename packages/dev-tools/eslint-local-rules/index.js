@@ -46,5 +46,8 @@ export default {
     'no-manual-path-normalize': require('./no-manual-path-normalize.cjs'),
     'no-path-sep-in-strings': require('./no-path-sep-in-strings.cjs'),
     'no-path-operations-in-comparisons': require('./no-path-operations-in-comparisons.cjs'),
+    'no-path-join': require('./no-path-join.cjs'),
+    'no-path-resolve': require('./no-path-resolve.cjs'),
+    'no-path-relative': require('./no-path-relative.cjs'),
   },
 };

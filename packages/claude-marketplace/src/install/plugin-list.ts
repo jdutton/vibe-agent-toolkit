@@ -8,7 +8,8 @@
  */
 
 import { existsSync, lstatSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
 
@@ -90,7 +91,7 @@ function collectLegacySkills(paths: ClaudeUserPaths): ListedLegacySkill[] {
     const entries = readdirSync(paths.skillsDir, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
-      const skillPath = join(paths.skillsDir, entry.name);
+      const skillPath = safePath.join(paths.skillsDir, entry.name);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Validated path
       const stat = lstatSync(skillPath);
       legacySkills.push({

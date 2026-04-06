@@ -6,9 +6,9 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, afterEach } from 'vitest';
 
 import {
@@ -38,17 +38,17 @@ function setupSkillsBuildTestSuite() {
    * Create a SKILL.md at a given path relative to tempDir
    */
   const createSkillSource = (tempDir: string, relativePath: string, skillName: string) => {
-    const resourcesDir = join(tempDir, relativePath, '..');
+    const resourcesDir = safePath.join(tempDir, relativePath, '..');
     mkdirSyncReal(resourcesDir, { recursive: true });
     // Use default description (meets 50 char minimum for DESCRIPTION_TOO_VAGUE validation)
-    writeTestFile(join(tempDir, relativePath), createSkillMarkdown(skillName));
+    writeTestFile(safePath.join(tempDir, relativePath), createSkillMarkdown(skillName));
   };
 
   /**
    * Create a config yaml with skills.include globs
    */
   const createConfigWithSkills = (tempDir: string, includeGlobs: string[]) => {
-    writeTestFile(join(tempDir, VAT_CONFIG_FILENAME), createSkillsConfigYaml(includeGlobs));
+    writeTestFile(safePath.join(tempDir, VAT_CONFIG_FILENAME), createSkillsConfigYaml(includeGlobs));
   };
 
   /**
@@ -117,7 +117,7 @@ describe('skills build command (system test)', () => {
 
   it('should exit 0 when config yaml has no skills section', () => {
     const tempDir = suite.createTempDir();
-    writeTestFile(join(tempDir, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+    writeTestFile(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
 
     const { result } = suite.runBuildCommand(tempDir);
 
@@ -157,8 +157,8 @@ describe('skills build command (system test)', () => {
     expect(skills[0]).toHaveProperty('filesPackaged', 1);
 
     // Verify output directory was created
-    const outputPath = join(tempDir, 'dist', 'skills', TEST_SKILL_NAME);
-    const skillMd = join(outputPath, 'SKILL.md');
+    const outputPath = safePath.join(tempDir, 'dist', 'skills', TEST_SKILL_NAME);
+    const skillMd = safePath.join(outputPath, 'SKILL.md');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output verification
     expect(readFileSync(skillMd, 'utf-8')).toContain(TEST_SKILL_NAME);
   });
@@ -179,15 +179,15 @@ describe('skills build command (system test)', () => {
     expect(skills[0]).toHaveProperty('name', SKILL_B_NAME);
 
     // Verify only skill-b was built
-    const outputPathB = join(tempDir, 'dist', 'skills', SKILL_B_NAME);
+    const outputPathB = safePath.join(tempDir, 'dist', 'skills', SKILL_B_NAME);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output verification
-    expect(readFileSync(join(outputPathB, 'SKILL.md'), 'utf-8')).toContain(SKILL_B_NAME);
+    expect(readFileSync(safePath.join(outputPathB, 'SKILL.md'), 'utf-8')).toContain(SKILL_B_NAME);
 
     // Skill A should not exist (only skill-b was built)
-    const outputPathA = join(tempDir, 'dist', 'skills', SKILL_A_NAME);
+    const outputPathA = safePath.join(tempDir, 'dist', 'skills', SKILL_A_NAME);
     try {
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output verification
-      readFileSync(join(outputPathA, 'SKILL.md'), 'utf-8');
+      readFileSync(safePath.join(outputPathA, 'SKILL.md'), 'utf-8');
       expect.fail('skill-a should not have been built');
     } catch {
       // Expected - file should not exist

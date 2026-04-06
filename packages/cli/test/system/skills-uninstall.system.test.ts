@@ -3,9 +3,9 @@
  * Tests removal of installed plugins from the Claude plugin registry
  */
 
-import { join } from 'node:path';
 
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -51,7 +51,7 @@ version: 1.0.0
  */
 function createFakeNpmPackage(packageDir: string): void {
   writeTestFile(
-    join(packageDir, 'package.json'),
+    safePath.join(packageDir, 'package.json'),
     JSON.stringify({
       name: PACKAGE_NAME,
       version: PACKAGE_VERSION,
@@ -60,23 +60,23 @@ function createFakeNpmPackage(packageDir: string): void {
   );
 
   // dist/.claude/plugins/marketplaces/<mp>/plugins/<plugin>/
-  const pluginClaudeDir = join(
+  const pluginClaudeDir = safePath.join(
     packageDir, 'dist', '.claude', 'plugins', 'marketplaces',
     MARKETPLACE_NAME, 'plugins', PLUGIN_NAME, CLAUDE_PLUGIN_SUBDIR
   );
   mkdirSyncReal(pluginClaudeDir, { recursive: true });
   writeTestFile(
-    join(pluginClaudeDir, PLUGIN_JSON_FILE),
+    safePath.join(pluginClaudeDir, PLUGIN_JSON_FILE),
     JSON.stringify({ name: PLUGIN_NAME, description: 'Test plugin', author: { name: 'Test Org' } })
   );
 
   // skills inside plugin
-  const pluginSkillDir = join(
+  const pluginSkillDir = safePath.join(
     packageDir, 'dist', '.claude', 'plugins', 'marketplaces',
     MARKETPLACE_NAME, 'plugins', PLUGIN_NAME, 'skills', SKILL_NAME
   );
   mkdirSyncReal(pluginSkillDir, { recursive: true });
-  writeTestFile(join(pluginSkillDir, 'SKILL.md'), minimalSkillMd(SKILL_NAME));
+  writeTestFile(safePath.join(pluginSkillDir, 'SKILL.md'), minimalSkillMd(SKILL_NAME));
 }
 
 function setupUninstallTestSuite() {
@@ -127,7 +127,7 @@ describe('claude plugin uninstall command (system test)', () => {
   function setupInstalledPlugin() {
     const { fakeHome, installResult } = suite.createInstalledContext();
     expect(installResult.status).toBe(0);
-    const pluginDir = join(
+    const pluginDir = safePath.join(
       fakeHome, '.claude', 'plugins', 'marketplaces',
       MARKETPLACE_NAME, 'plugins', PLUGIN_NAME
     );
@@ -158,7 +158,7 @@ describe('claude plugin uninstall command (system test)', () => {
   it('removes plugin from installed_plugins.json after uninstall', () => {
     const { fakeHome, pluginKey } = setupInstalledPlugin();
 
-    const installedPath = join(fakeHome, '.claude', 'plugins', 'installed_plugins.json');
+    const installedPath = safePath.join(fakeHome, '.claude', 'plugins', 'installed_plugins.json');
     const beforeUninstall = JSON.parse(fs.readFileSync(installedPath, 'utf-8')) as {
       plugins: Record<string, unknown[]>;
     };
@@ -175,7 +175,7 @@ describe('claude plugin uninstall command (system test)', () => {
   it('exits 0 (idempotent) when plugin is not installed', () => {
     const { createTempDir } = createTempDirTracker(TEMP_DIR_PREFIX);
     const fakeHome = createTempDir();
-    mkdirSyncReal(join(fakeHome, '.claude'), { recursive: true });
+    mkdirSyncReal(safePath.join(fakeHome, '.claude'), { recursive: true });
 
     const result = suite.runUninstall(fakeHome, ['nonexistent@nonexistent-market']);
 
@@ -189,7 +189,7 @@ describe('claude plugin uninstall command (system test)', () => {
     const { fakeHome, packageDir } = createPackageAndHomeContext(tempDir);
 
     writeTestFile(
-      join(packageDir, 'package.json'),
+      safePath.join(packageDir, 'package.json'),
       JSON.stringify({ name: 'some-uninstalled-package', version: '1.0.0' })
     );
 

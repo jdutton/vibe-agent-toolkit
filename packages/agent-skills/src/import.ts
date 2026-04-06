@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { stringify as stringifyYaml } from 'yaml';
 
 import { parseFrontmatter } from './parsers/frontmatter-parser.js';
@@ -89,7 +90,7 @@ export async function importSkillToAgent(options: ImportOptions): Promise<Import
   }
 
   // Determine output path
-  const agentPath = outputPath ?? path.join(path.dirname(skillPath), 'agent.yaml');
+  const agentPath = outputPath ?? safePath.join(path.dirname(skillPath), 'agent.yaml');
 
   // Check if output already exists
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from validated skillPath

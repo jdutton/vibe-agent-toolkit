@@ -1,7 +1,6 @@
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 
-import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { loadConfig } from '../../src/utils/config-loader.js';
@@ -25,7 +24,7 @@ describe('loadConfig', () => {
   });
 
   it('should load and parse valid config file', () => {
-    const configPath = path.join(tempDir, CONFIG_FILENAME);
+    const configPath = safePath.join(tempDir, CONFIG_FILENAME);
     const configContent = `version: 1
 resources:
   exclude:
@@ -44,7 +43,7 @@ resources:
   });
 
   it('should throw on invalid config schema', () => {
-    const configPath = path.join(tempDir, CONFIG_FILENAME);
+    const configPath = safePath.join(tempDir, CONFIG_FILENAME);
     const configContent = `version: 2\n`; // Invalid version
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(configPath, configContent);
@@ -53,7 +52,7 @@ resources:
   });
 
   it('should throw on invalid YAML syntax', () => {
-    const configPath = path.join(tempDir, CONFIG_FILENAME);
+    const configPath = safePath.join(tempDir, CONFIG_FILENAME);
     const configContent = `invalid: yaml: syntax:\n`;
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(configPath, configContent);
@@ -62,7 +61,7 @@ resources:
   });
 
   it('should load config with resource collections', () => {
-    const configPath = path.join(tempDir, CONFIG_FILENAME);
+    const configPath = safePath.join(tempDir, CONFIG_FILENAME);
     const configContent = `version: 1
 resources:
   exclude:
@@ -93,7 +92,7 @@ resources:
   });
 
   it('should load config with claude: section', () => {
-    const configPath = path.join(tempDir, CONFIG_FILENAME);
+    const configPath = safePath.join(tempDir, CONFIG_FILENAME);
     const configContent = `version: 1
 claude:
   marketplaces:
@@ -117,7 +116,7 @@ claude:
   });
 
   it('should load complete config with resources and claude sections', () => {
-    const configPath = path.join(tempDir, CONFIG_FILENAME);
+    const configPath = safePath.join(tempDir, CONFIG_FILENAME);
     const configContent = `version: 1
 resources:
   exclude:

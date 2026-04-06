@@ -17,9 +17,10 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { load as loadYaml } from 'js-yaml';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -27,8 +28,8 @@ import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { ProjectConfig } from '../../src/schemas/project-config.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
-const fixturesDir = join(__dirname, '../../test-fixtures/collections');
-const configPath = join(fixturesDir, 'vibe-agent-toolkit.config.yaml');
+const fixturesDir = safePath.join(__dirname, '../../test-fixtures/collections');
+const configPath = safePath.join(fixturesDir, 'vibe-agent-toolkit.config.yaml');
 
 // Helper to load config consistently
 function loadTestConfig(): ProjectConfig {

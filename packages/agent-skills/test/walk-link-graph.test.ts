@@ -1,6 +1,6 @@
-import { resolve } from 'node:path';
 
 import type { ResourceLink, ResourceMetadata } from '@vibe-agent-toolkit/resources';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { walkLinkGraph, type ExcludeRule, type WalkableRegistry, type WalkLinkGraphOptions } from '../src/walk-link-graph.js';
@@ -10,18 +10,18 @@ import { walkLinkGraph, type ExcludeRule, type WalkableRegistry, type WalkLinkGr
 // ============================================================================
 
 // Use path.resolve() so paths are platform-appropriate (drive letter on Windows)
-const PROJECT_ROOT = resolve('/project');
+const PROJECT_ROOT = safePath.resolve('/project');
 const SKILL_ID = 'skill-md';
-const SKILL_PATH = resolve('/project/SKILL.md');
+const SKILL_PATH = safePath.resolve('/project/SKILL.md');
 const GUIDE_ID = 'guide-md';
-const GUIDE_PATH = resolve('/project/docs/guide.md');
+const GUIDE_PATH = safePath.resolve('/project/docs/guide.md');
 const GUIDE_HREF = './docs/guide.md';
 const REF_ID = 'ref-md';
-const REF_PATH = resolve('/project/docs/ref.md');
+const REF_PATH = safePath.resolve('/project/docs/ref.md');
 const DEEP_ID = 'deep-md';
-const DEEP_PATH = resolve('/project/docs/deep.md');
+const DEEP_PATH = safePath.resolve('/project/docs/deep.md');
 const README_ID = 'readme-md';
-const README_PATH = resolve('/project/docs/README.md');
+const README_PATH = safePath.resolve('/project/docs/README.md');
 const README_HREF = './docs/README.md';
 
 // Valid 64-char hex string cast to branded SHA256 type
@@ -261,7 +261,7 @@ describe('walkLinkGraph', () => {
     it('should exclude files matching exclude patterns', () => {
       const rule: ExcludeRule = { patterns: ['docs/private/**'] };
       const privateId = 'private-md';
-      const privatePath = resolve('/project/docs/private/secret.md');
+      const privatePath = safePath.resolve('/project/docs/private/secret.md');
       const skill = createMockResource(SKILL_ID, SKILL_PATH, [
         createLocalLink('secret', './docs/private/secret.md', privateId),
       ]);
@@ -318,7 +318,7 @@ describe('walkLinkGraph', () => {
       // skill -> guide (depth 1) -> ref (depth 2)
       // skill -> ref2 (depth 1)
       const ref2Id = 'ref2-md';
-      const ref2Path = resolve('/project/ref2.md');
+      const ref2Path = safePath.resolve('/project/ref2.md');
       const skill = createMockResource(SKILL_ID, SKILL_PATH, [
         createLocalLink('guide', GUIDE_HREF, GUIDE_ID),
         createLocalLink('ref2', './ref2.md', ref2Id),

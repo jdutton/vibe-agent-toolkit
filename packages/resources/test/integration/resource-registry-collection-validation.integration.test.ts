@@ -1,8 +1,8 @@
 /* eslint-disable security/detect-non-literal-fs-filename, sonarjs/no-duplicate-string */
 // Test file - all file operations are in temp directories, duplicated strings acceptable
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ResourceRegistry } from '../../src/resource-registry.js';
@@ -98,9 +98,9 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
     config: ProjectConfig,
     frontmatter: Record<string, unknown> | null
   ): Promise<{ registry: ResourceRegistry; filePath: string }> {
-    const docsDir = join(suite.tempDir, 'docs');
+    const docsDir = safePath.join(suite.tempDir, 'docs');
     await mkdir(docsDir, { recursive: true });
-    const filePath = join(docsDir, 'test.md');
+    const filePath = safePath.join(docsDir, 'test.md');
     await createMarkdownFile(filePath, frontmatter);
 
     const registry = new ResourceRegistry({ baseDir: suite.tempDir, config });
@@ -264,9 +264,9 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
     };
 
     // Create markdown file
-    const docsDir = join(suite.tempDir, 'docs');
+    const docsDir = safePath.join(suite.tempDir, 'docs');
     await mkdir(docsDir, { recursive: true });
-    const filePath = join(docsDir, 'test.md');
+    const filePath = safePath.join(docsDir, 'test.md');
     await createMarkdownFile(filePath, { title: 'Test' });
 
     // Create registry and add resource
@@ -311,9 +311,9 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
     };
 
     // Create markdown file in DIFFERENT directory (not in collection)
-    const docsDir = join(suite.tempDir, 'docs');
+    const docsDir = safePath.join(suite.tempDir, 'docs');
     await mkdir(docsDir, { recursive: true });
-    const filePath = join(docsDir, 'test.md');
+    const filePath = safePath.join(docsDir, 'test.md');
     await createMarkdownFile(filePath, {
       // No title - would fail schema if validated
     });
@@ -365,9 +365,9 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
     };
 
     // Create markdown file with title but no author
-    const docsDir = join(suite.tempDir, 'docs');
+    const docsDir = safePath.join(suite.tempDir, 'docs');
     await mkdir(docsDir, { recursive: true });
-    const filePath = join(docsDir, 'test.md');
+    const filePath = safePath.join(docsDir, 'test.md');
     await createMarkdownFile(filePath, {
       title: 'Test Doc',
       // missing author (required by global schema)
@@ -408,9 +408,9 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
       },
     };
 
-    const docsDir = join(suite.tempDir, 'docs');
+    const docsDir = safePath.join(suite.tempDir, 'docs');
     await mkdir(docsDir, { recursive: true });
-    const filePath = join(docsDir, 'test.md');
+    const filePath = safePath.join(docsDir, 'test.md');
     await createMarkdownFile(filePath, {
       title: 'Test Skill',
       extraField: 'should be allowed in permissive mode',

@@ -1,8 +1,8 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 
-import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { packageSkill, type PackageSkillOptions } from '../../src/skill-packager.js';
@@ -30,7 +30,7 @@ async function packageSkillForTest(
   options: Omit<PackageSkillOptions, 'outputPath'> & { outputPath?: string } = {}
 ) {
   const tempDir = dirname(skillPath);
-  const defaultOutputPath = join(tempDir, 'output');
+  const defaultOutputPath = safePath.join(tempDir, 'output');
   return packageSkill(skillPath, {
     ...options,
     outputPath: options.outputPath ?? defaultOutputPath,
@@ -38,14 +38,25 @@ async function packageSkillForTest(
 }
 
 /**
+ * Package a skill with rewriteLinks and read the resulting SKILL.md content.
+ */
+async function packageAndReadSkillContent(skillPath: string): Promise<string> {
+  const result = await packageSkillForTest(skillPath, {
+    formats: ['directory'],
+    rewriteLinks: true,
+  });
+  return readFile(safePath.join(result.outputPath, 'SKILL.md'), 'utf-8');
+}
+
+/**
  * Helper to create a two-level linked chain: SKILL.md -> level1.md -> level2.md
  * Used by both recursive collection tests and depth-limited packaging tests
  */
 async function createTwoLevelChain(tempDir: string): Promise<string> {
-  const skillPath = join(tempDir, 'SKILL.md');
+  const skillPath = safePath.join(tempDir, 'SKILL.md');
 
-  await writeFile(join(tempDir, 'level2.md'), '# Level 2\n\nDeep content.');
-  await writeFile(join(tempDir, 'level1.md'), '# Level 1\n\nSee [level2](./level2.md).');
+  await writeFile(safePath.join(tempDir, 'level2.md'), '# Level 2\n\nDeep content.');
+  await writeFile(safePath.join(tempDir, 'level1.md'), '# Level 1\n\nSee [level2](./level2.md).');
   await writeFile(
     skillPath,
     `${createFrontmatter({ name: TEST_SKILL_NAME })}\n\nSee [level1](./level1.md).`
@@ -62,9 +73,9 @@ async function createSkillWithGuideFile(
   tempDir: string,
   skillBody: string,
 ): Promise<string> {
-  const skillPath = join(tempDir, 'SKILL.md');
+  const skillPath = safePath.join(tempDir, 'SKILL.md');
 
-  await writeFile(join(tempDir, GUIDE_MD), GUIDE_CONTENT);
+  await writeFile(safePath.join(tempDir, GUIDE_MD), GUIDE_CONTENT);
   await writeFile(skillPath, `${createFrontmatter({ name: TEST_SKILL_NAME })}\n\n${skillBody}`);
 
   return skillPath;
@@ -81,16 +92,16 @@ async function createSkillWithLink(
   linkContent: string,
   options: { subdirectory?: string; linkText?: string } = {}
 ): Promise<{ skillPath: string; linkedPath: string }> {
-  const skillPath = join(tempDir, 'SKILL.md');
+  const skillPath = safePath.join(tempDir, 'SKILL.md');
   const linkText = options.linkText ?? 'guide';
 
   let linkedPath: string;
   if (options.subdirectory) {
-    const subdir = join(tempDir, options.subdirectory);
+    const subdir = safePath.join(tempDir, options.subdirectory);
     await mkdir(subdir, { recursive: true });
-    linkedPath = join(subdir, linkTarget);
+    linkedPath = safePath.join(subdir, linkTarget);
   } else {
-    linkedPath = join(tempDir, linkTarget);
+    linkedPath = safePath.join(tempDir, linkTarget);
   }
 
   await writeFile(linkedPath, linkContent);
@@ -111,7 +122,7 @@ async function createAndPackageSkill(
   skillContent: string,
   options: Omit<PackageSkillOptions, 'outputPath'> = {}
 ) {
-  const skillPath = join(tempDir, 'SKILL.md');
+  const skillPath = safePath.join(tempDir, 'SKILL.md');
   await writeFile(skillPath, skillContent);
   return packageSkillForTest(skillPath, options);
 }
@@ -140,13 +151,13 @@ async function testLinkRewriting(
     rewriteLinks: true,
   });
 
-  return readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
+  return readFile(safePath.join(result.outputPath, 'SKILL.md'), 'utf-8');
 }
 
 describe('skill-packager: extractSkillMetadata', () => {
   it('should extract required name from frontmatter', async () => {
     const tempDir = getTempDir();
-    const skillPath = join(tempDir, 'SKILL.md');
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
 
     await writeFile(
       skillPath,
@@ -160,7 +171,7 @@ describe('skill-packager: extractSkillMetadata', () => {
 
   it('should extract optional metadata fields', async () => {
     const tempDir = getTempDir();
-    const skillPath = join(tempDir, 'SKILL.md');
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
 
     await writeFile(
       skillPath,
@@ -186,8 +197,8 @@ describe('skill-packager: extractSkillMetadata', () => {
 
   it('should use H1 title as fallback if name missing in frontmatter', async () => {
     const tempDir = getTempDir();
-    const skillPath = join(tempDir, 'SKILL.md');
-    const outputPath = join(tempDir, 'output');
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
+    const outputPath = safePath.join(tempDir, 'output');
 
     await writeFile(
       skillPath,
@@ -200,8 +211,8 @@ describe('skill-packager: extractSkillMetadata', () => {
 
   it('should use filename as last resort if no name or H1', async () => {
     const tempDir = getTempDir();
-    const skillPath = join(tempDir, 'my-custom-skill.md');
-    const outputPath = join(tempDir, 'output');
+    const skillPath = safePath.join(tempDir, 'my-custom-skill.md');
+    const outputPath = safePath.join(tempDir, 'output');
 
     await writeFile(
       skillPath,
@@ -214,7 +225,7 @@ describe('skill-packager: extractSkillMetadata', () => {
 
   it('should trim whitespace from name', async () => {
     const tempDir = getTempDir();
-    const skillPath = join(tempDir, 'SKILL.md');
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
 
     await writeFile(
       skillPath,
@@ -230,8 +241,8 @@ describe('skill-packager: extractSkillMetadata', () => {
 describe('skill-packager: collectLinkedResources', () => {
   it('should collect single linked markdown file', async () => {
     const tempDir = getTempDir();
-    const skillPath = join(tempDir, 'SKILL.md');
-    const linkedPath = join(tempDir, GUIDE_MD);
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
+    const linkedPath = safePath.join(tempDir, GUIDE_MD);
 
     await writeFile(linkedPath, '# Guide\n\nLinked content.');
     await writeFile(
@@ -257,9 +268,9 @@ describe('skill-packager: collectLinkedResources', () => {
 
   it('should handle circular references without infinite loop', async () => {
     const tempDir = getTempDir();
-    const skillPath = join(tempDir, 'SKILL.md');
-    const aPath = join(tempDir, 'a.md');
-    const bPath = join(tempDir, 'b.md');
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
+    const aPath = safePath.join(tempDir, 'a.md');
+    const bPath = safePath.join(tempDir, 'b.md');
 
     // Create circular references: SKILL -> a -> b -> a
     await writeFile(aPath, '# A\n\nSee [b](./b.md).');
@@ -279,7 +290,7 @@ describe('skill-packager: collectLinkedResources', () => {
 
   it('should skip non-local links (http, https, mailto)', async () => {
     const tempDir = getTempDir();
-    const skillPath = join(tempDir, 'SKILL.md');
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
 
     await writeFile(
       skillPath,
@@ -305,8 +316,8 @@ describe('skill-packager: collectLinkedResources', () => {
 
   it('should handle links with anchors by stripping anchor', async () => {
     const tempDir = getTempDir();
-    const skillPath = join(tempDir, 'SKILL.md');
-    const guidePath = join(tempDir, GUIDE_MD);
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
+    const guidePath = safePath.join(tempDir, GUIDE_MD);
 
     await writeFile(guidePath, '# Guide\n\n## Section\n\nContent.');
     await writeFile(
@@ -322,9 +333,9 @@ describe('skill-packager: collectLinkedResources', () => {
 
   it('should collect files from subdirectories', async () => {
     const tempDir = getTempDir();
-    const skillPath = join(tempDir, 'SKILL.md');
-    const docsDir = join(tempDir, 'docs');
-    const docPath = join(docsDir, GUIDE_MD);
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
+    const docsDir = safePath.join(tempDir, 'docs');
+    const docPath = safePath.join(docsDir, GUIDE_MD);
 
     await mkdir(docsDir, { recursive: true });
     await writeFile(docPath, GUIDE_CONTENT);
@@ -353,8 +364,8 @@ describe('skill-packager: collectLinkedResources', () => {
 
   it('should skip non-.md files', async () => {
     const tempDir = getTempDir();
-    const skillPath = join(tempDir, 'SKILL.md');
-    const imagePath = join(tempDir, 'image.png');
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
+    const imagePath = safePath.join(tempDir, 'image.png');
 
     await writeFile(imagePath, 'fake-image-data');
     await writeFile(
@@ -379,12 +390,7 @@ describe('skill-packager: link rewriting', () => {
       '# Guide'
     );
 
-    const result = await packageSkillForTest(skillPath, {
-      formats: ['directory'],
-      rewriteLinks: true,
-    });
-
-    const copiedContent = await readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
+    const copiedContent = await packageAndReadSkillContent(skillPath);
     expect(copiedContent).toContain('[guide](resources/guide.md)');
   });
 
@@ -402,7 +408,7 @@ describe('skill-packager: link rewriting', () => {
       rewriteLinks: false,
     });
 
-    const copiedContent = await readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
+    const copiedContent = await readFile(safePath.join(result.outputPath, 'SKILL.md'), 'utf-8');
     expect(copiedContent).toContain('[guide](./guide.md)');
   });
 
@@ -415,7 +421,7 @@ describe('skill-packager: link rewriting', () => {
       { formats: ['directory'], rewriteLinks: true }
     );
 
-    const copiedContent = await readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
+    const copiedContent = await readFile(safePath.join(result.outputPath, 'SKILL.md'), 'utf-8');
     expect(copiedContent).toContain('[external](https://example.com)');
     expect(copiedContent).toContain('[mailto](mailto:test@example.com)');
   });
@@ -428,7 +434,7 @@ describe('skill-packager: link rewriting', () => {
       { formats: ['directory'], rewriteLinks: true }
     );
 
-    const copiedContent = await readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
+    const copiedContent = await readFile(safePath.join(result.outputPath, 'SKILL.md'), 'utf-8');
     expect(copiedContent).toContain('[section](#section)');
   });
 
@@ -459,21 +465,16 @@ describe('skill-packager: link rewriting', () => {
 
   it('should rewrite reference-style links', async () => {
     const tempDir = getTempDir();
-    const skillPath = join(tempDir, 'SKILL.md');
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
 
-    await writeFile(join(tempDir, GUIDE_MD), '# Guide');
+    await writeFile(safePath.join(tempDir, GUIDE_MD), '# Guide');
     await writeFile(
       skillPath,
       `${createFrontmatter({ name: TEST_SKILL_NAME })}\n\n` +
         `See [guide][guide-ref].\n\n[guide-ref]: ./guide.md`
     );
 
-    const result = await packageSkillForTest(skillPath, {
-      formats: ['directory'],
-      rewriteLinks: true,
-    });
-
-    const copiedContent = await readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
+    const copiedContent = await packageAndReadSkillContent(skillPath);
     expect(copiedContent).toContain('[guide-ref]: resources/guide.md');
   });
 });
@@ -487,16 +488,16 @@ describe('skill-packager: file copying', () => {
       { formats: ['directory'] }
     );
 
-    const copiedContent = await readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
+    const copiedContent = await readFile(safePath.join(result.outputPath, 'SKILL.md'), 'utf-8');
     expect(copiedContent).toContain('name: test-skill');
     expect(copiedContent).toContain(TEST_SKILL_CONTENT);
   });
 
   it('should copy linked files preserving directory structure', async () => {
     const tempDir = getTempDir();
-    const skillPath = join(tempDir, 'SKILL.md');
-    const docsDir = join(tempDir, 'docs');
-    const guidePath = join(docsDir, GUIDE_MD);
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
+    const docsDir = safePath.join(tempDir, 'docs');
+    const guidePath = safePath.join(docsDir, GUIDE_MD);
 
     await mkdir(docsDir, { recursive: true });
     await writeFile(guidePath, GUIDE_CONTENT);
@@ -509,7 +510,7 @@ describe('skill-packager: file copying', () => {
     const result = await packageSkillForTest(skillPath, { formats: ['directory'] });
 
     // Flat structure: all linked files under resources/ subdirectory
-    const copiedGuidePath = join(result.outputPath, 'resources', GUIDE_MD);
+    const copiedGuidePath = safePath.join(result.outputPath, 'resources', GUIDE_MD);
     const copiedGuideContent = await readFile(copiedGuidePath, 'utf-8');
 
     expect(copiedGuideContent).toBe(GUIDE_CONTENT);
@@ -517,7 +518,7 @@ describe('skill-packager: file copying', () => {
 
   it('should preserve file contents exactly when rewriteLinks is false', async () => {
     const tempDir = getTempDir();
-    const skillPath = join(tempDir, 'SKILL.md');
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
     const content = `${createFrontmatter({ name: TEST_SKILL_NAME })}\n\n# Test\n\nSpecial chars: àéïöü\nEmojis: 🐱🎉`;
 
     await writeFile(skillPath, content);
@@ -527,7 +528,7 @@ describe('skill-packager: file copying', () => {
       rewriteLinks: false,
     });
 
-    const copiedSkillPath = join(result.outputPath, 'SKILL.md');
+    const copiedSkillPath = safePath.join(result.outputPath, 'SKILL.md');
     const copiedContent = await readFile(copiedSkillPath, 'utf-8');
 
     expect(copiedContent).toBe(content);
@@ -540,11 +541,11 @@ describe('skill-packager: output path determination', () => {
 
     // Create package.json to establish package root
     await writeFile(
-      join(tempDir, 'package.json'),
+      safePath.join(tempDir, 'package.json'),
       JSON.stringify({ name: 'test-package' })
     );
 
-    const skillPath = join(tempDir, 'SKILL.md');
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
     await writeFile(
       skillPath,
       `${createFrontmatter({ name: TEST_SKILL_NAME })}\n\n# Test`
@@ -561,8 +562,8 @@ describe('skill-packager: output path determination', () => {
 
   it('should use custom output path when specified', async () => {
     const tempDir = getTempDir();
-    const customPath = join(tempDir, 'custom-output');
-    const skillPath = join(tempDir, 'SKILL.md');
+    const customPath = safePath.join(tempDir, 'custom-output');
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
 
     await writeFile(
       skillPath,
@@ -594,7 +595,7 @@ describe('skill-packager: depth-limited packaging', () => {
     expect(result.files.dependencies).not.toContain('level2.md');
 
     // The link to level2.md in level1.md should be rewritten to just the link text
-    const level1Content = await readFile(join(result.outputPath, 'resources', 'level1.md'), 'utf-8');
+    const level1Content = await readFile(safePath.join(result.outputPath, 'resources', 'level1.md'), 'utf-8');
     expect(level1Content).toContain('level2');
     expect(level1Content).not.toContain('[level2](');
 
@@ -605,8 +606,8 @@ describe('skill-packager: depth-limited packaging', () => {
 
   it('should use custom template for excluded link rewriting', async () => {
     const tempDir = getTempDir();
-    const skillPath = join(tempDir, 'SKILL.md');
-    const level1Path = join(tempDir, 'level1.md');
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
+    const level1Path = safePath.join(tempDir, 'level1.md');
 
     await writeFile(level1Path, '# Level 1\n\nContent.');
     await writeFile(
@@ -627,17 +628,17 @@ describe('skill-packager: depth-limited packaging', () => {
     expect(result.files.dependencies).not.toContain('level1.md');
 
     // The link in SKILL.md should be rewritten using the custom template
-    const skillContent = await readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
+    const skillContent = await readFile(safePath.join(result.outputPath, 'SKILL.md'), 'utf-8');
     expect(skillContent).toContain('important doc (search KB for details)');
     expect(skillContent).not.toContain('[important doc](');
   });
 
   it('should render all template variables (skill.name, link.resource.fileName, link.href)', async () => {
     const tempDir = getTempDir();
-    const subDir = join(tempDir, 'docs');
+    const subDir = safePath.join(tempDir, 'docs');
     await mkdir(subDir, { recursive: true });
-    const refPath = join(subDir, REFERENCE_MD);
-    const skillPath = join(tempDir, 'SKILL.md');
+    const refPath = safePath.join(subDir, REFERENCE_MD);
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
 
     await writeFile(refPath, '# Reference\n\nContent.');
     await writeFile(
@@ -654,15 +655,15 @@ describe('skill-packager: depth-limited packaging', () => {
       },
     });
 
-    const skillContent = await readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
+    const skillContent = await readFile(safePath.join(result.outputPath, 'SKILL.md'), 'utf-8');
     expect(skillContent).toContain('Search my-test-skill for reference.md (./docs/reference.md)');
     expect(skillContent).not.toContain('[ref](');
   });
 
   it('should bundle non-markdown assets as plain copies', async () => {
     const tempDir = getTempDir();
-    const skillPath = join(tempDir, 'SKILL.md');
-    const jsonPath = join(tempDir, CONFIG_JSON);
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
+    const jsonPath = safePath.join(tempDir, CONFIG_JSON);
     const jsonContent = JSON.stringify({ key: 'value' });
 
     await writeFile(jsonPath, jsonContent);
@@ -680,7 +681,7 @@ describe('skill-packager: depth-limited packaging', () => {
     expect(result.files.dependencies).toContain(CONFIG_JSON);
 
     // JSON file should be copied as-is (plain copy, not rewritten)
-    const copiedJson = await readFile(join(result.outputPath, 'resources', CONFIG_JSON), 'utf-8');
+    const copiedJson = await readFile(safePath.join(result.outputPath, 'resources', CONFIG_JSON), 'utf-8');
     expect(copiedJson).toBe(jsonContent);
   });
 
@@ -709,7 +710,7 @@ describe('skill-packager: depth-limited packaging', () => {
     expect(result.excludedReferences).toContain(GUIDE_MD);
 
     // The link in SKILL.md should be rewritten using the rule's template
-    const skillContent = await readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
+    const skillContent = await readFile(safePath.join(result.outputPath, 'SKILL.md'), 'utf-8');
     expect(skillContent).toContain('[Search: the guide]');
     expect(skillContent).not.toContain('[the guide](');
   });
@@ -718,10 +719,10 @@ describe('skill-packager: depth-limited packaging', () => {
 describe('skill-packager: integration', () => {
   it('should package skill with all components', async () => {
     const tempDir = getTempDir();
-    const skillPath = join(tempDir, 'SKILL.md');
-    const docsDir = join(tempDir, 'docs');
-    const guidePath = join(docsDir, GUIDE_MD);
-    const referencePath = join(docsDir, REFERENCE_MD);
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
+    const docsDir = safePath.join(tempDir, 'docs');
+    const guidePath = safePath.join(docsDir, GUIDE_MD);
+    const referencePath = safePath.join(docsDir, REFERENCE_MD);
 
     // Create linked structure
     await mkdir(docsDir, { recursive: true });
@@ -752,9 +753,9 @@ describe('skill-packager: integration', () => {
     expect(result.files.dependencies).toContain(toForwardSlash(`docs/${REFERENCE_MD}`));
 
     // Verify files copied (linked files under resources/ subdirectory)
-    const copiedSkill = await readFile(join(result.outputPath, 'SKILL.md'), 'utf-8');
-    const copiedGuide = await readFile(join(result.outputPath, 'resources', GUIDE_MD), 'utf-8');
-    const copiedReference = await readFile(join(result.outputPath, 'resources', REFERENCE_MD), 'utf-8');
+    const copiedSkill = await readFile(safePath.join(result.outputPath, 'SKILL.md'), 'utf-8');
+    const copiedGuide = await readFile(safePath.join(result.outputPath, 'resources', GUIDE_MD), 'utf-8');
+    const copiedReference = await readFile(safePath.join(result.outputPath, 'resources', REFERENCE_MD), 'utf-8');
 
     expect(copiedSkill).toContain(COMPLEX_SKILL_NAME);
     expect(copiedGuide).toContain('# Guide');

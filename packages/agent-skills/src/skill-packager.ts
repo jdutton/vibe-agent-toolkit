@@ -17,7 +17,7 @@
 
 import { existsSync, statSync } from 'node:fs';
 import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname } from 'node:path';
 
 import {
   ResourceRegistry,
@@ -26,7 +26,7 @@ import {
   type ParseResult,
   parseMarkdown,
 } from '@vibe-agent-toolkit/resources';
-import { findProjectRoot, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 
 import { walkLinkGraph, type WalkableRegistry } from './walk-link-graph.js';
 
@@ -279,7 +279,7 @@ export async function packageSkill(
   const maxDepth = linkFollowDepth === 'full' ? Infinity : linkFollowDepth;
 
   // Find the skill resource in the registry
-  const skillResource = registry.getResource(resolve(skillPath));
+  const skillResource = registry.getResource(safePath.resolve(skillPath));
   const skillResourceId = skillResource?.id ?? '';
 
   const { bundledResources, bundledAssets, excludedReferences } = walkLinkGraph(
@@ -308,8 +308,8 @@ export async function packageSkill(
     getDefaultSkillOutputPath(skillPath, skillMetadata.name);
 
   // 7. Clean stale output (skip when source SKILL.md lives inside the output, e.g. builder flow)
-  const resolvedOutput = toForwardSlash(resolve(outputPath));
-  const sourceInOutput = toForwardSlash(resolve(skillPath)).startsWith(resolvedOutput + '/');
+  const resolvedOutput = toForwardSlash(safePath.resolve(outputPath));
+  const sourceInOutput = toForwardSlash(safePath.resolve(skillPath)).startsWith(resolvedOutput + '/');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- outputPath is validated
   if (!sourceInOutput && existsSync(resolvedOutput)) {
     await rm(resolvedOutput, { recursive: true });
@@ -328,7 +328,7 @@ export async function packageSkill(
   if (skillResource) {
     outputResources.push({
       ...skillResource,
-      filePath: join(outputPath, 'SKILL.md'),
+      filePath: safePath.join(outputPath, 'SKILL.md'),
     });
   }
   // Include excluded resources (with source paths) for pattern-based rule matching
@@ -336,7 +336,7 @@ export async function packageSkill(
     if (excl.excludeReason === 'directory-target' || excl.excludeReason === 'outside-project') {
       continue;
     }
-    const exclResource = (registry as WalkableRegistry).getResource(resolve(excl.path));
+    const exclResource = (registry as WalkableRegistry).getResource(safePath.resolve(excl.path));
     if (exclResource && !outputResources.some(r => r.id === exclResource.id)) {
       outputResources.push(exclResource);
     }
@@ -348,7 +348,7 @@ export async function packageSkill(
     excludedReferences
       .filter(r => r.excludeReason !== 'directory-target' && r.excludeReason !== 'outside-project')
       .map(r => {
-        const res = (registry as WalkableRegistry).getResource(resolve(r.path));
+        const res = (registry as WalkableRegistry).getResource(safePath.resolve(r.path));
         return res?.id;
       })
       .filter((id): id is string => id !== undefined),
@@ -384,7 +384,7 @@ export async function packageSkill(
 
   // Get relative paths for result
   const relativeLinkedFiles = bundledFiles.map(f =>
-    toForwardSlash(relative(effectiveBasePath, f))
+    toForwardSlash(safePath.relative(effectiveBasePath, f))
   );
 
   // Build excluded reference paths for result
@@ -401,7 +401,7 @@ export async function packageSkill(
   if (excludedReferences.length > 0) {
     // Deduplicate excluded reference paths for the result
     const uniqueExcludedPaths = [...new Set(
-      excludedReferences.map(r => toForwardSlash(relative(skillRoot, r.path)))
+      excludedReferences.map(r => toForwardSlash(safePath.relative(skillRoot, r.path)))
     )];
     result.excludedReferences = uniqueExcludedPaths;
   }
@@ -454,7 +454,7 @@ function buildPathMap(
 ): Map<string, string> {
   const resourceSubdir = getResourceSubdir(target);
   const pathMap = new Map<string, string>();
-  pathMap.set(toForwardSlash(skillPath), join(outputPath, 'SKILL.md'));
+  pathMap.set(toForwardSlash(skillPath), safePath.join(outputPath, 'SKILL.md'));
 
   for (const linkedFile of bundledFiles) {
     const targetRelPath = generateTargetPath(
@@ -463,7 +463,7 @@ function buildPathMap(
       resourceNaming,
       stripPrefix
     );
-    const targetPath = join(outputPath, resourceSubdir, targetRelPath);
+    const targetPath = safePath.join(outputPath, resourceSubdir, targetRelPath);
 
     // Check for filename collisions
     const existingSource = [...pathMap.entries()].find(
@@ -613,7 +613,7 @@ async function copyAndRewriteFile(
   const content = await readFile(sourcePath, 'utf-8');
 
   // Look up the resource in the "from" registry
-  const resource = ctx.fromRegistry.getResource(resolve(sourcePath));
+  const resource = ctx.fromRegistry.getResource(safePath.resolve(sourcePath));
 
   if (!resource) {
     // Resource not in registry — write content as-is
@@ -724,7 +724,7 @@ function findCommonAncestor(filePaths: string[]): string {
   }
 
   // Normalize all paths
-  const normalizedPaths = filePaths.map(p => toForwardSlash(resolve(p)));
+  const normalizedPaths = filePaths.map(p => toForwardSlash(safePath.resolve(p)));
 
   // Split into path segments
   // eslint-disable-next-line local/no-hardcoded-path-split -- Paths are normalized to forward slashes by toForwardSlash()
@@ -775,7 +775,7 @@ function generateTargetPath(
   }
 
   const ext = filePath.substring(filePath.lastIndexOf('.'));
-  let relPath = relative(basePath, filePath);
+  let relPath = safePath.relative(basePath, filePath);
 
   // Strip prefix from relative path (if specified)
   // Works for both resource-id and preserve-path strategies
@@ -955,7 +955,7 @@ async function createNpmPackage(
     files: ['**/*.md'],
   };
 
-  const packageJsonPath = join(outputPath, PACKAGE_JSON_FILENAME);
+  const packageJsonPath = safePath.join(outputPath, PACKAGE_JSON_FILENAME);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path is constructed from validated outputPath
   await writeFile(
     packageJsonPath,
@@ -990,7 +990,7 @@ async function createMarketplaceManifest(
     created: new Date().toISOString(),
   };
 
-  const manifestPath = join(dirname(outputPath), `${metadata.name}.marketplace.json`);
+  const manifestPath = safePath.join(dirname(outputPath), `${metadata.name}.marketplace.json`);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path is constructed from validated outputPath
   await writeFile(
     manifestPath,
@@ -1012,7 +1012,7 @@ async function createMarketplaceManifest(
  */
 function getDefaultSkillOutputPath(skillPath: string, skillName: string): string {
   const skillPackageRoot = findPackageRoot(skillPath);
-  return join(skillPackageRoot, 'dist', 'skills', skillName);
+  return safePath.join(skillPackageRoot, 'dist', 'skills', skillName);
 }
 
 /**
@@ -1025,12 +1025,12 @@ function getDefaultSkillOutputPath(skillPath: string, skillName: string): string
  * @returns Package root directory (or skill's directory if fallback enabled)
  */
 function findPackageRoot(skillPath: string, fallbackToSkillDir = false): string {
-  let currentDir = dirname(resolve(skillPath));
+  let currentDir = dirname(safePath.resolve(skillPath));
   const skillDir = currentDir;
 
   // Walk up until we find a package.json or hit the filesystem root
   while (currentDir !== dirname(currentDir)) {
-    const packageJsonPath = join(currentDir, PACKAGE_JSON_FILENAME);
+    const packageJsonPath = safePath.join(currentDir, PACKAGE_JSON_FILENAME);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Searching for package.json
     if (existsSync(packageJsonPath)) {
       return currentDir;

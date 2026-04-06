@@ -6,7 +6,8 @@
  */
 
 import * as fs from 'node:fs';
-import { join } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import type { CliResult } from './cli-runner.js';
 import { executeAndParseYaml } from './cli-runner.js';
@@ -26,14 +27,14 @@ export function setupRagTestProject(
   });
 
   // Create test markdown files
-  const docsDir = join(projectDir, 'docs');
+  const docsDir = safePath.join(projectDir, 'docs');
   fs.writeFileSync(
-    join(docsDir, 'README.md'),
+    safePath.join(docsDir, 'README.md'),
     '# Documentation\n\n## Getting Started\n\nWelcome to the documentation.\n\n## API Reference\n\nAPI docs here.'
   );
 
   fs.writeFileSync(
-    join(docsDir, 'guide.md'),
+    safePath.join(docsDir, 'guide.md'),
     '# User Guide\n\n## Installation\n\nInstall the package.\n\n## Usage\n\nUse it like this.'
   );
 

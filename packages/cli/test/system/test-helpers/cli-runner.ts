@@ -7,9 +7,9 @@
 
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import { join } from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
 import { expect } from 'vitest';
 
@@ -54,9 +54,9 @@ export function executeCli(
 ): CliResult {
   // Create temp files for stdout/stderr to avoid Bun's 64KB buffer limit
   // eslint-disable-next-line sonarjs/pseudo-random -- Test utility, not security-sensitive
-  const stdoutFile = join(normalizedTmpdir(), `vat-test-stdout-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+  const stdoutFile = safePath.join(normalizedTmpdir(), `vat-test-stdout-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
   // eslint-disable-next-line sonarjs/pseudo-random -- Test utility, not security-sensitive
-  const stderrFile = join(normalizedTmpdir(), `vat-test-stderr-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
+  const stderrFile = safePath.join(normalizedTmpdir(), `vat-test-stderr-${Date.now()}-${Math.random().toString(36).slice(2)}.txt`);
 
   // Open file descriptors
   const stdoutFd = fs.openSync(stdoutFile, 'w');
@@ -187,7 +187,7 @@ export function testConfigError(
     withDocs: true,
   });
 
-  fs.writeFileSync(join(projectDir, 'docs/test.md'), '# Test');
+  fs.writeFileSync(safePath.join(projectDir, 'docs/test.md'), '# Test');
 
   // eslint-disable-next-line sonarjs/no-os-command-from-path
   return spawnSync('node', [binPath, 'resources', 'scan'], {

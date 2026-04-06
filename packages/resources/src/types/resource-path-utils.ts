@@ -5,9 +5,9 @@
  * All projectPath values must be relative with forward slashes.
  */
 
-import { join, normalize, sep } from 'node:path';
+import { normalize, sep } from 'node:path';
 
-import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 /**
  * Normalize a path to projectPath format
@@ -98,5 +98,5 @@ export function isValidProjectPath(projectPath: string): boolean {
  * @returns Absolute path to resource
  */
 export function getResourceAbsolutePath(projectRoot: string, projectPath: string): string {
-  return join(projectRoot, projectPath);
+  return safePath.join(projectRoot, projectPath);
 }

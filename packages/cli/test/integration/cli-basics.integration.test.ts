@@ -1,11 +1,12 @@
 import { spawnSync } from 'node:child_process';
-import { resolve, dirname } from 'node:path';
+import {  dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect } from 'vitest';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const binPath = resolve(__dirname, '../../dist/bin.js');
+const binPath = safePath.resolve(__dirname, '../../dist/bin.js');
 
 describe('CLI basics (integration)', () => {
   it('should show version', () => {

@@ -5,18 +5,19 @@
  * to verify self-hosting works correctly. No mocks - real execution.
  */
 
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { executeCli, getBinPath } from './test-common.js';
 
 // Get the project root (VAT repo root)
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PROJECT_ROOT = join(__dirname, '../../../..'); // from packages/cli/test/system/ to project root
-const PACKAGES_DIR = join(PROJECT_ROOT, 'packages');
-const CLI_DIR = join(PROJECT_ROOT, 'packages/cli');
+const PROJECT_ROOT = safePath.join(__dirname, '../../../..'); // from packages/cli/test/system/ to project root
+const PACKAGES_DIR = safePath.join(PROJECT_ROOT, 'packages');
+const CLI_DIR = safePath.join(PROJECT_ROOT, 'packages/cli');
 
 // Use the built CLI binary directly
 const CLI_BIN = getBinPath(import.meta.url);

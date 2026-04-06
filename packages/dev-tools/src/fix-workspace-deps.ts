@@ -10,12 +10,13 @@
  */
 
 import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { log } from './common.js';
 
 const PROJECT_ROOT = process.cwd();
-const PACKAGES_DIR = join(PROJECT_ROOT, 'packages');
+const PACKAGES_DIR = safePath.join(PROJECT_ROOT, 'packages');
 const SCOPE = '@vibe-agent-toolkit';
 const WORKSPACE_PROTOCOL = 'workspace:*';
 
@@ -39,7 +40,7 @@ function fixDependencies(deps: Record<string, string> | undefined): number {
 }
 
 function processPackage(packageDir: string): number {
-  const packageJsonPath = join(PACKAGES_DIR, packageDir, 'package.json');
+  const packageJsonPath = safePath.join(PACKAGES_DIR, packageDir, 'package.json');
   const packageJson = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as PackageJson;
 
   const fixedDeps = fixDependencies(packageJson.dependencies);

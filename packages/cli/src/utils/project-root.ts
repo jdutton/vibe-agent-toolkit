@@ -9,6 +9,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
+
 /**
  * Find project root by walking up directory tree
  *
@@ -36,19 +38,19 @@ export function findProjectRoot(startDir: string): string | null {
     return process.env['VAT_TEST_ROOT'];
   }
 
-  let current = path.resolve(startDir);
+  let current = safePath.resolve(startDir);
   const root = path.parse(current).root;
 
   while (current !== root) {
     // Check for .git directory
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path walking is intentional
-    if (fs.existsSync(path.join(current, '.git'))) {
+    if (fs.existsSync(safePath.join(current, '.git'))) {
       return current;
     }
 
     // Check for config file
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path walking is intentional
-    if (fs.existsSync(path.join(current, 'vibe-agent-toolkit.config.yaml'))) {
+    if (fs.existsSync(safePath.join(current, 'vibe-agent-toolkit.config.yaml'))) {
       return current;
     }
 

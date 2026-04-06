@@ -1,7 +1,7 @@
 import fs from 'node:fs';
-import { join } from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { runCliCommand } from '../test-helpers.js';
@@ -10,7 +10,7 @@ describe('agent validate command (integration)', () => {
   let tempDir: string;
 
   beforeAll(() => {
-    tempDir = fs.mkdtempSync(join(normalizedTmpdir(), 'vat-agent-validate-'));
+    tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-agent-validate-'));
   });
 
   afterAll(() => {
@@ -18,12 +18,12 @@ describe('agent validate command (integration)', () => {
   });
 
   it('should validate correct agent manifest', () => {
-    const agentDir = join(tempDir, 'valid-agent');
+    const agentDir = safePath.join(tempDir, 'valid-agent');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
     fs.mkdirSync(agentDir);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
     fs.writeFileSync(
-      join(agentDir, 'agent.yaml'),
+      safePath.join(agentDir, 'agent.yaml'),
       `metadata:
   name: test-agent
   version: 0.1.0
@@ -44,12 +44,12 @@ spec:
   });
 
   it('should show validation errors for invalid manifest', () => {
-    const agentDir = join(tempDir, 'invalid-agent');
+    const agentDir = safePath.join(tempDir, 'invalid-agent');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
     fs.mkdirSync(agentDir, { recursive: true });
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: tempDir is from mkdtempSync
     fs.writeFileSync(
-      join(agentDir, 'agent.yaml'),
+      safePath.join(agentDir, 'agent.yaml'),
       `metadata:
   name: invalid-agent
 spec:

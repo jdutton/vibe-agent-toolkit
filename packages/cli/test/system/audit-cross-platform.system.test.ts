@@ -7,8 +7,8 @@
 
 import * as fs from 'node:fs';
 import * as os from 'node:os';
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -27,13 +27,13 @@ describe('Audit Cross-Platform (system test)', () => {
   beforeAll(() => {
     binPath = getBinPath(import.meta.url);
     tempDir = createTestTempDir('vat-audit-platform-');
-    testResourcesDir = join(tempDir, 'resources');
+    testResourcesDir = safePath.join(tempDir, 'resources');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- testResourcesDir is controlled in tests
     fs.mkdirSync(testResourcesDir, { recursive: true });
 
     // Create a valid skill for testing (note: must be named SKILL.md)
     writeTestFile(
-      join(testResourcesDir, 'SKILL.md'),
+      safePath.join(testResourcesDir, 'SKILL.md'),
       `---
 name: test-skill
 description: Test skill
@@ -52,11 +52,11 @@ Test content.
 
   it('should expand ~ to home directory on current platform', () => {
     // Create a skill in a subdirectory of temp
-    const skillDir = join(tempDir, 'home-test');
+    const skillDir = safePath.join(tempDir, 'home-test');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillDir is controlled in tests
     fs.mkdirSync(skillDir, { recursive: true });
     writeTestFile(
-      join(skillDir, 'SKILL.md'),
+      safePath.join(skillDir, 'SKILL.md'),
       `---
 name: home-skill
 description: Home skill test

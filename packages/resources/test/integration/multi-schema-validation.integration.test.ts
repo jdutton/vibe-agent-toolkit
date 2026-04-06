@@ -11,8 +11,8 @@
 /* eslint-disable security/detect-non-literal-fs-filename */
 
 import { promises as fs } from 'node:fs';
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -50,8 +50,8 @@ describe('Multi-Schema Validation Integration', () => {
     };
 
     const schemas: SchemaReference[] = [
-      { schema: join(suite.tempDir, BASE_JSON), source: 'self', applied: false },
-      { schema: join(suite.tempDir, ENHANCED_JSON), source: 'cli', applied: false },
+      { schema: safePath.join(suite.tempDir, BASE_JSON), source: 'self', applied: false },
+      { schema: safePath.join(suite.tempDir, ENHANCED_JSON), source: 'cli', applied: false },
     ];
 
     // Strict mode: both schemas fail (extra fields)
@@ -94,7 +94,7 @@ describe('Multi-Schema Validation Integration', () => {
     };
 
     await fs.writeFile(
-      join(suite.tempDir, SCHEMA_JSON),
+      safePath.join(suite.tempDir, SCHEMA_JSON),
       JSON.stringify(schema),
       'utf-8'
     );
@@ -105,7 +105,7 @@ describe('Multi-Schema Validation Integration', () => {
     };
 
     const schemas: SchemaReference[] = [
-      { schema: join(suite.tempDir, SCHEMA_JSON), source: 'self', applied: false },
+      { schema: safePath.join(suite.tempDir, SCHEMA_JSON), source: 'self', applied: false },
     ];
 
     const results = await validateFrontmatterMultiSchema(
@@ -124,7 +124,7 @@ describe('Multi-Schema Validation Integration', () => {
 
   it('should handle schema loading errors gracefully', async () => {
     const schemas: SchemaReference[] = [
-      { schema: join(suite.tempDir, 'nonexistent.json'), source: 'cli', applied: false },
+      { schema: safePath.join(suite.tempDir, 'nonexistent.json'), source: 'cli', applied: false },
     ];
 
     const results = await validateFrontmatterMultiSchema(
@@ -150,7 +150,7 @@ describe('Multi-Schema Validation Integration', () => {
     };
 
     await fs.writeFile(
-      join(suite.tempDir, 'schema.json'),
+      safePath.join(suite.tempDir, 'schema.json'),
       JSON.stringify(schema),
       'utf-8'
     );
@@ -161,8 +161,8 @@ describe('Multi-Schema Validation Integration', () => {
 
     // Same schema, different sources (deduplication happens at assignment level)
     const schemas: SchemaReference[] = [
-      { schema: join(suite.tempDir, SCHEMA_JSON), source: 'self', applied: false },
-      { schema: join(suite.tempDir, SCHEMA_JSON), source: 'docs', applied: false },
+      { schema: safePath.join(suite.tempDir, SCHEMA_JSON), source: 'self', applied: false },
+      { schema: safePath.join(suite.tempDir, SCHEMA_JSON), source: 'docs', applied: false },
     ];
 
     const results = await validateFrontmatterMultiSchema(
@@ -188,13 +188,13 @@ describe('Multi-Schema Validation Integration', () => {
     };
 
     await fs.writeFile(
-      join(suite.tempDir, SCHEMA_JSON),
+      safePath.join(suite.tempDir, SCHEMA_JSON),
       JSON.stringify(schema),
       'utf-8'
     );
 
     const schemas: SchemaReference[] = [
-      { schema: join(suite.tempDir, SCHEMA_JSON), source: 'cli', applied: false },
+      { schema: safePath.join(suite.tempDir, SCHEMA_JSON), source: 'cli', applied: false },
     ];
 
     // No frontmatter provided
@@ -232,13 +232,13 @@ describe('Multi-Schema Validation Integration', () => {
     };
 
     await fs.writeFile(
-      join(suite.tempDir, BASE_JSON),
+      safePath.join(suite.tempDir, BASE_JSON),
       JSON.stringify(baseSchema),
       'utf-8'
     );
 
     await fs.writeFile(
-      join(suite.tempDir, ENHANCED_JSON),
+      safePath.join(suite.tempDir, ENHANCED_JSON),
       JSON.stringify(enhancedSchema),
       'utf-8'
     );
@@ -251,8 +251,8 @@ describe('Multi-Schema Validation Integration', () => {
     };
 
     const schemas: SchemaReference[] = [
-      { schema: join(suite.tempDir, BASE_JSON), source: 'docs', applied: false },
-      { schema: join(suite.tempDir, ENHANCED_JSON), source: 'guides', applied: false },
+      { schema: safePath.join(suite.tempDir, BASE_JSON), source: 'docs', applied: false },
+      { schema: safePath.join(suite.tempDir, ENHANCED_JSON), source: 'guides', applied: false },
     ];
 
     // Permissive mode: both pass

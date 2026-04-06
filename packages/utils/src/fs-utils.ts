@@ -5,6 +5,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+import { safePath } from './path-utils.js';
+
 /**
  * Recursively copy a directory
  *
@@ -21,8 +23,8 @@ export async function copyDirectory(src: string, dest: string): Promise<void> {
   const entries = await fs.readdir(src, { withFileTypes: true });
 
   for (const entry of entries) {
-    const srcPath = path.join(src, entry.name);
-    const destPath = path.join(dest, entry.name);
+    const srcPath = safePath.join(src, entry.name);
+    const destPath = safePath.join(dest, entry.name);
 
     if (entry.isDirectory()) {
       await copyDirectory(srcPath, destPath);

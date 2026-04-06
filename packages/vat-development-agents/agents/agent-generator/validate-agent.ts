@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+/* eslint-disable local/no-path-resolve -- standalone script, no utils dependency */
 /**
  * Validation script for agent.yaml
  *

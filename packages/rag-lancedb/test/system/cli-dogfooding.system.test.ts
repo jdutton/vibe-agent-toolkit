@@ -16,9 +16,9 @@
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
 
-import { getTestOutputDir } from '@vibe-agent-toolkit/utils';
+
+import { getTestOutputDir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { parse } from 'yaml';
 
@@ -61,12 +61,12 @@ function executeCliCommand(
 }
 
 describe('RAG CLI (Node.js dogfooding)', () => {
-  const projectRoot = resolve(__dirname, '../../../..');
-  const binPath = join(projectRoot, 'packages/cli/dist/bin.js');
+  const projectRoot = safePath.resolve(__dirname, '../../../..');
+  const binPath = safePath.join(projectRoot, 'packages/cli/dist/bin.js');
   // Use isolated test output directory to avoid conflicts in parallel test execution
   const testDbPath = getTestOutputDir('rag-lancedb', 'system', 'test-db');
   // Index only architecture docs (5 files) instead of all docs (53 files) for faster tests
-  const docsPath = join(projectRoot, 'docs/architecture');
+  const docsPath = safePath.join(projectRoot, 'docs/architecture');
 
   beforeAll(async () => {
     // Ensure CLI is built

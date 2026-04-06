@@ -28,7 +28,8 @@
 // File paths derived from PROJECT_ROOT and packagesDir constants (controlled, not user input)
 
 import { readdirSync, existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { PROJECT_ROOT, log, safeExecSync, safeExecResult } from './common.js';
 import { validatePackageList } from './validate-package-list.js';
@@ -57,7 +58,7 @@ function getPublishablePackages(packagesDir: string): Array<{ name: string; pkgJ
     .map(dirent => dirent.name);
 
   for (const pkg of packages) {
-    const pkgJsonPath = join(packagesDir, pkg, 'package.json');
+    const pkgJsonPath = safePath.join(packagesDir, pkg, 'package.json');
     if (existsSync(pkgJsonPath)) {
       const pkgJson = JSON.parse(readFileSync(pkgJsonPath, 'utf8')) as Record<string, unknown>;
 
@@ -272,7 +273,7 @@ if (skipGitChecks) {
 console.log('');
 console.log('Checking package list synchronization...');
 
-const packagesDir = join(PROJECT_ROOT, 'packages');
+const packagesDir = safePath.join(PROJECT_ROOT, 'packages');
 
 try {
   const validation = validatePackageList(PROJECT_ROOT);
@@ -329,9 +330,9 @@ try {
       continue;
     }
 
-    const distDir = join(packagesDir, pkg, 'dist');
+    const distDir = safePath.join(packagesDir, pkg, 'dist');
     if (!existsSync(distDir)) {
-      missingBuilds.push(join('packages', pkg, ''));
+      missingBuilds.push(safePath.join('packages', pkg, ''));
     }
   }
 } catch (error) {
@@ -537,7 +538,7 @@ if (skipGitChecks) {
 
   try {
     // Read version from umbrella package (monorepo canonical version)
-    const umbrellaPkgJsonPath = join(packagesDir, 'vibe-agent-toolkit', 'package.json');
+    const umbrellaPkgJsonPath = safePath.join(packagesDir, 'vibe-agent-toolkit', 'package.json');
     if (!existsSync(umbrellaPkgJsonPath)) {
       throw new Error('Umbrella package (vibe-agent-toolkit) package.json not found');
     }
@@ -549,7 +550,7 @@ if (skipGitChecks) {
     }
 
     // Read CHANGELOG.md
-    const changelogPath = join(PROJECT_ROOT, 'CHANGELOG.md');
+    const changelogPath = safePath.join(PROJECT_ROOT, 'CHANGELOG.md');
     if (!existsSync(changelogPath)) {
       log('✗ CHANGELOG.md not found', 'red');
       console.log('  Create CHANGELOG.md to document releases');
@@ -598,8 +599,8 @@ if (skipGitChecks) {
   console.log('');
   console.log('Checking marketplace publish readiness...');
 
-  const vatDevAgentsDir = join(packagesDir, 'vat-development-agents');
-  const vatConfigPath = join(vatDevAgentsDir, 'vibe-agent-toolkit.config.yaml');
+  const vatDevAgentsDir = safePath.join(packagesDir, 'vat-development-agents');
+  const vatConfigPath = safePath.join(vatDevAgentsDir, 'vibe-agent-toolkit.config.yaml');
 
   if (existsSync(vatConfigPath)) {
     try {

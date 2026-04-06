@@ -1,9 +1,8 @@
 
 /* eslint-disable security/detect-non-literal-fs-filename -- Test files use controlled temp directories */
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { validate } from '../../src/validators/unified-validator.js';
@@ -57,7 +56,7 @@ describe('validate (unified validator)', () => {
 	describe('registry validation', () => {
 		it('should route to installed plugins registry validator', async () => {
 			const tempDir = getTempDir();
-			const registryPath = path.join(tempDir, 'installed_plugins.json');
+			const registryPath = safePath.join(tempDir, 'installed_plugins.json');
 			fs.writeFileSync(
 				registryPath,
 				JSON.stringify(
@@ -78,7 +77,7 @@ describe('validate (unified validator)', () => {
 
 		it('should route to known marketplaces registry validator', async () => {
 			const tempDir = getTempDir();
-			const registryPath = path.join(tempDir, 'known_marketplaces.json');
+			const registryPath = safePath.join(tempDir, 'known_marketplaces.json');
 			// Known marketplaces registry is just a record (no version field)
 			fs.writeFileSync(registryPath, JSON.stringify({}, null, 2));
 
@@ -91,7 +90,7 @@ describe('validate (unified validator)', () => {
 
 	describe('unknown format handling', () => {
 		it('should return error for non-existent path', async () => {
-			const nonExistentPath = path.join(getTempDir(), 'does-not-exist');
+			const nonExistentPath = safePath.join(getTempDir(), 'does-not-exist');
 
 			const result = await validate(nonExistentPath);
 
@@ -104,7 +103,7 @@ describe('validate (unified validator)', () => {
 
 		it('should return error for directory without .claude-plugin', async () => {
 			const tempDir = getTempDir();
-			const emptyDir = path.join(tempDir, 'empty-dir');
+			const emptyDir = safePath.join(tempDir, 'empty-dir');
 			mkdirSyncReal(emptyDir, { recursive: true });
 
 			const result = await validate(emptyDir);
@@ -133,7 +132,7 @@ describe('validate (unified validator)', () => {
 
 		it('should return error for non-JSON file', async () => {
 			const tempDir = getTempDir();
-			const textFilePath = path.join(tempDir, 'test.txt');
+			const textFilePath = safePath.join(tempDir, 'test.txt');
 			fs.writeFileSync(textFilePath, 'not a json file');
 
 			const result = await validate(textFilePath);
@@ -146,7 +145,7 @@ describe('validate (unified validator)', () => {
 
 		it('should return error for unrecognized JSON file', async () => {
 			const tempDir = getTempDir();
-			const jsonFilePath = path.join(tempDir, 'random.json');
+			const jsonFilePath = safePath.join(tempDir, 'random.json');
 			fs.writeFileSync(jsonFilePath, JSON.stringify({ foo: 'bar' }));
 
 			const result = await validate(jsonFilePath);

@@ -1,9 +1,9 @@
 
 /* eslint-disable security/detect-non-literal-fs-filename */
 import { promises as fs } from 'node:fs';
-import { join } from 'node:path';
 
-import { setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+
+import { setupAsyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
 import { beforeEach, describe, expect, it, beforeAll, afterAll } from 'vitest';
 
 import { ResourceRegistry } from '../src/resource-registry.js';
@@ -32,8 +32,8 @@ describe('ResourceRegistry factory methods', () => {
     it('should create registry that can add resources', async () => {
       const registry = ResourceRegistry.empty(tempDir);
 
-      await fs.writeFile(join(tempDir, 'test.md'), '# Test', 'utf-8');
-      const resource = await registry.addResource(join(tempDir, 'test.md'));
+      await fs.writeFile(safePath.join(tempDir, 'test.md'), '# Test', 'utf-8');
+      const resource = await registry.addResource(safePath.join(tempDir, 'test.md'));
 
       expect(registry.size()).toBe(1);
       expect(resource).toBeDefined();
@@ -42,10 +42,10 @@ describe('ResourceRegistry factory methods', () => {
 
   describe('fromResources', () => {
     it('should create registry from resource array', async () => {
-      await fs.writeFile(join(tempDir, 'test.md'), '# Test', 'utf-8');
+      await fs.writeFile(safePath.join(tempDir, 'test.md'), '# Test', 'utf-8');
 
       const tempRegistry = new ResourceRegistry();
-      const resource = await tempRegistry.addResource(join(tempDir, 'test.md'));
+      const resource = await tempRegistry.addResource(safePath.join(tempDir, 'test.md'));
 
       const registry = ResourceRegistry.fromResources(tempDir, [resource]);
 
@@ -55,12 +55,12 @@ describe('ResourceRegistry factory methods', () => {
     });
 
     it('should build indexes from initial resources', async () => {
-      await fs.writeFile(join(tempDir, 'doc1.md'), '# Same', 'utf-8');
-      await fs.writeFile(join(tempDir, 'doc2.md'), '# Same', 'utf-8');
+      await fs.writeFile(safePath.join(tempDir, 'doc1.md'), '# Same', 'utf-8');
+      await fs.writeFile(safePath.join(tempDir, 'doc2.md'), '# Same', 'utf-8');
 
       const tempRegistry = new ResourceRegistry();
-      const resource1 = await tempRegistry.addResource(join(tempDir, 'doc1.md'));
-      const resource2 = await tempRegistry.addResource(join(tempDir, 'doc2.md'));
+      const resource1 = await tempRegistry.addResource(safePath.join(tempDir, 'doc1.md'));
+      const resource2 = await tempRegistry.addResource(safePath.join(tempDir, 'doc2.md'));
 
       const registry = ResourceRegistry.fromResources(tempDir, [resource1, resource2]);
 
@@ -78,14 +78,14 @@ describe('ResourceRegistry factory methods', () => {
     });
 
     it('should support name-based lookups', async () => {
-      await fs.writeFile(join(tempDir, 'README.md'), '# Root', 'utf-8');
-      await fs.mkdir(join(tempDir, 'docs'), { recursive: true });
-      await fs.writeFile(join(tempDir, 'docs/README.md'), '# Docs', 'utf-8');
+      await fs.writeFile(safePath.join(tempDir, 'README.md'), '# Root', 'utf-8');
+      await fs.mkdir(safePath.join(tempDir, 'docs'), { recursive: true });
+      await fs.writeFile(safePath.join(tempDir, 'docs/README.md'), '# Docs', 'utf-8');
 
       // Use baseDir so same-named files get unique path-relative IDs
       const tempRegistry = new ResourceRegistry({ baseDir: tempDir });
-      const resource1 = await tempRegistry.addResource(join(tempDir, 'README.md'));
-      const resource2 = await tempRegistry.addResource(join(tempDir, 'docs/README.md'));
+      const resource1 = await tempRegistry.addResource(safePath.join(tempDir, 'README.md'));
+      const resource2 = await tempRegistry.addResource(safePath.join(tempDir, 'docs/README.md'));
 
       const registry = ResourceRegistry.fromResources(tempDir, [resource1, resource2]);
 
@@ -96,8 +96,8 @@ describe('ResourceRegistry factory methods', () => {
 
   describe('fromCrawl', () => {
     it('should create registry by crawling directory', async () => {
-      await fs.writeFile(join(tempDir, 'doc1.md'), '# Doc 1', 'utf-8');
-      await fs.writeFile(join(tempDir, 'doc2.md'), '# Doc 2', 'utf-8');
+      await fs.writeFile(safePath.join(tempDir, 'doc1.md'), '# Doc 1', 'utf-8');
+      await fs.writeFile(safePath.join(tempDir, 'doc2.md'), '# Doc 2', 'utf-8');
 
       const registry = await ResourceRegistry.fromCrawl({
         baseDir: tempDir,
@@ -109,10 +109,10 @@ describe('ResourceRegistry factory methods', () => {
     });
 
     it('should respect exclude patterns', async () => {
-      await fs.mkdir(join(tempDir, 'public'), { recursive: true });
-      await fs.mkdir(join(tempDir, 'private'), { recursive: true });
-      await fs.writeFile(join(tempDir, 'public/doc.md'), '# Public', 'utf-8');
-      await fs.writeFile(join(tempDir, 'private/doc.md'), '# Private', 'utf-8');
+      await fs.mkdir(safePath.join(tempDir, 'public'), { recursive: true });
+      await fs.mkdir(safePath.join(tempDir, 'private'), { recursive: true });
+      await fs.writeFile(safePath.join(tempDir, 'public/doc.md'), '# Public', 'utf-8');
+      await fs.writeFile(safePath.join(tempDir, 'private/doc.md'), '# Private', 'utf-8');
 
       const registry = await ResourceRegistry.fromCrawl({
         baseDir: tempDir,
@@ -126,8 +126,8 @@ describe('ResourceRegistry factory methods', () => {
     });
 
     it('should handle nested directories', async () => {
-      await fs.mkdir(join(tempDir, 'docs/api'), { recursive: true });
-      await fs.writeFile(join(tempDir, 'docs/api/guide.md'), '# Guide', 'utf-8');
+      await fs.mkdir(safePath.join(tempDir, 'docs/api'), { recursive: true });
+      await fs.writeFile(safePath.join(tempDir, 'docs/api/guide.md'), '# Guide', 'utf-8');
 
       const registry = await ResourceRegistry.fromCrawl({
         baseDir: tempDir,
@@ -148,8 +148,8 @@ describe('ResourceRegistry factory methods', () => {
     });
 
     it('should detect duplicates during crawl', async () => {
-      await fs.writeFile(join(tempDir, 'doc1.md'), '# Same Content', 'utf-8');
-      await fs.writeFile(join(tempDir, 'doc2.md'), '# Same Content', 'utf-8');
+      await fs.writeFile(safePath.join(tempDir, 'doc1.md'), '# Same Content', 'utf-8');
+      await fs.writeFile(safePath.join(tempDir, 'doc2.md'), '# Same Content', 'utf-8');
 
       const registry = await ResourceRegistry.fromCrawl({
         baseDir: tempDir,

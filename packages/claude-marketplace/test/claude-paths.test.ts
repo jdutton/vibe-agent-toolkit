@@ -1,7 +1,7 @@
 import { homedir } from 'node:os';
-import { join } from 'node:path';
 
-import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+
+import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, it, expect } from 'vitest';
 
 import { getClaudeUserPaths, getClaudeProjectPaths } from '../src/paths/claude-paths.js';
@@ -24,15 +24,15 @@ describe('getClaudeUserPaths', () => {
     const paths = getClaudeUserPaths();
     const home = homedir();
 
-    expect(paths.claudeDir).toBe(join(home, '.claude'));
-    expect(paths.pluginsDir).toBe(join(home, '.claude', 'plugins'));
-    expect(paths.skillsDir).toBe(join(home, '.claude', 'skills'));
-    expect(paths.marketplacesDir).toBe(join(home, '.claude', 'plugins', 'marketplaces'));
-    expect(paths.pluginsCacheDir).toBe(join(home, '.claude', 'plugins', 'cache'));
-    expect(paths.knownMarketplacesPath).toBe(join(home, '.claude', 'plugins', 'known_marketplaces.json'));
-    expect(paths.installedPluginsPath).toBe(join(home, '.claude', 'plugins', 'installed_plugins.json'));
-    expect(paths.userSettingsPath).toBe(join(home, '.claude', 'settings.json'));
-    expect(paths.userDotJsonPath).toBe(join(home, '.claude.json'));
+    expect(paths.claudeDir).toBe(safePath.join(home, '.claude'));
+    expect(paths.pluginsDir).toBe(safePath.join(home, '.claude', 'plugins'));
+    expect(paths.skillsDir).toBe(safePath.join(home, '.claude', 'skills'));
+    expect(paths.marketplacesDir).toBe(safePath.join(home, '.claude', 'plugins', 'marketplaces'));
+    expect(paths.pluginsCacheDir).toBe(safePath.join(home, '.claude', 'plugins', 'cache'));
+    expect(paths.knownMarketplacesPath).toBe(safePath.join(home, '.claude', 'plugins', 'known_marketplaces.json'));
+    expect(paths.installedPluginsPath).toBe(safePath.join(home, '.claude', 'plugins', 'installed_plugins.json'));
+    expect(paths.userSettingsPath).toBe(safePath.join(home, '.claude', 'settings.json'));
+    expect(paths.userDotJsonPath).toBe(safePath.join(home, '.claude.json'));
   });
 
   it('should use CLAUDE_CONFIG_DIR when set', () => {
@@ -41,9 +41,9 @@ describe('getClaudeUserPaths', () => {
     const paths = getClaudeUserPaths();
 
     expect(paths.claudeDir).toBe(customDir);
-    expect(paths.pluginsDir).toBe(join(customDir, 'plugins'));
-    expect(paths.skillsDir).toBe(join(customDir, 'skills'));
-    expect(paths.userSettingsPath).toBe(join(customDir, 'settings.json'));
+    expect(paths.pluginsDir).toBe(safePath.join(customDir, 'plugins'));
+    expect(paths.skillsDir).toBe(safePath.join(customDir, 'skills'));
+    expect(paths.userSettingsPath).toBe(safePath.join(customDir, 'settings.json'));
   });
 
   it('should return consistent paths on multiple calls', () => {

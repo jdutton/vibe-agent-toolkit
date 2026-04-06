@@ -29,11 +29,12 @@
 
 import { existsSync } from 'node:fs';
 import { readdir, stat } from 'node:fs/promises';
-import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
+
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
-const REPO_ROOT = join(__dirname, '../../..');
+const REPO_ROOT = safePath.join(__dirname, '../../..');
 
 /**
  * Validation error type constants
@@ -80,8 +81,8 @@ async function walkDirectory(
   }
 
   for (const entry of entries) {
-    const fullPath = join(dir, entry.name);
-    const relPath = join(relativePath, entry.name);
+    const fullPath = safePath.join(dir, entry.name);
+    const relPath = safePath.join(relativePath, entry.name);
 
     if (entry.isDirectory()) {
       // Check if we should skip this directory
@@ -111,12 +112,12 @@ async function walkDirectory(
 async function forEachPackageFixturesDir(
   checkDirectory: (dir: string, relativePath: string) => Promise<void>,
 ): Promise<void> {
-  const packagesDir = join(REPO_ROOT, 'packages');
+  const packagesDir = safePath.join(REPO_ROOT, 'packages');
   const entries = await readdir(packagesDir, { withFileTypes: true });
 
   for (const entry of entries) {
     if (entry.isDirectory()) {
-      const fixturesDir = join(packagesDir, entry.name, 'test', 'fixtures');
+      const fixturesDir = safePath.join(packagesDir, entry.name, 'test', 'fixtures');
       await checkDirectory(fixturesDir, `packages/${entry.name}/test/fixtures`);
     }
   }
@@ -127,7 +128,7 @@ async function forEachPackageFixturesDir(
  * Demos should be in vat-example-cat-agents/examples/
  */
 async function validateNoRuntimeExamples(): Promise<void> {
-  const packagesDir = join(REPO_ROOT, 'packages');
+  const packagesDir = safePath.join(REPO_ROOT, 'packages');
   const entries = await readdir(packagesDir, { withFileTypes: true });
 
   for (const entry of entries) {
@@ -137,7 +138,7 @@ async function validateNoRuntimeExamples(): Promise<void> {
 
     // Check runtime-* packages for /examples
     if (entry.name.startsWith('runtime-')) {
-      const examplesDir = join(packagesDir, entry.name, 'examples');
+      const examplesDir = safePath.join(packagesDir, entry.name, 'examples');
       if (existsSync(examplesDir)) {
         errors.push({
           type: ERROR_TYPES.FORBIDDEN_DIRECTORY,
@@ -156,7 +157,7 @@ async function validateNoRuntimeExamples(): Promise<void> {
  * Allowed: dev-tools (repo utilities), agent-schema, agent-skills (schema generation)
  */
 async function validateScriptsLocation(): Promise<void> {
-  const packagesDir = join(REPO_ROOT, 'packages');
+  const packagesDir = safePath.join(REPO_ROOT, 'packages');
   const entries = await readdir(packagesDir, { withFileTypes: true });
 
   const allowedScriptsPackages = new Set([
@@ -172,7 +173,7 @@ async function validateScriptsLocation(): Promise<void> {
       continue;
     }
 
-    const scriptsDir = join(packagesDir, entry.name, 'scripts');
+    const scriptsDir = safePath.join(packagesDir, entry.name, 'scripts');
     if (existsSync(scriptsDir)) {
       errors.push({
         type: ERROR_TYPES.FORBIDDEN_DIRECTORY,

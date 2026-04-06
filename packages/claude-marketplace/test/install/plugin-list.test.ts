@@ -4,9 +4,9 @@
 // Test helper — file paths are controlled by test code, not user input
 
 import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { listLocalPlugins } from '../../src/install/plugin-list.js';
@@ -73,9 +73,9 @@ describe('listLocalPlugins', () => {
 
   it('lists legacy skills from skillsDir (directories)', () => {
     const paths = getPaths();
-    const skillDir = join(paths.skillsDir, 'old-skill');
+    const skillDir = safePath.join(paths.skillsDir, 'old-skill');
     mkdirSyncReal(skillDir, { recursive: true });
-    writeFileSync(join(skillDir, 'SKILL.md'), '# old-skill');
+    writeFileSync(safePath.join(skillDir, 'SKILL.md'), '# old-skill');
 
     const result = listLocalPlugins(paths);
     expect(result.legacySkillsDir).toBe(1);
@@ -89,7 +89,7 @@ describe('listLocalPlugins', () => {
   it('skips non-directory/non-symlink entries in skillsDir', () => {
     const paths = getPaths();
     // Write a plain file (not a skill dir)
-    writeFileSync(join(paths.skillsDir, 'not-a-skill.txt'), 'text');
+    writeFileSync(safePath.join(paths.skillsDir, 'not-a-skill.txt'), 'text');
 
     const result = listLocalPlugins(paths);
     expect(result.legacySkillsDir).toBe(0);

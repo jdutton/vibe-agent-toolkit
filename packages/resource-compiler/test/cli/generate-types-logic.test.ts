@@ -6,9 +6,9 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test file with controlled inputs */
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+
+import { setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
 import { glob } from 'glob';
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 
@@ -82,7 +82,7 @@ title: Test Document
 
 Content here.`;
 
-      const mdPath = join(inputDir, 'test.md');
+      const mdPath = safePath.join(inputDir, 'test.md');
       writeFileSync(mdPath, mdContent, 'utf-8');
 
       const results = await generateTypesForDirectory(inputDir, '**/*.md');
@@ -90,7 +90,7 @@ Content here.`;
       expect(results).toHaveLength(1);
       expect(results[0]?.success).toBe(true);
 
-      const dtsPath = join(inputDir, 'test.md.d.ts');
+      const dtsPath = safePath.join(inputDir, 'test.md.d.ts');
       expect(existsSync(dtsPath)).toBe(true);
 
       const dtsContent = readFileSync(dtsPath, 'utf-8');
@@ -113,7 +113,7 @@ Content here.`;
       expect(results.every((r) => r.success)).toBe(true);
 
       for (const file of files) {
-        const dtsPath = join(inputDir, `${file}.d.ts`);
+        const dtsPath = safePath.join(inputDir, `${file}.d.ts`);
         expect(existsSync(dtsPath)).toBe(true);
 
         const dtsContent = readFileSync(dtsPath, 'utf-8');
@@ -136,26 +136,26 @@ Content here.`;
       expect(results).toHaveLength(4);
       expect(results.every((r) => r.success)).toBe(true);
 
-      expect(existsSync(join(inputDir, 'root.md.d.ts'))).toBe(true);
-      expect(existsSync(join(inputDir, 'docs/guide.md.d.ts'))).toBe(true);
-      expect(existsSync(join(inputDir, 'docs/api/reference.md.d.ts'))).toBe(true);
-      expect(existsSync(join(inputDir, 'examples/basic.md.d.ts'))).toBe(true);
+      expect(existsSync(safePath.join(inputDir, 'root.md.d.ts'))).toBe(true);
+      expect(existsSync(safePath.join(inputDir, 'docs/guide.md.d.ts'))).toBe(true);
+      expect(existsSync(safePath.join(inputDir, 'docs/api/reference.md.d.ts'))).toBe(true);
+      expect(existsSync(safePath.join(inputDir, 'examples/basic.md.d.ts'))).toBe(true);
     });
   });
 
   describe('error handling', () => {
     it('should continue on individual file errors', async () => {
-      writeFileSync(join(inputDir, 'valid.md'), '# Valid\n\n## Section\n\nContent', 'utf-8');
-      writeFileSync(join(inputDir, 'broken.md'), '---\nbroken: [unclosed\n---\n\n## Test', 'utf-8');
-      writeFileSync(join(inputDir, 'also-valid.md'), '# Also Valid\n\n## Section\n\nMore', 'utf-8');
+      writeFileSync(safePath.join(inputDir, 'valid.md'), '# Valid\n\n## Section\n\nContent', 'utf-8');
+      writeFileSync(safePath.join(inputDir, 'broken.md'), '---\nbroken: [unclosed\n---\n\n## Test', 'utf-8');
+      writeFileSync(safePath.join(inputDir, 'also-valid.md'), '# Also Valid\n\n## Section\n\nMore', 'utf-8');
 
       const results = await generateTypesForDirectory(inputDir, '**/*.md');
 
       verifyOperationResults(results, 3, 2);
 
-      expect(existsSync(join(inputDir, 'valid.md.d.ts'))).toBe(true);
-      expect(existsSync(join(inputDir, 'also-valid.md.d.ts'))).toBe(true);
-      expect(existsSync(join(inputDir, 'broken.md.d.ts'))).toBe(false);
+      expect(existsSync(safePath.join(inputDir, 'valid.md.d.ts'))).toBe(true);
+      expect(existsSync(safePath.join(inputDir, 'also-valid.md.d.ts'))).toBe(true);
+      expect(existsSync(safePath.join(inputDir, 'broken.md.d.ts'))).toBe(false);
     });
   });
 
@@ -172,11 +172,11 @@ tags: [one, two, three]
 
 Content`;
 
-      writeFileSync(join(inputDir, 'complex.md'), mdContent, 'utf-8');
+      writeFileSync(safePath.join(inputDir, 'complex.md'), mdContent, 'utf-8');
 
       await generateTypesForDirectory(inputDir, '**/*.md');
 
-      const dtsContent = readFileSync(join(inputDir, 'complex.md.d.ts'), 'utf-8');
+      const dtsContent = readFileSync(safePath.join(inputDir, 'complex.md.d.ts'), 'utf-8');
 
       expect(dtsContent).toContain('readonly title: string;');
       expect(dtsContent).toContain('readonly version: number;');
@@ -191,11 +191,11 @@ Content`;
 
 Content without frontmatter.`;
 
-      writeFileSync(join(inputDir, 'simple.md'), mdContent, 'utf-8');
+      writeFileSync(safePath.join(inputDir, 'simple.md'), mdContent, 'utf-8');
 
       await generateTypesForDirectory(inputDir, '**/*.md');
 
-      const dtsContent = readFileSync(join(inputDir, 'simple.md.d.ts'), 'utf-8');
+      const dtsContent = readFileSync(safePath.join(inputDir, 'simple.md.d.ts'), 'utf-8');
 
       expect(dtsContent).toContain('export const meta: {}');
       expect(dtsContent).toContain('readonly section: Fragment;');
@@ -210,11 +210,11 @@ title: No Fragments
 
 No H2 headings here.`;
 
-      writeFileSync(join(inputDir, 'no-fragments.md'), mdContent, 'utf-8');
+      writeFileSync(safePath.join(inputDir, 'no-fragments.md'), mdContent, 'utf-8');
 
       await generateTypesForDirectory(inputDir, '**/*.md');
 
-      const dtsContent = readFileSync(join(inputDir, 'no-fragments.md.d.ts'), 'utf-8');
+      const dtsContent = readFileSync(safePath.join(inputDir, 'no-fragments.md.d.ts'), 'utf-8');
 
       expect(dtsContent).toContain('export const fragments: {}');
       expect(dtsContent).toContain('export type FragmentName = never;');

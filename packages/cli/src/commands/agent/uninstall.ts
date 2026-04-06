@@ -3,7 +3,8 @@
  */
 
 import fs from 'node:fs/promises';
-import path from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
@@ -31,7 +32,7 @@ export async function uninstallAgent(
     // Validate scope and get target location
     const targetLocation = validateAndGetScopeLocation(runtime, scope);
 
-    const installPath = path.join(targetLocation, agentName);
+    const installPath = safePath.join(targetLocation, agentName);
 
     // Check if installed
     try {

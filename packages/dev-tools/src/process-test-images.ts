@@ -19,8 +19,9 @@
 // This utility script needs to process user-provided image paths
 
 import { mkdir, readdir, stat } from 'node:fs/promises';
-import { basename, extname, join } from 'node:path';
+import { basename, extname } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import sharp from 'sharp';
 import { z } from 'zod';
 
@@ -242,8 +243,8 @@ async function processDirectory(inputDir: string, outputDir: string, config?: Pr
       continue;
     }
 
-    const inputPath = join(inputDir, entry.name);
-    const outputPath = join(outputDir, entry.name);
+    const inputPath = safePath.join(inputDir, entry.name);
+    const outputPath = safePath.join(outputDir, entry.name);
 
     try {
       const metadata = await promptForMetadata(entry.name);

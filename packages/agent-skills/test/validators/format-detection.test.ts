@@ -1,9 +1,8 @@
 
 /* eslint-disable security/detect-non-literal-fs-filename -- test helpers use controlled temp directories */
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { detectResourceFormat } from '../../src/validators/format-detection.js';
@@ -39,7 +38,7 @@ describe('detectResourceFormat', () => {
 
 		it('should detect directory without .claude-plugin as unknown', async () => {
 			const tempDir = getTempDir();
-			const emptyDir = path.join(tempDir, 'empty');
+			const emptyDir = safePath.join(tempDir, 'empty');
 			mkdirSyncReal(emptyDir);
 
 			const result = await detectResourceFormat(emptyDir);
@@ -53,8 +52,8 @@ describe('detectResourceFormat', () => {
 	describe('Marketplace detection', () => {
 		it('should detect a valid marketplace directory', async () => {
 			const tempDir = getTempDir();
-			const marketplaceDir = path.join(tempDir, TEST_MARKETPLACE_NAME);
-			const claudePluginDir = path.join(marketplaceDir, CLAUDE_PLUGIN_DIR);
+			const marketplaceDir = safePath.join(tempDir, TEST_MARKETPLACE_NAME);
+			const claudePluginDir = safePath.join(marketplaceDir, CLAUDE_PLUGIN_DIR);
 			mkdirSyncReal(claudePluginDir, { recursive: true });
 
 			const marketplaceData = {
@@ -65,7 +64,7 @@ describe('detectResourceFormat', () => {
 				plugins: [],
 			};
 			fs.writeFileSync(
-				path.join(claudePluginDir, 'marketplace.json'),
+				safePath.join(claudePluginDir, 'marketplace.json'),
 				JSON.stringify(marketplaceData, null, 2),
 			);
 
@@ -79,8 +78,8 @@ describe('detectResourceFormat', () => {
 	describe('Ambiguous detection', () => {
 		it('should detect co-located plugin as marketplace (valid pattern)', async () => {
 			const tempDir = getTempDir();
-			const colocatedDir = path.join(tempDir, 'colocated-marketplace');
-			const claudePluginDir = path.join(colocatedDir, CLAUDE_PLUGIN_DIR);
+			const colocatedDir = safePath.join(tempDir, 'colocated-marketplace');
+			const claudePluginDir = safePath.join(colocatedDir, CLAUDE_PLUGIN_DIR);
 			mkdirSyncReal(claudePluginDir, { recursive: true });
 
 			// Create plugin.json
@@ -90,7 +89,7 @@ describe('detectResourceFormat', () => {
 				version: '1.0.0',
 			};
 			fs.writeFileSync(
-				path.join(claudePluginDir, 'plugin.json'),
+				safePath.join(claudePluginDir, 'plugin.json'),
 				JSON.stringify(pluginData, null, 2),
 			);
 
@@ -108,7 +107,7 @@ describe('detectResourceFormat', () => {
 				],
 			};
 			fs.writeFileSync(
-				path.join(claudePluginDir, 'marketplace.json'),
+				safePath.join(claudePluginDir, 'marketplace.json'),
 				JSON.stringify(marketplaceData, null, 2),
 			);
 
@@ -138,7 +137,7 @@ describe('detectResourceFormat', () => {
 	describe('Registry detection', () => {
 		it('should detect installed_plugins.json as installed-plugins-registry', async () => {
 			const tempDir = getTempDir();
-			const registryPath = path.join(tempDir, 'installed_plugins.json');
+			const registryPath = safePath.join(tempDir, 'installed_plugins.json');
 			fs.writeFileSync(registryPath, JSON.stringify({ plugins: [] }, null, 2));
 
 			const result = await detectResourceFormat(registryPath);
@@ -152,7 +151,7 @@ describe('detectResourceFormat', () => {
 
 		it('should detect known_marketplaces.json as known-marketplaces-registry', async () => {
 			const tempDir = getTempDir();
-			const registryPath = path.join(tempDir, 'known_marketplaces.json');
+			const registryPath = safePath.join(tempDir, 'known_marketplaces.json');
 			fs.writeFileSync(
 				registryPath,
 				JSON.stringify({ marketplaces: [] }, null, 2),
@@ -169,7 +168,7 @@ describe('detectResourceFormat', () => {
 
 		it('should return unknown for JSON file that is not a recognized registry', async () => {
 			const tempDir = getTempDir();
-			const jsonPath = path.join(tempDir, 'random.json');
+			const jsonPath = safePath.join(tempDir, 'random.json');
 			fs.writeFileSync(jsonPath, JSON.stringify({ foo: 'bar' }, null, 2));
 
 			const result = await detectResourceFormat(jsonPath);
@@ -181,7 +180,7 @@ describe('detectResourceFormat', () => {
 
 		it('should return unknown for file without .json extension', async () => {
 			const tempDir = getTempDir();
-			const txtPath = path.join(tempDir, 'installed_plugins.txt');
+			const txtPath = safePath.join(tempDir, 'installed_plugins.txt');
 			fs.writeFileSync(txtPath, 'not json');
 
 			const result = await detectResourceFormat(txtPath);
@@ -193,7 +192,7 @@ describe('detectResourceFormat', () => {
 
 		it('should be case-sensitive for registry filenames', async () => {
 			const tempDir = getTempDir();
-			const registryPath = path.join(tempDir, 'Installed_Plugins.json');
+			const registryPath = safePath.join(tempDir, 'Installed_Plugins.json');
 			fs.writeFileSync(registryPath, JSON.stringify({ plugins: [] }, null, 2));
 
 			const result = await detectResourceFormat(registryPath);
@@ -206,7 +205,7 @@ describe('detectResourceFormat', () => {
 
 	describe('Error handling', () => {
 		it('should return unknown for non-existent path', async () => {
-			const nonExistentPath = path.join(getTempDir(), 'does-not-exist');
+			const nonExistentPath = safePath.join(getTempDir(), 'does-not-exist');
 
 			const result = await detectResourceFormat(nonExistentPath);
 
@@ -223,7 +222,7 @@ describe('detectResourceFormat', () => {
 			}
 
 			const tempDir = getTempDir();
-			const restrictedDir = path.join(tempDir, 'restricted');
+			const restrictedDir = safePath.join(tempDir, 'restricted');
 			mkdirSyncReal(restrictedDir);
 			fs.chmodSync(restrictedDir, 0o000);
 

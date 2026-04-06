@@ -13,9 +13,9 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with controlled temp dirs */
 import * as nodeFs from 'node:fs';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ZipSizeLimitError, packageSkill } from '../src/skill-packager.js';
@@ -52,7 +52,7 @@ const CLAUDE_WEB = 'claude-web' as const;
 let tempDir: string;
 
 beforeEach(() => {
-  tempDir = mkdtempSync(join(normalizedTmpdir(), 'zip-size-test-'));
+  tempDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'zip-size-test-'));
   vi.clearAllMocks();
 });
 
@@ -67,7 +67,7 @@ afterEach(() => {
 
 /** Write a minimal SKILL.md and return its path */
 function writeSkillMd(dir: string, body: string): string {
-  const skillPath = join(dir, 'SKILL.md');
+  const skillPath = safePath.join(dir, 'SKILL.md');
   writeFileSync(skillPath, `${createFrontmatter({ name: ZIP_SKILL_NAME })}\n\n${body}`);
   return skillPath;
 }
@@ -84,7 +84,7 @@ async function runClaudeWebZipWithSize(
   scenario: string,
   fakeZipBytes: number,
 ): Promise<{ result: Awaited<ReturnType<typeof packageSkill>>; stderrSpy: ReturnType<typeof vi.spyOn> }> {
-  const outDir = join(tempDir, `${scenario}-out`);
+  const outDir = safePath.join(tempDir, `${scenario}-out`);
   const sp = writeSkillMd(tempDir, `# ${scenario}`);
 
   vi.mocked(nodeFs.statSync).mockReturnValue({ size: fakeZipBytes } as nodeFs.Stats);
@@ -134,7 +134,7 @@ describe('ZipSizeLimitError', () => {
 
 describe('validateZipSize (via packageSkill, target: claude-web)', () => {
   it('throws ZipSizeLimitError when ZIP size is at the 8MB error threshold', async () => {
-    const outDir = join(tempDir, 'zip-error-out');
+    const outDir = safePath.join(tempDir, 'zip-error-out');
     const sp = writeSkillMd(tempDir, '# Zip Error Test');
 
     vi.mocked(nodeFs.statSync).mockReturnValue({ size: ZIP_ERROR_BYTES } as nodeFs.Stats);
@@ -149,7 +149,7 @@ describe('validateZipSize (via packageSkill, target: claude-web)', () => {
   });
 
   it('throws ZipSizeLimitError when ZIP size exceeds 8MB', async () => {
-    const outDir = join(tempDir, 'zip-over-out');
+    const outDir = safePath.join(tempDir, 'zip-over-out');
     const sp = writeSkillMd(tempDir, '# Zip Over Test');
 
     vi.mocked(nodeFs.statSync).mockReturnValue({
@@ -185,7 +185,7 @@ describe('validateZipSize (via packageSkill, target: claude-web)', () => {
   });
 
   it('does not validate ZIP size for claude-code target', async () => {
-    const outDir = join(tempDir, 'zip-code-out');
+    const outDir = safePath.join(tempDir, 'zip-code-out');
     const sp = writeSkillMd(tempDir, '# Claude Code Target');
 
     // Even with a huge fake size, claude-code should never call validateZipSize

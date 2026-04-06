@@ -2,11 +2,11 @@
  * `vat claude org skills` — manage organization skills via Skills API.
  */
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
-import { join, relative, basename } from 'node:path';
+import {   basename } from 'node:path';
 
 import { buildMultipartFormData } from '@vibe-agent-toolkit/claude-marketplace';
 import type { MultipartFile, OrgApiClient } from '@vibe-agent-toolkit/claude-marketplace';
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { downloadNpmPackage } from '../plugin/helpers.js';
@@ -79,12 +79,12 @@ function collectFiles(dir: string, baseDir?: string): Array<{ relativePath: stri
 
 	// eslint-disable-next-line security/detect-non-literal-fs-filename -- dir from CLI arg
 	for (const entry of readdirSync(dir, { withFileTypes: true })) {
-		const fullPath = join(dir, entry.name);
+		const fullPath = safePath.join(dir, entry.name);
 		if (entry.isDirectory()) {
 			results.push(...collectFiles(fullPath, base));
 		} else {
 			results.push({
-				relativePath: relative(base, fullPath),
+				relativePath: safePath.relative(base, fullPath),
 				absolutePath: fullPath,
 			});
 		}
@@ -102,7 +102,7 @@ async function uploadSkillDir(
 	titleOverride: string | undefined,
 	logger: UploadLogger,
 ): Promise<SkillUploadResult> {
-	const skillMdPath = join(skillDir, 'SKILL.md');
+	const skillMdPath = safePath.join(skillDir, 'SKILL.md');
 	// eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from CLI arg
 	if (!existsSync(skillMdPath)) {
 		throw new Error(`SKILL.md not found in ${skillDir}. Is this a built skill directory?`);
@@ -143,13 +143,13 @@ function listNodeModulePackages(nodeModulesDir: string): string[] {
 	for (const entry of readdirSync(nodeModulesDir, { withFileTypes: true })) {
 		if (!entry.isDirectory()) continue;
 		if (entry.name.startsWith('@')) {
-			const scopeDir = join(nodeModulesDir, entry.name);
+			const scopeDir = safePath.join(nodeModulesDir, entry.name);
 			// eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from temp dir
 			for (const scopedEntry of readdirSync(scopeDir, { withFileTypes: true })) {
-				if (scopedEntry.isDirectory()) results.push(join(scopeDir, scopedEntry.name));
+				if (scopedEntry.isDirectory()) results.push(safePath.join(scopeDir, scopedEntry.name));
 			}
 		} else {
-			results.push(join(nodeModulesDir, entry.name));
+			results.push(safePath.join(nodeModulesDir, entry.name));
 		}
 	}
 	return results;
@@ -160,13 +160,13 @@ function listNodeModulePackages(nodeModulesDir: string): string[] {
  * first, then scans node_modules for sub-packages that contain built skills.
  */
 function findSkillsDir(packageDir: string): string | undefined {
-	const direct = join(packageDir, 'dist', 'skills');
+	const direct = safePath.join(packageDir, 'dist', 'skills');
 	// eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from temp dir
 	if (existsSync(direct)) return direct;
 
-	const candidates = listNodeModulePackages(join(packageDir, 'node_modules'));
+	const candidates = listNodeModulePackages(safePath.join(packageDir, 'node_modules'));
 	for (const pkgDir of candidates) {
-		const candidate = join(pkgDir, 'dist', 'skills');
+		const candidate = safePath.join(pkgDir, 'dist', 'skills');
 		// eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from temp dir
 		if (existsSync(candidate)) return candidate;
 	}
@@ -183,7 +183,7 @@ async function installFromNpm(
 	client: OrgApiClient,
 	logger: UploadLogger,
 ): Promise<object> {
-	const tempDir = mkdtempSync(join(normalizedTmpdir(), 'vat-org-skills-'));
+	const tempDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-org-skills-'));
 	try {
 		logger.info(`Downloading: ${npmPackage}`);
 		const packageDir = downloadNpmPackage(npmPackage, tempDir);
@@ -192,7 +192,7 @@ async function installFromNpm(
 		if (!skillsDir) {
 			throw new Error(`No dist/skills/ directory found in ${npmPackage}. Was the package built with vat skills build?`);
 		}
-		logger.info(`Found skills at: ${relative(packageDir, skillsDir) || 'dist/skills/'}`);
+		logger.info(`Found skills at: ${safePath.relative(packageDir, skillsDir) || 'dist/skills/'}`);
 
 		// eslint-disable-next-line security/detect-non-literal-fs-filename -- constructed from temp dir
 		const skillDirs = readdirSync(skillsDir, { withFileTypes: true })
@@ -217,7 +217,7 @@ async function installFromNpm(
 		const errors: Array<{ skill: string; error: string }> = [];
 
 		for (const skillName of toUpload) {
-			const skillDir = join(skillsDir, skillName);
+			const skillDir = safePath.join(skillsDir, skillName);
 			try {
 				const result = await uploadSkillDir(client, skillDir, undefined, logger);
 				results.push(result);
@@ -248,7 +248,7 @@ async function installFromLocal(
 	client: OrgApiClient,
 	logger: UploadLogger,
 ): Promise<object> {
-	const sourcePath = source.startsWith('/') ? source : join(process.cwd(), source);
+	const sourcePath = source.startsWith('/') ? source : safePath.join(process.cwd(), source);
 
 	// eslint-disable-next-line security/detect-non-literal-fs-filename -- path from CLI arg
 	if (!existsSync(sourcePath)) {

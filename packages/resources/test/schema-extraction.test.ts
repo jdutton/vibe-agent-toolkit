@@ -9,8 +9,8 @@
 /* eslint-disable security/detect-non-literal-fs-filename */
 
 import { promises as fs } from 'node:fs';
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { parseMarkdownResource } from '../src/types/resource-parser.js';
@@ -24,7 +24,7 @@ describe('Schema Extraction from Frontmatter', () => {
   afterEach(suite.afterEach);
 
   it('should extract $schema from frontmatter as self-asserted schema', async () => {
-    const filePath = join(suite.tempDir, 'test.md');
+    const filePath = safePath.join(suite.tempDir, 'test.md');
     const content = `---
 $schema: ./schema.json
 title: My Document
@@ -45,7 +45,7 @@ title: My Document
   });
 
   it('should handle missing $schema field', async () => {
-    const filePath = join(suite.tempDir, 'test.md');
+    const filePath = safePath.join(suite.tempDir, 'test.md');
     const content = `---
 title: My Document
 ---
@@ -60,7 +60,7 @@ title: My Document
   });
 
   it('should handle file without frontmatter', async () => {
-    const filePath = join(suite.tempDir, 'test.md');
+    const filePath = safePath.join(suite.tempDir, 'test.md');
     const content = `# Content
 
 No frontmatter here`;
@@ -73,7 +73,7 @@ No frontmatter here`;
   });
 
   it('should ignore non-string $schema values', async () => {
-    const filePath = join(suite.tempDir, 'test.md');
+    const filePath = safePath.join(suite.tempDir, 'test.md');
     const content = `---
 $schema: 123
 title: My Document
@@ -89,7 +89,7 @@ title: My Document
   });
 
   it('should preserve frontmatter including $schema field', async () => {
-    const filePath = join(suite.tempDir, 'test.md');
+    const filePath = safePath.join(suite.tempDir, 'test.md');
     const content = `---
 $schema: ./schema.json
 title: My Document

@@ -1,5 +1,5 @@
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+
 
 import { SessionNotFoundError } from '@vibe-agent-toolkit/agent-runtime';
 import {
@@ -11,7 +11,7 @@ import {
   TEST_CONSTANTS,
   type SessionStoreTestSuite,
 } from '@vibe-agent-toolkit/agent-runtime/session/test-helpers';
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 
 import { FileSessionStore } from '../../src/session/file-session-store.js';
@@ -25,7 +25,7 @@ describe('FileSessionStore', () => {
     store: null as unknown as FileSessionStore<{ count: number }>,
     setup: async () => {
       testCounter++;
-      tempDir = join(suiteDir, `test-${testCounter}`);
+      tempDir = safePath.join(suiteDir, `test-${testCounter}`);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtemp
       await mkdir(tempDir, { recursive: true });
       suite.store = new FileSessionStore<{ count: number }>({
@@ -39,7 +39,7 @@ describe('FileSessionStore', () => {
   };
 
   beforeAll(async () => {
-    suiteDir = await mkdtemp(join(normalizedTmpdir(), 'file-session-store-suite-'));
+    suiteDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'file-session-store-suite-'));
   });
 
   afterAll(async () => {
@@ -136,7 +136,7 @@ describe('FileSessionStore', () => {
 
   describe('list', () => {
     it('should return empty array when base directory does not exist', async () => {
-      const nonExistentDir = join(tempDir, 'non-existent-subdir');
+      const nonExistentDir = safePath.join(tempDir, 'non-existent-subdir');
       const store = new FileSessionStore<{ count: number }>({
         baseDir: nonExistentDir,
       });

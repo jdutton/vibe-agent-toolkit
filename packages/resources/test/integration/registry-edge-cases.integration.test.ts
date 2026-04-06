@@ -5,9 +5,9 @@
 
 /* eslint-disable security/detect-non-literal-fs-filename */
 import { promises as fs } from 'node:fs';
-import { join } from 'node:path';
 
-import { GitTracker, setupAsyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+
+import { GitTracker, setupAsyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
 import { beforeEach, describe, expect, it, beforeAll, afterAll } from 'vitest';
 
 import { ResourceRegistry } from '../../src/resource-registry.js';
@@ -22,7 +22,7 @@ async function createRegistryWithTestFile(
   config: ProjectConfig
 ): Promise<{ registry: ResourceRegistry; resource: ResourceMetadata; filePath: string }> {
   const registry = new ResourceRegistry({ baseDir: tempDir, config });
-  const filePath = join(tempDir, 'test.md');
+  const filePath = safePath.join(tempDir, 'test.md');
   await fs.writeFile(filePath, '# Test', 'utf-8');
   const resource = await registry.addResource(filePath);
   return { registry, resource, filePath };
@@ -84,13 +84,13 @@ describe('ResourceRegistry.fromResources index building', () => {
 
   it('should build all 4 indexes correctly', async () => {
     // Create test files
-    await fs.writeFile(join(tempDir, 'doc1.md'), '# Doc 1', 'utf-8');
-    await fs.writeFile(join(tempDir, 'doc2.md'), '# Doc 2', 'utf-8');
+    await fs.writeFile(safePath.join(tempDir, 'doc1.md'), '# Doc 1', 'utf-8');
+    await fs.writeFile(safePath.join(tempDir, 'doc2.md'), '# Doc 2', 'utf-8');
 
     // Parse resources
     const tempRegistry = new ResourceRegistry();
-    const resource1 = await tempRegistry.addResource(join(tempDir, 'doc1.md'));
-    const resource2 = await tempRegistry.addResource(join(tempDir, 'doc2.md'));
+    const resource1 = await tempRegistry.addResource(safePath.join(tempDir, 'doc1.md'));
+    const resource2 = await tempRegistry.addResource(safePath.join(tempDir, 'doc2.md'));
 
     // Create registry from resources
     const registry = ResourceRegistry.fromResources(tempDir, [resource1, resource2]);
@@ -174,8 +174,8 @@ describe('ResourceRegistry.validate without baseDir', () => {
   it('should validate links when baseDir is undefined', async () => {
     const registry = new ResourceRegistry(); // No baseDir
 
-    await fs.writeFile(join(tempDir, 'test.md'), '# Test\n\n[Link](./other.md)', 'utf-8');
-    await registry.addResource(join(tempDir, 'test.md'));
+    await fs.writeFile(safePath.join(tempDir, 'test.md'), '# Test\n\n[Link](./other.md)', 'utf-8');
+    await registry.addResource(safePath.join(tempDir, 'test.md'));
 
     const result = await registry.validate();
 
@@ -215,8 +215,8 @@ describe('ResourceRegistry schema validation error handling', () => {
 
     const registry = new ResourceRegistry({ baseDir: tempDir, config });
 
-    await fs.writeFile(join(tempDir, 'test.md'), '---\ntitle: Test\n---\n\n# Test', 'utf-8');
-    await registry.addResource(join(tempDir, 'test.md'));
+    await fs.writeFile(safePath.join(tempDir, 'test.md'), '---\ntitle: Test\n---\n\n# Test', 'utf-8');
+    await registry.addResource(safePath.join(tempDir, 'test.md'));
 
     const result = await registry.validate();
 
@@ -245,10 +245,10 @@ describe('ResourceRegistry schema validation error handling', () => {
     const registry = new ResourceRegistry({ baseDir: tempDir, config });
 
     // Write invalid JSON to schema file
-    await fs.writeFile(join(tempDir, 'invalid.json'), '{invalid json}', 'utf-8');
+    await fs.writeFile(safePath.join(tempDir, 'invalid.json'), '{invalid json}', 'utf-8');
 
-    await fs.writeFile(join(tempDir, 'test.md'), '---\ntitle: Test\n---\n\n# Test', 'utf-8');
-    await registry.addResource(join(tempDir, 'test.md'));
+    await fs.writeFile(safePath.join(tempDir, 'test.md'), '---\ntitle: Test\n---\n\n# Test', 'utf-8');
+    await registry.addResource(safePath.join(tempDir, 'test.md'));
 
     const result = await registry.validate();
 
@@ -284,11 +284,11 @@ describe('ResourceRegistry schema validation error handling', () => {
     const registry = new ResourceRegistry({ baseDir: tempDir, config });
 
     // Write valid schema
-    await fs.writeFile(join(tempDir, 'schema.json'), JSON.stringify(schema), 'utf-8');
+    await fs.writeFile(safePath.join(tempDir, 'schema.json'), JSON.stringify(schema), 'utf-8');
 
     // Write document with valid frontmatter
-    await fs.writeFile(join(tempDir, 'test.md'), '---\ntitle: Test Document\n---\n\n# Test', 'utf-8');
-    await registry.addResource(join(tempDir, 'test.md'));
+    await fs.writeFile(safePath.join(tempDir, 'test.md'), '---\ntitle: Test Document\n---\n\n# Test', 'utf-8');
+    await registry.addResource(safePath.join(tempDir, 'test.md'));
 
     const result = await registry.validate();
 

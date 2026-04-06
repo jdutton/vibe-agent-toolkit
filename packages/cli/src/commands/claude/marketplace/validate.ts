@@ -11,7 +11,7 @@
  */
 
 import { existsSync, readdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+
 
 import {
   validateMarketplace,
@@ -22,6 +22,7 @@ import type {
   ValidationIssue,
   ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { formatDuration, handleCommandError } from '../../../utils/command-error.js';
@@ -45,12 +46,12 @@ function checkMarketplaceFiles(marketplacePath: string): ValidationIssue[] {
   ];
 
   for (const check of fileChecks) {
-    if (!existsSync(join(marketplacePath, check.file))) {
+    if (!existsSync(safePath.join(marketplacePath, check.file))) {
       issues.push({
         severity: check.severity,
         code: check.code as ValidationIssue['code'],
         message: `Marketplace is missing a ${check.file} — ${check.verb}`,
-        location: join(marketplacePath, check.file),
+        location: safePath.join(marketplacePath, check.file),
         fix: `Add a ${check.file} to the marketplace root directory`,
       });
     }
@@ -63,7 +64,7 @@ function checkMarketplaceFiles(marketplacePath: string): ValidationIssue[] {
  * Validate all SKILL.md files within a plugin's skills/ directory.
  */
 async function validatePluginSkills(pluginDir: string): Promise<ValidationIssue[]> {
-  const skillsDir = join(pluginDir, 'skills');
+  const skillsDir = safePath.join(pluginDir, 'skills');
   if (!existsSync(skillsDir)) return [];
 
   const issues: ValidationIssue[] = [];
@@ -72,8 +73,8 @@ async function validatePluginSkills(pluginDir: string): Promise<ValidationIssue[
   for (const skillEntry of skillEntries) {
     if (!skillEntry.isDirectory()) continue;
 
-    const skillDir = join(skillsDir, skillEntry.name);
-    const skillMdPath = join(skillDir, 'SKILL.md');
+    const skillDir = safePath.join(skillsDir, skillEntry.name);
+    const skillMdPath = safePath.join(skillDir, 'SKILL.md');
     if (!existsSync(skillMdPath)) continue;
 
     const skillResult = await validateSkill({ skillPath: skillMdPath, rootDir: skillDir });
@@ -89,7 +90,7 @@ async function validatePluginSkills(pluginDir: string): Promise<ValidationIssue[
 async function validatePlugins(
   marketplacePath: string,
 ): Promise<{ pluginResults: ValidationResult[]; issues: ValidationIssue[] }> {
-  const pluginsDir = join(marketplacePath, 'plugins');
+  const pluginsDir = safePath.join(marketplacePath, 'plugins');
   if (!existsSync(pluginsDir)) return { pluginResults: [], issues: [] };
 
   const pluginResults: ValidationResult[] = [];
@@ -99,7 +100,7 @@ async function validatePlugins(
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
 
-    const pluginDir = join(pluginsDir, entry.name);
+    const pluginDir = safePath.join(pluginsDir, entry.name);
     const pluginResult = await validatePlugin(pluginDir, { strict: true });
     pluginResults.push(pluginResult);
     issues.push(...pluginResult.issues);
@@ -128,7 +129,7 @@ async function marketplaceValidateCommand(
   const startTime = Date.now();
 
   try {
-    const marketplacePath = resolve(targetPath ?? '.');
+    const marketplacePath = safePath.resolve(targetPath ?? '.');
     logger.info(`Validating marketplace: ${marketplacePath}`);
 
     // 1. Validate marketplace.json

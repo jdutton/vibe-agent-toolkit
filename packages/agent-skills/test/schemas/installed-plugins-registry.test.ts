@@ -1,12 +1,12 @@
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { InstalledPluginsRegistrySchema } from '../../src/schemas/installed-plugins-registry.js';
 
 function loadRegistryFixture(name: string): unknown {
-  const fixturePath = resolve(__dirname, '../fixtures/registries', name);
+  const fixturePath = safePath.resolve(__dirname, '../fixtures/registries', name);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test helper loading fixtures from known directory
   return JSON.parse(readFileSync(fixturePath, 'utf-8'));
 }

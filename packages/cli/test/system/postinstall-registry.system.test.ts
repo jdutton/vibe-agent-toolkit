@@ -12,9 +12,9 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
@@ -71,7 +71,7 @@ function createBasePackageWithSkill(
   const { packageName, version, skillName } = opts;
 
   writeTestFile(
-    join(packageDir, PACKAGE_JSON_FILE),
+    safePath.join(packageDir, PACKAGE_JSON_FILE),
     JSON.stringify({
       name: packageName,
       version,
@@ -83,9 +83,9 @@ function createBasePackageWithSkill(
     })
   );
 
-  const skillDistDir = join(packageDir, 'dist', 'skills', skillName);
+  const skillDistDir = safePath.join(packageDir, 'dist', 'skills', skillName);
   mkdirSyncReal(skillDistDir, { recursive: true });
-  writeTestFile(join(skillDistDir, 'SKILL.md'), minimalSkillMd(skillName));
+  writeTestFile(safePath.join(skillDistDir, 'SKILL.md'), minimalSkillMd(skillName));
 }
 
 /**
@@ -111,16 +111,16 @@ function createFakeNpmPackage(
   createBasePackageWithSkill(packageDir, { packageName, version, skillName });
 
   // New dist structure: dist/.claude/plugins/marketplaces/<mp>/plugins/<plugin>/
-  const pluginDir = join(
+  const pluginDir = safePath.join(
     packageDir, 'dist', '.claude', 'plugins', 'marketplaces',
     marketplaceName, 'plugins', pluginName
   );
 
   // .claude-plugin/plugin.json
-  const pluginClaudeDir = join(pluginDir, CLAUDE_PLUGIN_SUBDIR);
+  const pluginClaudeDir = safePath.join(pluginDir, CLAUDE_PLUGIN_SUBDIR);
   mkdirSyncReal(pluginClaudeDir, { recursive: true });
   writeTestFile(
-    join(pluginClaudeDir, PLUGIN_JSON_FILE),
+    safePath.join(pluginClaudeDir, PLUGIN_JSON_FILE),
     JSON.stringify({
       name: pluginName,
       description: 'Test plugin for postinstall',
@@ -129,9 +129,9 @@ function createFakeNpmPackage(
   );
 
   // skills/<skillName>/SKILL.md inside plugin
-  const pluginSkillDir = join(pluginDir, 'skills', skillName);
+  const pluginSkillDir = safePath.join(pluginDir, 'skills', skillName);
   mkdirSyncReal(pluginSkillDir, { recursive: true });
-  writeTestFile(join(pluginSkillDir, 'SKILL.md'), minimalSkillMd(skillName));
+  writeTestFile(safePath.join(pluginSkillDir, 'SKILL.md'), minimalSkillMd(skillName));
 }
 
 /** Context object for tests that need isolated packageDir + fakeHome. */
@@ -197,7 +197,7 @@ describe('claude plugin install --npm-postinstall plugin registry (system test)'
 
       expect(result.status).toBe(0);
 
-      const knownPath = join(fakeHome, '.claude', 'plugins', 'known_marketplaces.json');
+      const knownPath = safePath.join(fakeHome, '.claude', 'plugins', 'known_marketplaces.json');
       expect(existsSync(knownPath)).toBe(true);
       const known = JSON.parse(readFileSync(knownPath, 'utf-8')) as Record<string, unknown>;
       expect(known).toHaveProperty(MARKETPLACE_NAME);
@@ -209,7 +209,7 @@ describe('claude plugin install --npm-postinstall plugin registry (system test)'
 
       expect(result.status).toBe(0);
 
-      const installedPath = join(fakeHome, '.claude', 'plugins', 'installed_plugins.json');
+      const installedPath = safePath.join(fakeHome, '.claude', 'plugins', 'installed_plugins.json');
       expect(existsSync(installedPath)).toBe(true);
       const installed = JSON.parse(readFileSync(installedPath, 'utf-8')) as {
         version: number;
@@ -226,7 +226,7 @@ describe('claude plugin install --npm-postinstall plugin registry (system test)'
 
       expect(result.status).toBe(0);
 
-      const settingsPath = join(fakeHome, '.claude', 'settings.json');
+      const settingsPath = safePath.join(fakeHome, '.claude', 'settings.json');
       expect(existsSync(settingsPath)).toBe(true);
       const settings = JSON.parse(readFileSync(settingsPath, 'utf-8')) as {
         enabledPlugins?: Record<string, boolean>;
@@ -241,7 +241,7 @@ describe('claude plugin install --npm-postinstall plugin registry (system test)'
 
       expect(result.status).toBe(0);
 
-      const marketplacePluginDest = join(
+      const marketplacePluginDest = safePath.join(
         fakeHome,
         '.claude',
         'plugins',
@@ -261,7 +261,7 @@ describe('claude plugin install --npm-postinstall plugin registry (system test)'
 
       expect(result.status).toBe(0);
 
-      const cacheDest = join(
+      const cacheDest = safePath.join(
         fakeHome,
         '.claude',
         'plugins',
@@ -285,7 +285,7 @@ describe('claude plugin install --npm-postinstall plugin registry (system test)'
       });
 
       // Create marketplace dir without any plugin subdirectories
-      const mpDir = join(
+      const mpDir = safePath.join(
         packageDir, 'dist', '.claude', 'plugins', 'marketplaces', MARKETPLACE_NAME
       );
       mkdirSyncReal(mpDir, { recursive: true });
@@ -295,7 +295,7 @@ describe('claude plugin install --npm-postinstall plugin registry (system test)'
 
       expect(result.status).toBe(0);
       // No registry files should have been created since no plugins exist
-      const knownPath = join(fakeHome, '.claude', 'plugins', 'known_marketplaces.json');
+      const knownPath = safePath.join(fakeHome, '.claude', 'plugins', 'known_marketplaces.json');
       expect(existsSync(knownPath)).toBe(false);
     });
 
@@ -311,26 +311,26 @@ describe('claude plugin install --npm-postinstall plugin registry (system test)'
         pluginName: PLUGIN_NAME,
         skillName: SKILL_NAME,
       });
-      const extraSkillDir = join(
+      const extraSkillDir = safePath.join(
         v1Dir, 'dist', '.claude', 'plugins', 'marketplaces',
         MARKETPLACE_NAME, 'plugins', PLUGIN_NAME, 'skills', EXTRA_SKILL
       );
       mkdirSyncReal(extraSkillDir, { recursive: true });
-      writeTestFile(join(extraSkillDir, 'SKILL.md'), minimalSkillMd(EXTRA_SKILL));
+      writeTestFile(safePath.join(extraSkillDir, 'SKILL.md'), minimalSkillMd(EXTRA_SKILL));
 
       // Install v1 — both skills land in the marketplace dir
       const v1Result = suite.runPostinstall(v1Dir, fakeHome);
       expect(v1Result.status).toBe(0);
 
-      const pluginSkillsDir = join(
+      const pluginSkillsDir = safePath.join(
         fakeHome, '.claude', 'plugins', 'marketplaces',
         MARKETPLACE_NAME, 'plugins', PLUGIN_NAME, 'skills'
       );
-      expect(existsSync(join(pluginSkillsDir, SKILL_NAME))).toBe(true);
-      expect(existsSync(join(pluginSkillsDir, EXTRA_SKILL))).toBe(true);
+      expect(existsSync(safePath.join(pluginSkillsDir, SKILL_NAME))).toBe(true);
+      expect(existsSync(safePath.join(pluginSkillsDir, EXTRA_SKILL))).toBe(true);
 
       // v2: package with only SKILL_NAME — EXTRA_SKILL has been removed
-      const v2Dir = join(fakeHome, '..', 'v2-package');
+      const v2Dir = safePath.join(fakeHome, '..', 'v2-package');
       mkdirSyncReal(v2Dir, { recursive: true });
       createFakeNpmPackage(v2Dir, {
         packageName: PACKAGE_NAME,
@@ -345,9 +345,9 @@ describe('claude plugin install --npm-postinstall plugin registry (system test)'
       expect(v2Result.status).toBe(0);
 
       // SKILL_NAME must still be present
-      expect(existsSync(join(pluginSkillsDir, SKILL_NAME))).toBe(true);
+      expect(existsSync(safePath.join(pluginSkillsDir, SKILL_NAME))).toBe(true);
       // EXTRA_SKILL must be gone — stale files from the previous version must not persist
-      expect(existsSync(join(pluginSkillsDir, EXTRA_SKILL))).toBe(false);
+      expect(existsSync(safePath.join(pluginSkillsDir, EXTRA_SKILL))).toBe(false);
     });
   });
 

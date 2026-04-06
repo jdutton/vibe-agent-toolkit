@@ -7,9 +7,9 @@
  * the original behavior.
  */
 
-import { join } from 'node:path';
 
 import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
@@ -65,7 +65,7 @@ Content in section 1 that mentions [the other doc](./other.md) again.`,
   it('should compute contentHash on transformed content', async () => {
     // Index WITHOUT transform
     const providerNoTransform = await LanceDBRAGProvider.create({
-      dbPath: join(suite.tempDir, 'db-no-transform'),
+      dbPath: safePath.join(suite.tempDir, 'db-no-transform'),
     });
 
     const resource = await createResourceWithLinks(
@@ -85,7 +85,7 @@ See [local link](./other.md) for info.`,
     const contentTransform = createLinkRewriteTransform('LINK: {{link.text}}');
 
     const providerWithTransform = await LanceDBRAGProvider.create({
-      dbPath: join(suite.tempDir, 'db-with-transform'),
+      dbPath: safePath.join(suite.tempDir, 'db-with-transform'),
       contentTransform,
     });
 
@@ -96,7 +96,7 @@ See [local link](./other.md) for info.`,
     // Re-indexing the same file with transform should NOT skip
     // because the content hash is different (transformed vs original)
     const providerReindex = await LanceDBRAGProvider.create({
-      dbPath: join(suite.tempDir, 'db-no-transform'),
+      dbPath: safePath.join(suite.tempDir, 'db-no-transform'),
       contentTransform,
     });
 

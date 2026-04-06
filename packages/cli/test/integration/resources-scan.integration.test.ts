@@ -1,5 +1,5 @@
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import {
@@ -26,8 +26,8 @@ describe('vat resources scan (integration)', () => {
 
   it('should scan directory and output YAML', () => {
     // Create test markdown files
-    writeTestFile(join(tempDir, 'README.md'), '# Test\n[link](./other.md)');
-    writeTestFile(join(tempDir, 'other.md'), '# Other');
+    writeTestFile(safePath.join(tempDir, 'README.md'), '# Test\n[link](./other.md)');
+    writeTestFile(safePath.join(tempDir, 'other.md'), '# Other');
 
     const { result, parsed } = executeCliAndParseYaml(binPath, [
       'resources',
@@ -49,7 +49,7 @@ describe('vat resources scan (integration)', () => {
   });
 
   it('should use current directory if no path provided', () => {
-    writeTestFile(join(tempDir, 'test.md'), '# Test');
+    writeTestFile(safePath.join(tempDir, 'test.md'), '# Test');
 
     const result = executeCli(binPath, ['resources', 'scan'], { cwd: tempDir });
 
@@ -58,9 +58,9 @@ describe('vat resources scan (integration)', () => {
 
   it('should scan multiple files successfully', () => {
     // Create test files
-    writeTestFile(join(tempDir, 'doc1.md'), '# Same Content\nThis is identical.');
-    writeTestFile(join(tempDir, 'doc2.md'), '# Same Content\nThis is identical.');
-    writeTestFile(join(tempDir, 'unique.md'), '# Different Content');
+    writeTestFile(safePath.join(tempDir, 'doc1.md'), '# Same Content\nThis is identical.');
+    writeTestFile(safePath.join(tempDir, 'doc2.md'), '# Same Content\nThis is identical.');
+    writeTestFile(safePath.join(tempDir, 'unique.md'), '# Different Content');
 
     const { result, parsed } = executeCliAndParseYaml(binPath, [
       'resources',
@@ -75,7 +75,7 @@ describe('vat resources scan (integration)', () => {
   // Note: --verbose flag for scan is currently not working due to conflict
   // with parent command's --verbose. This test is skipped until that's fixed.
   it.skip('should include checksums in file output with --verbose flag', () => {
-    writeTestFile(join(tempDir, 'test.md'), '# Test');
+    writeTestFile(safePath.join(tempDir, 'test.md'), '# Test');
 
     const { result, parsed } = executeCliAndParseYaml(binPath, [
       'resources',

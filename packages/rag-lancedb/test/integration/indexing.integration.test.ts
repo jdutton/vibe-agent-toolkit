@@ -23,8 +23,8 @@
  */
 
 import { rm } from 'node:fs/promises';
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { LanceDBRAGProvider } from '../../src/lancedb-rag-provider.js';
@@ -41,7 +41,7 @@ describe('LanceDB Indexing Integration', () => {
   beforeEach(async () => {
     // Create temporary directory for test database and files
     tempDir = await createTempDir();
-    dbPath = join(tempDir, 'db');
+    dbPath = safePath.join(tempDir, 'db');
 
     // Create a test markdown file
     testFilePath = await createTestMarkdownFile(
@@ -337,7 +337,7 @@ Content for section 4 with even more text.`
     // Create resource with non-existent file (missing required fields will cause error)
     const badResource = {
       id: 'bad-resource',
-      filePath: join(tempDir, 'nonexistent.md'),
+      filePath: safePath.join(tempDir, 'nonexistent.md'),
       links: [],
       headings: [],
       sizeBytes: 0,

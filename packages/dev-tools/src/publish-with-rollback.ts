@@ -6,8 +6,8 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import semver from 'semver';
 
 import { log, safeExecResult, safeExecSync } from './common.js';
@@ -15,7 +15,7 @@ import { PUBLISHED_PACKAGES } from './package-lists.js';
 import { validatePackageList as validatePackages } from './validate-package-list.js';
 
 const PROJECT_ROOT = process.cwd();
-const MANIFEST_PATH = join(PROJECT_ROOT, '.publish-manifest.json');
+const MANIFEST_PATH = safePath.join(PROJECT_ROOT, '.publish-manifest.json');
 const VIBE_AGENT_TOOLKIT_SCOPE = '@vibe-agent-toolkit/';
 const PACKAGES_DIR = 'packages';
 const UMBRELLA_PACKAGE_NAME = 'vibe-agent-toolkit';
@@ -78,24 +78,29 @@ const manifest: Manifest = {
 };
 
 function saveManifest(): void {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- MANIFEST_PATH is a constant path
   writeFileSync(MANIFEST_PATH, JSON.stringify(manifest, null, 2), 'utf8');
 }
 
 function loadManifest(): void {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- MANIFEST_PATH is a constant path
   if (existsSync(MANIFEST_PATH)) {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- MANIFEST_PATH is a constant path
     const content = readFileSync(MANIFEST_PATH, 'utf8');
     Object.assign(manifest, JSON.parse(content));
   }
 }
 
 function cleanupManifest(): void {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- MANIFEST_PATH is a constant path
   if (existsSync(MANIFEST_PATH)) {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- MANIFEST_PATH is a constant path
     unlinkSync(MANIFEST_PATH);
   }
 }
 
 function publishPackage(packageName: string, version: string, tag: string, dryRun: boolean): { success: boolean; dryRun?: boolean; error?: unknown } {
-  const packagePath = join(PROJECT_ROOT, PACKAGES_DIR, packageName);
+  const packagePath = safePath.join(PROJECT_ROOT, PACKAGES_DIR, packageName);
   const fullPackageName = packageName === UMBRELLA_PACKAGE_NAME
     ? UMBRELLA_PACKAGE_NAME
     : `${VIBE_AGENT_TOOLKIT_SCOPE}${packageName}`;

@@ -6,9 +6,9 @@
  */
 
 import { mkdir, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -78,8 +78,8 @@ let vocabPath: string;
 let tokenizer: BertTokenizer;
 
 beforeAll(async () => {
-  vocabDir = join(normalizedTmpdir(), `onnx-utils-test-${Date.now().toString()}`);
-  vocabPath = join(vocabDir, 'vocab.txt');
+  vocabDir = safePath.join(normalizedTmpdir(), `onnx-utils-test-${Date.now().toString()}`);
+  vocabPath = safePath.join(vocabDir, 'vocab.txt');
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
   await mkdir(vocabDir, { recursive: true });

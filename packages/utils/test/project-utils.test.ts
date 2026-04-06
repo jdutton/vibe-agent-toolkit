@@ -1,7 +1,7 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code using temp directories */
 import fs from 'node:fs';
-import path from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { findProjectRoot } from '../src/project-utils.js';
@@ -23,19 +23,19 @@ describe('findProjectRoot', () => {
 
   it('should find workspace root when package.json has "workspaces"', () => {
     // Create a monorepo-like structure
-    const workspaceRoot = path.join(tempDir, 'mono');
-    const pkgDir = path.join(workspaceRoot, 'packages', 'my-pkg', 'resources', 'skills');
+    const workspaceRoot = safePath.join(tempDir, 'mono');
+    const pkgDir = safePath.join(workspaceRoot, 'packages', 'my-pkg', 'resources', 'skills');
     fs.mkdirSync(pkgDir, { recursive: true });
 
     // Workspace root has package.json with workspaces
     fs.writeFileSync(
-      path.join(workspaceRoot, PACKAGE_JSON),
+      safePath.join(workspaceRoot, PACKAGE_JSON),
       JSON.stringify({ name: 'monorepo', workspaces: ['packages/*'] }),
     );
 
     // Inner package has package.json without workspaces
     fs.writeFileSync(
-      path.join(workspaceRoot, 'packages', 'my-pkg', PACKAGE_JSON),
+      safePath.join(workspaceRoot, 'packages', 'my-pkg', PACKAGE_JSON),
       JSON.stringify({ name: '@mono/my-pkg' }),
     );
 
@@ -55,12 +55,12 @@ describe('findProjectRoot', () => {
 
   it('should fall back to startDir when no workspace root or git root', () => {
     // Create a deeply nested directory with a package.json without workspaces
-    const isolated = path.join(tempDir, 'isolated', 'deep', 'dir');
+    const isolated = safePath.join(tempDir, 'isolated', 'deep', 'dir');
     fs.mkdirSync(isolated, { recursive: true });
 
     // Add a package.json without workspaces at the root level to stop workspace search
     fs.writeFileSync(
-      path.join(tempDir, 'isolated', PACKAGE_JSON),
+      safePath.join(tempDir, 'isolated', PACKAGE_JSON),
       JSON.stringify({ name: 'no-workspaces' }),
     );
 
@@ -73,9 +73,9 @@ describe('findProjectRoot', () => {
   });
 
   it('should skip invalid JSON in package.json files', () => {
-    const dir = path.join(tempDir, 'bad-json');
+    const dir = safePath.join(tempDir, 'bad-json');
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, PACKAGE_JSON), '{ invalid json }');
+    fs.writeFileSync(safePath.join(dir, PACKAGE_JSON), '{ invalid json }');
 
     // Should not throw, falls through to git root or dirname
     const result = findProjectRoot(dir);

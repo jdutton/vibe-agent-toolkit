@@ -12,6 +12,8 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
+
 import { validateFrontmatter } from './frontmatter-validator.js';
 import type { ValidationMode } from './schemas/project-config.js';
 import type { ValidationIssue } from './schemas/validation-result.js';
@@ -29,7 +31,7 @@ async function loadSchema(schemaPath: string, projectRoot?: string): Promise<obj
 
   // If path is relative and we have a project root, resolve it
   if (!path.isAbsolute(schemaPath) && projectRoot) {
-    resolvedPath = path.join(projectRoot, schemaPath);
+    resolvedPath = safePath.join(projectRoot, schemaPath);
   }
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename

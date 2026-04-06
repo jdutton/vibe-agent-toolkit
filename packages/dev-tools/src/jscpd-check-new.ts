@@ -6,7 +6,8 @@
  */
 
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { buildJscpdArgs, JSCPD_CONFIG, safeExecSync } from './common.js';
 
@@ -23,7 +24,7 @@ interface Clone {
   secondFile: CloneLocation;
 }
 
-const BASELINE_FILE = join('.github', '.jscpd-baseline.json');
+const BASELINE_FILE = safePath.join('.github', '.jscpd-baseline.json');
 
 /**
  * IMPORTANT: Test files are INTENTIONALLY included in duplication checks.
@@ -62,7 +63,7 @@ function runJscpd() {
     // Otherwise continue - duplications found, but report still generated
   }
 
-  const reportPath = join(JSCPD_CONFIG.OUTPUT_DIR, 'jscpd-report.json');
+  const reportPath = safePath.join(JSCPD_CONFIG.OUTPUT_DIR, 'jscpd-report.json');
   // Path derived from JSCPD_CONFIG constant (controlled, not user input)
   // eslint-disable-next-line security/detect-non-literal-fs-filename
   if (!existsSync(reportPath)) {
@@ -92,8 +93,10 @@ function checkNewDuplications() {
   const currentClones = currentReport.duplicates ?? [];
 
   // Load baseline
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- BASELINE_FILE is a constant path
   if (!existsSync(BASELINE_FILE)) {
     console.log('📝 No baseline found. Creating baseline from current state...');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- BASELINE_FILE is a constant path
     writeFileSync(BASELINE_FILE, JSON.stringify({ duplicates: currentClones }, null, 2));
     console.log(`✅ Baseline saved to ${BASELINE_FILE}`);
     console.log(`   Current duplication: ${String(currentReport.statistics.total.percentage.toFixed(2))}%`);
@@ -101,6 +104,7 @@ function checkNewDuplications() {
     process.exit(0);
   }
 
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- BASELINE_FILE is a constant path
   const baseline = JSON.parse(readFileSync(BASELINE_FILE, 'utf-8')) as { duplicates?: Clone[] };
   const baselineClones = baseline.duplicates ?? [];
 

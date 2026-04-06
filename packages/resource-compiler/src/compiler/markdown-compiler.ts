@@ -3,9 +3,9 @@
  */
 
 import { readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 
-import { mkdirSyncReal, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import { glob } from 'glob';
 
 import { generateTypeScriptDeclarations } from './dts-generator.js';
@@ -84,7 +84,7 @@ async function compileSingleFile(
   outputDir: string,
   verbose: boolean,
 ): Promise<CompileResult> {
-  const sourcePath = join(inputDir, relativeFilePath);
+  const sourcePath = safePath.join(inputDir, relativeFilePath);
 
   try {
     // Read markdown file
@@ -110,8 +110,8 @@ async function compileSingleFile(
     const jsRelativePath = `${fileBaseName}.js`;
     const dtsRelativePath = `${fileBaseName}.d.ts`;
 
-    const jsPath = join(outputDir, jsRelativePath);
-    const dtsPath = join(outputDir, dtsRelativePath);
+    const jsPath = safePath.join(outputDir, jsRelativePath);
+    const dtsPath = safePath.join(outputDir, dtsRelativePath);
 
     // Ensure output directories exist
     const jsDir = dirname(jsPath);

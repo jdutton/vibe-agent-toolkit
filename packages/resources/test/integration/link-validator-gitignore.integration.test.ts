@@ -12,7 +12,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { validateLink } from '../../src/link-validator.js';
@@ -45,28 +45,28 @@ describe('isWithinProject', () => {
 
   it('should return true for file within project', () => {
     const projectRoot = suite.tempDir;
-    const filePath = path.join(projectRoot, 'docs', 'guide.md');
+    const filePath = safePath.join(projectRoot, 'docs', 'guide.md');
 
     expect(isWithinProject(filePath, projectRoot)).toBe(true);
   });
 
   it('should return false for file outside project', () => {
     const projectRoot = suite.tempDir;
-    const filePath = path.join(normalizedTmpdir(), 'external', 'data.md');
+    const filePath = safePath.join(normalizedTmpdir(), 'external', 'data.md');
 
     expect(isWithinProject(filePath, projectRoot)).toBe(false);
   });
 
   it('should return true for file at project root', () => {
     const projectRoot = suite.tempDir;
-    const filePath = path.join(projectRoot, 'README.md');
+    const filePath = safePath.join(projectRoot, 'README.md');
 
     expect(isWithinProject(filePath, projectRoot)).toBe(true);
   });
 
   it('should handle non-existent files within project', () => {
     const projectRoot = suite.tempDir;
-    const filePath = path.join(projectRoot, 'nonexistent.md');
+    const filePath = safePath.join(projectRoot, 'nonexistent.md');
 
     expect(isWithinProject(filePath, projectRoot)).toBe(true);
   });
@@ -76,7 +76,7 @@ describe('isWithinProject', () => {
     // Create a path that starts with project root but is not inside it
     const parentDir = path.dirname(projectRoot);
     const similarPath = projectRoot + '-other';
-    const filePath = path.join(parentDir, path.basename(similarPath), 'file.md');
+    const filePath = safePath.join(parentDir, path.basename(similarPath), 'file.md');
 
     expect(isWithinProject(filePath, projectRoot)).toBe(false);
   });
@@ -103,20 +103,20 @@ describe('validateLink - git-ignore safety', () => {
     // Create .gitignore
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- projectRoot is from temp dir
     fs.writeFileSync(
-      path.join(projectRoot, '.gitignore'),
+      safePath.join(projectRoot, '.gitignore'),
       '# Test gitignore\nignored/\n*.secret\n'
     );
 
     // Create directory structure
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- projectRoot is from temp dir
-    fs.mkdirSync(path.join(projectRoot, 'docs'));
+    fs.mkdirSync(safePath.join(projectRoot, 'docs'));
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- projectRoot is from temp dir
-    fs.mkdirSync(path.join(projectRoot, 'ignored'));
+    fs.mkdirSync(safePath.join(projectRoot, 'ignored'));
 
     // Create files
-    const sourceFile = path.join(projectRoot, 'docs', 'guide.md');
-    const ignoredFile = path.join(projectRoot, 'ignored', 'secret.md');
-    const nonIgnoredFile = path.join(projectRoot, 'docs', 'public.md');
+    const sourceFile = safePath.join(projectRoot, 'docs', 'guide.md');
+    const ignoredFile = safePath.join(projectRoot, 'ignored', 'secret.md');
+    const nonIgnoredFile = safePath.join(projectRoot, 'docs', 'public.md');
 
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
     fs.writeFileSync(sourceFile, '# Guide\n[Link](../ignored/secret.md)\n');
@@ -145,12 +145,12 @@ describe('validateLink - git-ignore safety', () => {
     const projectRoot = suite.tempDir;
 
     // Create another ignored file
-    const anotherIgnoredFile = path.join(projectRoot, 'ignored', 'other.md');
+    const anotherIgnoredFile = safePath.join(projectRoot, 'ignored', 'other.md');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is from temp dir
     fs.writeFileSync(anotherIgnoredFile, '# Other Secret\n');
 
     // Create a source file that is also ignored
-    const ignoredSourceFile = path.join(projectRoot, 'ignored', 'index.md');
+    const ignoredSourceFile = safePath.join(projectRoot, 'ignored', 'index.md');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is from temp dir
     fs.writeFileSync(ignoredSourceFile, '# Index\n[Link](./secret.md)\n');
 
@@ -165,7 +165,7 @@ describe('validateLink - git-ignore safety', () => {
     const projectRoot = suite.tempDir;
 
     // Create ignored source file
-    const ignoredSourceFile = path.join(projectRoot, 'ignored', 'index.md');
+    const ignoredSourceFile = safePath.join(projectRoot, 'ignored', 'index.md');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is from temp dir
     fs.writeFileSync(ignoredSourceFile, '# Index\n[Link](../docs/public.md)\n');
 
@@ -179,10 +179,10 @@ describe('validateLink - git-ignore safety', () => {
     const { projectRoot, sourceFile } = await setupGitProject();
 
     // Create an external file (outside project)
-    const externalDir = path.join(normalizedTmpdir(), 'external-project');
+    const externalDir = safePath.join(normalizedTmpdir(), 'external-project');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is from temp dir
     fs.mkdirSync(externalDir);
-    const externalFile = path.join(externalDir, 'external.md');
+    const externalFile = safePath.join(externalDir, 'external.md');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is from temp dir
     fs.writeFileSync(externalFile, '# External\n');
 
@@ -208,7 +208,7 @@ describe('validateLink - git-ignore safety', () => {
     const { projectRoot, sourceFile } = await setupGitProject();
 
     // Create a file matching *.secret pattern
-    const secretFile = path.join(projectRoot, 'docs', 'password.secret');
+    const secretFile = safePath.join(projectRoot, 'docs', 'password.secret');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is from temp dir
     fs.writeFileSync(secretFile, 'secret-data\n');
 

@@ -5,9 +5,9 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test file with controlled inputs */
 
 import { writeFileSync, unlinkSync, utimesSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import type { MarkdownResource } from '../../src/compiler/types.js';
@@ -59,7 +59,7 @@ function setupTestFiles(
   dir: string,
   fileNames: string[],
 ): { files: string[]; cleanup: () => void } {
-  const files = fileNames.map((name) => join(dir, name));
+  const files = fileNames.map((name) => safePath.join(dir, name));
   for (const file of files) {
     writeFileSync(file, TEST_MD_CONTENT);
   }
@@ -104,9 +104,9 @@ describe('markdown-cache', () => {
 
   beforeEach(() => {
     // Create temp directory for test files
-    testDir = join(normalizedTmpdir(), `markdown-cache-test-${Date.now()}`);
+    testDir = safePath.join(normalizedTmpdir(), `markdown-cache-test-${Date.now()}`);
     mkdirSyncReal(testDir, { recursive: true });
-    testFile = join(testDir, 'test.md');
+    testFile = safePath.join(testDir, 'test.md');
 
     // Clear cache before each test
     clearCache();
@@ -179,7 +179,7 @@ describe('markdown-cache', () => {
     });
 
     it('should handle non-existent files gracefully', () => {
-      const nonExistentFile = join(testDir, 'does-not-exist.md');
+      const nonExistentFile = safePath.join(testDir, 'does-not-exist.md');
 
       const emptyLoader = (): MarkdownResource => ({
         frontmatter: {},
@@ -248,7 +248,7 @@ describe('markdown-cache', () => {
     });
 
     it('should not throw when invalidating non-existent file', () => {
-      const nonExistentFile = join(testDir, 'does-not-exist.md');
+      const nonExistentFile = safePath.join(testDir, 'does-not-exist.md');
 
       expect(() => {
         invalidateFile(nonExistentFile);

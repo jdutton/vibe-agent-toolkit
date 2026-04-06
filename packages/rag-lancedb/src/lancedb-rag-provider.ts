@@ -5,7 +5,6 @@
  */
 
 import fs from 'node:fs';
-import path from 'node:path';
 
 import type { Connection, Table } from '@lancedb/lancedb';
 import * as lancedb from '@lancedb/lancedb';
@@ -34,6 +33,7 @@ import {
   type ContentTransformOptions,
   type ResourceMetadata,
 } from '@vibe-agent-toolkit/resources';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import type { ZodObject, ZodRawShape } from 'zod';
 
 import { createDocumentRecord, overlayChunkMetadata, type DocumentRecord } from './document-helpers.js';
@@ -103,7 +103,7 @@ function getDirectorySize(dirPath: string): number {
     const items = fs.readdirSync(dirPath);
 
     for (const item of items) {
-      const itemPath = path.join(dirPath, item);
+      const itemPath = safePath.join(dirPath, item);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- itemPath is constructed from config, not user input
       const stats = fs.statSync(itemPath);
 

@@ -9,9 +9,9 @@
  */
 
 import { cpSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { dirname } from 'node:path';
 
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudeUserPaths } from '../paths/claude-paths.js';
 
@@ -123,8 +123,8 @@ export async function installPlugin(opts: InstallPluginOptions): Promise<void> {
 
     // Step 1: Copy plugin to marketplacesDir/<marketplaceName>/plugins/<pluginName>/
     // Skip if pluginDir is already at the destination (e.g. copyPluginTree already did the copy)
-    const marketplacePluginDest = join(paths.marketplacesDir, marketplaceName, 'plugins', pluginName);
-    if (resolve(pluginDir) !== resolve(marketplacePluginDest)) {
+    const marketplacePluginDest = safePath.join(paths.marketplacesDir, marketplaceName, 'plugins', pluginName);
+    if (safePath.resolve(pluginDir) !== safePath.resolve(marketplacePluginDest)) {
       mkdirSyncReal(marketplacePluginDest, { recursive: true });
       cpSync(pluginDir, marketplacePluginDest, { recursive: true });
     }
@@ -133,15 +133,15 @@ export async function installPlugin(opts: InstallPluginOptions): Promise<void> {
     const knownMarketplaces = readKnownMarketplaces(paths);
     knownMarketplaces[marketplaceName] = {
       source: source as MarketplaceSource,
-      installLocation: join(paths.marketplacesDir, marketplaceName),
+      installLocation: safePath.join(paths.marketplacesDir, marketplaceName),
       lastUpdated: now,
     };
     writeKnownMarketplaces(paths, knownMarketplaces);
 
     // Step 3: Copy plugin to pluginsCacheDir/<marketplaceName>/<pluginName>/<version>/
     // Skip if source and destination are the same
-    const cacheDest = join(paths.pluginsCacheDir, marketplaceName, pluginName, version);
-    if (resolve(pluginDir) !== resolve(cacheDest)) {
+    const cacheDest = safePath.join(paths.pluginsCacheDir, marketplaceName, pluginName, version);
+    if (safePath.resolve(pluginDir) !== safePath.resolve(cacheDest)) {
       mkdirSyncReal(cacheDest, { recursive: true });
       cpSync(pluginDir, cacheDest, { recursive: true });
     }
@@ -151,7 +151,7 @@ export async function installPlugin(opts: InstallPluginOptions): Promise<void> {
     installedPlugins.plugins[pluginKey] = [
       {
         scope: 'user',
-        installPath: join(paths.pluginsCacheDir, marketplaceName, pluginName, version),
+        installPath: safePath.join(paths.pluginsCacheDir, marketplaceName, pluginName, version),
         version,
         installedAt: now,
         lastUpdated: now,

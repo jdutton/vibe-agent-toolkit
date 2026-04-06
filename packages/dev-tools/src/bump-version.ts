@@ -29,9 +29,9 @@
 // File paths derived from PROJECT_ROOT (controlled, not user input)
 
 import { readFileSync, writeFileSync, readdirSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { safeExecSync } from '@vibe-agent-toolkit/utils';
+
+import { safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
 import semver from 'semver';
 
 import { PROJECT_ROOT, log, processWorkspacePackages, type PackageProcessResult } from './common.js';
@@ -114,7 +114,7 @@ let newVersion: string;
 if (['patch', 'minor', 'major'].includes(versionArg)) {
   // Get current version from root package.json
   try {
-    const rootPkgPath = join(PROJECT_ROOT, PACKAGE_JSON);
+    const rootPkgPath = safePath.join(PROJECT_ROOT, PACKAGE_JSON);
     const rootPkg = JSON.parse(readFileSync(rootPkgPath, 'utf8'));
     const currentVersion = rootPkg.version;
 
@@ -191,7 +191,7 @@ function updatePackageVersion(filePath: string, newVersion: string): VersionUpda
 }
 
 // Update root package.json
-const rootPackagePath = join(PROJECT_ROOT, PACKAGE_JSON);
+const rootPackagePath = safePath.join(PROJECT_ROOT, PACKAGE_JSON);
 log('Updating root package.json...', 'blue');
 
 try {
@@ -213,7 +213,7 @@ console.log('');
 log('Updating workspace packages...', 'blue');
 
 // Check if packages directory exists
-const packagesDir = join(PROJECT_ROOT, 'packages');
+const packagesDir = safePath.join(PROJECT_ROOT, 'packages');
 let hasPackages = false;
 try {
   const packages = readdirSync(packagesDir, { withFileTypes: true })

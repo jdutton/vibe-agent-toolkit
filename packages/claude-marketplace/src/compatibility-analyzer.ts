@@ -1,7 +1,7 @@
 import { readdir, readFile } from 'node:fs/promises';
-import { extname, join, relative } from 'node:path';
+import { extname } from 'node:path';
 
-import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 
 import {
   classifyScriptFile,
@@ -39,7 +39,7 @@ interface FileCounts {
  * Throws if the file does not exist or is invalid JSON.
  */
 async function readPluginManifest(pluginDir: string): Promise<PluginManifest> {
-  const manifestPath = join(pluginDir, '.claude-plugin', 'plugin.json');
+  const manifestPath = safePath.join(pluginDir, '.claude-plugin', 'plugin.json');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from join(pluginDir, ...)
   const raw = await readFile(manifestPath, 'utf8');
   const parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -73,8 +73,8 @@ async function collectFiles(rootDir: string): Promise<string[]> {
     const entries = await readdir(dir, { withFileTypes: true });
 
     for (const entry of entries) {
-      const fullPath = join(dir, entry.name);
-      const relativePath = toForwardSlash(relative(rootDir, fullPath));
+      const fullPath = safePath.join(dir, entry.name);
+      const relativePath = toForwardSlash(safePath.relative(rootDir, fullPath));
 
       if (entry.isDirectory()) {
         // Skip the .claude-plugin metadata directory
@@ -229,7 +229,7 @@ export async function analyzeCompatibility(pluginDir: string): Promise<Compatibi
   };
 
   for (const relativePath of files) {
-    const fullPath = join(pluginDir, relativePath);
+    const fullPath = safePath.join(pluginDir, relativePath);
     const ext = extname(relativePath).toLowerCase();
 
     if (MARKDOWN_EXTENSIONS.has(ext)) {

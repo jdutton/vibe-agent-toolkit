@@ -6,7 +6,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
 /**
@@ -112,7 +112,7 @@ export function resolveLocalHref(
   }
 
   const sourceDir = path.dirname(sourceFilePath);
-  const resolvedPath = path.resolve(sourceDir, decodedHref);
+  const resolvedPath = safePath.resolve(sourceDir, decodedHref);
 
   return { resolvedPath, anchor };
 }
@@ -142,10 +142,10 @@ export function isWithinProject(filePath: string, projectRoot: string): boolean 
     resolvedFilePath = fs.realpathSync(filePath);
   } catch {
     // If realpath fails, file doesn't exist - use original path
-    resolvedFilePath = path.resolve(filePath);
+    resolvedFilePath = safePath.resolve(filePath);
   }
 
-  const resolvedProjectRoot = path.resolve(projectRoot);
+  const resolvedProjectRoot = safePath.resolve(projectRoot);
 
   // Normalize to forward slashes for cross-platform comparison
   const normalizedFile = toForwardSlash(resolvedFilePath);

@@ -10,8 +10,8 @@
 
 import { createRequire } from 'node:module';
 import { homedir } from 'node:os';
-import * as path from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import type { Ignore } from 'ignore';
 
 // createRequire is needed because ignore@6 is CJS and NodeNext module resolution
@@ -221,7 +221,7 @@ export function matchesPathRule(
   }
 
   const ig = createIgnore().add(pattern);
-  const relative = path.relative(root, filePath);
+  const relative = safePath.relative(root, filePath);
 
   // node-ignore can't match paths that go "up" (..)
   if (relative.startsWith('..')) return false;

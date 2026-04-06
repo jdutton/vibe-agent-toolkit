@@ -10,9 +10,9 @@
  */
 
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import * as agentRunner from '../../src/utils/agent-runner.js';
@@ -61,17 +61,17 @@ describe('agent-runner', () => {
     process.env = { ...originalEnv };
 
     // Create temp directory structure for test agent
-    tempDir = await mkdtemp(join(normalizedTmpdir(), 'agent-runner-test-'));
-    manifestPath = join(tempDir, 'agent.yaml');
+    tempDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'agent-runner-test-'));
+    manifestPath = safePath.join(tempDir, 'agent.yaml');
 
     // Create prompts directory and files
-    const promptsDir = join(tempDir, 'prompts');
+    const promptsDir = safePath.join(tempDir, 'prompts');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtemp (safe)
     await mkdir(promptsDir, { recursive: true });
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- promptsDir is from mkdtemp (safe)
-    await writeFile(join(promptsDir, 'system.md'), SYSTEM_PROMPT_CONTENT);
+    await writeFile(safePath.join(promptsDir, 'system.md'), SYSTEM_PROMPT_CONTENT);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- promptsDir is from mkdtemp (safe)
-    await writeFile(join(promptsDir, 'user.md'), USER_PROMPT_CONTENT);
+    await writeFile(safePath.join(promptsDir, 'user.md'), USER_PROMPT_CONTENT);
 
     // Setup default mock for loadAgentManifest
     const agentConfig = await import('@vibe-agent-toolkit/agent-config');

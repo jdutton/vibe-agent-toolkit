@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+/* eslint-disable local/no-path-join -- standalone demo, no utils dependency */
 /**
  * Photo Analysis Demo - demonstrates photo analyzer with actual test fixtures
  *

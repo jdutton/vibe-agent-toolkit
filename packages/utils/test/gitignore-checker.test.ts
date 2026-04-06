@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import { gitFindRoot } from '../src/git-utils.js';
@@ -26,7 +26,7 @@ describe('gitignore-checker', () => {
     gitRoot = tempDir;
 
     // Create .git directory
-    mkdirSyncReal(path.join(gitRoot, '.git'));
+    mkdirSyncReal(safePath.join(gitRoot, '.git'));
   });
 
   describe('gitFindRoot', () => {
@@ -36,7 +36,7 @@ describe('gitignore-checker', () => {
     });
 
     it('should find git root in parent directory', () => {
-      const subDir = path.join(gitRoot, 'subdir');
+      const subDir = safePath.join(gitRoot, 'subdir');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
       fs.mkdirSync(subDir);
 
@@ -45,7 +45,7 @@ describe('gitignore-checker', () => {
     });
 
     it('should find git root in deeply nested directory', () => {
-      const deepDir = path.join(gitRoot, 'a', 'b', 'c');
+      const deepDir = safePath.join(gitRoot, 'a', 'b', 'c');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
       fs.mkdirSync(deepDir, { recursive: true });
 
@@ -54,7 +54,7 @@ describe('gitignore-checker', () => {
     });
 
     it('should return null when not in a git repository', () => {
-      const nonGitDir = fs.mkdtempSync(path.join(normalizedTmpdir(), 'non-git-'));
+      const nonGitDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'non-git-'));
       try {
         const result = gitFindRoot(nonGitDir);
         expect(result).toBeNull();
@@ -73,7 +73,7 @@ describe('gitignore-checker', () => {
     });
 
     it('should load rules from .gitignore file', () => {
-      const gitignorePath = path.join(gitRoot, GITIGNORE_FILENAME);
+      const gitignorePath = safePath.join(gitRoot, GITIGNORE_FILENAME);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
       fs.writeFileSync(gitignorePath, NODE_MODULES_IGNORE_CONTENT);
 
@@ -87,14 +87,14 @@ describe('gitignore-checker', () => {
     });
 
     it('should load rules from nested .gitignore files', () => {
-      const rootGitignore = path.join(gitRoot, GITIGNORE_FILENAME);
+      const rootGitignore = safePath.join(gitRoot, GITIGNORE_FILENAME);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
       fs.writeFileSync(rootGitignore, '*.log\n');
 
-      const subDir = path.join(gitRoot, 'subdir');
+      const subDir = safePath.join(gitRoot, 'subdir');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
       fs.mkdirSync(subDir);
-      const subGitignore = path.join(subDir, GITIGNORE_FILENAME);
+      const subGitignore = safePath.join(subDir, GITIGNORE_FILENAME);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
       fs.writeFileSync(subGitignore, '*.tmp\n');
 
@@ -106,7 +106,7 @@ describe('gitignore-checker', () => {
     });
 
     it('should handle unreadable .gitignore files gracefully', () => {
-      const gitignorePath = path.join(gitRoot, GITIGNORE_FILENAME);
+      const gitignorePath = safePath.join(gitRoot, GITIGNORE_FILENAME);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtempSync
       fs.writeFileSync(gitignorePath, 'node_modules/\n');
       // Make file unreadable (Unix-like systems only)

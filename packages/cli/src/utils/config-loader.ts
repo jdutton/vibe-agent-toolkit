@@ -6,9 +6,10 @@
  */
 
 import { readFileSync, existsSync } from 'node:fs';
-import { join, dirname } from 'node:path';
+import {  dirname } from 'node:path';
 
 import { ProjectConfigSchema, type ProjectConfig } from '@vibe-agent-toolkit/resources';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
 
 const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
@@ -23,12 +24,12 @@ export function findConfigPath(startDir?: string): string | null {
   const root = '/';
 
   while (currentDir !== root) {
-    const configPath = join(currentDir, CONFIG_FILENAME);
+    const configPath = safePath.join(currentDir, CONFIG_FILENAME);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path walking is required for config file search
     if (existsSync(configPath)) {
       return configPath;
     }
-    currentDir = join(currentDir, '..');
+    currentDir = safePath.join(currentDir, '..');
   }
 
   return null;
@@ -57,7 +58,7 @@ export function findConfigPath(startDir?: string): string | null {
  */
 export function loadConfig(projectRoot: string): ProjectConfig | undefined {
   // Override for testing: VAT_TEST_CONFIG provides explicit config path
-  const configPath = process.env['VAT_TEST_CONFIG'] ?? join(projectRoot, CONFIG_FILENAME);
+  const configPath = process.env['VAT_TEST_CONFIG'] ?? safePath.join(projectRoot, CONFIG_FILENAME);
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- configPath is derived from projectRoot parameter or env override
   if (!existsSync(configPath)) {

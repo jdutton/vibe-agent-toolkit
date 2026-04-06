@@ -1,9 +1,8 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- test file uses controlled temp directory */
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
-import * as path from 'node:path';
 
-import { setupSyncTempDirSuite } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 
@@ -22,7 +21,7 @@ describe('scan', () => {
   });
 
   it('should scan single SKILL.md file', async () => {
-    const skillPath = path.join(tempDir, 'SKILL.md');
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
     fs.writeFileSync(skillPath, '# Test Skill');
 
     const result = await scan({ path: skillPath });
@@ -34,10 +33,10 @@ describe('scan', () => {
   });
 
   it('should scan directory non-recursively', async () => {
-    fs.writeFileSync(path.join(tempDir, 'SKILL.md'), '# Skill');
-    fs.writeFileSync(path.join(tempDir, 'README.md'), '# Readme');
-    fs.mkdirSync(path.join(tempDir, 'sub'));
-    fs.writeFileSync(path.join(tempDir, 'sub', 'agent.yaml'), 'name: test');
+    fs.writeFileSync(safePath.join(tempDir, 'SKILL.md'), '# Skill');
+    fs.writeFileSync(safePath.join(tempDir, 'README.md'), '# Readme');
+    fs.mkdirSync(safePath.join(tempDir, 'sub'));
+    fs.writeFileSync(safePath.join(tempDir, 'sub', 'agent.yaml'), 'name: test');
 
     const result = await scan({ path: tempDir, recursive: false });
 
@@ -47,9 +46,9 @@ describe('scan', () => {
   });
 
   it('should scan directory recursively', async () => {
-    fs.writeFileSync(path.join(tempDir, 'SKILL.md'), '# Skill');
-    fs.mkdirSync(path.join(tempDir, 'sub'));
-    fs.writeFileSync(path.join(tempDir, 'sub', 'agent.yaml'), 'name: test');
+    fs.writeFileSync(safePath.join(tempDir, 'SKILL.md'), '# Skill');
+    fs.mkdirSync(safePath.join(tempDir, 'sub'));
+    fs.writeFileSync(safePath.join(tempDir, 'sub', 'agent.yaml'), 'name: test');
 
     const result = await scan({ path: tempDir, recursive: true });
 
@@ -59,8 +58,8 @@ describe('scan', () => {
   });
 
   it('should respect include patterns', async () => {
-    fs.writeFileSync(path.join(tempDir, 'test.md'), '# Test');
-    fs.writeFileSync(path.join(tempDir, 'test.ts'), 'code');
+    fs.writeFileSync(safePath.join(tempDir, 'test.md'), '# Test');
+    fs.writeFileSync(safePath.join(tempDir, 'test.ts'), 'code');
 
     const result = await scan({
       path: tempDir,
@@ -72,9 +71,9 @@ describe('scan', () => {
   });
 
   it('should respect exclude patterns', async () => {
-    fs.mkdirSync(path.join(tempDir, 'node_modules'));
-    fs.writeFileSync(path.join(tempDir, 'README.md'), '# Readme');
-    fs.writeFileSync(path.join(tempDir, 'node_modules', 'pkg.md'), '# Pkg');
+    fs.mkdirSync(safePath.join(tempDir, 'node_modules'));
+    fs.writeFileSync(safePath.join(tempDir, 'README.md'), '# Readme');
+    fs.writeFileSync(safePath.join(tempDir, 'node_modules', 'pkg.md'), '# Pkg');
 
     const result = await scan({
       path: tempDir,
@@ -96,10 +95,10 @@ describe('scan', () => {
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
     spawnSync(gitPath, ['config', 'user.name', 'Test User'], { cwd: tempDir, stdio: 'pipe' });
 
-    fs.writeFileSync(path.join(tempDir, '.gitignore'), 'dist/\n');
-    fs.mkdirSync(path.join(tempDir, 'dist'));
-    fs.writeFileSync(path.join(tempDir, 'dist', 'SKILL.md'), '# Built');
-    fs.writeFileSync(path.join(tempDir, 'SKILL.md'), '# Source');
+    fs.writeFileSync(safePath.join(tempDir, '.gitignore'), 'dist/\n');
+    fs.mkdirSync(safePath.join(tempDir, 'dist'));
+    fs.writeFileSync(safePath.join(tempDir, 'dist', 'SKILL.md'), '# Built');
+    fs.writeFileSync(safePath.join(tempDir, 'SKILL.md'), '# Source');
 
     const result = await scan({ path: tempDir, recursive: true });
 

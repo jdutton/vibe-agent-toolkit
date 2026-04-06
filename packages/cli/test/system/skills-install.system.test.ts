@@ -7,8 +7,8 @@
 
 import { existsSync } from 'node:fs';
 import { mkdir, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -22,9 +22,9 @@ const suite = setupInstallTestSuite('vat-skills-install-test-');
  * Helper: Create a simple skill directory with SKILL.md
  */
 async function createSimpleSkill(tempDir: string, skillName: string): Promise<string> {
-  const skillDir = join(tempDir, skillName);
+  const skillDir = safePath.join(tempDir, skillName);
   await mkdir(skillDir, { recursive: true });
-  await writeFile(join(skillDir, 'SKILL.md'), '# Test Skill\nA test skill');
+  await writeFile(safePath.join(skillDir, 'SKILL.md'), '# Test Skill\nA test skill');
   return skillDir;
 }
 
@@ -55,7 +55,7 @@ describe('claude plugin install command (system test)', () => {
 
   describe('source detection', () => {
     it('should detect ZIP source', async () => {
-      const zipPath = join(suite.tempDir, 'test-skill.zip');
+      const zipPath = safePath.join(suite.tempDir, 'test-skill.zip');
       await writeFile(zipPath, 'fake zip content');
 
       const { result, parsed } = executeCommandAndParse(
@@ -71,7 +71,7 @@ describe('claude plugin install command (system test)', () => {
     });
 
     it('should detect local directory source', async () => {
-      const dirPath = join(suite.tempDir, 'test-skill-dir');
+      const dirPath = safePath.join(suite.tempDir, 'test-skill-dir');
       await mkdir(dirPath, { recursive: true });
 
       const { result, parsed } = executeCommandAndParse(
@@ -112,22 +112,22 @@ describe('claude plugin install command (system test)', () => {
       );
 
       // Verify skill was installed
-      const installedPath = join(suite.skillsDir, 'my-skill');
+      const installedPath = safePath.join(suite.skillsDir, 'my-skill');
       expect(existsSync(installedPath)).toBe(true);
-      expect(existsSync(join(installedPath, 'SKILL.md'))).toBe(true);
+      expect(existsSync(safePath.join(installedPath, 'SKILL.md'))).toBe(true);
     });
 
     it('should install from directory with package.json vat metadata', async () => {
       const skillName = 'my-vat-skill';
 
       // Create package directory
-      const packageDir = join(suite.tempDir, 'test-package');
+      const packageDir = safePath.join(suite.tempDir, 'test-package');
       await mkdir(packageDir, { recursive: true });
 
       // Create skill output directory
-      const skillOutputDir = join(packageDir, 'dist', 'skills', skillName);
+      const skillOutputDir = safePath.join(packageDir, 'dist', 'skills', skillName);
       await mkdir(skillOutputDir, { recursive: true });
-      await writeFile(join(skillOutputDir, 'SKILL.md'), '# VAT Skill\nFrom package');
+      await writeFile(safePath.join(skillOutputDir, 'SKILL.md'), '# VAT Skill\nFrom package');
 
       // Create package.json with new vat metadata (skills as string array)
       const packageJson = {
@@ -139,7 +139,7 @@ describe('claude plugin install command (system test)', () => {
           skills: [skillName],
         },
       };
-      await writeFile(join(packageDir, 'package.json'), JSON.stringify(packageJson, null, 2));
+      await writeFile(safePath.join(packageDir, 'package.json'), JSON.stringify(packageJson, null, 2));
 
       const { result, parsed } = executeCommandAndParse(
         suite.binPath,
@@ -156,17 +156,17 @@ describe('claude plugin install command (system test)', () => {
       expect(skills[0]).toHaveProperty('name', skillName);
 
       // Verify skill was installed
-      const installedPath = join(suite.skillsDir, skillName);
+      const installedPath = safePath.join(suite.skillsDir, skillName);
       expect(existsSync(installedPath)).toBe(true);
-      expect(existsSync(join(installedPath, 'SKILL.md'))).toBe(true);
+      expect(existsSync(safePath.join(installedPath, 'SKILL.md'))).toBe(true);
     });
 
     it('should use custom name when --name provided', async () => {
       const customName = 'custom-name';
       const originalName = 'original-name';
-      const skillDir = join(suite.tempDir, originalName);
+      const skillDir = safePath.join(suite.tempDir, originalName);
       await mkdir(skillDir, { recursive: true });
-      await writeFile(join(skillDir, 'SKILL.md'), '# Test');
+      await writeFile(safePath.join(skillDir, 'SKILL.md'), '# Test');
 
       const { result, parsed } = executeCommandAndParse(
         suite.binPath,
@@ -179,8 +179,8 @@ describe('claude plugin install command (system test)', () => {
       expect(skills[0]).toHaveProperty('name', customName);
 
       // Verify installed with custom name
-      expect(existsSync(join(suite.skillsDir, customName))).toBe(true);
-      expect(existsSync(join(suite.skillsDir, originalName))).toBe(false);
+      expect(existsSync(safePath.join(suite.skillsDir, customName))).toBe(true);
+      expect(existsSync(safePath.join(suite.skillsDir, originalName))).toBe(false);
     });
   });
 
@@ -188,7 +188,7 @@ describe('claude plugin install command (system test)', () => {
     it('should install from ZIP file', async () => {
       // Note: Would need adm-zip to create real ZIP, testing with mock
       // For now, test dry-run mode
-      const zipPath = join(suite.tempDir, 'skill.zip');
+      const zipPath = safePath.join(suite.tempDir, 'skill.zip');
       await writeFile(zipPath, 'fake zip');
 
       executeInstallAndExpectSuccess(
@@ -210,9 +210,9 @@ describe('claude plugin install command (system test)', () => {
 
   describe('--force flag', () => {
     it('should overwrite existing skill with --force', async () => {
-      const skillDir = join(suite.tempDir, 'my-skill');
+      const skillDir = safePath.join(suite.tempDir, 'my-skill');
       await mkdir(skillDir, { recursive: true });
-      await writeFile(join(skillDir, 'SKILL.md'), '# Version 1');
+      await writeFile(safePath.join(skillDir, 'SKILL.md'), '# Version 1');
 
       // Install first time
       executeCommandAndParse(
@@ -222,7 +222,7 @@ describe('claude plugin install command (system test)', () => {
       );
 
       // Update skill content
-      await writeFile(join(skillDir, 'SKILL.md'), '# Version 2');
+      await writeFile(safePath.join(skillDir, 'SKILL.md'), '# Version 2');
 
       // Install again with --force
       const { result, parsed } = executeCommandAndParse(
@@ -236,9 +236,9 @@ describe('claude plugin install command (system test)', () => {
     });
 
     it('should fail without --force if skill exists', async () => {
-      const skillDir = join(suite.tempDir, 'my-skill');
+      const skillDir = safePath.join(suite.tempDir, 'my-skill');
       await mkdir(skillDir, { recursive: true });
-      await writeFile(join(skillDir, 'SKILL.md'), '# Test');
+      await writeFile(safePath.join(skillDir, 'SKILL.md'), '# Test');
 
       // Install first time
       executeCommandAndParse(
@@ -280,7 +280,7 @@ describe('claude plugin install command (system test)', () => {
       expect(parsed.dryRun).toBe(true);
 
       // Verify nothing was actually installed
-      expect(existsSync(join(suite.skillsDir, 'my-skill'))).toBe(false);
+      expect(existsSync(safePath.join(suite.skillsDir, 'my-skill'))).toBe(false);
     });
   });
 });

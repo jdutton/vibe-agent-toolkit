@@ -5,8 +5,8 @@
  * code paths to consistently handle anchor stripping and URL-decoding.
  */
 
-import { resolve } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { resolveLocalHref } from '../src/utils.js';
@@ -19,7 +19,7 @@ describe('resolveLocalHref', () => {
   it('should resolve a simple relative path', () => {
     const result = resolveLocalHref(GUIDE_MD, SOURCE);
     expect(result).toEqual({
-      resolvedPath: resolve(SOURCE_DIR, GUIDE_MD),
+      resolvedPath: safePath.resolve(SOURCE_DIR, GUIDE_MD),
       anchor: undefined,
     });
   });
@@ -27,7 +27,7 @@ describe('resolveLocalHref', () => {
   it('should strip anchor and return it separately', () => {
     const result = resolveLocalHref('./guide.md#section', SOURCE);
     expect(result).toEqual({
-      resolvedPath: resolve(SOURCE_DIR, GUIDE_MD),
+      resolvedPath: safePath.resolve(SOURCE_DIR, GUIDE_MD),
       anchor: 'section',
     });
   });
@@ -39,7 +39,7 @@ describe('resolveLocalHref', () => {
   it('should decode %20 as space', () => {
     const result = resolveLocalHref('My%20Folder/doc.md', SOURCE);
     expect(result).toEqual({
-      resolvedPath: resolve(SOURCE_DIR, 'My Folder/doc.md'),
+      resolvedPath: safePath.resolve(SOURCE_DIR, 'My Folder/doc.md'),
       anchor: undefined,
     });
   });
@@ -47,7 +47,7 @@ describe('resolveLocalHref', () => {
   it('should decode %26 as ampersand', () => {
     const result = resolveLocalHref('Fraud%20%26%20Investigations/CLAUDE.md', SOURCE);
     expect(result).toEqual({
-      resolvedPath: resolve(SOURCE_DIR, 'Fraud & Investigations/CLAUDE.md'),
+      resolvedPath: safePath.resolve(SOURCE_DIR, 'Fraud & Investigations/CLAUDE.md'),
       anchor: undefined,
     });
   });
@@ -55,7 +55,7 @@ describe('resolveLocalHref', () => {
   it('should decode percent-encoding AND strip anchor', () => {
     const result = resolveLocalHref('My%20Folder/doc.md#intro', SOURCE);
     expect(result).toEqual({
-      resolvedPath: resolve(SOURCE_DIR, 'My Folder/doc.md'),
+      resolvedPath: safePath.resolve(SOURCE_DIR, 'My Folder/doc.md'),
       anchor: 'intro',
     });
   });
@@ -63,7 +63,7 @@ describe('resolveLocalHref', () => {
   it('should fall back to raw href on invalid percent-encoding', () => {
     const result = resolveLocalHref('bad%ZZencoding.md', SOURCE);
     expect(result).toEqual({
-      resolvedPath: resolve(SOURCE_DIR, 'bad%ZZencoding.md'),
+      resolvedPath: safePath.resolve(SOURCE_DIR, 'bad%ZZencoding.md'),
       anchor: undefined,
     });
   });

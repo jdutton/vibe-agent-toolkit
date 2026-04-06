@@ -2,9 +2,9 @@
  * Agent import command - convert SKILL.md to agent.yaml
  */
 
-import * as path from 'node:path';
-
 import { importSkillToAgent } from '@vibe-agent-toolkit/agent-skills';
+import { safePath } from '@vibe-agent-toolkit/utils';
+
 
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
@@ -25,7 +25,7 @@ export async function importCommand(
 
   try {
     // Resolve path
-    const resolvedSkillPath = path.resolve(skillPath);
+    const resolvedSkillPath = safePath.resolve(skillPath);
     logger.debug(`Importing Agent Skill: ${resolvedSkillPath}`);
 
     // Import SKILL.md to agent.yaml
@@ -35,7 +35,7 @@ export async function importCommand(
     };
 
     if (options.output) {
-      importOptions.outputPath = path.resolve(options.output);
+      importOptions.outputPath = safePath.resolve(options.output);
     }
 
     const result = await importSkillToAgent(importOptions);

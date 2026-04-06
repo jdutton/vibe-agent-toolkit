@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 import { setupResourceTestSuite } from '../test-helpers.js';
@@ -9,11 +9,11 @@ import { setupResourceTestSuite } from '../test-helpers.js';
  * Helper to create a SKILL.md file in the skills directory
  */
 async function createSkillFile(tempDir: string, content: string): Promise<string> {
-  const skillsDir = join(tempDir, 'resources', 'skills');
+  const skillsDir = safePath.join(tempDir, 'resources', 'skills');
   // eslint-disable-next-line security/detect-non-literal-fs-filename
   await fs.mkdir(skillsDir, { recursive: true });
 
-  const skillPath = join(skillsDir, 'SKILL.md');
+  const skillPath = safePath.join(skillsDir, 'SKILL.md');
   // eslint-disable-next-line security/detect-non-literal-fs-filename
   await fs.writeFile(skillPath, content, 'utf-8');
 
@@ -47,11 +47,11 @@ See [documentation](../../docs/README.md) for details.
       );
 
       // Create referenced doc
-      const docsDir = join(suite.tempDir, 'docs');
+      const docsDir = safePath.join(suite.tempDir, 'docs');
       // eslint-disable-next-line security/detect-non-literal-fs-filename
       await fs.mkdir(docsDir, { recursive: true });
       // eslint-disable-next-line security/detect-non-literal-fs-filename
-      await fs.writeFile(join(docsDir, 'README.md'), '# Documentation\n\nMain docs.', 'utf-8');
+      await fs.writeFile(safePath.join(docsDir, 'README.md'), '# Documentation\n\nMain docs.', 'utf-8');
 
       // Crawl and validate
       await suite.registry.crawl({

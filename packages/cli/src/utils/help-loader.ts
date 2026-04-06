@@ -4,8 +4,10 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 /**
  * Load verbose help from markdown files in packages/cli/docs/
@@ -16,11 +18,11 @@ import { fileURLToPath } from 'node:url';
 export function loadVerboseHelp(section?: string): string {
   // Get package root (packages/cli/)
   const __dirname = dirname(fileURLToPath(import.meta.url));
-  const packageRoot = join(__dirname, '../..');
+  const packageRoot = safePath.join(__dirname, '../..');
 
   // Determine which markdown file to load
   const filename = section ? `${section}.md` : 'index.md';
-  const helpPath = join(packageRoot, 'docs', filename);
+  const helpPath = safePath.join(packageRoot, 'docs', filename);
 
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is constructed from known safe components

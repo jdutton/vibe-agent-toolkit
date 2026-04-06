@@ -3,7 +3,7 @@
 
 import { it, beforeAll, afterAll } from 'vitest';
 
-import { describe, expect, fs, getBinPath, join } from './test-common.js';
+import { describe, expect, fs, getBinPath, safePath } from './test-common.js';
 import {
   createTestTempDir,
   executeAndParseYaml,
@@ -37,11 +37,11 @@ resources:
     });
 
     // Create files in different locations
-    fs.mkdirSync(join(projectDir, 'other'));
+    fs.mkdirSync(safePath.join(projectDir, 'other'));
 
-    fs.writeFileSync(join(projectDir, 'docs/test.md'), '# Test');
-    fs.writeFileSync(join(projectDir, 'other/test.md'), '# Other');
-    fs.writeFileSync(join(projectDir, 'README.md'), '# Root');
+    fs.writeFileSync(safePath.join(projectDir, 'docs/test.md'), '# Test');
+    fs.writeFileSync(safePath.join(projectDir, 'other/test.md'), '# Other');
+    fs.writeFileSync(safePath.join(projectDir, 'README.md'), '# Root');
 
     const { result, parsed} = executeScanAndParse(binPath, projectDir);
 
@@ -62,11 +62,11 @@ resources:
       withDocs: true,
     });
 
-    fs.mkdirSync(join(projectDir, 'test'));
+    fs.mkdirSync(safePath.join(projectDir, 'test'));
 
-    fs.writeFileSync(join(projectDir, 'docs/guide.md'), '# Guide');
-    fs.writeFileSync(join(projectDir, 'test/fixture.md'), '# Fixture');
-    fs.writeFileSync(join(projectDir, 'docs/api.test.md'), '# API Test');
+    fs.writeFileSync(safePath.join(projectDir, 'docs/guide.md'), '# Guide');
+    fs.writeFileSync(safePath.join(projectDir, 'test/fixture.md'), '# Fixture');
+    fs.writeFileSync(safePath.join(projectDir, 'docs/api.test.md'), '# API Test');
 
     const { result, parsed } = executeScanAndParse(binPath, projectDir);
 
@@ -81,7 +81,7 @@ resources:
       withDocs: true,
     });
 
-    fs.writeFileSync(join(projectDir, 'docs/test.md'), '# Test');
+    fs.writeFileSync(safePath.join(projectDir, 'docs/test.md'), '# Test');
 
     const { result, parsed } = executeScanAndParse(binPath, projectDir);
 
@@ -104,13 +104,13 @@ resources:
     });
 
     // Create nested directory structure
-    const docsDir = join(projectDir, 'docs/guides');
+    const docsDir = safePath.join(projectDir, 'docs/guides');
     fs.mkdirSync(docsDir, { recursive: true });
-    fs.writeFileSync(join(docsDir, 'test.md'), '# Test');
+    fs.writeFileSync(safePath.join(docsDir, 'test.md'), '# Test');
 
-    const excludedDir = join(projectDir, 'excluded');
+    const excludedDir = safePath.join(projectDir, 'excluded');
     fs.mkdirSync(excludedDir);
-    fs.writeFileSync(join(excludedDir, 'test.md'), '# Excluded');
+    fs.writeFileSync(safePath.join(excludedDir, 'test.md'), '# Excluded');
 
     // Run from nested directory with explicit path
     const { result, parsed } = executeAndParseYaml(
@@ -136,13 +136,13 @@ resources:
     });
 
     // Create files
-    const docsDir = join(projectDir, 'docs');
+    const docsDir = safePath.join(projectDir, 'docs');
     fs.mkdirSync(docsDir, { recursive: true });
-    fs.writeFileSync(join(docsDir, 'included.md'), '# Included');
+    fs.writeFileSync(safePath.join(docsDir, 'included.md'), '# Included');
 
-    const excludedDir = join(projectDir, 'excluded');
+    const excludedDir = safePath.join(projectDir, 'excluded');
     fs.mkdirSync(excludedDir);
-    fs.writeFileSync(join(excludedDir, 'test.md'), '# Excluded');
+    fs.writeFileSync(safePath.join(excludedDir, 'test.md'), '# Excluded');
 
     // Run WITHOUT path argument - should use config
     const { result, parsed } = executeAndParseYaml(
@@ -170,7 +170,7 @@ resources:
     });
 
     fs.writeFileSync(
-      join(projectDir, 'docs/test.md'),
+      safePath.join(projectDir, 'docs/test.md'),
       '# Test\n\n[Link](./test.md)'
     );
 
@@ -188,7 +188,7 @@ resources:
       withDocs: true,
     });
 
-    fs.writeFileSync(join(projectDir, 'docs/test.md'), '# Test');
+    fs.writeFileSync(safePath.join(projectDir, 'docs/test.md'), '# Test');
 
     const { result, parsed } = executeScanAndParse(binPath, projectDir);
 
@@ -210,15 +210,15 @@ resources:
     });
 
     // Create complex directory structure
-    fs.mkdirSync(join(projectDir, 'docs/api'), { recursive: true });
-    fs.mkdirSync(join(projectDir, 'guides/tutorials'), { recursive: true });
-    fs.mkdirSync(join(projectDir, 'test/fixtures'), { recursive: true });
+    fs.mkdirSync(safePath.join(projectDir, 'docs/api'), { recursive: true });
+    fs.mkdirSync(safePath.join(projectDir, 'guides/tutorials'), { recursive: true });
+    fs.mkdirSync(safePath.join(projectDir, 'test/fixtures'), { recursive: true });
 
-    fs.writeFileSync(join(projectDir, 'README.md'), '# Root');
-    fs.writeFileSync(join(projectDir, 'docs/api/auth.md'), '# Auth');
-    fs.writeFileSync(join(projectDir, 'guides/tutorials/intro.md'), '# Intro');
-    fs.writeFileSync(join(projectDir, 'guides/wip.draft.md'), '# Draft');
-    fs.writeFileSync(join(projectDir, 'test/fixtures/mock.md'), '# Mock');
+    fs.writeFileSync(safePath.join(projectDir, 'README.md'), '# Root');
+    fs.writeFileSync(safePath.join(projectDir, 'docs/api/auth.md'), '# Auth');
+    fs.writeFileSync(safePath.join(projectDir, 'guides/tutorials/intro.md'), '# Intro');
+    fs.writeFileSync(safePath.join(projectDir, 'guides/wip.draft.md'), '# Draft');
+    fs.writeFileSync(safePath.join(projectDir, 'test/fixtures/mock.md'), '# Mock');
 
     const { result, parsed } = executeScanAndParse(binPath, projectDir);
 

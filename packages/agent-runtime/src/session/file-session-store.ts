@@ -7,7 +7,7 @@
 
 import { mkdir, readFile, readdir, unlink, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+
 
 import type {
   RuntimeSession,
@@ -21,6 +21,7 @@ import {
   SessionNotFoundError,
   validateSessionId,
 } from '@vibe-agent-toolkit/agent-runtime';
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 /**
  * File-based session store for VAT agents.
@@ -44,7 +45,7 @@ export class FileSessionStore<TState = unknown> implements SessionStore<TState> 
   private readonly ttl: number | undefined;
 
   constructor(options: FileSessionStoreOptions<TState> = {}) {
-    this.baseDir = options.baseDir ?? join(homedir(), '.vat-sessions');
+    this.baseDir = options.baseDir ?? safePath.join(homedir(), '.vat-sessions');
     this.generateId = options.generateId ?? (() => crypto.randomUUID());
     this.createInitialState = options.createInitialState;
     this.ttl = options.ttl;
@@ -95,7 +96,7 @@ export class FileSessionStore<TState = unknown> implements SessionStore<TState> 
 
   async save(session: RuntimeSession<TState>): Promise<void> {
     const sessionPath = this.getSessionPath(session.id);
-    const sessionDir = join(this.baseDir, session.id);
+    const sessionDir = safePath.join(this.baseDir, session.id);
 
     // Ensure directory exists
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- session.id validated by getSessionPath
@@ -164,7 +165,7 @@ export class FileSessionStore<TState = unknown> implements SessionStore<TState> 
 
   private getSessionPath(sessionId: string): string {
     validateSessionId(sessionId);
-    return join(this.baseDir, sessionId, 'session.json');
+    return safePath.join(this.baseDir, sessionId, 'session.json');
   }
 
   /**
@@ -172,7 +173,7 @@ export class FileSessionStore<TState = unknown> implements SessionStore<TState> 
    */
   getCheckpointDir(sessionId: string): string {
     validateSessionId(sessionId);
-    return join(this.baseDir, sessionId, 'checkpoints');
+    return safePath.join(this.baseDir, sessionId, 'checkpoints');
   }
 }
 

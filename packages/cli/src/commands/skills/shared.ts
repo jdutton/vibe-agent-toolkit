@@ -4,7 +4,8 @@
 
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import type { createLogger } from '../../utils/logger.js';
 
@@ -25,7 +26,7 @@ export interface PackageJson {
  * Read and parse package.json from current directory
  */
 export async function readPackageJson(cwd: string): Promise<PackageJson> {
-	const packageJsonPath = join(cwd, 'package.json');
+	const packageJsonPath = safePath.join(cwd, 'package.json');
 
 	// eslint-disable-next-line security/detect-non-literal-fs-filename -- Reading from validated current directory
 	if (!existsSync(packageJsonPath)) {

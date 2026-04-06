@@ -3,15 +3,16 @@
  */
 
 import os from 'node:os';
-import path from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 /**
  * Map of runtime to scope locations
  */
 export const SCOPE_LOCATIONS: Record<string, Record<string, string>> = {
   'agent-skill': {
-    user: path.join(os.homedir(), '.claude', 'skills'),
-    project: path.join(process.cwd(), '.claude', 'skills'),
+    user: safePath.join(os.homedir(), '.claude', 'skills'),
+    project: safePath.join(process.cwd(), '.claude', 'skills'),
   },
 };
 

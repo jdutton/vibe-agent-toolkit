@@ -20,7 +20,7 @@ import path from 'node:path';
 import {
   isGitIgnored,
   type GitTracker,
-  verifyCaseSensitiveFilename,
+  verifyCaseSensitiveFilename, safePath,
 } from '@vibe-agent-toolkit/utils';
 
 import type { ValidationIssue } from './schemas/validation-result.js';
@@ -242,7 +242,7 @@ async function validateLocalFile(
 ): Promise<{ exists: boolean; resolvedPath: string; actualName?: string }> {
   // Resolve href to filesystem path (decode percent-encoding, resolve relative to source)
   const resolved = resolveLocalHref(href, sourceFilePath);
-  const resolvedPath = resolved?.resolvedPath ?? path.resolve(path.dirname(sourceFilePath), href);
+  const resolvedPath = resolved?.resolvedPath ?? safePath.resolve(path.dirname(sourceFilePath), href);
 
   // Check if file exists with correct case
   const verification = await verifyCaseSensitiveFilename(resolvedPath);

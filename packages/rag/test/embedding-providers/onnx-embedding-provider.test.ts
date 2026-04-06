@@ -6,14 +6,14 @@
  */
 
 import { homedir } from 'node:os';
-import { join } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { OnnxEmbeddingProvider } from '../../src/embedding-providers/onnx-embedding-provider.js';
 
 /** Non-public directory for test paths to satisfy sonarjs/publicly-writable-directories */
-const TEST_PATH_BASE = join(homedir(), '.cache', 'vat-test');
+const TEST_PATH_BASE = safePath.join(homedir(), '.cache', 'vat-test');
 
 describe('OnnxEmbeddingProvider - Unit Tests', () => {
   it('should have correct default metadata', () => {
@@ -45,7 +45,7 @@ describe('OnnxEmbeddingProvider - Unit Tests', () => {
 
   it('should accept modelPath configuration', () => {
     const provider = new OnnxEmbeddingProvider({
-      modelPath: join(TEST_PATH_BASE, 'my-model'),
+      modelPath: safePath.join(TEST_PATH_BASE, 'my-model'),
     });
 
     expect(provider).toBeDefined();
@@ -54,7 +54,7 @@ describe('OnnxEmbeddingProvider - Unit Tests', () => {
 
   it('should accept cacheDir configuration', () => {
     const provider = new OnnxEmbeddingProvider({
-      cacheDir: join(TEST_PATH_BASE, 'custom-cache'),
+      cacheDir: safePath.join(TEST_PATH_BASE, 'custom-cache'),
     });
 
     expect(provider).toBeDefined();
@@ -83,8 +83,8 @@ describe('OnnxEmbeddingProvider - Unit Tests', () => {
     const provider = new OnnxEmbeddingProvider({
       model: 'custom/model',
       dimensions: 512,
-      modelPath: join(TEST_PATH_BASE, 'models'),
-      cacheDir: join(TEST_PATH_BASE, 'cache'),
+      modelPath: safePath.join(TEST_PATH_BASE, 'models'),
+      cacheDir: safePath.join(TEST_PATH_BASE, 'cache'),
       executionProviders: ['cpu'],
       maxSequenceLength: 512,
     });

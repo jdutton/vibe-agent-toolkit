@@ -7,9 +7,9 @@
 
 import { spawnSync } from 'node:child_process';
 import { cpSync, mkdtempSync, rmSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { Logger } from '../../../utils/logger.js';
 
@@ -167,7 +167,7 @@ export async function publishToGitBranch(options: PublishGitOptions): Promise<vo
   logger.info(`   Remote: ${remoteUrl}`);
   logger.info(`   Branch: ${branch}`);
 
-  const tmpRepo = mkdtempSync(join(normalizedTmpdir(), 'vat-marketplace-publish-'));
+  const tmpRepo = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-marketplace-publish-'));
   logger.debug(`   Staging repo: ${tmpRepo}`);
 
   try {

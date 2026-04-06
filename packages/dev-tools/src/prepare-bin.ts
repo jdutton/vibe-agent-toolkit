@@ -4,12 +4,13 @@
  */
 
 import { copyFileSync, chmodSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 export function prepareBinaries(packageRoot: string): void {
-  const distBinDir = join(packageRoot, 'dist', 'bin');
-  const sourcePath = join(distBinDir, 'vat.js');
-  const targetPath = join(distBinDir, 'vat');
+  const distBinDir = safePath.join(packageRoot, 'dist', 'bin');
+  const sourcePath = safePath.join(distBinDir, 'vat.js');
+  const targetPath = safePath.join(distBinDir, 'vat');
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are constructed from packageRoot parameter
   if (!existsSync(distBinDir)) {

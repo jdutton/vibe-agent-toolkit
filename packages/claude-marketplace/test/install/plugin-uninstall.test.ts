@@ -4,9 +4,9 @@
 // Test helper — file paths are controlled by test code, not user input
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { mkdirSyncReal } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { findPluginsByPackage, uninstallPlugin } from '../../src/install/plugin-uninstall.js';
@@ -23,14 +23,14 @@ function setupInstalledPlugin(
   const pluginKey = `${pluginName}@${marketplace}`;
 
   // Artifact 1: marketplaces dir
-  const mpPluginDir = join(paths.marketplacesDir, marketplace, 'plugins', pluginName);
+  const mpPluginDir = safePath.join(paths.marketplacesDir, marketplace, 'plugins', pluginName);
   mkdirSyncReal(mpPluginDir, { recursive: true });
-  writeFileSync(join(mpPluginDir, 'SKILL.md'), `# ${pluginName}`);
+  writeFileSync(safePath.join(mpPluginDir, 'SKILL.md'), `# ${pluginName}`);
 
   // Artifact 2: cache dir
-  const cacheDir = join(paths.pluginsCacheDir, marketplace, pluginName, version);
+  const cacheDir = safePath.join(paths.pluginsCacheDir, marketplace, pluginName, version);
   mkdirSyncReal(cacheDir, { recursive: true });
-  writeFileSync(join(cacheDir, 'SKILL.md'), `# ${pluginName}`);
+  writeFileSync(safePath.join(cacheDir, 'SKILL.md'), `# ${pluginName}`);
 
   // Artifact 3: installed_plugins.json
   writeFileSync(paths.installedPluginsPath, JSON.stringify({
@@ -59,8 +59,8 @@ describe('uninstallPlugin', () => {
 
     expect(result.removed).toBe(true);
     expect(result.warning).toBeUndefined();
-    expect(existsSync(join(paths.marketplacesDir, 'my-market', 'plugins', 'my-skill'))).toBe(false);
-    expect(existsSync(join(paths.pluginsCacheDir, 'my-market', 'my-skill'))).toBe(false);
+    expect(existsSync(safePath.join(paths.marketplacesDir, 'my-market', 'plugins', 'my-skill'))).toBe(false);
+    expect(existsSync(safePath.join(paths.pluginsCacheDir, 'my-market', 'my-skill'))).toBe(false);
     // installed_plugins.json: key removed
     const ip = JSON.parse(readFileSync(paths.installedPluginsPath, 'utf-8'));
     expect(ip.plugins['my-skill@my-market']).toBeUndefined();
@@ -82,7 +82,7 @@ describe('uninstallPlugin', () => {
     const paths = getPaths();
     setupInstalledPlugin(paths, 'skill-a', 'shared-market', '@test/pkg-a');
     // Add a second plugin to the same marketplace
-    const pluginBDir = join(paths.marketplacesDir, 'shared-market', 'plugins', 'skill-b');
+    const pluginBDir = safePath.join(paths.marketplacesDir, 'shared-market', 'plugins', 'skill-b');
     mkdirSyncReal(pluginBDir, { recursive: true });
     const ip = JSON.parse(readFileSync(paths.installedPluginsPath, 'utf-8'));
     ip.plugins['skill-b@shared-market'] = [{ scope: 'user', installPath: '', version: '1.0.0', installedAt: '', lastUpdated: '' }];
@@ -99,13 +99,13 @@ describe('uninstallPlugin', () => {
     setupInstalledPlugin(paths, 'my-skill', 'my-market', '@test/pkg');
     const result = await uninstallPlugin({ pluginKey: 'my-skill@my-market', paths, dryRun: true });
     expect(result.removed).toBe(true);
-    expect(existsSync(join(paths.marketplacesDir, 'my-market', 'plugins', 'my-skill'))).toBe(true);
+    expect(existsSync(safePath.join(paths.marketplacesDir, 'my-market', 'plugins', 'my-skill'))).toBe(true);
   });
 
   it('warns and cleans if plugin dir exists but not in registry', async () => {
     const paths = getPaths();
     // Only artifact 1 (dir) exists — not VAT-installed
-    const mpPluginDir = join(paths.marketplacesDir, 'my-market', 'plugins', 'orphan');
+    const mpPluginDir = safePath.join(paths.marketplacesDir, 'my-market', 'plugins', 'orphan');
     mkdirSyncReal(mpPluginDir, { recursive: true });
     const result = await uninstallPlugin({ pluginKey: 'orphan@my-market', paths });
     expect(result.removed).toBe(true);

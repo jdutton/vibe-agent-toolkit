@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
-import path from 'node:path';
 
 import { AgentManifestSchema, type AgentManifest } from '@vibe-agent-toolkit/agent-schema';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { parse as parseYaml } from 'yaml';
 
 export interface LoadedAgentManifest extends AgentManifest {
@@ -19,7 +19,7 @@ export interface LoadedAgentManifest extends AgentManifest {
  * - Directory containing manifest
  */
 export async function findManifestPath(pathArg: string): Promise<string> {
-  const absolutePath = path.resolve(process.cwd(), pathArg);
+  const absolutePath = safePath.resolve(process.cwd(), pathArg);
 
   // Check if it's a direct file reference
   if (pathArg.endsWith('.yaml') || pathArg.endsWith('.yml')) {
@@ -33,8 +33,8 @@ export async function findManifestPath(pathArg: string): Promise<string> {
 
   // Assume it's a directory - search for manifest
   const candidates = [
-    path.join(absolutePath, 'agent.yaml'),
-    path.join(absolutePath, 'agent.yml'),
+    safePath.join(absolutePath, 'agent.yaml'),
+    safePath.join(absolutePath, 'agent.yml'),
   ];
 
   for (const candidate of candidates) {

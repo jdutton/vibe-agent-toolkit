@@ -5,9 +5,9 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test files use dynamic paths */
 
 import { writeFileSync, unlinkSync } from 'node:fs';
-import { join } from 'node:path';
 
-import { mkdirSyncReal, normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import ts from 'typescript';
 import { describe, it, expect, beforeEach } from 'vitest';
 
@@ -84,7 +84,7 @@ describe('language-service utils', () => {
   let testDir: string;
 
   beforeEach(() => {
-    testDir = join(normalizedTmpdir(), `ls-utils-test-${Date.now()}`);
+    testDir = safePath.join(normalizedTmpdir(), `ls-utils-test-${Date.now()}`);
     mkdirSyncReal(testDir, { recursive: true });
     clearCache();
   });
@@ -265,7 +265,7 @@ Content`;
 
   describe('loadMarkdownResource', () => {
     it('should load and parse markdown file', () => {
-      const testFile = join(testDir, 'test.md');
+      const testFile = safePath.join(testDir, 'test.md');
       writeFileSync(
         testFile,
         `---
@@ -289,7 +289,7 @@ Content two`,
     });
 
     it('should cache loaded resources', () => {
-      const testFile = join(testDir, 'test.md');
+      const testFile = safePath.join(testDir, 'test.md');
       writeFileSync(testFile, '## Fragment\nContent');
 
       // First load

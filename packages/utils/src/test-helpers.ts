@@ -1,9 +1,8 @@
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import fs from 'node:fs/promises';
-import { join, resolve } from 'node:path';
 
-import { mkdirSyncReal, normalizedTmpdir } from './path-utils.js';
+import { mkdirSyncReal, normalizedTmpdir, safePath } from './path-utils.js';
 
 /**
  * Get isolated test output directory for current test run
@@ -38,10 +37,10 @@ export function getTestOutputDir(
   const runId = `${timestamp}-${randomId}`;
 
   // Find project root (assuming we're always in packages/*/test/*)
-  const projectRoot = resolve(process.cwd());
+  const projectRoot = safePath.resolve(process.cwd());
 
   // Build path: packages/{packageName}/.test-output/{testType}/{runId}/{...subdirs}
-  const testOutputDir = join(
+  const testOutputDir = safePath.join(
     projectRoot,
     'packages',
     packageName,
@@ -70,8 +69,8 @@ export function getTestOutputDir(
  * ```
  */
 export function getTestOutputBase(packageName: string): string {
-  const projectRoot = resolve(process.cwd());
-  return join(projectRoot, 'packages', packageName, '.test-output');
+  const projectRoot = safePath.resolve(process.cwd());
+  return safePath.join(projectRoot, 'packages', packageName, '.test-output');
 }
 
 /**
@@ -112,7 +111,7 @@ export function setupAsyncTempDirSuite(prefix: string): {
 
   return {
     beforeAll: async () => {
-      suiteDir = await fs.mkdtemp(join(normalizedTmpdir(), `${prefix}-suite-`));
+      suiteDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), `${prefix}-suite-`));
     },
     afterAll: async () => {
       if (suiteDir) {
@@ -121,7 +120,7 @@ export function setupAsyncTempDirSuite(prefix: string): {
     },
     beforeEach: async () => {
       testCounter++;
-      tempDir = join(suiteDir, `test-${testCounter}`);
+      tempDir = safePath.join(suiteDir, `test-${testCounter}`);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtemp
       await fs.mkdir(tempDir, { recursive: true });
     },
@@ -170,7 +169,7 @@ export function setupSyncTempDirSuite(prefix: string): {
 
   return {
     beforeAll: () => {
-      suiteDir = mkdtempSync(join(normalizedTmpdir(), `${prefix}-suite-`));
+      suiteDir = mkdtempSync(safePath.join(normalizedTmpdir(), `${prefix}-suite-`));
     },
     afterAll: () => {
       if (suiteDir) {
@@ -179,7 +178,7 @@ export function setupSyncTempDirSuite(prefix: string): {
     },
     beforeEach: () => {
       testCounter++;
-      tempDir = join(suiteDir, `test-${testCounter}`);
+      tempDir = safePath.join(suiteDir, `test-${testCounter}`);
       mkdirSyncReal(tempDir);
     },
     afterEach: () => {

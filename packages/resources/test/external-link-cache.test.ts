@@ -1,7 +1,6 @@
 import { promises as fs } from 'node:fs';
-import path from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ExternalLinkCache } from '../src/external-link-cache.js';
@@ -15,7 +14,7 @@ describe('ExternalLinkCache', () => {
 	let cache: ExternalLinkCache;
 
 	beforeEach(async () => {
-		tempDir = await fs.mkdtemp(path.join(normalizedTmpdir(), 'link-cache-test-'));
+		tempDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), 'link-cache-test-'));
 		cache = new ExternalLinkCache(tempDir, 24);
 	});
 
@@ -113,7 +112,7 @@ describe('ExternalLinkCache', () => {
 
 	it('should handle corrupted cache file gracefully', async () => {
 		// Write invalid JSON to cache file
-		const cacheFile = path.join(tempDir, 'external-links.json');
+		const cacheFile = safePath.join(tempDir, 'external-links.json');
 		// eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir from mkdtemp, safe
 		await fs.writeFile(cacheFile, 'invalid json {{{');
 
@@ -173,7 +172,7 @@ describe('ExternalLinkCache', () => {
 
 	it('should handle cache directory creation', async () => {
 		// Test with non-existent directory
-		const newDir = path.join(tempDir, 'nested', 'cache');
+		const newDir = safePath.join(tempDir, 'nested', 'cache');
 		const newCache = new ExternalLinkCache(newDir, 24);
 
 		// Should create directory and work normally

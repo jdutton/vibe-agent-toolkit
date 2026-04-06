@@ -3,8 +3,8 @@
  */
 
 import fs from 'node:fs/promises';
-import path from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
 
 export interface DiscoveredAgent {
@@ -32,13 +32,13 @@ export async function discoverAgents(): Promise<DiscoveredAgent[]> {
 
 async function discoverAgentsInPath(searchPath: string): Promise<DiscoveredAgent[]> {
   try {
-    const absolutePath = path.resolve(process.cwd(), searchPath);
+    const absolutePath = safePath.resolve(process.cwd(), searchPath);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path is from predefined constant list
     const entries = await fs.readdir(absolutePath, { withFileTypes: true });
 
     const directories = entries.filter(entry => entry.isDirectory());
     const agentPromises = directories.map(entry =>
-      discoverAgentInDirectory(path.join(absolutePath, entry.name))
+      discoverAgentInDirectory(safePath.join(absolutePath, entry.name))
     );
 
     const agents = await Promise.all(agentPromises);
@@ -62,7 +62,7 @@ async function findManifest(dir: string): Promise<string | null> {
   const candidates = ['agent.yaml', 'agent.yml'];
 
   for (const candidate of candidates) {
-    const manifestPath = path.join(dir, candidate);
+    const manifestPath = safePath.join(dir, candidate);
     try {
       await fs.access(manifestPath);
       return manifestPath;

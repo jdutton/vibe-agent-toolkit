@@ -1,9 +1,9 @@
 
 
 import { promises as fs } from 'node:fs';
-import { join } from 'node:path';
 
-import { normalizedTmpdir } from '@vibe-agent-toolkit/utils';
+
+import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect } from 'vitest';
 
 import { calculateChecksum } from '../src/checksum.js';
@@ -15,9 +15,9 @@ describe('calculateChecksum', () => {
    * Helper to create two test files with given content
    */
   async function createTwoFiles(content1: string, content2: string): Promise<{ tempDir: string; file1: string; file2: string }> {
-    const tempDir = await fs.mkdtemp(join(normalizedTmpdir(), TEMP_DIR_PREFIX));
-    const file1 = join(tempDir, 'file1.txt');
-    const file2 = join(tempDir, 'file2.txt');
+    const tempDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), TEMP_DIR_PREFIX));
+    const file1 = safePath.join(tempDir, 'file1.txt');
+    const file2 = safePath.join(tempDir, 'file2.txt');
     // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.writeFile(file1, content1, 'utf-8');
     // eslint-disable-next-line security/detect-non-literal-fs-filename
@@ -26,8 +26,8 @@ describe('calculateChecksum', () => {
   }
 
   it('should calculate SHA-256 checksum for file content', async () => {
-    const tempDir = await fs.mkdtemp(join(normalizedTmpdir(), TEMP_DIR_PREFIX));
-    const testFile = join(tempDir, 'test.txt');
+    const tempDir = await fs.mkdtemp(safePath.join(normalizedTmpdir(), TEMP_DIR_PREFIX));
+    const testFile = safePath.join(tempDir, 'test.txt');
     // eslint-disable-next-line security/detect-non-literal-fs-filename
     await fs.writeFile(testFile, 'Hello, World!', 'utf-8');
 

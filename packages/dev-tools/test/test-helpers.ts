@@ -4,9 +4,9 @@
 // Simple semver validation regex for test purposes only
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
 
-import { mkdirSyncReal, normalizePath, normalizedTmpdir, toForwardSlash } from '@vibe-agent-toolkit/utils';
+
+import { mkdirSyncReal, normalizePath, normalizedTmpdir, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 
 export interface TestTempDirOptions {
   prefix?: string;
@@ -15,8 +15,8 @@ export interface TestTempDirOptions {
 export function createTestTempDir(options: TestTempDirOptions = {}): string {
   const prefix = options.prefix ?? 'vat-test-';
   const tempBase = normalizedTmpdir();
-  const tempDir = mkdtempSync(join(tempBase, prefix));
-  return resolve(tempDir);
+  const tempDir = mkdtempSync(safePath.join(tempBase, prefix));
+  return safePath.resolve(tempDir);
 }
 
 export function cleanupTestTempDir(dir: string): void {
@@ -46,7 +46,7 @@ export function createMockPackageJson(
   options: MockPackageOptions
 ): string {
   // Ensure directory exists with normalized path
-  const normalizedDir = resolve(dir);
+  const normalizedDir = safePath.resolve(dir);
   mkdirSyncReal(normalizedDir, { recursive: true });
 
   const packageJson = {
@@ -55,7 +55,7 @@ export function createMockPackageJson(
     dependencies: options.dependencies ?? {},
   };
 
-  const packagePath = resolve(normalizedDir, 'package.json');
+  const packagePath = safePath.resolve(normalizedDir, 'package.json');
   writeFileSync(packagePath, JSON.stringify(packageJson, null, 2));
   return packagePath;
 }

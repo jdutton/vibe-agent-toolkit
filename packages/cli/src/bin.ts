@@ -5,8 +5,8 @@
  * Uses Commander.js for command structure
  */
 
-import { resolve } from 'node:path';
 
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { createAgentCommand, showAgentVerboseHelp } from './commands/agent/index.js';
@@ -67,7 +67,7 @@ program.hook('preAction', () => {
   const { cwd } = program.opts<{ cwd?: string }>();
   if (cwd) {
     // Resolve relative to original cwd BEFORE chdir
-    process.chdir(resolve(cwd));
+    process.chdir(safePath.resolve(cwd));
   }
 });
 

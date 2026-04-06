@@ -9,7 +9,8 @@
 // File paths derived from PROJECT_ROOT and 'packages' constants (controlled, not user input)
 
 import { readdirSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { PUBLISHED_PACKAGES, SKIP_PACKAGES } from './package-lists.js';
 
@@ -32,7 +33,7 @@ export interface PackageListValidation {
  * @returns Validation results with undeclared and phantom packages
  */
 export function validatePackageList(projectRoot: string): PackageListValidation {
-  const packagesPath = join(projectRoot, 'packages');
+  const packagesPath = safePath.join(projectRoot, 'packages');
 
   if (!existsSync(packagesPath)) {
     throw new Error('packages/ directory not found');

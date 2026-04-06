@@ -10,9 +10,9 @@
 
 import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { join, resolve } from 'node:path';
 
-import { safeExecSync } from '@vibe-agent-toolkit/utils';
+
+import { safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
 import * as tar from 'tar';
 
 
@@ -64,7 +64,7 @@ export function detectSource(input: string): SkillSource {
   }
 
   // Check filesystem
-  const absolutePath = resolve(input);
+  const absolutePath = safePath.resolve(input);
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- User-provided CLI argument
   if (existsSync(absolutePath)) {
@@ -95,7 +95,7 @@ export function detectSource(input: string): SkillSource {
 export async function readPackageJsonVatMetadata(
   dir: string
 ): Promise<{ packageJson: PackageJson; skills: string[] }> {
-  const packageJsonPath = join(dir, 'package.json');
+  const packageJsonPath = safePath.join(dir, 'package.json');
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Directory path validated by caller
   if (!existsSync(packageJsonPath)) {
@@ -144,7 +144,7 @@ export function downloadNpmPackage(packageName: string, tempDir: string): string
 
   // npm pack outputs the filename (e.g., "package-1.0.0.tgz")
   const tarballName = packOutput.toString().trim();
-  const tarballPath = join(tempDir, tarballName);
+  const tarballPath = safePath.join(tempDir, tarballName);
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path is constructed from temp dir
   if (!existsSync(tarballPath)) {
@@ -159,7 +159,7 @@ export function downloadNpmPackage(packageName: string, tempDir: string): string
     sync: true,
   });
 
-  const packageDir = join(tempDir, 'package');
+  const packageDir = safePath.join(tempDir, 'package');
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path is constructed from temp dir
   if (!existsSync(packageDir)) {
