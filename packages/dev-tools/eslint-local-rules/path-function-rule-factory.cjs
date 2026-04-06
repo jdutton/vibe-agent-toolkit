@@ -8,7 +8,7 @@
  * Auto-fixes to safePath.fn() from @vibe-agent-toolkit/utils.
  */
 
-const PATH_MODULES = ['node:path', 'path'];
+const PATH_MODULES = new Set(['node:path', 'path']);
 const SAFE_MODULE = '@vibe-agent-toolkit/utils';
 const SAFE_OBJECT = 'safePath';
 
@@ -20,11 +20,11 @@ function removeSpecifier(fixer, sourceCode, importNode, spec) {
     return [fixer.remove(importNode)];
   }
   const comma = sourceCode.getTokenAfter(spec);
-  if (comma && comma.value === ',') {
+  if (comma?.value === ',') {
     return [fixer.removeRange([spec.range[0], comma.range[1]])];
   }
   const commaBefore = sourceCode.getTokenBefore(spec);
-  if (commaBefore && commaBefore.value === ',') {
+  if (commaBefore?.value === ',') {
     return [fixer.removeRange([commaBefore.range[0], spec.range[1]])];
   }
   return [fixer.remove(spec)];
@@ -142,7 +142,7 @@ module.exports = function createPathFunctionRule(config) {
 
       return {
         ImportDeclaration(node) {
-          if (PATH_MODULES.includes(node.source.value)) {
+          if (PATH_MODULES.has(node.source.value)) {
             trackPathImport(node, unsafeFn, state);
           }
           if (node.source.value === SAFE_MODULE) {
