@@ -308,8 +308,8 @@ export async function packageSkill(
     getDefaultSkillOutputPath(skillPath, skillMetadata.name);
 
   // 7. Clean stale output (skip when source SKILL.md lives inside the output, e.g. builder flow)
-  const resolvedOutput = toForwardSlash(safePath.resolve(outputPath));
-  const sourceInOutput = toForwardSlash(safePath.resolve(skillPath)).startsWith(resolvedOutput + '/');
+  const resolvedOutput = safePath.resolve(outputPath);
+  const sourceInOutput = safePath.resolve(skillPath).startsWith(resolvedOutput + '/');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- outputPath is validated
   if (!sourceInOutput && existsSync(resolvedOutput)) {
     await rm(resolvedOutput, { recursive: true });
@@ -384,7 +384,7 @@ export async function packageSkill(
 
   // Get relative paths for result
   const relativeLinkedFiles = bundledFiles.map(f =>
-    toForwardSlash(safePath.relative(effectiveBasePath, f))
+    safePath.relative(effectiveBasePath, f)
   );
 
   // Build excluded reference paths for result
@@ -401,7 +401,7 @@ export async function packageSkill(
   if (excludedReferences.length > 0) {
     // Deduplicate excluded reference paths for the result
     const uniqueExcludedPaths = [...new Set(
-      excludedReferences.map(r => toForwardSlash(safePath.relative(skillRoot, r.path)))
+      excludedReferences.map(r => safePath.relative(skillRoot, r.path))
     )];
     result.excludedReferences = uniqueExcludedPaths;
   }
@@ -724,7 +724,7 @@ function findCommonAncestor(filePaths: string[]): string {
   }
 
   // Normalize all paths
-  const normalizedPaths = filePaths.map(p => toForwardSlash(safePath.resolve(p)));
+  const normalizedPaths = filePaths.map(p => safePath.resolve(p));
 
   // Split into path segments
   // eslint-disable-next-line local/no-hardcoded-path-split -- Paths are normalized to forward slashes by toForwardSlash()

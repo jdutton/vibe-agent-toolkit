@@ -76,7 +76,7 @@ describe('Schema Path Resolution', () => {
   });
 
   describe('Package Path Resolution', () => {
-    // NOTE: import.meta.safePath.resolve() is not available in Vitest environment
+    // NOTE: import.meta.resolve() is not available in Vitest environment
     // These tests work in real Node.js but not in Vitest's SSR transform
     // Manual testing required for package resolution
     it.skip('should resolve scoped package paths', async () => {

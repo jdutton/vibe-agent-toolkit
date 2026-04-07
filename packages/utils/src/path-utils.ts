@@ -199,9 +199,9 @@ export function isAbsolutePath(p: string): boolean {
  */
 export function toAbsolutePath(p: string, baseDir: string): string {
   if (path.isAbsolute(p)) {
-    return path.normalize(p);
+    return toForwardSlash(path.normalize(p));
   }
-  return path.resolve(baseDir, p);
+  return toForwardSlash(path.resolve(baseDir, p));
 }
 
 /**
@@ -225,7 +225,7 @@ export function getRelativePath(from: string, to: string): string {
   const fromDir = path.dirname(from);
 
   // Calculate relative path from source directory to target file
-  return path.relative(fromDir, to);
+  return toForwardSlash(path.relative(fromDir, to));
 }
 
 /**
