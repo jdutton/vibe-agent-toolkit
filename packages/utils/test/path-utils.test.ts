@@ -77,31 +77,31 @@ describe('path-utils', () => {
   describe('toAbsolutePath', () => {
     it('should convert relative path to absolute', () => {
       const result = toAbsolutePath(TEST_DOCS_README, TEST_PROJECT_PATH);
-      expect(result).toBe(path.resolve(TEST_PROJECT_PATH, TEST_DOCS_README));
+      expect(result).toBe(toForwardSlash(path.resolve(TEST_PROJECT_PATH, TEST_DOCS_README)));
       expect(path.isAbsolute(result)).toBe(true);
     });
 
     it('should return normalized absolute path when input is already absolute', () => {
       const absolutePath = '/absolute/path/file.md';
       const result = toAbsolutePath(absolutePath, TEST_PROJECT_PATH);
-      expect(result).toBe(path.normalize(absolutePath));
+      expect(result).toBe(toForwardSlash(path.normalize(absolutePath)));
       expect(path.isAbsolute(result)).toBe(true);
     });
 
     it('should resolve parent directory references', () => {
       // eslint-disable-next-line sonarjs/no-duplicate-string -- test-specific path fragment repeated across related test cases
       const result = toAbsolutePath('../README.md', `${TEST_PROJECT_PATH}/docs`);
-      expect(result).toBe(path.resolve(`${TEST_PROJECT_PATH}/docs`, '../README.md'));
+      expect(result).toBe(toForwardSlash(path.resolve(`${TEST_PROJECT_PATH}/docs`, '../README.md')));
     });
 
     it('should handle current directory reference', () => {
       const result = toAbsolutePath('./file.md', TEST_PROJECT_PATH);
-      expect(result).toBe(path.resolve(TEST_PROJECT_PATH, './file.md'));
+      expect(result).toBe(toForwardSlash(path.resolve(TEST_PROJECT_PATH, './file.md')));
     });
 
     it('should resolve deep relative paths', () => {
       const result = toAbsolutePath('../../root/file.md', `${TEST_PROJECT_PATH}/a/b`);
-      expect(result).toBe(path.resolve(`${TEST_PROJECT_PATH}/a/b`, '../../root/file.md'));
+      expect(result).toBe(toForwardSlash(path.resolve(`${TEST_PROJECT_PATH}/a/b`, '../../root/file.md')));
     });
   });
 
@@ -118,12 +118,12 @@ describe('path-utils', () => {
 
     it('should get relative path to subdirectory', () => {
       const result = getRelativePath(`${TEST_PROJECT_PATH}/README.md`, `${TEST_PROJECT_PATH}/docs/api.md`);
-      expect(result).toBe(path.join('docs', 'api.md'));
+      expect(result).toBe('docs/api.md');
     });
 
     it('should get relative path across directories', () => {
       const result = getRelativePath(`${TEST_PROJECT_PATH}/docs/guide.md`, `${TEST_PROJECT_PATH}/examples/demo.md`);
-      expect(result).toBe(path.join('..', 'examples', 'demo.md'));
+      expect(result).toBe('../examples/demo.md');
     });
 
     it('should handle deep nesting', () => {
@@ -132,7 +132,7 @@ describe('path-utils', () => {
         '/project/x/y/z/target.md'
       );
       // Should go up 3 levels (c, b, a) then down (x, y, z)
-      expect(result).toBe(path.join('..', '..', '..', 'x', 'y', 'z', 'target.md'));
+      expect(result).toBe('../../../x/y/z/target.md');
     });
 
     it('should return file name when paths are in same directory', () => {
@@ -143,15 +143,14 @@ describe('path-utils', () => {
     it('should handle paths with different depths', () => {
       const result = getRelativePath('/a/b/c.md', '/x.md');
       // From /a/b/ to /x.md is ../../x.md
-      expect(result).toBe(path.join('..', '..', 'x.md'));
+      expect(result).toBe('../../x.md');
     });
 
     // Cross-platform test
-    it('should always return forward slashes or platform-specific separators', () => {
+    it('should always return forward slashes', () => {
       const result = getRelativePath('/project/docs/guide.md', '/project/README.md');
-      // Result should be a valid relative path on current platform
-      expect(result).toBeTruthy();
-      expect(typeof result).toBe('string');
+      expect(result).toBe('../README.md');
+      expect(result).not.toContain('\\');
     });
   });
 
