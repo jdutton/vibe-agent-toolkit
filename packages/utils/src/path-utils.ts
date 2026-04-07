@@ -15,7 +15,8 @@ import path from 'node:path';
  * - realpathSync.native() resolves these to their actual filesystem paths
  *
  * @param paths - Path segments to join and normalize
- * @returns Real (normalized) path, or resolved path if normalization fails
+ * @returns Real (normalized) path with **OS-native separators** (backslashes on Windows).
+ * Use `toForwardSlash()` if you need forward slashes for string comparison or display.
  *
  * @example
  * ```typescript
@@ -80,7 +81,7 @@ export function normalizePath(...paths: string[]): string {
  * - Tests using SHORT paths from tmpdir() will fail existsSync() checks
  * - This is a "works on Mac, fails on Windows CI" bug pattern
  *
- * @returns Normalized temp directory path (resolves short names on Windows)
+ * @returns Normalized temp directory path with **OS-native separators** (resolves short names on Windows)
  *
  * @example
  * ```typescript
@@ -121,7 +122,7 @@ export function normalizedTmpdir(): string {
  *
  * @param path - Directory path to create
  * @param options - Options for mkdirSync (e.g., recursive: true)
- * @returns Real (normalized) path to the created directory
+ * @returns Real (normalized) path to the created directory with **OS-native separators**
  *
  * @example
  * ```typescript
@@ -188,7 +189,7 @@ export function isAbsolutePath(p: string): boolean {
  *
  * @param p - Path to convert
  * @param baseDir - Base directory for resolution
- * @returns Absolute path
+ * @returns Absolute path with **forward slashes** (cross-platform safe)
  *
  * @example
  * toAbsolutePath('./docs/README.md', '/project')
@@ -211,7 +212,7 @@ export function toAbsolutePath(p: string, baseDir: string): string {
  *
  * @param from - Source file path (absolute)
  * @param to - Target file path (absolute)
- * @returns Relative path from source to target
+ * @returns Relative path from source to target with **forward slashes** (cross-platform safe)
  *
  * @example
  * getRelativePath('/project/docs/guide.md', '/project/README.md')
