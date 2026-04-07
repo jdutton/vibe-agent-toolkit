@@ -113,7 +113,7 @@ describe('path-utils', () => {
 
     it('should get relative path to parent directory', () => {
       const result = getRelativePath(`${TEST_PROJECT_PATH}/docs/guide.md`, `${TEST_PROJECT_PATH}/README.md`);
-      expect(result).toBe(path.join('..', 'README.md'));
+      expect(result).toBe('../README.md');
     });
 
     it('should get relative path to subdirectory', () => {
