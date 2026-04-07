@@ -14,9 +14,11 @@
  * - Only when first argument is __dirname
  *
  * Auto-fix: Replaces path.resolve(__dirname, ...) with normalizePath(__dirname, ...)
+ *           and removes orphaned path import if no longer used.
  */
 
 const SAFE_MODULE = '@vibe-agent-toolkit/utils';
+const PATH_MODULES = new Set(['node:path', 'path']);
 
 module.exports = {
   meta: {
@@ -55,14 +57,22 @@ module.exports = {
     }
 
     let pathImportNode = null;
+    let pathDefaultName = null;
     let hasNormalizePathImport = false;
     let safeImportNode = null;
+    let pathMemberExpressionCount = 0;
+    let reportedNodes = [];
 
     return {
       ImportDeclaration(node) {
         // Track path module imports
-        if (node.source.value === 'node:path' || node.source.value === 'path') {
+        if (PATH_MODULES.has(node.source.value)) {
           pathImportNode = node;
+          for (const spec of node.specifiers) {
+            if (spec.type === 'ImportDefaultSpecifier' || spec.type === 'ImportNamespaceSpecifier') {
+              pathDefaultName = spec.local.name;
+            }
+          }
         }
 
         // Track normalizePath imports
@@ -76,15 +86,28 @@ module.exports = {
         }
       },
 
+      MemberExpression(node) {
+        // Count all path.* member expressions to know if import can be removed
+        if (
+          pathDefaultName &&
+          node.object.type === 'Identifier' &&
+          node.object.name === pathDefaultName
+        ) {
+          pathMemberExpressionCount++;
+        }
+      },
+
       CallExpression(node) {
         // Check for path.resolve(__dirname, ...)
         if (
           node.callee.type === 'MemberExpression' &&
-          node.callee.object.name === 'path' &&
+          node.callee.object.type === 'Identifier' &&
+          node.callee.object.name === pathDefaultName &&
           node.callee.property.name === 'resolve' &&
           node.arguments.length > 0 &&
           node.arguments[0].name === '__dirname'
         ) {
+          reportedNodes.push(node);
           context.report({
             node,
             messageId: 'noPathResolveDirname',
@@ -108,6 +131,11 @@ module.exports = {
                   fixes.push(fixer.insertTextAfter(targetNode, newImport));
                 }
                 hasNormalizePathImport = true;
+              }
+
+              // Remove path import if this was the only path.* usage
+              if (pathImportNode && pathMemberExpressionCount === reportedNodes.length) {
+                fixes.push(fixer.remove(pathImportNode));
               }
 
               return fixes;
