@@ -45,7 +45,7 @@ function safeSerializeError(err: unknown): string | undefined {
 export interface ExternalLinkValidatorOptions {
 	/** Time-to-live for cache entries in hours (default: 24) */
 	cacheTtlHours?: number;
-	/** Request timeout in milliseconds (default: 5000) */
+	/** Request timeout in milliseconds (default: 3000) */
 	timeout?: number;
 	/** Number of retries for failed requests (default: 2) */
 	retries?: number;
@@ -79,7 +79,7 @@ export interface LinkValidationResult {
  * ```typescript
  * const validator = new ExternalLinkValidator('/tmp/cache', {
  *   cacheTtlHours: 24,
- *   timeout: 5000,
+ *   timeout: 3000,
  * });
  *
  * const result = await validator.validateLink('https://example.com');
@@ -101,7 +101,7 @@ export class ExternalLinkValidator {
 	constructor(cacheDir: string, options: ExternalLinkValidatorOptions = {}) {
 		this.options = {
 			cacheTtlHours: options.cacheTtlHours ?? 24,
-			timeout: options.timeout ?? 5000,
+			timeout: options.timeout ?? 3000,
 			retries: options.retries ?? 2,
 			userAgent:
 				options.userAgent ??
