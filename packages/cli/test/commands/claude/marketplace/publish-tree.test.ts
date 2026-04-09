@@ -14,6 +14,19 @@ function makeTempDir(tempDirs: string[]): string {
   return dir;
 }
 
+/**
+ * Create a minimal marketplace build output under sourceDir so composePublishTree
+ * can find it. Returns the marketplace name used.
+ */
+function seedMarketplaceBuild(sourceDir: string, mpName = 'test-mp'): string {
+  const pluginDir = safePath.join(
+    sourceDir, 'dist', '.claude', 'plugins', 'marketplaces', mpName, '.claude-plugin',
+  );
+  mkdirSyncReal(pluginDir, { recursive: true });
+  writeFileSync(safePath.join(pluginDir, 'marketplace.json'), `{"name":"${mpName}"}`);
+  return mpName;
+}
+
 describe('publish-tree', () => {
   const tempDirs: string[] = [];
 
@@ -27,25 +40,17 @@ describe('publish-tree', () => {
   it('should compose tree with marketplace artifacts, changelog, readme, and license', async () => {
     const sourceDir = makeTempDir(tempDirs);
     const outputDir = makeTempDir(tempDirs);
+    const mpName = seedMarketplaceBuild(sourceDir);
 
-    // Create mock marketplace build output
-    const mpDir = safePath.join(sourceDir, 'dist', '.claude', 'plugins', 'marketplaces', 'test-mp');
-    const pluginDir = safePath.join(mpDir, '.claude-plugin');
-    mkdirSyncReal(pluginDir, { recursive: true });
-    writeFileSync(safePath.join(pluginDir, 'marketplace.json'), '{"name":"test-mp"}');
-
-    // Create changelog source
-    writeFileSync(safePath.join(sourceDir, 'CHANGELOG.md'), '# Changelog\n\n## [Unreleased]\n\n### Added\n- Feature\n');
-
-    // Create readme source
+    const sourceChangelog = '# Changelog\n\n## [Unreleased]\n\n### Added\n- Feature\n';
+    writeFileSync(safePath.join(sourceDir, 'CHANGELOG.md'), sourceChangelog);
     writeFileSync(safePath.join(sourceDir, 'README.md'), '# My Marketplace\n');
 
     const result = await composePublishTree({
-      marketplaceName: 'test-mp',
+      marketplaceName: mpName,
       configDir: sourceDir,
       outputDir,
       version: '1.0.0',
-      date: '2026-04-01',
       changelog: { sourcePath: 'CHANGELOG.md' },
       readme: { sourcePath: 'README.md' },
       license: { type: 'spdx', value: 'mit', ownerName: 'Test Org' },
@@ -57,9 +62,13 @@ describe('publish-tree', () => {
     expect(existsSync(safePath.join(outputDir, 'LICENSE'))).toBe(true);
     expect(result.version).toBe('1.0.0');
 
-    // Changelog should be stamped
+    // CHANGELOG must be copied BYTE-FOR-BYTE — no stamping, no mutation.
     const changelogContent = readFileSync(safePath.join(outputDir, 'CHANGELOG.md'), 'utf-8');
-    expect(changelogContent).toContain('[1.0.0] - 2026-04-01');
+    expect(changelogContent).toBe(sourceChangelog);
+
+    // Release notes still flow to the commit body via changelogDelta.
+    expect(result.changelogDelta).toContain('### Added');
+    expect(result.changelogDelta).toContain('- Feature');
   });
 
   it('should fail when build output does not exist', async () => {
@@ -71,29 +80,80 @@ describe('publish-tree', () => {
       configDir: sourceDir,
       outputDir,
       version: '1.0.0',
-      date: '2026-04-01',
     })).rejects.toThrow(/build output/i);
   });
 
-  it('should fail when changelog has empty unreleased section', async () => {
+  it('should fail when changelog has neither unreleased content nor matching version section', async () => {
     const sourceDir = makeTempDir(tempDirs);
     const outputDir = makeTempDir(tempDirs);
+    const mpName = seedMarketplaceBuild(sourceDir);
 
-    // Create marketplace build output
-    const mpDir = safePath.join(sourceDir, 'dist', '.claude', 'plugins', 'marketplaces', 'test-mp', '.claude-plugin');
-    mkdirSyncReal(mpDir, { recursive: true });
-    writeFileSync(safePath.join(mpDir, 'marketplace.json'), '{}');
-
-    // Empty unreleased changelog
-    writeFileSync(safePath.join(sourceDir, 'CHANGELOG.md'), '# Changelog\n\n## [Unreleased]\n\n## [0.1.0]\n');
+    // Empty [Unreleased] and a stamped section for a DIFFERENT version
+    writeFileSync(
+      safePath.join(sourceDir, 'CHANGELOG.md'),
+      '# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - 2026-01-01\n\n### Added\n- Old\n',
+    );
 
     await expect(composePublishTree({
-      marketplaceName: 'test-mp',
+      marketplaceName: mpName,
       configDir: sourceDir,
       outputDir,
       version: '1.0.0',
-      date: '2026-04-01',
       changelog: { sourcePath: 'CHANGELOG.md' },
-    })).rejects.toThrow(/empty/i);
+    })).rejects.toThrow(/neither.*\[Unreleased\].*nor.*\[1\.0\.0\]/i);
+  });
+
+  it('should publish a pre-stamped changelog when [Unreleased] is empty (Workflow B)', async () => {
+    const sourceDir = makeTempDir(tempDirs);
+    const outputDir = makeTempDir(tempDirs);
+    const mpName = seedMarketplaceBuild(sourceDir);
+
+    const sourceChangelog =
+      '# Changelog\n\n## [Unreleased]\n\n## [1.2.0] - 2026-04-09\n\n### Added\n- New feature X\n- New feature Y\n\n## [1.1.0] - 2026-03-15\n\n### Fixed\n- Old bug\n';
+    writeFileSync(safePath.join(sourceDir, 'CHANGELOG.md'), sourceChangelog);
+
+    const result = await composePublishTree({
+      marketplaceName: mpName,
+      configDir: sourceDir,
+      outputDir,
+      version: '1.2.0',
+      changelog: { sourcePath: 'CHANGELOG.md' },
+    });
+
+    expect(result.version).toBe('1.2.0');
+    // Commit body uses the stamped [1.2.0] section, not [Unreleased] and not [1.1.0].
+    expect(result.changelogDelta).toContain('New feature X');
+    expect(result.changelogDelta).toContain('New feature Y');
+    expect(result.changelogDelta).not.toContain('Old bug');
+
+    // Published CHANGELOG is BYTE-IDENTICAL to source.
+    const changelogContent = readFileSync(safePath.join(outputDir, 'CHANGELOG.md'), 'utf-8');
+    expect(changelogContent).toBe(sourceChangelog);
+  });
+
+  it('should prefer stamped [X.Y.Z] over [Unreleased] when both have content', async () => {
+    const sourceDir = makeTempDir(tempDirs);
+    const outputDir = makeTempDir(tempDirs);
+    const mpName = seedMarketplaceBuild(sourceDir);
+
+    const sourceChangelog =
+      '# Changelog\n\n## [Unreleased]\n\n### Added\n- Work-in-progress for next release\n\n## [1.2.0] - 2026-04-09\n\n### Added\n- Released feature\n';
+    writeFileSync(safePath.join(sourceDir, 'CHANGELOG.md'), sourceChangelog);
+
+    const result = await composePublishTree({
+      marketplaceName: mpName,
+      configDir: sourceDir,
+      outputDir,
+      version: '1.2.0',
+      changelog: { sourcePath: 'CHANGELOG.md' },
+    });
+
+    // Commit body comes from the stamped section, not [Unreleased].
+    expect(result.changelogDelta).toContain('Released feature');
+    expect(result.changelogDelta).not.toContain('Work-in-progress');
+
+    // Published CHANGELOG is BYTE-IDENTICAL (both sections preserved, nothing mutated).
+    const changelogContent = readFileSync(safePath.join(outputDir, 'CHANGELOG.md'), 'utf-8');
+    expect(changelogContent).toBe(sourceChangelog);
   });
 });
