@@ -12,6 +12,7 @@ import { cpSync, mkdtempSync, rmSync } from 'node:fs';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { Logger } from '../../../utils/logger.js';
+import { redactUrlCredentials } from '../../../utils/url-redact.js';
 
 export interface CommitMetadata {
   sourceRepo?: string;
@@ -145,7 +146,7 @@ function deliverCommit(
     pushArgs.splice(1, 0, '--force');
   }
   git(pushArgs, { cwd: tmpRepo });
-  logger.info(`   Pushed to ${remoteUrl} branch ${branch}`);
+  logger.info(`   Pushed to ${redactUrlCredentials(remoteUrl)} branch ${branch}`);
 }
 
 /**
@@ -164,7 +165,7 @@ export async function publishToGitBranch(options: PublishGitOptions): Promise<vo
   const cwd = process.cwd();
   const remoteUrl = resolveRemoteUrl(options.remote, cwd);
 
-  logger.info(`   Remote: ${remoteUrl}`);
+  logger.info(`   Remote: ${redactUrlCredentials(remoteUrl)}`);
   logger.info(`   Branch: ${branch}`);
 
   const tmpRepo = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-marketplace-publish-'));

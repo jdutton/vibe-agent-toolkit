@@ -16,6 +16,7 @@ import { Command } from 'commander';
 import { handleCommandError } from '../../../utils/command-error.js';
 import { createLogger, type Logger } from '../../../utils/logger.js';
 import { writeYamlOutput } from '../../../utils/output.js';
+import { redactUrlCredentials } from '../../../utils/url-redact.js';
 import { loadClaudeProjectConfig } from '../claude-config.js';
 
 import { createCommitMessage, publishToGitBranch } from './git-publish.js';
@@ -191,7 +192,7 @@ async function publishOneMarketplace(ctx: PublishOneOptions): Promise<PublishRes
   );
 
   if (options.dryRun) {
-    logger.info(`[dry-run] Would publish to ${remote}/${branch}`);
+    logger.info(`[dry-run] Would publish to ${redactUrlCredentials(remote)}/${branch}`);
     logger.info(`[dry-run] Version: ${version}`);
     logger.info(`[dry-run] Files: ${composeResult.files.join(', ')}`);
   } else if (options.push === false) {
