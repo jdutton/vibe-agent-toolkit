@@ -58,7 +58,11 @@ Description:
 
   Composes:
   - Marketplace artifacts from dist/.claude/plugins/marketplaces/
-  - CHANGELOG.md (stamped with version and date)
+  - CHANGELOG.md — copied BYTE-FOR-BYTE from the source. Release notes
+    for the commit body are extracted from either a pre-stamped
+    [version] section matching package.json, or (as a fallback) a
+    non-empty [Unreleased] section. Publish fails if neither is
+    present. VAT never mutates CHANGELOG.md.
   - README.md
   - LICENSE (SPDX shortcut or file)
 
@@ -70,7 +74,7 @@ Output:
 
 Exit Codes:
   0 - Published successfully (or dry-run completed)
-  1 - Publish error (missing build, empty changelog)
+  1 - Publish error (missing build, changelog missing release notes for version)
   2 - System error
 
 Example:
@@ -127,7 +131,6 @@ function buildComposeOptions(
   mpName: string,
   configDir: string,
   version: string,
-  date: string,
   publishConfig: NonNullable<ClaudeMarketplaceConfig['publish']>,
   licenseOpts: LicenseOptions | undefined,
 ): ComposeOptions {
@@ -136,7 +139,6 @@ function buildComposeOptions(
     configDir,
     outputDir: mkdtempSync(safePath.join(normalizedTmpdir(), `vat-publish-tree-${mpName}-`)),
     version,
-    date,
   };
   if (publishConfig.changelog) {
     opts.changelog = { sourcePath: publishConfig.changelog };
@@ -156,7 +158,6 @@ interface PublishOneOptions {
   publishConfig: NonNullable<ClaudeMarketplaceConfig['publish']>;
   configDir: string;
   version: string;
-  date: string;
   options: MarketplacePublishOptions;
   logger: Logger;
 }
@@ -165,7 +166,7 @@ interface PublishOneOptions {
  * Publish a single marketplace and return the result.
  */
 async function publishOneMarketplace(ctx: PublishOneOptions): Promise<PublishResult> {
-  const { mpName, mpConfig, publishConfig, configDir, version, date, options, logger } = ctx;
+  const { mpName, mpConfig, publishConfig, configDir, version, options, logger } = ctx;
   const branch = options.branch ?? publishConfig.branch ?? 'claude-marketplace';
   const remote = publishConfig.remote ?? 'origin';
 
@@ -175,7 +176,7 @@ async function publishOneMarketplace(ctx: PublishOneOptions): Promise<PublishRes
     ? resolveLicenseOptions(publishConfig.license, mpConfig.owner.name)
     : undefined;
 
-  const composeOpts = buildComposeOptions(mpName, configDir, version, date, publishConfig, licenseOpts);
+  const composeOpts = buildComposeOptions(mpName, configDir, version, publishConfig, licenseOpts);
   const composeResult = await composePublishTree(composeOpts);
 
   // Resolve source repo for commit metadata
@@ -231,7 +232,6 @@ async function marketplacePublishCommand(options: MarketplacePublishOptions): Pr
     }
 
     const version = readProjectVersion(configDir);
-    const today = new Date().toISOString().slice(0, 10);
     const results: PublishResult[] = [];
 
     for (const [mpName, mpConfig] of Object.entries(claudeConfig.marketplaces)) {
@@ -244,7 +244,7 @@ async function marketplacePublishCommand(options: MarketplacePublishOptions): Pr
       }
 
       const result = await publishOneMarketplace({
-        mpName, mpConfig, publishConfig: mpConfig.publish, configDir, version, date: today, options, logger,
+        mpName, mpConfig, publishConfig: mpConfig.publish, configDir, version, options, logger,
       });
       results.push(result);
     }

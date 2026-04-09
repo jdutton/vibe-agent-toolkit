@@ -11,7 +11,11 @@ import { cp, writeFile } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
-import { parseUnreleasedSection, readChangelog, stampChangelog } from './changelog-utils.js';
+import {
+  parseUnreleasedSection,
+  parseVersionSection,
+  readChangelog,
+} from './changelog-utils.js';
 import { generateLicenseText, readLicenseFile } from './license-utils.js';
 
 export interface ChangelogOptions {
@@ -31,7 +35,6 @@ export interface ComposeOptions {
   configDir: string;
   outputDir: string;
   version: string;
-  date: string;
   changelog?: ChangelogOptions;
   readme?: ReadmeOptions;
   license?: LicenseOptions;
@@ -44,7 +47,7 @@ export interface ComposeResult {
 }
 
 export async function composePublishTree(options: ComposeOptions): Promise<ComposeResult> {
-  const { marketplaceName, configDir, outputDir, version, date } = options;
+  const { marketplaceName, configDir, outputDir, version } = options;
   const files: string[] = [];
   let changelogDelta = '';
 
@@ -61,22 +64,29 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
   await cp(buildDir, outputDir, { recursive: true });
   files.push('.claude-plugin/marketplace.json', 'plugins/');
 
-  // 3. Process changelog
+  // 3. Process changelog — VAT copies the source file byte-for-byte into the publish tree.
+  //    We only extract a release-note string for the commit body (changelogDelta).
+  //    Accept both Keep a Changelog workflows:
+  //      (B) pre-stamped `## [version]` section — preferred when present, and
+  //      (A) non-empty `## [Unreleased]` — fallback.
+  //    Error if both are empty.
   if (options.changelog) {
     const rawChangelog = readChangelog(options.changelog.sourcePath, configDir);
-    const unreleased = parseUnreleasedSection(rawChangelog);
 
-    if (unreleased.trim() === '') {
+    const stampedSection = parseVersionSection(rawChangelog, version);
+    const unreleasedSection = parseUnreleasedSection(rawChangelog).trim();
+
+    if (stampedSection === '' && unreleasedSection === '') {
       throw new Error(
-        `Changelog "${options.changelog.sourcePath}" has an empty [Unreleased] section. ` +
-          `Add release notes before publishing.`,
+        `Changelog "${options.changelog.sourcePath}" has neither a non-empty [Unreleased] ` +
+          `section nor a [${version}] section. Document the release before publishing.`,
       );
     }
 
-    changelogDelta = unreleased.trim();
-    const stamped = stampChangelog(rawChangelog, version, date);
+    changelogDelta = stampedSection === '' ? unreleasedSection : stampedSection;
+
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated config
-    await writeFile(safePath.join(outputDir, 'CHANGELOG.md'), stamped);
+    await writeFile(safePath.join(outputDir, 'CHANGELOG.md'), rawChangelog);
     files.push('CHANGELOG.md');
   }
 
