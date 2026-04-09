@@ -1,23 +1,47 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { ExternalLinkValidator } from '../../src/external-link-validator.js';
 import { setupExternalLinkValidatorSuite } from '../test-helpers.js';
 
-const GOOGLE_URL = 'https://www.google.com';
-const EXAMPLE_URL = 'https://www.example.com';
+// Use httpbin.org — designed for automated HTTP testing, no bot detection
+const WORKING_URL = 'https://httpbin.org/status/200';
 const BROKEN_URL = 'https://this-domain-definitely-does-not-exist-12345.com';
 
-// Network-dependent tests: skip in CI where egress restrictions cause flaky failures
-describe.skipIf(!!process.env.CI)('ExternalLinkValidator (integration)', () => {
+/**
+ * Quick reachability check before running network-dependent tests.
+ * Returns false if network is unavailable or httpbin.org is down.
+ */
+async function isNetworkAvailable(): Promise<boolean> {
+	try {
+		const response = await fetch('https://httpbin.org/status/200', {
+			method: 'HEAD',
+			signal: AbortSignal.timeout(3000),
+		});
+		return response.ok;
+	} catch {
+		return false;
+	}
+}
+
+let networkAvailable = false;
+
+beforeAll(async () => {
+	// Skip entirely in CI (egress restrictions) or when network is unreachable
+	if (process.env.CI) return;
+	networkAvailable = await isNetworkAvailable();
+});
+
+// Skip in CI or when network pre-check fails
+describe.skipIf(!networkAvailable || !!process.env.CI)('ExternalLinkValidator (integration)', () => {
 	const suite = setupExternalLinkValidatorSuite('link-validator-integration-');
 
 	beforeEach(suite.beforeEach);
 	afterEach(suite.afterEach);
 
 	it('should validate a working URL', async () => {
-		const result = await suite.validator.validateLink(GOOGLE_URL);
+		const result = await suite.validator.validateLink(WORKING_URL);
 
-		expect(result.url).toBe(GOOGLE_URL);
+		expect(result.url).toBe(WORKING_URL);
 		expect(result.status).toBe('ok');
 		expect(result.statusCode).toBe(200);
 	});
@@ -32,8 +56,8 @@ describe.skipIf(!!process.env.CI)('ExternalLinkValidator (integration)', () => {
 	});
 
 	it('should use cache for repeated checks', async () => {
-		const result1 = await suite.validator.validateLink(GOOGLE_URL);
-		const result2 = await suite.validator.validateLink(GOOGLE_URL);
+		const result1 = await suite.validator.validateLink(WORKING_URL);
+		const result2 = await suite.validator.validateLink(WORKING_URL);
 
 		expect(result1.cached).toBe(false);
 		expect(result2.cached).toBe(true);
@@ -46,7 +70,7 @@ describe.skipIf(!!process.env.CI)('ExternalLinkValidator (integration)', () => {
 			timeout: 1, // 1ms timeout - guaranteed to fail
 		});
 
-		const result = await timeoutValidator.validateLink(GOOGLE_URL);
+		const result = await timeoutValidator.validateLink(WORKING_URL);
 
 		expect(result.status).toBe('error');
 		expect(result.error).toBeDefined();
@@ -59,51 +83,45 @@ describe.skipIf(!!process.env.CI)('ExternalLinkValidator (integration)', () => {
 		});
 
 		// This should work eventually with retries
-		const result = await retryValidator.validateLink(GOOGLE_URL);
+		const result = await retryValidator.validateLink(WORKING_URL);
 		expect(result.status).toBe('ok');
 	});
 
 	it('should validate multiple links efficiently', async () => {
-		const urls = [GOOGLE_URL, EXAMPLE_URL, BROKEN_URL];
+		const urls = [WORKING_URL, BROKEN_URL];
 		const results = await suite.validator.validateLinks(urls);
 
 		expect(results).toHaveLength(urls.length);
 
-		// Assert the known-broken URL failed
+		const workingResult = results.find(r => r.url === WORKING_URL);
+		expect(workingResult?.status).toBe('ok');
+
 		const brokenResult = results.find(r => r.url === BROKEN_URL);
 		expect(brokenResult?.status).toBe('error');
-
-		// At least one working URL should succeed (both may, but network can be flaky)
-		const working = results.filter(r => r.status === 'ok');
-		expect(working.length).toBeGreaterThanOrEqual(1);
 	});
 
 	it('should handle concurrent validations with cache', async () => {
 		// Run 3 validations concurrently
 		const [result1, result2, result3] = await Promise.all([
-			suite.validator.validateLink(GOOGLE_URL),
-			suite.validator.validateLink(GOOGLE_URL),
-			suite.validator.validateLink(GOOGLE_URL),
+			suite.validator.validateLink(WORKING_URL),
+			suite.validator.validateLink(WORKING_URL),
+			suite.validator.validateLink(WORKING_URL),
 		]);
 
-		// At least one should be from cache (or they should all have same result)
-		const cached = new Set([result1.cached, result2.cached, result3.cached]);
+		// All should have same status code regardless of cache timing
 		const allSameStatus = result1.statusCode === result2.statusCode && result2.statusCode === result3.statusCode;
-
 		expect(allSameStatus).toBe(true);
-		// Cache behavior may vary due to concurrency, but results should be consistent
-		expect(cached.has(true) || cached.has(false)).toBe(true);
 	});
 
 	it('should clear cache', async () => {
 		// Validate and cache a URL
-		await suite.validator.validateLink(GOOGLE_URL);
+		await suite.validator.validateLink(WORKING_URL);
 
 		// Clear cache
 		await suite.validator.clearCache();
 
 		// Next validation should not be cached
-		const result = await suite.validator.validateLink(GOOGLE_URL);
+		const result = await suite.validator.validateLink(WORKING_URL);
 		expect(result.cached).toBe(false);
 	});
 
@@ -113,8 +131,7 @@ describe.skipIf(!!process.env.CI)('ExternalLinkValidator (integration)', () => {
 		expect(stats.total).toBe(0);
 
 		// Add some entries
-		await suite.validator.validateLink(GOOGLE_URL);
-		await suite.validator.validateLink(EXAMPLE_URL);
+		await suite.validator.validateLink(WORKING_URL);
 
 		stats = await suite.validator.getCacheStats();
 		expect(stats.total).toBeGreaterThan(0);

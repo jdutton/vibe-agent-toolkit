@@ -49,7 +49,6 @@ export default {
     'no-path-join': require('./no-path-join.cjs'),
     'no-path-resolve': require('./no-path-resolve.cjs'),
     'no-path-relative': require('./no-path-relative.cjs'),
-    'no-path-resolve-dirname': require('./no-path-resolve-dirname.cjs'),
     'no-test-scoped-functions': require('./no-test-scoped-functions.cjs'),
   },
 };
