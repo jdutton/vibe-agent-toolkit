@@ -13,8 +13,8 @@
  * copying dist/skills/ to ~/.claude/skills/.
  */
 
-import { existsSync, lstatSync, readdirSync, readFileSync } from 'node:fs';
-import { cp, mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
+import { existsSync, lstatSync, readdirSync, readFileSync, cpSync } from 'node:fs';
+import {  mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
 import { basename } from 'node:path';
 
 import { getClaudeUserPaths, installPlugin, uninstallPlugin } from '@vibe-agent-toolkit/claude-marketplace';
@@ -634,7 +634,7 @@ async function devInstallPlugin(
     if (entry.name !== 'skills' && !options.dryRun) {
       const srcEntry = safePath.join(srcPluginDir, entry.name);
       const destEntry = safePath.join(destPluginDir, entry.name);
-      await cp(srcEntry, destEntry, { recursive: true, force: true });
+      cpSync(srcEntry, destEntry, { recursive: true, force: true });
     }
   }
 
@@ -676,7 +676,7 @@ async function devInstallMarketplace(
     if (entry.name !== 'plugins' && !options.dryRun) {
       const srcEntry = safePath.join(srcMpDir, entry.name);
       const destEntry = safePath.join(destMpDir, entry.name);
-      await cp(srcEntry, destEntry, { recursive: true, force: true });
+      cpSync(srcEntry, destEntry, { recursive: true, force: true });
     }
   }
 
@@ -951,7 +951,7 @@ async function copyPluginTree(
     await rm(destMpDir, { recursive: true, force: true });
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Resolved from constant subpath
     await mkdir(destMpDir, { recursive: true });
-    await cp(srcMpDir, destMpDir, { recursive: true, force: true });
+    cpSync(srcMpDir, destMpDir, { recursive: true, force: true });
 
     // Register each plugin and collect installed skill names
     for (const pluginName of listSubdirectories(safePath.join(srcMpDir, 'plugins'))) {
@@ -1026,7 +1026,7 @@ async function installSkillFromPath(
 
   if (!options.dryRun) {
     logger.info(`   Installing ${skillName}...`);
-    await cp(skillPath, installPath, { recursive: true, force: true });
+    cpSync(skillPath, installPath, { recursive: true, force: true });
   }
 }
 

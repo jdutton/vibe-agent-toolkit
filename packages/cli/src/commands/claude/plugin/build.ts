@@ -6,8 +6,8 @@
  * Wraps skills into Claude plugin directory structure with plugin.json metadata.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
-import { cp, mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { existsSync, readFileSync, cpSync } from 'node:fs';
+import {  mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 
 import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
@@ -209,7 +209,7 @@ async function copyDistributionFiles(
     const srcPath = override ? safePath.join(configDir, override) : safePath.join(configDir, file);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- file is from static list or config
     if (existsSync(srcPath)) {
-      await cp(srcPath, safePath.join(marketplaceDir, file));
+      cpSync(srcPath, safePath.join(marketplaceDir, file));
       if (override) {
         logger.info(`   ${file} (from publish.${file === 'README.md' ? 'readme' : 'changelog'}: ${override})`);
       } else {
@@ -367,7 +367,7 @@ async function buildPlugin(
     const destPath = safePath.join(pluginDir, 'skills', fsPath);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
     await mkdir(destPath, { recursive: true });
-    await cp(skillDistPath, destPath, { recursive: true });
+    cpSync(skillDistPath, destPath, { recursive: true });
     skillsCopied.push(fsPath);
     logger.info(`         ${skillName} -> skills/${fsPath}`);
   }

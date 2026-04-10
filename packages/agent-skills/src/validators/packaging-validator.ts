@@ -38,6 +38,7 @@ import {
 /** Exclude reason constants to avoid duplicate string literals */
 const EXCLUDE_REASON_DIRECTORY = 'directory-target' as const;
 const EXCLUDE_REASON_OUTSIDE_PROJECT = 'outside-project' as const;
+const DETAIL_REASON_DEPTH: ExcludedReferenceDetail['reason'] = 'depth-exceeded';
 
 /**
  * Packaging configuration for skill validation.
@@ -58,7 +59,7 @@ export interface SkillPackagingConfig {
 /** Excluded reference detail for verbose output */
 export interface ExcludedReferenceDetail {
   path: string;
-  reason: 'depth-exceeded' | 'pattern-matched' | 'outside-project' | 'navigation-file';
+  reason: 'depth-exceeded' | 'pattern-matched' | 'outside-project' | 'navigation-file' | 'skill-definition';
   matchedPattern?: string | undefined;
 }
 
@@ -431,11 +432,13 @@ function mapExcludeReason(
   switch (excludeReason) {
     case 'pattern-matched': return 'pattern-matched';
     case 'navigation-file': return 'navigation-file';
+    case 'skill-definition': return 'skill-definition';
     case 'depth-exceeded':
     case EXCLUDE_REASON_DIRECTORY:
     case EXCLUDE_REASON_OUTSIDE_PROJECT:
     case undefined:
-      return 'depth-exceeded';
+    default:
+      return DETAIL_REASON_DEPTH;
   }
 }
 

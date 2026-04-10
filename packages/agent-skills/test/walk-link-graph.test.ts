@@ -336,4 +336,61 @@ describe('walkLinkGraph', () => {
       expect(result.maxBundledDepth).toBe(2);
     });
   });
+
+  describe('cross-skill SKILL.md exclusion', () => {
+    it('should exclude links to other SKILL.md files as skill-definition', () => {
+      const otherSkillId = 'other-skill-md';
+      const otherSkillPath = safePath.resolve('/project/other-skill/SKILL.md');
+      const skill = createMockResource(SKILL_ID, SKILL_PATH, [
+        createLocalLink('guide', GUIDE_HREF, GUIDE_ID),
+        createLocalLink('other skill', './other-skill/SKILL.md', otherSkillId),
+      ]);
+      const guide = createMockResource(GUIDE_ID, GUIDE_PATH);
+      const otherSkill = createMockResource(otherSkillId, otherSkillPath);
+      const registry = createMockRegistry([skill, guide, otherSkill]);
+
+      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions());
+
+      // Guide should be bundled, other SKILL.md should NOT
+      expectBundledIds(result, [GUIDE_ID]);
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe('skill-definition');
+      expect(result.excludedReferences[0]?.path).toBe(otherSkillPath);
+    });
+
+    it('should exclude SKILL.md found via transitive link', () => {
+      // skill -> guide -> other-skill/SKILL.md
+      const otherSkillId = 'other-skill-md';
+      const otherSkillPath = safePath.resolve('/project/other-skill/SKILL.md');
+      const skill = createMockResource(SKILL_ID, SKILL_PATH, [
+        createLocalLink('guide', GUIDE_HREF, GUIDE_ID),
+      ]);
+      const guide = createMockResource(GUIDE_ID, GUIDE_PATH, [
+        createLocalLink('other skill', '../other-skill/SKILL.md', otherSkillId),
+      ]);
+      const otherSkill = createMockResource(otherSkillId, otherSkillPath);
+      const registry = createMockRegistry([skill, guide, otherSkill]);
+
+      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions());
+
+      expectBundledIds(result, [GUIDE_ID]);
+      expect(result.excludedReferences.some(r => r.excludeReason === 'skill-definition')).toBe(true);
+    });
+
+    it('should not exclude non-SKILL.md files named similarly', () => {
+      // Ensure files like "MY-SKILL.md" or "skills.md" are not caught
+      const skillsDocId = 'skills-doc';
+      const skillsDocPath = safePath.resolve('/project/docs/skills.md');
+      const skill = createMockResource(SKILL_ID, SKILL_PATH, [
+        createLocalLink('skills doc', './docs/skills.md', skillsDocId),
+      ]);
+      const skillsDoc = createMockResource(skillsDocId, skillsDocPath);
+      const registry = createMockRegistry([skill, skillsDoc]);
+
+      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions());
+
+      expectBundledIds(result, [skillsDocId]);
+      expect(result.excludedReferences).toHaveLength(0);
+    });
+  });
 });
