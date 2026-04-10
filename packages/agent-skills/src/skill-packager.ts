@@ -15,7 +15,7 @@
  * for link resolution and rewriting (replacing the previous inline regex approach).
  */
 
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
@@ -374,7 +374,13 @@ export async function packageSkill(
     templateContext: { skill: { name: skillMetadata.name } },
   });
 
-  // 13. Generate distribution artifacts
+  // 13. Post-build integrity check: no SKILL.md in subdirectories
+  // A SKILL.md is a skill definition marker — it must only exist at the root.
+  // If another skill's SKILL.md was bundled as a resource, it creates duplicate
+  // skill definitions that break marketplace sync and confuse skill consumers.
+  await validateNoNestedSkillMd(outputPath, skillMetadata.name);
+
+  // 14. Generate distribution artifacts
   const artifacts = await generatePackageArtifacts(
     outputPath,
     skillMetadata,
@@ -634,6 +640,42 @@ async function copyAndRewriteFile(
   await writeFile(targetPath, transformed, 'utf-8');
 }
 
+
+// ============================================================================
+// Post-Build Integrity Checks
+// ============================================================================
+
+/**
+ * Verify no SKILL.md files exist in subdirectories of the skill output.
+ *
+ * A SKILL.md is a skill definition marker — it declares the existence and identity
+ * of a skill. If another skill's SKILL.md is bundled as a resource, it creates
+ * duplicate skill definitions that cause:
+ * - Marketplace sync rejection ("Duplicate skill name")
+ * - Consumers discovering phantom skills in subdirectories
+ *
+ * This should never happen because the link graph walker excludes SKILL.md targets,
+ * but this check acts as a safety net in case files are introduced through other means.
+ */
+async function validateNoNestedSkillMd(outputPath: string, skillName: string): Promise<void> {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- outputPath is validated
+  const entries = readdirSync(outputPath, { recursive: true, withFileTypes: true });
+  const nestedSkillMds = entries
+    .filter(entry => entry.isFile() && entry.name === 'SKILL.md')
+    .map(entry => safePath.relative(outputPath, safePath.join(entry.parentPath, entry.name)))
+    .filter(relativePath => relativePath !== 'SKILL.md'); // Exclude the root SKILL.md
+
+  if (nestedSkillMds.length > 0) {
+    throw new Error(
+      `SKILL.md found inside skill "${skillName}" at: ${nestedSkillMds.join(', ')}\n` +
+      `A SKILL.md was bundled as a resource — this creates a duplicate skill definition\n` +
+      `in the build output, which breaks marketplace sync and confuses skill consumers.\n\n` +
+      `Fix: Replace the markdown link to the other skill's SKILL.md with a text reference:\n` +
+      `  Instead of: [other skill](../other-skill/SKILL.md)\n` +
+      `  Use:        For details, load the \`other-skill\` skill.`,
+    );
+  }
+}
 
 // ============================================================================
 // Metadata Extraction

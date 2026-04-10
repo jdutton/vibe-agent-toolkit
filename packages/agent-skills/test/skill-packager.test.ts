@@ -722,3 +722,38 @@ describe('packageSkill - source-in-output check', () => {
     expect(existsSync(safePath.join(outDir, 'stale.md'))).toBe(false);
   });
 });
+
+describe('packageSkill - nested SKILL.md integrity check', () => {
+  it('should exclude cross-skill SKILL.md links and not bundle them', async () => {
+    const dir = getTempDir();
+
+    // Create another skill's SKILL.md at a sibling path
+    const otherSkillDir = safePath.join(dir, 'other-skill');
+    await mkdir(otherSkillDir, { recursive: true });
+    await writeFile(
+      safePath.join(otherSkillDir, 'SKILL.md'),
+      `${createFrontmatter({ name: 'other-skill' })}\n\n# Other Skill\n\nSome content.`,
+    );
+
+    // Create main skill that links to other skill's SKILL.md
+    const skillPath = await writeSkillMd(
+      dir,
+      UNIT_SKILL_NAME,
+      '# My Skill\n\nSee the [other skill](other-skill/SKILL.md) for details.',
+    );
+
+    const result = await packWithOutput(skillPath);
+
+    // The other SKILL.md should NOT appear in the output
+    const outputFiles = await readdir(result.outputPath, { recursive: true });
+    const skillMdFiles = outputFiles.filter(
+      (f: string) => f === 'SKILL.md' || f.endsWith('/SKILL.md'),
+    );
+    // Only the root SKILL.md should exist
+    expect(skillMdFiles).toEqual(['SKILL.md']);
+
+    // Should be reported as excluded
+    expect(result.excludedReferences).toBeDefined();
+    expect(result.excludedReferences?.some(r => r.includes('SKILL.md'))).toBe(true);
+  });
+});

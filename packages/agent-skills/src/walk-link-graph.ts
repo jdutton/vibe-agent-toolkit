@@ -28,7 +28,7 @@ export interface LinkResolution {
   /** Whether the file will be bundled */
   bundled: boolean;
   /** Reason it was excluded (only set when bundled is false) */
-  excludeReason?: 'depth-exceeded' | 'pattern-matched' | 'directory-target' | 'outside-project' | 'navigation-file' | undefined;
+  excludeReason?: 'depth-exceeded' | 'pattern-matched' | 'directory-target' | 'outside-project' | 'navigation-file' | 'skill-definition' | undefined;
   /** The rule that matched (only set for pattern-matched exclusions) */
   matchedRule?: ExcludeRule | undefined;
   /** Link text from the source markdown */
@@ -179,6 +179,14 @@ function checkExclusions(
   // Check navigation file exclusion
   if (options.excludeNavigationFiles && isNavigationFile(basename(targetPath))) {
     excludedReferences.push(makeExclusion(targetPath, 'navigation-file', link));
+    return true;
+  }
+
+  // Check for cross-skill SKILL.md links — a SKILL.md is a skill definition marker,
+  // not a resource. Bundling another skill's SKILL.md creates duplicate skill definitions
+  // in the output, which causes marketplace sync failures and confuses skill consumers.
+  if (basename(targetPath) === 'SKILL.md') {
+    excludedReferences.push(makeExclusion(targetPath, 'skill-definition', link));
     return true;
   }
 
