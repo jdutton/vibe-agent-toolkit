@@ -7,8 +7,8 @@
  * - claude-marketplace (.claude-plugin/marketplace.json) → ~/.claude/marketplaces/
  */
 
-import { existsSync, lstatSync } from 'node:fs';
-import { cp, mkdir, rm } from 'node:fs/promises';
+import { existsSync, lstatSync, cpSync } from 'node:fs';
+import {  mkdir, rm } from 'node:fs/promises';
 import { basename } from 'node:path';
 
 import {
@@ -303,7 +303,7 @@ async function installCommand(
 
     if (!options.dryRun) {
       logger.info(`Installing ${resourceName}...`);
-      await cp(sourcePath, installPath, { recursive: true, force: true });
+      cpSync(sourcePath, installPath, { recursive: true, force: true });
     }
 
     const duration = Date.now() - startTime;

@@ -85,6 +85,7 @@ export default [
       'local/no-path-resolve': 'error',
       'local/no-path-relative': 'error',
       'local/no-test-scoped-functions': 'error',
+      'local/no-fs-promises-cp': 'error',
 
       // TypeScript
       'no-unused-vars': 'off', // Use @typescript-eslint/no-unused-vars instead

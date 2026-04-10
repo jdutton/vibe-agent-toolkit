@@ -50,5 +50,6 @@ export default {
     'no-path-resolve': require('./no-path-resolve.cjs'),
     'no-path-relative': require('./no-path-relative.cjs'),
     'no-test-scoped-functions': require('./no-test-scoped-functions.cjs'),
+    'no-fs-promises-cp': require('./no-fs-promises-cp.cjs'),
   },
 };
