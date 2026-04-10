@@ -219,7 +219,9 @@ async function publishOneMarketplace(ctx: PublishOneOptions): Promise<PublishRes
   };
 }
 
-async function marketplacePublishCommand(options: MarketplacePublishOptions): Promise<void> {
+async function marketplacePublishCommand(_options: MarketplacePublishOptions, command: Command): Promise<void> {
+  // Commander nests --debug on a parent command, so use optsWithGlobals()
+  const options = command.optsWithGlobals() as MarketplacePublishOptions;
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
 
