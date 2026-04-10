@@ -6,8 +6,7 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { cpSync, mkdtempSync, rmSync } from 'node:fs';
-
+import { cpSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 
@@ -191,12 +190,35 @@ export async function publishToGitBranch(options: PublishGitOptions): Promise<vo
 
     // Copy publish tree content into temp repo
     cpSync(publishDir, tmpRepo, { recursive: true });
+
+    // Log what cpSync placed in the temp repo (filesystem truth before git touches it)
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tmpRepo is a controlled temp directory
+    const tmpRepoFiles = readdirSync(tmpRepo, { recursive: true, withFileTypes: true })
+      .filter(entry => entry.isFile() && !entry.parentPath.includes('.git'))
+      .map(entry => safePath.join(entry.parentPath, entry.name))
+      .map(p => safePath.relative(tmpRepo, p));
+    logger.debug(`   Files in tmpRepo after cpSync (${tmpRepoFiles.length}):\n${tmpRepoFiles.join('\n')}`);
+
     git(['add', '-A'], { cwd: tmpRepo });
+
+    // Log what git is tracking vs what's on disk but untracked/ignored
+    const tracked = git(['ls-files'], { cwd: tmpRepo });
+    logger.debug(`   Git tracked files:\n${tracked.stdout}`);
+
+    const ignored = git(['ls-files', '--others', '--ignored', '--exclude-standard'], {
+      cwd: tmpRepo,
+      allowFailure: true,
+    });
+    if (ignored.stdout) {
+      logger.info(`   ⚠ Git IGNORED files (on disk but not tracked):\n${ignored.stdout}`);
+    }
 
     // Check if there are changes to commit
     const diffResult = git(['diff', '--cached', '--quiet'], { cwd: tmpRepo, allowFailure: true });
     if (diffResult.status === 0) {
       logger.info('   No changes to publish (tree is identical to current branch)');
+      const currentTree = git(['ls-files'], { cwd: tmpRepo });
+      logger.debug(`   Current tree (${currentTree.stdout.split('\n').filter(Boolean).length} files):\n${currentTree.stdout}`);
       return;
     }
 
