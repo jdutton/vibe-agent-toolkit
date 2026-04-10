@@ -6,8 +6,8 @@
  * directory ready to be committed to the publish branch.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
-import { cp, writeFile } from 'node:fs/promises';
+import { cpSync, existsSync, readFileSync } from 'node:fs';
+import { writeFile } from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
@@ -61,7 +61,8 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
   }
 
   // 2. Copy marketplace artifacts to output
-  await cp(buildDir, outputDir, { recursive: true });
+  // Use cpSync instead of async cp() — Node 22 cp() drops files in nested directories
+  cpSync(buildDir, outputDir, { recursive: true });
   files.push('.claude-plugin/marketplace.json', 'plugins/');
 
   // 3. Process changelog — VAT copies the source file byte-for-byte into the publish tree.
