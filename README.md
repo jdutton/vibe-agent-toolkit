@@ -34,12 +34,27 @@ See [Distributing VAT Skills Guide](./docs/guides/distributing-vat-skills.md) fo
 
 VAT skills are available as a **Claude Code plugin** — install them directly from GitHub, no npm needed:
 
-```
-claude plugin marketplace add jdutton/vibe-agent-toolkit#claude-marketplace-next
+```bash
+claude plugin marketplace add jdutton/vibe-agent-toolkit#claude-marketplace
 claude plugin install vibe-agent-toolkit@vat-skills
 ```
 
-This gives Claude Code 8 skills for building, packaging, and distributing agent skills. See the [marketplace branch](https://github.com/jdutton/vibe-agent-toolkit/tree/claude-marketplace-next) for the full skill list.
+Or from within a Claude Code session:
+
+```
+/plugin marketplace add jdutton/vibe-agent-toolkit#claude-marketplace
+/plugin install vibe-agent-toolkit@vat-skills
+```
+
+**For project-scope** (shared with team via `.claude/settings.json`), add `--scope project`:
+
+```bash
+claude plugin marketplace add jdutton/vibe-agent-toolkit#claude-marketplace --scope project
+```
+
+This gives Claude Code 8 skills for building, packaging, and distributing agent skills. See the [marketplace branch](https://github.com/jdutton/vibe-agent-toolkit/tree/claude-marketplace) for the full skill list.
+
+**Pre-release channel:** To track the latest pre-release builds, use `#claude-marketplace-next` instead.
 
 **Build your own marketplace:** VAT can publish your skills as a Claude plugin marketplace too. See the [Marketplace Distribution Guide](./docs/guides/marketplace-distribution.md) for how marketplace publishing works — from project structure through build, validation, publishing, and testing.
 

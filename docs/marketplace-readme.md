@@ -6,22 +6,27 @@ Development agents and skills for building, testing, and distributing AI agent s
 
 ## Install
 
-### For yourself (user-level)
+### From the terminal
 
 ```bash
 claude plugin marketplace add jdutton/vibe-agent-toolkit#claude-marketplace
 claude plugin install vibe-agent-toolkit@vat-skills
 ```
 
+### From within Claude Code
+
+```
+/plugin marketplace add jdutton/vibe-agent-toolkit#claude-marketplace
+/plugin install vibe-agent-toolkit@vat-skills
+```
+
 ### For your project (shared with team)
+
+Add `--scope project` to write to `.claude/settings.json` (committed to git). Team members who clone the repo will be prompted to install the marketplace automatically.
 
 ```bash
 claude plugin marketplace add jdutton/vibe-agent-toolkit#claude-marketplace --scope project
-claude plugin install vibe-agent-toolkit@vat-skills
 ```
-
-Project-scope writes to `.claude/settings.json` (committed to git). Team members
-who clone the repo will be prompted to install the marketplace automatically.
 
 ### Update
 

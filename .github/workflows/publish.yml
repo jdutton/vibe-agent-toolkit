@@ -65,15 +65,16 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           UPDATE_NEXT: ${{ steps.version_type.outputs.update_next }}
 
-      - name: Publish Claude marketplace
+      - name: Publish Claude marketplace (next)
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [[ "${{ steps.version.outputs.is_stable }}" == "true" ]]; then
-            bun run vat claude marketplace publish --cwd packages/vat-development-agents
-          else
-            bun run vat claude marketplace publish --cwd packages/vat-development-agents --branch claude-marketplace-next
-          fi
+        run: bun run vat claude marketplace publish --cwd packages/vat-development-agents --branch claude-marketplace-next
+
+      - name: Publish Claude marketplace (stable)
+        if: steps.version.outputs.is_stable == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bun run vat claude marketplace publish --cwd packages/vat-development-agents
 
       - name: Extract changelog
         if: steps.version.outputs.is_stable == 'true'
