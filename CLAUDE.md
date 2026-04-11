@@ -513,12 +513,25 @@ bun run vat audit packages/vat-development-agents/dist/skills/
 
 2. **Ask about version bump** — Ask the developer: *"Would you like to bump the version or create an RC for this change?"*
    - If yes: run `bun run bump-version <version>` (e.g., `0.1.16-rc.5`) and commit the version bump
+   - For **stable** versions, `bump-version` auto-stamps CHANGELOG.md (moves `[Unreleased]` content under a new `## [X.Y.Z] - date` heading)
    - If no: proceed with just the changelog update
    - RC versions (e.g., `0.1.16-rc.5`) stay in the `[Unreleased]` section — they are NOT given their own version heading
 
 3. **Run `bun run validate`** one final time after the changelog/version changes to ensure nothing broke
 
 **For AI assistants:** This is a hard gate. Do NOT create a PR without updating the changelog and asking about the version bump first. Forgetting this creates extra work for the maintainer.
+
+### Pre-Release Checklist (MANDATORY — before tagging)
+
+**After the PR is merged to main, ALWAYS run the pre-release check BEFORE creating any version tag:**
+
+1. **Run `bun run pre-release`** — Confirms CHANGELOG is stamped, no stale tags on remote, marketplace dry-run passes, and version section has content.
+2. **Only after pre-release passes:** Tag: `git tag v{version}`
+3. **Push:** `git push origin main v{version}`
+
+**Why this matters:** CI publish is triggered by the tag push. If CHANGELOG isn't stamped or artifacts aren't built, the publish fails and you have to delete the tag and re-do it. `bun run pre-release` catches all of these issues locally before you create the tag.
+
+**For AI assistants:** Never suggest tagging without running `bun run pre-release` first. This is non-negotiable.
 
 ### Running vat CLI During Development
 
@@ -595,9 +608,10 @@ See [packages/cli/CLAUDE.md](packages/cli/CLAUDE.md) for more CLI development gu
 See [docs/publishing.md](docs/publishing.md) for complete publishing workflow, versioning, and rollback procedures.
 
 **Quick Reference:**
-- Use `bun run bump-version <version>` for all version changes
+- Use `bun run bump-version <version>` for all version changes (stable bumps auto-stamp CHANGELOG)
 - All packages share same version (unified versioning)
 - RC versions stay in `[Unreleased]` section of CHANGELOG
+- **ALWAYS run `bun run pre-release` before tagging** — validates CHANGELOG, tag, and marketplace
 - Publishing is triggered by pushing a git tag: `git tag vX.Y.Z && git push origin main vX.Y.Z`
 - GitHub Actions then auto-publishes to npm and creates the GitHub release
 - Commands: `bun run build`, `bun run build:clean`
