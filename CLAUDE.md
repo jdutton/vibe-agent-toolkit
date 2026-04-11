@@ -319,6 +319,14 @@ Large test data for system/integration tests should be stored as compressed arch
 
 For small test data (<10 files), raw files in `test/fixtures/` are fine.
 
+**CRITICAL: Never use gitignored directory names in committed fixtures.** Directory names like `dist/`, `node_modules/`, `coverage/`, and `build/` are gitignored at the repo root. Files committed under these names silently disappear in CI (clean clone) while appearing to work locally. Instead:
+
+- Store committed artifact sources under a non-gitignored name (e.g., `build-artifacts/`)
+- Have test `beforeAll` copy them to `tempDir/dist/` — simulating a real build step
+- This mirrors how real projects work: build produces `dist/`, then tools consume it
+
+**Example**: `packages/agent-skills/test/fixtures/skill-files/build-artifacts/bin/cli.mjs` is the committed source. The integration test copies it to `tempDir/dist/bin/cli.mjs` during setup, and the `files` config references `source: 'dist/bin/cli.mjs'`.
+
 ## Coding Standards
 
 ### TypeScript Configuration
