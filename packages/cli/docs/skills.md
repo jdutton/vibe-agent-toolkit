@@ -233,71 +233,112 @@ vat skills package SKILL.md -o dist -b /custom/base
 
 ---
 
-### vat skills install [source]
+### vat skills install \<source\>
 
-**Purpose:** Install a skill to Claude Code's skills directory
+**Purpose:** Install a SKILL.md-based skill to one of 7 supported platform targets
 
 **What it does:**
-1. Detects source type (npm package, local ZIP, or local directory)
-2. Extracts/copies skill to `~/.claude/skills/`
-3. Handles conflicts and validates installation
+1. Resolves the source (local directory, ZIP, .tgz, or npm package)
+2. Discovers one or more skills inside the source
+3. Pre-validates every skill with `validateSkill()` — zero files written if validation fails
+4. Builds an install plan, detecting conflicts before touching the filesystem
+5. Copies skill(s) to the resolved platform directory (all-or-nothing semantics)
+6. Emits a YAML summary on stdout
+
+Both `--target` and `--scope` are **required** — there are no defaults.
 
 **Supported Sources:**
-- **npm package:** `npm:@scope/package-name`
-- **Local ZIP file:** `./path/to/skill.zip`
-- **Local directory:** `./path/to/skill-dir`
-- **npm postinstall:** `--npm-postinstall` (automatic during global install)
+- **Local directory:** `./path/to/skill-dir` — must contain `SKILL.md` at root or in subdirectories
+- **Local ZIP file:** `./path/to/skill.zip` — extracted to a temp directory, then installed
+- **Local tarball:** `./path/to/skill.tgz` or `skill.tar.gz` — extracted as an npm package tarball
+- **npm package:** `npm:@scope/package-name` — downloaded from the registry, `dist/skills/` is used
 
 **Arguments:**
-- `[source]` - Source to install from (required unless using --npm-postinstall)
+- `<source>` - Source to install from (required)
 
-**Options:**
-- `-s, --skills-dir <path>` - Claude skills directory (default: ~/.claude/skills/)
-- `-n, --name <name>` - Custom name for installed skill (default: auto-detect from source)
-- `-f, --force` - Overwrite existing skill if present
-- `--dry-run` - Preview installation without creating files
-- `--npm-postinstall` - Run as npm postinstall hook (internal use)
+**Required Options:**
+- `--target <target>` - Platform target (see Targets table below)
+- `--scope <scope>` - Install scope: `user` or `project`
+
+**Optional Options:**
+- `-n, --name <name>` - Override skill name (single-skill sources only)
+- `-f, --force` - Overwrite existing skill
+- `--dry-run` - Preview install without writing files
 - `--debug` - Enable debug logging
 
-**Exit Codes:**
-- `0` - Installation successful
-- `1` - Installation error (invalid source, skill exists)
-- `2` - System error
+**Targets:**
 
-**Output Format:**
+| Target | User path | Project path |
+|--------|-----------|--------------|
+| `claude` | `~/.claude/skills/` | `.claude/skills/` |
+| `codex` | `~/.agents/skills/` | `.agents/skills/` |
+| `copilot` | `~/.copilot/skills/` | `.github/skills/` |
+| `gemini` | `~/.gemini/skills/` | `.gemini/skills/` |
+| `cursor` | `~/.cursor/skills/` | `.cursor/skills/` |
+| `windsurf` | `~/.codeium/windsurf/skills/` | `.windsurf/skills/` |
+| `agents` | `~/.agents/skills/` | `.agents/skills/` |
+
+**Exit Codes:**
+- `0` - Install successful (or dry-run complete)
+- `1` - Install error (validation failed, conflict without `--force`, source not found, bad target/scope)
+- `2` - System error (unexpected exception)
+
+**YAML Output Format:**
 ```yaml
-status: success
-skillName: my-skill
-installPath: /Users/you/.claude/skills/my-skill
-source: npm:@my-org/my-package
-sourceType: npm
-duration: 1234ms
+---
+status: success          # or dry-run on --dry-run
+source: /abs/path/to/source
+target: claude
+scope: user
+skillsInstalled: 2
+skills:
+  - name: my-skill
+    installPath: /Users/you/.claude/skills/my-skill
+  - name: other-skill
+    installPath: /Users/you/.claude/skills/other-skill
+duration: 234ms
 ```
+
+On error, stdout receives:
+```yaml
+---
+status: error
+error: <first line of error message>
+duration: 234ms
+```
+
+**All-or-nothing semantics:** Skills are pre-verified before any filesystem writes. If any skill fails validation, or if a conflict is detected (without `--force`), the entire install is aborted and no files are written.
 
 **Examples:**
 ```bash
+# Install from local built skill directory to user-scoped Claude
+vat skills install ./dist/skills/my-skill --target claude --scope user
+
+# Install from ZIP to project-scoped Copilot
+vat skills install ./my-skill.zip --target copilot --scope project
+
+# Install from tarball
+vat skills install ./my-skill.tgz --target gemini --scope user
+
 # Install from npm package
-vat skills install npm:@vibe-agent-toolkit/vat-development-agents
+vat skills install npm:@vibe-agent-toolkit/vat-development-agents --target claude --scope user
 
-# Install from local ZIP
-vat skills install ./cat-agents-skill.zip
-
-# Install from local directory with custom name
-vat skills install ./my-skill-dir --name custom-skill-name
+# Override skill name (single-skill sources only)
+vat skills install ./dist/skills/my-skill --target claude --scope user --name custom-name
 
 # Force overwrite existing skill
-vat skills install skill.zip --force
+vat skills install ./dist/skills/my-skill --target claude --scope user --force
 
-# Preview installation
-vat skills install npm:@my-org/package --dry-run
+# Preview installation without writing files
+vat skills install npm:@my-org/package --target cursor --scope user --dry-run
 
-# Install to custom location
-vat skills install skill.zip --skills-dir /custom/path
+# Install to project scope
+vat skills install ./dist/skills/my-skill --target claude --scope project
 ```
 
 **Post-Installation:**
 After installation, you need to:
-1. Restart Claude Code, or
+1. Restart Claude Code (or the target agent), or
 2. Run `/reload-skills` in Claude Code to load the new skill
 
 ---
@@ -425,22 +466,25 @@ npm publish  # Skills installed via postinstall hook
 
 **Option C: Direct install**
 ```bash
-# From npm
-vat skills install npm:@my-org/my-skill-package
+# From npm (--target and --scope required)
+vat skills install npm:@my-org/my-skill-package --target claude --scope user
 
 # From local ZIP
-vat skills install my-skill.zip
+vat skills install my-skill.zip --target claude --scope user
 ```
 
 ### 6. Installation
 Users install via:
 ```bash
-# Global npm install (automatic skill installation)
-npm install -g @my-org/my-skill-package
+# Manual install — both --target and --scope are required
+vat skills install npm:@my-org/my-skill-package --target claude --scope user
+vat skills install ./my-skill.zip --target claude --scope user
 
-# Or manual install
-vat skills install npm:@my-org/my-skill-package
-vat skills install ./my-skill.zip
+# Install to Cursor instead
+vat skills install npm:@my-org/my-skill-package --target cursor --scope user
+
+# Dry-run to preview before committing
+vat skills install ./my-skill.zip --target claude --scope user --dry-run
 ```
 
 ### 7. Usage
@@ -449,6 +493,21 @@ vat skills install ./my-skill.zip
 User: /my-skill
 # Skill executes
 ```
+
+---
+
+## When to Use Which Install Command
+
+| Use case | Command |
+|----------|---------|
+| Install a SKILL.md-based skill (local dir, ZIP, .tgz, npm package) to any of 7 supported platforms | `vat skills install <source> --target <target> --scope <scope>` |
+| Install a Claude plugin (`.claude-plugin/`, `plugin.json`, marketplace structure) | `vat claude plugin install <source>` |
+| Upload a skill to your Anthropic org for Claude.ai (org admin only, requires ANTHROPIC_API_KEY) | `vat claude org skills install <source>` or `vat claude org skills install --from-npm <package>` |
+
+**Key distinctions:**
+- `vat skills install` — file-based, multi-platform, works entirely offline (except npm sources). Installs to local agent directories.
+- `vat claude plugin install` — Claude-specific plugin format. Installs to `~/.claude/plugins/` and updates Claude's plugin registry.
+- `vat claude org skills install` — cloud upload. Pushes skills to Anthropic's organization API so they are available to all org members in Claude.ai.
 
 ---
 
@@ -478,21 +537,46 @@ User: /my-skill
 - Use semantic versioning for skill versions
 
 ### User Installation
-- Prefer npm packages for automatic updates
+- Always specify both `--target` and `--scope` — they are required with no defaults
+- Use `--dry-run` to preview what will be installed before committing
 - Use `--force` flag carefully (overwrites existing skills)
 - Verify installation: `vat skills list --user`
-- Remember to restart Claude Code or run `/reload-skills`
+- Remember to restart the target agent or run `/reload-skills` in Claude Code
 
 ---
 
 ## Troubleshooting
 
-### "Skill already exists"
-**Problem:** Installing skill that's already installed
+### "Invalid target" / "Invalid scope"
+**Problem:** `--target` or `--scope` value is not recognized.
 
-**Solution:** Use `--force` flag to overwrite:
+**Solution:** Use one of the exact values listed in the Targets table. Both flags are required.
+
+Valid targets: `claude`, `codex`, `copilot`, `gemini`, `cursor`, `windsurf`, `agents`
+Valid scopes: `user`, `project`
+
 ```bash
-vat skills install my-skill.zip --force
+# Correct
+vat skills install ./my-skill --target claude --scope user
+```
+
+### "Skill validation failed during install"
+**Problem:** The skill's `SKILL.md` has validation errors. No files were written.
+
+**Solution:** Fix the errors reported, then retry. Run validate first to see all issues:
+```bash
+vat skills validate ./my-skill
+vat skills install ./my-skill --target claude --scope user
+```
+
+### "Already installed" (conflict without --force)
+**Problem:** A skill with the same name already exists at the install path.
+
+**Solution:** Use `--force` to overwrite, or use `-n/--name` to install under a different name:
+```bash
+vat skills install my-skill.zip --target claude --scope user --force
+# or install under a different name
+vat skills install my-skill.zip --target claude --scope user --name my-skill-v2
 ```
 
 ### "No skills found in package.json"

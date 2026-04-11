@@ -24,7 +24,7 @@ claude:
         name: vibe-agent-toolkit contributors
       publish:
         branch: claude-marketplace
-        changelog: ../../docs/marketplace-changelog.md
+        changelog: ../../CHANGELOG.md
         readme: ../../docs/marketplace-readme.md
         license: mit
       plugins:

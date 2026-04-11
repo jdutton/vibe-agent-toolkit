@@ -9,6 +9,7 @@
 import { Command } from 'commander';
 
 import { createBuildCommand } from './build.js';
+import { createInstallCommand } from './install.js';
 import { listCommand } from './list.js';
 import { createPackageCommand } from './package.js';
 import { createValidateCommand } from './validate-command.js';
@@ -28,7 +29,7 @@ Examples:
 Build & Install Workflow:
   1. Validate: vat skills validate
   2. Build: vat skills build (creates dist/.claude/plugins/)
-  3. Install: vat claude plugin install --dev (symlink) or npm:@scope/package
+  3. Install: vat skills install <source> --target claude --scope project
 
 For detailed command help:
   $ vat skills <command> --help
@@ -37,6 +38,7 @@ For detailed command help:
   command.addCommand(createValidateCommand());
   command.addCommand(createBuildCommand());
   command.addCommand(createPackageCommand());
+  command.addCommand(createInstallCommand());
   command.addCommand(createListCommand());
 
   return command;

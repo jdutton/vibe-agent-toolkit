@@ -37,3 +37,6 @@ export * from './zod-introspection.js';
 
 // Handlebars template rendering (cached, no HTML escaping)
 export * from './template.js';
+
+// Skill target resolution (cross-platform flat skill install paths)
+export * from './skill-targets.js';

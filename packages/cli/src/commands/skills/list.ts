@@ -2,16 +2,23 @@
  * List skills in project or user installation
  *
  * By default, lists project skills. Use --user flag to list user-installed skills.
+ * Supports npm:@scope/pkg and local .tgz/.tar.gz sources for inspecting packages
+ * without installing them.
  */
 
-import * as path from 'node:path';
+import { existsSync, readdirSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
+import { basename, dirname } from 'node:path';
 
 import { scan, type ScanSummary } from '@vibe-agent-toolkit/discovery';
+import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { loadConfig } from '../../utils/config-loader.js';
 import { createLogger } from '../../utils/logger.js';
 import { discoverSkills, validateSkillFilename } from '../../utils/skill-discovery.js';
 import { scanUserContext } from '../../utils/user-context-scanner.js';
+
+import { isNpmOrTarballSource, resolveNpmOrTarballSource } from './source-resolvers.js';
 
 export interface SkillsListCommandOptions {
   user?: boolean;
@@ -31,8 +38,8 @@ interface DiscoveredSkill {
  */
 function extractSkillName(skillPath: string): string {
   // Extract skill name from path (directory name containing SKILL.md)
-  const dir = path.dirname(skillPath);
-  return path.basename(dir);
+  const dir = dirname(skillPath);
+  return basename(dir);
 }
 
 /**
@@ -110,6 +117,65 @@ function outputSkillsHuman(
   }
 }
 
+/**
+ * Scan a dist/skills/ directory tree for SKILL.md files and return DiscoveredSkill[].
+ * Each immediate subdirectory that contains a SKILL.md is treated as one skill.
+ */
+function scanSkillsDir(skillsDir: string): DiscoveredSkill[] {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- temp path from trusted source
+  const entries = readdirSync(skillsDir, { withFileTypes: true });
+  const skills: DiscoveredSkill[] = [];
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const candidate = safePath.join(skillsDir, entry.name);
+    const skillMd = safePath.join(candidate, 'SKILL.md');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from temp path
+    if (existsSync(skillMd)) {
+      const filenameCheck = validateSkillFilename(skillMd);
+      const skill: DiscoveredSkill = {
+        path: skillMd,
+        name: entry.name,
+        valid: filenameCheck.valid,
+      };
+      if (filenameCheck.message !== undefined) {
+        skill.warning = filenameCheck.message;
+      }
+      skills.push(skill);
+    }
+  }
+
+  return skills;
+}
+
+/**
+ * List skills from an npm: or .tgz/.tar.gz source without installing.
+ */
+async function listFromNpmSource(
+  source: string,
+  logger: ReturnType<typeof createLogger>,
+  options: SkillsListCommandOptions,
+): Promise<void> {
+  logger.info(`📋 Inspecting npm/tgz source: ${source}`);
+
+  const resolved = await resolveNpmOrTarballSource(source);
+
+  try {
+    const skills = scanSkillsDir(resolved.skillsDir);
+    outputSkillsYaml(skills, 'npm');
+    outputSkillsHuman(skills, logger, options);
+    process.exit(0);
+  } finally {
+    for (const dir of resolved.tempDirs) {
+      try {
+        await rm(dir, { recursive: true, force: true });
+      } catch {
+        // best-effort cleanup
+      }
+    }
+  }
+}
+
 export async function listCommand(
   pathArg: string | undefined,
   options: SkillsListCommandOptions
@@ -117,6 +183,12 @@ export async function listCommand(
   const logger = createLogger(options.debug ? { debug: true } : {});
 
   try {
+    // npm: or .tgz/.tar.gz source — inspect without installing
+    if (pathArg !== undefined && isNpmOrTarballSource(pathArg)) {
+      await listFromNpmSource(pathArg, logger, options);
+      return; // process.exit(0) called inside listFromNpmSource
+    }
+
     let skills: DiscoveredSkill[];
     let context: string;
 
