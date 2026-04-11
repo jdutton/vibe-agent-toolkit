@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/cli",
-  "version": "0.1.27",
+  "version": "0.1.28-rc.1",
   "description": "Command-line interface for vibe-agent-toolkit",
   "type": "module",
   "bin": {
