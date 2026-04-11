@@ -1,3 +1,2 @@
-/* eslint-disable */
-// Helper script
-console.log("Helper script");
+#!/usr/bin/env node
+export default function helper() { return 'Helper script'; }
