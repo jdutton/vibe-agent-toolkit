@@ -60,6 +60,7 @@ export type {
   CollectionConfig,
   CollectionValidation,
   ValidationMode,
+  SkillFileEntry,
   SkillPackagingConfig,
   SkillsConfig,
   ClaudeConfig,
@@ -111,6 +112,7 @@ export {
 
 export {
   ProjectConfigSchema,
+  SkillFileEntrySchema,
   SkillsConfigSchema,
   SkillPackagingConfigSchema,
 } from './schemas/project-config.js';

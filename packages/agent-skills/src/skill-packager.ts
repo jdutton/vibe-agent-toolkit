@@ -28,6 +28,8 @@ import {
 } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 
+import { getTargetSubdir } from './content-type-routing.js';
+import type { SkillFileEntry } from './files-config.js';
 import { walkLinkGraph, type WalkableRegistry } from './walk-link-graph.js';
 
 const PACKAGE_JSON_FILENAME = 'package.json';
@@ -138,6 +140,15 @@ export interface PackageSkillOptions {
    * Default: 'claude-code'
    */
   target?: PackagingTarget | undefined;
+
+  /**
+   * Explicit file mappings for build artifacts, unlinked files, or routing overrides.
+   *
+   * Each entry copies source to dest in the skill output. Links matching
+   * files[].source are rewritten to dest. Links matching files[].dest are
+   * left as-is (assumed to be build artifacts placed at dest during build).
+   */
+  files?: SkillFileEntry[] | undefined;
 }
 
 export interface SkillMetadata {
@@ -319,6 +330,25 @@ export async function packageSkill(
   const namingBasePath = projectRoot;
   const pathMap = buildPathMap(skillPath, bundledFiles, outputPath, resourceNaming, namingBasePath, stripPrefix, target);
 
+  // 8b. Apply files config: copy declared files and adjust path map
+  const filesConfig = options.files ?? [];
+  for (const fileEntry of filesConfig) {
+    const absoluteSource = safePath.resolve(safePath.join(projectRoot, fileEntry.source));
+    const absoluteDest = safePath.join(outputPath, fileEntry.dest);
+
+    // Validate source exists at build time
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
+    if (!existsSync(absoluteSource)) {
+      throw new Error(
+        `files entry for skill '${skillMetadata.name}': source '${fileEntry.source}' does not exist. ` +
+        `Has your project's build step run?`
+      );
+    }
+
+    // If this source was auto-discovered, override its destination; otherwise add it
+    pathMap.set(toForwardSlash(absoluteSource), absoluteDest);
+  }
+
   // 9. Build "to" registry for link rewriting (maps same resource IDs to output paths)
   const outputResources = bundledResources.map(resource => ({
     ...resource,
@@ -373,6 +403,9 @@ export async function packageSkill(
     rewriteRules,
     templateContext: { skill: { name: skillMetadata.name } },
   });
+
+  // 12b. Copy files config entries that were not auto-discovered via link traversal.
+  await copyFilesConfigEntries(filesConfig, bundledFiles, projectRoot, outputPath);
 
   // 13. Post-build integrity check: no SKILL.md in subdirectories
   // A SKILL.md is a skill definition marker — it must only exist at the root.
@@ -436,13 +469,16 @@ async function createStandaloneRegistry(projectRoot: string): Promise<ResourceRe
 // ============================================================================
 
 /**
- * Determine the subdirectory name for bundled resources based on the packaging target.
+ * Determine the resource subdirectory for a file.
  *
- * - 'claude-code': resources/ (standard VAT format)
- * - 'claude-web': references/ (Claude.ai web upload format)
+ * For claude-web target: uses the existing references directory.
+ * For claude-code target: uses content-type routing based on file extension.
  */
-function getResourceSubdir(target: PackagingTarget): string {
-  return target === 'claude-web' ? 'references' : 'resources';
+function getResourceSubdirForFile(filePath: string, target: PackagingTarget): string {
+  if (target === 'claude-web') {
+    return 'references';
+  }
+  return getTargetSubdir(filePath);
 }
 
 /**
@@ -458,7 +494,6 @@ function buildPathMap(
   stripPrefix?: string,
   target: PackagingTarget = DEFAULT_PACKAGING_TARGET,
 ): Map<string, string> {
-  const resourceSubdir = getResourceSubdir(target);
   const pathMap = new Map<string, string>();
   pathMap.set(toForwardSlash(skillPath), safePath.join(outputPath, 'SKILL.md'));
 
@@ -469,7 +504,8 @@ function buildPathMap(
       resourceNaming,
       stripPrefix
     );
-    const targetPath = safePath.join(outputPath, resourceSubdir, targetRelPath);
+    const fileSubdir = getResourceSubdirForFile(linkedFile, target);
+    const targetPath = safePath.join(outputPath, fileSubdir, targetRelPath);
 
     // Check for filename collisions
     const existingSource = [...pathMap.entries()].find(
@@ -557,6 +593,31 @@ interface CopyRewriteContext {
   toRegistry: ResourceRegistry;
   rewriteRules: LinkRewriteRule[];
   templateContext?: Record<string, unknown>;
+}
+
+/**
+ * Copy files config entries that were not auto-discovered via link traversal.
+ *
+ * Build artifacts declared in `files` (e.g. `dist/bin/cli.mjs → scripts/cli.mjs`)
+ * are not in the link graph (the linked path points to `dest`, which doesn't exist
+ * at source time). This step copies them explicitly to the output directory.
+ */
+async function copyFilesConfigEntries(
+  filesConfig: SkillFileEntry[],
+  bundledFiles: string[],
+  projectRoot: string,
+  outputPath: string,
+): Promise<void> {
+  const bundledFileSet = new Set(bundledFiles.map(f => toForwardSlash(f)));
+  for (const fileEntry of filesConfig) {
+    const absoluteSource = safePath.resolve(safePath.join(projectRoot, fileEntry.source));
+    const absoluteDest = safePath.join(outputPath, fileEntry.dest);
+    if (!bundledFileSet.has(toForwardSlash(absoluteSource))) {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
+      await mkdir(dirname(absoluteDest), { recursive: true });
+      await copyFile(absoluteSource, absoluteDest);
+    }
+  }
 }
 
 /**

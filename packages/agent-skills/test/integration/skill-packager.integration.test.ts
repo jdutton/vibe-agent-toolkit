@@ -681,7 +681,8 @@ describe('skill-packager: depth-limited packaging', () => {
     expect(result.files.dependencies).toContain(CONFIG_JSON);
 
     // JSON file should be copied as-is (plain copy, not rewritten)
-    const copiedJson = await readFile(safePath.join(result.outputPath, 'resources', CONFIG_JSON), 'utf-8');
+    // Content-type routing places .json files in templates/
+    const copiedJson = await readFile(safePath.join(result.outputPath, 'templates', CONFIG_JSON), 'utf-8');
     expect(copiedJson).toBe(jsonContent);
   });
 

@@ -24,6 +24,7 @@ export type IssueCode =
   | 'FILENAME_COLLISION'
   | 'WINDOWS_BACKSLASH_IN_PATH'
   | 'LINK_TARGETS_DIRECTORY'
+  | 'DUPLICATE_FILES_DEST'
   // Packaging validation - Best practice (overridable)
   | 'SKILL_LENGTH_EXCEEDS_RECOMMENDED'
   | 'SKILL_TOTAL_SIZE_LARGE'

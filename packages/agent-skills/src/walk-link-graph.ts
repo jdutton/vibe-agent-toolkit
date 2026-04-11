@@ -71,6 +71,8 @@ export interface LinkGraphResult {
   excludedReferences: LinkResolution[];
   /** Actual max depth of the bundled portion */
   maxBundledDepth: number;
+  /** Asset paths that are deferred (declared in files config, may not exist yet) */
+  deferredAssets: string[];
 }
 
 /**
@@ -85,6 +87,8 @@ export interface WalkLinkGraphOptions {
   projectRoot: string;
   /** Whether to exclude navigation files (README.md, index.md, etc.) */
   excludeNavigationFiles?: boolean;
+  /** Paths declared in files config that may not exist at source time */
+  deferredPaths?: Set<string>;
 }
 
 // ============================================================================
@@ -134,6 +138,7 @@ interface WalkState {
   visitedResourceIds: Set<string>;
   bundledResourceMap: Map<string, ResourceMetadata>;
   bundledAssetSet: Set<string>;
+  deferredAssetSet: Set<string>;
   excludedReferences: LinkResolution[];
   maxBundledDepth: number;
   queue: Array<[ResourceMetadata, number]>;
@@ -241,8 +246,15 @@ function processLink(
   } else if (existsSync(targetPath)) {
     // Not in registry — non-markdown asset that exists on disk
     state.bundledAssetSet.add(toForwardSlash(targetPath));
+  } else {
+    // File doesn't exist and not in registry
+    // Check if it's a deferred path (declared build artifact)
+    const relativePath = toForwardSlash(safePath.relative(options.projectRoot, targetPath));
+    if (options.deferredPaths?.has(relativePath)) {
+      state.deferredAssetSet.add(toForwardSlash(targetPath));
+    }
+    // Otherwise silently skip (same as old collectLinks behavior)
   }
-  // If file doesn't exist and not in registry, silently skip (same as old collectLinks)
 }
 
 /**
@@ -300,7 +312,7 @@ export function walkLinkGraph(
 ): LinkGraphResult {
   const skillResource = registry.getResourceById(skillResourceId);
   if (!skillResource) {
-    return { bundledResources: [], bundledAssets: [], excludedReferences: [], maxBundledDepth: 0 };
+    return { bundledResources: [], bundledAssets: [], excludedReferences: [], maxBundledDepth: 0, deferredAssets: [] };
   }
 
   // Compile exclude patterns once
@@ -314,6 +326,7 @@ export function walkLinkGraph(
     visitedResourceIds: new Set<string>([skillResourceId]),
     bundledResourceMap: new Map<string, ResourceMetadata>(),
     bundledAssetSet: new Set<string>(),
+    deferredAssetSet: new Set<string>(),
     excludedReferences: [],
     maxBundledDepth: 0,
     queue: [[skillResource, 0]],
@@ -338,5 +351,6 @@ export function walkLinkGraph(
     bundledAssets: [...state.bundledAssetSet],
     excludedReferences: state.excludedReferences,
     maxBundledDepth: state.maxBundledDepth,
+    deferredAssets: [...state.deferredAssetSet],
   };
 }
