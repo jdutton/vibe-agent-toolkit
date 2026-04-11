@@ -267,4 +267,34 @@ describe('vat skills install — local directory source', () => {
       }),
     ).rejects.toThrow(/--name.*single-skill/);
   });
+
+  it('rejects --name with path traversal characters', async () => {
+    const skillSrc = createSkillDir(tempDir, 'traversal-skill', 'Traversal test.');
+    const projectDir = safePath.join(tempDir, 'project');
+    mkdirSyncReal(projectDir, { recursive: true });
+
+    await expect(
+      installCommand(skillSrc, {
+        target: 'claude',
+        scope: 'project',
+        cwd: projectDir,
+        name: '../../etc',
+      }),
+    ).rejects.toThrow(/path separators/);
+  });
+
+  it('rejects --name containing forward slash', async () => {
+    const skillSrc = createSkillDir(tempDir, 'slash-name-skill', 'Slash test.');
+    const projectDir = safePath.join(tempDir, 'project');
+    mkdirSyncReal(projectDir, { recursive: true });
+
+    await expect(
+      installCommand(skillSrc, {
+        target: 'claude',
+        scope: 'project',
+        cwd: projectDir,
+        name: 'foo/bar',
+      }),
+    ).rejects.toThrow(/path separators/);
+  });
 });

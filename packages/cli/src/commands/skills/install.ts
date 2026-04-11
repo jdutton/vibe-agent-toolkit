@@ -257,6 +257,12 @@ async function resolveSource(source: string): Promise<ResolvedSource> {
 }
 
 function applyNameOverride(discovered: DiscoveredSkill[], name: string): void {
+  // Prevent path traversal: reject names containing slashes, backslashes, or ..
+  if (name.includes('/') || name.includes('\\') || name.includes('..')) {
+    throw new InstallError(
+      `Invalid skill name "${name}". Name must not contain path separators or "..".`,
+    );
+  }
   if (discovered.length > 1) {
     throw new InstallError(
       `--name is only valid for single-skill sources; found ${discovered.length} skills.`,
@@ -280,8 +286,9 @@ export async function installCommand(
     const target = options.target as SkillTarget;
     const scope = options.scope as SkillScope;
 
-    // 1. Resolve source — dispatch by type (directory or ZIP).
-    const sourcePath = safePath.resolve(source);
+    // 1. Resolve source — dispatch by type (directory, ZIP, tgz, npm:).
+    // For display: use the raw source string for npm: prefixes, resolved path otherwise.
+    const displaySource = source.startsWith('npm:') ? source : safePath.resolve(source);
     const resolved = await resolveSource(source);
 
     try {
@@ -311,7 +318,7 @@ export async function installCommand(
 
       const duration = Date.now() - startTime;
       emitYamlSummary({
-        source: sourcePath,
+        source: displaySource,
         target,
         scope,
         skills: plans,
