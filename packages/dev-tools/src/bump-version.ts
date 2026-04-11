@@ -37,6 +37,29 @@ import semver from 'semver';
 import { PROJECT_ROOT, log, processWorkspacePackages, type PackageProcessResult } from './common.js';
 
 const PACKAGE_JSON = 'package.json';
+const CHANGELOG_PATH = safePath.join(PROJECT_ROOT, 'CHANGELOG.md');
+const UNRELEASED_HEADING = '## [Unreleased]';
+
+interface ChangelogUnreleasedSection {
+  content: string;
+  body: string;
+  unreleasedIndex: number;
+  afterHeading: number;
+  nextSectionOffset: number;
+}
+
+function parseChangelogUnreleased(): ChangelogUnreleasedSection {
+  const content = readFileSync(CHANGELOG_PATH, 'utf8');
+  const unreleasedIndex = content.indexOf(UNRELEASED_HEADING);
+  if (unreleasedIndex === -1) {
+    throw new Error('CHANGELOG.md is missing the [Unreleased] section');
+  }
+  const afterHeading = unreleasedIndex + UNRELEASED_HEADING.length;
+  const nextSectionMatch = /\n## \[/.exec(content.slice(afterHeading));
+  const nextSectionOffset = nextSectionMatch?.index ?? content.slice(afterHeading).length;
+  const body = content.slice(afterHeading, afterHeading + nextSectionOffset);
+  return { content, body, unreleasedIndex, afterHeading, nextSectionOffset };
+}
 
 // Parse command-line arguments
 const args = process.argv.slice(2);
@@ -140,6 +163,35 @@ if (['patch', 'minor', 'major'].includes(versionArg)) {
     log(`✗ Invalid version format: ${newVersion}`, 'red');
     log('  Expected format: X.Y.Z or X.Y.Z-prerelease', 'yellow');
     log('  Examples: 1.0.0, 2.0.0, 1.0.0-beta.1, patch, minor, major', 'yellow');
+    process.exit(1);
+  }
+}
+
+// Pre-flight: validate CHANGELOG before touching any files (prevents dirty state on failure)
+const isPrerelease = semver.prerelease(newVersion) !== null;
+if (!isPrerelease) {
+  try {
+    const { content, body } = parseChangelogUnreleased();
+
+    // Safety: refuse to stamp if this version already exists in CHANGELOG
+    const escapedVersion = newVersion.replaceAll('.', String.raw`\.`);
+    // eslint-disable-next-line security/detect-non-literal-regexp -- version is from CLI arg, already validated by semver
+    const existingPattern = new RegExp(String.raw`^## \[${escapedVersion}\]`, 'm');
+    if (existingPattern.test(content)) {
+      log(`✗ CHANGELOG.md already has an entry for [${newVersion}]. Refusing to stamp to avoid corruption.`, 'red');
+      console.log('  If you need to re-stamp, manually remove the existing entry first.');
+      process.exit(1);
+    }
+
+    if (!body.trim()) {
+      log('✗ CHANGELOG.md has no content under [Unreleased]. Add release notes before bumping to a stable version.', 'red');
+      process.exit(1);
+    }
+
+    log('✓ CHANGELOG.md pre-flight check passed', 'green');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log(`✗ Failed to validate CHANGELOG.md: ${message}`, 'red');
     process.exit(1);
   }
 }
@@ -267,12 +319,42 @@ try {
   log('  You may need to run "bun install" manually', 'yellow');
 }
 
+// Stamp CHANGELOG.md for stable releases (pre-flight already validated, just do the write)
+if (isPrerelease) {
+  log('⊘ CHANGELOG stamp skipped (prerelease version)', 'yellow');
+} else {
+  try {
+    const { content, body, afterHeading, nextSectionOffset } = parseChangelogUnreleased();
+    const today = new Date().toISOString().split('T')[0] ?? '';
+    const versionHeading = `## [${newVersion}] - ${today}`;
+
+    const before = content.slice(0, afterHeading);
+    const after = content.slice(afterHeading + nextSectionOffset);
+    const updatedChangelog = `${before}\n\n${versionHeading}\n${body.replace(/^\n/, '')}${after}`;
+
+    writeFileSync(CHANGELOG_PATH, updatedChangelog, 'utf8');
+    log(`✓ CHANGELOG.md stamped for v${newVersion}`, 'green');
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    log(`✗ Failed to stamp CHANGELOG.md: ${message}`, 'red');
+    process.exit(1);
+  }
+}
+
 console.log('');
 console.log('Next steps:');
 console.log(`  1. Review changes: git diff`);
-console.log(`  2. Commit: git add -A && git commit -m "chore: Release v${newVersion}"`);
-console.log(`  3. Tag: git tag v${newVersion}`);
-console.log(`  4. Push: git push origin main && git push origin v${newVersion}`);
+console.log(`  2. Commit: git add -A && git commit -m "chore: bump version to v${newVersion}"`);
+if (isPrerelease) {
+  console.log(`  3. Push: git push origin main`);
+  console.log(`  (RC versions are not tagged — content stays under [Unreleased] in CHANGELOG)`);
+} else {
+  console.log(`  3. Merge to main, then run: bun run pre-release`);
+  console.log(`  4. Only after pre-release passes: git tag v${newVersion}`);
+  console.log(`  5. Push: git push origin main v${newVersion}`);
+  console.log('');
+  log('⚠ Do NOT tag until bun run pre-release passes. Tags trigger CI publish.', 'yellow');
+}
 console.log('');
 
 process.exit(0);
