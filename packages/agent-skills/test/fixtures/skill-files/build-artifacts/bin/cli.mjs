@@ -1,3 +1,2 @@
-/* eslint-disable */
-// CLI tool
-console.log("CLI tool");
+#!/usr/bin/env node
+export default function main() { return 'CLI tool'; }
