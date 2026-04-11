@@ -559,6 +559,81 @@ describe('validateSkillForPackaging - Metadata reporting', () => {
 	});
 });
 
+// Files config validation constants
+const DUPLICATE_FILES_DEST_CODE = 'DUPLICATE_FILES_DEST';
+const FILES_DEST_A = 'output/a.md';
+const FILES_DEST_B = 'output/b.md';
+
+/**
+ * Create a minimal valid skill in the given temp dir.
+ */
+function createMinimalSkill(tempDir: string): string {
+	const content = createSkillContent(
+		{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+		SKILL_HEADER_NO_TRAILING,
+	);
+	const { skillPath } = createTransitiveSkillStructure(tempDir, {}, content);
+	return skillPath;
+}
+
+describe('validateSkillForPackaging - Files config validation', () => {
+	it('should detect duplicate dest in files config', async () => {
+		const skillPath = createMinimalSkill(getTempDir());
+
+		const result = await validateSkillForPackaging(skillPath, {
+			files: [
+				{ source: 'a.md', dest: FILES_DEST_A },
+				{ source: 'b.md', dest: FILES_DEST_A },
+			],
+		});
+
+		expect(result.status).toBe('error');
+		const dupError = result.activeErrors.find(e => e.code === DUPLICATE_FILES_DEST_CODE);
+		expect(dupError).toBeDefined();
+		expect(dupError?.message).toContain(FILES_DEST_A);
+	});
+
+	it('should pass validation when files config dests are unique', async () => {
+		const skillPath = createMinimalSkill(getTempDir());
+
+		const result = await validateSkillForPackaging(skillPath, {
+			files: [
+				{ source: 'a.md', dest: FILES_DEST_A },
+				{ source: 'b.md', dest: FILES_DEST_B },
+			],
+		});
+
+		const dupError = result.activeErrors.find(e => e.code === DUPLICATE_FILES_DEST_CODE);
+		expect(dupError).toBeUndefined();
+	});
+
+	it('should pass validation when files config is empty', async () => {
+		const skillPath = createMinimalSkill(getTempDir());
+
+		const result = await validateSkillForPackaging(skillPath, { files: [] });
+
+		const dupError = result.activeErrors.find(e => e.code === DUPLICATE_FILES_DEST_CODE);
+		expect(dupError).toBeUndefined();
+	});
+
+	it('should detect multiple duplicate dests', async () => {
+		const skillPath = createMinimalSkill(getTempDir());
+
+		const result = await validateSkillForPackaging(skillPath, {
+			files: [
+				{ source: 'a.md', dest: FILES_DEST_A },
+				{ source: 'b.md', dest: FILES_DEST_A },
+				{ source: 'c.md', dest: FILES_DEST_B },
+				{ source: 'd.md', dest: FILES_DEST_B },
+			],
+		});
+
+		expect(result.status).toBe('error');
+		const dupErrors = result.activeErrors.filter(e => e.code === DUPLICATE_FILES_DEST_CODE);
+		expect(dupErrors).toHaveLength(2);
+	});
+});
+
 describe('validateSkillForPackaging - Link collection integration', () => {
 	it('should limit bundled files to depth 1 when linkFollowDepth is 1', async () => {
 		const { skillPath } = createThreeLevelChain(getTempDir());

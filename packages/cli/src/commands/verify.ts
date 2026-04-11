@@ -7,10 +7,15 @@
  *   3. vat claude marketplace validate  (strict marketplace validation, when configured)
  */
 
+import { existsSync } from 'node:fs';
+
+import { mergeFilesConfig } from '@vibe-agent-toolkit/agent-skills';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../utils/command-error.js';
 import { loadConfig } from '../utils/config-loader.js';
+import { type createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 
 import { createPhaseContext, runPhase, type Phase, type PhaseResult } from './phase-utils.js';
@@ -59,6 +64,71 @@ Example:
   return command;
 }
 
+/** Result of checking files config dests for a single skill */
+interface FilesDestCheckResult {
+  skillName: string;
+  missing: string[];
+}
+
+/**
+ * Sanitize skill names with colon namespaces for filesystem paths.
+ * Mirrors the logic in build.ts.
+ */
+function skillNameToFsPath(name: string): string {
+  return name.replaceAll(':', '__');
+}
+
+/**
+ * Check that all dest paths from the merged files config exist in the built output.
+ * Returns one result per skill that has files config entries.
+ */
+function checkFilesConfigDests(cwd: string): FilesDestCheckResult[] {
+  try {
+    const config = loadConfig(cwd);
+    if (!config?.skills?.config && !config?.skills?.defaults?.files) {
+      return [];
+    }
+
+    const skillsConfig = config.skills;
+    const results: FilesDestCheckResult[] = [];
+
+    // Collect all skill names from config
+    const skillNames = Object.keys(skillsConfig.config ?? {});
+
+    // Also check defaults-only (no per-skill config) — but we need skill names for output paths.
+    // If there's no per-skill config we can't know which skills to check without discovery,
+    // so we only check skills that are explicitly listed in config.
+    for (const skillName of skillNames) {
+      const perSkill = skillsConfig.config?.[skillName];
+      const defaults = skillsConfig.defaults;
+
+      const mergedFiles = mergeFilesConfig(defaults?.files, perSkill?.files);
+      if (mergedFiles.length === 0) {
+        continue;
+      }
+
+      const outputDir = safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skillName));
+      const missing: string[] = [];
+
+      for (const entry of mergedFiles) {
+        const destPath = safePath.resolve(outputDir, entry.dest);
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- destPath resolved from config
+        if (!existsSync(destPath)) {
+          missing.push(entry.dest);
+        }
+      }
+
+      if (missing.length > 0) {
+        results.push({ skillName, missing });
+      }
+    }
+
+    return results;
+  } catch {
+    return [];
+  }
+}
+
 /**
  * Check whether the current project has claude.marketplaces configured.
  * Returns the marketplace names if present, empty array otherwise.
@@ -72,6 +142,22 @@ function getClaudeMarketplaceNames(): string[] {
     return [];
   } catch {
     return [];
+  }
+}
+
+/**
+ * Log files-config-dests errors to stderr.
+ */
+function reportFilesDestErrors(
+  results: FilesDestCheckResult[],
+  logger: ReturnType<typeof createLogger>
+): void {
+  logger.error('\n▶ Phase: files-config-dests');
+  for (const { skillName, missing } of results) {
+    logger.error(`  Skill '${skillName}': missing dest file(s) in dist/skills/${skillNameToFsPath(skillName)}/:`);
+    for (const dest of missing) {
+      logger.error(`    - ${dest}`);
+    }
   }
 }
 
@@ -115,7 +201,18 @@ async function verifyTopLevelCommand(options: VerifyCommandOptions): Promise<voi
       phaseResults.push(runPhase(binPath, phase));
     }
 
-    const hasErrors = phaseResults.some((r) => r.status === 'failed');
+    let hasErrors = phaseResults.some((r) => r.status === 'failed');
+
+    // Post-build files config check: verify all dest paths exist in built output
+    if (!options.only || options.only === 'skills') {
+      const filesDestResults = checkFilesConfigDests(process.cwd());
+      if (filesDestResults.length > 0) {
+        hasErrors = true;
+        reportFilesDestErrors(filesDestResults, logger);
+        phaseResults.push({ name: 'files-config-dests', status: 'failed' });
+      }
+    }
+
     const duration = Date.now() - startTime;
 
     writeYamlOutput({

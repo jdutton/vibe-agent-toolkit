@@ -79,6 +79,7 @@ export type {
   CollectionConfig,
   ResourcesConfig,
   ProjectConfig,
+  SkillFileEntry,
   SkillPackagingConfig,
   SkillsConfig,
   ClaudeConfig,

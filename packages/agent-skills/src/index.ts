@@ -27,6 +27,19 @@ export {
 } from './walk-link-graph.js';
 
 export {
+  getTargetSubdir,
+  CONTENT_TYPE_ROUTING_MAP,
+  type TargetSubdirCategory,
+} from './content-type-routing.js';
+
+export {
+  mergeFilesConfig,
+  matchLinkToFiles,
+  computeDeferredPaths,
+  type FilesMatchResult,
+} from './files-config.js';
+
+export {
   AgentSkillFrontmatterJsonSchema,
   AgentSkillFrontmatterSchema,
   VATAgentSkillFrontmatterSchema,

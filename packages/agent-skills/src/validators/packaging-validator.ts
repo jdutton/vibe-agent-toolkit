@@ -53,6 +53,7 @@ export interface SkillPackagingConfig {
     rules?: Array<{ patterns: string[]; template?: string }>;
     defaultTemplate?: string;
   };
+  files?: Array<{ source: string; dest: string }>;
   ignoreValidationErrors?: Record<string, string | { reason: string; expires?: string }>;
 }
 
@@ -105,6 +106,32 @@ export interface PackagingValidationResult {
 }
 
 /**
+ * Validate files config entries for duplicate dest values.
+ */
+function validateFilesConfig(
+  files: Array<{ source: string; dest: string }> | undefined,
+): ValidationIssue[] {
+  if (!files?.length) return [];
+
+  const issues: ValidationIssue[] = [];
+  const destSet = new Set<string>();
+
+  for (const entry of files) {
+    const normalized = toForwardSlash(entry.dest);
+    if (destSet.has(normalized)) {
+      issues.push({
+        severity: 'error',
+        code: 'DUPLICATE_FILES_DEST',
+        message: `Duplicate dest '${entry.dest}' in files config. Each dest must be unique.`,
+      });
+    }
+    destSet.add(normalized);
+  }
+
+  return issues;
+}
+
+/**
  * Validate a skill for packaging
  *
  * Performs comprehensive validation including:
@@ -136,6 +163,9 @@ export async function validateSkillForPackaging(
       ...validateFrontmatterRules(parseResult.frontmatter),
     );
   }
+
+  // Validate files config
+  errors.push(...validateFilesConfig(packagingConfig?.files));
 
   // Read packaging options for depth/exclude configuration
   const linkFollowDepth = packagingConfig?.linkFollowDepth ?? 2;

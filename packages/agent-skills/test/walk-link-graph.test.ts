@@ -393,4 +393,55 @@ describe('walkLinkGraph', () => {
       expect(result.excludedReferences).toHaveLength(0);
     });
   });
+
+  // ============================================================================
+  // Deferred files support
+  // ============================================================================
+
+  describe('deferred files support', () => {
+    const DEFERRED_CLI_PATH = 'scripts/cli.mjs';
+
+    it('should classify missing file as deferred when path matches deferred set', () => {
+      // Skill links to scripts/cli.mjs which doesn't exist on disk
+      const skill = createMockResource(SKILL_ID, SKILL_PATH, [
+        createLocalLink('CLI', `./${DEFERRED_CLI_PATH}`),
+      ]);
+      const registry = createMockRegistry([skill]);
+
+      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions({
+        deferredPaths: new Set([DEFERRED_CLI_PATH]),
+      }));
+
+      expect(result.deferredAssets).toHaveLength(1);
+      expect(result.deferredAssets[0]).toContain(DEFERRED_CLI_PATH);
+      // Should not be in excluded references
+      expect(result.excludedReferences).toHaveLength(0);
+    });
+
+    it('should not classify genuinely missing files as deferred', () => {
+      const skill = createMockResource(SKILL_ID, SKILL_PATH, [
+        createLocalLink('missing', './nowhere/gone.txt'),
+      ]);
+      const registry = createMockRegistry([skill]);
+
+      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions({
+        deferredPaths: new Set([DEFERRED_CLI_PATH]), // different path
+      }));
+
+      // Missing file not in deferred set — silently skipped
+      expect(result.deferredAssets).toHaveLength(0);
+    });
+
+    it('should return empty deferredAssets when no deferredPaths provided', () => {
+      const skill = createMockResource(SKILL_ID, SKILL_PATH, [
+        createLocalLink('guide', GUIDE_HREF, GUIDE_ID),
+      ]);
+      const guide = createMockResource(GUIDE_ID, GUIDE_PATH);
+      const registry = createMockRegistry([skill, guide]);
+
+      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions());
+
+      expect(result.deferredAssets).toEqual([]);
+    });
+  });
 });
