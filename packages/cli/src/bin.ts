@@ -14,7 +14,6 @@ import { createAuditCommand } from './commands/audit.js';
 import { createBuildTopLevelCommand } from './commands/build.js';
 import { createClaudeCommand } from './commands/claude/index.js';
 import { doctorCommand } from './commands/doctor.js';
-import { createInstallCommand } from './commands/install.js';
 import { createMCPCommand } from './commands/mcp/index.js';
 import { createRagCommand, showRagVerboseHelp } from './commands/rag/index.js';
 import { createResourcesCommand, showResourcesVerboseHelp } from './commands/resources/index.js';
@@ -127,7 +126,6 @@ if (process.argv.includes('agent') && process.argv.includes('--verbose')) {
 
 // Add command groups (audit is common, should be first)
 program.addCommand(createAuditCommand());
-program.addCommand(createInstallCommand());
 program.addCommand(createResourcesCommand());
 program.addCommand(createRagCommand());
 program.addCommand(createAgentCommand());
