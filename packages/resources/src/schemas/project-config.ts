@@ -107,6 +107,20 @@ export const ExcludeReferencesFromBundleSchema = z.object({
 });
 
 /**
+ * A file entry mapping a source path to a destination path in the skill output.
+ *
+ * Used for build artifacts, unlinked files, and routing overrides.
+ * - source: path relative to project root (where vibe-agent-toolkit.config.yaml lives)
+ * - dest: path relative to the skill's output directory (sibling to SKILL.md)
+ */
+export const SkillFileEntrySchema = z.object({
+  source: z.string().min(1).describe('Source path relative to project root'),
+  dest: z.string().min(1).describe('Destination path relative to skill output directory'),
+});
+
+export type SkillFileEntry = z.infer<typeof SkillFileEntrySchema>;
+
+/**
  * Skill packaging configuration.
  *
  * Controls how a skill is bundled: link-follow depth, resource naming,
@@ -119,6 +133,7 @@ export const SkillPackagingConfigSchema = z.object({
   excludeNavigationFiles: z.boolean().optional(),
   excludeReferencesFromBundle: ExcludeReferencesFromBundleSchema.optional(),
   ignoreValidationErrors: z.record(z.string(), ValidationOverrideSchema).optional(),
+  files: z.array(SkillFileEntrySchema).optional().describe('Explicit source→dest file mappings for build artifacts, unlinked files, or routing overrides'),
 }).describe('Skill packaging configuration');
 
 export type SkillPackagingConfig = z.infer<typeof SkillPackagingConfigSchema>;

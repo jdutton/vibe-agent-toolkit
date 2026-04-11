@@ -23,6 +23,7 @@ const { getTempDir } = setupTempDir('skill-packager-unit-');
 const UNIT_SKILL_NAME = 'unit-test-skill';
 const DIRECTORY_FORMAT = 'directory' as const;
 const DETAILS_MD = 'details.md';
+const CONFIG_JSON = 'config.json';
 const PRESERVE_PATH = 'preserve-path' as const;
 
 // ============================================================================
@@ -523,11 +524,11 @@ describe('packageSkill - binary file copy', () => {
     const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, 'See [logo](./logo.png).');
     const result = await packWithOutput(sp);
 
-    // Binary file should be copied to resources/
-    expect(existsSync(safePath.join(result.outputPath, 'resources', 'logo.png'))).toBe(true);
+    // Binary file should be copied to assets/ (content-type routing for .png)
+    expect(existsSync(safePath.join(result.outputPath, 'assets', 'logo.png'))).toBe(true);
 
     // Verify the binary content was preserved (not mangled by text processing)
-    const copiedContent = await readFile(safePath.join(result.outputPath, 'resources', 'logo.png'));
+    const copiedContent = await readFile(safePath.join(result.outputPath, 'assets', 'logo.png'));
     expect(copiedContent).toEqual(pngContent);
   });
 
@@ -539,8 +540,8 @@ describe('packageSkill - binary file copy', () => {
     const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, 'See [data](./data.json).');
     const result = await packWithOutput(sp);
 
-    expect(existsSync(safePath.join(result.outputPath, 'resources', 'data.json'))).toBe(true);
-    const copiedJson = await readFile(safePath.join(result.outputPath, 'resources', 'data.json'), 'utf-8');
+    expect(existsSync(safePath.join(result.outputPath, 'templates', 'data.json'))).toBe(true);
+    const copiedJson = await readFile(safePath.join(result.outputPath, 'templates', 'data.json'), 'utf-8');
     expect(copiedJson).toBe(jsonContent);
   });
 });
@@ -755,5 +756,150 @@ describe('packageSkill - nested SKILL.md integrity check', () => {
     // Should be reported as excluded
     expect(result.excludedReferences).toBeDefined();
     expect(result.excludedReferences?.some(r => r.includes('SKILL.md'))).toBe(true);
+  });
+});
+
+// ============================================================================
+// Content-type routing in packaging
+// ============================================================================
+
+describe('content-type routing in packaging', () => {
+  it('should route .mjs assets to scripts/ subdirectory', async () => {
+    const dir = getTempDir();
+    const scriptPath = safePath.join(dir, 'helper.mjs');
+    writeFileSync(scriptPath, '// helper script');
+    const skillPath = await writeSkillMd(
+      dir,
+      UNIT_SKILL_NAME,
+      '# My Skill\n\nRun the [helper script](helper.mjs).',
+    );
+    const result = await packWithOutput(skillPath);
+    const outputFiles = await readdir(safePath.join(result.outputPath, 'scripts'));
+    expect(outputFiles).toContain('helper.mjs');
+  });
+
+  it('should route .json assets to templates/ subdirectory', async () => {
+    const dir = getTempDir();
+    const configPath = safePath.join(dir, CONFIG_JSON);
+    writeFileSync(configPath, '{"key": "value"}');
+    const skillPath = await writeSkillMd(
+      dir,
+      UNIT_SKILL_NAME,
+      '# My Skill\n\nSee [config](config.json).',
+    );
+    const result = await packWithOutput(skillPath);
+    const outputFiles = await readdir(safePath.join(result.outputPath, 'templates'));
+    expect(outputFiles).toContain(CONFIG_JSON);
+  });
+
+  it('should route .png assets to assets/ subdirectory', async () => {
+    const dir = getTempDir();
+    const imgPath = safePath.join(dir, 'logo.png');
+    writeFileSync(imgPath, 'fake-png-data');
+    const skillPath = await writeSkillMd(
+      dir,
+      UNIT_SKILL_NAME,
+      '# My Skill\n\nSee [logo](logo.png).',
+    );
+    const result = await packWithOutput(skillPath);
+    const outputFiles = await readdir(safePath.join(result.outputPath, 'assets'));
+    expect(outputFiles).toContain('logo.png');
+  });
+
+  it('should keep .md resources in resources/ subdirectory', async () => {
+    const dir = getTempDir();
+    const guidePath = safePath.join(dir, 'guide.md');
+    writeFileSync(guidePath, '# Guide\n\nSome content.');
+    const skillPath = await writeSkillMd(
+      dir,
+      UNIT_SKILL_NAME,
+      '# My Skill\n\nSee the [guide](guide.md).',
+    );
+    const result = await packWithOutput(skillPath);
+    const outputFiles = await readdir(safePath.join(result.outputPath, 'resources'));
+    expect(outputFiles).toContain('guide.md');
+  });
+
+  it('should route unknown extensions to resources/', async () => {
+    const dir = getTempDir();
+    const csvPath = safePath.join(dir, 'data.csv');
+    writeFileSync(csvPath, 'a,b,c\n1,2,3');
+    const skillPath = await writeSkillMd(
+      dir,
+      UNIT_SKILL_NAME,
+      '# My Skill\n\nSee [data](data.csv).',
+    );
+    const result = await packWithOutput(skillPath);
+    const outputFiles = await readdir(safePath.join(result.outputPath, 'resources'));
+    expect(outputFiles).toContain('data.csv');
+  });
+
+  it('should place script files in scripts/ not resources/', async () => {
+    const dir = getTempDir();
+    const scriptPath = safePath.join(dir, 'tool.mjs');
+    writeFileSync(scriptPath, '// tool');
+    const skillPath = await writeSkillMd(
+      dir,
+      UNIT_SKILL_NAME,
+      '# My Skill\n\nRun the [tool](tool.mjs).',
+    );
+    const result = await packWithOutput(skillPath);
+    // The file should be in scripts/, not resources/
+    const scriptsFiles = await readdir(safePath.join(result.outputPath, 'scripts'));
+    expect(scriptsFiles).toContain('tool.mjs');
+    expect(existsSync(safePath.join(result.outputPath, 'resources', 'tool.mjs'))).toBe(false);
+  });
+});
+
+// ============================================================================
+// Files config in packaging
+// ============================================================================
+
+describe('files config in packaging', () => {
+  it('should copy files entry source to dest in output', async () => {
+    const dir = getTempDir();
+    // Simulate build step: create artifact in dist/ (matches real-world usage)
+    const artifactDir = safePath.join(dir, 'dist', 'bin');
+    await mkdir(artifactDir, { recursive: true });
+    writeFileSync(safePath.join(artifactDir, 'cli.mjs'), '#!/usr/bin/env node\nconsole.log("cli");');
+    const skillPath = await writeSkillMd(
+      dir,
+      UNIT_SKILL_NAME,
+      '# My Skill\n\nRun the [CLI](scripts/cli.mjs).',
+    );
+    const result = await packWithOutput(skillPath, {
+      files: [{ source: 'dist/bin/cli.mjs', dest: 'scripts/cli.mjs' }],
+    });
+    expect(existsSync(safePath.join(result.outputPath, 'scripts', 'cli.mjs'))).toBe(true);
+  });
+
+  it('should throw when files source does not exist', async () => {
+    const dir = getTempDir();
+    const skillPath = await writeSkillMd(
+      dir,
+      UNIT_SKILL_NAME,
+      '# My Skill\n\nContent.',
+    );
+    await expect(
+      packWithOutput(skillPath, {
+        files: [{ source: 'nonexistent/tool.mjs', dest: 'scripts/tool.mjs' }],
+      })
+    ).rejects.toThrow(/does not exist/i);
+  });
+
+  it('should let files entry override auto-discovered routing', async () => {
+    const dir = getTempDir();
+    // Create a .json file that would normally go to templates/
+    writeFileSync(safePath.join(dir, CONFIG_JSON), '{"key":"value"}');
+    const skillPath = await writeSkillMd(
+      dir,
+      UNIT_SKILL_NAME,
+      '# My Skill\n\nSee [config](config.json).',
+    );
+    // Override: put it in scripts/ instead of templates/
+    const result = await packWithOutput(skillPath, {
+      files: [{ source: CONFIG_JSON, dest: 'scripts/config.json' }],
+    });
+    expect(existsSync(safePath.join(result.outputPath, 'scripts', CONFIG_JSON))).toBe(true);
   });
 });

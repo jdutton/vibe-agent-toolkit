@@ -13,6 +13,7 @@ import { dirname } from 'node:path';
 
 
 import {
+  mergeFilesConfig,
   packageSkills,
   validateSkillForPackaging,
   type PackageSkillResult,
@@ -181,6 +182,15 @@ function mergePackagingConfig(
       (result as Record<string, unknown>)[key] = value;
     }
   }
+
+  // Special merge for files: additive with per-skill dest override
+  if (defaults?.files !== undefined || perSkill?.files !== undefined) {
+    const mergedFiles = mergeFilesConfig(defaults?.files, perSkill?.files);
+    if (mergedFiles.length > 0) {
+      (result as Record<string, unknown>)['files'] = mergedFiles;
+    }
+  }
+
   return result;
 }
 
