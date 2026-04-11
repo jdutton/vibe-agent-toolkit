@@ -8,11 +8,17 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { packageSkill, type PackageSkillOptions } from '../../src/skill-packager.js';
 
 const FIXTURE_DIR = safePath.join(import.meta.dirname, '..', 'fixtures', 'skill-files');
-const CLI_FILES_ENTRY = [{ source: 'build-output/bin/cli.mjs', dest: 'scripts/cli.mjs' }];
+
+// Realistic files config: source uses dist/ (gitignored in real projects, simulated by test setup)
+const CLI_FILES_ENTRY = [{ source: 'dist/bin/cli.mjs', dest: 'scripts/cli.mjs' }];
 
 /**
- * Shared test setup: copies post-build fixture to a temp dir with a
- * package.json so findProjectRoot() anchors there.
+ * Shared test setup: copies post-build fixture to a temp dir, then
+ * simulates a project build step by copying the build artifact into
+ * dist/bin/ (which would be gitignored in a real project).
+ *
+ * Also writes a package.json with "workspaces" so findProjectRoot()
+ * anchors to tempDir instead of walking up to the monorepo root.
  */
 function setupSkillFilesTestDir(): { getTempDir: () => string } {
   let tempDir = '';
@@ -21,6 +27,15 @@ function setupSkillFilesTestDir(): { getTempDir: () => string } {
     tempDir = safePath.join(normalizedTmpdir(), `skill-files-integration-${Date.now()}`);
     await mkdir(tempDir, { recursive: true });
     cpSync(safePath.join(FIXTURE_DIR, 'post-build'), tempDir, { recursive: true });
+
+    // Simulate build step: copy build artifact into dist/ (gitignored in real projects)
+    const distBin = safePath.join(tempDir, 'dist', 'bin');
+    await mkdir(distBin, { recursive: true });
+    cpSync(
+      safePath.join(FIXTURE_DIR, 'build-artifacts', 'bin', 'cli.mjs'),
+      safePath.join(distBin, 'cli.mjs'),
+    );
+
     await writeFile(
       safePath.join(tempDir, 'package.json'),
       JSON.stringify({ name: 'skill-files-test', workspaces: ['skills/*'] }),
