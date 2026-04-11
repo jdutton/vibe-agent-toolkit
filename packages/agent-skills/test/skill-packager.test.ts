@@ -858,8 +858,8 @@ describe('content-type routing in packaging', () => {
 describe('files config in packaging', () => {
   it('should copy files entry source to dest in output', async () => {
     const dir = getTempDir();
-    // Create a build artifact
-    const artifactDir = safePath.join(dir, 'build-out', 'bin');
+    // Simulate build step: create artifact in dist/ (matches real-world usage)
+    const artifactDir = safePath.join(dir, 'dist', 'bin');
     await mkdir(artifactDir, { recursive: true });
     writeFileSync(safePath.join(artifactDir, 'cli.mjs'), '#!/usr/bin/env node\nconsole.log("cli");');
     const skillPath = await writeSkillMd(
@@ -868,7 +868,7 @@ describe('files config in packaging', () => {
       '# My Skill\n\nRun the [CLI](scripts/cli.mjs).',
     );
     const result = await packWithOutput(skillPath, {
-      files: [{ source: 'build-out/bin/cli.mjs', dest: 'scripts/cli.mjs' }],
+      files: [{ source: 'dist/bin/cli.mjs', dest: 'scripts/cli.mjs' }],
     });
     expect(existsSync(safePath.join(result.outputPath, 'scripts', 'cli.mjs'))).toBe(true);
   });
