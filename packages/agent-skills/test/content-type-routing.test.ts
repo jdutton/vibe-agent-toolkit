@@ -1,109 +1,67 @@
 import { describe, expect, it } from 'vitest';
 
-import { getTargetSubdir, CONTENT_TYPE_ROUTING_MAP } from '../src/content-type-routing.js';
+import { getTargetSubdir, CONTENT_TYPE_ROUTING_MAP, type TargetSubdirCategory } from '../src/content-type-routing.js';
 
-describe('getTargetSubdir', () => {
+/** [filePath, expectedSubdir] */
+const ROUTING_CASES: Array<[string, TargetSubdirCategory]> = [
   // Scripts
-  it('should route .mjs to scripts/', () => {
-    expect(getTargetSubdir('dist/bin/cli.mjs')).toBe('scripts');
-  });
-
-  it('should route .cjs to scripts/', () => {
-    expect(getTargetSubdir('lib/helper.cjs')).toBe('scripts');
-  });
-
-  it('should route .js to scripts/', () => {
-    expect(getTargetSubdir('tools/run.js')).toBe('scripts');
-  });
-
-  it('should route .ts to scripts/', () => {
-    expect(getTargetSubdir('src/main.ts')).toBe('scripts');
-  });
-
-  it('should route .sh to scripts/', () => {
-    expect(getTargetSubdir('bin/setup.sh')).toBe('scripts');
-  });
-
-  it('should route .bash to scripts/', () => {
-    expect(getTargetSubdir('bin/deploy.bash')).toBe('scripts');
-  });
-
-  it('should route .zsh to scripts/', () => {
-    expect(getTargetSubdir('bin/init.zsh')).toBe('scripts');
-  });
-
-  it('should route .ps1 to scripts/', () => {
-    expect(getTargetSubdir('scripts/setup.ps1')).toBe('scripts');
-  });
-
-  it('should route .py to scripts/', () => {
-    expect(getTargetSubdir('tools/migrate.py')).toBe('scripts');
-  });
-
-  it('should route .rb to scripts/', () => {
-    expect(getTargetSubdir('tools/generate.rb')).toBe('scripts');
-  });
-
-  it('should route .pl to scripts/', () => {
-    expect(getTargetSubdir('tools/parse.pl')).toBe('scripts');
-  });
+  ['dist/bin/cli.mjs', 'scripts'],
+  ['lib/helper.cjs', 'scripts'],
+  ['tools/run.js', 'scripts'],
+  ['src/main.ts', 'scripts'],
+  ['bin/setup.sh', 'scripts'],
+  ['bin/deploy.bash', 'scripts'],
+  ['bin/init.zsh', 'scripts'],
+  ['scripts/setup.ps1', 'scripts'],
+  ['tools/migrate.py', 'scripts'],
+  ['tools/generate.rb', 'scripts'],
+  ['tools/parse.pl', 'scripts'],
 
   // Templates
-  it('should route .json to templates/', () => {
-    expect(getTargetSubdir('config/settings.json')).toBe('templates');
-  });
+  ['config/settings.json', 'templates'],
+  ['config/app.yaml', 'templates'],
+  ['config/docker-compose.yml', 'templates'],
+  ['config/pyproject.toml', 'templates'],
+  ['config/pom.xml', 'templates'],
+  ['config/settings.ini', 'templates'],
+  ['config/setup.cfg', 'templates'],
+  ['config/nginx.conf', 'templates'],
+  ['views/page.hbs', 'templates'],
+  ['views/partial.mustache', 'templates'],
+  ['views/index.ejs', 'templates'],
+  ['views/layout.njk', 'templates'],
+  ['views/page.tmpl', 'templates'],
+  ['views/header.tpl', 'templates'],
 
-  it('should route .yaml to templates/', () => {
-    expect(getTargetSubdir('config/app.yaml')).toBe('templates');
-  });
+  // Assets
+  ['images/logo.png', 'assets'],
+  ['images/photo.jpg', 'assets'],
+  ['icons/arrow.svg', 'assets'],
+  ['images/spinner.gif', 'assets'],
+  ['images/hero.webp', 'assets'],
+  ['favicon.ico', 'assets'],
+  ['images/old.bmp', 'assets'],
+  ['images/scan.tiff', 'assets'],
+  ['images/modern.avif', 'assets'],
+  ['media/clip.webm', 'assets'],
+  ['docs/manual.pdf', 'assets'],
+  ['fonts/inter.woff', 'assets'],
+  ['fonts/inter.woff2', 'assets'],
+  ['fonts/mono.ttf', 'assets'],
+  ['fonts/legacy.eot', 'assets'],
+  ['styles/main.css', 'assets'],
 
-  it('should route .yml to templates/', () => {
-    expect(getTargetSubdir('config/docker-compose.yml')).toBe('templates');
-  });
+  // Markdown (stays in resources)
+  ['docs/guide.md', 'resources'],
+];
 
-  it('should route .toml to templates/', () => {
-    expect(getTargetSubdir('config/pyproject.toml')).toBe('templates');
-  });
-
-  it('should route .xml to templates/', () => {
-    expect(getTargetSubdir('config/pom.xml')).toBe('templates');
-  });
-
-  it('should route .ini to templates/', () => {
-    expect(getTargetSubdir('config/settings.ini')).toBe('templates');
-  });
-
-  it('should route .cfg to templates/', () => {
-    expect(getTargetSubdir('config/setup.cfg')).toBe('templates');
-  });
-
-  it('should route .conf to templates/', () => {
-    expect(getTargetSubdir('config/nginx.conf')).toBe('templates');
-  });
-
-  it('should route .hbs to templates/', () => {
-    expect(getTargetSubdir('views/page.hbs')).toBe('templates');
-  });
-
-  it('should route .mustache to templates/', () => {
-    expect(getTargetSubdir('views/partial.mustache')).toBe('templates');
-  });
-
-  it('should route .ejs to templates/', () => {
-    expect(getTargetSubdir('views/index.ejs')).toBe('templates');
-  });
-
-  it('should route .njk to templates/', () => {
-    expect(getTargetSubdir('views/layout.njk')).toBe('templates');
-  });
-
-  it('should route .tmpl to templates/', () => {
-    expect(getTargetSubdir('views/page.tmpl')).toBe('templates');
-  });
-
-  it('should route .tpl to templates/', () => {
-    expect(getTargetSubdir('views/header.tpl')).toBe('templates');
-  });
+describe('getTargetSubdir', () => {
+  it.each(ROUTING_CASES)(
+    'should route %s to %s/',
+    (filePath, expectedSubdir) => {
+      expect(getTargetSubdir(filePath)).toBe(expectedSubdir);
+    },
+  );
 
   it('should route *.example to templates/', () => {
     expect(getTargetSubdir('config/.env.example')).toBe('templates');
@@ -111,84 +69,12 @@ describe('getTargetSubdir', () => {
     expect(getTargetSubdir('config/database.yml.example')).toBe('templates');
   });
 
-  // Assets
-  it('should route .png to assets/', () => {
-    expect(getTargetSubdir('images/logo.png')).toBe('assets');
-  });
-
-  it('should route .jpg to assets/', () => {
-    expect(getTargetSubdir('images/photo.jpg')).toBe('assets');
-  });
-
-  it('should route .svg to assets/', () => {
-    expect(getTargetSubdir('icons/arrow.svg')).toBe('assets');
-  });
-
-  it('should route .gif to assets/', () => {
-    expect(getTargetSubdir('images/spinner.gif')).toBe('assets');
-  });
-
-  it('should route .webp to assets/', () => {
-    expect(getTargetSubdir('images/hero.webp')).toBe('assets');
-  });
-
-  it('should route .ico to assets/', () => {
-    expect(getTargetSubdir('favicon.ico')).toBe('assets');
-  });
-
-  it('should route .bmp to assets/', () => {
-    expect(getTargetSubdir('images/old.bmp')).toBe('assets');
-  });
-
-  it('should route .tiff to assets/', () => {
-    expect(getTargetSubdir('images/scan.tiff')).toBe('assets');
-  });
-
-  it('should route .avif to assets/', () => {
-    expect(getTargetSubdir('images/modern.avif')).toBe('assets');
-  });
-
-  it('should route .webm to assets/', () => {
-    expect(getTargetSubdir('media/clip.webm')).toBe('assets');
-  });
-
-  it('should route .pdf to assets/', () => {
-    expect(getTargetSubdir('docs/manual.pdf')).toBe('assets');
-  });
-
-  it('should route .woff to assets/', () => {
-    expect(getTargetSubdir('fonts/inter.woff')).toBe('assets');
-  });
-
-  it('should route .woff2 to assets/', () => {
-    expect(getTargetSubdir('fonts/inter.woff2')).toBe('assets');
-  });
-
-  it('should route .ttf to assets/', () => {
-    expect(getTargetSubdir('fonts/mono.ttf')).toBe('assets');
-  });
-
-  it('should route .eot to assets/', () => {
-    expect(getTargetSubdir('fonts/legacy.eot')).toBe('assets');
-  });
-
-  it('should route .css to assets/', () => {
-    expect(getTargetSubdir('styles/main.css')).toBe('assets');
-  });
-
-  // Markdown (stays in resources)
-  it('should route .md to resources/', () => {
-    expect(getTargetSubdir('docs/guide.md')).toBe('resources');
-  });
-
-  // Unknown/fallback
   it('should route unknown extensions to resources/', () => {
     expect(getTargetSubdir('data/file.csv')).toBe('resources');
     expect(getTargetSubdir('data/file.parquet')).toBe('resources');
     expect(getTargetSubdir('data/file.sql')).toBe('resources');
   });
 
-  // Edge cases
   it('should handle files with no extension', () => {
     expect(getTargetSubdir('Makefile')).toBe('resources');
     expect(getTargetSubdir('Dockerfile')).toBe('resources');
