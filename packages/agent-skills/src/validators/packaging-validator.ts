@@ -60,7 +60,7 @@ export interface SkillPackagingConfig {
 /** Excluded reference detail for verbose output */
 export interface ExcludedReferenceDetail {
   path: string;
-  reason: 'depth-exceeded' | 'pattern-matched' | 'outside-project' | 'navigation-file' | 'skill-definition';
+  reason: 'depth-exceeded' | 'pattern-matched' | 'outside-project' | 'navigation-file' | 'skill-definition' | 'gitignored';
   matchedPattern?: string | undefined;
 }
 
@@ -463,6 +463,7 @@ function mapExcludeReason(
     case 'pattern-matched': return 'pattern-matched';
     case 'navigation-file': return 'navigation-file';
     case 'skill-definition': return 'skill-definition';
+    case 'gitignored': return 'gitignored';
     case 'depth-exceeded':
     case EXCLUDE_REASON_DIRECTORY:
     case EXCLUDE_REASON_OUTSIDE_PROJECT:

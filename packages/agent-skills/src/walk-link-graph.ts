@@ -14,7 +14,7 @@ import { existsSync, statSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 import type { ResourceLink, ResourceMetadata } from '@vibe-agent-toolkit/resources';
-import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { isGitIgnored, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
 import { NAVIGATION_FILE_PATTERNS } from './validators/validation-rules.js';
@@ -28,7 +28,7 @@ export interface LinkResolution {
   /** Whether the file will be bundled */
   bundled: boolean;
   /** Reason it was excluded (only set when bundled is false) */
-  excludeReason?: 'depth-exceeded' | 'pattern-matched' | 'directory-target' | 'outside-project' | 'navigation-file' | 'skill-definition' | undefined;
+  excludeReason?: 'depth-exceeded' | 'pattern-matched' | 'directory-target' | 'outside-project' | 'navigation-file' | 'skill-definition' | 'gitignored' | undefined;
   /** The rule that matched (only set for pattern-matched exclusions) */
   matchedRule?: ExcludeRule | undefined;
   /** Link text from the source markdown */
@@ -200,6 +200,12 @@ function checkExclusions(
   const matchedExclude = excludeMatchers.find((m) => m.isMatch(relativePath));
   if (matchedExclude) {
     excludedReferences.push(makeExclusion(targetPath, 'pattern-matched', link, matchedExclude.rule));
+    return true;
+  }
+
+  // Check if the file is gitignored (prevents leaking data from ignored directories)
+  if (isGitIgnored(targetPath, options.projectRoot)) {
+    excludedReferences.push(makeExclusion(targetPath, 'gitignored', link));
     return true;
   }
 

@@ -103,10 +103,17 @@ export function gitLsFiles(options: {
 /**
  * Check if a file path is ignored by git
  *
- * Uses git check-ignore which respects .gitignore, .git/info/exclude, and global gitignore
+ * Uses git check-ignore which respects .gitignore, .git/info/exclude, and global gitignore.
  *
- * **Performance warning**: This spawns a git subprocess for each file.
- * For checking multiple files, use `gitCheckIgnoredBatch()` instead.
+ * **Symlink handling**: When `git check-ignore` fails with exit code 128 ("beyond a symbolic
+ * link"), this function walks up ancestor directories and checks each one. If any ancestor is
+ * gitignored (e.g., `data/` is in `.gitignore`), the file is considered gitignored too. This
+ * handles the common pattern where a gitignored directory contains symlinks to external content
+ * (e.g., OneDrive, shared drives).
+ *
+ * **Performance warning**: This spawns a git subprocess for each file (plus up to N ancestor
+ * checks when the path traverses a symlink). For checking multiple files, use
+ * `gitCheckIgnoredBatch()` instead.
  *
  * @param filePath - Absolute or relative path to check
  * @param cwd - Working directory (defaults to process.cwd())
@@ -116,16 +123,49 @@ export function isGitIgnored(filePath: string, cwd: string = process.cwd()): boo
   try {
     // Resolve git path using which for security (avoids PATH manipulation)
     const gitPath = which.sync('git');
+    const checkIgnoreArgs = ['check-ignore', '-q'] as const;
 
     // git check-ignore returns exit code 0 if file is ignored, 1 if not
-    const result = spawnSync(gitPath, ['check-ignore', '-q', filePath], {
+    const result = spawnSync(gitPath, [...checkIgnoreArgs, filePath], {
       cwd,
       encoding: 'utf-8',
       stdio: 'pipe',
       shell: false, // No shell interpreter for security
     });
 
-    return result.status === 0;
+    if (result.status === 0) {
+      return true;
+    }
+
+    // Exit code 128 = fatal error (e.g., path beyond a symbolic link).
+    // Walk up ancestor directories to check if a parent is gitignored.
+    // Example: data/ is gitignored, data/symlink/deep/file.md fails with 128,
+    // but checking data/ directly returns 0.
+    if (result.status !== 1) {
+      const resolvedCwd = safePath.resolve(cwd);
+      const resolvedFile = safePath.resolve(cwd, filePath);
+      let current = dirname(resolvedFile);
+
+      while (current !== resolvedCwd && !current.endsWith(parse(current).root)) {
+        const ancestorResult = spawnSync(gitPath, [...checkIgnoreArgs, current], {
+          cwd,
+          encoding: 'utf-8',
+          stdio: 'pipe',
+          shell: false,
+        });
+        if (ancestorResult.status === 0) {
+          return true;
+        }
+        // If this ancestor check also fails fatally, keep walking up
+        // If it returns 1 (not ignored), the parent is tracked — stop walking
+        if (ancestorResult.status === 1) {
+          break;
+        }
+        current = dirname(current);
+      }
+    }
+
+    return false;
   } catch {
     // If git is not available or other error, assume not ignored
     return false;
@@ -137,6 +177,11 @@ export function isGitIgnored(filePath: string, cwd: string = process.cwd()): boo
  *
  * Much more efficient than calling `isGitIgnored()` in a loop - uses a single
  * git subprocess with stdin instead of N subprocesses.
+ *
+ * **Symlink handling**: After the batch check, any paths that were not reported as
+ * ignored are re-checked individually via `isGitIgnored()`, which handles exit code
+ * 128 ("beyond a symbolic link") by walking up ancestor directories. This ensures
+ * paths through symlinks in gitignored directories are correctly detected.
  *
  * @param filePaths - Array of absolute or relative paths to check
  * @param cwd - Working directory (defaults to process.cwd())
@@ -151,58 +196,56 @@ export function isGitIgnored(filePath: string, cwd: string = process.cwd()): boo
  * // ignoreMap.get('node_modules/baz.js') === true
  * ```
  */
-export function gitCheckIgnoredBatch(
-  filePaths: string[],
-  cwd: string = process.cwd()
-): Map<string, boolean> {
+/** Build the normalized→original path map and initialize result map. */
+function initBatchMaps(filePaths: string[]): {
+  normalizedPaths: string[];
+  pathMap: Map<string, string>;
+  result: Map<string, boolean>;
+} {
+  const normalizedPaths = filePaths.map(p => toForwardSlash(p));
+  const pathMap = new Map<string, string>();
   const result = new Map<string, boolean>();
 
-  // No files to check
-  if (filePaths.length === 0) {
-    return result;
-  }
-
-  // Normalize paths to forward slashes for cross-platform consistency
-  // Git on Windows returns forward slashes, so we normalize input paths to match
-  const normalizedPaths = filePaths.map(p => toForwardSlash(p));
-
-  // Create map with normalized paths as keys
-  const pathMap = new Map<string, string>(); // normalized -> original
   for (const [index, normalizedPath] of normalizedPaths.entries()) {
     const originalPath = filePaths[index];
     if (originalPath !== undefined) {
       pathMap.set(normalizedPath, originalPath);
     }
   }
-
-  // Initialize all as not ignored (using original paths as keys)
   for (const filePath of filePaths) {
     result.set(filePath, false);
   }
 
+  return { normalizedPaths, pathMap, result };
+}
+
+export function gitCheckIgnoredBatch(
+  filePaths: string[],
+  cwd: string = process.cwd()
+): Map<string, boolean> {
+  if (filePaths.length === 0) {
+    return new Map<string, boolean>();
+  }
+
+  const { normalizedPaths, pathMap, result } = initBatchMaps(filePaths);
+
   try {
-    // Resolve git path using which for security (avoids PATH manipulation)
     const gitPath = which.sync('git');
 
-    // git check-ignore --stdin reads paths from stdin and outputs ignored ones
-    // Send normalized paths to git
     const gitResult = spawnSync(gitPath, ['check-ignore', '--stdin'], {
       cwd,
       encoding: 'utf-8',
       input: normalizedPaths.join('\n'),
       stdio: 'pipe',
-      shell: false, // No shell interpreter for security
+      shell: false,
     });
 
-    // Exit code 0 = at least one file ignored, 1 = none ignored
-    // Parse stdout to get which files are ignored
     if (gitResult.status === 0 && gitResult.stdout) {
       const ignoredPaths = gitResult.stdout
         .split('\n')
         .map((line) => line.trim())
         .filter((line) => line.length > 0);
 
-      // Mark ignored files (convert back to original paths)
       for (const ignoredPath of ignoredPaths) {
         const originalPath = pathMap.get(ignoredPath);
         if (originalPath !== undefined) {
@@ -211,9 +254,16 @@ export function gitCheckIgnoredBatch(
       }
     }
 
+    // Fallback: re-check paths that batch reported as not-ignored using isGitIgnored(),
+    // which handles symlink traversal (exit code 128) via ancestor walk.
+    for (const [filePath, ignored] of result) {
+      if (!ignored && isGitIgnored(filePath, cwd)) {
+        result.set(filePath, true);
+      }
+    }
+
     return result;
   } catch {
-    // If git is not available or other error, return all as not ignored
     return result;
   }
 }
