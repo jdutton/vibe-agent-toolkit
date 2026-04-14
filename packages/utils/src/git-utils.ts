@@ -178,6 +178,12 @@ export function isGitIgnored(filePath: string, cwd: string = process.cwd()): boo
  * Much more efficient than calling `isGitIgnored()` in a loop - uses a single
  * git subprocess with stdin instead of N subprocesses.
  *
+ * **Limitation**: Unlike `isGitIgnored()`, this function does NOT handle symlink
+ * traversal (exit code 128). Paths that go through symlinks in gitignored directories
+ * will silently appear as non-ignored. If you need symlink-aware checking, use
+ * `isGitIgnored()` per-file instead. This is acceptable for discovery scanning
+ * (which typically doesn't follow symlinks), but NOT for bundling/packaging guards.
+ *
  * @param filePaths - Array of absolute or relative paths to check
  * @param cwd - Working directory (defaults to process.cwd())
  * @returns Map of filePath -> isIgnored (true if gitignored, false otherwise)
