@@ -233,6 +233,30 @@ describe('isGitIgnored', () => {
 
     expect(result).toBe(true);
   });
+
+  it('should detect gitignored files through symlinks via ancestor walk', () => {
+    // Simulate: data/ is gitignored, data/linked-content is a symlink to external dir
+    // git check-ignore fails with "beyond a symbolic link" for paths through symlinks,
+    // but ancestor walk should detect that data/ itself is gitignored
+    const dataDir = safePath.join(tempDir, 'data');
+    const externalDir = safePath.join(tempDir, 'external-content');
+    const linkedDir = safePath.join(dataDir, 'linked-content');
+
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
+    fs.mkdirSync(dataDir);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
+    fs.mkdirSync(externalDir);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
+    fs.writeFileSync(safePath.join(externalDir, 'doc.md'), '# Test');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
+    fs.symlinkSync(externalDir, linkedDir);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
+    fs.writeFileSync(safePath.join(tempDir, GITIGNORE_FILENAME), 'data/\n');
+
+    const result = isGitIgnored(safePath.join(tempDir, 'data', 'linked-content', 'doc.md'), tempDir);
+
+    expect(result).toBe(true);
+  });
 });
 
 describe('gitCheckIgnoredBatch', () => {

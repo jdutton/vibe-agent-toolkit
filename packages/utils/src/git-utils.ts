@@ -103,10 +103,17 @@ export function gitLsFiles(options: {
 /**
  * Check if a file path is ignored by git
  *
- * Uses git check-ignore which respects .gitignore, .git/info/exclude, and global gitignore
+ * Uses git check-ignore which respects .gitignore, .git/info/exclude, and global gitignore.
  *
- * **Performance warning**: This spawns a git subprocess for each file.
- * For checking multiple files, use `gitCheckIgnoredBatch()` instead.
+ * **Symlink handling**: When `git check-ignore` fails with exit code 128 ("beyond a symbolic
+ * link"), this function walks up ancestor directories and checks each one. If any ancestor is
+ * gitignored (e.g., `data/` is in `.gitignore`), the file is considered gitignored too. This
+ * handles the common pattern where a gitignored directory contains symlinks to external content
+ * (e.g., OneDrive, shared drives).
+ *
+ * **Performance warning**: This spawns a git subprocess for each file (plus up to N ancestor
+ * checks when the path traverses a symlink). For checking multiple files, use
+ * `gitCheckIgnoredBatch()` instead.
  *
  * @param filePath - Absolute or relative path to check
  * @param cwd - Working directory (defaults to process.cwd())
@@ -116,16 +123,49 @@ export function isGitIgnored(filePath: string, cwd: string = process.cwd()): boo
   try {
     // Resolve git path using which for security (avoids PATH manipulation)
     const gitPath = which.sync('git');
+    const checkIgnoreArgs = ['check-ignore', '-q'] as const;
 
     // git check-ignore returns exit code 0 if file is ignored, 1 if not
-    const result = spawnSync(gitPath, ['check-ignore', '-q', filePath], {
+    const result = spawnSync(gitPath, [...checkIgnoreArgs, filePath], {
       cwd,
       encoding: 'utf-8',
       stdio: 'pipe',
       shell: false, // No shell interpreter for security
     });
 
-    return result.status === 0;
+    if (result.status === 0) {
+      return true;
+    }
+
+    // Exit code 128 = fatal error (e.g., path beyond a symbolic link).
+    // Walk up ancestor directories to check if a parent is gitignored.
+    // Example: data/ is gitignored, data/symlink/deep/file.md fails with 128,
+    // but checking data/ directly returns 0.
+    if (result.status !== 1) {
+      const resolvedCwd = safePath.resolve(cwd);
+      const resolvedFile = safePath.resolve(cwd, filePath);
+      let current = dirname(resolvedFile);
+
+      while (current !== resolvedCwd && !current.endsWith(parse(current).root)) {
+        const ancestorResult = spawnSync(gitPath, [...checkIgnoreArgs, current], {
+          cwd,
+          encoding: 'utf-8',
+          stdio: 'pipe',
+          shell: false,
+        });
+        if (ancestorResult.status === 0) {
+          return true;
+        }
+        // If this ancestor check also fails fatally, keep walking up
+        // If it returns 1 (not ignored), the parent is tracked — stop walking
+        if (ancestorResult.status === 1) {
+          break;
+        }
+        current = dirname(current);
+      }
+    }
+
+    return false;
   } catch {
     // If git is not available or other error, assume not ignored
     return false;
