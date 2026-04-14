@@ -23,22 +23,35 @@ const { isGitIgnored, gitCheckIgnoredBatch } = await import('../src/git-utils.js
 
 /** Helper to create a spawnSync return value. */
 function makeSpawnResult(status: number, stdout = ''): SpawnSyncReturns<string> {
-  return {
-    status,
-    stdout,
-    stderr: '',
-    pid: 0,
-    output: [],
-    signal: null,
-  };
+  return { status, stdout, stderr: '', pid: 0, output: [], signal: null };
+}
+
+/**
+ * Create a spawnSync mock that returns exit codes based on a path → status map.
+ * Handles both per-file mode (check-ignore -q <path>) and batch mode (check-ignore --stdin).
+ * Unmapped paths return the fallback status (default: 1 = not ignored).
+ */
+function mockSpawnByPath(
+  pathStatusMap: Record<string, number>,
+  options?: { batchStdout?: string; fallbackStatus?: number },
+): void {
+  const fallback = options?.fallbackStatus ?? 1;
+  vi.mocked(spawnSync).mockImplementation((_cmd, args) => {
+    const argsArray = args as string[];
+    // Batch mode: check-ignore --stdin
+    if (argsArray[1] === '--stdin' && options?.batchStdout !== undefined) {
+      return makeSpawnResult(0, options.batchStdout);
+    }
+    // Per-file mode: check-ignore -q <path> — pathArg is args[2]
+    const pathArg = argsArray[2];
+    if (pathArg !== undefined && pathArg in pathStatusMap) {
+      return makeSpawnResult(pathStatusMap[pathArg] as number);
+    }
+    return makeSpawnResult(fallback);
+  });
 }
 
 const CWD = safePath.resolve('/project');
-const CHECK_IGNORE = 'check-ignore';
-const STDIN_FLAG = '--stdin';
-const QUIET_FLAG = '-q';
-const SYMLINK_FILE = 'data/symlink/file.md';
-const DIST_OUT = 'dist/out.js';
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -60,78 +73,44 @@ describe('isGitIgnored', () => {
   it('returns true when exit 128 and ancestor walk finds a gitignored parent', () => {
     const filePath = 'data/symlink/deep/file.md';
 
-    // Walk: file -> data/symlink/deep -> data/symlink -> data
-    vi.mocked(spawnSync).mockImplementation((_cmd, args) => {
-      const pathArg = (args as string[])[2];
-      if (pathArg === filePath) {
-        // Initial check on the file itself → exit 128 (beyond symlink)
-        return makeSpawnResult(128);
-      }
-      // Ancestor: data/symlink/deep
-      const deepDir = safePath.resolve(CWD, 'data/symlink/deep');
-      if (pathArg === deepDir) {
-        return makeSpawnResult(128);
-      }
-      // Ancestor: data/symlink
-      const symlinkDir = safePath.resolve(CWD, 'data/symlink');
-      if (pathArg === symlinkDir) {
-        return makeSpawnResult(128);
-      }
-      // Ancestor: data → gitignored
-      const dataDir = safePath.resolve(CWD, 'data');
-      if (pathArg === dataDir) {
-        return makeSpawnResult(0);
-      }
-      // Fallback
-      return makeSpawnResult(1);
+    // Walk: file(128) -> data/symlink/deep(128) -> data/symlink(128) -> data(0=ignored)
+    mockSpawnByPath({
+      [filePath]: 128,
+      [safePath.resolve(CWD, 'data/symlink/deep')]: 128,
+      [safePath.resolve(CWD, 'data/symlink')]: 128,
+      [safePath.resolve(CWD, 'data')]: 0,
     });
 
     expect(isGitIgnored(filePath, CWD)).toBe(true);
-
-    // Verify we checked the file + ancestors (at least 2 calls)
     expect(vi.mocked(spawnSync).mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it('returns false when exit 128 and ancestor walk is exhausted without finding ignored parent', () => {
-    // All calls return 128 until we hit cwd
     vi.mocked(spawnSync).mockReturnValue(makeSpawnResult(128));
 
-    expect(isGitIgnored(SYMLINK_FILE, CWD)).toBe(false);
+    expect(isGitIgnored('data/symlink/file.md', CWD)).toBe(false);
   });
 
   it('returns false when exit 128 and ancestor walk hits a tracked parent (exit 1)', () => {
     const filePath = 'src/symlink/deep/file.md';
 
-    vi.mocked(spawnSync).mockImplementation((_cmd, args) => {
-      const pathArg = (args as string[])[2];
-      if (pathArg === filePath) {
-        return makeSpawnResult(128); // File beyond symlink
-      }
-      // deep dir → also behind symlink
-      const deepDir = safePath.resolve(CWD, 'src/symlink/deep');
-      if (pathArg === deepDir) {
-        return makeSpawnResult(128);
-      }
-      // symlink dir → tracked (exit 1), stop walking
-      const symlinkDir = safePath.resolve(CWD, 'src/symlink');
-      if (pathArg === symlinkDir) {
-        return makeSpawnResult(1);
-      }
-      // src dir — should NOT be reached
-      return makeSpawnResult(0);
+    // Walk: file(128) -> src/symlink/deep(128) -> src/symlink(1=tracked, stop)
+    // src should NOT be reached — exit 1 means parent is tracked, stop walking
+    mockSpawnByPath({
+      [filePath]: 128,
+      [safePath.resolve(CWD, 'src/symlink/deep')]: 128,
+      [safePath.resolve(CWD, 'src/symlink')]: 1,
+      [safePath.resolve(CWD, 'src')]: 0, // should never reach this
     });
 
-    const result = isGitIgnored(filePath, CWD);
-    expect(result).toBe(false);
+    expect(isGitIgnored(filePath, CWD)).toBe(false);
 
-    // Verify we did NOT check 'src' (the walk should have stopped at 'src/symlink')
+    // Verify we did NOT check 'src' (walk stopped at 'src/symlink')
     const checkedPaths = vi.mocked(spawnSync).mock.calls.map((c) => (c[1] as string[])[2]);
-    const srcDir = safePath.resolve(CWD, 'src');
-    expect(checkedPaths).not.toContain(srcDir);
+    expect(checkedPaths).not.toContain(safePath.resolve(CWD, 'src'));
   });
 
   it('returns false when git is not available (which.sync throws)', async () => {
-    // Re-mock which to throw
     const whichModule = await import('which');
     vi.mocked(whichModule.default.sync).mockImplementation(() => {
       throw new Error('not found');
@@ -143,15 +122,7 @@ describe('isGitIgnored', () => {
 
 describe('gitCheckIgnoredBatch', () => {
   it('returns correct map for normal batch check', () => {
-    vi.mocked(spawnSync).mockImplementation((_cmd, args) => {
-      const argsArray = args as string[];
-      if (argsArray[0] === CHECK_IGNORE && argsArray[1] === STDIN_FLAG) {
-        // Batch mode: return only ignored files in stdout
-        return makeSpawnResult(0, 'dist/bar.js\nnode_modules/baz.js\n');
-      }
-      // Per-file fallback (isGitIgnored) — not ignored
-      return makeSpawnResult(1);
-    });
+    mockSpawnByPath({}, { batchStdout: 'dist/bar.js\nnode_modules/baz.js\n' });
 
     const files = ['src/foo.ts', 'dist/bar.js', 'node_modules/baz.js'];
     const result = gitCheckIgnoredBatch(files, CWD);
@@ -162,42 +133,30 @@ describe('gitCheckIgnoredBatch', () => {
   });
 
   it('uses isGitIgnored fallback for symlink paths missed by batch', () => {
-    vi.mocked(spawnSync).mockImplementation((_cmd, args) => {
-      const argsArray = args as string[];
-      if (argsArray[0] === CHECK_IGNORE && argsArray[1] === STDIN_FLAG) {
-        // Batch mode: symlink path silently skipped, only dist/ reported
-        return makeSpawnResult(0, `${DIST_OUT}\n`);
-      }
-      // Per-file isGitIgnored fallback calls use ['check-ignore', '-q', path]
-      if (argsArray[0] === CHECK_IGNORE && argsArray[1] === QUIET_FLAG) {
-        const pathArg = argsArray[2];
-        if (pathArg === SYMLINK_FILE) {
-          // Initial check → exit 128 (beyond symlink)
-          return makeSpawnResult(128);
-        }
-        // Ancestor: data → gitignored
-        const dataDir = safePath.resolve(CWD, 'data');
-        if (pathArg === dataDir) {
-          return makeSpawnResult(0);
-        }
-        // Any other ancestor → also 128
-        return makeSpawnResult(128);
-      }
-      return makeSpawnResult(1);
-    });
+    const symlinkFile = 'data/symlink/file.md';
+    const distOut = 'dist/out.js';
 
-    const files = ['src/ok.ts', DIST_OUT, SYMLINK_FILE];
+    // Batch reports only dist/out.js; symlink path silently skipped.
+    // Per-file fallback: symlink file → 128, ancestor data/ → 0 (ignored)
+    mockSpawnByPath(
+      {
+        [symlinkFile]: 128,
+        [safePath.resolve(CWD, 'data')]: 0,
+      },
+      { batchStdout: `${distOut}\n`, fallbackStatus: 128 },
+    );
+
+    const files = ['src/ok.ts', distOut, symlinkFile];
     const result = gitCheckIgnoredBatch(files, CWD);
 
     expect(result.get('src/ok.ts')).toBe(false);
-    expect(result.get(DIST_OUT)).toBe(true);
-    expect(result.get(SYMLINK_FILE)).toBe(true);
+    expect(result.get(distOut)).toBe(true);
+    expect(result.get(symlinkFile)).toBe(true);
   });
 
   it('returns empty map for empty input', () => {
     const result = gitCheckIgnoredBatch([], CWD);
     expect(result.size).toBe(0);
-    // spawnSync should not be called at all
     expect(vi.mocked(spawnSync)).not.toHaveBeenCalled();
   });
 });
