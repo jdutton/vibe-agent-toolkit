@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Skill bundler no longer silently bundles gitignored files** — `walkLinkGraph` now checks `isGitIgnored()` before bundling linked files. Gitignored targets are excluded with reason `'gitignored'`, preventing accidental data leaks when SKILL.md links reference files in gitignored directories (e.g., `data/`).
+
 ## [0.1.27] - 2026-04-11
 
 ### Breaking

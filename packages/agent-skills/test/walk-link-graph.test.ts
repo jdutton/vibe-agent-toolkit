@@ -427,6 +427,8 @@ describe('walkLinkGraph', () => {
       expect(result.excludedReferences).toHaveLength(1);
       expect(result.excludedReferences[0]?.excludeReason).toBe('gitignored');
       expect(result.excludedReferences[0]?.path).toBe(GUIDE_PATH);
+      // Verify projectRoot is passed as cwd so git checks ignore rules in the right directory
+      expect(vi.mocked(isGitIgnored)).toHaveBeenCalledWith(GUIDE_PATH, PROJECT_ROOT);
     });
 
     it('should NOT exclude files that are not gitignored', () => {
