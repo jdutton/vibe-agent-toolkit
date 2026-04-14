@@ -1,9 +1,21 @@
 
 import type { ResourceLink, ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { walkLinkGraph, type ExcludeRule, type WalkableRegistry, type WalkLinkGraphOptions } from '../src/walk-link-graph.js';
+
+// Mock isGitIgnored — default to false (not ignored), override in specific tests
+vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
+  const actual = await importOriginal<Record<string, unknown>>();
+  return {
+    ...actual,
+    isGitIgnored: vi.fn().mockReturnValue(false),
+  };
+});
+
+// Import after mock setup so we get the mocked version
+const { isGitIgnored } = await import('@vibe-agent-toolkit/utils');
 
 // ============================================================================
 // Constants
@@ -151,6 +163,10 @@ function expectEmptyWalkResult(result: ReturnType<typeof walkLinkGraph>): void {
 // ============================================================================
 // Tests
 // ============================================================================
+
+afterEach(() => {
+  vi.mocked(isGitIgnored).mockReturnValue(false);
+});
 
 describe('walkLinkGraph', () => {
   describe('skill resource not found', () => {
@@ -391,6 +407,51 @@ describe('walkLinkGraph', () => {
 
       expectBundledIds(result, [skillsDocId]);
       expect(result.excludedReferences).toHaveLength(0);
+    });
+  });
+
+  // ============================================================================
+  // Gitignored file exclusion
+  // ============================================================================
+
+  describe('gitignored file exclusion', () => {
+    it('should exclude gitignored markdown files with gitignored reason', () => {
+      vi.mocked(isGitIgnored).mockImplementation((filePath: string) =>
+        filePath === GUIDE_PATH,
+      );
+
+      const registry = createSkillGuideRegistry();
+      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions());
+
+      expect(result.bundledResources).toHaveLength(0);
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe('gitignored');
+      expect(result.excludedReferences[0]?.path).toBe(GUIDE_PATH);
+    });
+
+    it('should NOT exclude files that are not gitignored', () => {
+      // isGitIgnored returns false by default (from mock setup)
+      const registry = createSkillGuideRegistry();
+      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions());
+
+      expectBundledIds(result, [GUIDE_ID]);
+      expect(result.excludedReferences).toHaveLength(0);
+    });
+
+    it('should exclude gitignored file found via transitive link', () => {
+      // skill -> guide -> ref, where ref is gitignored
+      vi.mocked(isGitIgnored).mockImplementation((filePath: string) =>
+        filePath === REF_PATH,
+      );
+
+      const registry = createSkillGuideRefRegistry();
+      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions());
+
+      // Guide should be bundled, but ref should be excluded as gitignored
+      expectBundledIds(result, [GUIDE_ID]);
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe('gitignored');
+      expect(result.excludedReferences[0]?.path).toBe(REF_PATH);
     });
   });
 
