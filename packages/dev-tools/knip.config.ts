@@ -37,6 +37,11 @@ const config: KnipConfig = {
       project: ['src/**/*.ts'],
     },
 
+    // agent-schema: scripts/ uses utils for JSON Schema generation
+    'packages/agent-schema': {
+      entry: ['src/**/*.ts', 'scripts/**/*.ts'],
+    },
+
     // CLI: Commander.js wires commands from bin.ts, not index.ts
     'packages/cli': {
       entry: ['src/bin.ts'],

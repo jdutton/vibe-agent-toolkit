@@ -170,6 +170,22 @@ vat resources validate docs/ --frontmatter-schema schema.json
 }
 ```
 
+### Skill Distribution Architecture
+
+Skills, config, and packaging each have a distinct role. These boundaries are intentional:
+
+| Surface | Role | Owns |
+|---------|------|------|
+| **SKILL.md frontmatter** | Portable skill metadata | Skill identity, description, triggers — standard schema, never VAT-specific fields |
+| **vibe-agent-toolkit.config.yaml** | VAT source of truth | All VAT-specific config — discovery globs, packaging, `publish` flag, plugin assignment |
+| **package.json `vat.skills`** | npm packaging hint | Declares which skills ship in this npm package — validated by `vat verify`, never used as input for build |
+
+**Key rules:**
+- `vat verify` drives validation from config.yaml discovery, checking package.json as a suspect
+- `publish: false` in `skills.config.<name>` opts a skill out of distribution checks (default: `true`)
+- Error messages always reference the config mechanism so developers discover the fix from the error
+- No VAT-specific fields in SKILL.md frontmatter — skills are portable artifacts
+
 ### Resource Collections and Per-Directory Schema Validation
 
 **The `collections` key in `vibe-agent-toolkit.config.yaml` enables per-directory (or per-pattern) frontmatter schema validation.** This is the primary tool for projects with multiple document types, each requiring different frontmatter.

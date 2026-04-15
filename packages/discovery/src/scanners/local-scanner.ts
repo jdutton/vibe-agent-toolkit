@@ -12,10 +12,12 @@ import type { DetectedFormat, ScanOptions, ScanResult, ScanSummary } from '../ty
  * These contain tens of thousands of files and are never useful for discovery.
  */
 const PERFORMANCE_POISON = [
-  '**/.git/**',          // Git objects (1000s of files), never useful for discovery
-  '**/node_modules/**',  // Dependencies (40K+ files), never user content
-  '**/coverage/**',      // Test coverage reports, never useful for discovery
-  '**/.test-output/**',  // Test artifacts, never useful for discovery
+  '**/.git/**',              // Git objects (1000s of files), never useful for discovery
+  '**/node_modules/**',      // Dependencies (40K+ files), never user content
+  '**/coverage/**',          // Test coverage reports, never useful for discovery
+  '**/.test-output/**',      // Test artifacts, never useful for discovery
+  '**/.worktrees/**',        // Git worktrees (full repo copies), must not traverse into
+  '**/.claude/worktrees/**', // Claude Code worktrees, same reason
 ];
 
 /**

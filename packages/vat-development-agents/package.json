@@ -18,7 +18,8 @@
       "authoring",
       "audit",
       "debugging",
-      "install"
+      "install",
+      "org-admin"
     ],
     "replaces": {
       "plugins": ["vat-development-agents"],

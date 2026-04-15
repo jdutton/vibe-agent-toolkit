@@ -127,6 +127,8 @@ export type SkillFileEntry = z.infer<typeof SkillFileEntrySchema>;
  * reference exclusion rules, and validation overrides.
  */
 export const SkillPackagingConfigSchema = z.object({
+  publish: z.boolean().optional()
+    .describe('Whether this skill is published for distribution (default: true). Set to false for in-development skills.'),
   linkFollowDepth: z.union([z.number().int().min(0), z.literal('full')]).optional(),
   resourceNaming: z.enum(['basename', 'resource-id', 'preserve-path']).optional(),
   stripPrefix: z.string().optional(),
