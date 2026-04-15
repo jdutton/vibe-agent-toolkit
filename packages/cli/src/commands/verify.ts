@@ -5,6 +5,7 @@
  *   1. vat resources validate  (link integrity, collection schemas)
  *   2. vat skills validate     (SKILL.md frontmatter validation)
  *   3. vat claude marketplace validate  (strict marketplace validation, when configured)
+ *   4. consistency check  (skill distribution integrity — package.json, plugin assignment)
  */
 
 import { existsSync } from 'node:fs';
@@ -15,10 +16,12 @@ import { Command } from 'commander';
 
 import { handleCommandError } from '../utils/command-error.js';
 import { loadConfig } from '../utils/config-loader.js';
-import { type createLogger } from '../utils/logger.js';
+import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 
-import { createPhaseContext, runPhase, type Phase, type PhaseResult } from './phase-utils.js';
+import { runConsistencyChecks, type ConsistencyIssue } from './consistency-check.js';
+import { resolveBinPath, runPhase, type Phase, type PhaseResult } from './phase-utils.js';
+import { discoverSkillsFromConfig } from './skills/skill-discovery.js';
 
 export interface VerifyCommandOptions {
   only?: string;
@@ -29,8 +32,8 @@ export function createVerifyTopLevelCommand(): Command {
   const command = new Command('verify');
 
   command
-    .description('Verify all project artifacts in dependency order (resources → skills → marketplace)')
-    .option('--only <phase>', 'Verify only a specific phase: resources, skills, marketplace')
+    .description('Verify all project artifacts in dependency order (resources → skills → marketplace → consistency)')
+    .option('--only <phase>', 'Verify only a specific phase: resources, skills, marketplace, consistency')
     .option('--debug', 'Enable debug logging')
     .action(verifyTopLevelCommand)
     .addHelpText(
@@ -44,6 +47,7 @@ Description:
     resources    → link integrity, collection frontmatter schemas
     skills       → SKILL.md frontmatter and packaging validation
     marketplace  → strict marketplace validation (when configured)
+    consistency  → skill distribution integrity (package.json, plugin assignment)
 
 Output:
   YAML summary for each phase → stdout
@@ -161,6 +165,32 @@ function reportFilesDestErrors(
   }
 }
 
+/**
+ * Log consistency check issues to stderr.
+ */
+function reportConsistencyIssues(
+  issues: ConsistencyIssue[],
+  logger: ReturnType<typeof createLogger>
+): void {
+  logger.error('\n▶ Phase: consistency');
+
+  const errors = issues.filter((i) => i.severity === 'error');
+  const warnings = issues.filter((i) => i.severity === 'warning');
+  const infos = issues.filter((i) => i.severity === 'info');
+
+  for (const issue of errors) {
+    logger.error(`  ERROR [${issue.code}]: ${issue.message}`);
+    logger.error(`    Fix: ${issue.fix}`);
+  }
+  for (const issue of warnings) {
+    logger.error(`  WARN [${issue.code}]: ${issue.message}`);
+    logger.error(`    Fix: ${issue.fix}`);
+  }
+  for (const issue of infos) {
+    logger.info(`  INFO [${issue.code}]: ${issue.message}`);
+  }
+}
+
 function buildPhaseList(options: VerifyCommandOptions): Phase[] {
   const { only } = options;
   const phases: Phase[] = [];
@@ -188,9 +218,46 @@ function buildPhaseList(options: VerifyCommandOptions): Phase[] {
   return phases;
 }
 
+/**
+ * Run the consistency check phase and return whether errors were found.
+ */
+async function runConsistencyPhase(
+  logger: ReturnType<typeof createLogger>,
+  phaseResults: PhaseResult[]
+): Promise<boolean> {
+  const config = loadConfig(process.cwd());
+  if (!config?.skills) {
+    return false;
+  }
+
+  const discoveredSkills = await discoverSkillsFromConfig(config.skills, process.cwd());
+  const consistencyResult = runConsistencyChecks(discoveredSkills, config, process.cwd());
+
+  if (consistencyResult.summary.errors > 0) {
+    reportConsistencyIssues(consistencyResult.issues, logger);
+    phaseResults.push({ name: 'consistency', status: 'failed' });
+    return true;
+  }
+
+  if (consistencyResult.summary.warnings > 0 || consistencyResult.summary.infos > 0) {
+    reportConsistencyIssues(consistencyResult.issues, logger);
+  }
+  phaseResults.push({ name: 'consistency', status: 'passed' });
+  return false;
+}
+
 async function verifyTopLevelCommand(options: VerifyCommandOptions): Promise<void> {
   const phases = buildPhaseList(options);
-  const { logger, startTime, binPath } = createPhaseContext(options.debug, phases, options.only, 'resources, skills, marketplace');
+
+  // Consistency is an in-process phase, not a subprocess. Allow --only consistency
+  // to produce an empty subprocess phase list without throwing.
+  if (phases.length === 0 && options.only !== 'consistency') {
+    throw new Error(`Unknown phase: ${options.only ?? ''}. Valid phases: resources, skills, marketplace, consistency`);
+  }
+
+  const logger = createLogger(options.debug ? { debug: true } : {});
+  const startTime = Date.now();
+  const binPath = resolveBinPath();
 
   try {
     logger.info(`🔍 vat verify (phases: ${phases.map((p) => p.name).join(' → ')})`);
@@ -210,6 +277,14 @@ async function verifyTopLevelCommand(options: VerifyCommandOptions): Promise<voi
         hasErrors = true;
         reportFilesDestErrors(filesDestResults, logger);
         phaseResults.push({ name: 'files-config-dests', status: 'failed' });
+      }
+    }
+
+    // Consistency check: cross-reference discovered skills vs package.json and plugin assignments
+    if (!options.only || options.only === 'consistency' || options.only === 'skills') {
+      const consistencyHasErrors = await runConsistencyPhase(logger, phaseResults);
+      if (consistencyHasErrors) {
+        hasErrors = true;
       }
     }
 

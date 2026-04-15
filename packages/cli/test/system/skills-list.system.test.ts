@@ -1,44 +1,59 @@
 /**
  * System tests for skills list command
+ *
+ * These tests dogfood the real project scan (scanning the monorepo from cwd).
+ * To avoid redundant ~15s scans, the default and verbose commands are each run
+ * once in beforeAll and shared across assertions.
+ *
+ * For fast, deterministic, fixture-based tests see skills-list-fixture.system.test.ts.
  */
 
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import { getBinPath } from './test-common.js';
 
-/**
- * Helper to run skills list command and parse YAML output
- */
-function runListCommand(args: string[] = []): {
-  result: ReturnType<typeof spawnSync>;
-  parsed: Record<string, unknown>;
-} {
-  const binPath = getBinPath(import.meta.url);
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
-  const result = spawnSync('node', [binPath, 'skills', 'list', ...args], {
-    encoding: 'utf-8',
-    cwd: process.cwd(),
-  });
+interface SkillEntry {
+  name: string;
+  path: string;
+  valid: boolean;
+  warning?: string;
+}
 
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = yaml.load(result.stdout) as Record<string, unknown>;
-  } catch (error) {
-    // If parsing fails, log the error and return empty object
-    console.error('Failed to parse YAML:', error);
-    console.error('stdout:', result.stdout);
-    console.error('stderr:', result.stderr);
-    parsed = {};
-  }
-  return { result, parsed };
+interface SkillsListOutput {
+  status: string;
+  context: string;
+  skillsFound: number;
+  skills: SkillEntry[];
 }
 
 describe('skills list command (system test)', () => {
   const binPath = getBinPath(import.meta.url);
+
+  // Shared results from beforeAll — avoids 4 redundant full-project scans
+  let defaultResult: SpawnSyncReturns<string>;
+  let defaultParsed: SkillsListOutput;
+  let verboseResult: SpawnSyncReturns<string>;
+
+  beforeAll(() => {
+    // Run the default scan once (~15-20s) and share across tests
+    // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
+    defaultResult = spawnSync('node', [binPath, 'skills', 'list'], {
+      encoding: 'utf-8',
+      cwd: process.cwd(),
+    });
+    defaultParsed = yaml.load(defaultResult.stdout) as SkillsListOutput;
+
+    // Run the verbose scan once
+    // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
+    verboseResult = spawnSync('node', [binPath, 'skills', 'list', '--verbose'], {
+      encoding: 'utf-8',
+      cwd: process.cwd(),
+    });
+  }, 60_000); // Two full-project scans (~15-20s each)
 
   it('should show help text', () => {
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
@@ -56,38 +71,19 @@ describe('skills list command (system test)', () => {
   });
 
   it('should list project skills by default', () => {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
-    const result = spawnSync('node', [binPath, 'skills', 'list'], {
-      encoding: 'utf-8',
-      cwd: process.cwd(),
-    });
-
-    // Parse YAML output
-    const parsed = yaml.load(result.stdout) as {
-      status: string;
-      context: string;
-      skillsFound: number;
-      skills: Array<{
-        name: string;
-        path: string;
-        valid: boolean;
-        warning?: string;
-      }>;
-    };
-
-    expect(result.status).toBe(0);
-    expect(parsed).toHaveProperty('status', 'success');
-    expect(parsed).toHaveProperty('context', 'project');
-    expect(parsed).toHaveProperty('skillsFound');
-    expect(parsed).toHaveProperty('skills');
-    expect(Array.isArray(parsed.skills)).toBe(true);
+    expect(defaultResult.status).toBe(0);
+    expect(defaultParsed).toHaveProperty('status', 'success');
+    expect(defaultParsed).toHaveProperty('context', 'project');
+    expect(defaultParsed).toHaveProperty('skillsFound');
+    expect(defaultParsed).toHaveProperty('skills');
+    expect(Array.isArray(defaultParsed.skills)).toBe(true);
 
     // Should find at least the cat-agents skill
-    expect(parsed.skillsFound).toBeGreaterThan(0);
+    expect(defaultParsed.skillsFound).toBeGreaterThan(0);
 
     // Verify result structure
-    if (parsed.skills.length > 0) {
-      const firstSkill = parsed.skills[0];
+    if (defaultParsed.skills.length > 0) {
+      const firstSkill = defaultParsed.skills[0];
       expect(firstSkill).toHaveProperty('name');
       expect(firstSkill).toHaveProperty('path');
       expect(firstSkill).toHaveProperty('valid');
@@ -96,31 +92,14 @@ describe('skills list command (system test)', () => {
   });
 
   it('should output YAML format', () => {
-    const { result, parsed } = runListCommand();
-
-    // Should be parseable as YAML (runListCommand already does this)
-    expect(result.status).toBe(0);
-    expect(parsed.status).toBe('success');
-    expect(['project', 'user']).toContain(parsed.context);
+    expect(defaultResult.status).toBe(0);
+    expect(defaultParsed.status).toBe('success');
+    expect(['project', 'user']).toContain(defaultParsed.context);
   });
 
   it('should show validation warnings for non-standard filenames', () => {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
-    const result = spawnSync('node', [binPath, 'skills', 'list'], {
-      encoding: 'utf-8',
-      cwd: process.cwd(),
-    });
-
-    const parsed = yaml.load(result.stdout) as {
-      skills: Array<{
-        name: string;
-        valid: boolean;
-        warning?: string;
-      }>;
-    };
-
     // Check if any skills have warnings (they should all be valid in this repo)
-    for (const skill of parsed.skills) {
+    for (const skill of defaultParsed.skills) {
       if (!skill.valid) {
         expect(skill.warning).toBeDefined();
         expect(typeof skill.warning).toBe('string');
@@ -129,16 +108,10 @@ describe('skills list command (system test)', () => {
   });
 
   it('should show verbose output with --verbose flag', () => {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
-    const result = spawnSync('node', [binPath, 'skills', 'list', '--verbose'], {
-      encoding: 'utf-8',
-      cwd: process.cwd(),
-    });
-
-    expect(result.status).toBe(0);
+    expect(verboseResult.status).toBe(0);
 
     // Verbose output goes to stderr
-    expect(result.stderr).toContain('Path:');
+    expect(verboseResult.stderr).toContain('Path:');
   });
 
   it('should list skills at specific path', () => {
@@ -149,14 +122,7 @@ describe('skills list command (system test)', () => {
       cwd: process.cwd(),
     });
 
-    const parsed = yaml.load(result.stdout) as {
-      status: string;
-      context: string;
-      skillsFound: number;
-      skills: Array<{
-        name: string;
-      }>;
-    };
+    const parsed = yaml.load(result.stdout) as SkillsListOutput;
 
     // Debug output if test fails
     if (result.status !== 0) {
@@ -176,15 +142,7 @@ describe('skills list command (system test)', () => {
 
   it('should exit with code 0 even with warnings', () => {
     // List command should always succeed (warnings don't fail)
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
-    const result = spawnSync('node', [binPath, 'skills', 'list'], {
-      encoding: 'utf-8',
-      cwd: process.cwd(),
-    });
-
-    expect(result.status).toBe(0);
-
-    const parsed = yaml.load(result.stdout) as { status: string };
-    expect(parsed.status).toBe('success');
+    expect(defaultResult.status).toBe(0);
+    expect(defaultParsed.status).toBe('success');
   });
 });
