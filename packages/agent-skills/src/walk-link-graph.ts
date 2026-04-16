@@ -85,6 +85,13 @@ export interface WalkLinkGraphOptions {
   excludeRules: ExcludeRule[];
   /** Project root for boundary enforcement and pattern matching */
   projectRoot: string;
+  /**
+   * Absolute path to the current skill's SKILL.md. Used to distinguish self-links
+   * (a bundled doc linking back to the current skill's own SKILL.md) from
+   * cross-skill links to other skills' SKILL.md files. Self-links are silently
+   * ignored; cross-skill links become `skill-definition` exclusions.
+   */
+  skillRootPath: string;
   /** Whether to exclude navigation files (README.md, index.md, etc.) */
   excludeNavigationFiles?: boolean;
   /** Paths declared in files config that may not exist at source time */
@@ -190,8 +197,15 @@ function checkExclusions(
   // Check for cross-skill SKILL.md links — a SKILL.md is a skill definition marker,
   // not a resource. Bundling another skill's SKILL.md creates duplicate skill definitions
   // in the output, which causes marketplace sync failures and confuses skill consumers.
+  //
+  // Self-links (a bundled doc linking back to the current skill's own SKILL.md) are
+  // silently ignored: no exclusion is recorded. The walker's `visited` set already
+  // prevents re-traversal, and the duplicate-definition risk does not apply to the
+  // current skill itself.
   if (basename(targetPath) === 'SKILL.md') {
-    excludedReferences.push(makeExclusion(targetPath, 'skill-definition', link));
+    if (safePath.resolve(targetPath) !== safePath.resolve(options.skillRootPath)) {
+      excludedReferences.push(makeExclusion(targetPath, 'skill-definition', link));
+    }
     return true;
   }
 

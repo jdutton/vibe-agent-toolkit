@@ -320,6 +320,7 @@ export async function packageSkill(
       maxDepth,
       excludeRules: excludeConfig?.rules ?? [],
       projectRoot,
+      skillRootPath: safePath.resolve(skillPath),
       excludeNavigationFiles,
     },
   );

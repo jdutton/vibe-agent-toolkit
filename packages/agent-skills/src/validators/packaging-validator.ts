@@ -205,6 +205,7 @@ export async function validateSkillForPackaging(
       maxDepth,
       excludeRules: excludeConfig?.rules ?? [],
       projectRoot,
+      skillRootPath: safePath.resolve(skillPath),
       excludeNavigationFiles,
     },
   );

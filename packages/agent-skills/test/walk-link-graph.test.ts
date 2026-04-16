@@ -39,6 +39,9 @@ const README_HREF = './docs/README.md';
 // Valid 64-char hex string cast to branded SHA256 type
 const MOCK_CHECKSUM = 'a'.repeat(64) as ResourceMetadata['checksum'];
 
+// Exclude reason literal — avoids string duplication in assertions
+const REASON_SKILL_DEFINITION = 'skill-definition';
+
 // ============================================================================
 // Helpers — Resource & Registry Builders
 // ============================================================================
@@ -84,6 +87,7 @@ function defaultOptions(overrides?: Partial<WalkLinkGraphOptions>): WalkLinkGrap
     maxDepth: 5,
     excludeRules: [],
     projectRoot: PROJECT_ROOT,
+    skillRootPath: SKILL_PATH,
     ...overrides,
   };
 }
@@ -372,7 +376,7 @@ describe('walkLinkGraph', () => {
       // Guide should be bundled, other SKILL.md should NOT
       expectBundledIds(result, [GUIDE_ID]);
       expect(result.excludedReferences).toHaveLength(1);
-      expect(result.excludedReferences[0]?.excludeReason).toBe('skill-definition');
+      expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_SKILL_DEFINITION);
       expect(result.excludedReferences[0]?.path).toBe(otherSkillPath);
     });
 
@@ -392,7 +396,7 @@ describe('walkLinkGraph', () => {
       const result = walkLinkGraph(SKILL_ID, registry, defaultOptions());
 
       expectBundledIds(result, [GUIDE_ID]);
-      expect(result.excludedReferences.some(r => r.excludeReason === 'skill-definition')).toBe(true);
+      expect(result.excludedReferences.some(r => r.excludeReason === REASON_SKILL_DEFINITION)).toBe(true);
     });
 
     it('should not exclude non-SKILL.md files named similarly', () => {
@@ -409,6 +413,41 @@ describe('walkLinkGraph', () => {
 
       expectBundledIds(result, [skillsDocId]);
       expect(result.excludedReferences).toHaveLength(0);
+    });
+
+    it('should NOT emit skill-definition for a bundled doc linking back to the current skill\'s own SKILL.md', () => {
+      // Mirrors the real adopter scenario:
+      //   skill at /project/skills/repo-setup/SKILL.md
+      //     links to ../../docs/platform-packages.md (bundled)
+      //   that doc contains a back-link to ../../skills/repo-setup/SKILL.md
+      //     (the same skill — NOT another skill)
+      //
+      // The walker should silently drop the self-link (already visited via cycle guard)
+      // without producing a skill-definition exclusion, because it isn't a different
+      // skill and bundling is not at risk — this is the skill itself.
+      const ownSkillPath = safePath.resolve('/project/skills/repo-setup/SKILL.md');
+      const docPath = safePath.resolve('/project/docs/platform-packages.md');
+      const docId = 'platform-packages';
+
+      const skill = createMockResource(SKILL_ID, ownSkillPath, [
+        createLocalLink('platform packages', '../../docs/platform-packages.md', docId),
+      ]);
+      const doc = createMockResource(docId, docPath, [
+        createLocalLink('repo-setup skill', '../skills/repo-setup/SKILL.md', SKILL_ID),
+      ]);
+      const registry = createMockRegistry([skill, doc]);
+
+      const result = walkLinkGraph(
+        SKILL_ID,
+        registry,
+        defaultOptions({ skillRootPath: ownSkillPath }),
+      );
+
+      // Doc bundled; no skill-definition exclusion for the self-link.
+      expectBundledIds(result, [docId]);
+      expect(
+        result.excludedReferences.some(r => r.excludeReason === REASON_SKILL_DEFINITION),
+      ).toBe(false);
     });
   });
 
