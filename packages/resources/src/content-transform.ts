@@ -75,7 +75,7 @@ export interface ResourceLookup {
  *
  * A rule matches a link when ALL specified criteria are satisfied:
  * - `type`: Link type matches (if specified)
- * - `pattern`: Target resource's filePath matches a glob pattern (if specified)
+ * - `pattern`: Target file path matches a glob pattern (if specified)
  * - `excludeResourceIds`: Target resource's ID is NOT in the exclusion list
  */
 export interface LinkRewriteMatch {
@@ -86,9 +86,15 @@ export interface LinkRewriteMatch {
   type?: LinkType | LinkType[];
 
   /**
-   * Glob pattern(s) to match against the target resource's filePath.
-   * If omitted, matches any path. Requires the link to have a resolvedId
-   * so the target resource can be looked up.
+   * Glob pattern(s) to match against the target file path.
+   *
+   * For resolved links (target resource found in the registry), patterns match
+   * against `resource.filePath`. For unresolved links (e.g., terminal links to
+   * non-markdown files not indexed by the registry), patterns fall back to
+   * matching against the link's raw href. This allows exclude rules to apply
+   * to assets like YAML, JSON, or images that markdown files reference.
+   *
+   * If omitted, matches any path.
    * Can be a single glob string or an array of glob strings.
    */
   pattern?: string | string[];
@@ -233,13 +239,19 @@ function matchesType(linkType: LinkType, matchType: LinkType | LinkType[] | unde
 }
 
 /**
- * Check if a link's target resource matches the rule's pattern criteria.
+ * Check if a link's target file path matches the rule's pattern criteria.
  *
+ * Uses `resource.filePath` when the link is resolved. Falls back to the link's
+ * href (anchor stripped) for unresolved links so rules can target terminal
+ * assets — YAML, JSON, images — that the registry does not index.
+ *
+ * @param link - The link being tested
  * @param resource - The target resource (if resolved)
  * @param patterns - The pattern(s) to match against (or undefined = match all)
  * @returns True if the pattern matches or no pattern is specified
  */
 function matchesPattern(
+  link: ResourceLink,
   resource: ResourceMetadata | undefined,
   patterns: string | string[] | undefined,
 ): boolean {
@@ -247,13 +259,19 @@ function matchesPattern(
     return true;
   }
 
-  // Pattern matching requires a resolved resource
+  let pathToMatch: string;
   if (resource === undefined) {
-    return false;
+    const [hrefWithoutAnchor] = splitHrefAnchor(link.href);
+    if (hrefWithoutAnchor === '') {
+      return false;
+    }
+    pathToMatch = hrefWithoutAnchor;
+  } else {
+    pathToMatch = resource.filePath;
   }
 
   const patternArray = Array.isArray(patterns) ? patterns : [patterns];
-  return patternArray.some((pattern) => matchesGlobPattern(resource.filePath, pattern));
+  return patternArray.some((pattern) => matchesGlobPattern(pathToMatch, pattern));
 }
 
 /**
@@ -296,7 +314,7 @@ function findMatchingRule(
       continue;
     }
 
-    if (!matchesPattern(resource, match.pattern)) {
+    if (!matchesPattern(link, resource, match.pattern)) {
       continue;
     }
 

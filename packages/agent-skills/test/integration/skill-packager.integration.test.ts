@@ -832,6 +832,51 @@ describe('skill-packager: depth-limited packaging', () => {
     expect(skillContent).toContain('[Search: the guide]');
     expect(skillContent).not.toContain('[the guide](');
   });
+
+  it('should apply pattern-based excludes to terminal non-markdown links', async () => {
+    // Terminal links to assets (YAML, JSON, images) are not indexed by the
+    // registry (the registry only crawls markdown). Their pattern-based exclude
+    // must fall back to matching the raw href so the link is rewritten via the
+    // rule template rather than leaking through the bundled-link template with
+    // an undefined `link.resource.*`.
+    const rosterYaml = 'roster.yaml';
+    const tempDir = getTempDir();
+    const dataDir = safePath.join(tempDir, 'data', 'teams');
+    await mkdir(dataDir, { recursive: true });
+    await writeFile(safePath.join(dataDir, rosterYaml), 'members:\n  - alice\n');
+
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
+    await writeFile(
+      skillPath,
+      `${createFrontmatter({ name: TEST_SKILL_NAME })}\n\nSee [the roster](./data/teams/${rosterYaml}).`
+    );
+
+    const result = await packageSkillForTest(skillPath, {
+      formats: ['directory'],
+      rewriteLinks: true,
+      excludeReferencesFromBundle: {
+        rules: [{
+          patterns: ['**/data/**'],
+          template: '{{link.text}} (search KB)',
+        }],
+      },
+    });
+
+    // The YAML must NOT be bundled (pattern excluded it)
+    const yamlOutput = safePath.join(result.outputPath, 'templates', rosterYaml);
+    expect(existsSync(yamlOutput)).toBe(false);
+
+    // The terminal link must be rewritten via the pattern's template, not left
+    // as a broken relative path and not collapsed to `[text]()` by the bundled
+    // rule's template.
+    const skillContent = await readFile(safePath.join(result.outputPath, 'SKILL.md'), 'utf-8');
+    expect(skillContent).toContain('the roster (search KB)');
+    expect(skillContent).not.toContain('[the roster](');
+    expect(skillContent).not.toContain(rosterYaml);
+
+    // No post-build integrity issues should surface.
+    expect(result.postBuildIssues ?? []).toEqual([]);
+  });
 });
 
 describe('skill-packager: integration', () => {

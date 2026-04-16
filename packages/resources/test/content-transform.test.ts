@@ -255,9 +255,9 @@ describe('transformContent', () => {
       expect(result).toBe('See REF:api.');
     });
 
-    it('should not match when link has no resolvedId (cannot look up resource for pattern)', () => {
+    it('should not match when link has no resolvedId and pattern does not match the href', () => {
       const { content, links } = createScenario(GUIDE_TEXT, GUIDE_HREF);
-      // No resolvedId set
+      // No resolvedId set and `docs/**` does not match `./guide.md`
 
       const result = transformContent(content, links, {
         linkRewriteRules: [{ match: { pattern: 'docs/**' }, template: 'REPLACED' }],
@@ -266,7 +266,7 @@ describe('transformContent', () => {
       expect(result).toBe(GUIDE_ORIGINAL_LINK);
     });
 
-    it('should not match when resource is not found in registry', () => {
+    it('should not match when resource is not found in registry and pattern does not match the href', () => {
       const registry = createTestRegistry([]); // empty registry
       const { content, links } = createScenario(GUIDE_TEXT, GUIDE_HREF, GUIDE_ID);
 
@@ -276,6 +276,39 @@ describe('transformContent', () => {
       });
 
       expect(result).toBe(GUIDE_ORIGINAL_LINK);
+    });
+
+    it('should fall back to matching pattern against href when link has no resolvedId', () => {
+      // Simulates a terminal (non-markdown) link that was never indexed.
+      const content = 'Roster: [IT](../../../data/teams/it.yaml).';
+      const links: ResourceLink[] = [
+        createTestLink({ text: 'IT', href: '../../../data/teams/it.yaml' }),
+      ];
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [{
+          match: { type: LOCAL_FILE, pattern: '**/data/teams/**' },
+          template: 'Search KB for {{link.text}}',
+        }],
+      });
+
+      expect(result).toBe('Roster: Search KB for IT.');
+    });
+
+    it('should fall back to href matching even when an anchor fragment is present', () => {
+      const content = 'See [schema](./config.yaml#section).';
+      const links: ResourceLink[] = [
+        createTestLink({ text: 'schema', href: './config.yaml#section' }),
+      ];
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [{
+          match: { type: LOCAL_FILE, pattern: '**/*.yaml' },
+          template: '[STRIPPED: {{link.text}}]',
+        }],
+      });
+
+      expect(result).toBe('See [STRIPPED: schema].');
     });
   });
 

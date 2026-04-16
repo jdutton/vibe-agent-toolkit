@@ -748,9 +748,14 @@ function buildPathMap(
  * Build unified link rewrite rules for transformContent().
  *
  * Rules are ordered for first-match-wins semantics:
- * 1. Bundled links: local_file links minus excluded IDs → rewrite to output path
- * 2. Per-pattern excludes: local_file links matching specific patterns → custom template
+ * 1. Per-pattern excludes: local_file links matching specific patterns → custom template
+ * 2. Bundled links: local_file links minus excluded IDs → rewrite to output path
  * 3. Catch-all excludes: remaining local_file links (depth-exceeded, navigation) → strip
+ *
+ * Per-pattern excludes run first so that terminal links to non-markdown assets
+ * (YAML, JSON, images) match against the link's href via `matchesPattern`'s
+ * href fallback — such links have no resolvedId and would otherwise be caught
+ * by the bundled-link rule and rendered with an undefined `link.resource.*`.
  *
  * External, anchor, and email links match no rule and are left untouched.
  */
@@ -761,7 +766,15 @@ function buildRewriteRules(
 ): LinkRewriteRule[] {
   const rules: LinkRewriteRule[] = [];
 
-  // Rule 1: Bundled links — match local_file, skip excluded IDs
+  // Rules 1+: Per-pattern exclude rules (if any)
+  for (const rule of excludeRules) {
+    rules.push({
+      match: { type: 'local_file', pattern: rule.patterns },
+      template: rule.template ?? defaultExcludeTemplate ?? DEFAULT_STRIP_TEMPLATE,
+    });
+  }
+
+  // Rule N: Bundled links — match local_file, skip excluded IDs
   rules.push({
     match: {
       type: 'local_file',
@@ -769,14 +782,6 @@ function buildRewriteRules(
     },
     template: '[{{link.text}}]({{link.resource.relativePath}}{{link.fragment}})',
   });
-
-  // Rules 2+: Per-pattern exclude rules (if any)
-  for (const rule of excludeRules) {
-    rules.push({
-      match: { type: 'local_file', pattern: rule.patterns },
-      template: rule.template ?? defaultExcludeTemplate ?? DEFAULT_STRIP_TEMPLATE,
-    });
-  }
 
   // Final catch-all: remaining local_file links (depth-exceeded, navigation, etc.)
   if (excludedIds.length > 0) {
