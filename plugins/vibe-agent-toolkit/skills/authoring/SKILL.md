@@ -298,19 +298,37 @@ Use `stripPrefix` to remove a common directory prefix (e.g., `"knowledge-base"`)
 | `{{link.resource.fileName}}` | Target filename (if resolved) |
 | `{{skill.name}}` | Skill name from frontmatter |
 
-**`ignoreValidationErrors`** — Override specific validation rules when justified:
+**`validation`** — Unified framework for overriding default severity and allowing specific issue instances:
 
-```json
-"ignoreValidationErrors": {
-  "SKILL_LENGTH_EXCEEDS_RECOMMENDED": "Large domain requires detailed examples",
-  "NO_PROGRESSIVE_DISCLOSURE": {
-    "reason": "Temporary — refactoring planned",
-    "expires": "2026-06-30"
-  }
-}
+```yaml
+# In vibe-agent-toolkit.config.yaml under skills.defaults or skills.config.<name>
+validation:
+  severity:
+    LINK_DROPPED_BY_DEPTH: error           # upgrade: block on depth-dropped links
+    LINK_TO_NAVIGATION_FILE: ignore        # silence: this skill intentionally links to READMEs
+  allow:
+    PACKAGED_UNREFERENCED_FILE:
+      - paths: ["templates/runtime.json"]
+        reason: "consumed programmatically at runtime"
+        expires: "2026-09-30"
+    SKILL_LENGTH_EXCEEDS_RECOMMENDED:
+      - reason: "whole-skill concern; paths defaults to ['**/*']"
 ```
 
-Use sparingly. Prefer fixing the underlying issue over suppressing warnings.
+Two sub-keys, each covering a different override granularity:
+
+- **`severity`** — Class-level. Raise any code to `error` (blocks build), lower to `warning` (emits, non-blocking), or `ignore` (fully suppressed). Applies to every instance of that code.
+- **`allow`** — Per-instance. Suppress specific `(code, path)` matches with a required `reason` and optional `expires` date. `paths` is optional (defaults to `["**/*"]` — the whole skill). Use for legitimate exceptions that don't warrant code-wide silencing.
+
+Things adopters typically adjust:
+
+- Downgrade `LINK_DROPPED_BY_DEPTH` to `ignore` when intentionally linking out to external docs.
+- Allow specific files under `PACKAGED_UNREFERENCED_FILE` when they're consumed programmatically by CLI scripts at runtime.
+- Raise `ALLOW_EXPIRED` to `error` for zero-tolerance expiry policies.
+
+Expired `allow` entries still apply — VAT emits `ALLOW_EXPIRED` as a reminder rather than silently re-surfacing the underlying issue (no surprise build breaks when a date passes). Unused `allow` entries surface as `ALLOW_UNUSED` (analogous to ESLint's unused-disable).
+
+Full code reference at `docs/validation-codes.md`. `vat audit` is advisory: it applies `severity` for display grouping only, ignores `allow`, and always exits 0. Use `vat skills validate` or `vat skills build` for gated checks.
 
 ## Testing Agents
 
@@ -368,7 +386,7 @@ const output2 = await agent.execute({
 
 ## References
 
-- Skill Quality Checklist — Pre-publication checklist for all skills (general + CLI-backed)
+- [Skill Quality Checklist](resources/skill-quality-checklist.md) — Pre-publication checklist for all skills (general + CLI-backed)
 - agent-authoring.md — Complete patterns guide
 - orchestration.md — Multi-agent workflows
 - [Building Effective Agents - Anthropic](https://www.anthropic.com/research/building-effective-agents)
