@@ -16,6 +16,7 @@ const SKILL_MD = 'SKILL.md';
 const RESOURCES = 'resources';
 const SCRIPTS = 'scripts';
 const SCRIPTS_CLI = 'scripts/cli.mjs';
+const CLI_SCRIPT_BODY = 'console.log("hi");\n';
 const GUIDE_LINK_BODY = ['# Skill', '', 'See [guide](resources/guide.md).'].join('\n');
 
 /**
@@ -73,7 +74,7 @@ describe('checkUnreferencedFiles', () => {
   it('should report unreferenced non-markdown file', async () => {
     const outputDir = await setupOutputDir([SCRIPTS]);
     await writeSkillMd(outputDir, '# Skill\n\nNo links here.\n');
-    await writeResource(outputDir, SCRIPTS_CLI, 'console.log("hi");\n');
+    await writeResource(outputDir, SCRIPTS_CLI, CLI_SCRIPT_BODY);
 
     const issues = await checkUnreferencedFiles(outputDir);
     expectSingleIssue(issues, 'PACKAGED_UNREFERENCED_FILE', SCRIPTS_CLI);
@@ -96,10 +97,57 @@ describe('checkUnreferencedFiles', () => {
       `${RESOURCES}/guide.md`,
       ['# Guide', '', 'Uses [cli](../scripts/cli.mjs).'].join('\n'),
     );
-    await writeResource(outputDir, SCRIPTS_CLI, 'console.log("hi");\n');
+    await writeResource(outputDir, SCRIPTS_CLI, CLI_SCRIPT_BODY);
 
     const issues = await checkUnreferencedFiles(outputDir);
     expect(issues).toHaveLength(0);
+  });
+
+  it('should count path mentions inside fenced code blocks as documented', async () => {
+    // CLI scripts are typically documented by showing the invocation:
+    // ```bash
+    // node scripts/cli.mjs whoami
+    // ```
+    // That's a legitimate reference — the file is documented for the user —
+    // even though it isn't wrapped in a markdown [text](href) link.
+    const outputDir = await setupOutputDir([SCRIPTS]);
+    await writeSkillMd(
+      outputDir,
+      [
+        '# Skill',
+        '',
+        'Run the CLI:',
+        '',
+        '```bash',
+        'node scripts/cli.mjs whoami',
+        '```',
+      ].join('\n'),
+    );
+    await writeResource(outputDir, SCRIPTS_CLI, CLI_SCRIPT_BODY);
+
+    const issues = await checkUnreferencedFiles(outputDir);
+    expect(issues).toHaveLength(0);
+  });
+
+  it('should count path mentions in inline code or prose as documented', async () => {
+    const outputDir = await setupOutputDir([SCRIPTS]);
+    await writeSkillMd(
+      outputDir,
+      ['# Skill', '', 'Invoke via `scripts/cli.mjs` for details.'].join('\n'),
+    );
+    await writeResource(outputDir, SCRIPTS_CLI, CLI_SCRIPT_BODY);
+
+    const issues = await checkUnreferencedFiles(outputDir);
+    expect(issues).toHaveLength(0);
+  });
+
+  it('should still flag packaged files not mentioned anywhere', async () => {
+    const outputDir = await setupOutputDir([SCRIPTS]);
+    await writeSkillMd(outputDir, '# Skill\n\nSome unrelated prose.\n');
+    await writeResource(outputDir, SCRIPTS_CLI, CLI_SCRIPT_BODY);
+
+    const issues = await checkUnreferencedFiles(outputDir);
+    expectSingleIssue(issues, 'PACKAGED_UNREFERENCED_FILE', SCRIPTS_CLI);
   });
 });
 

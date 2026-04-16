@@ -132,15 +132,59 @@ async function collectReferencedPaths(
 }
 
 /**
+ * Record packaged files whose output-relative path appears anywhere in any
+ * packaged markdown — inside code blocks (`` ```bash\nnode scripts/cli.mjs `` ``),
+ * inline code spans, or prose — as "documented" references.
+ *
+ * A file that a skill author chose to bundle but never documents is the real
+ * problem this check exists to catch; documentation by code-block invocation
+ * is still documentation. By contrast, `collectReferencedPaths` is intentionally
+ * strict (only `[text](href)` links) because it also walks the transitive link
+ * graph, which would be unbounded if we followed substring hits.
+ */
+async function addMentionReferences(
+  outputDir: string,
+  referenced: Set<string>,
+  candidates: string[],
+  mdFiles: string[],
+): Promise<void> {
+  if (candidates.length === 0 || mdFiles.length === 0) {
+    return;
+  }
+
+  const contents = await Promise.all(
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- mdFile from walkDir
+    mdFiles.map(f => readFile(f, 'utf-8')),
+  );
+  const haystack = contents.join('\n');
+
+  for (const candidate of candidates) {
+    const relativePath = toForwardSlash(safePath.relative(outputDir, candidate));
+    if (haystack.includes(relativePath)) {
+      referenced.add(toForwardSlash(candidate));
+    }
+  }
+}
+
+/**
  * Check that every file in the packaged output is referenced from some markdown file.
  *
- * Walks the output directory, parses all .md files for links, and reports any file
- * not reachable from the SKILL.md link graph.
+ * Two-pass detection:
+ * 1. Walk `[text](href)` link graph from SKILL.md (strict, transitive).
+ * 2. For files not covered by pass 1, check whether their output-relative path
+ *    is mentioned anywhere in packaged markdown (code blocks, prose, etc.).
+ *    Authors often document CLI scripts via invocation examples rather than
+ *    markdown links, and that counts as documented.
  */
 export async function checkUnreferencedFiles(outputDir: string): Promise<ValidationIssue[]> {
   const allFiles = walkDir(outputDir);
   const allFileSet = new Set(allFiles.map(f => toForwardSlash(f)));
   const referenced = await collectReferencedPaths(outputDir, allFileSet);
+
+  // Second pass: treat any path mention in packaged markdown as documentation.
+  const candidates = allFiles.filter(f => !referenced.has(toForwardSlash(f)));
+  const mdFiles = allFiles.filter(f => f.endsWith('.md'));
+  await addMentionReferences(outputDir, referenced, candidates, mdFiles);
 
   // Find unreferenced files
   const issues: ValidationIssue[] = [];

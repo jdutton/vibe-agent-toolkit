@@ -405,25 +405,27 @@ export function transformContent(
 
   // === Pass 1: Inline links [text](href) ===
 
-  // Build a lookup map from "[text](href)" to the corresponding ResourceLink.
-  // Multiple links can share the same text+href combination; we process them all
-  // with the first matching ResourceLink (they are identical in terms of match criteria).
-  const linkBySignature = new Map<string, ResourceLink>();
+  // Build a lookup map keyed by href → ResourceLink. We intentionally key by href
+  // rather than "[text](href)" because the regex below captures the RAW markdown
+  // text (including backticks, emphasis markers, etc.), while `link.text` is
+  // already rendered (formatting stripped). Keying by text causes a signature
+  // mismatch for any formatted link text; keying by href avoids that class of
+  // bug entirely. When multiple inline links share an href, the first wins —
+  // their match criteria (type, resolvedId) are identical for lookup purposes.
+  const linkByHref = new Map<string, ResourceLink>();
   for (const link of links) {
     if (link.nodeType === 'definition') {
       continue; // Definitions are handled in pass 2
     }
-    const signature = `[${link.text}](${link.href})`;
-    if (!linkBySignature.has(signature)) {
-      linkBySignature.set(signature, link);
+    if (!linkByHref.has(link.href)) {
+      linkByHref.set(link.href, link);
     }
   }
 
   // Replace inline markdown links in content
-  let result = content.replaceAll(MARKDOWN_LINK_REGEX, (fullMatch, text: string, href: string) => {
-    // Find the corresponding ResourceLink
-    const signature = `[${text}](${href})`;
-    const link = linkBySignature.get(signature);
+  let result = content.replaceAll(MARKDOWN_LINK_REGEX, (fullMatch, _text: string, href: string) => {
+    // Find the corresponding ResourceLink by href
+    const link = linkByHref.get(href);
 
     if (!link) {
       // Link not in the parsed links array - leave untouched

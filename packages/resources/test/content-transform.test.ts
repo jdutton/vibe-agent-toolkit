@@ -228,6 +228,37 @@ describe('transformContent', () => {
 
       expect(result).toBe(GUIDE_ORIGINAL_LINK);
     });
+
+    it('should rewrite links whose text contains inline code formatting', () => {
+      // The markdown parser strips backticks from link text (remark produces
+      // `text: "guide.md"` for `[\`guide.md\`](...)`), but the regex that
+      // rewrites inline links captures the raw source including backticks.
+      // The lookup must still succeed so authors can safely code-format paths.
+      const content = 'See [`guide.md`](./guide.md) for details.';
+      const links: ResourceLink[] = [
+        createTestLink({ text: 'guide.md', href: GUIDE_HREF, resolvedId: GUIDE_ID }),
+      ];
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [createTypeRule(LOCAL_FILE, 'REWRITTEN:{{link.href}}')],
+      });
+
+      expect(result).toBe('See REWRITTEN:./guide.md for details.');
+    });
+
+    it('should rewrite links whose text contains emphasis formatting', () => {
+      const content = 'See [**Guide**](./guide.md) and [_details_](./details.md).';
+      const links: ResourceLink[] = [
+        createTestLink({ text: 'Guide', href: GUIDE_HREF }),
+        createTestLink({ text: 'details', href: './details.md' }),
+      ];
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [createTypeRule(LOCAL_FILE, 'REWRITTEN:{{link.href}}')],
+      });
+
+      expect(result).toBe('See REWRITTEN:./guide.md and REWRITTEN:./details.md.');
+    });
   });
 
   describe('pattern-based matching (glob)', () => {
