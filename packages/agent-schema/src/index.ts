@@ -71,15 +71,22 @@ export {
   PackagingOptionsSchema,
   SKILL_NAME_REGEX,
   SKILL_NAME_REGEX_MESSAGE,
-  ValidationOverrideSchema,
   VatAgentMetadataSchema,
   VatPackageMetadataSchema,
   VatPureFunctionMetadataSchema,
   VatSkillMetadataSchema,
   type PackagingOptions,
-  type ValidationOverride,
   type VatAgentMetadata,
   type VatPackageMetadata,
   type VatPureFunctionMetadata,
   type VatSkillMetadata,
 } from './package-metadata.js';
+
+export {
+  AllowEntrySchema,
+  SeverityLevelSchema,
+  ValidationConfigSchema,
+  type AllowEntry,
+  type SeverityLevel,
+  type ValidationConfig,
+} from './validation-config.js';

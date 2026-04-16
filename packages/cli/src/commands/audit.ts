@@ -26,6 +26,7 @@ import { Command } from 'commander';
 import picomatch from 'picomatch';
 
 import { handleCommandError } from '../utils/command-error.js';
+import { loadConfig } from '../utils/config-loader.js';
 import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 
@@ -101,6 +102,15 @@ Description:
   - ~/.claude/cache (cached data)
 
 Validation Behavior:
+  Advisory only: audit surfaces all validation issues for inspection.
+  Unlike 'vat skills validate', audit:
+  - NEVER applies validation.allow (allowed codes are always shown)
+  - Respects validation.severity: codes set to 'ignore' are hidden
+  - ALWAYS exits 0 for validation results (never gates on errors)
+
+  For gated validation (CI/CD), use: vat skills validate
+  For the full list of codes and severity defaults, see: docs/validation-codes.md
+
   Default: Validates SKILL.md and all transitively linked markdown files
   --warn-unreferenced-files: Also detect files not referenced in skill
 
@@ -119,9 +129,8 @@ Validation Checks:
   - Unreferenced files detected (with --warn-unreferenced-files)
 
 Exit Codes:
-  0 - Success (--user mode: always exits 0 for informational output)
-  1 - Errors found (non-user mode only)
-  2 - System error (directory not found, file not readable)
+  0 - Always (even when validation errors are surfaced)
+  2 - System error (config invalid, directory not found)
 
 Examples:
   $ vat audit ./plugins/              # Audit recursively (default)
@@ -186,11 +195,128 @@ async function auditUserDirectories(
     ? await runCompatAnalysis(results, logger)  // --settings not supported in --user mode
     : undefined;
 
-  const skillResults = results.filter((r: ValidationResult) => r.type === 'agent-skill');
+  const skillResults = results.filter((r: ValidationResult) => SKILL_RESULT_TYPES.has(r.type));
   const hierarchical = buildHierarchicalOutput(skillResults, options.verbose ?? false);
   const summary = calculateHierarchicalSummary(results, hierarchical, startTime, compatMap);
   writeYamlOutput(summary);
   logHierarchicalSummary(results, hierarchical, logger);
+}
+
+/**
+ * Apply severity filtering to validation results.
+ *
+ * Audit is advisory only: it applies `validation.severity` to decide what to
+ * show, but deliberately ignores `validation.allow`. Codes configured as
+ * `severity: 'ignore'` are stripped from the result issues before rendering.
+ *
+ * The severity config is per-skill, keyed by skill name in
+ * `config.skills.config[skillName].validation.severity`.
+ * Defaults config (`config.skills.defaults.validation.severity`) is also
+ * checked as a fallback.
+ *
+ * @param results - Raw validation results from skill/plugin validators
+ * @param config - Parsed VATConfig (may be undefined if no config file)
+ * @returns New results array with ignored codes removed from issues
+ */
+/** Skill resource types that can have per-skill validation config. */
+const SKILL_RESULT_TYPES: ReadonlySet<ValidationResult['type']> = new Set(['agent-skill', 'vat-agent']);
+
+/**
+ * Derive the project root directory for config loading.
+ *
+ * For a direct SKILL.md path, the project root is two levels up (skill dir → skills/ → project/).
+ * For a directory or undefined path, use the directory itself (or cwd).
+ */
+function deriveConfigRoot(targetPath: string | undefined): string {
+  if (targetPath === undefined) {
+    return process.cwd();
+  }
+  if (targetPath.endsWith('SKILL.md')) {
+    return safePath.resolve(safePath.join(targetPath, '..', '..'));
+  }
+  return safePath.resolve(targetPath);
+}
+
+/**
+ * Build the recalculated status and summary after issues have been filtered.
+ */
+function buildFilteredResult(
+  result: ValidationResult,
+  filteredIssues: ValidationResult['issues']
+): ValidationResult {
+  const errorCount = filteredIssues.filter(i => i.severity === 'error').length;
+  const warningCount = filteredIssues.filter(i => i.severity === 'warning').length;
+  const infoCount = filteredIssues.filter(i => i.severity === 'info').length;
+
+  let status: ValidationResult['status'];
+  if (errorCount > 0) {
+    status = 'error';
+  } else if (warningCount > 0) {
+    status = 'warning';
+  } else {
+    status = 'success';
+  }
+
+  return {
+    ...result,
+    status,
+    summary: `${errorCount} errors, ${warningCount} warnings, ${infoCount} info`,
+    issues: filteredIssues,
+  };
+}
+
+/**
+ * Apply severity filtering to validation results.
+ *
+ * Audit is advisory only: it applies `validation.severity` to decide what to
+ * show, but deliberately ignores `validation.allow`. Codes configured as
+ * `severity: 'ignore'` are stripped from the result issues before rendering.
+ *
+ * The severity config is per-skill, keyed by skill name in
+ * `config.skills.config[skillName].validation.severity`.
+ * Defaults config (`config.skills.defaults.validation.severity`) is also
+ * checked as a fallback.
+ *
+ * @param results - Raw validation results from skill/plugin validators
+ * @param config - Parsed VATConfig (may be undefined if no config file)
+ * @returns New results array with ignored codes removed from issues
+ */
+function applySeverityFilter(
+  results: ValidationResult[],
+  config: ReturnType<typeof loadConfig>
+): ValidationResult[] {
+  if (config?.skills === undefined) {
+    return results;
+  }
+
+  const skillsConfig = config.skills;
+  const defaultSeverity = skillsConfig.defaults?.validation?.severity ?? {};
+
+  return results.map(result => {
+    if (!SKILL_RESULT_TYPES.has(result.type)) {
+      return result;
+    }
+
+    const skillName = result.metadata?.name;
+    const perSkillSeverity = skillName === undefined
+      ? {}
+      : (skillsConfig.config?.[skillName]?.validation?.severity ?? {});
+
+    // Merge: per-skill overrides default
+    const effectiveSeverity: Record<string, string> = { ...defaultSeverity, ...perSkillSeverity };
+
+    if (Object.keys(effectiveSeverity).length === 0) {
+      return result;
+    }
+
+    const filteredIssues = result.issues.filter(issue => effectiveSeverity[issue.code] !== 'ignore');
+
+    if (filteredIssues.length === result.issues.length) {
+      return result;
+    }
+
+    return buildFilteredResult(result, filteredIssues);
+  });
 }
 
 export async function auditCommand(
@@ -212,7 +338,14 @@ export async function auditCommand(
     const scanPath = targetPath ? safePath.resolve(targetPath) : process.cwd();
     logger.debug(`Auditing resources at: ${scanPath}`);
 
-    const results = await getValidationResults(scanPath, recursive, options, logger);
+    const rawResults = await getValidationResults(scanPath, recursive, options, logger);
+
+    // Load config for severity filtering (audit ignores allow; only severity matters).
+    const config = loadConfig(deriveConfigRoot(targetPath));
+
+    // Apply severity filtering: hide codes whose effective severity is 'ignore'.
+    // Allow is deliberately NOT applied — audit is advisory only.
+    const results = applySeverityFilter(rawResults, config);
 
     // Load effective settings when --settings is used (requires --compat)
     let effectiveSettings: EffectiveSettings | undefined;
@@ -415,12 +548,11 @@ function handleAuditResults(
     logger.error(`\u26a0 ${totalSettingsConflicts} settings conflict(s) found — see 'settings' section in YAML output`);
   }
 
+  // Audit is advisory only — always exit 0 for validation results.
+  // Use vat skills validate for gated validation (exit 1 on errors).
   if (errorCount > 0) {
     logErrors(results, errorCount, logger);
-    process.exit(1);
-  }
-
-  if (warningCount > 0) {
+  } else if (warningCount > 0) {
     logWarnings(results, warningCount, logger);
   } else {
     logger.info(`Audit successful: ${successCount} file(s) passed`);
@@ -735,13 +867,12 @@ function logHierarchicalSummary(
   const skillsWithIssues = countAllSkills(hierarchical);
   const totalSkills = results.length;
 
+  // Audit is advisory only — always exit 0 for validation results.
+  // Use vat skills validate for gated validation (exit 1 on errors).
   if (status === 'error') {
     const errorCount = results.filter((r: ValidationResult) => r.status === 'error').length;
-    logger.error(`Audit failed: ${errorCount} skill(s) with errors (${totalSkills} scanned, ${skillsWithIssues} with issues)`);
-    process.exit(1);
-  }
-
-  if (status === 'warning') {
+    logger.error(`Audit found ${errorCount} skill(s) with errors (${totalSkills} scanned, ${skillsWithIssues} with issues)`);
+  } else if (status === 'warning') {
     const warningCount = results.filter((r: ValidationResult) => r.status === 'warning').length;
     logger.info(`Audit passed with warnings: ${warningCount} skill(s) (${totalSkills} scanned, ${skillsWithIssues} with issues)`);
   } else {

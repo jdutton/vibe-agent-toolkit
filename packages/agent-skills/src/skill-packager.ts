@@ -33,6 +33,8 @@ import { getTargetSubdir } from './content-type-routing.js';
 import type { SkillFileEntry } from './files-config.js';
 import { checkBrokenPackagedLinks, checkUnreferencedFiles } from './post-build-checks.js';
 import type { ValidationIssue } from './validators/types.js';
+import { runValidationFramework, type ValidationConfig } from './validators/validation-framework.js';
+import { walkerExclusionsToIssues } from './validators/walker-to-issues.js';
 import { walkLinkGraph, type WalkableRegistry } from './walk-link-graph.js';
 
 const PACKAGE_JSON_FILENAME = 'package.json';
@@ -154,11 +156,10 @@ export interface PackageSkillOptions {
   files?: SkillFileEntry[] | undefined;
 
   /**
-   * Suppress specific post-build validation errors by code.
-   * Maps issue code → reason string or { reason, expires? }.
-   * Same shape as SkillPackagingConfig.ignoreValidationErrors.
+   * Validation framework configuration: severity overrides and per-path allow entries.
+   * See docs/validation-codes.md for codes and defaults.
    */
-  ignoreValidationErrors?: Record<string, string | { reason: string; expires?: string }> | undefined;
+  validation?: ValidationConfig | undefined;
 }
 
 export interface SkillMetadata {
@@ -206,6 +207,9 @@ export interface PackageSkillResult {
    * Empty (or omitted) means all post-build checks passed.
    */
   postBuildIssues?: ValidationIssue[] | undefined;
+
+  /** True when any emitted issue has resolved severity 'error'. */
+  hasErrors: boolean;
 }
 
 /**
@@ -316,6 +320,7 @@ export async function packageSkill(
       maxDepth,
       excludeRules: excludeConfig?.rules ?? [],
       projectRoot,
+      skillRootPath: safePath.resolve(skillPath),
       excludeNavigationFiles,
     },
   );
@@ -452,13 +457,18 @@ export async function packageSkill(
   // Runs BEFORE generatePackageArtifacts so the synthetic package.json from
   // createNpmPackage isn't flagged as unreferenced.
   //
-  // Filter out issues suppressed by ignoreValidationErrors overrides.
-  const postBuildIssues = [
+  // Walker-exclusion issues (depth drops, missing targets, outside-project, etc.)
+  // are combined with post-build checks and run through the validation framework.
+  const rawPostBuildIssues = [
     ...await checkUnreferencedFiles(outputPath),
     ...await checkBrokenPackagedLinks(outputPath),
   ];
-  const overrides = options.ignoreValidationErrors ?? {};
-  const activeIssues = postBuildIssues.filter(issue => overrides[issue.code] === undefined);
+  const rawLinkIssues = walkerExclusionsToIssues(excludedReferences, projectRoot);
+
+  const framework = runValidationFramework(
+    [...rawLinkIssues, ...rawPostBuildIssues],
+    options.validation ?? {},
+  );
 
   // 14. Generate distribution artifacts
   const artifacts = await generatePackageArtifacts(
@@ -473,7 +483,7 @@ export async function packageSkill(
     safePath.relative(effectiveBasePath, f)
   );
 
-  // Build excluded reference paths for result
+  // Build result — hasErrors is always set (non-optional)
   const result: PackageSkillResult = {
     outputPath,
     skill: skillMetadata,
@@ -482,10 +492,11 @@ export async function packageSkill(
       dependencies: relativeLinkedFiles,
     },
     artifacts,
+    hasErrors: framework.hasErrors,
   };
 
-  if (activeIssues.length > 0) {
-    result.postBuildIssues = activeIssues;
+  if (framework.emitted.length > 0) {
+    result.postBuildIssues = framework.emitted;
   }
 
   if (excludedReferences.length > 0) {

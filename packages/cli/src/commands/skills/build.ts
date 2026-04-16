@@ -85,17 +85,28 @@ Config Structure (vibe-agent-toolkit.config.yaml):
     config:
       my-skill:
         linkFollowDepth: full
-        ignoreValidationErrors:
-          NAV_FILE_INCLUDED: "Navigation files needed for this skill"
+        validation:
+          severity:
+            LINK_TO_NAVIGATION_FILE: ignore
+          allow:
+            LINK_DROPPED_BY_DEPTH:
+              - paths: ["docs/**"]
+                reason: depth drop is intentional for large reference docs
+
+Validation:
+  Both pre-build and post-build checks use the unified validation framework.
+  Override per-code severity (error/warning/ignore) or allow specific paths
+  via validation.severity and validation.allow in vibe-agent-toolkit.config.yaml.
+  See docs/validation-codes.md for all codes and their defaults.
 
 Output:
   YAML summary -> stdout (for programmatic parsing)
   Build progress -> stderr (for human reading)
 
 Exit Codes:
-  0 - Build successful (or dry-run preview)
-  1 - Validation error or build error
-  2 - System error (missing config, invalid config)
+  0 - All skills built successfully (or dry-run preview)
+  1 - One or more skills emitted validation errors
+  2 - System error (config invalid, directory not found)
 
 Example:
   $ vat skills build                    # Build all skills from config
@@ -127,49 +138,57 @@ function displayActiveErrors(
 }
 
 /**
- * Display expired overrides
+ * Display expired allow warnings
  */
-function displayExpiredOverrides(
+function displayExpiredAllowEntries(
   validationResult: PackagingValidationResult,
   logger: ReturnType<typeof createLogger>
 ): void {
-  if (validationResult.expiredOverrides.length > 0) {
-    logger.error(`\n   Expired overrides (${validationResult.expiredOverrides.length}):`);
-    for (const { error, reason, expiredDate } of validationResult.expiredOverrides) {
-      logger.error(`     [${String(error.code)}] ${String(error.message)}`);
-      logger.error(`       Override expired: ${expiredDate} (reason: ${reason})`);
+  const expiredWarnings = validationResult.activeWarnings.filter(w => w.code === 'ALLOW_EXPIRED');
+  if (expiredWarnings.length > 0) {
+    logger.error(`\n   Expired allow entries (${expiredWarnings.length}):`);
+    for (const warn of expiredWarnings) {
+      logger.error(`     ${String(warn.message)}`);
     }
   }
 }
 
 /**
- * Log post-build integrity issues (non-blocking) so users see them.
+ * Log post-build integrity issues, prefixed by resolved severity.
  *
- * These are best-practice checks run after packaging — the build itself succeeded.
- * We surface them at info level so they show up without failing the build.
+ * Errors are emitted to stderr; warnings and info to stderr as well so they
+ * appear in the human-readable stream (not the YAML stdout stream).
  */
 function logPostBuildIssues(
   result: PackageSkillResult,
   logger: ReturnType<typeof createLogger>,
 ): void {
   if (!result.postBuildIssues || result.postBuildIssues.length === 0) return;
-  logger.info(`   ${result.postBuildIssues.length} post-build issue(s) (non-blocking):`);
+  const label = result.hasErrors ? 'post-build error(s)' : 'post-build warning(s)';
+  logger.info(`   ${result.postBuildIssues.length} ${label}:`);
   for (const issue of result.postBuildIssues) {
-    logger.info(`     [${String(issue.code)}] ${String(issue.message)}`);
+    const prefix = issue.severity === 'error' ? 'ERROR' : 'WARNING';
+    logger.info(`     [${prefix}] [${String(issue.code)}] ${String(issue.message)}`);
+    if (issue.location) {
+      logger.info(`       Location: ${String(issue.location)}`);
+    }
+    if (issue.fix) {
+      logger.info(`       Fix: ${String(issue.fix)}`);
+    }
   }
 }
 
 /**
- * Display ignored errors for context
+ * Display allowed issues for context
  */
 function displayIgnoredErrors(
   validationResult: PackagingValidationResult,
   logger: ReturnType<typeof createLogger>
 ): void {
   if (validationResult.ignoredErrors.length > 0) {
-    logger.info(`\n   Ignored errors (${validationResult.ignoredErrors.length}):`);
-    for (const { error, reason } of validationResult.ignoredErrors) {
-      logger.info(`     [${String(error.code)}] ${String(error.message)} (ignored: ${reason})`);
+    logger.info(`\n   Allowed issues (${validationResult.ignoredErrors.length}):`);
+    for (const record of validationResult.ignoredErrors) {
+      logger.info(`     [${String(record.code)}] ${String(record.location)} (allowed: ${record.reason})`);
     }
   }
 }
@@ -178,7 +197,7 @@ function displayIgnoredErrors(
  * Merge packaging config: schema defaults -> config yaml defaults -> per-skill overrides.
  *
  * Uses shallow merge (spread) since all SkillPackagingConfig fields are top-level.
- * The ignoreValidationErrors and excludeReferencesFromBundle fields are objects,
+ * The excludeReferencesFromBundle and validation fields are objects,
  * but per-skill overrides should fully replace (not deep-merge) the defaults for those fields.
  */
 function mergePackagingConfig(
@@ -223,12 +242,10 @@ async function validateSkillOrExit(
   logger.debug(`   Validating skill: ${skillName}`);
 
   const validationResult = await validateSkillForPackaging(sourcePath, packagingConfig);
-  const hasActiveErrors =
-    validationResult.activeErrors.length > 0 || validationResult.expiredOverrides.length > 0;
 
-  if (!hasActiveErrors) {
+  if (validationResult.status !== 'error') {
     if (validationResult.ignoredErrors.length > 0) {
-      logger.debug(`   ${validationResult.ignoredErrors.length} error(s) ignored by overrides`);
+      logger.debug(`   ${validationResult.ignoredErrors.length} issue(s) allowed by config`);
     }
     return;
   }
@@ -238,7 +255,7 @@ async function validateSkillOrExit(
   logger.error(`   Source: ${sourcePath}`);
 
   displayActiveErrors(validationResult, logger);
-  displayExpiredOverrides(validationResult, logger);
+  displayExpiredAllowEntries(validationResult, logger);
   displayIgnoredErrors(validationResult, logger);
 
   logger.error(`\n   Build aborted due to validation errors`);
@@ -406,19 +423,23 @@ async function buildCommand(
         ...(packagingConfig.stripPrefix && { stripPrefix: packagingConfig.stripPrefix }),
         ...(packagingConfig.linkFollowDepth !== undefined && { linkFollowDepth: packagingConfig.linkFollowDepth }),
         ...(packagingConfig.excludeReferencesFromBundle && { excludeReferencesFromBundle: packagingConfig.excludeReferencesFromBundle }),
-        ...(packagingConfig.ignoreValidationErrors && { ignoreValidationErrors: packagingConfig.ignoreValidationErrors }),
         ...(packagingConfig.files && { files: packagingConfig.files }),
+        ...(packagingConfig.validation && { validation: packagingConfig.validation }),
       },
     }));
 
     const packageResults = await packageSkills(specs, cwd);
 
     const results: Array<{ name: string; result: PackageSkillResult }> = [];
+    const skillsWithErrors: string[] = [];
     for (const [i, spec] of validatedSpecs.entries()) {
       const result = packageResults[i];
       if (result) {
         logger.info(`   Built ${result.files.dependencies.length + 1} files`);
         logPostBuildIssues(result, logger);
+        if (result.hasErrors) {
+          skillsWithErrors.push(spec.skill.name);
+        }
         results.push({ name: spec.skill.name, result });
       }
     }
@@ -427,6 +448,14 @@ async function buildCommand(
 
     // Output YAML results
     outputBuildYaml(results, duration);
+
+    if (skillsWithErrors.length > 0) {
+      logger.error(`\nBuild failed: ${skillsWithErrors.length} skill(s) emitted post-build validation errors`);
+      for (const name of skillsWithErrors) {
+        logger.error(`   - ${name}`);
+      }
+      process.exit(1);
+    }
 
     logger.info(`\nBuilt ${results.length} skill(s) successfully`);
 

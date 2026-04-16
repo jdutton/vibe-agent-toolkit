@@ -11,6 +11,7 @@ import { dirname } from 'node:path';
 
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
+import { CODE_REGISTRY } from './validators/code-registry.js';
 import type { ValidationIssue } from './validators/types.js';
 
 /**
@@ -193,11 +194,12 @@ export async function checkUnreferencedFiles(outputDir: string): Promise<Validat
     if (!referenced.has(normalized)) {
       const relativePath = toForwardSlash(safePath.relative(outputDir, file));
       issues.push({
-        severity: 'error',
+        severity: CODE_REGISTRY.PACKAGED_UNREFERENCED_FILE.defaultSeverity,
         code: 'PACKAGED_UNREFERENCED_FILE',
         message: `Packaged file not referenced from any markdown: ${relativePath}`,
         location: relativePath,
-        fix: 'Add a markdown link to this file from SKILL.md or a linked resource, or suppress with ignoreValidationErrors',
+        fix: CODE_REGISTRY.PACKAGED_UNREFERENCED_FILE.fix,
+        reference: CODE_REGISTRY.PACKAGED_UNREFERENCED_FILE.reference,
       });
     }
   }
@@ -226,11 +228,12 @@ export async function checkBrokenPackagedLinks(outputDir: string): Promise<Valid
       const resolved = toForwardSlash(safePath.resolve(dirname(mdFile), href));
       if (!allFileSet.has(resolved)) {
         issues.push({
-          severity: 'error',
+          severity: CODE_REGISTRY.PACKAGED_BROKEN_LINK.defaultSeverity,
           code: 'PACKAGED_BROKEN_LINK',
           message: `Broken link in packaged output: ${href} (from ${relativeMdPath})`,
           location: relativeMdPath,
-          fix: 'This indicates a link-rewriting bug — the source link was valid but the packaged link is broken',
+          fix: CODE_REGISTRY.PACKAGED_BROKEN_LINK.fix,
+          reference: CODE_REGISTRY.PACKAGED_BROKEN_LINK.reference,
         });
       }
     }

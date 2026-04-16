@@ -6,9 +6,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
 	createIssue,
-	isOverridable,
 	NAVIGATION_FILE_PATTERNS,
-	NON_OVERRIDABLE_RULES,
 	VALIDATION_RULES,
 	VALIDATION_THRESHOLDS,
 } from '../../src/validators/validation-rules.js';
@@ -39,25 +37,6 @@ describe('NAVIGATION_FILE_PATTERNS', () => {
 	});
 });
 
-describe('NON_OVERRIDABLE_RULES', () => {
-	it('should mark required rules as non-overridable', () => {
-		expect(NON_OVERRIDABLE_RULES).toContain('INVALID_FRONTMATTER');
-		expect(NON_OVERRIDABLE_RULES).toContain('MISSING_NAME');
-		expect(NON_OVERRIDABLE_RULES).toContain('RESERVED_WORD_IN_NAME');
-		expect(NON_OVERRIDABLE_RULES).toContain('BROKEN_INTERNAL_LINK');
-		expect(NON_OVERRIDABLE_RULES).toContain('CIRCULAR_REFERENCE');
-		expect(NON_OVERRIDABLE_RULES).toContain('OUTSIDE_PROJECT_BOUNDARY');
-		expect(NON_OVERRIDABLE_RULES).toContain('FILENAME_COLLISION');
-		expect(NON_OVERRIDABLE_RULES).toContain('WINDOWS_BACKSLASH_IN_PATH');
-	});
-
-	it('should not include best practice rules', () => {
-		expect(NON_OVERRIDABLE_RULES).not.toContain('SKILL_LENGTH_EXCEEDS_RECOMMENDED');
-		expect(NON_OVERRIDABLE_RULES).not.toContain('SKILL_TOTAL_SIZE_LARGE');
-		expect(NON_OVERRIDABLE_RULES).not.toContain('SKILL_TOO_MANY_FILES');
-		expect(NON_OVERRIDABLE_RULES).not.toContain('REFERENCE_TOO_DEEP');
-	});
-});
 
 describe('VALIDATION_RULES', () => {
 	it('should define all required rules', () => {
@@ -112,28 +91,6 @@ describe('VALIDATION_RULES', () => {
 	});
 });
 
-describe('isOverridable', () => {
-	it('should return false for required rules', () => {
-		expect(isOverridable('INVALID_FRONTMATTER')).toBe(false);
-		expect(isOverridable('MISSING_NAME')).toBe(false);
-		expect(isOverridable('RESERVED_WORD_IN_NAME')).toBe(false);
-		expect(isOverridable('BROKEN_INTERNAL_LINK')).toBe(false);
-		expect(isOverridable('CIRCULAR_REFERENCE')).toBe(false);
-		expect(isOverridable('OUTSIDE_PROJECT_BOUNDARY')).toBe(false);
-		expect(isOverridable('FILENAME_COLLISION')).toBe(false);
-		expect(isOverridable('WINDOWS_BACKSLASH_IN_PATH')).toBe(false);
-	});
-
-	it('should return true for best practice rules', () => {
-		expect(isOverridable('SKILL_LENGTH_EXCEEDS_RECOMMENDED')).toBe(true);
-		expect(isOverridable('SKILL_TOTAL_SIZE_LARGE')).toBe(true);
-		expect(isOverridable('SKILL_TOO_MANY_FILES')).toBe(true);
-		expect(isOverridable('REFERENCE_TOO_DEEP')).toBe(true);
-		expect(isOverridable('LINKS_TO_NAVIGATION_FILES')).toBe(true);
-		expect(isOverridable('DESCRIPTION_TOO_VAGUE')).toBe(true);
-		expect(isOverridable('NO_PROGRESSIVE_DISCLOSURE')).toBe(true);
-	});
-});
 
 describe('createIssue', () => {
 	it('should create basic issue from rule', () => {
@@ -173,6 +130,14 @@ describe('createIssue', () => {
 		const issue = createIssue(rule, {}); // Missing 'href' context
 
 		expect(issue.message).toBe('Link target not found: unknown');
+	});
+});
+
+describe('fix hints are framework-aware', () => {
+	it('PACKAGED_UNREFERENCED_FILE fix references validation.allow, not the removed ignoreValidationErrors field', () => {
+		const rule = VALIDATION_RULES.PACKAGED_UNREFERENCED_FILE;
+		expect(rule.fix).not.toMatch(/ignoreValidationErrors/);
+		expect(rule.fix).toMatch(/validation\.allow/);
 	});
 });
 

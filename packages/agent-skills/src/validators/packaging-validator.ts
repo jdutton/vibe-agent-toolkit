@@ -5,8 +5,7 @@
  * - Size/complexity validation (SKILL.md lines, total lines, file count)
  * - Link depth analysis (prevent deep nesting)
  * - Navigation file detection (README.md, index.md patterns)
- * - Override support (ignoreValidationErrors configuration)
- * - Expiration checking (time-limited overrides)
+ * - Framework-based severity / allow config (validation.severity, validation.allow)
  *
  * Used by:
  * - vat skills validate (report errors, exit 1 on failure)
@@ -18,22 +17,21 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
-import type { ValidationOverride } from '@vibe-agent-toolkit/agent-schema';
 import { parseMarkdown, ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 
 import { walkLinkGraph, type LinkResolution, type WalkableRegistry } from '../walk-link-graph.js';
 
+import type { AllowRecord } from './allow-filter.js';
+import { CODE_REGISTRY, type IssueCode } from './code-registry.js';
 import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
 import type { ValidationIssue } from './types.js';
+import { runValidationFramework, type ValidationConfig } from './validation-framework.js';
 import {
-  createIssue,
-  isOverridable,
-  NAVIGATION_FILE_PATTERNS,
   VALIDATION_RULES,
   VALIDATION_THRESHOLDS,
-  type ValidationRuleCode,
 } from './validation-rules.js';
+import { walkerExclusionsToIssues } from './walker-to-issues.js';
 
 /** Exclude reason constants to avoid duplicate string literals */
 const EXCLUDE_REASON_DIRECTORY = 'directory-target' as const;
@@ -54,7 +52,8 @@ export interface SkillPackagingConfig {
     defaultTemplate?: string;
   };
   files?: Array<{ source: string; dest: string }>;
-  ignoreValidationErrors?: Record<string, string | { reason: string; expires?: string }>;
+  /** Framework-based validation configuration (severity overrides and allow entries). */
+  validation?: ValidationConfig | undefined;
 }
 
 /** Excluded reference detail for verbose output */
@@ -65,7 +64,7 @@ export interface ExcludedReferenceDetail {
 }
 
 /**
- * Enhanced validation result with override support
+ * Enhanced validation result using the unified framework
  */
 export interface PackagingValidationResult {
   /** Skill name */
@@ -74,24 +73,17 @@ export interface PackagingValidationResult {
   /** Validation status */
   status: 'success' | 'error';
 
-  /** All validation errors (before override filtering) */
+  /** All emitted issues after severity resolution (errors + warnings) */
   allErrors: ValidationIssue[];
 
-  /** Active errors (not ignored by overrides) */
+  /** Active errors (severity === 'error', not suppressed by allow) */
   activeErrors: ValidationIssue[];
 
-  /** Ignored errors (suppressed by valid overrides) */
-  ignoredErrors: Array<{
-    error: ValidationIssue;
-    reason: string;
-  }>;
+  /** Active warnings (severity === 'warning', not suppressed by allow) */
+  activeWarnings: ValidationIssue[];
 
-  /** Expired overrides (no longer valid) */
-  expiredOverrides: Array<{
-    error: ValidationIssue;
-    reason: string;
-    expiredDate: string;
-  }>;
+  /** Issues suppressed by allow entries */
+  ignoredErrors: AllowRecord[];
 
   /** Metadata about the skill */
   metadata: {
@@ -132,23 +124,45 @@ function validateFilesConfig(
 }
 
 /**
+ * Create a validation issue from a code-registry code
+ */
+function createRegistryIssue(
+  code: IssueCode,
+  message: string,
+  location?: string,
+): ValidationIssue {
+  const entry = CODE_REGISTRY[code];
+  const issue: ValidationIssue = {
+    severity: entry.defaultSeverity,
+    code,
+    message,
+    fix: entry.fix,
+    reference: entry.reference,
+  };
+  if (location !== undefined) {
+    issue.location = location;
+  }
+  return issue;
+}
+
+/**
  * Validate a skill for packaging
  *
  * Performs comprehensive validation including:
  * - Size/complexity checks
  * - Link depth analysis
  * - Navigation file detection
- * - Override application
+ * - Framework-based severity / allow config
  *
  * @param skillPath - Path to SKILL.md
- * @param packagingConfig - Optional packaging configuration (depth, excludes, overrides)
- * @returns Validation result with active and ignored errors
+ * @param packagingConfig - Optional packaging configuration (depth, excludes, validation)
+ * @returns Validation result with active errors, warnings, and allowed issues
  */
 export async function validateSkillForPackaging(
   skillPath: string,
   packagingConfig?: SkillPackagingConfig
 ): Promise<PackagingValidationResult> {
-  const errors: ValidationIssue[] = [];
+  const rawIssues: ValidationIssue[] = [];
 
   // Parse SKILL.md
   const parseResult = await parseMarkdown(skillPath);
@@ -158,14 +172,14 @@ export async function validateSkillForPackaging(
 
   // Validate frontmatter schema (name format, required fields, etc.)
   if (parseResult.frontmatter) {
-    errors.push(
+    rawIssues.push(
       ...validateFrontmatterSchema(parseResult.frontmatter, false),
       ...validateFrontmatterRules(parseResult.frontmatter),
     );
   }
 
   // Validate files config
-  errors.push(...validateFilesConfig(packagingConfig?.files));
+  rawIssues.push(...validateFilesConfig(packagingConfig?.files));
 
   // Read packaging options for depth/exclude configuration
   const linkFollowDepth = packagingConfig?.linkFollowDepth ?? 2;
@@ -191,6 +205,7 @@ export async function validateSkillForPackaging(
       maxDepth,
       excludeRules: excludeConfig?.rules ?? [],
       projectRoot,
+      skillRootPath: safePath.resolve(skillPath),
       excludeNavigationFiles,
     },
   );
@@ -201,19 +216,8 @@ export async function validateSkillForPackaging(
   const bundledFileSet = new Set(bundledFiles);
   const directFileCount = directLinks.filter(p => bundledFileSet.has(p)).length;
 
-  // Check for directory links (directories are not valid bundle targets)
-  const directoryLinks = excludedReferences.filter(r => r.excludeReason === EXCLUDE_REASON_DIRECTORY);
-  for (const dirLink of directoryLinks) {
-    const dirPath = toForwardSlash(safePath.relative(dirname(skillPath), dirLink.path));
-    errors.push(createIssue(VALIDATION_RULES.LINK_TARGETS_DIRECTORY, { dirPath }, skillPath));
-  }
-
-  // Check for outside-project links (non-overridable error)
-  const outsideProjectLinks = excludedReferences.filter(r => r.excludeReason === EXCLUDE_REASON_OUTSIDE_PROJECT);
-  for (const extLink of outsideProjectLinks) {
-    const href = toForwardSlash(safePath.relative(dirname(skillPath), extLink.path));
-    errors.push(createIssue(VALIDATION_RULES.OUTSIDE_PROJECT_BOUNDARY, { href }, skillPath));
-  }
+  // Emit issues from walker exclusions (LINK_OUTSIDE_PROJECT, LINK_TARGETS_DIRECTORY, etc.)
+  rawIssues.push(...walkerExclusionsToIssues(excludedReferences, projectRoot));
 
   const fileCount = bundledFiles.length + 1; // +1 for SKILL.md itself
   const maxLinkDepth = maxBundledDepth;
@@ -230,28 +234,27 @@ export async function validateSkillForPackaging(
 
   const excludedDetails = deduplicateExcludedReferences(excludedReferences, skillPath);
 
-  // Run validation checks
-  await validateSkillSize(skillLines, skillPath, errors);
-  await validateTotalSize(totalLines, fileCount, skillPath, errors);
-  await validateFileCount(fileCount, skillPath, errors);
-  await validateLinkDepth(maxLinkDepth, skillPath, errors);
-  await validateNavigationLinks(parseResult.links, skillPath, errors);
-  await validateDescription(parseResult.frontmatter, skillPath, errors);
-  await validateProgressiveDisclosure(skillLines, bundledFiles.length, skillPath, errors);
+  // Run quality / best-practice checks
+  collectSizeIssues(skillLines, totalLines, fileCount, maxLinkDepth, skillPath, rawIssues);
+  collectDescriptionIssue(parseResult.frontmatter, skillPath, rawIssues);
+  collectProgressiveDisclosureIssue(skillLines, bundledFiles.length, skillPath, rawIssues);
 
-  // Apply overrides
+  // Run through the unified validation framework
+  const validationConfig = packagingConfig?.validation ?? {};
+  const framework = runValidationFramework(rawIssues, validationConfig);
+
   const skillName = extractSkillName(parseResult, skillPath);
-  const overrides = packagingConfig?.ignoreValidationErrors ?? {};
 
-  const { activeErrors, ignoredErrors, expiredOverrides } = applyOverrides(errors, overrides);
+  const activeErrors = framework.emitted.filter(i => i.severity === 'error');
+  const activeWarnings = framework.emitted.filter(i => i.severity === 'warning');
 
   return {
     skillName,
-    status: activeErrors.length > 0 ? 'error' : 'success',
-    allErrors: errors,
+    status: framework.hasErrors ? 'error' : 'success',
+    allErrors: framework.emitted,
     activeErrors,
-    ignoredErrors,
-    expiredOverrides,
+    activeWarnings,
+    ignoredErrors: framework.allowed,
     metadata: {
       skillLines,
       totalLines,
@@ -265,97 +268,61 @@ export async function validateSkillForPackaging(
 }
 
 /**
- * Validate SKILL.md size
+ * Collect size and depth validation issues
  */
-async function validateSkillSize(
-  lines: number,
-  skillPath: string,
-  errors: ValidationIssue[]
-): Promise<void> {
-  if (lines > VALIDATION_THRESHOLDS.RECOMMENDED_SKILL_LINES) {
-    const rule = VALIDATION_RULES.SKILL_LENGTH_EXCEEDS_RECOMMENDED;
-    errors.push(createIssue(rule, { lines }, skillPath));
-  }
-}
-
-/**
- * Validate total skill size
- */
-async function validateTotalSize(
+function collectSizeIssues(
+  skillLines: number,
   totalLines: number,
-  _fileCount: number,
+  fileCount: number,
+  maxLinkDepth: number,
   skillPath: string,
-  errors: ValidationIssue[]
-): Promise<void> {
+  issues: ValidationIssue[],
+): void {
+  if (skillLines > VALIDATION_THRESHOLDS.RECOMMENDED_SKILL_LINES) {
+    const rule = VALIDATION_RULES.SKILL_LENGTH_EXCEEDS_RECOMMENDED;
+    issues.push(createRegistryIssue(
+      rule.code as IssueCode,
+      rule.message({ lines: skillLines }),
+      skillPath,
+    ));
+  }
+
   if (totalLines > VALIDATION_THRESHOLDS.MAX_TOTAL_LINES) {
     const rule = VALIDATION_RULES.SKILL_TOTAL_SIZE_LARGE;
-    errors.push(createIssue(rule, { totalLines }, skillPath));
+    issues.push(createRegistryIssue(
+      rule.code as IssueCode,
+      rule.message({ totalLines }),
+      skillPath,
+    ));
   }
-}
 
-/**
- * Validate file count
- */
-async function validateFileCount(
-  fileCount: number,
-  skillPath: string,
-  errors: ValidationIssue[]
-): Promise<void> {
   if (fileCount > VALIDATION_THRESHOLDS.MAX_FILE_COUNT) {
     const rule = VALIDATION_RULES.SKILL_TOO_MANY_FILES;
-    errors.push(createIssue(rule, { fileCount }, skillPath));
+    issues.push(createRegistryIssue(
+      rule.code as IssueCode,
+      rule.message({ fileCount }),
+      skillPath,
+    ));
   }
-}
 
-/**
- * Validate link depth
- */
-async function validateLinkDepth(
-  depth: number,
-  skillPath: string,
-  errors: ValidationIssue[]
-): Promise<void> {
-  if (depth > VALIDATION_THRESHOLDS.MAX_REFERENCE_DEPTH) {
+  if (maxLinkDepth > VALIDATION_THRESHOLDS.MAX_REFERENCE_DEPTH) {
     const rule = VALIDATION_RULES.REFERENCE_TOO_DEEP;
-    errors.push(createIssue(rule, { depth }, skillPath));
+    issues.push(createRegistryIssue(
+      rule.code as IssueCode,
+      rule.message({ depth: maxLinkDepth }),
+      skillPath,
+    ));
   }
 }
 
 /**
- * Validate navigation links
+ * Collect description quality issue (DESCRIPTION_TOO_VAGUE)
  */
-async function validateNavigationLinks(
-  links: Array<{ href: string; type: string; line?: number | undefined; text?: string | undefined }>,
-  skillPath: string,
-  errors: ValidationIssue[]
-): Promise<void> {
-  const navigationLinks = links
-    .filter((link) => link.type === 'local_file')
-    .filter((link) => {
-      const filename = basename(link.href);
-      return (NAVIGATION_FILE_PATTERNS as readonly string[]).includes(filename);
-    });
-
-  if (navigationLinks.length > 0) {
-    const files = navigationLinks.map((l) => {
-      const hrefBase = l.href.split('#')[0] ?? l.href;
-      const resolvedPath = safePath.resolve(dirname(skillPath), hrefBase);
-      const lineInfo = l.line === undefined ? '' : `:${l.line}`;
-      return `${resolvedPath}${lineInfo}`;
-    }).join(', ');
-    const rule = VALIDATION_RULES.LINKS_TO_NAVIGATION_FILES;
-    errors.push(createIssue(rule, { files }, skillPath));
-  }
-}
-
-/**
- * Validate description
- */
-async function validateDescription(
+function collectDescriptionIssue(
   frontmatter: Record<string, unknown> | undefined,
   skillPath: string,
-  errors: ValidationIssue[]
-): Promise<void> {
+  issues: ValidationIssue[],
+): void {
   const description = frontmatter?.['description'];
 
   if (!description || typeof description !== 'string') {
@@ -364,22 +331,30 @@ async function validateDescription(
 
   if (description.length < VALIDATION_THRESHOLDS.MIN_DESCRIPTION_LENGTH) {
     const rule = VALIDATION_RULES.DESCRIPTION_TOO_VAGUE;
-    errors.push(createIssue(rule, { length: description.length }, skillPath));
+    issues.push(createRegistryIssue(
+      rule.code as IssueCode,
+      rule.message({ length: description.length }),
+      skillPath,
+    ));
   }
 }
 
 /**
- * Validate progressive disclosure pattern
+ * Collect progressive disclosure issue (NO_PROGRESSIVE_DISCLOSURE)
  */
-async function validateProgressiveDisclosure(
+function collectProgressiveDisclosureIssue(
   skillLines: number,
   referenceFileCount: number,
   skillPath: string,
-  errors: ValidationIssue[]
-): Promise<void> {
+  issues: ValidationIssue[],
+): void {
   if (skillLines > VALIDATION_THRESHOLDS.RECOMMENDED_SKILL_LINES && referenceFileCount === 0) {
     const rule = VALIDATION_RULES.NO_PROGRESSIVE_DISCLOSURE;
-    errors.push(createIssue(rule, { lines: skillLines }, skillPath));
+    issues.push(createRegistryIssue(
+      rule.code as IssueCode,
+      rule.message({ lines: skillLines }),
+      skillPath,
+    ));
   }
 }
 
@@ -467,6 +442,7 @@ function mapExcludeReason(
     case 'depth-exceeded':
     case EXCLUDE_REASON_DIRECTORY:
     case EXCLUDE_REASON_OUTSIDE_PROJECT:
+    case 'missing-target':
     case undefined:
     default:
       return DETAIL_REASON_DEPTH;
@@ -495,58 +471,4 @@ function extractSkillName(
 
   // Fall back to filename
   return basename(skillPath, '.md');
-}
-
-/**
- * Apply validation overrides
- */
-function applyOverrides(
-  errors: ValidationIssue[],
-  overrides: Record<string, ValidationOverride>
-): {
-  activeErrors: ValidationIssue[];
-  ignoredErrors: Array<{ error: ValidationIssue; reason: string }>;
-  expiredOverrides: Array<{ error: ValidationIssue; reason: string; expiredDate: string }>;
-} {
-  const activeErrors: ValidationIssue[] = [];
-  const ignoredErrors: Array<{ error: ValidationIssue; reason: string }> = [];
-  const expiredOverrides: Array<{ error: ValidationIssue; reason: string; expiredDate: string }> = [];
-
-  for (const error of errors) {
-    const override = overrides[error.code];
-
-    // No override - error is active
-    if (!override) {
-      activeErrors.push(error);
-      continue;
-    }
-
-    // Check if error code is overridable
-    if (!isOverridable(error.code as ValidationRuleCode)) {
-      // Non-overridable rule - error is active
-      activeErrors.push(error);
-      continue;
-    }
-
-    // Parse override
-    const { reason, expires } = typeof override === 'string' ? { reason: override, expires: undefined } : override;
-
-    // Check expiration
-    if (expires) {
-      const expirationDate = new Date(expires);
-      const now = new Date();
-
-      if (now > expirationDate) {
-        // Override expired - error is active
-        expiredOverrides.push({ error, reason, expiredDate: expires });
-        activeErrors.push(error);
-        continue;
-      }
-    }
-
-    // Valid override - error is ignored
-    ignoredErrors.push({ error, reason });
-  }
-
-  return { activeErrors, ignoredErrors, expiredOverrides };
 }

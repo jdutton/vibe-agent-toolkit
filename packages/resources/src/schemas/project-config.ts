@@ -1,8 +1,8 @@
-import { ValidationOverrideSchema } from '@vibe-agent-toolkit/agent-schema';
+import { ValidationConfigSchema } from '@vibe-agent-toolkit/agent-schema';
 import { z } from 'zod';
 
 // Re-export for downstream consumers (unicorn/prefer-export-from satisfied by the import above)
-export { ValidationOverrideSchema } from '@vibe-agent-toolkit/agent-schema';
+export { ValidationConfigSchema } from '@vibe-agent-toolkit/agent-schema';
 
 /**
  * Validation mode for frontmatter schema validation.
@@ -134,9 +134,10 @@ export const SkillPackagingConfigSchema = z.object({
   stripPrefix: z.string().optional(),
   excludeNavigationFiles: z.boolean().optional(),
   excludeReferencesFromBundle: ExcludeReferencesFromBundleSchema.optional(),
-  ignoreValidationErrors: z.record(z.string(), ValidationOverrideSchema).optional(),
+  validation: ValidationConfigSchema.optional()
+    .describe('Validation framework config: severity overrides and per-path allow entries'),
   files: z.array(SkillFileEntrySchema).optional().describe('Explicit source→dest file mappings for build artifacts, unlinked files, or routing overrides'),
-}).describe('Skill packaging configuration');
+}).strict().describe('Skill packaging configuration');
 
 export type SkillPackagingConfig = z.infer<typeof SkillPackagingConfigSchema>;
 
@@ -150,7 +151,7 @@ export const SkillsConfigSchema = z.object({
   exclude: z.array(z.string()).optional().describe('Glob patterns to exclude'),
   defaults: SkillPackagingConfigSchema.optional().describe('Default packaging config for all skills'),
   config: z.record(z.string(), SkillPackagingConfigSchema).optional().describe('Per-skill packaging config overrides (keyed by skill name)'),
-}).describe('Skills discovery and packaging configuration');
+}).strict().describe('Skills discovery and packaging configuration');
 
 export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
 
@@ -238,6 +239,6 @@ export const ProjectConfigSchema = z.object({
     .describe('Resources configuration'),
   claude: ClaudeConfigSchema.optional()
     .describe('Claude-specific configuration (marketplaces, managed-settings)'),
-}).describe('vibe-agent-toolkit project configuration');
+}).strict().describe('vibe-agent-toolkit project configuration');
 
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;

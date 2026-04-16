@@ -69,9 +69,12 @@ Use this before a release to determine which surfaces each plugin supports.
 
 ## Exit Codes
 
-- `0` — clean (or `--user` mode: always 0, informational)
-- `1` — validation errors found
-- `2` — system error (path not found, permission denied)
+`vat audit` is **advisory** — it reports every issue it detects but never blocks on validation severity:
+
+- `0` — always, when the audit completes, regardless of errors or warnings in the report.
+- `2` — system error (path not found, permission denied, etc.) — the audit could not run.
+
+For gated checks that exit `1` on validation errors, use `vat skills validate` or `vat skills build` instead. Those commands apply `validation.severity` and honor `validation.allow` from config.
 
 ## CI Usage
 
@@ -93,19 +96,21 @@ summary:
   errors: 0
 ```
 
-Warnings (exit 0) vs errors (exit 1):
-- **Errors:** Missing required frontmatter, broken links, invalid plugin.json schema
+Severity taxonomy in audit output:
+- **Errors:** Missing required frontmatter, broken links, invalid plugin.json schema, link integrity violations
 - **Warnings:** Skill too long, description too short, best practice violations
 
-Suppress specific warnings with `ignoreValidationErrors` in `package.json`:
-```json
-{
-  "vat": {
-    "skills": [{
-      "ignoreValidationErrors": {
-        "SKILL_LENGTH_EXCEEDS_RECOMMENDED": "Complex domain requires full detail"
-      }
-    }]
-  }
-}
+Audit always exits `0` regardless — surface-level severity drives display grouping only.
+
+**Hiding codes from audit output.** Audit ignores `validation.allow` by design (it is the read-only report), but it does honor `validation.severity`. Set a code to `ignore` in `vibe-agent-toolkit.config.yaml` to suppress it from the audit output:
+
+```yaml
+skills:
+  config:
+    my-skill:
+      validation:
+        severity:
+          LINK_TO_NAVIGATION_FILE: ignore   # hidden from audit output
 ```
+
+**Per-instance allow entries.** For per-path suppression with an audit trail, use `validation.allow` and run `vat skills validate` or `vat skills build` — those commands apply `allow` and gate the build. See `docs/validation-codes.md` for the full code reference and the VAT agent-authoring skill for configuration patterns.

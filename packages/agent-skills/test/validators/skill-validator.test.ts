@@ -121,12 +121,12 @@ describe('transitive link traversal — broken links', () => {
 describe('transitive link traversal — boundary escape', () => {
   const { getTempDir } = setupTempDir('skill-boundary-');
 
-  it('should report OUTSIDE_PROJECT_BOUNDARY for link escaping skill directory', async () => {
+  it('should report LINK_OUTSIDE_PROJECT for link escaping skill directory', async () => {
     const { result } = await createAndValidateTransitiveSkill(
       getTempDir(), {}, skillWithLink('../outside.md', 'parent'),
     );
 
-    const issues = findIssues(result, 'OUTSIDE_PROJECT_BOUNDARY');
+    const issues = findIssues(result, 'LINK_OUTSIDE_PROJECT');
     expect(issues).toHaveLength(1);
     expect(issues[0]?.severity).toBe('warning');
     expect(issues[0]?.message).toContain('../outside.md');
@@ -326,7 +326,7 @@ describe('transitive link traversal — skipped link types', () => {
     );
 
     expect(findIssues(result, 'LINK_INTEGRITY_BROKEN')).toHaveLength(0);
-    expect(findIssues(result, 'OUTSIDE_PROJECT_BOUNDARY')).toHaveLength(0);
+    expect(findIssues(result, 'LINK_OUTSIDE_PROJECT')).toHaveLength(0);
   });
 });
 

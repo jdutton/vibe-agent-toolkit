@@ -1020,7 +1020,7 @@ describe('skill-packager: post-build integrity', () => {
     expect(result.postBuildIssues?.filter(i => i.code === 'PACKAGED_BROKEN_LINK')).toHaveLength(0);
   });
 
-  it('should suppress PACKAGED_UNREFERENCED_FILE when ignoreValidationErrors is set', async () => {
+  it('should suppress PACKAGED_UNREFERENCED_FILE when validation.severity is set to ignore', async () => {
     const tempDir = getTempDir();
     const rootDir = safePath.join(tempDir, 'unreferenced-suppressed-root');
     await mkdir(rootDir, { recursive: true });
@@ -1031,7 +1031,7 @@ describe('skill-packager: post-build integrity', () => {
       formats: ['directory'],
       rewriteLinks: true,
       files: [{ source: 'extra/orphan.txt', dest: ORPHAN_DEST }],
-      ignoreValidationErrors: { PACKAGED_UNREFERENCED_FILE: 'orphan.txt is intentionally unreferenced for this test' },
+      validation: { severity: { PACKAGED_UNREFERENCED_FILE: 'ignore' } },
     });
 
     // File should still exist in output (suppression doesn't prevent packaging)
@@ -1039,5 +1039,37 @@ describe('skill-packager: post-build integrity', () => {
 
     // No active issues should be reported (suppression took effect)
     expect(result.postBuildIssues ?? []).toHaveLength(0);
+    // Suppression is not an error
+    expect(result.hasErrors).toBe(false);
+  });
+
+  it('emits LINK_DROPPED_BY_DEPTH as a warning by default and blocks when severity=error', async () => {
+    const tempDir = getTempDir();
+    const skillPath = await createTwoLevelChain(tempDir);
+    const outputPath = safePath.join(tempDir, 'output-depth-warn');
+    const outputPathStrict = safePath.join(tempDir, 'output-depth-error');
+
+    // Default: LINK_DROPPED_BY_DEPTH is a warning, non-blocking
+    const warn = await packageSkill(skillPath, {
+      outputPath,
+      linkFollowDepth: 0,
+      formats: ['directory'],
+    });
+    expect(warn.postBuildIssues?.some(i =>
+      i.code === 'LINK_DROPPED_BY_DEPTH' && i.severity === 'warning'
+    )).toBe(true);
+    expect(warn.hasErrors).toBe(false);
+
+    // Upgraded to error: hasErrors = true, issue surfaces as error
+    const strict = await packageSkill(skillPath, {
+      outputPath: outputPathStrict,
+      linkFollowDepth: 0,
+      formats: ['directory'],
+      validation: { severity: { LINK_DROPPED_BY_DEPTH: 'error' } },
+    });
+    expect(strict.hasErrors).toBe(true);
+    expect(strict.postBuildIssues?.some(i =>
+      i.code === 'LINK_DROPPED_BY_DEPTH' && i.severity === 'error'
+    )).toBe(true);
   });
 });

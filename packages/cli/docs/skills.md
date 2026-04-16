@@ -4,6 +4,45 @@
 
 The `vat skills` commands provide tools for packaging, distributing, installing, and managing Claude Code skills. These commands support the full skill lifecycle from development to distribution to installation.
 
+## Validation Configuration
+
+`vat skills build` and `vat skills validate` both honor a unified validation framework configured in `vibe-agent-toolkit.config.yaml`. Every overridable check emits an issue with a default severity; adopters override class-level behavior with `validation.severity` and allow specific instances with `validation.allow`.
+
+```yaml
+# vibe-agent-toolkit.config.yaml
+skills:
+  defaults:
+    validation:
+      severity:
+        LINK_DROPPED_BY_DEPTH: warning      # default; raise to error for strict mode
+  config:
+    my-skill:
+      validation:
+        severity:
+          LINK_TO_NAVIGATION_FILE: ignore   # this skill links to READMEs on purpose
+          ALLOW_EXPIRED: error              # zero-tolerance expiry
+        allow:
+          PACKAGED_UNREFERENCED_FILE:
+            - paths: ["templates/runtime.json"]
+              reason: "consumed programmatically at runtime"
+              expires: "2026-09-30"
+          SKILL_LENGTH_EXCEEDS_RECOMMENDED:
+            - reason: "whole-skill concern; paths defaults to ['**/*']"
+```
+
+**Severity levels** (uniform across every overridable code):
+- `error` — emit and block (exit 1).
+- `warning` — emit, do not block.
+- `ignore` — do not emit (check still runs; result is discarded).
+
+**Key behaviors:**
+- `paths` is optional on `allow` entries and defaults to `["**/*"]` (the whole skill).
+- Expired `allow` entries still apply; a separate `ALLOW_EXPIRED` warning surfaces the stale date for re-review. Opt into strict expiry with `severity.ALLOW_EXPIRED: error`.
+- Unused `allow` entries surface as `ALLOW_UNUSED` (analogous to ESLint's unused-disable).
+- `vat audit` is advisory: it applies `severity` for display grouping only, ignores `allow`, and always exits 0.
+
+See `docs/validation-codes.md` for the full code reference with per-code descriptions and defaults.
+
 ## Commands
 
 ### vat skills validate [path]

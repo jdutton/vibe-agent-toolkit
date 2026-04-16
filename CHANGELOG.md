@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.30] - 2026-04-16
+
+### Changed
+- **BREAKING: Unified validation framework replaces `ignoreValidationErrors`.** Every overridable integrity check now flows through a single `validation` block (`severity` + `allow`) under `skills.defaults` / `skills.config.<name>` in `vibe-agent-toolkit.config.yaml`. The previous non-overridable error tier (`OUTSIDE_PROJECT_BOUNDARY`, `LINK_TARGETS_DIRECTORY`, `LINKS_TO_NAVIGATION_FILES`) is removed and replaced by unified `LINK_*` codes that accept the same overrides as everything else. Project-config schemas are now strict — configs containing the removed `ignoreValidationErrors` field (or any other unknown key) fail at parse time with `"Unrecognized key(s) in object"` instead of silently dropping, so upgrades surface the migration work immediately. See [jdutton/vibe-agent-toolkit#83](https://github.com/jdutton/vibe-agent-toolkit/issues/83) for full design rationale and the canonical code reference at `docs/validation-codes.md`.
+- **BREAKING: `PACKAGED_UNREFERENCED_FILE` and `PACKAGED_BROKEN_LINK` now block the build.** Previously logged at info level without affecting exit code; now default severity `error` with `vat skills build` exiting `1`. Downgrade via `validation.severity: { PACKAGED_UNREFERENCED_FILE: warning }` if needed.
+- **BREAKING: Expired `allow` entries no longer silently re-fire the underlying error.** The allow entry still applies; VAT emits a new `ALLOW_EXPIRED` warning to surface the stale date for re-review. Opt in to strict expiry with `validation.severity: { ALLOW_EXPIRED: error }`.
+- **`vat audit` is now advisory.** Audit always exits `0` regardless of validation severity, honors `validation.severity` for display grouping only, and ignores `validation.allow`. Use `vat skills validate` or `vat skills build` for gated checks with per-path allow entries.
+
+### Added
+- **New validation codes** — `LINK_OUTSIDE_PROJECT`, `LINK_TARGETS_DIRECTORY`, `LINK_TO_NAVIGATION_FILE`, `LINK_TO_GITIGNORED_FILE`, `LINK_MISSING_TARGET`, `LINK_TO_SKILL_DEFINITION`, `LINK_DROPPED_BY_DEPTH`, `ALLOW_EXPIRED`, `ALLOW_UNUSED`. Full reference at `docs/validation-codes.md` with defaults, descriptions, and fix hints. `LINK_TO_SKILL_DEFINITION` fires only for cross-skill SKILL.md references; transitive self-references (a bundled resource linking back to the skill's own SKILL.md) are treated as no-ops.
+- **`LINK_MISSING_TARGET`** closes a previously silent walker drop path: links to non-existent (non-deferred) files are now reported at the walker with a clear message, rather than only surfacing post-build as a generic `PACKAGED_BROKEN_LINK`.
+- **`ALLOW_UNUSED`** — analogous to ESLint's unused-disable — surfaces `allow` entries that match no emitted issues.
+- **Per-path `validation.allow`** with required `reason` and optional `expires` date, providing an audit trail for legitimate exceptions. `paths` is optional and defaults to `["**/*"]` (the whole skill) — so concerns that apply to an entire skill can omit the paths array entirely.
+- **Canonical code reference** at `docs/validation-codes.md`, test-locked against the code registry so new codes cannot ship without documentation.
+
+### Migration
+
+| Old | New |
+|---|---|
+| `ignoreValidationErrors: { CODE: "reason" }` | `validation.severity: { CODE: ignore }` |
+| `ignoreValidationErrors: { CODE: { reason, expires } }` | `validation.severity: { CODE: ignore }` for code-wide silence, OR `validation.allow: { CODE: [{ paths, reason, expires }] }` for scoped allow entries with re-review on expiry |
+
 ## [0.1.29] - 2026-04-16
 
 ### Added
