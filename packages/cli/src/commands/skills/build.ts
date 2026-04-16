@@ -407,6 +407,7 @@ async function buildCommand(
         ...(packagingConfig.linkFollowDepth !== undefined && { linkFollowDepth: packagingConfig.linkFollowDepth }),
         ...(packagingConfig.excludeReferencesFromBundle && { excludeReferencesFromBundle: packagingConfig.excludeReferencesFromBundle }),
         ...(packagingConfig.ignoreValidationErrors && { ignoreValidationErrors: packagingConfig.ignoreValidationErrors }),
+        ...(packagingConfig.files && { files: packagingConfig.files }),
       },
     }));
 
