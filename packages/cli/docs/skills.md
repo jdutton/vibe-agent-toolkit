@@ -4,6 +4,42 @@
 
 The `vat skills` commands provide tools for packaging, distributing, installing, and managing Claude Code skills. These commands support the full skill lifecycle from development to distribution to installation.
 
+## Validation Configuration
+
+`vat skills build` and `vat skills validate` both honor a unified validation framework configured in `vibe-agent-toolkit.config.yaml`. Every overridable check emits an issue with a default severity; adopters override class-level behavior with `validation.severity` and accept specific instances with `validation.accept`.
+
+```yaml
+# vibe-agent-toolkit.config.yaml
+skills:
+  defaults:
+    validation:
+      severity:
+        LINK_DROPPED_BY_DEPTH: warning      # default; raise to error for strict mode
+  config:
+    my-skill:
+      validation:
+        severity:
+          LINK_TO_NAVIGATION_FILE: ignore   # this skill links to READMEs on purpose
+          ACCEPTANCE_EXPIRED: error         # zero-tolerance expiry
+        accept:
+          PACKAGED_UNREFERENCED_FILE:
+            - paths: ["templates/runtime.json"]
+              reason: "consumed programmatically at runtime"
+              expires: "2026-09-30"
+```
+
+**Severity levels** (uniform across every overridable code):
+- `error` — emit and block (exit 1).
+- `warning` — emit, do not block.
+- `ignore` — do not emit (check still runs; result is discarded).
+
+**Key behaviors:**
+- Expired `accept` entries still apply; a separate `ACCEPTANCE_EXPIRED` warning surfaces the stale date for re-review. Opt into strict expiry with `severity.ACCEPTANCE_EXPIRED: error`.
+- Unused `accept` entries surface as `ACCEPTANCE_UNUSED` (analogous to ESLint's unused-disable).
+- `vat audit` is advisory: it applies `severity` for display grouping only, ignores `accept`, and always exits 0.
+
+See `docs/validation-codes.md` for the full code reference with per-code descriptions and defaults.
+
 ## Commands
 
 ### vat skills validate [path]

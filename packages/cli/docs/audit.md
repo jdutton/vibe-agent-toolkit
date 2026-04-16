@@ -161,9 +161,26 @@ hierarchical:
 
 ## Exit Codes
 
-- **0** - Success: All validations passed
-- **1** - Errors found: Validation errors that must be fixed
-- **2** - System error: Config invalid, path not found, etc.
+`vat audit` is **advisory by design** — it reports every issue it detects but does not block on validation severity. Use `vat skills validate` or `vat skills build` for gated checks (those commands exit `1` on validation errors).
+
+- **0** - Always, when the audit completes. The report may still contain errors and warnings; check `status` and `summary` in the YAML output to decide whether action is needed.
+- **2** - System error: Config invalid, path not found, permission denied, etc. The audit could not run.
+
+## Validation Configuration
+
+Audit honors `validation.severity` from `vibe-agent-toolkit.config.yaml` for **display grouping only** — setting a code to `ignore` hides it from output, raising to `error` promotes it in the report's error count. Audit does **not** apply `validation.accept` (per-path acceptance); for that, use `vat skills validate` or `vat skills build`.
+
+```yaml
+# In vibe-agent-toolkit.config.yaml
+skills:
+  defaults:
+    validation:
+      severity:
+        LINK_TO_NAVIGATION_FILE: ignore   # hidden from audit output
+        LINK_DROPPED_BY_DEPTH: error      # elevated in the report
+```
+
+See `docs/validation-codes.md` for the full code reference.
 
 ## Validation Checks
 
@@ -342,20 +359,27 @@ Use in CI pipeline:
 #!/bin/bash
 set -e
 
-# Audit all resources
+# Audit all resources (always exits 0 unless system error)
 vat audit --recursive > audit-report.yaml
 
-# Check exit code
-if [ $? -eq 1 ]; then
-  echo "Audit failed with validation errors"
+# Check YAML status field — audit itself doesn't fail on validation errors
+STATUS=$(grep '^status:' audit-report.yaml | awk '{print $2}')
+if [ "$STATUS" = "error" ]; then
+  echo "Audit report contains validation errors"
   cat audit-report.yaml
   exit 1
-elif [ $? -eq 2 ]; then
-  echo "Audit failed with system error"
-  exit 2
 fi
 
-echo "Audit passed"
+echo "Audit clean — no validation errors in report"
+```
+
+To gate on validation errors directly (exits `1` automatically), use `vat skills validate` instead:
+
+```bash
+#!/bin/bash
+set -e
+
+vat skills validate   # exits 1 on validation errors
 ```
 
 GitHub Actions example:
