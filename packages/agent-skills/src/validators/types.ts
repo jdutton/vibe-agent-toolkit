@@ -33,6 +33,9 @@ export type IssueCode =
   | 'LINKS_TO_NAVIGATION_FILES'
   | 'DESCRIPTION_TOO_VAGUE'
   | 'NO_PROGRESSIVE_DISCLOSURE'
+  // Post-build integrity (overridable)
+  | 'PACKAGED_UNREFERENCED_FILE'
+  | 'PACKAGED_BROKEN_LINK'
   // Critical errors - Plugins
   | 'PLUGIN_MISSING_MANIFEST'
   | 'PLUGIN_INVALID_JSON'

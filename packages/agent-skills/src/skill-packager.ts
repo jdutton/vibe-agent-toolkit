@@ -31,6 +31,8 @@ import { findProjectRoot, toForwardSlash, safePath } from '@vibe-agent-toolkit/u
 
 import { getTargetSubdir } from './content-type-routing.js';
 import type { SkillFileEntry } from './files-config.js';
+import { checkBrokenPackagedLinks, checkUnreferencedFiles } from './post-build-checks.js';
+import type { ValidationIssue } from './validators/types.js';
 import { walkLinkGraph, type WalkableRegistry } from './walk-link-graph.js';
 
 const PACKAGE_JSON_FILENAME = 'package.json';
@@ -150,6 +152,13 @@ export interface PackageSkillOptions {
    * left as-is (assumed to be build artifacts placed at dest during build).
    */
   files?: SkillFileEntry[] | undefined;
+
+  /**
+   * Suppress specific post-build validation errors by code.
+   * Maps issue code → reason string or { reason, expires? }.
+   * Same shape as SkillPackagingConfig.ignoreValidationErrors.
+   */
+  ignoreValidationErrors?: Record<string, string | { reason: string; expires?: string }> | undefined;
 }
 
 export interface SkillMetadata {
@@ -191,6 +200,12 @@ export interface PackageSkillResult {
 
   /** References excluded from bundle */
   excludedReferences?: string[] | undefined;
+
+  /**
+   * Post-build integrity issues — issues that the override config did NOT suppress.
+   * Empty (or omitted) means all post-build checks passed.
+   */
+  postBuildIssues?: ValidationIssue[] | undefined;
 }
 
 /**
@@ -432,6 +447,19 @@ export async function packageSkill(
   // skill definitions that break marketplace sync and confuse skill consumers.
   await validateNoNestedSkillMd(outputPath, skillMetadata.name);
 
+  // 13b. Post-build integrity checks (unreferenced files, broken packaged links).
+  //
+  // Runs BEFORE generatePackageArtifacts so the synthetic package.json from
+  // createNpmPackage isn't flagged as unreferenced.
+  //
+  // Filter out issues suppressed by ignoreValidationErrors overrides.
+  const postBuildIssues = [
+    ...await checkUnreferencedFiles(outputPath),
+    ...await checkBrokenPackagedLinks(outputPath),
+  ];
+  const overrides = options.ignoreValidationErrors ?? {};
+  const activeIssues = postBuildIssues.filter(issue => overrides[issue.code] === undefined);
+
   // 14. Generate distribution artifacts
   const artifacts = await generatePackageArtifacts(
     outputPath,
@@ -455,6 +483,10 @@ export async function packageSkill(
     },
     artifacts,
   };
+
+  if (activeIssues.length > 0) {
+    result.postBuildIssues = activeIssues;
+  }
 
   if (excludedReferences.length > 0) {
     // Deduplicate excluded reference paths for the result

@@ -884,3 +884,89 @@ describe('skill-packager: integration', () => {
     expect(result.artifacts?.directory).toBe(result.outputPath);
   });
 });
+
+const ORPHAN_DEST = 'resources/orphan.txt';
+
+/**
+ * Set up a temp project with a package.json so findProjectRoot() anchors correctly,
+ * then create a skill and an orphan asset. Returns the skill path and output path.
+ */
+async function setupUnreferencedFixture(
+  rootDir: string,
+  skillName: string,
+): Promise<{ skillPath: string; outputPath: string }> {
+  await writeFile(
+    safePath.join(rootDir, 'package.json'),
+    JSON.stringify({ name: 'unref-fixture', workspaces: ['skills/*'] }),
+  );
+  const skillDir = safePath.join(rootDir, 'skills', skillName);
+  await mkdir(skillDir, { recursive: true });
+  await mkdir(safePath.join(rootDir, 'extra'), { recursive: true });
+
+  const skillPath = safePath.join(skillDir, 'SKILL.md');
+  await writeFile(skillPath, [
+    '---',
+    `name: ${skillName}`,
+    'description: Test unreferenced file detection',
+    '---',
+    TEST_SKILL_CONTENT,
+    '',
+    'This skill has no links.',
+  ].join('\n'));
+
+  await writeFile(safePath.join(rootDir, 'extra', 'orphan.txt'), 'orphan content\n');
+
+  return {
+    skillPath,
+    outputPath: safePath.join(rootDir, 'out', skillName),
+  };
+}
+
+describe('skill-packager: post-build integrity', () => {
+  it('should report PACKAGED_UNREFERENCED_FILE for files not referenced from markdown', async () => {
+    const tempDir = getTempDir();
+    const rootDir = safePath.join(tempDir, 'unreferenced-root');
+    await mkdir(rootDir, { recursive: true });
+    const { skillPath, outputPath } = await setupUnreferencedFixture(rootDir, 'unreferenced-test');
+
+    const result = await packageSkill(skillPath, {
+      outputPath,
+      formats: ['directory'],
+      rewriteLinks: true,
+      files: [{ source: 'extra/orphan.txt', dest: ORPHAN_DEST }],
+    });
+
+    // File should exist in output
+    expect(existsSync(safePath.join(result.outputPath, ORPHAN_DEST))).toBe(true);
+
+    // Result should include the unreferenced-file issue
+    expect(result.postBuildIssues).toBeDefined();
+    expect(result.postBuildIssues?.some(i =>
+      i.code === 'PACKAGED_UNREFERENCED_FILE' && i.message.includes('orphan.txt')
+    )).toBe(true);
+
+    // Also assert no broken-link issues — guards against fixture drift
+    expect(result.postBuildIssues?.filter(i => i.code === 'PACKAGED_BROKEN_LINK')).toHaveLength(0);
+  });
+
+  it('should suppress PACKAGED_UNREFERENCED_FILE when ignoreValidationErrors is set', async () => {
+    const tempDir = getTempDir();
+    const rootDir = safePath.join(tempDir, 'unreferenced-suppressed-root');
+    await mkdir(rootDir, { recursive: true });
+    const { skillPath, outputPath } = await setupUnreferencedFixture(rootDir, 'unreferenced-suppressed-test');
+
+    const result = await packageSkill(skillPath, {
+      outputPath,
+      formats: ['directory'],
+      rewriteLinks: true,
+      files: [{ source: 'extra/orphan.txt', dest: ORPHAN_DEST }],
+      ignoreValidationErrors: { PACKAGED_UNREFERENCED_FILE: 'orphan.txt is intentionally unreferenced for this test' },
+    });
+
+    // File should still exist in output (suppression doesn't prevent packaging)
+    expect(existsSync(safePath.join(result.outputPath, ORPHAN_DEST))).toBe(true);
+
+    // No active issues should be reported (suppression took effect)
+    expect(result.postBuildIssues ?? []).toHaveLength(0);
+  });
+});
