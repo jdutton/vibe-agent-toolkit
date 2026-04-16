@@ -58,20 +58,6 @@ export interface ValidationRule {
   link?: string;
 }
 
-/**
- * Non-overridable validation rules
- * These enforce fundamental correctness and cannot be ignored
- */
-export const NON_OVERRIDABLE_RULES: ValidationRuleCode[] = [
-  'INVALID_FRONTMATTER',
-  'MISSING_NAME',
-  'RESERVED_WORD_IN_NAME',
-  'BROKEN_INTERNAL_LINK',
-  'CIRCULAR_REFERENCE',
-  'OUTSIDE_PROJECT_BOUNDARY',
-  'FILENAME_COLLISION',
-  'WINDOWS_BACKSLASH_IN_PATH',
-];
 
 /**
  * Validation rule definitions
@@ -232,13 +218,6 @@ export const NAVIGATION_FILE_PATTERNS = [
   'overview.md',
   'OVERVIEW.md',
 ] as const;
-
-/**
- * Check if an error code is overridable
- */
-export function isOverridable(code: ValidationRuleCode): boolean {
-  return !NON_OVERRIDABLE_RULES.includes(code);
-}
 
 /**
  * Create a validation issue from a rule

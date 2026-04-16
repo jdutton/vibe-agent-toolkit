@@ -151,6 +151,32 @@ describe('checkUnreferencedFiles', () => {
   });
 });
 
+describe('fix hints and reference anchors', () => {
+  it('PACKAGED_UNREFERENCED_FILE fix references validation.accept, not ignoreValidationErrors', async () => {
+    const outputDir = await setupOutputDir([RESOURCES]);
+    await writeSkillMd(outputDir, '# Skill\n\nNo links here.\n');
+    await writeResource(outputDir, `${RESOURCES}/orphan.json`, '{}');
+
+    const issues = await checkUnreferencedFiles(outputDir);
+    const unref = issues.find(i => i.code === 'PACKAGED_UNREFERENCED_FILE');
+    expect(unref).toBeDefined();
+    expect(unref?.fix).not.toMatch(/ignoreValidationErrors/);
+    expect(unref?.fix).toMatch(/validation\.accept/);
+    expect(unref?.reference).toMatch(/^#packaged_unreferenced_file/);
+  });
+
+  it('PACKAGED_BROKEN_LINK fix does not reference ignoreValidationErrors', async () => {
+    const outputDir = await setupOutputDir();
+    await writeSkillMd(outputDir, GUIDE_LINK_BODY);
+
+    const issues = await checkBrokenPackagedLinks(outputDir);
+    const broken = issues.find(i => i.code === 'PACKAGED_BROKEN_LINK');
+    expect(broken).toBeDefined();
+    expect(broken?.fix).not.toMatch(/ignoreValidationErrors/);
+    expect(broken?.reference).toMatch(/^#packaged_broken_link/);
+  });
+});
+
 describe('checkBrokenPackagedLinks', () => {
   it('should return no issues when all links resolve', async () => {
     const outputDir = await setupOutputDir([RESOURCES]);

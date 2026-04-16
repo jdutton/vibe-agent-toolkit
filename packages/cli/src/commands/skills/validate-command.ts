@@ -47,28 +47,24 @@ Validation Checks:
     - Description ≥50 characters
     - Progressive disclosure pattern
 
-Validation Overrides:
-  Configure overrides in package.json vat.skills:
+Validation Config:
+  Configure via validation key in vibe-agent-toolkit.config.yaml skills.config:
 
-  {
-    "vat": {
-      "skills": [{
-        "name": "my-skill",
-        "source": "./SKILL.md",
-        "path": "./dist/skills/my-skill",
-        "ignoreValidationErrors": {
-          "SKILL_LENGTH_EXCEEDS_RECOMMENDED": "Complex domain requires detailed examples",
-          "SKILL_TOO_MANY_FILES": {
-            "reason": "Migration in progress - will split skill",
-            "expires": "2026-06-01"
-          }
-        }
-      }]
-    }
-  }
+  skills:
+    config:
+      my-skill:
+        validation:
+          severity:
+            SKILL_LENGTH_EXCEEDS_RECOMMENDED: ignore
+            LINK_TO_NAVIGATION_FILE: warning
+          accept:
+            SKILL_TOO_MANY_FILES:
+              - paths: ["**"]
+                reason: "Migration in progress - will split skill"
+                expires: "2026-06-01"
 
-  Non-overridable rules (required for correctness) cannot be ignored.
-  Expired overrides are reported as errors.
+  All codes are configurable via severity (error/warning/ignore) or accept entries.
+  Expired accept entries are reported as ACCEPTANCE_EXPIRED warnings.
 
 Output:
   YAML summary → stdout (for programmatic parsing)
@@ -77,12 +73,12 @@ Output:
   Output includes:
     - status: success/error
     - skillsValidated: number of skills validated
-    - results: per-skill validation details (activeErrors, ignoredErrors, expiredOverrides)
+    - results: per-skill validation details (activeErrors, activeWarnings, ignoredErrors)
     - durationSecs: validation time
 
 Exit Codes:
-  0 - All validations passed (or all errors ignored by valid overrides)
-  1 - Active validation errors found (or expired overrides)
+  0 - All validations passed (or all errors accepted by valid config)
+  1 - Active validation errors found
   2 - System error (file not found, invalid config, etc.)
 
 Examples:

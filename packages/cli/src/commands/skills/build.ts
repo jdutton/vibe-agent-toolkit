@@ -85,8 +85,9 @@ Config Structure (vibe-agent-toolkit.config.yaml):
     config:
       my-skill:
         linkFollowDepth: full
-        ignoreValidationErrors:
-          NAV_FILE_INCLUDED: "Navigation files needed for this skill"
+        validation:
+          severity:
+            LINK_TO_NAVIGATION_FILE: ignore
 
 Output:
   YAML summary -> stdout (for programmatic parsing)
@@ -127,17 +128,17 @@ function displayActiveErrors(
 }
 
 /**
- * Display expired overrides
+ * Display expired acceptance warnings
  */
-function displayExpiredOverrides(
+function displayExpiredAcceptances(
   validationResult: PackagingValidationResult,
   logger: ReturnType<typeof createLogger>
 ): void {
-  if (validationResult.expiredOverrides.length > 0) {
-    logger.error(`\n   Expired overrides (${validationResult.expiredOverrides.length}):`);
-    for (const { error, reason, expiredDate } of validationResult.expiredOverrides) {
-      logger.error(`     [${String(error.code)}] ${String(error.message)}`);
-      logger.error(`       Override expired: ${expiredDate} (reason: ${reason})`);
+  const expiredWarnings = validationResult.activeWarnings.filter(w => w.code === 'ACCEPTANCE_EXPIRED');
+  if (expiredWarnings.length > 0) {
+    logger.error(`\n   Expired acceptances (${expiredWarnings.length}):`);
+    for (const warn of expiredWarnings) {
+      logger.error(`     ${String(warn.message)}`);
     }
   }
 }
@@ -160,16 +161,16 @@ function logPostBuildIssues(
 }
 
 /**
- * Display ignored errors for context
+ * Display accepted issues for context
  */
 function displayIgnoredErrors(
   validationResult: PackagingValidationResult,
   logger: ReturnType<typeof createLogger>
 ): void {
   if (validationResult.ignoredErrors.length > 0) {
-    logger.info(`\n   Ignored errors (${validationResult.ignoredErrors.length}):`);
-    for (const { error, reason } of validationResult.ignoredErrors) {
-      logger.info(`     [${String(error.code)}] ${String(error.message)} (ignored: ${reason})`);
+    logger.info(`\n   Accepted issues (${validationResult.ignoredErrors.length}):`);
+    for (const record of validationResult.ignoredErrors) {
+      logger.info(`     [${String(record.code)}] ${String(record.location)} (accepted: ${record.reason})`);
     }
   }
 }
@@ -178,7 +179,7 @@ function displayIgnoredErrors(
  * Merge packaging config: schema defaults -> config yaml defaults -> per-skill overrides.
  *
  * Uses shallow merge (spread) since all SkillPackagingConfig fields are top-level.
- * The ignoreValidationErrors and excludeReferencesFromBundle fields are objects,
+ * The excludeReferencesFromBundle and validation fields are objects,
  * but per-skill overrides should fully replace (not deep-merge) the defaults for those fields.
  */
 function mergePackagingConfig(
@@ -223,12 +224,10 @@ async function validateSkillOrExit(
   logger.debug(`   Validating skill: ${skillName}`);
 
   const validationResult = await validateSkillForPackaging(sourcePath, packagingConfig);
-  const hasActiveErrors =
-    validationResult.activeErrors.length > 0 || validationResult.expiredOverrides.length > 0;
 
-  if (!hasActiveErrors) {
+  if (validationResult.status !== 'error') {
     if (validationResult.ignoredErrors.length > 0) {
-      logger.debug(`   ${validationResult.ignoredErrors.length} error(s) ignored by overrides`);
+      logger.debug(`   ${validationResult.ignoredErrors.length} issue(s) accepted by config`);
     }
     return;
   }
@@ -238,7 +237,7 @@ async function validateSkillOrExit(
   logger.error(`   Source: ${sourcePath}`);
 
   displayActiveErrors(validationResult, logger);
-  displayExpiredOverrides(validationResult, logger);
+  displayExpiredAcceptances(validationResult, logger);
   displayIgnoredErrors(validationResult, logger);
 
   logger.error(`\n   Build aborted due to validation errors`);
@@ -406,7 +405,6 @@ async function buildCommand(
         ...(packagingConfig.stripPrefix && { stripPrefix: packagingConfig.stripPrefix }),
         ...(packagingConfig.linkFollowDepth !== undefined && { linkFollowDepth: packagingConfig.linkFollowDepth }),
         ...(packagingConfig.excludeReferencesFromBundle && { excludeReferencesFromBundle: packagingConfig.excludeReferencesFromBundle }),
-        ...(packagingConfig.ignoreValidationErrors && { ignoreValidationErrors: packagingConfig.ignoreValidationErrors }),
         ...(packagingConfig.files && { files: packagingConfig.files }),
       },
     }));

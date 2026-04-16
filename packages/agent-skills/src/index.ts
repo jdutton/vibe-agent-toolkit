@@ -69,11 +69,10 @@ export {
   type PackagingValidationResult,
   type SkillPackagingConfig,
 } from './validators/packaging-validator.js';
+export { type ValidationConfig } from './validators/validation-framework.js';
 export {
   createIssue,
-  isOverridable,
   NAVIGATION_FILE_PATTERNS,
-  NON_OVERRIDABLE_RULES,
   VALIDATION_RULES,
   VALIDATION_THRESHOLDS,
   type RuleCategory,
@@ -93,6 +92,3 @@ export {
   type ImportResult,
 } from './import.js';
 
-
-// Re-export ValidationOverride from agent-schema for convenience
-export type { ValidationOverride } from '@vibe-agent-toolkit/agent-schema';

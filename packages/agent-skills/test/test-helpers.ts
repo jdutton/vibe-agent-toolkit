@@ -470,7 +470,7 @@ export async function setupNavigationValidationTest(
 	files: Record<string, string>,
 	skillBody: string,
 	contentOptions: { name: string; description: string }
-): Promise<{ result: unknown; findNavError: () => unknown }> {
+): Promise<{ result: unknown; findNavWarn: () => unknown }> {
 	const { validateSkillForPackaging } = await import('../src/validators/packaging-validator.js');
 
 	const tempDir = getTempDir();
@@ -481,81 +481,9 @@ export async function setupNavigationValidationTest(
 
 	return {
 		result,
-		findNavError: () => (result as { activeErrors: Array<{ code: string }> }).activeErrors.find(
-			(e) => e.code === 'LINKS_TO_NAVIGATION_FILES'
+		findNavWarn: () => (result as { activeWarnings: Array<{ code: string }> }).activeWarnings.find(
+			(e) => e.code === 'LINK_TO_NAVIGATION_FILE'
 		),
 	};
 }
 
-/**
- * Setup override validation test
- *
- * Common pattern for tests checking ignoreValidationErrors:
- * 1. Create skill content with overrides in metadata
- * 2. Validate with override metadata
- * 3. Return result with helpers for checking ignored errors
- *
- * @param getTempDir - Function to get temp directory
- * @param bodyContent - Body content for SKILL.md
- * @param overrides - Override metadata (ignoreValidationErrors)
- * @param contentOptions - Options for createSkillContent
- * @returns Object with result and helper to find ignored errors
- */
-export async function setupOverrideValidationTest(
-	getTempDir: () => string,
-	bodyContent: string,
-	overrides: Record<string, unknown>,
-	contentOptions: { name: string; description: string }
-): Promise<{
-	result: unknown;
-	findIgnoredError: (code: string) => unknown;
-}> {
-	const metadata = {
-		ignoreValidationErrors: overrides,
-	};
-
-	const result = await setupPackagingValidationTest(
-		getTempDir,
-		contentOptions,
-		bodyContent,
-		{},
-		metadata
-	);
-
-	return {
-		result,
-		findIgnoredError: (code: string) =>
-			(result as { ignoredErrors: Array<{ error: { code: string } }> }).ignoredErrors.find(
-				(e) => e.error.code === code
-			),
-	};
-}
-
-/**
- * Setup skill with custom validation metadata
- *
- * Common pattern for tests that need direct validateSkillForPackaging access:
- * 1. Create skill content
- * 2. Create transitive structure
- * 3. Validate with custom metadata
- *
- * @param getTempDir - Function to get temp directory
- * @param bodyContent - Body content for SKILL.md
- * @param contentOptions - Options for createSkillContent
- * @param metadata - Custom validation metadata
- * @returns Validation result
- */
-export async function setupSkillWithMetadata(
-	getTempDir: () => string,
-	bodyContent: string,
-	contentOptions: { name: string; description: string },
-	metadata?: unknown
-): Promise<unknown> {
-	const { validateSkillForPackaging } = await import('../src/validators/packaging-validator.js');
-
-	const tempDir = getTempDir();
-	const content = createSkillContent(contentOptions, bodyContent);
-	const { skillPath } = createTransitiveSkillStructure(tempDir, {}, content);
-
-	return validateSkillForPackaging(skillPath, metadata as never);
-}

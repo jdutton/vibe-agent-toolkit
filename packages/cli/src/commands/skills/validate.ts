@@ -105,19 +105,19 @@ function outputSkillErrors(result: PackagingValidationResult): void {
   }
 
   if (result.ignoredErrors.length > 0) {
-    console.error(`  Ignored errors (${result.ignoredErrors.length}):`);
-    for (const { error, reason } of result.ignoredErrors) {
+    console.error(`  Accepted issues (${result.ignoredErrors.length}):`);
+    for (const record of result.ignoredErrors) {
       console.error(
-        `    [${String(error.code)}] ${String(error.message)} (ignored: ${reason})`
+        `    [${String(record.code)}] ${String(record.location)} (accepted: ${record.reason})`
       );
     }
   }
 
-  if (result.expiredOverrides.length > 0) {
-    console.error(`  Expired overrides (${result.expiredOverrides.length}):`);
-    for (const { error, reason, expiredDate } of result.expiredOverrides) {
-      console.error(`    [${String(error.code)}] ${String(error.message)}`);
-      console.error(`      Override expired: ${expiredDate} (reason: ${reason})`);
+  const expiredWarnings = result.activeWarnings.filter(w => w.code === 'ACCEPTANCE_EXPIRED');
+  if (expiredWarnings.length > 0) {
+    console.error(`  Expired acceptances (${expiredWarnings.length}):`);
+    for (const warn of expiredWarnings) {
+      console.error(`    ${String(warn.message)}`);
     }
   }
 
@@ -158,18 +158,18 @@ function logSkillProgress(
 ): void {
   if (result.status === 'error') {
     const activeCount = result.activeErrors.length;
-    const ignoredCount = result.ignoredErrors.length;
-    const expiredCount = result.expiredOverrides.length;
+    const acceptedCount = result.ignoredErrors.length;
+    const expiredCount = result.activeWarnings.filter(w => w.code === 'ACCEPTANCE_EXPIRED').length;
 
     logger.error(`   ❌ ${skillName}: ${activeCount} error${activeCount === 1 ? '' : 's'}`);
-    if (ignoredCount > 0) {
-      logger.info(`      (${ignoredCount} ignored by overrides)`);
+    if (acceptedCount > 0) {
+      logger.info(`      (${acceptedCount} accepted by config)`);
     }
     if (expiredCount > 0) {
-      logger.error(`      (${expiredCount} expired override${expiredCount === 1 ? '' : 's'})`);
+      logger.error(`      (${expiredCount} expired acceptance${expiredCount === 1 ? '' : 's'})`);
     }
   } else if (result.ignoredErrors.length > 0) {
-    logger.info(`   ✅ ${skillName} (${result.ignoredErrors.length} ignored by overrides)`);
+    logger.info(`   ✅ ${skillName} (${result.ignoredErrors.length} accepted by config)`);
   } else {
     logger.info(`   ✅ ${skillName}`);
   }
@@ -237,9 +237,7 @@ export async function validateCommand(
     const verbose = options.verbose === true;
     outputValidationReport(results, duration, logger, verbose);
 
-    const hasErrors = results.some(
-      (r) => r.activeErrors.length > 0 || r.expiredOverrides.length > 0
-    );
+    const hasErrors = results.some(r => r.status === 'error');
     process.exit(hasErrors ? 1 : 0);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'SkillsValidate');

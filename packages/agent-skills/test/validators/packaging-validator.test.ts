@@ -14,22 +14,20 @@ import {
 	createSkillContent,
 	createTransitiveSkillStructure,
 	setupNavigationValidationTest,
-	setupOverrideValidationTest,
 	setupPackagingValidationTest,
-	setupSkillWithMetadata,
 	setupTempDir,
 	setupTransitiveValidationTest,
 } from '../test-helpers.js';
 
 const { getTempDir } = setupTempDir('packaging-validator-');
 
-// Use a description that's >= 50 characters to avoid DESCRIPTION_TOO_VAGUE errors
+// Use a description that's >= 50 characters to avoid DESCRIPTION_TOO_VAGUE warnings
 const VALID_DESCRIPTION = 'A comprehensive test skill with a detailed description for validation purposes';
 
 // Constants to avoid duplication warnings
 const TEST_SKILL_NAME = 'test-skill';
 const LINE_CONTENT = 'Line content\n';
-const TEST_REASON = 'Will be refactored in Q2';
+const REASON_REFACTOR_Q2 = 'Will be refactored in Q2';
 const SKILL_HEADER = '\n# Test Skill\n\n';
 const SKILL_HEADER_NO_TRAILING = '\n# Test Skill';
 const LONG_SKILL_BODY = SKILL_HEADER + LINE_CONTENT.repeat(550);
@@ -60,24 +58,44 @@ function createThreeLevelChain(tempDir: string): { skillPath: string } {
 }
 
 /**
- * Helper to test override validation with common assertions
+ * Helper to test ignoring warnings via validation.severity config.
+ * Returns result with all warnings ignored for the given codes.
  */
-async function testOverrideValidation(
-	overrides: Record<string, unknown>
-): Promise<{ typedResult: PackagingValidationResult; lengthOverride: unknown }> {
-	const { result, findIgnoredError } = await setupOverrideValidationTest(
-		getTempDir,
+async function testIgnoreWarnings(
+	codes: string[],
+): Promise<PackagingValidationResult> {
+	const tempDir = getTempDir();
+	const content = createSkillContent(
+		{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
 		LONG_SKILL_BODY,
-		overrides,
-		{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION }
 	);
+	const { skillPath } = createTransitiveSkillStructure(tempDir, {}, content);
 
-	const typedResult = result as PackagingValidationResult;
-	expect(typedResult.status).toBe('success');
-	expect(typedResult.ignoredErrors).toHaveLength(2);
+	const severity = Object.fromEntries(codes.map(c => [c, 'ignore' as const]));
+	return validateSkillForPackaging(skillPath, {
+		validation: { severity },
+	});
+}
 
-	const lengthOverride = findIgnoredError('SKILL_LENGTH_EXCEEDS_RECOMMENDED');
-	return { typedResult, lengthOverride };
+type AcceptMap = NonNullable<
+	NonNullable<Parameters<typeof validateSkillForPackaging>[1]>['validation']
+>['accept'];
+
+/**
+ * Shared setup for long-skill acceptance tests: a long SKILL.md in a temp dir
+ * with no transitive links. Returns the packaging validation result with the
+ * given accept map applied.
+ */
+async function setupLongSkillAcceptanceTest(
+	accept: AcceptMap,
+): Promise<PackagingValidationResult> {
+	const tempDir = getTempDir();
+	const content = createSkillContent(
+		{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+		LONG_SKILL_BODY,
+	);
+	const { skillPath } = createTransitiveSkillStructure(tempDir, {}, content);
+	return validateSkillForPackaging(skillPath, { validation: { accept } });
 }
 
 describe('validateSkillForPackaging - Size validation', () => {
@@ -95,7 +113,7 @@ describe('validateSkillForPackaging - Size validation', () => {
 		expect(result.activeErrors).toHaveLength(0);
 	});
 
-	it('should error for SKILL.md over 500 lines', async () => {
+	it('should warn for SKILL.md over 500 lines', async () => {
 		const tempDir = getTempDir();
 		const content = createSkillContent(
 			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
@@ -105,10 +123,13 @@ describe('validateSkillForPackaging - Size validation', () => {
 
 		const result = await validateSkillForPackaging(skillPath);
 
-		expect(result.status).toBe('error');
-		expect(result.activeErrors).toHaveLength(2); // SKILL_LENGTH + NO_PROGRESSIVE_DISCLOSURE
-		const lengthError = result.activeErrors.find(e => e.code === 'SKILL_LENGTH_EXCEEDS_RECOMMENDED');
-		expect(lengthError).toBeDefined();
+		// Size checks are warnings not errors — status is success
+		expect(result.status).toBe('success');
+		expect(result.activeErrors).toHaveLength(0);
+		// SKILL_LENGTH + NO_PROGRESSIVE_DISCLOSURE are warnings
+		expect(result.activeWarnings).toHaveLength(2);
+		const lengthWarn = result.activeWarnings.find(e => e.code === 'SKILL_LENGTH_EXCEEDS_RECOMMENDED');
+		expect(lengthWarn).toBeDefined();
 		expect(result.metadata.skillLines).toBeGreaterThan(500);
 	});
 });
@@ -129,10 +150,10 @@ describe('validateSkillForPackaging - Total size validation', () => {
 		)) as PackagingValidationResult;
 
 		expect(result.metadata.totalLines).toBeLessThan(2000);
-		expect(result.activeErrors.filter((e) => e.code === 'SKILL_TOTAL_SIZE_LARGE')).toHaveLength(0);
+		expect(result.activeWarnings.filter((e) => e.code === 'SKILL_TOTAL_SIZE_LARGE')).toHaveLength(0);
 	});
 
-	it('should error for total lines over 2000', async () => {
+	it('should warn for total lines over 2000', async () => {
 		const files = {
 			'reference.md': '# Reference\n\n' + 'Content\n'.repeat(1000),
 			'guide.md': '# Guide\n\n' + 'Content\n'.repeat(1100),
@@ -146,10 +167,10 @@ describe('validateSkillForPackaging - Total size validation', () => {
 			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION }
 		)) as PackagingValidationResult;
 
-		expect(result.status).toBe('error');
+		expect(result.status).toBe('success'); // warnings don't make status error
 		expect(result.metadata.totalLines).toBeGreaterThan(2000);
-		const totalSizeError = result.activeErrors.find((e) => e.code === 'SKILL_TOTAL_SIZE_LARGE');
-		expect(totalSizeError).toBeDefined();
+		const totalSizeWarn = result.activeWarnings.find((e) => e.code === 'SKILL_TOTAL_SIZE_LARGE');
+		expect(totalSizeWarn).toBeDefined();
 	});
 });
 
@@ -172,10 +193,10 @@ describe('validateSkillForPackaging - File count validation', () => {
 		const result = await validateSkillForPackaging(skillPath);
 
 		expect(result.metadata.fileCount).toBe(6); // 5 refs + SKILL.md
-		expect(result.activeErrors.filter((e) => e.code === 'SKILL_TOO_MANY_FILES')).toHaveLength(0);
+		expect(result.activeWarnings.filter((e) => e.code === 'SKILL_TOO_MANY_FILES')).toHaveLength(0);
 	});
 
-	it('should error for more than 6 files', async () => {
+	it('should warn for more than 6 files', async () => {
 		const tempDir = getTempDir();
 		const files = {
 			'ref1.md': '# Ref 1',
@@ -194,10 +215,10 @@ describe('validateSkillForPackaging - File count validation', () => {
 
 		const result = await validateSkillForPackaging(skillPath);
 
-		expect(result.status).toBe('error');
+		expect(result.status).toBe('success'); // warnings don't make status error
 		expect(result.metadata.fileCount).toBe(8); // 7 refs + SKILL.md
-		const fileCountError = result.activeErrors.find((e) => e.code === 'SKILL_TOO_MANY_FILES');
-		expect(fileCountError).toBeDefined();
+		const fileCountWarn = result.activeWarnings.find((e) => e.code === 'SKILL_TOO_MANY_FILES');
+		expect(fileCountWarn).toBeDefined();
 	});
 });
 
@@ -217,20 +238,20 @@ describe('validateSkillForPackaging - Link depth validation', () => {
 		const result = await validateSkillForPackaging(skillPath);
 
 		expect(result.metadata.maxLinkDepth).toBeLessThanOrEqual(2);
-		expect(result.activeErrors.filter((e) => e.code === 'REFERENCE_TOO_DEEP')).toHaveLength(0);
+		expect(result.activeWarnings.filter((e) => e.code === 'REFERENCE_TOO_DEEP')).toHaveLength(0);
 	});
 
-	it('should error for depth > 2 when linkFollowDepth is full', async () => {
+	it('should warn for depth > 2 when linkFollowDepth is full', async () => {
 		const { skillPath } = createThreeLevelChain(getTempDir());
 
 		// With linkFollowDepth: 'full', all links are followed regardless of depth
 		const metadata = { linkFollowDepth: 'full' as const };
 		const result = await validateSkillForPackaging(skillPath, metadata as never);
 
-		expect(result.status).toBe('error');
+		expect(result.status).toBe('success'); // warnings don't make status error
 		expect(result.metadata.maxLinkDepth).toBeGreaterThan(2);
-		const depthError = result.activeErrors.find((e) => e.code === 'REFERENCE_TOO_DEEP');
-		expect(depthError).toBeDefined();
+		const depthWarn = result.activeWarnings.find((e) => e.code === 'REFERENCE_TOO_DEEP');
+		expect(depthWarn).toBeDefined();
 	});
 
 	it('should truncate at default depth 2 and exclude deeper files', async () => {
@@ -243,7 +264,7 @@ describe('validateSkillForPackaging - Link depth validation', () => {
 		expect(result.metadata.maxLinkDepth).toBeLessThanOrEqual(2);
 		expect(result.metadata.fileCount).toBe(3); // SKILL.md + level1.md + level2.md
 		expect(result.metadata.excludedReferenceCount).toBe(1); // level3.md excluded
-		expect(result.activeErrors.filter((e) => e.code === 'REFERENCE_TOO_DEEP')).toHaveLength(0);
+		expect(result.activeWarnings.filter((e) => e.code === 'REFERENCE_TOO_DEEP')).toHaveLength(0);
 	});
 
 	it('should include reason detail in excludedReferences for depth-exceeded files', async () => {
@@ -260,7 +281,7 @@ describe('validateSkillForPackaging - Link depth validation', () => {
 });
 
 describe('validateSkillForPackaging - Navigation file detection', () => {
-	it('should detect links to README.md with full path and line number', async () => {
+	it('should detect links to README.md', async () => {
 		const tempDir = getTempDir();
 		const files = {
 			'docs/README.md': '# Documentation Index',
@@ -273,13 +294,12 @@ describe('validateSkillForPackaging - Navigation file detection', () => {
 
 		const result = await validateSkillForPackaging(skillPath);
 
-		expect(result.status).toBe('error');
-		const navError = result.activeErrors.find((e) => e.code === 'LINKS_TO_NAVIGATION_FILES');
-		expect(navError).toBeDefined();
-		// Should contain full resolved path, not just basename
-		expect(navError?.message).toContain(safePath.resolve(tempDir, 'docs/README.md'));
-		// Should contain a line number (colon followed by digits)
-		expect(navError?.message).toMatch(/:\d+/);
+		// Navigation file links are warnings, not errors
+		expect(result.status).toBe('success');
+		const navWarn = result.activeWarnings.find((e) => e.code === 'LINK_TO_NAVIGATION_FILE');
+		expect(navWarn).toBeDefined();
+		// location is relative to project root
+		expect(navWarn?.location).toContain('docs/README.md');
 	});
 
 	it('should detect links to index.md', async () => {
@@ -288,34 +308,34 @@ describe('validateSkillForPackaging - Navigation file detection', () => {
 		};
 		const skillBody = '\n# Test Skill\n\nSee [docs](./docs/index.md).';
 
-		const { findNavError } = await setupNavigationValidationTest(
+		const { findNavWarn } = await setupNavigationValidationTest(
 			getTempDir,
 			files,
 			skillBody,
 			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION }
 		);
 
-		const navError = findNavError();
-		expect(navError).toBeDefined();
-		expect((navError as { message: string }).message).toContain('index.md');
+		const navWarn = findNavWarn();
+		expect(navWarn).toBeDefined();
+		expect((navWarn as { message: string }).message).toContain('index.md');
 	});
 
-	it('should not error for specific topic files', async () => {
+	it('should not warn for specific topic files', async () => {
 		const files = {
 			'operators.md': '# Operators',
 			'calculations.md': '# Calculations',
 		};
 		const skillBody = '\n# Test Skill\n\nSee [operators](./operators.md) and [calculations](./calculations.md).';
 
-		const { findNavError } = await setupNavigationValidationTest(
+		const { findNavWarn } = await setupNavigationValidationTest(
 			getTempDir,
 			files,
 			skillBody,
 			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION }
 		);
 
-		const navError = findNavError();
-		expect(navError).toBeUndefined();
+		const navWarn = findNavWarn();
+		expect(navWarn).toBeUndefined();
 	});
 });
 
@@ -333,11 +353,11 @@ describe('validateSkillForPackaging - Description validation', () => {
 
 		const result = await validateSkillForPackaging(skillPath);
 
-		const descError = result.activeErrors.find((e) => e.code === 'DESCRIPTION_TOO_VAGUE');
-		expect(descError).toBeUndefined();
+		const descWarn = result.activeWarnings.find((e) => e.code === 'DESCRIPTION_TOO_VAGUE');
+		expect(descWarn).toBeUndefined();
 	});
 
-	it('should error for description < 50 characters', async () => {
+	it('should warn for description < 50 characters', async () => {
 		const tempDir = getTempDir();
 		const content = createSkillContent(
 			{ name: TEST_SKILL_NAME, description: 'Short description' },
@@ -347,13 +367,14 @@ describe('validateSkillForPackaging - Description validation', () => {
 
 		const result = await validateSkillForPackaging(skillPath);
 
-		expect(result.status).toBe('error');
-		const descError = result.activeErrors.find((e) => e.code === 'DESCRIPTION_TOO_VAGUE');
-		expect(descError).toBeDefined();
-		expect(descError?.message).toContain('characters');
+		// Description warning — status is still success
+		expect(result.status).toBe('success');
+		const descWarn = result.activeWarnings.find((e) => e.code === 'DESCRIPTION_TOO_VAGUE');
+		expect(descWarn).toBeDefined();
+		expect(descWarn?.message).toContain('characters');
 	});
 
-	it('should not error when description is missing', async () => {
+	it('should not warn when description is missing', async () => {
 		const tempDir = getTempDir();
 		const content = createSkillContent({ name: TEST_SKILL_NAME }, SKILL_HEADER_NO_TRAILING);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, content);
@@ -361,8 +382,8 @@ describe('validateSkillForPackaging - Description validation', () => {
 		const result = await validateSkillForPackaging(skillPath);
 
 		// Missing description is handled by existing validator, not packaging validator
-		const descError = result.activeErrors.find((e) => e.code === 'DESCRIPTION_TOO_VAGUE');
-		expect(descError).toBeUndefined();
+		const descWarn = result.activeWarnings.find((e) => e.code === 'DESCRIPTION_TOO_VAGUE');
+		expect(descWarn).toBeUndefined();
 	});
 });
 
@@ -381,20 +402,20 @@ describe('validateSkillForPackaging - Progressive disclosure validation', () => 
 		const result = await validateSkillForPackaging(skillPath);
 
 		// Should have SKILL_LENGTH_EXCEEDS_RECOMMENDED but not NO_PROGRESSIVE_DISCLOSURE
-		const pdError = result.activeErrors.find((e) => e.code === 'NO_PROGRESSIVE_DISCLOSURE');
-		expect(pdError).toBeUndefined();
+		const pdWarn = result.activeWarnings.find((e) => e.code === 'NO_PROGRESSIVE_DISCLOSURE');
+		expect(pdWarn).toBeUndefined();
 	});
 
-	it('should error for large SKILL.md without reference files', async () => {
+	it('should warn for large SKILL.md without reference files', async () => {
 		const result = (await setupPackagingValidationTest(
 			getTempDir,
 			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
 			SKILL_HEADER + LINE_CONTENT.repeat(550)
 		)) as PackagingValidationResult;
 
-		expect(result.status).toBe('error');
-		const pdError = result.activeErrors.find((e) => e.code === 'NO_PROGRESSIVE_DISCLOSURE');
-		expect(pdError).toBeDefined();
+		expect(result.status).toBe('success'); // warnings don't make status error
+		const pdWarn = result.activeWarnings.find((e) => e.code === 'NO_PROGRESSIVE_DISCLOSURE');
+		expect(pdWarn).toBeDefined();
 	});
 
 	it('should pass for small SKILL.md without reference files', async () => {
@@ -404,107 +425,131 @@ describe('validateSkillForPackaging - Progressive disclosure validation', () => 
 			SKILL_HEADER + LINE_CONTENT.repeat(400)
 		)) as PackagingValidationResult;
 
-		const pdError = result.activeErrors.find((e) => e.code === 'NO_PROGRESSIVE_DISCLOSURE');
-		expect(pdError).toBeUndefined();
+		const pdWarn = result.activeWarnings.find((e) => e.code === 'NO_PROGRESSIVE_DISCLOSURE');
+		expect(pdWarn).toBeUndefined();
 	});
 });
 
-describe('validateSkillForPackaging - Override support', () => {
-	it('should ignore errors with simple string override', async () => {
-		const { typedResult, lengthOverride } = await testOverrideValidation({
-			SKILL_LENGTH_EXCEEDS_RECOMMENDED: 'Legacy skill, refactoring planned for Q2',
-			NO_PROGRESSIVE_DISCLOSURE: TEST_REASON,
+describe('validateSkillForPackaging - Severity / accept config (framework)', () => {
+	it('should ignore warnings via validation.severity', async () => {
+		const result = await testIgnoreWarnings([
+			'SKILL_LENGTH_EXCEEDS_RECOMMENDED',
+			'NO_PROGRESSIVE_DISCLOSURE',
+		]);
+
+		expect(result.status).toBe('success');
+		expect(result.activeWarnings.filter(
+			e => e.code === 'SKILL_LENGTH_EXCEEDS_RECOMMENDED' || e.code === 'NO_PROGRESSIVE_DISCLOSURE'
+		)).toHaveLength(0);
+	});
+
+	it('should surface only non-ignored warnings when some codes are ignored', async () => {
+		// Only ignore SKILL_LENGTH — NO_PROGRESSIVE_DISCLOSURE should remain
+		const result = await testIgnoreWarnings(['SKILL_LENGTH_EXCEEDS_RECOMMENDED']);
+
+		expect(result.status).toBe('success');
+		expect(result.activeWarnings.find(e => e.code === 'SKILL_LENGTH_EXCEEDS_RECOMMENDED')).toBeUndefined();
+		const pdWarn = result.activeWarnings.find(e => e.code === 'NO_PROGRESSIVE_DISCLOSURE');
+		expect(pdWarn).toBeDefined();
+	});
+
+	it('should accept specific issues via validation.accept with path wildcard', async () => {
+		const result = await setupLongSkillAcceptanceTest({
+			SKILL_LENGTH_EXCEEDS_RECOMMENDED: [{ paths: ['**'], reason: 'Legacy skill, refactoring planned for Q2' }],
+			NO_PROGRESSIVE_DISCLOSURE: [{ paths: ['**'], reason: REASON_REFACTOR_Q2 }],
 		});
 
-		expect(typedResult.activeErrors).toHaveLength(0);
-		expect((lengthOverride as { reason: string }).reason).toBe('Legacy skill, refactoring planned for Q2');
+		expect(result.status).toBe('success');
+		// Both codes are accepted (suppressed), not in warnings
+		expect(result.activeWarnings.filter(
+			e => e.code === 'SKILL_LENGTH_EXCEEDS_RECOMMENDED' || e.code === 'NO_PROGRESSIVE_DISCLOSURE'
+		)).toHaveLength(0);
+		// ignoredErrors (accepted) contains the accept records
+		expect(result.ignoredErrors.some(r => r.code === 'SKILL_LENGTH_EXCEEDS_RECOMMENDED')).toBe(true);
+		expect(result.ignoredErrors.some(r => r.code === 'NO_PROGRESSIVE_DISCLOSURE')).toBe(true);
 	});
 
-	it('should ignore errors with object override', async () => {
-		const { lengthOverride } = await testOverrideValidation({
-			SKILL_LENGTH_EXCEEDS_RECOMMENDED: {
-				reason: 'Complex domain requires detailed examples',
-				expires: '2026-12-31',
-			},
-			NO_PROGRESSIVE_DISCLOSURE: TEST_REASON,
+	it('should emit ACCEPTANCE_EXPIRED warning for expired accept entries', async () => {
+		const result = await setupLongSkillAcceptanceTest({
+			SKILL_LENGTH_EXCEEDS_RECOMMENDED: [{ paths: ['**'], reason: 'Temporary exception', expires: '2020-01-01' }],
+			NO_PROGRESSIVE_DISCLOSURE: [{ paths: ['**'], reason: REASON_REFACTOR_Q2 }],
 		});
 
-		expect((lengthOverride as { reason: string }).reason).toBe('Complex domain requires detailed examples');
+		// Expired accept still suppresses the issue itself, but emits ACCEPTANCE_EXPIRED
+		const expiredWarn = result.activeWarnings.find(e => e.code === 'ACCEPTANCE_EXPIRED');
+		expect(expiredWarn).toBeDefined();
+		expect(expiredWarn?.message).toContain('SKILL_LENGTH_EXCEEDS_RECOMMENDED');
+		expect(expiredWarn?.message).toContain('2020-01-01');
 	});
 
-	it('should not ignore non-overridable rules', async () => {
-		// Attempt to override a best_practice rule (should work)
-		const metadata = {
-			ignoreValidationErrors: {
-				SKILL_LENGTH_EXCEEDS_RECOMMENDED: 'This is allowed',
-			},
-		};
-
-		const result = (await setupSkillWithMetadata(
-			getTempDir,
-			LONG_SKILL_BODY,
+	it('should keep accept active if not expired', async () => {
+		const tempDir = getTempDir();
+		const content = createSkillContent(
 			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
-			metadata
-		)) as PackagingValidationResult;
-
-		// SKILL_LENGTH should be ignored
-		expect(result.ignoredErrors.some(e => e.error.code === 'SKILL_LENGTH_EXCEEDS_RECOMMENDED')).toBe(true);
-
-		// But NO_PROGRESSIVE_DISCLOSURE was not overridden, so it should be active
-		expect(result.activeErrors.some(e => e.code === 'NO_PROGRESSIVE_DISCLOSURE')).toBe(true);
-	});
-
-	it('should detect expired overrides', async () => {
-		const metadata = {
-			ignoreValidationErrors: {
-				SKILL_LENGTH_EXCEEDS_RECOMMENDED: {
-					reason: 'Temporary exception',
-					expires: '2020-01-01', // Expired
-				},
-				NO_PROGRESSIVE_DISCLOSURE: TEST_REASON,
-			},
-		};
-
-		const result = (await setupSkillWithMetadata(
-			getTempDir,
 			LONG_SKILL_BODY,
-			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
-			metadata
-		)) as PackagingValidationResult;
+		);
+		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, content);
 
-		expect(result.status).toBe('error');
-		expect(result.expiredOverrides).toHaveLength(1);
-		expect(result.expiredOverrides[0]?.error.code).toBe('SKILL_LENGTH_EXCEEDS_RECOMMENDED');
-		expect(result.expiredOverrides[0]?.reason).toBe('Temporary exception');
-		expect(result.expiredOverrides[0]?.expiredDate).toBe('2020-01-01');
-		expect(result.activeErrors).toHaveLength(1); // SKILL_LENGTH becomes active
-	});
-
-	it('should keep override active if not expired', async () => {
 		const futureDate = new Date();
 		futureDate.setFullYear(futureDate.getFullYear() + 1);
 		const futureDateStr = futureDate.toISOString().split('T')[0];
 
-		const metadata = {
-			ignoreValidationErrors: {
-				SKILL_LENGTH_EXCEEDS_RECOMMENDED: {
-					reason: 'Time-limited exception',
-					expires: futureDateStr,
+		const result = await validateSkillForPackaging(skillPath, {
+			validation: {
+				accept: {
+					SKILL_LENGTH_EXCEEDS_RECOMMENDED: [{ paths: ['**'], reason: 'Time-limited exception', expires: futureDateStr }],
+					NO_PROGRESSIVE_DISCLOSURE: [{ paths: ['**'], reason: REASON_REFACTOR_Q2 }],
 				},
-				NO_PROGRESSIVE_DISCLOSURE: TEST_REASON,
 			},
-		};
-
-		const result = (await setupSkillWithMetadata(
-			getTempDir,
-			LONG_SKILL_BODY,
-			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
-			metadata
-		)) as PackagingValidationResult;
+		});
 
 		expect(result.status).toBe('success');
-		expect(result.ignoredErrors).toHaveLength(2);
-		expect(result.expiredOverrides).toHaveLength(0);
+		expect(result.activeWarnings.filter(
+			e => e.code === 'SKILL_LENGTH_EXCEEDS_RECOMMENDED' || e.code === 'NO_PROGRESSIVE_DISCLOSURE'
+		)).toHaveLength(0);
+		expect(result.activeWarnings.find(e => e.code === 'ACCEPTANCE_EXPIRED')).toBeUndefined();
+	});
+
+	it('emits LINK_OUTSIDE_PROJECT through the framework instead of OUTSIDE_PROJECT_BOUNDARY', async () => {
+		// Create a skill that links outside the project boundary
+		// We use a path that goes above the temp dir (which is the project root here)
+		const tempDir = getTempDir();
+		const skillContent = createSkillContent(
+			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+			'\n# Test Skill\n\nSee [outside](../outside.md).',
+		);
+		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
+
+		const result = await validateSkillForPackaging(skillPath, {
+			validation: { severity: { LINK_OUTSIDE_PROJECT: 'error' } },
+		});
+
+		expect(result.activeErrors.map(e => e.code)).toContain('LINK_OUTSIDE_PROJECT');
+		expect(result.activeErrors.map(e => e.code)).not.toContain('OUTSIDE_PROJECT_BOUNDARY');
+	});
+
+	it('allows accepting LINK_TARGETS_DIRECTORY per-path', async () => {
+		const tempDir = getTempDir();
+		const conceptsDir = safePath.join(tempDir, 'docs/sub');
+		fs.mkdirSync(conceptsDir, { recursive: true });
+		fs.writeFileSync(safePath.join(conceptsDir, 'README.md'), '# Sub');
+
+		const skillContent = createSkillContent(
+			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+			'\n# Test\n\nSee [Sub](./docs/sub/) for details.',
+		);
+		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
+
+		// location is 'docs/sub' (relative to project root, no trailing slash)
+		const result = await validateSkillForPackaging(skillPath, {
+			validation: {
+				accept: {
+					LINK_TARGETS_DIRECTORY: [{ paths: ['docs/sub'], reason: 'ToC target' }],
+				},
+			},
+		});
+
+		expect(result.activeErrors).toHaveLength(0);
 	});
 });
 
