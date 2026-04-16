@@ -74,7 +74,7 @@ Use this before a release to determine which surfaces each plugin supports.
 - `0` — always, when the audit completes, regardless of errors or warnings in the report.
 - `2` — system error (path not found, permission denied, etc.) — the audit could not run.
 
-For gated checks that exit `1` on validation errors, use `vat skills validate` or `vat skills build` instead. Those commands apply `validation.severity` and honor `validation.accept` from config.
+For gated checks that exit `1` on validation errors, use `vat skills validate` or `vat skills build` instead. Those commands apply `validation.severity` and honor `validation.allow` from config.
 
 ## CI Usage
 
@@ -102,7 +102,7 @@ Severity taxonomy in audit output:
 
 Audit always exits `0` regardless — surface-level severity drives display grouping only.
 
-**Hiding codes from audit output.** Audit ignores `validation.accept` by design (it is the read-only report), but it does honor `validation.severity`. Set a code to `ignore` in `vibe-agent-toolkit.config.yaml` to suppress it from the audit output:
+**Hiding codes from audit output.** Audit ignores `validation.allow` by design (it is the read-only report), but it does honor `validation.severity`. Set a code to `ignore` in `vibe-agent-toolkit.config.yaml` to suppress it from the audit output:
 
 ```yaml
 skills:
@@ -113,4 +113,4 @@ skills:
           LINK_TO_NAVIGATION_FILE: ignore   # hidden from audit output
 ```
 
-**Per-instance acceptance.** For per-path suppression with an audit trail, use `validation.accept` and run `vat skills validate` or `vat skills build` — those commands apply `accept` and gate the build. See `docs/validation-codes.md` for the full code reference and the VAT agent-authoring skill for configuration patterns.
+**Per-instance allow entries.** For per-path suppression with an audit trail, use `validation.allow` and run `vat skills validate` or `vat skills build` — those commands apply `allow` and gate the build. See `docs/validation-codes.md` for the full code reference and the VAT agent-authoring skill for configuration patterns.

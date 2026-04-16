@@ -298,7 +298,7 @@ Use `stripPrefix` to remove a common directory prefix (e.g., `"knowledge-base"`)
 | `{{link.resource.fileName}}` | Target filename (if resolved) |
 | `{{skill.name}}` | Skill name from frontmatter |
 
-**`validation`** — Unified framework for overriding default severity and accepting specific issue instances:
+**`validation`** — Unified framework for overriding default severity and allowing specific issue instances:
 
 ```yaml
 # In vibe-agent-toolkit.config.yaml under skills.defaults or skills.config.<name>
@@ -306,27 +306,29 @@ validation:
   severity:
     LINK_DROPPED_BY_DEPTH: error           # upgrade: block on depth-dropped links
     LINK_TO_NAVIGATION_FILE: ignore        # silence: this skill intentionally links to READMEs
-  accept:
+  allow:
     PACKAGED_UNREFERENCED_FILE:
       - paths: ["templates/runtime.json"]
         reason: "consumed programmatically at runtime"
         expires: "2026-09-30"
+    SKILL_LENGTH_EXCEEDS_RECOMMENDED:
+      - reason: "whole-skill concern; paths defaults to ['**/*']"
 ```
 
 Two sub-keys, each covering a different override granularity:
 
 - **`severity`** — Class-level. Raise any code to `error` (blocks build), lower to `warning` (emits, non-blocking), or `ignore` (fully suppressed). Applies to every instance of that code.
-- **`accept`** — Per-instance. Suppress specific `(code, path)` matches with a required `reason` and optional `expires` date. Use for legitimate exceptions that don't warrant code-wide silencing.
+- **`allow`** — Per-instance. Suppress specific `(code, path)` matches with a required `reason` and optional `expires` date. `paths` is optional (defaults to `["**/*"]` — the whole skill). Use for legitimate exceptions that don't warrant code-wide silencing.
 
 Things adopters typically adjust:
 
 - Downgrade `LINK_DROPPED_BY_DEPTH` to `ignore` when intentionally linking out to external docs.
-- Accept specific files under `PACKAGED_UNREFERENCED_FILE` when they're consumed programmatically by CLI scripts at runtime.
-- Raise `ACCEPTANCE_EXPIRED` to `error` for zero-tolerance expiry policies.
+- Allow specific files under `PACKAGED_UNREFERENCED_FILE` when they're consumed programmatically by CLI scripts at runtime.
+- Raise `ALLOW_EXPIRED` to `error` for zero-tolerance expiry policies.
 
-Expired `accept` entries still apply — VAT emits `ACCEPTANCE_EXPIRED` as a reminder rather than silently re-surfacing the underlying issue (no surprise build breaks when a date passes). Unused `accept` entries surface as `ACCEPTANCE_UNUSED` (analogous to ESLint's unused-disable).
+Expired `allow` entries still apply — VAT emits `ALLOW_EXPIRED` as a reminder rather than silently re-surfacing the underlying issue (no surprise build breaks when a date passes). Unused `allow` entries surface as `ALLOW_UNUSED` (analogous to ESLint's unused-disable).
 
-Full code reference at `docs/validation-codes.md`. `vat audit` is advisory: it applies `severity` for display grouping only, ignores `accept`, and always exits 0. Use `vat skills validate` or `vat skills build` for gated checks.
+Full code reference at `docs/validation-codes.md`. `vat audit` is advisory: it applies `severity` for display grouping only, ignores `allow`, and always exits 0. Use `vat skills validate` or `vat skills build` for gated checks.
 
 ## Testing Agents
 
