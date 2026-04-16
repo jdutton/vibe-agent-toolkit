@@ -79,7 +79,7 @@ Before changing VAT source code, write a test that reproduces the bug:
 - **CLI behavior** → add an integration test in `packages/cli/test/integration/`
 - **End-to-end workflow** → add a system test in `packages/cli/test/system/`
 
-See [docs/writing-tests.md](resources/writing-tests.md) for test patterns and
+See docs/writing-tests.md for test patterns and
 the unit/integration/system classification guide.
 
 ## Step 5: Validate Before Committing
@@ -106,6 +106,6 @@ is safe to commit. Do not commit until `bun run validate` passes.
 
 ## See Also
 
-- [docs/debug-and-test-vat-fixes.md](resources/debug-and-test-vat-fixes.md) — Full reference
-- [docs/writing-tests.md](resources/writing-tests.md) — Test patterns and classification
-- [packages/cli/CLAUDE.md](resources/CLAUDE.md) — CLI development guidelines
+- docs/debug-and-test-vat-fixes.md — Full reference
+- docs/writing-tests.md — Test patterns and classification
+- [packages/cli/CLAUDE.md]() — CLI development guidelines

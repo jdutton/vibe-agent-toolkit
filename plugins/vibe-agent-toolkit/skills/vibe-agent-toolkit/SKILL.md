@@ -182,12 +182,12 @@ You've successfully adopted VAT when:
 
 ## Documentation Index
 
-- [Getting Started Guide](resources/getting-started.md)
-- [Agent Authoring Guide](resources/agent-authoring.md) — patterns and code examples
-- [Orchestration Guide](resources/orchestration.md) — multi-agent workflows
-- [RAG Usage Guide](resources/rag-usage-guide.md)
-- [Resource Compiler Guide](resources/compiling-markdown-to-typescript.md)
-- [Runtime Adapters](resources/adding-runtime-adapters.md)
+- Getting Started Guide
+- Agent Authoring Guide — patterns and code examples
+- Orchestration Guide — multi-agent workflows
+- RAG Usage Guide
+- Resource Compiler Guide
+- Runtime Adapters
 - Examples: `@vibe-agent-toolkit/vat-example-cat-agents`
 
 ## Running VAT
