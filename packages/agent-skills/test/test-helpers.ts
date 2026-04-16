@@ -454,7 +454,7 @@ export async function setupTransitiveValidationTest(
 /**
  * Setup navigation validation test
  *
- * Common pattern for tests checking LINKS_TO_NAVIGATION_FILES:
+ * Common pattern for tests checking LINK_TO_NAVIGATION_FILE:
  * 1. Create specific files (navigation or topic)
  * 2. Create skill with links
  * 3. Validate and return result with error finder
