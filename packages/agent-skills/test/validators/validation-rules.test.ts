@@ -134,10 +134,10 @@ describe('createIssue', () => {
 });
 
 describe('fix hints are framework-aware', () => {
-	it('PACKAGED_UNREFERENCED_FILE fix references validation.accept, not the removed ignoreValidationErrors field', () => {
+	it('PACKAGED_UNREFERENCED_FILE fix references validation.allow, not the removed ignoreValidationErrors field', () => {
 		const rule = VALIDATION_RULES.PACKAGED_UNREFERENCED_FILE;
 		expect(rule.fix).not.toMatch(/ignoreValidationErrors/);
-		expect(rule.fix).toMatch(/validation\.accept/);
+		expect(rule.fix).toMatch(/validation\.allow/);
 	});
 });
 

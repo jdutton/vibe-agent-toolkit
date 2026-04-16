@@ -156,7 +156,7 @@ export interface PackageSkillOptions {
   files?: SkillFileEntry[] | undefined;
 
   /**
-   * Validation framework configuration: severity overrides and per-path acceptance.
+   * Validation framework configuration: severity overrides and per-path allow entries.
    * See docs/validation-codes.md for codes and defaults.
    */
   validation?: ValidationConfig | undefined;

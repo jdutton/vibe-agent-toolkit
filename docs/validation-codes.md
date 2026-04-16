@@ -1,6 +1,6 @@
 # VAT Validation Codes
 
-This reference lists every overridable validation code VAT emits, plus the two meta-codes. Use it to interpret CLI output, configure `validation.severity` / `validation.accept`, and understand default behavior.
+This reference lists every overridable validation code VAT emits, plus the two meta-codes. Use it to interpret CLI output, configure `validation.severity` / `validation.allow`, and understand default behavior.
 
 ## Severity Model
 
@@ -22,18 +22,20 @@ skills:
       validation:
         severity:
           LINK_DROPPED_BY_DEPTH: error
-        accept:
+        allow:
           PACKAGED_UNREFERENCED_FILE:
             - paths: ["internal/*.json"]
               reason: "consumed programmatically at runtime"
               expires: "2026-09-30"
+          SKILL_LENGTH_EXCEEDS_RECOMMENDED:
+            - reason: "whole-skill concern; paths defaults to ['**/*']"
 ```
 
-`validation.severity` sets class-level behavior; `validation.accept` suppresses specific `(code, path)` instances with an audit trail. Full docs at the VAT agent-authoring skill.
+`validation.severity` sets class-level behavior; `validation.allow` suppresses specific `(code, path)` instances with an audit trail. `paths` is optional on allow entries and defaults to `["**/*"]` (the whole skill). Full docs at the VAT agent-authoring skill.
 
 ## Command Scope
 
-| Command | Severity applied | `accept` applied | Blocks on error |
+| Command | Severity applied | `allow` applied | Blocks on error |
 |---|---|---|---|
 | `vat skills build` | ✓ | ✓ | Yes (exit 1) |
 | `vat skills validate` | ✓ | ✓ | Yes (exit 1) |
@@ -49,7 +51,7 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 - **Default:** `error`
 - **What:** Markdown link points to a file outside the project root.
 - **Why it matters:** Skills and resource bundles are self-contained artifacts. A link that escapes the project root cannot be resolved by the agent at runtime and signals a structural problem in how the content is organized.
-- **Fix:** Move the target inside the project or remove the link. Use `validation.accept` if the reference is intentional and cross-project.
+- **Fix:** Move the target inside the project or remove the link. Use `validation.allow` if the reference is intentional and cross-project.
 
 ### `LINK_TARGETS_DIRECTORY`
 
@@ -70,7 +72,7 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 - **Default:** `error`
 - **What:** Markdown link targets a gitignored file; risks leaking ignored data into the bundle.
 - **Why it matters:** Gitignored files are typically excluded for a reason — generated artifacts, secrets, or local-only state. Bundling them could expose sensitive data or break portability for anyone cloning the repo.
-- **Fix:** Link to a non-ignored file or adjust `.gitignore`. Accept the specific path via `validation.accept` if the risk has been reviewed.
+- **Fix:** Link to a non-ignored file or adjust `.gitignore`. Allow the specific path via `validation.allow` if the risk has been reviewed.
 
 ### `LINK_MISSING_TARGET`
 
@@ -95,14 +97,14 @@ Only meaningful when actually bundling a skill; fire from `vat skills build` (an
 - **Default:** `warning`
 - **What:** Walker stopped following links at the configured `linkFollowDepth`; this link was not bundled.
 - **Why it matters:** A depth-limited walk may silently omit content the skill author expected to be included. The agent gets a partial bundle without knowing it.
-- **Fix:** Raise `linkFollowDepth`, bundle the file via `files` config, declare the drop intentional with `validation.accept`, or exclude via `excludeReferencesFromBundle.rules`.
+- **Fix:** Raise `linkFollowDepth`, bundle the file via `files` config, declare the drop intentional with `validation.allow`, or exclude via `excludeReferencesFromBundle.rules`.
 
 ### `PACKAGED_UNREFERENCED_FILE`
 
 - **Default:** `error`
 - **What:** File in the packaged output is not referenced from any packaged markdown.
 - **Why it matters:** Unreferenced files bloat the bundle and indicate that content was added to the `files` config without wiring it into the skill's narrative. Agents never discover content that isn't linked.
-- **Fix:** Add a markdown link or code-block mention in `SKILL.md` or a linked resource. Accept via `validation.accept` if the file is consumed programmatically.
+- **Fix:** Add a markdown link or code-block mention in `SKILL.md` or a linked resource. Allow via `validation.allow` if the file is consumed programmatically.
 
 ### `PACKAGED_BROKEN_LINK`
 
@@ -120,28 +122,28 @@ Best-practice checks about skill shape and content.
 - **Default:** `warning`
 - **What:** `SKILL.md` line count exceeds the recommended limit; longer files degrade skill triggering.
 - **Why it matters:** LLMs use the skill description and early content to decide whether to invoke a skill. Excessively long `SKILL.md` files dilute the trigger signal and slow down skill matching across large plugin sets.
-- **Fix:** Split content into linked resources (progressive disclosure) or accept if the length is justified.
+- **Fix:** Split content into linked resources (progressive disclosure) or allow if the length is justified.
 
 ### `SKILL_TOTAL_SIZE_LARGE`
 
 - **Default:** `warning`
 - **What:** Total packaged line count exceeds the recommended limit.
 - **Why it matters:** A large total bundle consumes context window when loaded. Skills that load too much content crowd out other skills and reduce the agent's effective working space during a session.
-- **Fix:** Reduce bundled content, move references out of the bundle, or accept if the size is justified.
+- **Fix:** Reduce bundled content, move references out of the bundle, or allow if the size is justified.
 
 ### `SKILL_TOO_MANY_FILES`
 
 - **Default:** `warning`
 - **What:** Packaged file count exceeds the recommended limit.
 - **Why it matters:** Skills with many files are harder to maintain, harder for agents to navigate, and slower to load. High file counts often indicate a skill that should be split into multiple focused skills.
-- **Fix:** Consolidate or restructure references, or accept if the file count is justified.
+- **Fix:** Consolidate or restructure references, or allow if the file count is justified.
 
 ### `REFERENCE_TOO_DEEP`
 
 - **Default:** `warning`
 - **What:** Bundled link graph exceeds the recommended depth; deeply nested references hurt discoverability.
 - **Why it matters:** Deeply nested reference graphs require many hops for agents to reach leaf content. Information buried several levels deep is rarely surfaced and harder to keep consistent.
-- **Fix:** Flatten the reference structure or accept if depth is intentional.
+- **Fix:** Flatten the reference structure or allow if depth is intentional.
 
 ### `DESCRIPTION_TOO_VAGUE`
 
@@ -161,23 +163,23 @@ Best-practice checks about skill shape and content.
 
 Describe the state of the validation config itself.
 
-### `ACCEPTANCE_EXPIRED`
+### `ALLOW_EXPIRED`
 
 - **Default:** `warning`
-- **What:** A `validation.accept` entry's `expires` date is in the past; the acceptance still applies but should be re-reviewed.
-- **Why it matters:** Time-boxed acceptances let you accept an issue temporarily and force re-review later. The acceptance still applies past the expiry; the warning is your reminder to deal with the underlying issue. Without this check, expired acceptances silently suppress issues indefinitely.
-- **Fix:** Re-review the acceptance: extend `expires`, remove the entry, or fix the underlying issue. Upgrade severity to `error` for zero-tolerance expiry.
+- **What:** A `validation.allow` entry's `expires` date is in the past; the allow entry still applies but should be re-reviewed.
+- **Why it matters:** Time-boxed allow entries let you allow an issue temporarily and force re-review later. The allow entry still applies past the expiry; the warning is your reminder to deal with the underlying issue. Without this check, expired allow entries silently suppress issues indefinitely.
+- **Fix:** Re-review the allow entry: extend `expires`, remove the entry, or fix the underlying issue. Upgrade severity to `error` for zero-tolerance expiry.
 
-### `ACCEPTANCE_UNUSED`
+### `ALLOW_UNUSED`
 
 - **Default:** `warning`
-- **What:** A `validation.accept` entry did not match any emitted issue; the acceptance is dead weight.
-- **Why it matters:** Unused acceptance entries indicate that the underlying issue was fixed, the path pattern no longer matches, or the entry was added in error. Dead entries in the config create false confidence that issues are being tracked when they are not.
-- **Fix:** Remove the entry or fix the pattern. Upgrade severity to `error` to block on unused acceptances.
+- **What:** A `validation.allow` entry did not match any emitted issue; the allow entry is dead weight.
+- **Why it matters:** Unused allow entries indicate that the underlying issue was fixed, the path pattern no longer matches, or the entry was added in error. Dead entries in the config create false confidence that issues are being tracked when they are not.
+- **Fix:** Remove the entry or fix the pattern. Upgrade severity to `error` to block on unused allow entries.
 
 ## Migration from `ignoreValidationErrors`
 
 | Old | New |
 | --- | --- |
 | `ignoreValidationErrors: { CODE: "reason" }` | `validation.severity: { CODE: ignore }` |
-| `ignoreValidationErrors: { CODE: { reason, expires } }` | `validation.severity: { CODE: ignore }` for code-wide silence, OR `validation.accept: { CODE: [{ paths, reason, expires }] }` for scoped acceptance with re-review on expiry |
+| `ignoreValidationErrors: { CODE: { reason, expires } }` | `validation.severity: { CODE: ignore }` for code-wide silence, OR `validation.allow: { CODE: [{ paths, reason, expires }] }` for scoped allow entries with re-review on expiry |

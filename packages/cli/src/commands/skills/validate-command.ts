@@ -21,13 +21,13 @@ export function createValidateCommand(): Command {
       `
 Description:
   Validates skills declared in vibe-agent-toolkit.config.yaml using the
-  validation framework (severity + accept). Checks source-detectable link
+  validation framework (severity + allow). Checks source-detectable link
   issues, size/complexity, and link depth. Applies per-skill severity
-  overrides and per-path acceptance entries.
+  overrides and per-path allow entries.
 
-  Supports severity overrides and per-path acceptance (with optional expiry
-  reminders via ACCEPTANCE_EXPIRED). See docs/validation-codes.md for the
-  full code reference.
+  Supports severity overrides and per-path allow entries (with optional
+  expiry reminders via ALLOW_EXPIRED). See docs/validation-codes.md for
+  the full code reference.
 
 Validation Checks:
   Required (non-overridable):
@@ -40,7 +40,7 @@ Validation Checks:
     - No filename collisions
     - Forward slashes in paths (not backslashes)
 
-  Best practices (overridable via severity/accept):
+  Best practices (overridable via severity/allow):
     - SKILL.md ≤500 lines (recommended)
     - Total skill size ≤2000 lines
     - File count ≤6 files
@@ -60,14 +60,14 @@ Validation Config:
           severity:
             SKILL_LENGTH_EXCEEDS_RECOMMENDED: ignore
             LINK_TO_NAVIGATION_FILE: warning
-          accept:
+          allow:
             SKILL_TOO_MANY_FILES:
-              - paths: ["**"]
-                reason: "Migration in progress - will split skill"
+              - reason: "Migration in progress - will split skill"
                 expires: "2026-06-01"
 
-  All codes are configurable via severity (error/warning/ignore) or accept entries.
-  Expired accept entries are reported as ACCEPTANCE_EXPIRED warnings.
+  Allow entries accept an optional paths array (defaults to ["**/*"] — the
+  whole skill). All codes are configurable via severity (error/warning/ignore)
+  or allow entries. Expired allow entries are reported as ALLOW_EXPIRED warnings.
 
 Output:
   YAML summary → stdout (for programmatic parsing)
@@ -80,8 +80,8 @@ Output:
     - durationSecs: validation time
 
 Exit Codes:
-  0 - All validations passed (or all errors accepted by valid config)
-  1 - Validation errors found (severity=error, not accepted)
+  0 - All validations passed (or all errors allowed by valid config)
+  1 - Validation errors found (severity=error, not allowed)
   2 - System error (config invalid, skill path not found)
 
 Example:

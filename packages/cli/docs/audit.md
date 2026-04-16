@@ -168,7 +168,7 @@ hierarchical:
 
 ## Validation Configuration
 
-Audit honors `validation.severity` from `vibe-agent-toolkit.config.yaml` for **display grouping only** — setting a code to `ignore` hides it from output, raising to `error` promotes it in the report's error count. Audit does **not** apply `validation.accept` (per-path acceptance); for that, use `vat skills validate` or `vat skills build`.
+Audit honors `validation.severity` from `vibe-agent-toolkit.config.yaml` for **display grouping only** — setting a code to `ignore` hides it from output, raising to `error` promotes it in the report's error count. Audit does **not** apply `validation.allow` (per-path allow entries); for that, use `vat skills validate` or `vat skills build`.
 
 ```yaml
 # In vibe-agent-toolkit.config.yaml

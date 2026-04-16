@@ -34,8 +34,8 @@ export type IssueCode =
   | 'DESCRIPTION_TOO_VAGUE'
   | 'NO_PROGRESSIVE_DISCLOSURE'
   // Meta-codes describing the state of the validation config itself
-  | 'ACCEPTANCE_EXPIRED'
-  | 'ACCEPTANCE_UNUSED';
+  | 'ALLOW_EXPIRED'
+  | 'ALLOW_UNUSED';
 
 export interface CodeRegistryEntry {
   defaultSeverity: EmittedSeverity;
@@ -56,7 +56,7 @@ export const CODE_REGISTRY: Record<IssueCode, CodeRegistryEntry> = {
   LINK_OUTSIDE_PROJECT: entry(
     'error',
     'Markdown link points to a file outside the project root.',
-    'Move the target inside the project or remove the link. Use validation.accept if the reference is intentional and cross-project.',
+    'Move the target inside the project or remove the link. Use validation.allow if the reference is intentional and cross-project.',
     'link_outside_project',
   ),
   LINK_TARGETS_DIRECTORY: entry(
@@ -74,7 +74,7 @@ export const CODE_REGISTRY: Record<IssueCode, CodeRegistryEntry> = {
   LINK_TO_GITIGNORED_FILE: entry(
     'error',
     'Markdown link targets a gitignored file; risks leaking ignored data into the bundle.',
-    'Link to a non-ignored file or adjust .gitignore. Accept the specific path via validation.accept if the risk has been reviewed.',
+    'Link to a non-ignored file or adjust .gitignore. Allow the specific path via validation.allow if the risk has been reviewed.',
     'link_to_gitignored_file',
   ),
   LINK_MISSING_TARGET: entry(
@@ -92,13 +92,13 @@ export const CODE_REGISTRY: Record<IssueCode, CodeRegistryEntry> = {
   LINK_DROPPED_BY_DEPTH: entry(
     'warning',
     'Walker stopped following links at the configured linkFollowDepth; this link was not bundled.',
-    'Raise linkFollowDepth, bundle the file via files config, declare the drop intentional with validation.accept, or exclude via excludeReferencesFromBundle.rules.',
+    'Raise linkFollowDepth, bundle the file via files config, declare the drop intentional with validation.allow, or exclude via excludeReferencesFromBundle.rules.',
     'link_dropped_by_depth',
   ),
   PACKAGED_UNREFERENCED_FILE: entry(
     'error',
     'File in the packaged output is not referenced from any packaged markdown.',
-    'Add a markdown link or code-block mention in SKILL.md or a linked resource. Accept via validation.accept if the file is consumed programmatically.',
+    'Add a markdown link or code-block mention in SKILL.md or a linked resource. Allow via validation.allow if the file is consumed programmatically.',
     'packaged_unreferenced_file',
   ),
   PACKAGED_BROKEN_LINK: entry(
@@ -110,25 +110,25 @@ export const CODE_REGISTRY: Record<IssueCode, CodeRegistryEntry> = {
   SKILL_LENGTH_EXCEEDS_RECOMMENDED: entry(
     'warning',
     'SKILL.md line count exceeds the recommended limit; longer files degrade skill triggering.',
-    'Split content into linked resources (progressive disclosure) or accept if the length is justified.',
+    'Split content into linked resources (progressive disclosure) or allow if the length is justified.',
     'skill_length_exceeds_recommended',
   ),
   SKILL_TOTAL_SIZE_LARGE: entry(
     'warning',
     'Total packaged line count exceeds the recommended limit.',
-    'Reduce bundled content, move references out of the bundle, or accept if the size is justified.',
+    'Reduce bundled content, move references out of the bundle, or allow if the size is justified.',
     'skill_total_size_large',
   ),
   SKILL_TOO_MANY_FILES: entry(
     'warning',
     'Packaged file count exceeds the recommended limit.',
-    'Consolidate or restructure references, or accept if the file count is justified.',
+    'Consolidate or restructure references, or allow if the file count is justified.',
     'skill_too_many_files',
   ),
   REFERENCE_TOO_DEEP: entry(
     'warning',
     'Bundled link graph exceeds the recommended depth; deeply nested references hurt discoverability.',
-    'Flatten the reference structure or accept if depth is intentional.',
+    'Flatten the reference structure or allow if depth is intentional.',
     'reference_too_deep',
   ),
   DESCRIPTION_TOO_VAGUE: entry(
@@ -143,16 +143,16 @@ export const CODE_REGISTRY: Record<IssueCode, CodeRegistryEntry> = {
     'Move background detail into linked resources and reference them from SKILL.md.',
     'no_progressive_disclosure',
   ),
-  ACCEPTANCE_EXPIRED: entry(
+  ALLOW_EXPIRED: entry(
     'warning',
-    "A validation.accept entry's expires date is in the past; the acceptance still applies but should be re-reviewed.",
-    'Re-review the acceptance: extend expires, remove the entry, or fix the underlying issue. Upgrade severity to error for zero-tolerance expiry.',
-    'acceptance_expired',
+    "A validation.allow entry's expires date is in the past; the allowance still applies but should be re-reviewed.",
+    'Re-review the allow entry: extend expires, remove the entry, or fix the underlying issue. Upgrade severity to error for zero-tolerance expiry.',
+    'allow_expired',
   ),
-  ACCEPTANCE_UNUSED: entry(
+  ALLOW_UNUSED: entry(
     'warning',
-    'A validation.accept entry did not match any emitted issue; the acceptance is dead weight.',
-    'Remove the entry or fix the pattern. Upgrade severity to error to block on unused acceptances.',
-    'acceptance_unused',
+    'A validation.allow entry did not match any emitted issue; the allow entry is dead weight.',
+    'Remove the entry or fix the pattern. Upgrade severity to error to block on unused allow entries.',
+    'allow_unused',
   ),
 };

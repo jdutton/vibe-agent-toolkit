@@ -105,17 +105,17 @@ function outputSkillErrors(result: PackagingValidationResult): void {
   }
 
   if (result.ignoredErrors.length > 0) {
-    console.error(`  Accepted issues (${result.ignoredErrors.length}):`);
+    console.error(`  Allowed issues (${result.ignoredErrors.length}):`);
     for (const record of result.ignoredErrors) {
       console.error(
-        `    [${String(record.code)}] ${String(record.location)} (accepted: ${record.reason})`
+        `    [${String(record.code)}] ${String(record.location)} (allowed: ${record.reason})`
       );
     }
   }
 
-  const expiredWarnings = result.activeWarnings.filter(w => w.code === 'ACCEPTANCE_EXPIRED');
+  const expiredWarnings = result.activeWarnings.filter(w => w.code === 'ALLOW_EXPIRED');
   if (expiredWarnings.length > 0) {
-    console.error(`  Expired acceptances (${expiredWarnings.length}):`);
+    console.error(`  Expired allow entries (${expiredWarnings.length}):`);
     for (const warn of expiredWarnings) {
       console.error(`    ${String(warn.message)}`);
     }
@@ -158,18 +158,18 @@ function logSkillProgress(
 ): void {
   if (result.status === 'error') {
     const activeCount = result.activeErrors.length;
-    const acceptedCount = result.ignoredErrors.length;
-    const expiredCount = result.activeWarnings.filter(w => w.code === 'ACCEPTANCE_EXPIRED').length;
+    const allowedCount = result.ignoredErrors.length;
+    const expiredCount = result.activeWarnings.filter(w => w.code === 'ALLOW_EXPIRED').length;
 
     logger.error(`   ❌ ${skillName}: ${activeCount} error${activeCount === 1 ? '' : 's'}`);
-    if (acceptedCount > 0) {
-      logger.info(`      (${acceptedCount} accepted by config)`);
+    if (allowedCount > 0) {
+      logger.info(`      (${allowedCount} allowed by config)`);
     }
     if (expiredCount > 0) {
-      logger.error(`      (${expiredCount} expired acceptance${expiredCount === 1 ? '' : 's'})`);
+      logger.error(`      (${expiredCount} expired allow entr${expiredCount === 1 ? 'y' : 'ies'})`);
     }
   } else if (result.ignoredErrors.length > 0) {
-    logger.info(`   ✅ ${skillName} (${result.ignoredErrors.length} accepted by config)`);
+    logger.info(`   ✅ ${skillName} (${result.ignoredErrors.length} allowed by config)`);
   } else {
     logger.info(`   ✅ ${skillName}`);
   }

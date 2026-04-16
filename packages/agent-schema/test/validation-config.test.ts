@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { ValidationConfigSchema } from '../src/validation-config.js';
+import { AllowEntrySchema, ValidationConfigSchema } from '../src/validation-config.js';
 
 describe('ValidationConfigSchema', () => {
   it('parses a minimal severity-only config', () => {
@@ -13,16 +13,16 @@ describe('ValidationConfigSchema', () => {
     expect(result.success).toBe(false);
   });
 
-  it('requires reason on accept entries', () => {
+  it('requires reason on allow entries', () => {
     const result = ValidationConfigSchema.safeParse({
-      accept: { LINK_DROPPED_BY_DEPTH: [{ paths: ['docs/**'] }] },
+      allow: { LINK_DROPPED_BY_DEPTH: [{ paths: ['docs/**'] }] },
     });
     expect(result.success).toBe(false);
   });
 
-  it('accepts an entry with reason and optional expires', () => {
+  it('allows an entry with reason and optional expires', () => {
     const result = ValidationConfigSchema.safeParse({
-      accept: {
+      allow: {
         LINK_DROPPED_BY_DEPTH: [{ paths: ['docs/**'], reason: 'ok', expires: '2026-09-30' }],
       },
     });
@@ -35,5 +35,23 @@ describe('ValidationConfigSchema', () => {
       extra: 'not allowed',
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe('AllowEntrySchema', () => {
+  it('defaults paths to ["**/*"] when omitted', () => {
+    const result = AllowEntrySchema.safeParse({ reason: 'whole-skill concern' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.paths).toEqual(['**/*']);
+    }
+  });
+
+  it('preserves explicit paths when provided', () => {
+    const result = AllowEntrySchema.safeParse({ paths: ['docs/**'], reason: 'explicit scope' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.paths).toEqual(['docs/**']);
+    }
   });
 });

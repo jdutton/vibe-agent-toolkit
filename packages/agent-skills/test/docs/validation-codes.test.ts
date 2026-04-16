@@ -34,6 +34,6 @@ describe('docs/validation-codes.md', () => {
   it('includes the migration table', () => {
     expect(doc).toMatch(/ignoreValidationErrors/);
     expect(doc).toMatch(/validation\.severity/);
-    expect(doc).toMatch(/validation\.accept/);
+    expect(doc).toMatch(/validation\.allow/);
   });
 });

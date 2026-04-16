@@ -232,7 +232,7 @@ describe('skills build command (system test)', () => {
     writeTestFile(safePath.join(tempDir, 'dist', 'bin', 'tool.mjs'), 'console.log("tool");\n');
 
     // Config with files entry declaring source → dest mapping.
-    // Accept PACKAGED_UNREFERENCED_FILE since this test focuses on file copying,
+    // Allow PACKAGED_UNREFERENCED_FILE since this test focuses on file copying,
     // not link-reference coverage. The injected artifact is intentionally unreferenced.
     const configContent = [
       CONFIG_VERSION_LINE,
@@ -245,7 +245,7 @@ describe('skills build command (system test)', () => {
       '        - source: dist/bin/tool.mjs',
       '          dest: scripts/tool.mjs',
       CONFIG_VALIDATION_INDENT,
-      '        accept:',
+      '        allow:',
       '          PACKAGED_UNREFERENCED_FILE:',
       '            - paths: ["**"]',
       '              reason: artifact injected via files config, not linked from markdown',
@@ -377,23 +377,23 @@ function setupProjectWithDepthDrop(
 }
 
 /**
- * Helper: same depth-drop scenario but with an accept entry to suppress the error.
+ * Helper: same depth-drop scenario but with an allow entry to suppress the error.
  */
-function setupProjectWithDepthDropAndAccept(
+function setupProjectWithDepthDropAndAllow(
   tempDir: string,
   skillName: string,
 ): string {
-  const projectDir = safePath.join(tempDir, 'depth-drop-accept');
+  const projectDir = safePath.join(tempDir, 'depth-drop-allow');
   mkdirSyncReal(projectDir, { recursive: true });
 
   writeTestFile(
     safePath.join(projectDir, PACKAGE_JSON_FILENAME),
-    JSON.stringify({ name: 'depth-drop-accept-test', workspaces: [] }),
+    JSON.stringify({ name: 'depth-drop-allow-test', workspaces: [] }),
   );
 
   writeDepthDropLinkGraph(projectDir, skillName);
 
-  // linkFollowDepth=1, severity=error, but accept suppresses it
+  // linkFollowDepth=1, severity=error, but allow suppresses it
   const configContent = [
     CONFIG_VERSION_LINE,
     'skills:',
@@ -405,7 +405,7 @@ function setupProjectWithDepthDropAndAccept(
     CONFIG_VALIDATION_INDENT,
     '        severity:',
     '          LINK_DROPPED_BY_DEPTH: error',
-    '        accept:',
+    '        allow:',
     '          LINK_DROPPED_BY_DEPTH:',
     '            - paths: ["**"]',
     '              reason: depth drop is intentional in this test',
@@ -440,9 +440,9 @@ describe('skills build — framework exit codes (system test)', () => {
     expect(cmdResult.stderr + cmdResult.stdout).toContain('LINK_DROPPED_BY_DEPTH');
   });
 
-  it('exits zero when LINK_DROPPED_BY_DEPTH error is suppressed via accept', () => {
+  it('exits zero when LINK_DROPPED_BY_DEPTH error is suppressed via allow', () => {
     const tempDir = suite.createTempDir();
-    const projectDir = setupProjectWithDepthDropAndAccept(tempDir, DEPTH_DROP_SKILL);
+    const projectDir = setupProjectWithDepthDropAndAllow(tempDir, DEPTH_DROP_SKILL);
 
     const { result: cmdResult } = suite.runBuildCommand(projectDir);
 

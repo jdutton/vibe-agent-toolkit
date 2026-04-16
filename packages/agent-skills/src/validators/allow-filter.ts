@@ -3,17 +3,17 @@ import picomatch from 'picomatch';
 import type { IssueCode } from './code-registry.js';
 import type { ValidationIssue } from './types.js';
 
-export interface AcceptEntry {
+export interface AllowEntry {
   paths: string[];
   reason: string;
   expires?: string | undefined;
 }
 
-export interface AcceptConfig {
-  accept?: Partial<Record<IssueCode, AcceptEntry[]>>;
+export interface AllowConfig {
+  allow?: Partial<Record<IssueCode, AllowEntry[]>>;
 }
 
-export interface AcceptRecord {
+export interface AllowRecord {
   code: IssueCode;
   location: string;
   reason: string;
@@ -35,15 +35,15 @@ export interface ExpiredRecord {
   matchedLocations: string[];
 }
 
-export interface AcceptFilterResult {
+export interface AllowFilterResult {
   emitted: ValidationIssue[];
-  accepted: AcceptRecord[];
+  allowed: AllowRecord[];
   expired: ExpiredRecord[];
   unused: UnusedRecord[];
 }
 
 interface CompiledEntry {
-  entry: AcceptEntry;
+  entry: AllowEntry;
   match: (p: string) => boolean;
   used: boolean;
 }
@@ -55,10 +55,10 @@ function isExpired(expires: string | undefined, now: Date): boolean {
 }
 
 function buildMatchers(
-  acceptByCode: Partial<Record<IssueCode, AcceptEntry[]>>,
+  allowByCode: Partial<Record<IssueCode, AllowEntry[]>>,
 ): Map<IssueCode, CompiledEntry[]> {
   const matchers = new Map<IssueCode, CompiledEntry[]>();
-  for (const [code, entries] of Object.entries(acceptByCode) as Array<[IssueCode, AcceptEntry[] | undefined]>) {
+  for (const [code, entries] of Object.entries(allowByCode) as Array<[IssueCode, AllowEntry[] | undefined]>) {
     if (!entries) continue;
     matchers.set(code, entries.map(e => ({ entry: e, match: picomatch(e.paths), used: false })));
   }
@@ -67,7 +67,7 @@ function buildMatchers(
 
 function collectExpiredAndUnused(
   matchers: Map<IssueCode, CompiledEntry[]>,
-  accepted: AcceptRecord[],
+  allowed: AllowRecord[],
   now: Date,
 ): { expired: ExpiredRecord[]; unused: UnusedRecord[] } {
   const expired: ExpiredRecord[] = [];
@@ -76,7 +76,7 @@ function collectExpiredAndUnused(
   for (const [code, list] of matchers) {
     for (const m of list) {
       if (isExpired(m.entry.expires, now)) {
-        const matchedLocations = accepted
+        const matchedLocations = allowed
           .filter(a => a.code === code && a.reason === m.entry.reason)
           .map(a => a.location);
         expired.push({
@@ -103,15 +103,15 @@ function collectExpiredAndUnused(
   return { expired, unused };
 }
 
-export function applyAcceptFilter(
+export function applyAllowFilter(
   issues: readonly ValidationIssue[],
-  config: AcceptConfig,
+  config: AllowConfig,
   now: Date = new Date(),
-): AcceptFilterResult {
+): AllowFilterResult {
   const emitted: ValidationIssue[] = [];
-  const accepted: AcceptRecord[] = [];
+  const allowed: AllowRecord[] = [];
 
-  const matchers = buildMatchers(config.accept ?? {});
+  const matchers = buildMatchers(config.allow ?? {});
 
   for (const issue of issues) {
     const code = issue.code as IssueCode;
@@ -120,7 +120,7 @@ export function applyAcceptFilter(
     const hit = byCode?.find(m => m.match(location));
     if (hit) {
       hit.used = true;
-      const record: AcceptRecord = {
+      const record: AllowRecord = {
         code,
         location,
         reason: hit.entry.reason,
@@ -128,13 +128,13 @@ export function applyAcceptFilter(
       if (hit.entry.expires !== undefined) {
         record.expires = hit.entry.expires;
       }
-      accepted.push(record);
+      allowed.push(record);
     } else {
       emitted.push(issue);
     }
   }
 
-  const { expired, unused } = collectExpiredAndUnused(matchers, accepted, now);
+  const { expired, unused } = collectExpiredAndUnused(matchers, allowed, now);
 
-  return { emitted, accepted, expired, unused };
+  return { emitted, allowed, expired, unused };
 }

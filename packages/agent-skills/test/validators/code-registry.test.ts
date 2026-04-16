@@ -20,8 +20,8 @@ describe('CODE_REGISTRY', () => {
       'REFERENCE_TOO_DEEP',
       'DESCRIPTION_TOO_VAGUE',
       'NO_PROGRESSIVE_DISCLOSURE',
-      'ACCEPTANCE_EXPIRED',
-      'ACCEPTANCE_UNUSED',
+      'ALLOW_EXPIRED',
+      'ALLOW_UNUSED',
     ];
     for (const code of expected) {
       expect(CODE_REGISTRY[code], `registry missing ${code}`).toBeDefined();
@@ -55,8 +55,8 @@ describe('CODE_REGISTRY', () => {
       'REFERENCE_TOO_DEEP',
       'DESCRIPTION_TOO_VAGUE',
       'NO_PROGRESSIVE_DISCLOSURE',
-      'ACCEPTANCE_EXPIRED',
-      'ACCEPTANCE_UNUSED',
+      'ALLOW_EXPIRED',
+      'ALLOW_UNUSED',
     ] as const) {
       expect(CODE_REGISTRY[code].defaultSeverity).toBe('warning');
     }

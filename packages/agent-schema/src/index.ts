@@ -83,10 +83,10 @@ export {
 } from './package-metadata.js';
 
 export {
-  AcceptEntrySchema,
+  AllowEntrySchema,
   SeverityLevelSchema,
   ValidationConfigSchema,
-  type AcceptEntry,
+  type AllowEntry,
   type SeverityLevel,
   type ValidationConfig,
 } from './validation-config.js';

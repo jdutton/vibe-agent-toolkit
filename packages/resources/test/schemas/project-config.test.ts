@@ -28,17 +28,32 @@ function expectStrictRejection(schema: ZodSchema, input: unknown): void {
 }
 
 describe('SkillPackagingConfigSchema', () => {
-  it('parses validation.severity and validation.accept', () => {
+  it('parses validation.severity and validation.allow', () => {
     const result = SkillPackagingConfigSchema.safeParse({
       linkFollowDepth: 1,
       validation: {
         severity: { LINK_DROPPED_BY_DEPTH: 'error' },
-        accept: {
+        allow: {
           PACKAGED_UNREFERENCED_FILE: [{ paths: ['internal/*.json'], reason: 'runtime consumed' }],
         },
       },
     });
     expect(result.success).toBe(true);
+  });
+
+  it('allows validation.allow entries without explicit paths (defaults to ["**/*"])', () => {
+    const result = SkillPackagingConfigSchema.safeParse({
+      validation: {
+        allow: {
+          SKILL_LENGTH_EXCEEDS_RECOMMENDED: [{ reason: 'whole-skill concern' }],
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      const entry = result.data.validation?.allow?.SKILL_LENGTH_EXCEEDS_RECOMMENDED?.[0];
+      expect(entry?.paths).toEqual(['**/*']);
+    }
   });
 
   it('rejects the removed ignoreValidationErrors field via strict mode', () => {

@@ -175,7 +175,7 @@ export const VALIDATION_RULES: Record<ValidationRuleCode, ValidationRule> = {
     code: 'PACKAGED_UNREFERENCED_FILE',
     category: 'best_practice',
     message: (ctx) => `Packaged file not referenced from any markdown: ${(ctx['relativePath'] as string) ?? 'unknown'}`,
-    fix: 'Add a markdown link from SKILL.md or a linked resource, or accept via validation.accept',
+    fix: 'Add a markdown link from SKILL.md or a linked resource, or allow via validation.allow',
   },
   PACKAGED_BROKEN_LINK: {
     code: 'PACKAGED_BROKEN_LINK',

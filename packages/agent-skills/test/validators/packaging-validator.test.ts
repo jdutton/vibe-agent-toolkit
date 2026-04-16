@@ -77,17 +77,17 @@ async function testIgnoreWarnings(
 	});
 }
 
-type AcceptMap = NonNullable<
+type AllowMap = NonNullable<
 	NonNullable<Parameters<typeof validateSkillForPackaging>[1]>['validation']
->['accept'];
+>['allow'];
 
 /**
- * Shared setup for long-skill acceptance tests: a long SKILL.md in a temp dir
+ * Shared setup for long-skill allow tests: a long SKILL.md in a temp dir
  * with no transitive links. Returns the packaging validation result with the
- * given accept map applied.
+ * given allow map applied.
  */
-async function setupLongSkillAcceptanceTest(
-	accept: AcceptMap,
+async function setupLongSkillAllowTest(
+	allow: AllowMap,
 ): Promise<PackagingValidationResult> {
 	const tempDir = getTempDir();
 	const content = createSkillContent(
@@ -95,7 +95,7 @@ async function setupLongSkillAcceptanceTest(
 		LONG_SKILL_BODY,
 	);
 	const { skillPath } = createTransitiveSkillStructure(tempDir, {}, content);
-	return validateSkillForPackaging(skillPath, { validation: { accept } });
+	return validateSkillForPackaging(skillPath, { validation: { allow } });
 }
 
 describe('validateSkillForPackaging - Size validation', () => {
@@ -430,7 +430,7 @@ describe('validateSkillForPackaging - Progressive disclosure validation', () => 
 	});
 });
 
-describe('validateSkillForPackaging - Severity / accept config (framework)', () => {
+describe('validateSkillForPackaging - Severity / allow config (framework)', () => {
 	it('should ignore warnings via validation.severity', async () => {
 		const result = await testIgnoreWarnings([
 			'SKILL_LENGTH_EXCEEDS_RECOMMENDED',
@@ -453,36 +453,36 @@ describe('validateSkillForPackaging - Severity / accept config (framework)', () 
 		expect(pdWarn).toBeDefined();
 	});
 
-	it('should accept specific issues via validation.accept with path wildcard', async () => {
-		const result = await setupLongSkillAcceptanceTest({
+	it('should allow specific issues via validation.allow with path wildcard', async () => {
+		const result = await setupLongSkillAllowTest({
 			SKILL_LENGTH_EXCEEDS_RECOMMENDED: [{ paths: ['**'], reason: 'Legacy skill, refactoring planned for Q2' }],
 			NO_PROGRESSIVE_DISCLOSURE: [{ paths: ['**'], reason: REASON_REFACTOR_Q2 }],
 		});
 
 		expect(result.status).toBe('success');
-		// Both codes are accepted (suppressed), not in warnings
+		// Both codes are allowed (suppressed), not in warnings
 		expect(result.activeWarnings.filter(
 			e => e.code === 'SKILL_LENGTH_EXCEEDS_RECOMMENDED' || e.code === 'NO_PROGRESSIVE_DISCLOSURE'
 		)).toHaveLength(0);
-		// ignoredErrors (accepted) contains the accept records
+		// ignoredErrors (allowed) contains the allow records
 		expect(result.ignoredErrors.some(r => r.code === 'SKILL_LENGTH_EXCEEDS_RECOMMENDED')).toBe(true);
 		expect(result.ignoredErrors.some(r => r.code === 'NO_PROGRESSIVE_DISCLOSURE')).toBe(true);
 	});
 
-	it('should emit ACCEPTANCE_EXPIRED warning for expired accept entries', async () => {
-		const result = await setupLongSkillAcceptanceTest({
+	it('should emit ALLOW_EXPIRED warning for expired allow entries', async () => {
+		const result = await setupLongSkillAllowTest({
 			SKILL_LENGTH_EXCEEDS_RECOMMENDED: [{ paths: ['**'], reason: 'Temporary exception', expires: '2020-01-01' }],
 			NO_PROGRESSIVE_DISCLOSURE: [{ paths: ['**'], reason: REASON_REFACTOR_Q2 }],
 		});
 
-		// Expired accept still suppresses the issue itself, but emits ACCEPTANCE_EXPIRED
-		const expiredWarn = result.activeWarnings.find(e => e.code === 'ACCEPTANCE_EXPIRED');
+		// Expired allow still suppresses the issue itself, but emits ALLOW_EXPIRED
+		const expiredWarn = result.activeWarnings.find(e => e.code === 'ALLOW_EXPIRED');
 		expect(expiredWarn).toBeDefined();
 		expect(expiredWarn?.message).toContain('SKILL_LENGTH_EXCEEDS_RECOMMENDED');
 		expect(expiredWarn?.message).toContain('2020-01-01');
 	});
 
-	it('should keep accept active if not expired', async () => {
+	it('should keep allow active if not expired', async () => {
 		const tempDir = getTempDir();
 		const content = createSkillContent(
 			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
@@ -496,7 +496,7 @@ describe('validateSkillForPackaging - Severity / accept config (framework)', () 
 
 		const result = await validateSkillForPackaging(skillPath, {
 			validation: {
-				accept: {
+				allow: {
 					SKILL_LENGTH_EXCEEDS_RECOMMENDED: [{ paths: ['**'], reason: 'Time-limited exception', expires: futureDateStr }],
 					NO_PROGRESSIVE_DISCLOSURE: [{ paths: ['**'], reason: REASON_REFACTOR_Q2 }],
 				},
@@ -507,7 +507,7 @@ describe('validateSkillForPackaging - Severity / accept config (framework)', () 
 		expect(result.activeWarnings.filter(
 			e => e.code === 'SKILL_LENGTH_EXCEEDS_RECOMMENDED' || e.code === 'NO_PROGRESSIVE_DISCLOSURE'
 		)).toHaveLength(0);
-		expect(result.activeWarnings.find(e => e.code === 'ACCEPTANCE_EXPIRED')).toBeUndefined();
+		expect(result.activeWarnings.find(e => e.code === 'ALLOW_EXPIRED')).toBeUndefined();
 	});
 
 	it('emits LINK_OUTSIDE_PROJECT through the framework instead of OUTSIDE_PROJECT_BOUNDARY', async () => {
@@ -528,7 +528,7 @@ describe('validateSkillForPackaging - Severity / accept config (framework)', () 
 		expect(result.activeErrors.map(e => e.code)).not.toContain('OUTSIDE_PROJECT_BOUNDARY');
 	});
 
-	it('allows accepting LINK_TARGETS_DIRECTORY per-path', async () => {
+	it('allows LINK_TARGETS_DIRECTORY per-path', async () => {
 		const tempDir = getTempDir();
 		const conceptsDir = safePath.join(tempDir, 'docs/sub');
 		fs.mkdirSync(conceptsDir, { recursive: true });
@@ -543,7 +543,7 @@ describe('validateSkillForPackaging - Severity / accept config (framework)', () 
 		// location is 'docs/sub' (relative to project root, no trailing slash)
 		const result = await validateSkillForPackaging(skillPath, {
 			validation: {
-				accept: {
+				allow: {
 					LINK_TARGETS_DIRECTORY: [{ paths: ['docs/sub'], reason: 'ToC target' }],
 				},
 			},

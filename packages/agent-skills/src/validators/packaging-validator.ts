@@ -5,7 +5,7 @@
  * - Size/complexity validation (SKILL.md lines, total lines, file count)
  * - Link depth analysis (prevent deep nesting)
  * - Navigation file detection (README.md, index.md patterns)
- * - Framework-based severity / accept config (validation.severity, validation.accept)
+ * - Framework-based severity / allow config (validation.severity, validation.allow)
  *
  * Used by:
  * - vat skills validate (report errors, exit 1 on failure)
@@ -22,7 +22,7 @@ import { findProjectRoot, toForwardSlash, safePath } from '@vibe-agent-toolkit/u
 
 import { walkLinkGraph, type LinkResolution, type WalkableRegistry } from '../walk-link-graph.js';
 
-import type { AcceptRecord } from './accept-filter.js';
+import type { AllowRecord } from './allow-filter.js';
 import { CODE_REGISTRY, type IssueCode } from './code-registry.js';
 import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
 import type { ValidationIssue } from './types.js';
@@ -52,7 +52,7 @@ export interface SkillPackagingConfig {
     defaultTemplate?: string;
   };
   files?: Array<{ source: string; dest: string }>;
-  /** Framework-based validation configuration (severity overrides and accepts). */
+  /** Framework-based validation configuration (severity overrides and allow entries). */
   validation?: ValidationConfig | undefined;
 }
 
@@ -76,14 +76,14 @@ export interface PackagingValidationResult {
   /** All emitted issues after severity resolution (errors + warnings) */
   allErrors: ValidationIssue[];
 
-  /** Active errors (severity === 'error', not suppressed by accept) */
+  /** Active errors (severity === 'error', not suppressed by allow) */
   activeErrors: ValidationIssue[];
 
-  /** Active warnings (severity === 'warning', not suppressed by accept) */
+  /** Active warnings (severity === 'warning', not suppressed by allow) */
   activeWarnings: ValidationIssue[];
 
-  /** Issues suppressed by accept entries */
-  ignoredErrors: AcceptRecord[];
+  /** Issues suppressed by allow entries */
+  ignoredErrors: AllowRecord[];
 
   /** Metadata about the skill */
   metadata: {
@@ -152,11 +152,11 @@ function createRegistryIssue(
  * - Size/complexity checks
  * - Link depth analysis
  * - Navigation file detection
- * - Framework-based severity / accept config
+ * - Framework-based severity / allow config
  *
  * @param skillPath - Path to SKILL.md
  * @param packagingConfig - Optional packaging configuration (depth, excludes, validation)
- * @returns Validation result with active errors, warnings, and accepted issues
+ * @returns Validation result with active errors, warnings, and allowed issues
  */
 export async function validateSkillForPackaging(
   skillPath: string,
@@ -254,7 +254,7 @@ export async function validateSkillForPackaging(
     allErrors: framework.emitted,
     activeErrors,
     activeWarnings,
-    ignoredErrors: framework.accepted,
+    ignoredErrors: framework.allowed,
     metadata: {
       skillLines,
       totalLines,

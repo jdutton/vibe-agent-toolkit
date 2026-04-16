@@ -88,15 +88,15 @@ Config Structure (vibe-agent-toolkit.config.yaml):
         validation:
           severity:
             LINK_TO_NAVIGATION_FILE: ignore
-          accept:
+          allow:
             LINK_DROPPED_BY_DEPTH:
               - paths: ["docs/**"]
                 reason: depth drop is intentional for large reference docs
 
 Validation:
   Both pre-build and post-build checks use the unified validation framework.
-  Override per-code severity (error/warning/ignore) or accept specific paths
-  via validation.severity and validation.accept in vibe-agent-toolkit.config.yaml.
+  Override per-code severity (error/warning/ignore) or allow specific paths
+  via validation.severity and validation.allow in vibe-agent-toolkit.config.yaml.
   See docs/validation-codes.md for all codes and their defaults.
 
 Output:
@@ -138,15 +138,15 @@ function displayActiveErrors(
 }
 
 /**
- * Display expired acceptance warnings
+ * Display expired allow warnings
  */
-function displayExpiredAcceptances(
+function displayExpiredAllowEntries(
   validationResult: PackagingValidationResult,
   logger: ReturnType<typeof createLogger>
 ): void {
-  const expiredWarnings = validationResult.activeWarnings.filter(w => w.code === 'ACCEPTANCE_EXPIRED');
+  const expiredWarnings = validationResult.activeWarnings.filter(w => w.code === 'ALLOW_EXPIRED');
   if (expiredWarnings.length > 0) {
-    logger.error(`\n   Expired acceptances (${expiredWarnings.length}):`);
+    logger.error(`\n   Expired allow entries (${expiredWarnings.length}):`);
     for (const warn of expiredWarnings) {
       logger.error(`     ${String(warn.message)}`);
     }
@@ -179,16 +179,16 @@ function logPostBuildIssues(
 }
 
 /**
- * Display accepted issues for context
+ * Display allowed issues for context
  */
 function displayIgnoredErrors(
   validationResult: PackagingValidationResult,
   logger: ReturnType<typeof createLogger>
 ): void {
   if (validationResult.ignoredErrors.length > 0) {
-    logger.info(`\n   Accepted issues (${validationResult.ignoredErrors.length}):`);
+    logger.info(`\n   Allowed issues (${validationResult.ignoredErrors.length}):`);
     for (const record of validationResult.ignoredErrors) {
-      logger.info(`     [${String(record.code)}] ${String(record.location)} (accepted: ${record.reason})`);
+      logger.info(`     [${String(record.code)}] ${String(record.location)} (allowed: ${record.reason})`);
     }
   }
 }
@@ -245,7 +245,7 @@ async function validateSkillOrExit(
 
   if (validationResult.status !== 'error') {
     if (validationResult.ignoredErrors.length > 0) {
-      logger.debug(`   ${validationResult.ignoredErrors.length} issue(s) accepted by config`);
+      logger.debug(`   ${validationResult.ignoredErrors.length} issue(s) allowed by config`);
     }
     return;
   }
@@ -255,7 +255,7 @@ async function validateSkillOrExit(
   logger.error(`   Source: ${sourcePath}`);
 
   displayActiveErrors(validationResult, logger);
-  displayExpiredAcceptances(validationResult, logger);
+  displayExpiredAllowEntries(validationResult, logger);
   displayIgnoredErrors(validationResult, logger);
 
   logger.error(`\n   Build aborted due to validation errors`);

@@ -104,7 +104,7 @@ Description:
 Validation Behavior:
   Advisory only: audit surfaces all validation issues for inspection.
   Unlike 'vat skills validate', audit:
-  - NEVER applies validation.accept (accepted codes are always shown)
+  - NEVER applies validation.allow (allowed codes are always shown)
   - Respects validation.severity: codes set to 'ignore' are hidden
   - ALWAYS exits 0 for validation results (never gates on errors)
 
@@ -206,7 +206,7 @@ async function auditUserDirectories(
  * Apply severity filtering to validation results.
  *
  * Audit is advisory only: it applies `validation.severity` to decide what to
- * show, but deliberately ignores `validation.accept`. Codes configured as
+ * show, but deliberately ignores `validation.allow`. Codes configured as
  * `severity: 'ignore'` are stripped from the result issues before rendering.
  *
  * The severity config is per-skill, keyed by skill name in
@@ -269,7 +269,7 @@ function buildFilteredResult(
  * Apply severity filtering to validation results.
  *
  * Audit is advisory only: it applies `validation.severity` to decide what to
- * show, but deliberately ignores `validation.accept`. Codes configured as
+ * show, but deliberately ignores `validation.allow`. Codes configured as
  * `severity: 'ignore'` are stripped from the result issues before rendering.
  *
  * The severity config is per-skill, keyed by skill name in
@@ -340,11 +340,11 @@ export async function auditCommand(
 
     const rawResults = await getValidationResults(scanPath, recursive, options, logger);
 
-    // Load config for severity filtering (audit ignores accept; only severity matters).
+    // Load config for severity filtering (audit ignores allow; only severity matters).
     const config = loadConfig(deriveConfigRoot(targetPath));
 
     // Apply severity filtering: hide codes whose effective severity is 'ignore'.
-    // Accept is deliberately NOT applied — audit is advisory only.
+    // Allow is deliberately NOT applied — audit is advisory only.
     const results = applySeverityFilter(rawResults, config);
 
     // Load effective settings when --settings is used (requires --compat)

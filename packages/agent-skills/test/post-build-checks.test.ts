@@ -152,7 +152,7 @@ describe('checkUnreferencedFiles', () => {
 });
 
 describe('fix hints and reference anchors', () => {
-  it('PACKAGED_UNREFERENCED_FILE fix references validation.accept, not ignoreValidationErrors', async () => {
+  it('PACKAGED_UNREFERENCED_FILE fix references validation.allow, not ignoreValidationErrors', async () => {
     const outputDir = await setupOutputDir([RESOURCES]);
     await writeSkillMd(outputDir, '# Skill\n\nNo links here.\n');
     await writeResource(outputDir, `${RESOURCES}/orphan.json`, '{}');
@@ -161,7 +161,7 @@ describe('fix hints and reference anchors', () => {
     const unref = issues.find(i => i.code === 'PACKAGED_UNREFERENCED_FILE');
     expect(unref).toBeDefined();
     expect(unref?.fix).not.toMatch(/ignoreValidationErrors/);
-    expect(unref?.fix).toMatch(/validation\.accept/);
+    expect(unref?.fix).toMatch(/validation\.allow/);
     expect(unref?.reference).toMatch(/^#packaged_unreferenced_file/);
   });
 

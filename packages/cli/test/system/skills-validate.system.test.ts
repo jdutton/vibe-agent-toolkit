@@ -245,10 +245,10 @@ function setupProjectWithGitignoreLink(tempDir: string, skillName: string): stri
 }
 
 /**
- * Same as above but with an accept entry suppressing the gitignored-link error.
+ * Same as above but with an allow entry suppressing the gitignored-link error.
  */
-function setupProjectWithGitignoreLinkAccepted(tempDir: string, skillName: string): string {
-  const projectDir = safePath.join(tempDir, 'gitignore-link-accept');
+function setupProjectWithGitignoreLinkAllowed(tempDir: string, skillName: string): string {
+  const projectDir = safePath.join(tempDir, 'gitignore-link-allow');
   mkdirSyncReal(safePath.join(projectDir, 'skills'), { recursive: true });
 
   writeTestFile(safePath.join(projectDir, GITIGNORE_FILENAME), `${GITIGNORED_FILE_GLOB}\n`);
@@ -259,7 +259,7 @@ function setupProjectWithGitignoreLinkAccepted(tempDir: string, skillName: strin
     makeSkillMd(skillName, 'See [secret](secret.md).'),
   );
 
-  // Config: accept suppresses the gitignored-link error
+  // Config: allow suppresses the gitignored-link error
   const configContent = [
     CONFIG_VERSION_LINE,
     'skills:',
@@ -268,7 +268,7 @@ function setupProjectWithGitignoreLinkAccepted(tempDir: string, skillName: strin
     '  config:',
     `    ${skillName}:`,
     '      validation:',
-    '        accept:',
+    '        allow:',
     '          LINK_TO_GITIGNORED_FILE:',
     '            - paths: ["**"]',
     '              reason: reviewed, intentional link for testing purposes',
@@ -339,9 +339,9 @@ describe('skills validate — framework exit codes (system test)', () => {
     expect(parsed.status).toBe('error');
   });
 
-  it('exits 0 when LINK_TO_GITIGNORED_FILE error is suppressed via accept', () => {
+  it('exits 0 when LINK_TO_GITIGNORED_FILE error is suppressed via allow', () => {
     const tempDir = frameworkCtx.createTempDir();
-    const projectDir = setupProjectWithGitignoreLinkAccepted(tempDir, VALIDATE_SKILL_NAME);
+    const projectDir = setupProjectWithGitignoreLinkAllowed(tempDir, VALIDATE_SKILL_NAME);
 
     const { result, parsed } = executeCliAndParseYaml(frameworkCtx.binPath, ['skills', 'validate'], { cwd: projectDir });
 
@@ -376,11 +376,11 @@ describe('skills validate — framework exit codes (system test)', () => {
     // New framework language
     expect(result.stdout).toContain('validation framework');
     expect(result.stdout).toContain('severity');
-    expect(result.stdout).toContain('accept');
+    expect(result.stdout).toContain('allow');
     expect(result.stdout).toContain('docs/validation-codes.md');
     // Exit codes section updated
     expect(result.stdout).toContain('Exit Codes:');
-    expect(result.stdout).toContain('severity=error, not accepted');
+    expect(result.stdout).toContain('severity=error, not allowed');
     // Stale language should be gone
     expect(result.stdout).not.toContain('validation overrides with expiration checking');
     expect(result.stdout).not.toContain('ignoreValidationErrors');

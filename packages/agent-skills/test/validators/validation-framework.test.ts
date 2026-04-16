@@ -26,35 +26,35 @@ describe('runValidationFramework', () => {
     expect(first?.severity).toBe('error');
   });
 
-  it('emits ACCEPTANCE_EXPIRED at resolved severity when accept entry is past expires', () => {
+  it('emits ALLOW_EXPIRED at resolved severity when allow entry is past expires', () => {
     const result = runValidationFramework(
       [issue('LINK_DROPPED_BY_DEPTH', 'docs/foo.md', 'warning')],
       {
-        accept: {
+        allow: {
           LINK_DROPPED_BY_DEPTH: [{ paths: ['docs/foo.md'], reason: 'x', expires: '2020-01-01' }],
         },
       },
     );
-    const meta = result.emitted.filter(i => i.code === 'ACCEPTANCE_EXPIRED');
+    const meta = result.emitted.filter(i => i.code === 'ALLOW_EXPIRED');
     expect(meta).toHaveLength(1);
     const [first] = meta;
     expect(first?.severity).toBe('warning');
   });
 
-  it('emits ACCEPTANCE_UNUSED when no issue matched an entry', () => {
+  it('emits ALLOW_UNUSED when no issue matched an entry', () => {
     const result = runValidationFramework([], {
-      accept: { LINK_DROPPED_BY_DEPTH: [{ paths: ['never-matches/**'], reason: 'dead' }] },
+      allow: { LINK_DROPPED_BY_DEPTH: [{ paths: ['never-matches/**'], reason: 'dead' }] },
     });
-    const meta = result.emitted.filter(i => i.code === 'ACCEPTANCE_UNUSED');
+    const meta = result.emitted.filter(i => i.code === 'ALLOW_UNUSED');
     expect(meta).toHaveLength(1);
   });
 
   it('respects severity override on meta-codes (error promotion)', () => {
     const result = runValidationFramework([], {
-      accept: { LINK_DROPPED_BY_DEPTH: [{ paths: ['x/**'], reason: 'dead' }] },
-      severity: { ACCEPTANCE_UNUSED: 'error' },
+      allow: { LINK_DROPPED_BY_DEPTH: [{ paths: ['x/**'], reason: 'dead' }] },
+      severity: { ALLOW_UNUSED: 'error' },
     });
-    const meta = result.emitted.find(i => i.code === 'ACCEPTANCE_UNUSED');
+    const meta = result.emitted.find(i => i.code === 'ALLOW_UNUSED');
     expect(meta?.severity).toBe('error');
   });
 

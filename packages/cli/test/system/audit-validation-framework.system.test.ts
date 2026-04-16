@@ -3,7 +3,7 @@
  *
  * Locks in three invariants:
  * 1. Audit always exits 0, even when severity=error issues are present.
- * 2. Audit ignores validation.accept — accepted codes are still shown.
+ * 2. Audit ignores validation.allow — allowed codes are still shown.
  * 3. Audit respects validation.severity: 'ignore' — ignored codes are hidden.
  */
 
@@ -78,7 +78,7 @@ function setupProjectWithOutsideLink(tempDir: string): string {
 
 /**
  * Create a project whose SKILL.md has a broken link (LINK_INTEGRITY_BROKEN,
- * severity=error).  No validation.accept in the config.
+ * severity=error).  No validation.allow in the config.
  *
  * Used to assert that audit exits 0 even when severity=error issues fire.
  */
@@ -102,13 +102,13 @@ function setupProjectWithBrokenLink(tempDir: string): string {
 }
 
 /**
- * Create a project with a broken link AND a validation.accept for that code.
+ * Create a project with a broken link AND a validation.allow for that code.
  *
- * vat audit must NOT honour accept — the code must still appear in the YAML
+ * vat audit must NOT honour allow — the code must still appear in the YAML
  * output and audit must still exit 0.
  */
-function setupProjectWithBrokenLinkAccepted(tempDir: string): string {
-  const projectDir = safePath.join(tempDir, 'broken-link-accepted');
+function setupProjectWithBrokenLinkAllowed(tempDir: string): string {
+  const projectDir = safePath.join(tempDir, 'broken-link-allowed');
   mkdirSyncReal(safePath.join(projectDir, 'skills'), { recursive: true });
 
   writeTestFile(
@@ -116,7 +116,7 @@ function setupProjectWithBrokenLinkAccepted(tempDir: string): string {
     makeSkillMd(SKILL_NAME, 'See [missing](does-not-exist.md).'),
   );
 
-  // Config: accept suppresses LINK_INTEGRITY_BROKEN — audit must ignore this
+  // Config: allow suppresses LINK_INTEGRITY_BROKEN — audit must ignore this
   const configContent = [
     'version: 1',
     'skills:',
@@ -125,7 +125,7 @@ function setupProjectWithBrokenLinkAccepted(tempDir: string): string {
     '  config:',
     `    ${SKILL_NAME}:`,
     '      validation:',
-    '        accept:',
+    '        allow:',
     '          LINK_INTEGRITY_BROKEN:',
     '            - paths: ["**"]',
     '              reason: reviewed, intentional for audit framework test',
@@ -142,7 +142,7 @@ function setupProjectWithBrokenLinkAccepted(tempDir: string): string {
  * 'ignore'. Audit must hide this code from its output.
  *
  * Note: audit reads the VATConfig and applies severity to decide what to show,
- * but it does NOT apply accept. Only vat skills validate uses accept.
+ * but it does NOT apply allow. Only vat skills validate uses allow.
  */
 function setupProjectWithIgnoredSeverity(tempDir: string): string {
   const projectDir = safePath.join(tempDir, 'ignored-severity');
@@ -199,18 +199,18 @@ describe('vat audit — validation framework behavior (system test)', () => {
   });
 
   // -------------------------------------------------------------------------
-  // (a) Audit shows LINK_INTEGRITY_BROKEN even when validation.accept would
+  // (a) Audit shows LINK_INTEGRITY_BROKEN even when validation.allow would
   //     silence it in `vat skills validate`
   // -------------------------------------------------------------------------
-  it('shows LINK_INTEGRITY_BROKEN even when validation.accept is set (accept is ignored by audit)', () => {
+  it('shows LINK_INTEGRITY_BROKEN even when validation.allow is set (allow is ignored by audit)', () => {
     const tempDir = ctx.createTempDir();
-    const projectDir = setupProjectWithBrokenLinkAccepted(tempDir);
+    const projectDir = setupProjectWithBrokenLinkAllowed(tempDir);
 
     const { result } = executeCliAndParseYaml(ctx.binPath, ['audit', projectDir]);
 
     // Status must be 0 regardless
     expect(result.status).toBe(0);
-    // The broken link code must still appear — accept is NOT honoured by audit
+    // The broken link code must still appear — allow is NOT honoured by audit
     expect(result.stderr + result.stdout).toContain('LINK_INTEGRITY_BROKEN');
   });
 
