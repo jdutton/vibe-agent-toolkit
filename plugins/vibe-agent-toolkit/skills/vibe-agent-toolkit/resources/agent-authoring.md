@@ -890,8 +890,8 @@ async execute(input, options = {}) {
 
 ## Related Documentation
 
-- [Orchestration Guide](./orchestration.md) - Composing agents into workflows
-- [Architecture Overview](./architecture/README.md) - Package structure
+- [Orchestration Guide](orchestration.md) - Composing agents into workflows
+- [Architecture Overview]() - Package structure
 
 ## Examples
 

@@ -54,7 +54,7 @@ cd /path/to/adopter-project
 vat resources validate .   # now uses your local build
 ```
 
-Full debugging guide: [docs/debug-and-test-vat-fixes.md](../../docs/debug-and-test-vat-fixes.md)
+Full debugging guide: [docs/debug-and-test-vat-fixes.md](debug-and-test-vat-fixes.md)
 
 ## CLI Package Architecture Principles
 

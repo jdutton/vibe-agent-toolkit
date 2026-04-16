@@ -473,29 +473,29 @@ import * as Doc from './doc.md';
 ## Next Steps
 
 ### For Package Publishers
-Read [Publishing TypeScript Resource Packages](./publishing-packages.md) to learn how to:
+Read [Publishing TypeScript Resource Packages]() to learn how to:
 - Set up package structure
 - Configure build scripts
 - Publish to npm
 - Include both compiled and original markdown
 
 ### For Package Consumers
-Read [Consuming TypeScript Resources](./consuming-packages.md) to learn how to:
+Read [Consuming TypeScript Resources]() to learn how to:
 - Install and import packages
 - Use type-safe compiled resources
 - Access original markdown for flexibility
 - Integrate with your project
 
 ### For Specific Use Cases
-- **Building AI agents?** → [Building Agent Prompt Libraries](./use-cases/agent-prompt-libraries.md)
-- **Creating RAG systems?** → [Creating RAG Knowledge Bases](./use-cases/rag-knowledge-bases.md)
-- **Building templates?** → [Template System Patterns](./use-cases/template-systems.md)
+- **Building AI agents?** → [Building Agent Prompt Libraries]()
+- **Creating RAG systems?** → [Creating RAG Knowledge Bases]()
+- **Building templates?** → [Template System Patterns]()
 
 ---
 
 ## See Also
 
-- [Resource Compiler README](../../../packages/resource-compiler/README.md) - Package documentation
-- [Publishing Packages](./publishing-packages.md) - Create and publish resource packages
-- [Consuming Packages](./consuming-packages.md) - Use published packages
-- [Guide Index](./README.md) - All resource compiler guides
+- [Resource Compiler README]() - Package documentation
+- [Publishing Packages]() - Create and publish resource packages
+- [Consuming Packages]() - Use published packages
+- [Guide Index]() - All resource compiler guides

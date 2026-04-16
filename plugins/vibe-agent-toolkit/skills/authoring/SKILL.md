@@ -368,6 +368,7 @@ const output2 = await agent.execute({
 
 ## References
 
-- [agent-authoring.md]() — Complete patterns guide
-- [orchestration.md]() — Multi-agent workflows
+- Skill Quality Checklist — Pre-publication checklist for all skills (general + CLI-backed)
+- agent-authoring.md — Complete patterns guide
+- orchestration.md — Multi-agent workflows
 - [Building Effective Agents - Anthropic](https://www.anthropic.com/research/building-effective-agents)

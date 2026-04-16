@@ -73,7 +73,7 @@ Reproduce the bug as a test before touching source code:
 | CLI command behavior | `packages/cli/test/integration/*.integration.test.ts` |
 | End-to-end workflow | `packages/cli/test/system/*.system.test.ts` |
 
-See [docs/writing-tests.md](./writing-tests.md) for patterns and classification guide.
+See [docs/writing-tests.md](writing-tests.md) for patterns and classification guide.
 
 Run just the test you added:
 ```bash
@@ -106,6 +106,6 @@ what changed. Do not commit until this passes.
 
 ## See Also
 
-- [docs/writing-tests.md](./writing-tests.md) — Full test classification and patterns
-- [packages/cli/CLAUDE.md](../packages/cli/CLAUDE.md) — CLI development guidelines
-- [docs/build-system.md](./build-system.md) — Build configuration reference
+- [docs/writing-tests.md](writing-tests.md) — Full test classification and patterns
+- [packages/cli/CLAUDE.md](CLAUDE.md) — CLI development guidelines
+- [docs/build-system.md]() — Build configuration reference

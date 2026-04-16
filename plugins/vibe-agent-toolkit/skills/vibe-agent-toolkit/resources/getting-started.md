@@ -75,7 +75,7 @@ mkdir -p packages/my-package/src packages/my-package/test
 
 3. **Add package configuration**:
 
-Create `package.json`, `tsconfig.json` (with `composite: true`), and add to root `tsconfig.json` references. See [CLAUDE.md](../CLAUDE.md) Development Workflow section for complete details.
+Create `package.json`, `tsconfig.json` (with `composite: true`), and add to root `tsconfig.json` references. See [CLAUDE.md]() Development Workflow section for complete details.
 
 4. **Update root tsconfig.json**:
 
@@ -304,7 +304,7 @@ The audit command checks for:
 - Link integrity (broken links, invalid paths)
 - Console compatibility (tool availability)
 
-See [Audit Command Documentation](./cli/audit.md) for complete validation rules.
+See [Audit Command Documentation]() for complete validation rules.
 
 ### Importing Skills
 
@@ -339,13 +339,13 @@ vat test
 vat package
 ```
 
-See [Import Command Documentation](./cli/import.md) for more details.
+See [Import Command Documentation]() for more details.
 
 ## Next Steps
 
-- Read [CLAUDE.md](../CLAUDE.md) for detailed development guidelines
-- Review [Agent Skills Best Practices](./guides/agent-skills-best-practices.md)
-- Review the [utils package](../packages/utils/) for reference patterns
+- Read [CLAUDE.md]() for detailed development guidelines
+- Review [Agent Skills Best Practices]()
+- Review the [utils package]() for reference patterns
 - Check out [vibe-validate documentation](https://github.com/jdutton/vibe-validate)
 - Set up your CI/CD pipeline on GitHub
 - Enable Codecov for your repository (see README.md for setup instructions)
