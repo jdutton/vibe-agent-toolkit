@@ -105,6 +105,46 @@ export function createTempDirTracker(prefix: string): {
 }
 
 /**
+ * Create a test suite context with a resolved binPath and a temp dir tracker.
+ *
+ * Extracts the boilerplate that every framework-test suite needs:
+ * - `let binPath: string` resolved in beforeAll
+ * - `createTempDir / cleanupTempDirs` via createTempDirTracker
+ *
+ * Usage (call OUTSIDE `describe`, then reference inside `describe`):
+ * ```typescript
+ * const ctx = createSuiteContext(TEMP_DIR_PREFIX, import.meta.url);
+ * describe('my suite', () => {
+ *   beforeAll(ctx.setup);
+ *   afterEach(ctx.cleanup);
+ *   it('...', () => {
+ *     const tempDir = ctx.createTempDir();
+ *     const result = executeCli(ctx.binPath, [...]);
+ *   });
+ * });
+ * ```
+ */
+export function createSuiteContext(
+  prefix: string,
+  testFileUrl: string,
+): {
+  binPath: string;
+  setup: () => void;
+  cleanup: () => void;
+  createTempDir: () => string;
+} {
+  let binPath = '';
+  const { createTempDir, cleanupTempDirs } = createTempDirTracker(prefix);
+
+  return {
+    get binPath() { return binPath; },
+    setup() { binPath = getBinPath(testFileUrl); },
+    cleanup: cleanupTempDirs,
+    createTempDir,
+  };
+}
+
+/**
  * Create an isolated package + home directory pair inside a temp dir.
  * Used by postinstall and uninstall tests that need a fake npm package context
  * and a fake Claude home directory.

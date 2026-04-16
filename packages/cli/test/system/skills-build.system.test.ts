@@ -9,7 +9,7 @@ import { readFileSync } from 'node:fs';
 
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it, afterEach } from 'vitest';
+import { describe, expect, it, afterEach, beforeAll } from 'vitest';
 
 import {
   createSkillMarkdown,
@@ -23,9 +23,17 @@ import {
 
 const TEMP_DIR_PREFIX = 'vat-build-test-';
 const VAT_CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
+const PACKAGE_JSON_FILENAME = 'package.json';
+const CONFIG_VERSION_HEADER = 'version: 1\n';
+const CONFIG_VERSION_LINE = 'version: 1';
+const CONFIG_VALIDATION_INDENT = '      validation:';
 const TEST_SKILL_NAME = 'test-skill';
 const SKILL_A_NAME = 'skill-a';
 const SKILL_B_NAME = 'skill-b';
+
+/** Inline SKILL.md frontmatter + body for fixture projects. */
+const SKILL_FRONTMATTER_TEMPLATE = (skillName: string) =>
+  `---\nname: ${skillName}\ndescription: ${skillName} - comprehensive test skill for validation and packaging\nversion: 1.0.0\n---\n\n# ${skillName}\n\nThis is a test skill.\n`;
 
 /**
  * Setup test fixtures for skills build tests
@@ -117,7 +125,7 @@ describe('skills build command (system test)', () => {
 
   it('should exit 0 when config yaml has no skills section', () => {
     const tempDir = suite.createTempDir();
-    writeTestFile(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+    writeTestFile(safePath.join(tempDir, VAT_CONFIG_FILENAME), CONFIG_VERSION_HEADER);
 
     const { result } = suite.runBuildCommand(tempDir);
 
@@ -214,7 +222,7 @@ describe('skills build command (system test)', () => {
     // "workspaces" to identify monorepo roots. Without this, it falls back to the
     // skill dir and source paths resolve incorrectly.
     writeTestFile(
-      safePath.join(tempDir, 'package.json'),
+      safePath.join(tempDir, PACKAGE_JSON_FILENAME),
       JSON.stringify({ name: 'files-test-workspace', workspaces: [] }),
     );
 
@@ -223,9 +231,11 @@ describe('skills build command (system test)', () => {
     mkdirSyncReal(safePath.join(tempDir, 'dist', 'bin'), { recursive: true });
     writeTestFile(safePath.join(tempDir, 'dist', 'bin', 'tool.mjs'), 'console.log("tool");\n');
 
-    // Config with files entry declaring source → dest mapping
+    // Config with files entry declaring source → dest mapping.
+    // Accept PACKAGED_UNREFERENCED_FILE since this test focuses on file copying,
+    // not link-reference coverage. The injected artifact is intentionally unreferenced.
     const configContent = [
-      'version: 1',
+      CONFIG_VERSION_LINE,
       'skills:',
       '  include:',
       '    - "resources/skills/**/SKILL.md"',
@@ -234,6 +244,11 @@ describe('skills build command (system test)', () => {
       '      files:',
       '        - source: dist/bin/tool.mjs',
       '          dest: scripts/tool.mjs',
+      CONFIG_VALIDATION_INDENT,
+      '        accept:',
+      '          PACKAGED_UNREFERENCED_FILE:',
+      '            - paths: ["**"]',
+      '              reason: artifact injected via files config, not linked from markdown',
       '',
     ].join('\n');
     writeTestFile(safePath.join(tempDir, VAT_CONFIG_FILENAME), configContent);
@@ -247,5 +262,200 @@ describe('skills build command (system test)', () => {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output verification
     const content = readFileSync(expectedDest, 'utf-8');
     expect(content).toContain('console.log("tool")');
+  });
+});
+
+/**
+ * Helper: create a project with a SKILL.md that has an unreferenced packaged file
+ * (using the files config to inject a file not mentioned in any markdown).
+ * PACKAGED_UNREFERENCED_FILE has default severity=error, so this should cause exit 1.
+ */
+function setupProjectWithUnreferencedFile(
+  tempDir: string,
+  skillName: string,
+): string {
+  const projectDir = safePath.join(tempDir, 'unreferenced-file');
+  mkdirSyncReal(projectDir, { recursive: true });
+
+  // package.json to establish project root
+  writeTestFile(
+    safePath.join(projectDir, PACKAGE_JSON_FILENAME),
+    JSON.stringify({ name: 'unreferenced-test', workspaces: [] }),
+  );
+
+  // Skill with minimal SKILL.md (no link to the injected file)
+  mkdirSyncReal(safePath.join(projectDir, 'skills'), { recursive: true });
+  writeTestFile(
+    safePath.join(projectDir, 'skills', 'SKILL.md'),
+    SKILL_FRONTMATTER_TEMPLATE(skillName),
+  );
+
+  // An artifact that will be injected via files config but NOT mentioned in SKILL.md
+  mkdirSyncReal(safePath.join(projectDir, 'dist', 'bin'), { recursive: true });
+  writeTestFile(safePath.join(projectDir, 'dist', 'bin', 'runner.mjs'), 'console.log("runner");\n');
+
+  // Config: inject the artifact via files but no markdown link → PACKAGED_UNREFERENCED_FILE
+  const configContent = [
+    CONFIG_VERSION_LINE,
+    'skills:',
+    '  include:',
+    '    - "skills/SKILL.md"',
+    '  config:',
+    `    ${skillName}:`,
+    '      files:',
+    '        - source: dist/bin/runner.mjs',
+    '          dest: bin/runner.mjs',
+    '',
+  ].join('\n');
+  writeTestFile(safePath.join(projectDir, VAT_CONFIG_FILENAME), configContent);
+
+  return projectDir;
+}
+
+/**
+ * Shared: scaffold a 3-level link graph (SKILL.md → level1/a.md → level2/b.md)
+ * inside `projectDir/skills/`. Used by depth-drop fixture helpers.
+ *
+ * With linkFollowDepth=1, `level2/b.md` is dropped at packaging time,
+ * emitting LINK_DROPPED_BY_DEPTH.
+ */
+function writeDepthDropLinkGraph(projectDir: string, skillName: string): void {
+  mkdirSyncReal(safePath.join(projectDir, 'skills', 'level0'), { recursive: true });
+  mkdirSyncReal(safePath.join(projectDir, 'skills', 'level1'), { recursive: true });
+  mkdirSyncReal(safePath.join(projectDir, 'skills', 'level2'), { recursive: true });
+
+  writeTestFile(
+    safePath.join(projectDir, 'skills', 'level0', 'SKILL.md'),
+    `---\nname: ${skillName}\ndescription: ${skillName} - comprehensive test skill for validation and packaging\nversion: 1.0.0\n---\n\n# ${skillName}\n\nSee [level1](../level1/a.md).\n`,
+  );
+  writeTestFile(
+    safePath.join(projectDir, 'skills', 'level1', 'a.md'),
+    '# Level 1\n\nSee [level2](../level2/b.md).\n',
+  );
+  writeTestFile(
+    safePath.join(projectDir, 'skills', 'level2', 'b.md'),
+    '# Level 2\n\nDeep content.\n',
+  );
+}
+
+/**
+ * Helper: create a project with a SKILL.md that has a depth-drop link
+ * and the severity overridden to 'error'.
+ * LINK_DROPPED_BY_DEPTH default=warning; we bump it to error to test exit code.
+ */
+function setupProjectWithDepthDrop(
+  tempDir: string,
+  skillName: string,
+): string {
+  const projectDir = safePath.join(tempDir, 'depth-drop');
+  mkdirSyncReal(projectDir, { recursive: true });
+
+  writeTestFile(
+    safePath.join(projectDir, PACKAGE_JSON_FILENAME),
+    JSON.stringify({ name: 'depth-drop-test', workspaces: [] }),
+  );
+
+  writeDepthDropLinkGraph(projectDir, skillName);
+
+  // linkFollowDepth=1 so level2/b.md is dropped; override severity to error
+  const configContent = [
+    CONFIG_VERSION_LINE,
+    'skills:',
+    '  include:',
+    '    - "skills/level0/SKILL.md"',
+    '  config:',
+    `    ${skillName}:`,
+    '      linkFollowDepth: 1',
+    CONFIG_VALIDATION_INDENT,
+    '        severity:',
+    '          LINK_DROPPED_BY_DEPTH: error',
+    '',
+  ].join('\n');
+  writeTestFile(safePath.join(projectDir, VAT_CONFIG_FILENAME), configContent);
+
+  return projectDir;
+}
+
+/**
+ * Helper: same depth-drop scenario but with an accept entry to suppress the error.
+ */
+function setupProjectWithDepthDropAndAccept(
+  tempDir: string,
+  skillName: string,
+): string {
+  const projectDir = safePath.join(tempDir, 'depth-drop-accept');
+  mkdirSyncReal(projectDir, { recursive: true });
+
+  writeTestFile(
+    safePath.join(projectDir, PACKAGE_JSON_FILENAME),
+    JSON.stringify({ name: 'depth-drop-accept-test', workspaces: [] }),
+  );
+
+  writeDepthDropLinkGraph(projectDir, skillName);
+
+  // linkFollowDepth=1, severity=error, but accept suppresses it
+  const configContent = [
+    CONFIG_VERSION_LINE,
+    'skills:',
+    '  include:',
+    '    - "skills/level0/SKILL.md"',
+    '  config:',
+    `    ${skillName}:`,
+    '      linkFollowDepth: 1',
+    CONFIG_VALIDATION_INDENT,
+    '        severity:',
+    '          LINK_DROPPED_BY_DEPTH: error',
+    '        accept:',
+    '          LINK_DROPPED_BY_DEPTH:',
+    '            - paths: ["**"]',
+    '              reason: depth drop is intentional in this test',
+    '',
+  ].join('\n');
+  writeTestFile(safePath.join(projectDir, VAT_CONFIG_FILENAME), configContent);
+
+  return projectDir;
+}
+
+describe('skills build — framework exit codes (system test)', () => {
+  const DEPTH_DROP_SKILL = 'depth-drop-skill';
+  const UNREFERENCED_SKILL = 'unreferenced-skill';
+
+  let suite: ReturnType<typeof setupSkillsBuildTestSuite>;
+
+  beforeAll(() => {
+    suite = setupSkillsBuildTestSuite();
+  });
+
+  afterEach(() => {
+    suite.cleanup();
+  });
+
+  it('exits non-zero when LINK_DROPPED_BY_DEPTH is set to severity=error', () => {
+    const tempDir = suite.createTempDir();
+    const projectDir = setupProjectWithDepthDrop(tempDir, DEPTH_DROP_SKILL);
+
+    const { result: cmdResult } = suite.runBuildCommand(projectDir);
+
+    expect(cmdResult.status).toBe(1);
+    expect(cmdResult.stderr + cmdResult.stdout).toContain('LINK_DROPPED_BY_DEPTH');
+  });
+
+  it('exits zero when LINK_DROPPED_BY_DEPTH error is suppressed via accept', () => {
+    const tempDir = suite.createTempDir();
+    const projectDir = setupProjectWithDepthDropAndAccept(tempDir, DEPTH_DROP_SKILL);
+
+    const { result: cmdResult } = suite.runBuildCommand(projectDir);
+
+    expect(cmdResult.status).toBe(0);
+  });
+
+  it('exits non-zero when PACKAGED_UNREFERENCED_FILE fires (default severity=error)', () => {
+    const tempDir = suite.createTempDir();
+    const projectDir = setupProjectWithUnreferencedFile(tempDir, UNREFERENCED_SKILL);
+
+    const { result: cmdResult } = suite.runBuildCommand(projectDir);
+
+    expect(cmdResult.status).toBe(1);
+    expect(cmdResult.stderr + cmdResult.stdout).toContain('PACKAGED_UNREFERENCED_FILE');
   });
 });

@@ -108,14 +108,11 @@ Test content.
       cwd: tempDir,
     });
 
-    // Should handle mixed resources without crashing
-    expect([0, 1]).toContain(result.status);
+    // Audit is advisory only — always exits 0 (never 1 for validation results)
+    expect(result.status).toBe(0);
 
     // Should produce output
     expect(result.stdout).toBeTruthy();
-
-    // Should not have system errors
-    expect(result.status).not.toBe(2);
   });
 
   it('should detect and report multiple validation errors', () => {
@@ -163,8 +160,9 @@ Test content.
       cwd: tempDir,
     });
 
-    // Should exit with validation error code (1)
-    expect(result.status).toBe(1);
+    // Audit is advisory only — always exits 0 even when errors are found.
+    // Use 'vat skills validate' for gated validation (exits 1 on errors).
+    expect(result.status).toBe(0);
 
     // Should report errors in stderr
     expect(result.stderr).toBeTruthy();

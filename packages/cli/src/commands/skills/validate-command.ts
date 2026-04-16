@@ -20,12 +20,14 @@ export function createValidateCommand(): Command {
       'after',
       `
 Description:
-  Validates skills declared in package.json vat.skills field using
-  enhanced packaging validation. Checks size/complexity, link depth,
-  navigation patterns, and applies validation overrides.
+  Validates skills declared in vibe-agent-toolkit.config.yaml using the
+  validation framework (severity + accept). Checks source-detectable link
+  issues, size/complexity, and link depth. Applies per-skill severity
+  overrides and per-path acceptance entries.
 
-  Reads skills from package.json vat.skills and runs validateSkillForPackaging()
-  for each skill. Supports validation overrides with expiration checking.
+  Supports severity overrides and per-path acceptance (with optional expiry
+  reminders via ACCEPTANCE_EXPIRED). See docs/validation-codes.md for the
+  full code reference.
 
 Validation Checks:
   Required (non-overridable):
@@ -38,12 +40,13 @@ Validation Checks:
     - No filename collisions
     - Forward slashes in paths (not backslashes)
 
-  Best practices (overridable):
+  Best practices (overridable via severity/accept):
     - SKILL.md ≤500 lines (recommended)
     - Total skill size ≤2000 lines
     - File count ≤6 files
     - Reference depth ≤2 levels
     - No links to navigation files (README.md, index.md)
+    - No links to gitignored files
     - Description ≥50 characters
     - Progressive disclosure pattern
 
@@ -78,12 +81,10 @@ Output:
 
 Exit Codes:
   0 - All validations passed (or all errors accepted by valid config)
-  1 - Active validation errors found
-  2 - System error (file not found, invalid config, etc.)
+  1 - Validation errors found (severity=error, not accepted)
+  2 - System error (config invalid, skill path not found)
 
-Examples:
-  $ vat skills validate                    # Validate all skills in package.json
-  $ vat skills validate --skill my-skill   # Validate specific skill only
+Example:
   $ vat skills validate packages/my-pkg/   # Validate skills in specific directory
 `
     );

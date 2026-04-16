@@ -180,7 +180,8 @@ description: Skill with broken links
         { cwd: tempDir },
       );
 
-      expect(result.status).toBe(1);
+      // Audit is advisory only — always exits 0 even when errors are found
+      expect(result.status).toBe(0);
 
       const files = parsed['files'] as Array<Record<string, unknown>> | undefined;
       const issues = files?.[0]?.['issues'] as Array<Record<string, unknown>> | undefined;

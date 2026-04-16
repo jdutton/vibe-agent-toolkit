@@ -88,15 +88,25 @@ Config Structure (vibe-agent-toolkit.config.yaml):
         validation:
           severity:
             LINK_TO_NAVIGATION_FILE: ignore
+          accept:
+            LINK_DROPPED_BY_DEPTH:
+              - paths: ["docs/**"]
+                reason: depth drop is intentional for large reference docs
+
+Validation:
+  Both pre-build and post-build checks use the unified validation framework.
+  Override per-code severity (error/warning/ignore) or accept specific paths
+  via validation.severity and validation.accept in vibe-agent-toolkit.config.yaml.
+  See docs/validation-codes.md for all codes and their defaults.
 
 Output:
   YAML summary -> stdout (for programmatic parsing)
   Build progress -> stderr (for human reading)
 
 Exit Codes:
-  0 - Build successful (or dry-run preview)
-  1 - Validation error or build error
-  2 - System error (missing config, invalid config)
+  0 - All skills built successfully (or dry-run preview)
+  1 - One or more skills emitted validation errors
+  2 - System error (config invalid, directory not found)
 
 Example:
   $ vat skills build                    # Build all skills from config
@@ -144,19 +154,27 @@ function displayExpiredAcceptances(
 }
 
 /**
- * Log post-build integrity issues (non-blocking) so users see them.
+ * Log post-build integrity issues, prefixed by resolved severity.
  *
- * These are best-practice checks run after packaging — the build itself succeeded.
- * We surface them at info level so they show up without failing the build.
+ * Errors are emitted to stderr; warnings and info to stderr as well so they
+ * appear in the human-readable stream (not the YAML stdout stream).
  */
 function logPostBuildIssues(
   result: PackageSkillResult,
   logger: ReturnType<typeof createLogger>,
 ): void {
   if (!result.postBuildIssues || result.postBuildIssues.length === 0) return;
-  logger.info(`   ${result.postBuildIssues.length} post-build issue(s) (non-blocking):`);
+  const label = result.hasErrors ? 'post-build error(s)' : 'post-build warning(s)';
+  logger.info(`   ${result.postBuildIssues.length} ${label}:`);
   for (const issue of result.postBuildIssues) {
-    logger.info(`     [${String(issue.code)}] ${String(issue.message)}`);
+    const prefix = issue.severity === 'error' ? 'ERROR' : 'WARNING';
+    logger.info(`     [${prefix}] [${String(issue.code)}] ${String(issue.message)}`);
+    if (issue.location) {
+      logger.info(`       Location: ${String(issue.location)}`);
+    }
+    if (issue.fix) {
+      logger.info(`       Fix: ${String(issue.fix)}`);
+    }
   }
 }
 
@@ -406,17 +424,22 @@ async function buildCommand(
         ...(packagingConfig.linkFollowDepth !== undefined && { linkFollowDepth: packagingConfig.linkFollowDepth }),
         ...(packagingConfig.excludeReferencesFromBundle && { excludeReferencesFromBundle: packagingConfig.excludeReferencesFromBundle }),
         ...(packagingConfig.files && { files: packagingConfig.files }),
+        ...(packagingConfig.validation && { validation: packagingConfig.validation }),
       },
     }));
 
     const packageResults = await packageSkills(specs, cwd);
 
     const results: Array<{ name: string; result: PackageSkillResult }> = [];
+    const skillsWithErrors: string[] = [];
     for (const [i, spec] of validatedSpecs.entries()) {
       const result = packageResults[i];
       if (result) {
         logger.info(`   Built ${result.files.dependencies.length + 1} files`);
         logPostBuildIssues(result, logger);
+        if (result.hasErrors) {
+          skillsWithErrors.push(spec.skill.name);
+        }
         results.push({ name: spec.skill.name, result });
       }
     }
@@ -425,6 +448,14 @@ async function buildCommand(
 
     // Output YAML results
     outputBuildYaml(results, duration);
+
+    if (skillsWithErrors.length > 0) {
+      logger.error(`\nBuild failed: ${skillsWithErrors.length} skill(s) emitted post-build validation errors`);
+      for (const name of skillsWithErrors) {
+        logger.error(`   - ${name}`);
+      }
+      process.exit(1);
+    }
 
     logger.info(`\nBuilt ${results.length} skill(s) successfully`);
 

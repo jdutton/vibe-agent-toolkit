@@ -49,8 +49,8 @@ describe('Audit User Plugins Fixture (system test)', () => {
         fixtureDir,
       ]);
 
-      // Fixture contains validation errors, should exit with error code
-      expect(status).toBe(1);
+      // Audit is advisory only — always exits 0 even when errors are found
+      expect(status).toBe(0);
 
       // Parse YAML output
       const output = parseYamlOutput(stdout);
