@@ -137,7 +137,7 @@ export const SkillPackagingConfigSchema = z.object({
   validation: ValidationConfigSchema.optional()
     .describe('Validation framework config: severity overrides and per-path acceptance'),
   files: z.array(SkillFileEntrySchema).optional().describe('Explicit source→dest file mappings for build artifacts, unlinked files, or routing overrides'),
-}).describe('Skill packaging configuration');
+}).strict().describe('Skill packaging configuration');
 
 export type SkillPackagingConfig = z.infer<typeof SkillPackagingConfigSchema>;
 
@@ -151,7 +151,7 @@ export const SkillsConfigSchema = z.object({
   exclude: z.array(z.string()).optional().describe('Glob patterns to exclude'),
   defaults: SkillPackagingConfigSchema.optional().describe('Default packaging config for all skills'),
   config: z.record(z.string(), SkillPackagingConfigSchema).optional().describe('Per-skill packaging config overrides (keyed by skill name)'),
-}).describe('Skills discovery and packaging configuration');
+}).strict().describe('Skills discovery and packaging configuration');
 
 export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
 
@@ -239,6 +239,6 @@ export const ProjectConfigSchema = z.object({
     .describe('Resources configuration'),
   claude: ClaudeConfigSchema.optional()
     .describe('Claude-specific configuration (marketplaces, managed-settings)'),
-}).describe('vibe-agent-toolkit project configuration');
+}).strict().describe('vibe-agent-toolkit project configuration');
 
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;
