@@ -302,14 +302,16 @@ describe('walkLinkGraph', () => {
       expectBundledIds(result, [GUIDE_ID]);
     });
 
-    it('should silently skip links to files not in registry and not on disk', () => {
+    it('should record missing-target exclusion for links to files not in registry and not on disk', () => {
       const result = walkSingleSkill([
         createLocalLink('missing', './nonexistent.md', 'no-such-id'),
       ]);
 
       expect(result.bundledResources).toHaveLength(0);
       expect(result.bundledAssets).toHaveLength(0);
-      expect(result.excludedReferences).toHaveLength(0);
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe('missing-target');
+      expect(result.excludedReferences[0]?.path).toContain('nonexistent.md');
     });
 
     it('should skip links with empty href after anchor stripping', () => {
@@ -491,7 +493,7 @@ describe('walkLinkGraph', () => {
         deferredPaths: new Set([DEFERRED_CLI_PATH]), // different path
       }));
 
-      // Missing file not in deferred set — silently skipped
+      // Missing file not in deferred set — recorded as missing-target, not deferred
       expect(result.deferredAssets).toHaveLength(0);
     });
 

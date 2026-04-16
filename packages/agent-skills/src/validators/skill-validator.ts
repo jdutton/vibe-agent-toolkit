@@ -132,7 +132,7 @@ function validateLocalLink(
   if (relativeToBoundary.startsWith('..')) {
     const issue: ValidationIssue = {
       severity: 'warning',
-      code: 'OUTSIDE_PROJECT_BOUNDARY',
+      code: 'LINK_OUTSIDE_PROJECT',
       message: `Link points outside skill directory: ${link.href}`,
       location: `${currentPath}:${link.line ?? 0}`,
       fix: 'Keep skills self-contained — move referenced files into the skill directory',

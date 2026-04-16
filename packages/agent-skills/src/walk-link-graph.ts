@@ -28,7 +28,7 @@ export interface LinkResolution {
   /** Whether the file will be bundled */
   bundled: boolean;
   /** Reason it was excluded (only set when bundled is false) */
-  excludeReason?: 'depth-exceeded' | 'pattern-matched' | 'directory-target' | 'outside-project' | 'navigation-file' | 'skill-definition' | 'gitignored' | undefined;
+  excludeReason?: 'depth-exceeded' | 'pattern-matched' | 'directory-target' | 'outside-project' | 'navigation-file' | 'skill-definition' | 'gitignored' | 'missing-target' | undefined;
   /** The rule that matched (only set for pattern-matched exclusions) */
   matchedRule?: ExcludeRule | undefined;
   /** Link text from the source markdown */
@@ -258,8 +258,10 @@ function processLink(
     const relativePath = toForwardSlash(safePath.relative(options.projectRoot, targetPath));
     if (options.deferredPaths?.has(relativePath)) {
       state.deferredAssetSet.add(toForwardSlash(targetPath));
+      return;
     }
-    // Otherwise silently skip (same as old collectLinks behavior)
+    // Not deferred — record as missing-target so downstream emits LINK_MISSING_TARGET.
+    state.excludedReferences.push(makeExclusion(targetPath, 'missing-target', link));
   }
 }
 

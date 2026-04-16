@@ -1,7 +1,20 @@
-export type IssueSeverity = 'error' | 'warning' | 'info';
+import type { IssueCode as RegistryIssueCode, IssueSeverity as RegistryIssueSeverity } from './code-registry.js';
 
-export type IssueCode =
-  // Critical errors - Skills
+export type { IssueCode as RegistryIssueCode, EmittedSeverity } from './code-registry.js';
+
+/** Three-level severity for the unified validation framework. */
+export type IssueSeverity = RegistryIssueSeverity;
+
+/** Codes outside the overridable framework — structural reports. */
+export type InfoCode =
+  | 'FILE_STRUCTURE_REPORT'
+  | 'RESOURCE_INVENTORY'
+  | 'METADATA_SUMMARY'
+  | 'SKILL_IMPLICIT_REFERENCE'
+  | 'SKILL_UNREFERENCED_FILE';
+
+/** Codes outside the overridable framework — structural prerequisites / errors that are not subject to severity overrides. */
+export type NonOverridableCode =
   | 'SKILL_MISSING_FRONTMATTER'
   | 'SKILL_MISSING_NAME'
   | 'SKILL_MISSING_DESCRIPTION'
@@ -14,68 +27,49 @@ export type IssueCode =
   | 'SKILL_MISCONFIGURED_LOCATION'
   | 'LINK_INTEGRITY_BROKEN'
   | 'PATH_STYLE_WINDOWS'
-  // Packaging validation - Required (non-overridable)
   | 'INVALID_FRONTMATTER'
   | 'MISSING_NAME'
   | 'RESERVED_WORD_IN_NAME'
-  | 'BROKEN_INTERNAL_LINK'
-  | 'CIRCULAR_REFERENCE'
-  | 'OUTSIDE_PROJECT_BOUNDARY'
   | 'FILENAME_COLLISION'
-  | 'WINDOWS_BACKSLASH_IN_PATH'
-  | 'LINK_TARGETS_DIRECTORY'
   | 'DUPLICATE_FILES_DEST'
-  // Packaging validation - Best practice (overridable)
-  | 'SKILL_LENGTH_EXCEEDS_RECOMMENDED'
-  | 'SKILL_TOTAL_SIZE_LARGE'
-  | 'SKILL_TOO_MANY_FILES'
-  | 'REFERENCE_TOO_DEEP'
-  | 'LINKS_TO_NAVIGATION_FILES'
-  | 'DESCRIPTION_TOO_VAGUE'
-  | 'NO_PROGRESSIVE_DISCLOSURE'
-  // Post-build integrity (overridable)
-  | 'PACKAGED_UNREFERENCED_FILE'
-  | 'PACKAGED_BROKEN_LINK'
-  // Critical errors - Plugins
   | 'PLUGIN_MISSING_MANIFEST'
   | 'PLUGIN_INVALID_JSON'
   | 'PLUGIN_INVALID_SCHEMA'
   | 'PLUGIN_MISSING_VERSION'
-  // Critical errors - Marketplaces
   | 'MARKETPLACE_MISSING_MANIFEST'
   | 'MARKETPLACE_INVALID_JSON'
   | 'MARKETPLACE_INVALID_SCHEMA'
-  // Marketplace publish validation (strict mode)
   | 'MARKETPLACE_MISSING_LICENSE'
   | 'MARKETPLACE_MISSING_README'
   | 'MARKETPLACE_MISSING_CHANGELOG'
   | 'MARKETPLACE_MISSING_VERSION'
-  // Critical errors - Registries
   | 'REGISTRY_MISSING_FILE'
   | 'REGISTRY_INVALID_JSON'
   | 'REGISTRY_INVALID_SCHEMA'
-  // Critical errors - Format detection
   | 'UNKNOWN_FORMAT'
-  // Warnings
   | 'SKILL_TOO_LONG'
-  | 'REFERENCE_DEPTH_EXCEEDED'
   | 'REFERENCE_MISSING_TOC'
   | 'DESCRIPTION_FIRST_PERSON'
   | 'RESOURCE_UNREACHABLE'
-  | 'SKILL_CONSOLE_INCOMPATIBLE'
-  // Info
-  | 'FILE_STRUCTURE_REPORT'
-  | 'RESOURCE_INVENTORY'
-  | 'METADATA_SUMMARY'
-  | 'SKILL_IMPLICIT_REFERENCE'
-  | 'SKILL_UNREFERENCED_FILE';
+  | 'SKILL_CONSOLE_INCOMPATIBLE';
+
+/** Full code space: registry codes (overridable) + info codes + structural/non-overridable codes. */
+export type IssueCode = RegistryIssueCode | InfoCode | NonOverridableCode;
 
 export interface ValidationIssue {
-  severity: IssueSeverity;
+  /**
+   * Resolved severity after the validation framework runs.
+   * The 'info' variant is a transitional concession for InfoCode emissions
+   * (FILE_STRUCTURE_REPORT, RESOURCE_INVENTORY, etc.) and will be folded into
+   * IssueSeverity once those emitters are wired to the framework in later phases.
+   */
+  severity: IssueSeverity | 'info';
   code: IssueCode;
   message: string;
   location?: string;
   fix?: string;
+  /** Stable anchor into docs/validation-codes.md (e.g. '#link_outside_project'). */
+  reference?: string;
 }
 
 export interface ValidationResult {
