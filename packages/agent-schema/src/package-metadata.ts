@@ -25,21 +25,6 @@ export const SKILL_NAME_REGEX_MESSAGE =
   '(e.g. "my-skill" or "vibe-agent-toolkit:resources")';
 
 /**
- * Validation override value
- *
- * Supports both simple string format and extended object format with expiration.
- */
-export const ValidationOverrideSchema = z.union([
-  z.string().min(1).describe('Simple override reason'),
-  z.object({
-    reason: z.string().min(1).describe('Override reason'),
-    expires: z.string().datetime().optional().describe('Optional expiration date (ISO 8601)'),
-  }).describe('Extended override with optional expiration'),
-]).describe('Validation override (reason or reason + expiration)');
-
-export type ValidationOverride = z.infer<typeof ValidationOverrideSchema>;
-
-/**
  * Packaging options for skill distribution
  *
  * Controls how skills are packaged and distributed.

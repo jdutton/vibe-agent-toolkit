@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   PackagingOptionsSchema,
-  ValidationOverrideSchema,
   VatAgentMetadataSchema,
   VatPackageMetadataSchema,
   VatPureFunctionMetadataSchema,
@@ -240,61 +239,6 @@ describe('VatPackageMetadataSchema', () => {
 
     const result = VatPackageMetadataSchema.safeParse(minimalMetadata);
     expect(result.success).toBe(true);
-  });
-});
-
-describe('ValidationOverrideSchema', () => {
-  it('should validate simple string override', () => {
-    const simpleOverride = 'Acceptable because documentation explains workaround';
-
-    const result = ValidationOverrideSchema.safeParse(simpleOverride);
-    expect(result.success).toBe(true);
-  });
-
-  it('should validate object override with reason only', () => {
-    const objectOverride = {
-      reason: 'Legacy API compatibility required until v2.0',
-    };
-
-    const result = ValidationOverrideSchema.safeParse(objectOverride);
-    expect(result.success).toBe(true);
-  });
-
-  it('should validate object override with reason and expiration', () => {
-    const objectOverride = {
-      reason: 'Temporary workaround for upstream bug',
-      expires: '2026-06-30T00:00:00Z',
-    };
-
-    const result = ValidationOverrideSchema.safeParse(objectOverride);
-    expect(result.success).toBe(true);
-  });
-
-  it('should reject empty string override', () => {
-    const invalidOverride = '';
-
-    const result = ValidationOverrideSchema.safeParse(invalidOverride);
-    expect(result.success).toBe(false);
-  });
-
-  it('should reject object override with empty reason', () => {
-    const invalidOverride = {
-      reason: '',
-      expires: '2026-06-30T00:00:00Z',
-    };
-
-    const result = ValidationOverrideSchema.safeParse(invalidOverride);
-    expect(result.success).toBe(false);
-  });
-
-  it('should reject object override with invalid expiration format', () => {
-    const invalidOverride = {
-      reason: 'Valid reason',
-      expires: '2026-06-30', // Not ISO 8601 datetime
-    };
-
-    const result = ValidationOverrideSchema.safeParse(invalidOverride);
-    expect(result.success).toBe(false);
   });
 });
 

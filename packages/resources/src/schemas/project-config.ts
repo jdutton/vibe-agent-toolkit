@@ -1,8 +1,8 @@
-import { ValidationOverrideSchema } from '@vibe-agent-toolkit/agent-schema';
+import { ValidationConfigSchema } from '@vibe-agent-toolkit/agent-schema';
 import { z } from 'zod';
 
 // Re-export for downstream consumers (unicorn/prefer-export-from satisfied by the import above)
-export { ValidationOverrideSchema } from '@vibe-agent-toolkit/agent-schema';
+export { ValidationConfigSchema } from '@vibe-agent-toolkit/agent-schema';
 
 /**
  * Validation mode for frontmatter schema validation.
@@ -134,7 +134,8 @@ export const SkillPackagingConfigSchema = z.object({
   stripPrefix: z.string().optional(),
   excludeNavigationFiles: z.boolean().optional(),
   excludeReferencesFromBundle: ExcludeReferencesFromBundleSchema.optional(),
-  ignoreValidationErrors: z.record(z.string(), ValidationOverrideSchema).optional(),
+  validation: ValidationConfigSchema.optional()
+    .describe('Validation framework config: severity overrides and per-path acceptance'),
   files: z.array(SkillFileEntrySchema).optional().describe('Explicit source→dest file mappings for build artifacts, unlinked files, or routing overrides'),
 }).describe('Skill packaging configuration');
 
