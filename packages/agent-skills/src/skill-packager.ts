@@ -24,12 +24,15 @@ import {
   transformContent,
   type LinkRewriteRule,
   type ParseResult,
+  type ResourceMetadata,
   parseMarkdown,
 } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 
 import { getTargetSubdir } from './content-type-routing.js';
 import type { SkillFileEntry } from './files-config.js';
+import { checkBrokenPackagedLinks, checkUnreferencedFiles } from './post-build-checks.js';
+import type { ValidationIssue } from './validators/types.js';
 import { walkLinkGraph, type WalkableRegistry } from './walk-link-graph.js';
 
 const PACKAGE_JSON_FILENAME = 'package.json';
@@ -149,6 +152,13 @@ export interface PackageSkillOptions {
    * left as-is (assumed to be build artifacts placed at dest during build).
    */
   files?: SkillFileEntry[] | undefined;
+
+  /**
+   * Suppress specific post-build validation errors by code.
+   * Maps issue code → reason string or { reason, expires? }.
+   * Same shape as SkillPackagingConfig.ignoreValidationErrors.
+   */
+  ignoreValidationErrors?: Record<string, string | { reason: string; expires?: string }> | undefined;
 }
 
 export interface SkillMetadata {
@@ -190,6 +200,12 @@ export interface PackageSkillResult {
 
   /** References excluded from bundle */
   excludedReferences?: string[] | undefined;
+
+  /**
+   * Post-build integrity issues — issues that the override config did NOT suppress.
+   * Empty (or omitted) means all post-build checks passed.
+   */
+  postBuildIssues?: ValidationIssue[] | undefined;
 }
 
 /**
@@ -304,6 +320,17 @@ export async function packageSkill(
     },
   );
 
+  // Register non-markdown bundled assets in the source registry so link rewriting
+  // can resolve them (resolvedId must be set on links pointing to YAML, JSON, etc.).
+  // For any asset whose ID collides with a paired markdown file (e.g. config.yaml +
+  // config.md both produce id `resources-config`), we set a synthetic resolvedId on
+  // links pointing to it so link rewriting still works.
+  const collidedAssets = await registerBundledAssets(registry, bundledAssets);
+  resolveCollidedAssetLinks(
+    collectResourcesWithLinks(bundledResources, skillResource),
+    collidedAssets,
+  );
+
   // Combine bundled file paths: markdown resources + non-markdown assets
   const bundledFiles = [
     ...bundledResources.map(r => r.filePath),
@@ -361,6 +388,8 @@ export async function packageSkill(
       filePath: safePath.join(outputPath, 'SKILL.md'),
     });
   }
+  // Add non-markdown bundled files (assets) to output registry so link rewriting resolves them
+  addBundledAssetsToOutputRegistry(outputResources, bundledAssets, pathMap, registry, collidedAssets);
   // Include excluded resources (with source paths) for pattern-based rule matching
   for (const excl of excludedReferences) {
     if (excl.excludeReason === 'directory-target' || excl.excludeReason === 'outside-project') {
@@ -373,7 +402,12 @@ export async function packageSkill(
   }
   const outputRegistry = ResourceRegistry.fromResources(outputPath, outputResources);
 
-  // 10. Build excluded resource IDs for rule matching
+  // 10. Build excluded resource IDs for rule matching.
+  // Excluded IDs should NOT include resources that are already bundled.
+  // A resource can appear in both bundledResources (via short path) and
+  // excludedReferences (via long path that exceeds depth). The bundled
+  // status wins — links to it should be rewritten, not stripped.
+  const bundledResourceIds = new Set(bundledResources.map(r => r.id));
   const excludedIds = [...new Set(
     excludedReferences
       .filter(r => r.excludeReason !== 'directory-target' && r.excludeReason !== 'outside-project')
@@ -381,7 +415,7 @@ export async function packageSkill(
         const res = (registry as WalkableRegistry).getResource(safePath.resolve(r.path));
         return res?.id;
       })
-      .filter((id): id is string => id !== undefined),
+      .filter((id): id is string => id !== undefined && !bundledResourceIds.has(id)),
   )];
 
   // 11. Build unified rewrite rules (bundled + excluded, all via transformContent)
@@ -413,6 +447,19 @@ export async function packageSkill(
   // skill definitions that break marketplace sync and confuse skill consumers.
   await validateNoNestedSkillMd(outputPath, skillMetadata.name);
 
+  // 13b. Post-build integrity checks (unreferenced files, broken packaged links).
+  //
+  // Runs BEFORE generatePackageArtifacts so the synthetic package.json from
+  // createNpmPackage isn't flagged as unreferenced.
+  //
+  // Filter out issues suppressed by ignoreValidationErrors overrides.
+  const postBuildIssues = [
+    ...await checkUnreferencedFiles(outputPath),
+    ...await checkBrokenPackagedLinks(outputPath),
+  ];
+  const overrides = options.ignoreValidationErrors ?? {};
+  const activeIssues = postBuildIssues.filter(issue => overrides[issue.code] === undefined);
+
   // 14. Generate distribution artifacts
   const artifacts = await generatePackageArtifacts(
     outputPath,
@@ -436,6 +483,10 @@ export async function packageSkill(
     },
     artifacts,
   };
+
+  if (activeIssues.length > 0) {
+    result.postBuildIssues = activeIssues;
+  }
 
   if (excludedReferences.length > 0) {
     // Deduplicate excluded reference paths for the result
@@ -462,6 +513,164 @@ async function createStandaloneRegistry(projectRoot: string): Promise<ResourceRe
   });
   registry.resolveLinks();
   return registry;
+}
+
+/**
+ * Generate a synthetic resource ID for a non-markdown asset that collides with an
+ * existing markdown resource. Uses the absolute asset path prefixed with `asset::`
+ * to guarantee uniqueness — this id is used only for skill-packager internal
+ * lookups (output registry + link rewriting), not for user-facing output.
+ */
+function synthesizeAssetId(assetPath: string): string {
+  return `asset::${toForwardSlash(safePath.resolve(assetPath))}`;
+}
+
+/**
+ * Collect all resources whose links may need collided-asset resolution:
+ * bundled markdown resources + the skill resource itself (if indexed).
+ * Deduplicates in case the skill is also in bundledResources.
+ */
+function collectResourcesWithLinks(
+  bundledResources: ResourceMetadata[],
+  skillResource: ResourceMetadata | undefined,
+): ResourceMetadata[] {
+  if (skillResource === undefined || bundledResources.includes(skillResource)) {
+    return bundledResources;
+  }
+  return [...bundledResources, skillResource];
+}
+
+/**
+ * Register non-markdown bundled assets in the registry so their links get resolvedId.
+ *
+ * The registry only crawls *.md files by default. Non-markdown files (YAML, JSON, etc.)
+ * discovered via link walking are not indexed, so links pointing to them won't have
+ * `resolvedId` set. Link rewriting depends on `resolvedId` to look up the target resource
+ * and compute the output `relativePath`. Without this, non-markdown links get stripped
+ * to empty `()` parentheses.
+ *
+ * Collision handling: if an asset's generated ID clashes with an existing markdown
+ * resource (e.g. paired `config.yaml` + `config.md` both produce id `resources-config`),
+ * `addResource` throws. We catch this, skip source-registry indexing for the asset,
+ * and return it so the caller can synthesize a unique ID for link rewriting.
+ *
+ * @returns Paths of assets that could not be added to the source registry due to
+ *   duplicate-ID collisions. Caller must wire these up manually.
+ */
+async function registerBundledAssets(
+  registry: ResourceRegistry,
+  bundledAssets: string[],
+): Promise<string[]> {
+  const collidedAssets: string[] = [];
+  if (bundledAssets.length === 0) {
+    return collidedAssets;
+  }
+  for (const assetPath of bundledAssets) {
+    try {
+      await registry.addResource(assetPath);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('Duplicate resource ID')) {
+        collidedAssets.push(assetPath);
+      } else {
+        throw error;
+      }
+    }
+  }
+  registry.resolveLinks();
+  return collidedAssets;
+}
+
+/**
+ * Manually set `resolvedId` on links pointing to collided assets.
+ *
+ * When a non-markdown asset collides with a markdown file (same stem, different
+ * extension), it can't be indexed in the source registry. `resolveLinks()` won't
+ * set `resolvedId` on links to these assets. We walk every bundled markdown
+ * resource's links and assign a synthetic `resolvedId` to links whose target
+ * path matches a collided asset.
+ */
+function resolveCollidedAssetLinks(
+  resources: ResourceMetadata[],
+  collidedAssets: string[],
+): void {
+  if (collidedAssets.length === 0) {
+    return;
+  }
+  const collidedByPath = new Map<string, string>(
+    collidedAssets.map(p => [safePath.resolve(p), synthesizeAssetId(p)]),
+  );
+  for (const resource of resources) {
+    for (const link of resource.links) {
+      if (link.type !== 'local_file' || link.resolvedId !== undefined) {
+        continue;
+      }
+      const [hrefPath] = link.href.split('#');
+      if (hrefPath === undefined) continue;
+      const targetPath = safePath.resolve(dirname(resource.filePath), hrefPath);
+      const syntheticId = collidedByPath.get(targetPath);
+      if (syntheticId !== undefined) {
+        link.resolvedId = syntheticId;
+      }
+    }
+  }
+}
+
+/**
+ * Add non-markdown bundled assets to the output registry so link rewriting can resolve them.
+ *
+ * Each asset's output path comes from `pathMap`. The source registry (populated by
+ * `registerBundledAssets`) supplies the resource record for non-colliding assets.
+ * For collided assets (ID clashes with a paired markdown file), we synthesize a
+ * minimal resource record using the same synthetic ID set on links by
+ * `resolveCollidedAssetLinks`. Assets already present in `outputResources` are skipped.
+ */
+function addBundledAssetsToOutputRegistry(
+  outputResources: ResourceMetadata[],
+  bundledAssets: string[],
+  pathMap: Map<string, string>,
+  registry: WalkableRegistry,
+  collidedAssets: string[],
+): void {
+  const collidedSet = new Set(collidedAssets.map(p => toForwardSlash(p)));
+  for (const assetPath of bundledAssets) {
+    const outputFilePath = pathMap.get(toForwardSlash(assetPath));
+    if (!outputFilePath) continue;
+    if (outputResources.some(r => toForwardSlash(r.filePath) === toForwardSlash(outputFilePath))) {
+      continue;
+    }
+    const sourceResource = registry.getResource(safePath.resolve(assetPath));
+    if (sourceResource) {
+      outputResources.push({
+        ...sourceResource,
+        filePath: outputFilePath,
+      });
+    } else if (collidedSet.has(toForwardSlash(assetPath))) {
+      // Asset collided with a paired markdown file and isn't in the source registry.
+      // Synthesize a minimal record — id matches what resolveCollidedAssetLinks set.
+      outputResources.push(buildSyntheticAssetResource(assetPath, outputFilePath));
+    }
+  }
+}
+
+/**
+ * Build a minimal ResourceMetadata record for a non-markdown asset that couldn't
+ * be added to the source registry due to an ID collision with a paired markdown file.
+ */
+function buildSyntheticAssetResource(
+  assetPath: string,
+  outputFilePath: string,
+): ResourceMetadata {
+  return {
+    id: synthesizeAssetId(assetPath),
+    filePath: outputFilePath,
+    links: [],
+    headings: [],
+    sizeBytes: 0,
+    estimatedTokenCount: 0,
+    modifiedAt: new Date(0),
+    // Synthetic asset; no real content hash. Use all-zeros to satisfy the SHA256 brand.
+    checksum: '0'.repeat(64) as ResourceMetadata['checksum'],
+  };
 }
 
 // ============================================================================
@@ -539,9 +748,14 @@ function buildPathMap(
  * Build unified link rewrite rules for transformContent().
  *
  * Rules are ordered for first-match-wins semantics:
- * 1. Bundled links: local_file links minus excluded IDs → rewrite to output path
- * 2. Per-pattern excludes: local_file links matching specific patterns → custom template
+ * 1. Per-pattern excludes: local_file links matching specific patterns → custom template
+ * 2. Bundled links: local_file links minus excluded IDs → rewrite to output path
  * 3. Catch-all excludes: remaining local_file links (depth-exceeded, navigation) → strip
+ *
+ * Per-pattern excludes run first so that terminal links to non-markdown assets
+ * (YAML, JSON, images) match against the link's href via `matchesPattern`'s
+ * href fallback — such links have no resolvedId and would otherwise be caught
+ * by the bundled-link rule and rendered with an undefined `link.resource.*`.
  *
  * External, anchor, and email links match no rule and are left untouched.
  */
@@ -552,22 +766,25 @@ function buildRewriteRules(
 ): LinkRewriteRule[] {
   const rules: LinkRewriteRule[] = [];
 
-  // Rule 1: Bundled links — match local_file, skip excluded IDs
-  rules.push({
-    match: {
-      type: 'local_file',
-      ...(excludedIds.length > 0 ? { excludeResourceIds: excludedIds } : {}),
-    },
-    template: '[{{link.text}}]({{link.resource.relativePath}}{{link.fragment}})',
-  });
-
-  // Rules 2+: Per-pattern exclude rules (if any)
+  // Rules 1+: Per-pattern exclude rules (if any)
   for (const rule of excludeRules) {
     rules.push({
       match: { type: 'local_file', pattern: rule.patterns },
       template: rule.template ?? defaultExcludeTemplate ?? DEFAULT_STRIP_TEMPLATE,
     });
   }
+
+  // Rule N: Bundled links — match local_file, skip excluded IDs.
+  // Using {{link.rawText}} instead of {{link.text}} preserves inline formatting
+  // the author wrote in the link text (backticks, emphasis, etc.), so a source
+  // link like [`foo.yaml`](…) still reads as [`foo.yaml`](new/path) after rewrite.
+  rules.push({
+    match: {
+      type: 'local_file',
+      ...(excludedIds.length > 0 ? { excludeResourceIds: excludedIds } : {}),
+    },
+    template: '[{{link.rawText}}]({{link.resource.relativePath}}{{link.fragment}})',
+  });
 
   // Final catch-all: remaining local_file links (depth-exceeded, navigation, etc.)
   if (excludedIds.length > 0) {

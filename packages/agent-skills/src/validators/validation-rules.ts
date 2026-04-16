@@ -42,7 +42,9 @@ export type ValidationRuleCode =
   | 'REFERENCE_TOO_DEEP'
   | 'LINKS_TO_NAVIGATION_FILES'
   | 'DESCRIPTION_TOO_VAGUE'
-  | 'NO_PROGRESSIVE_DISCLOSURE';
+  | 'NO_PROGRESSIVE_DISCLOSURE'
+  | 'PACKAGED_UNREFERENCED_FILE'
+  | 'PACKAGED_BROKEN_LINK';
 
 /**
  * Validation rule definition
@@ -182,6 +184,18 @@ export const VALIDATION_RULES: Record<ValidationRuleCode, ValidationRule> = {
     message: (ctx) => `SKILL.md is ${Number(ctx['lines'] ?? 0)} lines with no reference files`,
     fix: 'Move detailed content to reference files (forms.md, reference.md)',
     example: 'Keep SKILL.md under 500 lines, link to detailed content',
+  },
+  PACKAGED_UNREFERENCED_FILE: {
+    code: 'PACKAGED_UNREFERENCED_FILE',
+    category: 'best_practice',
+    message: (ctx) => `Packaged file not referenced from any markdown: ${(ctx['relativePath'] as string) ?? 'unknown'}`,
+    fix: 'Add a markdown link from SKILL.md or a linked resource, or suppress via packagingOptions.ignoreValidationErrors',
+  },
+  PACKAGED_BROKEN_LINK: {
+    code: 'PACKAGED_BROKEN_LINK',
+    category: 'best_practice',
+    message: (ctx) => `Broken link in packaged output: ${(ctx['href'] as string) ?? 'unknown'} (from ${(ctx['mdPath'] as string) ?? 'unknown'})`,
+    fix: 'Indicates a link-rewriting bug — the source link was valid but the packaged link is broken',
   },
 };
 

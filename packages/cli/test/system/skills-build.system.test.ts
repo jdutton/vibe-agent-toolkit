@@ -203,4 +203,49 @@ describe('skills build command (system test)', () => {
 
     expect(result.status).not.toBe(0);
   });
+
+  it('should copy files declared in skills.config.<name>.files to the skill output', () => {
+    // Regression test: the `files` config was parsed by build.ts::mergePackagingConfig
+    // but not passed into SkillBuildSpec.options, so declared files never got copied.
+    // This verifies that files config entries land in the packaged output.
+    const tempDir = suite.createTempDir();
+
+    // Establish project root: findProjectRoot() looks for a package.json with
+    // "workspaces" to identify monorepo roots. Without this, it falls back to the
+    // skill dir and source paths resolve incorrectly.
+    writeTestFile(
+      safePath.join(tempDir, 'package.json'),
+      JSON.stringify({ name: 'files-test-workspace', workspaces: [] }),
+    );
+
+    // Create source files: SKILL.md and an artifact to copy
+    suite.createSkillSource(tempDir, 'resources/skills/SKILL.md', TEST_SKILL_NAME);
+    mkdirSyncReal(safePath.join(tempDir, 'dist', 'bin'), { recursive: true });
+    writeTestFile(safePath.join(tempDir, 'dist', 'bin', 'tool.mjs'), 'console.log("tool");\n');
+
+    // Config with files entry declaring source → dest mapping
+    const configContent = [
+      'version: 1',
+      'skills:',
+      '  include:',
+      '    - "resources/skills/**/SKILL.md"',
+      '  config:',
+      `    ${TEST_SKILL_NAME}:`,
+      '      files:',
+      '        - source: dist/bin/tool.mjs',
+      '          dest: scripts/tool.mjs',
+      '',
+    ].join('\n');
+    writeTestFile(safePath.join(tempDir, VAT_CONFIG_FILENAME), configContent);
+
+    const { result } = suite.runBuildCommand(tempDir);
+
+    expect(result.status).toBe(0);
+
+    // The declared file should exist in the packaged skill output
+    const expectedDest = safePath.join(tempDir, 'dist', 'skills', TEST_SKILL_NAME, 'scripts', 'tool.mjs');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output verification
+    const content = readFileSync(expectedDest, 'utf-8');
+    expect(content).toContain('console.log("tool")');
+  });
 });

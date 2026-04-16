@@ -1,4 +1,5 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
+import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
@@ -19,6 +20,7 @@ const DOCS_GUIDE_MD = 'docs/guide.md';
 const GUIDE_CONTENT = '# Guide\n\nContent.';
 const GUIDE_WITH_REF = '# Guide\n\nSee [reference](./reference.md).';
 const CONFIG_JSON = 'config.json';
+const CONFIG_YAML = 'config.yaml';
 const REFERENCE_MD = 'reference.md';
 
 /**
@@ -477,6 +479,121 @@ describe('skill-packager: link rewriting', () => {
     const copiedContent = await packageAndReadSkillContent(skillPath);
     expect(copiedContent).toContain('[guide-ref]: resources/guide.md');
   });
+
+  it('should rewrite links to non-markdown bundled files (YAML → templates/)', async () => {
+    const tempDir = getTempDir();
+    const skillDir = safePath.join(tempDir, 'yaml-link-skill');
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(safePath.join(skillDir, 'SKILL.md'), [
+      '---',
+      'name: yaml-link-test',
+      'description: Test YAML link rewriting',
+      '---',
+      TEST_SKILL_CONTENT,
+      '',
+      'Load [config](resources/config.yaml) at startup.',
+    ].join('\n'));
+
+    const resourcesDir = safePath.join(skillDir, 'resources');
+    await mkdir(resourcesDir, { recursive: true });
+    await writeFile(safePath.join(resourcesDir, CONFIG_YAML), 'key: value\n');
+
+    const result = await packageSkillForTest(safePath.join(skillDir, 'SKILL.md'), {
+      formats: ['directory'],
+      rewriteLinks: true,
+    });
+
+    // YAML should be routed to templates/
+    const yamlExists = existsSync(safePath.join(result.outputPath, 'templates', CONFIG_YAML));
+    expect(yamlExists).toBe(true);
+
+    // Link should be rewritten to templates/config.yaml, NOT stripped to ()
+    const skillContent = await readFile(safePath.join(result.outputPath, 'SKILL.md'), 'utf-8');
+    expect(skillContent).toContain('[config](templates/config.yaml)');
+    expect(skillContent).not.toContain('()');
+  });
+
+  it('should handle paired markdown and non-markdown files with same stem', async () => {
+    const tempDir = getTempDir();
+    const skillDir = safePath.join(tempDir, 'paired-files-skill');
+    const resourcesDir = safePath.join(skillDir, 'resources');
+    await mkdir(resourcesDir, { recursive: true });
+
+    await writeFile(safePath.join(resourcesDir, CONFIG_YAML), 'key: value\n');
+    await writeFile(safePath.join(resourcesDir, 'config.md'), '# Config Docs\n');
+
+    await writeFile(safePath.join(skillDir, 'SKILL.md'), [
+      '---',
+      'name: paired-files-test',
+      'description: Test paired markdown and non-markdown files',
+      '---',
+      TEST_SKILL_CONTENT,
+      '',
+      'Load [config data](resources/config.yaml) and see [config docs](resources/config.md).',
+    ].join('\n'));
+
+    // Should not throw duplicate-ID error
+    const result = await packageSkillForTest(safePath.join(skillDir, 'SKILL.md'), {
+      formats: ['directory'],
+      rewriteLinks: true,
+    });
+
+    // Both files should be in output (different content-type routing)
+    expect(existsSync(safePath.join(result.outputPath, 'templates', CONFIG_YAML))).toBe(true);
+    expect(existsSync(safePath.join(result.outputPath, 'resources', 'config.md'))).toBe(true);
+
+    // Both links rewritten correctly
+    const skillContent = await readFile(safePath.join(result.outputPath, 'SKILL.md'), 'utf-8');
+    expect(skillContent).toContain('[config data](templates/config.yaml)');
+    expect(skillContent).toContain('[config docs](resources/config.md)');
+  });
+
+  it('should preserve links to already-bundled resources even when depth-exceeded from current file', async () => {
+    const tempDir = getTempDir();
+    const skillDir = safePath.join(tempDir, 'depth-boundary-skill');
+    await mkdir(skillDir, { recursive: true });
+
+    // SKILL.md links to both guide.md and reference.md (both at depth 1)
+    await writeFile(safePath.join(skillDir, 'SKILL.md'), [
+      '---',
+      'name: depth-boundary-test',
+      'description: Test depth boundary link preservation',
+      '---',
+      '# Test Skill',
+      '',
+      'See [Guide](guide.md) and [Reference](reference.md).',
+    ].join('\n'));
+
+    // guide.md links to reference.md (would be depth 2 from guide's perspective)
+    await writeFile(safePath.join(skillDir, 'guide.md'), [
+      '# Guide',
+      '',
+      'Also see [Reference](reference.md) for details.',
+    ].join('\n'));
+
+    await writeFile(safePath.join(skillDir, REFERENCE_MD), [
+      '# Reference',
+      '',
+      'Reference content here.',
+    ].join('\n'));
+
+    const result = await packageSkillForTest(safePath.join(skillDir, 'SKILL.md'), {
+      formats: ['directory'],
+      linkFollowDepth: 1,
+      rewriteLinks: true,
+    });
+
+    // Both files should be bundled
+    expect(existsSync(safePath.join(result.outputPath, 'resources', 'guide.md'))).toBe(true);
+    expect(existsSync(safePath.join(result.outputPath, 'resources', REFERENCE_MD))).toBe(true);
+
+    // guide.md's link to reference.md should be PRESERVED (not stripped)
+    const guideContent = await readFile(
+      safePath.join(result.outputPath, 'resources', 'guide.md'), 'utf-8'
+    );
+    expect(guideContent).toContain('(reference.md)');
+    expect(guideContent).not.toContain('Reference for details.');  // not plain text
+  });
 });
 
 describe('skill-packager: file copying', () => {
@@ -715,6 +832,77 @@ describe('skill-packager: depth-limited packaging', () => {
     expect(skillContent).toContain('[Search: the guide]');
     expect(skillContent).not.toContain('[the guide](');
   });
+
+  it('should preserve inline code formatting in bundled link text after rewriting', async () => {
+    // Authors commonly write `[\`path.yaml\`](path.yaml)` so the rendered HTML
+    // shows the path styled as code. The packaged output must keep the backticks
+    // when the href is rewritten to the new output location.
+    const configYaml = 'config.yaml';
+    const tempDir = getTempDir();
+    const configDir = safePath.join(tempDir, 'config');
+    await mkdir(configDir, { recursive: true });
+    await writeFile(safePath.join(configDir, configYaml), 'setting: value\n');
+
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
+    await writeFile(
+      skillPath,
+      `${createFrontmatter({ name: TEST_SKILL_NAME })}\n\nSee [\`config/${configYaml}\`](./config/${configYaml}).`
+    );
+
+    const result = await packageSkillForTest(skillPath, {
+      formats: ['directory'],
+      rewriteLinks: true,
+    });
+
+    const skillContent = await readFile(safePath.join(result.outputPath, 'SKILL.md'), 'utf-8');
+    // Backticks preserved around the code-styled link text
+    expect(skillContent).toContain(`[\`config/${configYaml}\`](templates/${configYaml})`);
+  });
+
+  it('should apply pattern-based excludes to terminal non-markdown links', async () => {
+    // Terminal links to assets (YAML, JSON, images) are not indexed by the
+    // registry (the registry only crawls markdown). Their pattern-based exclude
+    // must fall back to matching the raw href so the link is rewritten via the
+    // rule template rather than leaking through the bundled-link template with
+    // an undefined `link.resource.*`.
+    const rosterYaml = 'roster.yaml';
+    const tempDir = getTempDir();
+    const dataDir = safePath.join(tempDir, 'data', 'teams');
+    await mkdir(dataDir, { recursive: true });
+    await writeFile(safePath.join(dataDir, rosterYaml), 'members:\n  - alice\n');
+
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
+    await writeFile(
+      skillPath,
+      `${createFrontmatter({ name: TEST_SKILL_NAME })}\n\nSee [the roster](./data/teams/${rosterYaml}).`
+    );
+
+    const result = await packageSkillForTest(skillPath, {
+      formats: ['directory'],
+      rewriteLinks: true,
+      excludeReferencesFromBundle: {
+        rules: [{
+          patterns: ['**/data/**'],
+          template: '{{link.text}} (search KB)',
+        }],
+      },
+    });
+
+    // The YAML must NOT be bundled (pattern excluded it)
+    const yamlOutput = safePath.join(result.outputPath, 'templates', rosterYaml);
+    expect(existsSync(yamlOutput)).toBe(false);
+
+    // The terminal link must be rewritten via the pattern's template, not left
+    // as a broken relative path and not collapsed to `[text]()` by the bundled
+    // rule's template.
+    const skillContent = await readFile(safePath.join(result.outputPath, 'SKILL.md'), 'utf-8');
+    expect(skillContent).toContain('the roster (search KB)');
+    expect(skillContent).not.toContain('[the roster](');
+    expect(skillContent).not.toContain(rosterYaml);
+
+    // No post-build integrity issues should surface.
+    expect(result.postBuildIssues ?? []).toEqual([]);
+  });
 });
 
 describe('skill-packager: integration', () => {
@@ -765,5 +953,91 @@ describe('skill-packager: integration', () => {
     // Verify artifacts
     expect(result.artifacts).toBeDefined();
     expect(result.artifacts?.directory).toBe(result.outputPath);
+  });
+});
+
+const ORPHAN_DEST = 'resources/orphan.txt';
+
+/**
+ * Set up a temp project with a package.json so findProjectRoot() anchors correctly,
+ * then create a skill and an orphan asset. Returns the skill path and output path.
+ */
+async function setupUnreferencedFixture(
+  rootDir: string,
+  skillName: string,
+): Promise<{ skillPath: string; outputPath: string }> {
+  await writeFile(
+    safePath.join(rootDir, 'package.json'),
+    JSON.stringify({ name: 'unref-fixture', workspaces: ['skills/*'] }),
+  );
+  const skillDir = safePath.join(rootDir, 'skills', skillName);
+  await mkdir(skillDir, { recursive: true });
+  await mkdir(safePath.join(rootDir, 'extra'), { recursive: true });
+
+  const skillPath = safePath.join(skillDir, 'SKILL.md');
+  await writeFile(skillPath, [
+    '---',
+    `name: ${skillName}`,
+    'description: Test unreferenced file detection',
+    '---',
+    TEST_SKILL_CONTENT,
+    '',
+    'This skill has no links.',
+  ].join('\n'));
+
+  await writeFile(safePath.join(rootDir, 'extra', 'orphan.txt'), 'orphan content\n');
+
+  return {
+    skillPath,
+    outputPath: safePath.join(rootDir, 'out', skillName),
+  };
+}
+
+describe('skill-packager: post-build integrity', () => {
+  it('should report PACKAGED_UNREFERENCED_FILE for files not referenced from markdown', async () => {
+    const tempDir = getTempDir();
+    const rootDir = safePath.join(tempDir, 'unreferenced-root');
+    await mkdir(rootDir, { recursive: true });
+    const { skillPath, outputPath } = await setupUnreferencedFixture(rootDir, 'unreferenced-test');
+
+    const result = await packageSkill(skillPath, {
+      outputPath,
+      formats: ['directory'],
+      rewriteLinks: true,
+      files: [{ source: 'extra/orphan.txt', dest: ORPHAN_DEST }],
+    });
+
+    // File should exist in output
+    expect(existsSync(safePath.join(result.outputPath, ORPHAN_DEST))).toBe(true);
+
+    // Result should include the unreferenced-file issue
+    expect(result.postBuildIssues).toBeDefined();
+    expect(result.postBuildIssues?.some(i =>
+      i.code === 'PACKAGED_UNREFERENCED_FILE' && i.message.includes('orphan.txt')
+    )).toBe(true);
+
+    // Also assert no broken-link issues — guards against fixture drift
+    expect(result.postBuildIssues?.filter(i => i.code === 'PACKAGED_BROKEN_LINK')).toHaveLength(0);
+  });
+
+  it('should suppress PACKAGED_UNREFERENCED_FILE when ignoreValidationErrors is set', async () => {
+    const tempDir = getTempDir();
+    const rootDir = safePath.join(tempDir, 'unreferenced-suppressed-root');
+    await mkdir(rootDir, { recursive: true });
+    const { skillPath, outputPath } = await setupUnreferencedFixture(rootDir, 'unreferenced-suppressed-test');
+
+    const result = await packageSkill(skillPath, {
+      outputPath,
+      formats: ['directory'],
+      rewriteLinks: true,
+      files: [{ source: 'extra/orphan.txt', dest: ORPHAN_DEST }],
+      ignoreValidationErrors: { PACKAGED_UNREFERENCED_FILE: 'orphan.txt is intentionally unreferenced for this test' },
+    });
+
+    // File should still exist in output (suppression doesn't prevent packaging)
+    expect(existsSync(safePath.join(result.outputPath, ORPHAN_DEST))).toBe(true);
+
+    // No active issues should be reported (suppression took effect)
+    expect(result.postBuildIssues ?? []).toHaveLength(0);
   });
 });

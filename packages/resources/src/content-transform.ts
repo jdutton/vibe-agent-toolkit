@@ -75,7 +75,7 @@ export interface ResourceLookup {
  *
  * A rule matches a link when ALL specified criteria are satisfied:
  * - `type`: Link type matches (if specified)
- * - `pattern`: Target resource's filePath matches a glob pattern (if specified)
+ * - `pattern`: Target file path matches a glob pattern (if specified)
  * - `excludeResourceIds`: Target resource's ID is NOT in the exclusion list
  */
 export interface LinkRewriteMatch {
@@ -86,9 +86,15 @@ export interface LinkRewriteMatch {
   type?: LinkType | LinkType[];
 
   /**
-   * Glob pattern(s) to match against the target resource's filePath.
-   * If omitted, matches any path. Requires the link to have a resolvedId
-   * so the target resource can be looked up.
+   * Glob pattern(s) to match against the target file path.
+   *
+   * For resolved links (target resource found in the registry), patterns match
+   * against `resource.filePath`. For unresolved links (e.g., terminal links to
+   * non-markdown files not indexed by the registry), patterns fall back to
+   * matching against the link's raw href. This allows exclude rules to apply
+   * to assets like YAML, JSON, or images that markdown files reference.
+   *
+   * If omitted, matches any path.
    * Can be a single glob string or an array of glob strings.
    */
   pattern?: string | string[];
@@ -177,6 +183,8 @@ export interface ContentTransformOptions {
  * @param resource - The resolved target resource (if available)
  * @param extraContext - Additional context variables
  * @param sourceFilePath - Absolute path of the source document (for relativePath computation)
+ * @param rawText - Raw markdown text between the `[` and `]` (with inline formatting preserved).
+ *   When omitted, `link.rawText` falls back to `link.text`.
  * @returns Template context object
  */
 function buildTemplateContext(
@@ -186,6 +194,7 @@ function buildTemplateContext(
   resource: ResourceMetadata | undefined,
   extraContext: Record<string, unknown> | undefined,
   sourceFilePath: string | undefined,
+  rawText: string | undefined,
 ): Record<string, unknown> {
   const resourceContext = resource === undefined
     ? undefined
@@ -207,6 +216,7 @@ function buildTemplateContext(
     ...extraContext,
     link: {
       text: link.text,
+      rawText: rawText ?? link.text,
       href: hrefWithoutFragment,
       fragment,
       type: link.type,
@@ -233,13 +243,19 @@ function matchesType(linkType: LinkType, matchType: LinkType | LinkType[] | unde
 }
 
 /**
- * Check if a link's target resource matches the rule's pattern criteria.
+ * Check if a link's target file path matches the rule's pattern criteria.
  *
+ * Uses `resource.filePath` when the link is resolved. Falls back to the link's
+ * href (anchor stripped) for unresolved links so rules can target terminal
+ * assets — YAML, JSON, images — that the registry does not index.
+ *
+ * @param link - The link being tested
  * @param resource - The target resource (if resolved)
  * @param patterns - The pattern(s) to match against (or undefined = match all)
  * @returns True if the pattern matches or no pattern is specified
  */
 function matchesPattern(
+  link: ResourceLink,
   resource: ResourceMetadata | undefined,
   patterns: string | string[] | undefined,
 ): boolean {
@@ -247,13 +263,19 @@ function matchesPattern(
     return true;
   }
 
-  // Pattern matching requires a resolved resource
+  let pathToMatch: string;
   if (resource === undefined) {
-    return false;
+    const [hrefWithoutAnchor] = splitHrefAnchor(link.href);
+    if (hrefWithoutAnchor === '') {
+      return false;
+    }
+    pathToMatch = hrefWithoutAnchor;
+  } else {
+    pathToMatch = resource.filePath;
   }
 
   const patternArray = Array.isArray(patterns) ? patterns : [patterns];
-  return patternArray.some((pattern) => matchesGlobPattern(resource.filePath, pattern));
+  return patternArray.some((pattern) => matchesGlobPattern(pathToMatch, pattern));
 }
 
 /**
@@ -296,7 +318,7 @@ function findMatchingRule(
       continue;
     }
 
-    if (!matchesPattern(resource, match.pattern)) {
+    if (!matchesPattern(link, resource, match.pattern)) {
       continue;
     }
 
@@ -387,25 +409,27 @@ export function transformContent(
 
   // === Pass 1: Inline links [text](href) ===
 
-  // Build a lookup map from "[text](href)" to the corresponding ResourceLink.
-  // Multiple links can share the same text+href combination; we process them all
-  // with the first matching ResourceLink (they are identical in terms of match criteria).
-  const linkBySignature = new Map<string, ResourceLink>();
+  // Build a lookup map keyed by href → ResourceLink. We intentionally key by href
+  // rather than "[text](href)" because the regex below captures the RAW markdown
+  // text (including backticks, emphasis markers, etc.), while `link.text` is
+  // already rendered (formatting stripped). Keying by text causes a signature
+  // mismatch for any formatted link text; keying by href avoids that class of
+  // bug entirely. When multiple inline links share an href, the first wins —
+  // their match criteria (type, resolvedId) are identical for lookup purposes.
+  const linkByHref = new Map<string, ResourceLink>();
   for (const link of links) {
     if (link.nodeType === 'definition') {
       continue; // Definitions are handled in pass 2
     }
-    const signature = `[${link.text}](${link.href})`;
-    if (!linkBySignature.has(signature)) {
-      linkBySignature.set(signature, link);
+    if (!linkByHref.has(link.href)) {
+      linkByHref.set(link.href, link);
     }
   }
 
   // Replace inline markdown links in content
-  let result = content.replaceAll(MARKDOWN_LINK_REGEX, (fullMatch, text: string, href: string) => {
-    // Find the corresponding ResourceLink
-    const signature = `[${text}](${href})`;
-    const link = linkBySignature.get(signature);
+  let result = content.replaceAll(MARKDOWN_LINK_REGEX, (fullMatch, rawText: string, href: string) => {
+    // Find the corresponding ResourceLink by href
+    const link = linkByHref.get(href);
 
     if (!link) {
       // Link not in the parsed links array - leave untouched
@@ -431,8 +455,10 @@ export function transformContent(
     const [hrefWithoutFragment, anchor] = splitHrefAnchor(href);
     const fragment = anchor === undefined ? '' : `#${anchor}`;
 
-    // Build template context and render
-    const templateContext = buildTemplateContext(link, hrefWithoutFragment, fragment, resource, context, sourceFilePath);
+    // Build template context and render. rawText preserves any inline
+    // formatting the author wrote (backticks, bold, italics) so templates
+    // targeting bundled links can render the link with original styling.
+    const templateContext = buildTemplateContext(link, hrefWithoutFragment, fragment, resource, context, sourceFilePath, rawText);
     return renderTemplate(template, templateContext);
   });
 

@@ -143,6 +143,23 @@ function displayExpiredOverrides(
 }
 
 /**
+ * Log post-build integrity issues (non-blocking) so users see them.
+ *
+ * These are best-practice checks run after packaging — the build itself succeeded.
+ * We surface them at info level so they show up without failing the build.
+ */
+function logPostBuildIssues(
+  result: PackageSkillResult,
+  logger: ReturnType<typeof createLogger>,
+): void {
+  if (!result.postBuildIssues || result.postBuildIssues.length === 0) return;
+  logger.info(`   ${result.postBuildIssues.length} post-build issue(s) (non-blocking):`);
+  for (const issue of result.postBuildIssues) {
+    logger.info(`     [${String(issue.code)}] ${String(issue.message)}`);
+  }
+}
+
+/**
  * Display ignored errors for context
  */
 function displayIgnoredErrors(
@@ -389,6 +406,8 @@ async function buildCommand(
         ...(packagingConfig.stripPrefix && { stripPrefix: packagingConfig.stripPrefix }),
         ...(packagingConfig.linkFollowDepth !== undefined && { linkFollowDepth: packagingConfig.linkFollowDepth }),
         ...(packagingConfig.excludeReferencesFromBundle && { excludeReferencesFromBundle: packagingConfig.excludeReferencesFromBundle }),
+        ...(packagingConfig.ignoreValidationErrors && { ignoreValidationErrors: packagingConfig.ignoreValidationErrors }),
+        ...(packagingConfig.files && { files: packagingConfig.files }),
       },
     }));
 
@@ -399,6 +418,7 @@ async function buildCommand(
       const result = packageResults[i];
       if (result) {
         logger.info(`   Built ${result.files.dependencies.length + 1} files`);
+        logPostBuildIssues(result, logger);
         results.push({ name: spec.skill.name, result });
       }
     }
