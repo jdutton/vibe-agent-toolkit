@@ -183,6 +183,8 @@ export interface ContentTransformOptions {
  * @param resource - The resolved target resource (if available)
  * @param extraContext - Additional context variables
  * @param sourceFilePath - Absolute path of the source document (for relativePath computation)
+ * @param rawText - Raw markdown text between the `[` and `]` (with inline formatting preserved).
+ *   When omitted, `link.rawText` falls back to `link.text`.
  * @returns Template context object
  */
 function buildTemplateContext(
@@ -192,6 +194,7 @@ function buildTemplateContext(
   resource: ResourceMetadata | undefined,
   extraContext: Record<string, unknown> | undefined,
   sourceFilePath: string | undefined,
+  rawText: string | undefined,
 ): Record<string, unknown> {
   const resourceContext = resource === undefined
     ? undefined
@@ -213,6 +216,7 @@ function buildTemplateContext(
     ...extraContext,
     link: {
       text: link.text,
+      rawText: rawText ?? link.text,
       href: hrefWithoutFragment,
       fragment,
       type: link.type,
@@ -423,7 +427,7 @@ export function transformContent(
   }
 
   // Replace inline markdown links in content
-  let result = content.replaceAll(MARKDOWN_LINK_REGEX, (fullMatch, _text: string, href: string) => {
+  let result = content.replaceAll(MARKDOWN_LINK_REGEX, (fullMatch, rawText: string, href: string) => {
     // Find the corresponding ResourceLink by href
     const link = linkByHref.get(href);
 
@@ -451,8 +455,10 @@ export function transformContent(
     const [hrefWithoutFragment, anchor] = splitHrefAnchor(href);
     const fragment = anchor === undefined ? '' : `#${anchor}`;
 
-    // Build template context and render
-    const templateContext = buildTemplateContext(link, hrefWithoutFragment, fragment, resource, context, sourceFilePath);
+    // Build template context and render. rawText preserves any inline
+    // formatting the author wrote (backticks, bold, italics) so templates
+    // targeting bundled links can render the link with original styling.
+    const templateContext = buildTemplateContext(link, hrefWithoutFragment, fragment, resource, context, sourceFilePath, rawText);
     return renderTemplate(template, templateContext);
   });
 

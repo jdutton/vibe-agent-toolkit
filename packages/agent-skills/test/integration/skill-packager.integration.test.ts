@@ -833,6 +833,32 @@ describe('skill-packager: depth-limited packaging', () => {
     expect(skillContent).not.toContain('[the guide](');
   });
 
+  it('should preserve inline code formatting in bundled link text after rewriting', async () => {
+    // Authors commonly write `[\`path.yaml\`](path.yaml)` so the rendered HTML
+    // shows the path styled as code. The packaged output must keep the backticks
+    // when the href is rewritten to the new output location.
+    const configYaml = 'config.yaml';
+    const tempDir = getTempDir();
+    const configDir = safePath.join(tempDir, 'config');
+    await mkdir(configDir, { recursive: true });
+    await writeFile(safePath.join(configDir, configYaml), 'setting: value\n');
+
+    const skillPath = safePath.join(tempDir, 'SKILL.md');
+    await writeFile(
+      skillPath,
+      `${createFrontmatter({ name: TEST_SKILL_NAME })}\n\nSee [\`config/${configYaml}\`](./config/${configYaml}).`
+    );
+
+    const result = await packageSkillForTest(skillPath, {
+      formats: ['directory'],
+      rewriteLinks: true,
+    });
+
+    const skillContent = await readFile(safePath.join(result.outputPath, 'SKILL.md'), 'utf-8');
+    // Backticks preserved around the code-styled link text
+    expect(skillContent).toContain(`[\`config/${configYaml}\`](templates/${configYaml})`);
+  });
+
   it('should apply pattern-based excludes to terminal non-markdown links', async () => {
     // Terminal links to assets (YAML, JSON, images) are not indexed by the
     // registry (the registry only crawls markdown). Their pattern-based exclude

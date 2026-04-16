@@ -35,6 +35,11 @@ const REWRITE_LINK_TEMPLATE = '[{{link.text}}]({{link.resource.relativePath}})';
 const SOURCE_FILE_PATH = '/project/src/index.md';
 const GUIDE_RELATIVE_FROM_SRC = '../docs/guide.md';
 
+// Common content/template constants for rawText + formatted-text tests
+const CODE_LINK_CONTENT = 'See [`guide.md`](./guide.md).';
+const EMPHASIS_LINK_CONTENT = 'See [**Guide**](./guide.md) and [_details_](./details.md).';
+const PASSTHROUGH_LINK_TEMPLATE = '[{{link.rawText}}]({{link.href}})';
+
 // ============================================================================
 // Test helpers
 // ============================================================================
@@ -258,6 +263,77 @@ describe('transformContent', () => {
       });
 
       expect(result).toBe('See REWRITTEN:./guide.md and REWRITTEN:./details.md.');
+    });
+
+    it('should expose raw (formatted) link text via link.rawText for inline code', () => {
+      // Authors often write `[`path.yaml`](path.yaml)` to render the path as
+      // inline code. The bundled-link rewrite must preserve the backticks so
+      // the packaged output still renders as a code-styled link.
+      const links: ResourceLink[] = [
+        createTestLink({ text: 'guide.md', href: GUIDE_HREF }),
+      ];
+
+      const result = transformContent(CODE_LINK_CONTENT, links, {
+        linkRewriteRules: [createTypeRule(LOCAL_FILE, PASSTHROUGH_LINK_TEMPLATE)],
+      });
+
+      expect(result).toBe(CODE_LINK_CONTENT);
+    });
+
+    it('should expose raw text with emphasis formatting via link.rawText', () => {
+      const links: ResourceLink[] = [
+        createTestLink({ text: 'Guide', href: GUIDE_HREF }),
+        createTestLink({ text: 'details', href: './details.md' }),
+      ];
+
+      const result = transformContent(EMPHASIS_LINK_CONTENT, links, {
+        linkRewriteRules: [createTypeRule(LOCAL_FILE, PASSTHROUGH_LINK_TEMPLATE)],
+      });
+
+      expect(result).toBe(EMPHASIS_LINK_CONTENT);
+    });
+
+    it('should expose link.rawText equal to link.text for plain links', () => {
+      const content = 'See [Guide](./guide.md).';
+      const links: ResourceLink[] = [
+        createTestLink({ text: GUIDE_TEXT, href: GUIDE_HREF }),
+      ];
+
+      const result = transformContent(content, links, {
+        // Render both fields and confirm they're the same for a plain link
+        linkRewriteRules: [createTypeRule(LOCAL_FILE, '{{link.text}}|{{link.rawText}}')],
+      });
+
+      expect(result).toBe('See Guide|Guide.');
+    });
+
+    it('should keep link.text stripped of formatting (backward compat)', () => {
+      // Users with existing templates referencing {{link.text}} must continue
+      // to receive plain (rendered) text, not raw markdown.
+      const links: ResourceLink[] = [
+        createTestLink({ text: 'guide.md', href: GUIDE_HREF }),
+      ];
+
+      const result = transformContent(CODE_LINK_CONTENT, links, {
+        linkRewriteRules: [createTypeRule(LOCAL_FILE, 'Search KB for {{link.text}}')],
+      });
+
+      expect(result).toBe('See Search KB for guide.md.');
+    });
+
+    it('should preserve raw text when the link is nested inside outer formatting', () => {
+      // The inline regex matches the inner [text](href); outer formatting
+      // surrounds it in the content but is irrelevant to link capture.
+      const content = 'Bold link: **[`foo.yaml`](./foo.yaml)**.';
+      const links: ResourceLink[] = [
+        createTestLink({ text: 'foo.yaml', href: './foo.yaml' }),
+      ];
+
+      const result = transformContent(content, links, {
+        linkRewriteRules: [createTypeRule(LOCAL_FILE, PASSTHROUGH_LINK_TEMPLATE)],
+      });
+
+      expect(result).toBe(content);
     });
   });
 

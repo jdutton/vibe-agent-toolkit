@@ -774,13 +774,16 @@ function buildRewriteRules(
     });
   }
 
-  // Rule N: Bundled links — match local_file, skip excluded IDs
+  // Rule N: Bundled links — match local_file, skip excluded IDs.
+  // Using {{link.rawText}} instead of {{link.text}} preserves inline formatting
+  // the author wrote in the link text (backticks, emphasis, etc.), so a source
+  // link like [`foo.yaml`](…) still reads as [`foo.yaml`](new/path) after rewrite.
   rules.push({
     match: {
       type: 'local_file',
       ...(excludedIds.length > 0 ? { excludeResourceIds: excludedIds } : {}),
     },
-    template: '[{{link.text}}]({{link.resource.relativePath}}{{link.fragment}})',
+    template: '[{{link.rawText}}]({{link.resource.relativePath}}{{link.fragment}})',
   });
 
   // Final catch-all: remaining local_file links (depth-exceeded, navigation, etc.)
