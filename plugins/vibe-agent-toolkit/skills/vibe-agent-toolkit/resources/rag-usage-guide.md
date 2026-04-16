@@ -767,4 +767,4 @@ vat agent run doc-assistant "What's our code review process?"
 ---
 
 **See Also**:
-- [RAG Architecture](../architecture/rag.md)
+- [RAG Architecture]()

@@ -839,8 +839,8 @@ interface BreedAdvisorMetadata {
 
 ## Related Documentation
 
-- [Agent Authoring Guide](./agent-authoring.md) - How to create agents with result envelopes
-- [Architecture Overview](./architecture/README.md) - Package structure and design principles
+- [Agent Authoring Guide](agent-authoring.md) - How to create agents with result envelopes
+- [Architecture Overview]() - Package structure and design principles
 
 ## Examples
 
