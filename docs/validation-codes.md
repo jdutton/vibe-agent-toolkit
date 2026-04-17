@@ -1,5 +1,7 @@
 # VAT Validation Codes
 
+For the project's *stance* on what each category of code exists to enforce — the reasoning behind every default severity and the confidence level we attach to each — see [Skill Quality and Compatibility — VAT's Stance](./skill-quality-and-compatibility.md). That doc articulates what VAT believes; this doc is the code-level reference.
+
 This reference lists every overridable validation code VAT emits, plus the two meta-codes. Use it to interpret CLI output, configure `validation.severity` / `validation.allow`, and understand default behavior.
 
 ## Severity Model
@@ -43,6 +45,8 @@ skills:
 | `vat audit` | Display grouping only | ✗ | No (always exit 0) |
 
 ## Source-Detectable Link Codes
+
+*Stance: see [Structure](./skill-quality-and-compatibility.md#structure).*
 
 Static-analysis codes that fire anywhere markdown is analyzed — `vat resources validate`, `vat skills validate`, `vat skills build`, `vat audit`.
 
@@ -90,6 +94,8 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 
 ## Packaging-Only Codes
 
+*Stance: see [Packaging](./skill-quality-and-compatibility.md#packaging).*
+
 Only meaningful when actually bundling a skill; fire from `vat skills build` (and its pre-flight in `vat skills validate`).
 
 ### `LINK_DROPPED_BY_DEPTH`
@@ -114,6 +120,8 @@ Only meaningful when actually bundling a skill; fire from `vat skills build` (an
 - **Fix:** Report the issue — this indicates a VAT bug. As a temporary workaround, set `severity.PACKAGED_BROKEN_LINK` to `ignore` while the underlying bug is fixed.
 
 ## Quality Codes
+
+*Stance: see [Length and Shape](./skill-quality-and-compatibility.md#length-and-shape) and [Authoring](./skill-quality-and-compatibility.md#authoring).*
 
 Best-practice checks about skill shape and content.
 
@@ -161,6 +169,8 @@ Best-practice checks about skill shape and content.
 
 ## Compat Codes
 
+*Stance: see [Compatibility](./skill-quality-and-compatibility.md#compatibility).*
+
 Per-skill compatibility **smells** — patterns that signal a skill depends on a surface capability (browser, local shell, external CLI) that not every Claude runtime provides. Default severity is `warning`: these are advisory, not blocking, so adopters can surface them without breaking builds.
 
 Compat smells are declarations more than suppressions. When a skill genuinely needs a capability, the right posture is usually to `validation.allow` the code with a `reason` that documents the intent. The smell's job is to make that requirement visible, not to grade the skill.
@@ -192,6 +202,8 @@ Scope in v1: detectors run against SKILL.md and its transitively linked markdown
 - **When to allow:** The skill is intentionally a thin wrapper over a CLI and documents the dependency. Allow with a reason naming the CLI and the surface requirement.
 
 ## Meta Codes
+
+*Stance: see [Configuration Meta](./skill-quality-and-compatibility.md#configuration-meta).*
 
 Describe the state of the validation config itself.
 
