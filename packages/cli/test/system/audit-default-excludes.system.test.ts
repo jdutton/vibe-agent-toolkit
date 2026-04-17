@@ -5,6 +5,7 @@
  * .claude/worktrees/ by default. The --include-artifacts flag opts back in.
  */
 
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
@@ -26,6 +27,16 @@ function buildProject(parentDir: string, rootName: string): string {
   const rootDir = safePath.join(parentDir, rootName);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled test path
   fs.mkdirSync(rootDir, { recursive: true });
+
+  // Initialize a git repo so gitignore-aware scanning works
+  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git is required for gitignore tests
+  spawnSync('git', ['init'], { cwd: rootDir, stdio: 'pipe' });
+
+  // Create .gitignore to mark artifact directories
+  writeTestFile(
+    safePath.join(rootDir, '.gitignore'),
+    'dist/\nnode_modules/\n.claude/worktrees/\n'
+  );
 
   const skillBody = `---
 name: hello-skill

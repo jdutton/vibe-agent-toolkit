@@ -30,34 +30,26 @@ vat audit [path] [options]
 - `-r, --recursive` - Scan directories recursively for all resource types
 - `--debug` - Enable debug logging (outputs to stderr)
 
-### Default artifact excludes
+### Gitignore-aware scanning
 
-By default, `vat audit` skips three directory patterns that almost always
-contain duplicate or unresolvable artifacts:
+When scanning inside a git repository, `vat audit` skips paths that match
+the project's `.gitignore` rules. This automatically excludes build
+artifacts (`dist/`), dependencies (`node_modules/`), and any other
+project-specific ignored directories without maintaining a hardcoded list.
 
-- `**/node_modules/**` — bundled dependencies, including nested skills that
-  belong to other packages.
-- `**/dist/**` — TypeScript/JavaScript build output, which typically contains
-  packaged copies of skills also present in source.
-- `**/.claude/worktrees/**` — Claude Code worktree directories, which shadow
-  the active working tree.
+To opt back into scanning gitignored paths (for example, to audit a
+bundled marketplace plugin in `dist/`), use `--include-artifacts`.
 
-Scanning these directories is almost never what the user wants — it surfaces
-noise from artifacts the adopter didn't author. To opt back in (for example,
-to audit a specific bundled marketplace plugin), use `--include-artifacts`.
-
-User-supplied `--exclude` patterns are **additive** — they extend the defaults.
-Using `--include-artifacts` removes the defaults entirely; any `--exclude`
-patterns you pass alongside `--include-artifacts` are the only exclusions that
-apply.
+User-supplied `--exclude` patterns are always applied on top of gitignore
+filtering. Outside a git repository, no automatic exclusions apply.
 
 Examples:
 
-    vat audit .                              # Defaults apply; source only
+    vat audit .                              # Gitignored paths skipped
     vat audit --include-artifacts .          # Scan everything
-    vat audit --exclude "custom/**" .        # Defaults + "custom/**"
+    vat audit --exclude "vendor/**" .        # Gitignore + extra exclusion
     vat audit --include-artifacts --exclude "**/node_modules/**" .
-                                             # Override defaults, then re-exclude node_modules
+                                             # Override gitignore, re-exclude node_modules
 
 ## Supported Resource Types
 

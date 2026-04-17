@@ -21,7 +21,7 @@ import {
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { gitCheckIgnoredBatch, gitFindRoot, isGitIgnored, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import picomatch from 'picomatch';
 
@@ -32,25 +32,6 @@ import { writeYamlOutput } from '../utils/output.js';
 
 import { buildHierarchicalOutput } from './audit/hierarchical-output.js';
 import { createAuditSettingsCommand } from './audit-settings.js';
-
-/**
- * Directories excluded from `vat audit` scans by default.
- *
- * These paths typically contain build artifacts, bundled dependencies, and
- * git-worktree snapshots — scanning them produces duplicate and/or broken
- * results that are almost never what the user wants. The `--include-artifacts`
- * flag opts back in for deliberate artifact audits (e.g., verifying a bundled
- * marketplace plugin).
- *
- * Glob syntax: picomatch with `**` spanning any number of segments.
- * Comment: keep this list tight. Add new entries only when an adopter surfaces
- * a concrete noise case that `--exclude` can't address ergonomically.
- */
-const DEFAULT_EXCLUDES: readonly string[] = [
-  '**/node_modules/**',
-  '**/dist/**',
-  '**/.claude/worktrees/**',
-];
 
 export interface AuditCommandOptions {
   compat?: boolean;
@@ -83,7 +64,7 @@ export function createAuditCommand(): Command {
     .argument('[path]', 'Path to audit (default: current directory)')
     .option('--no-recursive', 'Disable recursive directory scanning (scans top level only)')
     .option('--exclude <glob>', 'Exclude paths matching glob pattern (repeatable)', collect, [])
-    .option('--include-artifacts', 'Include build artifact directories (node_modules/, dist/, .claude/worktrees/) that are excluded by default')
+    .option('--include-artifacts', 'Include gitignored paths (build artifacts, dependencies) that are excluded by default')
     .option('--user', 'Audit user-level Claude resources (default: $CLAUDE_CONFIG_DIR or ~/.claude — scans plugins/, skills/, marketplaces/)')
     .option('--verbose', 'Show all scanned resources, including those without issues')
     .option('--warn-unreferenced-files', 'Warn about files not referenced in skill markdown')
@@ -155,15 +136,17 @@ Validation Checks:
     COMPAT_REQUIRES_EXTERNAL_CLI). See docs/validation-codes.md.
   - Unreferenced files detected (with --warn-unreferenced-files)
 
-Default Excludes:
-  These directories are skipped by default; use --include-artifacts to
-  opt back in, or --exclude to add more:
-    - **/node_modules/**
-    - **/dist/**
-    - **/.claude/worktrees/**
+Gitignore-Aware Scanning:
+  When scanning inside a git repository, paths matched by .gitignore are
+  skipped by default. This excludes build artifacts (dist/), dependencies
+  (node_modules/), and any other project-specific ignored paths without
+  requiring a hardcoded list.
 
-  User-supplied --exclude patterns ADD to the defaults. --include-artifacts
-  removes the defaults entirely (user excludes still apply).
+  Use --include-artifacts to scan gitignored paths (e.g., to audit a
+  bundled marketplace plugin in dist/).
+
+  User-supplied --exclude patterns are always applied on top.
+  Outside a git repository, no automatic exclusions apply.
 
 Exit Codes:
   0 - Always (even when validation errors are surfaced)
@@ -174,8 +157,8 @@ Examples:
   $ vat audit --user                  # Audit default ~/.claude (or $CLAUDE_CONFIG_DIR)
   $ CLAUDE_CONFIG_DIR=~/.claude-work vat audit --user   # Scan a custom Claude config dir
   $ vat audit --no-recursive ./dir/   # Top level only, no subdirectories
-  $ vat audit --include-artifacts ./repo/   # Opt back into artifact dirs
-  $ vat audit --exclude "custom-build/**" ./repo/   # Add to default excludes
+  $ vat audit --include-artifacts ./repo/   # Include gitignored paths
+  $ vat audit --exclude "vendor/**" ./repo/   # Add extra exclusions
   $ vat audit --compat ./plugin/      # Include per-surface compatibility analysis
 `
     );
@@ -697,7 +680,8 @@ async function handleDirectoryEntry(
   recursive: boolean,
   options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>,
-  baseDir: string
+  baseDir: string,
+  gitRoot?: string | null
 ): Promise<ValidationResult[]> {
   const fs = await import('node:fs/promises');
   const results: ValidationResult[] = [];
@@ -714,11 +698,80 @@ async function handleDirectoryEntry(
 
   // Recurse into subdirectories (both plugin/marketplace dirs and regular dirs)
   if (recursive) {
-    const subResults = await scanDirectory(fullPath, recursive, options, logger, baseDir);
+    const subResults = await scanDirectory(fullPath, recursive, options, logger, baseDir, gitRoot);
     results.push(...subResults);
   }
 
   return results;
+}
+
+/**
+ * Resolve the effective git root for gitignore-aware scanning.
+ *
+ * On the first call (gitRoot is undefined), detects the git root from dirPath.
+ * If the scan root itself is gitignored (e.g., user explicitly targeted dist/),
+ * returns null to disable gitignore filtering — the user's explicit intent to
+ * scan that path takes precedence over .gitignore rules.
+ *
+ * On recursive calls, the already-resolved value is passed through unchanged.
+ */
+function resolveGitRootForScan(dirPath: string, gitRoot: string | null | undefined): string | null {
+  if (gitRoot === undefined) {
+    const detectedRoot = gitFindRoot(dirPath);
+    if (detectedRoot !== null && isGitIgnored(dirPath, detectedRoot)) {
+      return null;
+    }
+    return detectedRoot;
+  }
+  return gitRoot;
+}
+
+/**
+ * Build the gitignore exclusion map for a set of entry paths.
+ * Returns null when gitignore filtering is not applicable (no git root,
+ * --include-artifacts, or outside a git repo).
+ */
+function buildGitIgnoreMap(
+  entryPaths: string[],
+  gitRoot: string | null,
+  includeArtifacts: boolean
+): Map<string, boolean> | null {
+  if (gitRoot === null || includeArtifacts) {
+    return null;
+  }
+  return gitCheckIgnoredBatch(entryPaths, gitRoot);
+}
+
+/**
+ * Check whether a directory entry should be skipped during scanning.
+ * Returns a reason string for debug logging, or null if the entry should be kept.
+ */
+function getSkipReason(
+  entry: { name: string; isDirectory: () => boolean },
+  fullPath: string,
+  resolvedBaseDir: string,
+  gitIgnoredMap: Map<string, boolean> | null,
+  isMatch: ReturnType<typeof picomatch> | null
+): string | null {
+  // Always skip .git directory (not reported by git check-ignore)
+  if (entry.isDirectory() && entry.name === '.git') {
+    return '.git';
+  }
+
+  // Skip gitignored paths
+  if (gitIgnoredMap !== null && gitIgnoredMap.get(fullPath) === true) {
+    return `gitignored: ${entry.name}`;
+  }
+
+  // Check user-supplied --exclude patterns
+  if (isMatch !== null) {
+    const relativePath = safePath.relative(resolvedBaseDir, fullPath).replaceAll('\\', '/');
+    if (isExcludedPath(isMatch, relativePath, entry.isDirectory())) {
+      return `excluded: ${relativePath}`;
+    }
+  }
+
+  return null;
 }
 
 async function scanDirectory(
@@ -726,31 +779,31 @@ async function scanDirectory(
   recursive: boolean,
   options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>,
-  baseDir?: string
+  baseDir?: string,
+  gitRoot?: string | null
 ): Promise<ValidationResult[]> {
   const fs = await import('node:fs/promises');
   const results: ValidationResult[] = [];
   const userExcludes = options.exclude ?? [];
-  const excludePatterns = options.includeArtifacts
-    ? userExcludes
-    : [...DEFAULT_EXCLUDES, ...userExcludes];
   const resolvedBaseDir = baseDir ?? dirPath;
+  const resolvedGitRoot = resolveGitRootForScan(dirPath, gitRoot);
 
-  // Compile picomatch once per scanDirectory call (not inside the loop)
-  const isMatch = excludePatterns.length > 0 ? picomatch(excludePatterns) : null;
+  // Compile picomatch for user-supplied --exclude patterns
+  const isMatch = userExcludes.length > 0 ? picomatch(userExcludes) : null;
 
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
+
+  // Build full paths and batch-check gitignore status
+  const entryPaths = entries.map(e => safePath.join(dirPath, e.name));
+  const gitIgnoredMap = buildGitIgnoreMap(entryPaths, resolvedGitRoot, options.includeArtifacts ?? false);
 
   for (const entry of entries) {
     const fullPath = safePath.join(dirPath, entry.name);
 
-    // Check exclude patterns against path relative to the base scan directory
-    if (isMatch !== null) {
-      const relativePath = safePath.relative(resolvedBaseDir, fullPath).replaceAll('\\', '/');
-      if (isExcludedPath(isMatch, relativePath, entry.isDirectory())) {
-        logger.debug(`Excluding path: ${relativePath}`);
-        continue;
-      }
+    const skipReason = getSkipReason(entry, fullPath, resolvedBaseDir, gitIgnoredMap, isMatch);
+    if (skipReason !== null) {
+      logger.debug(`Excluding path: ${skipReason}`);
+      continue;
     }
 
     if (entry.isFile()) {
@@ -759,7 +812,7 @@ async function scanDirectory(
         results.push(result);
       }
     } else if (entry.isDirectory()) {
-      const dirResults = await handleDirectoryEntry(fullPath, recursive, options, logger, resolvedBaseDir);
+      const dirResults = await handleDirectoryEntry(fullPath, recursive, options, logger, resolvedBaseDir, resolvedGitRoot);
       results.push(...dirResults);
     }
   }
