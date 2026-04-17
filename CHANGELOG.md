@@ -7,11 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.31] - 2026-04-17
+
 ### Added
 - **v1 compat smells.** Three new `COMPAT_*` codes — `COMPAT_REQUIRES_BROWSER_AUTH`, `COMPAT_REQUIRES_LOCAL_SHELL`, `COMPAT_REQUIRES_EXTERNAL_CLI` — detect per-skill runtime capabilities (browser auth, local shell, external CLI) via static analysis of SKILL.md and its transitively linked markdown. Default severity `warning`; configure per-skill via `validation.severity` / `validation.allow` like any other framework code. Full rationale and when-to-allow guidance in `docs/validation-codes.md`.
 - **`vat audit --user` now documents `CLAUDE_CONFIG_DIR`.** Help text and `packages/cli/docs/audit.md` name the env var, mark `~/.claude` as the default rather than unconditional, and document a shell-loop pattern for multi-directory workflows. No code change — `CLAUDE_CONFIG_DIR` has always been honored in `packages/claude-marketplace/src/paths/claude-paths.ts` — but the UX gap closes.
+- `vat audit`: gitignore-aware scanning. When scanning inside a git repository, paths matched by `.gitignore` are skipped by default — no hardcoded directory list needed. `--include-artifacts` opts back in. When the user explicitly targets a gitignored path (e.g., `vat audit dist/skills/`), filtering is disabled for that subtree.
+- `vat audit`: config-aware validation in VAT projects. When `vibe-agent-toolkit.config.yaml` is found at the scan root, audit uses the project's build settings (`linkFollowDepth`, `files`, `excludeReferencesFromBundle`) to validate skills — eliminating false `LINK_OUTSIDE_PROJECT` warnings for links the build pipeline resolves. Audit never applies `validation.allow` (always shows all issues).
+- `docs/skill-quality-and-compatibility.md`: new project stance doc articulating what VAT believes makes a skill good and compatible. Linked from the `authoring` skill and cross-referenced from `docs/validation-codes.md`.
 
 ### Changed
+- `vat audit` now skips gitignored paths by default. Before this change, running `vat audit` in a TypeScript project scanned every SKILL.md in `node_modules/`, `dist/`, and other artifact directories (often hundreds of duplicate files). The new behavior uses the project's `.gitignore` rules, which adapts to each project's layout automatically. Use `--include-artifacts` to opt back in for deliberate artifact audits.
+
 - **`SKILL_CONSOLE_INCOMPATIBLE` retired.** The Bash/Edit/Write/NotebookEdit tool-mention warning is replaced by the new `COMPAT_REQUIRES_LOCAL_SHELL`, giving adopters a single canonical detector with configurable severity and per-path allow entries.
 
 ### Removed
