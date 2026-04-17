@@ -2,34 +2,57 @@ import { describe, expect, it } from 'vitest';
 
 import { detectBrowserAuth, detectExternalCLI, detectLocalShell, runCompatDetectors } from '../../src/validators/compat-detectors.js';
 
+/** Build a minimal SKILL.md content string from frontmatter fields and a body. */
+function skill(opts: {
+  name?: string;
+  description?: string;
+  extraFrontmatter?: string;
+  body: string;
+}): string {
+  const lines = ['---', `name: ${opts.name ?? 'x'}`, `description: ${opts.description ?? 'y'}`];
+  if (opts.extraFrontmatter !== undefined) {
+    lines.push(opts.extraFrontmatter);
+  }
+  lines.push('---', '', opts.body);
+  return lines.join('\n');
+}
+
+/** Wrap a command in a fenced bash code block. */
+function bashBlock(command: string): string {
+  return `\`\`\`bash\n${command}\n\`\`\`\n`;
+}
+
+/** Wrap code in a fenced code block with the given language. */
+function codeBlock(lang: string, code: string): string {
+  return `\`\`\`${lang}\n${code}\n\`\`\`\n`;
+}
+
+const SHELL_CODE = 'COMPAT_REQUIRES_LOCAL_SHELL';
+const CLI_CODE = 'COMPAT_REQUIRES_EXTERNAL_CLI';
+const AUTH_CODE = 'COMPAT_REQUIRES_BROWSER_AUTH';
+
+/** Check if any issue has the given code. */
+function hasCode(issues: Array<{ code: string }>, code: string): boolean {
+  return issues.some(i => i.code === code);
+}
+
 describe('runCompatDetectors', () => {
   it('returns an empty array for portable content with no compat signals', () => {
-    const content = [
-      '---',
-      'name: portable-skill',
-      'description: A skill that does not touch shells, browsers, or external CLIs.',
-      '---',
-      '',
-      '# Portable skill',
-      '',
-      "Call the Anthropic API with 'node' or the bundled SDK.",
-    ].join('\n');
-    const issues = runCompatDetectors(content, 'SKILL.md');
-    expect(issues).toHaveLength(0);
+    const content = skill({
+      name: 'portable-skill',
+      description: 'A skill that does not touch shells, browsers, or external CLIs.',
+      body: "# Portable skill\n\nCall the Anthropic API with 'node' or the bundled SDK.",
+    });
+    expect(runCompatDetectors(content, 'SKILL.md')).toHaveLength(0);
   });
 
   it('attaches stable ValidationIssue shape with reference anchor', () => {
-    // Minimal fixture that triggers COMPAT_REQUIRES_LOCAL_SHELL via allowed-tools;
-    // detection itself is covered in per-code tests (Task 4).
-    const content = [
-      '---',
-      'name: shell-skill',
-      'description: Requires the Bash tool.',
-      'allowed-tools: [Bash]',
-      '---',
-      '',
-      '# Content',
-    ].join('\n');
+    const content = skill({
+      name: 'shell-skill',
+      description: 'Requires the Bash tool.',
+      extraFrontmatter: 'allowed-tools: [Bash]',
+      body: '# Content',
+    });
     const issues = runCompatDetectors(content, 'SKILL.md');
     expect(issues.length).toBeGreaterThan(0);
     for (const issue of issues) {
@@ -44,108 +67,52 @@ describe('runCompatDetectors', () => {
 });
 
 describe('detectLocalShell', () => {
-  const DESC_Y = 'description: y';
-
   it('fires when allowed-tools frontmatter lists Bash', () => {
-    const content = [
-      '---',
-      'name: uses-bash',
-      'description: Uses Bash.',
-      'allowed-tools: [Bash, Read]',
-      '---',
-      '',
-      'Body.',
-    ].join('\n');
-    const issues = detectLocalShell(content, 'SKILL.md');
-    expect(issues.some(i => i.code === 'COMPAT_REQUIRES_LOCAL_SHELL')).toBe(true);
+    const content = skill({
+      name: 'uses-bash',
+      description: 'Uses Bash.',
+      extraFrontmatter: 'allowed-tools: [Bash, Read]',
+      body: 'Body.',
+    });
+    expect(hasCode(detectLocalShell(content, 'SKILL.md'), SHELL_CODE)).toBe(true);
   });
 
   it.each(['Edit', 'Write', 'NotebookEdit'])('fires when allowed-tools frontmatter lists %s', (tool) => {
-    const content = [
-      '---',
-      `name: uses-${tool.toLowerCase()}`,
-      'description: description',
-      `allowed-tools: [${tool}]`,
-      '---',
-      'Body.',
-    ].join('\n');
-    const issues = detectLocalShell(content, 'SKILL.md');
-    expect(issues.some(i => i.code === 'COMPAT_REQUIRES_LOCAL_SHELL'), `expected fire for ${tool}`).toBe(true);
+    const content = skill({
+      name: `uses-${tool.toLowerCase()}`,
+      extraFrontmatter: `allowed-tools: [${tool}]`,
+      body: 'Body.',
+    });
+    expect(hasCode(detectLocalShell(content, 'SKILL.md'), SHELL_CODE), `expected fire for ${tool}`).toBe(true);
   });
 
   it('fires when prose references the Bash tool by name', () => {
-    const content = [
-      '---',
-      'name: x',
-      DESC_Y,
-      '---',
-      '',
-      'Use the Bash tool to run `ls`.',
-    ].join('\n');
-    const issues = detectLocalShell(content, 'SKILL.md');
-    expect(issues.some(i => i.code === 'COMPAT_REQUIRES_LOCAL_SHELL')).toBe(true);
+    const content = skill({ body: 'Use the Bash tool to run `ls`.' });
+    expect(hasCode(detectLocalShell(content, 'SKILL.md'), SHELL_CODE)).toBe(true);
   });
 
   it('fires on direct bash/sh invocations in fenced shell code blocks', () => {
-    const content = [
-      '---',
-      'name: x',
-      DESC_Y,
-      '---',
-      '',
-      'Run this:',
-      '',
-      '```bash',
-      'echo hello',
-      '```',
-      '',
-    ].join('\n');
-    const issues = detectLocalShell(content, 'SKILL.md');
-    expect(issues.some(i => i.code === 'COMPAT_REQUIRES_LOCAL_SHELL')).toBe(true);
+    const content = skill({ body: `Run this:\n\n${bashBlock('echo hello')}` });
+    expect(hasCode(detectLocalShell(content, 'SKILL.md'), SHELL_CODE)).toBe(true);
   });
 
   it('does not fire for node-only or python-only content', () => {
-    const content = [
-      '---',
-      'name: x',
-      DESC_Y,
-      '---',
-      '',
-      '```javascript',
-      "console.log('hi');",
-      '```',
-      '',
-      'Read files using the Read tool.',
-    ].join('\n');
-    const issues = detectLocalShell(content, 'SKILL.md');
-    expect(issues).toHaveLength(0);
+    const content = skill({
+      body: `${codeBlock('javascript', "console.log('hi');")}\nRead files using the Read tool.`,
+    });
+    expect(detectLocalShell(content, 'SKILL.md')).toHaveLength(0);
   });
 
   it('deduplicates: multiple signals produce one issue per (code, location)', () => {
-    const content = [
-      '---',
-      'name: x',
-      DESC_Y,
-      'allowed-tools: [Bash]',
-      '---',
-      '',
-      'Use the Bash tool.',
-      '',
-      '```bash',
-      'ls',
-      '```',
-      '',
-    ].join('\n');
-    const issues = detectLocalShell(content, 'SKILL.md');
-    expect(issues.filter(i => i.code === 'COMPAT_REQUIRES_LOCAL_SHELL')).toHaveLength(1);
+    const content = skill({
+      extraFrontmatter: 'allowed-tools: [Bash]',
+      body: `Use the Bash tool.\n\n${bashBlock('ls')}`,
+    });
+    expect(detectLocalShell(content, 'SKILL.md').filter(i => i.code === SHELL_CODE)).toHaveLength(1);
   });
 });
 
 describe('detectExternalCLI', () => {
-  const DESC_PROSE = 'description: prose-only';
-  const DESC_BUNDLED = 'description: bundled-only';
-  const DESC_MULTI_AZ = 'description: multi-az';
-
   it.each([
     ['az', 'az account show'],
     ['aws', 'aws s3 ls'],
@@ -156,105 +123,37 @@ describe('detectExternalCLI', () => {
     ['gh', 'gh pr create'],
     ['op', 'op item list'],
   ])('fires for %s invocation in a shell code block', (binary, command) => {
-    const content = [
-      '---',
-      'name: x',
-      `description: uses ${binary}`,
-      '---',
-      '',
-      '```bash',
-      command,
-      '```',
-      '',
-    ].join('\n');
-    const issues = detectExternalCLI(content, 'SKILL.md');
-    expect(issues.some(i => i.code === 'COMPAT_REQUIRES_EXTERNAL_CLI'), `expected fire for ${binary}`).toBe(true);
+    const content = skill({ description: `uses ${binary}`, body: bashBlock(command) });
+    expect(hasCode(detectExternalCLI(content, 'SKILL.md'), CLI_CODE), `expected fire for ${binary}`).toBe(true);
   });
 
   it('does not fire on references inside prose (no shell context)', () => {
-    const content = [
-      '---',
-      'name: x',
-      DESC_PROSE,
-      '---',
-      '',
-      "See the Azure docs for the 'az' command syntax.",
-    ].join('\n');
-    const issues = detectExternalCLI(content, 'SKILL.md');
-    expect(issues).toHaveLength(0);
+    const content = skill({ body: "See the Azure docs for the 'az' command syntax." });
+    expect(detectExternalCLI(content, 'SKILL.md')).toHaveLength(0);
   });
 
   it('does not fire on bundled binaries like node/npx', () => {
-    const content = [
-      '---',
-      'name: x',
-      DESC_BUNDLED,
-      '---',
-      '',
-      '```bash',
-      'node scripts/do-thing.mjs',
-      'npx tsc',
-      '```',
-      '',
-    ].join('\n');
-    const issues = detectExternalCLI(content, 'SKILL.md');
-    expect(issues).toHaveLength(0);
+    const content = skill({ body: bashBlock('node scripts/do-thing.mjs\nnpx tsc') });
+    expect(detectExternalCLI(content, 'SKILL.md')).toHaveLength(0);
   });
 
   it('deduplicates multiple invocations of the same binary', () => {
-    const content = [
-      '---',
-      'name: x',
-      DESC_MULTI_AZ,
-      '---',
-      '',
-      '```bash',
-      'az login',
-      'az account show',
-      'az vm list',
-      '```',
-      '',
-    ].join('\n');
-    const issues = detectExternalCLI(content, 'SKILL.md');
-    expect(issues.filter(i => i.code === 'COMPAT_REQUIRES_EXTERNAL_CLI')).toHaveLength(1);
+    const content = skill({ body: bashBlock('az login\naz account show\naz vm list') });
+    expect(detectExternalCLI(content, 'SKILL.md').filter(i => i.code === CLI_CODE)).toHaveLength(1);
   });
 });
 
 describe('detectBrowserAuth', () => {
-  const NAME_X = 'name: x';
-  const DESC_MSAL_PY = 'description: msal-python';
-  const DESC_MSAL_JS = 'description: msal-js';
-  const DESC_WEBBROWSER = 'description: webbrowser-open';
-  const DESC_SERVICE_PRINCIPAL = 'description: service-principal';
-
   it('fires on MSAL usage (Python msal import)', () => {
-    const content = [
-      '---',
-      NAME_X,
-      DESC_MSAL_PY,
-      '---',
-      '',
-      '```python',
-      'from msal import PublicClientApplication',
-      '```',
-      '',
-    ].join('\n');
-    expect(detectBrowserAuth(content, 'SKILL.md').some(i => i.code === 'COMPAT_REQUIRES_BROWSER_AUTH')).toBe(true);
+    const content = skill({ body: codeBlock('python', 'from msal import PublicClientApplication') });
+    expect(hasCode(detectBrowserAuth(content, 'SKILL.md'), AUTH_CODE)).toBe(true);
   });
 
   it('fires on JS @azure/msal-* imports', () => {
-    const content = [
-      '---',
-      NAME_X,
-      DESC_MSAL_JS,
-      '---',
-      '',
-      '```javascript',
-      "import { PublicClientApplication } from '@azure/msal-node';",
-      '```',
-      '',
-    ].join('\n');
-    expect(detectBrowserAuth(content, 'SKILL.md').some(i => i.code === 'COMPAT_REQUIRES_BROWSER_AUTH')).toBe(true);
+    const content = skill({
+      body: codeBlock('javascript', "import { PublicClientApplication } from '@azure/msal-node';"),
+    });
+    expect(hasCode(detectBrowserAuth(content, 'SKILL.md'), AUTH_CODE)).toBe(true);
   });
 
   it.each([
@@ -262,45 +161,19 @@ describe('detectBrowserAuth', () => {
     ['gcloud auth login', 'gcloud auth login'],
     ['aws sso login', 'aws sso login'],
   ])('fires on %s in a shell code block', (_name, cmd) => {
-    const content = [
-      '---',
-      NAME_X,
-      `description: uses ${_name}`,
-      '---',
-      '',
-      '```bash',
-      cmd,
-      '```',
-      '',
-    ].join('\n');
-    expect(detectBrowserAuth(content, 'SKILL.md').some(i => i.code === 'COMPAT_REQUIRES_BROWSER_AUTH')).toBe(true);
+    const content = skill({ description: `uses ${_name}`, body: bashBlock(cmd) });
+    expect(hasCode(detectBrowserAuth(content, 'SKILL.md'), AUTH_CODE)).toBe(true);
   });
 
   it('fires on webbrowser.open() calls', () => {
-    const content = [
-      '---',
-      NAME_X,
-      DESC_WEBBROWSER,
-      '---',
-      '',
-      '```python',
-      'import webbrowser',
-      "webbrowser.open('https://login.example.com/oauth')",
-      '```',
-      '',
-    ].join('\n');
-    expect(detectBrowserAuth(content, 'SKILL.md').some(i => i.code === 'COMPAT_REQUIRES_BROWSER_AUTH')).toBe(true);
+    const content = skill({
+      body: codeBlock('python', "import webbrowser\nwebbrowser.open('https://login.example.com/oauth')"),
+    });
+    expect(hasCode(detectBrowserAuth(content, 'SKILL.md'), AUTH_CODE)).toBe(true);
   });
 
   it('does not fire on unrelated OAuth prose or token-based flows', () => {
-    const content = [
-      '---',
-      NAME_X,
-      DESC_SERVICE_PRINCIPAL,
-      '---',
-      '',
-      'Use the bearer token from `AZURE_CLIENT_SECRET` for service-principal auth.',
-    ].join('\n');
+    const content = skill({ body: 'Use the bearer token from `AZURE_CLIENT_SECRET` for service-principal auth.' });
     expect(detectBrowserAuth(content, 'SKILL.md')).toHaveLength(0);
   });
 });
