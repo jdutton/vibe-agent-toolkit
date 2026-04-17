@@ -386,6 +386,8 @@ const output2 = await agent.execute({
 
 ## References
 
+- Skill Quality and Compatibility — VAT's Stance — what VAT believes makes a skill good and compatible, and how those beliefs turn into validation codes. Read this before overriding severity defaults or adding allow entries.
+- Validation Codes Reference — full list of codes VAT emits, their default severity, and override recipes.
 - [Skill Quality Checklist](resources/skill-quality-checklist.md) — Pre-publication checklist for all skills (general + CLI-backed)
 - agent-authoring.md — Complete patterns guide
 - orchestration.md — Multi-agent workflows
