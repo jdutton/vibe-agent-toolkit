@@ -1,3 +1,6 @@
+import * as fs from 'node:fs';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { validateSkill } from '../src/validators/skill-validator.js';
@@ -146,8 +149,8 @@ describe('warning-level validations', () => {
       ),
     );
 
-    expectWarning(result, 'SKILL_CONSOLE_INCOMPATIBLE');
-    expect(result.issues.some((i) => i.code === 'SKILL_CONSOLE_INCOMPATIBLE')).toBe(true);
+    expectWarning(result, 'COMPAT_REQUIRES_LOCAL_SHELL');
+    expect(result.issues.some((i) => i.code === 'COMPAT_REQUIRES_LOCAL_SHELL')).toBe(true);
   });
 
   it('should not warn for console-compatible skills', async () => {
@@ -159,7 +162,7 @@ describe('warning-level validations', () => {
       ),
     );
 
-    const issue = result.issues.find((i) => i.code === 'SKILL_CONSOLE_INCOMPATIBLE');
+    const issue = result.issues.find((i) => i.code === 'COMPAT_REQUIRES_LOCAL_SHELL');
     expect(issue).toBeUndefined();
   });
 
@@ -173,5 +176,94 @@ describe('warning-level validations', () => {
     expect(result.status).toBe('warning');
     expect(result.summary).toContain('0 errors');
     expect(result.summary).toContain('1 warning');
+  });
+});
+
+describe('compat detectors in validateSkill', () => {
+  const { getTempDir } = setupTempDir('skill-validator-compat-test-');
+
+  it('emits COMPAT_REQUIRES_LOCAL_SHELL when SKILL.md lists Bash in allowed-tools', async () => {
+    const result = await createSkillAndValidate(
+      getTempDir(),
+      [
+        '---',
+        'name: uses-bash',
+        'description: This skill needs a local shell for az-cli orchestration.',
+        'allowed-tools: [Bash]',
+        '---',
+        '',
+        'Use the Bash tool.',
+        '',
+      ].join('\n'),
+    );
+    expect(result.issues.some(i => i.code === 'COMPAT_REQUIRES_LOCAL_SHELL')).toBe(true);
+  });
+
+  it('emits COMPAT_REQUIRES_BROWSER_AUTH when a linked md references MSAL', async () => {
+    const tmp = getTempDir();
+    const skillPath = safePath.join(tmp, 'SKILL.md');
+    const authPath = safePath.join(tmp, 'auth.md');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test uses controlled temp dir
+    fs.writeFileSync(
+      skillPath,
+      [
+        '---',
+        'name: msal-skill',
+        'description: Authenticates via Microsoft MSAL browser login for Azure AD users.',
+        '---',
+        '',
+        'See [auth flow](./auth.md).',
+      ].join('\n'),
+    );
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test uses controlled temp dir
+    fs.writeFileSync(
+      authPath,
+      [
+        '# Auth',
+        '',
+        '```python',
+        'from msal import PublicClientApplication',
+        '```',
+        '',
+      ].join('\n'),
+    );
+    const result = await validateSkill({ skillPath });
+    expect(result.issues.some(i => i.code === 'COMPAT_REQUIRES_BROWSER_AUTH')).toBe(true);
+  });
+
+  it('attaches compat issues to per-file linkedFiles entry for linked md', async () => {
+    const tmp = getTempDir();
+    const skillPath = safePath.join(tmp, 'SKILL.md');
+    const cliPath = safePath.join(tmp, 'cli.md');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test uses controlled temp dir
+    fs.writeFileSync(
+      skillPath,
+      [
+        '---',
+        'name: uses-cli',
+        'description: Wraps an external CLI tool via an include.',
+        '---',
+        '',
+        'See [cli usage](./cli.md).',
+      ].join('\n'),
+    );
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test uses controlled temp dir
+    fs.writeFileSync(
+      cliPath,
+      [
+        '# CLI',
+        '',
+        '```bash',
+        'az account show',
+        '```',
+        '',
+      ].join('\n'),
+    );
+    const result = await validateSkill({ skillPath });
+    const linked = result.linkedFiles?.find(lf => lf.path.endsWith('cli.md'));
+    expect(linked).toBeDefined();
+    expect(linked?.issues.some(i => i.code === 'COMPAT_REQUIRES_EXTERNAL_CLI')).toBe(true);
+    // And the top-level issues array also has it
+    expect(result.issues.some(i => i.code === 'COMPAT_REQUIRES_EXTERNAL_CLI')).toBe(true);
   });
 });

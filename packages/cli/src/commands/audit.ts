@@ -9,7 +9,12 @@ import {
   detectResourceFormat,
   validate,
   validateSkill,
+  runCompatDetectors,
+  validateSkillForPackaging,
+  type PackagingValidationResult,
+  type SkillPackagingConfig,
   type ValidateOptions,
+  type ValidationIssue,
   type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
 import {
@@ -21,7 +26,7 @@ import {
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { gitCheckIgnoredBatch, gitFindRoot, isGitIgnored, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import picomatch from 'picomatch';
 
@@ -32,16 +37,174 @@ import { writeYamlOutput } from '../utils/output.js';
 
 import { buildHierarchicalOutput } from './audit/hierarchical-output.js';
 import { createAuditSettingsCommand } from './audit-settings.js';
+import { discoverSkillsFromConfig } from './skills/skill-discovery.js';
 
 export interface AuditCommandOptions {
   compat?: boolean;
   debug?: boolean;
   exclude?: string[];
+  includeArtifacts?: boolean;
   recursive?: boolean; // Commander sets this to false when --no-recursive is used
   settings?: string | boolean; // true = auto-discover, string = explicit path
   user?: boolean;
   verbose?: boolean; // Commander sets this for --verbose
   warnUnreferencedFiles?: boolean; // Commander sets this for --warn-unreferenced-files
+}
+
+/** Resource type constant for agent skills, avoiding duplicate string literals. */
+const RESOURCE_TYPE_AGENT_SKILL: ValidationResult['type'] = 'agent-skill';
+
+/** Config-aware context for VAT project scanning. Built once per audit, passed through recursion. */
+interface VATProjectContext {
+  /** Map of absolute SKILL.md path → merged SkillPackagingConfig (without validation.allow) */
+  skillConfigs: Map<string, SkillPackagingConfig>;
+}
+
+/**
+ * Merge per-skill config for audit: keeps all packaging options but strips
+ * validation.allow (audit shows everything). Preserves validation.severity.
+ *
+ * Strips undefined values from the spread to satisfy exactOptionalPropertyTypes.
+ */
+function mergeSkillConfigForAudit(
+  defaults: Record<string, unknown> | undefined,
+  perSkillOverrides: Record<string, unknown> | undefined
+): SkillPackagingConfig {
+  const merged = { ...defaults, ...perSkillOverrides };
+  const packagingConfig: SkillPackagingConfig = {};
+
+  for (const [key, value] of Object.entries(merged)) {
+    if (value !== undefined && key !== 'validation') {
+      (packagingConfig as Record<string, unknown>)[key] = value;
+    }
+  }
+
+  // Keep validation.severity but strip validation.allow
+  const mergedValidation = merged['validation'] as { severity?: unknown; allow?: unknown } | undefined;
+  if (mergedValidation?.severity !== undefined) {
+    (packagingConfig as Record<string, unknown>)['validation'] = { severity: mergedValidation.severity };
+  }
+
+  return packagingConfig;
+}
+
+/**
+ * Build config-aware context when auditing inside a VAT project.
+ * Checks for vibe-agent-toolkit.config.yaml at the scan root only (no
+ * directory walking). Returns null if no config or no skills section found.
+ */
+async function buildVATProjectContext(
+  scanRoot: string,
+  logger: ReturnType<typeof createLogger>
+): Promise<VATProjectContext | null> {
+  const config = loadConfig(scanRoot);
+  if (config?.skills === undefined) {
+    return null;
+  }
+  const configRoot = scanRoot;
+
+  try {
+    const discovered = await discoverSkillsFromConfig(config.skills, configRoot);
+    if (discovered.length === 0) {
+      return null;
+    }
+
+    const { defaults, config: perSkillConfig } = config.skills;
+    const skillConfigs = new Map<string, SkillPackagingConfig>();
+
+    for (const skill of discovered) {
+      const packagingConfig = mergeSkillConfigForAudit(
+        defaults as Record<string, unknown> | undefined,
+        perSkillConfig?.[skill.name] as Record<string, unknown> | undefined,
+      );
+      skillConfigs.set(safePath.resolve(skill.sourcePath), packagingConfig);
+    }
+
+    logger.debug(`Config-aware audit: found ${skillConfigs.size} skill(s) in VAT project`);
+    return { skillConfigs };
+  } catch (error) {
+    logger.debug(`Config-aware audit: failed to discover skills: ${String(error)}`);
+    return null;
+  }
+}
+
+/**
+ * Convert PackagingValidationResult to ValidationResult for consistent audit output.
+ * In audit mode, we merge allErrors (which includes both errors and warnings after
+ * severity resolution but WITHOUT allow suppression) into the standard issues array.
+ */
+function packagingResultToValidationResult(
+  skillPath: string,
+  result: PackagingValidationResult,
+  extraIssues?: ValidationIssue[]
+): ValidationResult {
+  // allErrors contains all emitted issues (errors + warnings) after severity resolution
+  // but without allow suppression — exactly what audit wants.
+  // extraIssues (e.g., compat detectors) are merged in since the packaging validator
+  // doesn't run them.
+  const issues = extraIssues !== undefined && extraIssues.length > 0
+    ? [...result.allErrors, ...extraIssues]
+    : result.allErrors;
+  const errorCount = issues.filter(i => i.severity === 'error').length;
+  const warningCount = issues.filter(i => i.severity === 'warning').length;
+  const infoCount = issues.filter(i => i.severity === 'info').length;
+
+  let status: ValidationResult['status'];
+  if (errorCount > 0) {
+    status = 'error';
+  } else if (warningCount > 0) {
+    status = 'warning';
+  } else {
+    status = 'success';
+  }
+
+  return {
+    path: skillPath,
+    type: RESOURCE_TYPE_AGENT_SKILL,
+    status,
+    summary: `${errorCount} errors, ${warningCount} warnings, ${infoCount} info`,
+    issues,
+    metadata: {
+      lineCount: result.metadata.skillLines,
+      name: result.skillName,
+    },
+  };
+}
+
+/**
+ * Validate a single SKILL.md file, using config-aware validation if available.
+ * Used for direct SKILL.md and vat-agent paths passed to `vat audit`.
+ */
+async function validateSingleSkill(
+  skillPath: string,
+  options: AuditCommandOptions,
+  logger: ReturnType<typeof createLogger>,
+  isVATGenerated?: boolean
+): Promise<ValidationResult> {
+  // Try config-aware validation: find git root → check for config at git root
+  const gitRoot = resolveGitRootForScan(safePath.resolve(skillPath), undefined);
+  if (gitRoot !== null) {
+    const vatContext = await buildVATProjectContext(gitRoot, logger);
+    const skillConfig = vatContext?.skillConfigs.get(safePath.resolve(skillPath));
+    if (skillConfig !== undefined) {
+      logger.debug(`  Using config-aware validation for: ${skillPath}`);
+      const packagingResult = await validateSkillForPackaging(skillPath, skillConfig);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillPath is validated user input
+      const skillContent = fs.readFileSync(skillPath, 'utf-8');
+      const compatIssues = runCompatDetectors(skillContent, skillPath);
+      return packagingResultToValidationResult(skillPath, packagingResult, compatIssues);
+    }
+  }
+
+  // Fallback: basic validation
+  const validateOptions: ValidateOptions = { skillPath };
+  if (options.warnUnreferencedFiles) {
+    validateOptions.checkUnreferencedFiles = true;
+  }
+  if (isVATGenerated === true) {
+    validateOptions.isVATGenerated = true;
+  }
+  return validateSkill(validateOptions);
 }
 
 /**
@@ -63,7 +226,8 @@ export function createAuditCommand(): Command {
     .argument('[path]', 'Path to audit (default: current directory)')
     .option('--no-recursive', 'Disable recursive directory scanning (scans top level only)')
     .option('--exclude <glob>', 'Exclude paths matching glob pattern (repeatable)', collect, [])
-    .option('--user', 'Audit user-level Claude resources (~/.claude/plugins, ~/.claude/skills, ~/.claude/marketplaces)')
+    .option('--include-artifacts', 'Include gitignored paths (build artifacts, dependencies) that are excluded by default')
+    .option('--user', 'Audit user-level Claude resources (default: $CLAUDE_CONFIG_DIR or ~/.claude — scans plugins/, skills/, marketplaces/)')
     .option('--verbose', 'Show all scanned resources, including those without issues')
     .option('--warn-unreferenced-files', 'Warn about files not referenced in skill markdown')
     .option('--compat', 'Run compatibility analysis for each plugin (shows claude-code, cowork, claude-desktop support)')
@@ -91,15 +255,19 @@ Description:
   Default: current directory
   Use --user to audit user-level installation automatically
 
-  --user scans:
-  - ~/.claude/plugins (installed plugins)
-  - ~/.claude/skills (standalone skills)
-  - ~/.claude/marketplaces (marketplace plugins)
+  --user scope:
+  - By default, scans $CLAUDE_CONFIG_DIR if set, otherwise ~/.claude.
+  - Inside the chosen directory, scans:
+    - plugins/ (installed plugins)
+    - skills/ (standalone skills)
+    - marketplaces/ (marketplace plugins)
+  - Skips: projects/, logs/, cache/
 
-  --user skips:
-  - ~/.claude/projects (project-specific files)
-  - ~/.claude/logs (log files)
-  - ~/.claude/cache (cached data)
+  Multi-dir workflows:
+    for dir in ~/.claude ~/.claude-personal; do
+      CLAUDE_CONFIG_DIR="$dir" vat audit --user --verbose
+    done
+  (See packages/cli/docs/audit.md for details.)
 
 Validation Behavior:
   Advisory only: audit surfaces all validation issues for inspection.
@@ -125,8 +293,31 @@ Validation Checks:
 
   Warnings (should fix):
   - Skill exceeds recommended length (>5000 lines)
-  - References console-incompatible tools (Skills only)
+  - Compat smells — requires browser auth, local shell, or external CLI
+    (COMPAT_REQUIRES_BROWSER_AUTH, COMPAT_REQUIRES_LOCAL_SHELL,
+    COMPAT_REQUIRES_EXTERNAL_CLI). See docs/validation-codes.md.
   - Unreferenced files detected (with --warn-unreferenced-files)
+
+Gitignore-Aware Scanning:
+  When scanning inside a git repository, paths matched by .gitignore are
+  skipped by default. This excludes build artifacts (dist/), dependencies
+  (node_modules/), and any other project-specific ignored paths without
+  requiring a hardcoded list.
+
+  Use --include-artifacts to scan gitignored paths (e.g., to audit a
+  bundled marketplace plugin in dist/).
+
+  User-supplied --exclude patterns are always applied on top.
+  Outside a git repository, no automatic exclusions apply.
+
+Config-Aware Validation:
+  When a vibe-agent-toolkit.config.yaml is found at the git root, audit
+  uses the project's build settings (linkFollowDepth, files,
+  excludeReferencesFromBundle) to validate skills. This prevents false
+  warnings for links that the build pipeline resolves.
+
+  Config-aware mode never applies validation.allow — audit always shows
+  all issues. validation.severity is respected for display grouping.
 
 Exit Codes:
   0 - Always (even when validation errors are surfaced)
@@ -134,9 +325,11 @@ Exit Codes:
 
 Examples:
   $ vat audit ./plugins/              # Audit recursively (default)
-  $ vat audit --user                  # Audit user-level installation (~/.claude/)
+  $ vat audit --user                  # Audit default ~/.claude (or $CLAUDE_CONFIG_DIR)
+  $ CLAUDE_CONFIG_DIR=~/.claude-work vat audit --user   # Scan a custom Claude config dir
   $ vat audit --no-recursive ./dir/   # Top level only, no subdirectories
-  $ vat audit --exclude "dist/**" --exclude "node_modules/**"  # Filter noise
+  $ vat audit --include-artifacts ./repo/   # Include gitignored paths
+  $ vat audit --exclude "vendor/**" ./repo/   # Add extra exclusions
   $ vat audit --compat ./plugin/      # Include per-surface compatibility analysis
 `
     );
@@ -219,7 +412,7 @@ async function auditUserDirectories(
  * @returns New results array with ignored codes removed from issues
  */
 /** Skill resource types that can have per-skill validation config. */
-const SKILL_RESULT_TYPES: ReadonlySet<ValidationResult['type']> = new Set(['agent-skill', 'vat-agent']);
+const SKILL_RESULT_TYPES: ReadonlySet<ValidationResult['type']> = new Set([RESOURCE_TYPE_AGENT_SKILL, 'vat-agent']);
 
 /**
  * Derive the project root directory for config loading.
@@ -387,26 +580,16 @@ export async function getValidationResults(
   const format = detectFormat(scanPath);
 
   // Special handling for direct SKILL.md file
-  if (format === 'agent-skill') {
+  if (format === RESOURCE_TYPE_AGENT_SKILL) {
     logger.debug('Detected single Agent Skill');
-    const validateOptions: ValidateOptions = { skillPath: scanPath };
-    if (options.warnUnreferencedFiles) {
-      validateOptions.checkUnreferencedFiles = true;
-    }
-    const result = await validateSkill(validateOptions);
-    return [result];
+    return [await validateSingleSkill(scanPath, options, logger)];
   }
 
   // Special handling for VAT agent: validate its SKILL.md
   if (format === 'vat-agent') {
     const skillPath = safePath.join(scanPath, 'SKILL.md');
     logger.debug('Detected VAT agent, validating SKILL.md');
-    const validateOptions: ValidateOptions = { skillPath, isVATGenerated: true };
-    if (options.warnUnreferencedFiles) {
-      validateOptions.checkUnreferencedFiles = true;
-    }
-    const result = await validateSkill(validateOptions);
-    return [result];
+    return [await validateSingleSkill(skillPath, options, logger, true)];
   }
 
   // For plugin/marketplace directories or registry files, use unified validator
@@ -629,7 +812,8 @@ async function handleFileEntry(
   entry: { name: string },
   fullPath: string,
   options: AuditCommandOptions,
-  logger: ReturnType<typeof createLogger>
+  logger: ReturnType<typeof createLogger>,
+  vatContext: VATProjectContext | null
 ): Promise<ValidationResult | null> {
   // Check for registry files
   if (entry.name === 'installed_plugins.json' || entry.name === 'known_marketplaces.json') {
@@ -640,6 +824,20 @@ async function handleFileEntry(
   // Check for SKILL.md
   if (entry.name === 'SKILL.md') {
     logger.debug(`Validating Agent Skill: ${fullPath}`);
+
+    // Config-aware: use packaging validator with build settings
+    const skillConfig = vatContext?.skillConfigs.get(safePath.resolve(fullPath));
+    if (skillConfig !== undefined) {
+      logger.debug(`  Using config-aware validation for: ${fullPath}`);
+      const packagingResult = await validateSkillForPackaging(fullPath, skillConfig);
+      // Packaging validator doesn't run compat detectors — add them here.
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- fullPath from directory scan
+      const skillContent = fs.readFileSync(fullPath, 'utf-8');
+      const compatIssues = runCompatDetectors(skillContent, fullPath);
+      return packagingResultToValidationResult(fullPath, packagingResult, compatIssues);
+    }
+
+    // Wild mode: basic validation
     const validateOptions: ValidateOptions = { skillPath: fullPath };
     if (options.warnUnreferencedFiles) {
       validateOptions.checkUnreferencedFiles = true;
@@ -658,7 +856,9 @@ async function handleDirectoryEntry(
   recursive: boolean,
   options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>,
-  baseDir: string
+  baseDir: string,
+  gitRoot: string | null,
+  vatContext: VATProjectContext | null
 ): Promise<ValidationResult[]> {
   const fs = await import('node:fs/promises');
   const results: ValidationResult[] = [];
@@ -675,11 +875,80 @@ async function handleDirectoryEntry(
 
   // Recurse into subdirectories (both plugin/marketplace dirs and regular dirs)
   if (recursive) {
-    const subResults = await scanDirectory(fullPath, recursive, options, logger, baseDir);
+    const subResults = await scanDirectory(fullPath, recursive, options, logger, baseDir, gitRoot, vatContext);
     results.push(...subResults);
   }
 
   return results;
+}
+
+/**
+ * Resolve the effective git root for gitignore-aware scanning.
+ *
+ * On the first call (gitRoot is undefined), detects the git root from dirPath.
+ * If the scan root itself is gitignored (e.g., user explicitly targeted dist/),
+ * returns null to disable gitignore filtering — the user's explicit intent to
+ * scan that path takes precedence over .gitignore rules.
+ *
+ * On recursive calls, the already-resolved value is passed through unchanged.
+ */
+function resolveGitRootForScan(dirPath: string, gitRoot: string | null | undefined): string | null {
+  if (gitRoot === undefined) {
+    const detectedRoot = gitFindRoot(dirPath);
+    if (detectedRoot !== null && isGitIgnored(dirPath, detectedRoot)) {
+      return null;
+    }
+    return detectedRoot;
+  }
+  return gitRoot;
+}
+
+/**
+ * Build the gitignore exclusion map for a set of entry paths.
+ * Returns null when gitignore filtering is not applicable (no git root,
+ * --include-artifacts, or outside a git repo).
+ */
+function buildGitIgnoreMap(
+  entryPaths: string[],
+  gitRoot: string | null,
+  includeArtifacts: boolean
+): Map<string, boolean> | null {
+  if (gitRoot === null || includeArtifacts) {
+    return null;
+  }
+  return gitCheckIgnoredBatch(entryPaths, gitRoot);
+}
+
+/**
+ * Check whether a directory entry should be skipped during scanning.
+ * Returns a reason string for debug logging, or null if the entry should be kept.
+ */
+function getSkipReason(
+  entry: { name: string; isDirectory: () => boolean },
+  fullPath: string,
+  resolvedBaseDir: string,
+  gitIgnoredMap: Map<string, boolean> | null,
+  isMatch: ReturnType<typeof picomatch> | null
+): string | null {
+  // Always skip .git directory (not reported by git check-ignore)
+  if (entry.isDirectory() && entry.name === '.git') {
+    return '.git';
+  }
+
+  // Skip gitignored paths
+  if (gitIgnoredMap !== null && gitIgnoredMap.get(fullPath) === true) {
+    return `gitignored: ${entry.name}`;
+  }
+
+  // Check user-supplied --exclude patterns
+  if (isMatch !== null) {
+    const relativePath = safePath.relative(resolvedBaseDir, fullPath).replaceAll('\\', '/');
+    if (isExcludedPath(isMatch, relativePath, entry.isDirectory())) {
+      return `excluded: ${relativePath}`;
+    }
+  }
+
+  return null;
 }
 
 async function scanDirectory(
@@ -687,37 +956,47 @@ async function scanDirectory(
   recursive: boolean,
   options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>,
-  baseDir?: string
+  baseDir?: string,
+  gitRoot?: string | null,
+  vatContext?: VATProjectContext | null
 ): Promise<ValidationResult[]> {
   const fs = await import('node:fs/promises');
   const results: ValidationResult[] = [];
-  const excludePatterns = options.exclude ?? [];
+  const userExcludes = options.exclude ?? [];
   const resolvedBaseDir = baseDir ?? dirPath;
+  const resolvedGitRoot = resolveGitRootForScan(dirPath, gitRoot);
 
-  // Compile picomatch once per scanDirectory call (not inside the loop)
-  const isMatch = excludePatterns.length > 0 ? picomatch(excludePatterns) : null;
+  // Build config-aware context on first call in a VAT project.
+  // Checks for config at the scan root only (the directory the user pointed at).
+  const resolvedVatContext = vatContext === undefined && resolvedGitRoot !== null
+    ? await buildVATProjectContext(resolvedBaseDir, logger)
+    : (vatContext ?? null);
+
+  // Compile picomatch for user-supplied --exclude patterns
+  const isMatch = userExcludes.length > 0 ? picomatch(userExcludes) : null;
 
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
+
+  // Build full paths and batch-check gitignore status
+  const entryPaths = entries.map(e => safePath.join(dirPath, e.name));
+  const gitIgnoredMap = buildGitIgnoreMap(entryPaths, resolvedGitRoot, options.includeArtifacts ?? false);
 
   for (const entry of entries) {
     const fullPath = safePath.join(dirPath, entry.name);
 
-    // Check exclude patterns against path relative to the base scan directory
-    if (isMatch !== null) {
-      const relativePath = safePath.relative(resolvedBaseDir, fullPath).replaceAll('\\', '/');
-      if (isExcludedPath(isMatch, relativePath, entry.isDirectory())) {
-        logger.debug(`Excluding path: ${relativePath}`);
-        continue;
-      }
+    const skipReason = getSkipReason(entry, fullPath, resolvedBaseDir, gitIgnoredMap, isMatch);
+    if (skipReason !== null) {
+      logger.debug(`Excluding path: ${skipReason}`);
+      continue;
     }
 
     if (entry.isFile()) {
-      const result = await handleFileEntry(entry, fullPath, options, logger);
+      const result = await handleFileEntry(entry, fullPath, options, logger, resolvedVatContext);
       if (result !== null) {
         results.push(result);
       }
     } else if (entry.isDirectory()) {
-      const dirResults = await handleDirectoryEntry(fullPath, recursive, options, logger, resolvedBaseDir);
+      const dirResults = await handleDirectoryEntry(fullPath, recursive, options, logger, resolvedBaseDir, resolvedGitRoot, resolvedVatContext);
       results.push(...dirResults);
     }
   }

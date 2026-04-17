@@ -62,3 +62,16 @@ describe('CODE_REGISTRY', () => {
     }
   });
 });
+
+describe('CODE_REGISTRY — compat codes', () => {
+  it('registers the three v1 compat codes with warning defaults', () => {
+    const codes = ['COMPAT_REQUIRES_BROWSER_AUTH', 'COMPAT_REQUIRES_LOCAL_SHELL', 'COMPAT_REQUIRES_EXTERNAL_CLI'] as const;
+    for (const code of codes) {
+      expect(CODE_REGISTRY[code], `registry missing ${code}`).toBeDefined();
+      expect(CODE_REGISTRY[code].defaultSeverity).toBe('warning');
+      expect(CODE_REGISTRY[code].description.length).toBeGreaterThan(10);
+      expect(CODE_REGISTRY[code].fix.length).toBeGreaterThan(10);
+      expect(CODE_REGISTRY[code].reference).toMatch(/^#compat_/);
+    }
+  });
+});

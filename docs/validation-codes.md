@@ -1,5 +1,7 @@
 # VAT Validation Codes
 
+For the project's *stance* on what each category of code exists to enforce — the reasoning behind every default severity and the confidence level we attach to each — see [Skill Quality and Compatibility — VAT's Stance](./skill-quality-and-compatibility.md). That doc articulates what VAT believes; this doc is the code-level reference.
+
 This reference lists every overridable validation code VAT emits, plus the two meta-codes. Use it to interpret CLI output, configure `validation.severity` / `validation.allow`, and understand default behavior.
 
 ## Severity Model
@@ -43,6 +45,8 @@ skills:
 | `vat audit` | Display grouping only | ✗ | No (always exit 0) |
 
 ## Source-Detectable Link Codes
+
+*Stance: see [Structure](./skill-quality-and-compatibility.md#structure).*
 
 Static-analysis codes that fire anywhere markdown is analyzed — `vat resources validate`, `vat skills validate`, `vat skills build`, `vat audit`.
 
@@ -90,6 +94,8 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 
 ## Packaging-Only Codes
 
+*Stance: see [Packaging](./skill-quality-and-compatibility.md#packaging).*
+
 Only meaningful when actually bundling a skill; fire from `vat skills build` (and its pre-flight in `vat skills validate`).
 
 ### `LINK_DROPPED_BY_DEPTH`
@@ -114,6 +120,8 @@ Only meaningful when actually bundling a skill; fire from `vat skills build` (an
 - **Fix:** Report the issue — this indicates a VAT bug. As a temporary workaround, set `severity.PACKAGED_BROKEN_LINK` to `ignore` while the underlying bug is fixed.
 
 ## Quality Codes
+
+*Stance: see [Length and Shape](./skill-quality-and-compatibility.md#length-and-shape) and [Authoring](./skill-quality-and-compatibility.md#authoring).*
 
 Best-practice checks about skill shape and content.
 
@@ -159,7 +167,43 @@ Best-practice checks about skill shape and content.
 - **Why it matters:** A long flat `SKILL.md` loads all content immediately into context regardless of what the agent needs. Progressive disclosure — linking to separate files — allows agents to load only what is relevant to the current task.
 - **Fix:** Move background detail into linked resources and reference them from `SKILL.md`.
 
+## Compat Codes
+
+*Stance: see [Compatibility](./skill-quality-and-compatibility.md#compatibility).*
+
+Per-skill compatibility **smells** — patterns that signal a skill depends on a surface capability (browser, local shell, external CLI) that not every Claude runtime provides. Default severity is `warning`: these are advisory, not blocking, so adopters can surface them without breaking builds.
+
+Compat smells are declarations more than suppressions. When a skill genuinely needs a capability, the right posture is usually to `validation.allow` the code with a `reason` that documents the intent. The smell's job is to make that requirement visible, not to grade the skill.
+
+Scope in v1: detectors run against SKILL.md and its transitively linked markdown. Plugin-wide compat (hooks, `.mcp.json`) remains covered by the legacy `vat audit --compat` analyzer pending workstream B unification.
+
+### `COMPAT_REQUIRES_BROWSER_AUTH`
+
+- **Default:** `warning`
+- **What:** Skill appears to require an interactive browser login flow (MSAL, cloud provider SSO, OAuth redirect).
+- **Why it matters:** Surfaces without a browser — Claude Chat, Cowork, headless runtimes — cannot complete the login and the skill silently fails. Flagging the dependency lets authors declare it intentionally and lets runtimes route around incompatible skills.
+- **Fix:** Document the requirement prominently. If a service-principal or bearer-token flow would work, prefer it to avoid the constraint. Otherwise allow via `validation.allow` with a reason explaining the intentional auth model.
+- **When to allow:** The skill is intentionally interactive and documents Claude Code (or another browser-capable runtime) as its target surface. Allow with a reason citing the deliberate auth choice.
+
+### `COMPAT_REQUIRES_LOCAL_SHELL`
+
+- **Default:** `warning`
+- **What:** Skill references a local-shell or local-environment tool (`Bash`/`Edit`/`Write`/`NotebookEdit`) or invokes a shell directly.
+- **Why it matters:** Shell access and local filesystem mutation only exist on local runtimes like Claude Code. A skill that assumes shell availability will not run correctly on remote/chat surfaces.
+- **Fix:** If the skill genuinely needs local access, document it and allow with a reason naming the dependency. If the shell is an implementation detail, refactor to use portable runtime APIs.
+- **When to allow:** The skill is a Claude Code-only workflow (filesystem manipulation, CLI orchestration, IDE integration). Allow with a reason that names the local capability being relied on.
+
+### `COMPAT_REQUIRES_EXTERNAL_CLI`
+
+- **Default:** `warning`
+- **What:** Skill invokes an external CLI binary not bundled with the skill (`az`, `aws`, `gcloud`, `kubectl`, `docker`, `terraform`, `gh`, `op`).
+- **Why it matters:** External CLIs are environment-dependent — they may be installed, missing, or a different version on any given runtime. Making the dependency explicit lets users (or managed runtimes) ensure the binary is present before invoking the skill.
+- **Fix:** Document the required CLI as a prerequisite in the skill description or README. Consider bundling a language-native SDK (e.g., `@azure/arm-*` instead of `az`) if portability matters. If the CLI is the right tool, allow with a reason.
+- **When to allow:** The skill is intentionally a thin wrapper over a CLI and documents the dependency. Allow with a reason naming the CLI and the surface requirement.
+
 ## Meta Codes
+
+*Stance: see [Configuration Meta](./skill-quality-and-compatibility.md#configuration-meta).*
 
 Describe the state of the validation config itself.
 
