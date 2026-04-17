@@ -30,6 +30,35 @@ vat audit [path] [options]
 - `-r, --recursive` - Scan directories recursively for all resource types
 - `--debug` - Enable debug logging (outputs to stderr)
 
+### Default artifact excludes
+
+By default, `vat audit` skips three directory patterns that almost always
+contain duplicate or unresolvable artifacts:
+
+- `**/node_modules/**` — bundled dependencies, including nested skills that
+  belong to other packages.
+- `**/dist/**` — TypeScript/JavaScript build output, which typically contains
+  packaged copies of skills also present in source.
+- `**/.claude/worktrees/**` — Claude Code worktree directories, which shadow
+  the active working tree.
+
+Scanning these directories is almost never what the user wants — it surfaces
+noise from artifacts the adopter didn't author. To opt back in (for example,
+to audit a specific bundled marketplace plugin), use `--include-artifacts`.
+
+User-supplied `--exclude` patterns are **additive** — they extend the defaults.
+Using `--include-artifacts` removes the defaults entirely; any `--exclude`
+patterns you pass alongside `--include-artifacts` are the only exclusions that
+apply.
+
+Examples:
+
+    vat audit .                              # Defaults apply; source only
+    vat audit --include-artifacts .          # Scan everything
+    vat audit --exclude "custom/**" .        # Defaults + "custom/**"
+    vat audit --include-artifacts --exclude "**/node_modules/**" .
+                                             # Override defaults, then re-exclude node_modules
+
 ## Supported Resource Types
 
 ### 1. Plugin Directories

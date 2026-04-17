@@ -33,10 +33,30 @@ import { writeYamlOutput } from '../utils/output.js';
 import { buildHierarchicalOutput } from './audit/hierarchical-output.js';
 import { createAuditSettingsCommand } from './audit-settings.js';
 
+/**
+ * Directories excluded from `vat audit` scans by default.
+ *
+ * These paths typically contain build artifacts, bundled dependencies, and
+ * git-worktree snapshots — scanning them produces duplicate and/or broken
+ * results that are almost never what the user wants. The `--include-artifacts`
+ * flag opts back in for deliberate artifact audits (e.g., verifying a bundled
+ * marketplace plugin).
+ *
+ * Glob syntax: picomatch with `**` spanning any number of segments.
+ * Comment: keep this list tight. Add new entries only when an adopter surfaces
+ * a concrete noise case that `--exclude` can't address ergonomically.
+ */
+const DEFAULT_EXCLUDES: readonly string[] = [
+  '**/node_modules/**',
+  '**/dist/**',
+  '**/.claude/worktrees/**',
+];
+
 export interface AuditCommandOptions {
   compat?: boolean;
   debug?: boolean;
   exclude?: string[];
+  includeArtifacts?: boolean;
   recursive?: boolean; // Commander sets this to false when --no-recursive is used
   settings?: string | boolean; // true = auto-discover, string = explicit path
   user?: boolean;
@@ -63,6 +83,7 @@ export function createAuditCommand(): Command {
     .argument('[path]', 'Path to audit (default: current directory)')
     .option('--no-recursive', 'Disable recursive directory scanning (scans top level only)')
     .option('--exclude <glob>', 'Exclude paths matching glob pattern (repeatable)', collect, [])
+    .option('--include-artifacts', 'Include build artifact directories (node_modules/, dist/, .claude/worktrees/) that are excluded by default')
     .option('--user', 'Audit user-level Claude resources (default: $CLAUDE_CONFIG_DIR or ~/.claude — scans plugins/, skills/, marketplaces/)')
     .option('--verbose', 'Show all scanned resources, including those without issues')
     .option('--warn-unreferenced-files', 'Warn about files not referenced in skill markdown')
@@ -134,6 +155,16 @@ Validation Checks:
     COMPAT_REQUIRES_EXTERNAL_CLI). See docs/validation-codes.md.
   - Unreferenced files detected (with --warn-unreferenced-files)
 
+Default Excludes:
+  These directories are skipped by default; use --include-artifacts to
+  opt back in, or --exclude to add more:
+    - **/node_modules/**
+    - **/dist/**
+    - **/.claude/worktrees/**
+
+  User-supplied --exclude patterns ADD to the defaults. --include-artifacts
+  removes the defaults entirely (user excludes still apply).
+
 Exit Codes:
   0 - Always (even when validation errors are surfaced)
   2 - System error (config invalid, directory not found)
@@ -143,7 +174,8 @@ Examples:
   $ vat audit --user                  # Audit default ~/.claude (or $CLAUDE_CONFIG_DIR)
   $ CLAUDE_CONFIG_DIR=~/.claude-work vat audit --user   # Scan a custom Claude config dir
   $ vat audit --no-recursive ./dir/   # Top level only, no subdirectories
-  $ vat audit --exclude "dist/**" --exclude "node_modules/**"  # Filter noise
+  $ vat audit --include-artifacts ./repo/   # Opt back into artifact dirs
+  $ vat audit --exclude "custom-build/**" ./repo/   # Add to default excludes
   $ vat audit --compat ./plugin/      # Include per-surface compatibility analysis
 `
     );
@@ -698,7 +730,10 @@ async function scanDirectory(
 ): Promise<ValidationResult[]> {
   const fs = await import('node:fs/promises');
   const results: ValidationResult[] = [];
-  const excludePatterns = options.exclude ?? [];
+  const userExcludes = options.exclude ?? [];
+  const excludePatterns = options.includeArtifacts
+    ? userExcludes
+    : [...DEFAULT_EXCLUDES, ...userExcludes];
   const resolvedBaseDir = baseDir ?? dirPath;
 
   // Compile picomatch once per scanDirectory call (not inside the loop)
