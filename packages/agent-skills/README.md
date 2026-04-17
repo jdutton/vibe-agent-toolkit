@@ -156,7 +156,9 @@ The validator checks for:
 #### Warnings (Non-Blocking)
 
 - `SKILL_TOO_LONG` - Skill exceeds 5000 lines
-- `SKILL_CONSOLE_INCOMPATIBLE` - References Write, Edit, Bash, or NotebookEdit tools
+- `COMPAT_REQUIRES_LOCAL_SHELL` - References Write, Edit, Bash, or NotebookEdit tools (see [validation-codes.md](../../docs/validation-codes.md#compat_requires_local_shell))
+- `COMPAT_REQUIRES_BROWSER_AUTH` - Requires a browser login flow (MSAL, cloud SSO, OAuth redirect) (see [validation-codes.md](../../docs/validation-codes.md#compat_requires_browser_auth))
+- `COMPAT_REQUIRES_EXTERNAL_CLI` - Invokes an unbundled external CLI (az, aws, gcloud, kubectl, docker, terraform, gh, op) (see [validation-codes.md](../../docs/validation-codes.md#compat_requires_external_cli))
 
 See [Best Practices Guide](../../docs/guides/agent-skills-best-practices.md) for detailed guidance.
 

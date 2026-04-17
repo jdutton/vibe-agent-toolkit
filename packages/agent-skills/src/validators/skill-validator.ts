@@ -7,6 +7,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { parseFrontmatter } from '../parsers/frontmatter-parser.js';
 
+import { runCompatDetectors } from './compat-detectors.js';
 import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
 import type { LinkedFileValidationResult, ValidateOptions, ValidationIssue, ValidationResult } from './types.js';
 import { NAVIGATION_FILE_PATTERNS } from './validation-rules.js';
@@ -73,6 +74,9 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
 
   // Validate warning-level rules (skill-specific)
   validateWarningRules(content, lineCount, skillPath, issues);
+
+  // Compat smells (warning-severity; flows through validation.allow like other framework codes)
+  issues.push(...runCompatDetectors(content, skillPath));
 
   // Transitive link traversal (BFS)
   const skillDir = options.rootDir ?? dirname(skillPath);
@@ -242,6 +246,16 @@ async function traverseLinks(
 
     const processed = processFileLinks(parseResult, currentPath, skillDir, issues, visited);
     queue.push(...processed.newPaths);
+
+    // Compat smells for linked files (root SKILL.md handled by the top-level invocation).
+    // Re-read raw file content so fenced code blocks remain intact for detectors.
+    if (currentPath !== resolvedSkillPath) {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- currentPath verified existent by BFS predecessor
+      const linkedContent = fs.readFileSync(currentPath, 'utf-8');
+      const linkedCompatIssues = runCompatDetectors(linkedContent, currentPath);
+      processed.fileIssues.push(...linkedCompatIssues);
+      issues.push(...linkedCompatIssues);
+    }
 
     // Record linked file result (skip SKILL.md itself — it's the root)
     if (currentPath !== resolvedSkillPath) {
@@ -503,7 +517,7 @@ export function extractImplicitReferences(
 }
 
 function validateWarningRules(
-  content: string,
+  _content: string,
   lineCount: number,
   skillPath: string,
   issues: ValidationIssue[]
@@ -518,27 +532,6 @@ function validateWarningRules(
       location: skillPath,
       fix: 'Consider breaking skill into multiple smaller skills or using reference files',
     });
-  }
-
-  // Check for console-incompatible features
-  const toolPatterns = [
-    { tool: 'Write', pattern: /\bWrite\s+tool\b/i },
-    { tool: 'Edit', pattern: /\bEdit\s+tool\b/i },
-    { tool: 'Bash', pattern: /\bBash\s+tool\b/i },
-    { tool: 'NotebookEdit', pattern: /\bNotebookEdit\s+tool\b/i },
-  ];
-
-  for (const { tool, pattern } of toolPatterns) {
-    if (pattern.test(content)) {
-      issues.push({
-        severity: 'warning',
-        code: 'SKILL_CONSOLE_INCOMPATIBLE',
-        message: `Skill references "${tool}" tool which is not available in console mode`,
-        location: skillPath,
-        fix: 'Add note that skill requires IDE/CLI mode, or make skill console-compatible',
-      });
-      break; // Only report once
-    }
   }
 }
 

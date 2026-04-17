@@ -50,8 +50,7 @@ export type NonOverridableCode =
   | 'SKILL_TOO_LONG'
   | 'REFERENCE_MISSING_TOC'
   | 'DESCRIPTION_FIRST_PERSON'
-  | 'RESOURCE_UNREACHABLE'
-  | 'SKILL_CONSOLE_INCOMPATIBLE';
+  | 'RESOURCE_UNREACHABLE';
 
 /** Full code space: registry codes (overridable) + info codes + structural/non-overridable codes. */
 export type IssueCode = RegistryIssueCode | InfoCode | NonOverridableCode;
