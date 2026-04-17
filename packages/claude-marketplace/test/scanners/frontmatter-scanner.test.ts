@@ -61,23 +61,6 @@ describe('scanFrontmatter', () => {
     expect(result.some(e => e.signal === 'allowed-tools: Write')).toBe(true);
   });
 
-  it('detects author-declared targets', () => {
-    const content = [
-      '---',
-      'name: limited-skill',
-      'description: Only for code',
-      'targets: [claude-code, cowork]',
-      '---',
-    ].join('\n');
-
-    const result = scanFrontmatter(content, 'SKILL.md');
-    const declEvidence = result.find(e => e.source === 'declaration');
-    expect(declEvidence).toBeDefined();
-    expect(declEvidence?.impact['claude-desktop']).toBe('incompatible');
-    expect(declEvidence?.impact.cowork).toBe('ok');
-    expect(declEvidence?.impact['claude-code']).toBe('ok');
-  });
-
   it('ignores Read and other non-restricted tools in allowed-tools', () => {
     const content = [
       '---',
@@ -108,5 +91,19 @@ describe('scanFrontmatter', () => {
     const content = '---\ninvalid yaml: [[[bad\n---\n# Content';
     const result = scanFrontmatter(content, 'SKILL.md');
     expect(Array.isArray(result)).toBe(true);
+  });
+
+  it('silently ignores a top-level targets field (deprecated in 0.1.31)', () => {
+    const content = [
+      '---',
+      'name: test-skill',
+      'description: A test skill',
+      'targets: [claude-code]',
+      '---',
+      '',
+      'Body.',
+    ].join('\n');
+    const evidence = scanFrontmatter(content, 'test.md');
+    expect(evidence.some(e => e.source === 'declaration')).toBe(false);
   });
 });

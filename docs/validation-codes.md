@@ -159,6 +159,31 @@ Best-practice checks about skill shape and content.
 - **Why it matters:** A long flat `SKILL.md` loads all content immediately into context regardless of what the agent needs. Progressive disclosure — linking to separate files — allows agents to load only what is relevant to the current task.
 - **Fix:** Move background detail into linked resources and reference them from `SKILL.md`.
 
+## Compat Codes
+
+Per-skill compatibility smells — signal that a skill depends on a surface capability (browser, local shell, external CLI) that not every runtime provides. Default severity is `warning`: these are advisory, not blocking, so adopters can surface them without breaking builds.
+
+### `COMPAT_REQUIRES_BROWSER_AUTH`
+
+- **Default:** `warning`
+- **What:** Skill appears to require an interactive browser login flow (MSAL, cloud provider SSO, OAuth redirect).
+- **Why it matters:** Surfaces without a browser — Claude Chat, Cowork, headless runtimes — cannot complete the login and the skill silently fails. Flagging the dependency lets authors declare it intentionally and lets runtimes route around incompatible skills.
+- **Fix:** Document the requirement prominently and allow via `validation.allow` if the browser flow is the intended mechanism. Surfaces without a browser (Claude Chat, Cowork) cannot run this skill.
+
+### `COMPAT_REQUIRES_LOCAL_SHELL`
+
+- **Default:** `warning`
+- **What:** Skill references a local-shell or local-environment tool (`Bash`/`Edit`/`Write`/`NotebookEdit`) or invokes a shell directly.
+- **Why it matters:** Shell access and local filesystem mutation only exist on local runtimes like Claude Code. A skill that assumes shell availability will not run correctly on remote/chat surfaces.
+- **Fix:** Document that this skill requires a local runtime (Claude Code), or allow the code via `validation.allow` if the shell dependency is intentional.
+
+### `COMPAT_REQUIRES_EXTERNAL_CLI`
+
+- **Default:** `warning`
+- **What:** Skill invokes an external CLI binary not bundled with the skill (`az`, `aws`, `gcloud`, `kubectl`, `docker`, `terraform`, `gh`, `op`).
+- **Why it matters:** External CLIs are environment-dependent — they may be installed, missing, or a different version on any given runtime. Making the dependency explicit lets users (or managed runtimes) ensure the binary is present before invoking the skill.
+- **Fix:** Document the required CLI as a prerequisite, or allow via `validation.allow` if the dependency is intentional. External CLIs may not be present on every runtime.
+
 ## Meta Codes
 
 Describe the state of the validation config itself.

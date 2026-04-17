@@ -33,6 +33,10 @@ export type IssueCode =
   | 'REFERENCE_TOO_DEEP'
   | 'DESCRIPTION_TOO_VAGUE'
   | 'NO_PROGRESSIVE_DISCLOSURE'
+  // Compat smells (per-skill compatibility constraints)
+  | 'COMPAT_REQUIRES_BROWSER_AUTH'
+  | 'COMPAT_REQUIRES_LOCAL_SHELL'
+  | 'COMPAT_REQUIRES_EXTERNAL_CLI'
   // Meta-codes describing the state of the validation config itself
   | 'ALLOW_EXPIRED'
   | 'ALLOW_UNUSED';
@@ -142,6 +146,24 @@ export const CODE_REGISTRY: Record<IssueCode, CodeRegistryEntry> = {
     'Long SKILL.md with no linked references; progressive disclosure recommended.',
     'Move background detail into linked resources and reference them from SKILL.md.',
     'no_progressive_disclosure',
+  ),
+  COMPAT_REQUIRES_BROWSER_AUTH: entry(
+    'warning',
+    'Skill appears to require an interactive browser login flow (MSAL, cloud provider SSO, OAuth redirect).',
+    'Document the requirement prominently and allow via validation.allow if the browser flow is the intended mechanism. Surfaces without a browser (Claude Chat, Cowork) cannot run this skill.',
+    'compat_requires_browser_auth',
+  ),
+  COMPAT_REQUIRES_LOCAL_SHELL: entry(
+    'warning',
+    'Skill references a local-shell or local-environment tool (Bash/Edit/Write/NotebookEdit) or invokes a shell directly.',
+    'Document that this skill requires a local runtime (Claude Code), or allow the code via validation.allow if the shell dependency is intentional.',
+    'compat_requires_local_shell',
+  ),
+  COMPAT_REQUIRES_EXTERNAL_CLI: entry(
+    'warning',
+    'Skill invokes an external CLI binary not bundled with the skill (az, aws, gcloud, kubectl, docker, terraform, gh, op).',
+    'Document the required CLI as a prerequisite, or allow via validation.allow if the dependency is intentional. External CLIs may not be present on every runtime.',
+    'compat_requires_external_cli',
   ),
   ALLOW_EXPIRED: entry(
     'warning',
