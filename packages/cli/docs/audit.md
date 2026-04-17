@@ -132,6 +132,24 @@ vat audit --user
 - Cache status for each plugin
 - Issue counts at each level
 
+### Multi-dir Workflows
+
+`--user` is singular — one Claude config dir per invocation. The target
+directory is resolved from `$CLAUDE_CONFIG_DIR` if set, otherwise defaults
+to `~/.claude`. For users with multiple Claude config dirs (for example,
+`~/.claude` for work and `~/.claude-personal` for personal projects), loop
+in the shell:
+
+```bash
+for dir in ~/.claude ~/.claude-personal; do
+  CLAUDE_CONFIG_DIR="$dir" vat audit --user --verbose
+done
+```
+
+This pattern matches Claude Code's own `CLAUDE_CONFIG_DIR` convention and
+scales naturally to community smell-scanning (see the VAT skill-smell
+detection strategy doc, workstream B).
+
 **Example output**:
 ```yaml
 status: success
@@ -200,7 +218,7 @@ Errors prevent the resource from being used correctly:
 Warnings indicate potential issues but don't prevent usage:
 
 - **Skill exceeds recommended length**: Over 5000 lines (Skills only)
-- **Console-incompatible tools**: References tools that don't work in console (Skills only)
+- **Compat smells**: Skill requires a runtime capability that isn't available on every surface (browser auth, local shell, external CLI) — see `COMPAT_*` codes in `docs/validation-codes.md`.
 
 ## Error Codes Reference
 
@@ -250,7 +268,9 @@ Warnings indicate potential issues but don't prevent usage:
 | Code | Severity | Description | Fix |
 |------|----------|-------------|-----|
 | `SKILL_TOO_LONG` | warning | Skill exceeds 5000 lines | Consider splitting into multiple skills |
-| `SKILL_CONSOLE_INCOMPATIBLE` | warning | References console-incompatible tools | Use console-compatible alternatives |
+| `COMPAT_REQUIRES_BROWSER_AUTH` | warning | Skill needs browser login (MSAL, SSO, OAuth) | See `docs/validation-codes.md#compat_requires_browser_auth` |
+| `COMPAT_REQUIRES_LOCAL_SHELL` | warning | Skill needs local shell/environment tools (Bash, Edit, Write, NotebookEdit) | See `docs/validation-codes.md#compat_requires_local_shell` |
+| `COMPAT_REQUIRES_EXTERNAL_CLI` | warning | Skill invokes unbundled CLI (az, aws, gcloud, etc.) | See `docs/validation-codes.md#compat_requires_external_cli` |
 
 ### Format Detection Errors
 

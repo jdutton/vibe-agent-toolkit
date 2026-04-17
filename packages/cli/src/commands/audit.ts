@@ -63,7 +63,7 @@ export function createAuditCommand(): Command {
     .argument('[path]', 'Path to audit (default: current directory)')
     .option('--no-recursive', 'Disable recursive directory scanning (scans top level only)')
     .option('--exclude <glob>', 'Exclude paths matching glob pattern (repeatable)', collect, [])
-    .option('--user', 'Audit user-level Claude resources (~/.claude/plugins, ~/.claude/skills, ~/.claude/marketplaces)')
+    .option('--user', 'Audit user-level Claude resources (default: $CLAUDE_CONFIG_DIR or ~/.claude — scans plugins/, skills/, marketplaces/)')
     .option('--verbose', 'Show all scanned resources, including those without issues')
     .option('--warn-unreferenced-files', 'Warn about files not referenced in skill markdown')
     .option('--compat', 'Run compatibility analysis for each plugin (shows claude-code, cowork, claude-desktop support)')
@@ -91,15 +91,19 @@ Description:
   Default: current directory
   Use --user to audit user-level installation automatically
 
-  --user scans:
-  - ~/.claude/plugins (installed plugins)
-  - ~/.claude/skills (standalone skills)
-  - ~/.claude/marketplaces (marketplace plugins)
+  --user scope:
+  - By default, scans $CLAUDE_CONFIG_DIR if set, otherwise ~/.claude.
+  - Inside the chosen directory, scans:
+    - plugins/ (installed plugins)
+    - skills/ (standalone skills)
+    - marketplaces/ (marketplace plugins)
+  - Skips: projects/, logs/, cache/
 
-  --user skips:
-  - ~/.claude/projects (project-specific files)
-  - ~/.claude/logs (log files)
-  - ~/.claude/cache (cached data)
+  Multi-dir workflows:
+    for dir in ~/.claude ~/.claude-personal; do
+      CLAUDE_CONFIG_DIR="$dir" vat audit --user --verbose
+    done
+  (See packages/cli/docs/audit.md for details.)
 
 Validation Behavior:
   Advisory only: audit surfaces all validation issues for inspection.
@@ -125,7 +129,9 @@ Validation Checks:
 
   Warnings (should fix):
   - Skill exceeds recommended length (>5000 lines)
-  - References console-incompatible tools (Skills only)
+  - Compat smells — requires browser auth, local shell, or external CLI
+    (COMPAT_REQUIRES_BROWSER_AUTH, COMPAT_REQUIRES_LOCAL_SHELL,
+    COMPAT_REQUIRES_EXTERNAL_CLI). See docs/validation-codes.md.
   - Unreferenced files detected (with --warn-unreferenced-files)
 
 Exit Codes:
@@ -134,7 +140,8 @@ Exit Codes:
 
 Examples:
   $ vat audit ./plugins/              # Audit recursively (default)
-  $ vat audit --user                  # Audit user-level installation (~/.claude/)
+  $ vat audit --user                  # Audit default ~/.claude (or $CLAUDE_CONFIG_DIR)
+  $ CLAUDE_CONFIG_DIR=~/.claude-work vat audit --user   # Scan a custom Claude config dir
   $ vat audit --no-recursive ./dir/   # Top level only, no subdirectories
   $ vat audit --exclude "dist/**" --exclude "node_modules/**"  # Filter noise
   $ vat audit --compat ./plugin/      # Include per-surface compatibility analysis
