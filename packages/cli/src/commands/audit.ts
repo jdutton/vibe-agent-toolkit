@@ -9,7 +9,12 @@ import {
   detectResourceFormat,
   validate,
   validateSkill,
+  runCompatDetectors,
+  validateSkillForPackaging,
+  type PackagingValidationResult,
+  type SkillPackagingConfig,
   type ValidateOptions,
+  type ValidationIssue,
   type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
 import {
@@ -32,6 +37,7 @@ import { writeYamlOutput } from '../utils/output.js';
 
 import { buildHierarchicalOutput } from './audit/hierarchical-output.js';
 import { createAuditSettingsCommand } from './audit-settings.js';
+import { discoverSkillsFromConfig } from './skills/skill-discovery.js';
 
 export interface AuditCommandOptions {
   compat?: boolean;
@@ -43,6 +49,162 @@ export interface AuditCommandOptions {
   user?: boolean;
   verbose?: boolean; // Commander sets this for --verbose
   warnUnreferencedFiles?: boolean; // Commander sets this for --warn-unreferenced-files
+}
+
+/** Resource type constant for agent skills, avoiding duplicate string literals. */
+const RESOURCE_TYPE_AGENT_SKILL: ValidationResult['type'] = 'agent-skill';
+
+/** Config-aware context for VAT project scanning. Built once per audit, passed through recursion. */
+interface VATProjectContext {
+  /** Map of absolute SKILL.md path → merged SkillPackagingConfig (without validation.allow) */
+  skillConfigs: Map<string, SkillPackagingConfig>;
+}
+
+/**
+ * Merge per-skill config for audit: keeps all packaging options but strips
+ * validation.allow (audit shows everything). Preserves validation.severity.
+ *
+ * Strips undefined values from the spread to satisfy exactOptionalPropertyTypes.
+ */
+function mergeSkillConfigForAudit(
+  defaults: Record<string, unknown> | undefined,
+  perSkillOverrides: Record<string, unknown> | undefined
+): SkillPackagingConfig {
+  const merged = { ...defaults, ...perSkillOverrides };
+  const packagingConfig: SkillPackagingConfig = {};
+
+  for (const [key, value] of Object.entries(merged)) {
+    if (value !== undefined && key !== 'validation') {
+      (packagingConfig as Record<string, unknown>)[key] = value;
+    }
+  }
+
+  // Keep validation.severity but strip validation.allow
+  const mergedValidation = merged['validation'] as { severity?: unknown; allow?: unknown } | undefined;
+  if (mergedValidation?.severity !== undefined) {
+    (packagingConfig as Record<string, unknown>)['validation'] = { severity: mergedValidation.severity };
+  }
+
+  return packagingConfig;
+}
+
+/**
+ * Build config-aware context when auditing inside a VAT project.
+ * Checks for vibe-agent-toolkit.config.yaml at the scan root only (no
+ * directory walking). Returns null if no config or no skills section found.
+ */
+async function buildVATProjectContext(
+  scanRoot: string,
+  logger: ReturnType<typeof createLogger>
+): Promise<VATProjectContext | null> {
+  const config = loadConfig(scanRoot);
+  if (config?.skills === undefined) {
+    return null;
+  }
+  const configRoot = scanRoot;
+
+  try {
+    const discovered = await discoverSkillsFromConfig(config.skills, configRoot);
+    if (discovered.length === 0) {
+      return null;
+    }
+
+    const { defaults, config: perSkillConfig } = config.skills;
+    const skillConfigs = new Map<string, SkillPackagingConfig>();
+
+    for (const skill of discovered) {
+      const packagingConfig = mergeSkillConfigForAudit(
+        defaults as Record<string, unknown> | undefined,
+        perSkillConfig?.[skill.name] as Record<string, unknown> | undefined,
+      );
+      skillConfigs.set(safePath.resolve(skill.sourcePath), packagingConfig);
+    }
+
+    logger.debug(`Config-aware audit: found ${skillConfigs.size} skill(s) in VAT project`);
+    return { skillConfigs };
+  } catch (error) {
+    logger.debug(`Config-aware audit: failed to discover skills: ${String(error)}`);
+    return null;
+  }
+}
+
+/**
+ * Convert PackagingValidationResult to ValidationResult for consistent audit output.
+ * In audit mode, we merge allErrors (which includes both errors and warnings after
+ * severity resolution but WITHOUT allow suppression) into the standard issues array.
+ */
+function packagingResultToValidationResult(
+  skillPath: string,
+  result: PackagingValidationResult,
+  extraIssues?: ValidationIssue[]
+): ValidationResult {
+  // allErrors contains all emitted issues (errors + warnings) after severity resolution
+  // but without allow suppression — exactly what audit wants.
+  // extraIssues (e.g., compat detectors) are merged in since the packaging validator
+  // doesn't run them.
+  const issues = extraIssues !== undefined && extraIssues.length > 0
+    ? [...result.allErrors, ...extraIssues]
+    : result.allErrors;
+  const errorCount = issues.filter(i => i.severity === 'error').length;
+  const warningCount = issues.filter(i => i.severity === 'warning').length;
+  const infoCount = issues.filter(i => i.severity === 'info').length;
+
+  let status: ValidationResult['status'];
+  if (errorCount > 0) {
+    status = 'error';
+  } else if (warningCount > 0) {
+    status = 'warning';
+  } else {
+    status = 'success';
+  }
+
+  return {
+    path: skillPath,
+    type: RESOURCE_TYPE_AGENT_SKILL,
+    status,
+    summary: `${errorCount} errors, ${warningCount} warnings, ${infoCount} info`,
+    issues,
+    metadata: {
+      lineCount: result.metadata.skillLines,
+      name: result.skillName,
+    },
+  };
+}
+
+/**
+ * Validate a single SKILL.md file, using config-aware validation if available.
+ * Used for direct SKILL.md and vat-agent paths passed to `vat audit`.
+ */
+async function validateSingleSkill(
+  skillPath: string,
+  options: AuditCommandOptions,
+  logger: ReturnType<typeof createLogger>,
+  isVATGenerated?: boolean
+): Promise<ValidationResult> {
+  // Try config-aware validation: find git root → check for config at git root
+  const gitRoot = resolveGitRootForScan(safePath.resolve(skillPath), undefined);
+  if (gitRoot !== null) {
+    const vatContext = await buildVATProjectContext(gitRoot, logger);
+    const skillConfig = vatContext?.skillConfigs.get(safePath.resolve(skillPath));
+    if (skillConfig !== undefined) {
+      logger.debug(`  Using config-aware validation for: ${skillPath}`);
+      const packagingResult = await validateSkillForPackaging(skillPath, skillConfig);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillPath is validated user input
+      const skillContent = fs.readFileSync(skillPath, 'utf-8');
+      const compatIssues = runCompatDetectors(skillContent, skillPath);
+      return packagingResultToValidationResult(skillPath, packagingResult, compatIssues);
+    }
+  }
+
+  // Fallback: basic validation
+  const validateOptions: ValidateOptions = { skillPath };
+  if (options.warnUnreferencedFiles) {
+    validateOptions.checkUnreferencedFiles = true;
+  }
+  if (isVATGenerated === true) {
+    validateOptions.isVATGenerated = true;
+  }
+  return validateSkill(validateOptions);
 }
 
 /**
@@ -148,6 +310,15 @@ Gitignore-Aware Scanning:
   User-supplied --exclude patterns are always applied on top.
   Outside a git repository, no automatic exclusions apply.
 
+Config-Aware Validation:
+  When a vibe-agent-toolkit.config.yaml is found at the git root, audit
+  uses the project's build settings (linkFollowDepth, files,
+  excludeReferencesFromBundle) to validate skills. This prevents false
+  warnings for links that the build pipeline resolves.
+
+  Config-aware mode never applies validation.allow — audit always shows
+  all issues. validation.severity is respected for display grouping.
+
 Exit Codes:
   0 - Always (even when validation errors are surfaced)
   2 - System error (config invalid, directory not found)
@@ -241,7 +412,7 @@ async function auditUserDirectories(
  * @returns New results array with ignored codes removed from issues
  */
 /** Skill resource types that can have per-skill validation config. */
-const SKILL_RESULT_TYPES: ReadonlySet<ValidationResult['type']> = new Set(['agent-skill', 'vat-agent']);
+const SKILL_RESULT_TYPES: ReadonlySet<ValidationResult['type']> = new Set([RESOURCE_TYPE_AGENT_SKILL, 'vat-agent']);
 
 /**
  * Derive the project root directory for config loading.
@@ -409,26 +580,16 @@ export async function getValidationResults(
   const format = detectFormat(scanPath);
 
   // Special handling for direct SKILL.md file
-  if (format === 'agent-skill') {
+  if (format === RESOURCE_TYPE_AGENT_SKILL) {
     logger.debug('Detected single Agent Skill');
-    const validateOptions: ValidateOptions = { skillPath: scanPath };
-    if (options.warnUnreferencedFiles) {
-      validateOptions.checkUnreferencedFiles = true;
-    }
-    const result = await validateSkill(validateOptions);
-    return [result];
+    return [await validateSingleSkill(scanPath, options, logger)];
   }
 
   // Special handling for VAT agent: validate its SKILL.md
   if (format === 'vat-agent') {
     const skillPath = safePath.join(scanPath, 'SKILL.md');
     logger.debug('Detected VAT agent, validating SKILL.md');
-    const validateOptions: ValidateOptions = { skillPath, isVATGenerated: true };
-    if (options.warnUnreferencedFiles) {
-      validateOptions.checkUnreferencedFiles = true;
-    }
-    const result = await validateSkill(validateOptions);
-    return [result];
+    return [await validateSingleSkill(skillPath, options, logger, true)];
   }
 
   // For plugin/marketplace directories or registry files, use unified validator
@@ -651,7 +812,8 @@ async function handleFileEntry(
   entry: { name: string },
   fullPath: string,
   options: AuditCommandOptions,
-  logger: ReturnType<typeof createLogger>
+  logger: ReturnType<typeof createLogger>,
+  vatContext: VATProjectContext | null
 ): Promise<ValidationResult | null> {
   // Check for registry files
   if (entry.name === 'installed_plugins.json' || entry.name === 'known_marketplaces.json') {
@@ -662,6 +824,20 @@ async function handleFileEntry(
   // Check for SKILL.md
   if (entry.name === 'SKILL.md') {
     logger.debug(`Validating Agent Skill: ${fullPath}`);
+
+    // Config-aware: use packaging validator with build settings
+    const skillConfig = vatContext?.skillConfigs.get(safePath.resolve(fullPath));
+    if (skillConfig !== undefined) {
+      logger.debug(`  Using config-aware validation for: ${fullPath}`);
+      const packagingResult = await validateSkillForPackaging(fullPath, skillConfig);
+      // Packaging validator doesn't run compat detectors — add them here.
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- fullPath from directory scan
+      const skillContent = fs.readFileSync(fullPath, 'utf-8');
+      const compatIssues = runCompatDetectors(skillContent, fullPath);
+      return packagingResultToValidationResult(fullPath, packagingResult, compatIssues);
+    }
+
+    // Wild mode: basic validation
     const validateOptions: ValidateOptions = { skillPath: fullPath };
     if (options.warnUnreferencedFiles) {
       validateOptions.checkUnreferencedFiles = true;
@@ -681,7 +857,8 @@ async function handleDirectoryEntry(
   options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>,
   baseDir: string,
-  gitRoot?: string | null
+  gitRoot: string | null,
+  vatContext: VATProjectContext | null
 ): Promise<ValidationResult[]> {
   const fs = await import('node:fs/promises');
   const results: ValidationResult[] = [];
@@ -698,7 +875,7 @@ async function handleDirectoryEntry(
 
   // Recurse into subdirectories (both plugin/marketplace dirs and regular dirs)
   if (recursive) {
-    const subResults = await scanDirectory(fullPath, recursive, options, logger, baseDir, gitRoot);
+    const subResults = await scanDirectory(fullPath, recursive, options, logger, baseDir, gitRoot, vatContext);
     results.push(...subResults);
   }
 
@@ -780,13 +957,20 @@ async function scanDirectory(
   options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>,
   baseDir?: string,
-  gitRoot?: string | null
+  gitRoot?: string | null,
+  vatContext?: VATProjectContext | null
 ): Promise<ValidationResult[]> {
   const fs = await import('node:fs/promises');
   const results: ValidationResult[] = [];
   const userExcludes = options.exclude ?? [];
   const resolvedBaseDir = baseDir ?? dirPath;
   const resolvedGitRoot = resolveGitRootForScan(dirPath, gitRoot);
+
+  // Build config-aware context on first call in a VAT project.
+  // Checks for config at the scan root only (the directory the user pointed at).
+  const resolvedVatContext = vatContext === undefined && resolvedGitRoot !== null
+    ? await buildVATProjectContext(resolvedBaseDir, logger)
+    : (vatContext ?? null);
 
   // Compile picomatch for user-supplied --exclude patterns
   const isMatch = userExcludes.length > 0 ? picomatch(userExcludes) : null;
@@ -807,12 +991,12 @@ async function scanDirectory(
     }
 
     if (entry.isFile()) {
-      const result = await handleFileEntry(entry, fullPath, options, logger);
+      const result = await handleFileEntry(entry, fullPath, options, logger, resolvedVatContext);
       if (result !== null) {
         results.push(result);
       }
     } else if (entry.isDirectory()) {
-      const dirResults = await handleDirectoryEntry(fullPath, recursive, options, logger, resolvedBaseDir, resolvedGitRoot);
+      const dirResults = await handleDirectoryEntry(fullPath, recursive, options, logger, resolvedBaseDir, resolvedGitRoot, resolvedVatContext);
       results.push(...dirResults);
     }
   }
