@@ -161,28 +161,35 @@ Best-practice checks about skill shape and content.
 
 ## Compat Codes
 
-Per-skill compatibility smells — signal that a skill depends on a surface capability (browser, local shell, external CLI) that not every runtime provides. Default severity is `warning`: these are advisory, not blocking, so adopters can surface them without breaking builds.
+Per-skill compatibility **smells** — patterns that signal a skill depends on a surface capability (browser, local shell, external CLI) that not every Claude runtime provides. Default severity is `warning`: these are advisory, not blocking, so adopters can surface them without breaking builds.
+
+Compat smells are declarations more than suppressions. When a skill genuinely needs a capability, the right posture is usually to `validation.allow` the code with a `reason` that documents the intent. The smell's job is to make that requirement visible, not to grade the skill.
+
+Scope in v1: detectors run against SKILL.md and its transitively linked markdown. Plugin-wide compat (hooks, `.mcp.json`) remains covered by the legacy `vat audit --compat` analyzer pending workstream B unification.
 
 ### `COMPAT_REQUIRES_BROWSER_AUTH`
 
 - **Default:** `warning`
 - **What:** Skill appears to require an interactive browser login flow (MSAL, cloud provider SSO, OAuth redirect).
 - **Why it matters:** Surfaces without a browser — Claude Chat, Cowork, headless runtimes — cannot complete the login and the skill silently fails. Flagging the dependency lets authors declare it intentionally and lets runtimes route around incompatible skills.
-- **Fix:** Document the requirement prominently and allow via `validation.allow` if the browser flow is the intended mechanism. Surfaces without a browser (Claude Chat, Cowork) cannot run this skill.
+- **Fix:** Document the requirement prominently. If a service-principal or bearer-token flow would work, prefer it to avoid the constraint. Otherwise allow via `validation.allow` with a reason explaining the intentional auth model.
+- **When to allow:** The skill is intentionally interactive and documents Claude Code (or another browser-capable runtime) as its target surface. Allow with a reason citing the deliberate auth choice.
 
 ### `COMPAT_REQUIRES_LOCAL_SHELL`
 
 - **Default:** `warning`
 - **What:** Skill references a local-shell or local-environment tool (`Bash`/`Edit`/`Write`/`NotebookEdit`) or invokes a shell directly.
 - **Why it matters:** Shell access and local filesystem mutation only exist on local runtimes like Claude Code. A skill that assumes shell availability will not run correctly on remote/chat surfaces.
-- **Fix:** Document that this skill requires a local runtime (Claude Code), or allow the code via `validation.allow` if the shell dependency is intentional.
+- **Fix:** If the skill genuinely needs local access, document it and allow with a reason naming the dependency. If the shell is an implementation detail, refactor to use portable runtime APIs.
+- **When to allow:** The skill is a Claude Code-only workflow (filesystem manipulation, CLI orchestration, IDE integration). Allow with a reason that names the local capability being relied on.
 
 ### `COMPAT_REQUIRES_EXTERNAL_CLI`
 
 - **Default:** `warning`
 - **What:** Skill invokes an external CLI binary not bundled with the skill (`az`, `aws`, `gcloud`, `kubectl`, `docker`, `terraform`, `gh`, `op`).
 - **Why it matters:** External CLIs are environment-dependent — they may be installed, missing, or a different version on any given runtime. Making the dependency explicit lets users (or managed runtimes) ensure the binary is present before invoking the skill.
-- **Fix:** Document the required CLI as a prerequisite, or allow via `validation.allow` if the dependency is intentional. External CLIs may not be present on every runtime.
+- **Fix:** Document the required CLI as a prerequisite in the skill description or README. Consider bundling a language-native SDK (e.g., `@azure/arm-*` instead of `az`) if portability matters. If the CLI is the right tool, allow with a reason.
+- **When to allow:** The skill is intentionally a thin wrapper over a CLI and documents the dependency. Allow with a reason naming the CLI and the surface requirement.
 
 ## Meta Codes
 
