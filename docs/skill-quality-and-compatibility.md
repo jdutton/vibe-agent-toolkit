@@ -20,6 +20,14 @@ Stubs below (Structure, Packaging, Length and Shape, Authoring, Configuration Me
 
 ## Compatibility
 
+### The evidence substrate
+
+VAT's compat reasoning is layered. Parsers produce neutral **evidence records** (pattern matches with file + line + confidence); a derivation step rolls evidence into **observations** (capability claims like "this skill requires local shell"); a verdict engine compares observations against the plugin's declared targets and their runtime profiles to produce **verdicts** (`COMPAT_TARGET_INCOMPATIBLE`, `_NEEDS_REVIEW`, `_UNDECLARED`).
+
+This separation is load-bearing. Evidence is low-confidence by nature — regex can match things it shouldn't — and keeping evidence separate from judgment lets us refine patterns without changing the observation contract. When an adopter reports a false positive, `vat audit --verbose` surfaces the exact pattern that fired; we add the skill content to a regression corpus, refine the pattern, and keep the observation shape stable.
+
+The code-level semantics live in [`docs/validation-codes.md`](./validation-codes.md) — this doc names *why* the split exists; that doc is the reference for what each code does.
+
 ### The three Claude runtimes
 
 VAT models compatibility against three runtimes that differ in what a skill can physically do:
@@ -30,7 +38,7 @@ VAT models compatibility against three runtimes that differ in what a skill can 
 | `claude-cowork` | Managed VM with Python 3.10 + Node 22 pre-installed; restricted network. | Yes | No | Restricted | Yes (within VM) |
 | `claude-code` | Local runtime with full environment. | Yes | Yes | Full | Yes |
 
-"Claude Desktop" is an *application* that can host any of the three, not itself a runtime — do not confuse them. The earlier `claude-desktop` target name in VAT was architecturally wrong and is being retired in 0.1.32.
+"Claude Desktop" is an *application* that can host any of the three, not itself a runtime — do not confuse them. The earlier `claude-desktop` target name in VAT was architecturally wrong and was retired in 0.1.32 (renamed to `claude-chat`). `cowork` was likewise renamed to `claude-cowork` for namespace consistency.
 
 ### Capability axes (what VAT currently reasons about)
 
@@ -56,7 +64,7 @@ A marketplace may declare a default for all plugins it owns:
 { "name": "my-marketplace", "defaults": { "targets": ["claude-code"] } }
 ```
 
-Plugin-level declaration overrides marketplace default. Both absent means *no declaration* — not "assumed compatible with all runtimes." A skill's `COMPAT_REQUIRES_*` observations are informational when no target is declared; they become warnings only when the declared target lacks the capability.
+Plugin-level declaration overrides marketplace default. `vibe-agent-toolkit.config.yaml` (`skills.defaults.targets` / `skills.config.<name>.targets`) supplies a per-skill declaration when neither plugin nor marketplace covers it. All three absent means *no declaration* — not "assumed compatible with all runtimes." A skill's `CAPABILITY_*` observations are informational regardless of declaration state; the verdict engine only produces a `COMPAT_TARGET_INCOMPATIBLE` or `COMPAT_TARGET_NEEDS_REVIEW` warning when a declared target lacks the capability. Without any declaration, the missing declaration itself surfaces as `COMPAT_TARGET_UNDECLARED` at `info`.
 
 ### What we currently detect
 
@@ -111,4 +119,5 @@ VAT believes **overrides should have half-lives**, because an allow entry that s
 
 (Maintained going forward so adopters can see when and why our stance shifted. Initial entry: doc created in 0.1.31 stable.)
 
+- **2026-04-18 (0.1.32)** — Compat model refactored. v1 `COMPAT_REQUIRES_*` codes renamed to `CAPABILITY_*` (informational observations); new `COMPAT_TARGET_*` verdict codes fire only on declared-target mismatch. Runtime `claude-desktop` renamed to `claude-chat`. Evidence substrate added with `--verbose` output surface. Config-level `targets` declaration supported. Post-build validation runs full suite on built output.
 - **2026-04-17 (0.1.31 stable)** — doc created. Compatibility section reflects the v1 detectors shipped in 0.1.31-rc.1, with pending changes named explicitly (runtime rename, evidence/observation split) shipping in 0.1.32.

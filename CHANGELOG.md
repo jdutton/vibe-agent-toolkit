@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Evidence substrate** (`@vibe-agent-toolkit/agent-skills/evidence`). Parsers produce neutral `EvidenceRecord`s with stable pattern IDs from `PATTERN_REGISTRY`; a derivation step rolls evidence into capability `Observation`s; a verdict engine compares observations against declared targets. Designed so pattern refinement never changes the observation contract.
+- **`vat audit --verbose`** renders the evidence chain beneath each `CAPABILITY_*` observation — pattern ID, file, line, match text — and includes an `evidence[]` array in YAML output. Use it to debug false positives or confirm what a detector actually saw.
+- **Runtime profile table** (`RUNTIME_PROFILES` in `@vibe-agent-toolkit/claude-marketplace`) is the single source of truth for what each Claude runtime provides and lacks (local shell, browser, network level, preinstalled binaries).
+- **Verdict engine** (`computeVerdicts`) combines capability observations with declared targets to produce `COMPAT_TARGET_*` issues. Four states: expected (silent), `COMPAT_TARGET_INCOMPATIBLE` (warning), `COMPAT_TARGET_NEEDS_REVIEW` (warning), `COMPAT_TARGET_UNDECLARED` (info).
+- **Config-level `targets` declaration** in `vibe-agent-toolkit.config.yaml` under `skills.defaults.targets` and `skills.config.<name>.targets`. Declaring targets suppresses non-applicable compat verdicts.
+- **Marketplace-level `defaults.targets`** in `.claude-plugin/marketplace.json`. Layer priority (highest to lowest): `plugin.json` → `marketplace.json` → `vibe-agent-toolkit.config.yaml`.
+- **Post-build validation**: `vat skills build` runs the full validation suite against built `dist/skills/*/SKILL.md` (skipping source-only codes like `LINK_OUTSIDE_PROJECT`). Build failures surface identically to source failures.
+- **`info` severity** in the validation framework. `CAPABILITY_*` and `COMPAT_TARGET_UNDECLARED` emit as info; they appear in output and respect `validation.severity` overrides but do not contribute to build failure status.
+- New validation codes: `CAPABILITY_LOCAL_SHELL`, `CAPABILITY_EXTERNAL_CLI`, `CAPABILITY_BROWSER_AUTH` (info); `COMPAT_TARGET_INCOMPATIBLE`, `COMPAT_TARGET_NEEDS_REVIEW` (warning); `COMPAT_TARGET_UNDECLARED` (info).
+
+### Changed
+- **BREAKING: Runtime target rename.** `claude-desktop` → `claude-chat`, `cowork` → `claude-cowork`. Update `plugin.json`, `marketplace.json`, and any config references. The `claude-desktop` name was architecturally wrong — Claude Desktop is a host application, not a runtime.
+- **BREAKING: `runCompatDetectors` returns `DetectorOutput { evidence, observations }`** instead of `ValidationIssue[]`. The skill-validator converts observations to issues via `observationToIssue`; external callers must do the same or consume observations directly.
+- **BREAKING: `CompatibilityResult` restructured.** Old shape: `{ declared, analyzed: Record<Target, Verdict>, evidence: CompatibilityEvidence[] }`. New: `{ declaredTargets, evidence: EvidenceRecord[], observations: Observation[], verdicts: Verdict[] }`.
+- **BREAKING: Scanner output shape.** Scanners in `@vibe-agent-toolkit/claude-marketplace` now return `EvidenceRecord[]` with registered pattern IDs; `ScannerOutput { evidence, observations }` replaces `CompatibilityEvidence`.
+
+### Removed
+- **BREAKING:** `COMPAT_REQUIRES_BROWSER_AUTH`, `COMPAT_REQUIRES_LOCAL_SHELL`, `COMPAT_REQUIRES_EXTERNAL_CLI` codes (replaced by `CAPABILITY_*` + `COMPAT_TARGET_*`).
+- **BREAKING:** `CompatibilityEvidence` type, legacy `Verdict` string union (`'compatible' | 'needs-review' | 'incompatible'`), `ImpactLevel` type, `ALL_TARGETS` export, `aggregateVerdicts`, `hasNonOkImpact` helpers.
+- **BREAKING:** Hardcoded `IMPACT_*` constants and `packages/claude-marketplace/src/scanners/impact-constants.ts` module. Impact logic now lives in the runtime profile table and verdict engine.
+- `yaml` runtime dependency from `@vibe-agent-toolkit/claude-marketplace` (YAML parsing now lives in agent-skills via frontmatter delegation).
+
+### Migration Notes
+Pre-1.0 breaking. Callers must:
+1. Update `plugin.json` `targets` arrays to use `claude-chat` / `claude-cowork` / `claude-code`.
+2. Replace `COMPAT_REQUIRES_*` entries in `validation.severity` / `validation.allow` with the matching `CAPABILITY_*` or `COMPAT_TARGET_*` code.
+3. If consuming `CompatibilityResult` programmatically, migrate from `analyzed`/`declared` fields to `verdicts`/`declaredTargets`.
+4. Declare runtime targets in at least one layer (plugin, marketplace defaults, or config) or accept `COMPAT_TARGET_UNDECLARED` info emissions.
+5. Run `vat audit --verbose` to inspect evidence and confirm the refactor's output matches intent.
+
 ## [0.1.31] - 2026-04-17
 
 ### Added
