@@ -45,6 +45,11 @@ describe('analyzeCompatibility', () => {
     expect(result.evidence.some(e => e.patternId === 'MCP_SERVER_COMMAND')).toBe(true);
     // MCP-only plugins shouldn't roll up to CAPABILITY_LOCAL_SHELL.
     expect(result.observations.some(o => o.code === 'CAPABILITY_LOCAL_SHELL')).toBe(false);
+    // mcp-plugin fixture uses `command: node` — should roll up to CAPABILITY_EXTERNAL_CLI
+    // so the plugin produces a meaningful verdict at the marketplace level.
+    const externalCli = result.observations.find(o => o.code === 'CAPABILITY_EXTERNAL_CLI');
+    expect(externalCli).toBeDefined();
+    expect(externalCli?.payload).toEqual({ binary: 'node' });
   });
 
   it('detects SCRIPT_FILE_NODE for a node-bundled plugin', async () => {

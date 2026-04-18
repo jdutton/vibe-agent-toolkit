@@ -17,3 +17,7 @@ export {
   type DeriveObservationsOptions,
   type DerivationSubject,
 } from './derive-observations.js';
+export {
+  detectInterpreter,
+  extractMcpCommandFromMatchText,
+} from './interpreter-detection.js';
