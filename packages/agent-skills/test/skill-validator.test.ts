@@ -140,7 +140,7 @@ describe('warning-level validations', () => {
     expect(issue).toBeUndefined();
   });
 
-  it('should warn when skill references console-incompatible features', async () => {
+  it('should emit local-shell capability when skill references local-shell tools', async () => {
     const result = await createSkillAndValidate(
       getTempDir(),
       createSkillContent(
@@ -149,11 +149,12 @@ describe('warning-level validations', () => {
       ),
     );
 
-    expectWarning(result, 'COMPAT_REQUIRES_LOCAL_SHELL');
-    expect(result.issues.some((i) => i.code === 'COMPAT_REQUIRES_LOCAL_SHELL')).toBe(true);
+    const issue = result.issues.find((i) => i.code === 'CAPABILITY_LOCAL_SHELL');
+    expect(issue).toBeDefined();
+    expect(issue?.severity).toBe('info');
   });
 
-  it('should not warn for console-compatible skills', async () => {
+  it('should not emit local-shell capability for portable skills', async () => {
     const result = await createSkillAndValidate(
       getTempDir(),
       createSkillContent(
@@ -162,7 +163,7 @@ describe('warning-level validations', () => {
       ),
     );
 
-    const issue = result.issues.find((i) => i.code === 'COMPAT_REQUIRES_LOCAL_SHELL');
+    const issue = result.issues.find((i) => i.code === 'CAPABILITY_LOCAL_SHELL');
     expect(issue).toBeUndefined();
   });
 
@@ -182,7 +183,7 @@ describe('warning-level validations', () => {
 describe('compat detectors in validateSkill', () => {
   const { getTempDir } = setupTempDir('skill-validator-compat-test-');
 
-  it('emits COMPAT_REQUIRES_LOCAL_SHELL when SKILL.md lists Bash in allowed-tools', async () => {
+  it('emits CAPABILITY_LOCAL_SHELL when SKILL.md lists Bash in allowed-tools', async () => {
     const result = await createSkillAndValidate(
       getTempDir(),
       [
@@ -196,10 +197,10 @@ describe('compat detectors in validateSkill', () => {
         '',
       ].join('\n'),
     );
-    expect(result.issues.some(i => i.code === 'COMPAT_REQUIRES_LOCAL_SHELL')).toBe(true);
+    expect(result.issues.some(i => i.code === 'CAPABILITY_LOCAL_SHELL')).toBe(true);
   });
 
-  it('emits COMPAT_REQUIRES_BROWSER_AUTH when a linked md references MSAL', async () => {
+  it('emits CAPABILITY_BROWSER_AUTH when a linked md references MSAL', async () => {
     const tmp = getTempDir();
     const skillPath = safePath.join(tmp, 'SKILL.md');
     const authPath = safePath.join(tmp, 'auth.md');
@@ -228,7 +229,7 @@ describe('compat detectors in validateSkill', () => {
       ].join('\n'),
     );
     const result = await validateSkill({ skillPath });
-    expect(result.issues.some(i => i.code === 'COMPAT_REQUIRES_BROWSER_AUTH')).toBe(true);
+    expect(result.issues.some(i => i.code === 'CAPABILITY_BROWSER_AUTH')).toBe(true);
   });
 
   it('attaches compat issues to per-file linkedFiles entry for linked md', async () => {
@@ -262,8 +263,8 @@ describe('compat detectors in validateSkill', () => {
     const result = await validateSkill({ skillPath });
     const linked = result.linkedFiles?.find(lf => lf.path.endsWith('cli.md'));
     expect(linked).toBeDefined();
-    expect(linked?.issues.some(i => i.code === 'COMPAT_REQUIRES_EXTERNAL_CLI')).toBe(true);
+    expect(linked?.issues.some(i => i.code === 'CAPABILITY_EXTERNAL_CLI')).toBe(true);
     // And the top-level issues array also has it
-    expect(result.issues.some(i => i.code === 'COMPAT_REQUIRES_EXTERNAL_CLI')).toBe(true);
+    expect(result.issues.some(i => i.code === 'CAPABILITY_EXTERNAL_CLI')).toBe(true);
   });
 });

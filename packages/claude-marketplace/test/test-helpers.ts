@@ -5,7 +5,6 @@ import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/u
 import { afterEach, beforeEach } from 'vitest';
 
 import type { ClaudeUserPaths } from '../src/paths/claude-paths.js';
-import type { ImpactLevel, Target, Verdict } from '../src/types.js';
 
 export interface SetupPluginTestPathsOptions {
   /** If true, also creates paths.skillsDir for legacy skill tests */
@@ -63,22 +62,4 @@ export function buildTestPaths(base: string): ClaudeUserPaths {
 /** Build a markdown bash code block containing a single command */
 export function bashCodeBlock(command: string): string {
   return ['```bash', command, '```'].join('\n');
-}
-
-/** Build an impact record with defaults of 'ok' for each target */
-export function impact(
-  desktop: ImpactLevel = 'ok',
-  cowork: ImpactLevel = 'ok',
-  code: ImpactLevel = 'ok',
-): Record<Target, ImpactLevel> {
-  return { 'claude-desktop': desktop, cowork, 'claude-code': code };
-}
-
-/** Build a verdicts record for assertion against CompatibilityResult.analyzed */
-export function verdicts(
-  desktop: Verdict,
-  cowork: Verdict,
-  code: Verdict,
-): Record<Target, Verdict> {
-  return { 'claude-desktop': desktop, cowork, 'claude-code': code };
 }

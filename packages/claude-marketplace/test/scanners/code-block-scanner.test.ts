@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { scanCodeBlocks } from '../../src/scanners/code-block-scanner.js';
-import { bashCodeBlock, impact } from '../test-helpers.js';
+import { bashCodeBlock } from '../test-helpers.js';
 
 describe('scanCodeBlocks', () => {
   it('returns empty array for markdown with no code blocks', () => {
@@ -10,21 +10,22 @@ describe('scanCodeBlocks', () => {
     expect(result).toEqual([]);
   });
 
-  const NEEDS_REVIEW = impact('needs-review');
-
-  it.each([
-    { cmd: 'python3 scripts/unit-economics.py --sales-costs 500000', signal: 'python3', expected: NEEDS_REVIEW },
-    { cmd: 'pip install pandas numpy', signal: 'pip install', expected: impact('incompatible') },
-    { cmd: 'npm install express', signal: 'npm install', expected: NEEDS_REVIEW },
-    { cmd: 'node scripts/process.mjs --input data.json', signal: 'node', expected: impact() },
-    { cmd: 'bash scripts/setup.sh', signal: 'bash', expected: NEEDS_REVIEW },
-  ])('detects "$signal" command in bash code block', ({ cmd, signal, expected }) => {
-    const result = scanCodeBlocks(bashCodeBlock(cmd), 'SKILL.md');
-    expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({ source: 'code-block', signal, impact: expected });
+  it('emits FENCED_SHELL_BLOCK evidence for a bash code block', () => {
+    const result = scanCodeBlocks(bashCodeBlock('python3 scripts/calc.py'), 'SKILL.md');
+    expect(result.some(e => e.patternId === 'FENCED_SHELL_BLOCK')).toBe(true);
   });
 
-  it('includes file path and line number in evidence', () => {
+  it('emits EXTERNAL_CLI_AZ for an az invocation in a shell block', () => {
+    const result = scanCodeBlocks(bashCodeBlock('az group list'), 'SKILL.md');
+    expect(result.some(e => e.patternId === 'EXTERNAL_CLI_AZ')).toBe(true);
+  });
+
+  it('emits BROWSER_AUTH_AZ_LOGIN for an az login invocation', () => {
+    const result = scanCodeBlocks(bashCodeBlock('az login'), 'SKILL.md');
+    expect(result.some(e => e.patternId === 'BROWSER_AUTH_AZ_LOGIN')).toBe(true);
+  });
+
+  it('records location with file path and line number', () => {
     const content = [
       '# Usage',
       '',
@@ -34,31 +35,27 @@ describe('scanCodeBlocks', () => {
     ].join('\n');
 
     const result = scanCodeBlocks(content, 'skills/finance/SKILL.md');
-    expect(result).toHaveLength(1);
-    expect(result[0]?.file).toBe('skills/finance/SKILL.md');
-    expect(result[0]?.line).toBeGreaterThan(0);
-  });
-
-  it('detects uv run command', () => {
-    const result = scanCodeBlocks(bashCodeBlock('uv run python scripts/analyze.py'), 'SKILL.md');
-    expect(result.some(e => e.signal === 'uv')).toBe(true);
+    const fenced = result.find(e => e.patternId === 'FENCED_SHELL_BLOCK');
+    expect(fenced?.location.file).toBe('skills/finance/SKILL.md');
+    expect(fenced?.location.line).toBeGreaterThan(0);
   });
 
   it('handles multiple code blocks in one file', () => {
     const content = [
       '```bash',
-      'python3 scripts/a.py',
+      'az group list',
       '```',
       '',
       'Some text',
       '',
       '```bash',
-      'pip install requests',
+      'aws s3 ls',
       '```',
     ].join('\n');
 
     const result = scanCodeBlocks(content, 'SKILL.md');
-    expect(result.length).toBeGreaterThanOrEqual(2);
+    expect(result.some(e => e.patternId === 'EXTERNAL_CLI_AZ')).toBe(true);
+    expect(result.some(e => e.patternId === 'EXTERNAL_CLI_AWS')).toBe(true);
   });
 
   it('ignores non-executable code blocks (json, yaml, etc.)', () => {
@@ -74,10 +71,5 @@ describe('scanCodeBlocks', () => {
 
     const result = scanCodeBlocks(content, 'SKILL.md');
     expect(result).toEqual([]);
-  });
-
-  it('scans unlabeled code blocks for commands', () => {
-    const result = scanCodeBlocks(['```', 'python3 scripts/calculate.py', '```'].join('\n'), 'SKILL.md');
-    expect(result.length).toBeGreaterThanOrEqual(1);
   });
 });

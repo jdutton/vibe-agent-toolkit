@@ -1,18 +1,21 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { extname } from 'node:path';
 
+import type { EvidenceRecord, Observation } from '@vibe-agent-toolkit/agent-skills';
 import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 
+import { readMarketplaceDefaultTargets, resolveEffectiveTargets } from './marketplace-defaults.js';
 import {
   classifyScriptFile,
+  deriveScannerObservations,
   scanCodeBlocks,
   scanFrontmatter,
   scanHooksConfig,
   scanMcpConfig,
   scanPythonImports,
 } from './scanners/index.js';
-import type { CompatibilityEvidence, CompatibilityResult, ImpactLevel, Target, Verdict } from './types.js';
-import { ALL_TARGETS } from './types.js';
+import type { CompatibilityResult, Target } from './types.js';
+import { computeVerdicts } from './verdict-engine.js';
 
 /** File extensions treated as scripts by the scanner */
 const SCRIPT_EXTENSIONS = new Set(['.py', '.sh', '.bash', '.mjs', '.js', '.cjs']);
@@ -91,45 +94,12 @@ async function collectFiles(rootDir: string): Promise<string[]> {
 }
 
 /**
- * Determine if an evidence item has meaningful impact (not all-ok).
- * Evidence where every target is 'ok' is informational noise and gets filtered out.
- */
-function hasNonOkImpact(evidence: CompatibilityEvidence): boolean {
-  return ALL_TARGETS.some(target => evidence.impact[target] !== 'ok');
-}
-
-/**
- * Aggregate evidence into a per-target verdict.
- * Worst impact wins: any 'incompatible' -> incompatible, any 'needs-review' -> needs-review.
- */
-function aggregateVerdicts(evidence: CompatibilityEvidence[]): Record<Target, Verdict> {
-  const result: Record<Target, Verdict> = {
-    'claude-desktop': 'compatible',
-    cowork: 'compatible',
-    'claude-code': 'compatible',
-  };
-
-  for (const item of evidence) {
-    for (const target of ALL_TARGETS) {
-      const impact: ImpactLevel = item.impact[target];
-      if (impact === 'incompatible') {
-        result[target] = 'incompatible';
-      } else if (impact === 'needs-review' && result[target] !== 'incompatible') {
-        result[target] = 'needs-review';
-      }
-    }
-  }
-
-  return result;
-}
-
-/**
  * Scan a single markdown file for compatibility evidence.
  */
 async function scanMarkdownFile(
   fullPath: string,
   relativePath: string,
-): Promise<CompatibilityEvidence[]> {
+): Promise<EvidenceRecord[]> {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from collectFiles walk
   const content = await readFile(fullPath, 'utf8');
   return [
@@ -145,8 +115,8 @@ async function scanMarkdownFile(
 async function scanScriptFile(
   fullPath: string,
   relativePath: string,
-): Promise<CompatibilityEvidence[]> {
-  const evidence: CompatibilityEvidence[] = [];
+): Promise<EvidenceRecord[]> {
+  const evidence: EvidenceRecord[] = [];
 
   const classification = classifyScriptFile(relativePath);
   if (classification) {
@@ -168,7 +138,7 @@ async function scanScriptFile(
 async function scanHooksFile(
   fullPath: string,
   relativePath: string,
-): Promise<CompatibilityEvidence[]> {
+): Promise<EvidenceRecord[]> {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from collectFiles walk
   const raw = await readFile(fullPath, 'utf8');
   const config = JSON.parse(raw) as Record<string, unknown>;
@@ -181,7 +151,7 @@ async function scanHooksFile(
 async function scanMcpFile(
   fullPath: string,
   relativePath: string,
-): Promise<CompatibilityEvidence[]> {
+): Promise<EvidenceRecord[]> {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- path from collectFiles walk
   const raw = await readFile(fullPath, 'utf8');
   const config = JSON.parse(raw) as Record<string, unknown>;
@@ -209,17 +179,19 @@ function isMcpConfigFile(relativePath: string): boolean {
  * Analyze a Claude plugin directory for compatibility across all target surfaces.
  *
  * Walks the plugin directory, runs relevant scanners on each file,
- * and aggregates evidence into per-target verdicts.
+ * derives capability observations from raw evidence, and computes
+ * COMPAT_TARGET_* verdicts via the verdict engine using the effective
+ * declared targets (plugin.json → marketplace.json → config layer).
  *
  * @param pluginDir - Absolute path to the plugin root directory
- * @returns Aggregated compatibility result with evidence and verdicts
+ * @returns CompatibilityResult with evidence, observations, verdicts, and counts
  * @throws If the directory does not contain a valid .claude-plugin/plugin.json
  */
 export async function analyzeCompatibility(pluginDir: string): Promise<CompatibilityResult> {
   const manifest = await readPluginManifest(pluginDir);
   const files = await collectFiles(pluginDir);
 
-  const allEvidence: CompatibilityEvidence[] = [];
+  const allEvidence: EvidenceRecord[] = [];
   const counts: FileCounts = {
     totalFiles: files.length,
     skillFiles: 0,
@@ -234,32 +206,43 @@ export async function analyzeCompatibility(pluginDir: string): Promise<Compatibi
 
     if (MARKDOWN_EXTENSIONS.has(ext)) {
       counts.skillFiles++;
-      const evidence = await scanMarkdownFile(fullPath, relativePath);
-      allEvidence.push(...evidence);
+      allEvidence.push(...await scanMarkdownFile(fullPath, relativePath));
     } else if (SCRIPT_EXTENSIONS.has(ext)) {
       counts.scriptFiles++;
-      const evidence = await scanScriptFile(fullPath, relativePath);
-      allEvidence.push(...evidence);
+      allEvidence.push(...await scanScriptFile(fullPath, relativePath));
     } else if (isHooksFile(relativePath)) {
       counts.hookFiles++;
-      const evidence = await scanHooksFile(fullPath, relativePath);
-      allEvidence.push(...evidence);
+      allEvidence.push(...await scanHooksFile(fullPath, relativePath));
     } else if (isMcpConfigFile(relativePath)) {
       counts.mcpConfigs++;
-      const evidence = await scanMcpFile(fullPath, relativePath);
-      allEvidence.push(...evidence);
+      allEvidence.push(...await scanMcpFile(fullPath, relativePath));
     }
   }
 
-  // Filter out evidence where all targets are 'ok' (informational noise)
-  const meaningfulEvidence = allEvidence.filter(hasNonOkImpact);
+  // Roll evidence up into capability observations.
+  const observations: Observation[] = deriveScannerObservations(allEvidence);
+
+  // Resolve effective targets from manifest + marketplace defaults.
+  // The marketplace dir is the parent of the plugin dir (per Claude plugin layout).
+  // Config-layer targets are plumbed through by callers (e.g., the CLI) when
+  // they have a config; the analyzer itself does not load YAML config.
+  const marketplaceDir = safePath.resolve(pluginDir, '..');
+  const marketplaceTargets = await readMarketplaceDefaultTargets(marketplaceDir);
+  const effectiveTargets = resolveEffectiveTargets({
+    configTargets: undefined,
+    pluginTargets: manifest.targets,
+    marketplaceTargets,
+  });
+
+  const verdicts = computeVerdicts({ observations, targets: effectiveTargets });
 
   return {
     plugin: manifest.name,
     version: manifest.version,
-    declared: manifest.targets,
-    analyzed: aggregateVerdicts(meaningfulEvidence),
-    evidence: meaningfulEvidence,
+    declaredTargets: effectiveTargets,
+    evidence: allEvidence,
+    observations,
+    verdicts,
     summary: counts,
   };
 }

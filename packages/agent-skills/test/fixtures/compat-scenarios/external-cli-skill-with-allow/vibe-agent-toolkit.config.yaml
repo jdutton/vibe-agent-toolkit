@@ -8,7 +8,7 @@ skills:
     external-cli-skill-with-allow:
       validation:
         allow:
-          COMPAT_REQUIRES_EXTERNAL_CLI:
+          CAPABILITY_EXTERNAL_CLI:
             - reason: "Uses `az` CLI to query Azure resources"
-          COMPAT_REQUIRES_LOCAL_SHELL:
+          CAPABILITY_LOCAL_SHELL:
             - reason: "Shells out via Bash; Code surface provides this"

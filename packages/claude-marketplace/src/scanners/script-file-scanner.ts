@@ -1,7 +1,8 @@
 import { extname } from 'node:path';
 
-import type { CompatibilityEvidence, ImpactLevel, Target } from '../types.js';
-import { IMPACT_ALL_OK, IMPACT_NEEDS_REVIEW_DESKTOP } from '../types.js';
+import type { EvidenceRecord } from '@vibe-agent-toolkit/agent-skills';
+
+import { buildEvidence } from './evidence-helpers.js';
 
 /** Python 3.10+ standard library modules */
 export const PYTHON_STDLIB_MODULES: ReadonlySet<string> = new Set([
@@ -158,35 +159,14 @@ export const PYTHON_STDLIB_MODULES: ReadonlySet<string> = new Set([
   'zlib',
 ]);
 
-const SIGNAL_NODE_SCRIPT = 'node-script';
-const SIGNAL_SHELL_SCRIPT = 'shell-script';
-
-/** Script extension classification rules */
-const SCRIPT_RULES: Record<string, { signal: string; impact: Record<Target, ImpactLevel> }> = {
-  '.py': {
-    signal: 'python-script',
-    impact: { ...IMPACT_NEEDS_REVIEW_DESKTOP },
-  },
-  '.sh': {
-    signal: SIGNAL_SHELL_SCRIPT,
-    impact: { ...IMPACT_NEEDS_REVIEW_DESKTOP },
-  },
-  '.bash': {
-    signal: SIGNAL_SHELL_SCRIPT,
-    impact: { ...IMPACT_NEEDS_REVIEW_DESKTOP },
-  },
-  '.mjs': {
-    signal: SIGNAL_NODE_SCRIPT,
-    impact: { ...IMPACT_ALL_OK },
-  },
-  '.js': {
-    signal: SIGNAL_NODE_SCRIPT,
-    impact: { ...IMPACT_ALL_OK },
-  },
-  '.cjs': {
-    signal: SIGNAL_NODE_SCRIPT,
-    impact: { ...IMPACT_ALL_OK },
-  },
+/** Map script extensions to the pattern ID that records their presence. */
+const SCRIPT_EXTENSION_PATTERNS: Record<string, string> = {
+  '.py': 'SCRIPT_FILE_PYTHON',
+  '.sh': 'SCRIPT_FILE_SHELL',
+  '.bash': 'SCRIPT_FILE_SHELL',
+  '.mjs': 'SCRIPT_FILE_NODE',
+  '.js': 'SCRIPT_FILE_NODE',
+  '.cjs': 'SCRIPT_FILE_NODE',
 };
 
 /** Regex for `import X` and `import X as Y` */
@@ -196,31 +176,24 @@ const IMPORT_RE = /^import\s+(\w+)/;
 const FROM_IMPORT_RE = /^from\s+(\w+)/;
 
 /**
- * Classify a script file by its extension and return compatibility evidence.
- * Returns undefined for non-script files.
+ * Classify a script file by its extension. Returns a single SCRIPT_FILE_*
+ * evidence record when the extension matches a known script type.
  */
-export function classifyScriptFile(relativePath: string): CompatibilityEvidence | undefined {
+export function classifyScriptFile(relativePath: string): EvidenceRecord | undefined {
   const ext = extname(relativePath).toLowerCase();
-  const rule = SCRIPT_RULES[ext];
-
-  if (!rule) {
+  const patternId = SCRIPT_EXTENSION_PATTERNS[ext];
+  if (patternId === undefined) {
     return undefined;
   }
-
-  return {
-    source: 'script',
-    file: relativePath,
-    signal: rule.signal,
-    detail: `Script file detected: ${relativePath}`,
-    impact: { ...rule.impact },
-  };
+  return buildEvidence(patternId, relativePath, `script file: ${relativePath}`);
 }
 
 /**
  * Parse Python source content for import statements and return evidence
- * for any third-party (non-stdlib) imports found.
+ * for any third-party (non-stdlib) imports found, one record per distinct
+ * module.
  */
-export function scanPythonImports(content: string, filePath: string): CompatibilityEvidence[] {
+export function scanPythonImports(content: string, filePath: string): EvidenceRecord[] {
   const thirdPartyModules = new Set<string>();
 
   for (const line of content.split('\n')) {
@@ -243,16 +216,16 @@ export function scanPythonImports(content: string, filePath: string): Compatibil
     }
   }
 
-  const evidence: CompatibilityEvidence[] = [];
+  const evidence: EvidenceRecord[] = [];
 
   for (const moduleName of thirdPartyModules) {
-    evidence.push({
-      source: 'script-import',
-      file: filePath,
-      signal: `third-party-import:${moduleName}`,
-      detail: `Third-party Python import "${moduleName}" requires pip install`,
-      impact: { ...IMPACT_NEEDS_REVIEW_DESKTOP },
-    });
+    evidence.push(
+      buildEvidence(
+        'PYTHON_IMPORT_THIRD_PARTY',
+        filePath,
+        `third-party import: ${moduleName}`,
+      ),
+    );
   }
 
   return evidence;

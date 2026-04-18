@@ -10,11 +10,13 @@ import {
   type PackagingValidationResult,
   type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
+import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
 import * as yaml from 'js-yaml';
 
 import { loadConfig } from '../../utils/config-loader.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import { type createLogger } from '../../utils/logger.js';
+import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
 
 import {
   filterSkillsByName,
@@ -228,6 +230,7 @@ export async function validateCommand(
       logger.debug(`   Source: ${skill.sourcePath}`);
 
       const result = await validateSkillForPackaging(skill.sourcePath, skill.packagingConfig);
+      applyConfigVerdicts(result, skill.packagingConfig.targets as readonly Target[] | undefined, skill.sourcePath);
       logSkillProgress(skill.name, result, logger);
       results.push(result);
     }

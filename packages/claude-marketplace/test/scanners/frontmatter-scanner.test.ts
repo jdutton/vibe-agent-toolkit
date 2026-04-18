@@ -16,7 +16,7 @@ describe('scanFrontmatter', () => {
     expect(result).toEqual([]);
   });
 
-  it('detects Bash in allowed-tools as incompatible with desktop', () => {
+  it('detects Bash in allowed-tools as ALLOWED_TOOLS_LOCAL_SHELL evidence', () => {
     const content = [
       '---',
       'name: code-skill',
@@ -26,14 +26,12 @@ describe('scanFrontmatter', () => {
     ].join('\n');
 
     const result = scanFrontmatter(content, 'SKILL.md');
-    const bashEvidence = result.find(e => e.signal === 'allowed-tools: Bash');
-    expect(bashEvidence).toBeDefined();
-    expect(bashEvidence?.impact['claude-desktop']).toBe('incompatible');
-    expect(bashEvidence?.impact.cowork).toBe('needs-review');
-    expect(bashEvidence?.impact['claude-code']).toBe('ok');
+    const evidence = result.find(e => e.patternId === 'ALLOWED_TOOLS_LOCAL_SHELL');
+    expect(evidence).toBeDefined();
+    expect(evidence?.location.file).toBe('SKILL.md');
   });
 
-  it('detects Edit in allowed-tools as incompatible with desktop', () => {
+  it('detects Edit in allowed-tools as ALLOWED_TOOLS_LOCAL_SHELL evidence', () => {
     const content = [
       '---',
       'name: edit-skill',
@@ -43,12 +41,10 @@ describe('scanFrontmatter', () => {
     ].join('\n');
 
     const result = scanFrontmatter(content, 'SKILL.md');
-    const editEvidence = result.find(e => e.signal === 'allowed-tools: Edit');
-    expect(editEvidence).toBeDefined();
-    expect(editEvidence?.impact['claude-desktop']).toBe('incompatible');
+    expect(result.some(e => e.patternId === 'ALLOWED_TOOLS_LOCAL_SHELL')).toBe(true);
   });
 
-  it('detects Write in allowed-tools as incompatible with desktop', () => {
+  it('detects Write in allowed-tools as ALLOWED_TOOLS_LOCAL_SHELL evidence', () => {
     const content = [
       '---',
       'name: write-skill',
@@ -58,7 +54,7 @@ describe('scanFrontmatter', () => {
     ].join('\n');
 
     const result = scanFrontmatter(content, 'SKILL.md');
-    expect(result.some(e => e.signal === 'allowed-tools: Write')).toBe(true);
+    expect(result.some(e => e.patternId === 'ALLOWED_TOOLS_LOCAL_SHELL')).toBe(true);
   });
 
   it('ignores Read and other non-restricted tools in allowed-tools', () => {
@@ -74,7 +70,7 @@ describe('scanFrontmatter', () => {
     expect(result).toEqual([]);
   });
 
-  it('handles frontmatter without allowed-tools or targets', () => {
+  it('handles frontmatter without allowed-tools', () => {
     const content = [
       '---',
       'name: basic',
@@ -91,19 +87,5 @@ describe('scanFrontmatter', () => {
     const content = '---\ninvalid yaml: [[[bad\n---\n# Content';
     const result = scanFrontmatter(content, 'SKILL.md');
     expect(Array.isArray(result)).toBe(true);
-  });
-
-  it('silently ignores a top-level targets field (deprecated in 0.1.31)', () => {
-    const content = [
-      '---',
-      'name: test-skill',
-      'description: A test skill',
-      'targets: [claude-code]',
-      '---',
-      '',
-      'Body.',
-    ].join('\n');
-    const evidence = scanFrontmatter(content, 'test.md');
-    expect(evidence.some(e => e.source === 'declaration')).toBe(false);
   });
 });

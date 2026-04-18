@@ -9,8 +9,8 @@ import {
   detectResourceFormat,
   validate,
   validateSkill,
-  runCompatDetectors,
   validateSkillForPackaging,
+  type EvidenceRecord,
   type PackagingValidationResult,
   type SkillPackagingConfig,
   type ValidateOptions,
@@ -23,6 +23,7 @@ import {
   readEffectiveSettings,
   type CompatibilityResult,
   type EffectiveSettings,
+  type Target,
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
@@ -34,6 +35,7 @@ import { handleCommandError } from '../utils/command-error.js';
 import { loadConfig } from '../utils/config-loader.js';
 import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
+import { computeConfigVerdicts } from '../utils/verdict-helpers.js';
 
 import { buildHierarchicalOutput } from './audit/hierarchical-output.js';
 import { createAuditSettingsCommand } from './audit-settings.js';
@@ -132,18 +134,21 @@ async function buildVATProjectContext(
  * Convert PackagingValidationResult to ValidationResult for consistent audit output.
  * In audit mode, we merge allErrors (which includes both errors and warnings after
  * severity resolution but WITHOUT allow suppression) into the standard issues array.
+ *
+ * Compat verdicts (COMPAT_TARGET_*) are computed from the result's observations
+ * and the config-level targets, then merged into the issue list.
  */
 function packagingResultToValidationResult(
   skillPath: string,
   result: PackagingValidationResult,
-  extraIssues?: ValidationIssue[]
+  configTargets: ReadonlyArray<Target> | undefined,
 ): ValidationResult {
   // allErrors contains all emitted issues (errors + warnings) after severity resolution
-  // but without allow suppression — exactly what audit wants.
-  // extraIssues (e.g., compat detectors) are merged in since the packaging validator
-  // doesn't run them.
-  const issues = extraIssues !== undefined && extraIssues.length > 0
-    ? [...result.allErrors, ...extraIssues]
+  // but without allow suppression — exactly what audit wants. Verdicts are
+  // computed from the observations carried on the result.
+  const verdictIssues = computeConfigVerdicts(result.observations, configTargets, skillPath);
+  const issues = verdictIssues.length > 0
+    ? [...result.allErrors, ...verdictIssues]
     : result.allErrors;
   const errorCount = issues.filter(i => i.severity === 'error').length;
   const warningCount = issues.filter(i => i.severity === 'warning').length;
@@ -158,7 +163,7 @@ function packagingResultToValidationResult(
     status = 'success';
   }
 
-  return {
+  const out: ValidationResult = {
     path: skillPath,
     type: RESOURCE_TYPE_AGENT_SKILL,
     status,
@@ -169,6 +174,10 @@ function packagingResultToValidationResult(
       name: result.skillName,
     },
   };
+  if (result.evidence.length > 0) {
+    out.evidence = result.evidence;
+  }
+  return out;
 }
 
 /**
@@ -189,10 +198,11 @@ async function validateSingleSkill(
     if (skillConfig !== undefined) {
       logger.debug(`  Using config-aware validation for: ${skillPath}`);
       const packagingResult = await validateSkillForPackaging(skillPath, skillConfig);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillPath is validated user input
-      const skillContent = fs.readFileSync(skillPath, 'utf-8');
-      const compatIssues = runCompatDetectors(skillContent, skillPath);
-      return packagingResultToValidationResult(skillPath, packagingResult, compatIssues);
+      return packagingResultToValidationResult(
+        skillPath,
+        packagingResult,
+        skillConfig.targets as readonly Target[] | undefined,
+      );
     }
   }
 
@@ -230,7 +240,7 @@ export function createAuditCommand(): Command {
     .option('--user', 'Audit user-level Claude resources (default: $CLAUDE_CONFIG_DIR or ~/.claude — scans plugins/, skills/, marketplaces/)')
     .option('--verbose', 'Show all scanned resources, including those without issues')
     .option('--warn-unreferenced-files', 'Warn about files not referenced in skill markdown')
-    .option('--compat', 'Run compatibility analysis for each plugin (shows claude-code, cowork, claude-desktop support)')
+    .option('--compat', 'Run compatibility analysis for each plugin (shows claude-code, claude-cowork, claude-chat support)')
     .option('--settings [file]', 'Check plugins against Claude settings (auto-discover or specify file; requires --compat)')
     .option('--debug', 'Enable debug logging')
     .action(auditCommand)
@@ -388,10 +398,14 @@ async function auditUserDirectories(
     ? await runCompatAnalysis(results, logger)  // --settings not supported in --user mode
     : undefined;
 
+  const verbose = options.verbose ?? false;
   const skillResults = results.filter((r: ValidationResult) => SKILL_RESULT_TYPES.has(r.type));
-  const hierarchical = buildHierarchicalOutput(skillResults, options.verbose ?? false);
-  const summary = calculateHierarchicalSummary(results, hierarchical, startTime, compatMap);
+  const hierarchical = buildHierarchicalOutput(skillResults, verbose);
+  const summary = calculateHierarchicalSummary(results, hierarchical, startTime, compatMap, verbose);
   writeYamlOutput(summary);
+  if (verbose) {
+    renderVerboseEvidence(results, logger);
+  }
   logHierarchicalSummary(results, hierarchical, logger);
 }
 
@@ -512,6 +526,29 @@ function applySeverityFilter(
   });
 }
 
+/**
+ * Resolve `--settings`-driven EffectiveSettings if both --settings and
+ * --compat flags are present. Logs warnings for misconfiguration paths.
+ */
+async function resolveEffectiveSettings(
+  options: AuditCommandOptions,
+  scanPath: string,
+  logger: ReturnType<typeof createLogger>,
+): Promise<EffectiveSettings | undefined> {
+  if (!options.settings) return undefined;
+  if (!options.compat) {
+    logger.error('Warning: --settings requires --compat to be effective');
+    return undefined;
+  }
+  const settingsFile = typeof options.settings === 'string' ? options.settings : undefined;
+  try {
+    return await readEffectiveSettings({ settingsFile, projectDir: scanPath });
+  } catch (err) {
+    logger.error(`Warning: could not load settings: ${String(err)}`);
+    return undefined;
+  }
+}
+
 export async function auditCommand(
   targetPath: string | undefined,
   options: AuditCommandOptions
@@ -540,28 +577,19 @@ export async function auditCommand(
     // Allow is deliberately NOT applied — audit is advisory only.
     const results = applySeverityFilter(rawResults, config);
 
-    // Load effective settings when --settings is used (requires --compat)
-    let effectiveSettings: EffectiveSettings | undefined;
-    if (options.settings) {
-      if (options.compat) {
-        const settingsFile = typeof options.settings === 'string' ? options.settings : undefined;
-        try {
-          effectiveSettings = await readEffectiveSettings({ settingsFile, projectDir: scanPath });
-        } catch (err) {
-          logger.error(`Warning: could not load settings: ${String(err)}`);
-        }
-      } else {
-        logger.error('Warning: --settings requires --compat to be effective');
-      }
-    }
+    const effectiveSettings = await resolveEffectiveSettings(options, scanPath, logger);
 
     // Run compatibility analysis if --compat flag is set
     const compatMap = options.compat
       ? await runCompatAnalysis(results, logger, effectiveSettings)
       : undefined;
 
-    const summary = calculateSummary(results, startTime, compatMap);
+    const verbose = options.verbose ?? false;
+    const summary = calculateSummary(results, startTime, compatMap, verbose);
     writeYamlOutput(summary);
+    if (verbose) {
+      renderVerboseEvidence(results, logger);
+    }
     handleAuditResults(results, summary, logger);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'AgentAudit');
@@ -704,16 +732,121 @@ function applyCompatMap(
   return results;
 }
 
+/**
+ * Strip `evidence` from per-file results and `compatibility.evidence` when
+ * the audit is not running in --verbose mode. Producing the field at all
+ * (even as `[]`) would clutter terse YAML; we omit the key entirely.
+ */
+function stripCompatEvidence(compat: CompatibilityResult): Omit<CompatibilityResult, 'evidence'> {
+  const out: Record<string, unknown> = { ...compat };
+  delete out['evidence'];
+  return out as Omit<CompatibilityResult, 'evidence'>;
+}
+
+function applyVerboseFilter<T extends ValidationResult & { compatibility?: CompatibilityResult }>(
+  results: T[],
+  verbose: boolean,
+): T[] {
+  if (verbose) return results;
+  return results.map(r => {
+    const stripped = { ...r } as Record<string, unknown>;
+    delete stripped['evidence'];
+    if (r.compatibility !== undefined) {
+      stripped['compatibility'] = stripCompatEvidence(r.compatibility);
+    }
+    return stripped as unknown as T;
+  });
+}
+
 function calculateSummary(
   results: ValidationResult[],
   startTime: number,
-  compatMap?: Map<string, CompatibilityResult>
+  compatMap: Map<string, CompatibilityResult> | undefined,
+  verbose: boolean,
 ) {
   const base = buildBaseSummary(results, startTime);
+  const withCompat = applyCompatMap(results, compatMap);
   return {
     ...base,
-    files: applyCompatMap(results, compatMap),
+    files: applyVerboseFilter(withCompat, verbose),
   };
+}
+
+/**
+ * Maps a CAPABILITY_* observation code to the family of pattern IDs whose
+ * evidence supports that capability claim. Returns a predicate that matches
+ * any evidence record belonging to the family.
+ */
+function evidencePredicateForCode(code: string): ((e: EvidenceRecord) => boolean) | null {
+  switch (code) {
+    case 'CAPABILITY_LOCAL_SHELL':
+      return e => (
+        e.patternId === 'FENCED_SHELL_BLOCK' ||
+        e.patternId === 'ALLOWED_TOOLS_LOCAL_SHELL' ||
+        e.patternId === 'PROSE_LOCAL_SHELL_TOOL_REFERENCE' ||
+        e.patternId === 'HOOK_COMMAND_INVOKES_BINARY' ||
+        e.patternId.startsWith('SCRIPT_FILE_')
+      );
+    case 'CAPABILITY_EXTERNAL_CLI':
+      return e => e.patternId.startsWith('EXTERNAL_CLI_');
+    case 'CAPABILITY_BROWSER_AUTH':
+      return e => e.patternId.startsWith('BROWSER_AUTH_');
+    default:
+      return null;
+  }
+}
+
+/** Format an evidence record as a single rendering line. */
+function formatEvidenceLine(ev: EvidenceRecord): string {
+  const loc = ev.location.line === undefined
+    ? ev.location.file
+    : `${ev.location.file}:${ev.location.line}`;
+  return `    evidence: [${ev.patternId}] at ${loc} — ${ev.matchText}`;
+}
+
+/** Render the evidence supporting a single CAPABILITY_* issue. */
+function renderIssueEvidence(
+  issue: ValidationIssue,
+  evidenceSources: EvidenceRecord[],
+  logger: ReturnType<typeof createLogger>,
+): void {
+  const predicate = evidencePredicateForCode(issue.code);
+  if (!predicate) return;
+  const matched = evidenceSources.filter(predicate);
+  if (matched.length === 0) return;
+  logger.info(`  [${issue.code}] ${issue.message}`);
+  for (const ev of matched) {
+    logger.info(formatEvidenceLine(ev));
+  }
+}
+
+/**
+ * Render supporting evidence beneath each CAPABILITY_* issue when the
+ * audit was invoked with --verbose. Evidence comes from the validation
+ * result itself (per-file SKILL evidence) and from any attached
+ * `compatibility.evidence` (plugin-level scanner output).
+ */
+function renderVerboseEvidence(
+  results: Array<ValidationResult & { compatibility?: CompatibilityResult }>,
+  logger: ReturnType<typeof createLogger>,
+): void {
+  for (const result of results) {
+    const capabilityIssues = (result.issues ?? []).filter((i: ValidationIssue) =>
+      i.code.startsWith('CAPABILITY_'),
+    );
+    if (capabilityIssues.length === 0) continue;
+
+    const evidenceSources: EvidenceRecord[] = [
+      ...(result.evidence ?? []),
+      ...(result.compatibility?.evidence ?? []),
+    ];
+    if (evidenceSources.length === 0) continue;
+
+    logger.info(`\n${result.path} — supporting evidence:`);
+    for (const issue of capabilityIssues) {
+      renderIssueEvidence(issue, evidenceSources, logger);
+    }
+  }
 }
 
 function handleAuditResults(
@@ -830,11 +963,11 @@ async function handleFileEntry(
     if (skillConfig !== undefined) {
       logger.debug(`  Using config-aware validation for: ${fullPath}`);
       const packagingResult = await validateSkillForPackaging(fullPath, skillConfig);
-      // Packaging validator doesn't run compat detectors — add them here.
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- fullPath from directory scan
-      const skillContent = fs.readFileSync(fullPath, 'utf-8');
-      const compatIssues = runCompatDetectors(skillContent, fullPath);
-      return packagingResultToValidationResult(fullPath, packagingResult, compatIssues);
+      return packagingResultToValidationResult(
+        fullPath,
+        packagingResult,
+        skillConfig.targets as readonly Target[] | undefined,
+      );
     }
 
     // Wild mode: basic validation
@@ -1116,9 +1249,11 @@ function calculateHierarchicalSummary(
   results: ValidationResult[],
   hierarchical: ReturnType<typeof buildHierarchicalOutput>,
   startTime: number,
-  compatMap?: Map<string, CompatibilityResult>
+  compatMap: Map<string, CompatibilityResult> | undefined,
+  verbose: boolean,
 ) {
   const base = buildBaseSummary(results, startTime);
+  const withCompat = applyCompatMap(results, compatMap);
 
   return {
     ...base,
@@ -1129,7 +1264,7 @@ function calculateHierarchicalSummary(
       standalonePlugins: hierarchical.standalonePlugins.length,
       standaloneSkills: hierarchical.standaloneSkills.length,
     },
-    files: applyCompatMap(results, compatMap),
+    files: applyVerboseFilter(withCompat, verbose),
     hierarchical,
   };
 }

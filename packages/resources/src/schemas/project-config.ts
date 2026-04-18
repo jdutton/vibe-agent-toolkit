@@ -136,6 +136,8 @@ export const SkillPackagingConfigSchema = z.object({
   excludeReferencesFromBundle: ExcludeReferencesFromBundleSchema.optional(),
   validation: ValidationConfigSchema.optional()
     .describe('Validation framework config: severity overrides and per-path allow entries'),
+  targets: z.array(z.enum(['claude-chat', 'claude-cowork', 'claude-code'])).optional()
+    .describe('Declared runtime targets for this skill. Suppresses non-applicable compat verdicts.'),
   files: z.array(SkillFileEntrySchema).optional().describe('Explicit source→dest file mappings for build artifacts, unlinked files, or routing overrides'),
 }).strict().describe('Skill packaging configuration');
 

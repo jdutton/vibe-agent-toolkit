@@ -58,7 +58,12 @@ export {
   type FrontmatterResult,
 } from './parsers/frontmatter-parser.js';
 
-export { runCompatDetectors } from './validators/compat-detectors.js';
+export {
+  observationToIssue,
+  runCompatDetectors,
+  type DetectorOutput,
+} from './validators/compat-detectors.js';
+export { CODE_REGISTRY, type CodeRegistryEntry } from './validators/code-registry.js';
 export { validateMarketplace } from './validators/marketplace-validator.js';
 export { validatePlugin } from './validators/plugin-validator.js';
 export { validateSkill } from './validators/skill-validator.js';
@@ -92,4 +97,21 @@ export {
   type ImportOptions,
   type ImportResult,
 } from './import.js';
+
+// Evidence substrate
+export type {
+  EvidenceRecord,
+  EvidenceSource,
+  EvidenceConfidence,
+  EvidenceLocation,
+  PatternDefinition,
+  Observation,
+} from './evidence/index.js';
+export {
+  PATTERN_REGISTRY,
+  getPatternDefinition,
+  assertPatternRegistered,
+  deriveObservationsFromEvidence,
+} from './evidence/index.js';
+export type { DeriveObservationsOptions, DerivationSubject } from './evidence/index.js';
 

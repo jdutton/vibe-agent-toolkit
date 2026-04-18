@@ -1,3 +1,5 @@
+import type { EvidenceRecord } from '../evidence/index.js';
+
 import type { IssueCode as RegistryIssueCode, IssueSeverity as RegistryIssueSeverity } from './code-registry.js';
 
 export type { IssueCode as RegistryIssueCode, EmittedSeverity } from './code-registry.js';
@@ -56,13 +58,8 @@ export type NonOverridableCode =
 export type IssueCode = RegistryIssueCode | InfoCode | NonOverridableCode;
 
 export interface ValidationIssue {
-  /**
-   * Resolved severity after the validation framework runs.
-   * The 'info' variant is a transitional concession for InfoCode emissions
-   * (FILE_STRUCTURE_REPORT, RESOURCE_INVENTORY, etc.) and will be folded into
-   * IssueSeverity once those emitters are wired to the framework in later phases.
-   */
-  severity: IssueSeverity | 'info';
+  /** Resolved severity after the validation framework runs. */
+  severity: IssueSeverity;
   code: IssueCode;
   message: string;
   location?: string;
@@ -84,6 +81,8 @@ export interface ValidationResult {
     lineCount?: number;
     referenceFiles?: number;
   };
+  /** Raw evidence records collected during validation. Rendered in --verbose. */
+  evidence?: EvidenceRecord[];
   /** Validation results for transitively linked markdown files */
   linkedFiles?: LinkedFileValidationResult[];
 }

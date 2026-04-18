@@ -93,26 +93,17 @@ function runCompatAuditAndParse(
   return { files };
 }
 
-/** Valid verdict values from CompatibilityResult.analyzed */
-const VALID_VERDICTS = ['compatible', 'needs-review', 'incompatible'] as const;
-
 /**
- * Assert that a compat entry has the expected per-target analyzed verdicts structure.
- * Also validates that each verdict value is one of the known Verdict types.
+ * Assert that a compat entry has the expected new-shape verdict + observation
+ * structure produced by the WS6 analyzer refactor. Note: `evidence` is only
+ * surfaced when --verbose is set; without it the field is stripped from output.
  */
-function assertCompatAnalyzed(entry: Record<string, unknown>): void {
+function assertCompatStructure(entry: Record<string, unknown>): void {
   const compat = entry['compatibility'] as Record<string, unknown>;
-  expect(compat).toHaveProperty('analyzed');
-
-  const analyzed = compat['analyzed'] as Record<string, unknown>;
-  expect(analyzed).toHaveProperty('claude-code');
-  expect(analyzed).toHaveProperty('cowork');
-  expect(analyzed).toHaveProperty('claude-desktop');
-
-  // Validate that each verdict value is one of the known Verdict types
-  for (const target of ['claude-code', 'cowork', 'claude-desktop'] as const) {
-    expect(VALID_VERDICTS).toContain(analyzed[target]);
-  }
+  expect(compat).toHaveProperty('observations');
+  expect(compat).toHaveProperty('verdicts');
+  expect(Array.isArray(compat['observations'])).toBe(true);
+  expect(Array.isArray(compat['verdicts'])).toBe(true);
 }
 
 // ---------------------------------------------------------------------------
@@ -147,7 +138,7 @@ describe('Audit --compat flag (system test)', () => {
     expect(withCompat.length).toBeGreaterThan(0);
 
     // Verify the compatibility structure for the plugin entry
-    assertCompatAnalyzed(withCompat[0] as Record<string, unknown>);
+    assertCompatStructure(withCompat[0] as Record<string, unknown>);
   });
 
   it('--compat with multiple plugins produces analysis for each', () => {
@@ -166,7 +157,7 @@ describe('Audit --compat flag (system test)', () => {
 
     // Each compat entry should have analyzed per-target verdicts
     for (const entry of withCompat) {
-      assertCompatAnalyzed(entry as Record<string, unknown>);
+      assertCompatStructure(entry as Record<string, unknown>);
     }
   });
 
@@ -241,6 +232,6 @@ This skill has no plugin.json so no compat analysis applies.
     expect(withCompat.length).toBeGreaterThan(0);
 
     // Verify the compatibility structure and verdict values
-    assertCompatAnalyzed(withCompat[0] as Record<string, unknown>);
+    assertCompatStructure(withCompat[0] as Record<string, unknown>);
   });
 });

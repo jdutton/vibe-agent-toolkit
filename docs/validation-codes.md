@@ -171,35 +171,53 @@ Best-practice checks about skill shape and content.
 
 *Stance: see [Compatibility](./skill-quality-and-compatibility.md#compatibility).*
 
-Per-skill compatibility **smells** — patterns that signal a skill depends on a surface capability (browser, local shell, external CLI) that not every Claude runtime provides. Default severity is `warning`: these are advisory, not blocking, so adopters can surface them without breaking builds.
+Compat reasoning is layered. Parsers emit neutral **evidence records** (pattern matches with file/line/confidence). Evidence is rolled into **capability observations** — domain claims like "this skill requires local shell" — emitted as `CAPABILITY_*` codes at `info` severity. A verdict engine then compares observations against the plugin's declared targets and their runtime profiles, emitting `COMPAT_TARGET_*` codes only when there is an actual mismatch.
 
-Compat smells are declarations more than suppressions. When a skill genuinely needs a capability, the right posture is usually to `validation.allow` the code with a `reason` that documents the intent. The smell's job is to make that requirement visible, not to grade the skill.
+Capability observations are declarations, not judgments. When a plugin declares `targets: [claude-code]`, a `CAPABILITY_LOCAL_SHELL` observation matches — no verdict fires. Without a declared target, `COMPAT_TARGET_UNDECLARED` surfaces at `info` so adopters can make the decision explicit.
 
-Scope in v1: detectors run against SKILL.md and its transitively linked markdown. Plugin-wide compat (hooks, `.mcp.json`) remains covered by the legacy `vat audit --compat` analyzer pending workstream B unification.
+Scope in v1: detectors run against SKILL.md and its transitively linked markdown. Plugin-wide compat (hooks, `.mcp.json`) is covered by the `vat audit --compat` analyzer consuming the same observation/verdict pipeline.
 
-### `COMPAT_REQUIRES_BROWSER_AUTH`
+### `CAPABILITY_LOCAL_SHELL`
+
+- **Default:** `info`
+- **What:** Skill references a local-shell tool (`Bash`/`Edit`/`Write`/`NotebookEdit`) or invokes a shell via fenced `bash`/`sh`/`shell`/`zsh` blocks.
+- **Why it matters:** Local-shell access only exists on runtimes like Claude Code or Cowork. Surfacing the capability as an observation lets the verdict engine decide whether the declared target covers it.
+- **Fix:** Informational. Declare a plugin target that provides shell (`claude-code`, `claude-cowork`) so this observation resolves to an expected verdict. Run `vat audit --verbose` to see the supporting evidence.
+
+### `CAPABILITY_EXTERNAL_CLI`
+
+- **Default:** `info`
+- **What:** Skill invokes an external CLI binary not bundled with the skill (`az`, `aws`, `gcloud`, `kubectl`, `docker`, `terraform`, `gh`, `op`). One observation fires per distinct binary with `payload: { binary }`.
+- **Why it matters:** External CLIs are environment-dependent. The runtime profile records which binaries are guaranteed; the verdict engine flags `COMPAT_TARGET_NEEDS_REVIEW` when a declared target has shell but no guarantee.
+- **Fix:** Informational. Ensure the declared target guarantees the binary, or document the prerequisite.
+
+### `CAPABILITY_BROWSER_AUTH`
+
+- **Default:** `info`
+- **What:** Skill appears to require an interactive browser login flow (MSAL imports, `az login`, `gcloud auth login`, `aws sso login`, `webbrowser.open()`).
+- **Why it matters:** Browser-based auth requires a runtime with a browser capability. Non-browser auth (service principal, bearer tokens) is portable and intentionally not flagged.
+- **Fix:** Informational. If a service-principal or bearer-token flow would work, prefer it. Otherwise declare a browser-capable target.
+
+### `COMPAT_TARGET_INCOMPATIBLE`
 
 - **Default:** `warning`
-- **What:** Skill appears to require an interactive browser login flow (MSAL, cloud provider SSO, OAuth redirect).
-- **Why it matters:** Surfaces without a browser — Claude Chat, Cowork, headless runtimes — cannot complete the login and the skill silently fails. Flagging the dependency lets authors declare it intentionally and lets runtimes route around incompatible skills.
-- **Fix:** Document the requirement prominently. If a service-principal or bearer-token flow would work, prefer it to avoid the constraint. Otherwise allow via `validation.allow` with a reason explaining the intentional auth model.
-- **When to allow:** The skill is intentionally interactive and documents Claude Code (or another browser-capable runtime) as its target surface. Allow with a reason citing the deliberate auth choice.
+- **What:** The plugin's declared target runtime definitively lacks a required capability (e.g., `CAPABILITY_LOCAL_SHELL` observation on a `claude-chat`-only plugin).
+- **Why it matters:** This is a genuine mismatch — the skill cannot run on the declared target. Emitted by the verdict engine using the runtime profile table as the source of truth.
+- **Fix:** Narrow the declared target to runtimes that support the capability, or allow with a reason if the mismatch is intentional.
 
-### `COMPAT_REQUIRES_LOCAL_SHELL`
-
-- **Default:** `warning`
-- **What:** Skill references a local-shell or local-environment tool (`Bash`/`Edit`/`Write`/`NotebookEdit`) or invokes a shell directly.
-- **Why it matters:** Shell access and local filesystem mutation only exist on local runtimes like Claude Code. A skill that assumes shell availability will not run correctly on remote/chat surfaces.
-- **Fix:** If the skill genuinely needs local access, document it and allow with a reason naming the dependency. If the shell is an implementation detail, refactor to use portable runtime APIs.
-- **When to allow:** The skill is a Claude Code-only workflow (filesystem manipulation, CLI orchestration, IDE integration). Allow with a reason that names the local capability being relied on.
-
-### `COMPAT_REQUIRES_EXTERNAL_CLI`
+### `COMPAT_TARGET_NEEDS_REVIEW`
 
 - **Default:** `warning`
-- **What:** Skill invokes an external CLI binary not bundled with the skill (`az`, `aws`, `gcloud`, `kubectl`, `docker`, `terraform`, `gh`, `op`).
-- **Why it matters:** External CLIs are environment-dependent — they may be installed, missing, or a different version on any given runtime. Making the dependency explicit lets users (or managed runtimes) ensure the binary is present before invoking the skill.
-- **Fix:** Document the required CLI as a prerequisite in the skill description or README. Consider bundling a language-native SDK (e.g., `@azure/arm-*` instead of `az`) if portability matters. If the CLI is the right tool, allow with a reason.
-- **When to allow:** The skill is intentionally a thin wrapper over a CLI and documents the dependency. Allow with a reason naming the CLI and the surface requirement.
+- **What:** The declared target's capability profile covers the axis but a specific resource is uncertain (e.g., external CLI binary not in the target's preinstalled set).
+- **Why it matters:** Between "definitely works" and "definitely broken" — the adopter should document the prerequisite or allow the issue with a reason.
+- **Fix:** Document the prerequisite in the skill description or allow with a reason.
+
+### `COMPAT_TARGET_UNDECLARED`
+
+- **Default:** `info`
+- **What:** The skill has capability observations but no target is declared at any layer (`plugin.json`, `marketplace.json` defaults, `vibe-agent-toolkit.config.yaml`).
+- **Why it matters:** Absence of a target declaration is not the same as "compatible everywhere." Surfacing the gap lets adopters make the choice explicit.
+- **Fix:** Declare targets in `vibe-agent-toolkit.config.yaml` (`skills.config.<name>.targets`), `plugin.json`, or marketplace defaults.
 
 ## Meta Codes
 

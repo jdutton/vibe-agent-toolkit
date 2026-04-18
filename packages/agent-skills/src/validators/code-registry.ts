@@ -9,7 +9,7 @@
  * registry — no duplication.
  */
 
-export type IssueSeverity = 'error' | 'warning' | 'ignore';
+export type IssueSeverity = 'error' | 'warning' | 'info' | 'ignore';
 
 /** Non-ignore severities actually emitted to consumers. */
 export type EmittedSeverity = Exclude<IssueSeverity, 'ignore'>;
@@ -33,10 +33,14 @@ export type IssueCode =
   | 'REFERENCE_TOO_DEEP'
   | 'DESCRIPTION_TOO_VAGUE'
   | 'NO_PROGRESSIVE_DISCLOSURE'
-  // Compat smells (per-skill compatibility constraints)
-  | 'COMPAT_REQUIRES_BROWSER_AUTH'
-  | 'COMPAT_REQUIRES_LOCAL_SHELL'
-  | 'COMPAT_REQUIRES_EXTERNAL_CLI'
+  // Capability observations — what a skill requires from its runtime
+  | 'CAPABILITY_LOCAL_SHELL'
+  | 'CAPABILITY_EXTERNAL_CLI'
+  | 'CAPABILITY_BROWSER_AUTH'
+  // Compat verdicts — emitted when declared target does not cover required capability
+  | 'COMPAT_TARGET_INCOMPATIBLE'
+  | 'COMPAT_TARGET_NEEDS_REVIEW'
+  | 'COMPAT_TARGET_UNDECLARED'
   // Meta-codes describing the state of the validation config itself
   | 'ALLOW_EXPIRED'
   | 'ALLOW_UNUSED';
@@ -147,23 +151,41 @@ export const CODE_REGISTRY: Record<IssueCode, CodeRegistryEntry> = {
     'Move background detail into linked resources and reference them from SKILL.md.',
     'no_progressive_disclosure',
   ),
-  COMPAT_REQUIRES_BROWSER_AUTH: entry(
-    'warning',
-    'Skill appears to require an interactive browser login flow (MSAL, cloud provider SSO, OAuth redirect).',
-    'Document the requirement prominently and allow via validation.allow if the browser flow is the intended mechanism. Surfaces without a browser (Claude Chat, Cowork) cannot run this skill.',
-    'compat_requires_browser_auth',
+  CAPABILITY_LOCAL_SHELL: entry(
+    'info',
+    'Skill references a local-shell tool (Bash/Edit/Write/NotebookEdit) or invokes a shell.',
+    'Informational. Declare a plugin target that provides shell (claude-code, claude-cowork) so this observation resolves to an expected verdict.',
+    'capability_local_shell',
   ),
-  COMPAT_REQUIRES_LOCAL_SHELL: entry(
-    'warning',
-    'Skill references a local-shell or local-environment tool (Bash/Edit/Write/NotebookEdit) or invokes a shell directly.',
-    'Document that this skill requires a local runtime (Claude Code), or allow the code via validation.allow if the shell dependency is intentional.',
-    'compat_requires_local_shell',
+  CAPABILITY_EXTERNAL_CLI: entry(
+    'info',
+    'Skill invokes an external CLI binary not bundled with the skill.',
+    'Informational. Ensure the declared target guarantees the binary or document the prerequisite.',
+    'capability_external_cli',
   ),
-  COMPAT_REQUIRES_EXTERNAL_CLI: entry(
+  CAPABILITY_BROWSER_AUTH: entry(
+    'info',
+    'Skill appears to require an interactive browser login flow.',
+    'Informational. If a service-principal flow would work, prefer it. Otherwise declare a browser-capable target.',
+    'capability_browser_auth',
+  ),
+  COMPAT_TARGET_INCOMPATIBLE: entry(
     'warning',
-    'Skill invokes an external CLI binary not bundled with the skill (az, aws, gcloud, kubectl, docker, terraform, gh, op).',
-    'Document the required CLI as a prerequisite, or allow via validation.allow if the dependency is intentional. External CLIs may not be present on every runtime.',
-    'compat_requires_external_cli',
+    "Skill's declared target runtime definitively lacks a required capability.",
+    'Narrow the declared target to runtimes that support the capability, or allow with a reason.',
+    'compat_target_incompatible',
+  ),
+  COMPAT_TARGET_NEEDS_REVIEW: entry(
+    'warning',
+    "Declared target's capability profile covers the axis but a specific resource is uncertain.",
+    'Document the prerequisite or allow with a reason.',
+    'compat_target_needs_review',
+  ),
+  COMPAT_TARGET_UNDECLARED: entry(
+    'info',
+    'Skill has capability observations but no target is declared.',
+    'Declare targets in vibe-agent-toolkit.config.yaml, plugin.json, or marketplace.json defaults.',
+    'compat_target_undeclared',
   ),
   ALLOW_EXPIRED: entry(
     'warning',

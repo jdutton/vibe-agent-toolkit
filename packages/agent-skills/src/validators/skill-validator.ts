@@ -5,9 +5,10 @@ import { parseMarkdown, resolveLocalHref } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 
+import type { EvidenceRecord } from '../evidence/index.js';
 import { parseFrontmatter } from '../parsers/frontmatter-parser.js';
 
-import { runCompatDetectors } from './compat-detectors.js';
+import { observationToIssue, runCompatDetectors } from './compat-detectors.js';
 import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
 import type { LinkedFileValidationResult, ValidateOptions, ValidationIssue, ValidationResult } from './types.js';
 import { NAVIGATION_FILE_PATTERNS } from './validation-rules.js';
@@ -26,6 +27,7 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   const { skillPath, isVATGenerated = false } = options;
 
   const issues: ValidationIssue[] = [];
+  const allEvidence: EvidenceRecord[] = [];
 
   // Validate file exists
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillPath is user-provided but validated
@@ -75,12 +77,18 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   // Validate warning-level rules (skill-specific)
   validateWarningRules(content, lineCount, skillPath, issues);
 
-  // Compat smells (warning-severity; flows through validation.allow like other framework codes)
-  issues.push(...runCompatDetectors(content, skillPath));
+  // Compat capability detection: collect raw evidence, derive observations,
+  // surface each observation as an issue (severity comes from CODE_REGISTRY).
+  const { evidence: rootEvidence, observations: rootObservations } =
+    runCompatDetectors(content, skillPath);
+  allEvidence.push(...rootEvidence);
+  for (const obs of rootObservations) {
+    issues.push(observationToIssue(obs, skillPath));
+  }
 
   // Transitive link traversal (BFS)
   const skillDir = options.rootDir ?? dirname(skillPath);
-  const linkedFiles = await traverseLinks(skillPath, skillDir, issues);
+  const linkedFiles = await traverseLinks(skillPath, skillDir, issues, allEvidence);
 
   // Unreferenced file detection
   if (options.checkUnreferencedFiles) {
@@ -94,6 +102,10 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
 
   if (linkedFiles.length > 0) {
     result.linkedFiles = linkedFiles;
+  }
+
+  if (allEvidence.length > 0) {
+    result.evidence = allEvidence;
   }
 
   return result;
@@ -219,6 +231,7 @@ async function traverseLinks(
   skillPath: string,
   skillDir: string,
   issues: ValidationIssue[],
+  allEvidence: EvidenceRecord[],
 ): Promise<LinkedFileValidationResult[]> {
   const resolvedSkillPath = safePath.resolve(skillPath);
   const visited = new Set<string>([resolvedSkillPath]);
@@ -247,12 +260,16 @@ async function traverseLinks(
     const processed = processFileLinks(parseResult, currentPath, skillDir, issues, visited);
     queue.push(...processed.newPaths);
 
-    // Compat smells for linked files (root SKILL.md handled by the top-level invocation).
-    // Re-read raw file content so fenced code blocks remain intact for detectors.
+    // Compat capability detection for linked files (root SKILL.md handled by
+    // the top-level invocation). Re-read raw file content so fenced code
+    // blocks remain intact for detectors.
     if (currentPath !== resolvedSkillPath) {
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- currentPath verified existent by BFS predecessor
       const linkedContent = fs.readFileSync(currentPath, 'utf-8');
-      const linkedCompatIssues = runCompatDetectors(linkedContent, currentPath);
+      const { evidence: linkedEvidence, observations: linkedObservations } =
+        runCompatDetectors(linkedContent, currentPath);
+      allEvidence.push(...linkedEvidence);
+      const linkedCompatIssues = linkedObservations.map(obs => observationToIssue(obs, currentPath));
       processed.fileIssues.push(...linkedCompatIssues);
       issues.push(...linkedCompatIssues);
     }

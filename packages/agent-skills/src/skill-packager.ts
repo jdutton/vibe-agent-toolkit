@@ -32,8 +32,9 @@ import { findProjectRoot, toForwardSlash, safePath } from '@vibe-agent-toolkit/u
 import { getTargetSubdir } from './content-type-routing.js';
 import type { SkillFileEntry } from './files-config.js';
 import { checkBrokenPackagedLinks, checkUnreferencedFiles } from './post-build-checks.js';
+import { validateSkillForPackaging, type PackagingValidationResult } from './validators/packaging-validator.js';
 import type { ValidationIssue } from './validators/types.js';
-import { runValidationFramework, type ValidationConfig } from './validators/validation-framework.js';
+import { runValidationFramework, type FrameworkResult, type ValidationConfig } from './validators/validation-framework.js';
 import { walkerExclusionsToIssues } from './validators/walker-to-issues.js';
 import { walkLinkGraph, type WalkableRegistry } from './walk-link-graph.js';
 
@@ -207,6 +208,9 @@ export interface PackageSkillResult {
    * Empty (or omitted) means all post-build checks passed.
    */
   postBuildIssues?: ValidationIssue[] | undefined;
+
+  /** Full validation result against the built output. */
+  postBuildValidation?: PackagingValidationResult | undefined;
 
   /** True when any emitted issue has resolved severity 'error'. */
   hasErrors: boolean;
@@ -470,6 +474,9 @@ export async function packageSkill(
     options.validation ?? {},
   );
 
+  // 13c. Run full validation suite on built output
+  const postBuildValidation = await runPostBuildValidation(outputPath, options.validation);
+
   // 14. Generate distribution artifacts
   const artifacts = await generatePackageArtifacts(
     outputPath,
@@ -483,26 +490,71 @@ export async function packageSkill(
     safePath.relative(effectiveBasePath, f)
   );
 
-  // Build result — hasErrors is always set (non-optional)
-  const result: PackageSkillResult = {
+  // Build result
+  return assemblePackageResult({
     outputPath,
-    skill: skillMetadata,
+    skillMetadata,
+    relativeLinkedFiles,
+    artifacts,
+    postBuildValidation,
+    framework,
+    excludedReferences,
+    skillRoot,
+  });
+}
+
+/**
+ * Run full validation suite against built output (context = 'built').
+ * Source-only codes are automatically filtered out by validateSkillForPackaging.
+ */
+async function runPostBuildValidation(
+  outputPath: string,
+  validation: ValidationConfig | undefined,
+): Promise<PackagingValidationResult> {
+  const builtSkillPath = safePath.join(outputPath, 'SKILL.md');
+  return validateSkillForPackaging(
+    builtSkillPath,
+    validation ? { validation } : undefined,
+    'built',
+  );
+}
+
+/** Input for assemblePackageResult — avoids a long parameter list. */
+interface AssembleResultInput {
+  outputPath: string;
+  skillMetadata: SkillMetadata;
+  relativeLinkedFiles: string[];
+  artifacts: Record<string, string>;
+  postBuildValidation: PackagingValidationResult;
+  framework: FrameworkResult;
+  excludedReferences: Array<{ path: string }>;
+  skillRoot: string;
+}
+
+/**
+ * Assemble the final PackageSkillResult from intermediate data.
+ * Extracted to keep packageSkill() within the cognitive-complexity budget.
+ */
+function assemblePackageResult(input: AssembleResultInput): PackageSkillResult {
+  const result: PackageSkillResult = {
+    outputPath: input.outputPath,
+    skill: input.skillMetadata,
     files: {
       root: 'SKILL.md',
-      dependencies: relativeLinkedFiles,
+      dependencies: input.relativeLinkedFiles,
     },
-    artifacts,
-    hasErrors: framework.hasErrors,
+    artifacts: input.artifacts,
+    postBuildValidation: input.postBuildValidation,
+    hasErrors: input.framework.hasErrors || input.postBuildValidation.activeErrors.length > 0,
   };
 
-  if (framework.emitted.length > 0) {
-    result.postBuildIssues = framework.emitted;
+  if (input.framework.emitted.length > 0) {
+    result.postBuildIssues = input.framework.emitted;
   }
 
-  if (excludedReferences.length > 0) {
-    // Deduplicate excluded reference paths for the result
+  if (input.excludedReferences.length > 0) {
     const uniqueExcludedPaths = [...new Set(
-      excludedReferences.map(r => safePath.relative(skillRoot, r.path))
+      input.excludedReferences.map(r => safePath.relative(input.skillRoot, r.path))
     )];
     result.excludedReferences = uniqueExcludedPaths;
   }

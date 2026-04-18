@@ -1,40 +1,29 @@
-import type { CompatibilityEvidence } from '../types.js';
+/**
+ * Code-block scanner for marketplace plugin analysis.
+ *
+ * Delegates to the agent-skills compat detectors so that markdown content
+ * inside plugins is analysed with the same rules used for standalone
+ * skill validation. This emits FENCED_SHELL_BLOCK and EXTERNAL_CLI_*
+ * evidence (browser-auth detection lives in scanBrowserAuthEvidence).
+ */
 
-import { COMMAND_RULES } from './command-classifier.js';
+import { runCompatDetectors, type EvidenceRecord } from '@vibe-agent-toolkit/agent-skills';
 
-const EXECUTABLE_LANGUAGES = new Set(['bash', 'sh', 'shell', 'zsh', '']);
+const SHELL_AND_BROWSER_PATTERN_PREFIXES = ['FENCED_SHELL_BLOCK', 'EXTERNAL_CLI_', 'BROWSER_AUTH_'];
 
-/** Regex to extract fenced code blocks: ```lang\ncontent\n``` */
-const CODE_BLOCK_RE = /^```(\w*)\n([\s\S]*?)^```/gm;
+function isCodeBlockEvidence(record: EvidenceRecord): boolean {
+  return SHELL_AND_BROWSER_PATTERN_PREFIXES.some(prefix => record.patternId.startsWith(prefix));
+}
 
 /**
- * Scan markdown content for fenced code blocks containing command invocations.
- * Only scans blocks with executable languages (bash, sh, shell, zsh, unlabeled).
+ * Scan markdown content for fenced shell blocks and the external-CLI /
+ * browser-auth invocations they may contain. Returns an EvidenceRecord
+ * for each detected pattern.
  */
-export function scanCodeBlocks(content: string, filePath: string): CompatibilityEvidence[] {
-  const evidence: CompatibilityEvidence[] = [];
-
-  for (const match of content.matchAll(CODE_BLOCK_RE)) {
-    const language = match[1] ?? '';
-    const blockContent = match[2] ?? '';
-    const blockStartOffset = match.index ?? 0;
-    const blockLine = content.slice(0, blockStartOffset).split('\n').length;
-
-    if (!EXECUTABLE_LANGUAGES.has(language)) continue;
-
-    for (const rule of COMMAND_RULES) {
-      if (rule.pattern.test(blockContent)) {
-        evidence.push({
-          source: 'code-block',
-          file: filePath,
-          line: blockLine,
-          signal: rule.signal,
-          detail: `Found "${rule.signal}" command in ${language || 'unlabeled'} code block`,
-          impact: { ...rule.impact },
-        });
-      }
-    }
-  }
-
-  return evidence;
+export function scanCodeBlocks(content: string, filePath: string): EvidenceRecord[] {
+  const { evidence } = runCompatDetectors(content, filePath);
+  // Filter to evidence types this scanner is responsible for: shell-block /
+  // external-CLI / browser-auth. Frontmatter-scoped evidence is emitted by
+  // scanFrontmatter.
+  return evidence.filter(isCodeBlockEvidence);
 }
