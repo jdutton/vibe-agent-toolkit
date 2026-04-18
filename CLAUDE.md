@@ -745,6 +745,12 @@ VAT ships a plugin of skills for agents working on VAT itself. They live at `pac
 
 **For AI assistants**: If you're asked a question about VAT skill authoring, audit output, debugging, distribution, or publishing and you haven't invoked the matching skill, you're probably about to give a shallower answer than you could. Invoke first.
 
+## External Documentation Cache
+
+Cached copies of external guidance (e.g., Anthropic's skill-authoring best-practices doc) live under [`docs/external/`](docs/external/). Each cached file names its source URL and fetch date in its preamble.
+
+**Refresh policy for AI assistants and maintainers:** When a cached doc's fetch date is more than ~90 days old, or when a new Claude Code release changes Skill behavior, re-fetch the source, diff against the cache, and update the cache plus any VAT tooling that depends on it (primarily `packages/vat-development-agents/resources/skills/skill-quality-checklist.md`). The cache exists so VAT's opinions stay diffable against Anthropic's — do not let them silently drift.
+
 ## Questions?
 
 - [Architecture](./docs/architecture/README.md) - Package structure and evolution plan
