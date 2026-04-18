@@ -1,3 +1,5 @@
+import type { EvidenceRecord } from '../evidence/index.js';
+
 import type { IssueCode as RegistryIssueCode, IssueSeverity as RegistryIssueSeverity } from './code-registry.js';
 
 export type { IssueCode as RegistryIssueCode, EmittedSeverity } from './code-registry.js';
@@ -84,6 +86,8 @@ export interface ValidationResult {
     lineCount?: number;
     referenceFiles?: number;
   };
+  /** Raw evidence records collected during validation. Rendered in --verbose. */
+  evidence?: EvidenceRecord[];
   /** Validation results for transitively linked markdown files */
   linkedFiles?: LinkedFileValidationResult[];
 }

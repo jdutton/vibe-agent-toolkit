@@ -1,14 +1,18 @@
 import { parse as parseYaml } from 'yaml';
 
 import type { CompatibilityEvidence, ImpactLevel, Target } from '../types.js';
-import { IMPACT_DESKTOP_INCOMPATIBLE_COWORK_REVIEW } from '../types.js';
+
+/** Impact: chat incompatible, cowork needs review, code ok */
+const CHAT_INCOMPATIBLE_COWORK_REVIEW: Record<Target, ImpactLevel> = {
+  'claude-chat': 'incompatible', 'claude-cowork': 'needs-review', 'claude-code': 'ok',
+};
 
 /** Tools that require local environment access */
 const RESTRICTED_TOOLS: Record<string, { impact: Record<Target, ImpactLevel> }> = {
-  Bash: { impact: { ...IMPACT_DESKTOP_INCOMPATIBLE_COWORK_REVIEW } },
-  Edit: { impact: { ...IMPACT_DESKTOP_INCOMPATIBLE_COWORK_REVIEW } },
-  Write: { impact: { ...IMPACT_DESKTOP_INCOMPATIBLE_COWORK_REVIEW } },
-  NotebookEdit: { impact: { ...IMPACT_DESKTOP_INCOMPATIBLE_COWORK_REVIEW } },
+  Bash: { impact: { ...CHAT_INCOMPATIBLE_COWORK_REVIEW } },
+  Edit: { impact: { ...CHAT_INCOMPATIBLE_COWORK_REVIEW } },
+  Write: { impact: { ...CHAT_INCOMPATIBLE_COWORK_REVIEW } },
+  NotebookEdit: { impact: { ...CHAT_INCOMPATIBLE_COWORK_REVIEW } },
 };
 
 const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---/;

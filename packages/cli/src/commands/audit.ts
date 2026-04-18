@@ -230,7 +230,7 @@ export function createAuditCommand(): Command {
     .option('--user', 'Audit user-level Claude resources (default: $CLAUDE_CONFIG_DIR or ~/.claude — scans plugins/, skills/, marketplaces/)')
     .option('--verbose', 'Show all scanned resources, including those without issues')
     .option('--warn-unreferenced-files', 'Warn about files not referenced in skill markdown')
-    .option('--compat', 'Run compatibility analysis for each plugin (shows claude-code, cowork, claude-desktop support)')
+    .option('--compat', 'Run compatibility analysis for each plugin (shows claude-code, claude-cowork, claude-chat support)')
     .option('--settings [file]', 'Check plugins against Claude settings (auto-discover or specify file; requires --compat)')
     .option('--debug', 'Enable debug logging')
     .action(auditCommand)

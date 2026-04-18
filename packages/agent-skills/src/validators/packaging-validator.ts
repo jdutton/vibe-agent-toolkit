@@ -25,6 +25,7 @@ import { walkLinkGraph, type LinkResolution, type WalkableRegistry } from '../wa
 import type { AllowRecord } from './allow-filter.js';
 import { CODE_REGISTRY, type IssueCode } from './code-registry.js';
 import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
+import { SOURCE_ONLY_CODES } from './source-only-codes.js';
 import type { ValidationIssue } from './types.js';
 import { runValidationFramework, type ValidationConfig } from './validation-framework.js';
 import {
@@ -160,7 +161,8 @@ function createRegistryIssue(
  */
 export async function validateSkillForPackaging(
   skillPath: string,
-  packagingConfig?: SkillPackagingConfig
+  packagingConfig?: SkillPackagingConfig,
+  context: 'source' | 'built' = 'source',
 ): Promise<PackagingValidationResult> {
   const rawIssues: ValidationIssue[] = [];
 
@@ -239,9 +241,14 @@ export async function validateSkillForPackaging(
   collectDescriptionIssue(parseResult.frontmatter, skillPath, rawIssues);
   collectProgressiveDisclosureIssue(skillLines, bundledFiles.length, skillPath, rawIssues);
 
+  // Filter out source-only codes when validating built output
+  const filteredIssues = context === 'built'
+    ? rawIssues.filter(issue => !SOURCE_ONLY_CODES.has(issue.code))
+    : rawIssues;
+
   // Run through the unified validation framework
   const validationConfig = packagingConfig?.validation ?? {};
-  const framework = runValidationFramework(rawIssues, validationConfig);
+  const framework = runValidationFramework(filteredIssues, validationConfig);
 
   const skillName = extractSkillName(parseResult, skillPath);
 

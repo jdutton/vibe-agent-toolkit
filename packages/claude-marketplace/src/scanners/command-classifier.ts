@@ -1,5 +1,6 @@
 import type { ImpactLevel, Target } from '../types.js';
-import { IMPACT_ALL_OK, IMPACT_INCOMPATIBLE_DESKTOP, IMPACT_NEEDS_REVIEW_DESKTOP } from '../types.js';
+
+import { ALL_OK, CHAT_INCOMPATIBLE, CHAT_NEEDS_REVIEW } from './impact-constants.js';
 
 export interface CommandRule {
   pattern: RegExp;
@@ -9,13 +10,13 @@ export interface CommandRule {
 
 /** Maps known binary names to their compatibility impact */
 const BINARY_IMPACTS: Record<string, { signal: string; impact: Record<Target, ImpactLevel> }> = {
-  bash: { signal: 'bash', impact: { ...IMPACT_NEEDS_REVIEW_DESKTOP } },
-  node: { signal: 'node', impact: { ...IMPACT_ALL_OK } },
-  npx: { signal: 'npx', impact: { ...IMPACT_ALL_OK } },
-  python: { signal: 'python3', impact: { ...IMPACT_NEEDS_REVIEW_DESKTOP } },
-  python3: { signal: 'python3', impact: { ...IMPACT_NEEDS_REVIEW_DESKTOP } },
-  sh: { signal: 'sh', impact: { ...IMPACT_NEEDS_REVIEW_DESKTOP } },
-  uv: { signal: 'uv', impact: { ...IMPACT_NEEDS_REVIEW_DESKTOP } },
+  bash: { signal: 'bash', impact: { ...CHAT_NEEDS_REVIEW } },
+  node: { signal: 'node', impact: { ...ALL_OK } },
+  npx: { signal: 'npx', impact: { ...ALL_OK } },
+  python: { signal: 'python3', impact: { ...CHAT_NEEDS_REVIEW } },
+  python3: { signal: 'python3', impact: { ...CHAT_NEEDS_REVIEW } },
+  sh: { signal: 'sh', impact: { ...CHAT_NEEDS_REVIEW } },
+  uv: { signal: 'uv', impact: { ...CHAT_NEEDS_REVIEW } },
 };
 
 /** Commands and their impact on each target */
@@ -23,38 +24,38 @@ export const COMMAND_RULES: readonly CommandRule[] = [
   {
     pattern: /\bpip3?\s+install\b/,
     signal: 'pip install',
-    impact: { ...IMPACT_INCOMPATIBLE_DESKTOP },
+    impact: { ...CHAT_INCOMPATIBLE },
   },
   {
     pattern: /\bnpm\s+install\b/,
     signal: 'npm install',
-    impact: { ...IMPACT_NEEDS_REVIEW_DESKTOP },
+    impact: { ...CHAT_NEEDS_REVIEW },
   },
   {
     pattern: /\buv\s+(?:run|pip|sync)\b/,
     signal: 'uv',
-    impact: { ...IMPACT_NEEDS_REVIEW_DESKTOP },
+    impact: { ...CHAT_NEEDS_REVIEW },
   },
   {
     pattern: /\bpython3?\s+/,
     signal: 'python3',
-    impact: { ...IMPACT_NEEDS_REVIEW_DESKTOP },
+    impact: { ...CHAT_NEEDS_REVIEW },
   },
   {
     pattern: /\bbash\s+/,
     signal: 'bash',
-    impact: { ...IMPACT_NEEDS_REVIEW_DESKTOP },
+    impact: { ...CHAT_NEEDS_REVIEW },
   },
   {
     // The `sh` pattern avoids matching file extensions like `.sh`
     pattern: /(?<!\.)(?:^|[\s;|&])sh\s+/m,
     signal: 'sh',
-    impact: { ...IMPACT_NEEDS_REVIEW_DESKTOP },
+    impact: { ...CHAT_NEEDS_REVIEW },
   },
   {
     pattern: /\bnode\s+/,
     signal: 'node',
-    impact: { ...IMPACT_ALL_OK },
+    impact: { ...ALL_OK },
   },
 ] as const;
 

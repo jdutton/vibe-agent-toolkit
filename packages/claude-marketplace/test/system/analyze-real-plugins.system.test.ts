@@ -55,8 +55,8 @@ describe('analyzeCompatibility against local plugins', () => {
         results.push(result);
 
         expect(result.plugin).toBeTruthy();
-        expect(result.analyzed['claude-desktop']).toBeDefined();
-        expect(result.analyzed.cowork).toBeDefined();
+        expect(result.analyzed['claude-chat']).toBeDefined();
+        expect(result.analyzed['claude-cowork']).toBeDefined();
         expect(result.analyzed['claude-code']).toBeDefined();
       }
     }
@@ -65,8 +65,8 @@ describe('analyzeCompatibility against local plugins', () => {
 
     console.table(results.map(r => ({
       plugin: r.plugin,
-      desktop: r.analyzed['claude-desktop'],
-      cowork: r.analyzed.cowork,
+      chat: r.analyzed['claude-chat'],
+      cowork: r.analyzed['claude-cowork'],
       code: r.analyzed['claude-code'],
       evidenceCount: r.evidence.length,
     })));

@@ -20,8 +20,8 @@ describe('scanMcpConfig', () => {
       source: 'mcp-server',
       signal: 'mcp-server: node',
       impact: {
-        'claude-desktop': 'ok',
-        cowork: 'ok',
+        'claude-chat': 'ok',
+        'claude-cowork': 'ok',
         'claude-code': 'ok',
       },
     });
@@ -34,7 +34,7 @@ describe('scanMcpConfig', () => {
       },
     };
     const result = scanMcpConfig(config, '.mcp.json');
-    expect(result[0]?.impact['claude-desktop']).toBe('needs-review');
+    expect(result[0]?.impact['claude-chat']).toBe('needs-review');
   });
 
   it('flags uv-based MCP server as needs-review for desktop', () => {
@@ -45,7 +45,7 @@ describe('scanMcpConfig', () => {
     };
     const result = scanMcpConfig(config, '.mcp.json');
     expect(result[0]?.signal).toBe('mcp-server: uv');
-    expect(result[0]?.impact['claude-desktop']).toBe('needs-review');
+    expect(result[0]?.impact['claude-chat']).toBe('needs-review');
   });
 
   it('handles npx commands', () => {
@@ -55,7 +55,7 @@ describe('scanMcpConfig', () => {
       },
     };
     const result = scanMcpConfig(config, '.mcp.json');
-    expect(result[0]?.impact['claude-desktop']).toBe('ok');
+    expect(result[0]?.impact['claude-chat']).toBe('ok');
   });
 
   it('handles multiple servers', () => {

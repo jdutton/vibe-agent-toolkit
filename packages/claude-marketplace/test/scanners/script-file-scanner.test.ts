@@ -9,8 +9,8 @@ describe('classifyScriptFile', () => {
       source: 'script',
       signal: 'python-script',
       impact: {
-        'claude-desktop': 'needs-review',
-        cowork: 'ok',
+        'claude-chat': 'needs-review',
+        'claude-cowork': 'ok',
         'claude-code': 'ok',
       },
     });
@@ -21,8 +21,8 @@ describe('classifyScriptFile', () => {
     expect(result).toMatchObject({
       signal: 'shell-script',
       impact: {
-        'claude-desktop': 'needs-review',
-        cowork: 'ok',
+        'claude-chat': 'needs-review',
+        'claude-cowork': 'ok',
         'claude-code': 'ok',
       },
     });
@@ -33,8 +33,8 @@ describe('classifyScriptFile', () => {
     expect(result).toMatchObject({
       signal: 'node-script',
       impact: {
-        'claude-desktop': 'ok',
-        cowork: 'ok',
+        'claude-chat': 'ok',
+        'claude-cowork': 'ok',
         'claude-code': 'ok',
       },
     });

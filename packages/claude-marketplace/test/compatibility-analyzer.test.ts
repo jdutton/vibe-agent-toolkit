@@ -29,19 +29,19 @@ describe('analyzeCompatibility', () => {
 
   it('flags desktop-incompatible plugin as incompatible for desktop', async () => {
     const result = await analyzeCompatibility(fixtureDir('desktop-incompatible-plugin'));
-    expect(result.analyzed['claude-desktop']).toBe('incompatible');
+    expect(result.analyzed['claude-chat']).toBe('incompatible');
     expect(hasSource(result.evidence, 'frontmatter')).toBe(true);
   });
 
   it('detects hook handler runtime requirements', async () => {
     const result = await analyzeCompatibility(fixtureDir('hook-heavy-plugin'));
-    expect(result.analyzed['claude-desktop']).toBe('needs-review');
+    expect(result.analyzed['claude-chat']).toBe('needs-review');
     expect(hasSource(result.evidence, 'hook')).toBe(true);
   });
 
   it('handles node MCP server as compatible', async () => {
     const result = await analyzeCompatibility(fixtureDir('mcp-plugin'));
-    expect(result.analyzed['claude-desktop']).toBe('compatible');
+    expect(result.analyzed['claude-chat']).toBe('compatible');
   });
 
   it('marks node-bundled plugin as compatible everywhere', async () => {

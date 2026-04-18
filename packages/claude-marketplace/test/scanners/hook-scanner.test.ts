@@ -30,8 +30,8 @@ describe('scanHooksConfig', () => {
       source: 'hook',
       signal: 'hook-command: python3',
       impact: {
-        'claude-desktop': 'needs-review',
-        cowork: 'ok',
+        'claude-chat': 'needs-review',
+        'claude-cowork': 'ok',
         'claude-code': 'ok',
       },
     });
@@ -60,7 +60,7 @@ describe('scanHooksConfig', () => {
       },
     };
     const result = scanHooksConfig(config, HOOKS_FILE);
-    expect(result[0]?.impact['claude-desktop']).toBe('ok');
+    expect(result[0]?.impact['claude-chat']).toBe('ok');
   });
 
   it('handles multiple hooks across multiple events', () => {

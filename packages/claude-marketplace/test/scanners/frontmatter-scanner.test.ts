@@ -28,8 +28,8 @@ describe('scanFrontmatter', () => {
     const result = scanFrontmatter(content, 'SKILL.md');
     const bashEvidence = result.find(e => e.signal === 'allowed-tools: Bash');
     expect(bashEvidence).toBeDefined();
-    expect(bashEvidence?.impact['claude-desktop']).toBe('incompatible');
-    expect(bashEvidence?.impact.cowork).toBe('needs-review');
+    expect(bashEvidence?.impact['claude-chat']).toBe('incompatible');
+    expect(bashEvidence?.impact['claude-cowork']).toBe('needs-review');
     expect(bashEvidence?.impact['claude-code']).toBe('ok');
   });
 
@@ -45,7 +45,7 @@ describe('scanFrontmatter', () => {
     const result = scanFrontmatter(content, 'SKILL.md');
     const editEvidence = result.find(e => e.signal === 'allowed-tools: Edit');
     expect(editEvidence).toBeDefined();
-    expect(editEvidence?.impact['claude-desktop']).toBe('incompatible');
+    expect(editEvidence?.impact['claude-chat']).toBe('incompatible');
   });
 
   it('detects Write in allowed-tools as incompatible with desktop', () => {

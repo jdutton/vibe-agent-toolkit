@@ -2,44 +2,19 @@
  * Core types for Claude plugin compatibility analysis.
  *
  * Three Claude surfaces with different runtime capabilities:
- * - claude-desktop: Most restrictive (MCP servers only, no local scripts)
- * - cowork: Middle ground (VM with Python 3.10 + Node.js 22, restricted network)
+ * - claude-chat: Most restrictive (MCP servers only, no local scripts)
+ * - claude-cowork: Middle ground (VM with Python 3.10 + Node.js 22, restricted network)
  * - claude-code: Least restrictive (full local environment)
  */
 
 /** Claude surface where plugins can run */
-export type Target = 'claude-desktop' | 'cowork' | 'claude-code';
+export type Target = 'claude-chat' | 'claude-cowork' | 'claude-code';
 
 /** All targets in order of restrictiveness (most to least) */
-export const ALL_TARGETS: readonly Target[] = ['claude-desktop', 'cowork', 'claude-code'] as const;
+export const ALL_TARGETS: readonly Target[] = ['claude-chat', 'claude-cowork', 'claude-code'] as const;
 
 /** Per-target impact level used in evidence records */
 export type ImpactLevel = 'ok' | 'needs-review' | 'incompatible';
-
-/** Common impact patterns reused across scanners */
-export const IMPACT_NEEDS_REVIEW_DESKTOP: Record<Target, ImpactLevel> = {
-  'claude-desktop': 'needs-review',
-  cowork: 'ok',
-  'claude-code': 'ok',
-} as const;
-
-export const IMPACT_ALL_OK: Record<Target, ImpactLevel> = {
-  'claude-desktop': 'ok',
-  cowork: 'ok',
-  'claude-code': 'ok',
-} as const;
-
-export const IMPACT_INCOMPATIBLE_DESKTOP: Record<Target, ImpactLevel> = {
-  'claude-desktop': 'incompatible',
-  cowork: 'ok',
-  'claude-code': 'ok',
-} as const;
-
-export const IMPACT_DESKTOP_INCOMPATIBLE_COWORK_REVIEW: Record<Target, ImpactLevel> = {
-  'claude-desktop': 'incompatible',
-  cowork: 'needs-review',
-  'claude-code': 'ok',
-} as const;
 
 /**
  * Three-tier verdict to handle ambiguity in static analysis.

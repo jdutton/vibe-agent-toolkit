@@ -93,3 +93,14 @@ export {
   type ImportResult,
 } from './import.js';
 
+// Evidence substrate
+export type {
+  EvidenceRecord,
+  EvidenceSource,
+  EvidenceConfidence,
+  EvidenceLocation,
+  PatternDefinition,
+  Observation,
+} from './evidence/index.js';
+export { PATTERN_REGISTRY, getPatternDefinition, assertPatternRegistered } from './evidence/index.js';
+

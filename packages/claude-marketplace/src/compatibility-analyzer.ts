@@ -104,8 +104,8 @@ function hasNonOkImpact(evidence: CompatibilityEvidence): boolean {
  */
 function aggregateVerdicts(evidence: CompatibilityEvidence[]): Record<Target, Verdict> {
   const result: Record<Target, Verdict> = {
-    'claude-desktop': 'compatible',
-    cowork: 'compatible',
+    'claude-chat': 'compatible',
+    'claude-cowork': 'compatible',
     'claude-code': 'compatible',
   };
 

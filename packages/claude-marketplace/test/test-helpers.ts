@@ -71,7 +71,7 @@ export function impact(
   cowork: ImpactLevel = 'ok',
   code: ImpactLevel = 'ok',
 ): Record<Target, ImpactLevel> {
-  return { 'claude-desktop': desktop, cowork, 'claude-code': code };
+  return { 'claude-chat': desktop, 'claude-cowork': cowork, 'claude-code': code };
 }
 
 /** Build a verdicts record for assertion against CompatibilityResult.analyzed */
@@ -80,5 +80,5 @@ export function verdicts(
   cowork: Verdict,
   code: Verdict,
 ): Record<Target, Verdict> {
-  return { 'claude-desktop': desktop, cowork, 'claude-code': code };
+  return { 'claude-chat': desktop, 'claude-cowork': cowork, 'claude-code': code };
 }

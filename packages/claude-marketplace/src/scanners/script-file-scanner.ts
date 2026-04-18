@@ -1,7 +1,8 @@
 import { extname } from 'node:path';
 
 import type { CompatibilityEvidence, ImpactLevel, Target } from '../types.js';
-import { IMPACT_ALL_OK, IMPACT_NEEDS_REVIEW_DESKTOP } from '../types.js';
+
+import { ALL_OK, CHAT_NEEDS_REVIEW } from './impact-constants.js';
 
 /** Python 3.10+ standard library modules */
 export const PYTHON_STDLIB_MODULES: ReadonlySet<string> = new Set([
@@ -165,27 +166,27 @@ const SIGNAL_SHELL_SCRIPT = 'shell-script';
 const SCRIPT_RULES: Record<string, { signal: string; impact: Record<Target, ImpactLevel> }> = {
   '.py': {
     signal: 'python-script',
-    impact: { ...IMPACT_NEEDS_REVIEW_DESKTOP },
+    impact: { ...CHAT_NEEDS_REVIEW },
   },
   '.sh': {
     signal: SIGNAL_SHELL_SCRIPT,
-    impact: { ...IMPACT_NEEDS_REVIEW_DESKTOP },
+    impact: { ...CHAT_NEEDS_REVIEW },
   },
   '.bash': {
     signal: SIGNAL_SHELL_SCRIPT,
-    impact: { ...IMPACT_NEEDS_REVIEW_DESKTOP },
+    impact: { ...CHAT_NEEDS_REVIEW },
   },
   '.mjs': {
     signal: SIGNAL_NODE_SCRIPT,
-    impact: { ...IMPACT_ALL_OK },
+    impact: { ...ALL_OK },
   },
   '.js': {
     signal: SIGNAL_NODE_SCRIPT,
-    impact: { ...IMPACT_ALL_OK },
+    impact: { ...ALL_OK },
   },
   '.cjs': {
     signal: SIGNAL_NODE_SCRIPT,
-    impact: { ...IMPACT_ALL_OK },
+    impact: { ...ALL_OK },
   },
 };
 
@@ -251,7 +252,7 @@ export function scanPythonImports(content: string, filePath: string): Compatibil
       file: filePath,
       signal: `third-party-import:${moduleName}`,
       detail: `Third-party Python import "${moduleName}" requires pip install`,
-      impact: { ...IMPACT_NEEDS_REVIEW_DESKTOP },
+      impact: { ...CHAT_NEEDS_REVIEW },
     });
   }
 

@@ -106,11 +106,11 @@ function assertCompatAnalyzed(entry: Record<string, unknown>): void {
 
   const analyzed = compat['analyzed'] as Record<string, unknown>;
   expect(analyzed).toHaveProperty('claude-code');
-  expect(analyzed).toHaveProperty('cowork');
-  expect(analyzed).toHaveProperty('claude-desktop');
+  expect(analyzed).toHaveProperty('claude-cowork');
+  expect(analyzed).toHaveProperty('claude-chat');
 
   // Validate that each verdict value is one of the known Verdict types
-  for (const target of ['claude-code', 'cowork', 'claude-desktop'] as const) {
+  for (const target of ['claude-code', 'claude-cowork', 'claude-chat'] as const) {
     expect(VALID_VERDICTS).toContain(analyzed[target]);
   }
 }
