@@ -9,6 +9,10 @@ skills:
   defaults:
     linkFollowDepth: 2
     excludeNavigationFiles: true
+    # VAT development skills (authoring, debugging, build orchestration) all
+    # require local shell to invoke `vat`/`bun`/`git` — claude-code is the
+    # only runtime that fits.
+    targets: ['claude-code']
   config:
     vibe-agent-toolkit:
       linkFollowDepth: 0
