@@ -727,6 +727,24 @@ See [docs/structured-outputs.md](docs/structured-outputs.md) for pattern compari
 
 **Quick insight**: Don't force JSON on every conversational turn. Use two-phase pattern for chatbots.
 
+## Agent-Facing Skills (in this repo)
+
+VAT ships a plugin of skills for agents working on VAT itself. They live at `packages/vat-development-agents/resources/skills/` and publish as the `vat-development-agents` plugin. **When a task matches one of the descriptions below, load the skill before acting** — the repo-level docs (`docs/`) are reference material; these skills are the procedural runbooks.
+
+| Skill file | When to use |
+|---|---|
+| `SKILL.md` (root, name `vibe-agent-toolkit`) | Any VAT work — routes to the sub-skills below |
+| `vat-agent-authoring.md` | Authoring SKILL.md files, designing agent architectures, packaging options |
+| `vat-audit.md` | Running `vat audit`, interpreting `--compat` output, filtering noise |
+| `vat-resources.md` | Resource collections, frontmatter schema validation, `vat resources` |
+| `vat-skills-distribution.md` | `vat build`, plugin/marketplace config, npm publishing, `vat verify` |
+| `vat-debugging.md` | Reproducing VAT bugs, `VAT_ROOT_DIR` adopter testing, failing-test-first fixes |
+| `vat-install-architecture.md` | Designing or advising on VAT install/uninstall surfaces |
+| `vat-claude-org-admin.md` | Anthropic org admin (Enterprise/Team admins, `ANTHROPIC_ADMIN_API_KEY`) |
+| `skill-quality-checklist.md` | **Pre-publication checklist** — walk through before shipping any skill; also usable as a review rubric for existing skills |
+
+**For AI assistants**: If you're asked a question about VAT skill authoring, audit output, debugging, distribution, or publishing and you haven't invoked the matching skill, you're probably about to give a shallower answer than you could. Invoke first.
+
 ## Questions?
 
 - [Architecture](./docs/architecture/README.md) - Package structure and evolution plan
