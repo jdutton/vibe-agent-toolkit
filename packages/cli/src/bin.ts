@@ -17,6 +17,7 @@ import { doctorCommand } from './commands/doctor.js';
 import { createMCPCommand } from './commands/mcp/index.js';
 import { createRagCommand, showRagVerboseHelp } from './commands/rag/index.js';
 import { createResourcesCommand, showResourcesVerboseHelp } from './commands/resources/index.js';
+import { createSkillCommand } from './commands/skill/index.js';
 import { createSkillsCommand } from './commands/skills/index.js';
 import { createVerifyTopLevelCommand } from './commands/verify.js';
 import { loadVerboseHelp } from './utils/help-loader.js';
@@ -131,6 +132,7 @@ program.addCommand(createRagCommand());
 program.addCommand(createAgentCommand());
 program.addCommand(createMCPCommand());
 program.addCommand(createSkillsCommand());
+program.addCommand(createSkillCommand());
 program.addCommand(createClaudeCommand());
 
 // Add top-level orchestration commands
