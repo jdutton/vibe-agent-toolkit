@@ -120,7 +120,7 @@ describe('doctor command - unit tests', () => {
   describe('checkGitRepository', () => {
     it('passes when in git repository', async () => {
       await mockDoctorEnvironment();
-      (existsSync as ReturnType<typeof vi.fn>).mockReturnValue(true); // .git exists
+      vi.mocked(existsSync).mockReturnValue(true); // .git exists
 
       const result = checkGitRepository();
 
@@ -129,7 +129,7 @@ describe('doctor command - unit tests', () => {
 
     it('fails when not in git repository', async () => {
       await mockDoctorEnvironment();
-      (existsSync as ReturnType<typeof vi.fn>).mockReturnValue(false); // No .git
+      vi.mocked(existsSync).mockReturnValue(false); // No .git
 
       const result = checkGitRepository();
 
@@ -283,7 +283,7 @@ describe('doctor command - unit tests', () => {
       // but we need to differentiate them for testing.
       // Running version is read via file:// URL, source is read via safePath.join()
       let readCallCount = 0;
-      (readFileSync as ReturnType<typeof vi.fn>).mockImplementation((path: string | Buffer | URL): string => {
+      vi.mocked(readFileSync).mockImplementation((path): string => {
         const locationStr = path.toString();
         readCallCount++;
 
@@ -302,7 +302,7 @@ describe('doctor command - unit tests', () => {
           version: '0.2.0'
         });
       });
-      (existsSync as ReturnType<typeof vi.fn>).mockReturnValue(true);
+      vi.mocked(existsSync).mockReturnValue(true);
 
       const result = checkCliBuildSync();
 

@@ -110,7 +110,7 @@ module.exports = {
                 alternative: getAlternatives(firstArg.value),
               };
             }
-            return false;
+            return undefined;
           }
 
           // For execSync (shell-based) - check if any Unix command is in the string
@@ -132,7 +132,7 @@ module.exports = {
             }
           }
 
-          return false;
+          return undefined;
         },
         messageId: 'noUnixCommand',
       }),

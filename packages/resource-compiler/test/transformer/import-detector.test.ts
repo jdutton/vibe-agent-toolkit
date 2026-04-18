@@ -12,61 +12,43 @@ import {
   findMarkdownImports,
 } from '../../src/transformer/import-detector.js';
 
-import { createSourceFile, getFirstImport, getImportInfo } from './test-helpers.js';
+import { createMockImportNode, createSourceFile, getImportInfo } from './test-helpers.js';
 
 describe('isMarkdownImport', () => {
   it('should detect .md imports', () => {
-    const code = `import * as Core from './core.md';`;
-    const sourceFile = createSourceFile(code);
-    const importNode = getFirstImport(sourceFile);
+    const importNode = createMockImportNode(`import * as Core from './core.md';`);
 
-    expect(importNode).toBeDefined();
-    expect(isMarkdownImport(importNode!)).toBe(true);
+    expect(isMarkdownImport(importNode)).toBe(true);
   });
 
   it('should reject non-.md imports', () => {
-    const code = `import { readFile } from 'node:fs';`;
-    const sourceFile = createSourceFile(code);
-    const importNode = getFirstImport(sourceFile);
+    const importNode = createMockImportNode(`import { readFile } from 'node:fs';`);
 
-    expect(importNode).toBeDefined();
-    expect(isMarkdownImport(importNode!)).toBe(false);
+    expect(isMarkdownImport(importNode)).toBe(false);
   });
 
   it('should handle .ts imports', () => {
-    const code = `import { foo } from './utils.ts';`;
-    const sourceFile = createSourceFile(code);
-    const importNode = getFirstImport(sourceFile);
+    const importNode = createMockImportNode(`import { foo } from './utils.ts';`);
 
-    expect(importNode).toBeDefined();
-    expect(isMarkdownImport(importNode!)).toBe(false);
+    expect(isMarkdownImport(importNode)).toBe(false);
   });
 
   it('should handle .js imports', () => {
-    const code = `import foo from './module.js';`;
-    const sourceFile = createSourceFile(code);
-    const importNode = getFirstImport(sourceFile);
+    const importNode = createMockImportNode(`import foo from './module.js';`);
 
-    expect(importNode).toBeDefined();
-    expect(isMarkdownImport(importNode!)).toBe(false);
+    expect(isMarkdownImport(importNode)).toBe(false);
   });
 
   it('should handle relative .md paths', () => {
-    const code = `import * as Doc from '../docs/readme.md';`;
-    const sourceFile = createSourceFile(code);
-    const importNode = getFirstImport(sourceFile);
+    const importNode = createMockImportNode(`import * as Doc from '../docs/readme.md';`);
 
-    expect(importNode).toBeDefined();
-    expect(isMarkdownImport(importNode!)).toBe(true);
+    expect(isMarkdownImport(importNode)).toBe(true);
   });
 
   it('should handle node_modules .md paths', () => {
-    const code = `import * as Prompts from '@pkg/prompts/core.md';`;
-    const sourceFile = createSourceFile(code);
-    const importNode = getFirstImport(sourceFile);
+    const importNode = createMockImportNode(`import * as Prompts from '@pkg/prompts/core.md';`);
 
-    expect(importNode).toBeDefined();
-    expect(isMarkdownImport(importNode!)).toBe(true);
+    expect(isMarkdownImport(importNode)).toBe(true);
   });
 });
 
@@ -96,25 +78,17 @@ describe('extractImportInfo', () => {
   });
 
   it('should return null for non-.md imports', () => {
-    const code = `import { foo } from './utils.ts';`;
-    const sourceFile = createSourceFile(code);
-    const importNode = getFirstImport(sourceFile);
+    const importNode = createMockImportNode(`import { foo } from './utils.ts';`);
 
-    expect(importNode).toBeDefined();
-
-    const info = extractImportInfo(importNode!);
+    const info = extractImportInfo(importNode);
 
     expect(info).toBeNull();
   });
 
   it('should handle import with no bindings', () => {
-    const code = `import './side-effect.md';`;
-    const sourceFile = createSourceFile(code);
-    const importNode = getFirstImport(sourceFile);
+    const importNode = createMockImportNode(`import './side-effect.md';`);
 
-    expect(importNode).toBeDefined();
-
-    const info = extractImportInfo(importNode!);
+    const info = extractImportInfo(importNode);
 
     // Side-effect imports have no identifier
     expect(info).toBeNull();
