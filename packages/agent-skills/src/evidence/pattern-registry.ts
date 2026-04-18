@@ -166,14 +166,6 @@ export const PATTERN_REGISTRY: Record<string, PatternDefinition> = {
     description: 'Third-party (non-stdlib) Python import statement.',
     confidence: 'high',
   },
-
-  // Frontmatter allowed-tools entry pattern (broader than the local-shell-only variant)
-  FRONTMATTER_ALLOWED_TOOLS_ENTRY: {
-    patternId: 'FRONTMATTER_ALLOWED_TOOLS_ENTRY',
-    source: 'code',
-    description: 'Allowed-tools entry in skill frontmatter.',
-    confidence: 'high',
-  },
 };
 
 export function getPatternDefinition(patternId: string): PatternDefinition | undefined {
