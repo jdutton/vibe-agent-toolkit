@@ -1,6 +1,6 @@
 ---
 name: distribution
-description: Use when setting up vat build, configuring plugin distribution for the Claude ecosystem (marketplace, plugins, managed settings), npm publishing with postinstall hooks, or vat verify orchestration. Covers the full pipeline from skill source to installed plugin.
+description: Use when setting up `vat build`, configuring plugin distribution (marketplace, plugins, managed settings), npm publishing with postinstall hooks, or `vat verify` — the full pipeline from skill source to installed plugin.
 ---
 
 # VAT Distribution: Build, Publish & Install
