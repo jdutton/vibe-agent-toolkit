@@ -25,6 +25,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@vibe-agent-toolkit/agent-skills": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
     "ignore": "^6.0.0",
     "yaml": "^2.6.1",

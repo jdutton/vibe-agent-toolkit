@@ -7,6 +7,7 @@ import * as fs from 'node:fs';
 
 import {
   detectResourceFormat,
+  observationToIssue,
   validate,
   validateSkill,
   runCompatDetectors,
@@ -191,7 +192,8 @@ async function validateSingleSkill(
       const packagingResult = await validateSkillForPackaging(skillPath, skillConfig);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillPath is validated user input
       const skillContent = fs.readFileSync(skillPath, 'utf-8');
-      const compatIssues = runCompatDetectors(skillContent, skillPath);
+      const { observations } = runCompatDetectors(skillContent, skillPath);
+      const compatIssues = observations.map(obs => observationToIssue(obs, skillPath));
       return packagingResultToValidationResult(skillPath, packagingResult, compatIssues);
     }
   }
@@ -833,7 +835,8 @@ async function handleFileEntry(
       // Packaging validator doesn't run compat detectors — add them here.
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- fullPath from directory scan
       const skillContent = fs.readFileSync(fullPath, 'utf-8');
-      const compatIssues = runCompatDetectors(skillContent, fullPath);
+      const { observations } = runCompatDetectors(skillContent, fullPath);
+      const compatIssues = observations.map(obs => observationToIssue(obs, fullPath));
       return packagingResultToValidationResult(fullPath, packagingResult, compatIssues);
     }
 

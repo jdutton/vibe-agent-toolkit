@@ -10,12 +10,21 @@ export type {
   SettingsConflict,
   SettingsConflictType,
   Target,
-  Verdict,
 } from './types.js';
 
 export { ALL_TARGETS } from './types.js';
 
 export { analyzeCompatibility } from './compatibility-analyzer.js';
+
+// Marketplace defaults / target resolution
+export {
+  readMarketplaceDefaultTargets,
+  resolveEffectiveTargets,
+} from './marketplace-defaults.js';
+
+// Verdict engine
+export { computeVerdicts } from './verdict-engine.js';
+export type { Verdict, VerdictCode, VerdictInput } from './verdict-engine.js';
 
 // Paths
 export type { ClaudeProjectPaths, ClaudeUserPaths } from './paths/claude-paths.js';

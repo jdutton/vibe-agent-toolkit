@@ -58,7 +58,11 @@ export {
   type FrontmatterResult,
 } from './parsers/frontmatter-parser.js';
 
-export { runCompatDetectors } from './validators/compat-detectors.js';
+export {
+  observationToIssue,
+  runCompatDetectors,
+  type DetectorOutput,
+} from './validators/compat-detectors.js';
 export { validateMarketplace } from './validators/marketplace-validator.js';
 export { validatePlugin } from './validators/plugin-validator.js';
 export { validateSkill } from './validators/skill-validator.js';

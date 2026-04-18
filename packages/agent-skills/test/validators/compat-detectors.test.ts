@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { detectBrowserAuth, detectExternalCLI, detectLocalShell, runCompatDetectors } from '../../src/validators/compat-detectors.js';
+import { runCompatDetectors } from '../../src/validators/compat-detectors.js';
 
 /** Build a minimal SKILL.md content string from frontmatter fields and a body. */
 function skill(opts: {
@@ -27,92 +27,106 @@ function codeBlock(lang: string, code: string): string {
   return `\`\`\`${lang}\n${code}\n\`\`\`\n`;
 }
 
-const SHELL_CODE = 'COMPAT_REQUIRES_LOCAL_SHELL';
-const CLI_CODE = 'COMPAT_REQUIRES_EXTERNAL_CLI';
-const AUTH_CODE = 'COMPAT_REQUIRES_BROWSER_AUTH';
+const SHELL_OBS = 'CAPABILITY_LOCAL_SHELL';
+const CLI_OBS = 'CAPABILITY_EXTERNAL_CLI';
+const AUTH_OBS = 'CAPABILITY_BROWSER_AUTH';
 
-/** Check if any issue has the given code. */
-function hasCode(issues: Array<{ code: string }>, code: string): boolean {
-  return issues.some(i => i.code === code);
+function obsCodes(observations: ReadonlyArray<{ code: string }>): string[] {
+  return observations.map(o => o.code);
 }
 
 describe('runCompatDetectors', () => {
-  it('returns an empty array for portable content with no compat signals', () => {
+  it('returns empty evidence and observations for portable content', () => {
     const content = skill({
       name: 'portable-skill',
       description: 'A skill that does not touch shells, browsers, or external CLIs.',
       body: "# Portable skill\n\nCall the Anthropic API with 'node' or the bundled SDK.",
     });
-    expect(runCompatDetectors(content, 'SKILL.md')).toHaveLength(0);
+    const { evidence, observations } = runCompatDetectors(content, 'SKILL.md');
+    expect(evidence).toHaveLength(0);
+    expect(observations).toHaveLength(0);
   });
 
-  it('attaches stable ValidationIssue shape with reference anchor', () => {
+  it('produces evidence with stable pattern IDs and locations', () => {
     const content = skill({
       name: 'shell-skill',
       description: 'Requires the Bash tool.',
       extraFrontmatter: 'allowed-tools: [Bash]',
       body: '# Content',
     });
-    const issues = runCompatDetectors(content, 'SKILL.md');
-    expect(issues.length).toBeGreaterThan(0);
-    for (const issue of issues) {
-      expect(issue.severity).toBe('warning');
-      expect(issue.code).toMatch(/^COMPAT_/);
-      expect(issue.location).toBe('SKILL.md');
-      expect(issue.reference).toMatch(/^#compat_/);
-      expect(issue.fix?.length ?? 0).toBeGreaterThan(10);
-      expect(issue.message.length).toBeGreaterThan(10);
+    const { evidence, observations } = runCompatDetectors(content, 'SKILL.md');
+    expect(observations).toHaveLength(1);
+    expect(observations[0]?.code).toBe(SHELL_OBS);
+    for (const e of evidence) {
+      expect(e.source).toBe('code');
+      expect(e.location.file).toBe('SKILL.md');
+      expect(e.matchText.length).toBeGreaterThan(0);
+      expect(['high', 'medium', 'low']).toContain(e.confidence);
     }
   });
 });
 
-describe('detectLocalShell', () => {
-  it('fires when allowed-tools frontmatter lists Bash', () => {
+describe('local-shell capability', () => {
+  it('emits CAPABILITY_LOCAL_SHELL when allowed-tools frontmatter lists Bash', () => {
     const content = skill({
       name: 'uses-bash',
       description: 'Uses Bash.',
       extraFrontmatter: 'allowed-tools: [Bash, Read]',
       body: 'Body.',
     });
-    expect(hasCode(detectLocalShell(content, 'SKILL.md'), SHELL_CODE)).toBe(true);
+    const { evidence, observations } = runCompatDetectors(content, 'SKILL.md');
+    expect(obsCodes(observations)).toContain(SHELL_OBS);
+    expect(evidence.some(e => e.patternId === 'ALLOWED_TOOLS_LOCAL_SHELL')).toBe(true);
   });
 
-  it.each(['Edit', 'Write', 'NotebookEdit'])('fires when allowed-tools frontmatter lists %s', (tool) => {
+  it.each(['Edit', 'Write', 'NotebookEdit'])('emits CAPABILITY_LOCAL_SHELL when allowed-tools lists %s', (tool) => {
     const content = skill({
       name: `uses-${tool.toLowerCase()}`,
       extraFrontmatter: `allowed-tools: [${tool}]`,
       body: 'Body.',
     });
-    expect(hasCode(detectLocalShell(content, 'SKILL.md'), SHELL_CODE), `expected fire for ${tool}`).toBe(true);
+    const { observations } = runCompatDetectors(content, 'SKILL.md');
+    expect(obsCodes(observations), `expected fire for ${tool}`).toContain(SHELL_OBS);
   });
 
-  it('fires when prose references the Bash tool by name', () => {
+  it('emits CAPABILITY_LOCAL_SHELL when prose references the Bash tool by name', () => {
     const content = skill({ body: 'Use the Bash tool to run `ls`.' });
-    expect(hasCode(detectLocalShell(content, 'SKILL.md'), SHELL_CODE)).toBe(true);
+    const { evidence, observations } = runCompatDetectors(content, 'SKILL.md');
+    expect(obsCodes(observations)).toContain(SHELL_OBS);
+    expect(evidence.some(e => e.patternId === 'PROSE_LOCAL_SHELL_TOOL_REFERENCE')).toBe(true);
   });
 
-  it('fires on direct bash/sh invocations in fenced shell code blocks', () => {
+  it('emits CAPABILITY_LOCAL_SHELL on direct bash invocations in fenced shell code blocks', () => {
     const content = skill({ body: `Run this:\n\n${bashBlock('echo hello')}` });
-    expect(hasCode(detectLocalShell(content, 'SKILL.md'), SHELL_CODE)).toBe(true);
+    const { evidence, observations } = runCompatDetectors(content, 'SKILL.md');
+    expect(obsCodes(observations)).toContain(SHELL_OBS);
+    expect(evidence.some(e => e.patternId === 'FENCED_SHELL_BLOCK')).toBe(true);
   });
 
-  it('does not fire for node-only or python-only content', () => {
+  it('does not emit shell capability for node-only or python-only content', () => {
     const content = skill({
       body: `${codeBlock('javascript', "console.log('hi');")}\nRead files using the Read tool.`,
     });
-    expect(detectLocalShell(content, 'SKILL.md')).toHaveLength(0);
+    const { observations } = runCompatDetectors(content, 'SKILL.md');
+    expect(obsCodes(observations)).not.toContain(SHELL_OBS);
   });
 
-  it('deduplicates: multiple signals produce one issue per (code, location)', () => {
+  it('rolls multiple shell-family signals into a single CAPABILITY_LOCAL_SHELL observation', () => {
     const content = skill({
       extraFrontmatter: 'allowed-tools: [Bash]',
       body: `Use the Bash tool.\n\n${bashBlock('ls')}`,
     });
-    expect(detectLocalShell(content, 'SKILL.md').filter(i => i.code === SHELL_CODE)).toHaveLength(1);
+    const { observations } = runCompatDetectors(content, 'SKILL.md');
+    const shellObs = observations.filter(o => o.code === SHELL_OBS);
+    expect(shellObs).toHaveLength(1);
+    // Supporting evidence references each contributing pattern
+    expect(shellObs[0]?.supportingEvidence).toEqual(
+      expect.arrayContaining(['ALLOWED_TOOLS_LOCAL_SHELL', 'PROSE_LOCAL_SHELL_TOOL_REFERENCE', 'FENCED_SHELL_BLOCK']),
+    );
   });
 });
 
-describe('detectExternalCLI', () => {
+describe('external-CLI capability', () => {
   it.each([
     ['az', 'az account show'],
     ['aws', 'aws s3 ls'],
@@ -122,58 +136,79 @@ describe('detectExternalCLI', () => {
     ['terraform', 'terraform apply'],
     ['gh', 'gh pr create'],
     ['op', 'op item list'],
-  ])('fires for %s invocation in a shell code block', (binary, command) => {
+  ])('emits CAPABILITY_EXTERNAL_CLI for %s invocation in a shell code block', (binary, command) => {
     const content = skill({ description: `uses ${binary}`, body: bashBlock(command) });
-    expect(hasCode(detectExternalCLI(content, 'SKILL.md'), CLI_CODE), `expected fire for ${binary}`).toBe(true);
+    const { observations } = runCompatDetectors(content, 'SKILL.md');
+    const cliObs = observations.filter(o => o.code === CLI_OBS);
+    expect(cliObs.length, `expected fire for ${binary}`).toBeGreaterThanOrEqual(1);
+    expect(cliObs.some(o => (o.payload as { binary: string } | undefined)?.binary === binary)).toBe(true);
   });
 
-  it('does not fire on references inside prose (no shell context)', () => {
+  it('does not emit external-CLI for references inside prose (no shell context)', () => {
     const content = skill({ body: "See the Azure docs for the 'az' command syntax." });
-    expect(detectExternalCLI(content, 'SKILL.md')).toHaveLength(0);
+    const { observations } = runCompatDetectors(content, 'SKILL.md');
+    expect(obsCodes(observations)).not.toContain(CLI_OBS);
   });
 
-  it('does not fire on bundled binaries like node/npx', () => {
+  it('does not emit external-CLI for bundled binaries like node/npx', () => {
     const content = skill({ body: bashBlock('node scripts/do-thing.mjs\nnpx tsc') });
-    expect(detectExternalCLI(content, 'SKILL.md')).toHaveLength(0);
+    const { observations } = runCompatDetectors(content, 'SKILL.md');
+    expect(obsCodes(observations)).not.toContain(CLI_OBS);
   });
 
-  it('deduplicates multiple invocations of the same binary', () => {
+  it('rolls multiple invocations of the same binary into a single observation', () => {
     const content = skill({ body: bashBlock('az login\naz account show\naz vm list') });
-    expect(detectExternalCLI(content, 'SKILL.md').filter(i => i.code === CLI_CODE)).toHaveLength(1);
+    const { observations } = runCompatDetectors(content, 'SKILL.md');
+    const cliObs = observations.filter(o => o.code === CLI_OBS);
+    expect(cliObs).toHaveLength(1);
+    expect((cliObs[0]?.payload as { binary: string } | undefined)?.binary).toBe('az');
+  });
+
+  it('emits one CAPABILITY_EXTERNAL_CLI observation per distinct binary', () => {
+    const content = '```bash\naz login\ngh auth login\n```';
+    const { observations } = runCompatDetectors(content, '/test/SKILL.md');
+    const cliObs = observations.filter(o => o.code === 'CAPABILITY_EXTERNAL_CLI');
+    const binaries = cliObs.map(o => (o.payload as { binary: string }).binary).sort((a, b) => a.localeCompare(b));
+    expect(binaries).toEqual(['az', 'gh']);
   });
 });
 
-describe('detectBrowserAuth', () => {
-  it('fires on MSAL usage (Python msal import)', () => {
+describe('browser-auth capability', () => {
+  it('emits CAPABILITY_BROWSER_AUTH on MSAL usage (Python msal import)', () => {
     const content = skill({ body: codeBlock('python', 'from msal import PublicClientApplication') });
-    expect(hasCode(detectBrowserAuth(content, 'SKILL.md'), AUTH_CODE)).toBe(true);
+    const { observations } = runCompatDetectors(content, 'SKILL.md');
+    expect(obsCodes(observations)).toContain(AUTH_OBS);
   });
 
-  it('fires on JS @azure/msal-* imports', () => {
+  it('emits CAPABILITY_BROWSER_AUTH on JS @azure/msal-* imports', () => {
     const content = skill({
       body: codeBlock('javascript', "import { PublicClientApplication } from '@azure/msal-node';"),
     });
-    expect(hasCode(detectBrowserAuth(content, 'SKILL.md'), AUTH_CODE)).toBe(true);
+    const { observations } = runCompatDetectors(content, 'SKILL.md');
+    expect(obsCodes(observations)).toContain(AUTH_OBS);
   });
 
   it.each([
     ['az login', 'az login'],
     ['gcloud auth login', 'gcloud auth login'],
     ['aws sso login', 'aws sso login'],
-  ])('fires on %s in a shell code block', (_name, cmd) => {
+  ])('emits CAPABILITY_BROWSER_AUTH on %s in a shell code block', (_name, cmd) => {
     const content = skill({ description: `uses ${_name}`, body: bashBlock(cmd) });
-    expect(hasCode(detectBrowserAuth(content, 'SKILL.md'), AUTH_CODE)).toBe(true);
+    const { observations } = runCompatDetectors(content, 'SKILL.md');
+    expect(obsCodes(observations)).toContain(AUTH_OBS);
   });
 
-  it('fires on webbrowser.open() calls', () => {
+  it('emits CAPABILITY_BROWSER_AUTH on webbrowser.open() calls', () => {
     const content = skill({
       body: codeBlock('python', "import webbrowser\nwebbrowser.open('https://login.example.com/oauth')"),
     });
-    expect(hasCode(detectBrowserAuth(content, 'SKILL.md'), AUTH_CODE)).toBe(true);
+    const { observations } = runCompatDetectors(content, 'SKILL.md');
+    expect(obsCodes(observations)).toContain(AUTH_OBS);
   });
 
   it('does not fire on unrelated OAuth prose or token-based flows', () => {
     const content = skill({ body: 'Use the bearer token from `AZURE_CLIENT_SECRET` for service-principal auth.' });
-    expect(detectBrowserAuth(content, 'SKILL.md')).toHaveLength(0);
+    const { observations } = runCompatDetectors(content, 'SKILL.md');
+    expect(obsCodes(observations)).not.toContain(AUTH_OBS);
   });
 });

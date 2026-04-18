@@ -58,13 +58,8 @@ export type NonOverridableCode =
 export type IssueCode = RegistryIssueCode | InfoCode | NonOverridableCode;
 
 export interface ValidationIssue {
-  /**
-   * Resolved severity after the validation framework runs.
-   * The 'info' variant is a transitional concession for InfoCode emissions
-   * (FILE_STRUCTURE_REPORT, RESOURCE_INVENTORY, etc.) and will be folded into
-   * IssueSeverity once those emitters are wired to the framework in later phases.
-   */
-  severity: IssueSeverity | 'info';
+  /** Resolved severity after the validation framework runs. */
+  severity: IssueSeverity;
   code: IssueCode;
   message: string;
   location?: string;

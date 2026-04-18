@@ -156,9 +156,12 @@ The validator checks for:
 #### Warnings (Non-Blocking)
 
 - `SKILL_TOO_LONG` - Skill exceeds 5000 lines
-- `COMPAT_REQUIRES_LOCAL_SHELL` - References Write, Edit, Bash, or NotebookEdit tools (see [validation-codes.md](../../docs/validation-codes.md#compat_requires_local_shell))
-- `COMPAT_REQUIRES_BROWSER_AUTH` - Requires a browser login flow (MSAL, cloud SSO, OAuth redirect) (see [validation-codes.md](../../docs/validation-codes.md#compat_requires_browser_auth))
-- `COMPAT_REQUIRES_EXTERNAL_CLI` - Invokes an unbundled external CLI (az, aws, gcloud, kubectl, docker, terraform, gh, op) (see [validation-codes.md](../../docs/validation-codes.md#compat_requires_external_cli))
+- `CAPABILITY_LOCAL_SHELL` - References Write, Edit, Bash, or NotebookEdit tools (info; see [validation-codes.md](../../docs/validation-codes.md#capability_local_shell))
+- `CAPABILITY_BROWSER_AUTH` - Requires a browser login flow (MSAL, cloud SSO, OAuth redirect) (info; see [validation-codes.md](../../docs/validation-codes.md#capability_browser_auth))
+- `CAPABILITY_EXTERNAL_CLI` - Invokes an unbundled external CLI (az, aws, gcloud, kubectl, docker, terraform, gh, op) (info; see [validation-codes.md](../../docs/validation-codes.md#capability_external_cli))
+- `COMPAT_TARGET_INCOMPATIBLE` - Declared target runtime lacks a required capability (warning; see [validation-codes.md](../../docs/validation-codes.md#compat_target_incompatible))
+- `COMPAT_TARGET_NEEDS_REVIEW` - Declared target covers the capability but a specific resource is uncertain (warning; see [validation-codes.md](../../docs/validation-codes.md#compat_target_needs_review))
+- `COMPAT_TARGET_UNDECLARED` - Capability observations present but no target declared (info; see [validation-codes.md](../../docs/validation-codes.md#compat_target_undeclared))
 
 See [Best Practices Guide](../../docs/guides/agent-skills-best-practices.md) for detailed guidance.
 

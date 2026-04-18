@@ -25,7 +25,7 @@ describe('CODE_REGISTRY', () => {
     ];
     for (const code of expected) {
       expect(CODE_REGISTRY[code], `registry missing ${code}`).toBeDefined();
-      expect(CODE_REGISTRY[code].defaultSeverity).toMatch(/^(error|warning)$/);
+      expect(CODE_REGISTRY[code].defaultSeverity).toMatch(/^(error|warning|info)$/);
       expect(CODE_REGISTRY[code].description.length).toBeGreaterThan(10);
       expect(CODE_REGISTRY[code].fix.length).toBeGreaterThan(10);
       expect(CODE_REGISTRY[code].reference).toMatch(/^#/);
@@ -63,15 +63,24 @@ describe('CODE_REGISTRY', () => {
   });
 });
 
-describe('CODE_REGISTRY — compat codes', () => {
-  it('registers the three v1 compat codes with warning defaults', () => {
-    const codes = ['COMPAT_REQUIRES_BROWSER_AUTH', 'COMPAT_REQUIRES_LOCAL_SHELL', 'COMPAT_REQUIRES_EXTERNAL_CLI'] as const;
+describe('CODE_REGISTRY — capability and compat codes', () => {
+  it('registers capability codes as info severity', () => {
+    const codes = ['CAPABILITY_BROWSER_AUTH', 'CAPABILITY_LOCAL_SHELL', 'CAPABILITY_EXTERNAL_CLI'] as const;
     for (const code of codes) {
       expect(CODE_REGISTRY[code], `registry missing ${code}`).toBeDefined();
-      expect(CODE_REGISTRY[code].defaultSeverity).toBe('warning');
+      expect(CODE_REGISTRY[code].defaultSeverity).toBe('info');
       expect(CODE_REGISTRY[code].description.length).toBeGreaterThan(10);
       expect(CODE_REGISTRY[code].fix.length).toBeGreaterThan(10);
-      expect(CODE_REGISTRY[code].reference).toMatch(/^#compat_/);
+      expect(CODE_REGISTRY[code].reference).toMatch(/^#capability_/);
+    }
+  });
+
+  it('registers compat verdict codes with appropriate defaults', () => {
+    expect(CODE_REGISTRY.COMPAT_TARGET_INCOMPATIBLE.defaultSeverity).toBe('warning');
+    expect(CODE_REGISTRY.COMPAT_TARGET_NEEDS_REVIEW.defaultSeverity).toBe('warning');
+    expect(CODE_REGISTRY.COMPAT_TARGET_UNDECLARED.defaultSeverity).toBe('info');
+    for (const code of ['COMPAT_TARGET_INCOMPATIBLE', 'COMPAT_TARGET_NEEDS_REVIEW', 'COMPAT_TARGET_UNDECLARED'] as const) {
+      expect(CODE_REGISTRY[code].reference).toMatch(/^#compat_target_/);
     }
   });
 });
