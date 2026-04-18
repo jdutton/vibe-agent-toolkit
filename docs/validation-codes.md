@@ -2,6 +2,8 @@
 
 For the project's *stance* on what each category of code exists to enforce — the reasoning behind every default severity and the confidence level we attach to each — see [Skill Quality and Compatibility — VAT's Stance](./skill-quality-and-compatibility.md). That doc articulates what VAT believes; this doc is the code-level reference.
 
+See [skill-smell-philosophy.md](./skill-smell-philosophy.md) for the rule-addition philosophy, default-severity policy, and graduation path that governs every code in this reference.
+
 This reference lists every overridable validation code VAT emits, plus the two meta-codes. Use it to interpret CLI output, configure `validation.severity` / `validation.allow`, and understand default behavior.
 
 ## Severity Model
