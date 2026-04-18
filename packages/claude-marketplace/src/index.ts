@@ -13,6 +13,7 @@ export type {
 } from './types.js';
 
 export { analyzeCompatibility } from './compatibility-analyzer.js';
+export type { AnalyzeCompatibilityOptions } from './compatibility-analyzer.js';
 
 // Marketplace defaults / target resolution
 export {

@@ -176,6 +176,23 @@ function isMcpConfigFile(relativePath: string): boolean {
 }
 
 /**
+ * Options for {@link analyzeCompatibility}.
+ */
+export interface AnalyzeCompatibilityOptions {
+  /**
+   * Config-layer declared targets, typically drawn from
+   * `vibe-agent-toolkit.config.yaml` (`skills.defaults.targets` plus any
+   * per-skill `skills.config.<name>.targets`). These are considered only
+   * when the plugin.json and marketplace.json do not declare targets —
+   * see {@link resolveEffectiveTargets} for the precedence rules.
+   *
+   * When omitted, only plugin.json / marketplace.json targets are used and
+   * behavior matches the pre-options call signature.
+   */
+  configTargets?: Target[];
+}
+
+/**
  * Analyze a Claude plugin directory for compatibility across all target surfaces.
  *
  * Walks the plugin directory, runs relevant scanners on each file,
@@ -184,10 +201,17 @@ function isMcpConfigFile(relativePath: string): boolean {
  * declared targets (plugin.json → marketplace.json → config layer).
  *
  * @param pluginDir - Absolute path to the plugin root directory
+ * @param options - Optional analysis options; see {@link AnalyzeCompatibilityOptions}.
+ *   `options.configTargets` lets callers thread a config-layer target declaration
+ *   through to the verdict engine — plugin.json / marketplace.json targets still
+ *   win when present.
  * @returns CompatibilityResult with evidence, observations, verdicts, and counts
  * @throws If the directory does not contain a valid .claude-plugin/plugin.json
  */
-export async function analyzeCompatibility(pluginDir: string): Promise<CompatibilityResult> {
+export async function analyzeCompatibility(
+  pluginDir: string,
+  options?: AnalyzeCompatibilityOptions,
+): Promise<CompatibilityResult> {
   const manifest = await readPluginManifest(pluginDir);
   const files = await collectFiles(pluginDir);
 
@@ -229,7 +253,7 @@ export async function analyzeCompatibility(pluginDir: string): Promise<Compatibi
   const marketplaceDir = safePath.resolve(pluginDir, '..');
   const marketplaceTargets = await readMarketplaceDefaultTargets(marketplaceDir);
   const effectiveTargets = resolveEffectiveTargets({
-    configTargets: undefined,
+    configTargets: options?.configTargets,
     pluginTargets: manifest.targets,
     marketplaceTargets,
   });

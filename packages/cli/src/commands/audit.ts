@@ -27,7 +27,7 @@ import {
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
-import { gitCheckIgnoredBatch, gitFindRoot, isGitIgnored, safePath } from '@vibe-agent-toolkit/utils';
+import { gitCheckIgnoredBatch, gitFindRoot, isAbsolutePath, isGitIgnored, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import picomatch from 'picomatch';
 
@@ -56,8 +56,11 @@ export interface AuditCommandOptions {
 /** Resource type constant for agent skills, avoiding duplicate string literals. */
 const RESOURCE_TYPE_AGENT_SKILL: ValidationResult['type'] = 'agent-skill';
 
-/** Config-aware context for VAT project scanning. Built once per audit, passed through recursion. */
-interface VATProjectContext {
+/**
+ * Config-aware context for VAT project scanning. Built once per audit, passed through recursion.
+ * @internal Exported for integration testing only.
+ */
+export interface VATProjectContext {
   /** Map of absolute SKILL.md path → merged SkillPackagingConfig (without validation.allow) */
   skillConfigs: Map<string, SkillPackagingConfig>;
 }
@@ -579,9 +582,14 @@ export async function auditCommand(
 
     const effectiveSettings = await resolveEffectiveSettings(options, scanPath, logger);
 
+    // Build config-aware context (same shape used by directory/file scanning)
+    // so compat analysis can honor config-layer `targets` declarations.
+    // Scoped to the derived config root — the directory closest to the audit target.
+    const vatContextForCompat = await buildVATProjectContext(deriveConfigRoot(targetPath), logger);
+
     // Run compatibility analysis if --compat flag is set
     const compatMap = options.compat
-      ? await runCompatAnalysis(results, logger, effectiveSettings)
+      ? await runCompatAnalysis(results, logger, effectiveSettings, vatContextForCompat)
       : undefined;
 
     const verbose = options.verbose ?? false;
@@ -648,14 +656,63 @@ export async function getValidationResults(
 }
 
 /**
+ * Resolve the config-layer targets to pass to `analyzeCompatibility` for a
+ * single plugin directory.
+ *
+ * Strategy for multi-skill plugins: take the **union** of every in-plugin
+ * skill's `targets`. Rationale — a plugin is only "covered" for a target when
+ * it can satisfy every skill it ships, so the plugin-level declaration should
+ * include any target that any of its skills declares. This mirrors how the
+ * verdict engine treats the plugin as a whole rather than slicing
+ * capabilities per-skill. Skills that omit `targets` contribute nothing
+ * (their declaration is silent, not zero).
+ *
+ * Returns `undefined` when there is no config context, no skills in the
+ * plugin, or no skill declares targets — which preserves the pre-existing
+ * behavior (plugin.json / marketplace.json wins; otherwise undeclared).
+ */
+function resolveConfigTargetsForPlugin(
+  pluginDir: string,
+  vatContext: VATProjectContext | null,
+): Target[] | undefined {
+  if (vatContext === null) return undefined;
+
+  const pluginDirAbs = safePath.resolve(pluginDir);
+  const union = new Set<Target>();
+
+  for (const [skillPathAbs, packagingConfig] of vatContext.skillConfigs) {
+    const rel = safePath.relative(pluginDirAbs, skillPathAbs);
+    // Skill lives inside the plugin directory iff relative path does not
+    // start with '..' and is not absolute.
+    if (rel === '' || rel.startsWith('..') || isAbsolutePath(rel)) continue;
+
+    const skillTargets = packagingConfig.targets;
+    if (skillTargets === undefined) continue;
+    for (const t of skillTargets) {
+      union.add(t);
+    }
+  }
+
+  return union.size === 0 ? undefined : [...union];
+}
+
+/**
  * Run compatibility analysis on plugin results and return a map of path -> CompatibilityResult.
  * Non-plugin results are skipped silently.
  * When effectiveSettings is provided, also runs settings conflict detection.
+ *
+ * When vatContext is provided, config-layer `targets` declarations are
+ * threaded through to the analyzer so `vat audit .` inside a VAT project
+ * matches `vat skills validate` verdicts. See
+ * {@link resolveConfigTargetsForPlugin} for the multi-skill union strategy.
+ *
+ * @internal Exported for integration testing only — not part of the public CLI API.
  */
-async function runCompatAnalysis(
+export async function runCompatAnalysis(
   results: ValidationResult[],
   logger: ReturnType<typeof createLogger>,
-  effectiveSettings?: EffectiveSettings
+  effectiveSettings?: EffectiveSettings,
+  vatContext: VATProjectContext | null = null,
 ): Promise<Map<string, CompatibilityResult>> {
   const compatMap = new Map<string, CompatibilityResult>();
 
@@ -664,7 +721,11 @@ async function runCompatAnalysis(
 
     try {
       logger.debug(`Running compatibility analysis for: ${result.path}`);
-      const compat = await analyzeCompatibility(result.path);
+      const configTargets = resolveConfigTargetsForPlugin(result.path, vatContext);
+      const analyzeOptions = configTargets === undefined
+        ? undefined
+        : { configTargets };
+      const compat = await analyzeCompatibility(result.path, analyzeOptions);
 
       // Settings conflict detection (when --settings flag is used)
       if (effectiveSettings === undefined) {
