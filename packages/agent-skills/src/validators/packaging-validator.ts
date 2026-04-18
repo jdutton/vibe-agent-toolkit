@@ -20,10 +20,12 @@ import { basename, dirname } from 'node:path';
 import { parseMarkdown, ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 
+import type { EvidenceRecord, Observation } from '../evidence/index.js';
 import { walkLinkGraph, type LinkResolution, type WalkableRegistry } from '../walk-link-graph.js';
 
 import type { AllowRecord } from './allow-filter.js';
 import { CODE_REGISTRY, type IssueCode } from './code-registry.js';
+import { observationToIssue, runCompatDetectors } from './compat-detectors.js';
 import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
 import { SOURCE_ONLY_CODES } from './source-only-codes.js';
 import type { ValidationIssue } from './types.js';
@@ -55,6 +57,13 @@ export interface SkillPackagingConfig {
   files?: Array<{ source: string; dest: string }>;
   /** Framework-based validation configuration (severity overrides and allow entries). */
   validation?: ValidationConfig | undefined;
+  /**
+   * Declared runtime targets for this skill. Used by the CLI verdict layer
+   * to suppress non-applicable compat verdicts. The packaging validator
+   * itself only stores the declaration; verdict computation lives in the
+   * CLI (which can also bring in plugin / marketplace target layers).
+   */
+  targets?: ReadonlyArray<'claude-chat' | 'claude-cowork' | 'claude-code'>;
 }
 
 /** Excluded reference detail for verbose output */
@@ -85,6 +94,21 @@ export interface PackagingValidationResult {
 
   /** Issues suppressed by allow entries */
   ignoredErrors: AllowRecord[];
+
+  /**
+   * Capability observations rolled up from compat detectors.
+   * Carried alongside emitted issues so downstream verdict computation
+   * (CLI layer) can recover observation payloads (e.g. EXTERNAL_CLI binary)
+   * without re-parsing the skill.
+   */
+  observations: Observation[];
+
+  /**
+   * Raw evidence records collected by compat detectors. Surfaced so that
+   * audit `--verbose` can render the underlying matches for each capability
+   * observation without re-parsing the skill.
+   */
+  evidence: EvidenceRecord[];
 
   /** Metadata about the skill */
   metadata: {
@@ -183,6 +207,15 @@ export async function validateSkillForPackaging(
   // Validate files config
   rawIssues.push(...validateFilesConfig(packagingConfig?.files));
 
+  // Compat capability detection: collect observations from SKILL.md and
+  // surface each as a CAPABILITY_* issue. Observations are also returned
+  // on the result so downstream verdict computation (CLI layer) can recover
+  // payloads such as EXTERNAL_CLI binary names.
+  const { evidence, observations } = runCompatDetectors(skillContent, skillPath);
+  for (const obs of observations) {
+    rawIssues.push(observationToIssue(obs, skillPath));
+  }
+
   // Read packaging options for depth/exclude configuration
   const linkFollowDepth = packagingConfig?.linkFollowDepth ?? 2;
   const excludeConfig = packagingConfig?.excludeReferencesFromBundle;
@@ -262,6 +295,8 @@ export async function validateSkillForPackaging(
     activeErrors,
     activeWarnings,
     ignoredErrors: framework.allowed,
+    observations,
+    evidence,
     metadata: {
       skillLines,
       totalLines,

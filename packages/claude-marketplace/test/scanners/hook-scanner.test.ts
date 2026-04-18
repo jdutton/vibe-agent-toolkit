@@ -15,7 +15,7 @@ describe('scanHooksConfig', () => {
     expect(result).toEqual([]);
   });
 
-  it('detects python3 in command handler', () => {
+  it('detects python3 in command handler as HOOK_COMMAND_INVOKES_BINARY evidence', () => {
     const config = {
       hooks: {
         SessionStart: [{
@@ -26,18 +26,11 @@ describe('scanHooksConfig', () => {
     };
     const result = scanHooksConfig(config, HOOKS_FILE);
     expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      source: 'hook',
-      signal: 'hook-command: python3',
-      impact: {
-        'claude-chat': 'needs-review',
-        'claude-cowork': 'ok',
-        'claude-code': 'ok',
-      },
-    });
+    expect(result[0]?.patternId).toBe('HOOK_COMMAND_INVOKES_BINARY');
+    expect(result[0]?.matchText).toContain('python3');
   });
 
-  it('detects bash in command handler', () => {
+  it('detects bash in command handler as HOOK_COMMAND_INVOKES_BINARY evidence', () => {
     const config = {
       hooks: {
         PostToolUse: [{
@@ -47,10 +40,11 @@ describe('scanHooksConfig', () => {
       },
     };
     const result = scanHooksConfig(config, HOOKS_FILE);
-    expect(result[0]?.signal).toBe('hook-command: bash');
+    expect(result[0]?.patternId).toBe('HOOK_COMMAND_INVOKES_BINARY');
+    expect(result[0]?.matchText).toContain('bash');
   });
 
-  it('treats node handlers as compatible everywhere', () => {
+  it('records node handler invocations as HOOK_COMMAND_INVOKES_BINARY (any binary is recorded)', () => {
     const config = {
       hooks: {
         PostToolUse: [{
@@ -60,7 +54,7 @@ describe('scanHooksConfig', () => {
       },
     };
     const result = scanHooksConfig(config, HOOKS_FILE);
-    expect(result[0]?.impact['claude-chat']).toBe('ok');
+    expect(result[0]?.patternId).toBe('HOOK_COMMAND_INVOKES_BINARY');
   });
 
   it('handles multiple hooks across multiple events', () => {

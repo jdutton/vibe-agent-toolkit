@@ -55,9 +55,9 @@ describe('analyzeCompatibility against local plugins', () => {
         results.push(result);
 
         expect(result.plugin).toBeTruthy();
-        expect(result.analyzed['claude-chat']).toBeDefined();
-        expect(result.analyzed['claude-cowork']).toBeDefined();
-        expect(result.analyzed['claude-code']).toBeDefined();
+        expect(Array.isArray(result.evidence)).toBe(true);
+        expect(Array.isArray(result.observations)).toBe(true);
+        expect(Array.isArray(result.verdicts)).toBe(true);
       }
     }
 
@@ -65,9 +65,8 @@ describe('analyzeCompatibility against local plugins', () => {
 
     console.table(results.map(r => ({
       plugin: r.plugin,
-      chat: r.analyzed['claude-chat'],
-      cowork: r.analyzed['claude-cowork'],
-      code: r.analyzed['claude-code'],
+      observations: r.observations.length,
+      verdicts: r.verdicts.length,
       evidenceCount: r.evidence.length,
     })));
   });

@@ -1,74 +1,41 @@
-import type { ImpactLevel, Target } from '../types.js';
-
-import { ALL_OK, CHAT_INCOMPATIBLE, CHAT_NEEDS_REVIEW } from './impact-constants.js';
+/**
+ * Command classification: pure pattern detection.
+ *
+ * No impact information here — scanners emit evidence with pattern IDs,
+ * and the verdict engine decides per-target outcomes downstream.
+ */
 
 export interface CommandRule {
   pattern: RegExp;
+  /** Stable label for the rule (used as match-text hint and binary key). */
   signal: string;
-  impact: Record<Target, ImpactLevel>;
 }
 
-/** Maps known binary names to their compatibility impact */
-const BINARY_IMPACTS: Record<string, { signal: string; impact: Record<Target, ImpactLevel> }> = {
-  bash: { signal: 'bash', impact: { ...CHAT_NEEDS_REVIEW } },
-  node: { signal: 'node', impact: { ...ALL_OK } },
-  npx: { signal: 'npx', impact: { ...ALL_OK } },
-  python: { signal: 'python3', impact: { ...CHAT_NEEDS_REVIEW } },
-  python3: { signal: 'python3', impact: { ...CHAT_NEEDS_REVIEW } },
-  sh: { signal: 'sh', impact: { ...CHAT_NEEDS_REVIEW } },
-  uv: { signal: 'uv', impact: { ...CHAT_NEEDS_REVIEW } },
-};
+/** Known binary names mapped to their canonical signal label. */
+const KNOWN_BINARIES: ReadonlySet<string> = new Set([
+  'bash', 'sh', 'node', 'npx', 'python', 'python3', 'uv',
+]);
 
-/** Commands and their impact on each target */
+/** Commands whose presence in shell text we want to record. */
 export const COMMAND_RULES: readonly CommandRule[] = [
-  {
-    pattern: /\bpip3?\s+install\b/,
-    signal: 'pip install',
-    impact: { ...CHAT_INCOMPATIBLE },
-  },
-  {
-    pattern: /\bnpm\s+install\b/,
-    signal: 'npm install',
-    impact: { ...CHAT_NEEDS_REVIEW },
-  },
-  {
-    pattern: /\buv\s+(?:run|pip|sync)\b/,
-    signal: 'uv',
-    impact: { ...CHAT_NEEDS_REVIEW },
-  },
-  {
-    pattern: /\bpython3?\s+/,
-    signal: 'python3',
-    impact: { ...CHAT_NEEDS_REVIEW },
-  },
-  {
-    pattern: /\bbash\s+/,
-    signal: 'bash',
-    impact: { ...CHAT_NEEDS_REVIEW },
-  },
-  {
-    // The `sh` pattern avoids matching file extensions like `.sh`
-    pattern: /(?<!\.)(?:^|[\s;|&])sh\s+/m,
-    signal: 'sh',
-    impact: { ...CHAT_NEEDS_REVIEW },
-  },
-  {
-    pattern: /\bnode\s+/,
-    signal: 'node',
-    impact: { ...ALL_OK },
-  },
+  { pattern: /\bpip3?\s+install\b/, signal: 'pip install' },
+  { pattern: /\bnpm\s+install\b/, signal: 'npm install' },
+  { pattern: /\buv\s+(?:run|pip|sync)\b/, signal: 'uv' },
+  { pattern: /\bpython3?\s+/, signal: 'python3' },
+  { pattern: /\bbash\s+/, signal: 'bash' },
+  // The `sh` pattern avoids matching file extensions like `.sh`
+  { pattern: /(?<!\.)(?:^|[\s;|&])sh\s+/m, signal: 'sh' },
+  { pattern: /\bnode\s+/, signal: 'node' },
 ] as const;
 
 /**
  * Classify a command string against known command patterns.
- * Returns the first matching rule or undefined.
+ * Returns the first matching rule signal or undefined.
  */
-export function classifyCommand(
-  command: string,
-): { signal: string; impact: Record<Target, ImpactLevel> } | undefined {
+export function classifyCommand(command: string): { signal: string } | undefined {
   for (const rule of COMMAND_RULES) {
     if (rule.pattern.test(command)) {
-      return { signal: rule.signal, impact: { ...rule.impact } };
+      return { signal: rule.signal };
     }
   }
   return undefined;
@@ -76,13 +43,11 @@ export function classifyCommand(
 
 /**
  * Classify a standalone binary name (e.g., "python3", "node", "uv").
- * Unlike classifyCommand which matches regex patterns against full command strings,
- * this performs an exact lookup for MCP server command binaries.
+ * Used for MCP server `command` fields where the value is a bare binary name.
  */
-export function classifyCommandBinary(
-  binary: string,
-): { signal: string; impact: Record<Target, ImpactLevel> } | undefined {
-  const entry = BINARY_IMPACTS[binary];
-  if (!entry) return undefined;
-  return { signal: entry.signal, impact: { ...entry.impact } };
+export function classifyCommandBinary(binary: string): { signal: string } | undefined {
+  if (!KNOWN_BINARIES.has(binary)) return undefined;
+  // Normalize python → python3 to match the rule label.
+  const signal = binary === 'python' ? 'python3' : binary;
+  return { signal };
 }

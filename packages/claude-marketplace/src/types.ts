@@ -7,22 +7,12 @@
  * - claude-code: Least restrictive (full local environment)
  */
 
+import type { EvidenceRecord, Observation } from '@vibe-agent-toolkit/agent-skills';
+
+import type { Verdict } from './verdict-engine.js';
+
 /** Claude surface where plugins can run */
 export type Target = 'claude-chat' | 'claude-cowork' | 'claude-code';
-
-/** All targets in order of restrictiveness (most to least) */
-export const ALL_TARGETS: readonly Target[] = ['claude-chat', 'claude-cowork', 'claude-code'] as const;
-
-/** Per-target impact level used in evidence records */
-export type ImpactLevel = 'ok' | 'needs-review' | 'incompatible';
-
-/**
- * Three-tier verdict to handle ambiguity in static analysis.
- * - compatible: High confidence this works on the target
- * - needs-review: Signals detected but uncertain — curator decides
- * - incompatible: Definitive evidence it cannot work on the target
- */
-export type Verdict = 'compatible' | 'needs-review' | 'incompatible';
 
 /** Where a compatibility signal was detected */
 export type EvidenceSource =
@@ -36,22 +26,13 @@ export type EvidenceSource =
   | 'settings-conflict'; // Conflict with managed/user settings
 
 /**
- * A single piece of compatibility evidence found during analysis.
- * Each evidence item records what was found, where, and how it impacts each target.
+ * Output of a per-file scanner: raw evidence records plus the derived
+ * capability observations rolled up from those records (the verdict layer
+ * decides whether each observation produces an issue for a given target).
  */
-export interface CompatibilityEvidence {
-  /** What type of source produced this evidence */
-  source: EvidenceSource;
-  /** File where the signal was found (relative to plugin root) */
-  file: string;
-  /** Line number within the file (1-based, when applicable) */
-  line?: number | undefined;
-  /** Short description of the signal (e.g., "python3 command", "pip install") */
-  signal: string;
-  /** Human-readable detail explaining what was found */
-  detail: string;
-  /** Impact on each target surface */
-  impact: Record<Target, ImpactLevel>;
+export interface ScannerOutput {
+  evidence: EvidenceRecord[];
+  observations: Observation[];
 }
 
 /** Settings level (highest → lowest precedence) */
@@ -84,19 +65,24 @@ export interface SettingsConflict {
 
 /**
  * Aggregated compatibility result for a single plugin.
- * Plugin verdict = worst verdict across all evidence for each target.
+ *
+ * Evidence is the raw per-pattern record. Observations are rolled-up
+ * capability claims derived from evidence. Verdicts are emitted by the
+ * verdict engine based on observations + effective targets.
  */
 export interface CompatibilityResult {
   /** Plugin name from plugin.json */
   plugin: string;
   /** Plugin version from plugin.json (if present) */
   version?: string | undefined;
-  /** Author-declared target surfaces (if present in plugin.json) */
-  declared?: Target[] | undefined;
-  /** Analyzed verdict per target */
-  analyzed: Record<Target, Verdict>;
-  /** All evidence collected during analysis */
-  evidence: CompatibilityEvidence[];
+  /** Effective declared targets after resolving plugin/marketplace/config layers */
+  declaredTargets: Target[] | undefined;
+  /** All raw evidence records collected during analysis */
+  evidence: EvidenceRecord[];
+  /** Capability observations derived from evidence */
+  observations: Observation[];
+  /** Compat verdicts produced by the verdict engine */
+  verdicts: Verdict[];
   /** Settings conflicts found (only present when --settings used) */
   settingsConflicts?: SettingsConflict[] | undefined;
   /** Summary counts for quick assessment */

@@ -1,69 +1,24 @@
-import { parse as parseYaml } from 'yaml';
+/**
+ * Frontmatter scanner: emits ALLOWED_TOOLS_LOCAL_SHELL evidence when
+ * SKILL.md frontmatter declares allowed-tools that imply a local shell
+ * environment (Bash/Edit/Write/NotebookEdit).
+ *
+ * Delegates to the agent-skills detector so the rules are consistent
+ * with standalone skill validation.
+ */
 
-import type { CompatibilityEvidence, ImpactLevel, Target } from '../types.js';
+import { runCompatDetectors, type EvidenceRecord } from '@vibe-agent-toolkit/agent-skills';
 
-/** Impact: chat incompatible, cowork needs review, code ok */
-const CHAT_INCOMPATIBLE_COWORK_REVIEW: Record<Target, ImpactLevel> = {
-  'claude-chat': 'incompatible', 'claude-cowork': 'needs-review', 'claude-code': 'ok',
-};
-
-/** Tools that require local environment access */
-const RESTRICTED_TOOLS: Record<string, { impact: Record<Target, ImpactLevel> }> = {
-  Bash: { impact: { ...CHAT_INCOMPATIBLE_COWORK_REVIEW } },
-  Edit: { impact: { ...CHAT_INCOMPATIBLE_COWORK_REVIEW } },
-  Write: { impact: { ...CHAT_INCOMPATIBLE_COWORK_REVIEW } },
-  NotebookEdit: { impact: { ...CHAT_INCOMPATIBLE_COWORK_REVIEW } },
-};
-
-const FRONTMATTER_RE = /^---\n([\s\S]*?)\n---/;
-
-function scanAllowedTools(
-  allowedTools: unknown[],
-  filePath: string,
-): CompatibilityEvidence[] {
-  const evidence: CompatibilityEvidence[] = [];
-  for (const tool of allowedTools) {
-    const toolName = String(tool);
-    const restriction = RESTRICTED_TOOLS[toolName];
-    if (restriction) {
-      evidence.push({
-        source: 'frontmatter',
-        file: filePath,
-        signal: `allowed-tools: ${toolName}`,
-        detail: `Skill requires "${toolName}" tool which needs local environment access`,
-        impact: { ...restriction.impact },
-      });
-    }
-  }
-  return evidence;
-}
+const FRONTMATTER_PATTERN_IDS: ReadonlySet<string> = new Set([
+  'ALLOWED_TOOLS_LOCAL_SHELL',
+  'PROSE_LOCAL_SHELL_TOOL_REFERENCE',
+]);
 
 /**
- * Scan SKILL.md frontmatter for compatibility-relevant declarations.
- * Checks `allowed-tools` for restricted tools.
+ * Scan SKILL.md frontmatter (and prose tool references) for compatibility
+ * signals. Returns evidence records for each matched pattern.
  */
-export function scanFrontmatter(content: string, filePath: string): CompatibilityEvidence[] {
-  const fmMatch = FRONTMATTER_RE.exec(content);
-  if (!fmMatch) return [];
-
-  const rawYaml = fmMatch[1];
-  if (rawYaml === undefined) return [];
-
-  let parsed: Record<string, unknown>;
-  try {
-    parsed = parseYaml(rawYaml) as Record<string, unknown>;
-  } catch {
-    return [];
-  }
-
-  if (!parsed || typeof parsed !== 'object') return [];
-
-  const evidence: CompatibilityEvidence[] = [];
-
-  const allowedTools = parsed['allowed-tools'];
-  if (Array.isArray(allowedTools)) {
-    evidence.push(...scanAllowedTools(allowedTools, filePath));
-  }
-
-  return evidence;
+export function scanFrontmatter(content: string, filePath: string): EvidenceRecord[] {
+  const { evidence } = runCompatDetectors(content, filePath);
+  return evidence.filter(e => FRONTMATTER_PATTERN_IDS.has(e.patternId));
 }

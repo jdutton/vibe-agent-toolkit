@@ -28,7 +28,6 @@
     "@vibe-agent-toolkit/agent-skills": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
     "ignore": "^6.0.0",
-    "yaml": "^2.6.1",
     "zod": "^3.24.1"
   },
   "devDependencies": {

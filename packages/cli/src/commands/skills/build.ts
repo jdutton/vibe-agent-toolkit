@@ -21,6 +21,7 @@ import {
   type SkillBuildSpec,
   type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
+import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
 import type { SkillPackagingConfig as ConfigSkillPackagingConfig } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
@@ -28,6 +29,7 @@ import { Command } from 'commander';
 import { handleCommandError } from '../../utils/command-error.js';
 import { loadConfig } from '../../utils/config-loader.js';
 import { type createLogger } from '../../utils/logger.js';
+import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
 
 import {
   filterSkillsByName,
@@ -242,6 +244,11 @@ async function validateSkillOrExit(
   logger.debug(`   Validating skill: ${skillName}`);
 
   const validationResult = await validateSkillForPackaging(sourcePath, packagingConfig);
+  applyConfigVerdicts(
+    validationResult,
+    packagingConfig.targets as readonly Target[] | undefined,
+    sourcePath,
+  );
 
   if (validationResult.status !== 'error') {
     if (validationResult.ignoredErrors.length > 0) {

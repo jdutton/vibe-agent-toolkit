@@ -11,3 +11,9 @@ export {
   getPatternDefinition,
   assertPatternRegistered,
 } from './pattern-registry.js';
+export {
+  deriveObservationsFromEvidence,
+  EXTERNAL_CLI_BINARIES,
+  type DeriveObservationsOptions,
+  type DerivationSubject,
+} from './derive-observations.js';

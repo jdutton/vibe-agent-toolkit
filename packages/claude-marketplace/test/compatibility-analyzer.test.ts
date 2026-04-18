@@ -1,52 +1,47 @@
-
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { analyzeCompatibility } from '../src/compatibility-analyzer.js';
-import type { CompatibilityEvidence } from '../src/types.js';
-
-import { verdicts } from './test-helpers.js';
 
 const fixtureDir = (name: string) => safePath.resolve(import.meta.dirname, 'fixtures', name);
-const hasSource = (evidence: CompatibilityEvidence[], source: string) =>
-  evidence.some((e: CompatibilityEvidence) => e.source === source);
 
 describe('analyzeCompatibility', () => {
-  it('marks pure instruction plugin as compatible everywhere', async () => {
+  it('produces no observations for a pure instruction plugin', async () => {
     const result = await analyzeCompatibility(fixtureDir('pure-instruction-plugin'));
     expect(result.plugin).toBe('pure-instruction');
-    expect(result.analyzed).toEqual(verdicts('compatible', 'compatible', 'compatible'));
+    expect(result.observations).toEqual([]);
     expect(result.evidence).toEqual([]);
+    expect(result.verdicts).toEqual([]);
   });
 
-  it('flags python script plugin as needs-review for desktop', async () => {
+  it('detects local-shell capability for python script plugin', async () => {
     const result = await analyzeCompatibility(fixtureDir('python-script-plugin'));
-    expect(result.analyzed).toEqual(verdicts('needs-review', 'compatible', 'compatible'));
     expect(result.evidence.length).toBeGreaterThan(0);
-    expect(hasSource(result.evidence, 'code-block')).toBe(true);
-    expect(hasSource(result.evidence, 'script')).toBe(true);
+    expect(result.observations.some(o => o.code === 'CAPABILITY_LOCAL_SHELL')).toBe(true);
   });
 
-  it('flags desktop-incompatible plugin as incompatible for desktop', async () => {
+  it('detects local-shell capability for desktop-incompatible plugin (Bash in allowed-tools)', async () => {
     const result = await analyzeCompatibility(fixtureDir('desktop-incompatible-plugin'));
-    expect(result.analyzed['claude-chat']).toBe('incompatible');
-    expect(hasSource(result.evidence, 'frontmatter')).toBe(true);
+    expect(result.evidence.some(e => e.patternId === 'ALLOWED_TOOLS_LOCAL_SHELL')).toBe(true);
+    expect(result.observations.some(o => o.code === 'CAPABILITY_LOCAL_SHELL')).toBe(true);
   });
 
-  it('detects hook handler runtime requirements', async () => {
+  it('detects HOOK_COMMAND_INVOKES_BINARY for hook-heavy plugin', async () => {
     const result = await analyzeCompatibility(fixtureDir('hook-heavy-plugin'));
-    expect(result.analyzed['claude-chat']).toBe('needs-review');
-    expect(hasSource(result.evidence, 'hook')).toBe(true);
+    expect(result.evidence.some(e => e.patternId === 'HOOK_COMMAND_INVOKES_BINARY')).toBe(true);
+    expect(result.observations.some(o => o.code === 'CAPABILITY_LOCAL_SHELL')).toBe(true);
   });
 
-  it('handles node MCP server as compatible', async () => {
+  it('detects MCP_SERVER_COMMAND for an MCP plugin without surfacing local-shell capability', async () => {
     const result = await analyzeCompatibility(fixtureDir('mcp-plugin'));
-    expect(result.analyzed['claude-chat']).toBe('compatible');
+    expect(result.evidence.some(e => e.patternId === 'MCP_SERVER_COMMAND')).toBe(true);
+    // MCP-only plugins shouldn't roll up to CAPABILITY_LOCAL_SHELL.
+    expect(result.observations.some(o => o.code === 'CAPABILITY_LOCAL_SHELL')).toBe(false);
   });
 
-  it('marks node-bundled plugin as compatible everywhere', async () => {
+  it('detects SCRIPT_FILE_NODE for a node-bundled plugin', async () => {
     const result = await analyzeCompatibility(fixtureDir('node-bundled-plugin'));
-    expect(result.analyzed).toEqual(verdicts('compatible', 'compatible', 'compatible'));
+    expect(result.evidence.some(e => e.patternId === 'SCRIPT_FILE_NODE')).toBe(true);
   });
 
   it('includes summary counts', async () => {

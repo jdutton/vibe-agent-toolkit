@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest';
 
 import { RUNTIME_PROFILES, getRuntimeProfile } from '../src/runtime-profiles.js';
-import { ALL_TARGETS } from '../src/types.js';
+import type { Target } from '../src/types.js';
+
+const ALL_TARGETS: readonly Target[] = ['claude-chat', 'claude-cowork', 'claude-code'] as const;
 
 describe('RUNTIME_PROFILES', () => {
   it('defines a profile for every target', () => {

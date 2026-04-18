@@ -1,13 +1,15 @@
-import type { CompatibilityEvidence } from '../types.js';
+import type { EvidenceRecord } from '@vibe-agent-toolkit/agent-skills';
 
 import { classifyCommand } from './command-classifier.js';
+import { buildEvidence } from './evidence-helpers.js';
 
 /**
- * Scan a hooks config object for command handlers that indicate runtime requirements.
- * Expects the parsed JSON from a hooks.json file.
+ * Scan a hooks config object for command handlers that indicate runtime
+ * requirements. Each command handler that matches a known shell binary
+ * yields a HOOK_COMMAND_INVOKES_BINARY evidence record.
  */
-export function scanHooksConfig(config: Record<string, unknown>, filePath: string): CompatibilityEvidence[] {
-  const evidence: CompatibilityEvidence[] = [];
+export function scanHooksConfig(config: Record<string, unknown>, filePath: string): EvidenceRecord[] {
+  const evidence: EvidenceRecord[] = [];
 
   const hooks = config['hooks'];
   if (!hooks || typeof hooks !== 'object') return evidence;
@@ -23,13 +25,13 @@ export function scanHooksConfig(config: Record<string, unknown>, filePath: strin
       const command = h['command'];
       const classification = classifyCommand(command);
       if (classification) {
-        evidence.push({
-          source: 'hook',
-          file: filePath,
-          signal: `hook-command: ${classification.signal}`,
-          detail: `Hook "${eventName}" runs command: ${command}`,
-          impact: classification.impact,
-        });
+        evidence.push(
+          buildEvidence(
+            'HOOK_COMMAND_INVOKES_BINARY',
+            filePath,
+            `${eventName} → ${classification.signal}: ${command}`,
+          ),
+        );
       }
     }
   }

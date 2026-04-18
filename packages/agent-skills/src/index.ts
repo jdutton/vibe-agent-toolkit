@@ -63,6 +63,7 @@ export {
   runCompatDetectors,
   type DetectorOutput,
 } from './validators/compat-detectors.js';
+export { CODE_REGISTRY, type CodeRegistryEntry } from './validators/code-registry.js';
 export { validateMarketplace } from './validators/marketplace-validator.js';
 export { validatePlugin } from './validators/plugin-validator.js';
 export { validateSkill } from './validators/skill-validator.js';
@@ -106,5 +107,11 @@ export type {
   PatternDefinition,
   Observation,
 } from './evidence/index.js';
-export { PATTERN_REGISTRY, getPatternDefinition, assertPatternRegistered } from './evidence/index.js';
+export {
+  PATTERN_REGISTRY,
+  getPatternDefinition,
+  assertPatternRegistered,
+  deriveObservationsFromEvidence,
+} from './evidence/index.js';
+export type { DeriveObservationsOptions, DerivationSubject } from './evidence/index.js';
 

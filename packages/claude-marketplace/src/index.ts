@@ -4,15 +4,13 @@
  */
 
 export type {
-  CompatibilityEvidence,
   CompatibilityResult,
   EvidenceSource,
+  ScannerOutput,
   SettingsConflict,
   SettingsConflictType,
   Target,
 } from './types.js';
-
-export { ALL_TARGETS } from './types.js';
 
 export { analyzeCompatibility } from './compatibility-analyzer.js';
 

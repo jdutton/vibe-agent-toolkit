@@ -116,6 +116,64 @@ export const PATTERN_REGISTRY: Record<string, PatternDefinition> = {
     description: 'Python webbrowser.open(...) call.',
     confidence: 'medium',
   },
+
+  // Hook patterns
+  HOOK_COMMAND_INVOKES_BINARY: {
+    patternId: 'HOOK_COMMAND_INVOKES_BINARY',
+    source: 'code',
+    description: 'A hook handler executes a shell command.',
+    confidence: 'high',
+  },
+
+  // MCP server patterns
+  MCP_SERVER_COMMAND: {
+    patternId: 'MCP_SERVER_COMMAND',
+    source: 'code',
+    description: '.mcp.json declares a "command" for a stdio MCP server.',
+    confidence: 'high',
+  },
+  MCP_SERVER_URL: {
+    patternId: 'MCP_SERVER_URL',
+    source: 'code',
+    description: '.mcp.json declares a "url" for an HTTP MCP server.',
+    confidence: 'high',
+  },
+
+  // Script-file patterns
+  SCRIPT_FILE_PYTHON: {
+    patternId: 'SCRIPT_FILE_PYTHON',
+    source: 'code',
+    description: 'A .py script file is present in the plugin.',
+    confidence: 'high',
+  },
+  SCRIPT_FILE_SHELL: {
+    patternId: 'SCRIPT_FILE_SHELL',
+    source: 'code',
+    description: 'A .sh/.bash script file is present in the plugin.',
+    confidence: 'high',
+  },
+  SCRIPT_FILE_NODE: {
+    patternId: 'SCRIPT_FILE_NODE',
+    source: 'code',
+    description: 'A .mjs/.cjs/.js script file is present in the plugin.',
+    confidence: 'high',
+  },
+
+  // Python import pattern
+  PYTHON_IMPORT_THIRD_PARTY: {
+    patternId: 'PYTHON_IMPORT_THIRD_PARTY',
+    source: 'code',
+    description: 'Third-party (non-stdlib) Python import statement.',
+    confidence: 'high',
+  },
+
+  // Frontmatter allowed-tools entry pattern (broader than the local-shell-only variant)
+  FRONTMATTER_ALLOWED_TOOLS_ENTRY: {
+    patternId: 'FRONTMATTER_ALLOWED_TOOLS_ENTRY',
+    source: 'code',
+    description: 'Allowed-tools entry in skill frontmatter.',
+    confidence: 'high',
+  },
 };
 
 export function getPatternDefinition(patternId: string): PatternDefinition | undefined {

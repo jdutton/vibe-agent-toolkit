@@ -11,24 +11,18 @@
  */
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
-import { assertPatternRegistered, getPatternDefinition } from '../evidence/index.js';
+import {
+  assertPatternRegistered,
+  deriveObservationsFromEvidence,
+  EXTERNAL_CLI_BINARIES,
+  getPatternDefinition,
+} from '../evidence/index.js';
 
 import { CODE_REGISTRY, type IssueCode } from './code-registry.js';
 import type { ValidationIssue } from './types.js';
 
 const SHELL_LANGUAGES = new Set(['bash', 'sh', 'shell', 'zsh']);
 const LOCAL_SHELL_TOOLS = ['Bash', 'Edit', 'Write', 'NotebookEdit'] as const;
-
-const EXTERNAL_BINARIES: ReadonlyArray<{ binary: string; patternId: string }> = [
-  { binary: 'az', patternId: 'EXTERNAL_CLI_AZ' },
-  { binary: 'aws', patternId: 'EXTERNAL_CLI_AWS' },
-  { binary: 'gcloud', patternId: 'EXTERNAL_CLI_GCLOUD' },
-  { binary: 'kubectl', patternId: 'EXTERNAL_CLI_KUBECTL' },
-  { binary: 'docker', patternId: 'EXTERNAL_CLI_DOCKER' },
-  { binary: 'terraform', patternId: 'EXTERNAL_CLI_TERRAFORM' },
-  { binary: 'gh', patternId: 'EXTERNAL_CLI_GH' },
-  { binary: 'op', patternId: 'EXTERNAL_CLI_OP' },
-];
 
 const BROWSER_AUTH_PATTERNS: ReadonlyArray<{ patternId: string; re: RegExp; description: string }> = [
   { patternId: 'BROWSER_AUTH_MSAL_PYTHON_IMPORT', re: /\bfrom\s+msal\b/, description: 'from msal import' },
@@ -181,7 +175,7 @@ export function collectExternalCLIEvidence(content: string, filePath: string): E
   for (const block of iterCodeBlocks(content)) {
     const lang = block.language.toLowerCase();
     if (!SHELL_LANGUAGES.has(lang) && lang !== '') continue;
-    for (const { binary, patternId } of EXTERNAL_BINARIES) {
+    for (const { binary, patternId } of EXTERNAL_CLI_BINARIES) {
       const m = binaryLineRE(binary).exec(block.body);
       if (!m) continue;
       const key = `${patternId}|${block.line}`;
@@ -222,88 +216,17 @@ export function collectBrowserAuthEvidence(content: string, filePath: string): E
   return out;
 }
 
-const LOCAL_SHELL_PATTERN_IDS = new Set<string>([
+const SKILL_LOCAL_SHELL_PATTERN_IDS: ReadonlySet<string> = new Set([
   'ALLOWED_TOOLS_LOCAL_SHELL',
   'PROSE_LOCAL_SHELL_TOOL_REFERENCE',
   'FENCED_SHELL_BLOCK',
 ]);
 
-const BROWSER_AUTH_PATTERN_IDS = new Set<string>([
-  'BROWSER_AUTH_MSAL_PYTHON_IMPORT',
-  'BROWSER_AUTH_MSAL_JS_IMPORT',
-  'BROWSER_AUTH_AZ_LOGIN',
-  'BROWSER_AUTH_GCLOUD_LOGIN',
-  'BROWSER_AUTH_AWS_SSO_LOGIN',
-  'BROWSER_AUTH_WEBBROWSER_OPEN',
-]);
-
-/**
- * Roll evidence up into capability-level observations.
- *
- *  - Any local-shell-family evidence → ONE CAPABILITY_LOCAL_SHELL.
- *  - One CAPABILITY_EXTERNAL_CLI per distinct binary, payload includes binary.
- *  - Any browser-auth evidence → ONE CAPABILITY_BROWSER_AUTH.
- */
 export function deriveObservations(evidence: readonly EvidenceRecord[]): Observation[] {
-  const out: Observation[] = [];
-
-  // Local shell
-  const localShell = evidence.filter(e => LOCAL_SHELL_PATTERN_IDS.has(e.patternId));
-  if (localShell.length > 0) {
-    out.push({
-      code: 'CAPABILITY_LOCAL_SHELL',
-      summary: 'Skill requires a local shell environment.',
-      supportingEvidence: dedupePatternIds(localShell),
-    });
-  }
-
-  // External CLI: one observation per distinct binary
-  const cliByBinary = new Map<string, { patternId: string; evidence: EvidenceRecord[] }>();
-  for (const e of evidence) {
-    const match = EXTERNAL_BINARIES.find(b => b.patternId === e.patternId);
-    if (!match) continue;
-    const existing = cliByBinary.get(match.binary);
-    if (existing) {
-      existing.evidence.push(e);
-    } else {
-      cliByBinary.set(match.binary, { patternId: match.patternId, evidence: [e] });
-    }
-  }
-  // Sort by binary for deterministic output.
-  const sortedBinaries = [...cliByBinary.keys()].sort((a, b) => a.localeCompare(b));
-  for (const binary of sortedBinaries) {
-    const group = cliByBinary.get(binary);
-    if (!group) continue;
-    out.push({
-      code: 'CAPABILITY_EXTERNAL_CLI',
-      summary: `Skill invokes external CLI: ${binary}.`,
-      payload: { binary },
-      supportingEvidence: dedupePatternIds(group.evidence),
-    });
-  }
-
-  // Browser auth
-  const browserAuth = evidence.filter(e => BROWSER_AUTH_PATTERN_IDS.has(e.patternId));
-  if (browserAuth.length > 0) {
-    out.push({
-      code: 'CAPABILITY_BROWSER_AUTH',
-      summary: 'Skill requires an interactive browser authentication flow.',
-      supportingEvidence: dedupePatternIds(browserAuth),
-    });
-  }
-
-  return out;
-}
-
-function dedupePatternIds(records: readonly EvidenceRecord[]): string[] {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  for (const r of records) {
-    if (seen.has(r.patternId)) continue;
-    seen.add(r.patternId);
-    out.push(r.patternId);
-  }
-  return out;
+  return deriveObservationsFromEvidence(evidence, {
+    localShellPatternIds: SKILL_LOCAL_SHELL_PATTERN_IDS,
+    subject: 'skill',
+  });
 }
 
 /**

@@ -8,7 +8,7 @@ describe('scanMcpConfig', () => {
     expect(result).toEqual([]);
   });
 
-  it('treats node MCP server as compatible everywhere', () => {
+  it('emits MCP_SERVER_COMMAND for a node MCP server', () => {
     const config = {
       mcpServers: {
         myServer: { command: 'node', args: ['server.mjs'] },
@@ -16,46 +16,52 @@ describe('scanMcpConfig', () => {
     };
     const result = scanMcpConfig(config, '.mcp.json');
     expect(result).toHaveLength(1);
-    expect(result[0]).toMatchObject({
-      source: 'mcp-server',
-      signal: 'mcp-server: node',
-      impact: {
-        'claude-chat': 'ok',
-        'claude-cowork': 'ok',
-        'claude-code': 'ok',
-      },
-    });
+    expect(result[0]?.patternId).toBe('MCP_SERVER_COMMAND');
+    expect(result[0]?.matchText).toContain('node');
   });
 
-  it('flags python3 MCP server as needs-review for desktop', () => {
+  it('emits MCP_SERVER_COMMAND for a python3 MCP server', () => {
     const config = {
       mcpServers: {
         weather: { command: 'python3', args: ['-m', 'weather_server'] },
       },
     };
     const result = scanMcpConfig(config, '.mcp.json');
-    expect(result[0]?.impact['claude-chat']).toBe('needs-review');
+    expect(result[0]?.patternId).toBe('MCP_SERVER_COMMAND');
+    expect(result[0]?.matchText).toContain('python3');
   });
 
-  it('flags uv-based MCP server as needs-review for desktop', () => {
+  it('emits MCP_SERVER_COMMAND for uv-based MCP server', () => {
     const config = {
       mcpServers: {
         weather: { command: 'uv', args: ['run', 'weather.py'] },
       },
     };
     const result = scanMcpConfig(config, '.mcp.json');
-    expect(result[0]?.signal).toBe('mcp-server: uv');
-    expect(result[0]?.impact['claude-chat']).toBe('needs-review');
+    expect(result[0]?.patternId).toBe('MCP_SERVER_COMMAND');
+    expect(result[0]?.matchText).toContain('uv');
   });
 
-  it('handles npx commands', () => {
+  it('emits MCP_SERVER_COMMAND for npx commands', () => {
     const config = {
       mcpServers: {
         tool: { command: 'npx', args: ['-y', '@modelcontextprotocol/server-filesystem'] },
       },
     };
     const result = scanMcpConfig(config, '.mcp.json');
-    expect(result[0]?.impact['claude-chat']).toBe('ok');
+    expect(result[0]?.patternId).toBe('MCP_SERVER_COMMAND');
+  });
+
+  it('emits MCP_SERVER_URL for HTTP-style server entries', () => {
+    const config = {
+      mcpServers: {
+        remote: { url: 'https://example.com/mcp' },
+      },
+    };
+    const result = scanMcpConfig(config, '.mcp.json');
+    expect(result).toHaveLength(1);
+    expect(result[0]?.patternId).toBe('MCP_SERVER_URL');
+    expect(result[0]?.matchText).toContain('https://example.com/mcp');
   });
 
   it('handles multiple servers', () => {
