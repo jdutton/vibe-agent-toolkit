@@ -36,7 +36,7 @@ Rule removal is the last resort and follows the same logic: if a rule is wrong o
 
 Every VAT finding is attributed. When output is rendered in contexts where it might be confused with authorial voice — description badges, audit summaries, future community scan reports — it is prefixed with `[vat: ...]`. This is borrowed from Clippy's `clippy::` lint attribution and serves the same purpose: the tool owns the opinion, the author is not accused.
 
-The framing language matches. VAT emits **smells**, **observations**, and **findings** — not **violations**, **errors of judgment**, or **quality failures**. The vocabulary is deliberate: a smell is something worth sniffing at, not a verdict. (See §3.1 of the [community-scanning strategy spec](./superpowers/specs/2026-04-16-vat-skill-smell-detection-strategy.md) for the full non-judgment stance.)
+The framing language matches. VAT emits **smells**, **observations**, and **findings** — not **violations**, **errors of judgment**, or **quality failures**. The vocabulary is deliberate: a smell is something worth sniffing at, not a verdict.
 
 Every rule links back to the codes registry at [`docs/validation-codes.md`](./validation-codes.md). A rule that does not appear there does not exist — there is no hidden validation, no undocumented smell, no finding the adopter cannot look up.
 
@@ -76,7 +76,7 @@ When the Why-it-matters section extends beyond a paragraph, it belongs in [`docs
 
 ## Data-Driven Evolution
 
-Rule additions, severity changes, and rule removals are all driven by corpus evidence. The community-scanning workstream (see the [strategy spec](./superpowers/specs/2026-04-16-vat-skill-smell-detection-strategy.md) §6 Workstream B) is designed to produce this evidence at ecosystem scale. Before that lands, adopter corpora are the substrate.
+Rule additions, severity changes, and rule removals are all driven by corpus evidence. The community-scanning workstream is designed to produce this evidence at ecosystem scale. Before that lands, adopter corpora are the substrate.
 
 Decisions of the form "I think this is a smell" without corpus data are rejected, no matter how confident the proposer. This is not pedantry; it is survivorship. The linter tools that remain useful across years — ESLint, Clippy, gofmt's vet — earned their authority by being empirical about their rules. The ones that did not are remembered as noise. VAT aims for the first category.
 
@@ -86,4 +86,3 @@ An implication worth stating: if community scanning reveals that a currently-shi
 
 - [`docs/validation-codes.md`](./validation-codes.md) — code-level reference for every rule VAT emits.
 - [`docs/skill-quality-and-compatibility.md`](./skill-quality-and-compatibility.md) — VAT's stance on what makes a skill good and compatible.
-- [`docs/superpowers/specs/2026-04-16-vat-skill-smell-detection-strategy.md`](./superpowers/specs/2026-04-16-vat-skill-smell-detection-strategy.md) — the strategy this doc operationalizes, including community scanning and non-goals.
