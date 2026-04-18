@@ -169,6 +169,41 @@ Best-practice checks about skill shape and content.
 - **Why it matters:** A long flat `SKILL.md` loads all content immediately into context regardless of what the agent needs. Progressive disclosure — linking to separate files — allows agents to load only what is relevant to the current task.
 - **Fix:** Move background detail into linked resources and reference them from `SKILL.md`.
 
+### `SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT`
+
+- **Default:** `warning`
+- **What:** Frontmatter `description` exceeds 250 characters.
+- **Why it matters:** Claude Code's `/skills` listing truncates descriptions at 250 characters (since v2.1.86). Descriptions longer than this lose their tail — and trigger keywords placed late in the description may never be visible to users scanning the listing.
+- **Fix:** Shorten the description below 250 chars. Target ≤200 for a safety margin, or ≤130 if shipping a large skill collection (60+ skills) so the total budget fits. The softer companion to the 1024-char hard schema limit (`SKILL_DESCRIPTION_TOO_LONG`).
+
+### `SKILL_DESCRIPTION_FILLER_OPENER`
+
+- **Default:** `warning`
+- **What:** Description opens with a meta-filler phrase that describes the skill-as-object rather than what it does (e.g., `This skill...`, `A skill that...`, `Used to...`, `Use when you want to...`, `Use when you need to...`).
+- **Why it matters:** These openers waste the first — and highest-weighted — tokens of the description on boilerplate rather than trigger keywords. Anthropic's own examples never use them. Note: `Use when <concrete trigger>` is the recommended pattern and is explicitly allowed; only the vague `you want/need` variants are flagged.
+- **Fix:** Lead with a verb phrase (`Extracts text from PDFs...`) or `Use when <concrete trigger>`.
+
+### `SKILL_DESCRIPTION_WRONG_PERSON`
+
+- **Default:** `warning`
+- **What:** Description uses first-person (`I can...`, `I'll...`, `I'm able to...`) or conversational second-person (`You can...`, `You'll...`, `You should...`) patterns anywhere in the text.
+- **Why it matters:** Anthropic's guidance is unambiguous: "Always write in third person. The description is injected into the system prompt, and inconsistent point-of-view can cause discovery problems." Their bad examples are literally `I can help you process Excel files` and `You can use this to process Excel files`.
+- **Fix:** Rewrite in third person. `I can extract PDFs` → `Extracts text from PDFs`. `You can use this to...` → the action itself (`Processes...`, `Generates...`).
+
+### `SKILL_NAME_MISMATCHES_DIR`
+
+- **Default:** `warning`
+- **What:** The `name` field in frontmatter does not match the skill's parent directory name (kebab-case comparison). Skipped when `name` is omitted — schema inference handles that case.
+- **Why it matters:** Agents resolve skills by name; a mismatch between the declared name and the directory the skill lives in usually indicates a copy/paste bug during authoring. Built outputs derive directory names from the frontmatter, so a mismatch at the source means the packaged artifact will appear under a different name than its source location suggests.
+- **Fix:** Align them — rename the directory to match `name`, or update `name` to match the directory.
+
+### `SKILL_TIME_SENSITIVE_CONTENT`
+
+- **Default:** `info`
+- **What:** `SKILL.md` body contains a time-sensitive phrase (`as of November 2025`, `after July 2026`, `before March 2025`, `until December 2024`, or the year-first form `as of 2026-04`). One issue fires per matched line.
+- **Why it matters:** Anthropic's best-practices doc advises against content that will become outdated — time-sensitive prose goes stale and misleads agents. The `info` severity reflects that this is sometimes intentional (historical context); it surfaces the pattern without asserting it is wrong.
+- **Fix:** Remove the time qualifier, or move deprecated guidance into a clearly labeled `## Old patterns` section with a `<details>` block so agents skip it.
+
 ## Compat Codes
 
 *Stance: see [Compatibility](./skill-quality-and-compatibility.md#compatibility).*

@@ -338,4 +338,113 @@ describe('validateFrontmatterRules', () => {
 			expect(issues).toHaveLength(0);
 		});
 	});
+
+	describe('SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT', () => {
+		it('should warn when description exceeds 250 characters', () => {
+			const issues = validateFrontmatterRules(
+				validFrontmatter({ description: 'x'.repeat(260) }),
+			);
+
+			const issue = findIssueByCode(issues, 'SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT');
+			expect(issue).toBeDefined();
+			expect(issue?.severity).toBe('warning');
+			expect(issue?.location).toBe(LOC_FRONTMATTER_DESC);
+			expect(issue?.message).toContain('260');
+		});
+
+		it('should not warn at exactly 250 characters', () => {
+			const issues = validateFrontmatterRules(
+				validFrontmatter({ description: 'x'.repeat(250) }),
+			);
+
+			const issue = findIssueByCode(issues, 'SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT');
+			expect(issue).toBeUndefined();
+		});
+	});
+
+	describe('SKILL_DESCRIPTION_FILLER_OPENER', () => {
+		it('should warn on "This skill..." opener', () => {
+			const issues = validateFrontmatterRules(
+				validFrontmatter({ description: 'This skill processes PDF files' }),
+			);
+
+			const issue = findIssueByCode(issues, 'SKILL_DESCRIPTION_FILLER_OPENER');
+			expect(issue).toBeDefined();
+			expect(issue?.severity).toBe('warning');
+		});
+
+		it('should warn on "A skill that..." opener', () => {
+			const issues = validateFrontmatterRules(
+				validFrontmatter({ description: 'A skill that extracts data' }),
+			);
+
+			expect(findIssueByCode(issues, 'SKILL_DESCRIPTION_FILLER_OPENER')).toBeDefined();
+		});
+
+		it('should warn on "Use when you want to..." variant', () => {
+			const issues = validateFrontmatterRules(
+				validFrontmatter({ description: 'Use when you want to process files' }),
+			);
+
+			expect(findIssueByCode(issues, 'SKILL_DESCRIPTION_FILLER_OPENER')).toBeDefined();
+		});
+
+		it('should NOT warn on "Use when <concrete trigger>" pattern', () => {
+			const issues = validateFrontmatterRules(
+				validFrontmatter({
+					description: 'Use when the user asks about PDF extraction or form filling',
+				}),
+			);
+
+			expect(findIssueByCode(issues, 'SKILL_DESCRIPTION_FILLER_OPENER')).toBeUndefined();
+		});
+
+		it('should NOT warn on verb-phrase openers', () => {
+			const issues = validateFrontmatterRules(
+				validFrontmatter({ description: 'Extracts text and tables from PDFs' }),
+			);
+
+			expect(findIssueByCode(issues, 'SKILL_DESCRIPTION_FILLER_OPENER')).toBeUndefined();
+		});
+	});
+
+	describe('SKILL_DESCRIPTION_WRONG_PERSON', () => {
+		it('should warn on "I can..." first-person phrasing', () => {
+			const issues = validateFrontmatterRules(
+				validFrontmatter({ description: 'Processes PDFs. I can extract tables and forms.' }),
+			);
+
+			const issue = findIssueByCode(issues, 'SKILL_DESCRIPTION_WRONG_PERSON');
+			expect(issue).toBeDefined();
+			expect(issue?.severity).toBe('warning');
+		});
+
+		it('should warn on "You can..." second-person phrasing', () => {
+			const issues = validateFrontmatterRules(
+				validFrontmatter({ description: 'You can use this to extract tables from PDFs' }),
+			);
+
+			expect(findIssueByCode(issues, 'SKILL_DESCRIPTION_WRONG_PERSON')).toBeDefined();
+		});
+
+		it('should NOT warn on third-person phrasing', () => {
+			const issues = validateFrontmatterRules(
+				validFrontmatter({
+					description: 'Extracts text and tables from PDFs for downstream processing',
+				}),
+			);
+
+			expect(findIssueByCode(issues, 'SKILL_DESCRIPTION_WRONG_PERSON')).toBeUndefined();
+		});
+
+		it('should NOT match words like "Iowa" that contain "I" substring', () => {
+			const issues = validateFrontmatterRules(
+				validFrontmatter({
+					description: 'Analyzes Iowa weather patterns and Ionic breeze reports',
+				}),
+			);
+
+			expect(findIssueByCode(issues, 'SKILL_DESCRIPTION_WRONG_PERSON')).toBeUndefined();
+		});
+	});
 });

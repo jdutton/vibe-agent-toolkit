@@ -203,6 +203,12 @@ export const VALIDATION_THRESHOLDS = {
 
   /** Minimum description length (characters) */
   MIN_DESCRIPTION_LENGTH: 50,
+
+  /**
+   * Claude Code /skills listing truncates descriptions at this character count (since v2.1.86).
+   * Descriptions longer than this lose their tail — critical trigger keywords may be cut.
+   */
+  MAX_DESCRIPTION_CHARS_CLAUDE_CODE: 250,
 } as const;
 
 /**

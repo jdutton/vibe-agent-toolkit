@@ -35,6 +35,7 @@ import { handleCommandError } from '../utils/command-error.js';
 import { loadConfig } from '../utils/config-loader.js';
 import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
+import { renderSkillQualityFooter } from '../utils/skill-quality-footer.js';
 import { computeConfigVerdicts } from '../utils/verdict-helpers.js';
 
 import { buildHierarchicalOutput } from './audit/hierarchical-output.js';
@@ -935,7 +936,33 @@ function handleAuditResults(
     logger.info(`Audit successful: ${successCount} file(s) passed`);
   }
 
+  renderAuditFooter(results, logger);
   process.exit(0);
+}
+
+/**
+ * Render the skill-quality checklist footer when audit results contain
+ * skill-level findings (warnings/errors on SKILL.md files) or when any of
+ * the newer skill-quality codes fired.
+ */
+function renderAuditFooter(
+  results: ValidationResult[],
+  logger: ReturnType<typeof createLogger>,
+): void {
+  const emittedCodes = new Set<string>();
+  let hasSkillFindings = false;
+
+  for (const result of results) {
+    const isSkill = result.type === RESOURCE_TYPE_AGENT_SKILL;
+    for (const issue of result.issues) {
+      emittedCodes.add(issue.code);
+      if (isSkill && (issue.severity === 'error' || issue.severity === 'warning')) {
+        hasSkillFindings = true;
+      }
+    }
+  }
+
+  renderSkillQualityFooter(logger, hasSkillFindings, emittedCodes);
 }
 
 function logErrors(
@@ -1354,5 +1381,6 @@ function logHierarchicalSummary(
     logger.info(`Audit successful: ${totalSkills} skill(s) passed`);
   }
 
+  renderAuditFooter(results, logger);
   process.exit(0);
 }

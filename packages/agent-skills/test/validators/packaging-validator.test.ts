@@ -9,7 +9,8 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import type { PackagingValidationResult } from '../../src/validators/packaging-validator.js';
-import { validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
+import { detectNameMismatchIssue, validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
+import type { ValidationIssue } from '../../src/validators/types.js';
 import {
 	createSkillContent,
 	createTransitiveSkillStructure,
@@ -384,6 +385,80 @@ describe('validateSkillForPackaging - Description validation', () => {
 		// Missing description is handled by existing validator, not packaging validator
 		const descWarn = result.activeWarnings.find((e) => e.code === 'DESCRIPTION_TOO_VAGUE');
 		expect(descWarn).toBeUndefined();
+	});
+});
+
+describe('detectNameMismatchIssue', () => {
+	const SKILL_PATH_FIXTURE = '/repo/skills/pdf-extractor/SKILL.md';
+	const PDF_EXTRACTOR_DIR = 'pdf-extractor';
+	const PDF_PROCESSOR_NAME = 'pdf-processor';
+
+	it('should return issue when frontmatter name does not match parent directory', () => {
+		const issue = detectNameMismatchIssue(PDF_PROCESSOR_NAME, PDF_EXTRACTOR_DIR, SKILL_PATH_FIXTURE);
+
+		expect(issue).not.toBeNull();
+		expect(issue?.code).toBe('SKILL_NAME_MISMATCHES_DIR');
+		expect(issue?.severity).toBe('warning');
+		expect(issue?.message).toContain(PDF_PROCESSOR_NAME);
+		expect(issue?.message).toContain(PDF_EXTRACTOR_DIR);
+	});
+
+	it('should return null when frontmatter name matches parent directory', () => {
+		const issue = detectNameMismatchIssue(PDF_EXTRACTOR_DIR, PDF_EXTRACTOR_DIR, SKILL_PATH_FIXTURE);
+
+		expect(issue).toBeNull();
+	});
+
+	it('should return null when frontmatter name is missing', () => {
+		const issue = detectNameMismatchIssue(undefined, PDF_EXTRACTOR_DIR, SKILL_PATH_FIXTURE);
+
+		expect(issue).toBeNull();
+	});
+
+	it('should return null when parent dir is not kebab-case (e.g., repo root)', () => {
+		const issue = detectNameMismatchIssue(PDF_PROCESSOR_NAME, 'My Repo', SKILL_PATH_FIXTURE);
+
+		expect(issue).toBeNull();
+	});
+
+	it('should be case-insensitive in comparison', () => {
+		const issue = detectNameMismatchIssue('PDF-EXTRACTOR', PDF_EXTRACTOR_DIR, SKILL_PATH_FIXTURE);
+
+		expect(issue).toBeNull();
+	});
+});
+
+async function findTimeSensitiveIssue(
+	getTempDirFn: () => string,
+	bodyText: string,
+): Promise<ValidationIssue | undefined> {
+	const tempDir = getTempDirFn();
+	const skillContent = createSkillContent(
+		{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+		bodyText,
+	);
+	const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
+	const result = await validateSkillForPackaging(skillPath);
+	const allIssues = [...result.activeErrors, ...result.activeWarnings, ...result.allErrors];
+	return allIssues.find((e) => e.code === 'SKILL_TIME_SENSITIVE_CONTENT');
+}
+
+describe('validateSkillForPackaging - Time-sensitive content', () => {
+	it('should emit info issue for "as of <month> <year>" phrase', async () => {
+		const timeIssue = await findTimeSensitiveIssue(
+			getTempDir,
+			'\n# Test Skill\n\nAs of November 2025, this tool supports XYZ.',
+		);
+		expect(timeIssue).toBeDefined();
+		expect(timeIssue?.severity).toBe('info');
+	});
+
+	it('should NOT emit issue when body has no time-sensitive phrases', async () => {
+		const timeIssue = await findTimeSensitiveIssue(
+			getTempDir,
+			'\n# Test Skill\n\nThis tool supports XYZ without timestamps.',
+		);
+		expect(timeIssue).toBeUndefined();
 	});
 });
 
