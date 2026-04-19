@@ -7,6 +7,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.32] - 2026-04-19
+
+### Added
+- **Evidence substrate** (`@vibe-agent-toolkit/agent-skills/evidence`). Parsers produce neutral `EvidenceRecord`s with stable pattern IDs from `PATTERN_REGISTRY`; a derivation step rolls evidence into capability `Observation`s; a verdict engine compares observations against declared targets. Designed so pattern refinement never changes the observation contract.
+- **`vat audit --verbose`** renders the evidence chain beneath each `CAPABILITY_*` observation — pattern ID, file, line, match text — and includes an `evidence[]` array in YAML output. Use it to debug false positives or confirm what a detector actually saw.
+- **Runtime profile table** (`RUNTIME_PROFILES` in `@vibe-agent-toolkit/claude-marketplace`) is the single source of truth for what each Claude runtime provides and lacks (local shell, browser, network level, preinstalled binaries).
+- **Verdict engine** (`computeVerdicts`) combines capability observations with declared targets to produce `COMPAT_TARGET_*` issues. Four states: expected (silent), `COMPAT_TARGET_INCOMPATIBLE` (warning), `COMPAT_TARGET_NEEDS_REVIEW` (warning), `COMPAT_TARGET_UNDECLARED` (info).
+- **Config-level `targets` declaration** in `vibe-agent-toolkit.config.yaml` under `skills.defaults.targets` and `skills.config.<name>.targets`. Declaring targets suppresses non-applicable compat verdicts.
+- **Marketplace-level `defaults.targets`** in `.claude-plugin/marketplace.json`. Layer priority (highest to lowest): `plugin.json` → `marketplace.json` → `vibe-agent-toolkit.config.yaml`.
+- **Post-build validation**: `vat skills build` runs the full validation suite against built `dist/skills/*/SKILL.md` (skipping source-only codes like `LINK_OUTSIDE_PROJECT`). Build failures surface identically to source failures.
+- **`info` severity** in the validation framework. `CAPABILITY_*` and `COMPAT_TARGET_UNDECLARED` emit as info; they appear in output and respect `validation.severity` overrides but do not contribute to build failure status.
+- New validation codes: `CAPABILITY_LOCAL_SHELL`, `CAPABILITY_EXTERNAL_CLI`, `CAPABILITY_BROWSER_AUTH` (info); `COMPAT_TARGET_INCOMPATIBLE`, `COMPAT_TARGET_NEEDS_REVIEW` (warning); `COMPAT_TARGET_UNDECLARED` (info).
+- Skill-smell philosophy doc at `docs/skill-smell-philosophy.md` articulating rule-addition bar, default severity posture, graduation path, and data-driven evolution. Referenced from `docs/validation-codes.md`.
+- Cached Anthropic skill-authoring best-practices doc at `docs/external/anthropic-skill-authoring-best-practices.md` with attribution, source URL, and fetch date. Provides a diffable reference so VAT's tooling stays aligned with upstream Anthropic guidance. CLAUDE.md documents the periodic-refresh policy.
+- `vat-skill-review.md` (formerly `skill-quality-checklist.md`) rewritten with `[A]` / `[VAT]` tags distinguishing Anthropic-aligned items from VAT-opinionated additions. Added gerund-form naming guidance (Anthropic's preferred pattern), frontmatter-key conservatism, cross-skill dependency disclosure, in-package YAML-styling consistency, and large-tables-to-reference-files guidance — all from dogfood findings across 17 real skills (8 avonrisk-sdlc + 1 vibe-validate + 8 VAT dev-agents).
+- Five new skill-quality validation codes, all non-blocking:
+  - `SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT` (warning): description > 250 chars — Claude Code's `/skills` listing truncation limit since v2.1.86.
+  - `SKILL_DESCRIPTION_FILLER_OPENER` (warning): description opens with `This skill...`, `A skill that...`, `Used to...`, `Use when you want to...`, or `Use when you need to...`.
+  - `SKILL_DESCRIPTION_WRONG_PERSON` (warning): description uses first- or second-person voice (Anthropic: "Always write in third person").
+  - `SKILL_NAME_MISMATCHES_DIR` (warning): frontmatter `name` differs from the parent directory name.
+  - `SKILL_TIME_SENSITIVE_CONTENT` (info): body contains `as of <month> <year>`, `after <month> <year>`, etc. — will go stale.
+- `vat audit` and `vat skills validate` now print a checklist-discovery footer when skill-level findings are present, pointing at the `vat-skill-review` skill for rationale and judgment-call items.
+- **`vat skill review <path>` command**: deep-review a single skill. Combines `validateSkillForPackaging` output, config-aware compat verdicts (when inside a VAT project), and a manual-checklist walkthrough into one report. Groups automated findings by checklist section (Naming / Description / Body structure / References / Frontmatter hygiene / Compatibility). Supports `--yaml` for machine-readable output. Designed as a thin composition over existing primitives, not a new validation pipeline.
+- **MCP interpreter observations**: the `.mcp.json` scanner's `MCP_SERVER_COMMAND` evidence now rolls up into a `CAPABILITY_EXTERNAL_CLI` observation when the command is a python interpreter (`python`, `python3`, `python3.11`, absolute paths) or a node interpreter (`node`, `nodejs`, absolute paths). Closes the gap where python3-MCP plugins produced no capability signal and verdicts couldn't fire against them. Bespoke commands (e.g. `./scripts/my-server.sh`) remain un-rolled-up by design.
+- **`RESERVED_WORD_IN_NAME` (warning)** — code-registry-framework replacement for the legacy non-overridable error `SKILL_NAME_RESERVED_WORD`. Fires when a skill frontmatter `name` contains `anthropic` or `claude` (reserved for Anthropic's certified skills). Overridable via `validation.severity` / `validation.allow` like any other framework code. Per the skill-smell philosophy, reserved-word naming is a fix-before-publish smell, not a genuine build breaker, so default severity is `warning`.
+
+### Changed
+- **`vibe-agent-toolkit` plugin restructured into 10 sub-skills + a router.** Each sub-skill now has a sharp single responsibility and a name that aligns with its CLI command. Published skill names changed:
+  - `resources` → `vat-knowledge-resources`
+  - `distribution` → `vat-skill-distribution`
+  - `authoring` → split into `vat-skill-authoring` (SKILL.md authoring) and `vat-agent-authoring` (TypeScript agents)
+  - `org-admin` → `vat-enterprise-org` (also avoids the reserved word `claude` in the previous filename)
+  - `audit` → `vat-audit`
+  - `skill-quality-checklist` → `vat-skill-review` (now a first-class skill, no longer transcluded)
+  - New: `vat-adoption-and-configuration`, `vat-skill-authoring`, `vat-rag`
+  - Root `SKILL.md` (`vibe-agent-toolkit`) is now a thin discovery router (~60 lines, prose references to sub-skills only, no transclusion).
+  - Pre-1.0: no backwards-compatibility shims for the old skill names. Adopters with pinned references to the old names should update to the new ones.
+- **Contributor-only reference docs moved out of the plugin** to `docs/contributing/` (`vat-debugging.md`, `vat-install-architecture.md`). These are not installed with the plugin — they're for people working on VAT itself.
+- Shortened over-limit descriptions on three VAT development-agent skills (renamed above: `vat-enterprise-org`, `vat-skill-distribution`) to stay under Claude Code's 250-character truncation limit.
+- **BREAKING: Runtime target rename.** `claude-desktop` → `claude-chat`, `cowork` → `claude-cowork`. Update `plugin.json`, `marketplace.json`, and any config references. The `claude-desktop` name was architecturally wrong — Claude Desktop is a host application, not a runtime.
+- **BREAKING: `runCompatDetectors` returns `DetectorOutput { evidence, observations }`** instead of `ValidationIssue[]`. The skill-validator converts observations to issues via `observationToIssue`; external callers must do the same or consume observations directly.
+- **BREAKING: `CompatibilityResult` restructured.** Old shape: `{ declared, analyzed: Record<Target, Verdict>, evidence: CompatibilityEvidence[] }`. New: `{ declaredTargets, evidence: EvidenceRecord[], observations: Observation[], verdicts: Verdict[] }`.
+- **BREAKING: Scanner output shape.** Scanners in `@vibe-agent-toolkit/claude-marketplace` now return `EvidenceRecord[]` with registered pattern IDs; `ScannerOutput { evidence, observations }` replaces `CompatibilityEvidence`.
+
+### Fixed
+- `vat audit --compat` now honors config-layer `targets` declared in `vibe-agent-toolkit.config.yaml`, matching `vat skills validate` verdicts inside a VAT project. Previously only `plugin.json` / `marketplace.json` targets flowed into plugin-level compat analysis. Multi-skill plugins use the union of every in-plugin skill's targets.
+- `vat-skill-review.md` (formerly `skill-quality-checklist.md`): description-opener rule no longer contradicts Anthropic's official skill-description guidance. `Use when <concrete trigger>` is now explicitly allowed (it's the recommended pattern); only vague filler like `Use when you want to...` / `Use when you need to...` is banned. Prior wording banned all `Use when...` openers, which contradicted VAT's own authoring guidance.
+- `readMarketplaceDefaultTargets()` now walks upward from the starting directory to find the enclosing `.claude-plugin/marketplace.json`, instead of only checking the parent directory. Canonical layouts (`~/.claude/plugins/marketplaces/<m>/<p>/`) still work identically; deeper nested layouts now resolve correctly. Safeguarded against runaway walks by max depth (10 levels) and `node_modules` / `.git` boundaries. Closes limitation #1 from the 0.1.32-rc.1 plan Outcome.
+- **`vat audit` now walks to the nearest config per SKILL.md** instead of loading a single top-level config. In monorepos with per-package `vibe-agent-toolkit.config.yaml` files (e.g. `packages/<pkg>/vibe-agent-toolkit.config.yaml`), each skill's validation now honors its own package's config — eliminating cross-package config bleed where a root config was silently applied to skills owned by other packages.
+- **`vat audit` now honors `resources.exclude` from the config.** Previously the `exclude` list in the `resources` section only affected `vat resources validate`; audit ignored it and reported findings against files the author had explicitly opted out of validation for.
+- **`vat skill review <path>` accepts single-file skills** (any `.md` file), not just `SKILL.md` inside a directory. Useful when reviewing loose skill drafts or checklist-style skills that don't live in a dedicated directory.
+- **`SKILL_NAME_MISMATCHES_DIR` false positive:** the mismatch check no longer fires when `SKILL.md` lives directly inside a generic container directory (`skills/`, `resources/`). The parent directory name in those layouts carries no signal about what the skill is named.
+- Three directory-targeted markdown links in VAT docs (`CLAUDE.md`, `docs/README.md`, `docs/getting-started.md`) now point at specific files, silencing the corresponding `LINK_TARGETS_DIRECTORY` errors on VAT's own docs.
+
+### Performance
+- **~4x speedup on monorepo-scale `vat audit`.** `gitCheckIgnoredBatch` (used by the audit walker for every directory it visits) was unconditionally running a per-path `isGitIgnored` fallback after the batch `git check-ignore --stdin` call — spawning one git subprocess per non-ignored path even when the batch's results were authoritative. The fallback now only runs when the batch exits 128 (the fatal "beyond a symbolic link" case it was designed for), per git's documented exit-code semantics. Measurements on the VAT monorepo: `vat audit .` drops from ~30s → ~7s on this laptop. Correctness verified on `avonrisk-sdlc` (which has gitignored symlinks into OneDrive) — audit produces the same zero-error, same-warning output in ~7s.
+
+### Removed
+- **BREAKING:** `COMPAT_REQUIRES_BROWSER_AUTH`, `COMPAT_REQUIRES_LOCAL_SHELL`, `COMPAT_REQUIRES_EXTERNAL_CLI` codes (replaced by `CAPABILITY_*` + `COMPAT_TARGET_*`).
+- **BREAKING:** `CompatibilityEvidence` type, legacy `Verdict` string union (`'compatible' | 'needs-review' | 'incompatible'`), `ImpactLevel` type, `ALL_TARGETS` export, `aggregateVerdicts`, `hasNonOkImpact` helpers.
+- **BREAKING:** Hardcoded `IMPACT_*` constants and `packages/claude-marketplace/src/scanners/impact-constants.ts` module. Impact logic now lives in the runtime profile table and verdict engine.
+- `yaml` runtime dependency from `@vibe-agent-toolkit/claude-marketplace` (YAML parsing now lives in agent-skills via frontmatter delegation).
+- Unused `FRONTMATTER_ALLOWED_TOOLS_ENTRY` pattern-registry entry (never emitted by any scanner).
+
+### Migration Notes
+Pre-1.0 breaking. Callers must:
+1. Update `plugin.json` `targets` arrays to use `claude-chat` / `claude-cowork` / `claude-code`.
+2. Replace `COMPAT_REQUIRES_*` entries in `validation.severity` / `validation.allow` with the matching `CAPABILITY_*` or `COMPAT_TARGET_*` code.
+3. If consuming `CompatibilityResult` programmatically, migrate from `analyzed`/`declared` fields to `verdicts`/`declaredTargets`.
+4. Declare runtime targets in at least one layer (plugin, marketplace defaults, or config) or accept `COMPAT_TARGET_UNDECLARED` info emissions.
+5. Run `vat audit --verbose` to inspect evidence and confirm the refactor's output matches intent.
+6. If any prompt, CLAUDE.md, or repo-level doc references the `vibe-agent-toolkit` Claude plugin skills by their old names, update them:
+   - `vibe-agent-toolkit:authoring` → `vibe-agent-toolkit:vat-skill-authoring` (SKILL.md side) or `vibe-agent-toolkit:vat-agent-authoring` (TypeScript-agent side)
+   - `vibe-agent-toolkit:resources` → `vibe-agent-toolkit:vat-knowledge-resources`
+   - `vibe-agent-toolkit:distribution` → `vibe-agent-toolkit:vat-skill-distribution`
+   - `vibe-agent-toolkit:org-admin` → `vibe-agent-toolkit:vat-enterprise-org`
+   - `vibe-agent-toolkit:audit` → `vibe-agent-toolkit:vat-audit`
+   - `vibe-agent-toolkit:debugging` — retired from the plugin; the contributor guide lives at `docs/contributing/vat-debugging.md` in the VAT repo.
+   - `vibe-agent-toolkit:install` — retired from the plugin; the architecture doc lives at `docs/contributing/vat-install-architecture.md` in the VAT repo.
+   - The `skill-quality-checklist` skill is now `vibe-agent-toolkit:vat-skill-review` (also accessible via `vat skill review <path>` CLI).
+   Adopter repos that don't invoke the VAT plugin skills by name need no changes.
+7. Replace any `SKILL_NAME_RESERVED_WORD` references in `validation.severity` / `validation.allow` with `RESERVED_WORD_IN_NAME`. Default severity is now `warning` (was error); re-override if your policy demands `error`.
+
 ## [0.1.31] - 2026-04-17
 
 ### Added

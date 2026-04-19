@@ -1,34 +1,11 @@
 ---
-name: authoring
-description: Use when authoring SKILL.md files, designing agent architectures, or configuring packaging options. Covers SKILL.md structure, agent archetypes, orchestration patterns, and validation override patterns.
+name: vat-agent-authoring
+description: Use when authoring TypeScript portable agents — agent archetypes, agent.yaml, result envelopes, orchestration patterns, and runtime adapters (Vercel/LangChain/OpenAI/Claude Agent SDK). Paired with vat-skill-authoring for the SKILL.md side.
 ---
 
-# VAT Agent Authoring: SKILL.md, Archetypes & Patterns
+# VAT Agent Authoring: Archetypes, Envelopes, Orchestration
 
-## SKILL.md Structure
-
-A SKILL.md file is the definition file for a VAT agent skill. It tells Claude what the skill
-does and how to use it. All SKILL.md files must have YAML frontmatter:
-
-```markdown
----
-name: my-skill
-description: One sentence: what this skill does and when to use it (max 200 chars)
----
-
-# My Skill
-
-Rest of the skill documentation...
-```
-
-Required frontmatter fields:
-- `name` — unique identifier, kebab-case, matches the skill's directory name
-- `description` — trigger description used for skill routing; be specific about activation conditions
-
-Best practices for `description`:
-- Start with "Use when..." to make activation conditions explicit
-- Include the key commands or concepts the skill covers
-- Keep under 200 characters
+This skill covers authoring TypeScript portable agents — the runtime side of a VAT agent package. For SKILL.md authoring (frontmatter, body structure, references, packagingOptions, validation overrides) use `vibe-agent-toolkit:vat-skill-authoring`.
 
 ## Agent Archetypes
 
@@ -138,10 +115,10 @@ type StatefulAgentResult<TData, TError, TMetadata> =
   | { status: 'error'; error: TError };
 ```
 
-Standard LLM error literals: `'llm-refusal'`, `'llm-invalid-output'`, `'llm-timeout'`,
-`'llm-rate-limit'`, `'llm-token-limit'`, `'llm-unavailable'`.
+Standard LLM error literals: `'llm-refusal'`, `'llm-invalid-output'`, `'llm-timeout'`, `'llm-rate-limit'`, `'llm-token-limit'`, `'llm-unavailable'`.
 
 Always check status before accessing data:
+
 ```typescript
 const output = await myAgent.execute(input);
 if (output.result.status === 'success') {
@@ -236,100 +213,6 @@ while (true) {
 }
 ```
 
-## packagingOptions Reference
-
-Configure in your skill's `vat.skills[]` entry in `package.json`:
-
-```json
-{
-  "vat": {
-    "skills": [{
-      "name": "my-skill",
-      "source": "./SKILL.md",
-      "path": "./dist/skills/my-skill",
-      "packagingOptions": {
-        "linkFollowDepth": 1,
-        "resourceNaming": "resource-id",
-        "stripPrefix": "knowledge-base",
-        "excludeReferencesFromBundle": {
-          "rules": [
-            { "patterns": ["**/concepts/**"], "template": "Use search to find: {{link.text}}" }
-          ],
-          "defaultTemplate": "{{link.text}} (search knowledge base)"
-        }
-      }
-    }]
-  }
-}
-```
-
-**`linkFollowDepth`** — How deep to follow links from SKILL.md:
-
-| Value | Behavior |
-|-------|----------|
-| `0` | Skill file only (no links followed) |
-| `1` | Direct links only |
-| `2` | Direct + one transitive level **(default)** |
-| `"full"` | Complete transitive closure |
-
-**`resourceNaming`** — How bundled files are named:
-
-| Strategy | Example | Use When |
-|----------|---------|----------|
-| `basename` | `overview.md` | Few files, unique names **(default)** |
-| `resource-id` | `topics-quickstart-overview.md` | Many files, flat output |
-| `preserve-path` | `topics/quickstart/overview.md` | Preserve structure |
-
-Use `stripPrefix` to remove a common directory prefix (e.g., `"knowledge-base"`).
-
-**`excludeReferencesFromBundle`** — Rules for excluding files and rewriting their links:
-- `rules[]` — Ordered glob patterns (first match wins), each with optional Handlebars template
-- `defaultTemplate` — Applied to depth-exceeded links not matching any rule
-
-**Template variables:**
-
-| Variable | Description |
-|----------|-------------|
-| `{{link.text}}` | Link display text |
-| `{{link.href}}` | Original href (without fragment) |
-| `{{link.fragment}}` | Fragment including `#` prefix, or empty |
-| `{{link.type}}` | Link type (`"local_file"`, etc.) |
-| `{{link.resource.id}}` | Target resource ID (if resolved) |
-| `{{link.resource.fileName}}` | Target filename (if resolved) |
-| `{{skill.name}}` | Skill name from frontmatter |
-
-**`validation`** — Unified framework for overriding default severity and allowing specific issue instances:
-
-```yaml
-# In vibe-agent-toolkit.config.yaml under skills.defaults or skills.config.<name>
-validation:
-  severity:
-    LINK_DROPPED_BY_DEPTH: error           # upgrade: block on depth-dropped links
-    LINK_TO_NAVIGATION_FILE: ignore        # silence: this skill intentionally links to READMEs
-  allow:
-    PACKAGED_UNREFERENCED_FILE:
-      - paths: ["templates/runtime.json"]
-        reason: "consumed programmatically at runtime"
-        expires: "2026-09-30"
-    SKILL_LENGTH_EXCEEDS_RECOMMENDED:
-      - reason: "whole-skill concern; paths defaults to ['**/*']"
-```
-
-Two sub-keys, each covering a different override granularity:
-
-- **`severity`** — Class-level. Raise any code to `error` (blocks build), lower to `warning` (emits, non-blocking), or `ignore` (fully suppressed). Applies to every instance of that code.
-- **`allow`** — Per-instance. Suppress specific `(code, path)` matches with a required `reason` and optional `expires` date. `paths` is optional (defaults to `["**/*"]` — the whole skill). Use for legitimate exceptions that don't warrant code-wide silencing.
-
-Things adopters typically adjust:
-
-- Downgrade `LINK_DROPPED_BY_DEPTH` to `ignore` when intentionally linking out to external docs.
-- Allow specific files under `PACKAGED_UNREFERENCED_FILE` when they're consumed programmatically by CLI scripts at runtime.
-- Raise `ALLOW_EXPIRED` to `error` for zero-tolerance expiry policies.
-
-Expired `allow` entries still apply — VAT emits `ALLOW_EXPIRED` as a reminder rather than silently re-surfacing the underlying issue (no surprise build breaks when a date passes). Unused `allow` entries surface as `ALLOW_UNUSED` (analogous to ESLint's unused-disable).
-
-Full code reference at `docs/validation-codes.md`. `vat audit` is advisory: it applies `severity` for display grouping only, ignores `allow`, and always exits 0. Use `vat skills validate` or `vat skills build` for gated checks.
-
 ## Testing Agents
 
 ### Unit Testing Pure Functions
@@ -376,19 +259,18 @@ const output2 = await agent.execute({
 
 ## Best Practices
 
-1. **Return result envelopes, never throw** for expected errors
-2. **Define error types as literal unions** (`'invalid-format' | 'timeout'`) not `string`
-3. **Use Zod schemas** for all input/output validation
-4. **Test all paths** — success, each error type, edge cases
-5. **Use mock mode** for external dependencies to enable offline testing
-6. **Document with JSDoc** — purpose, params, return type, example, `@throws Never throws`
-7. **Keep SKILL.md focused** — if it exceeds ~300 lines, split into action skills
+1. **Return result envelopes, never throw** for expected errors.
+2. **Define error types as literal unions** (`'invalid-format' | 'timeout'`), not `string`.
+3. **Use Zod schemas** for all input/output validation.
+4. **Test all paths** — success, each error type, edge cases.
+5. **Use mock mode** for external dependencies to enable offline testing.
+6. **Document with JSDoc** — purpose, params, return type, example, `@throws Never throws`.
+7. **Keep SKILL.md focused** — if the skill documentation exceeds ~300 lines, split the skill or use progressive disclosure (see `vibe-agent-toolkit:vat-skill-authoring`).
 
 ## References
 
-- Skill Quality and Compatibility — VAT's Stance — what VAT believes makes a skill good and compatible, and how those beliefs turn into validation codes. Read this before overriding severity defaults or adding allow entries.
-- Validation Codes Reference — full list of codes VAT emits, their default severity, and override recipes.
-- [Skill Quality Checklist](resources/skill-quality-checklist.md) — Pre-publication checklist for all skills (general + CLI-backed)
+- `vibe-agent-toolkit:vat-skill-authoring` — sibling skill covering SKILL.md frontmatter, body structure, references, packagingOptions, and validation overrides
+- `vibe-agent-toolkit:vat-skill-review` — pre-publication quality checklist
 - agent-authoring.md — Complete patterns guide
 - orchestration.md — Multi-agent workflows
-- [Building Effective Agents - Anthropic](https://www.anthropic.com/research/building-effective-agents)
+- [Building Effective Agents — Anthropic](https://www.anthropic.com/research/building-effective-agents)
