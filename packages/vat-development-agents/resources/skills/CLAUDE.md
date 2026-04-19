@@ -94,7 +94,7 @@ When you add a validator:
 1. Register the code in `validation-rules.ts` with severity, message template, fix hint, and a `reference` pointer to the rationale (often a section of `vat-skill-review` or external doc)
 2. Wire it into the appropriate validator pipeline (frontmatter, link, packaging) so it actually fires
 3. Add a checklist entry in `vat-skill-review` that references the same code (so the manual rubric and the automated check stay aligned)
-4. Default severity is **warning** unless the issue genuinely blocks distribution — even then, prefer warning + clear fix hint per the [skill-smell philosophy](../../../docs/skill-smell-philosophy.md)
+4. Default severity is **warning** unless the issue genuinely blocks distribution — even then, prefer warning + clear fix hint per the [skill-smell philosophy](../../../../docs/skill-smell-philosophy.md)
 
 When `vat-skill-review` lists a checklist item that is currently a `[ ]` manual judgment call, ask: *can this be detected programmatically?* If yes, file a follow-up to add the validator and convert the manual item to an automated reference.
 
