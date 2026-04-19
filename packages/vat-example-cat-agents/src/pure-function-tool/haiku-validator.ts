@@ -3,9 +3,6 @@ import { syllable } from 'syllable';
 
 import { HaikuSchema, HaikuValidationResultSchema, type Haiku, type HaikuValidationResult } from '../types/schemas.js';
 
-// SonarQube: Disable "Do not call Array#push() multiple times" - conditional pushes based on validation logic
-// NOSONAR
-
 /**
  * Common seasonal words (kigo) in English haiku
  */
@@ -118,8 +115,10 @@ export function critiqueHaiku(haiku: Haiku): string {
     }
   }
 
-  lines.push('');
-  lines.push(`Syllable counts: ${result.syllables.line1}-${result.syllables.line2}-${result.syllables.line3}`);
+  lines.push(
+    '',
+    `Syllable counts: ${result.syllables.line1}-${result.syllables.line2}-${result.syllables.line3}`,
+  );
 
   if (result.hasKigo) {
     lines.push('✓ Contains seasonal reference (kigo). Good.');
@@ -134,14 +133,20 @@ export function critiqueHaiku(haiku: Haiku): string {
   }
 
   if (!result.valid) {
-    lines.push('\n*adjusts spectacles disapprovingly*');
-    lines.push('This requires REVISION. Come back when you understand syllable structure.');
+    lines.push(
+      '\n*adjusts spectacles disapprovingly*',
+      'This requires REVISION. Come back when you understand syllable structure.',
+    );
   } else if (!result.hasKigo || !result.hasKireji) {
-    lines.push('\n*tail twitches critically*');
-    lines.push('Structurally sound, but lacking poetic depth. Acceptable, but not exemplary.');
+    lines.push(
+      '\n*tail twitches critically*',
+      'Structurally sound, but lacking poetic depth. Acceptable, but not exemplary.',
+    );
   } else {
-    lines.push('\n*nods approvingly*');
-    lines.push('A proper haiku. You may proceed.');
+    lines.push(
+      '\n*nods approvingly*',
+      'A proper haiku. You may proceed.',
+    );
   }
 
   return lines.join('\n');

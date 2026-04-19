@@ -1,211 +1,62 @@
 ---
 name: vibe-agent-toolkit
-description: Use when building, adopting, or learning vibe-agent-toolkit (VAT). Covers agent creation, CLI commands (vat skills, vat resources, vat audit, vat rag), runtime adapters, skill packaging, and resource validation. Routes to specialized sub-skills.
+description: Use when starting VAT work or deciding which VAT sub-skill applies. Router that points at sub-skills for adoption, skill/agent authoring, audit, distribution, RAG, knowledge resources, skill review, and enterprise org admin.
 ---
 
-# Vibe Agent Toolkit Skill
+# Vibe Agent Toolkit
 
-**Vibe Agent Toolkit (VAT)** is a modular toolkit for building portable AI agents that work across
-multiple LLM frameworks and deployment targets. Write your agent logic once as plain TypeScript,
-then deploy it to Vercel AI SDK, LangChain, OpenAI, Claude Agent SDK, or any other runtime using
-framework adapters. No vendor lock-in.
+**Vibe Agent Toolkit (VAT)** is a modular toolkit for building, packaging, and distributing portable AI agents and skills that work across multiple Claude surfaces and adjacent frameworks. Write skill or agent content once; VAT handles validation, packaging, plugin/marketplace layout, and npm publishing.
 
-## Purpose: For Users, Not Contributors
-
-- **This skill** = How to USE VAT to build agents
-- **`vibe-agent-toolkit:debugging`** = When VAT itself behaves unexpectedly or you need to test a fix
-- **Root CLAUDE.md** = How to DEVELOP the VAT codebase itself
+This is a router skill. Load the sibling sub-skill that matches the work you're doing — each sub-skill owns one slice of VAT's surface and is designed to be pulled in on demand.
 
 ## When to Use VAT
 
-**VAT is great for:** Multi-framework projects, reusable agent libraries, testing across LLM
-providers, complex multi-agent orchestration, human-in-the-loop workflows.
+Good fits:
 
-**VAT may not be needed for:** Simple one-off scripts where the framework is already decided,
-non-TypeScript/JavaScript projects, or cases where you need deep framework-specific features.
+- Publishing a Claude skill or plugin to npm with a proper marketplace layout
+- Multi-runtime agent projects (Vercel AI SDK, LangChain, OpenAI, Claude Agent SDK)
+- Validating plugins / skills / marketplaces with `vat audit` before shipping
+- Enforcing frontmatter schemas across large markdown corpora
+- Wiring RAG indexing into an agent project
 
-## Skill Routing Table
+Poor fits:
 
-| If you're working on... | Use this skill |
+- Simple one-off scripts where the framework is already decided
+- Non-TypeScript/JavaScript projects
+- Cases where you need deep framework-specific features with no reuse goal
+
+## Picking a Sub-skill
+
+| If you're working on... | Load |
 |---|---|
-| Writing or structuring a `SKILL.md` file | `vibe-agent-toolkit:authoring` |
-| Agent archetypes, orchestration patterns, result envelopes | `vibe-agent-toolkit:authoring` |
-| `packagingOptions` (linkFollowDepth, excludeReferencesFromBundle) | `vibe-agent-toolkit:authoring` |
-| Resource collections, frontmatter schema validation | `vibe-agent-toolkit:resources` |
-| `vat resources validate`, collection config | `vibe-agent-toolkit:resources` |
-| Setting up `vat build` + `vat claude build` for a project | `vibe-agent-toolkit:distribution` |
-| Configuring `claude:` section in vibe-agent-toolkit.config.yaml | `vibe-agent-toolkit:distribution` |
-| npm publishing with plugin postinstall | `vibe-agent-toolkit:distribution` |
-| `vat build` / `vat verify` orchestration | `vibe-agent-toolkit:distribution` |
-| `--target claude-web` ZIP format | `vibe-agent-toolkit:distribution` |
-| Install/uninstall methods, enterprise deployment, Desktop vs CLI paths | `vibe-agent-toolkit:install` |
-| `vat audit`, `--compat`, CI validation | `vibe-agent-toolkit:audit` |
-| `vat claude org`, Admin API, org users/cost/usage/skills, ANTHROPIC_ADMIN_API_KEY | `vibe-agent-toolkit:org-admin` |
-| VAT behaves unexpectedly, debugging VAT, testing local VAT changes, VAT_ROOT_DIR | `vibe-agent-toolkit:debugging` |
+| New project setup, `vibe-agent-toolkit.config.yaml` orientation, repo structure, vibe-validate integration, npm postinstall | `vibe-agent-toolkit:vat-adoption-and-configuration` |
+| Writing or revising a SKILL.md — frontmatter, body, references, packagingOptions, validation overrides | `vibe-agent-toolkit:vat-skill-authoring` |
+| TypeScript agent archetypes, `agent.yaml`, result envelopes, orchestration, runtime adapters | `vibe-agent-toolkit:vat-agent-authoring` |
+| `vat audit` on plugins, marketplaces, skills, or settings — including `--compat`, `--exclude`, `--user`, CI use | `vibe-agent-toolkit:vat-audit` |
+| Markdown collections, `resources:` config, frontmatter schema validation, `vat resources validate` | `vibe-agent-toolkit:vat-knowledge-resources` |
+| `vat build`, `vat verify`, plugin/marketplace layout, npm publishing, postinstall | `vibe-agent-toolkit:vat-skill-distribution` |
+| `vat rag index` / `vat rag query`, embedding providers, vector stores, chunking | `vibe-agent-toolkit:vat-rag` |
+| Pre-publication quality review, `vat skill review`, validation-code triage | `vibe-agent-toolkit:vat-skill-review` |
+| Anthropic Admin API: org users, cost/usage, workspace skills, `ANTHROPIC_ADMIN_API_KEY` | `vibe-agent-toolkit:vat-enterprise-org` |
 
-## Agent Archetypes (Quick Reference)
-
-Four patterns cover most use cases. For full code examples, see `vibe-agent-toolkit:authoring`.
-
-| Archetype | When to Use |
-|---|---|
-| **Pure Function Tool** | Stateless validation, transformation, computation — no LLM needed |
-| **One-Shot LLM Analyzer** | Single LLM call for analysis, classification, or generation |
-| **Conversational Assistant** | Multi-turn dialogue with session state across turns |
-| **External Event Integrator** | Waiting for human approval, webhooks, or third-party APIs |
-
-## Core CLI Commands
+## CLI Surface at a Glance
 
 ```bash
-# Install VAT CLI globally
-npm install -g vibe-agent-toolkit
-
-# Or run without installing (works anywhere vat commands appear below)
-npx vibe-agent-toolkit <command>    # npm/Node.js
-bunx vibe-agent-toolkit <command>   # Bun
-
-# Top-level orchestration
-vat build                                # build all artifacts (skills then claude plugins)
-vat verify                               # verify all artifacts (resources, skills, claude)
-
-# Claude plugin commands
-vat claude build                         # generate plugin artifacts from built skills
-vat claude verify                        # validate plugin artifacts
-
-# Skills
-vat skills list                          # list skills in current project
-vat skills list --user                   # list user-installed skills
-vat skills install npm:@org/my-skills    # install from npm (routes through plugin system)
-vat skills build                         # build portable skills only
-vat skills validate                      # validate skill quality
-
-# Resources
-vat resources validate                   # validate collections (reads config)
-vat resources validate docs/ --frontmatter-schema schema.json
-
-# Audit
-vat audit                                # audit current directory recursively
-vat audit --user                         # audit entire Claude installation
-vat audit ./plugins/ --compat            # check surface compatibility
-
-# RAG
-vat rag index docs/                      # index markdown into vector DB
-vat rag query "my question" --limit 5    # semantic search
-
-# Get help for any command
-vat --help
-vat skills --help
+vat --help                 # top-level help
+vat build                  # build all artifacts (skills → claude plugins)
+vat verify                 # validate all artifacts
+vat skills validate        # validate skill quality
+vat resources validate     # validate markdown collections
+vat audit                  # audit plugins/skills/marketplaces/settings
+vat rag index docs/        # index markdown for RAG
+vat skill review <path>    # pre-publication review
+vat claude org --help      # enterprise admin surface
 ```
 
-## agent-generator: Creating New Agents
-
-The **agent-generator** is a built-in meta-agent that guides you through designing
-high-quality agents via a 4-phase workflow:
-
-1. **GATHER** — Understand your intent and goals
-2. **ANALYZE** — Identify agent pattern and requirements
-3. **DESIGN** — Make architecture decisions (LLM, tools, prompts)
-4. **GENERATE** — Create validated agent package
-
-Minimum input needed:
-```json
-{
-  "agentPurpose": "Review PRs for security issues",
-  "successCriteria": "Catches 100% of critical vulnerabilities"
-}
-```
-
-The generator produces: `agent.yaml`, `prompts/system.md`, `prompts/user.md`,
-`schemas/input.schema.json`, `schemas/output.schema.json`, and `README.md`.
-
-**Tips for better results:**
-- Be specific about success criteria ("Under 30s, zero false negatives") not vague ("fast enough")
-- Name the tools the agent needs upfront (file readers, APIs, etc.)
-- Describe domain context (OWASP Top 10, company coding standards, etc.)
-
-## Packaging Markdown for Reuse
-
-VAT's resource compiler transforms markdown files into type-safe TypeScript modules,
-enabling prompt libraries, RAG knowledge bases, and shared content across projects.
-
-```bash
-npm install -D @vibe-agent-toolkit/resource-compiler
-npx vat-compile-resources compile resources/ generated/resources/
-```
-
-```typescript
-import * as Doc from './generated/resources/doc.js';
-
-Doc.meta.title;                        // type-safe frontmatter
-Doc.fragments.introduction.text;       // H2 section content
-Doc.text;                              // full markdown
-```
-
-Use cases: agent prompt libraries, RAG knowledge bases packaged as npm modules,
-multi-project content sharing with versioning.
-
-## Common Workflows
-
-**Create a new agent:**
-```bash
-# Use agent-generator interactively, then:
-vat agent import my-skill/SKILL.md   # import to VAT format
-vat skills validate                   # check quality
-vat skills build                      # package for distribution
-```
-
-**Install and use a community skill:**
-```bash
-vat skills install npm:@vibe-agent-toolkit/vat-cat-agents
-vat skills list --user
-# Plugin-aware packages register in Claude's plugin system
-# Skills are invoked as /plugin-name:skill-name in Claude Code
-```
-
-**Build and publish your own skill package:**
-```bash
-# Configure vat.skills in package.json + claude: in vibe-agent-toolkit.config.yaml, then:
-vat build                 # builds skills + claude plugin artifacts
-vat verify                # validates everything
-npm publish               # publishes to npm (postinstall registers the plugin)
-# Users install with: vat skills install npm:@myorg/my-skills
-```
-
-## Success Criteria
-
-You've successfully adopted VAT when:
-- Agents have clear input/output schemas (Zod-validated)
-- Errors are handled as data (result envelopes), never thrown
-- Tests cover success and error paths without real API calls (mock mode)
-- Agents work across multiple runtimes via adapters
-- Multi-agent pipelines compose via `andThen()` / `match()` helpers
-
-## Documentation Index
-
-- [Getting Started Guide](../../../../docs/getting-started.md)
-- [Agent Authoring Guide](../../../../docs/agent-authoring.md) — patterns and code examples
-- [Orchestration Guide](../../../../docs/orchestration.md) — multi-agent workflows
-- [RAG Usage Guide](../../../../docs/guides/rag-usage-guide.md)
-- [Resource Compiler Guide](../../../../docs/guides/resource-compiler/compiling-markdown-to-typescript.md)
-- [Runtime Adapters](../../../../docs/adding-runtime-adapters.md)
-- Examples: `@vibe-agent-toolkit/vat-example-cat-agents`
-
-## Running VAT
-
-VAT can be run without a global install:
-
-```bash
-vat <command>                     # If installed globally
-npx vibe-agent-toolkit <command>  # npm (downloads on demand)
-bunx vibe-agent-toolkit <command> # Bun (downloads on demand)
-```
-
-All `vat` commands in this skill and sub-skills accept these alternatives.
+Each sub-skill covers its slice of the CLI in depth — don't memorize this table, load the sub-skill when you need detail.
 
 ## Getting Help
 
-- **CLI Help:** `vat --help`, `vat skills --help`, etc.
-- **Examples:** `packages/vat-example-cat-agents/`
-- **GitHub Issues:** Report bugs or ask questions
-
-Happy agent building!
+- `vat --help` and `vat <group> --help --verbose` for CLI depth
+- Repo docs: the VAT repository's `docs/` directory carries the full setup guide, architecture notes, and design references (not bundled with this plugin)
+- Contributor reference docs (debugging VAT, install architecture) live under `docs/contributing/` in the VAT repo

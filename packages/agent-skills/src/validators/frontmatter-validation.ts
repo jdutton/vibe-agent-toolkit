@@ -10,7 +10,9 @@
 
 import { AgentSkillFrontmatterSchema, VATAgentSkillFrontmatterSchema } from '../schemas/agent-skill-frontmatter.js';
 
+import { CODE_REGISTRY } from './code-registry.js';
 import type { ValidationIssue } from './types.js';
+import { VALIDATION_THRESHOLDS } from './validation-rules.js';
 
 // Location constants for validation messages
 const FRONTMATTER_LOC = 'frontmatter';
@@ -95,55 +97,160 @@ export function validateFrontmatterRules(
 
 	// Validate name field
 	if (frontmatter['name'] && typeof frontmatter['name'] === 'string') {
-		const name = frontmatter['name'].toLowerCase();
-
-		// Check for reserved words
-		if (name.includes('anthropic') || name.includes('claude')) {
-			issues.push({
-				severity: 'error',
-				code: 'SKILL_NAME_RESERVED_WORD',
-				message: 'Name contains reserved word "anthropic" or "claude"',
-				location: FRONTMATTER_NAME_LOC,
-				fix: 'Remove reserved word from name',
-			});
-		}
-
-		// Check for XML tags
-		if (/[<>]/.test(frontmatter['name'])) {
-			issues.push({
-				severity: 'error',
-				code: 'SKILL_NAME_XML_TAGS',
-				message: 'Name contains XML tags',
-				location: FRONTMATTER_NAME_LOC,
-				fix: 'Remove < and > characters from name',
-			});
-		}
+		issues.push(...validateNameRules(frontmatter['name']));
 	}
 
 	// Validate description field
 	if (frontmatter['description'] && typeof frontmatter['description'] === 'string') {
-		// Check for XML tags
-		if (/[<>]/.test(frontmatter['description'])) {
-			issues.push({
-				severity: 'error',
-				code: 'SKILL_DESCRIPTION_XML_TAGS',
-				message: 'Description contains XML tags',
-				location: FRONTMATTER_DESC_LOC,
-				fix: 'Remove < and > characters from description',
-			});
-		}
-
-		// Check for empty description
-		if (frontmatter['description'].trim() === '') {
-			issues.push({
-				severity: 'error',
-				code: 'SKILL_DESCRIPTION_EMPTY',
-				message: 'Description is empty',
-				location: FRONTMATTER_DESC_LOC,
-				fix: 'Add description explaining what the skill does and when to use it',
-			});
-		}
+		issues.push(...validateDescriptionRules(frontmatter['description']));
 	}
 
 	return issues;
+}
+
+function validateNameRules(name: string): ValidationIssue[] {
+	const issues: ValidationIssue[] = [];
+	const lowered = name.toLowerCase();
+
+	if (lowered.includes('anthropic') || lowered.includes('claude')) {
+		const registryEntry = CODE_REGISTRY.RESERVED_WORD_IN_NAME;
+		issues.push({
+			severity: registryEntry.defaultSeverity,
+			code: 'RESERVED_WORD_IN_NAME',
+			message: 'Name contains reserved word "anthropic" or "claude"',
+			location: FRONTMATTER_NAME_LOC,
+			fix: registryEntry.fix,
+			reference: registryEntry.reference,
+		});
+	}
+
+	if (/[<>]/.test(name)) {
+		issues.push({
+			severity: 'error',
+			code: 'SKILL_NAME_XML_TAGS',
+			message: 'Name contains XML tags',
+			location: FRONTMATTER_NAME_LOC,
+			fix: 'Remove < and > characters from name',
+		});
+	}
+
+	return issues;
+}
+
+function validateDescriptionRules(description: string): ValidationIssue[] {
+	const issues: ValidationIssue[] = [];
+
+	if (/[<>]/.test(description)) {
+		issues.push({
+			severity: 'error',
+			code: 'SKILL_DESCRIPTION_XML_TAGS',
+			message: 'Description contains XML tags',
+			location: FRONTMATTER_DESC_LOC,
+			fix: 'Remove < and > characters from description',
+		});
+	}
+
+	if (description.trim() === '') {
+		issues.push({
+			severity: 'error',
+			code: 'SKILL_DESCRIPTION_EMPTY',
+			message: 'Description is empty',
+			location: FRONTMATTER_DESC_LOC,
+			fix: 'Add description explaining what the skill does and when to use it',
+		});
+	}
+
+	// Soft check: description exceeds Claude Code /skills display limit (250 chars)
+	// Sits alongside the 1024-char hard schema limit as an earlier, softer warning.
+	if (description.length > VALIDATION_THRESHOLDS.MAX_DESCRIPTION_CHARS_CLAUDE_CODE) {
+		const registryEntry = CODE_REGISTRY.SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT;
+		issues.push({
+			severity: registryEntry.defaultSeverity,
+			code: 'SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT',
+			message: `Description is ${description.length} characters (Claude Code truncates at ${VALIDATION_THRESHOLDS.MAX_DESCRIPTION_CHARS_CLAUDE_CODE} in /skills listing)`,
+			location: FRONTMATTER_DESC_LOC,
+			fix: registryEntry.fix,
+			reference: registryEntry.reference,
+		});
+	}
+
+	const fillerIssue = detectFillerOpener(description);
+	if (fillerIssue !== null) {
+		issues.push(fillerIssue);
+	}
+
+	const wrongPersonIssue = detectWrongPerson(description);
+	if (wrongPersonIssue !== null) {
+		issues.push(wrongPersonIssue);
+	}
+
+	return issues;
+}
+
+/**
+ * Filler opener patterns that describe the skill-as-object rather than the behavior.
+ * Anchored to the start of the trimmed description (case-insensitive).
+ *
+ * Note: `Use when <concrete trigger>` is allowed — that's Anthropic's recommended
+ * pattern. Only `Use when you want to` / `Use when you need to` are flagged.
+ */
+const FILLER_OPENER_PATTERNS: readonly RegExp[] = [
+	/^this\s+skill\b/i,
+	/^a\s+skill\s+that\b/i,
+	/^a\s+skill\s+which\b/i,
+	/^used\s+to\b/i,
+	/^use\s+when\s+you\s+want\s+to\b/i,
+	/^use\s+when\s+you\s+need\s+to\b/i,
+];
+
+function detectFillerOpener(description: string): ValidationIssue | null {
+	const trimmed = description.trimStart();
+	const match = FILLER_OPENER_PATTERNS.find((pattern) => pattern.test(trimmed));
+	if (match === undefined) {
+		return null;
+	}
+
+	// Extract matched prefix for the error message
+	const execResult = match.exec(trimmed);
+	const matchedText = execResult?.[0] ?? '';
+	const registryEntry = CODE_REGISTRY.SKILL_DESCRIPTION_FILLER_OPENER;
+	return {
+		severity: registryEntry.defaultSeverity,
+		code: 'SKILL_DESCRIPTION_FILLER_OPENER',
+		message: `Description opens with filler "${matchedText}..." — lead with a verb phrase or "Use when <concrete trigger>" instead`,
+		location: FRONTMATTER_DESC_LOC,
+		fix: registryEntry.fix,
+		reference: registryEntry.reference,
+	};
+}
+
+/**
+ * Wrong-person patterns: first-person (I/I'll/I'm) or conversational second-person
+ * (You/You'll/You're) followed by a common verb/modal.
+ *
+ * Word-boundary anchored to avoid matches on `Iowa`, `Ionic`, etc.
+ * Case-insensitive.
+ */
+const WRONG_PERSON_PRONOUNS = '(?:I|I\'ll|I\'m|I\'ve|You|You\'ll|You\'re|You\'ve)';
+const WRONG_PERSON_VERBS = '(?:can|should|will|might|need|want|must|may|could|would|have|are|am)';
+// eslint-disable-next-line security/detect-non-literal-regexp -- compile-time constant pattern, no user input
+const WRONG_PERSON_PATTERN = new RegExp(
+	String.raw`\b${WRONG_PERSON_PRONOUNS}\s+${WRONG_PERSON_VERBS}\b`,
+	'i',
+);
+
+function detectWrongPerson(description: string): ValidationIssue | null {
+	const match = WRONG_PERSON_PATTERN.exec(description);
+	if (match === null) {
+		return null;
+	}
+	const registryEntry = CODE_REGISTRY.SKILL_DESCRIPTION_WRONG_PERSON;
+	return {
+		severity: registryEntry.defaultSeverity,
+		code: 'SKILL_DESCRIPTION_WRONG_PERSON',
+		message: `Description uses first-person or conversational second-person voice ("${match[0]}") — Anthropic recommends third person`,
+		location: FRONTMATTER_DESC_LOC,
+		fix: registryEntry.fix,
+		reference: registryEntry.reference,
+	};
 }

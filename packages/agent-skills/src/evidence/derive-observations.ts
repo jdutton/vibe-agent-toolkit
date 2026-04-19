@@ -7,6 +7,10 @@
  * wording.
  */
 
+import {
+  detectInterpreter,
+  extractMcpCommandFromMatchText,
+} from './interpreter-detection.js';
 import type { EvidenceRecord, Observation } from './types.js';
 
 /** Subject of derivation — controls observation summary wording. */
@@ -40,6 +44,37 @@ const BROWSER_AUTH_PATTERN_IDS: ReadonlySet<string> = new Set([
   'BROWSER_AUTH_WEBBROWSER_OPEN',
 ]);
 
+/**
+ * Classify a single evidence record as contributing to a specific external-CLI
+ * binary (e.g. via `EXTERNAL_CLI_*` patterns, or an `MCP_SERVER_COMMAND` whose
+ * command field is a known interpreter). Returns `undefined` if the record
+ * does not contribute.
+ */
+function externalCliBinaryFor(record: EvidenceRecord): string | undefined {
+  const explicit = EXTERNAL_CLI_BINARIES.find(b => b.patternId === record.patternId);
+  if (explicit) return explicit.binary;
+  if (record.patternId !== 'MCP_SERVER_COMMAND') return undefined;
+  const command = extractMcpCommandFromMatchText(record.matchText);
+  return command === undefined ? undefined : detectInterpreter(command);
+}
+
+function aggregateExternalCliEvidence(
+  evidence: readonly EvidenceRecord[],
+): Map<string, EvidenceRecord[]> {
+  const cliByBinary = new Map<string, EvidenceRecord[]>();
+  for (const e of evidence) {
+    const binary = externalCliBinaryFor(e);
+    if (!binary) continue;
+    const existing = cliByBinary.get(binary);
+    if (existing) {
+      existing.push(e);
+    } else {
+      cliByBinary.set(binary, [e]);
+    }
+  }
+  return cliByBinary;
+}
+
 function dedupePatternIds(records: readonly EvidenceRecord[]): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
@@ -67,17 +102,7 @@ export function deriveObservationsFromEvidence(
     });
   }
 
-  const cliByBinary = new Map<string, EvidenceRecord[]>();
-  for (const e of evidence) {
-    const match = EXTERNAL_CLI_BINARIES.find(b => b.patternId === e.patternId);
-    if (!match) continue;
-    const existing = cliByBinary.get(match.binary);
-    if (existing) {
-      existing.push(e);
-    } else {
-      cliByBinary.set(match.binary, [e]);
-    }
-  }
+  const cliByBinary = aggregateExternalCliEvidence(evidence);
   const sortedBinaries = [...cliByBinary.keys()].sort((a, b) => a.localeCompare(b));
   for (const binary of sortedBinaries) {
     const records = cliByBinary.get(binary);

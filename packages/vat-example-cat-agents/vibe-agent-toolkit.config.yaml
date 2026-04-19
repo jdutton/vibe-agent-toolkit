@@ -1,0 +1,18 @@
+# vibe-agent-toolkit configuration for vat-example-cat-agents
+# This package is an example demonstrating VAT agent archetypes — the SKILL.md
+# legitimately links to sibling agent reference docs under ../agents/ to guide
+# Claude Code through the archetype implementations. Those references are text
+# pointers, not bundled content.
+
+version: 1
+
+skills:
+  include: ["resources/skills/SKILL.md"]
+  defaults:
+    targets: ['claude-code']
+  config:
+    vat-example-cat-agents:
+      linkFollowDepth: 0
+      excludeReferencesFromBundle:
+        rules:
+          - patterns: ["**/agents/**"]

@@ -16,6 +16,8 @@ import * as yaml from 'js-yaml';
 import { loadConfig } from '../../utils/config-loader.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import { type createLogger } from '../../utils/logger.js';
+import { mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
+import { renderSkillQualityFooter } from '../../utils/skill-quality-footer.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
 
 import {
@@ -139,8 +141,20 @@ function outputValidationReport(
 
   const failedSkills = results.filter((r) => r.status === 'error');
 
+  // Collect all emitted codes across skills (both errors and warnings) to drive the footer
+  const emittedCodes = new Set<string>();
+  for (const r of results) {
+    for (const issue of r.allErrors) {
+      emittedCodes.add(issue.code);
+    }
+  }
+  const hasSkillFindings = results.some(
+    (r) => r.activeErrors.length > 0 || r.activeWarnings.length > 0,
+  );
+
   if (failedSkills.length === 0) {
     logger.info('\n✅ All validations passed');
+    renderSkillQualityFooter(logger, hasSkillFindings, emittedCodes);
     return;
   }
 
@@ -148,6 +162,7 @@ function outputValidationReport(
   for (const result of failedSkills) {
     outputSkillErrors(result);
   }
+  renderSkillQualityFooter(logger, hasSkillFindings, emittedCodes);
 }
 
 /**
@@ -204,20 +219,14 @@ export async function validateCommand(
     }
 
     // Merge packaging config for each skill.
-    // Strip undefined values from the spread to satisfy exactOptionalPropertyTypes —
-    // Zod-inferred optional types produce explicit `undefined` which is not assignable
-    // to optional-but-not-undefined properties.
     const { defaults, config: perSkillConfig } = config.skills;
-    const validatableSkills: ValidatableSkill[] = discovered.map(skill => {
-      const merged = { ...defaults, ...perSkillConfig?.[skill.name] };
-      const packagingConfig: SkillPackagingConfig = {};
-      for (const [key, value] of Object.entries(merged)) {
-        if (value !== undefined) {
-          (packagingConfig as Record<string, unknown>)[key] = value;
-        }
-      }
-      return { ...skill, packagingConfig };
-    });
+    const validatableSkills: ValidatableSkill[] = discovered.map(skill => ({
+      ...skill,
+      packagingConfig: mergeSkillPackagingConfig(
+        defaults as Record<string, unknown> | undefined,
+        perSkillConfig?.[skill.name] as Record<string, unknown> | undefined,
+      ),
+    }));
 
     // Filter by name if specified
     const skillsToValidate = filterSkillsByName(validatableSkills, options.skill);

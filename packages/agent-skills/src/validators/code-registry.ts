@@ -33,6 +33,12 @@ export type IssueCode =
   | 'REFERENCE_TOO_DEEP'
   | 'DESCRIPTION_TOO_VAGUE'
   | 'NO_PROGRESSIVE_DISCLOSURE'
+  | 'SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT'
+  | 'SKILL_DESCRIPTION_FILLER_OPENER'
+  | 'SKILL_DESCRIPTION_WRONG_PERSON'
+  | 'SKILL_NAME_MISMATCHES_DIR'
+  | 'RESERVED_WORD_IN_NAME'
+  | 'SKILL_TIME_SENSITIVE_CONTENT'
   // Capability observations — what a skill requires from its runtime
   | 'CAPABILITY_LOCAL_SHELL'
   | 'CAPABILITY_EXTERNAL_CLI'
@@ -150,6 +156,42 @@ export const CODE_REGISTRY: Record<IssueCode, CodeRegistryEntry> = {
     'Long SKILL.md with no linked references; progressive disclosure recommended.',
     'Move background detail into linked resources and reference them from SKILL.md.',
     'no_progressive_disclosure',
+  ),
+  SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT: entry(
+    'warning',
+    'SKILL.md description exceeds the 250-character Claude Code /skills display limit.',
+    'Shorten the description below 250 chars (target ≤200 for a safety margin, or ≤130 if shipping a large skill collection).',
+    'skill_description_over_claude_code_limit',
+  ),
+  SKILL_DESCRIPTION_FILLER_OPENER: entry(
+    'warning',
+    'SKILL.md description opens with meta-filler (e.g., "This skill...", "A skill that...", "Use when you want to...").',
+    'Lead with a verb phrase ("Extracts text from PDFs...") or "Use when <concrete trigger>".',
+    'skill_description_filler_opener',
+  ),
+  SKILL_DESCRIPTION_WRONG_PERSON: entry(
+    'warning',
+    'SKILL.md description uses first-person or conversational second-person voice.',
+    'Rewrite in third person. "I can extract PDFs" → "Extracts text from PDFs". "You can use this to..." → the action itself.',
+    'skill_description_wrong_person',
+  ),
+  SKILL_NAME_MISMATCHES_DIR: entry(
+    'warning',
+    'Frontmatter name field does not match the skill parent directory name.',
+    'Align them: rename the directory to match name, or update name to match the directory.',
+    'skill_name_mismatches_dir',
+  ),
+  RESERVED_WORD_IN_NAME: entry(
+    'warning',
+    'Frontmatter `name` contains a reserved word (`anthropic` or `claude`); Claude Code rejects non-certified skills using these words.',
+    'Rename the skill to avoid `anthropic` or `claude` in the name.',
+    'reserved_word_in_name',
+  ),
+  SKILL_TIME_SENSITIVE_CONTENT: entry(
+    'info',
+    'SKILL.md body contains time-sensitive prose (e.g., "as of November 2025") that may become stale.',
+    'Remove the time qualifier, or move deprecated guidance into a clearly labeled "## Old patterns" section with a <details> block.',
+    'skill_time_sensitive_content',
   ),
   CAPABILITY_LOCAL_SHELL: entry(
     'info',

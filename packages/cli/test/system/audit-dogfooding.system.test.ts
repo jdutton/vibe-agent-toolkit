@@ -96,7 +96,11 @@ describe('Audit Dogfooding (system test)', () => {
     cleanupTestTempDir(tempDir);
   });
 
-  it('should successfully audit vibe-agent-toolkit project root', () => {
+  // Windows runners are 10-20x slower than Ubuntu on monorepo-wide filesystem
+  // walks; this smoke test has timed out at 120s on Windows CI. Ubuntu covers
+  // the full-monorepo audit path; follow-up issue open to profile audit perf
+  // so we can drop this skip.
+  it.skipIf(process.platform === 'win32')('should successfully audit vibe-agent-toolkit project root', () => {
     const result = executeCli(binPath, ['audit', projectRoot], {
       cwd: tempDir,
     });

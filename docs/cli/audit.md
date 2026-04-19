@@ -106,9 +106,9 @@ Human-readable errors and warnings are written to stderr.
 - Max length: 64 characters
 - Fix: Change to format like "my-skill" or "data-processor"
 
-**SKILL_NAME_RESERVED_WORD**
-- Name contains reserved word "anthropic" or "claude"
-- Fix: Remove reserved word from name
+**RESERVED_WORD_IN_NAME** (warning)
+- Name contains reserved word "anthropic" or "claude"; Claude Code rejects non-certified skills using these words
+- Fix: Rename the skill to avoid `anthropic` or `claude` in the name
 
 **SKILL_NAME_XML_TAGS**
 - Name contains XML tag characters (< or >)

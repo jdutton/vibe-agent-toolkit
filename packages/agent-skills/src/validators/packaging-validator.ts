@@ -18,7 +18,7 @@ import { readFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 import { parseMarkdown, ResourceRegistry } from '@vibe-agent-toolkit/resources';
-import { findProjectRoot, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, normalizedTmpdir, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
 import { walkLinkGraph, type LinkResolution, type WalkableRegistry } from '../walk-link-graph.js';
@@ -273,6 +273,8 @@ export async function validateSkillForPackaging(
   collectSizeIssues(skillLines, totalLines, fileCount, maxLinkDepth, skillPath, rawIssues);
   collectDescriptionIssue(parseResult.frontmatter, skillPath, rawIssues);
   collectProgressiveDisclosureIssue(skillLines, bundledFiles.length, skillPath, rawIssues);
+  collectNameMismatchIssue(parseResult.frontmatter, skillPath, rawIssues);
+  collectTimeSensitiveContentIssues(parseResult.content, skillPath, rawIssues);
 
   // Filter out source-only codes when validating built output
   const filteredIssues = context === 'built'
@@ -378,6 +380,135 @@ function collectDescriptionIssue(
       rule.message({ length: description.length }),
       skillPath,
     ));
+  }
+}
+
+/**
+ * Kebab-case pattern used by the Agent Skill schema for `name`. The check
+ * only fires when the parent directory itself looks like a skill directory
+ * (same kebab-case shape). This avoids false positives when SKILL.md lives
+ * at a repo root or inside an unrelated container.
+ */
+const SKILL_DIR_NAME_PATTERN = /^[a-z][a-z0-9-]*$/;
+
+/**
+ * Generic container directory names that hold multiple skills in a flat layout.
+ * When SKILL.md lives directly inside one of these, the parent dir name carries
+ * no signal about what the skill is named — skip the mismatch check entirely.
+ */
+const GENERIC_CONTAINER_DIRS = new Set<string>(['skills', 'resources']);
+
+/**
+ * Detect SKILL_NAME_MISMATCHES_DIR issue from a frontmatter `name` and a
+ * parent directory name. Returns null when no mismatch should be reported.
+ *
+ * Exported for direct unit testing — the packaging validator wires it up
+ * with values derived from the skill path.
+ */
+export function detectNameMismatchIssue(
+  frontmatterName: unknown,
+  parentDir: string,
+  skillPath: string,
+): ValidationIssue | null {
+  if (typeof frontmatterName !== 'string' || frontmatterName.trim() === '') {
+    return null;
+  }
+  if (parentDir === '' || parentDir === '.' || parentDir === 'SKILL.md') {
+    return null;
+  }
+  if (!SKILL_DIR_NAME_PATTERN.test(parentDir)) {
+    return null;
+  }
+  if (GENERIC_CONTAINER_DIRS.has(parentDir.toLowerCase())) {
+    return null;
+  }
+
+  const normalize = (s: string): string => s.trim().toLowerCase();
+  if (normalize(frontmatterName) === normalize(parentDir)) {
+    return null;
+  }
+
+  const registryEntry = CODE_REGISTRY.SKILL_NAME_MISMATCHES_DIR;
+  return {
+    severity: registryEntry.defaultSeverity,
+    code: 'SKILL_NAME_MISMATCHES_DIR',
+    message: `Frontmatter name "${frontmatterName}" does not match parent directory "${parentDir}"`,
+    location: skillPath,
+    fix: registryEntry.fix,
+    reference: registryEntry.reference,
+  };
+}
+
+/**
+ * Collect SKILL_NAME_MISMATCHES_DIR issue. Skips when the skill lives in an
+ * OS temp directory — unit tests and ad-hoc scratch runs don't have
+ * meaningful parent-directory names.
+ */
+function collectNameMismatchIssue(
+  frontmatter: Record<string, unknown> | undefined,
+  skillPath: string,
+  issues: ValidationIssue[],
+): void {
+  const resolvedSkillPath = toForwardSlash(safePath.resolve(skillPath));
+  const resolvedTmpdir = toForwardSlash(safePath.resolve(normalizedTmpdir()));
+  // eslint-disable-next-line local/no-path-startswith -- both operands are already toForwardSlash-normalized
+  if (resolvedSkillPath.startsWith(`${resolvedTmpdir}/`)) {
+    return;
+  }
+
+  const parentDir = basename(dirname(skillPath));
+  const issue = detectNameMismatchIssue(frontmatter?.['name'], parentDir, skillPath);
+  if (issue !== null) {
+    issues.push(issue);
+  }
+}
+
+/**
+ * Time-sensitive content patterns. Case-insensitive.
+ * Matches: "as of <month> YYYY", "after/before/until <month> YYYY",
+ * and the year-first form "as of YYYY-MM".
+ */
+const MONTH_NAME_PATTERN = '(?:january|february|march|april|may|june|july|august|september|october|november|december)';
+/* eslint-disable security/detect-non-literal-regexp -- compile-time constant patterns composed from MONTH_NAME_PATTERN, no user input */
+const TIME_SENSITIVE_PATTERNS: readonly RegExp[] = [
+  new RegExp(String.raw`\bas of ${MONTH_NAME_PATTERN} \d{4}\b`, 'i'),
+  new RegExp(String.raw`\bafter ${MONTH_NAME_PATTERN} \d{4}\b`, 'i'),
+  new RegExp(String.raw`\bbefore ${MONTH_NAME_PATTERN} \d{4}\b`, 'i'),
+  new RegExp(String.raw`\buntil ${MONTH_NAME_PATTERN} \d{4}\b`, 'i'),
+  /\bas of \d{4}-\d{2}\b/i,
+];
+/* eslint-enable security/detect-non-literal-regexp */
+
+/**
+ * Collect SKILL_TIME_SENSITIVE_CONTENT issues — scan the SKILL.md body for
+ * time-sensitive prose that may become stale. One issue per distinct match
+ * with line-number location.
+ */
+function collectTimeSensitiveContentIssues(
+  content: string,
+  skillPath: string,
+  issues: ValidationIssue[],
+): void {
+  const registryEntry = CODE_REGISTRY.SKILL_TIME_SENSITIVE_CONTENT;
+  const lines = content.split('\n');
+
+  for (const [index, line] of lines.entries()) {
+    for (const pattern of TIME_SENSITIVE_PATTERNS) {
+      const match = pattern.exec(line);
+      if (match !== null) {
+        const lineNumber = index + 1;
+        issues.push({
+          severity: registryEntry.defaultSeverity,
+          code: 'SKILL_TIME_SENSITIVE_CONTENT',
+          message: `Time-sensitive phrase "${match[0]}" may become stale`,
+          location: `${skillPath}:${lineNumber}`,
+          fix: registryEntry.fix,
+          reference: registryEntry.reference,
+        });
+        // Only emit one issue per line (first match wins)
+        break;
+      }
+    }
   }
 }
 

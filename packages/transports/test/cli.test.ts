@@ -53,8 +53,8 @@ function createMockSession<TState>(
  * Helper to verify saved session structure
  */
 function expectSavedSessionStructure(mockStore: SessionStore<unknown>, expectedSessionId: string): void {
-  const savedSession = (mockStore.save as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as RuntimeSession<unknown>;
-  expect(savedSession).toBeDefined();
+  const savedSession = vi.mocked(mockStore.save).mock.calls[0]?.[0];
+  if (!savedSession) throw new Error('Expected a saved session');
   expect(savedSession.id).toBe(expectedSessionId);
   expect(savedSession.metadata).toBeDefined();
 }
@@ -347,14 +347,14 @@ describe('CLITransport with SessionStore', () => {
       await transport.start();
       await transport.stop();
 
-      const firstStopCalls = (mockStore.save as ReturnType<typeof vi.fn>).mock.calls.length;
+      const firstStopCalls = vi.mocked(mockStore.save).mock.calls.length;
       expect(firstStopCalls).toBeGreaterThan(0);
 
       // Second stop should not crash (idempotent safety)
       await expect(transport.stop()).resolves.not.toThrow();
 
       // May or may not save again (rl already closed), but shouldn't crash
-      const totalCalls = (mockStore.save as ReturnType<typeof vi.fn>).mock.calls.length;
+      const totalCalls = vi.mocked(mockStore.save).mock.calls.length;
       expect(totalCalls).toBeGreaterThanOrEqual(firstStopCalls);
     });
   });
@@ -383,7 +383,7 @@ describe('CLITransport with SessionStore', () => {
       transport = newTransport;
 
       // Override save to throw error
-      (mockStore.save as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('Disk full'));
+      vi.mocked(mockStore.save).mockRejectedValue(new Error('Disk full'));
 
       await transport.start();
 

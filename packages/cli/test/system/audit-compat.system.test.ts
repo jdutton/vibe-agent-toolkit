@@ -157,7 +157,7 @@ describe('Audit --compat flag (system test)', () => {
 
     // Each compat entry should have analyzed per-target verdicts
     for (const entry of withCompat) {
-      assertCompatStructure(entry as Record<string, unknown>);
+      assertCompatStructure(entry);
     }
   });
 

@@ -3,8 +3,10 @@
 Reference guide for diagnosing unexpected VAT behavior, testing local code changes
 in adopter projects, and validating fixes before publishing.
 
-> **Quick reference**: Also available as `vibe-agent-toolkit:debugging` skill
-> when working in Claude Code.
+> **Contributor reference** for developers working on VAT itself. The former
+> `vibe-agent-toolkit:debugging` skill has been retired from the user-facing
+> plugin (0.1.32); the companion contributor guide now lives at
+> [`docs/contributing/vat-debugging.md`](./contributing/vat-debugging.md).
 
 ## Check Which Version Is Running
 

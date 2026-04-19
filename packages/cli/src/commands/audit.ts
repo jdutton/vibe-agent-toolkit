@@ -27,7 +27,7 @@ import {
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
-import { gitCheckIgnoredBatch, gitFindRoot, isGitIgnored, safePath } from '@vibe-agent-toolkit/utils';
+import { gitCheckIgnoredBatch, gitFindRoot, isAbsolutePath, isGitIgnored, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import picomatch from 'picomatch';
 
@@ -35,6 +35,7 @@ import { handleCommandError } from '../utils/command-error.js';
 import { loadConfig } from '../utils/config-loader.js';
 import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
+import { renderSkillQualityFooter } from '../utils/skill-quality-footer.js';
 import { computeConfigVerdicts } from '../utils/verdict-helpers.js';
 
 import { buildHierarchicalOutput } from './audit/hierarchical-output.js';
@@ -56,8 +57,11 @@ export interface AuditCommandOptions {
 /** Resource type constant for agent skills, avoiding duplicate string literals. */
 const RESOURCE_TYPE_AGENT_SKILL: ValidationResult['type'] = 'agent-skill';
 
-/** Config-aware context for VAT project scanning. Built once per audit, passed through recursion. */
-interface VATProjectContext {
+/**
+ * Config-aware context for VAT project scanning. Built once per audit, passed through recursion.
+ * @internal Exported for integration testing only.
+ */
+export interface VATProjectContext {
   /** Map of absolute SKILL.md path → merged SkillPackagingConfig (without validation.allow) */
   skillConfigs: Map<string, SkillPackagingConfig>;
 }
@@ -90,44 +94,177 @@ function mergeSkillConfigForAudit(
   return packagingConfig;
 }
 
+const VAT_CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
+
 /**
- * Build config-aware context when auditing inside a VAT project.
- * Checks for vibe-agent-toolkit.config.yaml at the scan root only (no
- * directory walking). Returns null if no config or no skills section found.
+ * Collect sub-directories of `dir` that should be visited during the config
+ * root walk. Skips `.git` and gitignored directories.
  */
-async function buildVATProjectContext(
-  scanRoot: string,
-  logger: ReturnType<typeof createLogger>
-): Promise<VATProjectContext | null> {
-  const config = loadConfig(scanRoot);
-  if (config?.skills === undefined) {
-    return null;
+function collectVisitableSubdirs(
+  dir: string,
+  gitRoot: string | null,
+  includeArtifacts: boolean,
+  logger: ReturnType<typeof createLogger>,
+): string[] {
+  let entries: fs.Dirent[];
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dir comes from controlled filesystem walk
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return []; // unreadable directory — skip
   }
-  const configRoot = scanRoot;
+
+  const subdirs = entries
+    .filter(e => e.isDirectory() && e.name !== '.git')
+    .map(e => safePath.join(dir, e.name));
+
+  const gitIgnoredMap = buildGitIgnoreMap(subdirs, gitRoot, includeArtifacts);
+
+  return subdirs.filter(fullPath => {
+    if (gitIgnoredMap !== null && gitIgnoredMap.get(fullPath) === true) {
+      logger.debug(`findAllConfigRoots: skipping gitignored dir: ${fullPath}`);
+      return false;
+    }
+    return true;
+  });
+}
+
+/**
+ * Walk the filesystem under `scanRoot` to find all directories containing a
+ * `vibe-agent-toolkit.config.yaml`. Respects gitignore semantics (skips
+ * `.git` and gitignored directories) so the walk stays fast on large monorepos.
+ *
+ * Always includes `scanRoot` itself if a config exists there.
+ */
+function findAllConfigRoots(
+  scanRoot: string,
+  gitRoot: string | null,
+  includeArtifacts: boolean,
+  logger: ReturnType<typeof createLogger>,
+): string[] {
+  const configRoots: string[] = [];
+  const queue: string[] = [scanRoot];
+
+  while (queue.length > 0) {
+    const dir = queue.shift();
+    if (dir === undefined) break;
+
+    // Check if this dir has a config
+    const configPath = safePath.join(dir, VAT_CONFIG_FILENAME);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dir comes from controlled filesystem walk
+    if (fs.existsSync(configPath)) {
+      configRoots.push(dir);
+    }
+
+    const subdirs = collectVisitableSubdirs(dir, gitRoot, includeArtifacts, logger);
+    for (const subdir of subdirs) {
+      queue.push(subdir);
+    }
+  }
+
+  return configRoots;
+}
+
+/**
+ * Load skill configs from one config root and merge into the shared map.
+ * "Nearest ancestor wins": a config closer to the SKILL.md (longer path)
+ * overrides a shallower one for the same skill path.
+ *
+ * @param configRoot - The directory containing this config file
+ * @param skillConfigs - Accumulated map of absPath → SkillPackagingConfig
+ * @param configRootBySkill - Tracks which configRoot registered each skill path (for depth comparison)
+ */
+async function mergeConfigRootIntoMap(
+  configRoot: string,
+  skillConfigs: Map<string, SkillPackagingConfig>,
+  configRootBySkill: Map<string, string>,
+  logger: ReturnType<typeof createLogger>,
+): Promise<void> {
+  let config: ReturnType<typeof loadConfig>;
+  try {
+    config = loadConfig(configRoot);
+  } catch (error) {
+    // Invalid config — skip this root silently (log at debug)
+    logger.debug(`Config-aware audit: skipping invalid config in ${configRoot}: ${String(error)}`);
+    return;
+  }
+
+  if (config?.skills === undefined) return;
 
   try {
     const discovered = await discoverSkillsFromConfig(config.skills, configRoot);
-    if (discovered.length === 0) {
-      return null;
-    }
-
     const { defaults, config: perSkillConfig } = config.skills;
-    const skillConfigs = new Map<string, SkillPackagingConfig>();
 
     for (const skill of discovered) {
+      const absPath = safePath.resolve(skill.sourcePath);
       const packagingConfig = mergeSkillConfigForAudit(
         defaults as Record<string, unknown> | undefined,
         perSkillConfig?.[skill.name] as Record<string, unknown> | undefined,
       );
-      skillConfigs.set(safePath.resolve(skill.sourcePath), packagingConfig);
+
+      // Nearest ancestor wins: deeper configRoot (longer path) overrides shallower.
+      const existingRoot = configRootBySkill.get(absPath);
+      if (existingRoot === undefined || configRoot.length > existingRoot.length) {
+        skillConfigs.set(absPath, packagingConfig);
+        configRootBySkill.set(absPath, configRoot);
+      }
     }
 
-    logger.debug(`Config-aware audit: found ${skillConfigs.size} skill(s) in VAT project`);
-    return { skillConfigs };
+    logger.debug(`Config-aware audit: found ${discovered.length} skill(s) in ${configRoot}`);
   } catch (error) {
-    logger.debug(`Config-aware audit: failed to discover skills: ${String(error)}`);
+    logger.debug(`Config-aware audit: failed to discover skills in ${configRoot}: ${String(error)}`);
+  }
+}
+
+/**
+ * Build config-aware context when auditing inside a VAT project.
+ *
+ * When `recursive` is true, walks the filesystem under `scanRoot` to find ALL
+ * nested `vibe-agent-toolkit.config.yaml` files and merges skill configs from
+ * each. The "nearest ancestor" rule applies: a config file closer to a
+ * SKILL.md (deeper in the tree) overrides a shallower one for the same skill.
+ *
+ * When `recursive` is false, only inspects the `scanRoot` config (original
+ * behaviour).
+ *
+ * Returns null if no config with a skills section is found anywhere.
+ */
+async function buildVATProjectContext(
+  scanRoot: string,
+  logger: ReturnType<typeof createLogger>,
+  recursive = true,
+): Promise<VATProjectContext | null> {
+  let configRoots: string[];
+
+  if (recursive) {
+    const gitRoot = resolveGitRootForScan(scanRoot, undefined);
+    configRoots = findAllConfigRoots(scanRoot, gitRoot, false, logger);
+  } else {
+    // Non-recursive: only look at scanRoot
+    const configPath = safePath.join(scanRoot, VAT_CONFIG_FILENAME);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- scanRoot is a controlled parameter
+    configRoots = fs.existsSync(configPath) ? [scanRoot] : [];
+  }
+
+  if (configRoots.length === 0) {
     return null;
   }
+
+  // Build merged map. Process shallower dirs first so deeper dirs can override.
+  const sortedRoots = [...configRoots].sort((a, b) => a.length - b.length);
+  const skillConfigs = new Map<string, SkillPackagingConfig>();
+  const configRootBySkill = new Map<string, string>();
+
+  for (const configRoot of sortedRoots) {
+    await mergeConfigRootIntoMap(configRoot, skillConfigs, configRootBySkill, logger);
+  }
+
+  if (skillConfigs.size === 0) {
+    return null;
+  }
+
+  logger.debug(`Config-aware audit: total ${skillConfigs.size} skill(s) across ${configRoots.length} config root(s)`);
+  return { skillConfigs };
 }
 
 /**
@@ -579,9 +716,14 @@ export async function auditCommand(
 
     const effectiveSettings = await resolveEffectiveSettings(options, scanPath, logger);
 
+    // Build config-aware context (same shape used by directory/file scanning)
+    // so compat analysis can honor config-layer `targets` declarations.
+    // Scoped to the derived config root — the directory closest to the audit target.
+    const vatContextForCompat = await buildVATProjectContext(deriveConfigRoot(targetPath), logger, recursive);
+
     // Run compatibility analysis if --compat flag is set
     const compatMap = options.compat
-      ? await runCompatAnalysis(results, logger, effectiveSettings)
+      ? await runCompatAnalysis(results, logger, effectiveSettings, vatContextForCompat)
       : undefined;
 
     const verbose = options.verbose ?? false;
@@ -635,7 +777,17 @@ export async function getValidationResults(
     const stat = await fs.stat(scanPath);
     if (stat.isDirectory()) {
       logger.debug('Scanning directory for resources');
-      return scanDirectory(scanPath, recursive, options, logger);
+
+      // Merge resources.exclude from config with --exclude CLI flag patterns.
+      // Both use the same picomatch semantics. Do NOT mutate options.
+      const config = loadConfig(deriveConfigRoot(scanPath));
+      const configExcludes = config?.resources?.exclude ?? [];
+      const mergedOptions: AuditCommandOptions =
+        configExcludes.length > 0
+          ? { ...options, exclude: [...(options.exclude ?? []), ...configExcludes] }
+          : options;
+
+      return scanDirectory(scanPath, recursive, mergedOptions, logger);
     }
   } catch {
     // Path doesn't exist or not accessible, let validate() handle it
@@ -648,14 +800,63 @@ export async function getValidationResults(
 }
 
 /**
+ * Resolve the config-layer targets to pass to `analyzeCompatibility` for a
+ * single plugin directory.
+ *
+ * Strategy for multi-skill plugins: take the **union** of every in-plugin
+ * skill's `targets`. Rationale — a plugin is only "covered" for a target when
+ * it can satisfy every skill it ships, so the plugin-level declaration should
+ * include any target that any of its skills declares. This mirrors how the
+ * verdict engine treats the plugin as a whole rather than slicing
+ * capabilities per-skill. Skills that omit `targets` contribute nothing
+ * (their declaration is silent, not zero).
+ *
+ * Returns `undefined` when there is no config context, no skills in the
+ * plugin, or no skill declares targets — which preserves the pre-existing
+ * behavior (plugin.json / marketplace.json wins; otherwise undeclared).
+ */
+function resolveConfigTargetsForPlugin(
+  pluginDir: string,
+  vatContext: VATProjectContext | null,
+): Target[] | undefined {
+  if (vatContext === null) return undefined;
+
+  const pluginDirAbs = safePath.resolve(pluginDir);
+  const union = new Set<Target>();
+
+  for (const [skillPathAbs, packagingConfig] of vatContext.skillConfigs) {
+    const rel = safePath.relative(pluginDirAbs, skillPathAbs);
+    // Skill lives inside the plugin directory iff relative path does not
+    // start with '..' and is not absolute.
+    if (rel === '' || rel.startsWith('..') || isAbsolutePath(rel)) continue;
+
+    const skillTargets = packagingConfig.targets;
+    if (skillTargets === undefined) continue;
+    for (const t of skillTargets) {
+      union.add(t);
+    }
+  }
+
+  return union.size === 0 ? undefined : [...union];
+}
+
+/**
  * Run compatibility analysis on plugin results and return a map of path -> CompatibilityResult.
  * Non-plugin results are skipped silently.
  * When effectiveSettings is provided, also runs settings conflict detection.
+ *
+ * When vatContext is provided, config-layer `targets` declarations are
+ * threaded through to the analyzer so `vat audit .` inside a VAT project
+ * matches `vat skills validate` verdicts. See
+ * {@link resolveConfigTargetsForPlugin} for the multi-skill union strategy.
+ *
+ * @internal Exported for integration testing only — not part of the public CLI API.
  */
-async function runCompatAnalysis(
+export async function runCompatAnalysis(
   results: ValidationResult[],
   logger: ReturnType<typeof createLogger>,
-  effectiveSettings?: EffectiveSettings
+  effectiveSettings?: EffectiveSettings,
+  vatContext: VATProjectContext | null = null,
 ): Promise<Map<string, CompatibilityResult>> {
   const compatMap = new Map<string, CompatibilityResult>();
 
@@ -664,7 +865,11 @@ async function runCompatAnalysis(
 
     try {
       logger.debug(`Running compatibility analysis for: ${result.path}`);
-      const compat = await analyzeCompatibility(result.path);
+      const configTargets = resolveConfigTargetsForPlugin(result.path, vatContext);
+      const analyzeOptions = configTargets === undefined
+        ? undefined
+        : { configTargets };
+      const compat = await analyzeCompatibility(result.path, analyzeOptions);
 
       // Settings conflict detection (when --settings flag is used)
       if (effectiveSettings === undefined) {
@@ -874,7 +1079,33 @@ function handleAuditResults(
     logger.info(`Audit successful: ${successCount} file(s) passed`);
   }
 
+  renderAuditFooter(results, logger);
   process.exit(0);
+}
+
+/**
+ * Render the skill-quality checklist footer when audit results contain
+ * skill-level findings (warnings/errors on SKILL.md files) or when any of
+ * the newer skill-quality codes fired.
+ */
+function renderAuditFooter(
+  results: ValidationResult[],
+  logger: ReturnType<typeof createLogger>,
+): void {
+  const emittedCodes = new Set<string>();
+  let hasSkillFindings = false;
+
+  for (const result of results) {
+    const isSkill = result.type === RESOURCE_TYPE_AGENT_SKILL;
+    for (const issue of result.issues) {
+      emittedCodes.add(issue.code);
+      if (isSkill && (issue.severity === 'error' || issue.severity === 'warning')) {
+        hasSkillFindings = true;
+      }
+    }
+  }
+
+  renderSkillQualityFooter(logger, hasSkillFindings, emittedCodes);
 }
 
 function logErrors(
@@ -1100,9 +1331,12 @@ async function scanDirectory(
   const resolvedGitRoot = resolveGitRootForScan(dirPath, gitRoot);
 
   // Build config-aware context on first call in a VAT project.
-  // Checks for config at the scan root only (the directory the user pointed at).
+  // When recursive, walks all nested config files under resolvedBaseDir.
+  // When non-recursive, only uses the config at resolvedBaseDir itself.
+  // Guard: only build when inside a git repo (ensures scan roots are VAT
+  // projects, not arbitrary tmpdir fixtures in tests).
   const resolvedVatContext = vatContext === undefined && resolvedGitRoot !== null
-    ? await buildVATProjectContext(resolvedBaseDir, logger)
+    ? await buildVATProjectContext(resolvedBaseDir, logger, recursive)
     : (vatContext ?? null);
 
   // Compile picomatch for user-supplied --exclude patterns
@@ -1293,5 +1527,6 @@ function logHierarchicalSummary(
     logger.info(`Audit successful: ${totalSkills} skill(s) passed`);
   }
 
+  renderAuditFooter(results, logger);
   process.exit(0);
 }

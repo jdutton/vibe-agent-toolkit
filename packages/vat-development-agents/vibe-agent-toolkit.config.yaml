@@ -20,20 +20,37 @@ skills:
       excludeReferencesFromBundle:
         rules:
           - patterns: ["docs/**"]
-    authoring:
-      # Follow one hop so the sibling skill-quality-checklist.md gets bundled.
-      # External docs/ references are intentionally left as text pointers.
-      linkFollowDepth: 1
+    vat-agent-authoring:
+      # vat-skill-review is now a sibling standalone skill, so no transclusion needed.
+      # External monorepo docs are intentionally left as text pointers.
+      linkFollowDepth: 0
       excludeReferencesFromBundle:
         rules:
           - patterns: ["docs/**"]
-    debugging:
+    vat-skill-authoring:
+      # External monorepo docs are intentionally left as text pointers.
       linkFollowDepth: 0
-      # External monorepo docs and package CLAUDE.md files are intentionally
-      # left as text pointers.
       excludeReferencesFromBundle:
         rules:
-          - patterns: ["docs/**", "packages/*/CLAUDE.md"]
+          - patterns: ["docs/**"]
+    vat-skill-review:
+      # External monorepo docs are intentionally left as text pointers.
+      linkFollowDepth: 0
+      excludeReferencesFromBundle:
+        rules:
+          - patterns: ["docs/**"]
+    vat-rag:
+      # External monorepo docs and package READMEs are intentionally left as text pointers.
+      linkFollowDepth: 0
+      excludeReferencesFromBundle:
+        rules:
+          - patterns: ["docs/**", "packages/**/README.md"]
+    vat-adoption-and-configuration:
+      # External monorepo docs are intentionally left as text pointers.
+      linkFollowDepth: 0
+      excludeReferencesFromBundle:
+        rules:
+          - patterns: ["docs/**"]
 
 claude:
   marketplaces:

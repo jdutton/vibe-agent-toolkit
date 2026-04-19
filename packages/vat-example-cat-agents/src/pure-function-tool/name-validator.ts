@@ -8,9 +8,6 @@ import {
   type NameValidationResult,
 } from '../types/schemas.js';
 
-// SonarQube: Disable "Do not call Array#push() multiple times" - conditional pushes based on validation logic
-// NOSONAR
-
 /**
  * Input schema for name validation
  */
@@ -237,8 +234,10 @@ export function critiqueCatName(
   const result = validateCatName(name, characteristics);
   const lines: string[] = [];
 
-  lines.push('=== Madam Fluffington\'s Naming Critique ===\n');
-  lines.push('*adjusts diamond collar and regards you with piercing blue eyes*\n');
+  lines.push(
+    '=== Madam Fluffington\'s Naming Critique ===\n',
+    '*adjusts diamond collar and regards you with piercing blue eyes*\n',
+  );
 
   if (characteristics) {
     lines.push('The cat in question:');
@@ -249,31 +248,43 @@ export function critiqueCatName(
     if (characteristics.physical.breed) {
       lines.push(`  • Breed: ${characteristics.physical.breed}`);
     }
-    lines.push(`  • Personality: ${characteristics.behavioral.personality.join(', ')}`);
-    lines.push('');
+    lines.push(
+      `  • Personality: ${characteristics.behavioral.personality.join(', ')}`,
+      '',
+    );
   }
 
-  lines.push(`Proposed name: "${name}"`);
-  lines.push(`Verdict: ${result.status.toUpperCase()}\n`);
-  lines.push(result.reason);
+  lines.push(
+    `Proposed name: "${name}"`,
+    `Verdict: ${result.status.toUpperCase()}\n`,
+    result.reason,
+  );
 
   if (result.suggestedFixes && result.suggestedFixes.length > 0) {
-    lines.push('\n*extends one elegant paw*');
-    lines.push('May I suggest:');
+    lines.push(
+      '\n*extends one elegant paw*',
+      'May I suggest:',
+    );
     for (const fix of result.suggestedFixes) {
       lines.push(`  • ${fix}`);
     }
   }
 
   if (result.status === 'valid') {
-    lines.push('\n*purrs contentedly*');
-    lines.push('You may proceed with this name. I approve.');
+    lines.push(
+      '\n*purrs contentedly*',
+      'You may proceed with this name. I approve.',
+    );
   } else if (result.status === 'invalid') {
-    lines.push('\n*turns away and begins grooming*');
-    lines.push('I refuse to discuss this further until you present a PROPER name.');
+    lines.push(
+      '\n*turns away and begins grooming*',
+      'I refuse to discuss this further until you present a PROPER name.',
+    );
   } else {
-    lines.push('\n*tail swishes thoughtfully*');
-    lines.push('I shall tolerate this name, but know that I find it... uninspired.');
+    lines.push(
+      '\n*tail swishes thoughtfully*',
+      'I shall tolerate this name, but know that I find it... uninspired.',
+    );
   }
 
   return lines.join('\n');

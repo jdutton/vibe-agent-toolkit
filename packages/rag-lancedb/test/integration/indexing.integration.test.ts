@@ -66,9 +66,8 @@ async function indexTestChunksWithMetadata<TMetadata extends Record<string, unkn
   );
 
   const rows = ragChunks.map((chunk) => {
-    type ChunkWithCustomMetadata = typeof chunk & TMetadata;
     return chunkToLanceRow<TMetadata>(
-      { ...chunk, ...metadataValues } as ChunkWithCustomMetadata,
+      { ...chunk, ...metadataValues },
       generateContentHash(parseResult.content),
       schema
     );
@@ -470,9 +469,8 @@ Content for section 4 with even more text.`
 
       // Add custom metadata to security chunks
       const securityRows = securityRAGChunks.map((chunk) => {
-        type ChunkWithCustomMetadata = typeof chunk & CustomMetadata;
         const row = chunkToLanceRow<CustomMetadata>(
-          { ...chunk, domain: 'security', priority: 1 } as ChunkWithCustomMetadata,
+          { ...chunk, domain: 'security', priority: 1 },
           generateContentHash(securityParseResult.content),
           CustomSchema
         );
@@ -500,9 +498,8 @@ Content for section 4 with even more text.`
 
       // Add custom metadata to API chunks
       const apiRows = apiRAGChunks.map((chunk) => {
-        type ChunkWithCustomMetadata = typeof chunk & CustomMetadata;
         const row = chunkToLanceRow<CustomMetadata>(
-          { ...chunk, domain: 'api', priority: 2 } as ChunkWithCustomMetadata,
+          { ...chunk, domain: 'api', priority: 2 },
           generateContentHash(apiParseResult.content),
           CustomSchema
         );
@@ -528,7 +525,7 @@ Content for section 4 with even more text.`
       // All results should be from security domain
       expect(result.chunks.length).toBeGreaterThan(0);
       expect(
-        result.chunks.every((chunk) => (chunk as typeof chunk & CustomMetadata).domain === 'security')
+        result.chunks.every((chunk) => chunk.domain === 'security')
       ).toBe(true);
 
       // Clean up
@@ -556,7 +553,7 @@ Content for section 4 with even more text.`
 
       expect(result.chunks.length).toBeGreaterThan(0);
       expect(
-        result.chunks.every((chunk) => (chunk as typeof chunk & CustomMetadata).priority === 1)
+        result.chunks.every((chunk) => chunk.priority === 1)
       ).toBe(true);
 
       // Clean up
@@ -584,7 +581,7 @@ Content for section 4 with even more text.`
 
       expect(result.chunks.length).toBeGreaterThan(0);
       expect(
-        result.chunks.every((chunk) => (chunk as typeof chunk & CustomMetadata).active === true)
+        result.chunks.every((chunk) => chunk.active === true)
       ).toBe(true);
 
       // Clean up
@@ -647,10 +644,10 @@ Content for section 4 with even more text.`
 
       expect(result.chunks.length).toBeGreaterThan(0);
       expect(
-        result.chunks.every((chunk) => (chunk as typeof chunk & CustomMetadata).domain === 'security')
+        result.chunks.every((chunk) => chunk.domain === 'security')
       ).toBe(true);
       expect(
-        result.chunks.every((chunk) => (chunk as typeof chunk & CustomMetadata).priority === 1)
+        result.chunks.every((chunk) => chunk.priority === 1)
       ).toBe(true);
 
       // Clean up

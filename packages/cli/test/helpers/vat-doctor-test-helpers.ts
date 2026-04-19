@@ -106,7 +106,7 @@ export async function mockDoctorEnvironment(
   };
 
   // Cast to vi.Mock type (mocked modules return Mock types)
-  (execSync as ReturnType<typeof vi.fn>).mockImplementation((cmd: string): Buffer => {
+  vi.mocked(execSync).mockImplementation((cmd: string): Buffer => {
     const cmdStr = cmd.toString();
 
     if (cmdStr.includes('npm view vibe-agent-toolkit version')) {
@@ -167,7 +167,7 @@ export async function mockDoctorFileSystem(
 
   const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 
-  (readFileSync as ReturnType<typeof vi.fn>).mockImplementation((path: string | Buffer | URL): string => {
+  vi.mocked(readFileSync).mockImplementation((path): string => {
     // Normalize path separators for cross-platform compatibility (Windows uses backslashes)
     const pathStr = path.toString().replaceAll('\\', '/');
 
@@ -191,7 +191,7 @@ export async function mockDoctorFileSystem(
     return '';
   });
 
-  (existsSync as ReturnType<typeof vi.fn>).mockImplementation((path: string | Buffer | URL): boolean => {
+  vi.mocked(existsSync).mockImplementation((path): boolean => {
     // Normalize path separators for cross-platform compatibility (Windows uses backslashes)
     const pathStr = path.toString().replaceAll('\\', '/');
 

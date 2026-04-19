@@ -80,8 +80,9 @@ describe('validateSkill', () => {
       createSkillContent({ name: 'claude-helper', description: 'Test' }, ''),
     );
 
-    expect(result.status).toBe('error');
-    expectError(result, 'SKILL_NAME_RESERVED_WORD');
+    // RESERVED_WORD_IN_NAME is a warning — does not escalate to error status.
+    expect(result.status).not.toBe('error');
+    expectWarning(result, 'RESERVED_WORD_IN_NAME');
   });
 
   it('should detect XML tags in description', async () => {

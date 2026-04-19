@@ -18,9 +18,7 @@ createPureFunctionTestSuite({
   outputSchema: SimpleValidationOutputSchema,
   getToolFromResult: (result) => result.tool,
   executeFunction: async (result, input) => {
-    // Type assertion needed because of generic tool type constraints
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const execute = result.tool.execute as any;
+    const execute = result.tool.execute;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     return await execute(input, {} as any);
   },

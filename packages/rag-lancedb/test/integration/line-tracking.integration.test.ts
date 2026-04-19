@@ -107,7 +107,7 @@ Line 16 provides closing remarks.`
       const currChunk = sortedChunks[i];
 
       // Current chunk should start after previous chunk ends
-      if (prevChunk && prevChunk.endLine !== undefined && currChunk.startLine !== undefined) {
+      if (prevChunk?.endLine !== undefined && currChunk.startLine !== undefined) {
         expect(currChunk.startLine).toBeGreaterThan(prevChunk.endLine);
       }
     }

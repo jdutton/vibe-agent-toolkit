@@ -516,7 +516,7 @@ Content
         assertions: (result) => {
           expect(result.headings).toHaveLength(1);
           expectHeadingStructure(
-            result.headings[0]!,
+            result.headings[0],
             {
               text: 'Main',
               children: [

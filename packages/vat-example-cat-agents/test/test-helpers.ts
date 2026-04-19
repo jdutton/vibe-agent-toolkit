@@ -118,7 +118,7 @@ export async function findInvalidSyllableLine(
   options: { maxAttempts?: number } = {},
 ): Promise<boolean> {
   const { maxAttempts = 20 } = options;
-  const lineKey = `line${lineNumber}` as 'line1' | 'line2' | 'line3';
+  const lineKey = `line${lineNumber}` as const;
   const lineLabel = `Line ${lineNumber}`;
 
   for (let index = 0; index < maxAttempts; index++) {

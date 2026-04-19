@@ -1,12 +1,12 @@
 ---
-name: org-admin
-description: Anthropic org administration for Enterprise/Team admins. Requires ANTHROPIC_ADMIN_API_KEY. Use for org user management, API key auditing, cost/usage reporting, workspace administration, and enterprise skill distribution via the Anthropic Admin API. Not for regular users — admin access required.
+name: vat-enterprise-org
+description: Use for Anthropic Enterprise/Team org administration via the Admin API — user management, API-key auditing, cost/usage reporting, workspace admin, and enterprise skill distribution. Requires ANTHROPIC_ADMIN_API_KEY.
 ---
 
 # Claude Org Administration
 
 **For Anthropic org admins only.** Requires `ANTHROPIC_ADMIN_API_KEY` (Enterprise/Team plan).
-If you don't have an admin key, this skill is not for you — use `vibe-agent-toolkit:distribution`
+If you don't have an admin key, this skill is not for you — use `vibe-agent-toolkit:vat-skill-distribution`
 for local plugin management instead.
 
 ## Two Ways to Use It

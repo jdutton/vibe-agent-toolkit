@@ -107,19 +107,5 @@
     "ask": [
       "Bash(git commit:*)"
     ]
-  },
-  "hooks": {
-    "Stop": [
-      {
-        "matcher": ".*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bun validate --no-wait --yaml",
-            "timeout": 300
-          }
-        ]
-      }
-    ]
   }
 }

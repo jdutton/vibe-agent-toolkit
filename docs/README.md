@@ -30,8 +30,8 @@ Welcome to the Vibe Agent Toolkit documentation.
 
 ## Example Packages
 
-- **[Utils Package](../packages/utils/)** - Shared utilities (path-utils, file-crawler, safe-exec)
-- **[Resources Package](../packages/resources/)** - Resource registry and link validation
+- **[Utils Package](../packages/utils/README.md)** - Shared utilities (path-utils, file-crawler, safe-exec)
+- **[Resources Package](../packages/resources/README.md)** - Resource registry and link validation
 
 ## Development Tools
 
