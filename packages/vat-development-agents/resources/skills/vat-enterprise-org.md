@@ -6,7 +6,7 @@ description: Use for Anthropic Enterprise/Team org administration via the Admin 
 # Claude Org Administration
 
 **For Anthropic org admins only.** Requires `ANTHROPIC_ADMIN_API_KEY` (Enterprise/Team plan).
-If you don't have an admin key, this skill is not for you — use `vibe-agent-toolkit:distribution`
+If you don't have an admin key, this skill is not for you — use `vibe-agent-toolkit:vat-skill-distribution`
 for local plugin management instead.
 
 ## Two Ways to Use It
