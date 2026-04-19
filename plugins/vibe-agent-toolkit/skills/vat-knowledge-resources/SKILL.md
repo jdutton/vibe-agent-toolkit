@@ -1,5 +1,5 @@
 ---
-name: resources
+name: vat-knowledge-resources
 description: Use when working with VAT resource collections, per-directory frontmatter schema validation, link validation, or the vat resources command. Covers collection configuration, schema mapping, and validation modes.
 ---
 

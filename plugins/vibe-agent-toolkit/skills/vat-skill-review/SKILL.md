@@ -1,6 +1,21 @@
-# Skill Quality Checklist
+---
+name: vat-skill-review
+description: Use when reviewing a skill before publication or running `vat skill review`. Pre-publication quality checklist grouped into general (all skills) and CLI-backed items, tied to VAT validation codes and Anthropic's skill-authoring best practices.
+---
+
+# Skill Quality Checklist (vat skill review)
 
 Work through this checklist before publishing a skill. Items are grouped into general (all skills) and CLI-backed (skills that bundle and invoke scripts).
+
+This content is also surfaced by the `vat skill review` CLI command, which formats the checklist around a specific skill's validation output.
+
+## Guidance freshness
+
+Skill authoring standards move fast. Before applying this checklist to a non-trivial change:
+
+- Re-fetch the source of `docs/external/anthropic-skill-authoring-best-practices.md` named in its preamble. If the content has shifted, update the cache and this checklist together.
+- Web search for the latest Claude Code release notes when trigger semantics, frontmatter rules, or packaging behavior may have changed. Don't rely on training-data recall.
+- Promote any manual item below to a programmatic validator when the pattern is detectable from file contents — see the shift-left notes in `packages/vat-development-agents/resources/skills/CLAUDE.md`.
 
 ## About this checklist
 
