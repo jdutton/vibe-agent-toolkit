@@ -10,7 +10,7 @@ import { z } from 'zod';
 /**
  * Skill name pattern: kebab-case segments, optionally colon-namespaced as {plugin}:{skill}.
  *
- * Examples: "my-skill", "vibe-agent-toolkit:resources"
+ * Examples: "my-skill", "vibe-agent-toolkit:vat-audit"
  *
  * The colon namespace is intentional design — it is the `{plugin-name}:{sub-skill}` separator
  * used both in SKILL.md frontmatter and in vat.skills[].name in package.json.
@@ -22,7 +22,7 @@ import { z } from 'zod';
 export const SKILL_NAME_REGEX = /^[a-z0-9]+(-[a-z0-9]+)*(:[a-z0-9]+(-[a-z0-9]+)*)?$/;
 export const SKILL_NAME_REGEX_MESSAGE =
   'Skill name must be lowercase kebab-case, optionally namespaced as {plugin}:{skill} ' +
-  '(e.g. "my-skill" or "vibe-agent-toolkit:resources")';
+  '(e.g. "my-skill" or "vibe-agent-toolkit:vat-audit")';
 
 /**
  * Packaging options for skill distribution
