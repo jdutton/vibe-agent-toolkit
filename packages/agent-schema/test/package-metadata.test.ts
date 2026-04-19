@@ -10,7 +10,7 @@ import {
 
 // Test constants to avoid string duplication
 const TEST_SKILL_NAME = 'vat-cat-agents';
-const TEST_NAMESPACED_SKILL = 'vibe-agent-toolkit:resources';
+const TEST_NAMESPACED_SKILL = 'vibe-agent-toolkit:vat-audit';
 const TEST_AGENT_NAME = 'agent-generator';
 const TEST_AGENT_PATH = './agents/agent-generator';
 const TEST_FUNCTION_NAME = 'haiku-validator';
