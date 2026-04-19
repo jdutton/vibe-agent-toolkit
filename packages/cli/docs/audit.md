@@ -276,7 +276,7 @@ Warnings indicate potential issues but don't prevent usage:
 | `SKILL_MISSING_DESCRIPTION` | error | `description` field missing from frontmatter | Add `description` field |
 | `SKILL_NAME_INVALID` | error | Name contains invalid characters | Use only letters, numbers, hyphens, underscores |
 | `SKILL_DESCRIPTION_TOO_LONG` | error | Description exceeds 500 characters | Shorten description |
-| `SKILL_NAME_RESERVED_WORD` | error | Name is a reserved word | Choose a different name |
+| `RESERVED_WORD_IN_NAME` | warning | Name contains `anthropic` or `claude`; Claude Code rejects non-certified skills using these words | Rename the skill to avoid these words |
 | `SKILL_NAME_XML_TAGS` | error | Name contains XML-like tags | Remove XML tags from name |
 | `SKILL_DESCRIPTION_XML_TAGS` | error | Description contains XML-like tags | Remove XML tags from description |
 | `SKILL_DESCRIPTION_EMPTY` | error | Description is empty or whitespace | Provide meaningful description |

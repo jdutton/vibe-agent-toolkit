@@ -12,7 +12,7 @@
  *    grouped by section. These are rendered as a ready-to-walk rubric so a
  *    human (or agent reviewer) can tick each item as they review.
  *
- * Source of truth: packages/vat-development-agents/resources/skills/skill-quality-checklist.md
+ * Source of truth: packages/vat-development-agents/resources/skills/vat-skill-review.md
  * Keep this file in sync with that document when the checklist changes.
  */
 
@@ -61,7 +61,7 @@ export const CHECKLIST_SECTIONS: readonly ChecklistSection[] = [
 export const CODE_TO_SECTION: Record<string, ChecklistSection> = {
   // Naming
   SKILL_NAME_INVALID: SEC_NAMING,
-  SKILL_NAME_RESERVED_WORD: SEC_NAMING,
+  RESERVED_WORD_IN_NAME: SEC_NAMING,
   SKILL_NAME_XML_TAGS: SEC_NAMING,
   SKILL_NAME_MISMATCHES_DIR: SEC_NAMING,
 

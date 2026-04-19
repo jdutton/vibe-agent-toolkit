@@ -13,13 +13,15 @@
     "version": "1.0",
     "skills": [
       "vibe-agent-toolkit",
-      "resources",
-      "distribution",
-      "authoring",
-      "audit",
-      "debugging",
-      "install",
-      "org-admin"
+      "vat-adoption-and-configuration",
+      "vat-knowledge-resources",
+      "vat-skill-distribution",
+      "vat-agent-authoring",
+      "vat-skill-authoring",
+      "vat-audit",
+      "vat-rag",
+      "vat-skill-review",
+      "vat-enterprise-org"
     ],
     "replaces": {
       "plugins": ["vat-development-agents"],

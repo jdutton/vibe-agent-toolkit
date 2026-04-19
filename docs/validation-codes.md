@@ -197,6 +197,13 @@ Best-practice checks about skill shape and content.
 - **Why it matters:** Agents resolve skills by name; a mismatch between the declared name and the directory the skill lives in usually indicates a copy/paste bug during authoring. Built outputs derive directory names from the frontmatter, so a mismatch at the source means the packaged artifact will appear under a different name than its source location suggests.
 - **Fix:** Align them — rename the directory to match `name`, or update `name` to match the directory.
 
+### `RESERVED_WORD_IN_NAME`
+
+- **Default:** `warning`
+- **What:** Frontmatter `name` contains a reserved word (`anthropic` or `claude`); Claude Code rejects non-certified skills using these words.
+- **Why it matters:** Claude Code refuses to install skills containing `anthropic` or `claude` in the `name` unless they come from Anthropic's official certified set. Catching this at validate time shifts the failure left — from "Claude Code silently rejects my install" to a warning in `vat audit` / `vat skills validate` before the skill ships. Warning (not error) because some adopters may have legitimate downstream reasons to keep the name and accept the install restriction.
+- **Fix:** Rename the skill to avoid `anthropic` or `claude` in the name (e.g. `claude-helper` → `conversation-helper`). Allow via `validation.severity: { RESERVED_WORD_IN_NAME: ignore }` if the skill is a certified Anthropic distribution.
+
 ### `SKILL_TIME_SENSITIVE_CONTENT`
 
 - **Default:** `info`

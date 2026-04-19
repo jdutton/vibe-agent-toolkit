@@ -340,6 +340,39 @@ describe('validateSkillForPackaging - Navigation file detection', () => {
 	});
 });
 
+describe('validateSkillForPackaging - Reserved word in name', () => {
+	it('should emit RESERVED_WORD_IN_NAME warning for name containing "claude"', async () => {
+		const tempDir = getTempDir();
+		const content = createSkillContent(
+			{ name: 'claude-helper', description: VALID_DESCRIPTION },
+			SKILL_HEADER_NO_TRAILING,
+		);
+		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, content);
+
+		const result = await validateSkillForPackaging(skillPath);
+
+		const issue = result.activeWarnings.find((e) => e.code === 'RESERVED_WORD_IN_NAME');
+		expect(issue).toBeDefined();
+		expect(issue?.severity).toBe('warning');
+		// Warning does not escalate status to error
+		expect(result.activeErrors.find((e) => e.code === 'RESERVED_WORD_IN_NAME')).toBeUndefined();
+	});
+
+	it('should not emit RESERVED_WORD_IN_NAME for a clean name', async () => {
+		const tempDir = getTempDir();
+		const content = createSkillContent(
+			{ name: 'my-tool', description: VALID_DESCRIPTION },
+			SKILL_HEADER_NO_TRAILING,
+		);
+		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, content);
+
+		const result = await validateSkillForPackaging(skillPath);
+
+		const issue = result.allErrors.find((e) => e.code === 'RESERVED_WORD_IN_NAME');
+		expect(issue).toBeUndefined();
+	});
+});
+
 describe('validateSkillForPackaging - Description validation', () => {
 	it('should pass for description >= 50 characters', async () => {
 		const tempDir = getTempDir();
@@ -425,6 +458,31 @@ describe('detectNameMismatchIssue', () => {
 		const issue = detectNameMismatchIssue('PDF-EXTRACTOR', PDF_EXTRACTOR_DIR, SKILL_PATH_FIXTURE);
 
 		expect(issue).toBeNull();
+	});
+
+	it('should return null when parent dir is "skills" (flat-layout plugin-root)', () => {
+		const issue = detectNameMismatchIssue('vibe-agent-toolkit', 'skills', '/repo/resources/skills/SKILL.md');
+
+		expect(issue).toBeNull();
+	});
+
+	it('should return null when parent dir is "resources" (generic container)', () => {
+		const issue = detectNameMismatchIssue('my-skill', 'resources', '/repo/resources/SKILL.md');
+
+		expect(issue).toBeNull();
+	});
+
+	it('should return null when parent dir is "SKILLS" (case-insensitive container check)', () => {
+		const issue = detectNameMismatchIssue('vibe-agent-toolkit', 'SKILLS', '/repo/SKILLS/SKILL.md');
+
+		expect(issue).toBeNull();
+	});
+
+	it('should still fire for typical per-dir mismatch (regression check)', () => {
+		const issue = detectNameMismatchIssue('processing-pdf', 'processing-pdfs', '/repo/skills/processing-pdfs/SKILL.md');
+
+		expect(issue).not.toBeNull();
+		expect(issue?.code).toBe('SKILL_NAME_MISMATCHES_DIR');
 	});
 });
 

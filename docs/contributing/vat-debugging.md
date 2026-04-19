@@ -1,14 +1,10 @@
----
-name: debugging
-description: >-
-  Debug unexpected VAT behavior, reproduce bugs, test local vibe-agent-toolkit
-  changes in adopter projects (VAT_ROOT_DIR), write failing tests before fixing,
-  and validate fixes with the full build pipeline before publishing
----
-
 # Debugging & Testing VAT Fixes
 
-Use this skill when VAT itself is behaving unexpectedly, you suspect a VAT bug,
+Contributor reference for debugging VAT itself: reproducing bugs, testing a local
+code change in adopter projects via `VAT_ROOT_DIR`, writing failing tests before
+fixing, and validating fixes with the full build pipeline before publishing.
+
+Use this guide when VAT itself is behaving unexpectedly, you suspect a VAT bug,
 or you need to test a local code change to vibe-agent-toolkit in another project.
 
 ## Step 1: Confirm the Version
@@ -79,7 +75,7 @@ Before changing VAT source code, write a test that reproduces the bug:
 - **CLI behavior** → add an integration test in `packages/cli/test/integration/`
 - **End-to-end workflow** → add a system test in `packages/cli/test/system/`
 
-See [docs/writing-tests.md](../../../../docs/writing-tests.md) for test patterns and
+See [docs/writing-tests.md](../writing-tests.md) for test patterns and
 the unit/integration/system classification guide.
 
 ## Step 5: Validate Before Committing
@@ -106,6 +102,6 @@ is safe to commit. Do not commit until `bun run validate` passes.
 
 ## See Also
 
-- [docs/debug-and-test-vat-fixes.md](../../../../docs/debug-and-test-vat-fixes.md) — Full reference
-- [docs/writing-tests.md](../../../../docs/writing-tests.md) — Test patterns and classification
-- [packages/cli/CLAUDE.md](../../../cli/CLAUDE.md) — CLI development guidelines
+- [docs/debug-and-test-vat-fixes.md](../debug-and-test-vat-fixes.md) — Full reference
+- [docs/writing-tests.md](../writing-tests.md) — Test patterns and classification
+- [packages/cli/CLAUDE.md](../../packages/cli/CLAUDE.md) — CLI development guidelines

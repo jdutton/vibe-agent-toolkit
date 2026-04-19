@@ -1,6 +1,6 @@
 ---
-name: org-admin
-description: Anthropic org admin (Enterprise/Team). Use for user management, API-key auditing, cost/usage reporting, workspace admin, and enterprise skill distribution via the Admin API. Requires ANTHROPIC_ADMIN_API_KEY.
+name: vat-enterprise-org
+description: Use for Anthropic Enterprise/Team org administration via the Admin API — user management, API-key auditing, cost/usage reporting, workspace admin, and enterprise skill distribution. Requires ANTHROPIC_ADMIN_API_KEY.
 ---
 
 # Claude Org Administration

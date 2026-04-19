@@ -392,6 +392,13 @@ function collectDescriptionIssue(
 const SKILL_DIR_NAME_PATTERN = /^[a-z][a-z0-9-]*$/;
 
 /**
+ * Generic container directory names that hold multiple skills in a flat layout.
+ * When SKILL.md lives directly inside one of these, the parent dir name carries
+ * no signal about what the skill is named — skip the mismatch check entirely.
+ */
+const GENERIC_CONTAINER_DIRS = new Set<string>(['skills', 'resources']);
+
+/**
  * Detect SKILL_NAME_MISMATCHES_DIR issue from a frontmatter `name` and a
  * parent directory name. Returns null when no mismatch should be reported.
  *
@@ -410,6 +417,9 @@ export function detectNameMismatchIssue(
     return null;
   }
   if (!SKILL_DIR_NAME_PATTERN.test(parentDir)) {
+    return null;
+  }
+  if (GENERIC_CONTAINER_DIRS.has(parentDir.toLowerCase())) {
     return null;
   }
 

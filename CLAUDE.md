@@ -733,23 +733,31 @@ VAT ships a plugin of skills for agents working on VAT itself. They live at `pac
 
 | Skill file | When to use |
 |---|---|
-| `SKILL.md` (root, name `vibe-agent-toolkit`) | Any VAT work — routes to the sub-skills below |
-| `vat-agent-authoring.md` | Authoring SKILL.md files, designing agent architectures, packaging options |
-| `vat-audit.md` | Running `vat audit`, interpreting `--compat` output, filtering noise |
-| `vat-resources.md` | Resource collections, frontmatter schema validation, `vat resources` |
-| `vat-skills-distribution.md` | `vat build`, plugin/marketplace config, npm publishing, `vat verify` |
-| `vat-debugging.md` | Reproducing VAT bugs, `VAT_ROOT_DIR` adopter testing, failing-test-first fixes |
-| `vat-install-architecture.md` | Designing or advising on VAT install/uninstall surfaces |
-| `vat-claude-org-admin.md` | Anthropic org admin (Enterprise/Team admins, `ANTHROPIC_ADMIN_API_KEY`) |
-| `skill-quality-checklist.md` | **Pre-publication checklist** — walk through before shipping any skill; also usable as a review rubric for existing skills |
+| `SKILL.md` (router, name `vibe-agent-toolkit`) | Any VAT work — routes to the sub-skills below |
+| `vat-adoption-and-configuration.md` | New project setup, `vibe-agent-toolkit.config.yaml` orientation, repo structure, vibe-validate integration, npm postinstall |
+| `vat-skill-authoring.md` | Authoring SKILL.md files: frontmatter, body structure, references, packagingOptions, validation overrides |
+| `vat-agent-authoring.md` | TypeScript portable agents: archetypes, `agent.yaml`, result envelopes, orchestration, runtime adapters |
+| `vat-audit.md` | Running `vat audit`, interpreting `--compat` output, `--exclude` noise filtering, CI usage |
+| `vat-knowledge-resources.md` | Resource collections, per-directory frontmatter schemas, `vat resources validate` |
+| `vat-skill-distribution.md` | `vat build`, `vat verify`, plugin/marketplace config, npm publishing with postinstall |
+| `vat-rag.md` | `vat rag index/query`, native embedding providers, vector store, extension points |
+| `vat-skill-review.md` | Pre-publication review rubric, validation-code reference, `vat skill review` CLI |
+| `vat-enterprise-org.md` | Anthropic Admin API: org users, cost/usage, workspace skills, `ANTHROPIC_ADMIN_API_KEY` |
 
-**For AI assistants**: If you're asked a question about VAT skill authoring, audit output, debugging, distribution, or publishing and you haven't invoked the matching skill, you're probably about to give a shallower answer than you could. Invoke first.
+**For AI assistants**: If you're asked a question about VAT skill authoring, audit output, distribution, or publishing and you haven't invoked the matching skill, you're probably about to give a shallower answer than you could. Invoke first.
+
+## Contributor Reference Docs
+
+Material for developers working on VAT itself (not for users of VAT) lives under [`docs/contributing/`](docs/contributing/):
+
+- [vat-debugging.md](docs/contributing/vat-debugging.md) — reproducing VAT bugs, `VAT_ROOT_DIR` adopter testing, failing-test-first fixes before landing changes
+- [vat-install-architecture.md](docs/contributing/vat-install-architecture.md) — design landscape for VAT's install/uninstall surfaces; read before proposing new install methods
 
 ## External Documentation Cache
 
-Cached copies of external guidance (e.g., Anthropic's skill-authoring best-practices doc) live under [`docs/external/`](docs/external/). Each cached file names its source URL and fetch date in its preamble.
+Cached copies of external guidance (e.g., Anthropic's skill-authoring best-practices doc) live under `docs/external/` — see [`anthropic-skill-authoring-best-practices.md`](docs/external/anthropic-skill-authoring-best-practices.md). Each cached file names its source URL and fetch date in its preamble.
 
-**Refresh policy for AI assistants and maintainers:** When a cached doc's fetch date is more than ~90 days old, or when a new Claude Code release changes Skill behavior, re-fetch the source, diff against the cache, and update the cache plus any VAT tooling that depends on it (primarily `packages/vat-development-agents/resources/skills/skill-quality-checklist.md`). The cache exists so VAT's opinions stay diffable against Anthropic's — do not let them silently drift.
+**Refresh policy for AI assistants and maintainers:** When a cached doc's fetch date is more than ~90 days old, or when a new Claude Code release changes Skill behavior, re-fetch the source, diff against the cache, and update the cache plus any VAT tooling that depends on it (primarily `packages/vat-development-agents/resources/skills/vat-skill-review.md`). The cache exists so VAT's opinions stay diffable against Anthropic's — do not let them silently drift.
 
 ## Questions?
 

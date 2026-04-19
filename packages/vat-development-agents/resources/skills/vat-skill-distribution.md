@@ -1,5 +1,5 @@
 ---
-name: distribution
+name: vat-skill-distribution
 description: Use when setting up `vat build`, configuring plugin distribution (marketplace, plugins, managed settings), npm publishing with postinstall hooks, or `vat verify` — the full pipeline from skill source to installed plugin.
 ---
 
@@ -12,7 +12,8 @@ This is the only install method VAT currently supports.
 
 For the full install landscape — Claude Desktop paths, enterprise CI deployment,
 Anthropic Cloud org management, MDM integration, and the `vat plugins uninstall`
-design — see [Install & Uninstall Architecture](vat-install-architecture.md).
+design — see the contributor reference at `docs/contributing/vat-install-architecture.md`
+in the `vibe-agent-toolkit` repo (contributor material, not bundled with this skill).
 
 ## Overview
 

@@ -1,9 +1,8 @@
----
-name: install
-description: VAT skill/plugin install and uninstall architecture — what's supported, what isn't, and the full design vision across file-based, cloud, MDM, and enterprise-CI methods. Read before designing any install/uninstall feature.
----
-
 # VAT Skill Install & Uninstall: Architecture and Vision
+
+Contributor reference: the full install/uninstall landscape VAT supports (and
+plans to support) across file-based, cloud, MDM, and enterprise-CI delivery
+methods. Read before designing any install/uninstall feature.
 
 ## The Problem Space
 

@@ -45,14 +45,16 @@ export interface SkillReviewCommandOptions {
 }
 
 /**
- * Resolve the caller's argument to the absolute path of a SKILL.md file.
+ * Resolve the caller's argument to the absolute path of a skill markdown file.
  *
- * Accepts either:
- * - a path to SKILL.md directly
+ * Accepts:
+ * - a path to a SKILL.md file directly
+ * - a path to any single-file skill (.md)
  * - a directory that contains SKILL.md at its root
  *
- * Throws a user-friendly error for other inputs (missing path, arbitrary
- * markdown file, directory without SKILL.md).
+ * Throws a user-friendly error for other inputs (missing path, non-.md file,
+ * directory without SKILL.md). Frontmatter validity is not checked here —
+ * the downstream packaging validator handles that.
  */
 export function resolveSkillPath(pathArg: string): string {
   const absolute = safePath.resolve(pathArg);
@@ -66,9 +68,9 @@ export function resolveSkillPath(pathArg: string): string {
   const stat = statSync(absolute);
 
   if (stat.isFile()) {
-    if (!absolute.endsWith('SKILL.md')) {
+    if (!absolute.endsWith('.md')) {
       throw new Error(
-        `Expected a SKILL.md file or a skill directory containing SKILL.md. Got: ${pathArg}`,
+        `Expected a markdown file (.md) or a skill directory. Got: ${pathArg}`,
       );
     }
     return absolute;
@@ -323,7 +325,7 @@ export function createSkillReviewCommand(): Command {
 
   command
     .description('Deep-review a single skill: automated findings plus a manual rubric walkthrough')
-    .argument('<path>', 'Path to a SKILL.md file or a skill directory containing SKILL.md')
+    .argument('<path>', 'Path to a SKILL.md file, a single-file skill (.md), or a skill directory containing SKILL.md')
     .option('--yaml', 'Emit machine-readable YAML on stdout (for CI consumption)')
     .option('--debug', 'Enable debug logging')
     .action(reviewCommand)
@@ -336,7 +338,7 @@ Description:
   they belong to, and prints the judgment-call items from that checklist
   as a walk-through rubric for a reviewer to complete.
 
-  Path: either a SKILL.md file or a directory containing SKILL.md at its root.
+  Path: a SKILL.md file, any single-file skill (.md), or a directory containing SKILL.md at its root.
   Config: when run inside a VAT project, the matching skills.config entry is
   used automatically (same packaging options as 'vat skills build/validate').
 

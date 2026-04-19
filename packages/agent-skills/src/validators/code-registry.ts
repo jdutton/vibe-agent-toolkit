@@ -37,6 +37,7 @@ export type IssueCode =
   | 'SKILL_DESCRIPTION_FILLER_OPENER'
   | 'SKILL_DESCRIPTION_WRONG_PERSON'
   | 'SKILL_NAME_MISMATCHES_DIR'
+  | 'RESERVED_WORD_IN_NAME'
   | 'SKILL_TIME_SENSITIVE_CONTENT'
   // Capability observations — what a skill requires from its runtime
   | 'CAPABILITY_LOCAL_SHELL'
@@ -179,6 +180,12 @@ export const CODE_REGISTRY: Record<IssueCode, CodeRegistryEntry> = {
     'Frontmatter name field does not match the skill parent directory name.',
     'Align them: rename the directory to match name, or update name to match the directory.',
     'skill_name_mismatches_dir',
+  ),
+  RESERVED_WORD_IN_NAME: entry(
+    'warning',
+    'Frontmatter `name` contains a reserved word (`anthropic` or `claude`); Claude Code rejects non-certified skills using these words.',
+    'Rename the skill to avoid `anthropic` or `claude` in the name.',
+    'reserved_word_in_name',
   ),
   SKILL_TIME_SENSITIVE_CONTENT: entry(
     'info',

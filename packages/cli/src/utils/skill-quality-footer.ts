@@ -22,7 +22,7 @@ export const SKILL_QUALITY_FOOTER_CODES: ReadonlySet<string> = new Set([
   'SKILL_TIME_SENSITIVE_CONTENT',
 ]);
 
-const FOOTER_LINE = `ℹ For the full pre-publication rubric and rationale on each finding, load the 'skill-quality-checklist' skill (from the vat-development-agents plugin) or see https://github.com/jdutton/vibe-agent-toolkit/blob/main/packages/vat-development-agents/resources/skills/skill-quality-checklist.md`;
+const FOOTER_LINE = `ℹ For the full pre-publication rubric and rationale on each finding, load the 'vat-skill-review' skill (from the vibe-agent-toolkit plugin) or see https://github.com/jdutton/vibe-agent-toolkit/blob/main/packages/vat-development-agents/resources/skills/vat-skill-review.md`;
 
 /**
  * Render the footer to stderr when conditions are met.

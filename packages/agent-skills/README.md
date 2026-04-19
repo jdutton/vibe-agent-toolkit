@@ -143,7 +143,7 @@ The validator checks for:
 - `SKILL_MISSING_NAME` - Required "name" field missing
 - `SKILL_MISSING_DESCRIPTION` - Required "description" field missing
 - `SKILL_NAME_INVALID` - Name doesn't match pattern: `^[a-z0-9]+(-[a-z0-9]+)*$`
-- `SKILL_NAME_RESERVED_WORD` - Name contains "claude" or "anthropic"
+- `RESERVED_WORD_IN_NAME` (warning) - Name contains "claude" or "anthropic"
 - `SKILL_NAME_XML_TAGS` - Name contains < or > characters
 - `SKILL_DESCRIPTION_TOO_LONG` - Description exceeds 1024 characters
 - `SKILL_DESCRIPTION_EMPTY` - Description is empty or whitespace-only

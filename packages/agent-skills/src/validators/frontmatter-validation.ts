@@ -113,12 +113,14 @@ function validateNameRules(name: string): ValidationIssue[] {
 	const lowered = name.toLowerCase();
 
 	if (lowered.includes('anthropic') || lowered.includes('claude')) {
+		const registryEntry = CODE_REGISTRY.RESERVED_WORD_IN_NAME;
 		issues.push({
-			severity: 'error',
-			code: 'SKILL_NAME_RESERVED_WORD',
+			severity: registryEntry.defaultSeverity,
+			code: 'RESERVED_WORD_IN_NAME',
 			message: 'Name contains reserved word "anthropic" or "claude"',
 			location: FRONTMATTER_NAME_LOC,
-			fix: 'Remove reserved word from name',
+			fix: registryEntry.fix,
+			reference: registryEntry.reference,
 		});
 	}
 

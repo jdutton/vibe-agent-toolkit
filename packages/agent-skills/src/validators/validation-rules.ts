@@ -26,9 +26,6 @@ export type RuleCategory = 'required' | 'best_practice';
  */
 export type ValidationRuleCode =
   // Required rules (non-overridable)
-  | 'INVALID_FRONTMATTER'
-  | 'MISSING_NAME'
-  | 'RESERVED_WORD_IN_NAME'
   | 'BROKEN_INTERNAL_LINK'
   | 'CIRCULAR_REFERENCE'
   | 'OUTSIDE_PROJECT_BOUNDARY'
@@ -64,24 +61,6 @@ export interface ValidationRule {
  */
 export const VALIDATION_RULES: Record<ValidationRuleCode, ValidationRule> = {
   // Required rules (non-overridable)
-  INVALID_FRONTMATTER: {
-    code: 'INVALID_FRONTMATTER',
-    category: 'required',
-    message: () => 'YAML frontmatter syntax error',
-    fix: 'Fix YAML syntax in frontmatter',
-  },
-  MISSING_NAME: {
-    code: 'MISSING_NAME',
-    category: 'required',
-    message: () => 'Skill must have a name (frontmatter, H1, or filename)',
-    fix: 'Add name to frontmatter: name: my-skill',
-  },
-  RESERVED_WORD_IN_NAME: {
-    code: 'RESERVED_WORD_IN_NAME',
-    category: 'required',
-    message: () => 'Skill name contains reserved word (anthropic/claude)',
-    fix: 'Choose a different name',
-  },
   BROKEN_INTERNAL_LINK: {
     code: 'BROKEN_INTERNAL_LINK',
     category: 'required',

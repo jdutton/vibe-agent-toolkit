@@ -94,44 +94,177 @@ function mergeSkillConfigForAudit(
   return packagingConfig;
 }
 
+const VAT_CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
+
 /**
- * Build config-aware context when auditing inside a VAT project.
- * Checks for vibe-agent-toolkit.config.yaml at the scan root only (no
- * directory walking). Returns null if no config or no skills section found.
+ * Collect sub-directories of `dir` that should be visited during the config
+ * root walk. Skips `.git` and gitignored directories.
  */
-async function buildVATProjectContext(
-  scanRoot: string,
-  logger: ReturnType<typeof createLogger>
-): Promise<VATProjectContext | null> {
-  const config = loadConfig(scanRoot);
-  if (config?.skills === undefined) {
-    return null;
+function collectVisitableSubdirs(
+  dir: string,
+  gitRoot: string | null,
+  includeArtifacts: boolean,
+  logger: ReturnType<typeof createLogger>,
+): string[] {
+  let entries: fs.Dirent[];
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dir comes from controlled filesystem walk
+    entries = fs.readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return []; // unreadable directory — skip
   }
-  const configRoot = scanRoot;
+
+  const subdirs = entries
+    .filter(e => e.isDirectory() && e.name !== '.git')
+    .map(e => safePath.join(dir, e.name));
+
+  const gitIgnoredMap = buildGitIgnoreMap(subdirs, gitRoot, includeArtifacts);
+
+  return subdirs.filter(fullPath => {
+    if (gitIgnoredMap !== null && gitIgnoredMap.get(fullPath) === true) {
+      logger.debug(`findAllConfigRoots: skipping gitignored dir: ${fullPath}`);
+      return false;
+    }
+    return true;
+  });
+}
+
+/**
+ * Walk the filesystem under `scanRoot` to find all directories containing a
+ * `vibe-agent-toolkit.config.yaml`. Respects gitignore semantics (skips
+ * `.git` and gitignored directories) so the walk stays fast on large monorepos.
+ *
+ * Always includes `scanRoot` itself if a config exists there.
+ */
+function findAllConfigRoots(
+  scanRoot: string,
+  gitRoot: string | null,
+  includeArtifacts: boolean,
+  logger: ReturnType<typeof createLogger>,
+): string[] {
+  const configRoots: string[] = [];
+  const queue: string[] = [scanRoot];
+
+  while (queue.length > 0) {
+    const dir = queue.shift();
+    if (dir === undefined) break;
+
+    // Check if this dir has a config
+    const configPath = safePath.join(dir, VAT_CONFIG_FILENAME);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dir comes from controlled filesystem walk
+    if (fs.existsSync(configPath)) {
+      configRoots.push(dir);
+    }
+
+    const subdirs = collectVisitableSubdirs(dir, gitRoot, includeArtifacts, logger);
+    for (const subdir of subdirs) {
+      queue.push(subdir);
+    }
+  }
+
+  return configRoots;
+}
+
+/**
+ * Load skill configs from one config root and merge into the shared map.
+ * "Nearest ancestor wins": a config closer to the SKILL.md (longer path)
+ * overrides a shallower one for the same skill path.
+ *
+ * @param configRoot - The directory containing this config file
+ * @param skillConfigs - Accumulated map of absPath → SkillPackagingConfig
+ * @param configRootBySkill - Tracks which configRoot registered each skill path (for depth comparison)
+ */
+async function mergeConfigRootIntoMap(
+  configRoot: string,
+  skillConfigs: Map<string, SkillPackagingConfig>,
+  configRootBySkill: Map<string, string>,
+  logger: ReturnType<typeof createLogger>,
+): Promise<void> {
+  let config: ReturnType<typeof loadConfig>;
+  try {
+    config = loadConfig(configRoot);
+  } catch (error) {
+    // Invalid config — skip this root silently (log at debug)
+    logger.debug(`Config-aware audit: skipping invalid config in ${configRoot}: ${String(error)}`);
+    return;
+  }
+
+  if (config?.skills === undefined) return;
 
   try {
     const discovered = await discoverSkillsFromConfig(config.skills, configRoot);
-    if (discovered.length === 0) {
-      return null;
-    }
-
     const { defaults, config: perSkillConfig } = config.skills;
-    const skillConfigs = new Map<string, SkillPackagingConfig>();
 
     for (const skill of discovered) {
+      const absPath = safePath.resolve(skill.sourcePath);
       const packagingConfig = mergeSkillConfigForAudit(
         defaults as Record<string, unknown> | undefined,
         perSkillConfig?.[skill.name] as Record<string, unknown> | undefined,
       );
-      skillConfigs.set(safePath.resolve(skill.sourcePath), packagingConfig);
+
+      // Nearest ancestor wins: deeper configRoot (longer path) overrides shallower.
+      const existingRoot = configRootBySkill.get(absPath);
+      if (existingRoot === undefined || configRoot.length > existingRoot.length) {
+        skillConfigs.set(absPath, packagingConfig);
+        configRootBySkill.set(absPath, configRoot);
+      }
     }
 
-    logger.debug(`Config-aware audit: found ${skillConfigs.size} skill(s) in VAT project`);
-    return { skillConfigs };
+    logger.debug(`Config-aware audit: found ${discovered.length} skill(s) in ${configRoot}`);
   } catch (error) {
-    logger.debug(`Config-aware audit: failed to discover skills: ${String(error)}`);
+    logger.debug(`Config-aware audit: failed to discover skills in ${configRoot}: ${String(error)}`);
+  }
+}
+
+/**
+ * Build config-aware context when auditing inside a VAT project.
+ *
+ * When `recursive` is true, walks the filesystem under `scanRoot` to find ALL
+ * nested `vibe-agent-toolkit.config.yaml` files and merges skill configs from
+ * each. The "nearest ancestor" rule applies: a config file closer to a
+ * SKILL.md (deeper in the tree) overrides a shallower one for the same skill.
+ *
+ * When `recursive` is false, only inspects the `scanRoot` config (original
+ * behaviour).
+ *
+ * Returns null if no config with a skills section is found anywhere.
+ */
+async function buildVATProjectContext(
+  scanRoot: string,
+  logger: ReturnType<typeof createLogger>,
+  recursive = true,
+): Promise<VATProjectContext | null> {
+  let configRoots: string[];
+
+  if (recursive) {
+    const gitRoot = resolveGitRootForScan(scanRoot, undefined);
+    configRoots = findAllConfigRoots(scanRoot, gitRoot, false, logger);
+  } else {
+    // Non-recursive: only look at scanRoot
+    const configPath = safePath.join(scanRoot, VAT_CONFIG_FILENAME);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- scanRoot is a controlled parameter
+    configRoots = fs.existsSync(configPath) ? [scanRoot] : [];
+  }
+
+  if (configRoots.length === 0) {
     return null;
   }
+
+  // Build merged map. Process shallower dirs first so deeper dirs can override.
+  const sortedRoots = [...configRoots].sort((a, b) => a.length - b.length);
+  const skillConfigs = new Map<string, SkillPackagingConfig>();
+  const configRootBySkill = new Map<string, string>();
+
+  for (const configRoot of sortedRoots) {
+    await mergeConfigRootIntoMap(configRoot, skillConfigs, configRootBySkill, logger);
+  }
+
+  if (skillConfigs.size === 0) {
+    return null;
+  }
+
+  logger.debug(`Config-aware audit: total ${skillConfigs.size} skill(s) across ${configRoots.length} config root(s)`);
+  return { skillConfigs };
 }
 
 /**
@@ -586,7 +719,7 @@ export async function auditCommand(
     // Build config-aware context (same shape used by directory/file scanning)
     // so compat analysis can honor config-layer `targets` declarations.
     // Scoped to the derived config root — the directory closest to the audit target.
-    const vatContextForCompat = await buildVATProjectContext(deriveConfigRoot(targetPath), logger);
+    const vatContextForCompat = await buildVATProjectContext(deriveConfigRoot(targetPath), logger, recursive);
 
     // Run compatibility analysis if --compat flag is set
     const compatMap = options.compat
@@ -644,7 +777,17 @@ export async function getValidationResults(
     const stat = await fs.stat(scanPath);
     if (stat.isDirectory()) {
       logger.debug('Scanning directory for resources');
-      return scanDirectory(scanPath, recursive, options, logger);
+
+      // Merge resources.exclude from config with --exclude CLI flag patterns.
+      // Both use the same picomatch semantics. Do NOT mutate options.
+      const config = loadConfig(deriveConfigRoot(scanPath));
+      const configExcludes = config?.resources?.exclude ?? [];
+      const mergedOptions: AuditCommandOptions =
+        configExcludes.length > 0
+          ? { ...options, exclude: [...(options.exclude ?? []), ...configExcludes] }
+          : options;
+
+      return scanDirectory(scanPath, recursive, mergedOptions, logger);
     }
   } catch {
     // Path doesn't exist or not accessible, let validate() handle it
@@ -1188,9 +1331,12 @@ async function scanDirectory(
   const resolvedGitRoot = resolveGitRootForScan(dirPath, gitRoot);
 
   // Build config-aware context on first call in a VAT project.
-  // Checks for config at the scan root only (the directory the user pointed at).
+  // When recursive, walks all nested config files under resolvedBaseDir.
+  // When non-recursive, only uses the config at resolvedBaseDir itself.
+  // Guard: only build when inside a git repo (ensures scan roots are VAT
+  // projects, not arbitrary tmpdir fixtures in tests).
   const resolvedVatContext = vatContext === undefined && resolvedGitRoot !== null
-    ? await buildVATProjectContext(resolvedBaseDir, logger)
+    ? await buildVATProjectContext(resolvedBaseDir, logger, recursive)
     : (vatContext ?? null);
 
   // Compile picomatch for user-supplied --exclude patterns

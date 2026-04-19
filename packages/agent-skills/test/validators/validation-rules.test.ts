@@ -40,9 +40,6 @@ describe('NAVIGATION_FILE_PATTERNS', () => {
 
 describe('VALIDATION_RULES', () => {
 	it('should define all required rules', () => {
-		expect(VALIDATION_RULES.INVALID_FRONTMATTER).toBeDefined();
-		expect(VALIDATION_RULES.MISSING_NAME).toBeDefined();
-		expect(VALIDATION_RULES.RESERVED_WORD_IN_NAME).toBeDefined();
 		expect(VALIDATION_RULES.BROKEN_INTERNAL_LINK).toBeDefined();
 		expect(VALIDATION_RULES.CIRCULAR_REFERENCE).toBeDefined();
 		expect(VALIDATION_RULES.OUTSIDE_PROJECT_BOUNDARY).toBeDefined();
@@ -61,10 +58,9 @@ describe('VALIDATION_RULES', () => {
 	});
 
 	it('should have required rules with category "required"', () => {
-		expect(VALIDATION_RULES.INVALID_FRONTMATTER.category).toBe('required');
-		expect(VALIDATION_RULES.MISSING_NAME.category).toBe('required');
-		expect(VALIDATION_RULES.RESERVED_WORD_IN_NAME.category).toBe('required');
 		expect(VALIDATION_RULES.BROKEN_INTERNAL_LINK.category).toBe('required');
+		expect(VALIDATION_RULES.CIRCULAR_REFERENCE.category).toBe('required');
+		expect(VALIDATION_RULES.OUTSIDE_PROJECT_BOUNDARY.category).toBe('required');
 	});
 
 	it('should have best practice rules with category "best_practice"', () => {
@@ -94,13 +90,13 @@ describe('VALIDATION_RULES', () => {
 
 describe('createIssue', () => {
 	it('should create basic issue from rule', () => {
-		const rule = VALIDATION_RULES.MISSING_NAME;
+		const rule = VALIDATION_RULES.WINDOWS_BACKSLASH_IN_PATH;
 		const issue = createIssue(rule);
 
 		expect(issue.severity).toBe('error');
-		expect(issue.code).toBe('MISSING_NAME');
-		expect(issue.message).toBe('Skill must have a name (frontmatter, H1, or filename)');
-		expect(issue.fix).toBe('Add name to frontmatter: name: my-skill');
+		expect(issue.code).toBe('WINDOWS_BACKSLASH_IN_PATH');
+		expect(issue.message).toBe('Path uses Windows backslashes');
+		expect(issue.fix).toBe('Use forward slashes for cross-platform compatibility');
 	});
 
 	it('should create issue with context variables', () => {

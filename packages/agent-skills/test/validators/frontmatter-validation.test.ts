@@ -178,26 +178,26 @@ describe('validateFrontmatterRules', () => {
 	});
 
 	describe('reserved words in name', () => {
-		it('should report SKILL_NAME_RESERVED_WORD for name containing "claude"', () => {
+		it('should report RESERVED_WORD_IN_NAME for name containing "claude"', () => {
 			const issues = validateFrontmatterRules(validFrontmatter({ name: 'claude-helper' }));
 
-			const issue = findIssueByCode(issues, 'SKILL_NAME_RESERVED_WORD');
+			const issue = findIssueByCode(issues, 'RESERVED_WORD_IN_NAME');
 			expect(issue).toBeDefined();
-			expect(issue?.severity).toBe('error');
+			expect(issue?.severity).toBe('warning');
 			expect(issue?.location).toBe(LOC_FRONTMATTER_NAME);
 		});
 
-		it('should report SKILL_NAME_RESERVED_WORD for name containing "anthropic"', () => {
+		it('should report RESERVED_WORD_IN_NAME for name containing "anthropic"', () => {
 			const issues = validateFrontmatterRules(validFrontmatter({ name: 'anthropic-tools' }));
 
-			const issue = findIssueByCode(issues, 'SKILL_NAME_RESERVED_WORD');
+			const issue = findIssueByCode(issues, 'RESERVED_WORD_IN_NAME');
 			expect(issue).toBeDefined();
 		});
 
 		it('should detect reserved words case-insensitively', () => {
 			const issues = validateFrontmatterRules(validFrontmatter({ name: 'CLAUDE-Helper' }));
 
-			const issue = findIssueByCode(issues, 'SKILL_NAME_RESERVED_WORD');
+			const issue = findIssueByCode(issues, 'RESERVED_WORD_IN_NAME');
 			expect(issue).toBeDefined();
 		});
 	});
@@ -231,7 +231,7 @@ describe('validateFrontmatterRules', () => {
 			const issues = validateFrontmatterRules(validFrontmatter({ name: '<claude>' }));
 
 			expect(findIssueByCode(issues, 'SKILL_NAME_XML_TAGS')).toBeDefined();
-			expect(findIssueByCode(issues, 'SKILL_NAME_RESERVED_WORD')).toBeDefined();
+			expect(findIssueByCode(issues, 'RESERVED_WORD_IN_NAME')).toBeDefined();
 		});
 	});
 

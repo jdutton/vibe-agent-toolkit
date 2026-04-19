@@ -345,7 +345,7 @@ See [Import Command Documentation](./cli/import.md) for more details.
 
 - Read [CLAUDE.md](../CLAUDE.md) for detailed development guidelines
 - Review [Agent Skills Best Practices](./guides/agent-skills-best-practices.md)
-- Review the [utils package](../packages/utils/) for reference patterns
+- Review the [utils package](../packages/utils/README.md) for reference patterns
 - Check out [vibe-validate documentation](https://github.com/jdutton/vibe-validate)
 - Set up your CI/CD pipeline on GitHub
 - Enable Codecov for your repository (see README.md for setup instructions)
