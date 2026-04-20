@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-import { platformPool, platformPoolOptions, platformTestTimeout } from './vitest.shared.js';
+import { integrationPool, integrationPoolOptions, platformTestTimeout } from './vitest.shared.js';
 
 export default defineConfig({
   test: {
@@ -17,7 +17,7 @@ export default defineConfig({
     ],
     testTimeout: platformTestTimeout,
     passWithNoTests: true, // Allow passing when no integration tests exist yet
-    pool: platformPool,
-    poolOptions: platformPoolOptions,
+    pool: integrationPool,
+    poolOptions: integrationPoolOptions,
   },
 });

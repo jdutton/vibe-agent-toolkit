@@ -1,6 +1,6 @@
 import { defineConfig } from 'vitest/config';
 
-import { platformPool, platformPoolOptions, platformTestTimeout } from './vitest.shared.js';
+import { platformTestTimeout, unitPool, unitPoolOptions } from './vitest.shared.js';
 
 export default defineConfig({
   test: {
@@ -19,8 +19,8 @@ export default defineConfig({
       '**/*.system.test.ts', // System tests run separately (e2e, longer running)
     ],
     testTimeout: platformTestTimeout,
-    pool: platformPool,
-    poolOptions: platformPoolOptions,
+    pool: unitPool,
+    poolOptions: unitPoolOptions,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'lcov'],
