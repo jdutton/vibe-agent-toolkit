@@ -202,15 +202,22 @@ export class GitTracker {
    * @returns true if file is gitignored, false otherwise
    */
   isIgnored(filePath: string): boolean {
-    // Check cache first
-    const cached = this.cache.get(filePath);
+    // Normalize to the same shape used during cache population so Windows
+    // paths (drive-prefixed by `path.resolve`) hit the cache instead of
+    // falling through to `git check-ignore`. On POSIX this is a no-op for
+    // canonical absolute paths but is still required for robustness against
+    // paths containing `..` or trailing slashes. The original filePath is
+    // still passed to `isGitIgnored` — git handles its own normalization.
+    const cacheKey = safePath.resolve(filePath);
+
+    const cached = this.cache.get(cacheKey);
     if (cached !== undefined) {
       return cached;
     }
 
     // Not in cache - call git check-ignore and cache result
     const ignored = isGitIgnored(filePath, this.projectRoot);
-    this.cache.set(filePath, ignored);
+    this.cache.set(cacheKey, ignored);
 
     return ignored;
   }

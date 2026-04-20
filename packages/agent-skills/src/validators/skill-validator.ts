@@ -69,15 +69,14 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
 
   const { frontmatter } = parseResult;
 
-  // Validate frontmatter schema (shared with packaging validator)
+  // Frontmatter validation (schema + rules) plus the cross-skill dependency
+  // smell, which looks at body prose that requires/depends on a token the
+  // description omits.
   issues.push(
     ...validateFrontmatterSchema(frontmatter, isVATGenerated),
     ...validateFrontmatterRules(frontmatter),
+    ...detectUndeclaredCrossSkillAuth(frontmatter, parseResult.body),
   );
-
-  // Cross-skill dependency smell: body requires/depends on a token that the
-  // description omits.
-  issues.push(...detectUndeclaredCrossSkillAuth(frontmatter, parseResult.body));
 
   // Validate warning-level rules (skill-specific)
   validateWarningRules(content, lineCount, skillPath, issues);

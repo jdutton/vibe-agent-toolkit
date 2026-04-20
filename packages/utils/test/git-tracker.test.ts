@@ -145,6 +145,23 @@ describe('GitTracker', () => {
       expect(secondResult).toBe(true);
     });
 
+    it('hits the cache for non-canonical absolute paths (regression: Windows path-resolve drift)', async () => {
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize();
+
+      // Cache was populated with paths via safePath.resolve(projectRoot, relPath).
+      // On Windows that drive-prefixes the key (e.g. C:/project/README.md) while
+      // a caller may still pass '/project/README.md' or a path containing '..'.
+      // isIgnored() must normalize the lookup key to match the population shape;
+      // otherwise it silently falls through to `git check-ignore` per path —
+      // exactly the perf regression rc.2 was meant to eliminate.
+      const nonCanonical = '/project/src/../README.md';
+      expect(tracker.isIgnored(nonCanonical)).toBe(false);
+
+      // No spawn: cache hit via normalization.
+      expect(gitUtils.isGitIgnored).not.toHaveBeenCalled();
+    });
+
     it('should work without initialization (cache empty)', () => {
       vi.mocked(gitUtils.isGitIgnored).mockReturnValue(false);
 
