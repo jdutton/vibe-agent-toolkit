@@ -27,7 +27,7 @@ import {
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
-import { gitCheckIgnoredBatch, gitFindRoot, isAbsolutePath, isGitIgnored, safePath } from '@vibe-agent-toolkit/utils';
+import { gitFindRoot, GitTracker, isAbsolutePath, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import picomatch from 'picomatch';
 
@@ -102,7 +102,7 @@ const VAT_CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
  */
 function collectVisitableSubdirs(
   dir: string,
-  gitRoot: string | null,
+  gitTracker: GitTracker | null,
   includeArtifacts: boolean,
   logger: ReturnType<typeof createLogger>,
 ): string[] {
@@ -118,10 +118,12 @@ function collectVisitableSubdirs(
     .filter(e => e.isDirectory() && e.name !== '.git')
     .map(e => safePath.join(dir, e.name));
 
-  const gitIgnoredMap = buildGitIgnoreMap(subdirs, gitRoot, includeArtifacts);
+  if (gitTracker === null || includeArtifacts) {
+    return subdirs;
+  }
 
   return subdirs.filter(fullPath => {
-    if (gitIgnoredMap !== null && gitIgnoredMap.get(fullPath) === true) {
+    if (gitTracker.isIgnoredByActiveSet(fullPath)) {
       logger.debug(`findAllConfigRoots: skipping gitignored dir: ${fullPath}`);
       return false;
     }
@@ -138,7 +140,7 @@ function collectVisitableSubdirs(
  */
 function findAllConfigRoots(
   scanRoot: string,
-  gitRoot: string | null,
+  gitTracker: GitTracker | null,
   includeArtifacts: boolean,
   logger: ReturnType<typeof createLogger>,
 ): string[] {
@@ -156,7 +158,7 @@ function findAllConfigRoots(
       configRoots.push(dir);
     }
 
-    const subdirs = collectVisitableSubdirs(dir, gitRoot, includeArtifacts, logger);
+    const subdirs = collectVisitableSubdirs(dir, gitTracker, includeArtifacts, logger);
     for (const subdir of subdirs) {
       queue.push(subdir);
     }
@@ -233,12 +235,16 @@ async function buildVATProjectContext(
   scanRoot: string,
   logger: ReturnType<typeof createLogger>,
   recursive = true,
+  gitTracker: GitTracker | null = null,
 ): Promise<VATProjectContext | null> {
   let configRoots: string[];
 
   if (recursive) {
-    const gitRoot = resolveGitRootForScan(scanRoot, undefined);
-    configRoots = findAllConfigRoots(scanRoot, gitRoot, false, logger);
+    // Reuse an existing tracker when available so we don't re-scan `git ls-files`
+    // for the same repo; otherwise fall through and let findAllConfigRoots behave
+    // as before (no gitignore filtering, relies on .git short-circuit).
+    const tracker = gitTracker ?? (await resolveScanContext(scanRoot)).gitTracker;
+    configRoots = findAllConfigRoots(scanRoot, tracker, false, logger);
   } else {
     // Non-recursive: only look at scanRoot
     const configPath = safePath.join(scanRoot, VAT_CONFIG_FILENAME);
@@ -328,9 +334,9 @@ async function validateSingleSkill(
   isVATGenerated?: boolean
 ): Promise<ValidationResult> {
   // Try config-aware validation: find git root → check for config at git root
-  const gitRoot = resolveGitRootForScan(safePath.resolve(skillPath), undefined);
+  const { gitRoot, gitTracker } = await resolveScanContext(safePath.resolve(skillPath));
   if (gitRoot !== null) {
-    const vatContext = await buildVATProjectContext(gitRoot, logger);
+    const vatContext = await buildVATProjectContext(gitRoot, logger, true, gitTracker);
     const skillConfig = vatContext?.skillConfigs.get(safePath.resolve(skillPath));
     if (skillConfig !== undefined) {
       logger.debug(`  Using config-aware validation for: ${skillPath}`);
@@ -692,6 +698,11 @@ export async function auditCommand(
 ): Promise<void> {
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
+
+  // Each `vat audit` invocation gets a fresh tracker cache — test suites
+  // that run audit multiple times in-process against mutated fixtures must
+  // not observe stale active-set data from prior runs.
+  gitTrackerCache.clear();
 
   try {
     // Commander sets options.recursive to false when --no-recursive is passed, true otherwise
@@ -1221,7 +1232,7 @@ async function handleDirectoryEntry(
   options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>,
   baseDir: string,
-  gitRoot: string | null,
+  scanCtx: ScanContext,
   vatContext: VATProjectContext | null
 ): Promise<ValidationResult[]> {
   const fs = await import('node:fs/promises');
@@ -1239,7 +1250,7 @@ async function handleDirectoryEntry(
 
   // Recurse into subdirectories (both plugin/marketplace dirs and regular dirs)
   if (recursive) {
-    const subResults = await scanDirectory(fullPath, recursive, options, logger, baseDir, gitRoot, vatContext);
+    const subResults = await scanDirectory(fullPath, recursive, options, logger, baseDir, scanCtx, vatContext);
     results.push(...subResults);
   }
 
@@ -1247,24 +1258,55 @@ async function handleDirectoryEntry(
 }
 
 /**
- * Resolve the effective git root for gitignore-aware scanning.
- *
- * On the first call (gitRoot is undefined), detects the git root from dirPath.
- * If the scan root itself is gitignored (e.g., user explicitly targeted dist/),
- * returns null to disable gitignore filtering — the user's explicit intent to
- * scan that path takes precedence over .gitignore rules.
- *
- * On recursive calls, the already-resolved value is passed through unchanged.
+ * The per-scan "git context" a walker needs: the detected git root (for
+ * reporting / ancestor gating) and a pre-populated {@link GitTracker} with the
+ * repo's active set of non-ignored files. The tracker lets every subsequent
+ * ignore check answer in O(1) without spawning `git check-ignore`.
  */
-function resolveGitRootForScan(dirPath: string, gitRoot: string | null | undefined): string | null {
-  if (gitRoot === undefined) {
-    const detectedRoot = gitFindRoot(dirPath);
-    if (detectedRoot !== null && isGitIgnored(dirPath, detectedRoot)) {
-      return null;
-    }
-    return detectedRoot;
+interface ScanContext {
+  gitRoot: string | null;
+  gitTracker: GitTracker | null;
+}
+
+/** Cache of (gitRoot → initialized GitTracker) to avoid re-spawning ls-files. */
+const gitTrackerCache: Map<string, GitTracker> = new Map();
+
+async function getOrCreateGitTracker(gitRoot: string): Promise<GitTracker> {
+  const cached = gitTrackerCache.get(gitRoot);
+  if (cached !== undefined) {
+    return cached;
   }
-  return gitRoot;
+  const tracker = new GitTracker(gitRoot);
+  await tracker.initialize();
+  gitTrackerCache.set(gitRoot, tracker);
+  return tracker;
+}
+
+/**
+ * Resolve the effective git root and build a per-repo {@link GitTracker} for a
+ * scan. On the first call for a scan (no tracker yet), detects the git root
+ * from `dirPath` and constructs a tracker pre-populated with the repo's
+ * non-ignored files.
+ *
+ * If the scan root itself is gitignored (e.g., user explicitly targeted
+ * `dist/`), returns `{ gitRoot: null, gitTracker: null }` to disable gitignore
+ * filtering — the user's explicit intent takes precedence over .gitignore.
+ */
+async function resolveScanContext(dirPath: string): Promise<ScanContext> {
+  const detectedRoot = gitFindRoot(dirPath);
+  if (detectedRoot === null) {
+    return { gitRoot: null, gitTracker: null };
+  }
+
+  const tracker = await getOrCreateGitTracker(detectedRoot);
+
+  // If the scan root itself is gitignored (e.g. user targeted `dist/`), disable
+  // gitignore filtering so the user's explicit intent wins.
+  if (tracker.isIgnoredByActiveSet(dirPath)) {
+    return { gitRoot: null, gitTracker: null };
+  }
+
+  return { gitRoot: detectedRoot, gitTracker: tracker };
 }
 
 /**
@@ -1274,13 +1316,17 @@ function resolveGitRootForScan(dirPath: string, gitRoot: string | null | undefin
  */
 function buildGitIgnoreMap(
   entryPaths: string[],
-  gitRoot: string | null,
-  includeArtifacts: boolean
+  gitTracker: GitTracker | null,
+  includeArtifacts: boolean,
 ): Map<string, boolean> | null {
-  if (gitRoot === null || includeArtifacts) {
+  if (gitTracker === null || includeArtifacts) {
     return null;
   }
-  return gitCheckIgnoredBatch(entryPaths, gitRoot);
+  const map = new Map<string, boolean>();
+  for (const entryPath of entryPaths) {
+    map.set(entryPath, gitTracker.isIgnoredByActiveSet(entryPath));
+  }
+  return map;
 }
 
 /**
@@ -1321,22 +1367,25 @@ async function scanDirectory(
   options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>,
   baseDir?: string,
-  gitRoot?: string | null,
+  scanCtx?: ScanContext,
   vatContext?: VATProjectContext | null
 ): Promise<ValidationResult[]> {
   const fs = await import('node:fs/promises');
   const results: ValidationResult[] = [];
   const userExcludes = options.exclude ?? [];
   const resolvedBaseDir = baseDir ?? dirPath;
-  const resolvedGitRoot = resolveGitRootForScan(dirPath, gitRoot);
+
+  // First call in this scan: build the git context (root + tracker) once; every
+  // subsequent recursion reuses them.
+  const resolvedScanCtx: ScanContext = scanCtx ?? (await resolveScanContext(dirPath));
 
   // Build config-aware context on first call in a VAT project.
   // When recursive, walks all nested config files under resolvedBaseDir.
   // When non-recursive, only uses the config at resolvedBaseDir itself.
   // Guard: only build when inside a git repo (ensures scan roots are VAT
   // projects, not arbitrary tmpdir fixtures in tests).
-  const resolvedVatContext = vatContext === undefined && resolvedGitRoot !== null
-    ? await buildVATProjectContext(resolvedBaseDir, logger, recursive)
+  const resolvedVatContext = vatContext === undefined && resolvedScanCtx.gitRoot !== null
+    ? await buildVATProjectContext(resolvedBaseDir, logger, recursive, resolvedScanCtx.gitTracker)
     : (vatContext ?? null);
 
   // Compile picomatch for user-supplied --exclude patterns
@@ -1346,7 +1395,7 @@ async function scanDirectory(
 
   // Build full paths and batch-check gitignore status
   const entryPaths = entries.map(e => safePath.join(dirPath, e.name));
-  const gitIgnoredMap = buildGitIgnoreMap(entryPaths, resolvedGitRoot, options.includeArtifacts ?? false);
+  const gitIgnoredMap = buildGitIgnoreMap(entryPaths, resolvedScanCtx.gitTracker, options.includeArtifacts ?? false);
 
   for (const entry of entries) {
     const fullPath = safePath.join(dirPath, entry.name);
@@ -1363,7 +1412,7 @@ async function scanDirectory(
         results.push(result);
       }
     } else if (entry.isDirectory()) {
-      const dirResults = await handleDirectoryEntry(fullPath, recursive, options, logger, resolvedBaseDir, resolvedGitRoot, resolvedVatContext);
+      const dirResults = await handleDirectoryEntry(fullPath, recursive, options, logger, resolvedBaseDir, resolvedScanCtx, resolvedVatContext);
       results.push(...dirResults);
     }
   }
