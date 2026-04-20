@@ -120,6 +120,12 @@ function findEnvKeyDependencies(body: string): string[] {
 	const found = new Set<string>();
 	for (const match of body.matchAll(ANTHROPIC_KEY_RE)) {
 		const envKey = match[0];
+		// Bare ANTHROPIC_API_KEY is the universal default for Claude API, not a
+		// cross-skill dependency signal. The regex above matches it because the
+		// [A-Z][A-Z0-9_]* segment can greedily consume "API", leaving "_KEY" to
+		// match with the optional (?:API_)? skipped. Skip it explicitly here so
+		// the regex stays readable.
+		if (envKey === 'ANTHROPIC_API_KEY') continue;
 		if (hasDependencyIntro(body, match.index ?? 0)) {
 			found.add(envKey);
 		}

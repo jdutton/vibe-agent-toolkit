@@ -102,6 +102,13 @@ describe('detectUndeclaredCrossSkillAuth', () => {
       expect(issues).toHaveLength(1);
       expect(issues[0]!.message).toContain('ANTHROPIC_WORKBENCH_API_KEY');
     });
+
+    it('does not fire on bare ANTHROPIC_API_KEY (universal default, not a cross-skill signal)', () => {
+      const body = 'Requires `ANTHROPIC_API_KEY` to authenticate against the Claude API.';
+      const issues = detectUndeclaredCrossSkillAuth(validFrontmatter(), body);
+
+      expect(issues).toHaveLength(0);
+    });
   });
 
   describe('negative cases', () => {
