@@ -18,7 +18,7 @@ import { readFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 import { parseMarkdown, ResourceRegistry } from '@vibe-agent-toolkit/resources';
-import { findProjectRoot, normalizedTmpdir, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, normalizedTmpdir, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
 import { walkLinkGraph, type LinkResolution, type WalkableRegistry } from '../walk-link-graph.js';
@@ -172,6 +172,59 @@ function createRegistryIssue(
 }
 
 /**
+ * Build a fresh ResourceRegistry for a single skill's projectRoot and resolve
+ * internal links. Extracted so the skill validator can fall back to a private
+ * registry when the caller does not supply a shared one.
+ */
+async function crawlAndResolveRegistry(projectRoot: string): Promise<ResourceRegistry> {
+  const registry = await ResourceRegistry.fromCrawl({
+    baseDir: projectRoot,
+    include: ['**/*.md'],
+  });
+  registry.resolveLinks();
+  return registry;
+}
+
+/**
+ * True iff the shared registry's baseDir is an ancestor of (or equals) the
+ * skill's directory. Prevents the batched caller from reusing a registry that
+ * was crawled for a different project root — the `getResource()` /
+ * `getResourceById()` lookups would silently miss, and the walker would walk
+ * an empty graph.
+ */
+function registryCoversSkill(registry: ResourceRegistry, skillPath: string): boolean {
+  const baseDir = registry.baseDir;
+  if (baseDir === undefined) return false;
+  const normalizedBase = toForwardSlash(safePath.resolve(baseDir));
+  const skillDir = toForwardSlash(safePath.resolve(dirname(skillPath)));
+  if (skillDir === normalizedBase) return true;
+  // eslint-disable-next-line local/no-path-startswith -- both sides normalized via toForwardSlash above
+  return skillDir.startsWith(`${normalizedBase}/`);
+}
+
+/**
+ * Shared context for batched skill validation runs.
+ *
+ * Populated once by the caller (e.g. `vat skills validate`) and threaded into
+ * every per-skill validation so common setup is paid for exactly once:
+ *   - `registry`: a pre-crawled + `.resolveLinks()`-completed ResourceRegistry
+ *     covering the project root. Eliminates the per-skill markdown reparse.
+ *   - `gitTracker`: a pre-populated {@link GitTracker} (from
+ *     `GitTracker.initialize({ includeUntracked: true })`). Turns gitignore
+ *     checks during the link-graph walk into O(1) set lookups instead of
+ *     `git check-ignore` spawns.
+ *
+ * Both fields are optional — when omitted, the validator falls back to the
+ * legacy per-skill behavior so one-off callers keep working.
+ */
+export interface SkillValidationSharedContext {
+  /** Pre-built registry that covers the skill's project root. */
+  registry?: ResourceRegistry;
+  /** Pre-populated tracker for the repo that contains the skill. */
+  gitTracker?: GitTracker;
+}
+
+/**
  * Validate a skill for packaging
  *
  * Performs comprehensive validation including:
@@ -182,12 +235,15 @@ function createRegistryIssue(
  *
  * @param skillPath - Path to SKILL.md
  * @param packagingConfig - Optional packaging configuration (depth, excludes, validation)
+ * @param context - Whether the skill is being validated from source or built output
+ * @param shared - Optional shared context (registry + gitTracker) for batched runs
  * @returns Validation result with active errors, warnings, and allowed issues
  */
 export async function validateSkillForPackaging(
   skillPath: string,
   packagingConfig?: SkillPackagingConfig,
   context: 'source' | 'built' = 'source',
+  shared?: SkillValidationSharedContext,
 ): Promise<PackagingValidationResult> {
   const rawIssues: ValidationIssue[] = [];
 
@@ -226,24 +282,31 @@ export async function validateSkillForPackaging(
   // Find project boundary (workspace root -> git root -> skill dir)
   const projectRoot = findProjectRoot(dirname(skillPath));
 
-  // Build resource registry and walk the link graph
-  const registry = await ResourceRegistry.fromCrawl({
-    baseDir: projectRoot,
-    include: ['**/*.md'],
-  });
-  registry.resolveLinks();
+  // Build resource registry and walk the link graph.
+  // Prefer the caller-supplied shared registry (when `vat skills validate` or
+  // similar batches multiple skills under the same project root) so the
+  // per-file markdown parse is paid for exactly once across the batch. Only
+  // reuse when the shared registry covers this skill's projectRoot; otherwise
+  // fall back to a fresh crawl to avoid leaking resources across roots.
+  const registry = shared?.registry !== undefined && registryCoversSkill(shared.registry, skillPath)
+    ? shared.registry
+    : await crawlAndResolveRegistry(projectRoot);
 
   const skillResource = registry.getResource(safePath.resolve(skillPath));
+  const walkOptions: Parameters<typeof walkLinkGraph>[2] = {
+    maxDepth,
+    excludeRules: excludeConfig?.rules ?? [],
+    projectRoot,
+    skillRootPath: safePath.resolve(skillPath),
+    excludeNavigationFiles,
+  };
+  if (shared?.gitTracker !== undefined) {
+    walkOptions.gitTracker = shared.gitTracker;
+  }
   const { bundledResources, bundledAssets, excludedReferences, maxBundledDepth } = walkLinkGraph(
     skillResource?.id ?? '',
     registry as WalkableRegistry,
-    {
-      maxDepth,
-      excludeRules: excludeConfig?.rules ?? [],
-      projectRoot,
-      skillRootPath: safePath.resolve(skillPath),
-      excludeNavigationFiles,
-    },
+    walkOptions,
   );
   const bundledFiles = [...bundledResources.map(r => r.filePath), ...bundledAssets];
 

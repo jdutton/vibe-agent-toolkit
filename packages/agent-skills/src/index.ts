@@ -74,6 +74,7 @@ export {
   type ExcludedReferenceDetail,
   type PackagingValidationResult,
   type SkillPackagingConfig,
+  type SkillValidationSharedContext,
 } from './validators/packaging-validator.js';
 export { type ValidationConfig } from './validators/validation-framework.js';
 export {

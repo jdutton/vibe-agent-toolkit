@@ -340,7 +340,8 @@ async function validateSingleSkill(
     const skillConfig = vatContext?.skillConfigs.get(safePath.resolve(skillPath));
     if (skillConfig !== undefined) {
       logger.debug(`  Using config-aware validation for: ${skillPath}`);
-      const packagingResult = await validateSkillForPackaging(skillPath, skillConfig);
+      const sharedCtx = gitTracker === null ? undefined : { gitTracker };
+      const packagingResult = await validateSkillForPackaging(skillPath, skillConfig, 'source', sharedCtx);
       return packagingResultToValidationResult(
         skillPath,
         packagingResult,
@@ -1188,7 +1189,8 @@ async function handleFileEntry(
   fullPath: string,
   options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>,
-  vatContext: VATProjectContext | null
+  vatContext: VATProjectContext | null,
+  scanCtx: ScanContext,
 ): Promise<ValidationResult | null> {
   // Check for registry files
   if (entry.name === 'installed_plugins.json' || entry.name === 'known_marketplaces.json') {
@@ -1204,7 +1206,10 @@ async function handleFileEntry(
     const skillConfig = vatContext?.skillConfigs.get(safePath.resolve(fullPath));
     if (skillConfig !== undefined) {
       logger.debug(`  Using config-aware validation for: ${fullPath}`);
-      const packagingResult = await validateSkillForPackaging(fullPath, skillConfig);
+      // Thread the per-scan tracker into packaging validation so gitignore
+      // checks in the link-graph walk stay O(1).
+      const sharedCtx = scanCtx.gitTracker === null ? undefined : { gitTracker: scanCtx.gitTracker };
+      const packagingResult = await validateSkillForPackaging(fullPath, skillConfig, 'source', sharedCtx);
       return packagingResultToValidationResult(
         fullPath,
         packagingResult,
@@ -1407,7 +1412,7 @@ async function scanDirectory(
     }
 
     if (entry.isFile()) {
-      const result = await handleFileEntry(entry, fullPath, options, logger, resolvedVatContext);
+      const result = await handleFileEntry(entry, fullPath, options, logger, resolvedVatContext, resolvedScanCtx);
       if (result !== null) {
         results.push(result);
       }

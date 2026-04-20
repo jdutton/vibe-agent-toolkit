@@ -9,8 +9,11 @@ import {
   validateSkillForPackaging,
   type PackagingValidationResult,
   type SkillPackagingConfig,
+  type SkillValidationSharedContext,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
+import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import { findProjectRoot, gitFindRoot, GitTracker, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
 
 import { loadConfig } from '../../utils/config-loader.js';
@@ -193,6 +196,76 @@ function logSkillProgress(
 }
 
 /**
+ * Build a single shared validation context for an entire `vat skills validate`
+ * invocation.
+ *
+ * When every skill in the batch resolves to the same projectRoot (the normal
+ * monorepo case), we crawl the resource registry once and hand the same
+ * instance to each skill's validation — the per-skill markdown reparse
+ * disappears. Similarly, gitignore checks are backed by a single
+ * {@link GitTracker} when every skill sits inside the same git repository.
+ *
+ * When the batch is heterogeneous (e.g. multiple projectRoots), the helper
+ * returns an empty context and validators transparently fall back to their
+ * legacy per-skill setup — correctness first, perf second.
+ */
+async function buildSharedValidationContext(
+  skills: ValidatableSkill[],
+  logger: ReturnType<typeof createLogger>,
+): Promise<SkillValidationSharedContext> {
+  if (skills.length === 0) {
+    return {};
+  }
+
+  const projectRoots = new Set<string>();
+  const gitRoots = new Set<string>();
+  for (const skill of skills) {
+    const skillDir = safePath.resolve(skill.sourcePath, '..');
+    projectRoots.add(findProjectRoot(skillDir));
+    const gitRoot = gitFindRoot(skillDir);
+    if (gitRoot !== null) {
+      gitRoots.add(safePath.resolve(gitRoot));
+    }
+  }
+
+  const context: SkillValidationSharedContext = {};
+
+  // Only reuse a single registry when every skill shares the same project
+  // root. Otherwise the per-skill fallback path is correct and the cost is
+  // unchanged from the pre-refactor baseline.
+  if (projectRoots.size === 1) {
+    const [sharedRoot] = [...projectRoots];
+    if (sharedRoot !== undefined) {
+      logger.debug(`Building shared resource registry rooted at: ${sharedRoot}`);
+      const registry = await ResourceRegistry.fromCrawl({
+        baseDir: sharedRoot,
+        include: ['**/*.md'],
+      });
+      registry.resolveLinks();
+      context.registry = registry;
+    }
+  } else {
+    logger.debug(`Skipping shared registry — batch spans ${projectRoots.size} project roots`);
+  }
+
+  // One tracker per repo; when the batch spans repos, skip rather than spawn
+  // multiple `git ls-files`.
+  if (gitRoots.size === 1) {
+    const [sharedGitRoot] = [...gitRoots];
+    if (sharedGitRoot !== undefined) {
+      logger.debug(`Building shared GitTracker rooted at: ${sharedGitRoot}`);
+      const tracker = new GitTracker(sharedGitRoot);
+      await tracker.initialize();
+      context.gitTracker = tracker;
+    }
+  } else if (gitRoots.size > 1) {
+    logger.debug(`Skipping shared tracker — batch spans ${gitRoots.size} git roots`);
+  }
+
+  return context;
+}
+
+/**
  * Skills validate command implementation
  */
 export async function validateCommand(
@@ -232,13 +305,24 @@ export async function validateCommand(
     const skillsToValidate = filterSkillsByName(validatableSkills, options.skill);
     logger.info(`🔍 Found ${skillsToValidate.length} skill(s) to validate\n`);
 
+    // Build shared context once per invocation. Both the resource registry
+    // (for markdown parses) and the git tracker (for gitignore checks) can be
+    // shared across every skill whose projectRoot + gitRoot match the derived
+    // values, which is the common case for a single-repo `vat skills validate`.
+    const sharedContext = await buildSharedValidationContext(skillsToValidate, logger);
+
     // Validate each skill
     const results: PackagingValidationResult[] = [];
     for (const skill of skillsToValidate) {
       logger.info(`   Validating: ${skill.name}`);
       logger.debug(`   Source: ${skill.sourcePath}`);
 
-      const result = await validateSkillForPackaging(skill.sourcePath, skill.packagingConfig);
+      const result = await validateSkillForPackaging(
+        skill.sourcePath,
+        skill.packagingConfig,
+        'source',
+        sharedContext,
+      );
       applyConfigVerdicts(result, skill.packagingConfig.targets as readonly Target[] | undefined, skill.sourcePath);
       logSkillProgress(skill.name, result, logger);
       results.push(result);
