@@ -20,6 +20,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `packages/cli/test/system/audit-dogfooding.system.test.ts` test 1 (`should successfully audit vibe-agent-toolkit project root`) now runs on Windows. The `skipIf(process.platform === 'win32')` was added in 0.1.32 when the test timed out at 120s; the narrow `gitCheckIgnoredBatch` fallback fix that landed alongside it dropped audit wall time ~4x, so the smoke test fits in budget again. Windows CI will confirm.
 - Stale JSDoc examples referencing `vibe-agent-toolkit:resources` (renamed to `vibe-agent-toolkit:vat-knowledge-resources` during the 0.1.32 plugin restructure) replaced with `vibe-agent-toolkit:vat-audit` in `packages/cli/src/commands/claude/plugin/build.ts`, `packages/cli/src/commands/skills/build.ts`, `packages/agent-schema/src/package-metadata.ts`, and the companion test constant.
 
+### Performance
+- **Walker unification on `GitTracker`.** Every `vat audit` / `vat skills validate` / `vat verify` scan now shares one pre-populated `GitTracker` per repo. The tracker pre-loads the full active file set (tracked + untracked-not-ignored) via `git ls-files --cached --others --exclude-standard`, precomputes the ancestor directory set, and answers every ignore check from an in-memory `Set` instead of spawning `git check-ignore`. Per-directory `gitCheckIgnoredBatch` calls and per-link `isGitIgnored` calls are gone from the hot paths in `packages/cli/src/commands/audit.ts`, `packages/agent-skills/src/walk-link-graph.ts`, `packages/agent-skills/src/validators/packaging-validator.ts`, and `packages/discovery/src/scanners/local-scanner.ts`. The legacy `isGitIgnored` / `gitCheckIgnoredBatch` exports on `@vibe-agent-toolkit/utils` are preserved for one-off and cross-repo consumers.
+- **Shared `ResourceRegistry` across skills in `vat skills validate`.** When a single `vat skills validate` invocation covers multiple skills that share one project root, the command now builds one crawled/link-resolved `ResourceRegistry` once and reuses it for every skill's validation instead of re-parsing the same markdown per skill. Heterogeneous scans (mixed project roots) transparently fall back to per-skill registries.
+- **Measured wall-time (median of 3 runs on the VAT monorepo, M-series laptop):**
+  - `vat audit .`: 6.85s → 2.50s (~2.7x, under the 3s target set in the rc.1 plan)
+  - `vat verify --cwd packages/vat-development-agents`: 12.68s → 2.85s (~4.4x)
+  - `vat skills validate packages/vat-development-agents`: 10.05s → 1.44s (~7x)
+- Pure perf — no behavior changes. YAML output diffs clean pre/post across all three commands except wall-time fields. New `GitTracker` APIs (`hasActiveDescendant`, `isIgnoredByActiveSet`) are non-breaking additions; `initialize()` accepts an options bag with `includeUntracked` defaulting to `true`.
+
 ## [0.1.32] - 2026-04-19
 
 ### Added
