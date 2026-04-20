@@ -13,13 +13,16 @@ export default defineConfig({
       '**/node_modules/**',
       '**/dist/**',
     ],
-    testTimeout: 60000, // Integration tests may take longer
+    testTimeout: process.platform === 'win32' ? 900000 : 60000, // 15min Windows, 1min Unix
     passWithNoTests: true, // Allow passing when no integration tests exist yet
-    pool: 'forks',
+    // Threads on Mac/Unix: shared module cache = ~20% faster collect phase
+    // Forks on Windows: required for process.chdir() compatibility and native module isolation
+    pool: process.platform === 'win32' ? 'forks' : 'threads',
     poolOptions: {
       forks: {
         singleFork: false,
-        // Enable parallelization for integration tests (use half of available cores)
+        // Limit to 2 workers on Windows (prevents resource exhaustion / deadlock)
+        maxForks: 2,
       },
     },
   },

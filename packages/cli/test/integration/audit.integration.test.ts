@@ -34,7 +34,8 @@ async function runAudit(targetPath: string, options: AuditCommandOptions = {}) {
   return getValidationResults(targetPath, options.recursive !== false, options, silentLogger);
 }
 
-describe('audit command (integration)', () => {
+// Windows: this test hangs in vitest fork pool — module import deadlocks under constrained forks
+describe.skipIf(process.platform === 'win32')('audit command (integration)', () => {
   let tempDir: string;
 
   beforeAll(() => {

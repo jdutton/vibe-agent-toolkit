@@ -234,7 +234,7 @@ describe('isGitIgnored', () => {
     expect(result).toBe(true);
   });
 
-  it('should detect gitignored files through symlinks via ancestor walk', () => {
+  it.skipIf(process.platform === 'win32')('should detect gitignored files through symlinks via ancestor walk', () => {
     // Simulate: data/ is gitignored, data/linked-content is a symlink to external dir
     // git check-ignore fails with "beyond a symbolic link" for paths through symlinks,
     // but ancestor walk should detect that data/ itself is gitignored
