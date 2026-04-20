@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- Three new skill-smell validation codes (all default `warning`, per skill-smell philosophy):
+  - `SKILL_FRONTMATTER_EXTRA_FIELDS`: frontmatter contains keys beyond the standard agentskills.io + Claude Code set. Allowed keys derive from `AgentSkillFrontmatterSchema` at module load, so the rule tracks the schema. Actionable when adopters put project-specific fields (`version:`, `tools:`, `permissions:`) at top level — `metadata.*` is the right home for custom data.
+  - `SKILL_CROSS_SKILL_AUTH_UNDECLARED`: body prose declares a sibling-skill or `ANTHROPIC_*_KEY` dependency (e.g., "Requires `vibe-agent-toolkit:vat-enterprise-org`", "Requires `ANTHROPIC_ADMIN_API_KEY`") but the description omits it. Narrow heuristic to keep false-positive rate low; bare `ANTHROPIC_API_KEY` (the universal Claude-API default) is explicitly excluded.
+  - `SKILL_DESCRIPTION_STALE_IN_PACKAGE`: detector registered and documented; pipeline wiring deferred to a follow-up RC so adopters aren't surprised by an unexpected warning until the name is settled (the code detects mixed YAML scalar styles across sibling skills — not staleness — and is a rename candidate before it ships observable output).
+
+### Changed
+- `actions/checkout` and `actions/setup-node` bumped from `@v4` to `@v6` across `.github/workflows/*.yml`. Runs on Node 24; removes the Sept-2026 deprecation warning on `v4` runners.
+
+### Fixed
+- `packages/cli/test/system/audit-dogfooding.system.test.ts` test 1 (`should successfully audit vibe-agent-toolkit project root`) now runs on Windows. The `skipIf(process.platform === 'win32')` was added in 0.1.32 when the test timed out at 120s; the narrow `gitCheckIgnoredBatch` fallback fix that landed alongside it dropped audit wall time ~4x, so the smoke test fits in budget again. Windows CI will confirm.
+- Stale JSDoc examples referencing `vibe-agent-toolkit:resources` (renamed to `vibe-agent-toolkit:vat-knowledge-resources` during the 0.1.32 plugin restructure) replaced with `vibe-agent-toolkit:vat-audit` in `packages/cli/src/commands/claude/plugin/build.ts`, `packages/cli/src/commands/skills/build.ts`, `packages/agent-schema/src/package-metadata.ts`, and the companion test constant.
+
 ## [0.1.32] - 2026-04-19
 
 ### Added
