@@ -10,7 +10,11 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { validateFrontmatterRules, validateFrontmatterSchema } from '../../src/validators/frontmatter-validation.js';
+import {
+	detectExtraFrontmatterFields,
+	validateFrontmatterRules,
+	validateFrontmatterSchema,
+} from '../../src/validators/frontmatter-validation.js';
 import type { ValidationIssue } from '../../src/validators/types.js';
 
 // ---------------------------------------------------------------------------
@@ -446,5 +450,78 @@ describe('validateFrontmatterRules', () => {
 
 			expect(findIssueByCode(issues, 'SKILL_DESCRIPTION_WRONG_PERSON')).toBeUndefined();
 		});
+	});
+});
+
+// ---------------------------------------------------------------------------
+// detectExtraFrontmatterFields (SKILL_FRONTMATTER_EXTRA_FIELDS)
+// ---------------------------------------------------------------------------
+
+describe('detectExtraFrontmatterFields', () => {
+	it('returns no issues for standard agentskills.io fields', () => {
+		const issues = detectExtraFrontmatterFields({
+			name: 'my-skill',
+			description: 'Desc',
+			license: 'MIT',
+			compatibility: 'any',
+			metadata: { version: '1.0.0' },
+		});
+		expect(issues).toHaveLength(0);
+	});
+
+	it('returns no issues for standard Claude Code fields', () => {
+		const issues = detectExtraFrontmatterFields({
+			name: 'my-skill',
+			description: 'Desc',
+			'allowed-tools': 'Bash Edit',
+			'argument-hint': '<path>',
+			'disable-model-invocation': false,
+			'user-invocable': true,
+			model: 'sonnet',
+			context: 'fork',
+			agent: 'planner',
+			hooks: { PostToolUse: {} },
+		});
+		expect(issues).toHaveLength(0);
+	});
+
+	it('fires for a single non-standard field', () => {
+		const issues = detectExtraFrontmatterFields({
+			name: 'my-skill',
+			description: 'Desc',
+			version: '1.0.0',
+		});
+		expect(issues).toHaveLength(1);
+		const issue = findIssueByCode(issues, 'SKILL_FRONTMATTER_EXTRA_FIELDS');
+		expect(issue).toBeDefined();
+		expect(issue?.severity).toBe('warning');
+		expect(issue?.message).toContain('version');
+	});
+
+	it('fires for every non-standard field', () => {
+		const issues = detectExtraFrontmatterFields({
+			name: 'my-skill',
+			description: 'Desc',
+			version: '1.0.0',
+			customField: 'foo',
+		});
+		expect(issues).toHaveLength(2);
+		const codes = issues.map((i) => i.code);
+		expect(codes.every((c) => c === 'SKILL_FRONTMATTER_EXTRA_FIELDS')).toBe(true);
+		const messages = issues.map((i) => i.message).join(' ');
+		expect(messages).toContain('version');
+		expect(messages).toContain('customField');
+	});
+
+	it('returns no issues for empty frontmatter', () => {
+		const issues = detectExtraFrontmatterFields({});
+		expect(issues).toHaveLength(0);
+	});
+
+	it('suggests metadata.* in the fix hint', () => {
+		const issues = detectExtraFrontmatterFields({ extraThing: 'foo' });
+		expect(issues).toHaveLength(1);
+		const issue = findIssueByCode(issues, 'SKILL_FRONTMATTER_EXTRA_FIELDS');
+		expect(issue?.fix).toContain('metadata');
 	});
 });

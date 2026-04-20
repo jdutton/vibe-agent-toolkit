@@ -62,12 +62,12 @@ Tooling enforcement: items marked with a bracketed code (e.g., `[SKILL_DESCRIPTI
 
 ### Frontmatter hygiene
 
-- **[VAT] Frontmatter keys stay conservative**: use only the standard keys `name`, `description`, `allowed-tools` (plus `argument-hint` for slash-command-shaped skills). VAT generates SKILL.md under strict schema — novel keys like project-specific `version:` or `metadata:` fields will be rejected. If you need per-skill config, put it in `vibe-agent-toolkit.config.yaml`, not the frontmatter.
-- **[VAT] Sibling skills use consistent YAML styling**: within a single skill package, don't mix folded (`description: >-`) and inline (`description: "..."`) string forms. Pick one and apply it to every skill.
+- **[VAT] Frontmatter keys stay conservative**: use only the standard keys `name`, `description`, `allowed-tools` (plus `argument-hint` for slash-command-shaped skills). VAT generates SKILL.md under strict schema — novel keys like project-specific `version:` or `metadata:` fields will be rejected. If you need per-skill config, put it in `vibe-agent-toolkit.config.yaml`, not the frontmatter. `[SKILL_FRONTMATTER_EXTRA_FIELDS]` warns on non-standard keys.
+- **[VAT] Sibling skills use consistent YAML styling**: within a single skill package, don't mix folded (`description: >-`) and inline (`description: "..."`) string forms. Pick one and apply it to every skill. `[SKILL_DESCRIPTION_STALE_IN_PACKAGE]` flags mixed styles across a package (detector implemented, pipeline wiring pending).
 
 ### Cross-skill dependencies
 
-- **[VAT] State cross-skill dependencies in the description**: if this skill delegates auth, pre-flight, or setup to a sibling skill, say so in the description (`Requires ado skill for auth`). Agents may load one without the other; a silent dependency fails mysteriously at runtime.
+- **[VAT] State cross-skill dependencies in the description**: if this skill delegates auth, pre-flight, or setup to a sibling skill, say so in the description (`Requires ado skill for auth`). Agents may load one without the other; a silent dependency fails mysteriously at runtime. `[SKILL_CROSS_SKILL_AUTH_UNDECLARED]` flags body prose that requires a sibling skill or `ANTHROPIC_*_KEY` env var without naming it in the description.
 
 ### Readability
 

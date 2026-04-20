@@ -26,6 +26,7 @@ import { walkLinkGraph, type LinkResolution, type WalkableRegistry } from '../wa
 import type { AllowRecord } from './allow-filter.js';
 import { CODE_REGISTRY, type IssueCode } from './code-registry.js';
 import { observationToIssue, runCompatDetectors } from './compat-detectors.js';
+import { detectUndeclaredCrossSkillAuth } from './cross-skill-dependency-detection.js';
 import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
 import { SOURCE_ONLY_CODES } from './source-only-codes.js';
 import type { ValidationIssue } from './types.js';
@@ -275,6 +276,12 @@ export async function validateSkillForPackaging(
   collectProgressiveDisclosureIssue(skillLines, bundledFiles.length, skillPath, rawIssues);
   collectNameMismatchIssue(parseResult.frontmatter, skillPath, rawIssues);
   collectTimeSensitiveContentIssues(parseResult.content, skillPath, rawIssues);
+
+  // Cross-skill dependency smell: body declares a requires/depends token the
+  // description does not mention. Uses the post-frontmatter content slice.
+  if (parseResult.frontmatter) {
+    rawIssues.push(...detectUndeclaredCrossSkillAuth(parseResult.frontmatter, parseResult.content));
+  }
 
   // Filter out source-only codes when validating built output
   const filteredIssues = context === 'built'

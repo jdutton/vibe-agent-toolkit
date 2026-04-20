@@ -9,6 +9,7 @@ import type { EvidenceRecord } from '../evidence/index.js';
 import { parseFrontmatter } from '../parsers/frontmatter-parser.js';
 
 import { observationToIssue, runCompatDetectors } from './compat-detectors.js';
+import { detectUndeclaredCrossSkillAuth } from './cross-skill-dependency-detection.js';
 import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
 import type { LinkedFileValidationResult, ValidateOptions, ValidationIssue, ValidationResult } from './types.js';
 import { NAVIGATION_FILE_PATTERNS } from './validation-rules.js';
@@ -73,6 +74,10 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
     ...validateFrontmatterSchema(frontmatter, isVATGenerated),
     ...validateFrontmatterRules(frontmatter),
   );
+
+  // Cross-skill dependency smell: body requires/depends on a token that the
+  // description omits.
+  issues.push(...detectUndeclaredCrossSkillAuth(frontmatter, parseResult.body));
 
   // Validate warning-level rules (skill-specific)
   validateWarningRules(content, lineCount, skillPath, issues);

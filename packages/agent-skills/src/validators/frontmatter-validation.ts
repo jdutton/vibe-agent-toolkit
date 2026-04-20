@@ -8,6 +8,8 @@
  * @see https://code.claude.com/docs/en/skills — Official Claude Code skill frontmatter fields
  */
 
+import type { ZodRawShape } from 'zod';
+
 import { AgentSkillFrontmatterSchema, VATAgentSkillFrontmatterSchema } from '../schemas/agent-skill-frontmatter.js';
 
 import { CODE_REGISTRY } from './code-registry.js';
@@ -104,6 +106,9 @@ export function validateFrontmatterRules(
 	if (frontmatter['description'] && typeof frontmatter['description'] === 'string') {
 		issues.push(...validateDescriptionRules(frontmatter['description']));
 	}
+
+	// Detect non-standard frontmatter keys (agentskills.io + Claude Code allowed set)
+	issues.push(...detectExtraFrontmatterFields(frontmatter));
 
 	return issues;
 }
@@ -238,6 +243,46 @@ const WRONG_PERSON_PATTERN = new RegExp(
 	String.raw`\b${WRONG_PERSON_PRONOUNS}\s+${WRONG_PERSON_VERBS}\b`,
 	'i',
 );
+
+/**
+ * Standard frontmatter field names, derived from the Zod schema so the
+ * allowed set stays in sync with the spec. Covers both agentskills.io and
+ * Claude Code fields.
+ */
+const STANDARD_FRONTMATTER_FIELDS: ReadonlySet<string> = new Set(
+	Object.keys((AgentSkillFrontmatterSchema._def.shape as unknown as () => ZodRawShape)()),
+);
+
+/**
+ * Detect frontmatter keys that sit outside the standard agentskills.io + Claude
+ * Code allowed set. Emits one `SKILL_FRONTMATTER_EXTRA_FIELDS` warning per
+ * non-standard key.
+ *
+ * Exported so CLI call sites can opt in explicitly — `validateFrontmatterRules`
+ * wires it in by default so every validator entry point reports the smell.
+ */
+export function detectExtraFrontmatterFields(
+	frontmatter: Record<string, unknown>,
+): ValidationIssue[] {
+	const issues: ValidationIssue[] = [];
+	const registryEntry = CODE_REGISTRY.SKILL_FRONTMATTER_EXTRA_FIELDS;
+
+	for (const key of Object.keys(frontmatter)) {
+		if (STANDARD_FRONTMATTER_FIELDS.has(key)) {
+			continue;
+		}
+		issues.push({
+			severity: registryEntry.defaultSeverity,
+			code: 'SKILL_FRONTMATTER_EXTRA_FIELDS',
+			message: `Frontmatter contains non-standard field "${key}"; use \`metadata.*\` for custom data.`,
+			location: FRONTMATTER_LOC,
+			fix: registryEntry.fix,
+			reference: registryEntry.reference,
+		});
+	}
+
+	return issues;
+}
 
 function detectWrongPerson(description: string): ValidationIssue | null {
 	const match = WRONG_PERSON_PATTERN.exec(description);

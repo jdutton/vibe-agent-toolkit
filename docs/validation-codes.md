@@ -211,6 +211,27 @@ Best-practice checks about skill shape and content.
 - **Why it matters:** Anthropic's best-practices doc advises against content that will become outdated — time-sensitive prose goes stale and misleads agents. The `info` severity reflects that this is sometimes intentional (historical context); it surfaces the pattern without asserting it is wrong.
 - **Fix:** Remove the time qualifier, or move deprecated guidance into a clearly labeled `## Old patterns` section with a `<details>` block so agents skip it.
 
+### `SKILL_FRONTMATTER_EXTRA_FIELDS`
+
+- **Default:** `warning`
+- **What:** Frontmatter contains a field outside the standard agentskills.io + Claude Code key set (`name`, `description`, `license`, `compatibility`, `metadata`, `allowed-tools`, `argument-hint`, `disable-model-invocation`, `user-invocable`, `model`, `context`, `agent`, `hooks`). One issue fires per non-standard field.
+- **Why it matters:** Non-standard frontmatter keys are silently ignored by spec-compliant consumers and create a portability trap — a project-specific `version:` or `team:` field looks declarative but carries no semantics off that project. The allowed set is derived from the Zod schema so it stays in sync as the spec evolves.
+- **Fix:** Move custom data under `metadata.<key>`, or remove the field. Per-project configuration belongs in `vibe-agent-toolkit.config.yaml`, not SKILL.md frontmatter. Allow via `validation.severity: { SKILL_FRONTMATTER_EXTRA_FIELDS: ignore }` if the field is required by a non-VAT downstream consumer.
+
+### `SKILL_CROSS_SKILL_AUTH_UNDECLARED`
+
+- **Default:** `warning`
+- **What:** `SKILL.md` body contains a `requires` / `depends on` phrase within ~60 characters of a backtick-wrapped sibling skill reference (`` `plugin:skill-name` ``) or an `ANTHROPIC_*_API_KEY` / `ANTHROPIC_*_KEY` environment variable, but the frontmatter `description` does not name that dependency (case-insensitive substring or humanized shard match).
+- **Why it matters:** Agents select skills by description alone — if the description does not mention a prerequisite, the agent can load this skill without loading the sibling it depends on, or run it in an environment missing the required credential. The failure surfaces at runtime as a confusing error rather than a skill that refused to load.
+- **Fix:** Name the dependency in the description (e.g. `Requires ado skill for auth`, `Uses the Anthropic Admin API. Requires ANTHROPIC_ADMIN_API_KEY.`). Allow via `validation.allow` with a `reason` when the dependency is genuinely runtime-optional.
+
+### `SKILL_DESCRIPTION_STALE_IN_PACKAGE`
+
+- **Default:** `warning`
+- **What:** Sibling skills in the same package use a mix of YAML scalar styles for their `description` frontmatter line — folded (`description: >-`), literal (`description: |`), inline double-quoted (`description: "..."`), inline single-quoted (`description: '...'`), or inline plain. When two or more styles appear together, every skill in the package with a classifiable style receives the warning.
+- **Why it matters:** Consistent YAML styling across a skill package is a low-cost signal that the skills were authored deliberately together. Mixed styles usually reflect copy-paste from heterogeneous sources and make packaging refactors (renames, reformats) noisier than they need to be. The rule is package-scoped because within-skill style is invisible to agents — it only matters when compared against siblings.
+- **Fix:** Pick one YAML style and apply it to every skill in the package. The rule's name is a misnomer kept for stability — the detection is style mixing, not textual staleness. Allow via `validation.severity: { SKILL_DESCRIPTION_STALE_IN_PACKAGE: ignore }` per package when mixing is deliberate.
+
 ## Compat Codes
 
 *Stance: see [Compatibility](./skill-quality-and-compatibility.md#compatibility).*

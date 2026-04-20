@@ -39,6 +39,9 @@ export type IssueCode =
   | 'SKILL_NAME_MISMATCHES_DIR'
   | 'RESERVED_WORD_IN_NAME'
   | 'SKILL_TIME_SENSITIVE_CONTENT'
+  | 'SKILL_FRONTMATTER_EXTRA_FIELDS'
+  | 'SKILL_CROSS_SKILL_AUTH_UNDECLARED'
+  | 'SKILL_DESCRIPTION_STALE_IN_PACKAGE'
   // Capability observations — what a skill requires from its runtime
   | 'CAPABILITY_LOCAL_SHELL'
   | 'CAPABILITY_EXTERNAL_CLI'
@@ -192,6 +195,24 @@ export const CODE_REGISTRY: Record<IssueCode, CodeRegistryEntry> = {
     'SKILL.md body contains time-sensitive prose (e.g., "as of November 2025") that may become stale.',
     'Remove the time qualifier, or move deprecated guidance into a clearly labeled "## Old patterns" section with a <details> block.',
     'skill_time_sensitive_content',
+  ),
+  SKILL_FRONTMATTER_EXTRA_FIELDS: entry(
+    'warning',
+    'SKILL.md frontmatter contains a field outside the standard agentskills.io + Claude Code key set.',
+    'Move custom data under `metadata.<key>`, or remove the field. Per-project config belongs in vibe-agent-toolkit.config.yaml, not SKILL.md frontmatter.',
+    'skill_frontmatter_extra_fields',
+  ),
+  SKILL_CROSS_SKILL_AUTH_UNDECLARED: entry(
+    'warning',
+    'SKILL.md body declares a dependency on a sibling skill or ANTHROPIC_*_KEY environment variable that is not mentioned in the description.',
+    'Name the dependency in the description (e.g. "Requires ado skill for auth" or "Requires ANTHROPIC_ADMIN_API_KEY") so agents loading the skill discover it without reading the body.',
+    'skill_cross_skill_auth_undeclared',
+  ),
+  SKILL_DESCRIPTION_STALE_IN_PACKAGE: entry(
+    'warning',
+    'Sibling skills in the same package use mixed YAML scalar styles for their `description` frontmatter (e.g., folded `>-` alongside inline double-quoted).',
+    'Pick one YAML style and apply it to every skill in the package. Note: the rule name is currently "stale" for historical reasons — see docs/validation-codes.md.',
+    'skill_description_stale_in_package',
   ),
   CAPABILITY_LOCAL_SHELL: entry(
     'info',
