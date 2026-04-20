@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import type { AuditCommandOptions } from '../src/commands/audit.js';
-import { getValidationResults } from '../src/commands/audit.js';
+import { getValidationResults, resetAuditCaches } from '../src/commands/audit.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const binPath = safePath.resolve(__dirname, '../dist/bin.js');
@@ -38,5 +38,9 @@ export async function runAudit(
   targetPath: string,
   options: AuditCommandOptions = {}
 ): ReturnType<typeof getValidationResults> {
+  // Mirror auditCommand's cache reset so sibling tests sharing a vitest
+  // worker (e.g. Windows fork pool with maxForks: 2) don't observe stale
+  // GitTrackers / governing-config / skill-discovery caches.
+  resetAuditCaches();
   return getValidationResults(targetPath, options.recursive !== false, options, silentAuditLogger);
 }

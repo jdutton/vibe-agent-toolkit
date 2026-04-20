@@ -677,15 +677,7 @@ export async function auditCommand(
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
 
-  // Each `vat audit` invocation gets a fresh tracker cache — test suites
-  // that run audit multiple times in-process against mutated fixtures must
-  // not observe stale active-set data from prior runs.
-  gitTrackerCache.clear();
-  // Invalidate the governing-config cache so in-process tests that mutate
-  // fixture configs between runs do not see stale parse results.
-  resetGoverningConfigCache();
-  // Invalidate the discovered-skills cache for the same reason.
-  resetConfigSkillDiscoveryCache();
+  resetAuditCaches();
 
   try {
     // Commander sets options.recursive to false when --no-recursive is passed, true otherwise
@@ -1258,6 +1250,18 @@ interface ScanContext {
 
 /** Cache of (gitRoot → initialized GitTracker) to avoid re-spawning ls-files. */
 const gitTrackerCache: Map<string, GitTracker> = new Map();
+
+/**
+ * Reset all module-level audit caches. Must be called at the start of every
+ * independent audit invocation so in-process callers (CLI entrypoint AND
+ * integration tests that share a vitest worker) don't observe stale trackers,
+ * governing configs, or skill-discovery maps from a prior run.
+ */
+export function resetAuditCaches(): void {
+  gitTrackerCache.clear();
+  resetGoverningConfigCache();
+  resetConfigSkillDiscoveryCache();
+}
 
 async function getOrCreateGitTracker(gitRoot: string): Promise<GitTracker> {
   const cached = gitTrackerCache.get(gitRoot);

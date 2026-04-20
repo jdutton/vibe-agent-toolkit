@@ -7,7 +7,7 @@ import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import type { AuditCommandOptions } from '../../src/commands/audit.js';
-import { getValidationResults } from '../../src/commands/audit.js';
+import { getValidationResults, resetAuditCaches } from '../../src/commands/audit.js';
 
 // Constants for test fixtures
 const CLAUDE_PLUGIN_DIRNAME = '.claude-plugin';
@@ -31,6 +31,7 @@ const silentLogger = {
 // Helper to run audit validation directly (no CLI subprocess)
 // options.recursive defaults to true (recursive by default), set to false to disable
 async function runAudit(targetPath: string, options: AuditCommandOptions = {}) {
+  resetAuditCaches();
   return getValidationResults(targetPath, options.recursive !== false, options, silentLogger);
 }
 
