@@ -146,12 +146,15 @@ async function validateLocalFileLink(
     options?.projectRoot !== undefined &&
     isWithinProject(fileResult.resolvedPath, options.projectRoot)
   ) {
-    // Use GitTracker if available (cached), otherwise fall back to isGitIgnored
+    // Prefer the O(1) active-set lookup on the shared GitTracker (no spawn).
+    // isIgnoredByActiveSet falls back internally to isIgnored for paths outside
+    // the project root, so this is safe for the rare out-of-project case.
+    // When no tracker is threaded in, fall back to isGitIgnored (one-off spawn).
     const sourceIsIgnored = options.gitTracker
-      ? options.gitTracker.isIgnored(sourceFilePath)
+      ? options.gitTracker.isIgnoredByActiveSet(sourceFilePath)
       : isGitIgnored(sourceFilePath, options.projectRoot);
     const targetIsIgnored = options.gitTracker
-      ? options.gitTracker.isIgnored(fileResult.resolvedPath)
+      ? options.gitTracker.isIgnoredByActiveSet(fileResult.resolvedPath)
       : isGitIgnored(fileResult.resolvedPath, options.projectRoot);
 
     // Error ONLY if: source is NOT ignored AND target IS ignored

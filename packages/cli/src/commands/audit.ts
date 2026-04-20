@@ -102,6 +102,43 @@ function mergeSkillConfigForAudit(
 const VAT_CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 
 /**
+ * Cache of `configRoot → (absSkillPath → skillName)` derived from
+ * `discoverSkillsFromConfig`. Audit walks up from each SKILL.md it discovers
+ * to the skill's nearest-ancestor config; re-expanding the governing config's
+ * skills-globs per skill is O(N²) on multi-skill packages and dominates audit
+ * wall time on Windows (per-path FS spawns amplify the cost). The cache
+ * collapses it back to one expansion per configRoot per audit invocation.
+ *
+ * Invalidated at the top of {@link auditCommand} alongside the other scoped
+ * caches so test suites that mutate fixtures between in-process audits do not
+ * see stale discovery data.
+ */
+const configSkillDiscoveryCache: Map<string, Map<string, string>> = new Map();
+
+function resetConfigSkillDiscoveryCache(): void {
+  configSkillDiscoveryCache.clear();
+}
+
+async function getDiscoveredSkillsByPath(
+  skillsSection: NonNullable<ReturnType<typeof loadConfig>>['skills'],
+  configRoot: string,
+): Promise<Map<string, string>> {
+  const cached = configSkillDiscoveryCache.get(configRoot);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const map = new Map<string, string>();
+  if (skillsSection !== undefined) {
+    const discovered = await discoverSkillsFromConfig(skillsSection, configRoot);
+    for (const entry of discovered) {
+      map.set(safePath.resolve(entry.sourcePath), entry.name);
+    }
+  }
+  configSkillDiscoveryCache.set(configRoot, map);
+  return map;
+}
+
+/**
  * Build config-aware context for a single VAT project at `scanRoot`.
  *
  * VAT's design: one `vibe-agent-toolkit.config.yaml` per project. Configs do
@@ -192,20 +229,13 @@ async function resolveSkillPackagingConfig(
 
   const { defaults, config: perSkillConfig } = config.skills;
 
-  // Find which declared skill (by name) corresponds to this skill path, by
-  // expanding skill discovery against the governing config and matching on
-  // resolved absolute sourcePath. This keeps the walk-up path declarative
-  // (reuses the same discovery logic as the rest of VAT) rather than
-  // duck-typing the skill name from frontmatter on top of a separate lookup.
+  // Find which declared skill (by name) corresponds to this skill path.
+  // The discovery map is cached per governing configRoot so audits against
+  // multi-skill packages don't re-expand the same globs N times.
   let matchedName: string | undefined;
   try {
-    const discovered = await discoverSkillsFromConfig(config.skills, configRoot);
-    for (const entry of discovered) {
-      if (safePath.resolve(entry.sourcePath) === absSkillPath) {
-        matchedName = entry.name;
-        break;
-      }
-    }
+    const byPath = await getDiscoveredSkillsByPath(config.skills, configRoot);
+    matchedName = byPath.get(absSkillPath);
   } catch {
     return null;
   }
@@ -654,6 +684,8 @@ export async function auditCommand(
   // Invalidate the governing-config cache so in-process tests that mutate
   // fixture configs between runs do not see stale parse results.
   resetGoverningConfigCache();
+  // Invalidate the discovered-skills cache for the same reason.
+  resetConfigSkillDiscoveryCache();
 
   try {
     // Commander sets options.recursive to false when --no-recursive is passed, true otherwise
