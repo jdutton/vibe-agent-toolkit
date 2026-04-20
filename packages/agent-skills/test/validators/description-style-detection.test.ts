@@ -1,5 +1,4 @@
 /* eslint-disable @typescript-eslint/no-non-null-assertion -- Tests use non-null assertions after explicit length checks */
-/* eslint-disable sonarjs/no-duplicate-string -- Test fixtures intentionally reuse path/content literals across cases */
 /**
  * Unit tests for description-style-detection.ts
  *
@@ -18,33 +17,52 @@ import {
   detectMixedDescriptionStyles,
 } from '../../src/validators/description-style-detection.js';
 
+/** Build a SKILL.md fixture record with `description:` in a particular YAML scalar style. */
+function skillFixture(
+  path: string,
+  descriptionBlock: string,
+  preamble = '',
+): { path: string; rawContent: string } {
+  const rawContent = `---\n${preamble}description: ${descriptionBlock}\n---\n`;
+  return { path, rawContent };
+}
+
+/** Classify a `description:` block by wrapping it in the expected prefix. */
+function classify(descriptionBlock: string): ReturnType<typeof classifyDescriptionYamlStyle> {
+  return classifyDescriptionYamlStyle(`description: ${descriptionBlock}`);
+}
+
+const PATH_A = '/a/SKILL.md';
+const PATH_B = '/b/SKILL.md';
+const PATH_C = '/c/SKILL.md';
+
 describe('classifyDescriptionYamlStyle', () => {
   it('classifies folded style with >-', () => {
-    expect(classifyDescriptionYamlStyle('description: >-\n  inline text')).toBe('folded');
+    expect(classify('>-\n  inline text')).toBe('folded');
   });
 
   it('classifies folded style with >', () => {
-    expect(classifyDescriptionYamlStyle('description: >\n  text')).toBe('folded');
+    expect(classify('>\n  text')).toBe('folded');
   });
 
   it('classifies literal style with |', () => {
-    expect(classifyDescriptionYamlStyle('description: |\n  text')).toBe('literal');
+    expect(classify('|\n  text')).toBe('literal');
   });
 
   it('classifies literal style with |-', () => {
-    expect(classifyDescriptionYamlStyle('description: |-\n  text')).toBe('literal');
+    expect(classify('|-\n  text')).toBe('literal');
   });
 
   it('classifies inline double-quoted', () => {
-    expect(classifyDescriptionYamlStyle('description: "double quoted"')).toBe('inline-double');
+    expect(classify('"double quoted"')).toBe('inline-double');
   });
 
   it('classifies inline single-quoted', () => {
-    expect(classifyDescriptionYamlStyle("description: 'single quoted'")).toBe('inline-single');
+    expect(classify("'single quoted'")).toBe('inline-single');
   });
 
   it('classifies inline plain', () => {
-    expect(classifyDescriptionYamlStyle('description: plain text no quotes')).toBe('inline-plain');
+    expect(classify('plain text no quotes')).toBe('inline-plain');
   });
 
   it('returns null when no description line is present', () => {
@@ -52,23 +70,23 @@ describe('classifyDescriptionYamlStyle', () => {
   });
 
   it('tolerates trailing whitespace on the marker', () => {
-    expect(classifyDescriptionYamlStyle('description: >-   \n  text')).toBe('folded');
+    expect(classify('>-   \n  text')).toBe('folded');
   });
 });
 
 describe('detectMixedDescriptionStyles', () => {
   it('returns no issues when all skills share one style', () => {
     const issues = detectMixedDescriptionStyles([
-      { path: '/a/SKILL.md', rawContent: '---\nname: a\ndescription: >-\n  desc a\n---\n' },
-      { path: '/b/SKILL.md', rawContent: '---\nname: b\ndescription: >-\n  desc b\n---\n' },
+      skillFixture(PATH_A, '>-\n  desc a', 'name: a\n'),
+      skillFixture(PATH_B, '>-\n  desc b', 'name: b\n'),
     ]);
     expect(issues).toHaveLength(0);
   });
 
   it('fires on every skill when styles are mixed across the package', () => {
     const issues = detectMixedDescriptionStyles([
-      { path: '/a/SKILL.md', rawContent: '---\nname: a\ndescription: >-\n  desc a\n---\n' },
-      { path: '/b/SKILL.md', rawContent: '---\nname: b\ndescription: "desc b inline"\n---\n' },
+      skillFixture(PATH_A, '>-\n  desc a', 'name: a\n'),
+      skillFixture(PATH_B, '"desc b inline"', 'name: b\n'),
     ]);
     expect(issues).toHaveLength(2);
     for (const issue of issues) {
@@ -76,14 +94,14 @@ describe('detectMixedDescriptionStyles', () => {
       expect(issue.severity).toBe('warning');
       expect(issue.message).toContain('mixed YAML styles');
     }
-    expect(issues.map((i) => i.location)).toEqual(['/a/SKILL.md', '/b/SKILL.md']);
+    expect(issues.map((i) => i.location)).toEqual([PATH_A, PATH_B]);
   });
 
   it('reports the observed style set in the message', () => {
     const issues = detectMixedDescriptionStyles([
-      { path: '/a/SKILL.md', rawContent: '---\ndescription: >-\n  d\n---\n' },
-      { path: '/b/SKILL.md', rawContent: '---\ndescription: "d"\n---\n' },
-      { path: '/c/SKILL.md', rawContent: '---\ndescription: plain\n---\n' },
+      skillFixture(PATH_A, '>-\n  d'),
+      skillFixture(PATH_B, '"d"'),
+      skillFixture(PATH_C, 'plain'),
     ]);
     expect(issues).toHaveLength(3);
     expect(issues[0]!.message).toContain('folded');
@@ -93,17 +111,15 @@ describe('detectMixedDescriptionStyles', () => {
 
   it('skips skills whose description style could not be classified', () => {
     const issues = detectMixedDescriptionStyles([
-      { path: '/a/SKILL.md', rawContent: '---\nname: a\n---\n' },
-      { path: '/b/SKILL.md', rawContent: '---\ndescription: >-\n  d\n---\n' },
+      { path: PATH_A, rawContent: '---\nname: a\n---\n' },
+      skillFixture(PATH_B, '>-\n  d'),
     ]);
     // only one style observed — no mixing
     expect(issues).toHaveLength(0);
   });
 
   it('returns no issues for a single-skill package', () => {
-    const issues = detectMixedDescriptionStyles([
-      { path: '/a/SKILL.md', rawContent: '---\ndescription: >-\n  d\n---\n' },
-    ]);
+    const issues = detectMixedDescriptionStyles([skillFixture(PATH_A, '>-\n  d')]);
     expect(issues).toHaveLength(0);
   });
 });
