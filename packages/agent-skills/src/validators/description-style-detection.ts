@@ -1,23 +1,19 @@
 /**
  * Package-scope YAML-style mixing detection
  *
- * SKILL_DESCRIPTION_STALE_IN_PACKAGE — fires on every skill in a package
- * when the sibling skills' `description` frontmatter lines use a mix of
- * YAML scalar styles (folded, literal, inline-double, inline-single,
- * inline-plain).
+ * SKILL_DESCRIPTION_STYLE_MIXED_IN_PACKAGE — fires on every skill in a
+ * package when the sibling skills' `description` frontmatter lines use a
+ * mix of YAML scalar styles (folded, literal, inline-double,
+ * inline-single, inline-plain).
  *
  * This detector operates on the RAW frontmatter bytes because the style
  * information is erased by YAML parsers. It is package-scoped: callers
  * must collect every sibling skill's raw content and invoke
  * `detectMixedDescriptionStyles` once.
  *
- * Naming note: the code is `SKILL_DESCRIPTION_STALE_IN_PACKAGE` for
- * historical reasons — the actual detection is YAML-style mixing, not
- * textual staleness. See the rc.1 plan for a rename candidate.
- *
  * Status: detector implemented and unit-tested, not yet wired into the
  * validator pipeline (requires a package-level aggregation pass at the
- * CLI call site). See the 0.1.33-rc.1 plan for the deferral rationale.
+ * CLI call site).
  */
 
 import { CODE_REGISTRY } from './code-registry.js';
@@ -109,13 +105,13 @@ export function detectMixedDescriptionStyles(
 		return [];
 	}
 
-	const registryEntry = CODE_REGISTRY.SKILL_DESCRIPTION_STALE_IN_PACKAGE;
+	const registryEntry = CODE_REGISTRY.SKILL_DESCRIPTION_STYLE_MIXED_IN_PACKAGE;
 	const sortedStyles = [...styles].sort((a, b) => a.localeCompare(b));
 	const message = `Skill descriptions in this package use mixed YAML styles (${sortedStyles.join(', ')}); pick one for consistency.`;
 
 	return perSkill.map(({ path }) => ({
 		severity: registryEntry.defaultSeverity,
-		code: 'SKILL_DESCRIPTION_STALE_IN_PACKAGE' as const,
+		code: 'SKILL_DESCRIPTION_STYLE_MIXED_IN_PACKAGE' as const,
 		message,
 		location: path,
 		fix: registryEntry.fix,

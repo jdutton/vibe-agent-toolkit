@@ -3,7 +3,7 @@
 /**
  * Unit tests for description-style-detection.ts
  *
- * SKILL_DESCRIPTION_STALE_IN_PACKAGE — detects when a package of sibling skills
+ * SKILL_DESCRIPTION_STYLE_MIXED_IN_PACKAGE — detects when a package of sibling skills
  * mixes YAML scalar styles across their `description` frontmatter lines.
  *
  * The detector is standalone pending pipeline wiring — it is exercised here so
@@ -72,7 +72,7 @@ describe('detectMixedDescriptionStyles', () => {
     ]);
     expect(issues).toHaveLength(2);
     for (const issue of issues) {
-      expect(issue.code).toBe('SKILL_DESCRIPTION_STALE_IN_PACKAGE');
+      expect(issue.code).toBe('SKILL_DESCRIPTION_STYLE_MIXED_IN_PACKAGE');
       expect(issue.severity).toBe('warning');
       expect(issue.message).toContain('mixed YAML styles');
     }

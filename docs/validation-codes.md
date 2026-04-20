@@ -225,12 +225,12 @@ Best-practice checks about skill shape and content.
 - **Why it matters:** Agents select skills by description alone — if the description does not mention a prerequisite, the agent can load this skill without loading the sibling it depends on, or run it in an environment missing the required credential. The failure surfaces at runtime as a confusing error rather than a skill that refused to load.
 - **Fix:** Name the dependency in the description (e.g. `Requires ado skill for auth`, `Uses the Anthropic Admin API. Requires ANTHROPIC_ADMIN_API_KEY.`). Allow via `validation.allow` with a `reason` when the dependency is genuinely runtime-optional.
 
-### `SKILL_DESCRIPTION_STALE_IN_PACKAGE`
+### `SKILL_DESCRIPTION_STYLE_MIXED_IN_PACKAGE`
 
 - **Default:** `warning`
 - **What:** Sibling skills in the same package use a mix of YAML scalar styles for their `description` frontmatter line — folded (`description: >-`), literal (`description: |`), inline double-quoted (`description: "..."`), inline single-quoted (`description: '...'`), or inline plain. When two or more styles appear together, every skill in the package with a classifiable style receives the warning.
 - **Why it matters:** Consistent YAML styling across a skill package is a low-cost signal that the skills were authored deliberately together. Mixed styles usually reflect copy-paste from heterogeneous sources and make packaging refactors (renames, reformats) noisier than they need to be. The rule is package-scoped because within-skill style is invisible to agents — it only matters when compared against siblings.
-- **Fix:** Pick one YAML style and apply it to every skill in the package. The rule's name is a misnomer kept for stability — the detection is style mixing, not textual staleness. Allow via `validation.severity: { SKILL_DESCRIPTION_STALE_IN_PACKAGE: ignore }` per package when mixing is deliberate.
+- **Fix:** Pick one YAML style and apply it to every skill in the package. Allow via `validation.severity: { SKILL_DESCRIPTION_STYLE_MIXED_IN_PACKAGE: ignore }` per package when mixing is deliberate.
 
 ## Compat Codes
 
