@@ -94,3 +94,58 @@ export function loadConfig(projectRoot: string): ProjectConfig | undefined {
 export function getConfigDir(configPath: string): string {
   return dirname(configPath);
 }
+
+/**
+ * Module-level cache keyed by configRoot → parsed ProjectConfig (or null if
+ * the file failed to load). Avoids re-parsing the same config yaml repeatedly
+ * when audit walks up from many sibling skills.
+ *
+ * Tests that mutate fixtures between runs must call {@link resetGoverningConfigCache}
+ * to invalidate this cache.
+ */
+const governingConfigCache: Map<string, ProjectConfig | null> = new Map();
+
+/**
+ * Reset the governing-config cache used by {@link findGoverningConfig}.
+ * Call at the start of each `vat audit` invocation so in-process test suites
+ * that mutate fixtures between runs do not observe stale config data.
+ */
+export function resetGoverningConfigCache(): void {
+  governingConfigCache.clear();
+}
+
+/**
+ * Walk UP from `skillDir` looking for the nearest-ancestor
+ * `vibe-agent-toolkit.config.yaml`. Loads and caches the config on first hit.
+ *
+ * Returns the parsed config plus the `configRoot` (directory that contained the
+ * yaml), or `null` if no config is found anywhere up the tree.
+ */
+export function findGoverningConfig(
+  skillDir: string
+): { config: ProjectConfig; configRoot: string } | null {
+  const configPath = findConfigPath(skillDir);
+  if (configPath === null) {
+    return null;
+  }
+  const configRoot = dirname(configPath);
+
+  const cached = governingConfigCache.get(configRoot);
+  if (cached !== undefined) {
+    return cached === null ? null : { config: cached, configRoot };
+  }
+
+  try {
+    const config = loadConfig(configRoot);
+    if (config === undefined) {
+      governingConfigCache.set(configRoot, null);
+      return null;
+    }
+    governingConfigCache.set(configRoot, config);
+    return { config, configRoot };
+  } catch {
+    // Invalid config — cache as null so we don't re-parse on every skill.
+    governingConfigCache.set(configRoot, null);
+    return null;
+  }
+}
