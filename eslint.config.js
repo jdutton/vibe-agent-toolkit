@@ -30,6 +30,7 @@ export default [
       '**/*.d.ts',
       'vitest.config.ts',
       'vitest.*.config.ts',
+      'vitest.shared.ts',
       'vitest.setup.js',
       '.worktrees/',  // Git worktrees
       '.claude/worktrees/',  // Claude Code worktrees

@@ -311,6 +311,7 @@ async function validateSourceFileLocations(): Promise<void> {
     'vitest.config.ts',
     'vitest.integration.config.ts',
     'vitest.system.config.ts',
+    'vitest.shared.ts',
     'vitest.workspace.ts',
   ]);
 

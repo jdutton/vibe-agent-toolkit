@@ -1,5 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
+import { platformPool, platformPoolOptions, platformTestTimeout } from './vitest.shared.js';
+
 export default defineConfig({
   test: {
     globals: true,
@@ -16,18 +18,9 @@ export default defineConfig({
       '**/*.integration.test.ts', // Integration tests run separately
       '**/*.system.test.ts', // System tests run separately (e2e, longer running)
     ],
-    // Enable parallelization for fast unit test execution
-    testTimeout: process.platform === 'win32' ? 900000 : 60000, // 15min Windows, 1min Unix
-    // Threads on Mac/Unix: shared module cache = ~20% faster collect phase
-    // Forks on Windows: required for process.chdir() compatibility and native module isolation
-    pool: process.platform === 'win32' ? 'forks' : 'threads',
-    poolOptions: {
-      forks: {
-        singleFork: false,
-        // Limit to 2 workers on Windows (sweet spot per arch analysis)
-        maxForks: 2,
-      },
-    },
+    testTimeout: platformTestTimeout,
+    pool: platformPool,
+    poolOptions: platformPoolOptions,
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html', 'lcov'],
