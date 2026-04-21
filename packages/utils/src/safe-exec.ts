@@ -167,9 +167,14 @@ export function safeExecSync(
   };
 
   // Execute with absolute path (or command name if using shell on Windows)
-  // When shell:true, use command name so shell can resolve it properly
+  // When shell:true, use command name so shell can resolve it properly.
+  // Node.js v24+ (DEP0190) rejects shell:true with separate args containing
+  // shell metacharacters (*, ?, etc.) with EINVAL. Join into a single string
+  // so the shell handles expansion/quoting itself.
   const execCommand = useShell ? command : commandPath;
-  const result = spawnSync(execCommand, args, spawnOptions);
+  const result = useShell
+    ? spawnSync(`${execCommand} ${args.join(' ')}`, { ...spawnOptions, shell: true })
+    : spawnSync(execCommand, args, spawnOptions);
 
   // Check for spawn errors
   if (result.error) {

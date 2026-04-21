@@ -108,10 +108,16 @@ export function safeExecSync(
   // Resolve command path using which (avoids PATH security issues)
   const commandPath = which.sync(command);
 
-  const result = spawnSync(commandPath, args, {
-    ...options,
-    shell: false,
-  });
+  // Windows .cmd/.bat files require shell:true. Node.js v24+ (DEP0190) rejects
+  // shell:true with separate args containing shell metacharacters (*, ?, etc.)
+  // with EINVAL, so join command + args into a single string for the shell.
+  const lowerPath = commandPath.toLowerCase();
+  const needsShell = process.platform === 'win32' &&
+    (lowerPath.endsWith('.cmd') || lowerPath.endsWith('.bat'));
+
+  const result = needsShell
+    ? spawnSync(`${command} ${args.join(' ')}`, { ...options, shell: true })
+    : spawnSync(commandPath, args, { ...options, shell: false });
 
   if (result.error) {
     throw result.error;
