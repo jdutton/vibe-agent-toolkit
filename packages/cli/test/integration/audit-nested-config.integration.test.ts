@@ -1,19 +1,24 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 
 /**
- * Integration test: nested vibe-agent-toolkit.config.yaml files are honored
- * when `vat audit` is run from the monorepo root.
+ * Integration test: per-skill walk-up to the nearest-ancestor
+ * `vibe-agent-toolkit.config.yaml`.
  *
- * Exercises limitation fix for "nearest-ancestor config" per SKILL.md:
- * when a subdirectory has its own config.yaml with skills section and
- * `excludeReferencesFromBundle` rules, those rules suppress
- * LINK_OUTSIDE_PROJECT for skills in that subdirectory — even when the
- * audit is launched from a parent directory with a different (or no skills)
- * config.
+ * VAT's design: one config per VAT project. Configs do NOT compose across
+ * projects. Audit walks UP from each discovered SKILL.md to its
+ * nearest-ancestor config and applies ONLY that skill's declared packaging
+ * rules. Sibling configs never contaminate each other.
  *
- * Regression: skills in subdirectories WITHOUT a config.yaml still fire
- * LINK_OUTSIDE_PROJECT (confirms nested-config discovery is scoped to dirs
- * that actually have a config).
+ * Fixture:
+ *   tempDir/
+ *     vibe-agent-toolkit.config.yaml     (root — resources-only, no skills)
+ *     external-docs/guide.md
+ *     pkg-a/
+ *       vibe-agent-toolkit.config.yaml   (declares pkg-a-skill with
+ *                                          excludeReferencesFromBundle rule)
+ *       resources/skills/SKILL.md        (links to ../../../external-docs/)
+ *     pkg-b/
+ *       resources/skills/SKILL.md        (no governing pkg-b config)
  */
 
 import { spawnSync } from 'node:child_process';
@@ -26,12 +31,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { runAudit } from '../test-helpers.js';
 
 /**
- * Write a SKILL.md that contains a link to an external file (relative to its
- * own directory, but outside any bundle root), which would normally fire
- * LINK_OUTSIDE_PROJECT.
- *
- * The link target: `../../external-docs/guide.md` — referencing a file
- * at the scan root level, which is outside the pkg's own subtree.
+ * Write a SKILL.md that references an external doc via a relative path that
+ * escapes the skill's bundle root. Without a suppressing rule this fires
+ * LINK_OUTSIDE_PROJECT under packaging validation.
  */
 function writeSkillWithExternalLink(skillPath: string, skillName: string): void {
   fs.mkdirSync(path.dirname(skillPath), { recursive: true });
@@ -39,29 +41,26 @@ function writeSkillWithExternalLink(skillPath: string, skillName: string): void 
     skillPath,
     `---
 name: ${skillName}
-description: A test skill that links to external docs.
+description: A test skill that links to external docs for per-skill config verification.
 ---
 
 # ${skillName}
 
-See [the guide](../../external-docs/guide.md) for details.
+See [the guide](../../../external-docs/guide.md) for details.
 `,
   );
 }
 
-/**
- * Write a minimal external doc that the SKILL.md links to, so the link is
- * not broken (we want LINK_OUTSIDE_PROJECT, not BROKEN_LINK).
- */
+/** Write the external doc the SKILLs point at (so links are not broken). */
 function writeExternalDoc(docPath: string): void {
   fs.mkdirSync(path.dirname(docPath), { recursive: true });
-  fs.writeFileSync(docPath, `# Guide\n\nSome external guidance.\n`);
+  fs.writeFileSync(docPath, `# Guide\n\nExternal guidance content.\n`);
 }
 
 /**
- * Write a root-level config (no skills section — just resources).
- * Also writes a package.json with "workspaces" so findProjectRoot treats
- * rootDir as the workspace root (same as a real monorepo).
+ * Root config: resources-only (no skills section). Mirrors the VAT monorepo
+ * pattern where the top-level config exists for resources validation but
+ * declares no skills itself.
  */
 function writeRootConfig(rootDir: string): void {
   fs.writeFileSync(
@@ -76,25 +75,57 @@ function writeRootConfig(rootDir: string): void {
 }
 
 /**
- * Write a nested config WITH a skills section that declares
- * excludeReferencesFromBundle to allow external doc references.
+ * pkg-a's config declares pkg-a-skill explicitly in `skills.config` with an
+ * `excludeReferencesFromBundle` rule that suppresses external-docs links.
  */
-function writeNestedConfigWithExclude(pkgDir: string, skillGlob: string): void {
+function writePkgAConfig(pkgDir: string): void {
   fs.writeFileSync(
     safePath.join(pkgDir, 'vibe-agent-toolkit.config.yaml'),
-    `version: 1\n\nskills:\n  include:\n    - "${skillGlob}"\n  defaults:\n    excludeReferencesFromBundle:\n      rules:\n        - patterns:\n            - "external-docs/**"\n`,
+    `version: 1
+
+skills:
+  include:
+    - "resources/skills/SKILL.md"
+  config:
+    pkg-a-skill:
+      excludeReferencesFromBundle:
+        rules:
+          - patterns:
+              - "external-docs/**"
+`,
   );
 }
 
-describe('audit nested config discovery (integration)', () => {
+/**
+ * Run audit and collect LINK_OUTSIDE_PROJECT issues for the skill whose
+ * path contains `pkgMarker`. Returns `{ result, linkOutsideIssues }` so
+ * each test can assert on whatever shape it needs.
+ */
+async function auditAndCollectLinkOutside(
+  scanDir: string,
+  pkgMarker: string,
+): Promise<{
+  result: Awaited<ReturnType<typeof runAudit>>[number] | undefined;
+  linkOutsideIssues: Array<{ code: string; message: string }>;
+}> {
+  const results = await runAudit(scanDir, { recursive: true });
+  const result = results.find(r => r.path.includes(pkgMarker));
+  const linkOutsideIssues = (result?.issues ?? []).filter(
+    i => i.code === 'LINK_OUTSIDE_PROJECT',
+  );
+  return { result, linkOutsideIssues };
+}
+
+describe('audit per-skill walk-up to nearest-ancestor config (integration)', () => {
   let tempDir: string;
+  let pkgADir: string;
+  let pkgBDir: string;
 
   beforeAll(() => {
     tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-audit-nested-cfg-'));
 
-    // Initialize a git repo so resolveGitRootForScan returns non-null.
-    // Without git, buildVATProjectContext is skipped (git guard in scanDirectory).
-    // Files must be `git add`-ed so crawlDirectory (which uses git ls-files) finds them.
+    // Git init so resolveScanContext returns a real git root and the walker
+    // can use git ls-files to find fixtures.
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for repo init in tests
     spawnSync('git', ['init', '-b', 'main', '--quiet', tempDir], { stdio: 'ignore' });
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for repo init in tests
@@ -105,20 +136,25 @@ describe('audit nested config discovery (integration)', () => {
     // Root config (no skills section)
     writeRootConfig(tempDir);
 
-    // External doc that SKILL.md files link to (lives at scan root level)
+    // External doc the SKILL.md files link to (lives at repo root)
     writeExternalDoc(safePath.join(tempDir, 'external-docs', 'guide.md'));
 
-    // pkg-a: HAS its own config with excludeReferencesFromBundle
-    const pkgADir = safePath.join(tempDir, 'pkg-a');
-    const pkgASkillPath = safePath.join(pkgADir, 'resources', 'skills', 'SKILL.md');
-    writeSkillWithExternalLink(pkgASkillPath, 'pkg-a-skill');
-    writeNestedConfigWithExclude(pkgADir, 'resources/skills/SKILL.md');
+    // pkg-a: governing config suppresses LINK_OUTSIDE_PROJECT for pkg-a-skill.
+    pkgADir = safePath.join(tempDir, 'pkg-a');
+    writeSkillWithExternalLink(
+      safePath.join(pkgADir, 'resources', 'skills', 'SKILL.md'),
+      'pkg-a-skill',
+    );
+    writePkgAConfig(pkgADir);
 
-    // pkg-b: NO config of its own — should still fire LINK_OUTSIDE_PROJECT
-    const pkgBDir = safePath.join(tempDir, 'pkg-b');
-    const pkgBSkillPath = safePath.join(pkgBDir, 'resources', 'skills', 'SKILL.md');
-    writeSkillWithExternalLink(pkgBSkillPath, 'pkg-b-skill');
-    // (No vibe-agent-toolkit.config.yaml in pkg-b — intentionally)
+    // pkg-b: NO governing config — walk-up finds the root config which has
+    // no skills section, so wild mode / default rules apply. The skill's
+    // external link should still fire LINK_OUTSIDE_PROJECT.
+    pkgBDir = safePath.join(tempDir, 'pkg-b');
+    writeSkillWithExternalLink(
+      safePath.join(pkgBDir, 'resources', 'skills', 'SKILL.md'),
+      'pkg-b-skill',
+    );
 
     // Track all files so crawlDirectory (git ls-files mode) can find them.
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for staging files in tests
@@ -129,34 +165,26 @@ describe('audit nested config discovery (integration)', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('pkg-a: LINK_OUTSIDE_PROJECT is suppressed because pkg-a config excludes external-docs/**', async () => {
-    const results = await runAudit(tempDir, { recursive: true });
-    const pkgAResult = results.find(r => r.path.includes('pkg-a'));
-
-    expect(pkgAResult).toBeDefined();
-    const linkOutsideIssues = (pkgAResult?.issues ?? []).filter(
-      i => i.code === 'LINK_OUTSIDE_PROJECT',
-    );
+  it('pkg-a: LINK_OUTSIDE_PROJECT suppressed because pkg-a config excludes external-docs/**', async () => {
+    const { result, linkOutsideIssues } = await auditAndCollectLinkOutside(tempDir, 'pkg-a');
+    expect(result).toBeDefined();
     expect(linkOutsideIssues).toHaveLength(0);
   });
 
-  it('pkg-b: LINK_OUTSIDE_PROJECT still fires because pkg-b has no config', async () => {
-    const results = await runAudit(tempDir, { recursive: true });
-    const pkgBResult = results.find(r => r.path.includes('pkg-b'));
-
-    expect(pkgBResult).toBeDefined();
-    const linkOutsideIssues = (pkgBResult?.issues ?? []).filter(
-      i => i.code === 'LINK_OUTSIDE_PROJECT',
-    );
+  it('pkg-b: LINK_OUTSIDE_PROJECT still fires — pkg-a rule does NOT compose into pkg-b', async () => {
+    const { result, linkOutsideIssues } = await auditAndCollectLinkOutside(tempDir, 'pkg-b');
+    expect(result).toBeDefined();
     expect(linkOutsideIssues.length).toBeGreaterThan(0);
+    // Sanity: the firing link targets the external doc, proving the rule
+    // from pkg-a did not bleed across sibling configs.
+    expect(linkOutsideIssues[0]?.message ?? '').toContain('external-docs');
   });
 
-  it('non-recursive mode: only uses root config (ignores nested configs)', async () => {
-    // With --no-recursive, buildVATProjectContext should not walk into subdirs.
-    // pkg-a skill won't even be found (it's in a subdir), so no results from it.
-    const results = await runAudit(tempDir, { recursive: false });
-    // Non-recursive: only looks at top-level entries. Neither SKILL.md is at root.
-    const pkgAResult = results.find(r => r.path.includes('pkg-a'));
-    expect(pkgAResult).toBeUndefined();
+  it('auditing from inside pkg-a directly still suppresses pkg-a-skill warning', async () => {
+    // Same outcome via a different invocation path: running audit from
+    // inside pkg-a walks up to pkg-a's own config.
+    const { result, linkOutsideIssues } = await auditAndCollectLinkOutside(pkgADir, 'pkg-a');
+    expect(result).toBeDefined();
+    expect(linkOutsideIssues).toHaveLength(0);
   });
 });

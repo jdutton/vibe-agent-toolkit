@@ -1,5 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
+import { integrationPool, integrationPoolOptions, platformTestTimeout } from './vitest.shared.js';
+
 export default defineConfig({
   test: {
     globals: true,
@@ -13,14 +15,9 @@ export default defineConfig({
       '**/node_modules/**',
       '**/dist/**',
     ],
-    testTimeout: 60000, // Integration tests may take longer
+    testTimeout: platformTestTimeout,
     passWithNoTests: true, // Allow passing when no integration tests exist yet
-    pool: 'forks',
-    poolOptions: {
-      forks: {
-        singleFork: false,
-        // Enable parallelization for integration tests (use half of available cores)
-      },
-    },
+    pool: integrationPool,
+    poolOptions: integrationPoolOptions,
   },
 });

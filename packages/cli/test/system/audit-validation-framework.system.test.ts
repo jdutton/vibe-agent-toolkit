@@ -52,7 +52,7 @@ const makeSkillMd = (name: string, body = 'This is a test skill.') =>
  *
  * Because validateSkill (used by audit) emits LINK_OUTSIDE_PROJECT at
  * severity=warning, this fixture verifies: audit exits 0 even when issues
- * are present. Use LINK_INTEGRITY_BROKEN (a broken link) to get severity=error.
+ * are present. Use LINK_MISSING_TARGET (a broken link) to get severity=error.
  */
 function setupProjectWithOutsideLink(tempDir: string): string {
   const projectDir = safePath.join(tempDir, 'outside-link');
@@ -77,7 +77,7 @@ function setupProjectWithOutsideLink(tempDir: string): string {
 }
 
 /**
- * Create a project whose SKILL.md has a broken link (LINK_INTEGRITY_BROKEN,
+ * Create a project whose SKILL.md has a broken link (LINK_MISSING_TARGET,
  * severity=error).  No validation.allow in the config.
  *
  * Used to assert that audit exits 0 even when severity=error issues fire.
@@ -86,7 +86,7 @@ function setupProjectWithBrokenLink(tempDir: string): string {
   const projectDir = safePath.join(tempDir, 'broken-link');
   mkdirSyncReal(safePath.join(projectDir, 'skills'), { recursive: true });
 
-  // SKILL.md with a link to a non-existent file → LINK_INTEGRITY_BROKEN (error)
+  // SKILL.md with a link to a non-existent file → LINK_MISSING_TARGET (error)
   writeTestFile(
     safePath.join(projectDir, 'skills', 'SKILL.md'),
     makeSkillMd(SKILL_NAME, 'See [missing](does-not-exist.md).'),
@@ -116,7 +116,7 @@ function setupProjectWithBrokenLinkAllowed(tempDir: string): string {
     makeSkillMd(SKILL_NAME, 'See [missing](does-not-exist.md).'),
   );
 
-  // Config: allow suppresses LINK_INTEGRITY_BROKEN — audit must ignore this
+  // Config: allow suppresses LINK_MISSING_TARGET — audit must ignore this
   const configContent = [
     'version: 1',
     'skills:',
@@ -126,7 +126,7 @@ function setupProjectWithBrokenLinkAllowed(tempDir: string): string {
     `    ${SKILL_NAME}:`,
     '      validation:',
     '        allow:',
-    '          LINK_INTEGRITY_BROKEN:',
+    '          LINK_MISSING_TARGET:',
     '            - paths: ["**"]',
     '              reason: reviewed, intentional for audit framework test',
     '',
@@ -186,7 +186,7 @@ describe('vat audit — validation framework behavior (system test)', () => {
   // -------------------------------------------------------------------------
   // (c) Audit exits 0 even when validation errors are surfaced
   // -------------------------------------------------------------------------
-  it('exits 0 even when LINK_INTEGRITY_BROKEN fires (severity=error)', () => {
+  it('exits 0 even when LINK_MISSING_TARGET fires (severity=error)', () => {
     const tempDir = ctx.createTempDir();
     const projectDir = setupProjectWithBrokenLink(tempDir);
 
@@ -195,14 +195,14 @@ describe('vat audit — validation framework behavior (system test)', () => {
     // Audit must ALWAYS exit 0 for validation results
     expect(result.status).toBe(0);
     // The YAML should contain the error code in some form (stdout or stderr combined)
-    expect(result.stderr + result.stdout).toContain('LINK_INTEGRITY_BROKEN');
+    expect(result.stderr + result.stdout).toContain('LINK_MISSING_TARGET');
   });
 
   // -------------------------------------------------------------------------
-  // (a) Audit shows LINK_INTEGRITY_BROKEN even when validation.allow would
+  // (a) Audit shows LINK_MISSING_TARGET even when validation.allow would
   //     silence it in `vat skills validate`
   // -------------------------------------------------------------------------
-  it('shows LINK_INTEGRITY_BROKEN even when validation.allow is set (allow is ignored by audit)', () => {
+  it('shows LINK_MISSING_TARGET even when validation.allow is set (allow is ignored by audit)', () => {
     const tempDir = ctx.createTempDir();
     const projectDir = setupProjectWithBrokenLinkAllowed(tempDir);
 
@@ -211,7 +211,7 @@ describe('vat audit — validation framework behavior (system test)', () => {
     // Status must be 0 regardless
     expect(result.status).toBe(0);
     // The broken link code must still appear — allow is NOT honoured by audit
-    expect(result.stderr + result.stdout).toContain('LINK_INTEGRITY_BROKEN');
+    expect(result.stderr + result.stdout).toContain('LINK_MISSING_TARGET');
   });
 
   // -------------------------------------------------------------------------
@@ -271,6 +271,6 @@ describe('vat audit — validation framework behavior (system test)', () => {
     const { result } = executeCliAndParseYaml(ctx.binPath, ['audit', skillPath]);
 
     expect(result.status).toBe(0);
-    expect(result.stderr + result.stdout).toContain('LINK_INTEGRITY_BROKEN');
+    expect(result.stderr + result.stdout).toContain('LINK_MISSING_TARGET');
   });
 });

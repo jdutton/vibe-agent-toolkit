@@ -76,6 +76,9 @@ async function loadCollectionModule(
   originalInput: string
 ): Promise<CollectionModule> {
   try {
+    // importPath is either a bare package specifier (e.g. '@scope/pkg/mcp-collections')
+    // or a `file://` URL produced by buildImportPath() — never a raw filesystem path.
+    // eslint-disable-next-line local/no-bare-dynamic-import-path -- resolved upstream in buildImportPath
     return (await import(importPath)) as CollectionModule;
   } catch (error) {
     throw new Error(

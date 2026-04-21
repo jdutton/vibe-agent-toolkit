@@ -1,8 +1,19 @@
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { getRelativePath, isAbsolutePath, normalizePath, safePath, toAbsolutePath, toForwardSlash } from '../src/path-utils.js';
+import {
+  dynamicImportPath,
+  getRelativePath,
+  isAbsolutePath,
+  normalizePath,
+  resolveFromImportMeta,
+  safePath,
+  toAbsolutePath,
+  toForwardSlash,
+} from '../src/path-utils.js';
 
 describe('path-utils', () => {
   const TEST_PROJECT_PATH = '/project';
@@ -248,6 +259,52 @@ describe('path-utils', () => {
         const result = safePath.relative('/project/docs', '/project/docs/file.md');
         expect(result).toBe('file.md');
       });
+    });
+  });
+
+  describe('resolveFromImportMeta', () => {
+    const SIBLING_SOURCE = '../src/path-utils.ts';
+
+    it('returns the absolute path of the current test file when called with no segments', () => {
+      const result = resolveFromImportMeta(import.meta.url);
+      expect(typeof result).toBe('string');
+      expect(path.isAbsolute(result)).toBe(true);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test asserts real file
+      const contents = readFileSync(result, 'utf8');
+      expect(contents).toContain('returns the absolute path of the current test file');
+    });
+
+    it('resolves relative segments against the module URL', () => {
+      const result = resolveFromImportMeta(import.meta.url, SIBLING_SOURCE);
+      expect(path.isAbsolute(result)).toBe(true);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test asserts real file
+      expect(existsSync(result)).toBe(true);
+      expect(result.endsWith('path-utils.ts')).toBe(true);
+    });
+
+    it('composes multiple segments portably', () => {
+      const result = resolveFromImportMeta(import.meta.url, '..', 'src', 'path-utils.ts');
+      expect(path.isAbsolute(result)).toBe(true);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test asserts real file
+      expect(existsSync(result)).toBe(true);
+    });
+
+    it('returns a string, not a URL object, and not a file:// URL', () => {
+      const result = resolveFromImportMeta(import.meta.url, SIBLING_SOURCE);
+      expect(typeof result).toBe('string');
+      expect(result).not.toContain('file://');
+    });
+  });
+
+  describe('dynamicImportPath', () => {
+    it('loads a real module from an absolute path', async () => {
+      const absPath = fileURLToPath(new URL('../src/path-utils.ts', import.meta.url));
+      const mod = await dynamicImportPath<{
+        resolveFromImportMeta: typeof resolveFromImportMeta;
+        dynamicImportPath: typeof dynamicImportPath;
+      }>(absPath);
+      expect(typeof mod.resolveFromImportMeta).toBe('function');
+      expect(typeof mod.dynamicImportPath).toBe('function');
     });
   });
 });

@@ -48,7 +48,7 @@ export interface SkillsBuildCommandOptions {
 /**
  * Sanitize skill names with colon namespaces for filesystem paths.
  *
- * Skill names use colon-namespacing (e.g. "vibe-agent-toolkit:resources") which is
+ * Skill names use colon-namespacing (e.g. "vibe-agent-toolkit:vat-audit") which is
  * valid in YAML/JSON but invalid as a directory name on Windows. Replace colons with
  * double-underscore -- unambiguous, reversible, and safe on all platforms.
  */

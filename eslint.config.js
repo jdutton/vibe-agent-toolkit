@@ -30,6 +30,7 @@ export default [
       '**/*.d.ts',
       'vitest.config.ts',
       'vitest.*.config.ts',
+      'vitest.shared.ts',
       'vitest.setup.js',
       '.worktrees/',  // Git worktrees
       '.claude/worktrees/',  // Claude Code worktrees
@@ -86,6 +87,8 @@ export default [
       'local/no-path-relative': 'error',
       'local/no-test-scoped-functions': 'error',
       'local/no-fs-promises-cp': 'error',
+      'local/no-url-pathname-for-fs': 'error',
+      'local/no-bare-dynamic-import-path': 'error',
 
       // TypeScript
       'no-unused-vars': 'off', // Use @typescript-eslint/no-unused-vars instead

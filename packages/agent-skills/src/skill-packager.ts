@@ -27,7 +27,7 @@ import {
   type ResourceMetadata,
   parseMarkdown,
 } from '@vibe-agent-toolkit/resources';
-import { findProjectRoot, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import { getTargetSubdir } from './content-type-routing.js';
 import type { SkillFileEntry } from './files-config.js';
@@ -136,6 +136,16 @@ export interface PackageSkillOptions {
    * Used by packageSkills() to share a single registry across multiple skill builds.
    */
   registry?: ResourceRegistry | undefined;
+
+  /**
+   * Pre-populated {@link GitTracker} for the containing repo.
+   *
+   * When supplied, gitignore checks during the link-graph walk become O(1)
+   * active-set lookups instead of `git check-ignore` spawns. Used by batched
+   * build paths (e.g. `vat skills build`) that already constructed a tracker
+   * for discovery/scanning.
+   */
+  gitTracker?: GitTracker | undefined;
 
   /**
    * Packaging target — controls the ZIP directory structure produced.
@@ -317,16 +327,20 @@ export async function packageSkill(
   const skillResource = registry.getResource(safePath.resolve(skillPath));
   const skillResourceId = skillResource?.id ?? '';
 
+  const packagerWalkOptions: Parameters<typeof walkLinkGraph>[2] = {
+    maxDepth,
+    excludeRules: excludeConfig?.rules ?? [],
+    projectRoot,
+    skillRootPath: safePath.resolve(skillPath),
+    excludeNavigationFiles,
+  };
+  if (options.gitTracker !== undefined) {
+    packagerWalkOptions.gitTracker = options.gitTracker;
+  }
   const { bundledResources, bundledAssets, excludedReferences } = walkLinkGraph(
     skillResourceId,
     registry as WalkableRegistry,
-    {
-      maxDepth,
-      excludeRules: excludeConfig?.rules ?? [],
-      projectRoot,
-      skillRootPath: safePath.resolve(skillPath),
-      excludeNavigationFiles,
-    },
+    packagerWalkOptions,
   );
 
   // Register non-markdown bundled assets in the source registry so link rewriting

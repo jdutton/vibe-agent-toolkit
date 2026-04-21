@@ -14,7 +14,7 @@ import { existsSync, statSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 import type { ResourceLink, ResourceMetadata } from '@vibe-agent-toolkit/resources';
-import { isGitIgnored, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { type GitTracker, isGitIgnored, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
 import { NAVIGATION_FILE_PATTERNS } from './validators/validation-rules.js';
@@ -96,6 +96,19 @@ export interface WalkLinkGraphOptions {
   excludeNavigationFiles?: boolean;
   /** Paths declared in files config that may not exist at source time */
   deferredPaths?: Set<string>;
+  /**
+   * Optional pre-populated {@link GitTracker} for O(1) gitignore checks.
+   *
+   * When provided, link-target gitignore checks use the tracker's active set,
+   * which avoids spawning `git check-ignore` per file. Supply the same
+   * tracker you already built for the containing scan (e.g. from audit's
+   * ScanContext) so the first call warms the cache and every subsequent
+   * walker call answers in O(1).
+   *
+   * When omitted, the walker falls back to the legacy per-path
+   * `isGitIgnored()` spawn so one-off callers continue to work unchanged.
+   */
+  gitTracker?: GitTracker;
 }
 
 // ============================================================================
@@ -217,8 +230,13 @@ function checkExclusions(
     return true;
   }
 
-  // Check if the file is gitignored (prevents leaking data from ignored directories)
-  if (isGitIgnored(targetPath, options.projectRoot)) {
+  // Check if the file is gitignored (prevents leaking data from ignored directories).
+  // Prefer the pre-populated GitTracker when the caller plumbed one through: it
+  // answers in O(1) against the active set, no `git check-ignore` spawn.
+  const isIgnored = options.gitTracker === undefined
+    ? isGitIgnored(targetPath, options.projectRoot)
+    : options.gitTracker.isIgnoredByActiveSet(targetPath);
+  if (isIgnored) {
     excludedReferences.push(makeExclusion(targetPath, 'gitignored', link));
     return true;
   }

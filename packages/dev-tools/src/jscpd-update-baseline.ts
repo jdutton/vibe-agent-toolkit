@@ -7,9 +7,19 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { buildJscpdArgs, safeExecSync } from './common.js';
+
+interface CloneFile {
+  name: string;
+  [k: string]: unknown;
+}
+interface Clone {
+  firstFile: CloneFile;
+  secondFile: CloneFile;
+  [k: string]: unknown;
+}
 
 const BASELINE_FILE = safePath.join('.github', '.jscpd-baseline.json');
 
@@ -34,11 +44,19 @@ try {
 // Read current report
 const reportPath = './jscpd-report/jscpd-report.json';
 const currentReport = JSON.parse(readFileSync(reportPath, 'utf-8'));
-const currentClones = currentReport.duplicates ?? [];
+const currentClones: Clone[] = currentReport.duplicates ?? [];
+
+// Normalize paths to forward slashes so the baseline is cross-platform portable
+// (jscpd emits backslashes on Windows; Linux/CI emits forward slashes).
+const normalizedClones = currentClones.map((clone) => ({
+  ...clone,
+  firstFile: { ...clone.firstFile, name: toForwardSlash(clone.firstFile.name) },
+  secondFile: { ...clone.secondFile, name: toForwardSlash(clone.secondFile.name) },
+}));
 
 // Save as new baseline
 // eslint-disable-next-line security/detect-non-literal-fs-filename -- BASELINE_FILE is a constant path
-writeFileSync(BASELINE_FILE, JSON.stringify({ duplicates: currentClones }, null, 2));
+writeFileSync(BASELINE_FILE, JSON.stringify({ duplicates: normalizedClones }, null, 2));
 
 console.log('✅ Baseline updated!');
 console.log(`   Clones: ${String(currentClones.length)}`);

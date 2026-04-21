@@ -5,7 +5,7 @@
  * Used to test runtime adapters' pure function conversion.
  */
 
-import { definePureFunction } from '@vibe-agent-toolkit/agent-runtime';
+import { definePureFunction, type PureFunctionAgent } from '@vibe-agent-toolkit/agent-runtime';
 
 import type { SimpleValidationInput, SimpleValidationOutput } from './schemas.js';
 import { SimpleValidationInputSchema, SimpleValidationOutputSchema } from './schemas.js';
@@ -13,7 +13,7 @@ import { SimpleValidationInputSchema, SimpleValidationOutputSchema } from './sch
 /**
  * Simple text validator - pure function with no external dependencies
  */
-export const simpleValidatorAgent = definePureFunction(
+export const simpleValidatorAgent: PureFunctionAgent<SimpleValidationInput, SimpleValidationOutput> = definePureFunction(
   {
     name: 'haiku-validator',
     description: 'Validates haiku syllable patterns',

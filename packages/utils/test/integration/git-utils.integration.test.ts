@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
-import { gitFindRoot, gitLsFiles, isGitIgnored, gitCheckIgnoredBatch } from '../../src/git-utils.js';
+import { gitFindRoot, gitLsFiles, isGitIgnored } from '../../src/git-utils.js';
 import { normalizedTmpdir } from '../../src/path-utils.js';
 import { setupSyncTempDirSuite } from '../../src/test-helpers.js';
 import { createGitRepo } from '../test-helpers.js';
@@ -44,17 +44,6 @@ function setupGitTestSuite(suiteName: string) {
   };
 
   return { ...hooks, getTempDir };
-}
-
-/**
- * Helper to assert all files in result are not ignored
- * Extracted to outer scope to avoid function-in-loop code smell
- */
-function expectAllNotIgnored(result: Map<string, boolean>, files: string[]) {
-  expect(result.size).toBe(files.length);
-  for (const file of files) {
-    expect(result.get(file)).toBe(false);
-  }
 }
 
 describe('gitFindRoot', () => {
@@ -234,7 +223,7 @@ describe('isGitIgnored', () => {
     expect(result).toBe(true);
   });
 
-  it('should detect gitignored files through symlinks via ancestor walk', () => {
+  it.skipIf(process.platform === 'win32')('should detect gitignored files through symlinks via ancestor walk', () => {
     // Simulate: data/ is gitignored, data/linked-content is a symlink to external dir
     // git check-ignore fails with "beyond a symbolic link" for paths through symlinks,
     // but ancestor walk should detect that data/ itself is gitignored
@@ -259,118 +248,3 @@ describe('isGitIgnored', () => {
   });
 });
 
-describe('gitCheckIgnoredBatch', () => {
-  const suite = setupGitTestSuite('git-check-ignored-batch');
-  let tempDir: string;
-
-  beforeAll(suite.beforeAll);
-  afterAll(suite.afterAll);
-  beforeEach(() => {
-    suite.beforeEach();
-    tempDir = suite.getTempDir();
-  });
-
-  it('should return empty map for empty array', () => {
-    const result = gitCheckIgnoredBatch([], tempDir);
-
-    expect(result.size).toBe(0);
-  });
-
-  it('should identify ignored and non-ignored files', () => {
-    // Create .gitignore
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
-    fs.writeFileSync(
-      safePath.join(tempDir, GITIGNORE_FILENAME),
-      'node_modules/\ndist/\n*.log\n'
-    );
-
-    const files = [
-      safePath.join(tempDir, 'src', 'index.ts'),
-      safePath.join(tempDir, 'node_modules', 'foo.js'),
-      safePath.join(tempDir, 'dist', 'bundle.js'),
-      safePath.join(tempDir, 'debug.log'),
-      safePath.join(tempDir, 'README.md'),
-    ];
-
-    const result = gitCheckIgnoredBatch(files, tempDir);
-
-    expect(result.size).toBe(5);
-    expect(result.get(files[0])).toBe(false); // src/index.ts - not ignored
-    expect(result.get(files[1])).toBe(true);  // node_modules/foo.js - ignored
-    expect(result.get(files[2])).toBe(true);  // dist/bundle.js - ignored
-    expect(result.get(files[3])).toBe(true);  // debug.log - ignored
-    expect(result.get(files[4])).toBe(false); // README.md - not ignored
-  });
-
-  it('should handle all files ignored', () => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
-    fs.writeFileSync(
-      safePath.join(tempDir, GITIGNORE_FILENAME),
-      '*.tmp\n'
-    );
-
-    const files = [
-      safePath.join(tempDir, 'file1.tmp'),
-      safePath.join(tempDir, 'file2.tmp'),
-    ];
-
-    const result = gitCheckIgnoredBatch(files, tempDir);
-
-    expect(result.size).toBe(2);
-    expect(result.get(files[0])).toBe(true);
-    expect(result.get(files[1])).toBe(true);
-  });
-
-  it('should handle no files ignored', () => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
-    fs.writeFileSync(
-      safePath.join(tempDir, GITIGNORE_FILENAME),
-      '*.tmp\n'
-    );
-
-    const files = [
-      safePath.join(tempDir, 'file1.ts'),
-      safePath.join(tempDir, 'file2.ts'),
-    ];
-
-    const result = gitCheckIgnoredBatch(files, tempDir);
-
-    expectAllNotIgnored(result, files);
-  });
-
-  it('should return all false when not in git repository', () => {
-    const nonGitDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'non-git-'));
-
-    try {
-      const files = [
-        safePath.join(nonGitDir, 'file1.ts'),
-        safePath.join(nonGitDir, 'file2.ts'),
-      ];
-
-      const result = gitCheckIgnoredBatch(files, nonGitDir);
-
-      expectAllNotIgnored(result, files);
-    } finally {
-      fs.rmSync(nonGitDir, { recursive: true, force: true });
-    }
-  });
-
-  it('should handle relative and absolute paths', () => {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file uses controlled temp directory
-    fs.writeFileSync(
-      safePath.join(tempDir, GITIGNORE_FILENAME),
-      'ignored/\n'
-    );
-
-    const files = [
-      'src/index.ts', // relative
-      safePath.join(tempDir, 'ignored', 'file.ts'), // absolute
-    ];
-
-    const result = gitCheckIgnoredBatch(files, tempDir);
-
-    expect(result.size).toBe(2);
-    expect(result.get(files[0])).toBe(false); // src/index.ts - not ignored
-    expect(result.get(files[1])).toBe(true);  // ignored/file.ts - ignored
-  });
-});

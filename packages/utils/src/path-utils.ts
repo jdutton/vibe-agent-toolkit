@@ -1,6 +1,7 @@
 import { mkdirSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 /**
  * Normalize any path (resolve short names on Windows)
@@ -287,3 +288,49 @@ export const safePath = {
     return toForwardSlash(path.relative(from, to));
   },
 } as const;
+
+/**
+ * Resolve an OS-native absolute path from an ESM module's `import.meta.url` and
+ * optional relative path segments.
+ *
+ * Safer than `new URL(rel, importMetaUrl).pathname`, which returns `/D:/...` on
+ * Windows and breaks `fs` operations.
+ *
+ * @returns An **OS-native absolute path** (backslashes on Windows). Wrap with
+ *   `toForwardSlash()` if you need forward slashes for display or comparison.
+ *
+ * @example
+ * ```typescript
+ * import { resolveFromImportMeta } from '@vibe-agent-toolkit/utils';
+ *
+ * const fixturePath = resolveFromImportMeta(import.meta.url, '../fixtures/data.yaml');
+ * readFileSync(fixturePath, 'utf8');
+ * ```
+ */
+export function resolveFromImportMeta(importMetaUrl: string, ...segments: string[]): string {
+  if (segments.length === 0) {
+    // fileURLToPath accepts the string directly; no need to round-trip through URL.
+    return fileURLToPath(importMetaUrl);
+  }
+  // safePath.join gives forward slashes — URL spec requires them in relative refs.
+  const relative = safePath.join(...segments);
+  return fileURLToPath(new URL(relative, importMetaUrl));
+}
+
+/**
+ * Dynamically import a module from an OS-native absolute filesystem path.
+ *
+ * Wraps `pathToFileURL()` because `await import(absPath)` fails on Windows —
+ * ESM dynamic import requires a `file://` URL.
+ *
+ * @example
+ * ```typescript
+ * import { dynamicImportPath } from '@vibe-agent-toolkit/utils';
+ *
+ * const mod = await dynamicImportPath<{ default: Config }>(absConfigPath);
+ * ```
+ */
+export async function dynamicImportPath<T = unknown>(absPath: string): Promise<T> {
+  const mod: unknown = await import(pathToFileURL(absPath).href);
+  return mod as T;
+}

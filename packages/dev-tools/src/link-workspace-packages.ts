@@ -93,9 +93,15 @@ function linkPackage(packageName: string, scopeDir: string): boolean {
 
   removeExistingSymlink(linkPath, packageName);
 
-  const relativePath = join('..', '..', 'packages', packageName);
   try {
-    symlinkSync(relativePath, linkPath, 'dir');
+    // On Windows, directory symlinks require elevated privileges (SeCreateSymbolicLinkPrivilege).
+    // Junctions don't require admin and work identically for local paths.
+    // Junctions require absolute targets (not relative), so resolve the path.
+    const isWindows = process.platform === 'win32';
+    const target = isWindows
+      ? resolve(PACKAGES_DIR, packageName)       // absolute for junction
+      : join('..', '..', 'packages', packageName); // relative for symlink
+    symlinkSync(target, linkPath, isWindows ? 'junction' : 'dir');
     return true;
   } catch (error) {
     console.error(`❌ Failed to link ${packageName}:`, error instanceof Error ? error.message : String(error));

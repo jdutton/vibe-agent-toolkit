@@ -7,7 +7,7 @@
 
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { buildJscpdArgs, JSCPD_CONFIG, safeExecSync } from './common.js';
 
@@ -79,7 +79,11 @@ function runJscpd() {
  * Create clone signature for comparison
  */
 function getCloneSignature(clone: Clone) {
-  return `${clone.format}:${clone.firstFile.name}:${clone.firstFile.startLoc.line}-${clone.firstFile.endLoc.line}:${clone.secondFile.name}:${clone.secondFile.startLoc.line}-${clone.secondFile.endLoc.line}`;
+  // Normalize paths to forward slashes so baselines generated on Linux/CI
+  // match when duplication-check runs on Windows (where jscpd reports backslashes).
+  const first = toForwardSlash(clone.firstFile.name);
+  const second = toForwardSlash(clone.secondFile.name);
+  return `${clone.format}:${first}:${clone.firstFile.startLoc.line}-${clone.firstFile.endLoc.line}:${second}:${clone.secondFile.startLoc.line}-${clone.secondFile.endLoc.line}`;
 }
 
 /**

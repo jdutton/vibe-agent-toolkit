@@ -51,5 +51,7 @@ export default {
     'no-path-relative': require('./no-path-relative.cjs'),
     'no-test-scoped-functions': require('./no-test-scoped-functions.cjs'),
     'no-fs-promises-cp': require('./no-fs-promises-cp.cjs'),
+    'no-url-pathname-for-fs': require('./no-url-pathname-for-fs.cjs'),
+    'no-bare-dynamic-import-path': require('./no-bare-dynamic-import-path.cjs'),
   },
 };

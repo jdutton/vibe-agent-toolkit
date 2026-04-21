@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 
-import { crawlDirectory, gitCheckIgnoredBatch, safePath } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, gitFindRoot, GitTracker, safePath } from '@vibe-agent-toolkit/utils';
 
 import { detectFormat } from '../detectors/format-detector.js';
 import { createPatternFilter } from '../filters/pattern-filter.js';
@@ -96,17 +96,21 @@ export async function scan(options: ScanOptions): Promise<ScanSummary> {
     filteredFiles.push({ path: filePath, relativePath, format });
   }
 
-  // Batch check git-ignored status (single git subprocess instead of N)
-  const gitIgnoredMap = gitCheckIgnoredBatch(
-    filteredFiles.map((f) => f.path),
-    scanRoot
-  );
+  // Check git-ignored status via a single pre-populated GitTracker. One
+  // `git ls-files` spawn gives us the full active set; every per-file check
+  // becomes an O(1) lookup.
+  const gitRoot = gitFindRoot(scanRoot);
+  let gitTracker: GitTracker | null = null;
+  if (gitRoot !== null) {
+    gitTracker = new GitTracker(gitRoot);
+    await gitTracker.initialize();
+  }
 
   // Build final results
   const results: ScanResult[] = filteredFiles.map((file) => ({
     path: file.path,
     format: file.format,
-    isGitIgnored: gitIgnoredMap.get(file.path) ?? false,
+    isGitIgnored: gitTracker === null ? false : gitTracker.isIgnoredByActiveSet(file.path),
     relativePath: file.relativePath,
   }));
 

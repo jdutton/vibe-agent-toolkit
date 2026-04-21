@@ -47,7 +47,7 @@ my-skills-project/
 
 Three conventions are load-bearing:
 
-1. **`vibe-agent-toolkit.config.yaml` at the project root** — VAT walks upward from the invocation directory to find it.
+1. **`vibe-agent-toolkit.config.yaml` at the project root** — VAT commands pick up this file when run from the project root or a subdirectory.
 2. **SKILL.md files live under `resources/skills/`** — any path works, but this one is what `vat build` and `vat audit` expect by default.
 3. **`dist/` is the only write target** — everything VAT generates goes there, and it's gitignored.
 
@@ -104,6 +104,25 @@ Sections and the skills that own their details:
 | `rag:` (stores, embedding providers) | `vibe-agent-toolkit:vat-rag` |
 
 When adding to a section, load the owning skill rather than re-deriving the shape from this file.
+
+## Config lives at the VAT project root
+
+A VAT project is a directory that contains a `vibe-agent-toolkit.config.yaml`. That file is authoritative for the project: it defines `resources`, `skills`, `claude`, and (optionally) `rag`. Nothing outside the config contributes to its behavior — there is no ambient configuration, no inheritance from parent directories, and no merge with sibling configs.
+
+VAT commands (`vat build`, `vat verify`, `vat skills validate`, `vat skills build`) read the config at the directory they are invoked from. Run them from the project root or from a subdirectory, or pass `--cwd <path>` to point them at a specific project. If you run a lifecycle command from somewhere that has no config, it will not find one — there is no upward walk here.
+
+**Multiple `vibe-agent-toolkit.config.yaml` files in one git repository mean multiple distinct VAT projects.** Each project is independent: configs do not compose, do not merge, and do not inherit from one another. Running VAT from outside any project directory operates on a union of whatever projects it discovers, but each project's rules are applied only to its own skills — per-skill packaging overrides in `project-a/vibe-agent-toolkit.config.yaml` never affect skills under `project-b/`.
+
+`vat audit` is the one command that knowingly spans projects, and even there it does not compose: audit is a general-purpose read-only scan that you may point at any path, configured or not. When it encounters a SKILL.md inside a configured VAT project, it walks UP to that skill's nearest-ancestor `vibe-agent-toolkit.config.yaml` and applies **only** that skill's packaging rules (from its own project's `skills.config.<name>`) to the finding. This is display sanity, not federation — audit never merges config data across project boundaries.
+
+In practice, prefer one `vibe-agent-toolkit.config.yaml` per git repository. Multiple configs in a single repo are reasonable only for:
+
+- Committed test harnesses or fixtures that define their own toy VAT projects (for VAT's own tests, or for an adopter's integration tests).
+- Genuinely unrelated projects that happen to share a monorepo and each ship their own skills.
+
+If you are tempted to use nested configs to "share" or "override" settings across related skills, fold everything into one project-level config instead — that's what `skills.defaults` and `skills.config.<name>` are for.
+
+(Note: `agent.yaml`, the manifest for TypeScript portable agents, is a separate surface with its own rules and is out of scope for this guidance — see `vibe-agent-toolkit:vat-agent-authoring`.)
 
 ## `package.json` Wiring
 

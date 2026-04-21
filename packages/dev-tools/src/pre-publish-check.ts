@@ -165,7 +165,7 @@ if (IS_CI || skipGitChecks) {
     if (!result.success) {
       throw new Error('Failed to determine current branch');
     }
-    currentBranch = result.stdout.trim();
+    currentBranch = result.stdout.toString().trim();
   } catch (error) {
     log('✗ Failed to determine current branch', 'red');
     const message = error instanceof Error ? error.message : '';
@@ -227,7 +227,7 @@ if (IS_CI || skipGitChecks) {
 
   let untracked = '';
   if (untrackedResult.success) {
-    untracked = untrackedResult.stdout;
+    untracked = untrackedResult.stdout.toString();
   } else {
     log('⚠ Warning: Could not check untracked files (git not available)', 'yellow');
   }
@@ -650,7 +650,7 @@ if (releaseReadiness) {
       stdio: 'pipe',
     });
 
-    if (tagResult.success && tagResult.stdout.trim().length > 0) {
+    if (tagResult.success && tagResult.stdout.toString().trim().length > 0) {
       log(`✗ v${currentVersion} tag already exists on remote`, 'red');
       console.log(`  The tag v${currentVersion} has already been pushed to the remote.`);
       console.log('  Bump the version before releasing.');

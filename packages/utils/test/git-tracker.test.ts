@@ -66,6 +66,24 @@ describe('GitTracker', () => {
       expect(gitUtils.gitLsFiles).toHaveBeenCalledTimes(1); // Only called once
     });
 
+    it('should pre-populate with untracked non-ignored files by default', async () => {
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize();
+
+      // Default path should call gitLsFiles with includeUntracked: true
+      expect(gitUtils.gitLsFiles).toHaveBeenCalledWith(
+        expect.objectContaining({ cwd: projectRoot, includeUntracked: true }),
+      );
+    });
+
+    it('should skip untracked files when includeUntracked: false', async () => {
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize({ includeUntracked: false });
+
+      // Opt-out path should not pass includeUntracked to gitLsFiles.
+      expect(gitUtils.gitLsFiles).toHaveBeenCalledWith({ cwd: projectRoot });
+    });
+
     it('should handle git ls-files returning null (not in git repo)', async () => {
       vi.mocked(gitUtils.gitLsFiles).mockReturnValue(null);
 
@@ -125,6 +143,23 @@ describe('GitTracker', () => {
       const secondResult = tracker.isIgnored(ENV_PATH);
       expect(gitUtils.isGitIgnored).toHaveBeenCalledTimes(1); // Still 1
       expect(secondResult).toBe(true);
+    });
+
+    it('hits the cache for non-canonical absolute paths (regression: Windows path-resolve drift)', async () => {
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize();
+
+      // Cache was populated with paths via safePath.resolve(projectRoot, relPath).
+      // On Windows that drive-prefixes the key (e.g. C:/project/README.md) while
+      // a caller may still pass '/project/README.md' or a path containing '..'.
+      // isIgnored() must normalize the lookup key to match the population shape;
+      // otherwise it silently falls through to `git check-ignore` per path —
+      // exactly the perf regression rc.2 was meant to eliminate.
+      const nonCanonical = '/project/src/../README.md';
+      expect(tracker.isIgnored(nonCanonical)).toBe(false);
+
+      // No spawn: cache hit via normalization.
+      expect(gitUtils.isGitIgnored).not.toHaveBeenCalled();
     });
 
     it('should work without initialization (cache empty)', () => {
@@ -190,6 +225,102 @@ describe('GitTracker', () => {
       await tracker.initialize();
       expect(tracker.getStats().cacheSize).toBe(3);
       expect(gitUtils.gitLsFiles).toHaveBeenCalledTimes(2); // Called again after clear
+    });
+  });
+
+  describe('hasActiveDescendant()', () => {
+    it('should return true for active-set files', async () => {
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize();
+
+      expect(tracker.hasActiveDescendant(README_PATH)).toBe(true);
+      expect(tracker.hasActiveDescendant(INDEX_PATH)).toBe(true);
+      expect(tracker.hasActiveDescendant(GUIDE_PATH)).toBe(true);
+    });
+
+    it('should return true for directories containing active-set files (ancestors)', async () => {
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize();
+
+      // /project/src contains src/index.ts; /project/docs contains docs/guide.md
+      expect(tracker.hasActiveDescendant('/project/src')).toBe(true);
+      expect(tracker.hasActiveDescendant('/project/docs')).toBe(true);
+      // projectRoot itself is always an ancestor of everything under it
+      expect(tracker.hasActiveDescendant(projectRoot)).toBe(true);
+    });
+
+    it('should return false for directories with no active descendants', async () => {
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize();
+
+      expect(tracker.hasActiveDescendant('/project/node_modules')).toBe(false);
+      expect(tracker.hasActiveDescendant('/project/dist')).toBe(false);
+    });
+
+    it('should return true for any path when includeUntracked: false (fallback to legacy descent)', async () => {
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize({ includeUntracked: false });
+
+      // Without an authoritative active set we can't prune; let the walker descend.
+      expect(tracker.hasActiveDescendant('/project/anything')).toBe(true);
+    });
+  });
+
+  describe('isIgnoredByActiveSet()', () => {
+    it('should return false for files in the active set', async () => {
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize();
+
+      expect(tracker.isIgnoredByActiveSet(README_PATH)).toBe(false);
+      expect(tracker.isIgnoredByActiveSet(INDEX_PATH)).toBe(false);
+      expect(tracker.isIgnoredByActiveSet(GUIDE_PATH)).toBe(false);
+
+      // Never spawns git check-ignore for in-project paths
+      expect(gitUtils.isGitIgnored).not.toHaveBeenCalled();
+    });
+
+    it('should return false for ancestor directories of active-set files', async () => {
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize();
+
+      expect(tracker.isIgnoredByActiveSet('/project/src')).toBe(false);
+      expect(tracker.isIgnoredByActiveSet('/project/docs')).toBe(false);
+    });
+
+    it('should return true for paths inside projectRoot that are not in the active set', async () => {
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize();
+
+      expect(tracker.isIgnoredByActiveSet(NODE_MODULES_PATH)).toBe(true);
+      expect(tracker.isIgnoredByActiveSet('/project/dist/foo.js')).toBe(true);
+
+      // Still no git check-ignore spawn for in-project paths
+      expect(gitUtils.isGitIgnored).not.toHaveBeenCalled();
+    });
+
+    it('should fall back to isGitIgnored for paths outside the project root', async () => {
+      vi.mocked(gitUtils.isGitIgnored).mockReturnValue(false);
+
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize();
+
+      const outsidePath = '/other/project/file.md';
+      const result = tracker.isIgnoredByActiveSet(outsidePath);
+
+      expect(gitUtils.isGitIgnored).toHaveBeenCalledWith(outsidePath, projectRoot);
+      expect(result).toBe(false);
+    });
+
+    it('should fall back to isIgnored when initialized with includeUntracked: false', async () => {
+      vi.mocked(gitUtils.isGitIgnored).mockReturnValue(true);
+
+      const tracker = new GitTracker(projectRoot);
+      await tracker.initialize({ includeUntracked: false });
+
+      // Without an authoritative active set we must delegate to the legacy check
+      const result = tracker.isIgnoredByActiveSet('/project/node_modules/foo.js');
+      expect(gitUtils.isGitIgnored).toHaveBeenCalled();
+      expect(result).toBe(true);
     });
   });
 

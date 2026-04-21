@@ -41,6 +41,10 @@ Running `vat audit <path>` recursively walks the directory and auto-detects:
 
 Recursion is the default — you do not need `--recursive`.
 
+## Audit vs configured VAT projects
+
+Audit is the general-purpose command — you may point it at any path, configured or not. When it encounters a SKILL.md inside a configured VAT project, it walks UP to that skill's nearest-ancestor `vibe-agent-toolkit.config.yaml` and respects the skill's per-skill packaging rules (`excludeReferencesFromBundle`, `linkFollowDepth`, `files`) to avoid false flags — but it never composes configs across project boundaries. Per-skill rules from one project do not bleed into skills in another project. For gated, configured-project-level validation, use the lifecycle commands (`vat skills validate`, `vat verify`) and run them from within the project directory.
+
 ## Compatibility Analysis (`--compat`)
 
 ```bash
