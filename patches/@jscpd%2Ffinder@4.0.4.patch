@@ -1,0 +1,26 @@
+diff --git a/dist/index.js b/dist/index.js
+index df59f8d8349d53edb37aef155fc07a497b117208..458bd8bbe13fd00480ddd734019e57d7fddeecb3 100644
+--- a/dist/index.js
++++ b/dist/index.js
+@@ -188,7 +188,7 @@ function getFilesToDetect(options) {
+     patterns = patterns !== void 0 ? patterns.filter((path) => !isSymlink(path)) : [];
+   }
+   patterns = patterns !== void 0 ? patterns.map((path) => {
+-    const currentPath = _fsextra.realpathSync.call(void 0, path);
++    const currentPath = path;
+     if (isFile(currentPath)) {
+       return path;
+     }
+diff --git a/dist/index.mjs b/dist/index.mjs
+index 4c8fcda6dda2031b33e492a0e521a59dab6b03be..da615a90c764ae66ddb99467dc5542d9d9a48092 100644
+--- a/dist/index.mjs
++++ b/dist/index.mjs
+@@ -188,7 +188,7 @@ function getFilesToDetect(options) {
+     patterns = patterns !== void 0 ? patterns.filter((path) => !isSymlink(path)) : [];
+   }
+   patterns = patterns !== void 0 ? patterns.map((path) => {
+-    const currentPath = realpathSync(path);
++    const currentPath = path;
+     if (isFile(currentPath)) {
+       return path;
+     }

@@ -1,0 +1,79 @@
+/**
+ * Tests for local ESLint rules in packages/dev-tools/eslint-local-rules/.
+ *
+ * Each rule contributes one entry to SUITES below. Adding a new rule means
+ * adding one row, not a new test file — keeps RuleTester scaffolding in
+ * exactly one place.
+ */
+
+import { describe, expect, it } from 'vitest';
+
+import { loadLocalRule, type RuleCases, ruleTester } from './eslint-rule-test-harness.js';
+
+interface RuleSuite {
+  name: string;
+  cases: RuleCases;
+}
+
+const SUITES: readonly RuleSuite[] = [
+  {
+    name: 'no-url-pathname-for-fs',
+    cases: {
+      valid: [
+        { code: "import { fileURLToPath } from 'node:url'; const p = fileURLToPath(new URL('../x', import.meta.url));" },
+        { code: "const p = new URL('http://example.com').pathname;" },
+        { code: 'const p = someUrl.pathname;' },
+        { code: "const u = new URL('../x', import.meta.url); const s = u.href;" },
+      ],
+      invalid: [
+        {
+          code: 'const p = new URL(rel, import.meta.url).pathname;',
+          errors: [{ messageId: 'useFileURLToPath' }],
+        },
+        {
+          code: "const p = new URL('../fixtures/x.yaml', import.meta.url).pathname;",
+          errors: [{ messageId: 'useFileURLToPath' }],
+        },
+        {
+          code: 'const p = new URL(`../fixtures/${name}.yaml`, import.meta.url).pathname;',
+          errors: [{ messageId: 'useFileURLToPath' }],
+        },
+      ],
+    },
+  },
+  {
+    name: 'no-bare-dynamic-import-path',
+    cases: {
+      valid: [
+        { code: "await import('./relative.js');" },
+        { code: "await import('../sibling.js');" },
+        { code: "await import('some-pkg');" },
+        { code: "await import('@scope/pkg');" },
+        { code: "import { pathToFileURL } from 'node:url'; const p = '/abs'; await import(pathToFileURL(p).href);" },
+        { code: 'const spec = "./x.js"; await import(spec);' },
+      ],
+      invalid: [
+        { code: "await import('/Users/foo/x.js');", errors: [{ messageId: 'useFileUrl' }] },
+        { code: String.raw`await import('C:\\x.js');`, errors: [{ messageId: 'useFileUrl' }] },
+        { code: "import path from 'node:path'; await import(path.join(dir, 'x.js'));", errors: [{ messageId: 'useFileUrl' }] },
+        { code: "import path from 'node:path'; await import(path.resolve('x'));", errors: [{ messageId: 'useFileUrl' }] },
+        { code: "import { join } from 'node:path'; await import(join(dir, 'x.js'));", errors: [{ messageId: 'useFileUrl' }] },
+        { code: 'const absPath = "/x"; await import(absPath);', errors: [{ messageId: 'useFileUrl' }] },
+        { code: 'const configFile = "/x"; await import(configFile);', errors: [{ messageId: 'useFileUrl' }] },
+        { code: "import { join } from 'node:path'; await import(`${join(dir, 'x.js')}`);", errors: [{ messageId: 'useFileUrl' }] },
+      ],
+    },
+  },
+];
+
+describe.each(SUITES)('$name', ({ name, cases }) => {
+  const rule = loadLocalRule(`${name}.cjs`);
+
+  it('is registered with a valid schema', () => {
+    expect(rule.meta?.type).toBe('problem');
+  });
+
+  it('passes RuleTester cases', () => {
+    expect(() => { ruleTester.run(name, rule, cases); }).not.toThrow();
+  });
+});

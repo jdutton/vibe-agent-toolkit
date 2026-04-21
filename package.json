@@ -103,5 +103,8 @@
   "dependencies": {
     "@lancedb/lancedb": "0.22.3",
     "apache-arrow": "15.0.0"
+  },
+  "patchedDependencies": {
+    "@jscpd/finder@4.0.4": "patches/@jscpd%2Ffinder@4.0.4.patch"
   }
 }

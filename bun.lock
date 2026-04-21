@@ -176,6 +176,7 @@
         "@types/node": "^22.0.0",
         "@types/semver": "^7.5.0",
         "@types/which": "^3.0.4",
+        "eslint": "^9.39.2",
         "rimraf": "^6.0.1",
         "sharp": "^0.34.5",
         "typescript": "^5.9.3",
@@ -472,6 +473,9 @@
         "@vibe-agent-toolkit/vat-development-agents": "workspace:*",
       },
     },
+  },
+  "patchedDependencies": {
+    "@jscpd/finder@4.0.4": "patches/@jscpd%2Ffinder@4.0.4.patch",
   },
   "overrides": {
     "sharp": "^0.34.5",
