@@ -144,6 +144,7 @@ function resolveAndSpawn(
 
   const execCommand = useShell ? command : commandPath;
   return useShell
+    // eslint-disable-next-line sonarjs/os-command -- command is resolved via which.sync(); args are caller-controlled
     ? spawnSync(`${execCommand} ${args.join(' ')}`, { ...spawnOptions, shell: true })
     : spawnSync(execCommand, args, spawnOptions);
 }

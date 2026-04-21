@@ -24,7 +24,6 @@
   "dependencies": {
     "@vibe-agent-toolkit/utils": "workspace:*",
     "semver": "^7.7.3",
-    "which": "^5.0.0",
     "zod": "^3.24.1"
   },
   "devDependencies": {
