@@ -80,7 +80,8 @@ Deep reference document.
   return skillDir;
 }
 
-describe('Audit Dogfooding (system test)', () => {
+// Windows: vitest singleFork worker IPC times out when this runs as part of the full system test suite
+describe.skipIf(process.platform === 'win32')('Audit Dogfooding (system test)', () => {
   let binPath: string;
   let projectRoot: string;
   let tempDir: string;

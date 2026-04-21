@@ -6,7 +6,7 @@
  */
 
 import { readFileSync, existsSync } from 'node:fs';
-import {  dirname } from 'node:path';
+import {  dirname, parse } from 'node:path';
 
 import { ProjectConfigSchema, type ProjectConfig } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
@@ -20,8 +20,8 @@ const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
  * @returns Path to config file, or null if not found
  */
 export function findConfigPath(startDir?: string): string | null {
-  let currentDir = startDir ?? process.cwd();
-  const root = '/';
+  let currentDir = safePath.resolve(startDir ?? process.cwd());
+  const root = parse(currentDir).root;
 
   while (currentDir !== root) {
     const configPath = safePath.join(currentDir, CONFIG_FILENAME);
@@ -29,7 +29,9 @@ export function findConfigPath(startDir?: string): string | null {
     if (existsSync(configPath)) {
       return configPath;
     }
-    currentDir = safePath.join(currentDir, '..');
+    const parent = dirname(currentDir);
+    if (parent === currentDir) break; // safety: at filesystem root
+    currentDir = parent;
   }
 
   return null;
