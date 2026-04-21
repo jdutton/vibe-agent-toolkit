@@ -122,6 +122,12 @@ export function resetGoverningConfigCache(): void {
  *
  * Returns the parsed config plus the `configRoot` (directory that contained the
  * yaml), or `null` if no config is found anywhere up the tree.
+ *
+ * **Cache behavior:** Both successful loads and parse failures are cached
+ * (failures as `null`) so a broken config doesn't re-parse on every skill in
+ * the same scan. A test that edits a broken config into a good one between
+ * calls must invoke {@link resetGoverningConfigCache} to pick up the new
+ * state — the audit CLI entrypoint already does this via `resetAuditCaches()`.
  */
 export function findGoverningConfig(
   skillDir: string

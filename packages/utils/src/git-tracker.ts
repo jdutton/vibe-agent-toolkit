@@ -8,7 +8,7 @@
 import { dirname } from 'node:path';
 
 import { gitLsFiles, isGitIgnored } from './git-utils.js';
-import { safePath } from './path-utils.js';
+import { safePath, toForwardSlash } from './path-utils.js';
 
 /**
  * Options for {@link GitTracker.initialize}.
@@ -108,12 +108,19 @@ export class GitTracker {
     this.initialized = true;
   }
 
-  /** Walk up from each active-set file's directory and record every ancestor up to projectRoot. */
+  /**
+   * Walk up from each active-set file's directory and record every ancestor up to projectRoot.
+   *
+   * `activeSet` keys are forward-slash (via `safePath.resolve`) but `node:path.dirname`
+   * returns backslashes on Windows. Wrap every `dirname()` result with `toForwardSlash()`
+   * so the `activeAncestors` set uses the same key shape as `activeSet` — otherwise every
+   * `hasActiveDescendant` / `isIgnoredByActiveSet` ancestor lookup misses on Windows.
+   */
   private populateAncestorSet(): void {
     const root = this.normalizedProjectRoot;
 
     for (const absolutePath of this.activeSet) {
-      let current = dirname(absolutePath);
+      let current = toForwardSlash(dirname(absolutePath));
 
       while (current !== root && current.length > root.length) {
         if (this.activeAncestors.has(current)) {
@@ -121,7 +128,7 @@ export class GitTracker {
           break;
         }
         this.activeAncestors.add(current);
-        const parent = dirname(current);
+        const parent = toForwardSlash(dirname(current));
         if (parent === current) {
           break;
         }

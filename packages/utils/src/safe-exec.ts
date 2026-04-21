@@ -117,12 +117,33 @@ function shouldUseShell(commandPath: string): boolean {
 }
 
 /**
+ * Quote a single argument for a Windows `cmd.exe` command line.
+ *
+ * Rules:
+ *   - An arg that's empty, or contains whitespace, quotes, or any of `& | < > ^ ( ) % !`,
+ *     gets wrapped in double quotes.
+ *   - Embedded double quotes become `""` (cmd.exe's escape form inside quoted strings).
+ *
+ * This is narrow on purpose: it's only used when we're forced to assemble a shell string
+ * for `.cmd` / `.bat` wrappers on Windows (DEP0190 path). Callers still control what's
+ * in `args`, but this keeps a stray space, glob metachar, or paren from getting
+ * re-interpreted by the shell.
+ */
+function windowsShellQuote(arg: string): string {
+  if (arg === '' || /["\s&|<>^()%!]/.test(arg)) {
+    return `"${arg.replaceAll('"', '""')}"`;
+  }
+  return arg;
+}
+
+/**
  * Resolve command, build spawn options, and execute via spawnSync.
  *
- * Handles Windows shell requirements: .cmd/.bat files need shell:true.
- * Node.js v24+ (DEP0190) rejects shell:true with separate args containing
- * shell metacharacters (*, ?, etc.) with EINVAL. When shell mode is needed,
- * join command + args into a single string.
+ * Handles Windows shell requirements: `.cmd`/`.bat`/`.ps1` files need `shell:true`.
+ * Node.js v24+ (DEP0190) rejects `shell:true` with a separate args array containing
+ * shell metacharacters (`*`, `?`, `(`, `)`, etc.) with `EINVAL`. When shell mode is
+ * needed, join command + args into a single string with per-arg quoting via
+ * {@link windowsShellQuote} so metacharacters don't get re-interpreted by cmd.exe.
  */
 function resolveAndSpawn(
   command: string,
@@ -143,10 +164,13 @@ function resolveAndSpawn(
   };
 
   const execCommand = useShell ? command : commandPath;
-  return useShell
-    // eslint-disable-next-line sonarjs/os-command -- command is resolved via which.sync(); args are caller-controlled
-    ? spawnSync(`${execCommand} ${args.join(' ')}`, { ...spawnOptions, shell: true })
-    : spawnSync(execCommand, args, spawnOptions);
+  if (!useShell) {
+    return spawnSync(execCommand, args, spawnOptions);
+  }
+
+  const shellLine = `${execCommand} ${args.map(windowsShellQuote).join(' ')}`;
+  // eslint-disable-next-line sonarjs/os-command -- Windows DEP0190 workaround: command resolved via which.sync(); args are per-arg shell-quoted via windowsShellQuote()
+  return spawnSync(shellLine, { ...spawnOptions, shell: true });
 }
 
 /**

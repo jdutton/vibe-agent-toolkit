@@ -9,7 +9,7 @@ import { dirname, parse } from 'node:path';
 
 import which from 'which';
 
-import { safePath , toForwardSlash } from './path-utils.js';
+import { safePath } from './path-utils.js';
 
 
 /**
@@ -112,8 +112,8 @@ export function gitLsFiles(options: {
  * (e.g., OneDrive, shared drives).
  *
  * **Performance warning**: This spawns a git subprocess for each file (plus up to N ancestor
- * checks when the path traverses a symlink). For checking multiple files, use
- * `gitCheckIgnoredBatch()` instead.
+ * checks when the path traverses a symlink). For bulk workflows, initialize a
+ * {@link GitTracker} once and use `isIgnoredByActiveSet()` for O(1) in-repo lookups.
  *
  * @param filePath - Absolute or relative path to check
  * @param cwd - Working directory (defaults to process.cwd())
@@ -172,128 +172,3 @@ export function isGitIgnored(filePath: string, cwd: string = process.cwd()): boo
   }
 }
 
-/**
- * Batch check if multiple file paths are ignored by git
- *
- * Much more efficient than calling `isGitIgnored()` in a loop - uses a single
- * git subprocess with stdin instead of N subprocesses.
- *
- * **Symlink handling**: After the batch check, any paths that were not reported as
- * ignored are re-checked individually via `isGitIgnored()`, which handles exit code
- * 128 ("beyond a symbolic link") by walking up ancestor directories. This ensures
- * paths through symlinks in gitignored directories are correctly detected.
- *
- * @param filePaths - Array of absolute or relative paths to check
- * @param cwd - Working directory (defaults to process.cwd())
- * @returns Map of filePath -> isIgnored (true if gitignored, false otherwise)
- *
- * @example
- * ```typescript
- * const files = ['src/foo.ts', 'dist/bar.js', 'node_modules/baz.js'];
- * const ignoreMap = gitCheckIgnoredBatch(files, '/project');
- * // ignoreMap.get('src/foo.ts') === false
- * // ignoreMap.get('dist/bar.js') === true
- * // ignoreMap.get('node_modules/baz.js') === true
- * ```
- */
-/** Build the normalized→original path map and initialize result map. */
-function initBatchMaps(filePaths: string[]): {
-  normalizedPaths: string[];
-  pathMap: Map<string, string>;
-  result: Map<string, boolean>;
-} {
-  const normalizedPaths = filePaths.map(p => toForwardSlash(p));
-  const pathMap = new Map<string, string>();
-  const result = new Map<string, boolean>();
-
-  for (const [index, normalizedPath] of normalizedPaths.entries()) {
-    const originalPath = filePaths[index];
-    if (originalPath !== undefined) {
-      pathMap.set(normalizedPath, originalPath);
-    }
-  }
-  for (const filePath of filePaths) {
-    result.set(filePath, false);
-  }
-
-  return { normalizedPaths, pathMap, result };
-}
-
-/** Parse `git check-ignore --stdin` stdout and mark those paths as ignored. */
-function applyBatchIgnoredPaths(
-  stdout: string,
-  pathMap: Map<string, string>,
-  result: Map<string, boolean>,
-): void {
-  const ignoredPaths = stdout
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-
-  for (const ignoredPath of ignoredPaths) {
-    const originalPath = pathMap.get(ignoredPath);
-    if (originalPath !== undefined) {
-      result.set(originalPath, true);
-    }
-  }
-}
-
-/**
- * Per-path fallback using isGitIgnored(), which walks ancestor dirs to handle
- * the "beyond a symbolic link" case. Used only when the batch call didn't
- * complete cleanly — see the call site for the exit-code rationale.
- */
-function applyPerPathFallback(result: Map<string, boolean>, cwd: string): void {
-  for (const [filePath, ignored] of result) {
-    if (!ignored && isGitIgnored(filePath, cwd)) {
-      result.set(filePath, true);
-    }
-  }
-}
-
-export function gitCheckIgnoredBatch(
-  filePaths: string[],
-  cwd: string = process.cwd()
-): Map<string, boolean> {
-  if (filePaths.length === 0) {
-    return new Map<string, boolean>();
-  }
-
-  const { normalizedPaths, pathMap, result } = initBatchMaps(filePaths);
-
-  try {
-    const gitPath = which.sync('git');
-
-    const gitResult = spawnSync(gitPath, ['check-ignore', '--stdin'], {
-      cwd,
-      encoding: 'utf-8',
-      input: normalizedPaths.join('\n'),
-      stdio: 'pipe',
-      shell: false,
-    });
-
-    if (gitResult.status === 0 && gitResult.stdout) {
-      applyBatchIgnoredPaths(gitResult.stdout, pathMap, result);
-    }
-
-    // `git check-ignore --stdin` exits:
-    //   0  — at least one path was reported as ignored (authoritative)
-    //   1  — no paths were ignored (authoritative; nothing on stdout)
-    //  128 — fatal error, commonly "beyond a symbolic link" for one of the
-    //        inputs. When this happens the batch results may be incomplete,
-    //        so fall back to per-path isGitIgnored() (which walks ancestor
-    //        dirs to handle the symlink case).
-    //
-    // The fallback used to run unconditionally, which spawns one git
-    // subprocess per non-ignored path — O(N) spawns for every batch call
-    // and a measurable cost for monorepo-scale walkers (half of
-    // `vat audit .` wall time on the VAT repo before this change).
-    if (gitResult.status !== 0 && gitResult.status !== 1) {
-      applyPerPathFallback(result, cwd);
-    }
-
-    return result;
-  } catch {
-    return result;
-  }
-}

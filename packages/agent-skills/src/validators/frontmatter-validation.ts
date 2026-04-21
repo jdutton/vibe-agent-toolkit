@@ -8,7 +8,6 @@
  * @see https://code.claude.com/docs/en/skills — Official Claude Code skill frontmatter fields
  */
 
-import type { ZodRawShape } from 'zod';
 
 import { AgentSkillFrontmatterSchema, VATAgentSkillFrontmatterSchema } from '../schemas/agent-skill-frontmatter.js';
 
@@ -248,9 +247,12 @@ const WRONG_PERSON_PATTERN = new RegExp(
  * Standard frontmatter field names, derived from the Zod schema so the
  * allowed set stays in sync with the spec. Covers both agentskills.io and
  * Claude Code fields.
+ *
+ * Uses `.keyof().options` (stable across Zod v3 and v4) rather than
+ * `_def.shape`, which is a function getter in v3 but a plain object in v4.
  */
 const STANDARD_FRONTMATTER_FIELDS: ReadonlySet<string> = new Set(
-	Object.keys((AgentSkillFrontmatterSchema._def.shape as unknown as () => ZodRawShape)()),
+	AgentSkillFrontmatterSchema.keyof().options,
 );
 
 /**

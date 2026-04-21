@@ -309,7 +309,8 @@ export const safePath = {
  */
 export function resolveFromImportMeta(importMetaUrl: string, ...segments: string[]): string {
   if (segments.length === 0) {
-    return fileURLToPath(new URL(importMetaUrl));
+    // fileURLToPath accepts the string directly; no need to round-trip through URL.
+    return fileURLToPath(importMetaUrl);
   }
   // safePath.join gives forward slashes — URL spec requires them in relative refs.
   const relative = safePath.join(...segments);
