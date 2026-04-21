@@ -117,6 +117,38 @@ function shouldUseShell(commandPath: string): boolean {
 }
 
 /**
+ * Resolve command, build spawn options, and execute via spawnSync.
+ *
+ * Handles Windows shell requirements: .cmd/.bat files need shell:true.
+ * Node.js v24+ (DEP0190) rejects shell:true with separate args containing
+ * shell metacharacters (*, ?, etc.) with EINVAL. When shell mode is needed,
+ * join command + args into a single string.
+ */
+function resolveAndSpawn(
+  command: string,
+  args: string[],
+  options: SafeExecOptions,
+): ReturnType<typeof spawnSync> {
+  const commandPath = which.sync(command);
+  const useShell = shouldUseShell(commandPath);
+
+  const spawnOptions: SpawnSyncOptions = {
+    shell: useShell,
+    stdio: options.stdio ?? 'pipe',
+    env: options.env,
+    cwd: options.cwd,
+    maxBuffer: options.maxBuffer,
+    timeout: options.timeout,
+    encoding: options.encoding,
+  };
+
+  const execCommand = useShell ? command : commandPath;
+  return useShell
+    ? spawnSync(`${execCommand} ${args.join(' ')}`, { ...spawnOptions, shell: true })
+    : spawnSync(execCommand, args, spawnOptions);
+}
+
+/**
  * Safe command execution using spawnSync + which pattern
  *
  * More secure than execSync:
@@ -150,31 +182,7 @@ export function safeExecSync(
   args: string[] = [],
   options: SafeExecOptions = {},
 ): Buffer | string {
-  // Resolve command path using which (pure Node.js, no shell)
-  const commandPath = which.sync(command);
-
-  // Determine if shell is needed (Windows-specific logic)
-  const useShell = shouldUseShell(commandPath);
-
-  const spawnOptions: SpawnSyncOptions = {
-    shell: useShell, // shell:true on Windows for node and shell scripts, shell:false otherwise for security
-    stdio: options.stdio ?? 'pipe',
-    env: options.env,
-    cwd: options.cwd,
-    maxBuffer: options.maxBuffer,
-    timeout: options.timeout,
-    encoding: options.encoding,
-  };
-
-  // Execute with absolute path (or command name if using shell on Windows)
-  // When shell:true, use command name so shell can resolve it properly.
-  // Node.js v24+ (DEP0190) rejects shell:true with separate args containing
-  // shell metacharacters (*, ?, etc.) with EINVAL. Join into a single string
-  // so the shell handles expansion/quoting itself.
-  const execCommand = useShell ? command : commandPath;
-  const result = useShell
-    ? spawnSync(`${execCommand} ${args.join(' ')}`, { ...spawnOptions, shell: true })
-    : spawnSync(execCommand, args, spawnOptions);
+  const result = resolveAndSpawn(command, args, options);
 
   // Check for spawn errors
   if (result.error) {
@@ -219,24 +227,7 @@ export function safeExecResult(
   options: SafeExecOptions = {},
 ): SafeExecResult {
   try {
-    const commandPath = which.sync(command);
-
-    // Determine if shell is needed (Windows-specific logic)
-    const useShell = shouldUseShell(commandPath);
-
-    const spawnOptions: SpawnSyncOptions = {
-      shell: useShell,
-      stdio: options.stdio ?? 'pipe',
-      env: options.env,
-      cwd: options.cwd,
-      maxBuffer: options.maxBuffer,
-      timeout: options.timeout,
-      encoding: options.encoding,
-    };
-
-    // When shell:true, use command name so shell can resolve it properly
-    const execCommand = useShell ? command : commandPath;
-    const result = spawnSync(execCommand, args, spawnOptions);
+    const result = resolveAndSpawn(command, args, options);
 
     const status = result.status ?? -1;
     const execResult: SafeExecResult = {

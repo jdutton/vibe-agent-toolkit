@@ -7,13 +7,12 @@
 /* eslint-disable security/detect-non-literal-fs-filename */
 // File paths derived from PROJECT_ROOT constant (controlled, not user input)
 
-import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
-import which from 'which';
+import { safePath, safeExecResult } from '@vibe-agent-toolkit/utils';
+export { safeExecSync, safeExecResult } from '@vibe-agent-toolkit/utils';
 
 /**
  * JSCPD (Code Duplication Detection) Configuration
@@ -90,79 +89,6 @@ export function log(message: string, color: Color = 'reset'): void {
 }
 
 /**
- * Safe command execution for tools using which pattern
- * Resolves command path first, then executes with shell: false for security
- * Returns Buffer by default, or string if encoding is specified
- */
-// eslint-disable-next-line sonarjs/function-return-type -- Returns Buffer or string based on encoding option
-export function safeExecSync(
-  command: string,
-  args: string[] = [],
-  options: {
-    encoding?: BufferEncoding;
-    stdio?: 'pipe' | 'ignore' | 'inherit';
-    cwd?: string;
-    env?: NodeJS.ProcessEnv;
-  } = {}
-): Buffer | string {
-  // Resolve command path using which (avoids PATH security issues)
-  const commandPath = which.sync(command);
-
-  // Windows .cmd/.bat files require shell:true. Node.js v24+ (DEP0190) rejects
-  // shell:true with separate args containing shell metacharacters (*, ?, etc.)
-  // with EINVAL, so join command + args into a single string for the shell.
-  const lowerPath = commandPath.toLowerCase();
-  const needsShell = process.platform === 'win32' &&
-    (lowerPath.endsWith('.cmd') || lowerPath.endsWith('.bat'));
-
-  const result = needsShell
-    ? spawnSync(`${command} ${args.join(' ')}`, { ...options, shell: true })
-    : spawnSync(commandPath, args, { ...options, shell: false });
-
-  if (result.error) {
-    throw result.error;
-  }
-
-  if (result.status !== 0) {
-    throw new Error(
-      `Command failed with exit code ${String(result.status ?? 'null')}: ${command} ${args.join(' ')}\n${result.stderr?.toString() ?? ''}`
-    );
-  }
-
-  return result.stdout;
-}
-
-/**
- * Safe command execution that returns result instead of throwing
- * Uses which pattern for security
- */
-export function safeExecResult(
-  command: string,
-  args: string[] = [],
-  options: {
-    encoding?: BufferEncoding;
-    stdio?: 'pipe' | 'ignore';
-    cwd?: string;
-    env?: NodeJS.ProcessEnv;
-  } = {}
-): { success: boolean; stdout: string; stderr: string; status: number } {
-  // Resolve command path using which
-  const commandPath = which.sync(command);
-
-  const result = spawnSync(commandPath, args, {
-    ...options,
-    shell: false,
-  });
-
-  return {
-    success: result.status === 0,
-    stdout: result.stdout?.toString() || '',
-    stderr: result.stderr?.toString() || '',
-    status: result.status ?? -1,
-  };
-}
-
-/**
  * Get the version of a package for a specific npm dist-tag
  */
 export function getNpmTagVersion(packageName: string, tag: string): string | null {
@@ -172,7 +98,7 @@ export function getNpmTagVersion(packageName: string, tag: string): string | nul
   });
 
   if (result.success && result.stdout) {
-    return result.stdout.trim();
+    return result.stdout.toString().trim();
   }
 
   return null;
