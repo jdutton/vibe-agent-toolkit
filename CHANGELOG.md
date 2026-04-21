@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.33] - 2026-04-21
+
 ### Added
 - Three new skill-smell validation codes (all default `warning`, per skill-smell philosophy):
   - `SKILL_FRONTMATTER_EXTRA_FIELDS`: frontmatter contains keys beyond the standard agentskills.io + Claude Code set. Allowed keys derive from `AgentSkillFrontmatterSchema` at module load, so the rule tracks the schema. Actionable when adopters put project-specific fields (`version:`, `tools:`, `permissions:`) at top level — `metadata.*` is the right home for custom data.
@@ -19,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Windows path-normalization regression in `GitTracker.isIgnored()`.** The cache was populated at init with `safePath.resolve(projectRoot, relPath)` (which drive-prefixes on Windows, e.g. `C:/project/README.md`), but `isIgnored()` queried the cache with the raw caller-supplied path. Every lookup missed on Windows and fell through to spawn `git check-ignore`, triggering three `packages/utils/test/git-tracker.test.ts` performance-assertion failures on every Windows CI run since rc.2. Fix normalizes the lookup key to match population. Sibling methods `hasActiveDescendant` and `isIgnoredByActiveSet` already normalized correctly; `isIgnored` was the outlier. Added a POSIX-visible regression test using a non-canonical path (containing `..`) so the invariant is guarded against future changes that might reintroduce raw-path lookups.
-- `packages/cli/test/system/audit-dogfooding.system.test.ts` test 1 (`should successfully audit vibe-agent-toolkit project root`) now runs on Windows. The `skipIf(process.platform === 'win32')` was added in 0.1.32 when the test timed out at 120s; the narrow `gitCheckIgnoredBatch` fallback fix that landed alongside it dropped audit wall time ~4x, so the smoke test fits in budget again. Windows CI will confirm.
+- **Windows infinite loop in `findConfigPath()` when scanning paths outside a VAT-configured project.** The root-detection used a hardcoded `/`, which never matches Windows drive roots (`C:\`, `D:\`), causing the walk-up loop to spin indefinitely. Fixed via `path.parse(dir).root` + `dirname()` with a `parent === currentDir` safety break so traversal halts at the filesystem root on every OS. Manifested as `vat audit` hangs on Windows whenever the scan target (or the caller's cwd for a `.` scan) had no `vibe-agent-toolkit.config.yaml` ancestor — common for temp-directory test fixtures and any audit run outside a project.
 - Stale JSDoc examples referencing `vibe-agent-toolkit:resources` (renamed to `vibe-agent-toolkit:vat-knowledge-resources` during the 0.1.32 plugin restructure) replaced with `vibe-agent-toolkit:vat-audit` in `packages/cli/src/commands/claude/plugin/build.ts`, `packages/cli/src/commands/skills/build.ts`, `packages/agent-schema/src/package-metadata.ts`, and the companion test constant.
 
 ### Performance
