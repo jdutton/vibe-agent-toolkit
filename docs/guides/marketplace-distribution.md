@@ -429,7 +429,3 @@ VAT writes `.claude-plugin/plugin.json` last, merging the author's `.claude-plug
 5. `.claude-plugin/plugin.json` merge-write (always last, always wins)
 
 **Run order:** `vat skills build && vat claude plugin build`. The plugin build reads pre-built skills from `dist/`.
-
-### Example
-
-See [the full-plugin example config](../examples/full-plugin/vibe-agent-toolkit.config.yaml) for an end-to-end example exercising every asset type.

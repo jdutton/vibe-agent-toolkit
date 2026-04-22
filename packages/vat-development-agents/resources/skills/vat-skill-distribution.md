@@ -415,5 +415,4 @@ everything (minus `skills/` and `.claude-plugin/`), merges author `plugin.json` 
 VAT-owned identity fields, and applies any `files[]` mappings for artifacts built
 outside the plugin dir.
 
-See [docs/guides/marketplace-distribution.md](../../../../docs/guides/marketplace-distribution.md) section "Full-plugin authoring" and the end-to-end
-[docs/examples/full-plugin/vibe-agent-toolkit.config.yaml](../../../../docs/examples/full-plugin/vibe-agent-toolkit.config.yaml) example.
+See [docs/guides/marketplace-distribution.md](../../../../docs/guides/marketplace-distribution.md) section "Full-plugin authoring".
