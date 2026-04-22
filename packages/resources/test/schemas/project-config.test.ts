@@ -6,6 +6,7 @@ import { describe, expect, it } from 'vitest';
 import type { ZodSchema } from 'zod';
 
 import {
+  ClaudeMarketplacePluginEntrySchema,
   ProjectConfigSchema,
   SkillPackagingConfigSchema,
   SkillsConfigSchema,
@@ -123,5 +124,67 @@ describe('ProjectConfigSchema', () => {
       throw new Error(`vat-development-agents config failed to parse:\n${errors}`);
     }
     expect(result.success).toBe(true);
+  });
+});
+
+describe('ClaudeMarketplacePluginEntrySchema (full plugin support)', () => {
+  it('accepts plugin with only name (no skills, no source, no files)', () => {
+    // Schema-level: `{ name: 'x' }` alone is valid — an author may declare the plugin
+    // and then supply content via a plugins/<name>/ dir on disk. Build-time emptiness
+    // (no dir, no skills, no files) is enforced in Task 9's `buildPlugin()` guard,
+    // NOT here.
+    const result = ClaudeMarketplacePluginEntrySchema.safeParse({ name: 'my-plugin' });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts plugin with name regex conforming (lowercase alnum + hyphens)', () => {
+    for (const name of ['foo', 'foo-bar', 'a1', 'p1-p2-p3']) {
+      const result = ClaudeMarketplacePluginEntrySchema.safeParse({ name });
+      expect(result.success).toBe(true);
+    }
+  });
+
+  it('rejects plugin name with uppercase or invalid chars', () => {
+    for (const name of ['Foo', 'foo_bar', 'foo.bar', '-foo', 'foo!', '']) {
+      const result = ClaudeMarketplacePluginEntrySchema.safeParse({ name });
+      expect(result.success).toBe(false);
+    }
+  });
+
+  it('normalizes skills: [] to absent', () => {
+    const result = ClaudeMarketplacePluginEntrySchema.safeParse({ name: 'p', skills: [] });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.skills).toBeUndefined();
+    }
+  });
+
+  it('accepts skills: "*" and skills: [names]', () => {
+    expect(ClaudeMarketplacePluginEntrySchema.safeParse({ name: 'p', skills: '*' }).success).toBe(true);
+    expect(ClaudeMarketplacePluginEntrySchema.safeParse({ name: 'p', skills: ['a', 'b'] }).success).toBe(true);
+  });
+
+  it('accepts optional source path', () => {
+    const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+      name: 'p',
+      source: 'custom/dir',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts files[] with source+dest entries', () => {
+    const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+      name: 'p',
+      files: [{ source: 'dist/hooks/h.mjs', dest: 'hooks/h.mjs' }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects unknown top-level keys (strict)', () => {
+    const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+      name: 'p',
+      bogus: true,
+    });
+    expect(result.success).toBe(false);
   });
 });

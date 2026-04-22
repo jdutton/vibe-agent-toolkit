@@ -175,7 +175,9 @@ export function resolveAssignedSkills(
 
   for (const marketplace of Object.values(marketplaces)) {
     for (const plugin of marketplace.plugins) {
-      addMatchingSkills(assigned, plugin.skills, publishedSkillNames);
+      if (plugin.skills !== undefined) {
+        addMatchingSkills(assigned, plugin.skills, publishedSkillNames);
+      }
     }
   }
 
@@ -354,7 +356,7 @@ function checkPluginReferencesUnknownSkill(
 
   for (const [marketplaceName, marketplace] of Object.entries(marketplaces)) {
     for (const plugin of marketplace.plugins) {
-      if (plugin.skills === '*') {
+      if (plugin.skills === '*' || plugin.skills === undefined) {
         continue;
       }
       issues.push(...checkPluginSelectors(plugin.skills, plugin.name, marketplaceName, discoveredNames));

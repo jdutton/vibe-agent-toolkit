@@ -305,6 +305,10 @@ function resolvePluginSkills(
     return availableSkills;
   }
 
+  if (pluginDef.skills === undefined) {
+    return [];
+  }
+
   const matched = new Set<string>();
   for (const selector of pluginDef.skills) {
     // Also try the fs-safe form of the selector (colon → __) since

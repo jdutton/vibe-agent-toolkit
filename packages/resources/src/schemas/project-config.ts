@@ -163,14 +163,25 @@ export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
 
 /**
  * A plugin entry within a Claude marketplace configuration.
+ *
+ * Supports full Claude plugin bundling:
+ * - `skills` (optional): pool-skill selector (name list or "*"). Absent/[] = no pool skills.
+ * - `source` (optional): path to plugin dir (default: plugins/<name>). Tree-copied verbatim.
+ * - `files` (optional): explicit source->dest mappings for artifacts built outside the plugin dir.
  */
 export const ClaudeMarketplacePluginEntrySchema = z.object({
   name: z.string()
+    .regex(/^[a-z0-9][a-z0-9-]*$/, 'Plugin name must be lowercase alphanumeric with hyphens (regex: ^[a-z0-9][a-z0-9-]*$)')
     .describe('Plugin name (lowercase alphanumeric with hyphens)'),
   description: z.string().optional()
     .describe('Plugin description'),
-  skills: z.union([z.literal('*'), z.array(z.string())])
-    .describe('Skills to include: "*" for all, or array of skill name selectors'),
+  skills: z.union([z.literal('*'), z.array(z.string())]).optional()
+    .transform((val) => (Array.isArray(val) && val.length === 0 ? undefined : val))
+    .describe('Pool skills to include: "*" for all, or array of skill name selectors. Omit for no pool skills (plugin-local skills still ship).'),
+  source: z.string().optional()
+    .describe('Path to plugin directory (default: plugins/<name>)'),
+  files: z.array(SkillFileEntrySchema).optional()
+    .describe('Explicit source→dest file mappings for compiled artifacts outside the plugin directory'),
 }).strict().describe('Plugin entry within a marketplace configuration');
 
 export type ClaudeMarketplacePluginEntry = z.infer<typeof ClaudeMarketplacePluginEntrySchema>;
