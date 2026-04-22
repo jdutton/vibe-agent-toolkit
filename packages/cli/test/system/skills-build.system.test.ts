@@ -470,11 +470,6 @@ function writePluginLocalSkill(tempDir: string, plugin: string, skill: string): 
   );
 }
 
-function writePoolSkill(tempDir: string, skill: string): void {
-  mkdirSyncReal(safePath.join(tempDir, 'skills', skill), { recursive: true });
-  writeTestFile(safePath.join(tempDir, 'skills', skill, 'SKILL.md'), createSkillMarkdown(skill));
-}
-
 function writePluginFixtureFiles(tempDir: string, config: string): void {
   writeTestFile(safePath.join(tempDir, VAT_CONFIG_FILENAME), config);
   writeTestFile(safePath.join(tempDir, PACKAGE_JSON_FILENAME), PLUGIN_TEST_PKG_JSON);
@@ -517,56 +512,6 @@ claude:
     );
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output verification
     expect(existsSync(distSkillPath)).toBe(true);
-  });
-
-  it('errors with pool-vs-local name collision', () => {
-    const tempDir = createTempDir();
-    writePluginFixtureFiles(
-      tempDir,
-      `version: 1
-skills:
-  include: ["skills/**/SKILL.md"]
-claude:
-  marketplaces:
-    mp1:
-      owner:
-        name: Test
-      plugins:
-        - name: p1
-          skills: ["dup"]
-`,
-    );
-    writePoolSkill(tempDir, 'dup');
-    writePluginLocalSkill(tempDir, 'p1', 'dup');
-
-    const result = executeCli(binPath, ['skills', 'build'], { cwd: tempDir });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain('collision');
-  });
-
-  it('does NOT error when a pool skill shares a name with a plugin-local skill but is not in the plugin selection', () => {
-    const tempDir = createTempDir();
-    writePluginFixtureFiles(
-      tempDir,
-      `version: 1
-skills:
-  include: ["skills/**/SKILL.md"]
-claude:
-  marketplaces:
-    mp1:
-      owner:
-        name: Test
-      plugins:
-        - name: p1
-          skills: ["other"]
-`,
-    );
-    writePoolSkill(tempDir, 'dup');
-    writePoolSkill(tempDir, 'other');
-    writePluginLocalSkill(tempDir, 'p1', 'dup');
-
-    const result = executeCli(binPath, ['skills', 'build'], { cwd: tempDir });
-    expect(result.status).toBe(0);
   });
 
   it('errors on duplicate plugin names across marketplaces (case-colliding guard)', () => {

@@ -21,7 +21,7 @@ Skill authoring standards move fast. Before applying this checklist to a non-tri
 
 Items fall into two categories:
 
-- **[A]** items directly mirror Anthropic's official skill-authoring best practices (see the [cached guidance](../../../../docs/external/anthropic-skill-authoring-best-practices.md) or the [live doc](https://platform.claude.com/docs/en/docs/agents-and-tools/agent-skills/best-practices)). These are safe to treat as canonical.
+- **[A]** items directly mirror Anthropic's official skill-authoring best practices (see the [cached guidance](../../../../../docs/external/anthropic-skill-authoring-best-practices.md) or the [live doc](https://platform.claude.com/docs/en/docs/agents-and-tools/agent-skills/best-practices)). These are safe to treat as canonical.
 - **[VAT]** items are VAT-opinionated additions not explicitly in Anthropic's doc. They come from adopter experience, corpus observations, or Claude Code behavior changes. Individual teams can override any **[VAT]** item with `validation.severity` or `validation.allow` (with a `reason`).
 
 Tooling enforcement: items marked with a bracketed code (e.g., `[SKILL_DESCRIPTION_FILLER_OPENER]`) are checked by `vat skills validate` / `vat audit`. The rest are judgment calls for a human or agent reviewer.
@@ -94,6 +94,6 @@ Items marked as checks (not automated validation) are judgment calls that toolin
 
 When a VAT validation code fires, its `fix:` field will suggest a concrete remediation; this checklist is the reference for the underlying principle. For a walkthrough that combines automated validation with this checklist, run `vat skill review <path>`.
 
-**Source of truth**: [Anthropic's skill-authoring best practices](https://platform.claude.com/docs/en/docs/agents-and-tools/agent-skills/best-practices). See [`docs/external/anthropic-skill-authoring-best-practices.md`](../../../../docs/external/anthropic-skill-authoring-best-practices.md) for a cached copy of the load-bearing portions with the VAT-vs-Anthropic delta called out.
+**Source of truth**: [Anthropic's skill-authoring best practices](https://platform.claude.com/docs/en/docs/agents-and-tools/agent-skills/best-practices). See [`docs/external/anthropic-skill-authoring-best-practices.md`](../../../../../docs/external/anthropic-skill-authoring-best-practices.md) for a cached copy of the load-bearing portions with the VAT-vs-Anthropic delta called out.
 
 Reviewed against external best practices (Anthropic skill-authoring docs, anthropics/skills repository, Claude Code release notes through 2026-04-18).

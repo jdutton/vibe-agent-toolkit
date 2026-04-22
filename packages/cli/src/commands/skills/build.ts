@@ -440,7 +440,6 @@ async function cleanStaleSkillOutputs(
 interface DeclaredPlugin {
   name: string;
   source?: string;
-  skills?: '*' | string[];
 }
 
 function collectDeclaredPlugins(
@@ -453,56 +452,30 @@ function collectDeclaredPlugins(
     for (const plugin of marketplace.plugins) {
       const entry: DeclaredPlugin = { name: plugin.name };
       if (plugin.source !== undefined) entry.source = plugin.source;
-      if (plugin.skills !== undefined) entry.skills = plugin.skills;
       plugins.push(entry);
     }
   }
   return plugins;
 }
 
-function resolveSelectedPoolNames(
-  selector: '*' | string[] | undefined,
-  pool: readonly DiscoveredSkill[],
-): Set<string> {
-  if (selector === '*') return new Set(pool.map((s) => s.name));
-  if (Array.isArray(selector)) return new Set(selector);
-  return new Set<string>();
-}
-
 /**
- * Detect pool-vs-local skill collisions within each plugin's selection set.
+ * Detect cross-plugin name collisions among plugin-local skills.
  *
- * Spec §Design → Skill stream: "Only a pool-vs-local collision within the same
- * plugin's selection set is an error." Filter pool refs to only those pool skills
- * the plugin actually selects (via `skills: "*"`, array, or omission).
+ * Skills must have globally unique names across plugins so that a skill name
+ * maps to exactly one plugin-local `plugins/<p>/skills/<name>/SKILL.md`.
  */
 function enforcePluginSkillCollisions(
-  declaredPlugins: readonly DeclaredPlugin[],
-  pool: readonly DiscoveredSkill[],
   pluginLocal: readonly PluginLocalSkill[],
 ): void {
-  for (const plugin of declaredPlugins) {
-    const pluginLocals = pluginLocal.filter((s) => s.plugin === plugin.name);
-    const selectedPoolNames = resolveSelectedPoolNames(plugin.skills, pool);
+  const localRefs: SkillRef[] = pluginLocal.map((s) => ({
+    name: s.name,
+    plugin: s.plugin,
+    sourcePath: s.sourcePath,
+  }));
 
-    const poolRefs: SkillRef[] = pool
-      .filter((s) => selectedPoolNames.has(s.name))
-      .map((s) => ({
-        name: s.name,
-        origin: 'pool',
-        sourcePath: s.sourcePath,
-      }));
-    const localRefs: SkillRef[] = pluginLocals.map((s) => ({
-      name: s.name,
-      origin: 'plugin-local',
-      plugin: s.plugin,
-      sourcePath: s.sourcePath,
-    }));
-
-    const collisions = detectSkillCollisions([...poolRefs, ...localRefs]);
-    if (collisions.length > 0) {
-      throw new Error(collisions.map((c) => c.message).join('\n'));
-    }
+  const collisions = detectSkillCollisions(localRefs);
+  if (collisions.length > 0) {
+    throw new Error(collisions.map((c) => c.message).join('\n'));
   }
 }
 
@@ -530,7 +503,7 @@ async function discoverAllSkills(
     warn: (m) => logger.info(`warning: ${m}`),
   });
 
-  enforcePluginSkillCollisions(declaredPlugins, discoveredSkills, pluginLocal);
+  enforcePluginSkillCollisions(pluginLocal);
 
   const pluginSkillsAsDiscovered: DiscoveredSkill[] = pluginLocal.map((p) => ({
     name: p.name,

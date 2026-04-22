@@ -271,6 +271,6 @@ const output2 = await agent.execute({
 
 - `vibe-agent-toolkit:vat-skill-authoring` — sibling skill covering SKILL.md frontmatter, body structure, references, packagingOptions, and validation overrides
 - `vibe-agent-toolkit:vat-skill-review` — pre-publication quality checklist
-- [agent-authoring.md](../../../../docs/agent-authoring.md) — Complete patterns guide
-- [orchestration.md](../../../../docs/orchestration.md) — Multi-agent workflows
+- [agent-authoring.md](../../../../../docs/agent-authoring.md) — Complete patterns guide
+- [orchestration.md](../../../../../docs/orchestration.md) — Multi-agent workflows
 - [Building Effective Agents — Anthropic](https://www.anthropic.com/research/building-effective-agents)

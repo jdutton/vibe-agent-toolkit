@@ -36,7 +36,6 @@ claude:
         license: mit
       plugins:
         - name: test-plugin
-          skills: "*"
 `);
 }
 
@@ -160,7 +159,6 @@ claude:
         name: Test Org
       plugins:
         - name: test-plugin
-          skills: "*"
 `);
     writeTestFile(safePath.join(tempDir, 'package.json'), JSON.stringify({ name: 'test-project', version: '1.0.0' }));
     initGitRepo(tempDir);

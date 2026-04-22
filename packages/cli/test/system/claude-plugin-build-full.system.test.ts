@@ -23,7 +23,7 @@ function buildFixture(tempDir: string): void {
 
   const config = `version: 1
 skills:
-  include: ["skills/**/SKILL.md"]
+  include: ["plugins/*/skills/**/SKILL.md"]
 claude:
   marketplaces:
     mp1:
@@ -33,18 +33,11 @@ claude:
       plugins:
         - name: full-plugin
           description: Plugin with every asset type
-          skills: ["pool-a"]
           files:
             - source: dist/hooks/compiled-hook.mjs
               dest: hooks/compiled-hook.mjs
 `;
   writeTestFile(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), config);
-
-  mkdirSyncReal(safePath.join(tempDir, 'skills', 'pool-a'), { recursive: true });
-  writeTestFile(
-    safePath.join(tempDir, 'skills', 'pool-a', 'SKILL.md'),
-    createSkillMarkdown('pool-a'),
-  );
 
   const plugin = safePath.join(tempDir, 'plugins', 'full-plugin');
   mkdirSyncReal(safePath.join(plugin, 'commands'), { recursive: true });
@@ -83,7 +76,7 @@ claude:
 describe('vat claude plugin build (full plugin support)', () => {
   afterEach(() => cleanupTempDirs());
 
-  it('produces a full plugin tree with commands, hooks, agents, mcp, scripts, pool+local skills, files[], merged plugin.json', () => {
+  it('produces a full plugin tree with commands, hooks, agents, mcp, scripts, plugin-local skills, files[], merged plugin.json', () => {
     const tempDir = createTempDir();
     buildFixture(tempDir);
 
@@ -109,7 +102,6 @@ describe('vat claude plugin build (full plugin support)', () => {
     expect(existsSync(safePath.join(outDir, 'agents', 'reviewer.md'))).toBe(true);
     expect(existsSync(safePath.join(outDir, '.mcp.json'))).toBe(true);
     expect(existsSync(safePath.join(outDir, 'scripts', 'util.mjs'))).toBe(true);
-    expect(existsSync(safePath.join(outDir, 'skills', 'pool-a', 'SKILL.md'))).toBe(true);
     expect(existsSync(safePath.join(outDir, 'skills', 'local-b', 'SKILL.md'))).toBe(true);
     expect(existsSync(safePath.join(outDir, 'hooks', 'compiled-hook.mjs'))).toBe(true);
 

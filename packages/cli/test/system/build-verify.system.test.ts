@@ -32,24 +32,32 @@ const SKILL_INCLUDE_GLOB = 'resources/skills/**/SKILL.md';
 const SKILL_SOURCE_PATH = 'resources/skills/SKILL.md';
 
 /**
- * Write a vibe-agent-toolkit.config.yaml with skills + claude marketplace config
+ * Build a skill-include glob that discovers SKILL.md files under
+ * `plugins/<plugin>/skills/` so the plugin-local discovery picks them up.
+ */
+function pluginSkillIncludeGlob(pluginName: string): string {
+  return `plugins/${pluginName}/skills/**/SKILL.md`;
+}
+
+/**
+ * Write a vibe-agent-toolkit.config.yaml with skills + claude marketplace config.
+ *
+ * The skill-include glob matches `plugins/<pluginName>/skills/**\/SKILL.md` so
+ * every discovered skill is plugin-local to `pluginName` and ships with the
+ * plugin's own bundle.
  */
 function createVatConfig(
   dir: string,
   marketplaceName: string,
   pluginName: string,
-  skillSelector: string,
-  skillIncludeGlobs: string[] = [SKILL_INCLUDE_GLOB]
+  skillIncludeGlobs?: string[],
 ): void {
-  // skills field accepts "*" literal or an array of selectors
-  const skillsYaml = skillSelector === '*'
-    ? `          skills: "*"`
-    : `          skills:\n            - "${skillSelector}"`;
+  const globs = skillIncludeGlobs ?? [pluginSkillIncludeGlob(pluginName)];
 
   const content = `version: 1
 skills:
   include:
-${skillIncludeGlobs.map(g => `    - "${g}"`).join('\n')}
+${globs.map(g => `    - "${g}"`).join('\n')}
 claude:
   marketplaces:
     ${marketplaceName}:
@@ -58,7 +66,6 @@ claude:
       plugins:
         - name: ${pluginName}
           description: Test plugin for build-verify tests
-${skillsYaml}
 `;
   writeTestFile(safePath.join(dir, VAT_CONFIG_FILENAME), content);
 }
@@ -76,13 +83,26 @@ function setupBuildVerifyTestSuite() {
     writeTestFile(safePath.join(tempDir, relativePath), createSkillMarkdown(skillName));
   };
 
+  /**
+   * Place a SKILL.md under `plugins/<plugin>/skills/<skillName>/SKILL.md` so
+   * plugin-local discovery picks it up and ships it in the plugin bundle.
+   */
+  const createPluginLocalSkill = (
+    tempDir: string,
+    pluginName: string,
+    skillName: string,
+  ) => {
+    const relPath = safePath.join('plugins', pluginName, 'skills', skillName, 'SKILL.md');
+    createSkillSource(tempDir, relPath, skillName);
+  };
+
   const setupSingleSkillFixture = (
     tempDir: string,
     marketplaceName: string,
     pluginName: string,
   ) => {
-    createSkillSource(tempDir, SKILL_SOURCE_PATH, TEST_SKILL_NAME);
-    createVatConfig(tempDir, marketplaceName, pluginName, TEST_SKILL_NAME);
+    createPluginLocalSkill(tempDir, pluginName, TEST_SKILL_NAME);
+    createVatConfig(tempDir, marketplaceName, pluginName);
   };
 
   const runBuild = (tempDir: string, extraArgs: string[] = []) => {
@@ -111,14 +131,19 @@ describe('vat build command (system test)', () => {
     suite.cleanup();
   });
 
-  it('should build skills into dist/skills/ using --cwd flag', () => {
+  it('should build plugin-local skills into dist/plugins/<p>/skills/ using --cwd flag', () => {
     const tempDir = suite.createTempDir();
     suite.setupSingleSkillFixture(tempDir, MARKETPLACE_NAME, PLUGIN_NAME);
 
     const result = suite.runBuild(tempDir);
 
     expect(result.status).toBe(0);
-    expect(existsSync(safePath.join(tempDir, DIST_SKILLS_DIR, TEST_SKILL_NAME, 'SKILL.md'))).toBe(true);
+    // Plugin-local skills route to dist/plugins/<plugin>/skills/<skill>/ (not dist/skills/)
+    expect(
+      existsSync(
+        safePath.join(tempDir, 'dist', 'plugins', PLUGIN_NAME, 'skills', TEST_SKILL_NAME, 'SKILL.md'),
+      ),
+    ).toBe(true);
   });
 
   it('should build --only skills when no claude config', () => {
@@ -144,7 +169,11 @@ describe('vat build command (system test)', () => {
 
     const tempDir = suite.createTempDir();
     suite.createSkillSource(tempDir, SKILL_SOURCE_PATH, NAMESPACED_SKILL_NAME);
-    createVatConfig(tempDir, MARKETPLACE_NAME, PLUGIN_NAME, NAMESPACED_SKILL_NAME);
+    // Pool-only build (no claude section): standalone skill distribution path.
+    writeTestFile(
+      safePath.join(tempDir, VAT_CONFIG_FILENAME),
+      createSkillsConfigYaml([SKILL_INCLUDE_GLOB]),
+    );
 
     const result = suite.runBuild(tempDir);
 

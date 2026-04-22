@@ -84,7 +84,6 @@ claude:
       plugins:
         - name: my-plugin
           description: "What this plugin does"
-          skills: "*"
 
 rag:
   stores:
@@ -195,4 +194,4 @@ phases:
 - `vibe-agent-toolkit:vat-rag` — `rag:` stores, embedding providers, `vat rag index/query`
 - `vibe-agent-toolkit:vat-audit` — `vat audit` for plugins, marketplaces, and installed skills
 - `vibe-agent-toolkit:vat-skill-review` — pre-publication quality checklist
-- [Getting Started Guide](../../../../docs/getting-started.md) — full setup walkthrough
+- [Getting Started Guide](../../../../../docs/getting-started.md) — full setup walkthrough

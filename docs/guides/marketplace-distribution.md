@@ -116,7 +116,6 @@ claude:
       plugins:
         - name: my-plugin
           description: What this plugin does
-          skills: "*"                       # or list: ["skill-a", "skill-b"]
 ```
 
 ### License field
@@ -241,7 +240,6 @@ claude:
       plugins:
         - name: vibe-agent-toolkit
           description: Development agents and skills
-          skills: "*"
 ```
 
 ```bash
@@ -270,7 +268,6 @@ claude:
       plugins:
         - name: acme-tools
           description: Acme engineering tools
-          skills: "*"
 ```
 
 ### Manual/native: repo IS the marketplace
@@ -344,7 +341,9 @@ Verify by checking `~/.claude/plugins/known_marketplaces.json` to confirm the so
 
 ## Full-plugin authoring
 
-`vat claude plugin build` ships any Claude Code plugin asset — not just skills. Drop the plugin under `plugins/<name>/` in the same native layout Claude Code expects, declare it in `vibe-agent-toolkit.config.yaml`, and `vat claude plugin build` assembles the output.
+`vat claude plugin build` ships any Claude Code plugin asset — not just skills. Drop the plugin under `plugins/<name>/` in the same native layout Claude Code expects, declare it in `vibe-agent-toolkit.config.yaml`, and `vat claude plugin build` assembles the output from that plugin's own directory.
+
+A plugin ships only what its own `plugins/<name>/` directory contains. The top-level `skills:` pool is an independent build target (it produces `dist/skills/` for standalone skill distribution) and does not feed plugin bundles.
 
 ### Layout
 
@@ -368,16 +367,14 @@ Everything under `plugins/<name>/` is tree-copied to `dist/.claude/plugins/marke
 
 Tree-copy respects `.gitignore` (safe: `node_modules/`, build detritus never ship).
 
-### `skills` selector × plugin dir truth table
+### Minimum content — empty-plugin guard
 
-| Config | On disk | Result |
-|---|---|---|
-| `skills: ["a"]` and/or `["*"]` | no plugin dir | pool skills only |
-| `skills` omitted | `plugins/<name>/` present | tree-copy + plugin-local skills (no pool skills) |
-| `skills: ["a"]` | `plugins/<name>/` present | tree-copy + plugin-local skills + selected pool skills |
-| `skills` omitted | no plugin dir, no `files[]` | **error** (empty-plugin guard) |
+Every declared plugin must supply at least one of:
 
-Collisions between a pool skill and a plugin-local skill within the same plugin's selection set are always an error — rename one.
+- a `plugins/<name>/` directory on disk (or an alternate `source:` override pointing at one), **or**
+- a non-empty `files: [{ source, dest }, ...]` mapping.
+
+A plugin with neither is rejected with the empty-plugin guard.
 
 ### `source` override
 
@@ -416,7 +413,9 @@ VAT writes `.claude-plugin/plugin.json` last, merging the author's `.claude-plug
 
 ### Skill discovery
 
-`vat skills build` auto-discovers `plugins/<name>/skills/**/SKILL.md` for every declared plugin and routes outputs to `dist/plugins/<name>/skills/<skill>/`. Unlike pool skills, plugin-local skill discovery **bypasses `.gitignore`** (plugin-local skills are semantically mandatory to the plugin). A gitignored `SKILL.md` is still discovered but emits a warning so the adopter can audit their intent.
+`vat skills build` auto-discovers `plugins/<name>/skills/**/SKILL.md` for every declared plugin and routes outputs to `dist/plugins/<name>/skills/<skill>/`. Plugin-local skill discovery **bypasses `.gitignore`** (plugin-local skills are semantically mandatory to the plugin). A gitignored `SKILL.md` is still discovered but emits a warning so the adopter can audit their intent.
+
+Skill names must be globally unique across all plugins (case-sensitive and case-insensitive).
 
 ### Ordering contract
 
@@ -424,8 +423,8 @@ VAT writes `.claude-plugin/plugin.json` last, merging the author's `.claude-plug
 
 1. Discovery + validators (case-match, `hooks.json`/`.mcp.json` parse, empty-plugin guard)
 2. Tree-copy (skips `skills/` and `.claude-plugin/`, respects `.gitignore`)
-3. Skill-stream copy-in (pool from `dist/skills/`, plugin-local from `dist/plugins/<name>/skills/`)
+3. Plugin-local skill copy-in (from `dist/plugins/<name>/skills/`)
 4. `files[]` mapping (may overwrite tree-copied files; logged at info)
 5. `.claude-plugin/plugin.json` merge-write (always last, always wins)
 
-**Run order:** `vat skills build && vat claude plugin build`. The plugin build reads pre-built skills from `dist/`.
+**Run order:** `vat skills build && vat claude plugin build`. The plugin build reads pre-built plugin-local skills from `dist/plugins/<name>/skills/`.

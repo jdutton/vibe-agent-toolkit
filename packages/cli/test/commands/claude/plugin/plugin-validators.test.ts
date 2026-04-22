@@ -29,7 +29,7 @@ describe('plugin-validators', () => {
       await expect(verifyPluginDirCaseMatch(root, 'foo-bar')).rejects.toThrow(/case/i);
     });
 
-    it('no-ops silently when plugins dir does not exist (pool-skills-only plugin)', async () => {
+    it('no-ops silently when plugins dir does not exist (files-only plugin)', async () => {
       const root = createTempDir();
       await expect(verifyPluginDirCaseMatch(root, 'foo-bar')).resolves.toBeUndefined();
     });

@@ -165,9 +165,12 @@ export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
  * A plugin entry within a Claude marketplace configuration.
  *
  * Supports full Claude plugin bundling:
- * - `skills` (optional): pool-skill selector (name list or "*"). Absent/[] = no pool skills.
  * - `source` (optional): path to plugin dir (default: plugins/<name>). Tree-copied verbatim.
  * - `files` (optional): explicit source->dest mappings for artifacts built outside the plugin dir.
+ *
+ * A plugin ships only what its own `plugins/<name>/` directory contains — commands, hooks,
+ * agents, `.mcp.json`, plugin-local skills, and `.claude-plugin/plugin.json`. The top-level
+ * `skills:` pool is an independent build target and is never imported into plugins.
  */
 export const ClaudeMarketplacePluginEntrySchema = z.object({
   name: z.string()
@@ -175,9 +178,6 @@ export const ClaudeMarketplacePluginEntrySchema = z.object({
     .describe('Plugin name (lowercase alphanumeric with hyphens)'),
   description: z.string().optional()
     .describe('Plugin description'),
-  skills: z.union([z.literal('*'), z.array(z.string())]).optional()
-    .transform((val) => (Array.isArray(val) && val.length === 0 ? undefined : val))
-    .describe('Pool skills to include: "*" for all, or array of skill name selectors. Omit for no pool skills (plugin-local skills still ship).'),
   source: z.string().optional()
     .describe('Path to plugin directory (default: plugins/<name>)'),
   files: z.array(SkillFileEntrySchema).optional()
@@ -215,9 +215,6 @@ export const ClaudeMarketplaceSchema = z.object({
     name: z.string(),
     email: z.string().optional(),
   }).strict().describe('Marketplace owner information'),
-
-  skills: z.union([z.literal('*'), z.array(z.string())]).optional()
-    .describe('Default skill filter for the marketplace — restricts which skills are available when plugins use skills: "*". Omit to allow all skills. This does NOT add skills directly; skills are always selected per-plugin.'),
 
   publish: ClaudeMarketplacePublishSchema.optional()
     .describe('Publish configuration for marketplace distribution'),

@@ -1,46 +1,51 @@
 /**
- * Detect name collisions between pool skills and plugin-local skills
- * within a single plugin's selection set.
+ * Detect name collisions between plugin-local skills across different plugins.
  *
- * Rules (from spec section Design -> Skill stream + Validation v1):
- * - Exact (case-sensitive) collision -> error.
- * - Case-insensitive collision -> error (protects adopters on case-insensitive FS
- *   from shipping artifacts that break on Linux CI).
- * - Two different plugins may each have a local skill with the same name.
- * - Collisions block only the offending plugin; callers iterate per-plugin.
+ * Rules:
+ * - Exact (case-sensitive) collision across plugins -> error.
+ * - Case-insensitive collision across plugins -> error (protects adopters on
+ *   case-insensitive filesystems from shipping artifacts that break on Linux CI).
+ * - Two skills with the same name inside the same plugin are not flagged here;
+ *   such duplicates are unreachable from normal discovery (one SKILL.md per
+ *   directory, unique directory names per plugin). If encountered, the caller
+ *   is expected to have surfaced it earlier.
  */
 
 export interface SkillRef {
   name: string;
-  origin: 'pool' | 'plugin-local';
-  plugin?: string;
+  plugin: string;
   sourcePath: string;
 }
 
 export interface SkillCollision {
   kind: 'exact' | 'case-insensitive';
-  plugin: string | undefined;
   a: SkillRef;
   b: SkillRef;
   message: string;
 }
 
+/**
+ * Classify a pair of skill refs as an exact / case-insensitive collision.
+ *
+ * Returns undefined for same-plugin pairs (not a cross-plugin collision) and
+ * for name mismatches. The same-plugin guard is defensive: discovery emits one
+ * SkillRef per SKILL.md, so same-plugin duplicates should not normally reach
+ * this function.
+ */
 function classifyCollision(a: SkillRef, b: SkillRef): SkillCollision['kind'] | undefined {
-  if (a.origin === b.origin) return undefined;
+  if (a.plugin === b.plugin) return undefined;
   if (a.name === b.name) return 'exact';
   if (a.name.toLowerCase() === b.name.toLowerCase()) return 'case-insensitive';
   return undefined;
 }
 
 function buildCollision(a: SkillRef, b: SkillRef, kind: SkillCollision['kind']): SkillCollision {
-  const plugin = a.origin === 'plugin-local' ? a.plugin : b.plugin;
   const message =
-    `Skill name collision in plugin "${plugin ?? '?'}" (${kind}): ` +
-    `"${a.name}" (${a.origin} at ${a.sourcePath}) conflicts with ` +
-    `"${b.name}" (${b.origin} at ${b.sourcePath}). ` +
-    `Rename one skill to resolve. Pool skills are addressable via skills.config[<name>]; ` +
-    `plugin-local skills are scoped to their plugin directory.`;
-  return { kind, plugin, a, b, message };
+    `Skill name collision (${kind}): ` +
+    `"${a.name}" in plugin "${a.plugin}" (${a.sourcePath}) conflicts with ` +
+    `"${b.name}" in plugin "${b.plugin}" (${b.sourcePath}). ` +
+    `Skill names must be unique across plugins — rename one to resolve.`;
+  return { kind, a, b, message };
 }
 
 export function detectSkillCollisions(refs: readonly SkillRef[]): SkillCollision[] {

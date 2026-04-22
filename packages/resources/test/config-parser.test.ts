@@ -270,7 +270,6 @@ claude:
       plugins:
         - name: acme-tools
           description: Acme developer tools plugin
-          skills: '*'
 `;
     await writeFile(configPath, content);
 
@@ -282,7 +281,6 @@ claude:
     expect(mp?.plugins).toHaveLength(1);
     expect(mp?.plugins?.[0]?.name).toBe('acme-tools');
     expect(mp?.plugins?.[0]?.description).toBe('Acme developer tools plugin');
-    expect(mp?.plugins?.[0]?.skills).toBe('*');
   });
 
   it('should parse multiple marketplaces', async () => {
@@ -297,14 +295,12 @@ claude:
       plugins:
         - name: first-plugin
           description: First plugin
-          skills: '*'
     second:
       owner:
         name: My Org
       plugins:
         - name: my-plugin
           description: My plugin
-          skills: '*'
 `;
     await writeFile(configPath, content);
 
@@ -339,7 +335,6 @@ claude:
       plugins:
         - name: acme-tools
           description: Acme tools
-          skills: '*'
           unknownField: oops
 `;
     await writeFile(configPath, content);
@@ -375,7 +370,7 @@ describe('ClaudeMarketplaceSchema with publish config', () => {
         license: 'mit',
         sourceRepo: false,
       },
-      plugins: [{ name: 'test', skills: '*' }],
+      plugins: [{ name: 'test' }],
     });
     expect(result.success).toBe(true);
   });
@@ -384,7 +379,7 @@ describe('ClaudeMarketplaceSchema with publish config', () => {
     const result = ClaudeMarketplaceSchema.safeParse({
       owner: { name: 'Test Org' },
       publish: { license: 'mit' },
-      plugins: [{ name: 'test', skills: '*' }],
+      plugins: [{ name: 'test' }],
     });
     expect(result.success).toBe(true);
   });
@@ -393,7 +388,7 @@ describe('ClaudeMarketplaceSchema with publish config', () => {
     const result = ClaudeMarketplaceSchema.safeParse({
       owner: { name: 'Test Org' },
       publish: { license: './LICENSE' },
-      plugins: [{ name: 'test', skills: '*' }],
+      plugins: [{ name: 'test' }],
     });
     expect(result.success).toBe(true);
   });
@@ -401,7 +396,7 @@ describe('ClaudeMarketplaceSchema with publish config', () => {
   it('should accept marketplace config without publish section', () => {
     const result = ClaudeMarketplaceSchema.safeParse({
       owner: { name: 'Test Org' },
-      plugins: [{ name: 'test', skills: '*' }],
+      plugins: [{ name: 'test' }],
     });
     expect(result.success).toBe(true);
   });

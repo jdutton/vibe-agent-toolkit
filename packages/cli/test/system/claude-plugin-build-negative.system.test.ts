@@ -18,7 +18,7 @@ const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-plugin-neg-
 function configMin(pluginYaml: string): string {
   return `version: 1
 skills:
-  include: ["skills/**/SKILL.md"]
+  include: ["plugins/*/skills/**/SKILL.md"]
 claude:
   marketplaces:
     mp1:
@@ -29,16 +29,19 @@ ${pluginYaml}
 `;
 }
 
-function seedMinimalPool(tempDir: string): void {
+/**
+ * Seed a plugin-local skill under plugins/<name>/skills/<skill>/ so the
+ * skill-stream has something to build. The plugin directory existing is what
+ * makes the plugin non-empty.
+ */
+function seedPluginLocalSkill(tempDir: string, pluginName: string, skillName: string): void {
   writeTestFile(
     safePath.join(tempDir, 'package.json'),
     JSON.stringify({ name: 't', version: '0.0.1' }),
   );
-  mkdirSyncReal(safePath.join(tempDir, 'skills', 'pool-a'), { recursive: true });
-  writeTestFile(
-    safePath.join(tempDir, 'skills', 'pool-a', 'SKILL.md'),
-    createSkillMarkdown('pool-a'),
-  );
+  const skillDir = safePath.join(tempDir, 'plugins', pluginName, 'skills', skillName);
+  mkdirSyncReal(skillDir, { recursive: true });
+  writeTestFile(safePath.join(skillDir, 'SKILL.md'), createSkillMarkdown(skillName));
 }
 
 function writeConfigAndPkg(tempDir: string, configYaml: string): void {
@@ -54,23 +57,25 @@ function runSkillsThenPluginBuild(tempDir: string): ReturnType<typeof executeCli
   return executeCli(binPath, ['claude', 'plugin', 'build'], { cwd: tempDir });
 }
 
+/**
+ * Seed a plugin-local skill for plugin `p1` and write the minimal config that
+ * declares it. Shared setup for negative-path tests whose bodies diverge only
+ * in what malformed artifact they place under `plugins/p1/`.
+ */
+function seedPluginP1WithMinimalConfig(tempDir: string): void {
+  seedPluginLocalSkill(tempDir, 'p1', 'skill-a');
+  writeTestFile(
+    safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
+    configMin('        - name: p1\n'),
+  );
+}
+
 describe('vat claude plugin build (negative paths)', () => {
   afterEach(() => cleanupTempDirs());
 
-  it('errors when plugin dir is declared but missing AND no pool skills selected', () => {
-    const tempDir = createTempDir();
-    writeConfigAndPkg(tempDir, configMin('        - name: ghost\n'));
-    const result = executeCli(binPath, ['claude', 'plugin', 'build'], { cwd: tempDir });
-    expect(result.status).not.toBe(0);
-  });
-
   it('errors on malformed hooks/hooks.json', () => {
     const tempDir = createTempDir();
-    seedMinimalPool(tempDir);
-    writeTestFile(
-      safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
-      configMin('        - name: p1\n          skills: ["pool-a"]\n'),
-    );
+    seedPluginP1WithMinimalConfig(tempDir);
     mkdirSyncReal(safePath.join(tempDir, 'plugins', 'p1', 'hooks'), { recursive: true });
     writeTestFile(safePath.join(tempDir, 'plugins', 'p1', 'hooks', 'hooks.json'), '{not json');
 
@@ -81,11 +86,7 @@ describe('vat claude plugin build (negative paths)', () => {
 
   it('errors on malformed .mcp.json', () => {
     const tempDir = createTempDir();
-    seedMinimalPool(tempDir);
-    writeTestFile(
-      safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
-      configMin('        - name: p1\n          skills: ["pool-a"]\n'),
-    );
+    seedPluginP1WithMinimalConfig(tempDir);
     mkdirSyncReal(safePath.join(tempDir, 'plugins', 'p1'), { recursive: true });
     writeTestFile(safePath.join(tempDir, 'plugins', 'p1', '.mcp.json'), 'bogus');
 
@@ -96,12 +97,12 @@ describe('vat claude plugin build (negative paths)', () => {
 
   it('errors when files[].source is missing', () => {
     const tempDir = createTempDir();
-    seedMinimalPool(tempDir);
+    seedPluginLocalSkill(tempDir, 'p1', 'skill-a');
     writeTestFile(
       safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
       `version: 1
 skills:
-  include: ["skills/**/SKILL.md"]
+  include: ["plugins/*/skills/**/SKILL.md"]
 claude:
   marketplaces:
     mp1:
@@ -109,7 +110,6 @@ claude:
         name: Test
       plugins:
         - name: p1
-          skills: ["pool-a"]
           files:
             - source: dist/missing.mjs
               dest: hooks/missing.mjs
@@ -120,31 +120,14 @@ claude:
     expect(result.stderr).toContain('dist/missing.mjs');
   });
 
-  it('errors with resolution guidance on pool-vs-local name collision', () => {
-    const tempDir = createTempDir();
-    writeConfigAndPkg(tempDir, configMin('        - name: p1\n          skills: ["dup"]\n'));
-    mkdirSyncReal(safePath.join(tempDir, 'skills', 'dup'), { recursive: true });
-    writeTestFile(safePath.join(tempDir, 'skills', 'dup', 'SKILL.md'), createSkillMarkdown('dup'));
-    mkdirSyncReal(safePath.join(tempDir, 'plugins', 'p1', 'skills', 'dup'), { recursive: true });
-    writeTestFile(
-      safePath.join(tempDir, 'plugins', 'p1', 'skills', 'dup', 'SKILL.md'),
-      createSkillMarkdown('dup'),
-    );
-
-    const result = executeCli(binPath, ['skills', 'build'], { cwd: tempDir });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toMatch(/skills\/dup\/SKILL\.md/);
-    expect(result.stderr).toMatch(/plugins\/p1\/skills\/dup\/SKILL\.md/);
-  });
-
   it('errors when the same plugin name is declared in two marketplaces', () => {
     const tempDir = createTempDir();
-    seedMinimalPool(tempDir);
+    seedPluginLocalSkill(tempDir, 'dup', 'skill-a');
     writeTestFile(
       safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
       `version: 1
 skills:
-  include: ["skills/**/SKILL.md"]
+  include: ["plugins/*/skills/**/SKILL.md"]
 claude:
   marketplaces:
     mp1:
@@ -152,13 +135,11 @@ claude:
         name: Test
       plugins:
         - name: dup
-          skills: ["pool-a"]
     mp2:
       owner:
         name: Test
       plugins:
         - name: dup
-          skills: ["pool-a"]
 `,
     );
     const result = runSkillsThenPluginBuild(tempDir);
@@ -166,7 +147,7 @@ claude:
     expect(result.stderr).toMatch(/declared more than once|globally unique/i);
   });
 
-  it('errors when a plugin has no skills, no plugin dir, and no files[] (empty-plugin guard)', () => {
+  it('errors when a plugin has no plugin dir and no files[] (empty-plugin guard)', () => {
     const tempDir = createTempDir();
     writeConfigAndPkg(tempDir, configMin('        - name: empty\n'));
     const result = runSkillsThenPluginBuild(tempDir);
@@ -176,10 +157,10 @@ claude:
 
   it('does not copy gitignored node_modules from plugins/<p>/', () => {
     const tempDir = createTempDir();
-    seedMinimalPool(tempDir);
+    seedPluginLocalSkill(tempDir, 'p1', 'skill-a');
     writeTestFile(
       safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
-      configMin('        - name: p1\n          skills: ["pool-a"]\n'),
+      configMin('        - name: p1\n'),
     );
     safeExecSync('git', ['init', '-q'], { cwd: tempDir });
     safeExecSync('git', ['config', 'user.email', 't@t'], { cwd: tempDir });

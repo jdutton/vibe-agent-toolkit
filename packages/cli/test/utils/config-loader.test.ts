@@ -102,7 +102,6 @@ claude:
       plugins:
         - name: my-tools
           description: My tools plugin
-          skills: "*"
 `;
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(configPath, configContent);
@@ -133,7 +132,6 @@ claude:
       plugins:
         - name: vat-development-agents
           description: VAT development agents plugin
-          skills: "*"
 `;
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
     fs.writeFileSync(configPath, configContent);

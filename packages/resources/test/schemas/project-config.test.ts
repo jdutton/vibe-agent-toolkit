@@ -7,6 +7,7 @@ import type { ZodSchema } from 'zod';
 
 import {
   ClaudeMarketplacePluginEntrySchema,
+  ClaudeMarketplaceSchema,
   ProjectConfigSchema,
   SkillPackagingConfigSchema,
   SkillsConfigSchema,
@@ -25,6 +26,24 @@ function expectStrictRejection(schema: ZodSchema, input: unknown): void {
   if (!result.success) {
     const issue = result.error.issues.find((i) => i.code === 'unrecognized_keys');
     expect(issue).toBeDefined();
+  }
+}
+
+/**
+ * Assert that parsing `input` against `schema` fails with an `unrecognized_keys`
+ * Zod issue whose `keys` array contains `expectedKey`. Portable across Zod v3/v4.
+ */
+function expectUnrecognizedKey(schema: ZodSchema, input: unknown, expectedKey: string): void {
+  const result = schema.safeParse(input);
+  expect(result.success).toBe(false);
+  if (!result.success) {
+    const hasKey = result.error.issues.some(
+      (issue) =>
+        issue.code === 'unrecognized_keys' &&
+        Array.isArray((issue as unknown as { keys?: unknown }).keys) &&
+        (issue as unknown as { keys: string[] }).keys.includes(expectedKey),
+    );
+    expect(hasKey).toBe(true);
   }
 }
 
@@ -151,17 +170,15 @@ describe('ClaudeMarketplacePluginEntrySchema (full plugin support)', () => {
     }
   });
 
-  it('normalizes skills: [] to absent', () => {
-    const result = ClaudeMarketplacePluginEntrySchema.safeParse({ name: 'p', skills: [] });
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(result.data.skills).toBeUndefined();
-    }
-  });
-
-  it('accepts skills: "*" and skills: [names]', () => {
-    expect(ClaudeMarketplacePluginEntrySchema.safeParse({ name: 'p', skills: '*' }).success).toBe(true);
-    expect(ClaudeMarketplacePluginEntrySchema.safeParse({ name: 'p', skills: ['a', 'b'] }).success).toBe(true);
+  it('rejects stale skills field on plugin entry (as unrecognized_keys)', () => {
+    // Pre-1.0: the former pool-import `skills` field is gone. Configs still using
+    // it must error at load time via strict-schema unrecognized_keys, not silently
+    // pass through.
+    expectUnrecognizedKey(
+      ClaudeMarketplacePluginEntrySchema,
+      { name: 'p', skills: '*' },
+      'skills',
+    );
   });
 
   it('accepts optional source path', () => {
@@ -186,5 +203,19 @@ describe('ClaudeMarketplacePluginEntrySchema (full plugin support)', () => {
       bogus: true,
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe('ClaudeMarketplaceSchema (pool filter removed)', () => {
+  it('rejects stale top-level skills filter (as unrecognized_keys)', () => {
+    expectUnrecognizedKey(
+      ClaudeMarketplaceSchema,
+      {
+        owner: { name: 'Test Org' },
+        skills: '*',
+        plugins: [{ name: 'test' }],
+      },
+      'skills',
+    );
   });
 });

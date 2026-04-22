@@ -34,11 +34,6 @@ function setupConsistencyTestSuite() {
     writeConfig(tempDir, `version: 1\nskills:\n  include:\n    - "skills/**/SKILL.md"\n${extra}`);
   };
 
-  /** Config with skills + marketplace with specified plugin skills selector */
-  const writeMarketplaceConfig = (tempDir: string, pluginSkills: string, extra = '') => {
-    writeConfig(tempDir, `version: 1\nskills:\n  include:\n    - "skills/**/SKILL.md"\n${extra}claude:\n  marketplaces:\n    test-mp:\n      owner:\n        name: Test Org\n      plugins:\n        - name: test-plugin\n          ${pluginSkills}\n`);
-  };
-
   const writePackageJson = (tempDir: string, vatSkills?: string[]) => {
     const pkg: Record<string, unknown> = { name: 'test-pkg', version: '1.0.0' };
     if (vatSkills !== undefined) {
@@ -51,17 +46,7 @@ function setupConsistencyTestSuite() {
     return executeCli(binPath, ['--cwd', tempDir, 'verify', '--only', 'consistency']);
   };
 
-  /** Common setup: two skills (skill-a, skill-b) with package.json and marketplace config */
-  const setupTwoSkillsWithMarketplace = (vatSkills: string[], pluginSkills: string) => {
-    const tempDir = createTempDir();
-    createSkillSource(tempDir, 'skill-a');
-    createSkillSource(tempDir, 'skill-b');
-    writePackageJson(tempDir, vatSkills);
-    writeMarketplaceConfig(tempDir, pluginSkills);
-    return tempDir;
-  };
-
-  return { createTempDir, cleanup, createSkillSource, writeConfig, writeSkillsOnlyConfig, writeMarketplaceConfig, writePackageJson, runVerify, setupTwoSkillsWithMarketplace };
+  return { createTempDir, cleanup, createSkillSource, writeConfig, writeSkillsOnlyConfig, writePackageJson, runVerify };
 }
 
 describe('vat verify consistency checks (system test)', () => {
@@ -71,8 +56,12 @@ describe('vat verify consistency checks (system test)', () => {
     suite.cleanup();
   });
 
-  it('should pass when all skills are in package.json and assigned to plugins', () => {
-    const tempDir = suite.setupTwoSkillsWithMarketplace(['skill-a', 'skill-b'], 'skills: "*"');
+  it('should pass when all published skills are in package.json', () => {
+    const tempDir = suite.createTempDir();
+    suite.createSkillSource(tempDir, 'skill-a');
+    suite.createSkillSource(tempDir, 'skill-b');
+    suite.writePackageJson(tempDir, ['skill-a', 'skill-b']);
+    suite.writeSkillsOnlyConfig(tempDir);
 
     const result = suite.runVerify(tempDir);
     expect(result.status).toBe(0);
@@ -104,24 +93,12 @@ describe('vat verify consistency checks (system test)', () => {
     expect(result.stderr).toContain('PACKAGE_JSON_LISTS_UNKNOWN_SKILL');
   });
 
-  it('should error when published skill is not assigned to any plugin', () => {
-    const tempDir = suite.setupTwoSkillsWithMarketplace(
-      ['skill-a', 'skill-b'],
-      'skills:\n            - "skill-a"'
-    );
-
-    const result = suite.runVerify(tempDir);
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain('skill-b');
-    expect(result.stderr).toContain('PUBLISHED_SKILL_NOT_IN_PLUGIN');
-  });
-
-  it('should suppress checks for skills with publish: false', () => {
+  it('should report SKILL_UNPUBLISHED info for skills with publish: false', () => {
     const tempDir = suite.createTempDir();
     suite.createSkillSource(tempDir, 'skill-a');
     suite.createSkillSource(tempDir, 'dev-skill');
     suite.writePackageJson(tempDir, ['skill-a']);
-    suite.writeMarketplaceConfig(tempDir, 'skills:\n            - "skill-a"', '  config:\n    dev-skill:\n      publish: false\n');
+    suite.writeSkillsOnlyConfig(tempDir, '  config:\n    dev-skill:\n      publish: false\n');
 
     const result = suite.runVerify(tempDir);
     expect(result.status).toBe(0);
@@ -152,31 +129,9 @@ describe('vat verify consistency checks (system test)', () => {
     expect(result.stderr).toContain('CONFIG_REFERENCES_UNKNOWN_SKILL');
   });
 
-  it('should error when plugin references non-existent skill selector', () => {
-    const tempDir = suite.createTempDir();
-    suite.createSkillSource(tempDir, 'skill-a');
-    suite.writePackageJson(tempDir, ['skill-a']);
-    suite.writeMarketplaceConfig(tempDir, 'skills:\n            - "skill-a"\n            - "nonexistent-skill"');
-
-    const result = suite.runVerify(tempDir);
-    expect(result.status).toBe(1);
-    expect(result.stderr).toContain('nonexistent-skill');
-    expect(result.stderr).toContain('PLUGIN_REFERENCES_UNKNOWN_SKILL');
-  });
-
   it('should skip package.json checks when no package.json exists', () => {
     const tempDir = suite.createTempDir();
     suite.createSkillSource(tempDir, 'skill-a');
-    suite.writeSkillsOnlyConfig(tempDir);
-
-    const result = suite.runVerify(tempDir);
-    expect(result.status).toBe(0);
-  });
-
-  it('should skip plugin assignment checks when no claude.marketplaces configured', () => {
-    const tempDir = suite.createTempDir();
-    suite.createSkillSource(tempDir, 'skill-a');
-    suite.writePackageJson(tempDir, ['skill-a']);
     suite.writeSkillsOnlyConfig(tempDir);
 
     const result = suite.runVerify(tempDir);
