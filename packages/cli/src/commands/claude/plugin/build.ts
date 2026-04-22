@@ -6,11 +6,11 @@
  * Wraps skills into Claude plugin directory structure with plugin.json metadata.
  */
 
-import { existsSync, readFileSync, cpSync } from 'node:fs';
-import {  mkdir, readdir, rm, writeFile } from 'node:fs/promises';
+import { cpSync, existsSync, readFileSync } from 'node:fs';
+import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 
 import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../../../utils/command-error.js';
@@ -18,15 +18,32 @@ import { createLogger } from '../../../utils/logger.js';
 import { writeYamlOutput } from '../../../utils/output.js';
 import { loadClaudeProjectConfig } from '../claude-config.js';
 
+import { applyPluginFiles } from './plugin-files.js';
+import { mergePluginJson } from './plugin-json-merge.js';
+import {
+  parsePluginJsonFiles,
+  verifyNoCaseCollidingPluginNames,
+  verifyPluginDirCaseMatch,
+} from './plugin-validators.js';
+import { treeCopyPlugin } from './tree-copy.js';
+
 export interface PluginBuildCommandOptions {
   marketplace?: string;
   debug?: boolean;
 }
 
+const CLAUDE_PLUGIN_DIRNAME = '.claude-plugin';
+
 interface PluginBuildResult {
   pluginName: string;
   pluginDir: string;
   skillsCopied: string[];
+  commandsCopied: number;
+  hooksCopied: number;
+  agentsCopied: number;
+  mcpCopied: number;
+  treeFilesCopied: number;
+  explicitFilesCopied: number;
 }
 
 interface MarketplaceBuildResult {
@@ -136,6 +153,12 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
     const results: MarketplaceBuildResult[] = [];
 
     const marketplaces = claudeConfig.marketplaces;
+    const allPluginNames: string[] = [];
+    for (const mp of Object.values(marketplaces)) {
+      for (const p of mp.plugins) allPluginNames.push(p.name);
+    }
+    verifyNoCaseCollidingPluginNames(allPluginNames);
+
     for (const name of Object.keys(marketplaces)) {
       const mpConfig = marketplaces[name] as ClaudeMarketplaceConfig;
 
@@ -178,6 +201,12 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
           name: p.pluginName,
           dir: p.pluginDir,
           skills: p.skillsCopied,
+          commandsCopied: p.commandsCopied,
+          hooksCopied: p.hooksCopied,
+          agentsCopied: p.agentsCopied,
+          mcpCopied: p.mcpCopied,
+          treeFilesCopied: p.treeFilesCopied,
+          explicitFilesCopied: p.explicitFilesCopied,
         })),
       })),
       duration: `${duration}ms`,
@@ -230,10 +259,17 @@ async function buildMarketplace(
   const plugins: PluginBuildResult[] = [];
 
   // Clean stale marketplace directory before rebuilding — removes orphaned plugins
-  const marketplaceOutputDir = safePath.join(configDir, 'dist', '.claude', 'plugins', 'marketplaces', name);
+  const marketplaceBaseDir = safePath.join(
+    configDir,
+    'dist',
+    '.claude',
+    'plugins',
+    'marketplaces',
+    name,
+  );
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from config
-  if (existsSync(marketplaceOutputDir)) {
-    await rm(marketplaceOutputDir, { recursive: true, force: true });
+  if (existsSync(marketplaceBaseDir)) {
+    await rm(marketplaceBaseDir, { recursive: true, force: true });
   }
 
   for (const pluginDef of config.plugins) {
@@ -258,8 +294,8 @@ async function buildMarketplace(
   }
 
   // Generate .claude-plugin/marketplace.json
-  const marketplaceDir = safePath.join(configDir, 'dist', '.claude', 'plugins', 'marketplaces', name);
-  const claudePluginDir = safePath.join(marketplaceDir, '.claude-plugin');
+  const marketplaceDir = marketplaceBaseDir;
+  const claudePluginDir = safePath.join(marketplaceDir, CLAUDE_PLUGIN_DIRNAME);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
   await mkdir(claudePluginDir, { recursive: true });
 
@@ -335,6 +371,125 @@ function skillNameToFsPath(name: string): string {
   return name.replaceAll(':', '__');
 }
 
+async function copyPoolSkills(
+  skills: readonly string[],
+  configDir: string,
+  pluginDir: string,
+  logger: ReturnType<typeof createLogger>,
+): Promise<string[]> {
+  const copied: string[] = [];
+  for (const skillName of skills) {
+    const skillDistPath = safePath.join(configDir, 'dist', 'skills', skillName);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from config
+    if (!existsSync(skillDistPath)) {
+      throw new Error(
+        `Skill "${skillName}" not built at ${skillDistPath}. ` +
+          `Run: vat skills build (or vat build to build everything)`,
+      );
+    }
+    const fsPath = skillNameToFsPath(skillName);
+    const destPath = safePath.join(pluginDir, 'skills', fsPath);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
+    await mkdir(destPath, { recursive: true });
+    cpSync(skillDistPath, destPath, { recursive: true });
+    copied.push(fsPath);
+    logger.info(`         ${skillName} -> skills/${fsPath}`);
+  }
+  return copied;
+}
+
+async function copyPluginLocalSkills(
+  pluginDef: ClaudeMarketplacePluginEntry,
+  configDir: string,
+  pluginSourceDir: string,
+  pluginDir: string,
+  logger: ReturnType<typeof createLogger>,
+): Promise<string[]> {
+  const copied: string[] = [];
+  const localSkillsRoot = safePath.join(configDir, 'dist', 'plugins', pluginDef.name, 'skills');
+  const sourceSkillsDir = safePath.join(pluginSourceDir, 'skills');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
+  const sourceSkillsDeclared = existsSync(pluginSourceDir) && existsSync(sourceSkillsDir);
+  const sourceSkillsDisplayPath = toForwardSlash(
+    safePath.join(pluginDef.source ?? safePath.join('plugins', pluginDef.name), 'skills'),
+  );
+
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
+  if (!existsSync(localSkillsRoot)) {
+    if (sourceSkillsDeclared) {
+      logger.info(
+        `warning: Plugin '${pluginDef.name}' declares plugin-local skills under ${sourceSkillsDisplayPath}/ ` +
+          `but dist/plugins/${pluginDef.name}/skills/ does not exist. Run 'vat skills build' first.`,
+      );
+    }
+    return copied;
+  }
+
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
+  const localEntries = await readdir(localSkillsRoot, { withFileTypes: true });
+  const subdirs = localEntries.filter((e) => e.isDirectory());
+  if (subdirs.length === 0 && sourceSkillsDeclared) {
+    logger.info(
+      `warning: Plugin '${pluginDef.name}' has ${sourceSkillsDisplayPath}/ on disk but ` +
+        `dist/plugins/${pluginDef.name}/skills/ is empty. Run 'vat skills build' before ` +
+        `'vat claude plugin build' (or chain them: vat skills build && vat claude plugin build).`,
+    );
+  }
+  for (const entry of subdirs) {
+    const src = safePath.join(localSkillsRoot, entry.name);
+    const dst = safePath.join(pluginDir, 'skills', entry.name);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
+    await mkdir(dst, { recursive: true });
+    cpSync(src, dst, { recursive: true });
+    copied.push(entry.name);
+    logger.info(`         ${entry.name} (plugin-local) -> skills/${entry.name}`);
+  }
+  return copied;
+}
+
+async function writeMergedPluginJson(
+  pluginDef: ClaudeMarketplacePluginEntry,
+  pluginSourceDir: string,
+  pluginDir: string,
+  owner: ClaudeMarketplaceConfig['owner'],
+  packageVersion: string | undefined,
+  logger: ReturnType<typeof createLogger>,
+): Promise<void> {
+  const pluginJsonDir = safePath.join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
+  await mkdir(pluginJsonDir, { recursive: true });
+
+  const authorPluginJsonPath = safePath.join(pluginSourceDir, CLAUDE_PLUGIN_DIRNAME, 'plugin.json');
+  let authorJson: Record<string, unknown> | undefined;
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
+  if (existsSync(authorPluginJsonPath)) {
+    try {
+      authorJson = JSON.parse(
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
+        readFileSync(authorPluginJsonPath, 'utf-8'),
+      ) as Record<string, unknown>;
+    } catch (e) {
+      throw new Error(
+        `Author .claude-plugin/plugin.json is not valid JSON: ${(e as Error).message}`,
+      );
+    }
+  }
+
+  const { merged, warnings } = mergePluginJson({
+    vat: {
+      name: pluginDef.name,
+      version: packageVersion,
+      author: { name: owner.name, ...(owner.email ? { email: owner.email } : {}) },
+    },
+    configDescription: pluginDef.description,
+    authorJson,
+  });
+  for (const w of warnings) logger.info(`warning: ${w}`);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
+  await writeFile(safePath.join(pluginJsonDir, 'plugin.json'), JSON.stringify(merged, null, 2));
+  logger.info(`         .claude-plugin/plugin.json`);
+}
+
 async function buildPlugin(
   marketplaceName: string,
   pluginDef: ClaudeMarketplacePluginEntry,
@@ -346,56 +501,89 @@ async function buildPlugin(
 ): Promise<PluginBuildResult> {
   const pluginDir = safePath.join(
     configDir, 'dist', '.claude', 'plugins', 'marketplaces',
-    marketplaceName, 'plugins', pluginDef.name
+    marketplaceName, 'plugins', pluginDef.name,
   );
-  const skillsCopied: string[] = [];
+  const pluginSourceDir = safePath.join(
+    configDir,
+    pluginDef.source ?? safePath.join('plugins', pluginDef.name),
+  );
 
   logger.info(`      Building plugin: ${pluginDef.name}`);
 
-  for (const skillName of skills) {
-    const skillDistPath = safePath.join(configDir, 'dist', 'skills', skillName);
+  // Phase 1: validators.
+  await verifyPluginDirCaseMatch(configDir, pluginDef.name);
 
-    // Verify skill is built
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from config
-    if (!existsSync(skillDistPath)) {
-      throw new Error(
-        `Skill "${skillName}" not built at ${skillDistPath}. ` +
-          `Run: vat skills build (or vat build to build everything)`
-      );
-    }
-
-    // Copy skill into plugin directory structure.
-    // Use skillNameToFsPath to strip colons — colon-namespaced skill names (e.g.
-    // "pkg:sub-skill") are valid VAT identifiers but invalid directory names on Windows.
-    const fsPath = skillNameToFsPath(skillName);
-    const destPath = safePath.join(pluginDir, 'skills', fsPath);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
-    await mkdir(destPath, { recursive: true });
-    cpSync(skillDistPath, destPath, { recursive: true });
-    skillsCopied.push(fsPath);
-    logger.info(`         ${skillName} -> skills/${fsPath}`);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
+  const pluginSourceExists = existsSync(pluginSourceDir);
+  const hasExplicitFiles = (pluginDef.files?.length ?? 0) > 0;
+  if (skills.length === 0 && !pluginSourceExists && !hasExplicitFiles) {
+    throw new Error(
+      `Plugin '${pluginDef.name}' has no content: no skills selected, no plugin dir found at ` +
+        `'${toForwardSlash(safePath.relative(configDir, pluginSourceDir))}', and no files mapped. ` +
+        `Add one of: (a) skills: [...] in config, (b) create the plugin directory, ` +
+        `(c) add files: [{ source, dest }, ...] in config.`,
+    );
   }
 
-  // Generate plugin.json — STRICT: only name, description, author
-  const pluginJsonDir = safePath.join(pluginDir, '.claude-plugin');
+  if (pluginSourceExists) {
+    await parsePluginJsonFiles(pluginSourceDir);
+  }
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
-  await mkdir(pluginJsonDir, { recursive: true });
+  await mkdir(pluginDir, { recursive: true });
 
-  const pluginJson: Record<string, unknown> = {
-    name: pluginDef.name,
-    description: pluginDef.description ?? `${pluginDef.name} plugin`,
-    ...(packageVersion ? { version: packageVersion } : {}),
-    author: {
-      name: owner.name,
-      ...(owner.email ? { email: owner.email } : {}),
-    },
+  // Phase 2: tree copy (skips skills/ and .claude-plugin/, respects .gitignore).
+  const treeResult = pluginSourceExists
+    ? await treeCopyPlugin({
+        sourceDir: pluginSourceDir,
+        destDir: pluginDir,
+        warn: (m) => logger.info(`warning: ${m}`),
+      })
+    : { commandsCopied: 0, hooksCopied: 0, agentsCopied: 0, mcpCopied: 0, filesCopied: 0 };
+
+  // Phase 3: skill-stream copy-in (pool + plugin-local).
+  const poolSkills = await copyPoolSkills(skills, configDir, pluginDir, logger);
+  const localSkills = await copyPluginLocalSkills(
+    pluginDef,
+    configDir,
+    pluginSourceDir,
+    pluginDir,
+    logger,
+  );
+  const skillsCopied = [...poolSkills, ...localSkills];
+
+  // Phase 4: files[] mapping (may overwrite tree-copied files).
+  let explicitFilesCopied = 0;
+  if (pluginDef.files && pluginDef.files.length > 0) {
+    await applyPluginFiles({
+      projectRoot: configDir,
+      pluginOutputDir: pluginDir,
+      entries: pluginDef.files,
+      info: (m) => logger.info(m),
+    });
+    explicitFilesCopied = pluginDef.files.length;
+  }
+
+  // Phase 5: plugin.json merge-write (always last, always wins).
+  await writeMergedPluginJson(
+    pluginDef,
+    pluginSourceDir,
+    pluginDir,
+    owner,
+    packageVersion,
+    logger,
+  );
+
+  return {
+    pluginName: pluginDef.name,
+    pluginDir,
+    skillsCopied,
+    commandsCopied: treeResult.commandsCopied,
+    hooksCopied: treeResult.hooksCopied,
+    agentsCopied: treeResult.agentsCopied,
+    mcpCopied: treeResult.mcpCopied,
+    treeFilesCopied: treeResult.filesCopied,
+    explicitFilesCopied,
   };
-
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
-  await writeFile(safePath.join(pluginJsonDir, 'plugin.json'), JSON.stringify(pluginJson, null, 2));
-  logger.info(`         .claude-plugin/plugin.json`);
-
-  return { pluginName: pluginDef.name, pluginDir, skillsCopied };
 }
 
 /**
