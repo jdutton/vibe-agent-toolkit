@@ -76,26 +76,45 @@ plugins/<p>/{commands,hooks,agents,.mcp.json,scripts,…} ──→ [tree copy] 
                                                                                         .claude-plugin/plugin.json  (merged)
 ```
 
+**Output paths:**
+- Canonical final plugin output path: `dist/.claude/plugins/marketplaces/<marketplace>/plugins/<plugin>/` — matches today's `buildMarketplace()` output (see `packages/cli/src/commands/claude/plugin/build.ts` ~line 233). [inferred]
+- Pool-skill intermediate output stays at `dist/skills/<name>/` so standalone `vat skills build` is unchanged. [inferred]
+- Plugin-local skill intermediate output is `dist/plugins/<plugin>/skills/<skill>/`. [inferred]
+- At plugin-build time, both intermediates are copied into the canonical final path above. [inferred]
+
 **Skill stream (pool + plugin-local):**
 - Both run through the **identical existing skill pipeline**: link-following, `excludeReferencesFromBundle`, validation, `files` mappings. One code path, two discovery sources.
 - Pool skills are selected per-plugin via the existing `skills: [...]` selector.
 - Plugin-local skills are **implicit** — every SKILL.md under `plugins/<name>/skills/` ships with that plugin, no selector needed.
+- Plugin-local skills inherit `skills.defaults` from the top-level config but are NOT addressable by `skills.config[<name>]` — that namespace remains pool-only. [inferred] Per-plugin skill overrides are deferred to a future release. [inferred] If a plugin-local skill's name collides with a pool `skills.config` key, the pool config is not applied to the local skill (pool-only scope). [inferred]
+- The `publish` key in `skills.defaults` is **NOT inherited** by plugin-local skills — `publish` is a pool-distribution concept (who ships a skill from the shared pool) and has no meaning for plugin-local skills, which are semantically mandatory and always ship with their plugin. [inferred] Setting `skills.defaults.publish: false` at the top level does not suppress plugin-local skills. [inferred] All other `skills.defaults` keys (`linkFollowDepth`, `resourceNaming`, `stripPrefix`, `excludeNavigationFiles`, `excludeReferencesFromBundle`, `validation`, `targets`, `files`) are inherited by plugin-local skills. [inferred]
+- Discovered SKILL.md paths are deduplicated by canonical path before the pipeline runs. [inferred] Auto-injected plugin-local globs bypass top-level `skills.exclude` patterns — plugin-local skills are semantically mandatory and cannot be excluded via top-level config. [inferred]
 - Output locations stay distinct so ownership is clear: pool → `dist/skills/<name>/`, local → `dist/plugins/<name>/skills/<skill>/`. Both get copied into the final plugin output dir at build time.
+- Skill name collision detection runs at the **discovery phase, before any copy**. [inferred] Only a pool-vs-local collision **within the same plugin's selection set** is an error; two different plugins may each have a local skill with the same name because their output directories are disjoint. [inferred] A collision error blocks only the offending plugin's build — other plugins continue. [inferred]
 
 **Tree-copy stream:**
-- Everything under `plugins/<name>/` that is not `skills/` and not `.claude-plugin/` is copied as-is.
-- Respects `.gitignore` (prevents `node_modules/`, `.DS_Store`, `.env` leaking — same behavior as skills today).
-- Exclusions: `skills/` is handled by the skill stream; `.claude-plugin/plugin.json` feeds the merge step.
+- Everything under the **resolved source directory** (the `source` override if provided, otherwise `plugins/<name>/`) that is not `skills/` and not `.claude-plugin/` is copied as-is. [inferred]
+- The `skills/` and `.claude-plugin/` exclusion paths are interpreted relative to the resolved source directory — not relative to the literal `plugins/<name>/` — so they apply correctly when `source` points elsewhere. [inferred]
+- Skill auto-discovery follows the same resolved source (i.e., `<source>/skills/**/SKILL.md`). [inferred]
+- Respects `.gitignore` (prevents `node_modules/`, `.DS_Store`, `.env` leaking — same behavior as skills today). Tree copy reuses the gitignore-aware walker from `@vibe-agent-toolkit/utils` in a new "walk-all" mode (the existing skill-link traversal uses the same walker with link-following semantics); if that mode does not already exist, the implementation plan adds it. [inferred]
+- Gitignore enforcement applies to the **tree-copy stream only**. The **skill discovery stream uses a non-gitignore-aware glob** when searching for plugin-local `SKILL.md` files under `<source>/skills/**/SKILL.md` — plugin-local skills are discovered regardless of their gitignore status, consistent with their "semantically mandatory" contract. [inferred] Once a plugin-local SKILL.md is discovered, it runs through the normal skill pipeline, which itself may respect gitignore for linked/referenced files (matching today's skill pipeline behavior). [inferred] If an author gitignores a plugin-local `SKILL.md` itself, the skill is still discovered and built, but a build-time warning is logged noting the inconsistency. [inferred]
+- Exclusions: `skills/` is handled by the skill stream; the entire `.claude-plugin/` directory is copied to output with `plugin.json` replaced by the merged result. [inferred] If the author's `.claude-plugin/` directory contains a `marketplace.json`, it is ignored with a warning (marketplace.json is VAT-generated at the marketplace level). [inferred]
 
 **plugin.json merge:**
 - VAT generates `{ name, description, version, author }` as today.
+- Version source for the VAT-generated value is the root `package.json#version` (matches today's `buildPlugin()` behavior). [inferred]
 - If `plugins/<name>/.claude-plugin/plugin.json` exists, its fields are merged in.
-- Precedence: **VAT wins** on `name`, `version`, `author`. **Author wins** on any other field (`keywords`, `repository`, `homepage`, `license`, …). `description` follows current rule (config value, else default).
+- Precedence: **VAT wins** on `name`, `version`, `author`. **Author wins** on any other field (`keywords`, `repository`, `homepage`, `license`, …). `description` resolves via the deterministic chain `description = config.description ?? author.description ?? defaultDescription`. [inferred]
+- `defaultDescription` is the literal string `` `${plugin.name} plugin` `` — this preserves today's fallback behavior in `buildPlugin()` (`packages/cli/src/commands/claude/plugin/build.ts` ~line 382: `description: pluginDef.description ?? \`${pluginDef.name} plugin\``). [inferred]
+- VAT-winning fields (`name`, `version`, `author`) are **replaced wholesale** (shallow top-level replacement) — notably, if the author's `plugin.json` has an `author` field in any shape (string, object with different keys, extra fields), it is discarded in full and the VAT-generated `author` object is used verbatim. No deep-merge of the `author` object. [inferred]
+- When an author-supplied value for a VAT-winning field (`name`, `version`, `author`) differs from the VAT-generated value, the VAT value is used and a warning is logged identifying the mismatched field. [inferred]
 - Intent: VAT owns identity fields; authors own presentation/metadata.
 
 **Compiled artifacts outside the plugin dir:**
 - Reuse the existing `SkillFileEntrySchema` pattern for plugin-level `files: [{ source, dest }]`.
 - Source path is relative to project root; dest is relative to the plugin's output dir.
+- `files` entries are applied **after** the tree-copy stream, so they may overwrite tree-copied files; each overwrite is logged as an info-level message. [inferred]
+- `dest` must resolve inside the plugin output directory — path-traversal values (e.g. `../`) are a build error. [inferred] Parent directories in `dest` are auto-created as needed. [inferred]
 - Use case: a TypeScript hook compiles to `dist/hooks/my-hook.mjs` outside `plugins/<name>/` — `files: [{ source: "dist/hooks/my-hook.mjs", dest: "hooks/my-hook.mjs" }]` injects it.
 
 ### Schema changes
@@ -121,6 +140,18 @@ export const ClaudeMarketplacePluginEntrySchema = z.object({
 
 **Schema is still `.strict()`** — no passthrough. This is VAT-generated config, so we stay conservative (per Postel's Law in CLAUDE.md).
 
+**Truth table for `skills` field × resolved plugin directory:** [inferred]
+
+At schema-read time, `skills: []` is normalized to `skills: absent` — an empty array expresses the same intent as omitting the field and is treated identically throughout the pipeline. [inferred]
+
+| `skills` field | Plugin dir present | Behavior |
+|---|---|---|
+| absent (or `[]`) | absent | Error — plugin has no content source [inferred] |
+| present (non-empty or `"*"`) | absent | Pool-skills-only plugin (today's behavior preserved) [inferred] |
+| absent (or `[]`) | present | Tree-copy + plugin-local skills only (no pool selections) [inferred] |
+| present (non-empty or `"*"`) | present | Both pool selections and full tree-copy / local skills [inferred] |
+
+
 **No new top-level config keys.** No `commands`/`hooks`/`agents`/`mcp` arrays. The plugin directory IS the declaration.
 
 **Skills discovery glob extension:**
@@ -143,13 +174,15 @@ export const ClaudeMarketplacePluginEntrySchema = z.object({
 
 **Out of scope:** deep schema validation of hook manifests, MCP configs, or agent frontmatter.
 
+**`vat audit` behavior for new asset types (v1):** parse-only — the audit applies the same surface-level checks used at build time. [inferred] Commands (`commands/**/*.md`) and agents (`agents/**/*.md`) are checked for file existence and parse-able markdown; `hooks/hooks.json` and `.mcp.json` are checked for valid JSON parsing. [inferred] Deep schema validation (hook event names, MCP server shapes, agent frontmatter schemas) remains out of scope. [inferred] Parse failures are reported as audit errors; missing recommended fields are not flagged. [inferred]
+
 ### CLI surface
 
 No new commands. No new flags.
 
 - `vat skills build` — discovery extended to find plugin-local skills. Output routed to `dist/plugins/<name>/skills/`.
 - `vat claude plugin build` — extended to tree-copy plugin dirs, merge `plugin.json`, apply `files` mappings. Emits the same YAML summary shape plus new counts (`commandsCopied`, `hooksCopied`, `agentsCopied`, `mcpCopied`).
-- `vat validate` / `vat audit` — pick up new content automatically via config.
+- `vat validate` / `vat audit` — pick up new content automatically via config. Audit applies parse-only checks to new asset types (see Validation (v1) above). [inferred]
 
 ## Testing
 
