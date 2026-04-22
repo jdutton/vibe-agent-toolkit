@@ -4,7 +4,9 @@ import * as path from 'node:path';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
-import type { ResourceFormat } from './types.js';
+import type { ResourceFormat, Surface } from './types.js';
+
+const CLAUDE_PLUGIN_DIR_NAME = '.claude-plugin';
 
 /**
  * Detects the format of a resource at the given path
@@ -77,7 +79,7 @@ export async function detectResourceFormat(
  * Detects format for directory resources
  */
 function detectDirectoryFormat(dirPath: string): ResourceFormat {
-	const claudePluginDir = safePath.join(dirPath, '.claude-plugin');
+	const claudePluginDir = safePath.join(dirPath, CLAUDE_PLUGIN_DIR_NAME);
 
 	// Check if .claude-plugin directory exists
 	if (!fs.existsSync(claudePluginDir)) {
@@ -204,4 +206,92 @@ function detectFileFormat(filePath: string): ResourceFormat {
 		path: filePath,
 		reason: 'JSON file but not a recognized registry',
 	};
+}
+
+/**
+ * Enumerate all manifest surfaces present at a directory's root layer.
+ *
+ * Unlike {@link detectResourceFormat} (single-answer), this returns every
+ * recognized manifest found in the same directory. A skill-claude-plugin
+ * (root SKILL.md + .claude-plugin/plugin.json) returns two surfaces; a
+ * canonical plugin layout returns one (SKILL.md lives under skills/<name>/,
+ * not at the plugin root, so no agent-skill surface at this level).
+ *
+ * Detection rules (independent, all applied):
+ * - `<dir>/SKILL.md` exists → { type: 'agent-skill', path: <dir>/SKILL.md }
+ * - `<dir>/.claude-plugin/plugin.json` exists → { type: 'claude-plugin', path: <dir> }
+ * - `<dir>/.claude-plugin/marketplace.json` exists → { type: 'marketplace', path: <dir> }
+ *
+ * Returns `[]` for nonexistent paths, files, or directories with no recognized manifests.
+ *
+ * @param dirPath - Absolute path to a directory
+ * @returns Array of surfaces in enumerator-stable order (skill, plugin, marketplace)
+ */
+export async function enumerateSurfaces(dirPath: string): Promise<Surface[]> {
+	try {
+		if (!fs.existsSync(dirPath)) {
+			return [];
+		}
+		const stats = fs.statSync(dirPath);
+		if (!stats.isDirectory()) {
+			return [];
+		}
+	} catch {
+		return [];
+	}
+
+	const surfaces: Surface[] = [];
+
+	const skillPath = safePath.join(dirPath, 'SKILL.md');
+	if (fs.existsSync(skillPath)) {
+		surfaces.push({ type: 'agent-skill', path: skillPath });
+	}
+
+	const pluginJsonPath = safePath.join(dirPath, CLAUDE_PLUGIN_DIR_NAME, 'plugin.json');
+	const marketplaceJsonPath = safePath.join(dirPath, CLAUDE_PLUGIN_DIR_NAME, 'marketplace.json');
+	const hasPlugin = fs.existsSync(pluginJsonPath);
+	const hasMarketplace = fs.existsSync(marketplaceJsonPath);
+
+	// Co-located plugin/marketplace pattern: when both plugin.json and
+	// marketplace.json are present AND the marketplace references the current
+	// directory via `source: "./"`, detectResourceFormat collapses to a single
+	// `marketplace` surface. Preserve that collapse here so a co-located
+	// marketplace does not produce two parallel results (marketplace AND plugin).
+	const isColocated = hasPlugin && hasMarketplace && hasColocatedPluginInMarketplace(marketplaceJsonPath);
+
+	if (hasPlugin && !isColocated) {
+		surfaces.push({ type: 'claude-plugin', path: dirPath });
+	}
+
+	if (hasMarketplace) {
+		surfaces.push({ type: 'marketplace', path: dirPath });
+	}
+
+	return surfaces;
+}
+
+/**
+ * Returns true when marketplace.json declares a plugin with `source` pointing
+ * at the current directory (`./`, `.`, etc.), indicating a single-directory
+ * marketplace that owns the co-located plugin.
+ *
+ * Best-effort: swallows read/parse errors (caller treats as "not co-located").
+ */
+function hasColocatedPluginInMarketplace(marketplaceJsonPath: string): boolean {
+	try {
+		const content = fs.readFileSync(marketplaceJsonPath, 'utf-8');
+		const data = JSON.parse(content) as Record<string, unknown>;
+		const plugins = data['plugins'];
+		if (!Array.isArray(plugins)) {
+			return false;
+		}
+		return plugins.some((plugin: unknown) => {
+			if (typeof plugin !== 'object' || plugin === null) return false;
+			const source = (plugin as Record<string, unknown>)['source'];
+			if (typeof source !== 'string') return false;
+			return source === './' || source === '.' || source === '.\\' || source === '';
+		});
+	} catch {
+		return false;
+	}
 }

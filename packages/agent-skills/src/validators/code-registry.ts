@@ -36,6 +36,7 @@ export type IssueCode =
   | 'SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT'
   | 'SKILL_DESCRIPTION_FILLER_OPENER'
   | 'SKILL_DESCRIPTION_WRONG_PERSON'
+  | 'SKILL_CLAUDE_PLUGIN_NAME_MISMATCH'
   | 'SKILL_NAME_MISMATCHES_DIR'
   | 'RESERVED_WORD_IN_NAME'
   | 'SKILL_TIME_SENSITIVE_CONTENT'
@@ -177,6 +178,12 @@ export const CODE_REGISTRY: Record<IssueCode, CodeRegistryEntry> = {
     'SKILL.md description uses first-person or conversational second-person voice.',
     'Rewrite in third person. "I can extract PDFs" → "Extracts text from PDFs". "You can use this to..." → the action itself.',
     'skill_description_wrong_person',
+  ),
+  SKILL_CLAUDE_PLUGIN_NAME_MISMATCH: entry(
+    'warning',
+    'plugin.json name does not match the co-located root SKILL.md frontmatter name.',
+    'Align the names: update plugin.json `name` to match SKILL.md `name` (the skill is authoritative), or intentionally namespace the plugin (configure `validation.severity` or `validation.allow` with a reason).',
+    'skill_claude_plugin_name_mismatch',
   ),
   SKILL_NAME_MISMATCHES_DIR: entry(
     'warning',

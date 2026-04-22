@@ -2,6 +2,15 @@
 
 This document provides guidance specific to developing the vat CLI tool.
 
+## Validation Framework References
+
+Audit and related commands (`vat audit`, `vat skills validate`, `vat resources validate`) rely on VAT's unified validation framework. Before changing validator logic, read:
+
+- [`../../docs/skill-quality-and-compatibility.md`](../../docs/skill-quality-and-compatibility.md) — VAT's stance; the three-layer evidence/observation/verdict model.
+- [`../../docs/validation-codes.md`](../../docs/validation-codes.md) — Every code by name, default severity, and what triggers it.
+- [`../../docs/skill-smell-philosophy.md`](../../docs/skill-smell-philosophy.md) — Rule-addition discipline; never ship an `error`-severity code without corpus evidence.
+- [`../../docs/architecture/skill-packaging.md`](../../docs/architecture/skill-packaging.md) — The four recognized artifact shapes and which codes apply to each.
+
 ## Running vat Commands in Development
 
 **In this monorepo during development**, use one of these approaches to run vat commands:

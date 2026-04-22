@@ -1,0 +1,5 @@
+{
+  "name": "different-name",
+  "version": "1.0.0",
+  "description": "Plugin manifest with a name that differs from the co-located skill."
+}

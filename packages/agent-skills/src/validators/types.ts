@@ -122,3 +122,21 @@ export type ResourceFormat =
   | { type: 'installed-plugins-registry'; path: string; filename: string }
   | { type: 'known-marketplaces-registry'; path: string; filename: string }
   | { type: 'unknown'; path: string; reason?: string };
+
+/**
+ * One recognized manifest surface at a directory's root layer.
+ *
+ * Unlike {@link ResourceFormat} — which is the single-answer API used by
+ * `detectResourceFormat()` — `Surface` is emitted by `enumerateSurfaces()`
+ * which returns *every* manifest found in the same directory. A directory can
+ * contain multiple surfaces: e.g., a skill-claude-plugin has both `agent-skill`
+ * (root SKILL.md) and `claude-plugin` (.claude-plugin/plugin.json) surfaces.
+ *
+ * The `path` field points to the file to hand the validator: the SKILL.md path
+ * for skills, the directory path for plugin/marketplace (those validators resolve
+ * `<dir>/.claude-plugin/<manifest>.json` themselves).
+ */
+export type Surface =
+  | { type: 'agent-skill'; path: string }
+  | { type: 'claude-plugin'; path: string }
+  | { type: 'marketplace'; path: string };

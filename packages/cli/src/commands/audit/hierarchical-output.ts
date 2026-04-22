@@ -54,7 +54,7 @@ function replaceHomeDir(filePath: string): string {
  * Expected patterns:
  * - Marketplace plugin skill: .../marketplaces/{marketplace}/{plugin}/skills/{skill}/SKILL.md
  * - Standalone plugin skill (in plugins dir): .../plugins/{plugin}/skills/{skill}/SKILL.md (no marketplaces/)
- * - Standalone plugin skill (no skills subdir): .../plugins/{skill}/SKILL.md (no skills/)
+ * - Skill-claude-plugin: .../plugins/{skill}/SKILL.md (root SKILL.md + .claude-plugin/plugin.json, no skills/ subdir)
  * - Standalone skill (in skills dir): ~/.claude/skills/{skill}/SKILL.md
  */
 function parsePathStructure(filePath: string): {
@@ -123,7 +123,7 @@ function parsePluginPath(
     }
   }
 
-  // Standalone skill in plugins dir: .../plugins/{skill}/SKILL.md (no /skills/ subdir)
+  // Skill-claude-plugin: .../plugins/{skill}/SKILL.md (root SKILL.md + .claude-plugin/plugin.json, no /skills/ subdir)
   const skill = parts[pluginsIdx + 1];
   if (skill !== undefined) {
     return { skill, isCached };

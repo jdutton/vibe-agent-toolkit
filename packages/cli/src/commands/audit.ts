@@ -8,7 +8,10 @@ import { existsSync as fsExistsSync } from 'node:fs';
 
 import {
   detectResourceFormat,
+  enumerateSurfaces,
   validate,
+  validateMarketplace,
+  validatePlugin,
   validateSkill,
   validateSkillForPackaging,
   type EvidenceRecord,
@@ -746,6 +749,29 @@ export async function getValidationResults(
     const skillPath = safePath.join(scanPath, 'SKILL.md');
     logger.debug('Detected VAT agent, validating SKILL.md');
     return [await validateSingleSkill(skillPath, options, logger, true)];
+  }
+
+  // Enumerate all manifest surfaces at the directory root. If multiple are
+  // present (e.g., skill-claude-plugin: SKILL.md + .claude-plugin/plugin.json),
+  // validate each independently. This intentionally bypasses
+  // detectResourceFormat's single-answer collapse so the skill surface is not
+  // swallowed by the plugin surface.
+  const surfaces = await enumerateSurfaces(scanPath);
+  if (surfaces.length > 1) {
+    logger.debug(
+      `Detected ${surfaces.length.toString()} surfaces at ${scanPath}: ${surfaces.map((s) => s.type).join(', ')}`
+    );
+    const results: ValidationResult[] = [];
+    for (const surface of surfaces) {
+      if (surface.type === 'agent-skill') {
+        results.push(await validateSingleSkill(surface.path, options, logger));
+      } else if (surface.type === 'claude-plugin') {
+        results.push(await validatePlugin(surface.path));
+      } else {
+        results.push(await validateMarketplace(surface.path));
+      }
+    }
+    return results;
   }
 
   // For plugin/marketplace directories or registry files, use unified validator

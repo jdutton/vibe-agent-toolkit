@@ -5,12 +5,15 @@ import * as fs from 'node:fs';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { detectResourceFormat } from '../../src/validators/format-detection.js';
+import { detectResourceFormat, enumerateSurfaces } from '../../src/validators/format-detection.js';
 import {
 	createAmbiguousDirectory,
 	createTestPlugin,
 	setupTempDir,
 } from '../test-helpers.js';
+
+const SURFACE_TYPE_CLAUDE_PLUGIN = 'claude-plugin';
+const SURFACE_TYPE_AGENT_SKILL = 'agent-skill';
 
 describe('detectResourceFormat', () => {
 	const { getTempDir } = setupTempDir('format-detection-test-');
@@ -32,7 +35,7 @@ describe('detectResourceFormat', () => {
 
 			const result = await detectResourceFormat(pluginDir);
 
-			expect(result.type).toBe('claude-plugin');
+			expect(result.type).toBe(SURFACE_TYPE_CLAUDE_PLUGIN);
 			expect(result.path).toBe(pluginDir);
 		});
 
@@ -238,5 +241,91 @@ describe('detectResourceFormat', () => {
 				fs.chmodSync(restrictedDir, 0o755);
 			}
 		});
+	});
+});
+
+describe('enumerateSurfaces', () => {
+	const fixturesBase = safePath.join(
+		import.meta.dirname,
+		'..',
+		'fixtures',
+		'packaging-shapes',
+	);
+
+	it('returns a single agent-skill surface for a standalone skill', async () => {
+		const dir = safePath.join(fixturesBase, 'standalone-skill');
+		const surfaces = await enumerateSurfaces(dir);
+		expect(surfaces).toHaveLength(1);
+		expect(surfaces[0]).toEqual({
+			type: SURFACE_TYPE_AGENT_SKILL,
+			path: safePath.join(dir, 'SKILL.md'),
+		});
+	});
+
+	it('returns both agent-skill and claude-plugin for a skill-claude-plugin', async () => {
+		const dir = safePath.join(fixturesBase, 'skill-claude-plugin-matching');
+		const surfaces = await enumerateSurfaces(dir);
+		expect(surfaces).toHaveLength(2);
+		expect(surfaces).toContainEqual({
+			type: SURFACE_TYPE_AGENT_SKILL,
+			path: safePath.join(dir, 'SKILL.md'),
+		});
+		expect(surfaces).toContainEqual({ type: SURFACE_TYPE_CLAUDE_PLUGIN, path: dir });
+	});
+
+	it('returns only claude-plugin for a canonical plugin layout (no root SKILL.md)', async () => {
+		const dir = safePath.join(fixturesBase, 'canonical-plugin');
+		const surfaces = await enumerateSurfaces(dir);
+		expect(surfaces).toHaveLength(1);
+		expect(surfaces[0]).toEqual({ type: SURFACE_TYPE_CLAUDE_PLUGIN, path: dir });
+	});
+
+	it('returns only marketplace when only marketplace.json is present', async () => {
+		const dir = safePath.join(fixturesBase, 'marketplace-only');
+		const surfaces = await enumerateSurfaces(dir);
+		expect(surfaces).toHaveLength(1);
+		expect(surfaces[0]).toEqual({ type: 'marketplace', path: dir });
+	});
+
+	it('returns an empty array for an empty directory', async () => {
+		const dir = safePath.join(fixturesBase, 'empty-dir');
+		const surfaces = await enumerateSurfaces(dir);
+		expect(surfaces).toEqual([]);
+	});
+
+	it('returns an empty array for a nonexistent path', async () => {
+		const dir = safePath.join(fixturesBase, 'does-not-exist');
+		const surfaces = await enumerateSurfaces(dir);
+		expect(surfaces).toEqual([]);
+	});
+
+	it('returns an empty array for a file (not a directory)', async () => {
+		const file = safePath.join(fixturesBase, 'standalone-skill', 'SKILL.md');
+		const surfaces = await enumerateSurfaces(file);
+		expect(surfaces).toEqual([]);
+	});
+
+	it('collapses co-located plugin+marketplace to a single marketplace surface', async () => {
+		// Mirrors detectResourceFormat's co-located collapse — a marketplace that
+		// declares `source: "./"` for its plugin SHOULD NOT produce a parallel
+		// claude-plugin surface.
+		const dir = safePath.join(fixturesBase, 'colocated-plugin-marketplace');
+		const surfaces = await enumerateSurfaces(dir);
+		expect(surfaces).toHaveLength(1);
+		expect(surfaces[0]).toEqual({ type: 'marketplace', path: dir });
+	});
+
+	it('returns all three surfaces in enumerator-stable order when none collapse', async () => {
+		// Non-co-located marketplace + plugin + SKILL.md: audit is expected to
+		// emit three independent results; this test documents the ordering
+		// contract (skill, plugin, marketplace).
+		const dir = safePath.join(fixturesBase, 'three-surface');
+		const surfaces = await enumerateSurfaces(dir);
+		expect(surfaces).toHaveLength(3);
+		expect(surfaces.map((s) => s.type)).toEqual([
+			SURFACE_TYPE_AGENT_SKILL,
+			SURFACE_TYPE_CLAUDE_PLUGIN,
+			'marketplace',
+		]);
 	});
 });

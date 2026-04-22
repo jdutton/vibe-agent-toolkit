@@ -1,0 +1,6 @@
+{
+  "name": "marketplace-only",
+  "version": "1.0.0",
+  "description": "Marketplace with no co-located plugin.",
+  "plugins": []
+}

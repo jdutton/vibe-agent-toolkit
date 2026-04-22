@@ -95,6 +95,8 @@ The parser is a regex-based heuristic; it will be wrong. Known gaps:
 
 ## Structure
 
+See [Skill Packaging Shapes](./architecture/skill-packaging.md) for the terminology reference — the four recognized artifact shapes (standalone skill, skill-claude-plugin, claude-plugin, claude-marketplace) and how their validation applies.
+
 VAT believes skills should be **self-contained** and **progressively disclosed**: all linked resources live inside the skill directory, and long content is split into linked resources rather than loaded into a monolithic SKILL.md. Skills that reach outside their directory couple silently to project layout; skills that bundle everything into SKILL.md crowd the agent's context. See `LINK_OUTSIDE_PROJECT`, `LINK_TARGETS_DIRECTORY`, `LINK_TO_NAVIGATION_FILE`, `LINK_TO_GITIGNORED_FILE`, `LINK_TO_SKILL_DEFINITION`, `NO_PROGRESSIVE_DISCLOSURE`, and `REFERENCE_TOO_DEEP` in [`docs/validation-codes.md`](./validation-codes.md) for the code-level enforcement.
 
 ## Packaging
