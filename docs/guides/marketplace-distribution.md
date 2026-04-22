@@ -341,3 +341,95 @@ Verify by checking `~/.claude/plugins/known_marketplaces.json` to confirm the so
 
 **`claude plugin validate` rejects `$schema` key (Claude Code v2.1.81):** The marketplace validator treats `$schema` as an unrecognized key, even though Anthropic's own official marketplace uses it. This does not affect runtime behavior — the marketplace installs and works correctly. This is a Claude Code validation bug, not a marketplace authoring issue.
 
+
+## Full-plugin authoring
+
+`vat claude plugin build` ships any Claude Code plugin asset — not just skills. Drop the plugin under `plugins/<name>/` in the same native layout Claude Code expects, declare it in `vibe-agent-toolkit.config.yaml`, and `vat claude plugin build` assembles the output.
+
+### Layout
+
+```
+plugins/<name>/
+  .claude-plugin/
+    plugin.json       # author-supplied metadata; VAT merges on top
+  commands/           # slash commands (*.md)
+  hooks/
+    hooks.json        # hook registry (JSON; parse-only validated)
+  agents/             # subagent definitions (*.md)
+  .mcp.json           # MCP server config (JSON; parse-only validated)
+  scripts/            # arbitrary scripts (tree-copied verbatim)
+  skills/             # plugin-local skills (auto-discovered, non-gitignore-aware)
+```
+
+Everything under `plugins/<name>/` is tree-copied to `dist/.claude/plugins/marketplaces/<mp>/plugins/<name>/`, except:
+
+- `skills/` — owned by the skill stream (see "Skill discovery" below)
+- `.claude-plugin/` — owned by the `plugin.json` merge-write (see "plugin.json merge")
+
+Tree-copy respects `.gitignore` (safe: `node_modules/`, build detritus never ship).
+
+### `skills` selector × plugin dir truth table
+
+| Config | On disk | Result |
+|---|---|---|
+| `skills: ["a"]` and/or `["*"]` | no plugin dir | pool skills only |
+| `skills` omitted | `plugins/<name>/` present | tree-copy + plugin-local skills (no pool skills) |
+| `skills: ["a"]` | `plugins/<name>/` present | tree-copy + plugin-local skills + selected pool skills |
+| `skills` omitted | no plugin dir, no `files[]` | **error** (empty-plugin guard) |
+
+Collisions between a pool skill and a plugin-local skill within the same plugin's selection set are always an error — rename one.
+
+### `source` override
+
+```yaml
+claude:
+  marketplaces:
+    mp1:
+      owner: { name: Example }
+      plugins:
+        - name: my-plugin
+          source: custom/path/to/my-plugin   # default: plugins/my-plugin
+```
+
+### `files[]` — compiled artifacts outside the plugin dir
+
+Use `files: [{ source, dest }]` to inject build artifacts (compiled hooks, generated configs) into the plugin output:
+
+```yaml
+plugins:
+  - name: my-plugin
+    files:
+      - source: dist/hooks/compiled-hook.mjs   # relative to project root
+        dest: hooks/compiled-hook.mjs         # relative to plugin output dir
+```
+
+`dest` cannot escape the plugin output dir, cannot resolve inside `skills/` (owned by skill stream), and cannot target `.claude-plugin/plugin.json` (owned by merge-write). Overwrites are allowed and logged at info level.
+
+### `plugin.json` merge rules
+
+VAT writes `.claude-plugin/plugin.json` last, merging the author's `.claude-plugin/plugin.json` (if present) with VAT-owned identity fields:
+
+- **VAT wins** on `name`, `version`, `author` (shallow replace — mismatches produce warnings, never errors).
+- **Author wins** on all other keys (`keywords`, `repository`, `homepage`, `license`, …).
+- **Description chain:** `config.description ?? author.description ?? "${name} plugin"`.
+- `version` falls back to the author's value when VAT has no version (no `package.json`).
+
+### Skill discovery
+
+`vat skills build` auto-discovers `plugins/<name>/skills/**/SKILL.md` for every declared plugin and routes outputs to `dist/plugins/<name>/skills/<skill>/`. Unlike pool skills, plugin-local skill discovery **bypasses `.gitignore`** (plugin-local skills are semantically mandatory to the plugin). A gitignored `SKILL.md` is still discovered but emits a warning so the adopter can audit their intent.
+
+### Ordering contract
+
+`vat claude plugin build` runs per plugin in this order:
+
+1. Discovery + validators (case-match, `hooks.json`/`.mcp.json` parse, empty-plugin guard)
+2. Tree-copy (skips `skills/` and `.claude-plugin/`, respects `.gitignore`)
+3. Skill-stream copy-in (pool from `dist/skills/`, plugin-local from `dist/plugins/<name>/skills/`)
+4. `files[]` mapping (may overwrite tree-copied files; logged at info)
+5. `.claude-plugin/plugin.json` merge-write (always last, always wins)
+
+**Run order:** `vat skills build && vat claude plugin build`. The plugin build reads pre-built skills from `dist/`.
+
+### Example
+
+See [the full-plugin example config](../examples/full-plugin/vibe-agent-toolkit.config.yaml) for an end-to-end example exercising every asset type.

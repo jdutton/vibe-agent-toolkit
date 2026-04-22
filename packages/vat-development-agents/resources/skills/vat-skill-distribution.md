@@ -406,3 +406,14 @@ All `vat` commands in this skill work with these alternatives.
 ## Future: Zero-Dependency Postinstall (Option B)
 
 A planned improvement: `vat build` would bundle the plugin install logic into `dist/postinstall.js` — a fully self-contained script with no npm dependencies. The postinstall script would become simply `node ./dist/postinstall.js`. This eliminates `vibe-agent-toolkit` as a runtime dependency entirely, reducing install footprint for end users. Until then, Option C (runtime `vibe-agent-toolkit` dep) is the correct approach.
+
+## Full-plugin authoring (commands, hooks, agents, MCP)
+
+VAT supports bundling any Claude Code plugin asset — not just skills. Drop the plugin
+under `plugins/<name>/` in the same native layout Claude expects. VAT tree-copies
+everything (minus `skills/` and `.claude-plugin/`), merges author `plugin.json` with
+VAT-owned identity fields, and applies any `files[]` mappings for artifacts built
+outside the plugin dir.
+
+See [docs/guides/marketplace-distribution.md](../../../../docs/guides/marketplace-distribution.md) section "Full-plugin authoring" and the end-to-end
+[docs/examples/full-plugin/vibe-agent-toolkit.config.yaml](../../../../docs/examples/full-plugin/vibe-agent-toolkit.config.yaml) example.

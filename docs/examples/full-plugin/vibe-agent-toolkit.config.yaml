@@ -1,0 +1,16 @@
+version: 1
+
+skills:
+  include:
+    - "skills/**/SKILL.md"
+
+claude:
+  marketplaces:
+    examples:
+      owner:
+        name: Example Org
+        email: ops@example.test
+      plugins:
+        - name: full-plugin
+          description: Plugin with every asset type
+          skills: ["pool-sample"]
