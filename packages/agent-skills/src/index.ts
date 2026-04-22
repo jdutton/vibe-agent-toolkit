@@ -4,11 +4,6 @@
  */
 
 export { buildAgentSkill, type BuildOptions, type BuildResult } from './builder.js';
-export {
-  detectSkillCollisions,
-  type SkillCollision,
-  type SkillRef,
-} from './skill-collision.js';
 
 export {
   extractH1Title,

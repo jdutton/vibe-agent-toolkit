@@ -270,6 +270,7 @@ claude:
       plugins:
         - name: acme-tools
           description: Acme developer tools plugin
+          skills: "*"
 `;
     await writeFile(configPath, content);
 
@@ -295,12 +296,14 @@ claude:
       plugins:
         - name: first-plugin
           description: First plugin
+          skills: "*"
     second:
       owner:
         name: My Org
       plugins:
         - name: my-plugin
           description: My plugin
+          skills: "*"
 `;
     await writeFile(configPath, content);
 
@@ -335,6 +338,7 @@ claude:
       plugins:
         - name: acme-tools
           description: Acme tools
+          skills: "*"
           unknownField: oops
 `;
     await writeFile(configPath, content);
@@ -370,7 +374,7 @@ describe('ClaudeMarketplaceSchema with publish config', () => {
         license: 'mit',
         sourceRepo: false,
       },
-      plugins: [{ name: 'test' }],
+      plugins: [{ name: 'test', skills: '*' }],
     });
     expect(result.success).toBe(true);
   });
@@ -379,7 +383,7 @@ describe('ClaudeMarketplaceSchema with publish config', () => {
     const result = ClaudeMarketplaceSchema.safeParse({
       owner: { name: 'Test Org' },
       publish: { license: 'mit' },
-      plugins: [{ name: 'test' }],
+      plugins: [{ name: 'test', skills: '*' }],
     });
     expect(result.success).toBe(true);
   });
@@ -388,7 +392,7 @@ describe('ClaudeMarketplaceSchema with publish config', () => {
     const result = ClaudeMarketplaceSchema.safeParse({
       owner: { name: 'Test Org' },
       publish: { license: './LICENSE' },
-      plugins: [{ name: 'test' }],
+      plugins: [{ name: 'test', skills: '*' }],
     });
     expect(result.success).toBe(true);
   });
@@ -396,7 +400,7 @@ describe('ClaudeMarketplaceSchema with publish config', () => {
   it('should accept marketplace config without publish section', () => {
     const result = ClaudeMarketplaceSchema.safeParse({
       owner: { name: 'Test Org' },
-      plugins: [{ name: 'test' }],
+      plugins: [{ name: 'test', skills: '*' }],
     });
     expect(result.success).toBe(true);
   });

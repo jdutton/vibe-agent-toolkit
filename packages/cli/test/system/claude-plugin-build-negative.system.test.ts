@@ -66,7 +66,7 @@ function seedPluginP1WithMinimalConfig(tempDir: string): void {
   seedPluginLocalSkill(tempDir, 'p1', 'skill-a');
   writeTestFile(
     safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
-    configMin('        - name: p1\n'),
+    configMin('        - name: p1\n          skills: []\n'),
   );
 }
 
@@ -110,6 +110,7 @@ claude:
         name: Test
       plugins:
         - name: p1
+          skills: []
           files:
             - source: dist/missing.mjs
               dest: hooks/missing.mjs
@@ -135,11 +136,13 @@ claude:
         name: Test
       plugins:
         - name: dup
+          skills: []
     mp2:
       owner:
         name: Test
       plugins:
         - name: dup
+          skills: []
 `,
     );
     const result = runSkillsThenPluginBuild(tempDir);
@@ -149,7 +152,7 @@ claude:
 
   it('errors when a plugin has no plugin dir and no files[] (empty-plugin guard)', () => {
     const tempDir = createTempDir();
-    writeConfigAndPkg(tempDir, configMin('        - name: empty\n'));
+    writeConfigAndPkg(tempDir, configMin('        - name: empty\n          skills: []\n'));
     const result = runSkillsThenPluginBuild(tempDir);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/has no content/i);
@@ -160,7 +163,7 @@ claude:
     seedPluginLocalSkill(tempDir, 'p1', 'skill-a');
     writeTestFile(
       safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
-      configMin('        - name: p1\n'),
+      configMin('        - name: p1\n          skills: []\n'),
     );
     safeExecSync('git', ['init', '-q'], { cwd: tempDir });
     safeExecSync('git', ['config', 'user.email', 't@t'], { cwd: tempDir });

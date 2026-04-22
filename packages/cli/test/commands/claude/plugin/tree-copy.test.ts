@@ -43,11 +43,11 @@ describe('treeCopyPlugin', () => {
     expect(existsSync(safePath.join(dest, 'scripts', 'tool.mjs'))).toBe(true);
   });
 
-  it('excludes skills/ subtree from tree copy', async () => {
+  it('tree-copies skills/ verbatim (no special handling)', async () => {
     await mkdir(safePath.join(src, 'skills', 's1'), { recursive: true });
     await writeFile(safePath.join(src, 'skills', 's1', 'SKILL.md'), '# skill');
     await treeCopyPlugin({ sourceDir: src, destDir: dest });
-    expect(existsSync(safePath.join(dest, 'skills'))).toBe(false);
+    expect(existsSync(safePath.join(dest, 'skills', 's1', 'SKILL.md'))).toBe(true);
   });
 
   it('excludes .claude-plugin/ subtree (plugin.json is merged separately)', async () => {

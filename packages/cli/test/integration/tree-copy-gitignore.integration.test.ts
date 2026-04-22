@@ -70,7 +70,7 @@ describe('treeCopyPlugin — gitignore enforcement', () => {
     cleanupTempDirs();
   });
 
-  it('skips plugins/<p>/skills/ subtree so vat-skills-build output is not double-copied', async () => {
+  it('copies plugins/<p>/skills/ verbatim (no special handling)', async () => {
     const { root, src, dest } = initPluginTreeFixture(createTempDir);
 
     await mkdir(safePath.join(src, 'skills', 'foo'), { recursive: true });
@@ -84,8 +84,7 @@ describe('treeCopyPlugin — gitignore enforcement', () => {
 
     await treeCopyPlugin({ sourceDir: src, destDir: dest });
 
-    expect(existsSync(safePath.join(dest, 'skills'))).toBe(false);
-    expect(existsSync(safePath.join(dest, 'skills', 'foo', 'SKILL.md'))).toBe(false);
+    expect(existsSync(safePath.join(dest, 'skills', 'foo', 'SKILL.md'))).toBe(true);
     expect(existsSync(safePath.join(dest, 'commands', 'ok.md'))).toBe(true);
 
     cleanupTempDirs();

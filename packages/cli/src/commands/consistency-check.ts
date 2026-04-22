@@ -91,6 +91,97 @@ export function readVatSkillsFromPackageJson(
   }
 }
 
+/**
+ * Match a skill name against a simple glob selector.
+ *
+ * Supported forms:
+ * - exact match: `"my-skill"`
+ * - prefix wildcard: `"prefix*"`
+ * - suffix wildcard: `"*suffix"`
+ * - contains wildcard: `"*fragment*"`
+ */
+export function matchesSimpleGlob(
+  skillName: string,
+  selector: string
+): boolean {
+  if (selector === '*') {
+    return true;
+  }
+
+  const startsWithStar = selector.startsWith('*');
+  const endsWithStar = selector.endsWith('*');
+
+  if (startsWithStar && endsWithStar) {
+    // *contains*
+    const fragment = selector.slice(1, -1);
+    return fragment.length > 0 && skillName.includes(fragment);
+  }
+
+  if (endsWithStar) {
+    // prefix*
+    const prefix = selector.slice(0, -1);
+    return skillName.startsWith(prefix);
+  }
+
+  if (startsWithStar) {
+    // *suffix
+    const suffix = selector.slice(1);
+    return skillName.endsWith(suffix);
+  }
+
+  // exact match
+  return skillName === selector;
+}
+
+/**
+ * Add published skills matching a plugin's skill selector to the assigned set.
+ */
+function addMatchingSkills(
+  assigned: Set<string>,
+  pluginSkills: '*' | string[],
+  publishedSkillNames: string[]
+): void {
+  if (pluginSkills === '*') {
+    for (const name of publishedSkillNames) {
+      assigned.add(name);
+    }
+    return;
+  }
+  for (const selector of pluginSkills) {
+    for (const name of publishedSkillNames) {
+      if (matchesSimpleGlob(name, selector)) {
+        assigned.add(name);
+      }
+    }
+  }
+}
+
+/**
+ * Resolve which published skills are assigned to at least one plugin.
+ *
+ * Returns the set of published skill names that matched at least one
+ * plugin skill selector across all marketplaces.
+ */
+export function resolveAssignedSkills(
+  config: ProjectConfig,
+  publishedSkillNames: string[]
+): Set<string> {
+  const assigned = new Set<string>();
+  const marketplaces = config.claude?.marketplaces;
+
+  if (!marketplaces) {
+    return assigned;
+  }
+
+  for (const marketplace of Object.values(marketplaces)) {
+    for (const plugin of marketplace.plugins) {
+      addMatchingSkills(assigned, plugin.skills, publishedSkillNames);
+    }
+  }
+
+  return assigned;
+}
+
 // ---------------------------------------------------------------------------
 // Individual checks
 // ---------------------------------------------------------------------------
@@ -195,6 +286,84 @@ function checkUnpublishedSkillInPackageJson(
   return issues;
 }
 
+function checkPublishedSkillNotInPlugin(
+  publishedNames: string[],
+  config: ProjectConfig,
+  assignedSkills: Set<string>
+): ConsistencyIssue[] {
+  if (!config.claude?.marketplaces) {
+    return [];
+  }
+
+  const issues: ConsistencyIssue[] = [];
+
+  for (const name of publishedNames) {
+    if (!assignedSkills.has(name)) {
+      issues.push({
+        severity: 'error',
+        code: 'PUBLISHED_SKILL_NOT_IN_PLUGIN',
+        message: `Skill "${name}" is published but not assigned to any plugin in claude.marketplaces.`,
+        fix: `Either add "${name}" to a plugin's skills array in vibe-agent-toolkit.config.yaml: claude.marketplaces.<marketplace>.plugins[].skills, or opt out of publishing by setting publish: false in vibe-agent-toolkit.config.yaml: skills.config.${name}.publish: false`,
+      });
+    }
+  }
+
+  return issues;
+}
+
+/**
+ * Check a single plugin's skill selectors against discovered skill names.
+ */
+function checkPluginSelectors(
+  pluginSkills: string[],
+  pluginName: string,
+  marketplaceName: string,
+  discoveredNames: Set<string>
+): ConsistencyIssue[] {
+  const issues: ConsistencyIssue[] = [];
+
+  for (const selector of pluginSkills) {
+    const matchesAny = [...discoveredNames].some((name) =>
+      matchesSimpleGlob(name, selector)
+    );
+
+    if (!matchesAny) {
+      issues.push({
+        severity: 'error',
+        code: 'PLUGIN_REFERENCES_UNKNOWN_SKILL',
+        message: `Plugin "${pluginName}" in marketplace "${marketplaceName}" references skill selector "${selector}" which matches no discovered skill.`,
+        fix: `Check for typos in vibe-agent-toolkit.config.yaml: claude.marketplaces.${marketplaceName}.plugins (plugin "${pluginName}"). The selector must match at least one discovered SKILL.md name.`,
+      });
+    }
+  }
+
+  return issues;
+}
+
+function checkPluginReferencesUnknownSkill(
+  discoveredNames: Set<string>,
+  config: ProjectConfig
+): ConsistencyIssue[] {
+  const marketplaces = config.claude?.marketplaces;
+
+  if (!marketplaces) {
+    return [];
+  }
+
+  const issues: ConsistencyIssue[] = [];
+
+  for (const [marketplaceName, marketplace] of Object.entries(marketplaces)) {
+    for (const plugin of marketplace.plugins) {
+      if (plugin.skills === '*') {
+        continue;
+      }
+      issues.push(...checkPluginSelectors(plugin.skills, plugin.name, marketplaceName, discoveredNames));
+    }
+  }
+
+  return issues;
+}
+
 function checkSkillUnpublished(
   unpublishedNames: string[]
 ): ConsistencyIssue[] {
@@ -232,6 +401,7 @@ export function runConsistencyChecks(
   }
 
   const vatSkills = readVatSkillsFromPackageJson(projectRoot);
+  const assignedSkills = resolveAssignedSkills(config, publishedNames);
 
   // Run checks in specified order
   const issues: ConsistencyIssue[] = [
@@ -239,6 +409,8 @@ export function runConsistencyChecks(
     ...checkPublishedSkillNotInPackageJson(publishedNames, vatSkills),
     ...checkPackageJsonListsUnknownSkill(discoveredNames, vatSkills),
     ...checkUnpublishedSkillInPackageJson(unpublishedNames, vatSkills),
+    ...checkPublishedSkillNotInPlugin(publishedNames, config, assignedSkills),
+    ...checkPluginReferencesUnknownSkill(discoveredNames, config),
     ...checkSkillUnpublished(unpublishedNames),
   ];
 

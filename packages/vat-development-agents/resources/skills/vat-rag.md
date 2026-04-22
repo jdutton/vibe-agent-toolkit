@@ -99,6 +99,6 @@ Per-store configuration keeps multi-corpus projects (multilingual docs, product-
 ## References
 
 - `vibe-agent-toolkit:vat-knowledge-resources` — markdown collections and frontmatter schema validation (the content side)
-- [RAG Usage Guide](../../../../../docs/guides/rag-usage-guide.md) — configuration walkthroughs for single-store, multi-store, and custom metadata
-- [Embedding Providers](../../../../../docs/embedding-providers.md) — provider deep-dive and how to write new ones
-- [@vibe-agent-toolkit/rag](../../../../../packages/rag/README.md) — package README with the full interface reference
+- [RAG Usage Guide](../../../../docs/guides/rag-usage-guide.md) — configuration walkthroughs for single-store, multi-store, and custom metadata
+- [Embedding Providers](../../../../docs/embedding-providers.md) — provider deep-dive and how to write new ones
+- [@vibe-agent-toolkit/rag](../../../../packages/rag/README.md) — package README with the full interface reference

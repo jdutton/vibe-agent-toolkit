@@ -66,6 +66,7 @@ claude:
       plugins:
         - name: ${pluginName}
           description: Test plugin for build-verify tests
+          skills: "*"
 `;
   writeTestFile(safePath.join(dir, VAT_CONFIG_FILENAME), content);
 }
@@ -85,7 +86,8 @@ function setupBuildVerifyTestSuite() {
 
   /**
    * Place a SKILL.md under `plugins/<plugin>/skills/<skillName>/SKILL.md` so
-   * plugin-local discovery picks it up and ships it in the plugin bundle.
+   * the skill-include glob picks it up into the pool and the plugin's
+   * `skills: "*"` selector ships it in the plugin bundle.
    */
   const createPluginLocalSkill = (
     tempDir: string,
@@ -131,17 +133,35 @@ describe('vat build command (system test)', () => {
     suite.cleanup();
   });
 
-  it('should build plugin-local skills into dist/plugins/<p>/skills/ using --cwd flag', () => {
+  it('should build skills into dist/skills/ and ship them via plugin.skills selector', () => {
     const tempDir = suite.createTempDir();
     suite.setupSingleSkillFixture(tempDir, MARKETPLACE_NAME, PLUGIN_NAME);
 
     const result = suite.runBuild(tempDir);
 
     expect(result.status).toBe(0);
-    // Plugin-local skills route to dist/plugins/<plugin>/skills/<skill>/ (not dist/skills/)
+    // Pool skills live at dist/skills/<name>/
     expect(
       existsSync(
-        safePath.join(tempDir, 'dist', 'plugins', PLUGIN_NAME, 'skills', TEST_SKILL_NAME, 'SKILL.md'),
+        safePath.join(tempDir, DIST_SKILLS_DIR, TEST_SKILL_NAME, 'SKILL.md'),
+      ),
+    ).toBe(true);
+    // Plugin bundle imports them via skills: "*" selector
+    expect(
+      existsSync(
+        safePath.join(
+          tempDir,
+          'dist',
+          '.claude',
+          'plugins',
+          'marketplaces',
+          MARKETPLACE_NAME,
+          'plugins',
+          PLUGIN_NAME,
+          'skills',
+          TEST_SKILL_NAME,
+          'SKILL.md',
+        ),
       ),
     ).toBe(true);
   });

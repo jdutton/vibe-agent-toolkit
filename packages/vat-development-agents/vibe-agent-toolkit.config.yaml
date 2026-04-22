@@ -1,15 +1,11 @@
 # vibe-agent-toolkit configuration for vat-development-agents
-#
-# Skills live under the `resources/` directory, and the Claude plugin entry
-# below points its `source:` at `resources/` so the plugin-local skill
-# discovery walks `resources/skills/**/SKILL.md`. They are compiled into the
-# plugin's own bundle at dist/.claude/plugins/marketplaces/vat-skills/
-# plugins/vibe-agent-toolkit/skills/ — no pool-to-plugin import is involved.
+# Skills are discovered from SKILL.md files, built to dist/skills/, then
+# wrapped into Claude plugin structure at dist/.claude/plugins/marketplaces/.
 
 version: 1
 
 skills:
-  include: ["resources/skills/**/SKILL.md"]
+  include: ["resources/skills/SKILL.md", "resources/skills/vat-*.md"]
   defaults:
     linkFollowDepth: 2
     excludeNavigationFiles: true
@@ -69,4 +65,4 @@ claude:
       plugins:
         - name: vibe-agent-toolkit
           description: Development agents and skills for building with vibe-agent-toolkit
-          source: resources
+          skills: "*"

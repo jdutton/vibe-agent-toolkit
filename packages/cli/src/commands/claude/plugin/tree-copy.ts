@@ -2,13 +2,10 @@
  * Tree-copy stream for plugin build.
  *
  * Copies everything under <sourceDir> to <destDir>, except:
- *   - skills/         (owned by skill-stream copy-in)
  *   - .claude-plugin/ (owned by plugin.json merge-write)
  *
  * Respects .gitignore via crawlDirectory (respectGitignore: true, the default).
  * Returns counts keyed to the spec's YAML summary extension.
- *
- * Spec: docs/designs/2026-04-22-full-plugin-support.md section Design -> Tree-copy stream.
  */
 
 import { existsSync } from 'node:fs';
@@ -31,7 +28,7 @@ export interface TreeCopyResult {
   filesCopied: number;
 }
 
-const EXCLUDE_PATTERNS = ['skills/**', '.claude-plugin/**'];
+const EXCLUDE_PATTERNS = ['.claude-plugin/**'];
 
 function classifyRelative(rel: string): keyof Omit<TreeCopyResult, 'filesCopied'> | undefined {
   if (rel.startsWith('commands/')) return 'commandsCopied';

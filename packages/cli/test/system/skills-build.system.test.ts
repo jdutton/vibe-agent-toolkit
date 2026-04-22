@@ -5,7 +5,7 @@
  * globs to discover SKILL.md files, instead of reading package.json vat.skills objects.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
@@ -460,84 +460,3 @@ describe('skills build — framework exit codes (system test)', () => {
   });
 });
 
-const PLUGIN_TEST_PKG_JSON = JSON.stringify({ name: 't', version: '0.0.1' });
-
-function writePluginLocalSkill(tempDir: string, plugin: string, skill: string): void {
-  mkdirSyncReal(safePath.join(tempDir, 'plugins', plugin, 'skills', skill), { recursive: true });
-  writeTestFile(
-    safePath.join(tempDir, 'plugins', plugin, 'skills', skill, 'SKILL.md'),
-    createSkillMarkdown(skill),
-  );
-}
-
-function writePluginFixtureFiles(tempDir: string, config: string): void {
-  writeTestFile(safePath.join(tempDir, VAT_CONFIG_FILENAME), config);
-  writeTestFile(safePath.join(tempDir, PACKAGE_JSON_FILENAME), PLUGIN_TEST_PKG_JSON);
-}
-
-describe('skills build with plugin-local skills', () => {
-  const binPath = getBinPath(import.meta.url);
-  const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-build-plugin-local-');
-
-  afterEach(() => cleanupTempDirs());
-
-  it('emits dist/plugins/<name>/skills/<skill>/ for a plugin-local skill', () => {
-    const tempDir = createTempDir();
-    writePluginFixtureFiles(
-      tempDir,
-      `version: 1
-skills:
-  include: ["skills/**/SKILL.md"]
-claude:
-  marketplaces:
-    mp1:
-      owner:
-        name: Test
-      plugins:
-        - name: p1
-`,
-    );
-    writePluginLocalSkill(tempDir, 'p1', 'helper');
-
-    const { result } = executeCliAndParseYaml(binPath, ['skills', 'build'], { cwd: tempDir });
-    expect(result.status).toBe(0);
-    const distSkillPath = safePath.join(
-      tempDir,
-      'dist',
-      'plugins',
-      'p1',
-      'skills',
-      'helper',
-      'SKILL.md',
-    );
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output verification
-    expect(existsSync(distSkillPath)).toBe(true);
-  });
-
-  it('errors on duplicate plugin names across marketplaces (case-colliding guard)', () => {
-    const tempDir = createTempDir();
-    writePluginFixtureFiles(
-      tempDir,
-      `version: 1
-skills:
-  include: ["skills/**/SKILL.md"]
-claude:
-  marketplaces:
-    mp1:
-      owner:
-        name: Test
-      plugins:
-        - name: shared
-    mp2:
-      owner:
-        name: Test
-      plugins:
-        - name: shared
-`,
-    );
-
-    const result = executeCli(binPath, ['skills', 'build'], { cwd: tempDir });
-    expect(result.status).not.toBe(0);
-    expect(result.stderr).toMatch(/plugin name|case-collid|declared more than once/i);
-  });
-});

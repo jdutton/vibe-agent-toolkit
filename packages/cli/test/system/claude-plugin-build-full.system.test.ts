@@ -33,6 +33,7 @@ claude:
       plugins:
         - name: full-plugin
           description: Plugin with every asset type
+          skills: []
           files:
             - source: dist/hooks/compiled-hook.mjs
               dest: hooks/compiled-hook.mjs

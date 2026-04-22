@@ -152,5 +152,5 @@ Before shipping a skill, walk through the `vibe-agent-toolkit:vat-skill-review` 
 - `vibe-agent-toolkit:vat-skill-review` — pre-publication quality checklist (general + CLI-backed items, tied to VAT validation codes)
 - `vibe-agent-toolkit:vat-skill-distribution` — plugin/marketplace config, `vat build`, `vat verify`, npm publishing
 - `vibe-agent-toolkit:vat-knowledge-resources` — the `resources:` config section for multi-collection frontmatter schema validation
-- [Validation Codes Reference](../../../../../docs/validation-codes.md) — full list of codes VAT emits, their default severity, and override recipes.
-- [Skill Quality and Compatibility — VAT's Stance](../../../../../docs/skill-quality-and-compatibility.md) — what VAT believes makes a skill good and compatible.
+- [Validation Codes Reference](../../../../docs/validation-codes.md) — full list of codes VAT emits, their default severity, and override recipes.
+- [Skill Quality and Compatibility — VAT's Stance](../../../../docs/skill-quality-and-compatibility.md) — what VAT believes makes a skill good and compatible.

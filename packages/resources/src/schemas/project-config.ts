@@ -165,12 +165,10 @@ export type SkillsConfig = z.infer<typeof SkillsConfigSchema>;
  * A plugin entry within a Claude marketplace configuration.
  *
  * Supports full Claude plugin bundling:
+ * - `skills`: pool-to-plugin selector (`"*"` or array of skill name selectors). Imports
+ *   pool skills (built by `vat skills build`) into the plugin bundle.
  * - `source` (optional): path to plugin dir (default: plugins/<name>). Tree-copied verbatim.
  * - `files` (optional): explicit source->dest mappings for artifacts built outside the plugin dir.
- *
- * A plugin ships only what its own `plugins/<name>/` directory contains — commands, hooks,
- * agents, `.mcp.json`, plugin-local skills, and `.claude-plugin/plugin.json`. The top-level
- * `skills:` pool is an independent build target and is never imported into plugins.
  */
 export const ClaudeMarketplacePluginEntrySchema = z.object({
   name: z.string()
@@ -178,6 +176,8 @@ export const ClaudeMarketplacePluginEntrySchema = z.object({
     .describe('Plugin name (lowercase alphanumeric with hyphens)'),
   description: z.string().optional()
     .describe('Plugin description'),
+  skills: z.union([z.literal('*'), z.array(z.string())])
+    .describe('Skills to include: "*" for all, or array of skill name selectors'),
   source: z.string().optional()
     .describe('Path to plugin directory (default: plugins/<name>)'),
   files: z.array(SkillFileEntrySchema).optional()
@@ -215,6 +215,9 @@ export const ClaudeMarketplaceSchema = z.object({
     name: z.string(),
     email: z.string().optional(),
   }).strict().describe('Marketplace owner information'),
+
+  skills: z.union([z.literal('*'), z.array(z.string())]).optional()
+    .describe('Default skill filter for the marketplace — restricts which skills are available when plugins use skills: "*". Omit to allow all skills. This does NOT add skills directly; skills are always selected per-plugin.'),
 
   publish: ClaudeMarketplacePublishSchema.optional()
     .describe('Publish configuration for marketplace distribution'),

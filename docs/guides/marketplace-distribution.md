@@ -116,6 +116,7 @@ claude:
       plugins:
         - name: my-plugin
           description: What this plugin does
+          skills: "*"                       # or list: ["skill-a", "skill-b"]
 ```
 
 ### License field
@@ -240,6 +241,7 @@ claude:
       plugins:
         - name: vibe-agent-toolkit
           description: Development agents and skills
+          skills: "*"
 ```
 
 ```bash
@@ -268,6 +270,7 @@ claude:
       plugins:
         - name: acme-tools
           description: Acme engineering tools
+          skills: "*"
 ```
 
 ### Manual/native: repo IS the marketplace
@@ -341,9 +344,7 @@ Verify by checking `~/.claude/plugins/known_marketplaces.json` to confirm the so
 
 ## Full-plugin authoring
 
-`vat claude plugin build` ships any Claude Code plugin asset — not just skills. Drop the plugin under `plugins/<name>/` in the same native layout Claude Code expects, declare it in `vibe-agent-toolkit.config.yaml`, and `vat claude plugin build` assembles the output from that plugin's own directory.
-
-A plugin ships only what its own `plugins/<name>/` directory contains. The top-level `skills:` pool is an independent build target (it produces `dist/skills/` for standalone skill distribution) and does not feed plugin bundles.
+`vat claude plugin build` ships any Claude Code plugin asset — not just skills. Drop the plugin under `plugins/<name>/` in the same native layout Claude Code expects, declare it in `vibe-agent-toolkit.config.yaml`, and `vat claude plugin build` assembles the output from that plugin's own directory. Pool skills (from the top-level `skills:` discovery) are still imported into the plugin via the `skills:` selector — the plugin directory and the pool skills are both sources, composed into one bundle.
 
 ### Layout
 
@@ -357,24 +358,24 @@ plugins/<name>/
   agents/             # subagent definitions (*.md)
   .mcp.json           # MCP server config (JSON; parse-only validated)
   scripts/            # arbitrary scripts (tree-copied verbatim)
-  skills/             # plugin-local skills (auto-discovered, non-gitignore-aware)
+  skills/             # plugin-local SKILL.md files — tree-copied verbatim
 ```
 
 Everything under `plugins/<name>/` is tree-copied to `dist/.claude/plugins/marketplaces/<mp>/plugins/<name>/`, except:
 
-- `skills/` — owned by the skill stream (see "Skill discovery" below)
 - `.claude-plugin/` — owned by the `plugin.json` merge-write (see "plugin.json merge")
 
-Tree-copy respects `.gitignore` (safe: `node_modules/`, build detritus never ship).
+Tree-copy respects `.gitignore` (safe: `node_modules/`, build detritus never ship). `plugins/<name>/skills/` is just a regular tree-copied directory — drop raw `SKILL.md` files there and they ship as-is.
 
 ### Minimum content — empty-plugin guard
 
 Every declared plugin must supply at least one of:
 
 - a `plugins/<name>/` directory on disk (or an alternate `source:` override pointing at one), **or**
-- a non-empty `files: [{ source, dest }, ...]` mapping.
+- a non-empty `files: [{ source, dest }, ...]` mapping, **or**
+- a non-empty `skills:` selector that matches at least one pool skill.
 
-A plugin with neither is rejected with the empty-plugin guard.
+A plugin with none of these is rejected with the empty-plugin guard.
 
 ### `source` override
 
@@ -385,6 +386,7 @@ claude:
       owner: { name: Example }
       plugins:
         - name: my-plugin
+          skills: []
           source: custom/path/to/my-plugin   # default: plugins/my-plugin
 ```
 
@@ -395,12 +397,13 @@ Use `files: [{ source, dest }]` to inject build artifacts (compiled hooks, gener
 ```yaml
 plugins:
   - name: my-plugin
+    skills: []
     files:
       - source: dist/hooks/compiled-hook.mjs   # relative to project root
         dest: hooks/compiled-hook.mjs         # relative to plugin output dir
 ```
 
-`dest` cannot escape the plugin output dir, cannot resolve inside `skills/` (owned by skill stream), and cannot target `.claude-plugin/plugin.json` (owned by merge-write). Overwrites are allowed and logged at info level.
+`dest` cannot escape the plugin output dir and cannot target `.claude-plugin/plugin.json` (owned by merge-write). Overwrites are allowed and logged at info level.
 
 ### `plugin.json` merge rules
 
@@ -411,20 +414,14 @@ VAT writes `.claude-plugin/plugin.json` last, merging the author's `.claude-plug
 - **Description chain:** `config.description ?? author.description ?? "${name} plugin"`.
 - `version` falls back to the author's value when VAT has no version (no `package.json`).
 
-### Skill discovery
-
-`vat skills build` auto-discovers `plugins/<name>/skills/**/SKILL.md` for every declared plugin and routes outputs to `dist/plugins/<name>/skills/<skill>/`. Plugin-local skill discovery **bypasses `.gitignore`** (plugin-local skills are semantically mandatory to the plugin). A gitignored `SKILL.md` is still discovered but emits a warning so the adopter can audit their intent.
-
-Skill names must be globally unique across all plugins (case-sensitive and case-insensitive).
-
 ### Ordering contract
 
 `vat claude plugin build` runs per plugin in this order:
 
 1. Discovery + validators (case-match, `hooks.json`/`.mcp.json` parse, empty-plugin guard)
-2. Tree-copy (skips `skills/` and `.claude-plugin/`, respects `.gitignore`)
-3. Plugin-local skill copy-in (from `dist/plugins/<name>/skills/`)
+2. Tree-copy `plugins/<name>/` verbatim (skips `.claude-plugin/`, respects `.gitignore`)
+3. Pool-skill import via the plugin's `skills:` selector (from `dist/skills/`)
 4. `files[]` mapping (may overwrite tree-copied files; logged at info)
 5. `.claude-plugin/plugin.json` merge-write (always last, always wins)
 
-**Run order:** `vat skills build && vat claude plugin build`. The plugin build reads pre-built plugin-local skills from `dist/plugins/<name>/skills/`.
+**Run order:** `vat skills build && vat claude plugin build`. The plugin build reads pre-built pool skills from `dist/skills/` and raw plugin-local skills directly from `plugins/<name>/skills/`.
