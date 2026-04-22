@@ -98,6 +98,7 @@ plugins/<p>/{commands,hooks,agents,.mcp.json,scripts,…} ──→ [tree copy] 
 - Skill auto-discovery follows the same resolved source (i.e., `<source>/skills/**/SKILL.md`). [inferred]
 - Respects `.gitignore` (prevents `node_modules/`, `.DS_Store`, `.env` leaking — same behavior as skills today). Tree copy reuses the gitignore-aware walker from `@vibe-agent-toolkit/utils` in a new "walk-all" mode (the existing skill-link traversal uses the same walker with link-following semantics); if that mode does not already exist, the implementation plan adds it. [inferred]
 - Gitignore enforcement applies to the **tree-copy stream only**. The **skill discovery stream uses a non-gitignore-aware glob** when searching for plugin-local `SKILL.md` files under `<source>/skills/**/SKILL.md` — plugin-local skills are discovered regardless of their gitignore status, consistent with their "semantically mandatory" contract. [inferred] Once a plugin-local SKILL.md is discovered, it runs through the normal skill pipeline, which itself may respect gitignore for linked/referenced files (matching today's skill pipeline behavior). [inferred] If an author gitignores a plugin-local `SKILL.md` itself, the skill is still discovered and built, but a build-time warning is logged noting the inconsistency. [inferred]
+- **Scope of the gitignore bypass:** only the plugin-local skill *discovery* step bypasses gitignore. [inferred] Downstream, plugin-local skills run through the *same existing skill pipeline* as pool skills with no gitignore carve-out inside the pipeline — link-following, `excludeReferencesFromBundle` resolution, and skill-level `files` mappings all inherit today's skill-pipeline behavior unchanged. [inferred] Authors are responsible for not gitignoring files their plugin-local skills reference; if a referenced file is gitignored and the existing skill pipeline drops it, that file is dropped for plugin-local skills too. [inferred] This preserves the "identical existing skill pipeline" design decision — only discovery changes. [inferred]
 - Exclusions: `skills/` is handled by the skill stream; the entire `.claude-plugin/` directory is copied to output with `plugin.json` replaced by the merged result. [inferred] If the author's `.claude-plugin/` directory contains a `marketplace.json`, it is ignored with a warning (marketplace.json is VAT-generated at the marketplace level). [inferred]
 
 **plugin.json merge:**
@@ -117,6 +118,16 @@ plugins/<p>/{commands,hooks,agents,.mcp.json,scripts,…} ──→ [tree copy] 
 - `dest` must resolve inside the plugin output directory — path-traversal values (e.g. `../`) are a build error. [inferred] Parent directories in `dest` are auto-created as needed. [inferred]
 - Use case: a TypeScript hook compiles to `dist/hooks/my-hook.mjs` outside `plugins/<name>/` — `files: [{ source: "dist/hooks/my-hook.mjs", dest: "hooks/my-hook.mjs" }]` injects it.
 
+**Ordering contract (deterministic, last-writer-wins within the rules):** [inferred]
+
+The plugin build pipeline executes these phases in strict order; later phases may overwrite earlier ones only as specified. [inferred]
+
+1. **Discovery and collision check** — enumerate pool-skill selections, plugin-local skills, and tree-copy candidates; run pool-vs-local name collision detection before any file is written. [inferred]
+2. **Tree-copy stream** — copy everything under the resolved source directory (minus `skills/` and `.claude-plugin/`) respecting `.gitignore`. [inferred]
+3. **Skill stream copy-in (pool + plugin-local)** — copy the built skill intermediates from `dist/skills/<name>/` and `dist/plugins/<plugin>/skills/<skill>/` into the plugin's output `skills/` directory; this stream is authoritative for `skills/**` and may overwrite any tree-copied content there. [inferred]
+4. **`files[]` mapping** — apply explicit source→dest mappings; may overwrite tree-copied files (logged info-level). It is a **build error** if a `files[].dest` resolves inside `skills/` or resolves to `.claude-plugin/plugin.json` — those surfaces are owned by the skill stream and the merge-write phase respectively. [inferred] Authors who need custom plugin metadata must place it in their own `.claude-plugin/plugin.json` (the sanctioned mechanism, subject to the merge rules below). [inferred]
+5. **`plugin.json` merge-write** — always runs last and always wins; the merged manifest is written to `.claude-plugin/plugin.json` after all other streams complete. [inferred]
+
 ### Schema changes
 
 One file: `packages/resources/src/schemas/project-config.ts`.
@@ -126,7 +137,8 @@ One file: `packages/resources/src/schemas/project-config.ts`.
 ```typescript
 export const ClaudeMarketplacePluginEntrySchema = z.object({
   name: z.string()
-    .describe('Plugin name (lowercase alphanumeric with hyphens)'),
+    .regex(/^[a-z0-9][a-z0-9-]*$/)  // NEW: enforce lowercase alphanumeric + hyphens, case-sensitive [inferred]
+    .describe('Plugin name (lowercase alphanumeric with hyphens, regex ^[a-z0-9][a-z0-9-]*$)'),
   description: z.string().optional()
     .describe('Plugin description'),
   skills: z.union([z.literal('*'), z.array(z.string())]).optional()  // CHANGED: was required
@@ -172,6 +184,11 @@ At schema-read time, `skills: []` is normalized to `skills: absent` — an empty
 | `files[].source` | File exists at build time |
 | `.claude-plugin/plugin.json` (author) | Parses as JSON; merge conflicts with VAT fields logged |
 
+**Cross-platform case-sensitivity checks (build-time):** [inferred]
+- The declared plugin `name` must match the on-disk directory name **exactly**, using a case-sensitive compare against `fs.readdir` entries of the `plugins/` directory. [inferred] This catches Windows/macOS case-insensitive FS drift where `plugin: foo-bar` happens to resolve to `plugins/Foo-Bar/` locally but fails on case-sensitive Linux CI. [inferred]
+- No two declared plugin names may differ only in case (e.g., `foo` vs `Foo` — both are invalid-by-regex today, but the check also rejects any pair whose `toLowerCase()` values collide). [inferred]
+- Skill name collision detection (pool-vs-local within the same plugin's selection set) runs **both case-sensitive and case-insensitive** comparisons; either form of collision is a build error. [inferred] The case-insensitive check protects adopters whose dev environment is case-insensitive from shipping artifacts that break on case-sensitive runtimes. [inferred]
+
 **Out of scope:** deep schema validation of hook manifests, MCP configs, or agent frontmatter.
 
 **`vat audit` behavior for new asset types (v1):** parse-only — the audit applies the same surface-level checks used at build time. [inferred] Commands (`commands/**/*.md`) and agents (`agents/**/*.md`) are checked for file existence and parse-able markdown; `hooks/hooks.json` and `.mcp.json` are checked for valid JSON parsing. [inferred] Deep schema validation (hook event names, MCP server shapes, agent frontmatter schemas) remains out of scope. [inferred] Parse failures are reported as audit errors; missing recommended fields are not flagged. [inferred]
@@ -181,6 +198,9 @@ At schema-read time, `skills: []` is normalized to `skills: absent` — an empty
 No new commands. No new flags.
 
 - `vat skills build` — discovery extended to find plugin-local skills. Output routed to `dist/plugins/<name>/skills/`.
+  - **Discovery is driven by plugins declared in `vibe-agent-toolkit.config.yaml`** — undeclared `plugins/*/` directories are ignored entirely (no blind scan of `plugins/`). [inferred] An author staging a plugin directory on disk before adding it to the config sees no output from it. [inferred]
+  - **Standalone output surface change:** when one or more plugins are declared, `vat skills build` now additionally emits `dist/plugins/<name>/skills/` for each declared plugin's local skills. [inferred] The "standalone `vat skills build` is unchanged" guarantee applies only to skills-only adopters (no `plugins:` block in config) — adopters who declare plugins see the new `dist/plugins/` output even when running skills build on its own. [inferred]
+  - **Collision checks run at `vat skills build` time** (not deferred to plugin build), so an adopter who only runs the skills build still hits pool-vs-local name collisions immediately rather than discovering them later during a plugin build. [inferred]
 - `vat claude plugin build` — extended to tree-copy plugin dirs, merge `plugin.json`, apply `files` mappings. Emits the same YAML summary shape plus new counts (`commandsCopied`, `hooksCopied`, `agentsCopied`, `mcpCopied`).
 - `vat validate` / `vat audit` — pick up new content automatically via config. Audit applies parse-only checks to new asset types (see Validation (v1) above). [inferred]
 
