@@ -5,7 +5,7 @@
  * globs to discover SKILL.md files, instead of reading package.json vat.skills objects.
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
@@ -457,5 +457,142 @@ describe('skills build — framework exit codes (system test)', () => {
 
     expect(cmdResult.status).toBe(1);
     expect(cmdResult.stderr + cmdResult.stdout).toContain('PACKAGED_UNREFERENCED_FILE');
+  });
+});
+
+const PLUGIN_TEST_PKG_JSON = JSON.stringify({ name: 't', version: '0.0.1' });
+
+function writePluginLocalSkill(tempDir: string, plugin: string, skill: string): void {
+  mkdirSyncReal(safePath.join(tempDir, 'plugins', plugin, 'skills', skill), { recursive: true });
+  writeTestFile(
+    safePath.join(tempDir, 'plugins', plugin, 'skills', skill, 'SKILL.md'),
+    createSkillMarkdown(skill),
+  );
+}
+
+function writePoolSkill(tempDir: string, skill: string): void {
+  mkdirSyncReal(safePath.join(tempDir, 'skills', skill), { recursive: true });
+  writeTestFile(safePath.join(tempDir, 'skills', skill, 'SKILL.md'), createSkillMarkdown(skill));
+}
+
+function writePluginFixtureFiles(tempDir: string, config: string): void {
+  writeTestFile(safePath.join(tempDir, VAT_CONFIG_FILENAME), config);
+  writeTestFile(safePath.join(tempDir, PACKAGE_JSON_FILENAME), PLUGIN_TEST_PKG_JSON);
+}
+
+describe('skills build with plugin-local skills', () => {
+  const binPath = getBinPath(import.meta.url);
+  const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-build-plugin-local-');
+
+  afterEach(() => cleanupTempDirs());
+
+  it('emits dist/plugins/<name>/skills/<skill>/ for a plugin-local skill', () => {
+    const tempDir = createTempDir();
+    writePluginFixtureFiles(
+      tempDir,
+      `version: 1
+skills:
+  include: ["skills/**/SKILL.md"]
+claude:
+  marketplaces:
+    mp1:
+      owner:
+        name: Test
+      plugins:
+        - name: p1
+`,
+    );
+    writePluginLocalSkill(tempDir, 'p1', 'helper');
+
+    const { result } = executeCliAndParseYaml(binPath, ['skills', 'build'], { cwd: tempDir });
+    expect(result.status).toBe(0);
+    const distSkillPath = safePath.join(
+      tempDir,
+      'dist',
+      'plugins',
+      'p1',
+      'skills',
+      'helper',
+      'SKILL.md',
+    );
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output verification
+    expect(existsSync(distSkillPath)).toBe(true);
+  });
+
+  it('errors with pool-vs-local name collision', () => {
+    const tempDir = createTempDir();
+    writePluginFixtureFiles(
+      tempDir,
+      `version: 1
+skills:
+  include: ["skills/**/SKILL.md"]
+claude:
+  marketplaces:
+    mp1:
+      owner:
+        name: Test
+      plugins:
+        - name: p1
+          skills: ["dup"]
+`,
+    );
+    writePoolSkill(tempDir, 'dup');
+    writePluginLocalSkill(tempDir, 'p1', 'dup');
+
+    const result = executeCli(binPath, ['skills', 'build'], { cwd: tempDir });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain('collision');
+  });
+
+  it('does NOT error when a pool skill shares a name with a plugin-local skill but is not in the plugin selection', () => {
+    const tempDir = createTempDir();
+    writePluginFixtureFiles(
+      tempDir,
+      `version: 1
+skills:
+  include: ["skills/**/SKILL.md"]
+claude:
+  marketplaces:
+    mp1:
+      owner:
+        name: Test
+      plugins:
+        - name: p1
+          skills: ["other"]
+`,
+    );
+    writePoolSkill(tempDir, 'dup');
+    writePoolSkill(tempDir, 'other');
+    writePluginLocalSkill(tempDir, 'p1', 'dup');
+
+    const result = executeCli(binPath, ['skills', 'build'], { cwd: tempDir });
+    expect(result.status).toBe(0);
+  });
+
+  it('errors on duplicate plugin names across marketplaces (case-colliding guard)', () => {
+    const tempDir = createTempDir();
+    writePluginFixtureFiles(
+      tempDir,
+      `version: 1
+skills:
+  include: ["skills/**/SKILL.md"]
+claude:
+  marketplaces:
+    mp1:
+      owner:
+        name: Test
+      plugins:
+        - name: shared
+    mp2:
+      owner:
+        name: Test
+      plugins:
+        - name: shared
+`,
+    );
+
+    const result = executeCli(binPath, ['skills', 'build'], { cwd: tempDir });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/plugin name|case-collid|declared more than once/i);
   });
 });

@@ -13,6 +13,7 @@ import { dirname } from 'node:path';
 
 
 import {
+  detectSkillCollisions,
   mergeFilesConfig,
   packageSkills,
   validateSkillForPackaging,
@@ -20,9 +21,13 @@ import {
   type PackagingValidationResult,
   type SkillBuildSpec,
   type SkillPackagingConfig,
+  type SkillRef,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
-import type { SkillPackagingConfig as ConfigSkillPackagingConfig } from '@vibe-agent-toolkit/resources';
+import type {
+  SkillPackagingConfig as ConfigSkillPackagingConfig,
+  SkillsConfig,
+} from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
@@ -30,6 +35,9 @@ import { handleCommandError } from '../../utils/command-error.js';
 import { loadConfig } from '../../utils/config-loader.js';
 import { type createLogger } from '../../utils/logger.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
+import {
+  verifyNoCaseCollidingPluginNames,
+} from '../claude/plugin/plugin-validators.js';
 
 import {
   filterSkillsByName,
@@ -37,6 +45,10 @@ import {
   writeYamlHeader,
   type DiscoveredSkill,
 } from './command-helpers.js';
+import {
+  discoverPluginLocalSkills,
+  type PluginLocalSkill,
+} from './plugin-skill-discovery.js';
 import { discoverSkillsFromConfig } from './skill-discovery.js';
 
 export interface SkillsBuildCommandOptions {
@@ -54,6 +66,20 @@ export interface SkillsBuildCommandOptions {
  */
 function skillNameToFsPath(name: string): string {
   return name.replaceAll(':', '__');
+}
+
+/**
+ * Compute the output directory for a discovered skill.
+ *
+ * Plugin-local skills land in dist/plugins/<pluginOwner>/skills/<skill>/ so
+ * that `vat claude plugin build` can stream them into the plugin bundle
+ * without moving files around. Pool skills remain at dist/skills/<skill>/.
+ */
+function skillOutputDir(cwd: string, skill: DiscoveredSkill): string {
+  const fsName = skillNameToFsPath(skill.name);
+  return skill.pluginOwner
+    ? safePath.resolve(cwd, 'dist', 'plugins', skill.pluginOwner, 'skills', fsName)
+    : safePath.resolve(cwd, 'dist', 'skills', fsName);
 }
 
 export function createBuildCommand(): Command {
@@ -272,6 +298,13 @@ async function validateSkillOrExit(
 /**
  * Output dry-run results
  */
+function skillOutputRelPath(skill: DiscoveredSkill): string {
+  const fsName = skillNameToFsPath(skill.name);
+  return skill.pluginOwner
+    ? `dist/plugins/${skill.pluginOwner}/skills/${fsName}`
+    : `dist/skills/${fsName}`;
+}
+
 function outputDryRunYaml(
   skills: DiscoveredSkill[],
   duration: number
@@ -285,7 +318,7 @@ function outputDryRunYaml(
   for (const skill of skills) {
     process.stdout.write(`  - name: ${skill.name}\n`);
     process.stdout.write(`    source: ${skill.sourcePath}\n`);
-    process.stdout.write(`    output: dist/skills/${skillNameToFsPath(skill.name)}\n`);
+    process.stdout.write(`    output: ${skillOutputRelPath(skill)}\n`);
   }
   process.stdout.write(`duration: ${duration}ms\n`);
 }
@@ -305,7 +338,7 @@ function performDryRun(
   for (const skill of skillsToBuild) {
     logger.info(`   ${skill.name}`);
     logger.info(`      Source: ${skill.sourcePath}`);
-    logger.info(`      Output: dist/skills/${skillNameToFsPath(skill.name)}`);
+    logger.info(`      Output: ${skillOutputRelPath(skill)}`);
   }
 
   outputDryRunYaml(skillsToBuild, duration);
@@ -334,24 +367,248 @@ function outputBuildYaml(
   process.stdout.write(`duration: ${duration}ms\n`);
 }
 
+interface CleanStaleOptions {
+  skillName?: string;
+  declaredPlugins: string[];
+}
+
+async function removeIfExists(dir: string): Promise<boolean> {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved path
+  if (!existsSync(dir)) return false;
+  await rm(dir, { recursive: true, force: true });
+  return true;
+}
+
 /**
  * Clean stale skill output directories before building.
- * Full build: clear entire dist/skills/. Single skill: clear just that skill's dir.
+ *
+ * Full build: clear dist/skills/ and dist/plugins/<p>/skills/ for every declared plugin.
+ * Single skill with `<plugin>/<skill>`: clear only that plugin-local output dir.
+ * Single short name: clear dist/skills/<name>/ and every dist/plugins/<p>/skills/<name>/
+ * that exists; warn if more than one matches (ambiguous).
  */
-async function cleanStaleSkillOutputs(cwd: string, skillName: string | undefined): Promise<void> {
-  if (skillName) {
-    const singleSkillDir = safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skillName));
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from validated option
-    if (existsSync(singleSkillDir)) {
-      await rm(singleSkillDir, { recursive: true, force: true });
+async function cleanStaleSkillOutputs(
+  cwd: string,
+  options: CleanStaleOptions,
+  logger: ReturnType<typeof createLogger>,
+): Promise<void> {
+  const { skillName, declaredPlugins } = options;
+
+  if (!skillName) {
+    await removeIfExists(safePath.resolve(cwd, 'dist', 'skills'));
+    for (const plugin of declaredPlugins) {
+      await removeIfExists(safePath.resolve(cwd, 'dist', 'plugins', plugin, 'skills'));
     }
-  } else {
-    const allSkillsDir = safePath.resolve(cwd, 'dist', 'skills');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from cwd
-    if (existsSync(allSkillsDir)) {
-      await rm(allSkillsDir, { recursive: true, force: true });
+    return;
+  }
+
+  const slashIndex = skillName.indexOf('/');
+  if (slashIndex >= 0) {
+    const pluginName = skillName.slice(0, slashIndex);
+    const localName = skillName.slice(slashIndex + 1);
+    if (pluginName && localName) {
+      await removeIfExists(
+        safePath.resolve(cwd, 'dist', 'plugins', pluginName, 'skills', skillNameToFsPath(localName)),
+      );
+    }
+    return;
+  }
+
+  const matches: string[] = [];
+  const poolDir = safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skillName));
+  if (await removeIfExists(poolDir)) matches.push('pool');
+  for (const plugin of declaredPlugins) {
+    const pluginDir = safePath.resolve(
+      cwd,
+      'dist',
+      'plugins',
+      plugin,
+      'skills',
+      skillNameToFsPath(skillName),
+    );
+    if (await removeIfExists(pluginDir)) matches.push(plugin);
+  }
+  if (matches.length > 1) {
+    const pluginOnly = matches.filter((m) => m !== 'pool');
+    logger.info(
+      `warning: Ambiguous --skill ${skillName}: matched pool skill AND plugin-local skill(s) in [${pluginOnly.join(', ')}]. ` +
+        `Use --skill <plugin>/<name> to disambiguate.`,
+    );
+  }
+}
+
+interface DeclaredPlugin {
+  name: string;
+  source?: string;
+  skills?: '*' | string[];
+}
+
+function collectDeclaredPlugins(
+  config: ReturnType<typeof loadConfig>,
+): DeclaredPlugin[] {
+  const plugins: DeclaredPlugin[] = [];
+  const marketplaces = config?.claude?.marketplaces;
+  if (!marketplaces) return plugins;
+  for (const marketplace of Object.values(marketplaces)) {
+    for (const plugin of marketplace.plugins) {
+      const entry: DeclaredPlugin = { name: plugin.name };
+      if (plugin.source !== undefined) entry.source = plugin.source;
+      if (plugin.skills !== undefined) entry.skills = plugin.skills;
+      plugins.push(entry);
     }
   }
+  return plugins;
+}
+
+function resolveSelectedPoolNames(
+  selector: '*' | string[] | undefined,
+  pool: readonly DiscoveredSkill[],
+): Set<string> {
+  if (selector === '*') return new Set(pool.map((s) => s.name));
+  if (Array.isArray(selector)) return new Set(selector);
+  return new Set<string>();
+}
+
+/**
+ * Detect pool-vs-local skill collisions within each plugin's selection set.
+ *
+ * Spec §Design → Skill stream: "Only a pool-vs-local collision within the same
+ * plugin's selection set is an error." Filter pool refs to only those pool skills
+ * the plugin actually selects (via `skills: "*"`, array, or omission).
+ */
+function enforcePluginSkillCollisions(
+  declaredPlugins: readonly DeclaredPlugin[],
+  pool: readonly DiscoveredSkill[],
+  pluginLocal: readonly PluginLocalSkill[],
+): void {
+  for (const plugin of declaredPlugins) {
+    const pluginLocals = pluginLocal.filter((s) => s.plugin === plugin.name);
+    const selectedPoolNames = resolveSelectedPoolNames(plugin.skills, pool);
+
+    const poolRefs: SkillRef[] = pool
+      .filter((s) => selectedPoolNames.has(s.name))
+      .map((s) => ({
+        name: s.name,
+        origin: 'pool',
+        sourcePath: s.sourcePath,
+      }));
+    const localRefs: SkillRef[] = pluginLocals.map((s) => ({
+      name: s.name,
+      origin: 'plugin-local',
+      plugin: s.plugin,
+      sourcePath: s.sourcePath,
+    }));
+
+    const collisions = detectSkillCollisions([...poolRefs, ...localRefs]);
+    if (collisions.length > 0) {
+      throw new Error(collisions.map((c) => c.message).join('\n'));
+    }
+  }
+}
+
+async function discoverAllSkills(
+  skillsConfig: SkillsConfig,
+  config: NonNullable<ReturnType<typeof loadConfig>>,
+  cwd: string,
+  logger: ReturnType<typeof createLogger>,
+): Promise<{ all: DiscoveredSkill[]; declaredPlugins: DeclaredPlugin[] }> {
+  logger.info(`Discovering skills from config...`);
+  const discoveredSkills = await discoverSkillsFromConfig(skillsConfig, cwd);
+
+  const declaredPlugins = collectDeclaredPlugins(config);
+  verifyNoCaseCollidingPluginNames(declaredPlugins.map((p) => p.name));
+
+  const sourceOverrides: Record<string, string> = {};
+  for (const plugin of declaredPlugins) {
+    if (plugin.source) sourceOverrides[plugin.name] = plugin.source;
+  }
+
+  const pluginLocal = await discoverPluginLocalSkills({
+    projectRoot: cwd,
+    pluginNames: declaredPlugins.map((p) => p.name),
+    sourceOverrides,
+    warn: (m) => logger.info(`warning: ${m}`),
+  });
+
+  enforcePluginSkillCollisions(declaredPlugins, discoveredSkills, pluginLocal);
+
+  const pluginSkillsAsDiscovered: DiscoveredSkill[] = pluginLocal.map((p) => ({
+    name: p.name,
+    sourcePath: p.sourcePath,
+    pluginOwner: p.plugin,
+  }));
+  return { all: [...discoveredSkills, ...pluginSkillsAsDiscovered], declaredPlugins };
+}
+
+async function validateAndBuild(
+  skillsToBuild: DiscoveredSkill[],
+  skillsConfig: SkillsConfig,
+  cwd: string,
+  logger: ReturnType<typeof createLogger>,
+): Promise<Array<{ name: string; result: PackageSkillResult }>> {
+  const validatedSpecs: Array<{
+    skill: DiscoveredSkill;
+    packagingConfig: SkillPackagingConfig;
+  }> = [];
+
+  for (const skill of skillsToBuild) {
+    const packagingConfig = mergePackagingConfig(
+      skillsConfig.defaults,
+      skillsConfig.config?.[skill.name],
+    );
+    const outputDir = skillOutputDir(cwd, skill);
+    logger.info(`\nBuilding skill: ${skill.name}`);
+    logger.info(`   Source: ${skill.sourcePath}`);
+    logger.info(`   Output: ${outputDir}`);
+    await validateSkillOrExit(skill.name, skill.sourcePath, packagingConfig, logger);
+    validatedSpecs.push({ skill, packagingConfig });
+  }
+
+  const specs: SkillBuildSpec[] = validatedSpecs.map(({ skill, packagingConfig }) => ({
+    skillPath: skill.sourcePath,
+    options: {
+      outputPath: skillOutputDir(cwd, skill),
+      formats: ['directory' as const],
+      rewriteLinks: true,
+      basePath: dirname(skill.sourcePath),
+      ...(packagingConfig.resourceNaming && { resourceNaming: packagingConfig.resourceNaming }),
+      ...(packagingConfig.stripPrefix && { stripPrefix: packagingConfig.stripPrefix }),
+      ...(packagingConfig.linkFollowDepth !== undefined && {
+        linkFollowDepth: packagingConfig.linkFollowDepth,
+      }),
+      ...(packagingConfig.excludeReferencesFromBundle && {
+        excludeReferencesFromBundle: packagingConfig.excludeReferencesFromBundle,
+      }),
+      ...(packagingConfig.files && { files: packagingConfig.files }),
+      ...(packagingConfig.validation && { validation: packagingConfig.validation }),
+    },
+  }));
+
+  const packageResults = await packageSkills(specs, cwd);
+
+  const results: Array<{ name: string; result: PackageSkillResult }> = [];
+  const skillsWithErrors: string[] = [];
+  for (const [i, spec] of validatedSpecs.entries()) {
+    const result = packageResults[i];
+    if (!result) continue;
+    logger.info(`   Built ${result.files.dependencies.length + 1} files`);
+    logPostBuildIssues(result, logger);
+    if (result.hasErrors) skillsWithErrors.push(spec.skill.name);
+    results.push({ name: spec.skill.name, result });
+  }
+
+  if (skillsWithErrors.length > 0) {
+    logger.error(
+      `\nBuild failed: ${skillsWithErrors.length} skill(s) emitted post-build validation errors`,
+    );
+    for (const name of skillsWithErrors) {
+      logger.error(`   - ${name}`);
+    }
+    // Emit results first so callers can still see the YAML.
+    return results;
+  }
+
+  return results;
 }
 
 async function buildCommand(
@@ -370,24 +627,30 @@ async function buildCommand(
     }
 
     const skillsConfig = config.skills;
+    const { all: allDiscoveredSkills, declaredPlugins } = await discoverAllSkills(
+      skillsConfig,
+      config,
+      cwd,
+      logger,
+    );
 
-    // Discover SKILL.md files from config globs (relative to cwd where config lives)
-    logger.info(`Discovering skills from config...`);
-    const discoveredSkills = await discoverSkillsFromConfig(skillsConfig, cwd);
-
-    if (discoveredSkills.length === 0) {
+    if (allDiscoveredSkills.length === 0) {
       throw new Error(
         `No SKILL.md files found matching include patterns: ${skillsConfig.include.join(', ')}`
       );
     }
 
     // Filter by skill name if specified
-    const skillsToBuild = filterSkillsByName(discoveredSkills, options.skill);
+    const skillsToBuild = filterSkillsByName(allDiscoveredSkills, options.skill);
 
     logger.info(`Found ${skillsToBuild.length} skill(s) to build`);
 
     if (!options.dryRun) {
-      await cleanStaleSkillOutputs(cwd, options.skill);
+      const cleanOptions: CleanStaleOptions = {
+        declaredPlugins: declaredPlugins.map((p) => p.name),
+      };
+      if (options.skill !== undefined) cleanOptions.skillName = options.skill;
+      await cleanStaleSkillOutputs(cwd, cleanOptions, logger);
     }
 
     // Handle dry-run mode
@@ -397,75 +660,17 @@ async function buildCommand(
       process.exit(0);
     }
 
-    // Validate all skills before building
-    const validatedSpecs: Array<{
-      skill: DiscoveredSkill;
-      packagingConfig: SkillPackagingConfig;
-    }> = [];
-
-    for (const skill of skillsToBuild) {
-      const packagingConfig = mergePackagingConfig(
-        skillsConfig.defaults,
-        skillsConfig.config?.[skill.name],
-      );
-
-      const outputDir = safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skill.name));
-      logger.info(`\nBuilding skill: ${skill.name}`);
-      logger.info(`   Source: ${skill.sourcePath}`);
-      logger.info(`   Output: ${outputDir}`);
-
-      await validateSkillOrExit(skill.name, skill.sourcePath, packagingConfig, logger);
-      validatedSpecs.push({ skill, packagingConfig });
-    }
-
-    // Build all skills with a shared registry
-    const specs: SkillBuildSpec[] = validatedSpecs.map(({ skill, packagingConfig }) => ({
-      skillPath: skill.sourcePath,
-      options: {
-        outputPath: safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skill.name)),
-        formats: ['directory' as const],
-        rewriteLinks: true,
-        basePath: dirname(skill.sourcePath),
-        ...(packagingConfig.resourceNaming && { resourceNaming: packagingConfig.resourceNaming }),
-        ...(packagingConfig.stripPrefix && { stripPrefix: packagingConfig.stripPrefix }),
-        ...(packagingConfig.linkFollowDepth !== undefined && { linkFollowDepth: packagingConfig.linkFollowDepth }),
-        ...(packagingConfig.excludeReferencesFromBundle && { excludeReferencesFromBundle: packagingConfig.excludeReferencesFromBundle }),
-        ...(packagingConfig.files && { files: packagingConfig.files }),
-        ...(packagingConfig.validation && { validation: packagingConfig.validation }),
-      },
-    }));
-
-    const packageResults = await packageSkills(specs, cwd);
-
-    const results: Array<{ name: string; result: PackageSkillResult }> = [];
-    const skillsWithErrors: string[] = [];
-    for (const [i, spec] of validatedSpecs.entries()) {
-      const result = packageResults[i];
-      if (result) {
-        logger.info(`   Built ${result.files.dependencies.length + 1} files`);
-        logPostBuildIssues(result, logger);
-        if (result.hasErrors) {
-          skillsWithErrors.push(spec.skill.name);
-        }
-        results.push({ name: spec.skill.name, result });
-      }
-    }
-
+    const results = await validateAndBuild(skillsToBuild, skillsConfig, cwd, logger);
     const duration = Date.now() - startTime;
 
-    // Output YAML results
     outputBuildYaml(results, duration);
 
-    if (skillsWithErrors.length > 0) {
-      logger.error(`\nBuild failed: ${skillsWithErrors.length} skill(s) emitted post-build validation errors`);
-      for (const name of skillsWithErrors) {
-        logger.error(`   - ${name}`);
-      }
+    const hadErrors = results.some((r) => r.result.hasErrors);
+    if (hadErrors) {
       process.exit(1);
     }
 
     logger.info(`\nBuilt ${results.length} skill(s) successfully`);
-
     process.exit(0);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'SkillsBuild');

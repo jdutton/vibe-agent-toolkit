@@ -44,6 +44,11 @@ export interface DiscoveredSkill {
   name: string;
   /** Absolute path to SKILL.md */
   sourcePath: string;
+  /**
+   * Plugin owner, if this is a plugin-local skill. Routes output to
+   * dist/plugins/<pluginOwner>/skills/<name>/ instead of dist/skills/<name>/.
+   */
+  pluginOwner?: string;
 }
 
 /**
