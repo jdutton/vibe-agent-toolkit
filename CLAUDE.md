@@ -761,9 +761,9 @@ Cached copies of external guidance (e.g., Anthropic's skill-authoring best-pract
 
 ## Questions?
 
-- [Architecture](./docs/architecture/README.md) - Package structure and evolution plan
+- [Architecture](./docs/architecture/) - Package structure, evolution plan, and cross-cutting architectural concerns (the directory's CLAUDE.md pulls in its README)
 - [Getting Started](./docs/getting-started.md) - Detailed setup guide
-- [Documentation](./docs/README.md) - Full documentation index
+- [Documentation](./docs/) - Full documentation index (the directory's CLAUDE.md pulls in its README)
 - [Build System](./docs/build-system.md) - TypeScript monorepo build configuration
 - [Publishing](./docs/publishing.md) - Version management and publishing workflow
 - [Best Practices](./docs/best-practices.md) - Enterprise development standards

@@ -190,6 +190,13 @@ Best-practice checks about skill shape and content.
 - **Why it matters:** Anthropic's guidance is unambiguous: "Always write in third person. The description is injected into the system prompt, and inconsistent point-of-view can cause discovery problems." Their bad examples are literally `I can help you process Excel files` and `You can use this to process Excel files`.
 - **Fix:** Rewrite in third person. `I can extract PDFs` → `Extracts text from PDFs`. `You can use this to...` → the action itself (`Processes...`, `Generates...`).
 
+### `SKILL_CLAUDE_PLUGIN_NAME_MISMATCH`
+
+- **Default:** `warning`
+- **What:** For a [skill-claude-plugin](./architecture/skill-packaging.md) (a directory with both root `SKILL.md` and `.claude-plugin/plugin.json`), the plugin manifest's `name` does not match the skill's frontmatter `name`.
+- **Why it matters:** In a skill-claude-plugin, the skill is the authoritative artifact and the plugin is a Claude-specific distribution wrapper. Name drift between the two confuses users (which name shows up in their installed-plugins list? which is referenced in config?) and usually indicates a packaging oversight. For canonical plugins (skills under `skills/<name>/`), this code does not apply — plugin names and individual skill names are independent by design.
+- **Fix:** Align the names — update `plugin.json` `name` to match the skill's frontmatter `name` (the skill is authoritative). If the plugin is intentionally namespaced differently (e.g., `com.author.foo-plugin`), configure `validation.severity: { SKILL_CLAUDE_PLUGIN_NAME_MISMATCH: ignore }` or add a `validation.allow` entry with a reason.
+
 ### `SKILL_NAME_MISMATCHES_DIR`
 
 - **Default:** `warning`

@@ -13,6 +13,16 @@ Welcome to the Vibe Agent Toolkit documentation.
 - **[Adding Runtime Adapters](./adding-runtime-adapters.md)** - Best practices for creating new runtime adapters
 - **[Publishing Guide](./publishing.md)** - How to prepare and publish packages to npm
 
+## Validation & Quality Framework
+
+VAT is opinionated about skill and plugin quality. Three docs articulate what we believe, what we flag, and how we decide:
+
+- **[Skill Quality & Compatibility — VAT's Stance](./skill-quality-and-compatibility.md)** — What VAT believes about skill structure, packaging, and runtime compatibility. Foundation for every `defaultSeverity`.
+- **[Validation Codes](./validation-codes.md)** — Every code VAT emits, default severities, and configuration syntax (`validation.severity` / `validation.allow`).
+- **[Skill-Smell Philosophy](./skill-smell-philosophy.md)** — How VAT decides what to flag; rule-addition and severity-default policy.
+
+See also: [Skill Packaging Shapes](./architecture/skill-packaging.md) for the artifact shape terminology.
+
 ## Guides
 
 - **[Collection Validation](./guides/collection-validation.md)** - Per-collection frontmatter validation with JSON Schemas

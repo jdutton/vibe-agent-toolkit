@@ -1,4 +1,4 @@
-export { detectResourceFormat } from './format-detection.js';
+export { detectResourceFormat, enumerateSurfaces } from './format-detection.js';
 export { validatePlugin } from './plugin-validator.js';
 export {
 	validateInstalledPluginsRegistry,
@@ -11,6 +11,7 @@ export type {
 	IssueSeverity,
 	LinkedFileValidationResult,
 	ResourceFormat,
+	Surface,
 	ValidateOptions,
 	ValidationIssue,
 	ValidationResult,

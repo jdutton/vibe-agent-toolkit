@@ -1,0 +1,11 @@
+{
+  "name": "three-surface-marketplace",
+  "version": "1.0.0",
+  "description": "Marketplace that does NOT point at the current directory, so the co-located collapse does not apply.",
+  "plugins": [
+    {
+      "name": "some-other-plugin",
+      "source": "./subdir/"
+    }
+  ]
+}

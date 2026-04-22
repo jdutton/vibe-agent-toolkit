@@ -1,0 +1,5 @@
+{
+  "name": "canonical-plugin",
+  "version": "1.0.0",
+  "description": "Canonical plugin layout with skills under skills/<name>/."
+}

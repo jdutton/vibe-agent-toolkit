@@ -444,3 +444,9 @@ When using `--user` flag:
    - Is CLI intuitive?
    - What's missing?
    - Then build RAG or agent-skills based on priority
+
+---
+
+## Related references
+
+- [Skill Packaging Shapes](./skill-packaging.md) — the four recognized artifact shapes (standalone skill, skill-claude-plugin, claude-plugin, claude-marketplace) with layouts and applicable validation.

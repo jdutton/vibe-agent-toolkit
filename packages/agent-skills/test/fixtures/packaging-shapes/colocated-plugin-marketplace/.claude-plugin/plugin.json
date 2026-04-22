@@ -1,0 +1,5 @@
+{
+  "name": "colocated-plugin",
+  "version": "1.0.0",
+  "description": "Plugin whose marketplace sibling points back at this directory via source: './'."
+}

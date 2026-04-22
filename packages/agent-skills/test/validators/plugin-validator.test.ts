@@ -1,5 +1,8 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- test uses controlled temp dirs */
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { writeFileSync } from 'node:fs';
+
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { validatePlugin } from '../../src/validators/plugin-validator.js';
@@ -10,6 +13,8 @@ import {
 	createTestPlugin,
 	setupTempDir,
 } from '../test-helpers.js';
+
+const CLAUDE_PLUGIN_DIR = '.claude-plugin';
 
 describe('validatePlugin', () => {
 	const { getTempDir } = setupTempDir('plugin-validator-test-');
@@ -47,7 +52,7 @@ describe('validatePlugin', () => {
 		// Overwrite with invalid JSON
 		const fs = await import('node:fs');
 		fs.writeFileSync(
-			safePath.join(pluginPath, '.claude-plugin', 'plugin.json'),
+			safePath.join(pluginPath, CLAUDE_PLUGIN_DIR, 'plugin.json'),
 			'{ invalid json }',
 		);
 
@@ -155,5 +160,68 @@ describe('validatePlugin', () => {
 					issue.message.includes('semver'),
 			),
 		).toBe(true);
+	});
+
+	describe('SKILL_CLAUDE_PLUGIN_NAME_MISMATCH', () => {
+		const MISMATCH_CODE = 'SKILL_CLAUDE_PLUGIN_NAME_MISMATCH';
+		const fixturesBase = safePath.resolve(
+			__dirname,
+			'../fixtures/packaging-shapes',
+		);
+
+		it('does not emit when skill-claude-plugin names match', async () => {
+			const dir = safePath.join(fixturesBase, 'skill-claude-plugin-matching');
+			const result = await validatePlugin(dir);
+			expect(
+				result.issues.find((i) => i.code === MISMATCH_CODE),
+			).toBeUndefined();
+		});
+
+		it('emits a warning when skill-claude-plugin names disagree', async () => {
+			const dir = safePath.join(fixturesBase, 'skill-claude-plugin-mismatch');
+			const result = await validatePlugin(dir);
+			const issue = result.issues.find(
+				(i) => i.code === MISMATCH_CODE,
+			);
+			expect(issue).toBeDefined();
+			expect(issue?.severity).toBe('warning');
+			expect(issue?.message).toContain('different-name');
+			expect(issue?.message).toContain('mismatch-skill');
+		});
+
+		it('does not emit for canonical plugin layout (no root SKILL.md)', async () => {
+			const dir = safePath.join(fixturesBase, 'canonical-plugin');
+			const result = await validatePlugin(dir);
+			expect(
+				result.issues.find((i) => i.code === MISMATCH_CODE),
+			).toBeUndefined();
+		});
+
+		it('detects mismatch even when SKILL.md has CRLF line endings', async () => {
+			// Windows-authored SKILL.md without a .gitattributes normalization
+			// ships with CRLF. The frontmatter cross-check must still fire.
+			const tempDir = getTempDir();
+			const pluginDir = safePath.join(tempDir, 'crlf-skill-plugin');
+			mkdirSyncReal(safePath.join(pluginDir, CLAUDE_PLUGIN_DIR), { recursive: true });
+
+			const skillContentCrlf =
+				'---\r\nname: crlf-skill-name\r\ndescription: Skill with CRLF endings used to verify the plugin cross-check normalizes line endings before parsing frontmatter.\r\n---\r\n\r\n# CRLF Skill\r\n';
+			writeFileSync(safePath.join(pluginDir, 'SKILL.md'), skillContentCrlf);
+
+			writeFileSync(
+				safePath.join(pluginDir, CLAUDE_PLUGIN_DIR, 'plugin.json'),
+				JSON.stringify({
+					name: 'different-plugin-name',
+					version: '1.0.0',
+					description: 'Plugin with a name that deliberately differs from the CRLF SKILL.md.',
+				}),
+			);
+
+			const result = await validatePlugin(pluginDir);
+			const issue = result.issues.find((i) => i.code === MISMATCH_CODE);
+			expect(issue).toBeDefined();
+			expect(issue?.message).toContain('crlf-skill-name');
+			expect(issue?.message).toContain('different-plugin-name');
+		});
 	});
 });

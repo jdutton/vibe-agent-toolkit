@@ -68,7 +68,7 @@ export { validateMarketplace } from './validators/marketplace-validator.js';
 export { validatePlugin } from './validators/plugin-validator.js';
 export { validateSkill } from './validators/skill-validator.js';
 export { validate } from './validators/unified-validator.js';
-export { detectResourceFormat } from './validators/format-detection.js';
+export { detectResourceFormat, enumerateSurfaces } from './validators/format-detection.js';
 export {
   validateSkillForPackaging,
   type ExcludedReferenceDetail,
@@ -91,6 +91,7 @@ export type {
   ValidationIssue,
   ValidateOptions,
   ResourceFormat,
+  Surface,
 } from './validators/types.js';
 
 export {
