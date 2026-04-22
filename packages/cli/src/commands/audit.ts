@@ -780,6 +780,9 @@ export async function getValidationResults(
   if (resourceFormat.type !== 'unknown') {
     logger.debug(`Detected ${resourceFormat.type} at: ${scanPath}`);
     const result = await validate(scanPath);
+    if (resourceFormat.type === 'claude-plugin') {
+      await appendPluginAssetParseIssues(result, scanPath);
+    }
     return [result];
   }
 
@@ -1251,6 +1254,7 @@ async function handleDirectoryEntry(
   if (hasClaudePlugin) {
     logger.debug(`Validating resource directory: ${fullPath}`);
     const result = await validate(fullPath);
+    await appendPluginAssetParseIssues(result, fullPath);
     results.push(result);
   }
 
@@ -1261,6 +1265,45 @@ async function handleDirectoryEntry(
   }
 
   return results;
+}
+
+/**
+ * Parse-only checks for full-plugin assets (hooks/hooks.json, .mcp.json).
+ *
+ * Appends error-severity findings to the plugin's ValidationResult when these
+ * files are malformed. Does not throw — `vat audit` is advisory-only and must
+ * always exit 0 for validation results.
+ */
+async function appendPluginAssetParseIssues(
+  result: ValidationResult,
+  pluginRoot: string,
+): Promise<void> {
+  const fs = await import('node:fs/promises');
+  const checks: Array<{ path: string; label: string }> = [
+    { path: safePath.join(pluginRoot, 'hooks', 'hooks.json'), label: 'hooks/hooks.json' },
+    { path: safePath.join(pluginRoot, '.mcp.json'), label: '.mcp.json' },
+  ];
+
+  for (const { path, label } of checks) {
+    let raw: string;
+    try {
+      raw = await fs.readFile(path, 'utf-8');
+    } catch {
+      continue;
+    }
+    try {
+      JSON.parse(raw);
+    } catch (e) {
+      const issue: ValidationIssue = {
+        severity: 'error',
+        code: 'PLUGIN_INVALID_JSON',
+        message: `${label} is not valid JSON: ${(e as Error).message}`,
+        location: path,
+      };
+      result.issues.push(issue);
+      result.status = 'error';
+    }
+  }
 }
 
 /**
