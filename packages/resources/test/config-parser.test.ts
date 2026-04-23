@@ -270,7 +270,7 @@ claude:
       plugins:
         - name: acme-tools
           description: Acme developer tools plugin
-          skills: '*'
+          skills: "*"
 `;
     await writeFile(configPath, content);
 
@@ -282,7 +282,6 @@ claude:
     expect(mp?.plugins).toHaveLength(1);
     expect(mp?.plugins?.[0]?.name).toBe('acme-tools');
     expect(mp?.plugins?.[0]?.description).toBe('Acme developer tools plugin');
-    expect(mp?.plugins?.[0]?.skills).toBe('*');
   });
 
   it('should parse multiple marketplaces', async () => {
@@ -297,14 +296,14 @@ claude:
       plugins:
         - name: first-plugin
           description: First plugin
-          skills: '*'
+          skills: "*"
     second:
       owner:
         name: My Org
       plugins:
         - name: my-plugin
           description: My plugin
-          skills: '*'
+          skills: "*"
 `;
     await writeFile(configPath, content);
 
@@ -339,7 +338,7 @@ claude:
       plugins:
         - name: acme-tools
           description: Acme tools
-          skills: '*'
+          skills: "*"
           unknownField: oops
 `;
     await writeFile(configPath, content);

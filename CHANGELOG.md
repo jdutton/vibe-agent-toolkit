@@ -10,6 +10,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Skill-claude-plugin recognition in `vat audit`.** Introduces the **skill-claude-plugin** artifact shape — a skill that self-publishes as a Claude plugin by co-locating `.claude-plugin/plugin.json` alongside its root `SKILL.md`. Audit now emits independent `ValidationResult` entries for each surface (one `agent-skill`, one `claude-plugin`) instead of reporting only the plugin and silently ignoring the skill. The skill remains platform-agnostic; the graduation to skill-claude-plugin adds Claude-specific packaging only. See [`docs/architecture/skill-packaging.md`](docs/architecture/skill-packaging.md) for the full packaging-shape terminology (standalone skill / skill-claude-plugin / claude-plugin / claude-marketplace).
 - **`SKILL_CLAUDE_PLUGIN_NAME_MISMATCH`** validation code (default `warning`). Fires on the plugin result when a skill-claude-plugin's `plugin.json.name` disagrees with the co-located `SKILL.md` frontmatter `name`. The skill is authoritative; the plugin manifest is a distribution wrapper and should match unless the plugin is intentionally namespaced (in which case use `validation.severity` or `validation.allow`).
+- **Self-contained Claude Code plugin support in `vat claude plugin build`.**
+  Adopters can now bundle commands, hooks, agents, MCP servers, scripts, raw
+  plugin-local `SKILL.md` files, and author-supplied `plugin.json` metadata from a
+  per-plugin `plugins/<name>/` directory. The entire directory is tree-copied
+  verbatim (respecting `.gitignore`). Pre-existing pool-to-plugin skill selectors
+  (`marketplace.plugins[].skills`) are preserved — a plugin can still declare
+  `skills: "*"` or `skills: [names]` to import pool skills (built by
+  `vat skills build`) into its bundle. The skills stream is unchanged: `vat skills
+  build` continues to produce `dist/skills/<name>/` only. New schema fields on
+  marketplace plugin entries: `source` (path override, default `plugins/<name>`)
+  and `files[]` (compiled-artifact mappings). The 5-phase plugin build pipeline
+  is deterministically ordered (discovery → tree-copy → pool-skill import →
+  `files[]` → merged `plugin.json`). YAML summary adds `commandsCopied`,
+  `hooksCopied`, `agentsCopied`, `mcpCopied`, `treeFilesCopied`,
+  `explicitFilesCopied` per plugin. Case-sensitivity mismatches between declared
+  plugin names and on-disk dirs now fail the build to catch Linux-CI drift.
 
 ### Changed
 - `vat audit` directory-entry detection uses a new `enumerateSurfaces()` helper that returns every manifest present at the directory root, replacing single-result detection in the multi-surface case. Single-surface directories retain their legacy single-validator dispatch, including the marketplace-with-co-located-plugin collapse.

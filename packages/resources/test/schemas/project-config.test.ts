@@ -6,6 +6,8 @@ import { describe, expect, it } from 'vitest';
 import type { ZodSchema } from 'zod';
 
 import {
+  ClaudeMarketplacePluginEntrySchema,
+  ClaudeMarketplaceSchema,
   ProjectConfigSchema,
   SkillPackagingConfigSchema,
   SkillsConfigSchema,
@@ -122,6 +124,98 @@ describe('ProjectConfigSchema', () => {
         .join('\n');
       throw new Error(`vat-development-agents config failed to parse:\n${errors}`);
     }
+    expect(result.success).toBe(true);
+  });
+});
+
+describe('ClaudeMarketplacePluginEntrySchema (full plugin support)', () => {
+  it('accepts plugin with skills: "*"', () => {
+    const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+      name: 'my-plugin',
+      skills: '*',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts plugin with skills: [names]', () => {
+    const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+      name: 'my-plugin',
+      skills: ['foo', 'bar*', '*baz'],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('requires skills field on plugin entry', () => {
+    const result = ClaudeMarketplacePluginEntrySchema.safeParse({ name: 'my-plugin' });
+    expect(result.success).toBe(false);
+  });
+
+  it('accepts plugin with name regex conforming (lowercase alnum + hyphens)', () => {
+    for (const name of ['foo', 'foo-bar', 'a1', 'p1-p2-p3']) {
+      const result = ClaudeMarketplacePluginEntrySchema.safeParse({ name, skills: '*' });
+      expect(result.success).toBe(true);
+    }
+  });
+
+  it('rejects plugin name with uppercase or invalid chars', () => {
+    for (const name of ['Foo', 'foo_bar', 'foo.bar', '-foo', 'foo!', '']) {
+      const result = ClaudeMarketplacePluginEntrySchema.safeParse({ name, skills: '*' });
+      expect(result.success).toBe(false);
+    }
+  });
+
+  it('accepts optional source path', () => {
+    const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+      name: 'p',
+      skills: '*',
+      source: 'custom/dir',
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts files[] with source+dest entries', () => {
+    const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+      name: 'p',
+      skills: [],
+      files: [{ source: 'dist/hooks/h.mjs', dest: 'hooks/h.mjs' }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects unknown top-level keys (strict)', () => {
+    const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+      name: 'p',
+      skills: '*',
+      bogus: true,
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('ClaudeMarketplaceSchema (pool filter)', () => {
+  it('accepts top-level skills: "*"', () => {
+    const result = ClaudeMarketplaceSchema.safeParse({
+      owner: { name: 'Test Org' },
+      skills: '*',
+      plugins: [{ name: 'test', skills: '*' }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts top-level skills: [names]', () => {
+    const result = ClaudeMarketplaceSchema.safeParse({
+      owner: { name: 'Test Org' },
+      skills: ['foo*'],
+      plugins: [{ name: 'test', skills: '*' }],
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts marketplace without skills filter (allows all)', () => {
+    const result = ClaudeMarketplaceSchema.safeParse({
+      owner: { name: 'Test Org' },
+      plugins: [{ name: 'test', skills: '*' }],
+    });
     expect(result.success).toBe(true);
   });
 });

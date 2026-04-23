@@ -17,6 +17,7 @@ import {
   type EvidenceRecord,
   type PackagingValidationResult,
   type SkillPackagingConfig,
+  type Surface,
   type ValidateOptions,
   type ValidationIssue,
   type ValidationResult,
@@ -64,6 +65,8 @@ export interface AuditCommandOptions {
 
 /** Resource type constant for agent skills, avoiding duplicate string literals. */
 const RESOURCE_TYPE_AGENT_SKILL: ValidationResult['type'] = 'agent-skill';
+/** Resource type constant for Claude plugins, avoiding duplicate string literals. */
+const RESOURCE_TYPE_CLAUDE_PLUGIN: ValidationResult['type'] = 'claude-plugin';
 
 /**
  * Config-aware context for VAT project scanning. Built once per audit, passed through recursion.
@@ -728,6 +731,45 @@ export async function auditCommand(
 }
 
 /**
+ * Dispatch a single surface to the matching validator. Keeps the multi-surface
+ * branch of {@link getValidationResults} focused so cognitive complexity stays
+ * within the ESLint budget.
+ */
+async function validateSurface(
+  surface: Surface,
+  options: AuditCommandOptions,
+  logger: ReturnType<typeof createLogger>,
+): Promise<ValidationResult> {
+  if (surface.type === RESOURCE_TYPE_AGENT_SKILL) {
+    return validateSingleSkill(surface.path, options, logger);
+  }
+  if (surface.type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
+    return validatePlugin(surface.path);
+  }
+  return validateMarketplace(surface.path);
+}
+
+/**
+ * Validate every surface enumerated at a directory root (used when
+ * `enumerateSurfaces` returns more than one — e.g., skill-claude-plugin).
+ */
+async function validateMultipleSurfaces(
+  surfaces: readonly Surface[],
+  scanPath: string,
+  options: AuditCommandOptions,
+  logger: ReturnType<typeof createLogger>,
+): Promise<ValidationResult[]> {
+  logger.debug(
+    `Detected ${surfaces.length.toString()} surfaces at ${scanPath}: ${surfaces.map((s) => s.type).join(', ')}`,
+  );
+  const results: ValidationResult[] = [];
+  for (const surface of surfaces) {
+    results.push(await validateSurface(surface, options, logger));
+  }
+  return results;
+}
+
+/**
  * @internal Exported for integration testing only — not part of the public CLI API.
  */
 export async function getValidationResults(
@@ -758,20 +800,7 @@ export async function getValidationResults(
   // swallowed by the plugin surface.
   const surfaces = await enumerateSurfaces(scanPath);
   if (surfaces.length > 1) {
-    logger.debug(
-      `Detected ${surfaces.length.toString()} surfaces at ${scanPath}: ${surfaces.map((s) => s.type).join(', ')}`
-    );
-    const results: ValidationResult[] = [];
-    for (const surface of surfaces) {
-      if (surface.type === 'agent-skill') {
-        results.push(await validateSingleSkill(surface.path, options, logger));
-      } else if (surface.type === 'claude-plugin') {
-        results.push(await validatePlugin(surface.path));
-      } else {
-        results.push(await validateMarketplace(surface.path));
-      }
-    }
-    return results;
+    return validateMultipleSurfaces(surfaces, scanPath, options, logger);
   }
 
   // For plugin/marketplace directories or registry files, use unified validator
@@ -780,6 +809,9 @@ export async function getValidationResults(
   if (resourceFormat.type !== 'unknown') {
     logger.debug(`Detected ${resourceFormat.type} at: ${scanPath}`);
     const result = await validate(scanPath);
+    if (resourceFormat.type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
+      await appendPluginAssetParseIssues(result, scanPath);
+    }
     return [result];
   }
 
@@ -873,7 +905,7 @@ export async function runCompatAnalysis(
   const compatMap = new Map<string, CompatibilityResult>();
 
   for (const result of results) {
-    if (result.type !== 'claude-plugin') continue;
+    if (result.type !== RESOURCE_TYPE_CLAUDE_PLUGIN) continue;
 
     try {
       logger.debug(`Running compatibility analysis for: ${result.path}`);
@@ -1251,6 +1283,7 @@ async function handleDirectoryEntry(
   if (hasClaudePlugin) {
     logger.debug(`Validating resource directory: ${fullPath}`);
     const result = await validate(fullPath);
+    await appendPluginAssetParseIssues(result, fullPath);
     results.push(result);
   }
 
@@ -1261,6 +1294,45 @@ async function handleDirectoryEntry(
   }
 
   return results;
+}
+
+/**
+ * Parse-only checks for full-plugin assets (hooks/hooks.json, .mcp.json).
+ *
+ * Appends error-severity findings to the plugin's ValidationResult when these
+ * files are malformed. Does not throw — `vat audit` is advisory-only and must
+ * always exit 0 for validation results.
+ */
+async function appendPluginAssetParseIssues(
+  result: ValidationResult,
+  pluginRoot: string,
+): Promise<void> {
+  const fs = await import('node:fs/promises');
+  const checks: Array<{ path: string; label: string }> = [
+    { path: safePath.join(pluginRoot, 'hooks', 'hooks.json'), label: 'hooks/hooks.json' },
+    { path: safePath.join(pluginRoot, '.mcp.json'), label: '.mcp.json' },
+  ];
+
+  for (const { path, label } of checks) {
+    let raw: string;
+    try {
+      raw = await fs.readFile(path, 'utf-8');
+    } catch {
+      continue;
+    }
+    try {
+      JSON.parse(raw);
+    } catch (e) {
+      const issue: ValidationIssue = {
+        severity: 'error',
+        code: 'PLUGIN_INVALID_JSON',
+        message: `${label} is not valid JSON: ${(e as Error).message}`,
+        location: path,
+      };
+      result.issues.push(issue);
+      result.status = 'error';
+    }
+  }
 }
 
 /**
