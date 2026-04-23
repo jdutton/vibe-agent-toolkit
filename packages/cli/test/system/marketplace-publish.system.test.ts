@@ -107,16 +107,36 @@ function initGitRepo(tempDir: string): void {
 }
 
 /** Set up a fully configured publish project and run dry-run publish */
-function setupAndDryRunPublish(
+async function setupAndDryRunPublish(
   createTempDir: () => string,
   changelog = '# Changelog\n\n## [Unreleased]\n\n- Changes\n',
-): { tempDir: string; result: ReturnType<typeof executeCli> } {
+): Promise<{ tempDir: string; result: Awaited<ReturnType<typeof executeCli>> }> {
   const tempDir = createTempDir();
   writeProjectFiles(tempDir, changelog);
   createBuildOutput(tempDir);
   initGitRepo(tempDir);
-  const result = executeCli(binPath, [...PUBLISH_ARGS, '--dry-run'], { cwd: tempDir });
+  const result = await executeCli(binPath, [...PUBLISH_ARGS, '--dry-run'], { cwd: tempDir });
   return { tempDir, result };
+}
+
+/**
+ * Run dry-run publish against a project configured to fail, and assert the
+ * failure shape. Pass `withBuildOutput: true` for tests that need build
+ * artifacts to exist but still expect a later-stage failure.
+ */
+async function expectDryRunPublishFailure(
+  createTempDir: () => string,
+  opts: { changelog: string; stderrContains: string; withBuildOutput?: boolean; expectedStatus?: number },
+): Promise<void> {
+  const tempDir = createTempDir();
+  writeProjectFiles(tempDir, opts.changelog);
+  if (opts.withBuildOutput) {
+    createBuildOutput(tempDir);
+  }
+  initGitRepo(tempDir);
+  const result = await executeCli(binPath, [...PUBLISH_ARGS, '--dry-run'], { cwd: tempDir });
+  expect(result.status).toBe(opts.expectedStatus ?? 2);
+  expect(result.stderr).toContain(opts.stderrContains);
 }
 
 describe('vat claude marketplace publish (system)', () => {
@@ -126,26 +146,21 @@ describe('vat claude marketplace publish (system)', () => {
     cleanupTempDirs();
   });
 
-  it('should succeed with --dry-run when marketplace is fully configured', () => {
-    const { result } = setupAndDryRunPublish(createTempDir, '# Changelog\n\n## [Unreleased]\n\n- Added marketplace publish\n');
+  it('should succeed with --dry-run when marketplace is fully configured', async () => {
+    const { result } = await setupAndDryRunPublish(createTempDir, '# Changelog\n\n## [Unreleased]\n\n- Added marketplace publish\n');
 
     expect(result.status, `Expected exit 0 but got ${String(result.status)}. stderr: ${result.stderr}`).toBe(0);
     expect(result.stdout).toContain('success');
   });
 
-  it('should fail when no build output exists', () => {
-    const tempDir = createTempDir();
-
-    writeProjectFiles(tempDir, '# Changelog\n\n## [Unreleased]\n\n- Changes\n');
-    initGitRepo(tempDir);
-
-    const result = executeCli(binPath, [...PUBLISH_ARGS, '--dry-run'], { cwd: tempDir });
-
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain('build output not found');
+  it('should fail when no build output exists', async () => {
+    await expectDryRunPublishFailure(createTempDir, {
+      changelog: '# Changelog\n\n## [Unreleased]\n\n- Changes\n',
+      stderrContains: 'build output not found',
+    });
   });
 
-  it('should fail when no publish config exists', () => {
+  it('should fail when no publish config exists', async () => {
     const tempDir = createTempDir();
 
     // Config without publish section
@@ -165,13 +180,13 @@ claude:
     writeTestFile(safePath.join(tempDir, 'package.json'), JSON.stringify({ name: 'test-project', version: '1.0.0' }));
     initGitRepo(tempDir);
 
-    const result = executeCli(binPath, [...PUBLISH_ARGS, '--dry-run'], { cwd: tempDir });
+    const result = await executeCli(binPath, [...PUBLISH_ARGS, '--dry-run'], { cwd: tempDir });
 
     expect(result.status).not.toBe(0);
   });
 
-  it('should preserve non-markdown files (e.g., .mjs scripts) through publish pipeline', () => {
-    const { result } = setupAndDryRunPublish(createTempDir, '# Changelog\n\n## [Unreleased]\n\n- Added scripts\n');
+  it('should preserve non-markdown files (e.g., .mjs scripts) through publish pipeline', async () => {
+    const { result } = await setupAndDryRunPublish(createTempDir, '# Changelog\n\n## [Unreleased]\n\n- Added scripts\n');
 
     expect(result.status, `Expected exit 0 but got ${String(result.status)}. stderr: ${result.stderr}`).toBe(0);
 
@@ -192,16 +207,11 @@ claude:
     expect(allFiles.some(f => f.includes('cli.mjs'))).toBe(true);
   });
 
-  it('should fail when changelog has empty [Unreleased] section', () => {
-    const tempDir = createTempDir();
-
-    writeProjectFiles(tempDir, '# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - 2025-01-01\n\n- Old change\n');
-    createBuildOutput(tempDir);
-    initGitRepo(tempDir);
-
-    const result = executeCli(binPath, [...PUBLISH_ARGS, '--dry-run'], { cwd: tempDir });
-
-    expect(result.status).toBe(2);
-    expect(result.stderr).toContain('empty [Unreleased]');
+  it('should fail when changelog has empty [Unreleased] section', async () => {
+    await expectDryRunPublishFailure(createTempDir, {
+      changelog: '# Changelog\n\n## [Unreleased]\n\n## [0.1.0] - 2025-01-01\n\n- Old change\n',
+      stderrContains: 'empty [Unreleased]',
+      withBuildOutput: true,
+    });
   });
 });

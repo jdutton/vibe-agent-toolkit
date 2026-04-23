@@ -102,12 +102,12 @@ function createDevTestProject(
 /**
  * Execute --dev install with a fake home directory
  */
-function executeDevInstall(
+async function executeDevInstall(
   projectDir: string,
   fakeHome: string,
   extraArgs: string[] = []
-): { status: number | null; stderr: string; parsed: Record<string, unknown> } {
-  const { result, parsed } = executeCliAndParseYaml(
+): Promise<{ status: number | null; stderr: string; parsed: Record<string, unknown> }> {
+  const { result, parsed } = await executeCliAndParseYaml(
     binPath,
     ['claude', 'plugin', 'install', '--dev', ...extraArgs],
     { cwd: projectDir, env: fakeHomeEnv(fakeHome) }
@@ -122,17 +122,29 @@ function expectedSkillPath(fakeHome: string, skillName: string): string {
   return safePath.join(fakeHome, '.claude', 'plugins', 'marketplaces', MARKETPLACE_NAME, 'plugins', PLUGIN_NAME, 'skills', skillName);
 }
 
+/**
+ * Set up a dev test project, run `claude plugin install --dev`, and assert
+ * the install succeeded. Returns the fake home and parsed output so individual
+ * tests can make their own extra assertions.
+ */
+async function setupAndDevInstall(
+  name: string,
+  skills: Array<{ name: string; built: boolean }>,
+): Promise<{ fakeHome: string; parsed: Record<string, unknown> }> {
+  const tempDir = createTempDir();
+  const { projectDir, fakeHome } = createDevTestProject(tempDir, name, skills);
+  const { status, parsed } = await executeDevInstall(projectDir, fakeHome);
+  expect(status).toBe(0);
+  expect(parsed.status).toBe('success');
+  return { fakeHome, parsed };
+}
+
 describe('claude plugin install --dev command (system test)', () => {
-  it('should symlink a single skill', () => {
-    const tempDir = createTempDir();
-    const { projectDir, fakeHome } = createDevTestProject(tempDir, 'single', [
+  it('should symlink a single skill', async () => {
+    const { fakeHome, parsed } = await setupAndDevInstall('single', [
       { name: 'my-skill', built: true },
     ]);
 
-    const { status, parsed } = executeDevInstall(projectDir, fakeHome);
-
-    expect(status).toBe(0);
-    expect(parsed.status).toBe('success');
     expect(parsed.sourceType).toBe('dev');
     expect(parsed.symlink).toBe(true);
     expect(parsed.skillsInstalled).toBe(1);
@@ -142,23 +154,18 @@ describe('claude plugin install --dev command (system test)', () => {
     expect(lstatSync(installedPath).isSymbolicLink()).toBe(true);
   });
 
-  it('should symlink all skills from multi-skill package', () => {
-    const tempDir = createTempDir();
-    const { projectDir, fakeHome } = createDevTestProject(tempDir, 'multi', [
+  it('should symlink all skills from multi-skill package', async () => {
+    const { fakeHome, parsed } = await setupAndDevInstall('multi', [
       { name: 'skill-alpha', built: true },
       { name: 'skill-beta', built: true },
     ]);
 
-    const { status, parsed } = executeDevInstall(projectDir, fakeHome);
-
-    expect(status).toBe(0);
-    expect(parsed.status).toBe('success');
     expect(parsed.skillsInstalled).toBe(2);
     expect(lstatSync(expectedSkillPath(fakeHome, 'skill-alpha')).isSymbolicLink()).toBe(true);
     expect(lstatSync(expectedSkillPath(fakeHome, 'skill-beta')).isSymbolicLink()).toBe(true);
   });
 
-  it('should fail when plugin tree not found', () => {
+  it('should fail when plugin tree not found', async () => {
     const tempDir = createTempDir();
     const { packageDir: projectDir, fakeHome } = createPackageAndHomeContext(safePath.join(tempDir, 'no-tree'));
 
@@ -168,19 +175,19 @@ describe('claude plugin install --dev command (system test)', () => {
     );
     // No plugin tree created
 
-    const { status, stderr } = executeDevInstall(projectDir, fakeHome);
+    const { status, stderr } = await executeDevInstall(projectDir, fakeHome);
 
     expect(status).not.toBe(0);
     expect(stderr).toContain('Plugin tree not found');
   });
 
-  it('should not create symlinks with --dry-run', () => {
+  it('should not create symlinks with --dry-run', async () => {
     const tempDir = createTempDir();
     const { projectDir, fakeHome } = createDevTestProject(tempDir, 'dryrun', [
       { name: 'dry-skill', built: true },
     ]);
 
-    const { status, parsed } = executeDevInstall(projectDir, fakeHome, ['--dry-run']);
+    const { status, parsed } = await executeDevInstall(projectDir, fakeHome, ['--dry-run']);
 
     expect(status).toBe(0);
     expect(parsed.status).toBe('success');
@@ -189,18 +196,18 @@ describe('claude plugin install --dev command (system test)', () => {
     expect(existsSync(expectedSkillPath(fakeHome, 'dry-skill'))).toBe(false);
   });
 
-  it('should be idempotent on re-run (overwrites without --force)', () => {
+  it('should be idempotent on re-run (overwrites without --force)', async () => {
     const tempDir = createTempDir();
     const { projectDir, fakeHome } = createDevTestProject(tempDir, 'idempotent', [
       { name: 'dup-skill', built: true },
     ]);
 
     // First install succeeds
-    const first = executeDevInstall(projectDir, fakeHome);
+    const first = await executeDevInstall(projectDir, fakeHome);
     expect(first.status).toBe(0);
 
     // Second install also succeeds — marketplace dir is always reset
-    const { status, parsed } = executeDevInstall(projectDir, fakeHome);
+    const { status, parsed } = await executeDevInstall(projectDir, fakeHome);
 
     expect(status).toBe(0);
     expect(parsed.status).toBe('success');
@@ -208,7 +215,7 @@ describe('claude plugin install --dev command (system test)', () => {
     expect(lstatSync(expectedSkillPath(fakeHome, 'dup-skill')).isSymbolicLink()).toBe(true);
   });
 
-  it('should warn and skip skills not in dist/skills/', () => {
+  it('should warn and skip skills not in dist/skills/', async () => {
     const tempDir = createTempDir();
     // Create plugin tree with unbuilt-skill referenced but no dist/skills/unbuilt-skill/
     const { packageDir: projectDir, fakeHome } = createPackageAndHomeContext(safePath.join(tempDir, 'missing-built'));
@@ -229,7 +236,7 @@ describe('claude plugin install --dev command (system test)', () => {
     writeTestFile(safePath.join(pluginDir, '.claude-plugin', 'plugin.json'), JSON.stringify({ name: PLUGIN_NAME }));
     writeTestFile(safePath.join(skillInPluginDir, 'SKILL.md'), '# unbuilt-skill');
 
-    const { status, parsed } = executeDevInstall(projectDir, fakeHome);
+    const { status, parsed } = await executeDevInstall(projectDir, fakeHome);
 
     // Should exit 0 but 0 skills installed (all skipped due to missing dist)
     expect(status).toBe(0);

@@ -59,7 +59,7 @@ function setupSkillsPackageClaudeWebTestSuite() {
     return zip.getEntries().map(e => e.entryName);
   };
 
-  const runPackageCommand = (
+  const runPackageCommand = async (
     skillMdPath: string,
     outputDir: string,
     extraArgs: string[] = []
@@ -92,12 +92,12 @@ function setupSkillsPackageClaudeWebTestSuite() {
    * Run package command with a given target and assert successful completion.
    * Returns the ZIP structure for further assertions.
    */
-  const runPackageAndAssertSuccess = (
+  const runPackageAndAssertSuccess = async (
     skillMdPath: string,
     outputDir: string,
     target: string
-  ): ReturnType<typeof assertZipStructure> => {
-    const { result, parsed } = runPackageCommand(
+  ): Promise<ReturnType<typeof assertZipStructure>> => {
+    const { result, parsed } = await runPackageCommand(
       skillMdPath,
       outputDir,
       ['--target', target, '-f', 'zip']
@@ -130,14 +130,14 @@ describe('skills package --target (system test)', () => {
     suite.cleanup();
   });
 
-  it('--target claude-web produces references/ and no resources/ directory', () => {
+  it('--target claude-web produces references/ and no resources/ directory', async () => {
     const tempDir = suite.createTempDir();
     const skillDir = suite.createMinimalSkill(tempDir);
     const skillMdPath = safePath.join(skillDir, 'SKILL.md');
     const outputDir = safePath.join(tempDir, 'output-claude-web');
 
     // Verify ZIP structure: no linked resources → neither references/ nor resources/ dir
-    const { hasReferences, hasResources } = suite.runPackageAndAssertSuccess(
+    const { hasReferences, hasResources } = await suite.runPackageAndAssertSuccess(
       skillMdPath,
       outputDir,
       TARGET_CLAUDE_WEB
@@ -146,7 +146,7 @@ describe('skills package --target (system test)', () => {
     expect(hasResources).toBe(false);  // resources/ directory must NOT appear
   });
 
-  it('--target claude-web with linked resources places them in references/ not resources/', () => {
+  it('--target claude-web with linked resources places them in references/ not resources/', async () => {
     const tempDir = suite.createTempDir();
 
     // Create a skill with a linked resource
@@ -178,7 +178,7 @@ See [Reference](./reference.md) for details.
     const outputDir = safePath.join(tempDir, 'output-refs');
 
     // references/ must exist (linked resource goes there); resources/ must NOT exist
-    const { hasReferences, hasResources } = suite.runPackageAndAssertSuccess(
+    const { hasReferences, hasResources } = await suite.runPackageAndAssertSuccess(
       skillMdPath,
       outputDir,
       TARGET_CLAUDE_WEB
@@ -187,7 +187,7 @@ See [Reference](./reference.md) for details.
     expect(hasResources).toBe(false);
   });
 
-  it('--target claude-code (default) still produces resources/ directory', () => {
+  it('--target claude-code (default) still produces resources/ directory', async () => {
     const tempDir = suite.createTempDir();
 
     // Create skill with a linked resource so resources/ gets populated
@@ -222,7 +222,7 @@ See [Guide](./guide.md) for usage.
     const outputDir = safePath.join(tempDir, 'output-claude-code');
 
     // resources/ must exist (claude-code uses resources/); references/ must NOT exist
-    const { hasResources, hasReferences } = suite.runPackageAndAssertSuccess(
+    const { hasResources, hasReferences } = await suite.runPackageAndAssertSuccess(
       skillMdPath,
       outputDir,
       TARGET_CLAUDE_CODE
@@ -231,7 +231,7 @@ See [Guide](./guide.md) for usage.
     expect(hasReferences).toBe(false);
   });
 
-  it('no --target flag defaults to claude-code behavior (resources/ directory)', () => {
+  it('no --target flag defaults to claude-code behavior (resources/ directory)', async () => {
     const tempDir = suite.createTempDir();
 
     const skillDir = safePath.join(tempDir, 'default-skill');
@@ -265,7 +265,7 @@ See [Extra](./extra.md).
     const outputDir = safePath.join(tempDir, 'output-default');
 
     // No --target flag at all — default should behave like claude-code
-    const { result, parsed } = suite.runPackageCommand(skillMdPath, outputDir, ['-f', 'zip']);
+    const { result, parsed } = await suite.runPackageCommand(skillMdPath, outputDir, ['-f', 'zip']);
     expect(result.status).toBe(0);
     expect(parsed).toHaveProperty('status', 'success');
 
@@ -275,13 +275,13 @@ See [Extra](./extra.md).
     expect(hasReferences).toBe(false);
   });
 
-  it('--target with invalid value exits with error', () => {
+  it('--target with invalid value exits with error', async () => {
     const tempDir = suite.createTempDir();
     const skillDir = suite.createMinimalSkill(tempDir);
     const skillMdPath = safePath.join(skillDir, 'SKILL.md');
     const outputDir = safePath.join(tempDir, 'output-bad-target');
 
-    const result = executeCli(
+    const result = await executeCli(
       suite.binPath,
       ['skills', 'package', skillMdPath, '-o', outputDir, '--target', 'invalid-target']
     );
@@ -289,8 +289,8 @@ See [Extra](./extra.md).
     expect(result.status).not.toBe(0);
   });
 
-  it('shows --target option in help text', () => {
-    const result = executeCli(suite.binPath, ['skills', 'package', '--help']);
+  it('shows --target option in help text', async () => {
+    const result = await executeCli(suite.binPath, ['skills', 'package', '--help']);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('--target');

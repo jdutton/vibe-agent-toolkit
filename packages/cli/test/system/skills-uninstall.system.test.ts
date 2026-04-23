@@ -83,13 +83,13 @@ function setupUninstallTestSuite() {
   const binPath = getBinPath(import.meta.url);
   const { createTempDir, cleanupTempDirs: cleanup } = createTempDirTracker(TEMP_DIR_PREFIX);
 
-  const createInstalledContext = () => {
+  const createInstalledContext = async () => {
     const tempDir = createTempDir();
     const { packageDir, fakeHome } = createPackageAndHomeContext(tempDir);
     createFakeNpmPackage(packageDir);
 
     // Install via postinstall to populate registry
-    const installResult = executeCli(
+    const installResult = await executeCli(
       binPath,
       ['claude', 'plugin', 'install', '--npm-postinstall'],
       {
@@ -100,7 +100,7 @@ function setupUninstallTestSuite() {
     return { packageDir, fakeHome, installResult };
   };
 
-  const runUninstall = (
+  const runUninstall = async (
     fakeHome: string,
     args: string[],
     cwd?: string
@@ -117,8 +117,8 @@ function setupUninstallTestSuite() {
  * Install a plugin and return context needed for uninstall tests.
  * Verifies install succeeded and plugin dir exists before returning.
  */
-function setupInstalledPlugin(suite: ReturnType<typeof setupUninstallTestSuite>) {
-  const { fakeHome, installResult } = suite.createInstalledContext();
+async function setupInstalledPlugin(suite: ReturnType<typeof setupUninstallTestSuite>) {
+  const { fakeHome, installResult } = await suite.createInstalledContext();
   expect(installResult.status).toBe(0);
   const pluginDir = safePath.join(
     fakeHome, '.claude', 'plugins', 'marketplaces',
@@ -136,10 +136,10 @@ describe('claude plugin uninstall command (system test)', () => {
     suite.cleanup();
   });
 
-  it('exits 0 and removes plugin files when given plugin@marketplace key', () => {
-    const { fakeHome, pluginKey } = setupInstalledPlugin(suite);
+  it('exits 0 and removes plugin files when given plugin@marketplace key', async () => {
+    const { fakeHome, pluginKey } = await setupInstalledPlugin(suite);
 
-    const result = suite.runUninstall(fakeHome, [pluginKey]);
+    const result = await suite.runUninstall(fakeHome, [pluginKey]);
 
     expect(result.status).toBe(0);
     const combined = result.stdout;
@@ -147,16 +147,16 @@ describe('claude plugin uninstall command (system test)', () => {
     expect(combined).toContain('pluginsRemoved: 1');
   });
 
-  it('removes plugin directory from marketplacesDir after uninstall', () => {
-    const { fakeHome, pluginDir, pluginKey } = setupInstalledPlugin(suite);
+  it('removes plugin directory from marketplacesDir after uninstall', async () => {
+    const { fakeHome, pluginDir, pluginKey } = await setupInstalledPlugin(suite);
 
-    suite.runUninstall(fakeHome, [pluginKey]);
+    await suite.runUninstall(fakeHome, [pluginKey]);
 
     expect(fs.existsSync(pluginDir)).toBe(false);
   });
 
-  it('removes plugin from installed_plugins.json after uninstall', () => {
-    const { fakeHome, pluginKey } = setupInstalledPlugin(suite);
+  it('removes plugin from installed_plugins.json after uninstall', async () => {
+    const { fakeHome, pluginKey } = await setupInstalledPlugin(suite);
 
     const installedPath = safePath.join(fakeHome, '.claude', 'plugins', 'installed_plugins.json');
     const beforeUninstall = JSON.parse(fs.readFileSync(installedPath, 'utf-8')) as {
@@ -164,7 +164,7 @@ describe('claude plugin uninstall command (system test)', () => {
     };
     expect(beforeUninstall.plugins).toHaveProperty(pluginKey);
 
-    suite.runUninstall(fakeHome, [pluginKey]);
+    await suite.runUninstall(fakeHome, [pluginKey]);
 
     const afterUninstall = JSON.parse(fs.readFileSync(installedPath, 'utf-8')) as {
       plugins: Record<string, unknown[]>;
@@ -172,18 +172,18 @@ describe('claude plugin uninstall command (system test)', () => {
     expect(afterUninstall.plugins).not.toHaveProperty(pluginKey);
   });
 
-  it('exits 0 (idempotent) when plugin is not installed', () => {
+  it('exits 0 (idempotent) when plugin is not installed', async () => {
     const { createTempDir } = createTempDirTracker(TEMP_DIR_PREFIX);
     const fakeHome = createTempDir();
     mkdirSyncReal(safePath.join(fakeHome, '.claude'), { recursive: true });
 
-    const result = suite.runUninstall(fakeHome, ['nonexistent@nonexistent-market']);
+    const result = await suite.runUninstall(fakeHome, ['nonexistent@nonexistent-market']);
 
     // idempotent — not installed is a valid no-op success
     expect(result.status).toBe(0);
   });
 
-  it('exits 0 with pluginsRemoved: 0 when --all and nothing installed', () => {
+  it('exits 0 with pluginsRemoved: 0 when --all and nothing installed', async () => {
     const { createTempDir } = createTempDirTracker(TEMP_DIR_PREFIX);
     const tempDir = createTempDir();
     const { fakeHome, packageDir } = createPackageAndHomeContext(tempDir);
@@ -193,16 +193,16 @@ describe('claude plugin uninstall command (system test)', () => {
       JSON.stringify({ name: 'some-uninstalled-package', version: '1.0.0' })
     );
 
-    const result = suite.runUninstall(fakeHome, ['--all'], packageDir);
+    const result = await suite.runUninstall(fakeHome, ['--all'], packageDir);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('pluginsRemoved: 0');
   });
 
-  it('previews removal with --dry-run without deleting files', () => {
-    const { fakeHome, pluginDir, pluginKey } = setupInstalledPlugin(suite);
+  it('previews removal with --dry-run without deleting files', async () => {
+    const { fakeHome, pluginDir, pluginKey } = await setupInstalledPlugin(suite);
 
-    const result = suite.runUninstall(fakeHome, [pluginKey, '--dry-run']);
+    const result = await suite.runUninstall(fakeHome, [pluginKey, '--dry-run']);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('status: success');

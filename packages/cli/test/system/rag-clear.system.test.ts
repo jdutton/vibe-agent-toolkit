@@ -14,12 +14,12 @@ describe('RAG clear command (system test)', () => {
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
 
-  it('should clear RAG database and delete directory', () => {
+  it('should clear RAG database and delete directory', async () => {
     // Verify database directory exists before clear
     expect(fs.existsSync(suite.dbPath)).toBe(true);
 
     // Verify database has data
-    const { parsed: statsBefore } = executeCliAndParseYaml(
+    const { parsed: statsBefore } = await executeCliAndParseYaml(
       binPath,
       ['rag', 'stats', '--db', suite.dbPath],
       { cwd: suite.projectDir }
@@ -29,7 +29,7 @@ describe('RAG clear command (system test)', () => {
     expect(statsBefore.totalChunks).toBeGreaterThan(0);
 
     // Clear database
-    const { result, parsed } = executeCliAndParseYaml(
+    const { result, parsed } = await executeCliAndParseYaml(
       binPath,
       ['rag', 'clear', '--db', suite.dbPath],
       { cwd: suite.projectDir }

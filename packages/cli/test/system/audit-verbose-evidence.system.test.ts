@@ -61,9 +61,9 @@ describe('Audit --verbose evidence rendering (system test)', () => {
     cleanupTestTempDir(tempDir);
   });
 
-  it('omits the evidence field on file entries when --verbose is not set', () => {
+  it('omits the evidence field on file entries when --verbose is not set', async () => {
     const skillPath = createTestSkill(tempDir, 'no-verbose-skill');
-    const { result, parsed } = executeCliAndParseYaml(binPath, ['audit', skillPath]);
+    const { result, parsed } = await executeCliAndParseYaml(binPath, ['audit', skillPath]);
 
     expect(result.status).toBe(0);
     const files = getFiles(parsed);
@@ -71,9 +71,9 @@ describe('Audit --verbose evidence rendering (system test)', () => {
     expect(files[0]?.evidence).toBeUndefined();
   });
 
-  it('includes the expected evidence pattern IDs when --verbose is set', () => {
+  it('includes the expected evidence pattern IDs when --verbose is set', async () => {
     const skillPath = createTestSkill(tempDir, 'verbose-skill');
-    const { result, parsed } = executeCliAndParseYaml(binPath, ['audit', skillPath, '--verbose']);
+    const { result, parsed } = await executeCliAndParseYaml(binPath, ['audit', skillPath, '--verbose']);
 
     expect(result.status).toBe(0);
     const files = getFiles(parsed);

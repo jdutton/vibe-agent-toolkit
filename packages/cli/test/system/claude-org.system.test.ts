@@ -16,27 +16,27 @@ const binPath = getBinPath(import.meta.url);
 const NOT_YET_IMPLEMENTED = 'not-yet-implemented';
 const ADMIN_KEY_ENV = { ANTHROPIC_ADMIN_API_KEY: '', ANTHROPIC_API_KEY: '' };
 
-function runOrgWithoutKeys(args: string[]): ReturnType<typeof executeCli> {
+async function runOrgWithoutKeys(args: string[]): Promise<Awaited<ReturnType<typeof executeCli>>> {
   return executeCli(binPath, ['claude', 'org', ...args], { env: ADMIN_KEY_ENV });
 }
 
-function runStubCommand(args: string[]): {
-  result: ReturnType<typeof executeCli>;
+async function runStubCommand(args: string[]): Promise<{
+  result: Awaited<ReturnType<typeof executeCli>>;
   parsed: Record<string, unknown>;
-} {
+}> {
   return executeCliAndParseYaml(binPath, ['claude', 'org', ...args], { env: ADMIN_KEY_ENV });
 }
 
 /** Expect exit 2 with ANTHROPIC_ADMIN_API_KEY error. */
-function expectAdminKeyError(args: string[]): void {
-  const result = runOrgWithoutKeys(args);
+async function expectAdminKeyError(args: string[]): Promise<void> {
+  const result = await runOrgWithoutKeys(args);
   expect(result.status).toBe(2);
   expect(result.stderr).toContain('ANTHROPIC_ADMIN_API_KEY');
 }
 
 /** Expect exit 1 with not-yet-implemented stub for the given command name. */
-function expectStub(args: string[], commandName: string): void {
-  const { result, parsed } = runStubCommand(args);
+async function expectStub(args: string[], commandName: string): Promise<void> {
+  const { result, parsed } = await runStubCommand(args);
   expect(result.status).toBe(1);
   expect(parsed.status).toBe(NOT_YET_IMPLEMENTED);
   expect(parsed.command).toBe(commandName);
@@ -53,14 +53,14 @@ describe('vat claude org', () => {
       { cmd: 'usage', args: ['usage'] },
       { cmd: 'cost', args: ['cost'] },
       { cmd: 'code-analytics', args: ['code-analytics'] },
-    ])('org $cmd exits 2 with ANTHROPIC_ADMIN_API_KEY message', ({ args }) => {
-      expectAdminKeyError(args);
+    ])('org $cmd exits 2 with ANTHROPIC_ADMIN_API_KEY message', async ({ args }) => {
+      await expectAdminKeyError(args);
     });
   });
 
   describe('missing regular API key for skills', () => {
-    it('org skills list exits 2 with API key message', () => {
-      const result = runOrgWithoutKeys(['skills', 'list']);
+    it('org skills list exits 2 with API key message', async () => {
+      const result = await runOrgWithoutKeys(['skills', 'list']);
       expect(result.status).toBe(2);
       // Either message is acceptable — depends on which key is checked first
       expect(
@@ -79,8 +79,8 @@ describe('vat claude org', () => {
       { cmd: 'org workspaces create', args: ['workspaces', 'create', '--name', 'test'] },
       { cmd: 'org workspaces archive', args: ['workspaces', 'archive', 'ws_123'] },
       { cmd: 'org api-keys update', args: ['api-keys', 'update', 'key_123', '--name', 'new-name'] },
-    ])('$cmd outputs not-yet-implemented and exits 1', ({ cmd, args }) => {
-      expectStub(args, cmd);
+    ])('$cmd outputs not-yet-implemented and exits 1', async ({ cmd, args }) => {
+      await expectStub(args, cmd);
     });
 
     // Workspace member stubs don't include command name in output
@@ -88,8 +88,8 @@ describe('vat claude org', () => {
       { cmd: 'workspaces members add', args: ['workspaces', 'members', 'add', 'ws_123', '--user-id', 'u1', '--role', 'admin'] },
       { cmd: 'workspaces members update', args: ['workspaces', 'members', 'update', 'ws_123', '--user-id', 'u1', '--role', 'developer'] },
       { cmd: 'workspaces members remove', args: ['workspaces', 'members', 'remove', 'ws_123', '--user-id', 'u1'] },
-    ])('org $cmd outputs not-yet-implemented and exits 1', ({ args }) => {
-      const { result, parsed } = runStubCommand(args);
+    ])('org $cmd outputs not-yet-implemented and exits 1', async ({ args }) => {
+      const { result, parsed } = await runStubCommand(args);
       expect(result.status).toBe(1);
       expect(parsed.status).toBe(NOT_YET_IMPLEMENTED);
     });
@@ -101,14 +101,14 @@ describe('vat claude org', () => {
       { cmd: 'skills delete', args: ['skills', 'delete', 'skill_abc123'] },
       { cmd: 'skills versions list', args: ['skills', 'versions', 'list', 'my-skill'] },
       { cmd: 'skills versions delete', args: ['skills', 'versions', 'delete', 'my-skill', '1.0.0'] },
-    ])('org $cmd exits 2 with API key message when no key', ({ args }) => {
-      expectAdminKeyError(args);
+    ])('org $cmd exits 2 with API key message when no key', async ({ args }) => {
+      await expectAdminKeyError(args);
     });
   });
 
   describe('help text', () => {
-    it('org --help exits 0 and mentions admin key', () => {
-      const result = executeCli(binPath, ['claude', 'org', '--help']);
+    it('org --help exits 0 and mentions admin key', async () => {
+      const result = await executeCli(binPath, ['claude', 'org', '--help']);
       expect(result.status).toBe(0);
       expect(result.stdout).toContain('ANTHROPIC_ADMIN_API_KEY');
       expect(result.stdout).toContain('info');
@@ -119,8 +119,8 @@ describe('vat claude org', () => {
       expect(result.stdout).toContain('skills');
     });
 
-    it('org info --help exits 0', () => {
-      const result = executeCli(binPath, ['claude', 'org', 'info', '--help']);
+    it('org info --help exits 0', async () => {
+      const result = await executeCli(binPath, ['claude', 'org', 'info', '--help']);
       expect(result.status).toBe(0);
       expect(result.stdout).toContain('organization');
     });

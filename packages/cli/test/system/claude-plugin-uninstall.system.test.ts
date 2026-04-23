@@ -69,13 +69,13 @@ describe('claude plugin uninstall command (system test)', () => {
     cleanupTempDirs();
   });
 
-  it('uninstalls a plugin and removes all artifacts', () => {
+  it('uninstalls a plugin and removes all artifacts', async () => {
     const tempDir = createTempDir();
     const fakeHome = safePath.join(tempDir, 'home');
     mkdirSyncReal(fakeHome, { recursive: true });
     setupInstalledPlugin(fakeHome, 'my-skill', 'my-market');
 
-    const { result, parsed } = executeCliAndParseYaml(binPath, [
+    const { result, parsed } = await executeCliAndParseYaml(binPath, [
       'claude', 'plugin', 'uninstall', 'my-skill@my-market',
     ], { env: fakeHomeEnv(fakeHome) });
 
@@ -87,12 +87,12 @@ describe('claude plugin uninstall command (system test)', () => {
     ).toBe(false);
   });
 
-  it('is idempotent when plugin is not installed', () => {
+  it('is idempotent when plugin is not installed', async () => {
     const tempDir = createTempDir();
     const fakeHome = safePath.join(tempDir, 'home');
     mkdirSyncReal(safePath.join(fakeHome, '.claude'), { recursive: true });
 
-    const { result, parsed } = executeCliAndParseYaml(binPath, [
+    const { result, parsed } = await executeCliAndParseYaml(binPath, [
       'claude', 'plugin', 'uninstall', 'missing@market',
     ], { env: fakeHomeEnv(fakeHome) });
 
@@ -101,13 +101,13 @@ describe('claude plugin uninstall command (system test)', () => {
     expect(parsed.pluginsRemoved).toBe(0);
   });
 
-  it('dry-run shows what would be removed without removing files', () => {
+  it('dry-run shows what would be removed without removing files', async () => {
     const tempDir = createTempDir();
     const fakeHome = safePath.join(tempDir, 'home');
     mkdirSyncReal(fakeHome, { recursive: true });
     setupInstalledPlugin(fakeHome, 'dry-skill', 'dry-market');
 
-    const { result, parsed } = executeCliAndParseYaml(binPath, [
+    const { result, parsed } = await executeCliAndParseYaml(binPath, [
       'claude', 'plugin', 'uninstall', 'dry-skill@dry-market', '--dry-run',
     ], { env: fakeHomeEnv(fakeHome) });
 
@@ -120,12 +120,12 @@ describe('claude plugin uninstall command (system test)', () => {
     ).toBe(true);
   });
 
-  it('fails with non-zero exit code when no plugin key given and --all not specified', () => {
+  it('fails with non-zero exit code when no plugin key given and --all not specified', async () => {
     const tempDir = createTempDir();
     const fakeHome = safePath.join(tempDir, 'home');
     mkdirSyncReal(fakeHome, { recursive: true });
 
-    const { result } = executeCliAndParseYaml(binPath, [
+    const { result } = await executeCliAndParseYaml(binPath, [
       'claude', 'plugin', 'uninstall',
     ], { env: fakeHomeEnv(fakeHome) });
 

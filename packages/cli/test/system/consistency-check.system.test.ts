@@ -47,7 +47,7 @@ function setupConsistencyTestSuite() {
     writeTestFile(safePath.join(tempDir, 'package.json'), JSON.stringify(pkg));
   };
 
-  const runVerify = (tempDir: string) => {
+  const runVerify = async (tempDir: string) => {
     return executeCli(binPath, ['--cwd', tempDir, 'verify', '--only', 'consistency']);
   };
 
@@ -71,115 +71,115 @@ describe('vat verify consistency checks (system test)', () => {
     suite.cleanup();
   });
 
-  it('should pass when all skills are in package.json and assigned to plugins', () => {
+  it('should pass when all skills are in package.json and assigned to plugins', async () => {
     const tempDir = suite.setupTwoSkillsWithMarketplace(['skill-a', 'skill-b'], 'skills: "*"');
 
-    const result = suite.runVerify(tempDir);
+    const result = await suite.runVerify(tempDir);
     expect(result.status).toBe(0);
   });
 
-  it('should error when published skill is missing from package.json vat.skills', () => {
+  it('should error when published skill is missing from package.json vat.skills', async () => {
     const tempDir = suite.createTempDir();
     suite.createSkillSource(tempDir, 'skill-a');
     suite.createSkillSource(tempDir, 'skill-b');
     suite.writePackageJson(tempDir, ['skill-a']);
     suite.writeSkillsOnlyConfig(tempDir);
 
-    const result = suite.runVerify(tempDir);
+    const result = await suite.runVerify(tempDir);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('skill-b');
     expect(result.stderr).toContain('PUBLISHED_SKILL_NOT_IN_PACKAGE_JSON');
     expect(result.stderr).toContain('publish: false');
   });
 
-  it('should error when package.json vat.skills lists undiscovered skill', () => {
+  it('should error when package.json vat.skills lists undiscovered skill', async () => {
     const tempDir = suite.createTempDir();
     suite.createSkillSource(tempDir, 'skill-a');
     suite.writePackageJson(tempDir, ['skill-a', 'ghost-skill']);
     suite.writeSkillsOnlyConfig(tempDir);
 
-    const result = suite.runVerify(tempDir);
+    const result = await suite.runVerify(tempDir);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('ghost-skill');
     expect(result.stderr).toContain('PACKAGE_JSON_LISTS_UNKNOWN_SKILL');
   });
 
-  it('should error when published skill is not assigned to any plugin', () => {
+  it('should error when published skill is not assigned to any plugin', async () => {
     const tempDir = suite.setupTwoSkillsWithMarketplace(
       ['skill-a', 'skill-b'],
       'skills:\n            - "skill-a"'
     );
 
-    const result = suite.runVerify(tempDir);
+    const result = await suite.runVerify(tempDir);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('skill-b');
     expect(result.stderr).toContain('PUBLISHED_SKILL_NOT_IN_PLUGIN');
   });
 
-  it('should suppress checks for skills with publish: false', () => {
+  it('should suppress checks for skills with publish: false', async () => {
     const tempDir = suite.createTempDir();
     suite.createSkillSource(tempDir, 'skill-a');
     suite.createSkillSource(tempDir, 'dev-skill');
     suite.writePackageJson(tempDir, ['skill-a']);
     suite.writeMarketplaceConfig(tempDir, 'skills:\n            - "skill-a"', '  config:\n    dev-skill:\n      publish: false\n');
 
-    const result = suite.runVerify(tempDir);
+    const result = await suite.runVerify(tempDir);
     expect(result.status).toBe(0);
     expect(result.stderr).toContain('SKILL_UNPUBLISHED');
     expect(result.stderr).toContain('dev-skill');
   });
 
-  it('should warn when unpublished skill is listed in package.json', () => {
+  it('should warn when unpublished skill is listed in package.json', async () => {
     const tempDir = suite.createTempDir();
     suite.createSkillSource(tempDir, 'skill-a');
     suite.writePackageJson(tempDir, ['skill-a']);
     suite.writeSkillsOnlyConfig(tempDir, '  config:\n    skill-a:\n      publish: false\n');
 
-    const result = suite.runVerify(tempDir);
+    const result = await suite.runVerify(tempDir);
     expect(result.status).toBe(0);
     expect(result.stderr).toContain('UNPUBLISHED_SKILL_IN_PACKAGE_JSON');
   });
 
-  it('should error when skills.config references unknown skill name', () => {
+  it('should error when skills.config references unknown skill name', async () => {
     const tempDir = suite.createTempDir();
     suite.createSkillSource(tempDir, 'skill-a');
     suite.writePackageJson(tempDir, ['skill-a']);
     suite.writeSkillsOnlyConfig(tempDir, '  config:\n    typo-skill:\n      publish: false\n');
 
-    const result = suite.runVerify(tempDir);
+    const result = await suite.runVerify(tempDir);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('typo-skill');
     expect(result.stderr).toContain('CONFIG_REFERENCES_UNKNOWN_SKILL');
   });
 
-  it('should error when plugin references non-existent skill selector', () => {
+  it('should error when plugin references non-existent skill selector', async () => {
     const tempDir = suite.createTempDir();
     suite.createSkillSource(tempDir, 'skill-a');
     suite.writePackageJson(tempDir, ['skill-a']);
     suite.writeMarketplaceConfig(tempDir, 'skills:\n            - "skill-a"\n            - "nonexistent-skill"');
 
-    const result = suite.runVerify(tempDir);
+    const result = await suite.runVerify(tempDir);
     expect(result.status).toBe(1);
     expect(result.stderr).toContain('nonexistent-skill');
     expect(result.stderr).toContain('PLUGIN_REFERENCES_UNKNOWN_SKILL');
   });
 
-  it('should skip package.json checks when no package.json exists', () => {
+  it('should skip package.json checks when no package.json exists', async () => {
     const tempDir = suite.createTempDir();
     suite.createSkillSource(tempDir, 'skill-a');
     suite.writeSkillsOnlyConfig(tempDir);
 
-    const result = suite.runVerify(tempDir);
+    const result = await suite.runVerify(tempDir);
     expect(result.status).toBe(0);
   });
 
-  it('should skip plugin assignment checks when no claude.marketplaces configured', () => {
+  it('should skip plugin assignment checks when no claude.marketplaces configured', async () => {
     const tempDir = suite.createTempDir();
     suite.createSkillSource(tempDir, 'skill-a');
     suite.writePackageJson(tempDir, ['skill-a']);
     suite.writeSkillsOnlyConfig(tempDir);
 
-    const result = suite.runVerify(tempDir);
+    const result = await suite.runVerify(tempDir);
     expect(result.status).toBe(0);
   });
 });

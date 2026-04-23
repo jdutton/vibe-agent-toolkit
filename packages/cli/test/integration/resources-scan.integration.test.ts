@@ -24,12 +24,12 @@ describe('vat resources scan (integration)', () => {
     cleanupTestTempDir(tempDir);
   });
 
-  it('should scan directory and output YAML', () => {
+  it('should scan directory and output YAML', async () => {
     // Create test markdown files
     writeTestFile(safePath.join(tempDir, 'README.md'), '# Test\n[link](./other.md)');
     writeTestFile(safePath.join(tempDir, 'other.md'), '# Other');
 
-    const { result, parsed } = executeCliAndParseYaml(binPath, [
+    const { result, parsed } = await executeCliAndParseYaml(binPath, [
       'resources',
       'scan',
       tempDir,
@@ -42,27 +42,27 @@ describe('vat resources scan (integration)', () => {
     expect(parsed.filesScanned).toBeGreaterThan(0);
   });
 
-  it('should exit 0 even if no files found', () => {
-    const result = executeCli(binPath, ['resources', 'scan', tempDir]);
+  it('should exit 0 even if no files found', async () => {
+    const result = await executeCli(binPath, ['resources', 'scan', tempDir]);
 
     expect(result.status).toBe(0);
   });
 
-  it('should use current directory if no path provided', () => {
+  it('should use current directory if no path provided', async () => {
     writeTestFile(safePath.join(tempDir, 'test.md'), '# Test');
 
-    const result = executeCli(binPath, ['resources', 'scan'], { cwd: tempDir });
+    const result = await executeCli(binPath, ['resources', 'scan'], { cwd: tempDir });
 
     expect(result.status).toBe(0);
   });
 
-  it('should scan multiple files successfully', () => {
+  it('should scan multiple files successfully', async () => {
     // Create test files
     writeTestFile(safePath.join(tempDir, 'doc1.md'), '# Same Content\nThis is identical.');
     writeTestFile(safePath.join(tempDir, 'doc2.md'), '# Same Content\nThis is identical.');
     writeTestFile(safePath.join(tempDir, 'unique.md'), '# Different Content');
 
-    const { result, parsed } = executeCliAndParseYaml(binPath, [
+    const { result, parsed } = await executeCliAndParseYaml(binPath, [
       'resources',
       'scan',
       tempDir,
@@ -74,10 +74,10 @@ describe('vat resources scan (integration)', () => {
 
   // Note: --verbose flag for scan is currently not working due to conflict
   // with parent command's --verbose. This test is skipped until that's fixed.
-  it.skip('should include checksums in file output with --verbose flag', () => {
+  it.skip('should include checksums in file output with --verbose flag', async () => {
     writeTestFile(safePath.join(tempDir, 'test.md'), '# Test');
 
-    const { result, parsed } = executeCliAndParseYaml(binPath, [
+    const { result, parsed } = await executeCliAndParseYaml(binPath, [
       'resources',
       'scan',
       tempDir,

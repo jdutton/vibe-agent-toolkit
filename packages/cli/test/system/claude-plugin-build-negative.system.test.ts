@@ -52,8 +52,8 @@ function writeConfigAndPkg(tempDir: string, configYaml: string): void {
   writeTestFile(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), configYaml);
 }
 
-function runSkillsThenPluginBuild(tempDir: string): ReturnType<typeof executeCli> {
-  executeCli(binPath, ['skills', 'build'], { cwd: tempDir });
+async function runSkillsThenPluginBuild(tempDir: string): ReturnType<typeof executeCli> {
+  await executeCli(binPath, ['skills', 'build'], { cwd: tempDir });
   return executeCli(binPath, ['claude', 'plugin', 'build'], { cwd: tempDir });
 }
 
@@ -73,29 +73,29 @@ function seedPluginP1WithMinimalConfig(tempDir: string): void {
 describe('vat claude plugin build (negative paths)', () => {
   afterEach(() => cleanupTempDirs());
 
-  it('errors on malformed hooks/hooks.json', () => {
+  it('errors on malformed hooks/hooks.json', async () => {
     const tempDir = createTempDir();
     seedPluginP1WithMinimalConfig(tempDir);
     mkdirSyncReal(safePath.join(tempDir, 'plugins', 'p1', 'hooks'), { recursive: true });
     writeTestFile(safePath.join(tempDir, 'plugins', 'p1', 'hooks', 'hooks.json'), '{not json');
 
-    const result = runSkillsThenPluginBuild(tempDir);
+    const result = await runSkillsThenPluginBuild(tempDir);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('hooks.json');
   });
 
-  it('errors on malformed .mcp.json', () => {
+  it('errors on malformed .mcp.json', async () => {
     const tempDir = createTempDir();
     seedPluginP1WithMinimalConfig(tempDir);
     mkdirSyncReal(safePath.join(tempDir, 'plugins', 'p1'), { recursive: true });
     writeTestFile(safePath.join(tempDir, 'plugins', 'p1', '.mcp.json'), 'bogus');
 
-    const result = runSkillsThenPluginBuild(tempDir);
+    const result = await runSkillsThenPluginBuild(tempDir);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('.mcp.json');
   });
 
-  it('errors when files[].source is missing', () => {
+  it('errors when files[].source is missing', async () => {
     const tempDir = createTempDir();
     seedPluginLocalSkill(tempDir, 'p1', 'skill-a');
     writeTestFile(
@@ -116,12 +116,12 @@ claude:
               dest: hooks/missing.mjs
 `,
     );
-    const result = runSkillsThenPluginBuild(tempDir);
+    const result = await runSkillsThenPluginBuild(tempDir);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain('dist/missing.mjs');
   });
 
-  it('errors when the same plugin name is declared in two marketplaces', () => {
+  it('errors when the same plugin name is declared in two marketplaces', async () => {
     const tempDir = createTempDir();
     seedPluginLocalSkill(tempDir, 'dup', 'skill-a');
     writeTestFile(
@@ -145,20 +145,20 @@ claude:
           skills: []
 `,
     );
-    const result = runSkillsThenPluginBuild(tempDir);
+    const result = await runSkillsThenPluginBuild(tempDir);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/declared more than once|globally unique/i);
   });
 
-  it('errors when a plugin has no plugin dir and no files[] (empty-plugin guard)', () => {
+  it('errors when a plugin has no plugin dir and no files[] (empty-plugin guard)', async () => {
     const tempDir = createTempDir();
     writeConfigAndPkg(tempDir, configMin('        - name: empty\n          skills: []\n'));
-    const result = runSkillsThenPluginBuild(tempDir);
+    const result = await runSkillsThenPluginBuild(tempDir);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toMatch(/has no content/i);
   });
 
-  it('does not copy gitignored node_modules from plugins/<p>/', () => {
+  it('does not copy gitignored node_modules from plugins/<p>/', async () => {
     const tempDir = createTempDir();
     seedPluginLocalSkill(tempDir, 'p1', 'skill-a');
     writeTestFile(
@@ -179,7 +179,7 @@ claude:
     safeExecSync('git', ['add', '-A'], { cwd: tempDir });
     safeExecSync('git', ['commit', '-q', '-m', 'init'], { cwd: tempDir });
 
-    const result = runSkillsThenPluginBuild(tempDir);
+    const result = await runSkillsThenPluginBuild(tempDir);
     expect(result.status).toBe(0);
     const out = safePath.join(
       tempDir,

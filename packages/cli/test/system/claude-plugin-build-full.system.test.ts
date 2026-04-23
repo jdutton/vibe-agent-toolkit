@@ -77,14 +77,14 @@ claude:
 describe('vat claude plugin build (full plugin support)', () => {
   afterEach(() => cleanupTempDirs());
 
-  it('produces a full plugin tree with commands, hooks, agents, mcp, scripts, plugin-local skills, files[], merged plugin.json', () => {
+  it('produces a full plugin tree with commands, hooks, agents, mcp, scripts, plugin-local skills, files[], merged plugin.json', async () => {
     const tempDir = createTempDir();
     buildFixture(tempDir);
 
-    const sb = executeCliAndParseYaml(binPath, ['skills', 'build'], { cwd: tempDir });
+    const sb = await executeCliAndParseYaml(binPath, ['skills', 'build'], { cwd: tempDir });
     expect(sb.result.status).toBe(0);
 
-    const pb = executeCliAndParseYaml(binPath, ['claude', 'plugin', 'build'], { cwd: tempDir });
+    const pb = await executeCliAndParseYaml(binPath, ['claude', 'plugin', 'build'], { cwd: tempDir });
     expect(pb.result.status).toBe(0);
 
     const outDir = safePath.join(

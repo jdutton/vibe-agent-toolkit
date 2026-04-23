@@ -25,13 +25,13 @@ const CLI_BIN = getBinPath(import.meta.url);
 /**
  * Execute vat doctor command and return parsed result
  */
-function runVatDoctor(cwd: string, options?: { verbose?: boolean }): {
+async function runVatDoctor(cwd: string, options?: { verbose?: boolean }): Promise<{
   exitCode: number;
   output: string;
   allPassed: boolean;
-} {
+}> {
   const args = options?.verbose ? ['doctor', '--verbose'] : ['doctor'];
-  const result = executeCli(CLI_BIN, args, { cwd });
+  const result = await executeCli(CLI_BIN, args, { cwd });
 
   const output = (result.stdout ?? '') + (result.stderr ?? '');
   const exitCode = result.status ?? 1;
@@ -46,8 +46,8 @@ function runVatDoctor(cwd: string, options?: { verbose?: boolean }): {
 
 describe('vat doctor - system tests (self-hosting)', () => {
   describe('running from project root', () => {
-    it('passes all checks when run from project root', () => {
-      const result = runVatDoctor(PROJECT_ROOT);
+    it('passes all checks when run from project root', async () => {
+      const result = await runVatDoctor(PROJECT_ROOT);
 
       expect(result.exitCode).toBe(0);
       expect(result.allPassed).toBe(true);
@@ -55,8 +55,8 @@ describe('vat doctor - system tests (self-hosting)', () => {
       expect(result.output).toContain('All checks passed');
     });
 
-    it('reports correct summary counts', () => {
-      const result = runVatDoctor(PROJECT_ROOT);
+    it('reports correct summary counts', async () => {
+      const result = await runVatDoctor(PROJECT_ROOT);
 
       // Simple digit/digit pattern - not vulnerable to ReDoS
       // eslint-disable-next-line sonarjs/slow-regex -- Safe pattern: \d+\/\d+ has no backtracking
@@ -65,22 +65,22 @@ describe('vat doctor - system tests (self-hosting)', () => {
   });
 
   describe('running from subdirectories', () => {
-    it('passes all checks when run from packages/ subdirectory', () => {
-      const result = runVatDoctor(PACKAGES_DIR);
+    it('passes all checks when run from packages/ subdirectory', async () => {
+      const result = await runVatDoctor(PACKAGES_DIR);
 
       expect(result.exitCode).toBe(0);
       expect(result.allPassed).toBe(true);
     });
 
-    it('passes all checks when run from packages/cli/ subdirectory', () => {
-      const result = runVatDoctor(CLI_DIR);
+    it('passes all checks when run from packages/cli/ subdirectory', async () => {
+      const result = await runVatDoctor(CLI_DIR);
 
       expect(result.exitCode).toBe(0);
       expect(result.allPassed).toBe(true);
     });
 
-    it('shows context when running from subdirectory', () => {
-      const result = runVatDoctor(PACKAGES_DIR);
+    it('shows context when running from subdirectory', async () => {
+      const result = await runVatDoctor(PACKAGES_DIR);
 
       expect(result.output).toContain('📍 Project Context');
       expect(result.output).toContain('Current directory:');
@@ -89,9 +89,9 @@ describe('vat doctor - system tests (self-hosting)', () => {
   });
 
   describe('verbose mode', () => {
-    it('shows all checks with --verbose', () => {
-      const normal = runVatDoctor(PROJECT_ROOT);
-      const verbose = runVatDoctor(PROJECT_ROOT, { verbose: true });
+    it('shows all checks with --verbose', async () => {
+      const normal = await runVatDoctor(PROJECT_ROOT);
+      const verbose = await runVatDoctor(PROJECT_ROOT, { verbose: true });
 
       // Verbose shows more checks (all passing checks)
       const normalChecks = (normal.output.match(/✅/g) ?? []).length;

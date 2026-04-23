@@ -144,31 +144,34 @@ export function executeValidateAndParse(
 }
 
 /**
- * Helper to assert validation failure and check error details in stderr
- * Encapsulates the common pattern of:
- * 1. Running validation and expecting failure
- * 2. Parsing YAML output and verifying error count
- * 3. Running text format command and checking stderr for specific error
+ * Assert validation failure and check that the expected error string(s) appear
+ * in the command's output (combined stdout + stderr). Runs the CLI once — the
+ * YAML output carries the error details (file paths, field names, AJV messages)
+ * that earlier versions of this helper re-checked via a second `--format text`
+ * invocation.
  *
- * @returns Object with both YAML and text results for additional assertions
+ * @param expectedInOutput  Single string or array of strings that must all
+ *                          appear somewhere in the combined stdout/stderr.
+ * @returns { result, parsed } for additional assertions (e.g. errorsFound).
  */
-export function assertValidationFailureWithErrorInStderr(
+export function assertValidationFailureWithError(
   binPath: string,
   projectDir: string,
-  expectedErrorInStderr: string
-): { yamlResult: CliResult; textResult: CliResult; parsed: Record<string, unknown> } {
+  expectedInOutput: string | string[]
+): { result: CliResult; parsed: Record<string, unknown> } {
   const { result, parsed } = executeValidateAndParse(binPath, projectDir);
 
-  // Should fail due to validation error
   expect(result.status).toBe(1);
   expect(parsed.status).toBe('failed');
   expect(parsed.errorsFound).toBeGreaterThan(0);
 
-  // Check error details in stderr (use text format)
-  const textResult = executeCli(binPath, ['resources', 'validate', '--format', 'text'], { cwd: projectDir });
-  expect(textResult.stderr).toContain(expectedErrorInStderr);
+  const combined = result.stdout + result.stderr;
+  const expectedList = Array.isArray(expectedInOutput) ? expectedInOutput : [expectedInOutput];
+  for (const expected of expectedList) {
+    expect(combined).toContain(expected);
+  }
 
-  return { yamlResult: result, textResult, parsed };
+  return { result, parsed };
 }
 
 /**

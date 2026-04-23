@@ -23,8 +23,8 @@ describe('RAG stats command (system test)', () => {
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
 
-  it('should show RAG database statistics', () => {
-    const { result, parsed } = executeCliAndParseYaml(
+  it('should show RAG database statistics', async () => {
+    const { result, parsed } = await executeCliAndParseYaml(
       binPath,
       ['rag', 'stats', '--db', suite.dbPath],
       { cwd: suite.projectDir }

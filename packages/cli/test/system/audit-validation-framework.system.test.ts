@@ -186,11 +186,11 @@ describe('vat audit — validation framework behavior (system test)', () => {
   // -------------------------------------------------------------------------
   // (c) Audit exits 0 even when validation errors are surfaced
   // -------------------------------------------------------------------------
-  it('exits 0 even when LINK_MISSING_TARGET fires (severity=error)', () => {
+  it('exits 0 even when LINK_MISSING_TARGET fires (severity=error)', async () => {
     const tempDir = ctx.createTempDir();
     const projectDir = setupProjectWithBrokenLink(tempDir);
 
-    const { result } = executeCliAndParseYaml(ctx.binPath, ['audit', projectDir]);
+    const { result } = await executeCliAndParseYaml(ctx.binPath, ['audit', projectDir]);
 
     // Audit must ALWAYS exit 0 for validation results
     expect(result.status).toBe(0);
@@ -202,11 +202,11 @@ describe('vat audit — validation framework behavior (system test)', () => {
   // (a) Audit shows LINK_MISSING_TARGET even when validation.allow would
   //     silence it in `vat skills validate`
   // -------------------------------------------------------------------------
-  it('shows LINK_MISSING_TARGET even when validation.allow is set (allow is ignored by audit)', () => {
+  it('shows LINK_MISSING_TARGET even when validation.allow is set (allow is ignored by audit)', async () => {
     const tempDir = ctx.createTempDir();
     const projectDir = setupProjectWithBrokenLinkAllowed(tempDir);
 
-    const { result } = executeCliAndParseYaml(ctx.binPath, ['audit', projectDir]);
+    const { result } = await executeCliAndParseYaml(ctx.binPath, ['audit', projectDir]);
 
     // Status must be 0 regardless
     expect(result.status).toBe(0);
@@ -217,11 +217,11 @@ describe('vat audit — validation framework behavior (system test)', () => {
   // -------------------------------------------------------------------------
   // (b) Audit hides codes when severity is 'ignore' in config
   // -------------------------------------------------------------------------
-  it('hides LINK_OUTSIDE_PROJECT when severity.LINK_OUTSIDE_PROJECT is ignore', () => {
+  it('hides LINK_OUTSIDE_PROJECT when severity.LINK_OUTSIDE_PROJECT is ignore', async () => {
     const tempDir = ctx.createTempDir();
     const projectDir = setupProjectWithIgnoredSeverity(tempDir);
 
-    const { result, parsed } = executeCliAndParseYaml(ctx.binPath, ['audit', projectDir]);
+    const { result, parsed } = await executeCliAndParseYaml(ctx.binPath, ['audit', projectDir]);
 
     expect(result.status).toBe(0);
     // LINK_OUTSIDE_PROJECT must NOT appear anywhere in the output
@@ -233,11 +233,11 @@ describe('vat audit — validation framework behavior (system test)', () => {
   // -------------------------------------------------------------------------
   // Sanity: audit shows LINK_OUTSIDE_PROJECT when no severity override
   // -------------------------------------------------------------------------
-  it('shows LINK_OUTSIDE_PROJECT when no severity override (default behavior)', () => {
+  it('shows LINK_OUTSIDE_PROJECT when no severity override (default behavior)', async () => {
     const tempDir = ctx.createTempDir();
     const projectDir = setupProjectWithOutsideLink(tempDir);
 
-    const { result } = executeCliAndParseYaml(ctx.binPath, ['audit', projectDir]);
+    const { result } = await executeCliAndParseYaml(ctx.binPath, ['audit', projectDir]);
 
     expect(result.status).toBe(0);
     expect(result.stderr + result.stdout).toContain('LINK_OUTSIDE_PROJECT');
@@ -246,8 +246,8 @@ describe('vat audit — validation framework behavior (system test)', () => {
   // -------------------------------------------------------------------------
   // Help text: audit exit codes updated to reflect advisory-only behavior
   // -------------------------------------------------------------------------
-  it('help text documents that audit always exits 0 for validation results', () => {
-    const result = executeCli(ctx.binPath, ['audit', '--help']);
+  it('help text documents that audit always exits 0 for validation results', async () => {
+    const result = await executeCli(ctx.binPath, ['audit', '--help']);
 
     // --help must exit 0
     expect(result.status).toBe(0);
@@ -263,12 +263,12 @@ describe('vat audit — validation framework behavior (system test)', () => {
   // Audit does NOT use --user path here (just path-based test)
   // This verifies the flat audit path (non-hierarchical) exits 0 on errors
   // -------------------------------------------------------------------------
-  it('exits 0 for broken-link skill passed as direct SKILL.md path', () => {
+  it('exits 0 for broken-link skill passed as direct SKILL.md path', async () => {
     const tempDir = ctx.createTempDir();
     const projectDir = setupProjectWithBrokenLink(tempDir);
     const skillPath = safePath.join(projectDir, 'skills', 'SKILL.md');
 
-    const { result } = executeCliAndParseYaml(ctx.binPath, ['audit', skillPath]);
+    const { result } = await executeCliAndParseYaml(ctx.binPath, ['audit', skillPath]);
 
     expect(result.status).toBe(0);
     expect(result.stderr + result.stdout).toContain('LINK_MISSING_TARGET');
