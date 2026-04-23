@@ -7,6 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Skill-claude-plugin recognition in `vat audit`.** Introduces the **skill-claude-plugin** artifact shape — a skill that self-publishes as a Claude plugin by co-locating `.claude-plugin/plugin.json` alongside its root `SKILL.md`. Audit now emits independent `ValidationResult` entries for each surface (one `agent-skill`, one `claude-plugin`) instead of reporting only the plugin and silently ignoring the skill. The skill remains platform-agnostic; the graduation to skill-claude-plugin adds Claude-specific packaging only. See [`docs/architecture/skill-packaging.md`](docs/architecture/skill-packaging.md) for the full packaging-shape terminology (standalone skill / skill-claude-plugin / claude-plugin / claude-marketplace).
+- **`SKILL_CLAUDE_PLUGIN_NAME_MISMATCH`** validation code (default `warning`). Fires on the plugin result when a skill-claude-plugin's `plugin.json.name` disagrees with the co-located `SKILL.md` frontmatter `name`. The skill is authoritative; the plugin manifest is a distribution wrapper and should match unless the plugin is intentionally namespaced (in which case use `validation.severity` or `validation.allow`).
+- **Self-contained Claude Code plugin support in `vat claude plugin build`.**
+  Adopters can now bundle commands, hooks, agents, MCP servers, scripts, raw
+  plugin-local `SKILL.md` files, and author-supplied `plugin.json` metadata from a
+  per-plugin `plugins/<name>/` directory. The entire directory is tree-copied
+  verbatim (respecting `.gitignore`). Pre-existing pool-to-plugin skill selectors
+  (`marketplace.plugins[].skills`) are preserved — a plugin can still declare
+  `skills: "*"` or `skills: [names]` to import pool skills (built by
+  `vat skills build`) into its bundle. The skills stream is unchanged: `vat skills
+  build` continues to produce `dist/skills/<name>/` only. New schema fields on
+  marketplace plugin entries: `source` (path override, default `plugins/<name>`)
+  and `files[]` (compiled-artifact mappings). The 5-phase plugin build pipeline
+  is deterministically ordered (discovery → tree-copy → pool-skill import →
+  `files[]` → merged `plugin.json`). YAML summary adds `commandsCopied`,
+  `hooksCopied`, `agentsCopied`, `mcpCopied`, `treeFilesCopied`,
+  `explicitFilesCopied` per plugin. Case-sensitivity mismatches between declared
+  plugin names and on-disk dirs now fail the build to catch Linux-CI drift.
+
+### Changed
+- `vat audit` directory-entry detection uses a new `enumerateSurfaces()` helper that returns every manifest present at the directory root, replacing single-result detection in the multi-surface case. Single-surface directories retain their legacy single-validator dispatch, including the marketplace-with-co-located-plugin collapse.
+- `packages/cli/src/commands/audit/hierarchical-output.ts` comments standardized on the new terminology: the pattern previously documented as "standalone plugin skill (no skills subdir)" is now called **skill-claude-plugin**.
+- Upgraded `vibe-validate` and `@vibe-validate/cli` dev dependencies from `^0.19.1` to `^0.19.4`.
+
+### Documentation
+- New reference doc `docs/architecture/skill-packaging.md` enumerates the four packaging shapes with layouts and applicable validation.
+- `docs/README.md` gains a "Validation & Quality Framework" section indexing the three stance docs (`skill-quality-and-compatibility.md`, `validation-codes.md`, `skill-smell-philosophy.md`).
+- New `docs/CLAUDE.md` and `docs/architecture/CLAUDE.md` agent navigators pull in each directory's README via `@README.md` and add agent-only guidance for audit/validation work.
+- Root `/CLAUDE.md` "Questions?" section now links to directories rather than README files — child CLAUDE.md files auto-trigger and pull in their README once, avoiding the previous double-read pattern.
+- `packages/cli/CLAUDE.md` gains a "Validation Framework References" section.
+
 ## [0.1.33] - 2026-04-21
 
 ### Added

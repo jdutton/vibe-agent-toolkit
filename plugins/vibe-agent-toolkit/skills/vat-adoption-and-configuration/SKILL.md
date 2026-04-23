@@ -84,7 +84,6 @@ claude:
       plugins:
         - name: my-plugin
           description: "What this plugin does"
-          skills: "*"
 
 rag:
   stores:
