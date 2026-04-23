@@ -61,6 +61,11 @@ Plugin directories contain a `.claude-plugin/plugin.json` manifest:
 my-plugin/
 ├── .claude-plugin/
 │   └── plugin.json      # Plugin manifest
+├── commands/            # slash commands (optional)
+├── agents/              # subagents (optional)
+├── hooks/
+│   └── hooks.json       # hook registry (optional)
+├── .mcp.json            # MCP server config (optional)
 └── skills/
     └── skill1.md
 ```
@@ -69,6 +74,7 @@ my-plugin/
 - `plugin.json` exists and is valid JSON
 - Schema validation against plugin manifest schema
 - Referenced skills exist
+- `hooks/hooks.json` and `.mcp.json` parse as valid JSON when present (emits `PLUGIN_INVALID_JSON`)
 
 ### 2. Marketplace Directories
 

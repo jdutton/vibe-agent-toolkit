@@ -117,8 +117,7 @@ describe('vat claude plugin build (full plugin support)', () => {
     expect(pluginJson.license).toBe('Apache-2.0');
     expect(pluginJson.author).toEqual({ name: 'Test Org', email: 'ops@test.example' });
 
-    const parsed = pb.parsed as Record<string, unknown>;
-    const mps = parsed['marketplaces'] as Array<Record<string, unknown>>;
+    const mps = pb.parsed['marketplaces'] as Array<Record<string, unknown>>;
     const plugins = mps[0]?.['plugins'] as Array<Record<string, unknown>>;
     expect(plugins[0]).toMatchObject({
       commandsCopied: 1,
