@@ -22,10 +22,10 @@ describe('RAG caching and incremental updates (system test)', () => {
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
 
-  it('should skip unchanged files on re-index', () => {
+  it('should skip unchanged files on re-index', async () => {
     // setupIndexedRagTest already indexed files once
     // First re-index should skip all files (no changes)
-    const { result: firstResult, parsed: firstParsed } = executeCliAndParseYaml(
+    const { result: firstResult, parsed: firstParsed } = await executeCliAndParseYaml(
       binPath,
       ['rag', 'index', '--db', suite.dbPath],
       { cwd: suite.projectDir }
@@ -42,7 +42,7 @@ describe('RAG caching and incremental updates (system test)', () => {
     expect(firstParsed.chunksDeleted).toBe(0);
 
     // Second re-index should also skip all files
-    const { result: secondResult, parsed: secondParsed } = executeCliAndParseYaml(
+    const { result: secondResult, parsed: secondParsed } = await executeCliAndParseYaml(
       binPath,
       ['rag', 'index', '--db', suite.dbPath],
       { cwd: suite.projectDir }
@@ -58,14 +58,14 @@ describe('RAG caching and incremental updates (system test)', () => {
     expect(secondParsed.chunksDeleted).toBe(0);
   });
 
-  it('should detect and re-index changed files', () => {
+  it('should detect and re-index changed files', async () => {
     const testFile = `${suite.projectDir}/docs/test-change.md`;
 
     // Create a test file
     fs.writeFileSync(testFile, '# Original Content\n\nThis is the original content.');
 
     // Index it
-    const { parsed: firstParsed } = executeCliAndParseYaml(
+    const { parsed: firstParsed } = await executeCliAndParseYaml(
       binPath,
       ['rag', 'index', '--db', suite.dbPath],
       { cwd: suite.projectDir }
@@ -74,7 +74,7 @@ describe('RAG caching and incremental updates (system test)', () => {
     expect(firstParsed.resourcesIndexed).toBeGreaterThanOrEqual(1);
 
     // Re-index without changes - should skip
-    const { parsed: secondParsed } = executeCliAndParseYaml(
+    const { parsed: secondParsed } = await executeCliAndParseYaml(
       binPath,
       ['rag', 'index', '--db', suite.dbPath],
       { cwd: suite.projectDir }
@@ -87,7 +87,7 @@ describe('RAG caching and incremental updates (system test)', () => {
     fs.writeFileSync(testFile, '# Modified Content\n\nThis content has been changed.');
 
     // Re-index - should detect change and update
-    const { parsed: thirdParsed } = executeCliAndParseYaml(
+    const { parsed: thirdParsed } = await executeCliAndParseYaml(
       binPath,
       ['rag', 'index', '--db', suite.dbPath],
       { cwd: suite.projectDir }

@@ -91,12 +91,12 @@ function setupPluginTestProject(
  * Run `vat claude plugin install <projectDir>` and assert it exits 0 with status: success.
  * Returns parsed YAML output for further assertions.
  */
-function runPluginInstall(
+async function runPluginInstall(
   binPath: string,
   projectDir: string,
   fakeHome: string
-): ReturnType<typeof executeCliAndParseYaml> {
-  const out = executeCliAndParseYaml(binPath, [
+): Promise<Awaited<ReturnType<typeof executeCliAndParseYaml>>> {
+  const out = await executeCliAndParseYaml(binPath, [
     'claude', 'plugin', 'install', projectDir,
   ], { env: fakeHomeEnv(fakeHome) });
   expect(out.result.status).toBe(0);
@@ -112,14 +112,14 @@ describe('claude plugin install command (system test)', () => {
     cleanupTempDirs();
   });
 
-  it('installs from local directory with plugin tree', () => {
+  it('installs from local directory with plugin tree', async () => {
     const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
 
     const { projectDir } = setupPluginTestProject(tempDir, 'pkg-local', 'test-market', [
       { name: 'my-skill' },
     ]);
 
-    runPluginInstall(binPath, projectDir, fakeHome);
+    await runPluginInstall(binPath, projectDir, fakeHome);
 
     expect(
       fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES, 'test-market', 'plugins', 'my-skill'))
@@ -131,9 +131,9 @@ describe('claude plugin install command (system test)', () => {
     expect(Object.keys(installed.plugins)).toContain('my-skill@test-market');
   });
 
-  it('shows structured stub for --target claude.ai', () => {
+  it('shows structured stub for --target claude.ai', async () => {
     const tempDir = createTempDir();
-    const { result, parsed } = executeCliAndParseYaml(binPath, [
+    const { result, parsed } = await executeCliAndParseYaml(binPath, [
       'claude', 'plugin', 'install', 'npm:@test/fake',
       '--target', 'claude.ai',
     ], { env: fakeHomeEnv(safePath.join(tempDir, 'home')) });
@@ -143,13 +143,13 @@ describe('claude plugin install command (system test)', () => {
     expect(parsed.requestedTarget).toBe('claude.ai');
   });
 
-  it('skips install when not a global npm install (--npm-postinstall)', () => {
+  it('skips install when not a global npm install (--npm-postinstall)', async () => {
     const tempDir = createTempDir();
     const fakeHome = safePath.join(tempDir, 'home');
     mkdirSyncReal(fakeHome, { recursive: true });
 
     // Build env without npm_config_global so isGlobalNpmInstall() returns false
-    const { result } = executeCliAndParseYaml(binPath, ['claude', 'plugin', 'install', '--npm-postinstall'], {
+    const { result } = await executeCliAndParseYaml(binPath, ['claude', 'plugin', 'install', '--npm-postinstall'], {
       env: { ...fakeHomeEnv(fakeHome), npm_lifecycle_event: '', npm_command: '' },
     });
 
@@ -158,7 +158,7 @@ describe('claude plugin install command (system test)', () => {
     expect(combined).toContain('Skipping');
   });
 
-  it('installs multiple plugins from a single project directory', () => {
+  it('installs multiple plugins from a single project directory', async () => {
     const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
 
     const { projectDir } = setupPluginTestProject(tempDir, 'multi-pkg', MULTI_MARKET, [
@@ -166,7 +166,7 @@ describe('claude plugin install command (system test)', () => {
       { name: SKILL_BETA },
     ]);
 
-    runPluginInstall(binPath, projectDir, fakeHome);
+    await runPluginInstall(binPath, projectDir, fakeHome);
 
     expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES, MULTI_MARKET, 'plugins', SKILL_ALPHA))).toBe(true);
     expect(fs.existsSync(safePath.join(claudeDir, PLUGINS_MARKETPLACES, MULTI_MARKET, 'plugins', SKILL_BETA))).toBe(true);
@@ -183,7 +183,7 @@ describe('claude plugin install command (system test)', () => {
     const tgzPath = safePath.join(tempDir, 'my-pkg-1.0.0.tgz');
     await tar.create({ gzip: true, file: tgzPath, cwd: projectDir, prefix: 'package' }, ['.']);
 
-    const { result, parsed } = executeCliAndParseYaml(binPath, [
+    const { result, parsed } = await executeCliAndParseYaml(binPath, [
       'claude', 'plugin', 'install', tgzPath,
     ], { env: fakeHomeEnv(fakeHome) });
 
@@ -194,7 +194,7 @@ describe('claude plugin install command (system test)', () => {
     ).toBe(true);
   });
 
-  it('reinstall overwrites existing plugin tree', () => {
+  it('reinstall overwrites existing plugin tree', async () => {
     const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
 
     const { projectDir } = setupPluginTestProject(tempDir, 'overwrite-pkg', 'ow-market', [
@@ -202,7 +202,7 @@ describe('claude plugin install command (system test)', () => {
     ]);
 
     // First install
-    const first = executeCliAndParseYaml(binPath, ['claude', 'plugin', 'install', projectDir], {
+    const first = await executeCliAndParseYaml(binPath, ['claude', 'plugin', 'install', projectDir], {
       env: fakeHomeEnv(fakeHome),
     });
     expect(first.result.status).toBe(0);
@@ -212,7 +212,7 @@ describe('claude plugin install command (system test)', () => {
     fs.writeFileSync(safePath.join(installedSkillDir, 'extra-sentinel.txt'), 'sentinel');
 
     // Second install (should overwrite — marketplace dir is rm-ed and re-copied)
-    const second = executeCliAndParseYaml(binPath, ['claude', 'plugin', 'install', projectDir], {
+    const second = await executeCliAndParseYaml(binPath, ['claude', 'plugin', 'install', projectDir], {
       env: fakeHomeEnv(fakeHome),
     });
     expect(second.result.status).toBe(0);
@@ -222,7 +222,7 @@ describe('claude plugin install command (system test)', () => {
     expect(fs.existsSync(safePath.join(installedSkillDir, 'extra-sentinel.txt'))).toBe(false);
   });
 
-  it('reports correct skillsInstalled count when plugin has skills/ subdirectory', () => {
+  it('reports correct skillsInstalled count when plugin has skills/ subdirectory', async () => {
     // Regression test: installPluginTreeAndExit previously passed [] to outputInstallSuccess
     // regardless of how many skills were actually copied, always reporting skillsInstalled: 0.
     const { tempDir, fakeHome } = createInstallTestContext(createTempDir);
@@ -231,7 +231,7 @@ describe('claude plugin install command (system test)', () => {
       { name: 'my-plugin', skills: [SKILL_ALPHA, SKILL_BETA, 'skill-gamma'] },
     ]);
 
-    const { parsed } = runPluginInstall(binPath, projectDir, fakeHome);
+    const { parsed } = await runPluginInstall(binPath, projectDir, fakeHome);
 
     expect(parsed.skillsInstalled).toBe(3);
     expect(parsed.skills).toHaveLength(3);

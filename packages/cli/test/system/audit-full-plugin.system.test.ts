@@ -29,30 +29,30 @@ function seedPlugin(tempDir: string): string {
 describe('vat audit (parse-only checks for full-plugin assets)', () => {
   afterEach(() => cleanupTempDirs());
 
-  it('reports an error when a built plugin ships malformed hooks.json', () => {
+  it('reports an error when a built plugin ships malformed hooks.json', async () => {
     const tempDir = createTempDir();
     const pluginRoot = seedPlugin(tempDir);
     mkdirSyncReal(safePath.join(pluginRoot, 'hooks'), { recursive: true });
     writeTestFile(safePath.join(pluginRoot, 'hooks', 'hooks.json'), '{not json');
 
-    const result = executeCli(binPath, ['audit', pluginRoot], { cwd: tempDir });
+    const result = await executeCli(binPath, ['audit', pluginRoot], { cwd: tempDir });
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('hooks.json');
     expect(result.stdout).toMatch(/severity:\s*error/);
   });
 
-  it('reports an error when .mcp.json is malformed', () => {
+  it('reports an error when .mcp.json is malformed', async () => {
     const tempDir = createTempDir();
     const pluginRoot = seedPlugin(tempDir);
     writeTestFile(safePath.join(pluginRoot, '.mcp.json'), 'bogus');
 
-    const result = executeCli(binPath, ['audit', pluginRoot], { cwd: tempDir });
+    const result = await executeCli(binPath, ['audit', pluginRoot], { cwd: tempDir });
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('.mcp.json');
     expect(result.stdout).toMatch(/severity:\s*error/);
   });
 
-  it('passes when commands/*.md and agents/*.md exist and JSON files parse', () => {
+  it('passes when commands/*.md and agents/*.md exist and JSON files parse', async () => {
     const tempDir = createTempDir();
     const pluginRoot = seedPlugin(tempDir);
     mkdirSyncReal(safePath.join(pluginRoot, 'commands'), { recursive: true });
@@ -63,7 +63,7 @@ describe('vat audit (parse-only checks for full-plugin assets)', () => {
     writeTestFile(safePath.join(pluginRoot, 'hooks', 'hooks.json'), '{"events":{}}');
     writeTestFile(safePath.join(pluginRoot, '.mcp.json'), '{"mcpServers":{}}');
 
-    const result = executeCli(binPath, ['audit', pluginRoot], { cwd: tempDir });
+    const result = await executeCli(binPath, ['audit', pluginRoot], { cwd: tempDir });
     expect(result.status).toBe(0);
   });
 });

@@ -34,8 +34,8 @@ describe('RAG index command (system test)', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('should index markdown files into RAG database', () => {
-    const { result, parsed } = executeCliAndParseYaml(
+  it('should index markdown files into RAG database', async () => {
+    const { result, parsed } = await executeCliAndParseYaml(
       binPath,
       ['rag', 'index', projectDir, '--db', dbPath],
       { cwd: projectDir }
@@ -51,7 +51,7 @@ describe('RAG index command (system test)', () => {
     expect(fs.existsSync(dbPath)).toBe(true);
   });
 
-  it('should index successfully on re-run', () => {
+  it('should index successfully on re-run', async () => {
     // Create a new project for this test with isolated database
     const reindexProjectDir = setupTestProject(tempDir, {
       name: 'reindex-test-project',
@@ -66,7 +66,7 @@ describe('RAG index command (system test)', () => {
     );
 
     // First index
-    const { result: result1, parsed: parsed1 } = executeCliAndParseYaml(
+    const { result: result1, parsed: parsed1 } = await executeCliAndParseYaml(
       binPath,
       ['rag', 'index', reindexProjectDir, '--db', reindexDbPath],
       { cwd: reindexProjectDir }
@@ -79,7 +79,7 @@ describe('RAG index command (system test)', () => {
     // Second index - should complete successfully
     // NOTE: Current LanceDB provider doesn't skip unchanged resources,
     // it re-indexes them. This is a known limitation.
-    const { result: result2, parsed: parsed2 } = executeCliAndParseYaml(
+    const { result: result2, parsed: parsed2 } = await executeCliAndParseYaml(
       binPath,
       ['rag', 'index', reindexProjectDir, '--db', reindexDbPath],
       { cwd: reindexProjectDir }
@@ -91,12 +91,12 @@ describe('RAG index command (system test)', () => {
     expect(parsed2.resourcesIndexed).toBeGreaterThanOrEqual(0);
   });
 
-  it('should error when no path and no project root', () => {
+  it('should error when no path and no project root', async () => {
     // Create a temp dir without .git (no project root)
     const nonProjectDir = safePath.join(tempDir, 'non-project');
     fs.mkdirSync(nonProjectDir);
 
-    const { result, parsed } = executeCliAndParseYaml(
+    const { result, parsed } = await executeCliAndParseYaml(
       binPath,
       ['rag', 'index'],
       { cwd: nonProjectDir }

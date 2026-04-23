@@ -29,7 +29,9 @@ async function createSimpleSkill(tempDir: string, skillName: string): Promise<st
 }
 
 /**
- * Helper: Execute install command and verify success
+ * Helper: Execute install command and verify success. Returns the raw
+ * result + parsed YAML so callers can make additional assertions (e.g.
+ * `parsed.dryRun`) without re-running the command.
  */
 function executeInstallAndExpectSuccess(
   binPath: string,
@@ -37,7 +39,7 @@ function executeInstallAndExpectSuccess(
   projectDir: string,
   expectedSkillName: string,
   expectedSourceType: string
-): void {
+): ReturnType<typeof executeCommandAndParse> {
   const { result, parsed } = executeCommandAndParse(binPath, args, projectDir);
 
   expect(result.status).toBe(0);
@@ -47,6 +49,8 @@ function executeInstallAndExpectSuccess(
   const skills = parsed.skills as Array<Record<string, unknown>>;
   expect(skills).toHaveLength(1);
   expect(skills[0]).toHaveProperty('name', expectedSkillName);
+
+  return { result, parsed };
 }
 
 describe('claude plugin install command (system test)', () => {
@@ -191,18 +195,12 @@ describe('claude plugin install command (system test)', () => {
       const zipPath = safePath.join(suite.tempDir, 'skill.zip');
       await writeFile(zipPath, 'fake zip');
 
-      executeInstallAndExpectSuccess(
+      const { parsed } = executeInstallAndExpectSuccess(
         suite.binPath,
         ['claude', 'plugin', 'install', zipPath, '-s', suite.skillsDir, '--dry-run'],
         suite.projectDir,
         'skill',
         'zip'
-      );
-
-      const { parsed } = executeCommandAndParse(
-        suite.binPath,
-        ['claude', 'plugin', 'install', zipPath, '-s', suite.skillsDir, '--dry-run'],
-        suite.projectDir
       );
       expect(parsed.dryRun).toBe(true);
     });
@@ -264,18 +262,12 @@ describe('claude plugin install command (system test)', () => {
     it('should preview installation without creating files', async () => {
       const skillDir = await createSimpleSkill(suite.tempDir, 'my-skill');
 
-      executeInstallAndExpectSuccess(
+      const { parsed } = executeInstallAndExpectSuccess(
         suite.binPath,
         ['claude', 'plugin', 'install', skillDir, '-s', suite.skillsDir, '--dry-run'],
         suite.projectDir,
         'my-skill',
         'local'
-      );
-
-      const { parsed } = executeCommandAndParse(
-        suite.binPath,
-        ['claude', 'plugin', 'install', skillDir, '-s', suite.skillsDir, '--dry-run'],
-        suite.projectDir
       );
       expect(parsed.dryRun).toBe(true);
 

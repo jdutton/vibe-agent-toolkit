@@ -326,11 +326,11 @@ describe('skills validate — framework exit codes (system test)', () => {
   beforeAll(frameworkCtx.setup);
   afterEach(frameworkCtx.cleanup);
 
-  it('exits 1 when LINK_TO_GITIGNORED_FILE fires (default severity=error)', () => {
+  it('exits 1 when LINK_TO_GITIGNORED_FILE fires (default severity=error)', async () => {
     const tempDir = frameworkCtx.createTempDir();
     const projectDir = setupProjectWithGitignoreLink(tempDir, VALIDATE_SKILL_NAME);
 
-    const { result, parsed } = executeCliAndParseYaml(frameworkCtx.binPath, ['skills', 'validate'], { cwd: projectDir });
+    const { result, parsed } = await executeCliAndParseYaml(frameworkCtx.binPath, ['skills', 'validate'], { cwd: projectDir });
 
     expect(result.status).toBe(1);
     // Output should contain the error code somewhere (stdout YAML or stderr)
@@ -339,21 +339,21 @@ describe('skills validate — framework exit codes (system test)', () => {
     expect(parsed.status).toBe('error');
   });
 
-  it('exits 0 when LINK_TO_GITIGNORED_FILE error is suppressed via allow', () => {
+  it('exits 0 when LINK_TO_GITIGNORED_FILE error is suppressed via allow', async () => {
     const tempDir = frameworkCtx.createTempDir();
     const projectDir = setupProjectWithGitignoreLinkAllowed(tempDir, VALIDATE_SKILL_NAME);
 
-    const { result, parsed } = executeCliAndParseYaml(frameworkCtx.binPath, ['skills', 'validate'], { cwd: projectDir });
+    const { result, parsed } = await executeCliAndParseYaml(frameworkCtx.binPath, ['skills', 'validate'], { cwd: projectDir });
 
     expect(result.status).toBe(0);
     expect(parsed.status).toBe('success');
   });
 
-  it('exits 0 when LINK_TO_NAVIGATION_FILE fires (default severity=warning, non-blocking)', () => {
+  it('exits 0 when LINK_TO_NAVIGATION_FILE fires (default severity=warning, non-blocking)', async () => {
     const tempDir = frameworkCtx.createTempDir();
     const projectDir = setupProjectWithNavigationLink(tempDir, VALIDATE_SKILL_NAME);
 
-    const { result, parsed } = executeCliAndParseYaml(frameworkCtx.binPath, ['skills', 'validate'], { cwd: projectDir });
+    const { result, parsed } = await executeCliAndParseYaml(frameworkCtx.binPath, ['skills', 'validate'], { cwd: projectDir });
 
     // Warnings are non-blocking — should exit 0
     expect(result.status).toBe(0);
@@ -369,8 +369,8 @@ describe('skills validate — framework exit codes (system test)', () => {
     }
   });
 
-  it('help text uses validation framework language and not stale override language', () => {
-    const result = executeCli(frameworkCtx.binPath, ['skills', 'validate', '--help']);
+  it('help text uses validation framework language and not stale override language', async () => {
+    const result = await executeCli(frameworkCtx.binPath, ['skills', 'validate', '--help']);
 
     expect(result.status).toBe(0);
     // New framework language

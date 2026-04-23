@@ -34,7 +34,7 @@ describe('Audit Workflows (system test)', () => {
     cleanupTestTempDir(tempDir);
   });
 
-  it('should handle mixed resource directory (marketplace + plugins + skills)', () => {
+  it('should handle mixed resource directory (marketplace + plugins + skills)', async () => {
     const mixedDir = safePath.join(tempDir, 'mixed');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- mixedDir is controlled in tests
     fs.mkdirSync(mixedDir, { recursive: true });
@@ -104,7 +104,7 @@ Test content.
     );
 
     // Recursive is now the default — no flag needed
-    const result = executeCli(binPath, ['audit', mixedDir], {
+    const result = await executeCli(binPath, ['audit', mixedDir], {
       cwd: tempDir,
     });
 
@@ -115,7 +115,7 @@ Test content.
     expect(result.stdout).toBeTruthy();
   });
 
-  it('should detect and report multiple validation errors', () => {
+  it('should detect and report multiple validation errors', async () => {
     const errorDir = safePath.join(tempDir, 'errors');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- errorDir is controlled in tests
     fs.mkdirSync(errorDir, { recursive: true });
@@ -156,7 +156,7 @@ Test content.
     );
 
     // Recursive is now the default — no flag needed
-    const result = executeCli(binPath, ['audit', errorDir], {
+    const result = await executeCli(binPath, ['audit', errorDir], {
       cwd: tempDir,
     });
 
@@ -171,7 +171,7 @@ Test content.
     expect(result.stderr.toLowerCase()).toContain('name');
   });
 
-  it('should exit with 0 for fully valid resources', () => {
+  it('should exit with 0 for fully valid resources', async () => {
     const validDir = safePath.join(tempDir, 'valid');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- validDir is controlled in tests
     fs.mkdirSync(validDir, { recursive: true });
@@ -210,7 +210,7 @@ Test content.
     );
 
     // Recursive is now the default — no flag needed
-    const result = executeCli(binPath, ['audit', validDir], {
+    const result = await executeCli(binPath, ['audit', validDir], {
       cwd: tempDir,
     });
 
@@ -227,7 +227,7 @@ Test content.
     }
   });
 
-  it('should scan recursively by default without --recursive flag', () => {
+  it('should scan recursively by default without --recursive flag', async () => {
     const nestedDir = safePath.join(tempDir, 'nested-default');
     const nestedSkillDir = safePath.join(nestedDir, 'deeply', 'nested', 'skill-dir');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- nestedSkillDir is controlled in tests
@@ -247,7 +247,7 @@ This skill is deeply nested to verify recursive scanning is the default.
     );
 
     // Run audit WITHOUT any recursive flag — should find the nested skill by default
-    const result = executeCli(binPath, ['audit', nestedDir], {
+    const result = await executeCli(binPath, ['audit', nestedDir], {
       cwd: tempDir,
     });
 
@@ -261,7 +261,7 @@ This skill is deeply nested to verify recursive scanning is the default.
     expect(result.stdout).toContain('nested-skill');
   });
 
-  it('should NOT scan subdirectories with --no-recursive flag', () => {
+  it('should NOT scan subdirectories with --no-recursive flag', async () => {
     const noRecurseDir = safePath.join(tempDir, 'no-recurse');
     const subDir = safePath.join(noRecurseDir, 'subdir');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- subDir is controlled in tests
@@ -282,7 +282,7 @@ This skill should not be found when using --no-recursive.
     );
 
     // Run audit WITH --no-recursive — should NOT find the nested skill
-    const result = executeCli(binPath, ['audit', noRecurseDir, NO_RECURSIVE_FLAG], {
+    const result = await executeCli(binPath, ['audit', noRecurseDir, NO_RECURSIVE_FLAG], {
       cwd: tempDir,
     });
 
@@ -296,7 +296,7 @@ This skill should not be found when using --no-recursive.
     expect(result.stdout).not.toContain('subdir-skill');
   });
 
-  it('should exclude paths matching --exclude glob', () => {
+  it('should exclude paths matching --exclude glob', async () => {
     const excludeDir = safePath.join(tempDir, 'exclude-test');
     const distDir = safePath.join(excludeDir, 'dist');
     const srcDir = safePath.join(excludeDir, 'src');
@@ -334,7 +334,7 @@ This skill is in src/ and should be included.
     );
 
     // Run audit with --exclude "dist/**" — should exclude the dist skill
-    const result = executeCli(binPath, ['audit', excludeDir, '--exclude', 'dist/**'], {
+    const result = await executeCli(binPath, ['audit', excludeDir, '--exclude', 'dist/**'], {
       cwd: tempDir,
     });
 

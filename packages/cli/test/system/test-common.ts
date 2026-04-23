@@ -3,8 +3,8 @@
  * Extracts common setup to reduce duplication across test files
  */
 
-import type { SpawnSyncReturns } from 'node:child_process';
-import { spawnSync as nodeSpawnSync } from 'node:child_process';
+import type { SpawnOptionsWithoutStdio, SpawnSyncReturns } from 'node:child_process';
+import { spawn as nodeSpawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import { dirname as pathDirname, join as pathJoin, resolve as pathResolve } from 'node:path';
 import { fileURLToPath as urlFileURLToPath } from 'node:url';
@@ -203,21 +203,79 @@ function mergeEnvWithOverrides(overrides: Record<string, string>): NodeJS.Proces
   return merged;
 }
 
+async function spawnAndCollect(
+  command: string,
+  args: string[],
+  options: SpawnOptionsWithoutStdio,
+): Promise<SpawnSyncReturns<string>> {
+  const maxBuffer = 10 * 1024 * 1024;
+
+  return new Promise((resolvePromise) => {
+    const child = nodeSpawn(command, args, options);
+
+    let stdout = '';
+    let stderr = '';
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let truncated = false;
+    let spawnError: Error | undefined;
+
+    const truncateIfNeeded = () => {
+      if (truncated) return;
+      if (stdoutBytes > maxBuffer || stderrBytes > maxBuffer) {
+        truncated = true;
+        child.kill();
+      }
+    };
+
+    child.stdout?.setEncoding('utf-8');
+    child.stderr?.setEncoding('utf-8');
+
+    child.stdout?.on('data', (chunk: string) => {
+      stdoutBytes += Buffer.byteLength(chunk, 'utf-8');
+      stdout += chunk;
+      truncateIfNeeded();
+    });
+
+    child.stderr?.on('data', (chunk: string) => {
+      stderrBytes += Buffer.byteLength(chunk, 'utf-8');
+      stderr += chunk;
+      truncateIfNeeded();
+    });
+
+    child.on('error', (err) => {
+      spawnError = err;
+    });
+
+    child.on('close', (status, signal) => {
+      const result: SpawnSyncReturns<string> = {
+        pid: child.pid ?? 0,
+        output: [null, stdout, stderr],
+        stdout,
+        stderr,
+        status,
+        signal,
+      };
+      if (spawnError) {
+        result.error = spawnError;
+      }
+      resolvePromise(result);
+    });
+  });
+}
+
 /**
  * Execute CLI command and return result
  * Handles ESLint suppressions for test execution
  */
-export function executeCli(
+export async function executeCli(
   binPath: string,
   args: string[],
   options?: { cwd?: string; env?: Record<string, string> }
-): SpawnSyncReturns<string> {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- node is required for CLI integration tests
-  return nodeSpawnSync('node', [binPath, ...args], {
-    encoding: 'utf-8',
+): Promise<SpawnSyncReturns<string>> {
+  return spawnAndCollect('node', [binPath, ...args], {
     cwd: options?.cwd,
     env: options?.env ? mergeEnvWithOverrides(options.env) : undefined,
-    maxBuffer: 10 * 1024 * 1024, // 10MB buffer for large audit outputs
   });
 }
 
@@ -225,15 +283,15 @@ export function executeCli(
  * Execute CLI command and parse YAML output
  * Returns both the raw result and parsed YAML
  */
-export function executeCliAndParseYaml(
+export async function executeCliAndParseYaml(
   binPath: string,
   args: string[],
   options?: { cwd?: string; env?: Record<string, string> }
-): {
+): Promise<{
   result: SpawnSyncReturns<string>;
   parsed: Record<string, unknown>;
-} {
-  const result = executeCli(binPath, args, options);
+}> {
+  const result = await executeCli(binPath, args, options);
 
   // Parse YAML output (use loadAll to handle document markers)
   const docs = yaml.loadAll(result.stdout) as Array<Record<string, unknown>>;
@@ -249,18 +307,16 @@ export function executeCliAndParseYaml(
  * @param args - Arguments to pass to vat command
  * @param options - Optional execution options
  */
-export function executeBunVat(
+export async function executeBunVat(
   testFileUrl: string,
   args: string[],
   options?: { cwd?: string }
-): SpawnSyncReturns<string> {
+): Promise<SpawnSyncReturns<string>> {
   // Find the monorepo root relative to test file location (like getBinPath does)
   const testDir = pathDirname(urlFileURLToPath(testFileUrl));
   const monorepoRoot = pathResolve(testDir, '../../../..');
 
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- bun is required for wrapper tests
-  return nodeSpawnSync('bun', ['run', 'vat', ...args], {
-    encoding: 'utf-8',
+  return spawnAndCollect('bun', ['run', 'vat', ...args], {
     cwd: options?.cwd ?? monorepoRoot,
   });
 }

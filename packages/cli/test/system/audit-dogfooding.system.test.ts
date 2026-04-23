@@ -22,7 +22,7 @@ import {
 /**
  * Helper to validate audit result expectations
  */
-function expectSuccessfulAudit(result: ReturnType<typeof executeCli>): void {
+function expectSuccessfulAudit(result: Awaited<ReturnType<typeof executeCli>>): void {
   // Should succeed (exit 0) or fail gracefully
   expect([0, 1]).toContain(result.status);
 
@@ -100,15 +100,15 @@ describe.skipIf(process.platform === 'win32')('Audit Dogfooding (system test)', 
   // Windows CI wedges on a monorepo-wide audit (exact cause not yet root-caused;
   // the 0.1.33 perf sweep reduced but did not eliminate it). Ubuntu CI covers
   // this same path. Re-enable once Windows-audit perf is profiled.
-  it.skipIf(process.platform === 'win32')('should successfully audit vibe-agent-toolkit project root', () => {
-    const result = executeCli(binPath, ['audit', projectRoot], {
+  it.skipIf(process.platform === 'win32')('should successfully audit vibe-agent-toolkit project root', async () => {
+    const result = await executeCli(binPath, ['audit', projectRoot], {
       cwd: tempDir,
     });
 
     expectSuccessfulAudit(result);
   });
 
-  it('should audit dist skills without errors', () => {
+  it('should audit dist skills without errors', async () => {
     const distSkillsDir = safePath.join(projectRoot, 'packages/vat-development-agents/dist/skills');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- project path
     if (!fs.existsSync(distSkillsDir)) {
@@ -116,7 +116,7 @@ describe.skipIf(process.platform === 'win32')('Audit Dogfooding (system test)', 
       return;
     }
 
-    const { result, parsed } = executeCliAndParseYaml(
+    const { result, parsed } = await executeCliAndParseYaml(
       binPath,
       ['audit', '--verbose', distSkillsDir],
       { cwd: tempDir },
@@ -133,11 +133,11 @@ describe.skipIf(process.platform === 'win32')('Audit Dogfooding (system test)', 
   });
 
   describe('link traversal (end-to-end)', () => {
-    it('should follow transitive links and report linkedFiles', () => {
+    it('should follow transitive links and report linkedFiles', async () => {
       const skillDir = createLinkedSkill(tempDir);
       const skillPath = safePath.join(skillDir, 'SKILL.md');
 
-      const { result, parsed } = executeCliAndParseYaml(
+      const { result, parsed } = await executeCliAndParseYaml(
         binPath,
         ['audit', '--verbose', skillPath],
         { cwd: tempDir },
@@ -162,7 +162,7 @@ describe.skipIf(process.platform === 'win32')('Audit Dogfooding (system test)', 
       expect(linkedPaths.some(p => p.endsWith('guide-c.md'))).toBe(true);
     });
 
-    it('should detect broken links via CLI', () => {
+    it('should detect broken links via CLI', async () => {
       const brokenDir = safePath.join(tempDir, 'broken-skill');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- test directory
       fs.mkdirSync(brokenDir, { recursive: true });
@@ -178,7 +178,7 @@ description: Skill with broken links
 - [Missing file](does-not-exist.md)
 `);
 
-      const { result, parsed } = executeCliAndParseYaml(
+      const { result, parsed } = await executeCliAndParseYaml(
         binPath,
         ['audit', safePath.join(brokenDir, 'SKILL.md')],
         { cwd: tempDir },
@@ -193,7 +193,7 @@ description: Skill with broken links
       expect(issues?.some(i => i['code'] === 'LINK_INTEGRITY_BROKEN')).toBe(true);
     });
 
-    it('should detect unreferenced files with --warn-unreferenced-files', () => {
+    it('should detect unreferenced files with --warn-unreferenced-files', async () => {
       const skillDir = createLinkedSkill(tempDir);
       const resourcesDir = safePath.join(skillDir, 'resources');
 
@@ -201,7 +201,7 @@ description: Skill with broken links
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file
       fs.writeFileSync(safePath.join(resourcesDir, 'orphan.md'), '# Orphan\n\nNot linked from anywhere.\n');
 
-      const { result, parsed } = executeCliAndParseYaml(
+      const { result, parsed } = await executeCliAndParseYaml(
         binPath,
         ['audit', '--warn-unreferenced-files', safePath.join(skillDir, 'SKILL.md')],
         { cwd: tempDir },
@@ -218,7 +218,7 @@ description: Skill with broken links
       )).toBe(true);
     });
 
-    it('should not flag CLAUDE.md or README.md as unreferenced', () => {
+    it('should not flag CLAUDE.md or README.md as unreferenced', async () => {
       const skillDir = createLinkedSkill(tempDir);
 
       // Add CLAUDE.md and README.md — should NOT be flagged
@@ -227,7 +227,7 @@ description: Skill with broken links
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- test file
       fs.writeFileSync(safePath.join(skillDir, 'README.md'), '# Readme\n');
 
-      const { parsed } = executeCliAndParseYaml(
+      const { parsed } = await executeCliAndParseYaml(
         binPath,
         ['audit', '--warn-unreferenced-files', '--verbose', safePath.join(skillDir, 'SKILL.md')],
         { cwd: tempDir },

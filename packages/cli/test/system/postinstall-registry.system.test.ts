@@ -173,7 +173,7 @@ function setupPostinstallRegistryTestSuite() {
   /**
    * Run `vat claude plugin install --npm-postinstall` with a fake Claude home.
    */
-  const runPostinstall = (packageDir: string, fakeHome: string, extraArgs: string[] = []) => {
+  const runPostinstall = async (packageDir: string, fakeHome: string, extraArgs: string[] = []) => {
     return executeCli(binPath, ['claude', 'plugin', 'install', '--npm-postinstall', ...extraArgs], {
       cwd: packageDir,
       env: { ...NPM_POSTINSTALL_ENV, ...fakeHomeEnv(fakeHome) },
@@ -191,9 +191,9 @@ describe('claude plugin install --npm-postinstall plugin registry (system test)'
   });
 
   describe('when dist/.claude/plugins/marketplaces/ exists', () => {
-    it('exits 0 and registers plugin in known_marketplaces.json', () => {
+    it('exits 0 and registers plugin in known_marketplaces.json', async () => {
       const { packageDir, fakeHome } = suite.createFullPackageContext();
-      const result = suite.runPostinstall(packageDir, fakeHome);
+      const result = await suite.runPostinstall(packageDir, fakeHome);
 
       expect(result.status).toBe(0);
 
@@ -203,9 +203,9 @@ describe('claude plugin install --npm-postinstall plugin registry (system test)'
       expect(known).toHaveProperty(MARKETPLACE_NAME);
     });
 
-    it('exits 0 and records plugin in installed_plugins.json', () => {
+    it('exits 0 and records plugin in installed_plugins.json', async () => {
       const { packageDir, fakeHome } = suite.createFullPackageContext();
-      const result = suite.runPostinstall(packageDir, fakeHome);
+      const result = await suite.runPostinstall(packageDir, fakeHome);
 
       expect(result.status).toBe(0);
 
@@ -220,9 +220,9 @@ describe('claude plugin install --npm-postinstall plugin registry (system test)'
       expect(installed.plugins[pluginKey]).toHaveLength(1);
     });
 
-    it('exits 0 and enables plugin in user settings.json', () => {
+    it('exits 0 and enables plugin in user settings.json', async () => {
       const { packageDir, fakeHome } = suite.createFullPackageContext();
-      const result = suite.runPostinstall(packageDir, fakeHome);
+      const result = await suite.runPostinstall(packageDir, fakeHome);
 
       expect(result.status).toBe(0);
 
@@ -235,9 +235,9 @@ describe('claude plugin install --npm-postinstall plugin registry (system test)'
       expect(settings.enabledPlugins).toHaveProperty(pluginKey, true);
     });
 
-    it('exits 0 and copies plugin files to marketplacesDir', () => {
+    it('exits 0 and copies plugin files to marketplacesDir', async () => {
       const { packageDir, fakeHome } = suite.createFullPackageContext();
-      const result = suite.runPostinstall(packageDir, fakeHome);
+      const result = await suite.runPostinstall(packageDir, fakeHome);
 
       expect(result.status).toBe(0);
 
@@ -255,9 +255,9 @@ describe('claude plugin install --npm-postinstall plugin registry (system test)'
       expect(existsSync(marketplacePluginDest)).toBe(true);
     });
 
-    it('exits 0 and copies plugin files to pluginsCacheDir', () => {
+    it('exits 0 and copies plugin files to pluginsCacheDir', async () => {
       const { packageDir, fakeHome } = suite.createFullPackageContext();
-      const result = suite.runPostinstall(packageDir, fakeHome);
+      const result = await suite.runPostinstall(packageDir, fakeHome);
 
       expect(result.status).toBe(0);
 
@@ -275,7 +275,7 @@ describe('claude plugin install --npm-postinstall plugin registry (system test)'
       expect(existsSync(cacheDest)).toBe(true);
     });
 
-    it('skips when plugin tree has no plugin subdirectories and still exits 0', () => {
+    it('skips when plugin tree has no plugin subdirectories and still exits 0', async () => {
       const { packageDir, fakeHome } = suite.createTestContext();
 
       createBasePackageWithSkill(packageDir, {
@@ -291,7 +291,7 @@ describe('claude plugin install --npm-postinstall plugin registry (system test)'
       mkdirSyncReal(mpDir, { recursive: true });
       // NOTE: no plugins/ subdirectory — test that this doesn't crash
 
-      const result = suite.runPostinstall(packageDir, fakeHome);
+      const result = await suite.runPostinstall(packageDir, fakeHome);
 
       expect(result.status).toBe(0);
       // No registry files should have been created since no plugins exist
@@ -299,7 +299,7 @@ describe('claude plugin install --npm-postinstall plugin registry (system test)'
       expect(existsSync(knownPath)).toBe(false);
     });
 
-    it('removes stale skills from marketplace dir when reinstalled with fewer skills', () => {
+    it('removes stale skills from marketplace dir when reinstalled with fewer skills', async () => {
       const { packageDir: v1Dir, fakeHome } = suite.createTestContext();
       const EXTRA_SKILL = 'acme-skill-extra';
 
@@ -319,7 +319,7 @@ describe('claude plugin install --npm-postinstall plugin registry (system test)'
       writeTestFile(safePath.join(extraSkillDir, 'SKILL.md'), minimalSkillMd(EXTRA_SKILL));
 
       // Install v1 — both skills land in the marketplace dir
-      const v1Result = suite.runPostinstall(v1Dir, fakeHome);
+      const v1Result = await suite.runPostinstall(v1Dir, fakeHome);
       expect(v1Result.status).toBe(0);
 
       const pluginSkillsDir = safePath.join(
@@ -341,7 +341,7 @@ describe('claude plugin install --npm-postinstall plugin registry (system test)'
       });
 
       // Reinstall via v2 against the same Claude installation (same fakeHome)
-      const v2Result = suite.runPostinstall(v2Dir, fakeHome);
+      const v2Result = await suite.runPostinstall(v2Dir, fakeHome);
       expect(v2Result.status).toBe(0);
 
       // SKILL_NAME must still be present
@@ -352,7 +352,7 @@ describe('claude plugin install --npm-postinstall plugin registry (system test)'
   });
 
   describe('when dist/.claude/plugins/marketplaces/ does NOT exist', () => {
-    it('exits 0 and emits guidance message about running vat build', () => {
+    it('exits 0 and emits guidance message about running vat build', async () => {
       const { packageDir, fakeHome } = suite.createTestContext();
       createBasePackageWithSkill(packageDir, {
         packageName: PACKAGE_NAME,
@@ -361,14 +361,14 @@ describe('claude plugin install --npm-postinstall plugin registry (system test)'
       });
       // dist/.claude/plugins/marketplaces/ is intentionally absent
 
-      const result = suite.runPostinstall(packageDir, fakeHome);
+      const result = await suite.runPostinstall(packageDir, fakeHome);
 
       expect(result.status).toBe(0);
       const combined = result.stdout + result.stderr;
       expect(combined).toContain('vat build');
     });
 
-    it('exits 0 and mentions dist/.claude/plugins/marketplaces/ in output', () => {
+    it('exits 0 and mentions dist/.claude/plugins/marketplaces/ in output', async () => {
       const { packageDir, fakeHome } = suite.createTestContext();
       createBasePackageWithSkill(packageDir, {
         packageName: PACKAGE_NAME,
@@ -376,7 +376,7 @@ describe('claude plugin install --npm-postinstall plugin registry (system test)'
         skillName: SKILL_NAME,
       });
 
-      const result = suite.runPostinstall(packageDir, fakeHome);
+      const result = await suite.runPostinstall(packageDir, fakeHome);
 
       expect(result.status).toBe(0);
       const combined = result.stdout + result.stderr;

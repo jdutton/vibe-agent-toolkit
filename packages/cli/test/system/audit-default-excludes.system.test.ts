@@ -78,9 +78,9 @@ describe('Audit default artifact excludes (system test)', () => {
     cleanupTestTempDir(tempDir);
   });
 
-  it('excludes node_modules, dist, and .claude/worktrees by default', () => {
+  it('excludes node_modules, dist, and .claude/worktrees by default', async () => {
     const rootDir = buildProject(tempDir, 'exclude-defaults');
-    const { result, parsed } = executeCliAndParseYaml(binPath, ['audit', rootDir]);
+    const { result, parsed } = await executeCliAndParseYaml(binPath, ['audit', rootDir]);
 
     expect(result.status).toBe(0);
     // Only the source skill should be scanned — 1 file, not 4.
@@ -96,9 +96,9 @@ describe('Audit default artifact excludes (system test)', () => {
     expect(paths.some(p => p.includes('.claude/worktrees'))).toBe(false);
   });
 
-  it('--include-artifacts scans node_modules and dist', () => {
+  it('--include-artifacts scans node_modules and dist', async () => {
     const rootDir = buildProject(tempDir, 'exclude-opt-in');
-    const { result, parsed } = executeCliAndParseYaml(binPath, [
+    const { result, parsed } = await executeCliAndParseYaml(binPath, [
       'audit',
       '--include-artifacts',
       rootDir,
@@ -115,7 +115,7 @@ describe('Audit default artifact excludes (system test)', () => {
     expect(paths.some(p => p.includes('.claude/worktrees'))).toBe(true);
   });
 
-  it('--exclude adds to default excludes (does not replace them)', () => {
+  it('--exclude adds to default excludes (does not replace them)', async () => {
     const rootDir = buildProject(tempDir, 'exclude-additive');
     // Add one extra skill in an unusual location.
     const customDir = safePath.join(rootDir, 'vendor/skill-copy');
@@ -132,7 +132,7 @@ description: A vendored skill copy that should be excluded when the user adds it
 `
     );
 
-    const { result, parsed } = executeCliAndParseYaml(binPath, [
+    const { result, parsed } = await executeCliAndParseYaml(binPath, [
       'audit',
       '--exclude',
       '**/vendor/**',

@@ -41,16 +41,16 @@ const fixturesBase = safePath.join(
 );
 
 describe('vat audit skill-claude-plugin (system)', () => {
-  beforeAll(() => {
-    const check = executeCli(binPath, ['--help']);
+  beforeAll(async () => {
+    const check = await executeCli(binPath, ['--help']);
     if (check.status !== 0) {
       throw new Error('CLI not built. Run `bun run build` before these tests.');
     }
   });
 
-  it('emits two entries with expected types for the matching fixture', () => {
+  it('emits two entries with expected types for the matching fixture', async () => {
     const dir = safePath.join(fixturesBase, 'skill-claude-plugin-matching');
-    const { result, parsed } = executeCliAndParseYaml(binPath, ['audit', dir]);
+    const { result, parsed } = await executeCliAndParseYaml(binPath, ['audit', dir]);
     expect(result.status).toBe(0);
 
     const audit = parsed as ParsedAuditOutput;
@@ -63,9 +63,9 @@ describe('vat audit skill-claude-plugin (system)', () => {
     expect(types).toEqual(['agent-skill', 'claude-plugin']);
   });
 
-  it('emits SKILL_CLAUDE_PLUGIN_NAME_MISMATCH for the mismatch fixture', () => {
+  it('emits SKILL_CLAUDE_PLUGIN_NAME_MISMATCH for the mismatch fixture', async () => {
     const dir = safePath.join(fixturesBase, 'skill-claude-plugin-mismatch');
-    const result = executeCli(binPath, ['audit', dir]);
+    const result = await executeCli(binPath, ['audit', dir]);
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('SKILL_CLAUDE_PLUGIN_NAME_MISMATCH');
   });

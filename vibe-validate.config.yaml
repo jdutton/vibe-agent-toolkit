@@ -60,8 +60,9 @@ validation:
           command: 'bun run vat verify --cwd packages/vat-development-agents'
           description: 'Verifies vat-development-agents resources, skills, and claude artifacts (dogfoods vat verify)'
 
-        - name: 'Unit tests with coverage'
-          command: 'bun run test:coverage'
+        - name: 'Unit tests'
+          command: 'bun run test:unit'
+          description: 'Unit tests only. Coverage is collected in a dedicated CI job (.github/workflows/coverage.yml) so it does not slow local validation or the Windows CI matrix.'
 
     - name: 'Integration Tests'
       parallel: false

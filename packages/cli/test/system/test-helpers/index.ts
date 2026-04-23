@@ -6,7 +6,7 @@
  */
 
 export {
-  assertValidationFailureWithErrorInStderr,
+  assertValidationFailureWithError,
   executeAndParseYaml,
   executeCli,
   executeCliAndParseYaml,

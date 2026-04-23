@@ -52,11 +52,11 @@ describe('vat skill review (system test)', () => {
   beforeAll(ctx.setup);
   afterEach(ctx.cleanup);
 
-  it('exits 0 and prints manual checklist for a clean skill', () => {
+  it('exits 0 and prints manual checklist for a clean skill', async () => {
     const tempDir = ctx.createTempDir();
     const skillDir = setupCleanSkillDir(tempDir);
 
-    const result = executeCli(ctx.binPath, ['skill', 'review', skillDir]);
+    const result = await executeCli(ctx.binPath, ['skill', 'review', skillDir]);
 
     expect(result.status).toBe(0);
     // Manual checklist always rendered
@@ -67,22 +67,22 @@ describe('vat skill review (system test)', () => {
     expect(result.stderr).toMatch(/Summary: \d+ error/);
   });
 
-  it('accepts a path to SKILL.md directly', () => {
+  it('accepts a path to SKILL.md directly', async () => {
     const tempDir = ctx.createTempDir();
     const skillDir = setupCleanSkillDir(tempDir);
     const skillPath = safePath.join(skillDir, 'SKILL.md');
 
-    const result = executeCli(ctx.binPath, ['skill', 'review', skillPath]);
+    const result = await executeCli(ctx.binPath, ['skill', 'review', skillPath]);
 
     expect(result.status).toBe(0);
     expect(result.stderr).toContain('Reviewing skill: clean-skill');
   });
 
-  it('exits 1 when a skill has warnings and reports findings under the correct section', () => {
+  it('exits 1 when a skill has warnings and reports findings under the correct section', async () => {
     const tempDir = ctx.createTempDir();
     const skillDir = setupProblemSkillDir(tempDir);
 
-    const result = executeCli(ctx.binPath, ['skill', 'review', skillDir]);
+    const result = await executeCli(ctx.binPath, ['skill', 'review', skillDir]);
 
     expect(result.status).toBe(1);
     // Filler-opener warning should be emitted in the Description section
@@ -92,11 +92,11 @@ describe('vat skill review (system test)', () => {
     expect(result.stderr).toContain('Manual review checklist');
   });
 
-  it('emits YAML on stdout when --yaml is passed', () => {
+  it('emits YAML on stdout when --yaml is passed', async () => {
     const tempDir = ctx.createTempDir();
     const skillDir = setupCleanSkillDir(tempDir);
 
-    const result = executeCli(ctx.binPath, ['skill', 'review', skillDir, '--yaml']);
+    const result = await executeCli(ctx.binPath, ['skill', 'review', skillDir, '--yaml']);
 
     expect(result.status).toBe(0);
     // YAML block begins with the document marker
@@ -105,29 +105,29 @@ describe('vat skill review (system test)', () => {
     expect(result.stdout).toContain('manual:');
   });
 
-  it('exits 2 when the path does not exist', () => {
+  it('exits 2 when the path does not exist', async () => {
     const tempDir = ctx.createTempDir();
     const missing = safePath.join(tempDir, 'nope', 'SKILL.md');
 
-    const result = executeCli(ctx.binPath, ['skill', 'review', missing]);
+    const result = await executeCli(ctx.binPath, ['skill', 'review', missing]);
 
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('Path does not exist');
   });
 
-  it('exits 2 when the directory has no SKILL.md', () => {
+  it('exits 2 when the directory has no SKILL.md', async () => {
     const tempDir = ctx.createTempDir();
     const emptyDir = safePath.join(tempDir, 'empty');
     mkdirSyncReal(emptyDir, { recursive: true });
 
-    const result = executeCli(ctx.binPath, ['skill', 'review', emptyDir]);
+    const result = await executeCli(ctx.binPath, ['skill', 'review', emptyDir]);
 
     expect(result.status).toBe(2);
     expect(result.stderr).toContain('No SKILL.md found');
   });
 
-  it('help text documents input, exit codes, and yaml mode', () => {
-    const result = executeCli(ctx.binPath, ['skill', 'review', '--help']);
+  it('help text documents input, exit codes, and yaml mode', async () => {
+    const result = await executeCli(ctx.binPath, ['skill', 'review', '--help']);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('Description:');

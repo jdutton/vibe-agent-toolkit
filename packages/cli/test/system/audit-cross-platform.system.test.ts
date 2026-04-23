@@ -50,7 +50,7 @@ Test content.
     cleanupTestTempDir(tempDir);
   });
 
-  it('should expand ~ to home directory on current platform', () => {
+  it('should expand ~ to home directory on current platform', async () => {
     // Create a skill in a subdirectory of temp
     const skillDir = safePath.join(tempDir, 'home-test');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillDir is controlled in tests
@@ -71,7 +71,7 @@ Test content.
     // Try using ~ path (should be interpreted relative to home)
     // Since we can't actually test ~ without filesystem setup, we test that
     // the command handles the path correctly without crashing
-    const result = executeCli(binPath, ['audit', testResourcesDir], {
+    const result = await executeCli(binPath, ['audit', testResourcesDir], {
       cwd: tempDir,
     });
 
@@ -80,12 +80,12 @@ Test content.
     expect(result.status).not.toBe(2);
   });
 
-  it.skipIf(os.platform() !== 'win32')('should handle Windows-style paths on Windows', () => {
+  it.skipIf(os.platform() !== 'win32')('should handle Windows-style paths on Windows', async () => {
 
     // On Windows, test with backslash paths
     const windowsPath = testResourcesDir.replaceAll('/', '\\');
 
-    const result = executeCli(binPath, ['audit', windowsPath], {
+    const result = await executeCli(binPath, ['audit', windowsPath], {
       cwd: tempDir,
     });
 
@@ -94,12 +94,12 @@ Test content.
     expect(result.status).not.toBe(2);
   });
 
-  it('should detect user plugins directory location on current platform', () => {
+  it('should detect user plugins directory location on current platform', async () => {
     // Test that auditing a path works correctly on the current platform
     // The actual plugins directory detection is tested in unit tests
     // Here we verify the system-level integration works
 
-    const result = executeCli(binPath, ['audit', testResourcesDir], {
+    const result = await executeCli(binPath, ['audit', testResourcesDir], {
       cwd: tempDir,
     });
 

@@ -5,7 +5,7 @@ import { afterAll, beforeAll, it } from 'vitest';
 
 import { describe, expect, fs, getBinPath, safePath } from './test-common.js';
 import {
-  assertValidationFailureWithErrorInStderr,
+  assertValidationFailureWithError,
   createMarkdownWithFrontmatter,
   createSchemaFile,
   createTestTempDir,
@@ -124,11 +124,8 @@ resources:
       '# Invalid Content'
     );
 
-    // Should fail with validation error - check stderr contains expected error
-    const { textResult } = assertValidationFailureWithErrorInStderr(binPath, projectDir, 'invalid.md');
-
-    // Also verify the specific field error
-    expect(textResult.stderr).toContain('category'); // Missing required field
+    // Should fail with validation error — check both filename and field in combined output
+    assertValidationFailureWithError(binPath, projectDir, ['invalid.md', 'category']);
   });
 
   it('should allow extra fields in permissive mode', () => {
@@ -263,11 +260,8 @@ resources:
       '# Introduction'
     );
 
-    // Should fail because it violates guides-schema
-    const { textResult } = assertValidationFailureWithErrorInStderr(binPath, projectDir, 'guide-intro.md');
-
-    // Also verify the specific field error
-    expect(textResult.stderr).toContain('level'); // Missing required field
+    // Should fail because it violates guides-schema — check filename and field in combined output
+    assertValidationFailureWithError(binPath, projectDir, ['guide-intro.md', 'level']);
   });
 
   it('should handle resources in no collections (default validation only)', () => {
@@ -343,7 +337,7 @@ resources:
     );
 
     // Should fail (exit code 1) due to error about missing schema
-    assertValidationFailureWithErrorInStderr(binPath, projectDir, 'nonexistent-schema.json');
+    assertValidationFailureWithError(binPath, projectDir, 'nonexistent-schema.json');
   });
 
   it('should apply different validation modes to different collections', () => {
@@ -438,10 +432,10 @@ resources:
     );
 
     // Should fail because strict mode + additionalProperties: false
-    const { textResult } = assertValidationFailureWithErrorInStderr(binPath, projectDir, 'extra-fields.md');
-
-    // Verify specific error about additional properties
-    expect(textResult.stderr).toContain('must NOT have additional properties');
+    assertValidationFailureWithError(binPath, projectDir, [
+      'extra-fields.md',
+      'must NOT have additional properties',
+    ]);
   });
 
   it('should validate resources with nested directory patterns', () => {
@@ -544,14 +538,14 @@ resources:
       '# Guide Content'
     );
 
-    // Should fail with multiple errors
-    const { textResult, parsed } = assertValidationFailureWithErrorInStderr(binPath, projectDir, 'invalid-doc.md');
+    // Should fail with multiple errors — check all expected strings in combined output
+    const { parsed } = assertValidationFailureWithError(binPath, projectDir, [
+      'invalid-doc.md',
+      'category',
+      'invalid-guide.md',
+      'level',
+    ]);
 
     expect(parsed.errorsFound).toBeGreaterThanOrEqual(2);
-
-    // Check both errors in stderr
-    expect(textResult.stderr).toContain('category');
-    expect(textResult.stderr).toContain('invalid-guide.md');
-    expect(textResult.stderr).toContain('level');
   });
 });

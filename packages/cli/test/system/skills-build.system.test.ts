@@ -67,13 +67,13 @@ function setupSkillsBuildTestSuite() {
     createConfigWithSkills(tempDir, ['resources/skills/**/SKILL.md']);
   };
 
-  const runBuildCommand = (cwd: string, args: string[] = []) => {
+  const runBuildCommand = async (cwd: string, args: string[] = []) => {
     return executeCliAndParseYaml(binPath, ['skills', 'build', ...args], { cwd });
   };
 
   const assertSuccessfulBuild = (
-    result: ReturnType<typeof runBuildCommand>['result'],
-    parsed: ReturnType<typeof runBuildCommand>['parsed']
+    result: Awaited<ReturnType<typeof runBuildCommand>>['result'],
+    parsed: Awaited<ReturnType<typeof runBuildCommand>>['parsed']
   ) => {
     expect(result.status).toBe(0);
     expect(parsed).toHaveProperty('status', 'success');
@@ -105,8 +105,8 @@ describe('skills build command (system test)', () => {
     suite.cleanup();
   });
 
-  it('should show help text', () => {
-    const result = executeCli(suite.binPath, ['skills', 'build', '--help']);
+  it('should show help text', async () => {
+    const result = await executeCli(suite.binPath, ['skills', 'build', '--help']);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('Build skills from config yaml');
@@ -114,39 +114,39 @@ describe('skills build command (system test)', () => {
     expect(result.stdout).toContain('Exit Codes:');
   });
 
-  it('should exit 0 when no config yaml found (nothing to build)', () => {
+  it('should exit 0 when no config yaml found (nothing to build)', async () => {
     const tempDir = suite.createTempDir();
 
-    const { result } = suite.runBuildCommand(tempDir);
+    const { result } = await suite.runBuildCommand(tempDir);
 
     // No config yaml -> exits 0 with "nothing to build" message
     expect(result.status).toBe(0);
   });
 
-  it('should exit 0 when config yaml has no skills section', () => {
+  it('should exit 0 when config yaml has no skills section', async () => {
     const tempDir = suite.createTempDir();
     writeTestFile(safePath.join(tempDir, VAT_CONFIG_FILENAME), CONFIG_VERSION_HEADER);
 
-    const { result } = suite.runBuildCommand(tempDir);
+    const { result } = await suite.runBuildCommand(tempDir);
 
     expect(result.status).toBe(0);
   });
 
-  it('should fail when no SKILL.md files match include patterns', () => {
+  it('should fail when no SKILL.md files match include patterns', async () => {
     const tempDir = suite.createTempDir();
     suite.createConfigWithSkills(tempDir, ['resources/skills/**/SKILL.md']);
     // Intentionally NOT creating any skill source files
 
-    const { result } = suite.runBuildCommand(tempDir);
+    const { result } = await suite.runBuildCommand(tempDir);
 
     expect(result.status).not.toBe(0);
   });
 
-  it('should perform dry-run without creating files', () => {
+  it('should perform dry-run without creating files', async () => {
     const tempDir = suite.createTempDir();
     suite.setupSingleSkillTest(tempDir);
 
-    const { result, parsed } = suite.runBuildCommand(tempDir, ['--dry-run']);
+    const { result, parsed } = await suite.runBuildCommand(tempDir, ['--dry-run']);
 
     const skills = suite.assertSuccessfulBuild(result, parsed);
     expect(parsed).toHaveProperty('dryRun', true);
@@ -154,11 +154,11 @@ describe('skills build command (system test)', () => {
     expect(skills[0]).toHaveProperty('source');
   });
 
-  it('should build a valid skill', () => {
+  it('should build a valid skill', async () => {
     const tempDir = suite.createTempDir();
     suite.setupSingleSkillTest(tempDir);
 
-    const { result, parsed } = suite.runBuildCommand(tempDir);
+    const { result, parsed } = await suite.runBuildCommand(tempDir);
 
     const skills = suite.assertSuccessfulBuild(result, parsed);
     expect(parsed).toHaveProperty('skillsBuilt', 1);
@@ -171,13 +171,13 @@ describe('skills build command (system test)', () => {
     expect(readFileSync(skillMd, 'utf-8')).toContain(TEST_SKILL_NAME);
   });
 
-  it('should build specific skill with --skill flag', () => {
+  it('should build specific skill with --skill flag', async () => {
     const tempDir = suite.createTempDir();
     suite.createSkillSource(tempDir, 'resources/skills/skill-a.md', SKILL_A_NAME);
     suite.createSkillSource(tempDir, 'resources/skills/skill-b.md', SKILL_B_NAME);
     suite.createConfigWithSkills(tempDir, ['resources/skills/*.md']);
 
-    const { result, parsed } = suite.runBuildCommand(tempDir, ['--skill', SKILL_B_NAME]);
+    const { result, parsed } = await suite.runBuildCommand(tempDir, ['--skill', SKILL_B_NAME]);
 
     expect(result.status).toBe(0);
     expect(parsed).toHaveProperty('skillsBuilt', 1);
@@ -203,16 +203,16 @@ describe('skills build command (system test)', () => {
     }
   });
 
-  it('should fail when specified skill not found', () => {
+  it('should fail when specified skill not found', async () => {
     const tempDir = suite.createTempDir();
     suite.setupSingleSkillTest(tempDir);
 
-    const { result } = suite.runBuildCommand(tempDir, ['--skill', 'nonexistent']);
+    const { result } = await suite.runBuildCommand(tempDir, ['--skill', 'nonexistent']);
 
     expect(result.status).not.toBe(0);
   });
 
-  it('should copy files declared in skills.config.<name>.files to the skill output', () => {
+  it('should copy files declared in skills.config.<name>.files to the skill output', async () => {
     // Regression test: the `files` config was parsed by build.ts::mergePackagingConfig
     // but not passed into SkillBuildSpec.options, so declared files never got copied.
     // This verifies that files config entries land in the packaged output.
@@ -253,7 +253,7 @@ describe('skills build command (system test)', () => {
     ].join('\n');
     writeTestFile(safePath.join(tempDir, VAT_CONFIG_FILENAME), configContent);
 
-    const { result } = suite.runBuildCommand(tempDir);
+    const { result } = await suite.runBuildCommand(tempDir);
 
     expect(result.status).toBe(0);
 
@@ -430,30 +430,30 @@ describe('skills build — framework exit codes (system test)', () => {
     suite.cleanup();
   });
 
-  it('exits non-zero when LINK_DROPPED_BY_DEPTH is set to severity=error', () => {
+  it('exits non-zero when LINK_DROPPED_BY_DEPTH is set to severity=error', async () => {
     const tempDir = suite.createTempDir();
     const projectDir = setupProjectWithDepthDrop(tempDir, DEPTH_DROP_SKILL);
 
-    const { result: cmdResult } = suite.runBuildCommand(projectDir);
+    const { result: cmdResult } = await suite.runBuildCommand(projectDir);
 
     expect(cmdResult.status).toBe(1);
     expect(cmdResult.stderr + cmdResult.stdout).toContain('LINK_DROPPED_BY_DEPTH');
   });
 
-  it('exits zero when LINK_DROPPED_BY_DEPTH error is suppressed via allow', () => {
+  it('exits zero when LINK_DROPPED_BY_DEPTH error is suppressed via allow', async () => {
     const tempDir = suite.createTempDir();
     const projectDir = setupProjectWithDepthDropAndAllow(tempDir, DEPTH_DROP_SKILL);
 
-    const { result: cmdResult } = suite.runBuildCommand(projectDir);
+    const { result: cmdResult } = await suite.runBuildCommand(projectDir);
 
     expect(cmdResult.status).toBe(0);
   });
 
-  it('exits non-zero when PACKAGED_UNREFERENCED_FILE fires (default severity=error)', () => {
+  it('exits non-zero when PACKAGED_UNREFERENCED_FILE fires (default severity=error)', async () => {
     const tempDir = suite.createTempDir();
     const projectDir = setupProjectWithUnreferencedFile(tempDir, UNREFERENCED_SKILL);
 
-    const { result: cmdResult } = suite.runBuildCommand(projectDir);
+    const { result: cmdResult } = await suite.runBuildCommand(projectDir);
 
     expect(cmdResult.status).toBe(1);
     expect(cmdResult.stderr + cmdResult.stdout).toContain('PACKAGED_UNREFERENCED_FILE');

@@ -8,9 +8,9 @@ import { describe, expect, it } from 'vitest';
 import { executeBunVat } from './test-common.js';
 
 describe('Bin wrapper (vat command)', () => {
-  it('should execute vat command with bun run', () => {
+  it('should execute vat command with bun run', async () => {
     // Test the dev convenience script
-    const result = executeBunVat(import.meta.url, ['--version']);
+    const result = await executeBunVat(import.meta.url, ['--version']);
 
     expect(result.status).toBe(0);
     // Version format matching is safe despite backtracking potential
@@ -18,24 +18,24 @@ describe('Bin wrapper (vat command)', () => {
     expect(result.stdout).toMatch(/\d+\.\d+\.\d+/);
   });
 
-  it('should handle --help flag', () => {
-    const result = executeBunVat(import.meta.url, ['--help']);
+  it('should handle --help flag', async () => {
+    const result = await executeBunVat(import.meta.url, ['--help']);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('Agent-friendly toolkit');
     expect(result.stdout).toContain('resources');
   });
 
-  it('should handle --help --verbose flag', () => {
-    const result = executeBunVat(import.meta.url, ['--help', '--verbose']);
+  it('should handle --help --verbose flag', async () => {
+    const result = await executeBunVat(import.meta.url, ['--help', '--verbose']);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('# vat - Vibe Agent Toolkit CLI');
     expect(result.stdout).toContain('## Commands');
   });
 
-  it('should pass through subcommands correctly', () => {
-    const result = executeBunVat(import.meta.url, ['resources', '--help']);
+  it('should pass through subcommands correctly', async () => {
+    const result = await executeBunVat(import.meta.url, ['resources', '--help']);
 
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('Markdown resource scanning');
