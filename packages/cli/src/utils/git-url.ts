@@ -99,12 +99,13 @@ export function parseGitUrl(input: string): ParsedGitUrl {
     return buildParsed(base, ref, subpath);
   }
 
-  // GitHub shorthand: owner/repo (no path separators beyond the single /)
-  const shorthand = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/.exec(trimmed);
+  // GitHub shorthand: owner/repo[#ref[:subpath]] (single slash in base)
+  const { base, ref, subpath } = splitFragment(trimmed);
+  const shorthand = /^([A-Za-z0-9_.-]+)\/([A-Za-z0-9_.-]+)$/.exec(base);
   if (shorthand) {
     const owner = shorthand[1] ?? '';
     const repo = shorthand[2] ?? '';
-    return buildParsed(`https://github.com/${owner}/${repo}.git`);
+    return buildParsed(`https://github.com/${owner}/${repo}.git`, ref, subpath);
   }
 
   throw new Error(
@@ -143,6 +144,10 @@ export function isGitUrl(input: string): boolean {
   if (/^[^@\s]+@[^:\s]+:/.test(trimmed)) return true;
 
   // Strict GitHub shorthand: exactly two segments, no extension on second,
-  // no path separators beyond the single /.
-  return /^[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(trimmed);
+  // no path separators beyond the single /. Strip any `#ref[:subpath]`
+  // fragment first so `owner/repo#main` and `owner/repo#main:sub` are
+  // recognized — `parseGitUrl` handles fragments uniformly across forms.
+  const hashIndex = trimmed.indexOf('#');
+  const base = hashIndex === -1 ? trimmed : trimmed.slice(0, hashIndex);
+  return /^[A-Za-z0-9_-]+\/[A-Za-z0-9_-]+$/.test(base);
 }

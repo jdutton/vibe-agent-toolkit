@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **`vat audit` shorthand-URL fragments.** `vat audit owner/repo#ref` and `owner/repo#ref:subpath` were silently treated as filesystem paths because `isGitUrl` and `parseGitUrl` anchored the shorthand pattern without stripping the `#ref[:subpath]` fragment first. Both now strip the fragment before testing the shorthand pattern, matching the behavior of every other accepted URL form.
+
 ### Internal
 *No consumer-facing changes in this section — test infrastructure and CI pipeline only.*
 

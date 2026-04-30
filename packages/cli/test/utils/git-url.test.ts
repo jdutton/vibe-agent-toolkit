@@ -63,6 +63,21 @@ describe('parseGitUrl — GitHub shorthand', () => {
     });
   });
 
+  it('expands `owner/repo#ref` to clone URL + ref', () => {
+    expect(parseGitUrl('foo/bar#claude-marketplace')).toEqual({
+      cloneUrl: HTTPS_CLONE_URL,
+      ref: 'claude-marketplace',
+    });
+  });
+
+  it('expands `owner/repo#ref:subpath` to clone URL + ref + subpath', () => {
+    expect(parseGitUrl(`foo/bar#main:${SUBPATH_BAZ}`)).toEqual({
+      cloneUrl: HTTPS_CLONE_URL,
+      ref: 'main',
+      subpath: SUBPATH_BAZ,
+    });
+  });
+
   it('does not match strings with more than one slash', () => {
     expect(() => parseGitUrl(TOO_MANY_SLASHES)).toThrow(INVALID_URL_PATTERN);
   });
@@ -124,6 +139,8 @@ describe('isGitUrl', () => {
     SSH_URL_FORM,
     SSH_CLONE_URL,
     'foo/bar', // shorthand
+    'foo/bar#main', // shorthand with ref fragment
+    'foo/bar#main:packages/x', // shorthand with ref + subpath fragment
     `https://github.com/foo/bar/tree/main/${SUBPATH_BAZ}`,
   ];
   for (const u of urls) {
