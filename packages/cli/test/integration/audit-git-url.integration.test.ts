@@ -37,7 +37,12 @@ beforeAll(() => {
   bareRepoUrl = `file://${bareRepo}`;
   workTree = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-integ-work-'));
 
-  git(['init', '--bare'], bareRepo);
+  // `--initial-branch=main` so HEAD points to a branch we'll actually push.
+  // Without it, Ubuntu CI runners (init.defaultBranch=master) leave HEAD
+  // dangling at refs/heads/master, and `git clone --single-branch` against
+  // such a bare repo produces an empty working tree where `rev-parse HEAD`
+  // fails — the audit then exits 2 via handleCommandError.
+  git(['init', '--bare', '--initial-branch=main'], bareRepo);
   git(['init', '--initial-branch=main'], workTree);
   git(['config', 'user.email', 'test@example.com'], workTree);
   git(['config', 'user.name', 'Test'], workTree);
