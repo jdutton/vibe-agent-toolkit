@@ -59,7 +59,7 @@ export function parseGitUrl(input: string): ParsedGitUrl {
   // file:// form: file:///path/to/repo[#ref[:subpath]] — used primarily by
   // integration tests that clone a local bare repo. `git clone` accepts
   // file:// natively.
-  if (/^file:\/\//.test(trimmed)) {
+  if (trimmed.startsWith('file://')) {
     const { base, ref, subpath } = splitFragment(trimmed);
     return buildParsed(base, ref, subpath);
   }
@@ -87,7 +87,7 @@ export function parseGitUrl(input: string): ParsedGitUrl {
   }
 
   // SSH ssh:// form: ssh://git@host/path[#ref[:subpath]]
-  if (/^ssh:\/\//.test(trimmed)) {
+  if (trimmed.startsWith('ssh://')) {
     const { base, ref, subpath } = splitFragment(trimmed);
     return buildParsed(base, ref, subpath);
   }
@@ -138,8 +138,8 @@ export function isGitUrl(input: string): boolean {
   const trimmed = input.trim();
   if (trimmed === '') return false;
   if (/^https?:\/\//.test(trimmed)) return true;
-  if (/^ssh:\/\//.test(trimmed)) return true;
-  if (/^file:\/\//.test(trimmed)) return true;
+  if (trimmed.startsWith('ssh://')) return true;
+  if (trimmed.startsWith('file://')) return true;
   if (/^[^@\s]+@[^:\s]+:/.test(trimmed)) return true;
 
   // Strict GitHub shorthand: exactly two segments, no extension on second,

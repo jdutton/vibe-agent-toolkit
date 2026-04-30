@@ -89,6 +89,7 @@ export default [
       'local/no-fs-promises-cp': 'error',
       'local/no-url-pathname-for-fs': 'error',
       'local/no-bare-dynamic-import-path': 'error',
+      'local/prefer-startswith-over-regex': 'error',
 
       // TypeScript
       'no-unused-vars': 'off', // Use @typescript-eslint/no-unused-vars instead
@@ -169,6 +170,7 @@ export default [
       'unicorn/throw-new-error': 'error',
       'unicorn/no-array-for-each': 'error',
       'unicorn/prefer-string-replace-all': 'error',
+      'unicorn/prefer-string-starts-ends-with': 'error',
       'unicorn/prefer-array-find': 'error',
       'unicorn/prefer-array-some': 'error',
       'unicorn/prefer-at': 'error',
