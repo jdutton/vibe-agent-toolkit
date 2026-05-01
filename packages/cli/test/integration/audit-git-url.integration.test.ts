@@ -80,7 +80,9 @@ describe('vat audit <git-url> — happy path', () => {
     const result = runAuditCli(bareRepoUrl);
 
     expect(result.status).toBe(0);
-    expect(result.stdout).toMatch(/^Audited: .+ @ HEAD \(commit [a-f0-9]{8}\)$/m);
+    // Provenance header is emitted as a YAML comment so downstream
+    // tools (yq/jq) can pipe-parse the rest of the audit output.
+    expect(result.stdout).toMatch(/^# Audited: .+ @ HEAD \(commit [a-f0-9]{8}\)$/m);
     // Path appears as repo-relative, not tempdir-relative.
     expect(result.stdout).toContain('plugins/foo/SKILL.md');
     expect(result.stdout).not.toMatch(/\/vat-audit-/);
@@ -105,13 +107,22 @@ describe('vat audit <git-url> — subpath', () => {
   it('audits only the subpath when specified', () => {
     const result = runAuditCli(`${bareRepoUrl}#main:plugins/foo`);
     expect(result.status).toBe(0);
-    expect(result.stdout).toContain('Subpath: plugins/foo');
+    expect(result.stdout).toContain('# Subpath: plugins/foo');
   });
 
   it('reports clearly when subpath is missing', () => {
     const result = runAuditCli(`${bareRepoUrl}#main:does/not/exist`);
     expect(result.status).not.toBe(0);
     expect(result.stderr + result.stdout).toMatch(/Subpath not found/);
+  });
+
+  it('rejects subpaths that escape the cloned repo via path traversal', () => {
+    // `..` segments would resolve outside the tempdir — must be rejected
+    // before the audit is allowed to run, regardless of whether the
+    // resolved target happens to exist on the host filesystem.
+    const result = runAuditCli(`${bareRepoUrl}#main:../../../etc`);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr + result.stdout).toMatch(/escapes|traversal|outside/i);
   });
 });
 

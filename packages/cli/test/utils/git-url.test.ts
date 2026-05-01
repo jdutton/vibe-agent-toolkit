@@ -157,6 +157,7 @@ describe('isGitUrl', () => {
     TOO_MANY_SLASHES, // multi-segment relative path
     'foo/bar.md', // looks like a file path with extension
     String.raw`C:\Users\foo`, // Windows path
+    'foo@host:', // empty path after colon — not a real SSH URL
   ];
   for (const p of paths) {
     it(`treats ${JSON.stringify(p)} as a path (not a URL)`, () => {

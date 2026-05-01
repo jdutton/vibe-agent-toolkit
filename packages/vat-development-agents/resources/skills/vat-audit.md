@@ -41,6 +41,36 @@ Running `vat audit <path>` recursively walks the directory and auto-detects:
 
 Recursion is the default — you do not need `--recursive`.
 
+## Auditing a remote git repo
+
+`vat audit` accepts a git URL in addition to a local path. VAT shallow-clones into a temp directory, audits the clone, and **always cleans up on exit** — including on errors and SIGINT.
+
+```bash
+# Audit a public repo (HTTPS)
+vat audit https://github.com/foo/bar.git
+
+# GitHub shorthand
+vat audit foo/bar
+
+# Pin to a branch or tag
+vat audit foo/bar#main
+vat audit https://github.com/foo/bar.git#v1.2.3
+
+# Narrow to a monorepo subpath
+vat audit foo/bar#main:plugins/baz
+
+# A GitHub web URL also works
+vat audit https://github.com/foo/bar/tree/main/plugins/baz
+```
+
+Output is preceded by a provenance header — `# Audited: <url> @ <ref> (commit <sha>)` — emitted as YAML comments so `vat audit <url> | yq` parses cleanly. Audited paths are repo-relative, never tempdir-relative.
+
+**Authentication is pure passthrough to your local `git`.** SSH URLs use your SSH agent / keys; HTTPS URLs use whatever credential helper your `git` is configured with. VAT itself reads no tokens. If `git clone <url>` works on your machine, `vat audit <url>` works.
+
+**Inspection.** Pass `--debug` to preserve the cloned tempdir for post-mortem inspection (its location is printed to stderr at exit). You are responsible for cleanup when using this flag.
+
+For the full URL form table and edge cases, see `packages/cli/docs/audit.md` (the "Auditing a remote git repo" section).
+
 ## Audit vs configured VAT projects
 
 Audit is the general-purpose command — you may point it at any path, configured or not. When it encounters a SKILL.md inside a configured VAT project, it walks UP to that skill's nearest-ancestor `vibe-agent-toolkit.config.yaml` and respects the skill's per-skill packaging rules (`excludeReferencesFromBundle`, `linkFollowDepth`, `files`) to avoid false flags — but it never composes configs across project boundaries. Per-skill rules from one project do not bleed into skills in another project. For gated, configured-project-level validation, use the lifecycle commands (`vat skills validate`, `vat verify`) and run them from within the project directory.

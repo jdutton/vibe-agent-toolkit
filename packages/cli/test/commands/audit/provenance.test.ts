@@ -11,18 +11,18 @@ const GITHUB_URL = 'https://github.com/foo/bar.git';
 const SUBPATH = 'plugins/baz';
 
 describe('renderProvenanceHeader', () => {
-  it('renders url + ref + commit on one line', () => {
+  it('renders url + ref + commit on one line as a YAML comment', () => {
     const p: Provenance = {
       url: GITHUB_URL,
       ref: 'main',
       commit: 'abc123de',
     };
     expect(renderProvenanceHeader(p)).toBe(
-      `Audited: ${GITHUB_URL} @ main (commit abc123de)\n`
+      `# Audited: ${GITHUB_URL} @ main (commit abc123de)\n`
     );
   });
 
-  it('includes a Subpath line when subpath is set', () => {
+  it('renders subpath as a YAML comment too — keeps `vat audit | yq` parseable', () => {
     const p: Provenance = {
       url: GITHUB_URL,
       ref: 'main',
@@ -30,9 +30,22 @@ describe('renderProvenanceHeader', () => {
       subpath: SUBPATH,
     };
     expect(renderProvenanceHeader(p)).toBe(
-      `Audited: ${GITHUB_URL} @ main (commit abc123de)\n` +
-        `Subpath: ${SUBPATH}\n`
+      `# Audited: ${GITHUB_URL} @ main (commit abc123de)\n` +
+        `# Subpath: ${SUBPATH}\n`
     );
+  });
+
+  it('every non-empty line of the header is a valid YAML comment', () => {
+    const p: Provenance = {
+      url: GITHUB_URL,
+      ref: 'main',
+      commit: 'abc123de',
+      subpath: SUBPATH,
+    };
+    const lines = renderProvenanceHeader(p).split('\n').filter((l) => l !== '');
+    for (const line of lines) {
+      expect(line.startsWith('# ')).toBe(true);
+    }
   });
 
   it('preserves SSH URL form as the user typed it', () => {

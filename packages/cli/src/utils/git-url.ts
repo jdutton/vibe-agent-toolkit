@@ -141,7 +141,11 @@ export function isGitUrl(input: string): boolean {
   if (/^https?:\/\//.test(trimmed)) return true;
   if (trimmed.startsWith('ssh://')) return true;
   if (trimmed.startsWith('file://')) return true;
-  if (/^[^@\s]+@[^:\s]+:/.test(trimmed)) return true;
+  // Match the same scp-style pattern parseGitUrl uses, including the
+  // requirement of a non-empty path segment after the colon. Without the
+  // trailing `[^#\s]+`, `isGitUrl` would accept inputs like `foo@host:`
+  // that parseGitUrl then rejects with a less-helpful error.
+  if (/^[^@\s]+@[^:\s]+:[^#\s]+/.test(trimmed)) return true;
 
   // Strict GitHub shorthand: exactly two segments, no extension on second,
   // no path separators beyond the single /. Strip any `#ref[:subpath]`

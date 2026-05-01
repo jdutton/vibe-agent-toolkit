@@ -497,20 +497,25 @@ fi
 | HTTPS with ref + subpath | `https://github.com/foo/bar.git#main:plugins/baz` |
 | GitHub web URL | `https://github.com/foo/bar/tree/main/plugins/baz` |
 | GitHub shorthand | `foo/bar` |
+| GitHub shorthand with ref | `foo/bar#main` |
+| GitHub shorthand with ref + subpath | `foo/bar#main:plugins/baz` |
 | SSH (scp form) | `git@github.com:foo/bar.git` |
 | SSH (URL form) | `ssh://git@github.com/foo/bar.git` |
 
+The `#ref[:subpath]` fragment form works on every URL form above.
+
 ### Output
 
-Output begins with a provenance header showing the URL, ref, and resolved commit SHA, then the normal audit output with paths relative to the cloned repo root:
+Output begins with a provenance header showing the URL, ref, and resolved commit SHA, then the normal audit output with paths relative to the cloned repo root. Each header line is emitted as a YAML comment so the rest of the output remains pipe-parseable (`vat audit <url> | yq` works without preprocessing):
 
 ```
-Audited: https://github.com/foo/bar.git @ main (commit abc123de)
-Subpath: plugins/baz
-
-# Validation Summary
-Skill: plugins/baz/SKILL.md
-...
+# Audited: https://github.com/foo/bar.git @ main (commit abc123de)
+# Subpath: plugins/baz
+---
+status: success
+files:
+  - path: plugins/baz/SKILL.md
+    ...
 ```
 
 ### Authentication

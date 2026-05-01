@@ -16,12 +16,15 @@ export interface Provenance {
 }
 
 /**
- * Render the provenance header for a URL audit. Always ends with a newline.
+ * Render the provenance header for a URL audit. Each line is emitted as a
+ * YAML comment (`# `-prefixed) so that `vat audit <url> | yq` (or any
+ * downstream YAML consumer) can parse the rest of the output unchanged.
+ * Always ends with a newline.
  */
 export function renderProvenanceHeader(p: Provenance): string {
-  let header = `Audited: ${p.url} @ ${p.ref} (commit ${p.commit})\n`;
+  let header = `# Audited: ${p.url} @ ${p.ref} (commit ${p.commit})\n`;
   if (p.subpath) {
-    header += `Subpath: ${p.subpath}\n`;
+    header += `# Subpath: ${p.subpath}\n`;
   }
   return header;
 }

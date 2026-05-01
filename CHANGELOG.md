@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **`vat audit` shorthand-URL fragments.** `vat audit owner/repo#ref` and `owner/repo#ref:subpath` were silently treated as filesystem paths because `isGitUrl` and `parseGitUrl` anchored the shorthand pattern without stripping the `#ref[:subpath]` fragment first. Both now strip the fragment before testing the shorthand pattern, matching the behavior of every other accepted URL form.
+- **`vat audit <git-url>` subpath traversal rejected.** A subpath fragment that resolves outside the cloned tempdir (e.g. `repo#main:../../../etc`) is now rejected up front with a clear error, preventing the audit from running against unrelated host paths.
+- **`isGitUrl` SSH matcher tightened to match `parseGitUrl`.** Inputs with an empty path after the colon (e.g. `foo@host:`) are no longer routed into the URL branch only to fall through to a less-helpful "Invalid git URL" error — they now fall through to filesystem-path resolution like any other non-URL.
+- **`vat audit <git-url>` provenance header is now valid YAML.** The `Audited: <url> @ <ref> (commit <sha>)` and `Subpath: <path>` lines are emitted as YAML comments (`# `-prefixed), so `vat audit <url> | yq` (or any downstream YAML consumer) parses cleanly without preprocessing.
+
+### Documentation
+- **`vat audit` git-URL coverage in skills and verbose docs.** Added an "Auditing a remote git repo" section to the `vat-audit` skill (auth-passthrough behavior, `--debug` for tempdir preservation, all URL forms with examples), and added the missing shorthand-with-fragment rows (`foo/bar#main`, `foo/bar#main:plugins/baz`) to the verbose docs URL-form table. Updated header sample in both surfaces to reflect the new YAML-comment format.
 
 ### Internal
 *No consumer-facing changes in this section — test infrastructure and CI pipeline only.*

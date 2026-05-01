@@ -81,6 +81,24 @@ export async function withClonedRepo<T>(
     const { subpath } = parsed;
     const targetDir = subpath ? safePath.join(tempdir, subpath) : tempdir;
 
+    // Reject subpaths that resolve outside the cloned tempdir. Without
+    // this check, an input like `repo#main:../../../etc` would still let
+    // the audit run against unrelated host paths and leak them into
+    // output (`rewritePathsInResults` only strips the tempRoot prefix).
+    if (subpath !== undefined) {
+      const resolvedTarget = safePath.resolve(targetDir);
+      const resolvedTemp = safePath.resolve(tempdir);
+      const inside =
+        resolvedTarget === resolvedTemp ||
+        resolvedTarget.startsWith(`${resolvedTemp}/`);
+      if (!inside) {
+        throw new Error(
+          `Subpath escapes the cloned repository: ${subpath}. ` +
+            `Subpaths must be relative paths inside the repo (no \`..\` traversal).`
+        );
+      }
+    }
+
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetDir is composed from our own tempdir + validated subpath
     if (!existsSync(targetDir)) {
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempdir is our own mkdtempSync-created directory
