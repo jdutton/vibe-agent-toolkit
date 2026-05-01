@@ -63,8 +63,7 @@ module.exports = {
     // If `node` is a `path.<method>(...)` call where method returns
     // OS-specific separators, return that method name. Otherwise undefined.
     const unnormalizedPathCallMethod = (node) =>
-      node &&
-      node.type === 'CallExpression' &&
+      node?.type === 'CallExpression' &&
       node.callee.type === 'MemberExpression' &&
       node.callee.object.type === 'Identifier' &&
       node.callee.object.name === 'path' &&
