@@ -16,13 +16,14 @@ The `vat audit` command provides comprehensive validation for Claude plugins, ma
 ## Usage
 
 ```bash
-vat audit [path] [options]
+vat audit [git-url-or-path] [options]
 ```
 
 ### Arguments
 
-- `[path]` - Path to audit (optional, default: current directory)
-  - Can be: directory, registry file, SKILL.md file, or resource directory
+- `[git-url-or-path]` - Path or git URL to audit (optional, default: current directory)
+  - Local path: directory, registry file, SKILL.md file, or resource directory
+  - Git URL: HTTPS, SSH, GitHub shorthand, or GitHub web URL (see "Auditing a remote git repo" below)
 
 ### Options
 
@@ -482,6 +483,56 @@ if [ $? -ne 0 ]; then
   exit 1
 fi
 ```
+
+## Auditing a remote git repo
+
+`vat audit` accepts a git URL in addition to a local path. When given a URL, VAT performs a shallow clone into a temporary directory, runs the audit against the cloned tree, and always cleans up the tempdir on exit.
+
+### Accepted URL forms
+
+| Form | Example |
+|---|---|
+| HTTPS git URL | `https://github.com/foo/bar.git` |
+| HTTPS with ref | `https://github.com/foo/bar.git#v1.2.3` |
+| HTTPS with ref + subpath | `https://github.com/foo/bar.git#main:plugins/baz` |
+| GitHub web URL | `https://github.com/foo/bar/tree/main/plugins/baz` |
+| GitHub shorthand | `foo/bar` |
+| GitHub shorthand with ref | `foo/bar#main` |
+| GitHub shorthand with ref + subpath | `foo/bar#main:plugins/baz` |
+| SSH (scp form) | `git@github.com:foo/bar.git` |
+| SSH (URL form) | `ssh://git@github.com/foo/bar.git` |
+
+The `#ref[:subpath]` fragment form works on every URL form above.
+
+### Output
+
+Output begins with a provenance header showing the URL, ref, and resolved commit SHA, then the normal audit output with paths relative to the cloned repo root. Each header line is emitted as a YAML comment so the rest of the output remains pipe-parseable (`vat audit <url> | yq` works without preprocessing):
+
+```
+# Audited: https://github.com/foo/bar.git @ main (commit abc123de)
+# Subpath: plugins/baz
+---
+status: success
+files:
+  - path: plugins/baz/SKILL.md
+    ...
+```
+
+### Authentication
+
+Authentication is entirely passthrough to your local `git` configuration. SSH URLs use your SSH agent / keys; HTTPS URLs use whatever credential helper your `git` is configured with. VAT itself does not read tokens, environment variables, or credential files.
+
+To audit a private repo: ensure `git clone <url>` works on your machine, then `vat audit <url>` will work too.
+
+### Debugging
+
+Pass `--debug` to preserve the cloned tempdir for inspection (its location is printed to stderr at exit). You are responsible for cleanup when using this flag.
+
+### Limitations
+
+- `--depth 1` cloning cannot resolve arbitrary deep commit SHAs. Use a branch or tag name for the ref.
+- GitHub web URLs are parsed only for `github.com`. For GitLab/Bitbucket/Gitea, use the `.git` URL form directly.
+- Cache-skip-on-unchanged-SHA is not implemented in v1; every URL audit pays the clone cost.
 
 ## Cross-Platform Considerations
 

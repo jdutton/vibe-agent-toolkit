@@ -42,12 +42,19 @@ import {
   loadConfig,
   resetGoverningConfigCache,
 } from '../utils/config-loader.js';
+import { isGitUrl, parseGitUrl } from '../utils/git-url.js';
 import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 import { renderSkillQualityFooter } from '../utils/skill-quality-footer.js';
 import { computeConfigVerdicts } from '../utils/verdict-helpers.js';
 
+import { withClonedRepo } from './audit/git-url-clone.js';
 import { buildHierarchicalOutput } from './audit/hierarchical-output.js';
+import {
+  renderProvenanceHeader,
+  rewritePathsInResults,
+  type Provenance,
+} from './audit/provenance.js';
 import { createAuditSettingsCommand } from './audit-settings.js';
 import { discoverSkillsFromConfig } from './skills/skill-discovery.js';
 
@@ -360,7 +367,10 @@ export function createAuditCommand(): Command {
 
   audit
     .description('Audit Claude plugins, marketplaces, registries, and skills')
-    .argument('[path]', 'Path to audit (default: current directory)')
+    .argument(
+      '[git-url-or-path]',
+      'Path or git URL to audit. URL forms: https://host/owner/repo.git[#ref[:subpath]], git@host:owner/repo.git, ssh://..., owner/repo (GitHub shorthand), or a GitHub web URL like https://github.com/owner/repo/tree/<ref>/<subpath>. Default: current directory.'
+    )
     .option('--no-recursive', 'Disable recursive directory scanning (scans top level only)')
     .option('--exclude <glob>', 'Exclude paths matching glob pattern (repeatable)', collect, [])
     .option('--include-artifacts', 'Include gitignored paths (build artifacts, dependencies) that are excluded by default')
@@ -370,7 +380,12 @@ export function createAuditCommand(): Command {
     .option('--compat', 'Run compatibility analysis for each plugin (shows claude-code, claude-cowork, claude-chat support)')
     .option('--settings [file]', 'Check plugins against Claude settings (auto-discover or specify file; requires --compat)')
     .option('--debug', 'Enable debug logging')
-    .action(auditCommand)
+    .action(async function (this: Command, targetPath: string | undefined) {
+      // `--debug` is declared on both the root program and this command;
+      // Commander binds it to the program, so the command's own `opts()`
+      // arrives empty. Use `optsWithGlobals()` to merge both layers.
+      await auditCommand(targetPath, this.optsWithGlobals() as AuditCommandOptions);
+    })
     .addCommand(createAuditSettingsCommand())
     .addHelpText(
       'after',
@@ -388,7 +403,10 @@ Description:
   - Agent Skills (SKILL.md files)
   - VAT agents (agent.yaml + SKILL.md)
 
-  Path can be: resource directory, registry file, SKILL.md file, or scan directory
+  Path or URL to audit: resource directory, registry file, SKILL.md file,
+  scan directory, or a git URL (HTTPS, SSH, GitHub shorthand, GitHub web URL).
+  When given a URL, VAT shallow-clones to a temp directory, audits, and
+  cleans up on exit. See packages/cli/docs/audit.md for URL forms.
   Default: current directory
   Use --user to audit user-level installation automatically
 
@@ -468,6 +486,7 @@ Examples:
   $ vat audit --include-artifacts ./repo/   # Include gitignored paths
   $ vat audit --exclude "vendor/**" ./repo/   # Add extra exclusions
   $ vat audit --compat ./plugin/      # Include per-surface compatibility analysis
+  $ vat audit https://github.com/octocat/Hello-World.git   # Audit a remote git repo
 `
     );
 
@@ -676,6 +695,75 @@ async function resolveEffectiveSettings(
   }
 }
 
+interface AuditAtPathOverrides {
+  provenance?: Provenance;
+  tempRoot?: string;
+}
+
+async function runAuditAtPath(
+  scanPath: string,
+  options: AuditCommandOptions,
+  overrides: AuditAtPathOverrides = {}
+): Promise<void> {
+  const logger = createLogger(options.debug ? { debug: true } : {});
+  const startTime = Date.now();
+  const recursive: boolean = options.recursive !== false;
+  logger.debug(`Auditing resources at: ${scanPath}`);
+
+  const rawResults = await getValidationResults(scanPath, recursive, options, logger);
+
+  // Load config for severity filtering (audit ignores allow; only severity matters).
+  const config = loadConfig(deriveConfigRoot(scanPath));
+
+  // Apply severity filtering: hide codes whose effective severity is 'ignore'.
+  // Allow is deliberately NOT applied — audit is advisory only.
+  const results = applySeverityFilter(rawResults, config);
+
+  const effectiveSettings = await resolveEffectiveSettings(options, scanPath, logger);
+
+  // Build config-aware context scoped to the single derived config root —
+  // used by compat analysis to resolve the plugin-level `targets` union.
+  // VAT's design: one config per project, no composition.
+  const vatContextForCompat = await buildVATProjectContext(deriveConfigRoot(scanPath), logger);
+
+  // Run compatibility analysis if --compat flag is set
+  const compatMap = options.compat
+    ? await runCompatAnalysis(results, logger, effectiveSettings, vatContextForCompat)
+    : undefined;
+
+  const verbose = options.verbose ?? false;
+  const summary = calculateSummary(results, startTime, compatMap, verbose);
+
+  const finalSummary =
+    overrides.tempRoot === undefined ? summary : rewritePathsInResults(summary, overrides.tempRoot);
+  if (overrides.provenance) {
+    process.stdout.write(renderProvenanceHeader(overrides.provenance));
+  }
+  writeYamlOutput(finalSummary);
+  if (verbose) {
+    renderVerboseEvidence(results, logger);
+  }
+  handleAuditResults(results, summary, logger);
+  logger.debug(`Audit complete in ${Date.now() - startTime}ms`);
+}
+
+async function runUrlAudit(rawInput: string, options: AuditCommandOptions): Promise<void> {
+  const parsed = parseGitUrl(rawInput);
+  await withClonedRepo(
+    parsed,
+    { keepTempForDebug: options.debug === true },
+    async ({ targetDir, tempdir, provenance }) => {
+      // Re-enter the audit pipeline against the cloned target. Strip --user
+      // (it doesn't apply to URL audits).
+      const innerOptions: AuditCommandOptions = { ...options, user: false };
+      await runAuditAtPath(targetDir, innerOptions, {
+        provenance,
+        tempRoot: tempdir,
+      });
+    }
+  );
+}
+
 export async function auditCommand(
   targetPath: string | undefined,
   options: AuditCommandOptions
@@ -686,6 +774,11 @@ export async function auditCommand(
   resetAuditCaches();
 
   try {
+    if (targetPath !== undefined && isGitUrl(targetPath)) {
+      await runUrlAudit(targetPath, options);
+      return;
+    }
+
     // Commander sets options.recursive to false when --no-recursive is passed, true otherwise
     const recursive: boolean = options.recursive !== false;
 
@@ -695,36 +788,7 @@ export async function auditCommand(
     }
 
     const scanPath = targetPath ? safePath.resolve(targetPath) : process.cwd();
-    logger.debug(`Auditing resources at: ${scanPath}`);
-
-    const rawResults = await getValidationResults(scanPath, recursive, options, logger);
-
-    // Load config for severity filtering (audit ignores allow; only severity matters).
-    const config = loadConfig(deriveConfigRoot(targetPath));
-
-    // Apply severity filtering: hide codes whose effective severity is 'ignore'.
-    // Allow is deliberately NOT applied — audit is advisory only.
-    const results = applySeverityFilter(rawResults, config);
-
-    const effectiveSettings = await resolveEffectiveSettings(options, scanPath, logger);
-
-    // Build config-aware context scoped to the single derived config root —
-    // used by compat analysis to resolve the plugin-level `targets` union.
-    // VAT's design: one config per project, no composition.
-    const vatContextForCompat = await buildVATProjectContext(deriveConfigRoot(targetPath), logger);
-
-    // Run compatibility analysis if --compat flag is set
-    const compatMap = options.compat
-      ? await runCompatAnalysis(results, logger, effectiveSettings, vatContextForCompat)
-      : undefined;
-
-    const verbose = options.verbose ?? false;
-    const summary = calculateSummary(results, startTime, compatMap, verbose);
-    writeYamlOutput(summary);
-    if (verbose) {
-      renderVerboseEvidence(results, logger);
-    }
-    handleAuditResults(results, summary, logger);
+    await runAuditAtPath(scanPath, options);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'AgentAudit');
   }

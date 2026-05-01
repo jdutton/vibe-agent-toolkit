@@ -7,6 +7,8 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import type { AuditCommandOptions } from '../src/commands/audit.js';
 import { getValidationResults, resetAuditCaches } from '../src/commands/audit.js';
 
+import { type CliResult, executeCli } from './system/test-helpers/cli-runner.js';
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 export const binPath = safePath.resolve(__dirname, '../dist/bin.js');
 
@@ -43,4 +45,19 @@ export async function runAudit(
   // GitTrackers / governing-config / skill-discovery caches.
   resetAuditCaches();
   return getValidationResults(targetPath, options.recursive !== false, options, silentAuditLogger);
+}
+
+/**
+ * Run `vat audit <target>` via the CLI subprocess and return exit code +
+ * stdout + stderr. Use this for integration tests that assert on CLI
+ * output (provenance headers, formatted YAML, process exit behavior).
+ * For tests that only need validation results, use {@link runAudit}
+ * (direct in-process call).
+ */
+export function runAuditCli(
+  target: string,
+  extraArgs: string[] = [],
+  options?: { cwd?: string; env?: NodeJS.ProcessEnv }
+): CliResult {
+  return executeCli(binPath, ['audit', target, ...extraArgs], options);
 }

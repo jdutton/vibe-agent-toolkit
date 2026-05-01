@@ -60,104 +60,80 @@ module.exports = {
     const unwrappedPathVariables = new Set();
     const wrappedPathVariables = new Set();
 
+    // If `node` is a `path.<method>(...)` call where method returns
+    // OS-specific separators, return that method name. Otherwise undefined.
+    const unnormalizedPathCallMethod = (node) =>
+      node?.type === 'CallExpression' &&
+      node.callee.type === 'MemberExpression' &&
+      node.callee.object.type === 'Identifier' &&
+      node.callee.object.name === 'path' &&
+      pathMethodsReturningPaths.has(node.callee.property.name)
+        ? node.callee.property.name
+        : undefined;
+
+    const isStringComparisonCall = (node) =>
+      node.callee.type === 'MemberExpression' &&
+      stringComparisonMethods.has(node.callee.property.name);
+
+    const reportPathArgument = (arg) => {
+      const method = unnormalizedPathCallMethod(arg);
+      if (method !== undefined) {
+        context.report({ node: arg, messageId: 'normalizePathOperation', data: { method } });
+        return;
+      }
+      if (
+        arg.type === 'Identifier' &&
+        unwrappedPathVariables.has(arg.name) &&
+        !wrappedPathVariables.has(arg.name)
+      ) {
+        context.report({
+          node: arg,
+          messageId: 'normalizePathOperation',
+          data: { method: 'operation' },
+        });
+      }
+    };
+
+    const reportTemplateLiteralExpressions = (templateLiteral) => {
+      for (const expr of templateLiteral.expressions) {
+        const method = unnormalizedPathCallMethod(expr);
+        if (method !== undefined) {
+          context.report({
+            node: expr,
+            messageId: 'normalizePathOperation',
+            data: { method },
+          });
+        }
+      }
+    };
+
     return {
       VariableDeclarator(node) {
-        if (!node.init) return;
+        if (!node.init || node.id.type !== 'Identifier') return;
 
-        // Check if initializer is a path operation
-        if (
-          node.init.type === 'CallExpression' &&
-          node.init.callee.type === 'MemberExpression' &&
-          node.init.callee.object.type === 'Identifier' &&
-          node.init.callee.object.name === 'path' &&
-          pathMethodsReturningPaths.has(node.init.callee.property.name)
-        ) {
-          // Check if it's wrapped in toForwardSlash()
-          if (node.id.type === 'Identifier') {
-            unwrappedPathVariables.add(node.id.name);
-          }
+        if (unnormalizedPathCallMethod(node.init) !== undefined) {
+          unwrappedPathVariables.add(node.id.name);
+          return;
         }
 
-        // Check if initializer is toForwardSlash(path.operation())
+        // Initializer is `toForwardSlash(<expr>)` — treat the variable as wrapped.
         if (
           node.init.type === 'CallExpression' &&
           node.init.callee.type === 'Identifier' &&
           node.init.callee.name === 'toForwardSlash' &&
           node.init.arguments.length === 1
         ) {
-          if (node.id.type === 'Identifier') {
-            wrappedPathVariables.add(node.id.name);
-          }
+          wrappedPathVariables.add(node.id.name);
         }
       },
 
       CallExpression(node) {
-        // Check for direct path operation in string method argument
-        // e.g., content.includes(path.relative(...))
-        if (
-          node.callee.type === 'MemberExpression' &&
-          stringComparisonMethods.has(node.callee.property.name)
-        ) {
-          node.arguments.forEach((arg) => {
-            if (
-              arg.type === 'CallExpression' &&
-              arg.callee.type === 'MemberExpression' &&
-              arg.callee.object.type === 'Identifier' &&
-              arg.callee.object.name === 'path' &&
-              pathMethodsReturningPaths.has(arg.callee.property.name)
-            ) {
-              context.report({
-                node: arg,
-                messageId: 'normalizePathOperation',
-                data: {
-                  method: arg.callee.property.name,
-                },
-              });
-            }
-
-            // Check if using unwrapped path variable
-            if (
-              arg.type === 'Identifier' &&
-              unwrappedPathVariables.has(arg.name) &&
-              !wrappedPathVariables.has(arg.name)
-            ) {
-              context.report({
-                node: arg,
-                messageId: 'normalizePathOperation',
-                data: {
-                  method: 'operation',
-                },
-              });
-            }
-          });
-        }
-
-        // Check for path operations in template literals used in string methods
-        if (
-          node.callee.type === 'MemberExpression' &&
-          stringComparisonMethods.has(node.callee.property.name)
-        ) {
-          node.arguments.forEach((arg) => {
-            if (arg.type === 'TemplateLiteral') {
-              arg.expressions.forEach((expr) => {
-                if (
-                  expr.type === 'CallExpression' &&
-                  expr.callee.type === 'MemberExpression' &&
-                  expr.callee.object.type === 'Identifier' &&
-                  expr.callee.object.name === 'path' &&
-                  pathMethodsReturningPaths.has(expr.callee.property.name)
-                ) {
-                  context.report({
-                    node: expr,
-                    messageId: 'normalizePathOperation',
-                    data: {
-                      method: expr.callee.property.name,
-                    },
-                  });
-                }
-              });
-            }
-          });
+        if (!isStringComparisonCall(node)) return;
+        for (const arg of node.arguments) {
+          reportPathArgument(arg);
+          if (arg.type === 'TemplateLiteral') {
+            reportTemplateLiteralExpressions(arg);
+          }
         }
       },
     };

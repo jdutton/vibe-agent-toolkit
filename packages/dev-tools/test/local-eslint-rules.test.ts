@@ -64,6 +64,35 @@ const SUITES: readonly RuleSuite[] = [
       ],
     },
   },
+  {
+    name: 'prefer-startswith-over-regex',
+    cases: {
+      valid: [
+        // unicorn would catch these, but our rule treats them as redundant — both are fine.
+        { code: "const s = 'x'; if (s.startsWith('file://')) {}" },
+        // Patterns with regex metacharacters — must NOT flag (cannot safely flatten).
+        { code: String.raw`const s = 'x'; if (/^https?:\/\//.test(s)) {}` },
+        { code: "const s = 'x'; if (/^[a-z]+/.test(s)) {}" },
+        { code: String.raw`const s = 'x'; if (/\.txt$/.test(s)) {}` },
+        { code: "const s = 'x'; if (/^foo|bar/.test(s)) {}" },
+        // Flags i/m make literal conversion unsafe — must not flag.
+        { code: "const s = 'x'; if (/^foo/i.test(s)) {}" },
+        // Other escapes (\d, \w, \\) are not safely flattenable — must not flag.
+        { code: String.raw`const s = 'x'; if (/^\d+/.test(s)) {}` },
+        // No anchor — not a prefix/suffix check.
+        { code: "const s = 'x'; if (/foo/.test(s)) {}" },
+        // Method calls that aren't .test() — must not flag.
+        { code: "const s = 'x'; const m = /^foo/.exec(s);" },
+      ],
+      invalid: [
+        { code: String.raw`const s = 'x'; if (/^file:\/\//.test(s)) {}`, errors: [{ messageId: 'preferStartsWith' }] },
+        { code: String.raw`const s = 'x'; if (/^ssh:\/\//.test(s)) {}`, errors: [{ messageId: 'preferStartsWith' }] },
+        { code: "const s = 'x'; if (/^foo/.test(s)) {}", errors: [{ messageId: 'preferStartsWith' }] },
+        { code: "const s = 'x'; if (/bar$/.test(s)) {}", errors: [{ messageId: 'preferEndsWith' }] },
+        { code: "const s = 'x'; if (/^abc-def/.test(s)) {}", errors: [{ messageId: 'preferStartsWith' }] },
+      ],
+    },
+  },
 ];
 
 describe.each(SUITES)('$name', ({ name, cases }) => {

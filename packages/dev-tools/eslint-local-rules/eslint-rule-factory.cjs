@@ -40,7 +40,7 @@ function filterUnsafeSpecifiers(importNode, unsafeFn) {
  */
 function removeUnsafeImportSpecifiers(fixer, sourceCode, unsafeImportNode, unsafeSpecs) {
   const fixes = [];
-  unsafeSpecs.forEach((spec) => {
+  for (const spec of unsafeSpecs) {
     const comma = sourceCode.getTokenAfter(spec);
     if (comma?.value === ',') {
       fixes.push(fixer.removeRange([spec.range[0], comma.range[1]]));
@@ -52,7 +52,7 @@ function removeUnsafeImportSpecifiers(fixer, sourceCode, unsafeImportNode, unsaf
         fixes.push(fixer.remove(spec));
       }
     }
-  });
+  }
   return fixes;
 }
 
@@ -109,21 +109,21 @@ module.exports = function createNoUnsafeRule(config) {
           // Track unsafe module imports
           if (moduleVariants.includes(node.source.value)) {
             unsafeImportNode = node;
-            node.specifiers.forEach((spec) => {
+            for (const spec of node.specifiers) {
               if (spec.type === 'ImportSpecifier' && spec.imported.name === unsafeFn) {
                 hasUnsafeImport = true;
               }
-            });
+            }
           }
 
           // Track safe module imports
           if (node.source.value === safeModule) {
             safeImportNode = node;
-            node.specifiers.forEach((spec) => {
+            for (const spec of node.specifiers) {
               if (spec.type === 'ImportSpecifier' && spec.imported.name === safeFn) {
                 hasSafeImport = true;
               }
-            });
+            }
           }
         },
 
@@ -167,7 +167,7 @@ module.exports = function createNoUnsafeRule(config) {
               if (!hasSafeImport) {
                 if (safeImportNode) {
                   // Add to existing safe module import
-                  const lastSpecifier = safeImportNode.specifiers[safeImportNode.specifiers.length - 1];
+                  const lastSpecifier = safeImportNode.specifiers.at(-1);
                   fixes.push(fixer.insertTextAfter(lastSpecifier, `, ${safeFn}`));
                 } else {
                   // Create new import after unsafe import or at the top

@@ -32,6 +32,7 @@
  */
 
 import { createRequire } from 'node:module';
+
 const require = createRequire(import.meta.url);
 
 export default {
@@ -53,5 +54,6 @@ export default {
     'no-fs-promises-cp': require('./no-fs-promises-cp.cjs'),
     'no-url-pathname-for-fs': require('./no-url-pathname-for-fs.cjs'),
     'no-bare-dynamic-import-path': require('./no-bare-dynamic-import-path.cjs'),
+    'prefer-startswith-over-regex': require('./prefer-startswith-over-regex.cjs'),
   },
 };

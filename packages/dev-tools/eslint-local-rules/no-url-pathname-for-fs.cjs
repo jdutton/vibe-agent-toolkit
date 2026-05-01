@@ -47,7 +47,7 @@ function containsImportMetaUrl(node) {
   if (isImportMetaUrl(node)) return true;
   for (const key of Object.keys(node)) {
     if (SKIP_KEYS.has(key)) continue;
-    // eslint-disable-next-line security/detect-object-injection
+     
     const value = node[key];
     if (Array.isArray(value) && value.some((item) => containsImportMetaUrl(item))) {
       return true;

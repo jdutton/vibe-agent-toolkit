@@ -91,7 +91,7 @@ function buildFix(fixer, node, unsafeFn, isNamed, sourceCode, state) {
 
   if (!state.hasSafePathImport) {
     if (state.safeImportNode) {
-      const lastSpec = state.safeImportNode.specifiers[state.safeImportNode.specifiers.length - 1];
+      const lastSpec = state.safeImportNode.specifiers.at(-1);
       fixes.push(fixer.insertTextAfter(lastSpec, `, ${SAFE_OBJECT}`));
     } else {
       const targetNode = state.namedImportNode || sourceCode.ast.body[0];

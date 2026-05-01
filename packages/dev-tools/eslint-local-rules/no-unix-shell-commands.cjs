@@ -67,7 +67,7 @@ function getAlternatives(command) {
     awk: 'string.split() and array methods',
   };
 
-  // eslint-disable-next-line security/detect-object-injection -- Safe: command is validated against ALL_UNIX_COMMANDS before calling this function
+   
   return alternatives[command] || 'Node.js fs module or cross-platform npm package';
 }
 
