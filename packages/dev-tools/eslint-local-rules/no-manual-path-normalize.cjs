@@ -39,11 +39,11 @@ module.exports = {
       ImportDeclaration(node) {
         if (node.source.value === '@vibe-agent-toolkit/utils') {
           utilsImportNode = node;
-          node.specifiers.forEach((spec) => {
+          for (const spec of node.specifiers) {
             if (spec.type === 'ImportSpecifier' && spec.imported.name === 'toForwardSlash') {
               hasToForwardSlashImport = true;
             }
-          });
+          }
         }
       },
 
@@ -90,7 +90,7 @@ module.exports = {
                   if (!hasToForwardSlashImport) {
                     if (utilsImportNode) {
                       // Add to existing utils import
-                      const lastSpecifier = utilsImportNode.specifiers[utilsImportNode.specifiers.length - 1];
+                      const lastSpecifier = utilsImportNode.specifiers.at(-1);
                       fixes.push(fixer.insertTextAfter(lastSpecifier, ', toForwardSlash'));
                     } else {
                       // Create new import at the top

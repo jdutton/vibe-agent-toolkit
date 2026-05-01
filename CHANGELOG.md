@@ -7,55 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Fixed
-- **`vat audit` shorthand-URL fragments.** `vat audit owner/repo#ref` and `owner/repo#ref:subpath` were silently treated as filesystem paths because `isGitUrl` and `parseGitUrl` anchored the shorthand pattern without stripping the `#ref[:subpath]` fragment first. Both now strip the fragment before testing the shorthand pattern, matching the behavior of every other accepted URL form.
-- **`vat audit <git-url>` subpath traversal rejected.** A subpath fragment that resolves outside the cloned tempdir (e.g. `repo#main:../../../etc`) is now rejected up front with a clear error, preventing the audit from running against unrelated host paths.
-- **`isGitUrl` SSH matcher tightened to match `parseGitUrl`.** Inputs with an empty path after the colon (e.g. `foo@host:`) are no longer routed into the URL branch only to fall through to a less-helpful "Invalid git URL" error — they now fall through to filesystem-path resolution like any other non-URL.
-- **`vat audit <git-url>` provenance header is now valid YAML.** The `Audited: <url> @ <ref> (commit <sha>)` and `Subpath: <path>` lines are emitted as YAML comments (`# `-prefixed), so `vat audit <url> | yq` (or any downstream YAML consumer) parses cleanly without preprocessing.
-
-### Documentation
-- **`vat audit` git-URL coverage in skills and verbose docs.** Added an "Auditing a remote git repo" section to the `vat-audit` skill (auth-passthrough behavior, `--debug` for tempdir preservation, all URL forms with examples), and added the missing shorthand-with-fragment rows (`foo/bar#main`, `foo/bar#main:plugins/baz`) to the verbose docs URL-form table. Updated header sample in both surfaces to reflect the new YAML-comment format.
-
-### Internal
-*No consumer-facing changes in this section — test infrastructure and CI pipeline only.*
-
-- **System-test reliability on resource-constrained Windows environments.** `vv validate` could fail at the system-test phase with `"Timeout calling onTaskUpdate"` even when every test passed — caused by `spawnSync` blocking the vitest worker's event loop past its 60 s RPC heartbeat. The CLI dispatcher (`executeCli` / `executeCliAndParseYaml` / `executeBunVat` in `packages/cli/test/system/test-common.ts`) is now async (`spawn` wrapped in a Promise); call sites across ~29 test files updated. `vitest.system.config.ts` switches Windows from `singleFork: true` to `singleFork: false, maxForks: 1` so a slow file can no longer carry RPC backpressure into the next. Same config on all platforms — no CI/local divergence.
-- **Unit-test coverage is now collected only in the dedicated `coverage.yml` CI job.** The `vv validate` unit-test step switches from `test:coverage` to plain `test:unit`, dropping v8 instrumentation from local runs and the validate matrix. Codecov uploads continue from `coverage.yml` (Ubuntu) unchanged. Saves ~90–130 s per run on every platform. `bun run test:coverage` remains available for local coverage reports.
-- System-test helpers consolidated to reduce redundant CLI spawns: `assertValidationFailureWithErrorInStderr` → `assertValidationFailureWithError` (single spawn, checks combined stdout/stderr); `executeInstallAndExpectSuccess` now returns `{ result, parsed }` so dry-run tests avoid re-spawning; two `vat verify` tests in `build-verify.system.test.ts` hoisted into `beforeAll`.
-- **Shift-left for `/^literal/.test(s)` patterns.** Enabled `unicorn/prefer-string-starts-ends-with` and added a stricter local rule `local/prefer-startswith-over-regex` that also flags patterns containing `\/` escape sequences (which unicorn's `isSimpleString` rejects). Together they catch the SonarCloud S6557 findings at lint time, before commit. Backfilled with the four occurrences in `packages/cli/src/utils/git-url.ts` (file://, ssh:// detectors).
-
 ### Added
-- **`vat audit` accepts a git URL as input.** In addition to a local path, `vat audit` now takes a git URL, shallow-clones it into a temp directory, runs the normal audit against the cloned tree (or a subpath within it), emits output with repo-relative paths preceded by a provenance header (`Audited: <url> @ <ref> (commit <sha>)`), and unconditionally cleans up the temp directory on exit — including on errors and `process.exit()` from the audit pipeline. Authentication is pure passthrough to `git`: whatever `git clone <url>` can access on the invoking machine, `vat audit <url>` can audit. VAT contains no credentials code. Accepted forms: HTTPS `.git` URLs, GitHub web URLs (`/tree/<ref>/<subpath>`), GitHub shorthand (`owner/repo`), SSH (`git@host:path` and `ssh://...`), and `file://` (for local bare repos). Optional `#ref` pins a branch or tag; optional `#ref:subpath` narrows to a monorepo subdirectory. Reusing the existing `--debug` flag preserves the cloned tempdir for post-mortem inspection. This is the Layer-1 primitive of Workstream B (corpus scan); it also has standalone user value — any developer can `vat audit https://github.com/foo/bar-plugin` to evaluate a plugin before installing.
-- **Skill-claude-plugin recognition in `vat audit`.** Introduces the **skill-claude-plugin** artifact shape — a skill that self-publishes as a Claude plugin by co-locating `.claude-plugin/plugin.json` alongside its root `SKILL.md`. Audit now emits independent `ValidationResult` entries for each surface (one `agent-skill`, one `claude-plugin`) instead of reporting only the plugin and silently ignoring the skill. The skill remains platform-agnostic; the graduation to skill-claude-plugin adds Claude-specific packaging only. See [`docs/architecture/skill-packaging.md`](docs/architecture/skill-packaging.md) for the full packaging-shape terminology (standalone skill / skill-claude-plugin / claude-plugin / claude-marketplace).
-- **`SKILL_CLAUDE_PLUGIN_NAME_MISMATCH`** validation code (default `warning`). Fires on the plugin result when a skill-claude-plugin's `plugin.json.name` disagrees with the co-located `SKILL.md` frontmatter `name`. The skill is authoritative; the plugin manifest is a distribution wrapper and should match unless the plugin is intentionally namespaced (in which case use `validation.severity` or `validation.allow`).
-- **Self-contained Claude Code plugin support in `vat claude plugin build`.**
-  Adopters can now bundle commands, hooks, agents, MCP servers, scripts, raw
-  plugin-local `SKILL.md` files, and author-supplied `plugin.json` metadata from a
-  per-plugin `plugins/<name>/` directory. The entire directory is tree-copied
-  verbatim (respecting `.gitignore`). Pre-existing pool-to-plugin skill selectors
-  (`marketplace.plugins[].skills`) are preserved — a plugin can still declare
-  `skills: "*"` or `skills: [names]` to import pool skills (built by
-  `vat skills build`) into its bundle. The skills stream is unchanged: `vat skills
-  build` continues to produce `dist/skills/<name>/` only. New schema fields on
-  marketplace plugin entries: `source` (path override, default `plugins/<name>`)
-  and `files[]` (compiled-artifact mappings). The 5-phase plugin build pipeline
-  is deterministically ordered (discovery → tree-copy → pool-skill import →
-  `files[]` → merged `plugin.json`). YAML summary adds `commandsCopied`,
-  `hooksCopied`, `agentsCopied`, `mcpCopied`, `treeFilesCopied`,
-  `explicitFilesCopied` per plugin. Case-sensitivity mismatches between declared
-  plugin names and on-disk dirs now fail the build to catch Linux-CI drift.
+- **`vat audit` accepts a git URL.** Pass an HTTPS, SSH, GitHub-shorthand (`owner/repo`), GitHub web URL, or `file://` URL and `vat audit` shallow-clones, audits (or audits the `#ref:subpath` you specify), and cleans up. Auth is passthrough to your local `git` — VAT itself reads no tokens. `--debug` preserves the cloned tempdir for inspection.
+- **`skill-claude-plugin` recognized as a distinct artifact shape.** A skill that self-publishes as a Claude plugin by co-locating `.claude-plugin/plugin.json` alongside its root `SKILL.md` now produces independent `agent-skill` and `claude-plugin` validation results. New `SKILL_CLAUDE_PLUGIN_NAME_MISMATCH` warning fires when the manifest name disagrees with the SKILL.md `name`. See [`docs/architecture/skill-packaging.md`](docs/architecture/skill-packaging.md) for the four packaging shapes.
+- **`vat claude plugin build` builds self-contained Claude Code plugins.** Plugin authors can now bundle commands, hooks, agents, MCP servers, scripts, plugin-local `SKILL.md` files, and `plugin.json` from a `plugins/<name>/` directory (tree-copied verbatim, `.gitignore`-respecting). Pool-skill import via `marketplace.plugins[].skills` (`"*"` or `[names]`) is preserved. New marketplace fields: `source` (path override) and `files[]` (compiled-artifact mappings). Case mismatches between declared plugin names and on-disk dirs fail the build.
 
-### Changed
-- `vat audit` directory-entry detection uses a new `enumerateSurfaces()` helper that returns every manifest present at the directory root, replacing single-result detection in the multi-surface case. Single-surface directories retain their legacy single-validator dispatch, including the marketplace-with-co-located-plugin collapse.
-- `packages/cli/src/commands/audit/hierarchical-output.ts` comments standardized on the new terminology: the pattern previously documented as "standalone plugin skill (no skills subdir)" is now called **skill-claude-plugin**.
-- Upgraded `vibe-validate` and `@vibe-validate/cli` dev dependencies from `^0.19.1` to `0.19.5-rc.1` (pinned, not caret — RCs aren't matched by `^0.19.x`). 0.19.5-rc.1 fixes nested-run output passthrough so vitest failures inside `vv validate` actually surface in CI logs instead of being captured to a runner-local tempfile.
+### Fixed
+- **`vat audit owner/repo#ref` and `owner/repo#ref:subpath` now work.** Previously the shorthand-with-fragment form silently fell through to filesystem-path resolution.
+- **`vat audit <git-url>` rejects subpath traversal.** A subpath that resolves outside the cloned tempdir (e.g. `repo#main:../../../etc`) is now rejected up front.
+- **`vat audit <git-url>` provenance header is valid YAML.** `# Audited:` and `# Subpath:` are emitted as YAML comments so `vat audit <url> | yq` parses cleanly without preprocessing.
 
 ### Documentation
-- New reference doc `docs/architecture/skill-packaging.md` enumerates the four packaging shapes with layouts and applicable validation.
-- `docs/README.md` gains a "Validation & Quality Framework" section indexing the three stance docs (`skill-quality-and-compatibility.md`, `validation-codes.md`, `skill-smell-philosophy.md`).
-- New `docs/CLAUDE.md` and `docs/architecture/CLAUDE.md` agent navigators pull in each directory's README via `@README.md` and add agent-only guidance for audit/validation work.
-- Root `/CLAUDE.md` "Questions?" section now links to directories rather than README files — child CLAUDE.md files auto-trigger and pull in their README once, avoiding the previous double-read pattern.
-- `packages/cli/CLAUDE.md` gains a "Validation Framework References" section.
+- New `docs/architecture/skill-packaging.md` enumerates the four packaging shapes (standalone skill / skill-claude-plugin / claude-plugin / claude-marketplace).
+- The `vat-audit` skill and verbose `audit.md` cover the new git-URL flag, all URL forms, and the YAML-comment header format.
 
 ## [0.1.33] - 2026-04-21
 

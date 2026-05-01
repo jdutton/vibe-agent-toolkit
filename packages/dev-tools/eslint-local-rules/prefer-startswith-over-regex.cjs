@@ -20,7 +20,7 @@
 
 'use strict';
 
-const METACHARS = ['^', '$', '+', '[', '{', '(', '.', '?', '*', '|'];
+const METACHARS = new Set(['^', '$', '+', '[', '{', '(', '.', '?', '*', '|']);
 
 /**
  * Treat `\/` as a single literal `/` and check the remainder for any
@@ -29,14 +29,14 @@ const METACHARS = ['^', '$', '+', '[', '{', '(', '.', '?', '*', '|'];
  */
 function literalEquivalent(patternBody) {
   // Step 1: collapse `\/` (the only escape we accept) into a literal `/`.
-  const flattened = patternBody.replaceAll('\\/', '/');
+  const flattened = patternBody.replaceAll(String.raw`\/`, '/');
   // Step 2: any remaining `\` is an escape we don't understand (\d, \w, \\, etc.).
   if (flattened.includes('\\')) {
     return null;
   }
   // Step 3: reject any regex metacharacter we'd be silently flattening.
   for (const ch of flattened) {
-    if (METACHARS.includes(ch)) {
+    if (METACHARS.has(ch)) {
       return null;
     }
   }
@@ -48,16 +48,16 @@ module.exports = {
     type: 'problem',
     docs: {
       description:
-        'Prefer String#startsWith / String#endsWith over /^literal/.test() — even when the literal includes \\/ escape sequences',
+        String.raw`Prefer String#startsWith / String#endsWith over /^literal/.test() — even when the literal includes \/ escape sequences`,
       recommended: true,
     },
     messages: {
       preferStartsWith:
         "Prefer `<string>.startsWith('{{literal}}')` over `/{{pattern}}/.test(<string>)`. " +
-        'Treat \\/ as the literal / character.',
+        String.raw`Treat \/ as the literal / character.`,
       preferEndsWith:
         "Prefer `<string>.endsWith('{{literal}}')` over `/{{pattern}}/.test(<string>)`. " +
-        'Treat \\/ as the literal / character.',
+        String.raw`Treat \/ as the literal / character.`,
     },
     schema: [],
   },
@@ -94,7 +94,7 @@ module.exports = {
           }
         }
 
-        if (pattern.endsWith('$') && !pattern.endsWith('\\$')) {
+        if (pattern.endsWith('$') && !pattern.endsWith(String.raw`\$`)) {
           const body = pattern.slice(0, -1);
           const literal = literalEquivalent(body);
           if (literal !== null && literal !== '') {
