@@ -121,6 +121,6 @@ VAT believes **overrides should have half-lives**, because an allow entry that s
 
 (Maintained going forward so adopters can see when and why our stance shifted. Initial entry: doc created in 0.1.31 stable.)
 
-- **2026-04-18 (0.1.32)** — Companion stance doc [`docs/skill-smell-philosophy.md`](./skill-smell-philosophy.md) added, articulating the rule-addition bar, default-severity posture, graduation path, and data-driven evolution that govern every code in [`docs/validation-codes.md`](./validation-codes.md).
+- **2026-04-18 (0.1.32)** — Companion stance doc [`docs/validation-rule-design.md`](./validation-rule-design.md) (originally named `skill-smell-philosophy.md`) added, articulating the rule-addition bar, default-severity posture, graduation path, and data-driven evolution that govern every code in [`docs/validation-codes.md`](./validation-codes.md).
 - **2026-04-18 (0.1.32)** — Compat model refactored. v1 `COMPAT_REQUIRES_*` codes renamed to `CAPABILITY_*` (informational observations); new `COMPAT_TARGET_*` verdict codes fire only on declared-target mismatch. Runtime `claude-desktop` renamed to `claude-chat`. Evidence substrate added with `--verbose` output surface. Config-level `targets` declaration supported. Post-build validation runs full suite on built output.
 - **2026-04-17 (0.1.31 stable)** — doc created. Compatibility section reflects the v1 detectors shipped in 0.1.31-rc.1, with pending changes named explicitly (runtime rename, evidence/observation split) shipping in 0.1.32.

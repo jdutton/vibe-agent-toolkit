@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
 import { describe, expect, it } from 'vitest';
 
@@ -179,10 +179,26 @@ describe('auditOnePlugin — validation overlay', () => {
   });
 });
 
+function makeMultiSkillPluginDir(skillNames: string[]): string {
+  const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-corpus-multiskill-'));
+  for (const name of skillNames) {
+    const skillDir = safePath.join(root, 'plugins', name);
+    mkdirSyncReal(skillDir, { recursive: true });
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- composed test fixture path
+    writeFileSync(
+      safePath.join(skillDir, 'SKILL.md'),
+      `---\nname: ${name}\ndescription: Multi-skill plugin tree fixture skill ${name} that exercises the per-skill review enumeration code path.\n---\n\n# ${name}\n\nBody.\n`,
+      'utf-8'
+    );
+  }
+  return root;
+}
+
 describe('auditOnePlugin — --with-review', () => {
-  it('writes a review.md and records review.status=ok when withReview is true', async () => {
-    // `vat skill review` operates on a single-skill directory (SKILL.md at root),
-    // so use makeReviewablePluginDir here instead of the multi-skill makePluginDir.
+  it('writes an aggregated review.md and records review.status=ok when withReview is true', async () => {
+    // Single-skill plugin tree: SKILL.md at the root. The runner now discovers
+    // SKILL.md via discovery.scan() and reviews each skill directory, then
+    // wraps results in an aggregated markdown file.
     const pluginDir = makeReviewablePluginDir(
       'reviewed',
       'Skill that runs the review pipeline end-to-end so the runner test exercises the with-review path.'
@@ -198,6 +214,43 @@ describe('auditOnePlugin — --with-review', () => {
     const reviewPath = safePath.join(runDir, 'reviewed-review.md');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
     expect(existsSync(reviewPath)).toBe(true);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
+    const contents = readFileSync(reviewPath, 'utf-8');
+    expect(contents).toContain('# Skill review: reviewed');
+    expect(contents).toContain('Reviewed 1 of 1 skills');
+    expect(contents).toContain('## SKILL.md');
+  });
+
+  it('reviews every SKILL.md in a multi-skill plugin tree', async () => {
+    const pluginDir = makeMultiSkillPluginDir(['alpha', 'beta']);
+    const runDir = makeRunDir();
+
+    const entry: PluginEntry = { source: pluginDir, name: 'multi' };
+
+    const row = await auditOnePlugin(entry, { runDir, withReview: true, debug: false });
+
+    expect(row.review.status).toBe('ok');
+    expect(row.review.output_path).toBe('multi-review.md');
+    const reviewPath = safePath.join(runDir, 'multi-review.md');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
+    const contents = toForwardSlash(readFileSync(reviewPath, 'utf-8'));
+    expect(contents).toContain('Reviewed 2 of 2 skills');
+    expect(contents).toContain('## plugins/alpha/SKILL.md');
+    expect(contents).toContain('## plugins/beta/SKILL.md');
+  });
+
+  it('records review.status=error when no SKILL.md is found under the source', async () => {
+    // Audit succeeds (empty tree audits cleanly) but review has nothing to do.
+    const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-corpus-empty-'));
+    const runDir = makeRunDir();
+
+    const entry: PluginEntry = { source: root, name: 'empty' };
+
+    const row = await auditOnePlugin(entry, { runDir, withReview: true, debug: false });
+
+    expect(row.audit.status).not.toBe('unloadable');
+    expect(row.review.status).toBe('error');
+    expect(row.review.error).toMatch(/No SKILL\.md/i);
   });
 
   it('records review.status=skipped when audit was unloadable', async () => {

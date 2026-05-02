@@ -16,6 +16,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { scan } from '@vibe-agent-toolkit/discovery';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
 
@@ -146,7 +147,7 @@ async function auditAndRecord(
   // Skip review when audit was unloadable — nothing meaningful to review.
   const review =
     opts.withReview && audit.status !== 'unloadable'
-      ? runSkillReview(entry, scanPath, opts.runDir)
+      ? await runSkillReview(entry, scanPath, opts.runDir)
       : SKIPPED_REVIEW;
 
   return {
@@ -158,34 +159,112 @@ async function auditAndRecord(
   };
 }
 
-/**
- * Invoke `vat skill review <scanPath>` as a subprocess and capture stdout to
- * `<name>-review.md` under the run directory. Phase 1 keeps this simple: one
- * subprocess per plugin, synchronous via spawnSync.
- */
-function runSkillReview(entry: PluginEntry, scanPath: string, runDir: string): ReviewOutcome {
-  const start = Date.now();
-  const bin = resolveVatBinPath();
-  const reviewPath = safePath.join(runDir, `${entry.name}-review.md`);
+interface SkillReviewSection {
+  relativePath: string;
+  ok: boolean;
+  body: string;
+}
 
+/**
+ * Spawn `vat skill review <skillDir>` for one skill and return a markdown
+ * section describing the result. Subprocess failure is captured as an
+ * error section rather than thrown — one bad skill must not abort siblings.
+ */
+function reviewOneSkill(bin: string, skillDir: string, relativePath: string): SkillReviewSection {
   // eslint-disable-next-line sonarjs/no-os-command-from-path -- node is required for invoking vat
-  const result = spawnSync('node', [bin, 'skill', 'review', scanPath], {
+  const result = spawnSync('node', [bin, 'skill', 'review', skillDir], {
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-  if (result.status !== 0) {
+  // `vat skill review` exit semantics:
+  //   0 — review clean
+  //   1 — review completed but found warnings/errors (still a successful review for corpus purposes)
+  //   2 (or other non-zero / null) — system error, the review did not run to completion
+  const SKILL_REVIEW_FINDINGS_EXIT = 1;
+  const reviewRan = result.status === 0 || result.status === SKILL_REVIEW_FINDINGS_EXIT;
+
+  if (!reviewRan) {
+    const stderr = (result.stderr ?? '').trim();
+    const message = stderr || `vat skill review exited with code ${result.status ?? 'unknown'}`;
+    const stdout = (result.stdout ?? '').trim();
+    const stdoutBlock = stdout ? `\n\n${stdout}` : '';
+    const body = `**[review failed]**\n\n${message}${stdoutBlock}`;
+    return { relativePath, ok: false, body };
+  }
+
+  const body = ((result.stdout ?? '') + (result.stderr ?? '')).trim();
+  return { relativePath, ok: true, body };
+}
+
+function renderAggregatedReview(
+  entry: PluginEntry,
+  sections: SkillReviewSection[],
+  okCount: number
+): string {
+  const header = `# Skill review: ${entry.name}\n\nReviewed ${okCount} of ${sections.length} skills (${sections.length - okCount} errors).\n`;
+  const rendered = sections
+    .map((s) => `\n---\n\n## ${s.relativePath}\n\n${s.body}\n`)
+    .join('');
+  return `${header}${rendered}`;
+}
+
+/**
+ * Discover every SKILL.md under `scanPath` (recursive, gitignore-aware) and
+ * invoke `vat skill review` once per skill directory. Concatenate the
+ * outputs into `<name>-review.md` with a section per skill keyed by the
+ * skill's path relative to the plugin root.
+ *
+ * Per-skill subprocess failures become error sections; the aggregate is
+ * still written so users can see which skills passed and which failed.
+ * Returns `status: 'error'` only when no skills were discovered or every
+ * subprocess failed.
+ */
+async function runSkillReview(
+  entry: PluginEntry,
+  scanPath: string,
+  runDir: string
+): Promise<ReviewOutcome> {
+  const start = Date.now();
+  const bin = resolveVatBinPath();
+  const reviewPath = safePath.join(runDir, `${entry.name}-review.md`);
+
+  const summary = await scan({ path: scanPath, recursive: true });
+  const skills = summary.results.filter(
+    (r) => r.format === 'agent-skill' && !r.isGitIgnored
+  );
+
+  if (skills.length === 0) {
     return {
       status: 'error',
       duration_ms: Date.now() - start,
-      error:
-        (result.stderr ?? '').trim() ||
-        `vat skill review exited with code ${result.status ?? 'unknown'}`,
+      error: `No SKILL.md files found under ${scanPath}`,
     };
   }
 
+  const sections: SkillReviewSection[] = [];
+  for (const skill of skills) {
+    const skillDir = dirname(skill.path);
+    sections.push(reviewOneSkill(bin, skillDir, skill.relativePath));
+  }
+
+  const okCount = sections.filter((s) => s.ok).length;
+  const aggregated = renderAggregatedReview(entry, sections, okCount);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- composed under run dir
-  writeFileSync(reviewPath, (result.stdout ?? '') + (result.stderr ?? ''), 'utf-8');
+  writeFileSync(reviewPath, aggregated, 'utf-8');
+
+  if (okCount === 0) {
+    const errors = sections
+      .map((s) => `${s.relativePath}: ${s.body.replaceAll('\n', ' ').slice(0, 200)}`)
+      .join('; ');
+    return {
+      status: 'error',
+      duration_ms: Date.now() - start,
+      error: `All ${sections.length} skill reviews failed. ${errors}`,
+      output_path: `${entry.name}-review.md`,
+    };
+  }
+
   return {
     status: 'ok',
     duration_ms: Date.now() - start,

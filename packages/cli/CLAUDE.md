@@ -8,7 +8,7 @@ Audit and related commands (`vat audit`, `vat skills validate`, `vat resources v
 
 - [`../../docs/skill-quality-and-compatibility.md`](../../docs/skill-quality-and-compatibility.md) — VAT's stance; the three-layer evidence/observation/verdict model.
 - [`../../docs/validation-codes.md`](../../docs/validation-codes.md) — Every code by name, default severity, and what triggers it.
-- [`../../docs/skill-smell-philosophy.md`](../../docs/skill-smell-philosophy.md) — Rule-addition discipline; never ship an `error`-severity code without corpus evidence.
+- [`../../docs/validation-rule-design.md`](../../docs/validation-rule-design.md) — Rule-addition discipline; never ship an `error`-severity code without corpus evidence.
 - [`../../docs/architecture/skill-packaging.md`](../../docs/architecture/skill-packaging.md) — The four recognized artifact shapes and which codes apply to each.
 
 ## Running vat Commands in Development

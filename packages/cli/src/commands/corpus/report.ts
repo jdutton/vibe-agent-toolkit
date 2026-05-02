@@ -35,7 +35,7 @@ export interface AuditOutcome {
 export interface ReviewOutcome {
   status: ReviewStatus;
   duration_ms: number;
-  output_path?: string;          // present only when status === 'ok'
+  output_path?: string;          // present when an aggregated review.md was written
   error?: string;                // present only when status === 'error'
 }
 
