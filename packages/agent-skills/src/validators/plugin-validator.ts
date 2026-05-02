@@ -5,6 +5,8 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
 
+import { detectKebabCaseViolation } from './kebab-case-detection.js';
+import { detectMissingRecommendedFields } from './plugin-recommended-fields.js';
 import type { ValidationIssue, ValidationResult } from './types.js';
 import {
 	calculateValidationStatus,
@@ -126,7 +128,13 @@ function checkPluginSkillNameMismatch(
 function applyPostSchemaChecks(args: {
 	pluginPath: string;
 	pluginJsonPath: string;
-	data: { name: string; version?: string | undefined };
+	data: {
+		name: string;
+		version?: string | undefined;
+		description?: unknown;
+		license?: unknown;
+		author?: unknown;
+	};
 	strict: boolean;
 	issues: ValidationIssue[];
 	validationResult: ValidationResult;
@@ -150,6 +158,11 @@ function applyPostSchemaChecks(args: {
 			fix: 'Add a "version" field to plugin.json (semver format, e.g. "1.0.0")',
 		});
 	}
+
+	// Recommended-metadata observations from plugin-dev cross-walk.
+	// These ship at info severity — schema parse already errored on
+	// anything structurally required.
+	issues.push(...detectMissingRecommendedFields(data, pluginJsonPath));
 
 	const mismatchIssue = checkPluginSkillNameMismatch(pluginPath, pluginJsonPath, data.name);
 	if (mismatchIssue !== undefined) {
@@ -216,6 +229,19 @@ export async function validatePlugin(
 			summary: 'Plugin manifest is invalid JSON',
 			issues,
 		};
+	}
+
+	// Pre-schema kebab-case observation. Fires alongside the schema-level
+	// error so audit output names the violation specifically.
+	if (typeof (pluginData as { name?: unknown } | null)?.name === 'string') {
+		const kebabIssue = detectKebabCaseViolation(
+			'plugin',
+			(pluginData as { name: string }).name,
+			pluginJsonPath,
+		);
+		if (kebabIssue) {
+			issues.push(kebabIssue);
+		}
 	}
 
 	// Validate against schema

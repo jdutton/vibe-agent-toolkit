@@ -239,6 +239,55 @@ Best-practice checks about skill shape and content.
 - **Why it matters:** Consistent YAML styling across a skill package is a low-cost signal that the skills were authored deliberately together. Mixed styles usually reflect copy-paste from heterogeneous sources and make packaging refactors (renames, reformats) noisier than they need to be. The rule is package-scoped because within-skill style is invisible to agents — it only matters when compared against siblings.
 - **Fix:** Pick one YAML style and apply it to every skill in the package. Allow via `validation.severity: { SKILL_DESCRIPTION_STYLE_MIXED_IN_PACKAGE: ignore }` per package when mixing is deliberate.
 
+### `PLUGIN_MISSING_DESCRIPTION`
+
+- **Default:** `info`
+- **What:** `.claude-plugin/plugin.json` lacks a `description` field.
+- **Why it matters:** Plugin-dev's "Recommended Metadata" section names `description` as recommended. Claude Code surfaces the manifest description in the `/plugin` listing; without it, users see only the plugin name when browsing installed plugins.
+- **Fix:** Add `"description": "..."` to plugin.json.
+
+### `PLUGIN_MISSING_AUTHOR`
+
+- **Default:** `info`
+- **What:** `.claude-plugin/plugin.json` lacks an `author` field (or `author.name`).
+- **Why it matters:** Plugin-dev names `author` as recommended metadata. Authorship is what makes "report upstream" actionable for corpus scanning, marketplace discovery, and downstream issue-routing.
+- **Fix:** Add `"author": { "name": "..." }` to plugin.json.
+
+### `PLUGIN_MISSING_LICENSE`
+
+- **Default:** `info`
+- **What:** `.claude-plugin/plugin.json` lacks a `license` field.
+- **Why it matters:** Plugin-dev recommends `license`. License absence in shipped artifacts creates downstream redistribution ambiguity — adopters cannot tell at a glance whether a plugin is safe to vendor or extend.
+- **Fix:** Add `"license": "MIT"` (or appropriate SPDX identifier) to plugin.json.
+
+### `PLUGIN_NAME_NOT_KEBAB_CASE`
+
+- **Default:** `info`
+- **What:** Plugin manifest `name` does not match `^[a-z0-9]+(-[a-z0-9]+)*$` (lowercase alphanumeric with single hyphens).
+- **Why it matters:** Plugin-dev's "Name requirements" section: kebab-case is mandatory in Claude Code. The Zod schema already errors via `PLUGIN_INVALID_SCHEMA`; this dedicated code makes the finding actionable in audit output (the message names the convention rather than echoing a generic schema error).
+- **Fix:** Rename to kebab-case. The schema-level error blocks the build regardless of this info code's severity; raising severity to `error` here is redundant.
+
+### `SKILL_NAME_NOT_KEBAB_CASE`
+
+- **Default:** `info`
+- **What:** SKILL.md frontmatter `name` does not match `^[a-z0-9]+(-[a-z0-9]+)*$` (lowercase alphanumeric with single hyphens).
+- **Why it matters:** Sister rule to `PLUGIN_NAME_NOT_KEBAB_CASE`; plugin-dev applies the same convention to skills. The Zod schema already errors via `SKILL_NAME_INVALID`; this dedicated code surfaces the same finding with a more actionable message.
+- **Fix:** Rename to kebab-case.
+
+### `SKILL_REFERENCES_BUT_NO_LINKS`
+
+- **Default:** `info`
+- **What:** A skill directory contains `scripts/`, `references/`, or `assets/` subdirectories, but the SKILL.md body has zero markdown links pointing into any of them.
+- **Why it matters:** Plugin-dev's "Mistake 4: Missing Resource References" — bundled assets the body never links to are dead weight in the install. They ship but never load. This pattern often signals an author who intended progressive disclosure but didn't wire up the references.
+- **Fix:** Add explicit markdown links from SKILL.md (or a linked file) into the bundled subdirectories, or remove the unreferenced directory. Allow via `validation.allow` if the assets are consumed programmatically.
+
+### `SKILL_BODY_NOT_IMPERATIVE`
+
+- **Default:** `info`
+- **What:** SKILL.md body contains second-person instructional openers — lines starting with `You ` followed by a modal verb (`should`, `can`, `need`, `must`, `will`, `may`) outside fenced code blocks and quoted blocks.
+- **Why it matters:** Plugin-dev's "Mistake 3: Second Person Writing" calls this out as a top anti-pattern. Imperative form ("Configure the…") is more agent-readable than addressing a reader ("You should configure…"). Heuristic with bounded false-positive risk; ship at info to gather corpus signal before promoting.
+- **Fix:** Rewrite as imperative ("Configure the MCP server…" instead of "You should configure…"). Allow via `validation.allow` if the line is documenting user dialog or a quoted prompt the heuristic mis-fires on.
+
 ## Compat Codes
 
 *Stance: see [Compatibility](./skill-quality-and-compatibility.md#compatibility).*

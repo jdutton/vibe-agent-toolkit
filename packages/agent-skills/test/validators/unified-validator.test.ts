@@ -26,6 +26,8 @@ describe('validate (unified validator)', () => {
 				name: TEST_PLUGIN_NAME,
 				description: 'Test plugin',
 				version: '1.0.0',
+				author: { name: 'VAT Test Suite' },
+				license: 'MIT',
 			});
 
 			const result = await validate(pluginDir);

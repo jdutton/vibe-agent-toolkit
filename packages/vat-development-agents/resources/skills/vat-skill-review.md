@@ -42,6 +42,8 @@ Tooling enforcement: items marked with a bracketed code (e.g., `[SKILL_DESCRIPTI
 - **[VAT] Prefer a verb phrase or `Use when ...` opener** — not a meta-description of the skill-as-object. `[SKILL_DESCRIPTION_FILLER_OPENER]` warns on `This skill...`, `A skill that...`, `Used to...` — these waste the first tokens describing the wrapper rather than the behavior. Anthropic doesn't ban these explicitly, but their own examples never use them; VAT is stricter here.
 - **[A] Be specific**: include both what the skill does and when to use it. `[DESCRIPTION_TOO_VAGUE]` fires below 50 chars. Anthropic's bad examples — `Helps with documents`, `Processes data`, `Does stuff with files` — are rejected for vagueness, not length.
 - **[VAT] Description ≤250 characters**: Claude Code truncates descriptions at 250 characters in the `/skills` listing (since v2.1.86). `[SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT]` warns at 250; `[SKILL_DESCRIPTION_TOO_LONG]` errors at the 1024-char schema hard max. Aim for ≤200 chars for safety; ≤130 chars if shipping a large skill collection (60+ skills) so the total budget fits.
+- **[VAT] Description names concrete trigger phrases** — does the description list specific user-said trigger phrases (in quotes) or at least one concrete scenario? `SKILL_DESCRIPTION_NO_CONCRETE_SCENARIO` is intentionally a checklist line: "concrete enough" is judgment, not a regex. Refer to plugin-dev's "Triggering" section for examples.
+- **[VAT] Description disambiguates from sibling skills** — if a reviewer only saw this skill's name+description and the names+descriptions of siblings in the same plugin, could an agent reliably pick the right one? Cross-skill semantic comparison is judgment-only — no automated detector for it.
 
 ### Body structure
 
@@ -59,6 +61,7 @@ Tooling enforcement: items marked with a bracketed code (e.g., `[SKILL_DESCRIPTI
 - **[A] All links resolve**: every `[text](path)` link points to a file that exists. `[LINK_MISSING_TARGET]` and siblings enforce.
 - **[A] Build clean**: `vat skills build` succeeds and `vat verify` passes with zero errors.
 - **[A] Test the trigger**: ask "if an agent sees only this name and description, will it know when to load this skill?" If understanding the description requires reading the SKILL.md, the description is wrong.
+- **[VAT] Body avoids duplicating reference content** — when the skill bundles `references/`, does SKILL.md teach the agent *when to load each reference*, without repeating the reference's own content? Information should live in either SKILL.md or `references/`, not both. Semantic duplication is judgment, not regex.
 
 ### Frontmatter hygiene
 

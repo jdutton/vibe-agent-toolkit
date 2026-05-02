@@ -43,6 +43,16 @@ export type IssueCode =
   | 'SKILL_FRONTMATTER_EXTRA_FIELDS'
   | 'SKILL_CROSS_SKILL_AUTH_UNDECLARED'
   | 'SKILL_DESCRIPTION_STYLE_MIXED_IN_PACKAGE'
+  // Plugin manifest recommended fields (cross-walk from plugin-dev)
+  | 'PLUGIN_MISSING_DESCRIPTION'
+  | 'PLUGIN_MISSING_AUTHOR'
+  | 'PLUGIN_MISSING_LICENSE'
+  // Naming convention codes — named promotion of generic schema errors
+  | 'PLUGIN_NAME_NOT_KEBAB_CASE'
+  | 'SKILL_NAME_NOT_KEBAB_CASE'
+  // Skill body / packaging quality
+  | 'SKILL_REFERENCES_BUT_NO_LINKS'
+  | 'SKILL_BODY_NOT_IMPERATIVE'
   // Capability observations — what a skill requires from its runtime
   | 'CAPABILITY_LOCAL_SHELL'
   | 'CAPABILITY_EXTERNAL_CLI'
@@ -220,6 +230,48 @@ export const CODE_REGISTRY: Record<IssueCode, CodeRegistryEntry> = {
     'Sibling skills in the same package use mixed YAML scalar styles for their `description` frontmatter (e.g., folded `>-` alongside inline double-quoted).',
     'Pick one YAML style and apply it to every skill in the package.',
     'skill_description_style_mixed_in_package',
+  ),
+  PLUGIN_MISSING_DESCRIPTION: entry(
+    'info',
+    'plugin.json is missing the recommended `description` field.',
+    'Add a "description" field to plugin.json so users see what the plugin does in the listing.',
+    'plugin_missing_description',
+  ),
+  PLUGIN_MISSING_AUTHOR: entry(
+    'info',
+    'plugin.json is missing the recommended `author` field.',
+    'Add an "author" object (e.g. { "name": "..." }) to plugin.json so downstream consumers can attribute the plugin.',
+    'plugin_missing_author',
+  ),
+  PLUGIN_MISSING_LICENSE: entry(
+    'info',
+    'plugin.json is missing the recommended `license` field.',
+    'Add a "license" SPDX identifier (e.g. "MIT") to plugin.json so redistribution terms are explicit.',
+    'plugin_missing_license',
+  ),
+  PLUGIN_NAME_NOT_KEBAB_CASE: entry(
+    'info',
+    'Plugin name does not match the kebab-case convention required by Claude Code (lowercase alphanumeric with single hyphens).',
+    'Rename the plugin to kebab-case (e.g. "my-plugin"). Schema parse already errors; this code surfaces the same finding with a more actionable message.',
+    'plugin_name_not_kebab_case',
+  ),
+  SKILL_NAME_NOT_KEBAB_CASE: entry(
+    'info',
+    'Skill frontmatter `name` does not match the kebab-case convention.',
+    'Rename the skill to kebab-case (e.g. "my-skill"). Schema parse already errors; this code surfaces the same finding with a more actionable message.',
+    'skill_name_not_kebab_case',
+  ),
+  SKILL_REFERENCES_BUT_NO_LINKS: entry(
+    'info',
+    'Skill directory contains scripts/, references/, or assets/ subdirectories but the SKILL.md body has zero markdown links into them.',
+    'Add explicit markdown links from SKILL.md (or a linked file) into the bundled subdirectories, or remove the unreferenced directory. Allow via validation.allow if the assets are consumed programmatically.',
+    'skill_references_but_no_links',
+  ),
+  SKILL_BODY_NOT_IMPERATIVE: entry(
+    'info',
+    'SKILL.md body contains second-person instructional openers (e.g. "You should…", "You need to…", "You can…").',
+    'Rewrite as imperative ("Configure the MCP server…" instead of "You should configure…"). Skill bodies read more cleanly as instructions to the agent rather than to a human reader. Allow via validation.allow if the heuristic misfires on quoted prompts or user dialog.',
+    'skill_body_not_imperative',
   ),
   CAPABILITY_LOCAL_SHELL: entry(
     'info',

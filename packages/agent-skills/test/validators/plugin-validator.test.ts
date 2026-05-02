@@ -71,8 +71,9 @@ describe('validatePlugin', () => {
 
 		expect(result.status).toBe('error');
 		expect(result.issues.length).toBeGreaterThan(0);
+		// Schema error is the blocker; PLUGIN_NAME_NOT_KEBAB_CASE may also fire.
 		expect(
-			result.issues.every((issue) => issue.code === 'PLUGIN_INVALID_SCHEMA'),
+			result.issues.some((issue) => issue.code === 'PLUGIN_INVALID_SCHEMA'),
 		).toBe(true);
 	});
 
@@ -82,6 +83,8 @@ describe('validatePlugin', () => {
 			name: 'my-test-plugin',
 			description: 'A test plugin for validation',
 			version: '2.3.4',
+			author: { name: 'VAT Test Suite' },
+			license: 'MIT',
 		});
 
 		const result = await validatePlugin(pluginPath);
@@ -134,6 +137,8 @@ describe('validatePlugin', () => {
 			name: 'rc-plugin',
 			description: 'A plugin with pre-release version',
 			version: '1.0.0-rc.3',
+			author: { name: 'VAT Test Suite' },
+			license: 'MIT',
 		});
 
 		const result = await validatePlugin(pluginPath);
@@ -160,6 +165,42 @@ describe('validatePlugin', () => {
 					issue.message.includes('semver'),
 			),
 		).toBe(true);
+	});
+
+	it('emits PLUGIN_NAME_NOT_KEBAB_CASE alongside schema error for invalid names', async () => {
+		const tempDir = getTempDir();
+		const pluginPath = createTestPlugin(tempDir, {
+			name: 'Invalid_Name',
+			description: 'x',
+			version: '1.0.0',
+		});
+		const result = await validatePlugin(pluginPath);
+		const codes = result.issues.map((i) => i.code);
+		expect(codes).toContain('PLUGIN_NAME_NOT_KEBAB_CASE');
+		expect(codes).toContain('PLUGIN_INVALID_SCHEMA');
+		const kebabIssue = result.issues.find((i) => i.code === 'PLUGIN_NAME_NOT_KEBAB_CASE');
+		expect(kebabIssue?.severity).toBe('info');
+	});
+
+	it('emits PLUGIN_MISSING_DESCRIPTION/AUTHOR/LICENSE at info severity when fields absent', async () => {
+		const tempDir = getTempDir();
+		const pluginPath = createTestPlugin(tempDir, {
+			name: 'minimal-plugin',
+			version: '1.0.0',
+		});
+		const result = await validatePlugin(pluginPath);
+		const codes = result.issues.map((i) => i.code).sort((a, b) => a.localeCompare(b));
+		expect(codes).toContain('PLUGIN_MISSING_DESCRIPTION');
+		expect(codes).toContain('PLUGIN_MISSING_AUTHOR');
+		expect(codes).toContain('PLUGIN_MISSING_LICENSE');
+		for (const code of [
+			'PLUGIN_MISSING_DESCRIPTION',
+			'PLUGIN_MISSING_AUTHOR',
+			'PLUGIN_MISSING_LICENSE',
+		] as const) {
+			const issue = result.issues.find((i) => i.code === code);
+			expect(issue?.severity).toBe('info');
+		}
 	});
 
 	describe('SKILL_CLAUDE_PLUGIN_NAME_MISMATCH', () => {
