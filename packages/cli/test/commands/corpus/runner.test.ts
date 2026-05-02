@@ -75,15 +75,15 @@ describe('auditOnePlugin — local source', () => {
   });
 });
 
+function git(args: string[], cwd: string): void {
+  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git is a standard system command
+  const r = spawnSync('git', args, { cwd, encoding: 'utf-8' });
+  if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
+}
+
 function makeBareRepoWithSkill(): string {
   const bare = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-corpus-bare-'));
   const work = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-corpus-work-'));
-
-  function git(args: string[], cwd: string): void {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- git is a standard system command
-    const r = spawnSync('git', args, { cwd, encoding: 'utf-8' });
-    if (r.status !== 0) throw new Error(`git ${args.join(' ')}: ${r.stderr}`);
-  }
 
   git(['init', '--bare', '--initial-branch=main'], bare);
   git(['init', '--initial-branch=main'], work);

@@ -85,17 +85,16 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
     }
   }
 
-  // Frontmatter validation (schema + rules) plus the cross-skill dependency
-  // smell, which looks at body prose that requires/depends on a token the
-  // description omits.
+  // Frontmatter validation (schema + rules), the cross-skill dependency
+  // smell that looks at body prose requiring tokens the description omits,
+  // and the gray-zone second-person-opener heuristic from the plugin-dev
+  // cross-walk (info severity).
   issues.push(
     ...validateFrontmatterSchema(frontmatter, isVATGenerated),
     ...validateFrontmatterRules(frontmatter),
     ...detectUndeclaredCrossSkillAuth(frontmatter, parseResult.body),
+    ...detectNonImperativeBody(parseResult.body, skillPath),
   );
-
-  // Body-style heuristic (info severity, gray-zone — see plugin-dev cross-walk).
-  issues.push(...detectNonImperativeBody(parseResult.body, skillPath));
 
   // Validate warning-level rules (skill-specific)
   validateWarningRules(content, lineCount, skillPath, issues);
