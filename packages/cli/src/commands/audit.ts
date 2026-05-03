@@ -3,6 +3,7 @@
  * Top-level command: vat audit [path]
  */
 
+import type { Dirent } from 'node:fs';
 import * as fs from 'node:fs';
 import { existsSync as fsExistsSync } from 'node:fs';
 
@@ -834,6 +835,48 @@ async function validateMultipleSurfaces(
 }
 
 /**
+ * For a Claude plugin directory, validate every skill it ships under
+ * `<plugin>/skills/<name>/SKILL.md` and append the per-skill results.
+ *
+ * Plugins enumerate their skills via filesystem layout: each direct subdir
+ * of `skills/` containing a `SKILL.md` is a distinct skill. Reference files
+ * (no SKILL.md at the subdir root) are not separate skills and are reached
+ * transitively when their parent skill is validated.
+ *
+ * Without this, `vat audit <plugin-dir>` would only validate `plugin.json`
+ * and silently skip every skill the plugin ships — an asymmetry with
+ * `vat audit <random-dir>`, which scans the markdown tree.
+ */
+async function validatePluginSkills(
+  pluginPath: string,
+  options: AuditCommandOptions,
+  logger: ReturnType<typeof createLogger>,
+): Promise<ValidationResult[]> {
+  const skillsDir = safePath.join(pluginPath, 'skills');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- pluginPath is a controlled scan path
+  if (!fsExistsSync(skillsDir)) {
+    return [];
+  }
+  const fsp = await import('node:fs/promises');
+  let entries: Dirent[];
+  try {
+    entries = await fsp.readdir(skillsDir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const results: ValidationResult[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const skillPath = safePath.join(skillsDir, entry.name, 'SKILL.md');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- composed under skillsDir
+    if (!fsExistsSync(skillPath)) continue;
+    logger.debug(`  Validating plugin-bundled skill: ${skillPath}`);
+    results.push(await validateSingleSkill(skillPath, options, logger));
+  }
+  return results;
+}
+
+/**
  * @internal Exported for integration testing only — not part of the public CLI API.
  */
 export async function getValidationResults(
@@ -864,7 +907,11 @@ export async function getValidationResults(
   // swallowed by the plugin surface.
   const surfaces = await enumerateSurfaces(scanPath);
   if (surfaces.length > 1) {
-    return validateMultipleSurfaces(surfaces, scanPath, options, logger);
+    const surfaceResults = await validateMultipleSurfaces(surfaces, scanPath, options, logger);
+    if (surfaces.some((s) => s.type === RESOURCE_TYPE_CLAUDE_PLUGIN)) {
+      surfaceResults.push(...(await validatePluginSkills(scanPath, options, logger)));
+    }
+    return surfaceResults;
   }
 
   // For plugin/marketplace directories or registry files, use unified validator
@@ -875,6 +922,10 @@ export async function getValidationResults(
     const result = await validate(scanPath);
     if (resourceFormat.type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
       await appendPluginAssetParseIssues(result, scanPath);
+      // Also validate every skill the plugin ships. Without this, audit
+      // would short-circuit on the manifest and never open skill content.
+      const skillResults = await validatePluginSkills(scanPath, options, logger);
+      return [result, ...skillResults];
     }
     return [result];
   }
