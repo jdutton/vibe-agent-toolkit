@@ -137,3 +137,13 @@ export {
   resolveSettingsPaths,
   validateSettingsFile,
 } from './settings/index.js';
+
+// Claude plugin manifest schema (moved from agent-skills in Chunk 1)
+export {
+  ClaudePluginJsonSchema,
+  ClaudePluginSchema,
+  type ClaudePlugin,
+} from './schemas/claude-plugin.js';
+
+// Plugin validator (moved from agent-skills in Chunk 1)
+export { validatePlugin } from './validators/plugin-validator.js';

@@ -1,17 +1,17 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- File paths are validated before use */
 import { existsSync, readFileSync } from 'node:fs';
 
+import {
+	calculateValidationStatus,
+	detectKebabCaseViolation,
+	detectMissingRecommendedFields,
+	generateFixSuggestion,
+	type ValidationIssue,
+	type ValidationResult,
+} from '@vibe-agent-toolkit/agent-skills';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
-
-import { detectKebabCaseViolation } from './kebab-case-detection.js';
-import { detectMissingRecommendedFields } from './plugin-recommended-fields.js';
-import type { ValidationIssue, ValidationResult } from './types.js';
-import {
-	calculateValidationStatus,
-	generateFixSuggestion,
-} from './validation-utils.js';
 
 const PLUGIN_TYPE = 'claude-plugin' as const;
 

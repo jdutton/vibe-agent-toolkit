@@ -12,7 +12,6 @@ import {
   enumerateSurfaces,
   validate,
   validateMarketplace,
-  validatePlugin,
   validateSkill,
   validateSkillForPackaging,
   type EvidenceRecord,
@@ -26,12 +25,13 @@ import {
 import {
   analyzeCompatibility,
   checkSettingsCompatibility,
+  getClaudeUserPaths,
   readEffectiveSettings,
+  validatePlugin,
   type CompatibilityResult,
   type EffectiveSettings,
   type Target,
 } from '@vibe-agent-toolkit/claude-marketplace';
-import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
 import { gitFindRoot, GitTracker, isAbsolutePath, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
@@ -919,7 +919,7 @@ export async function getValidationResults(
 
   if (resourceFormat.type !== 'unknown') {
     logger.debug(`Detected ${resourceFormat.type} at: ${scanPath}`);
-    const result = await validate(scanPath);
+    const result = await validate(scanPath, { validatePlugin });
     if (resourceFormat.type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
       await appendPluginAssetParseIssues(result, scanPath);
       // Also validate every skill the plugin ships. Without this, audit
@@ -1397,7 +1397,7 @@ async function handleDirectoryEntry(
 
   if (hasClaudePlugin) {
     logger.debug(`Validating resource directory: ${fullPath}`);
-    const result = await validate(fullPath);
+    const result = await validate(fullPath, { validatePlugin });
     await appendPluginAssetParseIssues(result, fullPath);
     results.push(result);
   }

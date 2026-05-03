@@ -5,14 +5,14 @@ import { writeFileSync } from 'node:fs';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { validatePlugin } from '../../src/validators/plugin-validator.js';
 import {
 	assertSingleError,
 	assertValidationSuccess,
 	cleanupTestFiles,
 	createTestPlugin,
 	setupTempDir,
-} from '../test-helpers.js';
+} from '../../../agent-skills/test/test-helpers.js';
+import { validatePlugin } from '../../src/validators/plugin-validator.js';
 
 const CLAUDE_PLUGIN_DIR = '.claude-plugin';
 
@@ -26,7 +26,7 @@ describe('validatePlugin', () => {
 	it('should validate a simple plugin directory successfully', async () => {
 		const pluginPath = safePath.resolve(
 			__dirname,
-			'../fixtures/plugins/valid-simple-plugin',
+			'../../../agent-skills/test/fixtures/plugins/valid-simple-plugin',
 		);
 
 		const result = await validatePlugin(pluginPath);
@@ -207,7 +207,7 @@ describe('validatePlugin', () => {
 		const MISMATCH_CODE = 'SKILL_CLAUDE_PLUGIN_NAME_MISMATCH';
 		const fixturesBase = safePath.resolve(
 			__dirname,
-			'../fixtures/packaging-shapes',
+			'../../../agent-skills/test/fixtures/packaging-shapes',
 		);
 
 		it('does not emit when skill-claude-plugin names match', async () => {

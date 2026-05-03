@@ -1,15 +1,19 @@
 import { fileURLToPath } from 'node:url';
 
+import { validateSkill } from '@vibe-agent-toolkit/agent-skills';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { validatePlugin } from '../../src/validators/plugin-validator.js';
-import { validateSkill } from '../../src/validators/skill-validator.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const FIXTURE = safePath.join(
 	__dirname,
 	'..',
+	'..',
+	'..',
+	'agent-skills',
+	'test',
 	'fixtures',
 	'plugin-dev-rules',
 	'sample-plugin',

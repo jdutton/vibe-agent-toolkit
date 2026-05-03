@@ -47,8 +47,6 @@ export {
   type VATAgentSkillFrontmatter,
 } from './schemas/agent-skill-frontmatter.js';
 
-export { ClaudePluginJsonSchema, ClaudePluginSchema, type ClaudePlugin } from './schemas/claude-plugin.js';
-
 export { MarketplaceManifestJsonSchema, MarketplaceManifestSchema, type MarketplaceManifest } from './schemas/marketplace-manifest.js';
 
 export { PluginJsonSchema, type PluginJson } from './schemas/plugin-json.js';
@@ -58,6 +56,9 @@ export {
   type FrontmatterResult,
 } from './parsers/frontmatter-parser.js';
 
+export { calculateValidationStatus, generateFixSuggestion } from './validators/validation-utils.js';
+export { detectKebabCaseViolation, type KebabCaseSurface } from './validators/kebab-case-detection.js';
+export { detectMissingRecommendedFields } from './validators/plugin-recommended-fields.js';
 export {
   observationToIssue,
   runCompatDetectors,
@@ -65,9 +66,8 @@ export {
 } from './validators/compat-detectors.js';
 export { CODE_REGISTRY, type CodeRegistryEntry } from './validators/code-registry.js';
 export { validateMarketplace } from './validators/marketplace-validator.js';
-export { validatePlugin } from './validators/plugin-validator.js';
 export { validateSkill } from './validators/skill-validator.js';
-export { validate } from './validators/unified-validator.js';
+export { validate, type UnifiedValidateOptions } from './validators/unified-validator.js';
 export { detectResourceFormat, enumerateSurfaces } from './validators/format-detection.js';
 export {
   validateSkillForPackaging,
