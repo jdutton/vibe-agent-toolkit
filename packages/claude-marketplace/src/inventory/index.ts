@@ -6,3 +6,4 @@ export {
 } from './types.js';
 export { extractClaudeSkillInventory } from './extract-skill.js';
 export { extractClaudePluginInventory } from './extract-plugin.js';
+export { extractClaudeMarketplaceInventory } from './extract-marketplace.js';
