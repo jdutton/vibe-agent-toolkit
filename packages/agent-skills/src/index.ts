@@ -117,3 +117,27 @@ export {
 } from './evidence/index.js';
 export type { DeriveObservationsOptions, DerivationSubject } from './evidence/index.js';
 
+// Inventory
+export type {
+  AnyInventory,
+  BaseInventory,
+  ComponentRef,
+  DeclaredList,
+  HookRef,
+  InstallInventory,
+  LspRef,
+  MarketplaceInventory,
+  McpRef,
+  ParseError as InventoryParseError,
+  PluginInventory,
+  PluginRef,
+  ResolvedReference,
+  SkillInventory,
+} from './inventory/index.js';
+export {
+  isInstallInventory,
+  isMarketplaceInventory,
+  isPluginInventory,
+  isSkillInventory,
+} from './inventory/index.js';
+
