@@ -147,3 +147,11 @@ export {
 
 // Plugin validator (moved from agent-skills in Chunk 1)
 export { validatePlugin } from './validators/plugin-validator.js';
+
+// Inventory layer (added in Chunk 2 — vendor-specific concrete classes)
+export {
+  ClaudeInstallInventory,
+  ClaudeMarketplaceInventory,
+  ClaudePluginInventory,
+  ClaudeSkillInventory,
+} from './inventory/index.js';
