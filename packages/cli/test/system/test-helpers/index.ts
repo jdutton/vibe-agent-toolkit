@@ -6,6 +6,7 @@
  */
 
 export {
+  assertInventoryHasParseErrors,
   assertValidationFailureWithError,
   executeAndParseYaml,
   executeCli,

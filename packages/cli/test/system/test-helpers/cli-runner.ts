@@ -200,6 +200,30 @@ export function testConfigError(
 }
 
 /**
+ * Assert that `vat inventory <path>` exits 0, emits kind: plugin, and
+ * surfaces at least one parse error in the `parseErrors[]` field.
+ *
+ * Used by inventory tests that exercise error-recovery paths (broken
+ * plugin.json, non-existent directory, etc.). Extracted here to remove
+ * the repeated assertion block across multiple `describe` groups.
+ */
+export function assertInventoryHasParseErrors(
+  binPath: string,
+  targetPath: string,
+): void {
+  const result = executeCli(binPath, ['inventory', targetPath]);
+
+  expect(result.status).toBe(0);
+
+  const parsed = parseYamlOutput(result.stdout);
+  expect(parsed['kind']).toBe('plugin');
+
+  const parseErrors = parsed['parseErrors'] as unknown[];
+  expect(Array.isArray(parseErrors)).toBe(true);
+  expect(parseErrors.length).toBeGreaterThan(0);
+}
+
+/**
  * Execute a CLI command and parse YAML output if successful (lenient).
  *
  * Only parses YAML when the command exits with status 0 and stdout contains
