@@ -139,5 +139,8 @@ export {
   isMarketplaceInventory,
   isPluginInventory,
   isSkillInventory,
+  serializeInventory,
+  serializeInventoryShallow,
+  INVENTORY_SCHEMA_VERSION,
 } from './inventory/index.js';
 

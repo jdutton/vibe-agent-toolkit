@@ -21,3 +21,5 @@ export {
 	isPluginInventory,
 	isSkillInventory,
 } from './types.js';
+
+export { serializeInventory, serializeInventoryShallow, INVENTORY_SCHEMA_VERSION } from './serialize.js';
