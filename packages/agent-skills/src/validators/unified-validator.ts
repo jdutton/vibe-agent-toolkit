@@ -11,6 +11,13 @@ export interface UnifiedValidateOptions {
 	validatePlugin?: (path: string) => Promise<ValidationResult>;
 }
 
+class ProgrammerError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = 'ProgrammerError';
+	}
+}
+
 /**
  * Unified validation function that automatically detects resource type
  * and routes to the appropriate validator
@@ -39,24 +46,13 @@ export async function validate(resourcePath: string, opts?: UnifiedValidateOptio
 		// Route to appropriate validator based on detected format
 		switch (format.type) {
 			case 'claude-plugin':
-				if (opts?.validatePlugin !== undefined) {
-					return await opts.validatePlugin(format.path);
+				if (opts?.validatePlugin === undefined) {
+					throw new ProgrammerError(
+						'Plugin validation requires opts.validatePlugin to be injected. ' +
+						'Pass validatePlugin from @vibe-agent-toolkit/claude-marketplace to validate().',
+					);
 				}
-				return {
-					path: format.path,
-					type: 'claude-plugin',
-					status: 'error',
-					summary: 'Plugin validator not provided',
-					issues: [
-						{
-							severity: 'error',
-							code: 'UNKNOWN_FORMAT',
-							message: 'Plugin validation requires a validatePlugin function to be injected via opts.validatePlugin',
-							location: format.path,
-							fix: 'Pass validatePlugin from @vibe-agent-toolkit/claude-marketplace to validate()',
-						},
-					],
-				};
+				return await opts.validatePlugin(format.path);
 
 			case 'marketplace':
 				return await validateMarketplace(format.path);
@@ -92,6 +88,10 @@ export async function validate(resourcePath: string, opts?: UnifiedValidateOptio
 			}
 		}
 	} catch (error) {
+		if (error instanceof ProgrammerError) {
+			throw error;
+		}
+
 		// Defensive error handling: convert unexpected errors to ValidationResult
 		const errorMessage =
 			error instanceof Error ? error.message : 'Unknown error occurred';

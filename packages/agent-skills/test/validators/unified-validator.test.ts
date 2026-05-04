@@ -5,7 +5,7 @@ import * as fs from 'node:fs';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { validate } from '../../src/validators/unified-validator.js';
+import { type UnifiedValidateOptions, validate } from '../../src/validators/unified-validator.js';
 import {
 	assertSingleError,
 	assertValidationSuccess,
@@ -41,16 +41,21 @@ describe('validate (unified validator)', () => {
 				issues: [],
 				metadata: { name: TEST_PLUGIN_NAME, version: '1.0.0' },
 			};
-			const stubValidatePlugin = async (_path: string) => stubResult;
+			let receivedPath: string | undefined;
+			const stubValidatePlugin: NonNullable<UnifiedValidateOptions['validatePlugin']> = async (path) => {
+				receivedPath = path;
+				return stubResult;
+			};
 
 			const result = await validate(pluginDir, { validatePlugin: stubValidatePlugin });
 
 			assertValidationSuccess(result);
 			expect(result.type).toBe(PLUGIN_TYPE);
 			expect(result.metadata?.name).toBe(TEST_PLUGIN_NAME);
+			expect(receivedPath).toBe(pluginDir);
 		});
 
-		it('should return error when plugin directory detected but no validatePlugin injected', async () => {
+		it('should throw when plugin directory detected but no validatePlugin injected', async () => {
 			const tempDir = getTempDir();
 			const pluginDir = createTestPlugin(tempDir, {
 				name: TEST_PLUGIN_NAME,
@@ -58,10 +63,7 @@ describe('validate (unified validator)', () => {
 				version: '1.0.0',
 			});
 
-			const result = await validate(pluginDir);
-
-			expect(result.status).toBe('error');
-			expect(result.type).toBe(PLUGIN_TYPE);
+			await expect(validate(pluginDir)).rejects.toThrow('requires opts.validatePlugin to be injected');
 		});
 	});
 
