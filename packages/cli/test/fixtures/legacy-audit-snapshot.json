@@ -1,0 +1,1202 @@
+[
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/algorithmic-art/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/canvas-design/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/canvas-design/SKILL.md",
+    "code": "SKILL_DESCRIPTION_WRONG_PERSON",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/doc-coauthoring/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/docx/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/docx/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/docx/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/docx/ooxml.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/docx/SKILL.md",
+    "code": "SKILL_BODY_NOT_IMPERATIVE",
+    "location": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/docx/SKILL.md:38",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/docx/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/frontend-design/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/internal-comms/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/mcp-builder/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/mcp-builder/reference/evaluation.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/mcp-builder/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/mcp-builder/reference/node_mcp_server.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/mcp-builder/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/mcp-builder/SKILL.md",
+    "code": "SKILL_REFERENCES_BUT_NO_LINKS",
+    "location": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/mcp-builder/scripts",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/pdf/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/pdf/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/pdf/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/pdf/SKILL.md",
+    "code": "SKILL_REFERENCES_BUT_NO_LINKS",
+    "location": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/pdf/scripts",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/pptx/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/pptx/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/pptx/SKILL.md",
+    "code": "SKILL_BODY_NOT_IMPERATIVE",
+    "location": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/pptx/SKILL.md:19",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/pptx/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/skill-creator/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/skill-creator/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/slack-gif-creator/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/slack-gif-creator/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/theme-factory/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/theme-factory/SKILL.md",
+    "code": "SKILL_DESCRIPTION_WRONG_PERSON",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/web-artifacts-builder/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/web-artifacts-builder/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/web-artifacts-builder/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/webapp-testing/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/webapp-testing/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/xlsx/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/xlsx/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/document-skills/69c0b1a06741/skills/xlsx/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/algorithmic-art/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/canvas-design/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/canvas-design/SKILL.md",
+    "code": "SKILL_DESCRIPTION_WRONG_PERSON",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/doc-coauthoring/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/docx/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/docx/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/docx/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/docx/ooxml.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/docx/SKILL.md",
+    "code": "SKILL_BODY_NOT_IMPERATIVE",
+    "location": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/docx/SKILL.md:38",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/docx/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/frontend-design/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/internal-comms/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/mcp-builder/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/mcp-builder/reference/evaluation.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/mcp-builder/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/mcp-builder/reference/node_mcp_server.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/mcp-builder/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/mcp-builder/SKILL.md",
+    "code": "SKILL_REFERENCES_BUT_NO_LINKS",
+    "location": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/mcp-builder/scripts",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/pdf/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/pdf/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/pdf/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/pdf/SKILL.md",
+    "code": "SKILL_REFERENCES_BUT_NO_LINKS",
+    "location": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/pdf/scripts",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/pptx/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/pptx/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/pptx/SKILL.md",
+    "code": "SKILL_BODY_NOT_IMPERATIVE",
+    "location": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/pptx/SKILL.md:19",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/pptx/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/skill-creator/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/skill-creator/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/slack-gif-creator/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/slack-gif-creator/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/theme-factory/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/theme-factory/SKILL.md",
+    "code": "SKILL_DESCRIPTION_WRONG_PERSON",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/web-artifacts-builder/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/web-artifacts-builder/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/web-artifacts-builder/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/webapp-testing/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/webapp-testing/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/xlsx/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/xlsx/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/anthropic-agent-skills/example-skills/69c0b1a06741/skills/xlsx/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/claude-plugins-official/Notion/0.1.0",
+    "code": "UNKNOWN_FORMAT",
+    "location": "cache/claude-plugins-official/Notion/0.1.0",
+    "severity": "error"
+  },
+  {
+    "path": "cache/claude-plugins-official/Notion/0.1.0/skills/notion/knowledge-capture/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/claude-plugins-official/Notion/0.1.0/skills/notion/meeting-intelligence/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/claude-plugins-official/Notion/0.1.0/skills/notion/research-documentation/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/claude-plugins-official/Notion/0.1.0/skills/notion/spec-to-implementation/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/superpowers-marketplace/superpowers/4.0.3/skills/brainstorming/SKILL.md",
+    "code": "SKILL_DESCRIPTION_WRONG_PERSON",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/superpowers-marketplace/superpowers/4.0.3/skills/executing-plans/SKILL.md",
+    "code": "SKILL_DESCRIPTION_WRONG_PERSON",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/superpowers-marketplace/superpowers/4.0.3/skills/finishing-a-development-branch/SKILL.md",
+    "code": "CAPABILITY_EXTERNAL_CLI",
+    "location": "cache/superpowers-marketplace/superpowers/4.0.3/skills/finishing-a-development-branch/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/superpowers-marketplace/superpowers/4.0.3/skills/finishing-a-development-branch/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/superpowers-marketplace/superpowers/4.0.3/skills/finishing-a-development-branch/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/superpowers-marketplace/superpowers/4.0.3/skills/finishing-a-development-branch/SKILL.md",
+    "code": "SKILL_DESCRIPTION_WRONG_PERSON",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/superpowers-marketplace/superpowers/4.0.3/skills/requesting-code-review/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/superpowers-marketplace/superpowers/4.0.3/skills/requesting-code-review/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/superpowers-marketplace/superpowers/4.0.3/skills/systematic-debugging/SKILL.md",
+    "code": "SKILL_BODY_NOT_IMPERATIVE",
+    "location": "cache/superpowers-marketplace/superpowers/4.0.3/skills/systematic-debugging/SKILL.md:44",
+    "severity": "info"
+  },
+  {
+    "path": "cache/superpowers-marketplace/superpowers/4.0.3/skills/test-driven-development/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/superpowers-marketplace/superpowers/4.0.3/skills/test-driven-development/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/superpowers-marketplace/superpowers/4.0.3/skills/using-git-worktrees/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/superpowers-marketplace/superpowers/4.0.3/skills/using-git-worktrees/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "cache/superpowers-marketplace/superpowers/4.0.3/skills/writing-plans/SKILL.md",
+    "code": "SKILL_DESCRIPTION_WRONG_PERSON",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "cache/superpowers-marketplace/superpowers/4.0.3/skills/writing-skills/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "cache/superpowers-marketplace/superpowers/4.0.3/skills/writing-skills/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/algorithmic-art/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/canvas-design/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/canvas-design/SKILL.md",
+    "code": "SKILL_DESCRIPTION_WRONG_PERSON",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/doc-coauthoring/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/docx/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "marketplaces/anthropic-agent-skills/skills/docx/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/docx/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "marketplaces/anthropic-agent-skills/skills/docx/ooxml.md",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/docx/SKILL.md",
+    "code": "SKILL_BODY_NOT_IMPERATIVE",
+    "location": "marketplaces/anthropic-agent-skills/skills/docx/SKILL.md:38",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/docx/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/frontend-design/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/internal-comms/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/mcp-builder/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "marketplaces/anthropic-agent-skills/skills/mcp-builder/reference/evaluation.md",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/mcp-builder/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "marketplaces/anthropic-agent-skills/skills/mcp-builder/reference/node_mcp_server.md",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/mcp-builder/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/mcp-builder/SKILL.md",
+    "code": "SKILL_REFERENCES_BUT_NO_LINKS",
+    "location": "marketplaces/anthropic-agent-skills/skills/mcp-builder/scripts",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/pdf/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "marketplaces/anthropic-agent-skills/skills/pdf/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/pdf/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/pdf/SKILL.md",
+    "code": "SKILL_REFERENCES_BUT_NO_LINKS",
+    "location": "marketplaces/anthropic-agent-skills/skills/pdf/scripts",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/pptx/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "marketplaces/anthropic-agent-skills/skills/pptx/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/pptx/SKILL.md",
+    "code": "SKILL_BODY_NOT_IMPERATIVE",
+    "location": "marketplaces/anthropic-agent-skills/skills/pptx/SKILL.md:19",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/pptx/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/skill-creator/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "marketplaces/anthropic-agent-skills/skills/skill-creator/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/slack-gif-creator/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "marketplaces/anthropic-agent-skills/skills/slack-gif-creator/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/theme-factory/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/theme-factory/SKILL.md",
+    "code": "SKILL_DESCRIPTION_WRONG_PERSON",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/web-artifacts-builder/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "marketplaces/anthropic-agent-skills/skills/web-artifacts-builder/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/web-artifacts-builder/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/webapp-testing/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "marketplaces/anthropic-agent-skills/skills/webapp-testing/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/xlsx/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "marketplaces/anthropic-agent-skills/skills/xlsx/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/anthropic-agent-skills/skills/xlsx/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/asana",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/external_plugins/asana/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/asana",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/external_plugins/asana/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/context7",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/external_plugins/context7/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/context7",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/external_plugins/context7/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/firebase",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/external_plugins/firebase/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/firebase",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/external_plugins/firebase/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/github",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/external_plugins/github/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/github",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/external_plugins/github/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/gitlab",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/external_plugins/gitlab/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/gitlab",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/external_plugins/gitlab/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/greptile",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/external_plugins/greptile/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/greptile",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/external_plugins/greptile/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/laravel-boost",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/external_plugins/laravel-boost/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/laravel-boost",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/external_plugins/laravel-boost/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/linear",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/external_plugins/linear/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/linear",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/external_plugins/linear/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/playwright",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/external_plugins/playwright/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/playwright",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/external_plugins/playwright/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/serena",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/external_plugins/serena/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/serena",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/external_plugins/serena/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/slack",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/external_plugins/slack/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/slack",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/external_plugins/slack/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/stripe/skills/stripe-best-practices/SKILL.md",
+    "code": "SKILL_BODY_NOT_IMPERATIVE",
+    "location": "marketplaces/claude-plugins-official/external_plugins/stripe/skills/stripe-best-practices/SKILL.md:16",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/stripe/skills/stripe-best-practices/SKILL.md",
+    "code": "SKILL_BODY_NOT_IMPERATIVE",
+    "location": "marketplaces/claude-plugins-official/external_plugins/stripe/skills/stripe-best-practices/SKILL.md:6",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/supabase",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/external_plugins/supabase/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/external_plugins/supabase",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/external_plugins/supabase/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/agent-sdk-dev",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/plugins/agent-sdk-dev/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/agent-sdk-dev",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/plugins/agent-sdk-dev/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/code-review",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/plugins/code-review/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/code-review",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/plugins/code-review/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/commit-commands",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/plugins/commit-commands/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/commit-commands",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/plugins/commit-commands/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/example-plugin",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/plugins/example-plugin/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/example-plugin",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/plugins/example-plugin/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/example-plugin/skills/example-skill/SKILL.md",
+    "code": "SKILL_DESCRIPTION_FILLER_OPENER",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/example-plugin/skills/example-skill/SKILL.md",
+    "code": "SKILL_FRONTMATTER_EXTRA_FIELDS",
+    "location": "frontmatter",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/explanatory-output-style",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/plugins/explanatory-output-style/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/explanatory-output-style",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/plugins/explanatory-output-style/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/feature-dev",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/plugins/feature-dev/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/feature-dev",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/plugins/feature-dev/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/frontend-design",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/plugins/frontend-design/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/frontend-design",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/plugins/frontend-design/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/hookify",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/plugins/hookify/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/hookify",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/plugins/hookify/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/hookify/skills/writing-rules/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "marketplaces/claude-plugins-official/plugins/hookify/skills/writing-rules/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/hookify/skills/writing-rules/SKILL.md",
+    "code": "SKILL_DESCRIPTION_FILLER_OPENER",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/hookify/skills/writing-rules/SKILL.md",
+    "code": "SKILL_FRONTMATTER_EXTRA_FIELDS",
+    "location": "frontmatter",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/hookify/skills/writing-rules/SKILL.md",
+    "code": "SKILL_NAME_INVALID",
+    "location": "frontmatter.name",
+    "severity": "error"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/hookify/skills/writing-rules/SKILL.md",
+    "code": "SKILL_NAME_NOT_KEBAB_CASE",
+    "location": "marketplaces/claude-plugins-official/plugins/hookify/skills/writing-rules/SKILL.md:1",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/learning-output-style",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/plugins/learning-output-style/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/learning-output-style",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/plugins/learning-output-style/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/agent-development/SKILL.md",
+    "code": "SKILL_DESCRIPTION_FILLER_OPENER",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/agent-development/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/agent-development/SKILL.md",
+    "code": "SKILL_FRONTMATTER_EXTRA_FIELDS",
+    "location": "frontmatter",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/agent-development/SKILL.md",
+    "code": "SKILL_NAME_INVALID",
+    "location": "frontmatter.name",
+    "severity": "error"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/agent-development/SKILL.md",
+    "code": "SKILL_NAME_NOT_KEBAB_CASE",
+    "location": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/agent-development/SKILL.md:1",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/command-development/SKILL.md",
+    "code": "SKILL_DESCRIPTION_FILLER_OPENER",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/command-development/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/command-development/SKILL.md",
+    "code": "SKILL_FRONTMATTER_EXTRA_FIELDS",
+    "location": "frontmatter",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/command-development/SKILL.md",
+    "code": "SKILL_NAME_INVALID",
+    "location": "frontmatter.name",
+    "severity": "error"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/command-development/SKILL.md",
+    "code": "SKILL_NAME_NOT_KEBAB_CASE",
+    "location": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/command-development/SKILL.md:1",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/hook-development/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/hook-development/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/hook-development/SKILL.md",
+    "code": "SKILL_DESCRIPTION_FILLER_OPENER",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/hook-development/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/hook-development/SKILL.md",
+    "code": "SKILL_FRONTMATTER_EXTRA_FIELDS",
+    "location": "frontmatter",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/hook-development/SKILL.md",
+    "code": "SKILL_NAME_INVALID",
+    "location": "frontmatter.name",
+    "severity": "error"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/hook-development/SKILL.md",
+    "code": "SKILL_NAME_NOT_KEBAB_CASE",
+    "location": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/hook-development/SKILL.md:1",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/mcp-integration/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/mcp-integration/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/mcp-integration/SKILL.md",
+    "code": "SKILL_DESCRIPTION_FILLER_OPENER",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/mcp-integration/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/mcp-integration/SKILL.md",
+    "code": "SKILL_FRONTMATTER_EXTRA_FIELDS",
+    "location": "frontmatter",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/mcp-integration/SKILL.md",
+    "code": "SKILL_NAME_INVALID",
+    "location": "frontmatter.name",
+    "severity": "error"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/mcp-integration/SKILL.md",
+    "code": "SKILL_NAME_NOT_KEBAB_CASE",
+    "location": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/mcp-integration/SKILL.md:1",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/plugin-settings/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/plugin-settings/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/plugin-settings/SKILL.md",
+    "code": "SKILL_DESCRIPTION_FILLER_OPENER",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/plugin-settings/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/plugin-settings/SKILL.md",
+    "code": "SKILL_FRONTMATTER_EXTRA_FIELDS",
+    "location": "frontmatter",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/plugin-settings/SKILL.md",
+    "code": "SKILL_NAME_INVALID",
+    "location": "frontmatter.name",
+    "severity": "error"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/plugin-settings/SKILL.md",
+    "code": "SKILL_NAME_NOT_KEBAB_CASE",
+    "location": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/plugin-settings/SKILL.md:1",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/plugin-structure/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/plugin-structure/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/plugin-structure/SKILL.md",
+    "code": "SKILL_DESCRIPTION_FILLER_OPENER",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/plugin-structure/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/plugin-structure/SKILL.md",
+    "code": "SKILL_FRONTMATTER_EXTRA_FIELDS",
+    "location": "frontmatter",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/plugin-structure/SKILL.md",
+    "code": "SKILL_NAME_INVALID",
+    "location": "frontmatter.name",
+    "severity": "error"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/plugin-structure/SKILL.md",
+    "code": "SKILL_NAME_NOT_KEBAB_CASE",
+    "location": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/plugin-structure/SKILL.md:1",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/skill-development/SKILL.md",
+    "code": "CAPABILITY_LOCAL_SHELL",
+    "location": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/skill-development/SKILL.md",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/skill-development/SKILL.md",
+    "code": "SKILL_DESCRIPTION_FILLER_OPENER",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/skill-development/SKILL.md",
+    "code": "SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT",
+    "location": "frontmatter.description",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/skill-development/SKILL.md",
+    "code": "SKILL_FRONTMATTER_EXTRA_FIELDS",
+    "location": "frontmatter",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/skill-development/SKILL.md",
+    "code": "SKILL_NAME_INVALID",
+    "location": "frontmatter.name",
+    "severity": "error"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/skill-development/SKILL.md",
+    "code": "SKILL_NAME_NOT_KEBAB_CASE",
+    "location": "marketplaces/claude-plugins-official/plugins/plugin-dev/skills/skill-development/SKILL.md:1",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/pr-review-toolkit",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/plugins/pr-review-toolkit/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/pr-review-toolkit",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/plugins/pr-review-toolkit/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/ralph-loop",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/plugins/ralph-loop/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/ralph-loop",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/plugins/ralph-loop/.claude-plugin/plugin.json",
+    "severity": "warning"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/security-guidance",
+    "code": "PLUGIN_MISSING_LICENSE",
+    "location": "marketplaces/claude-plugins-official/plugins/security-guidance/.claude-plugin/plugin.json",
+    "severity": "info"
+  },
+  {
+    "path": "marketplaces/claude-plugins-official/plugins/security-guidance",
+    "code": "PLUGIN_MISSING_VERSION",
+    "location": "marketplaces/claude-plugins-official/plugins/security-guidance/.claude-plugin/plugin.json",
+    "severity": "warning"
+  }
+]
