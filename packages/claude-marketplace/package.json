@@ -26,6 +26,7 @@
   },
   "dependencies": {
     "@vibe-agent-toolkit/agent-skills": "workspace:*",
+    "@vibe-agent-toolkit/resources": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
     "ignore": "^6.0.0",
     "zod": "^3.24.1",

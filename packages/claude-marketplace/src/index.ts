@@ -155,3 +155,4 @@ export {
   ClaudePluginInventory,
   ClaudeSkillInventory,
 } from './inventory/index.js';
+export { extractClaudeSkillInventory } from './inventory/index.js';

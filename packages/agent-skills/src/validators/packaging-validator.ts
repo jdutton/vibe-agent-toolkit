@@ -175,8 +175,11 @@ function createRegistryIssue(
  * Build a fresh ResourceRegistry for a single skill's projectRoot and resolve
  * internal links. Extracted so the skill validator can fall back to a private
  * registry when the caller does not supply a shared one.
+ *
+ * Exported so external callers (e.g. the inventory layer) can build a registry
+ * once and pass it down rather than re-crawling per skill.
  */
-async function crawlAndResolveRegistry(projectRoot: string): Promise<ResourceRegistry> {
+export async function crawlAndResolveRegistry(projectRoot: string): Promise<ResourceRegistry> {
   const registry = await ResourceRegistry.fromCrawl({
     baseDir: projectRoot,
     include: ['**/*.md'],

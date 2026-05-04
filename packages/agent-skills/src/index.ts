@@ -70,6 +70,7 @@ export { validateSkill } from './validators/skill-validator.js';
 export { validate, type UnifiedValidateOptions } from './validators/unified-validator.js';
 export { detectResourceFormat, enumerateSurfaces } from './validators/format-detection.js';
 export {
+  crawlAndResolveRegistry,
   validateSkillForPackaging,
   type ExcludedReferenceDetail,
   type PackagingValidationResult,
