@@ -3,23 +3,11 @@ import { describe, it, expect } from 'vitest';
 import { isPluginInventory, isSkillInventory, isMarketplaceInventory, isInstallInventory } from '../../src/inventory/index.js';
 import type { PluginInventory, SkillInventory } from '../../src/inventory/index.js';
 
+import { makePluginInventory, makeSkillInventory } from './plugin-inventory-fixtures.js';
+
 describe('inventory kind narrowing', () => {
 	it('narrows to PluginInventory when kind is "plugin"', () => {
-		const value: { kind: string } = {
-			kind: 'plugin',
-			vendor: 'claude-code',
-			path: '/home/user/plugins/p',
-			parseErrors: [],
-			manifest: { name: 'p', version: '1.0.0' },
-			shape: 'claude-plugin',
-			declared: {
-				skills: null, commands: null, agents: null, hooks: null,
-				mcpServers: null, outputStyles: null, lspServers: null,
-			},
-			discovered: { skills: [], commands: [], agents: [] },
-			references: [],
-			unexpected: { skillManifests: [], pluginManifests: [] },
-		};
+		const value: { kind: string } = makePluginInventory();
 		expect(isPluginInventory(value)).toBe(true);
 		expect(isSkillInventory(value)).toBe(false);
 		expect(isMarketplaceInventory(value)).toBe(false);
@@ -31,14 +19,7 @@ describe('inventory kind narrowing', () => {
 	});
 
 	it('narrows to SkillInventory when kind is "skill"', () => {
-		const value: { kind: string } = {
-			kind: 'skill',
-			vendor: 'claude-code',
-			path: '/home/user/skills/s/SKILL.md',
-			parseErrors: [],
-			manifest: { name: 's' },
-			files: { skillMd: '/home/user/skills/s/SKILL.md', linked: [], packaged: [] },
-		};
+		const value: { kind: string } = makeSkillInventory('/home/user/skills/s/SKILL.md', 's');
 		expect(isSkillInventory(value)).toBe(true);
 		if (isSkillInventory(value)) {
 			const _typed: SkillInventory = value;

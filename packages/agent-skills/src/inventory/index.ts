@@ -23,3 +23,10 @@ export {
 } from './types.js';
 
 export { serializeInventory, serializeInventoryShallow, INVENTORY_SCHEMA_VERSION } from './serialize.js';
+
+export {
+	detectDeclaredButMissing,
+	detectMarketplacePluginSourceMissing,
+	detectPresentButUndeclared,
+	detectReferenceTargetMissing,
+} from './detectors/index.js';

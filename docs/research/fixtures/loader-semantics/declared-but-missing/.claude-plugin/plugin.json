@@ -1,0 +1,6 @@
+{
+  "name": "declared-but-missing",
+  "version": "1.0.0",
+  "description": "Test case: skill is declared in manifest but the skills/ directory does not exist at all.",
+  "skills": ["./skills/foo"]
+}

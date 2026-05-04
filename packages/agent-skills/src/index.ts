@@ -143,5 +143,9 @@ export {
   serializeInventory,
   serializeInventoryShallow,
   INVENTORY_SCHEMA_VERSION,
+  detectDeclaredButMissing,
+  detectMarketplacePluginSourceMissing,
+  detectPresentButUndeclared,
+  detectReferenceTargetMissing,
 } from './inventory/index.js';
 

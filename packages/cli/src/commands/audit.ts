@@ -8,6 +8,10 @@ import * as fs from 'node:fs';
 import { existsSync as fsExistsSync } from 'node:fs';
 
 import {
+  detectDeclaredButMissing,
+  detectMarketplacePluginSourceMissing,
+  detectPresentButUndeclared,
+  detectReferenceTargetMissing,
   detectResourceFormat,
   enumerateSurfaces,
   validate,
@@ -25,6 +29,8 @@ import {
 import {
   analyzeCompatibility,
   checkSettingsCompatibility,
+  extractClaudeMarketplaceInventory,
+  extractClaudePluginInventory,
   getClaudeUserPaths,
   readEffectiveSettings,
   validatePlugin,
@@ -877,6 +883,52 @@ async function validatePluginSkills(
 }
 
 /**
+ * Additive inventory-detector pass — runs the four pure-function detectors
+ * introduced in Tasks 3.2/3.3 alongside the existing audit pipeline.
+ * This is NOT a replacement for any existing walker; it is a parallel check
+ * that appends findings to the same ValidationResult after the primary
+ * validation has already run.
+ */
+async function runInventoryDetectors(
+  scanPath: string,
+  type: ValidationResult['type'],
+): Promise<ValidationIssue[]> {
+  if (type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
+    const inv = await extractClaudePluginInventory(scanPath);
+    return [
+      ...detectDeclaredButMissing(inv),
+      ...detectPresentButUndeclared(inv),
+      ...detectReferenceTargetMissing(inv),
+    ];
+  }
+  if (type === 'marketplace') {
+    const inv = await extractClaudeMarketplaceInventory(scanPath);
+    return detectMarketplacePluginSourceMissing(inv);
+  }
+  return [];
+}
+
+/**
+ * Append plugin inventory findings to the matching plugin result in a
+ * multi-surface result list. Mutates in place — the same pattern used by
+ * {@link appendPluginAssetParseIssues}.
+ */
+async function appendPluginInventoryToSurfaceResults(
+  surfaceResults: ValidationResult[],
+  scanPath: string,
+  logger: ReturnType<typeof createLogger>,
+): Promise<void> {
+  const inventoryIssues = await runInventoryDetectors(scanPath, RESOURCE_TYPE_CLAUDE_PLUGIN);
+  logger.debug(`Inventory detectors emitted ${inventoryIssues.length.toString()} issues for plugin (multi-surface) at ${scanPath}`);
+  for (const r of surfaceResults) {
+    if (r.type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
+      r.issues.push(...inventoryIssues);
+      break;
+    }
+  }
+}
+
+/**
  * @internal Exported for integration testing only — not part of the public CLI API.
  */
 export async function getValidationResults(
@@ -910,6 +962,7 @@ export async function getValidationResults(
     const surfaceResults = await validateMultipleSurfaces(surfaces, scanPath, options, logger);
     if (surfaces.some((s) => s.type === RESOURCE_TYPE_CLAUDE_PLUGIN)) {
       surfaceResults.push(...(await validatePluginSkills(scanPath, options, logger)));
+      await appendPluginInventoryToSurfaceResults(surfaceResults, scanPath, logger);
     }
     return surfaceResults;
   }
@@ -922,10 +975,18 @@ export async function getValidationResults(
     const result = await validate(scanPath, { validatePlugin });
     if (resourceFormat.type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
       await appendPluginAssetParseIssues(result, scanPath);
+      const pluginInventoryIssues = await runInventoryDetectors(scanPath, RESOURCE_TYPE_CLAUDE_PLUGIN);
+      result.issues.push(...pluginInventoryIssues);
+      logger.debug(`Inventory detectors emitted ${pluginInventoryIssues.length.toString()} issues for plugin at ${scanPath}`);
       // Also validate every skill the plugin ships. Without this, audit
       // would short-circuit on the manifest and never open skill content.
       const skillResults = await validatePluginSkills(scanPath, options, logger);
       return [result, ...skillResults];
+    }
+    if (resourceFormat.type === 'marketplace') {
+      const marketplaceInventoryIssues = await runInventoryDetectors(scanPath, 'marketplace');
+      result.issues.push(...marketplaceInventoryIssues);
+      logger.debug(`Inventory detectors emitted ${marketplaceInventoryIssues.length.toString()} issues for marketplace at ${scanPath}`);
     }
     return [result];
   }

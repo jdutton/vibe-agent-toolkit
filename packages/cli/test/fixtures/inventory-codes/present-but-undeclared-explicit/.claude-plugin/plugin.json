@@ -1,0 +1,6 @@
+{
+  "name": "present-but-undeclared-explicit",
+  "version": "1.0.0",
+  "description": "Test fixture: skills field is an explicit empty list; a SKILL.md on disk should trigger COMPONENT_PRESENT_BUT_UNDECLARED.",
+  "skills": []
+}

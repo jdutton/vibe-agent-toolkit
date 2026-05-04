@@ -1,0 +1,6 @@
+{
+  "name": "declared-and-present",
+  "version": "1.0.0",
+  "description": "Control case: skill is declared in manifest and the SKILL.md exists on disk.",
+  "skills": ["./skills/foo"]
+}
