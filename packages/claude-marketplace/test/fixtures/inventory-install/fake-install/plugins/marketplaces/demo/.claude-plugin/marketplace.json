@@ -1,0 +1,12 @@
+{
+	"name": "demo-marketplace",
+	"description": "Fixture marketplace for install extractor tests",
+	"version": "1.0.0",
+	"owner": { "name": "Demo Org" },
+	"plugins": [
+		{
+			"name": "demo-plugin",
+			"source": { "source": "npm", "package": "demo-plugin" }
+		}
+	]
+}

@@ -28,6 +28,7 @@ export type { Verdict, VerdictCode, VerdictInput } from './verdict-engine.js';
 // Paths
 export type { ClaudeProjectPaths, ClaudeUserPaths } from './paths/claude-paths.js';
 export {
+  buildClaudeUserPaths,
   getClaudeProjectPaths,
   getClaudeUserPaths,
 } from './paths/claude-paths.js';
@@ -158,3 +159,4 @@ export {
 export { extractClaudeSkillInventory } from './inventory/index.js';
 export { extractClaudePluginInventory } from './inventory/index.js';
 export { extractClaudeMarketplaceInventory } from './inventory/index.js';
+export { extractClaudeInstallInventory } from './inventory/index.js';
