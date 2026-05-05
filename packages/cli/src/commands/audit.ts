@@ -34,6 +34,7 @@ import {
   getClaudeUserPaths,
   readEffectiveSettings,
   validatePlugin,
+  type ClaudeMarketplaceInventory,
   type ClaudePluginInventory,
   type CompatibilityResult,
   type EffectiveSettings,
@@ -855,10 +856,10 @@ async function validateMultipleSurfaces(
 async function runInventoryDetectors(
   scanPath: string,
   type: ValidationResult['type'],
-  prebuiltInv?: ClaudePluginInventory,
+  prebuiltInv?: ClaudePluginInventory | ClaudeMarketplaceInventory,
 ): Promise<ValidationIssue[]> {
   if (type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
-    const inv = prebuiltInv ?? await extractClaudePluginInventory(scanPath);
+    const inv = (prebuiltInv as ClaudePluginInventory | undefined) ?? await extractClaudePluginInventory(scanPath);
     return [
       ...detectDeclaredButMissing(inv),
       ...detectPresentButUndeclared(inv),
@@ -867,10 +868,44 @@ async function runInventoryDetectors(
     ];
   }
   if (type === 'marketplace') {
-    const inv = await extractClaudeMarketplaceInventory(scanPath);
+    const inv = (prebuiltInv as ClaudeMarketplaceInventory | undefined) ?? await extractClaudeMarketplaceInventory(scanPath);
     return detectMarketplacePluginSourceMissing(inv);
   }
   return [];
+}
+
+/**
+ * Recurse into co-located, path-source plugins declared by a marketplace and
+ * dispatch each through the same audit pipeline used when audit is pointed
+ * directly at a plugin.
+ *
+ * Only `discovered.plugins[]` are visited — the marketplace extractor populates
+ * that list with path-source entries that exist on disk; remote (git/npm)
+ * sources never appear there. Each plugin path is also de-duplicated and
+ * compared against the marketplace path itself to avoid re-auditing a
+ * co-located self-source (e.g., `source: "./"`).
+ */
+async function recurseIntoMarketplacePlugins(
+  marketplaceInv: ClaudeMarketplaceInventory,
+  recursive: boolean,
+  options: AuditCommandOptions,
+  logger: ReturnType<typeof createLogger>,
+): Promise<ValidationResult[]> {
+  const marketplaceRoot = safePath.resolve(marketplaceInv.path);
+  const seen = new Set<string>([marketplaceRoot]);
+  const results: ValidationResult[] = [];
+  for (const plugin of marketplaceInv.discovered.plugins) {
+    const pluginPath = safePath.resolve(plugin.path);
+    if (seen.has(pluginPath)) {
+      logger.debug(`  Skipping marketplace-recurse into already-visited path: ${pluginPath}`);
+      continue;
+    }
+    seen.add(pluginPath);
+    logger.debug(`  Recursing into marketplace path-source plugin: ${pluginPath}`);
+    const pluginResults = await getValidationResults(pluginPath, recursive, options, logger);
+    results.push(...pluginResults);
+  }
+  return results;
 }
 
 /**
@@ -977,9 +1012,16 @@ export async function getValidationResults(
 			return [result, ...skillResults];
 		}
 		if (resourceFormat.type === 'marketplace') {
-			const marketplaceInventoryIssues = await runInventoryDetectors(scanPath, 'marketplace');
+			// Build the marketplace inventory once; reuse it for both detectors and
+			// recursion into co-located, path-source plugins. discovered.plugins[]
+			// is populated only for path sources that exist on disk (git/npm/unknown
+			// sources are declarations only and stay out of scope).
+			const marketplaceInv = await extractClaudeMarketplaceInventory(scanPath);
+			const marketplaceInventoryIssues = await runInventoryDetectors(scanPath, 'marketplace', marketplaceInv);
 			result.issues.push(...marketplaceInventoryIssues);
 			logger.debug(`Inventory detectors emitted ${marketplaceInventoryIssues.length.toString()} issues for marketplace at ${scanPath}`);
+			const pluginResults = await recurseIntoMarketplacePlugins(marketplaceInv, recursive, options, logger);
+			return [result, ...pluginResults];
 		}
 		return [result];
 	}
