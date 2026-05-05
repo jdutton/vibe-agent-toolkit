@@ -1,9 +1,9 @@
 /**
- * Parity harness: every finding from the captured legacy snapshot must appear
- * in the new inventory-pipeline output. Additions are allowed; losses are not.
- *
- * Phase 4a ships this test as skipped. Task 4a.4 removes the skip after the
- * new dispatch is wired in and verified to pass.
+ * Permanent regression guard: every finding the captured legacy pipeline
+ * produced over the claude-plugins-snapshot.zip fixture must continue to
+ * appear in audit output. Additions are fine; losses indicate a regression.
+ * The legacy pipeline itself was deleted in Phase 4c — only the snapshot
+ * remains.
  */
 
 import { readFileSync } from 'node:fs';

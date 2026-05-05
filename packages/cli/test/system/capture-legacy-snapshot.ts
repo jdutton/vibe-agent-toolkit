@@ -6,8 +6,9 @@
  *
  * Output: packages/cli/test/fixtures/legacy-audit-snapshot.json
  *
- * NEVER run this in CI. The snapshot is committed once and serves as the
- * regression baseline for the inventory-pipeline migration throughout 4a–4c.
+ * NEVER run this in CI. The snapshot was captured once at the start of Phase 4a
+ * and frozen for the lifetime of the regression baseline. Do not re-run unless
+ * you intend to redefine the baseline.
  *
  * Strategy: audit the corpus root recursively in one pass (mirrors what the
  * existing system tests and `vat audit <fixtureDir>` do). The full-corpus pass
