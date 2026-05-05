@@ -26,7 +26,8 @@ export function serializeInventory(inv: AnyInventory, format: Format = 'yaml'): 
  * - Plugin → discovered.skills replaced with [] (the skills list is preserved
  *   as ComponentRefs in declared.skills if the manifest declared them).
  * - Marketplace → discovered.plugins replaced with [].
- * - Install → marketplaces and plugins replaced with [].
+ * - Install → each marketplace and plugin shallow-projected (their own
+ *   discovered children dropped, but path/manifest/declared kept).
  *
  * Use case: tooling that wants top-level structure without the bulk.
  */
@@ -44,7 +45,14 @@ function shallowProject(inv: AnyInventory): AnyInventory {
 		return projected;
 	}
 	if (inv.kind === 'install') {
-		const projected: InstallInventory = { ...inv, marketplaces: [], plugins: [] };
+		// Project each child shallow: marketplaces lose discovered.plugins,
+		// plugins lose discovered.skills, but each child still carries its
+		// path, manifest, and declared lists.
+		const projected: InstallInventory = {
+			...inv,
+			marketplaces: inv.marketplaces.map((m) => shallowProject(m) as MarketplaceInventory),
+			plugins: inv.plugins.map((p) => shallowProject(p) as PluginInventory),
+		};
 		return projected;
 	}
 	return inv;
