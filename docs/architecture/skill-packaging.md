@@ -73,7 +73,21 @@ Applicable validation: marketplace-level codes.
 - Two surfaces (typically a skill-claude-plugin — skill + plugin emit independently)
 - Three surfaces (rare: skill + plugin + marketplace in one directory — allowed but unusual)
 
+## Inventory Layer
+
+The shapes above describe what an artifact *is*; the inventory layer describes what an artifact *contains*. Every detector that walks a plugin/marketplace/skill/install consumes the same structural model: a vendor-neutral interface (`packages/agent-skills/src/inventory/`) plus concrete extractors (`packages/claude-marketplace/src/inventory/`). The inventory is the single source of truth for "what does this artifact structurally hold" — declared components from the manifest, components discovered on disk, cross-component references, and parse errors. `vat audit` and `vat inventory` both build from it; new detectors are pure consumers of the model and never re-walk the filesystem.
+
+The four inventory kinds:
+
+- **Marketplace** — `marketplace.json` plus the plugin entries it declares and any plugins discovered on disk under it.
+- **Plugin** — `plugin.json` (or absent, for the skill-claude-plugin shape) plus the components it declares in tri-state form (`null` = auto-discovery, `[]` = explicit suppression, populated list = explicit declaration) and the components discovered on disk.
+- **Skill** — `SKILL.md` frontmatter plus the linked and packaged files referenced from it.
+- **Install** — `~/.claude/plugins/` (or any install root) and the marketplaces and plugins under it.
+
+The inventory schema is `vat.inventory/v1alpha`; it evolves freely under pre-1.0. Output is available via `vat inventory <path>` (YAML, JSON, or `--shallow` projection).
+
 ## See also
 
 - [`docs/validation-codes.md`](../validation-codes.md) — every validation code by name, default severity, and applicable shapes.
 - [`docs/skill-quality-and-compatibility.md`](../skill-quality-and-compatibility.md) — VAT's stance on structure, packaging, and compatibility.
+- [`docs/research/2026-05-03-claude-plugin-loader-semantics.md`](../research/2026-05-03-claude-plugin-loader-semantics.md) — empirical Claude Code loader behavior behind the tri-state declared-vs-discovered model.
