@@ -15,118 +15,15 @@ import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
 
 const PLUGIN_TYPE = 'claude-plugin' as const;
 
-interface FrontmatterNameReadResult {
-	skillFrontmatterName?: string;
-}
-
-/**
- * Best-effort read of a co-located SKILL.md's frontmatter `name` field.
- *
- * Returns `{ skillFrontmatterName: undefined }` when SKILL.md is absent,
- * unreadable, has no frontmatter, or the frontmatter has no `name`. Silent
- * failure is intentional — the skill validator handles its own errors, and
- * this helper only exists to enable the plugin-side cross-check.
- *
- * Accepts a minimal YAML subset: only extracts `name: <value>` from the first
- * frontmatter block. Full YAML parsing is not needed here because the skill
- * validator already reports every frontmatter-parse failure separately.
- */
-/**
- * Extract the YAML frontmatter block from file content, or undefined when
- * the content does not begin with a `---` fence.
- *
- * Uses indexOf instead of regex to avoid slow-regex lint errors.
- */
-function extractFrontmatterBlock(content: string): string | undefined {
-	// Normalize CRLF to LF so Windows-authored SKILL.md files parse identically.
-	// Matches the convention in parsers/frontmatter-parser.ts.
-	const normalized = content.replaceAll('\r\n', '\n');
-	const FENCE = '---';
-	if (!normalized.startsWith(`${FENCE}\n`)) {
-		return undefined;
-	}
-	const openerEnd = FENCE.length + 1;
-	const closerStart = normalized.indexOf(`\n${FENCE}`, openerEnd);
-	return closerStart === -1 ? undefined : normalized.slice(openerEnd, closerStart);
-}
-
-/** Strip optional surrounding single or double quotes from a YAML scalar. */
-function stripYamlQuotes(raw: string): string {
-	if (raw.length >= 2) {
-		const first = raw.at(0);
-		const last = raw.at(-1);
-		if ((first === '"' && last === '"') || (first === "'" && last === "'")) {
-			return raw.slice(1, -1);
-		}
-	}
-	return raw;
-}
-
-function readColocatedSkillFrontmatterName(pluginDir: string): FrontmatterNameReadResult {
-	const skillPath = safePath.join(pluginDir, 'SKILL.md');
-	if (!existsSync(skillPath)) {
-		return {};
-	}
-
-	let content: string;
-	try {
-		content = readFileSync(skillPath, 'utf-8');
-	} catch {
-		return {};
-	}
-
-	const frontmatter = extractFrontmatterBlock(content);
-	if (frontmatter === undefined) {
-		return {};
-	}
-
-	// Find the `name:` line using a non-backtracking line scan.
-	const nameLine = frontmatter.split('\n').find((line) => line.startsWith('name:'));
-	if (nameLine === undefined) {
-		return {};
-	}
-
-	const raw = nameLine.slice('name:'.length).trim();
-	if (raw.length === 0) {
-		return {};
-	}
-
-	return { skillFrontmatterName: stripYamlQuotes(raw) };
-}
-
-/**
- * Return a SKILL_CLAUDE_PLUGIN_NAME_MISMATCH issue when the plugin's co-located
- * root SKILL.md has a `name` frontmatter field that disagrees with `pluginName`,
- * or undefined when the names agree or SKILL.md is absent / unreadable.
- */
-function checkPluginSkillNameMismatch(
-	pluginPath: string,
-	pluginJsonPath: string,
-	pluginName: string,
-): ValidationIssue | undefined {
-	const { skillFrontmatterName } = readColocatedSkillFrontmatterName(pluginPath);
-	if (skillFrontmatterName === undefined || skillFrontmatterName === pluginName) {
-		return undefined;
-	}
-	return {
-		severity: 'warning',
-		code: 'SKILL_CLAUDE_PLUGIN_NAME_MISMATCH',
-		message: `plugin.json name "${pluginName}" does not match co-located SKILL.md frontmatter name "${skillFrontmatterName}"`,
-		location: pluginJsonPath,
-		fix: 'Align the names: update plugin.json `name` to match SKILL.md `name` (the skill is authoritative), or intentionally namespace the plugin (configure `validation.severity` or `validation.allow` with a reason).',
-	};
-}
-
 /**
  * Apply schema-success post-checks: set metadata, warn on missing version,
- * and cross-check skill-claude-plugin name agreement. Mutates `issues` and
+ * and surface recommended-field observations. Mutates `issues` and
  * `validationResult` in place; callers re-use the computed status/summary.
  *
  * Extracted from `validatePlugin` to keep cognitive complexity under the
  * project threshold.
  */
 function applyPostSchemaChecks(args: {
-	pluginPath: string;
 	pluginJsonPath: string;
 	data: {
 		name: string;
@@ -139,7 +36,7 @@ function applyPostSchemaChecks(args: {
 	issues: ValidationIssue[];
 	validationResult: ValidationResult;
 }): void {
-	const { pluginPath, pluginJsonPath, data, strict, issues, validationResult } = args;
+	const { pluginJsonPath, data, strict, issues, validationResult } = args;
 
 	validationResult.metadata = {
 		name: data.name,
@@ -163,11 +60,6 @@ function applyPostSchemaChecks(args: {
 	// These ship at info severity — schema parse already errored on
 	// anything structurally required.
 	issues.push(...detectMissingRecommendedFields(data, pluginJsonPath));
-
-	const mismatchIssue = checkPluginSkillNameMismatch(pluginPath, pluginJsonPath, data.name);
-	if (mismatchIssue !== undefined) {
-		issues.push(mismatchIssue);
-	}
 
 	if (issues.length > 0) {
 		validationResult.status = calculateValidationStatus(issues);
@@ -271,7 +163,6 @@ export async function validatePlugin(
 
 	if (result.success) {
 		applyPostSchemaChecks({
-			pluginPath,
 			pluginJsonPath,
 			data: result.data,
 			strict: options?.strict === true,

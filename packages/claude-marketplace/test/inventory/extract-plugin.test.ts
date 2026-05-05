@@ -5,6 +5,7 @@ import { extractClaudePluginInventory } from '../../src/inventory/extract-plugin
 
 const FIXTURE_BASE = safePath.resolve(__dirname, '../fixtures/inventory-plugin');
 const SKILL_CLAUDE_PLUGIN_FIXTURE = 'skill-claude-plugin';
+const MALFORMED_ASSETS_FIXTURE = 'malformed-assets';
 
 describe('extractClaudePluginInventory', () => {
 	describe('canonical fixture', () => {
@@ -130,6 +131,36 @@ describe('extractClaudePluginInventory', () => {
 			expect(inv.manifest).toEqual({});
 			expect(inv.declared.skills).toBeNull();
 			expect(inv.parseErrors.length).toBeGreaterThanOrEqual(1);
+		});
+	});
+
+	describe('malformed-assets fixture (hooks.json + .mcp.json parse errors)', () => {
+		it('populates parseErrors for malformed hooks/hooks.json', async () => {
+			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, MALFORMED_ASSETS_FIXTURE));
+
+			const hooksPath = safePath.join(FIXTURE_BASE, MALFORMED_ASSETS_FIXTURE, 'hooks', 'hooks.json');
+			const hookErr = inv.parseErrors.find(e => e.path === hooksPath);
+			expect(hookErr).toBeDefined();
+			expect(hookErr?.message).toContain('hooks/hooks.json is not valid JSON');
+		});
+
+		it('populates parseErrors for malformed .mcp.json', async () => {
+			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, MALFORMED_ASSETS_FIXTURE));
+
+			const mcpPath = safePath.join(FIXTURE_BASE, MALFORMED_ASSETS_FIXTURE, '.mcp.json');
+			const mcpErr = inv.parseErrors.find(e => e.path === mcpPath);
+			expect(mcpErr).toBeDefined();
+			expect(mcpErr?.message).toContain('.mcp.json is not valid JSON');
+		});
+
+		it('has no parse errors from plugin.json (which is valid)', async () => {
+			const inv = await extractClaudePluginInventory(safePath.join(FIXTURE_BASE, MALFORMED_ASSETS_FIXTURE));
+
+			const pluginJsonPath = safePath.join(
+				FIXTURE_BASE, MALFORMED_ASSETS_FIXTURE, '.claude-plugin', 'plugin.json',
+			);
+			const pluginJsonErr = inv.parseErrors.find(e => e.path === pluginJsonPath);
+			expect(pluginJsonErr).toBeUndefined();
 		});
 	});
 });

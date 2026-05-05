@@ -56,6 +56,8 @@ export async function extractClaudePluginInventory(pluginPath: string): Promise<
 	const discovered = await buildDiscovered(absolute, shape, rootSkillMd, parseErrors);
 	const unexpected = await buildUnexpected(absolute, shape);
 
+	await collectAssetParseErrors(absolute, parseErrors);
+
 	return new ClaudePluginInventory({
 		path: absolute,
 		shape,
@@ -304,6 +306,35 @@ async function buildUnexpected(
 	);
 
 	return { skillManifests, pluginManifests };
+}
+
+/**
+ * Try parsing hooks/hooks.json and .mcp.json. Any JSON syntax error is
+ * appended to `parseErrors` as a PLUGIN_INVALID_JSON-compatible record;
+ * missing files are silently skipped.
+ */
+async function collectAssetParseErrors(absolute: string, parseErrors: ParseErrors): Promise<void> {
+	const checks: Array<{ path: string; label: string }> = [
+		{ path: safePath.join(absolute, 'hooks', 'hooks.json'), label: 'hooks/hooks.json' },
+		{ path: safePath.join(absolute, '.mcp.json'), label: '.mcp.json' },
+	];
+
+	for (const { path, label } of checks) {
+		// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated absolute plugin root
+		if (!existsSync(path)) continue;
+		let raw: string;
+		try {
+			// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated absolute plugin root
+			raw = await readFile(path, 'utf-8');
+		} catch {
+			continue;
+		}
+		try {
+			JSON.parse(raw);
+		} catch (e) {
+			parseErrors.push({ path, message: `${label} is not valid JSON: ${(e as Error).message}` });
+		}
+	}
 }
 
 /**

@@ -29,11 +29,13 @@ import {
 import {
   analyzeCompatibility,
   checkSettingsCompatibility,
+  detectSkillClaudePluginNameMismatch,
   extractClaudeMarketplaceInventory,
   extractClaudePluginInventory,
   getClaudeUserPaths,
   readEffectiveSettings,
   validatePlugin,
+  type ClaudePluginInventory,
   type CompatibilityResult,
   type EffectiveSettings,
   type Target,
@@ -883,22 +885,28 @@ async function validatePluginSkills(
 }
 
 /**
- * Additive inventory-detector pass — runs the four pure-function detectors
- * introduced in Tasks 3.2/3.3 alongside the existing audit pipeline.
+ * Additive inventory-detector pass — runs the pure-function detectors
+ * introduced in Tasks 3.2/3.3/4b.1 alongside the existing audit pipeline.
  * This is NOT a replacement for any existing walker; it is a parallel check
  * that appends findings to the same ValidationResult after the primary
  * validation has already run.
+ *
+ * When `prebuiltInv` is provided for the `claude-plugin` type, the caller has
+ * already extracted the inventory (e.g., to surface parse errors) and the
+ * extractor is not called again.
  */
 async function runInventoryDetectors(
   scanPath: string,
   type: ValidationResult['type'],
+  prebuiltInv?: ClaudePluginInventory,
 ): Promise<ValidationIssue[]> {
   if (type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
-    const inv = await extractClaudePluginInventory(scanPath);
+    const inv = prebuiltInv ?? await extractClaudePluginInventory(scanPath);
     return [
       ...detectDeclaredButMissing(inv),
       ...detectPresentButUndeclared(inv),
       ...detectReferenceTargetMissing(inv),
+      ...(inv.vendor === 'claude-code' ? detectSkillClaudePluginNameMismatch(inv) : []),
     ];
   }
   if (type === 'marketplace') {
@@ -926,6 +934,27 @@ async function appendPluginInventoryToSurfaceResults(
       break;
     }
   }
+}
+
+/**
+ * Surface `inventory.parseErrors[]` as `PLUGIN_INVALID_JSON` findings on
+ * `result`, skipping the plugin.json manifest entry (which is already covered
+ * by `validatePlugin`). Only hooks/hooks.json and .mcp.json parse errors reach
+ * this helper; they are appended with error severity, matching the legacy
+ * {@link appendPluginAssetParseIssues} behaviour.
+ */
+function appendInventoryParseErrors(result: ValidationResult, inv: ClaudePluginInventory): void {
+	const pluginJsonSuffix = safePath.join('.claude-plugin', 'plugin.json');
+	for (const err of inv.parseErrors) {
+		if (err.path.endsWith(pluginJsonSuffix)) continue;
+		result.issues.push({
+			severity: 'error',
+			code: 'PLUGIN_INVALID_JSON',
+			message: err.message,
+			location: err.path,
+		});
+		result.status = 'error';
+	}
 }
 
 /**
@@ -1091,8 +1120,10 @@ async function runInventoryDispatch(
 		logger.debug(`Detected ${resourceFormat.type} at: ${scanPath}`);
 		const result = await validate(scanPath, { validatePlugin });
 		if (resourceFormat.type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
-			await appendPluginAssetParseIssues(result, scanPath);
-			const pluginInventoryIssues = await runInventoryDetectors(scanPath, RESOURCE_TYPE_CLAUDE_PLUGIN);
+			// Build the inventory once; reuse it for both parse-error surfacing and detectors.
+			const inv = await extractClaudePluginInventory(scanPath);
+			appendInventoryParseErrors(result, inv);
+			const pluginInventoryIssues = await runInventoryDetectors(scanPath, RESOURCE_TYPE_CLAUDE_PLUGIN, inv);
 			result.issues.push(...pluginInventoryIssues);
 			logger.debug(`Inventory detectors emitted ${pluginInventoryIssues.length.toString()} issues for plugin at ${scanPath}`);
 			// Also validate every skill the plugin ships via the inventory walker.
