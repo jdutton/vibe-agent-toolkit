@@ -1,6 +1,7 @@
 {
+  "license": "MIT",
   "name": "vibe-agent-toolkit",
-  "version": "0.1.34-rc.2",
+  "version": "0.1.34",
   "author": {
     "name": "vibe-agent-toolkit contributors"
   },
