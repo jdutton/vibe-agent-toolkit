@@ -19,7 +19,7 @@ type ParseErrors = ClaudePluginInventory['parseErrors'];
 
 const SKILL_MD = 'SKILL.md';
 const PLUGIN_JSON = 'plugin.json';
-const SHAPE_SKILL_CLAUDE_PLUGIN: 'skill-claude-plugin' = 'skill-claude-plugin';
+const SHAPE_SKILL_CLAUDE_PLUGIN = 'skill-claude-plugin' as const;
 
 /**
  * Build a PluginInventory for a directory containing a .claude-plugin/plugin.json manifest

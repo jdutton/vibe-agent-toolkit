@@ -859,7 +859,7 @@ async function runInventoryDetectors(
   prebuiltInv?: ClaudePluginInventory | ClaudeMarketplaceInventory,
 ): Promise<ValidationIssue[]> {
   if (type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
-    const inv = (prebuiltInv as ClaudePluginInventory | undefined) ?? await extractClaudePluginInventory(scanPath);
+    const inv = prebuiltInv?.kind === 'plugin' ? prebuiltInv : await extractClaudePluginInventory(scanPath);
     return [
       ...detectDeclaredButMissing(inv),
       ...detectPresentButUndeclared(inv),
@@ -868,7 +868,7 @@ async function runInventoryDetectors(
     ];
   }
   if (type === 'marketplace') {
-    const inv = (prebuiltInv as ClaudeMarketplaceInventory | undefined) ?? await extractClaudeMarketplaceInventory(scanPath);
+    const inv = prebuiltInv?.kind === 'marketplace' ? prebuiltInv : await extractClaudeMarketplaceInventory(scanPath);
     return detectMarketplacePluginSourceMissing(inv);
   }
   return [];
