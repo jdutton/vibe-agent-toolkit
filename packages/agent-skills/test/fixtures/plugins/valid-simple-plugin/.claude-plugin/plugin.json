@@ -1,5 +1,7 @@
 {
   "name": "valid-simple-plugin",
   "description": "A valid test plugin",
-  "version": "1.0.0"
+  "version": "1.0.0",
+  "author": { "name": "VAT Test Suite" },
+  "license": "MIT"
 }

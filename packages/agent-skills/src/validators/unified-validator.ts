@@ -1,32 +1,44 @@
 import { detectResourceFormat } from './format-detection.js';
 import { validateMarketplace } from './marketplace-validator.js';
-import { validatePlugin } from './plugin-validator.js';
 import {
 	validateInstalledPluginsRegistry,
 	validateKnownMarketplacesRegistry,
 } from './registry-validator.js';
 import type { ValidationResult } from './types.js';
 
+export interface UnifiedValidateOptions {
+	/** Validator for claude-plugin directories. Required when validating plugin paths. */
+	validatePlugin?: (path: string) => Promise<ValidationResult>;
+}
+
+class ProgrammerError extends Error {
+	constructor(message: string) {
+		super(message);
+		this.name = 'ProgrammerError';
+	}
+}
+
 /**
  * Unified validation function that automatically detects resource type
  * and routes to the appropriate validator
  *
  * @param resourcePath - Path to the resource to validate (file or directory)
+ * @param opts - Optional injectable validators (e.g. validatePlugin from claude-marketplace)
  * @returns ValidationResult with type-specific validation
  *
  * @example
  * ```typescript
- * // Validates a plugin directory
- * const result = await validate('/path/to/plugin');
- *
  * // Validates a marketplace directory
  * const result = await validate('/path/to/marketplace');
+ *
+ * // Validates a plugin directory (requires injectable validatePlugin)
+ * const result = await validate('/path/to/plugin', { validatePlugin });
  *
  * // Validates a registry file
  * const result = await validate('/path/to/installed_plugins.json');
  * ```
  */
-export async function validate(resourcePath: string): Promise<ValidationResult> {
+export async function validate(resourcePath: string, opts?: UnifiedValidateOptions): Promise<ValidationResult> {
 	try {
 		// Detect resource format
 		const format = await detectResourceFormat(resourcePath);
@@ -34,7 +46,13 @@ export async function validate(resourcePath: string): Promise<ValidationResult> 
 		// Route to appropriate validator based on detected format
 		switch (format.type) {
 			case 'claude-plugin':
-				return await validatePlugin(format.path);
+				if (opts?.validatePlugin === undefined) {
+					throw new ProgrammerError(
+						'Plugin validation requires opts.validatePlugin to be injected. ' +
+						'Pass validatePlugin from @vibe-agent-toolkit/claude-marketplace to validate().',
+					);
+				}
+				return await opts.validatePlugin(format.path);
 
 			case 'marketplace':
 				return await validateMarketplace(format.path);
@@ -70,6 +88,10 @@ export async function validate(resourcePath: string): Promise<ValidationResult> 
 			}
 		}
 	} catch (error) {
+		if (error instanceof ProgrammerError) {
+			throw error;
+		}
+
 		// Defensive error handling: convert unexpected errors to ValidationResult
 		const errorMessage =
 			error instanceof Error ? error.message : 'Unknown error occurred';

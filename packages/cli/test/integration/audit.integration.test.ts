@@ -35,6 +35,18 @@ async function runAudit(targetPath: string, options: AuditCommandOptions = {}) {
   return getValidationResults(targetPath, options.recursive !== false, options, silentLogger);
 }
 
+// Write a plugin.json into <parent>/<name>/.claude-plugin/plugin.json
+function writePluginManifest(parentDir: string, dirName: string, manifest: object): string {
+  const pluginDir = safePath.join(parentDir, dirName);
+  const claudePluginDir = safePath.join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
+  fs.mkdirSync(claudePluginDir, { recursive: true });
+  fs.writeFileSync(
+    safePath.join(claudePluginDir, PLUGIN_JSON_FILENAME),
+    JSON.stringify(manifest)
+  );
+  return pluginDir;
+}
+
 describe('audit command (integration)', () => {
   let tempDir: string;
 
@@ -48,17 +60,13 @@ describe('audit command (integration)', () => {
 
   describe('plugin validation', () => {
     it('should validate a valid plugin directory', async () => {
-      const pluginDir = safePath.join(tempDir, 'valid-plugin');
-      const claudePluginDir = safePath.join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
-      fs.mkdirSync(claudePluginDir, { recursive: true });
-      fs.writeFileSync(
-        safePath.join(claudePluginDir, PLUGIN_JSON_FILENAME),
-        JSON.stringify({
-          name: TEST_PLUGIN_NAME,
-          version: '1.0.0',
-          description: TEST_PLUGIN_DESCRIPTION,
-        })
-      );
+      const pluginDir = writePluginManifest(tempDir, 'valid-plugin', {
+        name: TEST_PLUGIN_NAME,
+        version: '1.0.0',
+        description: TEST_PLUGIN_DESCRIPTION,
+        author: { name: 'VAT Test Suite' },
+        license: 'MIT',
+      });
 
       const results = await runAudit(pluginDir);
 
@@ -68,16 +76,10 @@ describe('audit command (integration)', () => {
     });
 
     it('should detect plugin validation errors', async () => {
-      const pluginDir = safePath.join(tempDir, 'invalid-plugin');
-      const claudePluginDir = safePath.join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
-      fs.mkdirSync(claudePluginDir, { recursive: true });
-      fs.writeFileSync(
-        safePath.join(claudePluginDir, PLUGIN_JSON_FILENAME),
-        JSON.stringify({
-          // Invalid name format (must be lowercase-alphanumeric-with-hyphens)
-          name: 'Invalid_Plugin_Name',
-        })
-      );
+      // Invalid name format (must be lowercase-alphanumeric-with-hyphens)
+      const pluginDir = writePluginManifest(tempDir, 'invalid-plugin', {
+        name: 'Invalid_Plugin_Name',
+      });
 
       const results = await runAudit(pluginDir);
 
@@ -86,25 +88,52 @@ describe('audit command (integration)', () => {
     });
 
     it('should warn when plugin.json is missing version field', async () => {
-      const pluginDir = safePath.join(tempDir, 'no-version-plugin');
-      const claudePluginDir = safePath.join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
-      fs.mkdirSync(claudePluginDir, { recursive: true });
-      fs.writeFileSync(
-        safePath.join(claudePluginDir, PLUGIN_JSON_FILENAME),
-        JSON.stringify({
-          name: TEST_PLUGIN_NAME,
-          description: TEST_PLUGIN_DESCRIPTION,
-          // No version field — Claude Code will cache as "unknown/"
-        })
-      );
+      // No version field — Claude Code will cache as "unknown/"
+      const pluginDir = writePluginManifest(tempDir, 'no-version-plugin', {
+        name: TEST_PLUGIN_NAME,
+        description: TEST_PLUGIN_DESCRIPTION,
+      });
 
       const results = await runAudit(pluginDir);
 
       expect(results).toHaveLength(1);
       expect(results[0].status).toBe('warning');
-      expect(results[0].issues).toHaveLength(1);
-      expect(results[0].issues[0].code).toBe('PLUGIN_MISSING_VERSION');
-      // Detailed assertion coverage in plugin-validator.test.ts unit test
+      const codes = results[0].issues.map((i) => i.code);
+      expect(codes).toContain('PLUGIN_MISSING_VERSION');
+      // Plugin-recommended-fields detector also fires (info severity) for
+      // missing author/license — detailed coverage in plugin-validator.test.ts.
+    });
+
+    it('should also validate skills the plugin ships under skills/', async () => {
+      // Plugin layout matching Anthropic's claude-plugins-official convention:
+      //   <plugin>/.claude-plugin/plugin.json
+      //   <plugin>/skills/<name>/SKILL.md
+      // Auditing the plugin dir should validate the manifest AND every skill.
+      const pluginDir = writePluginManifest(tempDir, 'plugin-with-skills', {
+        name: TEST_PLUGIN_NAME,
+        version: '1.0.0',
+        description: TEST_PLUGIN_DESCRIPTION,
+        author: { name: 'VAT Test Suite' },
+        license: 'MIT',
+      });
+      const skillAlpha = safePath.join(pluginDir, 'skills', 'alpha');
+      const skillBeta = safePath.join(pluginDir, 'skills', 'beta');
+      fs.mkdirSync(skillAlpha, { recursive: true });
+      fs.mkdirSync(skillBeta, { recursive: true });
+      const skillBody = (name: string) =>
+        `---\nname: ${name}\ndescription: A bundled test skill, long enough to clear any minimum-description thresholds the validator may enforce.\n---\n\n# ${name}\n\nBody.\n`;
+      fs.writeFileSync(safePath.join(skillAlpha, 'SKILL.md'), skillBody('alpha'));
+      fs.writeFileSync(safePath.join(skillBeta, 'SKILL.md'), skillBody('beta'));
+
+      const results = await runAudit(pluginDir);
+
+      // 1 plugin manifest + 2 skills
+      expect(results).toHaveLength(3);
+      expect(results[0].type).toBe('claude-plugin');
+      const skillResults = results.filter((r) => r.type === 'agent-skill');
+      expect(skillResults).toHaveLength(2);
+      const skillNames = skillResults.map((r) => r.metadata?.name).sort((a, b) => (a ?? '').localeCompare(b ?? ''));
+      expect(skillNames).toEqual(['alpha', 'beta']);
     });
   });
 

@@ -1,4 +1,4 @@
-# Skill-Smell Philosophy — How VAT Decides What to Flag
+# Validation Rule Design — How VAT Decides What to Flag
 
 This document is the rubric VAT follows when adding, promoting, demoting, or removing a validation code — especially the skill-smell codes that grew out of the unified validation framework (`0.1.30+`). It is a stance doc, not a tutorial. Every default in [`docs/validation-codes.md`](./validation-codes.md) traces back to a principle here.
 
@@ -60,6 +60,32 @@ Every rule must be suppressible — either class-wide via `validation.severity` 
 The `reason` field is non-negotiable. An allowlist without reasons becomes hidden state: entries accumulate, their original justification is forgotten, and the config is no longer a record of considered exceptions — it is a wall. The `reason` turns each entry into documentation: *why did a human decide this instance is fine?* The optional `expires` date goes further, giving time-boxed overrides a forced re-review prompt via `ALLOW_EXPIRED`.
 
 A rule that adopters cannot opt out of is a rule VAT cannot ship at `warning` or above. If VAT believes a constraint is universal enough that suppression should be impossible, that is evidence the rule belongs in a hard schema validator (Zod), not in the smell framework.
+
+## Code Check or Manual Checklist?
+
+Every proposed rule must be classified as either an **automated check** (emitted by `vat audit` / `vat skills validate` with a code in [`docs/validation-codes.md`](./validation-codes.md)) or a **manual checklist item** (rendered as a `[ ]` line in `vat skill review`'s walkthrough output). The wrong classification erodes trust in either direction: noisy automated checks train users to ignore findings; "judgment calls" buried as automated `warning`-level codes generate false positives that adopters rightly silence.
+
+**Codeable signals** — make it an automated check when:
+
+- The pattern has a single right answer that does not depend on audience or context.
+- A regex, schema diff, file-system check, link resolver, or word count can decide it.
+- A representative slice of corpus shows the detector firing with a low false-positive rate at the chosen severity (rule of thumb: <10%).
+- The fix is mechanically reproducible from the rule message + path + location, without further inspection.
+
+Examples that qualify: `name`/`description` presence in frontmatter (parse + key existence); plugin manifest required fields like `version` and `author` (JSON parse + key existence); kebab-case naming (regex); description length thresholds (string length); body word count (counter); bundled-but-unreferenced files (link resolver across body); broken `[link](path)` references (file-system check); non-standard frontmatter keys (schema diff). These all decide cleanly.
+
+**Judgment-call signals** — keep it on the manual checklist when:
+
+- Multiple acceptable answers exist depending on the skill's audience, scope, or sibling context.
+- Cross-skill semantic comparison is required (e.g., disambiguation from siblings in the same plugin).
+- Runtime testing or execution would be needed to verify (e.g., "examples are complete and working").
+- A heuristic exists but generates enough false positives that an automated finding would be silenced more often than acted on.
+
+Examples that qualify: "Does the description disambiguate from sibling skills?" (semantic + cross-skill); "Is the body imperative throughout?" (heuristic-but-noisy on dialog/example text); "Are concrete scenarios concrete *enough*?" (subjective threshold); "Does the skill trigger on expected user queries?" (interactive).
+
+**The gray zone is real.** A few classes of rule sit between code and checklist — for example, "description leads with trigger keywords" or "body avoids second-person openers." Default to the **info-severity automated check** in the gray zone: code flags it, but at info level so a reviewer can override the call without config-file pollution. If the false-positive rate stays low across corpus runs, the rule graduates to `warning` per the [Graduation Path](#graduation-path) above; if it stays high, the automated check is removed and the concern moves to the manual checklist with a `[VAT]` annotation.
+
+**The rule designer's hand-off:** when classifying a proposed rule, write *both* the candidate automated detector spec **and** the equivalent checklist item. If the checklist item is the higher-fidelity expression of the concern, the rule belongs there and the automated detector is dropped. If the automated detector hits the rule's intent without imposing on the reviewer's judgment, ship the code-check and add a brief reference line to the checklist (so manual review still surfaces the concept when no automated finding fired). The two surfaces are complementary, not redundant.
 
 ## Per-Rule Documentation
 

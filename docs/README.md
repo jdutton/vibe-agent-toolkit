@@ -19,7 +19,7 @@ VAT is opinionated about skill and plugin quality. Three docs articulate what we
 
 - **[Skill Quality & Compatibility — VAT's Stance](./skill-quality-and-compatibility.md)** — What VAT believes about skill structure, packaging, and runtime compatibility. Foundation for every `defaultSeverity`.
 - **[Validation Codes](./validation-codes.md)** — Every code VAT emits, default severities, and configuration syntax (`validation.severity` / `validation.allow`).
-- **[Skill-Smell Philosophy](./skill-smell-philosophy.md)** — How VAT decides what to flag; rule-addition and severity-default policy.
+- **[Validation Rule Design](./validation-rule-design.md)** — How VAT decides what to flag; rule-addition and severity-default policy.
 
 See also: [Skill Packaging Shapes](./architecture/skill-packaging.md) for the artifact shape terminology.
 

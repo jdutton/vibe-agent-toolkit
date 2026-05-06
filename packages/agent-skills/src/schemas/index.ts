@@ -10,8 +10,6 @@ export {
   type VATAgentSkillFrontmatter,
 } from './agent-skill-frontmatter.js';
 
-export { ClaudePluginJsonSchema, ClaudePluginSchema, type ClaudePlugin } from './claude-plugin.js';
-
 export { PluginJsonSchema, type PluginJson } from './plugin-json.js';
 
 export {

@@ -5,7 +5,7 @@ import * as fs from 'node:fs';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { validate } from '../../src/validators/unified-validator.js';
+import { type UnifiedValidateOptions, validate } from '../../src/validators/unified-validator.js';
 import {
 	assertSingleError,
 	assertValidationSuccess,
@@ -18,9 +18,44 @@ import {
 describe('validate (unified validator)', () => {
 	const { getTempDir } = setupTempDir('unified-validator-');
 	const TEST_PLUGIN_NAME = 'test-plugin';
+	const PLUGIN_TYPE = 'claude-plugin' as const;
 
 	describe('plugin validation', () => {
-		it('should route to plugin validator for plugin directory', async () => {
+		it('should route to injectable validatePlugin for plugin directory', async () => {
+			const tempDir = getTempDir();
+			const pluginDir = createTestPlugin(tempDir, {
+				name: TEST_PLUGIN_NAME,
+				description: 'Test plugin',
+				version: '1.0.0',
+				author: { name: 'VAT Test Suite' },
+				license: 'MIT',
+			});
+
+			// Plugin validation requires an injectable validatePlugin (now in claude-marketplace).
+			// This test verifies the routing/injection mechanism using a stub.
+			const stubResult = {
+				path: pluginDir,
+				type: PLUGIN_TYPE,
+				status: 'success' as const,
+				summary: 'Valid plugin',
+				issues: [],
+				metadata: { name: TEST_PLUGIN_NAME, version: '1.0.0' },
+			};
+			let receivedPath: string | undefined;
+			const stubValidatePlugin: NonNullable<UnifiedValidateOptions['validatePlugin']> = async (path) => {
+				receivedPath = path;
+				return stubResult;
+			};
+
+			const result = await validate(pluginDir, { validatePlugin: stubValidatePlugin });
+
+			assertValidationSuccess(result);
+			expect(result.type).toBe(PLUGIN_TYPE);
+			expect(result.metadata?.name).toBe(TEST_PLUGIN_NAME);
+			expect(receivedPath).toBe(pluginDir);
+		});
+
+		it('should throw when plugin directory detected but no validatePlugin injected', async () => {
 			const tempDir = getTempDir();
 			const pluginDir = createTestPlugin(tempDir, {
 				name: TEST_PLUGIN_NAME,
@@ -28,11 +63,7 @@ describe('validate (unified validator)', () => {
 				version: '1.0.0',
 			});
 
-			const result = await validate(pluginDir);
-
-			assertValidationSuccess(result);
-			expect(result.type).toBe('claude-plugin');
-			expect(result.metadata?.name).toBe(TEST_PLUGIN_NAME);
+			await expect(validate(pluginDir)).rejects.toThrow('requires opts.validatePlugin to be injected');
 		});
 	});
 

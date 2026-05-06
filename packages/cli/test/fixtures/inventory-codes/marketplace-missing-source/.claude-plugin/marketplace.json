@@ -1,0 +1,13 @@
+{
+  "name": "marketplace-missing-source",
+  "description": "Test fixture: one plugin entry uses a path-based source that does not exist on disk.",
+  "version": "1.0.0",
+  "owner": { "name": "Test Org" },
+  "plugins": [
+    {
+      "name": "ghost-plugin",
+      "source": "./plugins/ghost-plugin",
+      "description": "A plugin whose source directory does not exist."
+    }
+  ]
+}

@@ -1,18 +1,14 @@
-/* eslint-disable security/detect-non-literal-fs-filename -- test uses controlled temp dirs */
-
-import { writeFileSync } from 'node:fs';
-
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { validatePlugin } from '../../src/validators/plugin-validator.js';
 import {
 	assertSingleError,
 	assertValidationSuccess,
 	cleanupTestFiles,
 	createTestPlugin,
 	setupTempDir,
-} from '../test-helpers.js';
+} from '../../../agent-skills/test/test-helpers.js';
+import { validatePlugin } from '../../src/validators/plugin-validator.js';
 
 const CLAUDE_PLUGIN_DIR = '.claude-plugin';
 
@@ -26,7 +22,7 @@ describe('validatePlugin', () => {
 	it('should validate a simple plugin directory successfully', async () => {
 		const pluginPath = safePath.resolve(
 			__dirname,
-			'../fixtures/plugins/valid-simple-plugin',
+			'../../../agent-skills/test/fixtures/plugins/valid-simple-plugin',
 		);
 
 		const result = await validatePlugin(pluginPath);
@@ -71,8 +67,9 @@ describe('validatePlugin', () => {
 
 		expect(result.status).toBe('error');
 		expect(result.issues.length).toBeGreaterThan(0);
+		// Schema error is the blocker; PLUGIN_NAME_NOT_KEBAB_CASE may also fire.
 		expect(
-			result.issues.every((issue) => issue.code === 'PLUGIN_INVALID_SCHEMA'),
+			result.issues.some((issue) => issue.code === 'PLUGIN_INVALID_SCHEMA'),
 		).toBe(true);
 	});
 
@@ -82,6 +79,8 @@ describe('validatePlugin', () => {
 			name: 'my-test-plugin',
 			description: 'A test plugin for validation',
 			version: '2.3.4',
+			author: { name: 'VAT Test Suite' },
+			license: 'MIT',
 		});
 
 		const result = await validatePlugin(pluginPath);
@@ -134,6 +133,8 @@ describe('validatePlugin', () => {
 			name: 'rc-plugin',
 			description: 'A plugin with pre-release version',
 			version: '1.0.0-rc.3',
+			author: { name: 'VAT Test Suite' },
+			license: 'MIT',
 		});
 
 		const result = await validatePlugin(pluginPath);
@@ -162,66 +163,40 @@ describe('validatePlugin', () => {
 		).toBe(true);
 	});
 
-	describe('SKILL_CLAUDE_PLUGIN_NAME_MISMATCH', () => {
-		const MISMATCH_CODE = 'SKILL_CLAUDE_PLUGIN_NAME_MISMATCH';
-		const fixturesBase = safePath.resolve(
-			__dirname,
-			'../fixtures/packaging-shapes',
-		);
-
-		it('does not emit when skill-claude-plugin names match', async () => {
-			const dir = safePath.join(fixturesBase, 'skill-claude-plugin-matching');
-			const result = await validatePlugin(dir);
-			expect(
-				result.issues.find((i) => i.code === MISMATCH_CODE),
-			).toBeUndefined();
+	it('emits PLUGIN_NAME_NOT_KEBAB_CASE alongside schema error for invalid names', async () => {
+		const tempDir = getTempDir();
+		const pluginPath = createTestPlugin(tempDir, {
+			name: 'Invalid_Name',
+			description: 'x',
+			version: '1.0.0',
 		});
-
-		it('emits a warning when skill-claude-plugin names disagree', async () => {
-			const dir = safePath.join(fixturesBase, 'skill-claude-plugin-mismatch');
-			const result = await validatePlugin(dir);
-			const issue = result.issues.find(
-				(i) => i.code === MISMATCH_CODE,
-			);
-			expect(issue).toBeDefined();
-			expect(issue?.severity).toBe('warning');
-			expect(issue?.message).toContain('different-name');
-			expect(issue?.message).toContain('mismatch-skill');
-		});
-
-		it('does not emit for canonical plugin layout (no root SKILL.md)', async () => {
-			const dir = safePath.join(fixturesBase, 'canonical-plugin');
-			const result = await validatePlugin(dir);
-			expect(
-				result.issues.find((i) => i.code === MISMATCH_CODE),
-			).toBeUndefined();
-		});
-
-		it('detects mismatch even when SKILL.md has CRLF line endings', async () => {
-			// Windows-authored SKILL.md without a .gitattributes normalization
-			// ships with CRLF. The frontmatter cross-check must still fire.
-			const tempDir = getTempDir();
-			const pluginDir = safePath.join(tempDir, 'crlf-skill-plugin');
-			mkdirSyncReal(safePath.join(pluginDir, CLAUDE_PLUGIN_DIR), { recursive: true });
-
-			const skillContentCrlf =
-				'---\r\nname: crlf-skill-name\r\ndescription: Skill with CRLF endings used to verify the plugin cross-check normalizes line endings before parsing frontmatter.\r\n---\r\n\r\n# CRLF Skill\r\n';
-			writeFileSync(safePath.join(pluginDir, 'SKILL.md'), skillContentCrlf);
-
-			writeFileSync(
-				safePath.join(pluginDir, CLAUDE_PLUGIN_DIR, 'plugin.json'),
-				JSON.stringify({
-					name: 'different-plugin-name',
-					version: '1.0.0',
-					description: 'Plugin with a name that deliberately differs from the CRLF SKILL.md.',
-				}),
-			);
-
-			const result = await validatePlugin(pluginDir);
-			const issue = result.issues.find((i) => i.code === MISMATCH_CODE);
-			expect(issue).toBeDefined();
-			expect(issue?.message).toContain('crlf-skill-name');
-			expect(issue?.message).toContain('different-plugin-name');
-		});
+		const result = await validatePlugin(pluginPath);
+		const codes = result.issues.map((i) => i.code);
+		expect(codes).toContain('PLUGIN_NAME_NOT_KEBAB_CASE');
+		expect(codes).toContain('PLUGIN_INVALID_SCHEMA');
+		const kebabIssue = result.issues.find((i) => i.code === 'PLUGIN_NAME_NOT_KEBAB_CASE');
+		expect(kebabIssue?.severity).toBe('info');
 	});
+
+	it('emits PLUGIN_MISSING_DESCRIPTION/AUTHOR/LICENSE at info severity when fields absent', async () => {
+		const tempDir = getTempDir();
+		const pluginPath = createTestPlugin(tempDir, {
+			name: 'minimal-plugin',
+			version: '1.0.0',
+		});
+		const result = await validatePlugin(pluginPath);
+		const codes = result.issues.map((i) => i.code).sort((a, b) => a.localeCompare(b));
+		expect(codes).toContain('PLUGIN_MISSING_DESCRIPTION');
+		expect(codes).toContain('PLUGIN_MISSING_AUTHOR');
+		expect(codes).toContain('PLUGIN_MISSING_LICENSE');
+		for (const code of [
+			'PLUGIN_MISSING_DESCRIPTION',
+			'PLUGIN_MISSING_AUTHOR',
+			'PLUGIN_MISSING_LICENSE',
+		] as const) {
+			const issue = result.issues.find((i) => i.code === code);
+			expect(issue?.severity).toBe('info');
+		}
+	});
+
 });

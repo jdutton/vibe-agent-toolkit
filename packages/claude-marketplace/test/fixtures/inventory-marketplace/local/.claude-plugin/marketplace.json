@@ -1,0 +1,28 @@
+{
+	"name": "local-test-marketplace",
+	"description": "Fixture marketplace for inventory extractor tests",
+	"version": "1.0.0",
+	"owner": { "name": "Test Org" },
+	"plugins": [
+		{
+			"name": "foo",
+			"source": "./plugins/foo",
+			"description": "A locally sourced plugin"
+		},
+		{
+			"name": "missing",
+			"source": "./plugins/missing",
+			"description": "A path-source plugin that does not exist on disk"
+		},
+		{
+			"name": "repo-plugin",
+			"source": { "source": "github", "repo": "user/repo" },
+			"description": "A GitHub-sourced plugin"
+		},
+		{
+			"name": "npm-plugin",
+			"source": { "source": "npm", "package": "demo-plugin" },
+			"description": "An npm-sourced plugin"
+		}
+	]
+}

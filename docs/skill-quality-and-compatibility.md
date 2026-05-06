@@ -99,6 +99,17 @@ See [Skill Packaging Shapes](./architecture/skill-packaging.md) for the terminol
 
 VAT believes skills should be **self-contained** and **progressively disclosed**: all linked resources live inside the skill directory, and long content is split into linked resources rather than loaded into a monolithic SKILL.md. Skills that reach outside their directory couple silently to project layout; skills that bundle everything into SKILL.md crowd the agent's context. See `LINK_OUTSIDE_PROJECT`, `LINK_TARGETS_DIRECTORY`, `LINK_TO_NAVIGATION_FILE`, `LINK_TO_GITIGNORED_FILE`, `LINK_TO_SKILL_DEFINITION`, `NO_PROGRESSIVE_DISCLOSURE`, and `REFERENCE_TOO_DEEP` in [`docs/validation-codes.md`](./validation-codes.md) for the code-level enforcement.
 
+### Declared vs discovered components
+
+A plugin manifest can list its components (`skills`, `commands`, `agents`, `hooks`, `mcpServers`, `outputStyles`, `lspServers`) explicitly, or omit those fields and rely on Claude Code's auto-discovery of canonical directories (`skills/`, `commands/`, etc.). The two are not equivalent: source review of the Claude Code 2.1.126 plugin loader (see [`docs/research/2026-05-03-claude-plugin-loader-semantics.md`](./research/2026-05-03-claude-plugin-loader-semantics.md)) established that declaring a component field — even as an empty array — **suppresses the auto-discovery probe for that field entirely**. A plugin that ships `"skills": []` while having `skills/foo/SKILL.md` on disk loads zero skills.
+
+VAT's inventory layer treats this as a **tri-state**: a manifest field is `null` (omitted, auto-discovery active), an empty list (explicitly suppressed), or a populated list. Two structural codes fall out:
+
+- **`COMPONENT_DECLARED_BUT_MISSING`** (`warning`) — a manifest path doesn't exist on disk. The loader logs a warn-level message and skips the missing path; the plugin still installs. VAT's `warning` mirrors what the loader does at runtime.
+- **`COMPONENT_PRESENT_BUT_UNDECLARED`** (`info`) — a component file exists under the canonical layout but the manifest provides an explicit list that omits it; the runtime will silently skip it. VAT only fires this when `declared !== null`. Auto-discovery (a missing field) is intentional and is not flagged.
+
+These severity defaults are grounded in the loader's actual behavior, not guesses. See `COMPONENT_DECLARED_BUT_MISSING`, `COMPONENT_PRESENT_BUT_UNDECLARED`, `REFERENCE_TARGET_MISSING`, and `MARKETPLACE_PLUGIN_SOURCE_MISSING` in [`docs/validation-codes.md`](./validation-codes.md).
+
 ## Packaging
 
 VAT believes **every packaged file should be reachable by a link from SKILL.md or another packaged file**, and that the link rewriter's output should match the source author's intent. Unreferenced packaged files signal dead weight; broken packaged links after rewrite signal a VAT bug. See `PACKAGED_UNREFERENCED_FILE`, `PACKAGED_BROKEN_LINK`, and `LINK_DROPPED_BY_DEPTH` in [`docs/validation-codes.md`](./validation-codes.md).
@@ -121,6 +132,6 @@ VAT believes **overrides should have half-lives**, because an allow entry that s
 
 (Maintained going forward so adopters can see when and why our stance shifted. Initial entry: doc created in 0.1.31 stable.)
 
-- **2026-04-18 (0.1.32)** — Companion stance doc [`docs/skill-smell-philosophy.md`](./skill-smell-philosophy.md) added, articulating the rule-addition bar, default-severity posture, graduation path, and data-driven evolution that govern every code in [`docs/validation-codes.md`](./validation-codes.md).
+- **2026-04-18 (0.1.32)** — Companion stance doc [`docs/validation-rule-design.md`](./validation-rule-design.md) (originally named `skill-smell-philosophy.md`) added, articulating the rule-addition bar, default-severity posture, graduation path, and data-driven evolution that govern every code in [`docs/validation-codes.md`](./validation-codes.md).
 - **2026-04-18 (0.1.32)** — Compat model refactored. v1 `COMPAT_REQUIRES_*` codes renamed to `CAPABILITY_*` (informational observations); new `COMPAT_TARGET_*` verdict codes fire only on declared-target mismatch. Runtime `claude-desktop` renamed to `claude-chat`. Evidence substrate added with `--verbose` output surface. Config-level `targets` declaration supported. Post-build validation runs full suite on built output.
 - **2026-04-17 (0.1.31 stable)** — doc created. Compatibility section reflects the v1 detectors shipped in 0.1.31-rc.1, with pending changes named explicitly (runtime rename, evidence/observation split) shipping in 0.1.32.

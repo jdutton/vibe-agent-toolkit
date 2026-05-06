@@ -28,6 +28,7 @@ export type { Verdict, VerdictCode, VerdictInput } from './verdict-engine.js';
 // Paths
 export type { ClaudeProjectPaths, ClaudeUserPaths } from './paths/claude-paths.js';
 export {
+  buildClaudeUserPaths,
   getClaudeProjectPaths,
   getClaudeUserPaths,
 } from './paths/claude-paths.js';
@@ -137,3 +138,26 @@ export {
   resolveSettingsPaths,
   validateSettingsFile,
 } from './settings/index.js';
+
+// Claude plugin manifest schema (moved from agent-skills in Chunk 1)
+export {
+  ClaudePluginJsonSchema,
+  ClaudePluginSchema,
+  type ClaudePlugin,
+} from './schemas/claude-plugin.js';
+
+// Plugin validator (moved from agent-skills in Chunk 1)
+export { validatePlugin } from './validators/plugin-validator.js';
+
+// Inventory layer (added in Chunk 2 — vendor-specific concrete classes)
+export {
+  ClaudeInstallInventory,
+  ClaudeMarketplaceInventory,
+  ClaudePluginInventory,
+  ClaudeSkillInventory,
+} from './inventory/index.js';
+export { extractClaudeSkillInventory } from './inventory/index.js';
+export { extractClaudePluginInventory } from './inventory/index.js';
+export { extractClaudeMarketplaceInventory } from './inventory/index.js';
+export { extractClaudeInstallInventory } from './inventory/index.js';
+export { detectSkillClaudePluginNameMismatch } from './inventory/index.js';

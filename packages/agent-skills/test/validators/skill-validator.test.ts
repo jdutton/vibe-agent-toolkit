@@ -5,6 +5,9 @@
  * unreferenced file detection, and cycle handling.
  */
 
+import { writeFileSync } from 'node:fs';
+
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { validateSkill } from '../../src/validators/skill-validator.js';
@@ -403,5 +406,36 @@ describe('transitive link traversal — rootDir default', () => {
 
     expect(result.linkedFiles).toHaveLength(1);
     expect(findIssues(result, 'LINK_INTEGRITY_BROKEN')).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Kebab-case detection — skill
+// ---------------------------------------------------------------------------
+
+describe('kebab-case detection — skill', () => {
+  const { getTempDir } = setupTempDir('skill-kebab-');
+
+  it('emits SKILL_NAME_NOT_KEBAB_CASE alongside schema error for invalid names', async () => {
+    const skillPath = safePath.join(getTempDir(), 'SKILL.md');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillPath is a controlled temp dir
+    writeFileSync(
+      skillPath,
+      [
+        '---',
+        'name: Bad_Name',
+        'description: A test skill with non-kebab-case name (long enough to clear thresholds).',
+        '---',
+        '',
+        '# Bad Name',
+        '',
+        'Body.',
+      ].join('\n'),
+    );
+    const result = await validateSkill({ skillPath });
+    const codes = result.issues.map((i) => i.code);
+    expect(codes).toContain('SKILL_NAME_NOT_KEBAB_CASE');
+    const kebabIssue = result.issues.find((i) => i.code === 'SKILL_NAME_NOT_KEBAB_CASE');
+    expect(kebabIssue?.severity).toBe('info');
   });
 });

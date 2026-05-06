@@ -1,0 +1,5 @@
+{
+  "name": "present-but-undeclared",
+  "version": "1.0.0",
+  "description": "Test case: SKILL.md exists on disk under skills/foo/ but the manifest has no skills field."
+}

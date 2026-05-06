@@ -1,0 +1,41 @@
+# Tracked plugins for `vat corpus scan`.
+# See docs/superpowers/specs/2026-05-01-corpus-scan-phase-1-design.md
+# Source is the unique key. Each entry can carry an optional `validation:`
+# block with the same shape as `skills.defaults.validation` in
+# vibe-agent-toolkit.config.yaml — used to silence findings on this
+# plugin when we've decided the rule is wrong (or not yet right enough).
+# All entries start with no validation block; overrides accumulate as
+# evidence over scan runs.
+
+plugins:
+  # Policy: audit the published artifact (claude-marketplace branch or
+  # marketplace plugins/<x> path), not source. Source-tree audit can miss
+  # skills authored as flat-file siblings (e.g. VAT's resources/skills/
+  # vat-*.md → dist/skills/<name>/SKILL.md), and source layouts can drift
+  # from what Claude Code actually receives at install time.
+  - source: https://github.com/jdutton/vibe-agent-toolkit.git#claude-marketplace:plugins/vibe-agent-toolkit
+    name: vibe-agent-toolkit
+  - source: https://github.com/jdutton/vibe-validate.git#claude-marketplace
+    name: vibe-validate
+  - source: https://github.com/ihiservices/avonrisk-sdlc-claude-marketplace.git#main:plugins/avonrisk-sdlc
+    name: avonrisk-sdlc
+  - source: https://github.com/ihiservices/avonrisk-sdlc-claude-marketplace.git#main:plugins/avonrisk-builders
+    name: avonrisk-builders
+
+  # claude-plugins-official samples (verified via gh api 2026-05-01)
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/skill-creator
+    name: skill-creator
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/plugin-dev
+    name: plugin-dev
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/code-review
+    name: code-review
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/pr-review-toolkit
+    name: pr-review-toolkit
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/feature-dev
+    name: feature-dev
+
+  # knowledge-work-plugins samples (each plugin is at the repo root, not under plugins/)
+  - source: https://github.com/anthropics/knowledge-work-plugins.git#main:data
+    name: knowledge-work-data
+  - source: https://github.com/anthropics/knowledge-work-plugins.git#main:engineering
+    name: knowledge-work-engineering

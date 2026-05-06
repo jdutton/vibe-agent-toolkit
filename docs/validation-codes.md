@@ -2,7 +2,7 @@
 
 For the project's *stance* on what each category of code exists to enforce — the reasoning behind every default severity and the confidence level we attach to each — see [Skill Quality and Compatibility — VAT's Stance](./skill-quality-and-compatibility.md). That doc articulates what VAT believes; this doc is the code-level reference.
 
-See [skill-smell-philosophy.md](./skill-smell-philosophy.md) for the rule-addition philosophy, default-severity policy, and graduation path that governs every code in this reference.
+See [validation-rule-design.md](./validation-rule-design.md) for the rule-addition policy, default-severity guidance, and graduation path that governs every code in this reference.
 
 This reference lists every overridable validation code VAT emits, plus the two meta-codes. Use it to interpret CLI output, configure `validation.severity` / `validation.allow`, and understand default behavior.
 
@@ -238,6 +238,87 @@ Best-practice checks about skill shape and content.
 - **What:** Sibling skills in the same package use a mix of YAML scalar styles for their `description` frontmatter line — folded (`description: >-`), literal (`description: |`), inline double-quoted (`description: "..."`), inline single-quoted (`description: '...'`), or inline plain. When two or more styles appear together, every skill in the package with a classifiable style receives the warning.
 - **Why it matters:** Consistent YAML styling across a skill package is a low-cost signal that the skills were authored deliberately together. Mixed styles usually reflect copy-paste from heterogeneous sources and make packaging refactors (renames, reformats) noisier than they need to be. The rule is package-scoped because within-skill style is invisible to agents — it only matters when compared against siblings.
 - **Fix:** Pick one YAML style and apply it to every skill in the package. Allow via `validation.severity: { SKILL_DESCRIPTION_STYLE_MIXED_IN_PACKAGE: ignore }` per package when mixing is deliberate.
+
+### `PLUGIN_MISSING_DESCRIPTION`
+
+- **Default:** `info`
+- **What:** `.claude-plugin/plugin.json` lacks a `description` field.
+- **Why it matters:** Plugin-dev's "Recommended Metadata" section names `description` as recommended. Claude Code surfaces the manifest description in the `/plugin` listing; without it, users see only the plugin name when browsing installed plugins.
+- **Fix:** Add `"description": "..."` to plugin.json.
+
+### `PLUGIN_MISSING_AUTHOR`
+
+- **Default:** `info`
+- **What:** `.claude-plugin/plugin.json` lacks an `author` field (or `author.name`).
+- **Why it matters:** Plugin-dev names `author` as recommended metadata. Authorship is what makes "report upstream" actionable for corpus scanning, marketplace discovery, and downstream issue-routing.
+- **Fix:** Add `"author": { "name": "..." }` to plugin.json.
+
+### `PLUGIN_MISSING_LICENSE`
+
+- **Default:** `info`
+- **What:** `.claude-plugin/plugin.json` lacks a `license` field.
+- **Why it matters:** Plugin-dev recommends `license`. License absence in shipped artifacts creates downstream redistribution ambiguity — adopters cannot tell at a glance whether a plugin is safe to vendor or extend.
+- **Fix:** Add `"license": "MIT"` (or appropriate SPDX identifier) to plugin.json.
+
+### `PLUGIN_NAME_NOT_KEBAB_CASE`
+
+- **Default:** `info`
+- **What:** Plugin manifest `name` does not match `^[a-z0-9]+(-[a-z0-9]+)*$` (lowercase alphanumeric with single hyphens).
+- **Why it matters:** Plugin-dev's "Name requirements" section: kebab-case is mandatory in Claude Code. The Zod schema already errors via `PLUGIN_INVALID_SCHEMA`; this dedicated code makes the finding actionable in audit output (the message names the convention rather than echoing a generic schema error).
+- **Fix:** Rename to kebab-case. The schema-level error blocks the build regardless of this info code's severity; raising severity to `error` here is redundant.
+
+### `SKILL_NAME_NOT_KEBAB_CASE`
+
+- **Default:** `info`
+- **What:** SKILL.md frontmatter `name` does not match `^[a-z0-9]+(-[a-z0-9]+)*$` (lowercase alphanumeric with single hyphens).
+- **Why it matters:** Sister rule to `PLUGIN_NAME_NOT_KEBAB_CASE`; plugin-dev applies the same convention to skills. The Zod schema already errors via `SKILL_NAME_INVALID`; this dedicated code surfaces the same finding with a more actionable message.
+- **Fix:** Rename to kebab-case.
+
+### `SKILL_REFERENCES_BUT_NO_LINKS`
+
+- **Default:** `info`
+- **What:** A skill directory contains `scripts/`, `references/`, or `assets/` subdirectories, but the SKILL.md body has zero markdown links pointing into any of them.
+- **Why it matters:** Plugin-dev's "Mistake 4: Missing Resource References" — bundled assets the body never links to are dead weight in the install. They ship but never load. This pattern often signals an author who intended progressive disclosure but didn't wire up the references.
+- **Fix:** Add explicit markdown links from SKILL.md (or a linked file) into the bundled subdirectories, or remove the unreferenced directory. Allow via `validation.allow` if the assets are consumed programmatically.
+
+### `SKILL_BODY_NOT_IMPERATIVE`
+
+- **Default:** `info`
+- **What:** SKILL.md body contains second-person instructional openers — lines starting with `You ` followed by a modal verb (`should`, `can`, `need`, `must`, `will`, `may`) outside fenced code blocks and quoted blocks.
+- **Why it matters:** Plugin-dev's "Mistake 3: Second Person Writing" calls this out as a top anti-pattern. Imperative form ("Configure the…") is more agent-readable than addressing a reader ("You should configure…"). Heuristic with bounded false-positive risk; ship at info to gather corpus signal before promoting.
+- **Fix:** Rewrite as imperative ("Configure the MCP server…" instead of "You should configure…"). Allow via `validation.allow` if the line is documenting user dialog or a quoted prompt the heuristic mis-fires on.
+
+## Plugin Inventory Codes
+
+Structural checks derived from the plugin inventory layer. These codes fire when the inventory model detects a mismatch between what a manifest declares and what exists on disk. They are emitted during `vat audit` (and any future command that consumes the inventory layer). All four are detector-based (pure functions) — no filesystem I/O at detection time.
+
+### `COMPONENT_DECLARED_BUT_MISSING` {#component_declared_but_missing}
+
+- **Default:** `warning`
+- **What:** A component path declared in the plugin manifest (`skills`, `commands`, `agents`, `hooks`, `mcpServers`, `outputStyles`, or `lspServers`) does not exist on disk.
+- **Why it matters:** Claude Code logs a warn-level message and continues install when a declared component is absent — the plugin installs but the missing component is silently skipped. This is often a path typo, a file that was deleted without updating the manifest, or a build artifact that was not generated. Catching it at audit time shifts the failure from a silent runtime skip to a visible pre-flight warning.
+- **Fix:** Add the missing file, remove the manifest declaration, or correct the path. Use `validation.allow` if the artifact is intentionally generated by an install-time build step.
+
+### `COMPONENT_PRESENT_BUT_UNDECLARED` {#component_present_but_undeclared}
+
+- **Default:** `info`
+- **What:** A component (skill, command, or agent) is present under the canonical layout but the manifest declares an explicit list that omits it; the runtime may silently skip it at install.
+- **Why it matters:** Claude Code applies auto-discovery when the manifest _omits_ a field entirely. But when the manifest provides an explicit list (including an empty `[]`), auto-discovery is suppressed — only listed components are installed. A file that ships but is absent from the explicit list will be silently skipped. This code fires only when `declared !== null` (explicit list present); a missing field is intentional auto-discovery and is not flagged.
+- **Fix:** Add the component to the appropriate manifest field, or remove the file if unintended. Skipped when the manifest omits the field entirely.
+
+### `REFERENCE_TARGET_MISSING` {#reference_target_missing}
+
+- **Default:** `error`
+- **What:** A cross-component reference resolved from the manifest (e.g., a hook's `script` path, an MCP server's `path`) points to a file that does not exist on disk.
+- **Why it matters:** These are direct manifest-level pointers — not auto-discovered paths but explicit path declarations. A missing target means the component cannot be loaded at all. Unlike a missing declared component (which the loader skips), a broken cross-reference causes the manifest to be malformed in a way that prevents the referencing component from initializing.
+- **Fix:** Add the referenced file or correct the path in the manifest.
+
+### `MARKETPLACE_PLUGIN_SOURCE_MISSING` {#marketplace_plugin_source_missing}
+
+- **Default:** `error`
+- **What:** A marketplace manifest declares a plugin with a `path`-based source that does not exist on disk.
+- **Why it matters:** Path sources in a marketplace are filesystem-relative installation targets. A missing source means the marketplace cannot install the plugin — the path is either a typo, a relative path that drifted after a directory move, or a build artifact that was never generated. Git/npm/unknown sources are out of scope (they resolve at install time from remote sources).
+- **Fix:** Correct the source path or remove the entry from `marketplace.plugins[]`.
 
 ## Compat Codes
 

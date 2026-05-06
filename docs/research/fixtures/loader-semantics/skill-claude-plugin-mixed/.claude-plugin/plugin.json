@@ -1,0 +1,6 @@
+{
+  "name": "skill-claude-plugin-mixed",
+  "version": "1.0.0",
+  "description": "Test case: root-level SKILL.md (skill-style plugin) AND a declared skills/ entry. Tests shape mixing.",
+  "skills": ["./skills/bar"]
+}

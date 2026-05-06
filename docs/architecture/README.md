@@ -355,17 +355,19 @@ resources (→ utils)
 **Purpose:** Comprehensive validation of Claude plugins, marketplaces, registries, and skills
 
 **Architecture:**
+- **Inventory substrate**: All structural enumeration goes through the inventory layer (see [Skill Packaging — Inventory Layer](./skill-packaging.md#inventory-layer)). Vendor-neutral interfaces live in `packages/agent-skills/src/inventory/`; concrete Claude extractors live in `packages/claude-marketplace/src/inventory/`. Detectors are pure consumers of inventory data — they never walk the filesystem directly. `vat inventory <path>` exposes the same model as YAML/JSON.
 - **Auto-detection**: Detects resource type based on file structure
   - Plugin directories: `.claude-plugin/plugin.json` ([official spec](https://code.claude.com/docs/en/plugins-reference))
   - Marketplace directories: `.claude-plugin/marketplace.json`
   - Registry files: `installed_plugins.json`, `known_marketplaces.json`
   - Skills: `SKILL.md` files
   - VAT agents: `agent.yaml` + `SKILL.md`
-- **Validators**: Reuses validators from `agent-skills` package
-  - Plugin validator: Schema validation for plugin manifests
+- **Validators**: Reuses validators from `agent-skills` and `claude-marketplace` packages
+  - Plugin validator (`claude-marketplace`): Schema validation for plugin manifests
   - Marketplace validator: Schema validation for marketplace manifests
   - Registry validator: Schema validation + checksum staleness detection
   - Skill validator: Frontmatter, links, naming conventions, length checks
+  - Inventory detectors: `COMPONENT_DECLARED_BUT_MISSING`, `COMPONENT_PRESENT_BUT_UNDECLARED`, `REFERENCE_TARGET_MISSING`, `MARKETPLACE_PLUGIN_SOURCE_MISSING` (set algebra over the inventory)
 - **Hierarchical Output**: Groups results into marketplace → plugin → skill structure
   - Used for `--user` flag to show plugin relationships
   - Flat output for single resource audits
@@ -379,10 +381,12 @@ resources (→ utils)
 - `cache-detector.ts` - Compares cache and installed checksums (future enhancement)
 
 **Integration:**
-- Uses validators from `@vibe-agent-toolkit/agent-skills`
-  - `validate()` - Unified validator for plugins/marketplaces/registries
-  - `validateSkill()` - Skill-specific validator
-  - `detectResourceFormat()` - Resource type detection
+- Uses validators from `@vibe-agent-toolkit/agent-skills` and `@vibe-agent-toolkit/claude-marketplace`
+  - `validate()` - Unified validator for plugins/marketplaces/registries (`agent-skills`)
+  - `validatePlugin()` - Claude plugin manifest validation (`claude-marketplace`)
+  - `validateSkill()` - Skill-specific validator (`agent-skills`)
+  - `detectResourceFormat()` - Resource type detection (`agent-skills`)
+  - Inventory extractors and detectors — see [Skill Packaging — Inventory Layer](./skill-packaging.md#inventory-layer)
 - Uses ResourceRegistry from `@vibe-agent-toolkit/resources`
   - Checksum-based staleness detection
   - Plugin relationship tracking

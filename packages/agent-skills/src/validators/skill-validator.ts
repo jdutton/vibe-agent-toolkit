@@ -8,9 +8,12 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import type { EvidenceRecord } from '../evidence/index.js';
 import { parseFrontmatter } from '../parsers/frontmatter-parser.js';
 
+import { detectBundledResourceWithoutLinks } from './bundled-resource-link-detection.js';
 import { observationToIssue, runCompatDetectors } from './compat-detectors.js';
 import { detectUndeclaredCrossSkillAuth } from './cross-skill-dependency-detection.js';
 import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
+import { detectNonImperativeBody } from './imperative-body-detection.js';
+import { detectKebabCaseViolation } from './kebab-case-detection.js';
 import type { LinkedFileValidationResult, ValidateOptions, ValidationIssue, ValidationResult } from './types.js';
 import { NAVIGATION_FILE_PATTERNS } from './validation-rules.js';
 
@@ -69,13 +72,28 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
 
   const { frontmatter } = parseResult;
 
-  // Frontmatter validation (schema + rules) plus the cross-skill dependency
-  // smell, which looks at body prose that requires/depends on a token the
-  // description omits.
+  // Surface kebab-case name violations as a named info code in addition
+  // to the schema-level error.
+  if (typeof frontmatter['name'] === 'string') {
+    const kebabIssue = detectKebabCaseViolation(
+      'skill',
+      frontmatter['name'],
+      `${skillPath}:1`,
+    );
+    if (kebabIssue) {
+      issues.push(kebabIssue);
+    }
+  }
+
+  // Frontmatter validation (schema + rules), the cross-skill dependency
+  // smell that looks at body prose requiring tokens the description omits,
+  // and the gray-zone second-person-opener heuristic from the plugin-dev
+  // cross-walk (info severity).
   issues.push(
     ...validateFrontmatterSchema(frontmatter, isVATGenerated),
     ...validateFrontmatterRules(frontmatter),
     ...detectUndeclaredCrossSkillAuth(frontmatter, parseResult.body),
+    ...detectNonImperativeBody(parseResult.body, skillPath),
   );
 
   // Validate warning-level rules (skill-specific)
@@ -93,6 +111,15 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   // Transitive link traversal (BFS)
   const skillDir = options.rootDir ?? dirname(skillPath);
   const linkedFiles = await traverseLinks(skillPath, skillDir, issues, allEvidence);
+
+  // Bundled-resource link detection — fires after link traversal so the
+  // linkedFiles set reflects everything reachable from SKILL.md.
+  const bundledResourceIssues = detectBundledResourceWithoutLinks(
+    skillPath,
+    skillDir,
+    linkedFiles.map((lf) => lf.path),
+  );
+  issues.push(...bundledResourceIssues);
 
   // Unreferenced file detection
   if (options.checkUnreferencedFiles) {

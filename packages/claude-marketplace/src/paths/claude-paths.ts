@@ -41,6 +41,27 @@ export interface ClaudeProjectPaths {
 }
 
 /**
+ * Build ClaudeUserPaths from a resolved claudeDir root.
+ * Called by getClaudeUserPaths and by callers with a custom install root.
+ */
+export function buildClaudeUserPaths(claudeDir: string): ClaudeUserPaths {
+  const pluginsDir = safePath.join(claudeDir, 'plugins');
+  const home = homedir();
+
+  return {
+    claudeDir,
+    pluginsDir,
+    skillsDir: safePath.join(claudeDir, 'skills'),
+    marketplacesDir: safePath.join(pluginsDir, 'marketplaces'),
+    pluginsCacheDir: safePath.join(pluginsDir, 'cache'),
+    knownMarketplacesPath: safePath.join(pluginsDir, 'known_marketplaces.json'),
+    installedPluginsPath: safePath.join(pluginsDir, 'installed_plugins.json'),
+    userSettingsPath: safePath.join(claudeDir, 'settings.json'),
+    userDotJsonPath: safePath.join(home, '.claude.json'),
+  };
+}
+
+/**
  * Get user-level Claude directories and settings paths.
  *
  * Returns absolute paths to Claude user directories and settings files.
@@ -57,19 +78,7 @@ export interface ClaudeProjectPaths {
 export function getClaudeUserPaths(): ClaudeUserPaths {
   const home = homedir();
   const claudeDir = process.env['CLAUDE_CONFIG_DIR'] ?? safePath.join(home, '.claude');
-  const pluginsDir = safePath.join(claudeDir, 'plugins');
-
-  return {
-    claudeDir,
-    pluginsDir,
-    skillsDir: safePath.join(claudeDir, 'skills'),
-    marketplacesDir: safePath.join(pluginsDir, 'marketplaces'),
-    pluginsCacheDir: safePath.join(pluginsDir, 'cache'),
-    knownMarketplacesPath: safePath.join(pluginsDir, 'known_marketplaces.json'),
-    installedPluginsPath: safePath.join(pluginsDir, 'installed_plugins.json'),
-    userSettingsPath: safePath.join(claudeDir, 'settings.json'),
-    userDotJsonPath: safePath.join(home, '.claude.json'),
-  };
+  return buildClaudeUserPaths(claudeDir);
 }
 
 /**

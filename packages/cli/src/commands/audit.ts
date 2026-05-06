@@ -7,11 +7,14 @@ import * as fs from 'node:fs';
 import { existsSync as fsExistsSync } from 'node:fs';
 
 import {
+  detectDeclaredButMissing,
+  detectMarketplacePluginSourceMissing,
+  detectPresentButUndeclared,
+  detectReferenceTargetMissing,
   detectResourceFormat,
   enumerateSurfaces,
   validate,
   validateMarketplace,
-  validatePlugin,
   validateSkill,
   validateSkillForPackaging,
   type EvidenceRecord,
@@ -25,12 +28,18 @@ import {
 import {
   analyzeCompatibility,
   checkSettingsCompatibility,
+  detectSkillClaudePluginNameMismatch,
+  extractClaudeMarketplaceInventory,
+  extractClaudePluginInventory,
+  getClaudeUserPaths,
   readEffectiveSettings,
+  validatePlugin,
+  type ClaudeMarketplaceInventory,
+  type ClaudePluginInventory,
   type CompatibilityResult,
   type EffectiveSettings,
   type Target,
 } from '@vibe-agent-toolkit/claude-marketplace';
-import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
 import { gitFindRoot, GitTracker, isAbsolutePath, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
@@ -834,77 +843,244 @@ async function validateMultipleSurfaces(
 }
 
 /**
+ * Additive inventory-detector pass — runs the pure-function detectors
+ * introduced in Tasks 3.2/3.3/4b.1 alongside the existing audit pipeline.
+ * This is NOT a replacement for any existing walker; it is a parallel check
+ * that appends findings to the same ValidationResult after the primary
+ * validation has already run.
+ *
+ * When `prebuiltInv` is provided for the `claude-plugin` type, the caller has
+ * already extracted the inventory (e.g., to surface parse errors) and the
+ * extractor is not called again.
+ */
+async function runInventoryDetectors(
+  scanPath: string,
+  type: ValidationResult['type'],
+  prebuiltInv?: ClaudePluginInventory | ClaudeMarketplaceInventory,
+): Promise<ValidationIssue[]> {
+  if (type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
+    const inv = prebuiltInv?.kind === 'plugin' ? prebuiltInv : await extractClaudePluginInventory(scanPath);
+    return [
+      ...detectDeclaredButMissing(inv),
+      ...detectPresentButUndeclared(inv),
+      ...detectReferenceTargetMissing(inv),
+      ...(inv.vendor === 'claude-code' ? detectSkillClaudePluginNameMismatch(inv) : []),
+    ];
+  }
+  if (type === 'marketplace') {
+    const inv = prebuiltInv?.kind === 'marketplace' ? prebuiltInv : await extractClaudeMarketplaceInventory(scanPath);
+    return detectMarketplacePluginSourceMissing(inv);
+  }
+  return [];
+}
+
+/**
+ * Recurse into co-located, path-source plugins declared by a marketplace and
+ * dispatch each through the same audit pipeline used when audit is pointed
+ * directly at a plugin.
+ *
+ * Only `discovered.plugins[]` are visited — the marketplace extractor populates
+ * that list with path-source entries that exist on disk; remote (git/npm)
+ * sources never appear there. Each plugin path is also de-duplicated and
+ * compared against the marketplace path itself to avoid re-auditing a
+ * co-located self-source (e.g., `source: "./"`).
+ */
+async function recurseIntoMarketplacePlugins(
+  marketplaceInv: ClaudeMarketplaceInventory,
+  recursive: boolean,
+  options: AuditCommandOptions,
+  logger: ReturnType<typeof createLogger>,
+): Promise<ValidationResult[]> {
+  const marketplaceRoot = safePath.resolve(marketplaceInv.path);
+  const seen = new Set<string>([marketplaceRoot]);
+  const results: ValidationResult[] = [];
+  for (const plugin of marketplaceInv.discovered.plugins) {
+    const pluginPath = safePath.resolve(plugin.path);
+    if (seen.has(pluginPath)) {
+      logger.debug(`  Skipping marketplace-recurse into already-visited path: ${pluginPath}`);
+      continue;
+    }
+    seen.add(pluginPath);
+    logger.debug(`  Recursing into marketplace path-source plugin: ${pluginPath}`);
+    const pluginResults = await getValidationResults(pluginPath, recursive, options, logger);
+    results.push(...pluginResults);
+  }
+  return results;
+}
+
+/**
+ * Append plugin inventory findings to the matching plugin result in a
+ * multi-surface result list. Mutates in place.
+ */
+async function appendPluginInventoryToSurfaceResults(
+  surfaceResults: ValidationResult[],
+  scanPath: string,
+  logger: ReturnType<typeof createLogger>,
+): Promise<void> {
+  const inventoryIssues = await runInventoryDetectors(scanPath, RESOURCE_TYPE_CLAUDE_PLUGIN);
+  logger.debug(`Inventory detectors emitted ${inventoryIssues.length.toString()} issues for plugin (multi-surface) at ${scanPath}`);
+  for (const r of surfaceResults) {
+    if (r.type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
+      r.issues.push(...inventoryIssues);
+      break;
+    }
+  }
+}
+
+/**
+ * Surface `inventory.parseErrors[]` as `PLUGIN_INVALID_JSON` findings on
+ * `result`, skipping the plugin.json manifest entry (which is already covered
+ * by `validatePlugin`). Only hooks/hooks.json and .mcp.json parse errors reach
+ * this helper; they are appended with error severity.
+ */
+function appendInventoryParseErrors(result: ValidationResult, inv: ClaudePluginInventory): void {
+	const pluginJsonSuffix = safePath.join('.claude-plugin', 'plugin.json');
+	for (const err of inv.parseErrors) {
+		if (err.path.endsWith(pluginJsonSuffix)) continue;
+		result.issues.push({
+			severity: 'error',
+			code: 'PLUGIN_INVALID_JSON',
+			message: err.message,
+			location: err.path,
+		});
+		result.status = 'error';
+	}
+}
+
+/**
  * @internal Exported for integration testing only — not part of the public CLI API.
  */
 export async function getValidationResults(
-  scanPath: string,
-  recursive: boolean,
-  options: AuditCommandOptions,
-  logger: ReturnType<typeof createLogger>
+	scanPath: string,
+	recursive: boolean,
+	options: AuditCommandOptions,
+	logger: ReturnType<typeof createLogger>,
 ): Promise<ValidationResult[]> {
-  const format = detectFormat(scanPath);
+	const format = detectFormat(scanPath);
 
-  // Special handling for direct SKILL.md file
-  if (format === RESOURCE_TYPE_AGENT_SKILL) {
-    logger.debug('Detected single Agent Skill');
-    return [await validateSingleSkill(scanPath, options, logger)];
-  }
+	// Special handling for direct SKILL.md file
+	if (format === RESOURCE_TYPE_AGENT_SKILL) {
+		logger.debug('Detected single Agent Skill');
+		return [await validateSingleSkill(scanPath, options, logger)];
+	}
 
-  // Special handling for VAT agent: validate its SKILL.md
-  if (format === 'vat-agent') {
-    const skillPath = safePath.join(scanPath, 'SKILL.md');
-    logger.debug('Detected VAT agent, validating SKILL.md');
-    return [await validateSingleSkill(skillPath, options, logger, true)];
-  }
+	// Special handling for VAT agent: validate its SKILL.md
+	if (format === 'vat-agent') {
+		const skillPath = safePath.join(scanPath, 'SKILL.md');
+		logger.debug('Detected VAT agent, validating SKILL.md');
+		return [await validateSingleSkill(skillPath, options, logger, true)];
+	}
 
-  // Enumerate all manifest surfaces at the directory root. If multiple are
-  // present (e.g., skill-claude-plugin: SKILL.md + .claude-plugin/plugin.json),
-  // validate each independently. This intentionally bypasses
-  // detectResourceFormat's single-answer collapse so the skill surface is not
-  // swallowed by the plugin surface.
-  const surfaces = await enumerateSurfaces(scanPath);
-  if (surfaces.length > 1) {
-    return validateMultipleSurfaces(surfaces, scanPath, options, logger);
-  }
+	// Enumerate all manifest surfaces at the directory root. If multiple are
+	// present (e.g., skill-claude-plugin: SKILL.md + .claude-plugin/plugin.json),
+	// validate each independently. This intentionally bypasses
+	// detectResourceFormat's single-answer collapse so the skill surface is not
+	// swallowed by the plugin surface.
+	const surfaces = await enumerateSurfaces(scanPath);
+	if (surfaces.length > 1) {
+		const surfaceResults = await validateMultipleSurfaces(surfaces, scanPath, options, logger);
+		if (surfaces.some((s) => s.type === RESOURCE_TYPE_CLAUDE_PLUGIN)) {
+			// Build exclusion set from skill paths already validated as surfaces, so that
+			// validatePluginSkillsViaInventory does not double-count a root SKILL.md that
+			// enumerateSurfaces already returned as an agent-skill surface.
+			const alreadyValidated = new Set(
+				surfaces
+					.filter((s) => s.type === RESOURCE_TYPE_AGENT_SKILL)
+					.map((s) => safePath.resolve(s.path)),
+			);
+			surfaceResults.push(...(await validatePluginSkillsViaInventory(scanPath, options, logger, alreadyValidated)));
+			await appendPluginInventoryToSurfaceResults(surfaceResults, scanPath, logger);
+		}
+		return surfaceResults;
+	}
 
-  // For plugin/marketplace directories or registry files, use unified validator
-  const resourceFormat = await detectResourceFormat(scanPath);
+	// For plugin/marketplace directories or registry files, use unified validator
+	const resourceFormat = await detectResourceFormat(scanPath);
 
-  if (resourceFormat.type !== 'unknown') {
-    logger.debug(`Detected ${resourceFormat.type} at: ${scanPath}`);
-    const result = await validate(scanPath);
-    if (resourceFormat.type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
-      await appendPluginAssetParseIssues(result, scanPath);
-    }
-    return [result];
-  }
+	if (resourceFormat.type !== 'unknown') {
+		logger.debug(`Detected ${resourceFormat.type} at: ${scanPath}`);
+		const result = await validate(scanPath, { validatePlugin });
+		if (resourceFormat.type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
+			// Build the inventory once; reuse it for both parse-error surfacing and detectors.
+			const inv = await extractClaudePluginInventory(scanPath);
+			appendInventoryParseErrors(result, inv);
+			const pluginInventoryIssues = await runInventoryDetectors(scanPath, RESOURCE_TYPE_CLAUDE_PLUGIN, inv);
+			result.issues.push(...pluginInventoryIssues);
+			logger.debug(`Inventory detectors emitted ${pluginInventoryIssues.length.toString()} issues for plugin at ${scanPath}`);
+			// Also validate every skill the plugin ships via the inventory walker.
+			const skillResults = await validatePluginSkillsViaInventory(scanPath, options, logger);
+			return [result, ...skillResults];
+		}
+		if (resourceFormat.type === 'marketplace') {
+			// Build the marketplace inventory once; reuse it for both detectors and
+			// recursion into co-located, path-source plugins. discovered.plugins[]
+			// is populated only for path sources that exist on disk (git/npm/unknown
+			// sources are declarations only and stay out of scope).
+			const marketplaceInv = await extractClaudeMarketplaceInventory(scanPath);
+			const marketplaceInventoryIssues = await runInventoryDetectors(scanPath, 'marketplace', marketplaceInv);
+			result.issues.push(...marketplaceInventoryIssues);
+			logger.debug(`Inventory detectors emitted ${marketplaceInventoryIssues.length.toString()} issues for marketplace at ${scanPath}`);
+			const pluginResults = await recurseIntoMarketplacePlugins(marketplaceInv, recursive, options, logger);
+			return [result, ...pluginResults];
+		}
+		return [result];
+	}
 
-  // If unknown format, check if it's a directory we can scan
-  const fs = await import('node:fs/promises');
-  try {
-    const stat = await fs.stat(scanPath);
-    if (stat.isDirectory()) {
-      logger.debug('Scanning directory for resources');
+	// If unknown format, check if it's a directory we can scan
+	const fsp = await import('node:fs/promises');
+	try {
+		const stat = await fsp.stat(scanPath);
+		if (stat.isDirectory()) {
+			logger.debug('Scanning directory for resources');
 
-      // Merge resources.exclude from config with --exclude CLI flag patterns.
-      // Both use the same picomatch semantics. Do NOT mutate options.
-      const config = loadConfig(deriveConfigRoot(scanPath));
-      const configExcludes = config?.resources?.exclude ?? [];
-      const mergedOptions: AuditCommandOptions =
-        configExcludes.length > 0
-          ? { ...options, exclude: [...(options.exclude ?? []), ...configExcludes] }
-          : options;
+			// Merge resources.exclude from config with --exclude CLI flag patterns.
+			// Both use the same picomatch semantics. Do NOT mutate options.
+			const config = loadConfig(deriveConfigRoot(scanPath));
+			const configExcludes = config?.resources?.exclude ?? [];
+			const mergedOptions: AuditCommandOptions =
+				configExcludes.length > 0
+					? { ...options, exclude: [...(options.exclude ?? []), ...configExcludes] }
+					: options;
 
-      return scanDirectory(scanPath, recursive, mergedOptions, logger);
-    }
-  } catch {
-    // Path doesn't exist or not accessible, let validate() handle it
-  }
+			return scanDirectory(scanPath, recursive, mergedOptions, logger);
+		}
+	} catch {
+		// Path doesn't exist or not accessible, let validate() handle it
+	}
 
-  // Unknown resource type - use unified validator which will return appropriate error
-  logger.debug(`Unknown resource type at: ${scanPath}`);
-  const result = await validate(scanPath);
-  return [result];
+	// Unknown resource type - use unified validator which will return appropriate error
+	logger.debug(`Unknown resource type at: ${scanPath}`);
+	const result = await validate(scanPath);
+	return [result];
+}
+
+/**
+ * Inventory-driven plugin skill walker. Builds the plugin inventory via
+ * `extractClaudePluginInventory` and dispatches `validateSingleSkill` for each
+ * discovered skill, including root-level skills in skill-claude-plugin shape.
+ *
+ * @param excludeSkillPaths - Resolved absolute paths to skip. Used in the
+ *   multi-surface branch to avoid double-counting a root SKILL.md that
+ *   `validateMultipleSurfaces` already validated as an `agent-skill` surface.
+ */
+async function validatePluginSkillsViaInventory(
+	scanPath: string,
+	options: AuditCommandOptions,
+	logger: ReturnType<typeof createLogger>,
+	excludeSkillPaths: ReadonlySet<string> = new Set(),
+): Promise<ValidationResult[]> {
+	const inv = await extractClaudePluginInventory(scanPath);
+	const results: ValidationResult[] = [];
+	for (const skill of inv.discovered.skills) {
+		const resolvedPath = safePath.resolve(skill.files.skillMd);
+		if (excludeSkillPaths.has(resolvedPath)) {
+			logger.debug(`  Skipping already-validated skill (inventory): ${skill.files.skillMd}`);
+			continue;
+		}
+		logger.debug(`  Validating plugin-bundled skill (inventory): ${skill.files.skillMd}`);
+		results.push(await validateSingleSkill(skill.files.skillMd, options, logger));
+	}
+	return results;
 }
 
 /**
@@ -1346,8 +1522,9 @@ async function handleDirectoryEntry(
 
   if (hasClaudePlugin) {
     logger.debug(`Validating resource directory: ${fullPath}`);
-    const result = await validate(fullPath);
-    await appendPluginAssetParseIssues(result, fullPath);
+    const result = await validate(fullPath, { validatePlugin });
+    const inv = await extractClaudePluginInventory(fullPath);
+    appendInventoryParseErrors(result, inv);
     results.push(result);
   }
 
@@ -1358,45 +1535,6 @@ async function handleDirectoryEntry(
   }
 
   return results;
-}
-
-/**
- * Parse-only checks for full-plugin assets (hooks/hooks.json, .mcp.json).
- *
- * Appends error-severity findings to the plugin's ValidationResult when these
- * files are malformed. Does not throw — `vat audit` is advisory-only and must
- * always exit 0 for validation results.
- */
-async function appendPluginAssetParseIssues(
-  result: ValidationResult,
-  pluginRoot: string,
-): Promise<void> {
-  const fs = await import('node:fs/promises');
-  const checks: Array<{ path: string; label: string }> = [
-    { path: safePath.join(pluginRoot, 'hooks', 'hooks.json'), label: 'hooks/hooks.json' },
-    { path: safePath.join(pluginRoot, '.mcp.json'), label: '.mcp.json' },
-  ];
-
-  for (const { path, label } of checks) {
-    let raw: string;
-    try {
-      raw = await fs.readFile(path, 'utf-8');
-    } catch {
-      continue;
-    }
-    try {
-      JSON.parse(raw);
-    } catch (e) {
-      const issue: ValidationIssue = {
-        severity: 'error',
-        code: 'PLUGIN_INVALID_JSON',
-        message: `${label} is not valid JSON: ${(e as Error).message}`,
-        location: path,
-      };
-      result.issues.push(issue);
-      result.status = 'error';
-    }
-  }
 }
 
 /**
