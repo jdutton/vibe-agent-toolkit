@@ -182,15 +182,14 @@ claude:
       plugins:
         - name: my-plugin             # installable unit
           description: My plugin description
-          skills: "*"                  # all discovered skills
 ```
 
-The `skills:` section discovers SKILL.md files via include/exclude globs. The `claude:` section defines how skills are packaged into plugins. Each marketplace has `owner` and `plugins` fields (strict schema — no extra fields).
+The top-level `skills:` section drives standalone skill builds (output: `dist/skills/`). The `claude:` section defines plugins, which are assembled from their own `plugins/<name>/` directories (plugin-local skills under `plugins/<name>/skills/**/SKILL.md`). Each marketplace has `owner` and `plugins` fields (strict schema — no extra fields).
 
 **Naming convention:** marketplace = org identity (e.g. `acme`), plugin = this package
 (e.g. `acme-tools`). Registers as `my-plugin@my-marketplace` in Claude's plugin registry.
 
-### Multiple skills in one package
+### Multiple skills in one plugin
 
 List all skills in `vat.skills` for npm discoverability:
 
@@ -201,18 +200,16 @@ List all skills in `vat.skills` for npm discoverability:
 }
 ```
 
-Use a selector in the plugin config to include matching skills:
+Each skill lives as a subdirectory of the plugin under `plugins/<name>/skills/<skill>/SKILL.md`:
 
-```yaml
-plugins:
-  - name: my-plugin
-    description: Linting and testing skills
-    skills:
-      - "my-linting"
-      - "my-testing"
+```
+plugins/my-plugin/
+  skills/
+    my-linting/SKILL.md
+    my-testing/SKILL.md
 ```
 
-Or use `"*"` to include all discovered skills in the plugin.
+All plugin-local skills found under `plugins/<name>/skills/` are packaged into the plugin automatically — no per-plugin selector is needed or supported. Skill names must be globally unique across all plugins.
 
 ## Step 3: Build
 
@@ -264,7 +261,6 @@ claude:
       plugins:
         - name: my-plugin
           description: My plugin description
-          skills: "*"
       publish:
         github:
           repo: owner/repo          # GitHub repo to publish to
@@ -406,3 +402,13 @@ All `vat` commands in this skill work with these alternatives.
 ## Future: Zero-Dependency Postinstall (Option B)
 
 A planned improvement: `vat build` would bundle the plugin install logic into `dist/postinstall.js` — a fully self-contained script with no npm dependencies. The postinstall script would become simply `node ./dist/postinstall.js`. This eliminates `vibe-agent-toolkit` as a runtime dependency entirely, reducing install footprint for end users. Until then, Option C (runtime `vibe-agent-toolkit` dep) is the correct approach.
+
+## Full-plugin authoring (commands, hooks, agents, MCP)
+
+VAT supports bundling any Claude Code plugin asset — not just skills. Drop the plugin
+under `plugins/<name>/` in the same native layout Claude expects. VAT tree-copies
+everything (minus `skills/` and `.claude-plugin/`), merges author `plugin.json` with
+VAT-owned identity fields, and applies any `files[]` mappings for artifacts built
+outside the plugin dir.
+
+See [docs/guides/marketplace-distribution.md](resources/marketplace-distribution.md) section "Full-plugin authoring".

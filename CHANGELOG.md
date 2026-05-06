@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.34] - 2026-05-06
+
+### Added
+- **`vat inventory <path>`** — new top-level command emitting structural YAML/JSON for plugins, marketplaces, skills, and installs (`schema: vat.inventory/v1alpha`). Runs no validators; pure structural enumeration. Supports `--user`, `--shallow`, and `--format json|yaml`. The same inventory model is now the single substrate for `vat audit` — adopters who want to script structural questions about their plugins (declared vs. discovered components, parse errors, cross-references) can do so without re-walking the filesystem.
+- **`vat corpus scan [seed-file] --out <dir>`** — audit and (with `--with-review`) review multiple plugins in one run. Reads a YAML seed of tracked plugins, audits each, and aggregates per-plugin output. Per-entry `validation:` overrides silence findings on a per-plugin basis. Ships with a starter `corpus/seed.yaml` of 11 plugins.
+- **`vat audit` accepts a git URL.** Pass HTTPS, SSH, GitHub-shorthand (`owner/repo`), GitHub web URL, or `file://`, optionally with `#ref:subpath`. Shallow-clones, audits, cleans up. Auth is passthrough to your local `git` — VAT reads no tokens. `--debug` preserves the cloned tempdir.
+- **`vat claude plugin build`** — bundle commands, hooks, agents, MCP servers, scripts, plugin-local `SKILL.md` files, and `plugin.json` from a `plugins/<name>/` directory into a self-contained Claude Code plugin (tree-copied verbatim, `.gitignore`-respecting). Pool-skill import via `marketplace.plugins[].skills` (`"*"` or `[names]`) preserved. New marketplace fields: `source` (path override) and `files[]` (compiled-artifact mappings). Case mismatches between declared plugin names and on-disk dirs fail the build.
+- **`skill-claude-plugin` recognized as a distinct artifact shape.** A skill that self-publishes as a Claude plugin by co-locating `.claude-plugin/plugin.json` alongside its root `SKILL.md` now produces independent `agent-skill` and `claude-plugin` validation results. New `SKILL_CLAUDE_PLUGIN_NAME_MISMATCH` warning fires when the manifest name disagrees with the SKILL.md `name`.
+- **Eleven new validation codes.**
+  - Seven cross-walked from Anthropic's `plugin-dev` skill, all `info` severity per the rule-addition policy: `PLUGIN_MISSING_DESCRIPTION`, `PLUGIN_MISSING_AUTHOR`, `PLUGIN_MISSING_LICENSE`, `PLUGIN_NAME_NOT_KEBAB_CASE`, `SKILL_NAME_NOT_KEBAB_CASE`, `SKILL_REFERENCES_BUT_NO_LINKS`, `SKILL_BODY_NOT_IMPERATIVE`. Additive observability — no existing audit will newly fail.
+  - Four structural codes derived from the inventory model:
+    - `COMPONENT_DECLARED_BUT_MISSING` (warning) — manifest declares a component path that's absent on disk.
+    - `COMPONENT_PRESENT_BUT_UNDECLARED` (info) — component exists under canonical layout but the manifest's explicit list omits it; the runtime will silently skip it. Fires only when `declared !== null`; auto-discovery (a missing field) is intentional and not flagged.
+    - `REFERENCE_TARGET_MISSING` (error) — a manifest-resolved cross-component reference (hook script, MCP path) points at a missing file.
+    - `MARKETPLACE_PLUGIN_SOURCE_MISSING` (error) — a marketplace declares a path-source plugin that doesn't exist.
+- **Three `[VAT]` manual checklist items in `vat-skill-review.md`** for judgment calls automation can't make: description names concrete trigger phrases, description disambiguates from sibling skills, body avoids duplicating reference content.
+
+### Changed
+- **`vat audit <marketplace-dir>` now recurses into co-located, path-source plugins.** Previously a marketplace audit scanned only the manifest; plugins declared via `./plugins/<name>` were silently skipped. Each path-source plugin in `discovered.plugins[]` is now audited via the same plugin pipeline. Adopters who run `vat audit` against a marketplace directory in CI will see findings for the contained plugins and their skills (e.g., `vibe-validate.git#claude-marketplace`: 1 file scanned → 10). Git/npm sources stay out of scope.
+- **Breaking (pre-1.0):** `ClaudePluginSchema`, `ClaudePlugin`, `ClaudePluginJsonSchema`, and `validatePlugin` moved from `@vibe-agent-toolkit/agent-skills` to `@vibe-agent-toolkit/claude-marketplace`. `agent-skills` is now vendor-neutral. Update imports.
+
+### Documentation
+- New `docs/architecture/skill-packaging.md` enumerates the four packaging shapes (standalone skill / skill-claude-plugin / claude-plugin / claude-marketplace) and the inventory model.
+- New "Plugin Inventory Codes" section in `docs/validation-codes.md` and a "Declared vs discovered components" subsection in `docs/skill-quality-and-compatibility.md` document the tri-state declared/discovered model and the empirical Claude Code loader behavior behind it.
+
 ## [0.1.33] - 2026-04-21
 
 ### Added
@@ -56,7 +81,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Post-build validation**: `vat skills build` runs the full validation suite against built `dist/skills/*/SKILL.md` (skipping source-only codes like `LINK_OUTSIDE_PROJECT`). Build failures surface identically to source failures.
 - **`info` severity** in the validation framework. `CAPABILITY_*` and `COMPAT_TARGET_UNDECLARED` emit as info; they appear in output and respect `validation.severity` overrides but do not contribute to build failure status.
 - New validation codes: `CAPABILITY_LOCAL_SHELL`, `CAPABILITY_EXTERNAL_CLI`, `CAPABILITY_BROWSER_AUTH` (info); `COMPAT_TARGET_INCOMPATIBLE`, `COMPAT_TARGET_NEEDS_REVIEW` (warning); `COMPAT_TARGET_UNDECLARED` (info).
-- Skill-smell philosophy doc at `docs/skill-smell-philosophy.md` articulating rule-addition bar, default severity posture, graduation path, and data-driven evolution. Referenced from `docs/validation-codes.md`.
+- Validation-rule-design doc at `docs/validation-rule-design.md` articulating rule-addition bar, default severity posture, graduation path, and data-driven evolution. Referenced from `docs/validation-codes.md`.
 - Cached Anthropic skill-authoring best-practices doc at `docs/external/anthropic-skill-authoring-best-practices.md` with attribution, source URL, and fetch date. Provides a diffable reference so VAT's tooling stays aligned with upstream Anthropic guidance. CLAUDE.md documents the periodic-refresh policy.
 - `vat-skill-review.md` (formerly `skill-quality-checklist.md`) rewritten with `[A]` / `[VAT]` tags distinguishing Anthropic-aligned items from VAT-opinionated additions. Added gerund-form naming guidance (Anthropic's preferred pattern), frontmatter-key conservatism, cross-skill dependency disclosure, in-package YAML-styling consistency, and large-tables-to-reference-files guidance — all from dogfood findings across 17 real skills (8 avonrisk-sdlc + 1 vibe-validate + 8 VAT dev-agents).
 - Five new skill-quality validation codes, all non-blocking:
