@@ -13,6 +13,8 @@ import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import type { Logger } from '../../../utils/logger.js';
 import { redactUrlCredentials } from '../../../utils/url-redact.js';
 
+import { pluginTagName } from './tag-utils.js';
+
 export interface CommitMetadata {
   sourceRepo?: string;
   commitRange?: string;
@@ -26,6 +28,14 @@ export interface PublishGitOptions {
   force: boolean;
   dryRun: boolean;
   noPush: boolean;
+  /**
+   * Plugins (with resolved versions) extracted from the published
+   * marketplace.json. After a successful branch push, each entry is tagged
+   * `<name>-v<version>` on the SOURCE repo (the cwd from which vat was
+   * invoked) and pushed to the remote. Tag-push failures are logged as
+   * warnings — they do NOT roll back the publish.
+   */
+  publishedPlugins: { name: string; version: string }[];
   logger: Logger;
 }
 
@@ -110,15 +120,101 @@ function resolveRemoteUrl(remote: string, cwd: string): string {
 }
 
 /**
+ * Push per-plugin source-repo tags for each entry in `publishedPlugins`.
+ *
+ * Runs against the SOURCE repo (cwd), not the temp publish repo, because the
+ * source commit is the artifact users want to identify. Tag failures are
+ * logged as warnings — the publish itself already succeeded, so we never
+ * throw from this helper.
+ *
+ * Republish-without-bump safety: we never use `git tag -f`. If the tag
+ * already exists locally at HEAD, that's fine — skip the local create and
+ * still attempt the push (a no-op if the remote already has it). If the
+ * tag exists locally pointing at a different SHA than HEAD, the user is
+ * republishing the same `<plugin>@<version>` on new commits without bumping
+ * — emit a clear warning and do NOT move the local tag or push it. This
+ * preserves the user's existing reference to the originally released commit.
+ */
+function pushPluginTags(
+  cwd: string,
+  remoteUrl: string,
+  publishedPlugins: { name: string; version: string }[],
+  logger: Logger,
+): void {
+  if (publishedPlugins.length === 0) return;
+
+  for (const plugin of publishedPlugins) {
+    const tag = pluginTagName(plugin.name, plugin.version);
+
+    // 1. Reconcile local tag state. If the tag exists at a different SHA than
+    //    HEAD, this is the republish-without-bump case — bail with guidance.
+    const headSha = git(['rev-parse', 'HEAD'], { cwd }).stdout.trim();
+    const existingTagSha = git(['rev-list', '-n', '1', tag], {
+      cwd,
+      allowFailure: true,
+    }).stdout.trim();
+
+    let skipPush = false;
+    if (existingTagSha === '') {
+      // Tag does not exist locally — create it (without -f).
+      try {
+        git(['tag', tag], { cwd });
+      } catch (err) {
+        logger.info(
+          `   warning: failed to create local tag ${tag}: ${(err as Error).message}. ` +
+            `Skipping tag push.`,
+        );
+        skipPush = true;
+      }
+    } else if (existingTagSha === headSha) {
+      // Tag is already correct locally — skip create, still try the push so
+      // the remote catches up if it was missing this tag.
+      logger.debug(`   Tag ${tag} already exists locally at HEAD — skipping local tag create.`);
+    } else {
+      // Republish-without-bump: tag exists locally at a different SHA. Do
+      // NOT move the local tag, do NOT push.
+      logger.info(
+        `   warning: tag ${tag} already exists locally at ${existingTagSha} but HEAD is ${headSha}. ` +
+          `This usually means the plugin was republished at the same version on new ` +
+          `commits. Either bump the plugin's version, or (if intentional) delete the ` +
+          `existing tag with \`git tag -d ${tag}\` and force-push, accepting that ` +
+          `consumers may have already cached the old commit at this version.`,
+      );
+      continue;
+    }
+
+    if (skipPush) continue;
+
+    // 2. Push the tag to the remote (non-force). If the remote already has the
+    //    tag at a different commit, this push will fail — surface that as a
+    //    warning explaining the most likely cause.
+    try {
+      git(['push', remoteUrl, tag], { cwd });
+      logger.info(`   Tagged source repo: ${tag}`);
+    } catch (err) {
+      logger.info(
+        `   warning: failed to push tag ${tag}: ${(err as Error).message}. The most likely cause ` +
+          `is that ${tag} already exists on the remote at a different commit. The publish ` +
+          `itself succeeded; if you intended to republish at the same version, the version ` +
+          `should be bumped.`,
+      );
+    }
+  }
+}
+
+/**
  * Deliver the commit: dry-run (show info), no-push (local branch), or push to remote.
  */
 function deliverCommit(
   tmpRepo: string,
   cwd: string,
-  options: Pick<PublishGitOptions, 'branch' | 'remote' | 'force' | 'dryRun' | 'noPush' | 'logger'>,
+  options: Pick<
+    PublishGitOptions,
+    'branch' | 'remote' | 'force' | 'dryRun' | 'noPush' | 'publishedPlugins' | 'logger'
+  >,
   remoteUrl: string,
 ): void {
-  const { branch, remote, force, dryRun, noPush, logger } = options;
+  const { branch, remote, force, dryRun, noPush, publishedPlugins, logger } = options;
 
   if (dryRun) {
     logger.info('   [dry-run] Would push to remote. Commit staged at:');
@@ -146,6 +242,11 @@ function deliverCommit(
   }
   git(pushArgs, { cwd: tmpRepo });
   logger.info(`   Pushed to ${redactUrlCredentials(remoteUrl)} branch ${branch}`);
+
+  // Tag the source repo with per-plugin tags (`<name>-v<version>`) and push
+  // them to the remote. Failures are logged as warnings, never thrown — the
+  // publish already succeeded above.
+  pushPluginTags(cwd, remoteUrl, publishedPlugins, logger);
 }
 
 /**

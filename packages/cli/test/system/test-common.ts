@@ -9,7 +9,7 @@ import * as fs from 'node:fs';
 import { dirname as pathDirname, join as pathJoin, resolve as pathResolve } from 'node:path';
 import { fileURLToPath as urlFileURLToPath } from 'node:url';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
 
 // Re-export commonly used functions
@@ -350,6 +350,51 @@ export function fakeHomeEnv(fakeHome: string): Record<string, string> {
     // not any shell-level CLAUDE_CONFIG_DIR that may be set in the test runner's env.
     CLAUDE_CONFIG_DIR: pathJoin(fakeHome, '.claude'),
   };
+}
+
+/**
+ * Initialize a git working repo at `sourceRepo` with `bareRemote` configured as
+ * `origin`, set test identity, and create a single initial commit on `main`
+ * pushed to the remote so refs exist for subsequent tag operations.
+ *
+ * Caller must have already created both directories and run `git init --bare`
+ * on `bareRemote`. This helper is shared by integration tests that need a real
+ * git fixture (publish-tags, multi-plugin marketplace).
+ */
+export function initGitRepoWithRemote(sourceRepo: string, bareRemote: string): void {
+  safeExecSync('git', ['init', '-q', '-b', 'main'], { cwd: sourceRepo });
+  safeExecSync('git', ['config', 'user.email', 'test@test'], { cwd: sourceRepo });
+  safeExecSync('git', ['config', 'user.name', 'test'], { cwd: sourceRepo });
+  safeExecSync('git', ['remote', 'add', 'origin', bareRemote], { cwd: sourceRepo });
+}
+
+/**
+ * Stage all files in `sourceRepo`, create an initial commit, and push `main`
+ * to `origin`. Pairs with `initGitRepoWithRemote`.
+ */
+export function commitAllAndPushMain(sourceRepo: string): void {
+  safeExecSync('git', ['add', '-A'], { cwd: sourceRepo });
+  safeExecSync('git', ['commit', '-q', '-m', 'init'], { cwd: sourceRepo });
+  safeExecSync('git', ['push', '-q', 'origin', 'main'], { cwd: sourceRepo });
+}
+
+/**
+ * List tags on a remote via `git ls-remote --tags`. Returns just the short tag
+ * names (without `refs/tags/` prefix). Used by integration tests to assert on
+ * pushed-tag state after a publish.
+ */
+export function listRemoteTagNames(cwd: string, remoteUrl: string): string[] {
+  const out = safeExecSync('git', ['ls-remote', '--tags', remoteUrl], {
+    cwd,
+    encoding: 'utf-8',
+  });
+  return String(out)
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => l.split(/\s+/)[1] ?? '')
+    .filter((ref) => ref.startsWith('refs/tags/'))
+    .map((ref) => ref.replace(/^refs\/tags\//, ''));
 }
 
 /**

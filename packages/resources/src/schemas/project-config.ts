@@ -1,6 +1,18 @@
 import { ValidationConfigSchema } from '@vibe-agent-toolkit/agent-schema';
 import { z } from 'zod';
 
+/**
+ * Official semver regex from https://semver.org/ (anchored).
+ *
+ * Used as the JSON-Schema-friendly source of truth for plugin version
+ * validation. A `.refine()` over `semver.valid()` would not survive
+ * `zod-to-json-schema` export — external consumers validating against the
+ * exported JSON Schema would silently accept invalid versions. A `.regex()`
+ * round-trips into JSON Schema as `pattern`, preserving the constraint.
+ */
+// eslint-disable-next-line security/detect-unsafe-regex, sonarjs/regex-complexity -- Official semver regex from https://semver.org/; not user-controlled input.
+const SEMVER_REGEX = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
+
 // Re-export for downstream consumers (unicorn/prefer-export-from satisfied by the import above)
 export { ValidationConfigSchema } from '@vibe-agent-toolkit/agent-schema';
 
@@ -182,6 +194,12 @@ export const ClaudeMarketplacePluginEntrySchema = z.object({
     .describe('Path to plugin directory (default: plugins/<name>)'),
   files: z.array(SkillFileEntrySchema).optional()
     .describe('Explicit source→dest file mappings for compiled artifacts outside the plugin directory'),
+  version: z.string().regex(SEMVER_REGEX, {
+    message: 'version must be a valid semver string (e.g., "1.2.3" or "1.0.0-rc.1")',
+  }).optional()
+    .describe('Per-plugin semver version (overrides root package.json:version for this plugin)'),
+  changelog: z.string().optional()
+    .describe('Path to per-plugin CHANGELOG (relative to plugin source dir; default: <source>/CHANGELOG.md if it exists)'),
 }).strict().describe('Plugin entry within a marketplace configuration');
 
 export type ClaudeMarketplacePluginEntry = z.infer<typeof ClaudeMarketplacePluginEntrySchema>;

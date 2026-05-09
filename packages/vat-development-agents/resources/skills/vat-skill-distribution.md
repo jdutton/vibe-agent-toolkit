@@ -300,6 +300,63 @@ Start a new Claude Code session to confirm skills load. See the [Marketplace Dis
 
 **Note (Claude Code v2.1.81):** If re-adding a marketplace with the same name as an existing one (e.g., switching from npm to GitHub source), remove the old marketplace first: `claude plugin marketplace remove <name>` then re-add. Otherwise the old source is silently reused.
 
+### Per-plugin versioning (multi-plugin marketplaces)
+
+VAT supports two versioning models for a marketplace:
+
+**Single-version (default for skills-only marketplaces).** No `version` is declared on individual plugins. All plugins inherit the root `package.json:version`. This is the model used by `vibe-agent-toolkit` and `avonrisk-sdlc` — the marketplace is treated as one release artifact.
+
+**Per-plugin versioning** (multi-plugin marketplaces with independent release cadences). Each plugin declares its own `version`. Recommended when topical plugins under one marketplace evolve on independent timelines (e.g., AvonRiskBuilders' `ai-digest`, `bank-reconciliation`).
+
+#### Where to declare a per-plugin version
+
+Two options, in precedence order:
+
+1. **Marketplace config** (`vibe-agent-toolkit.config.yaml`) — most explicit:
+   ```yaml
+   claude:
+     marketplaces:
+       my-marketplace:
+         plugins:
+           - name: ai-digest
+             version: 0.2.0
+             skills: '*'
+   ```
+2. **Plugin source** (`plugins/<name>/.claude-plugin/plugin.json:version`) — most ergonomic for plugin authors:
+   ```json
+   { "name": "ai-digest", "version": "0.2.0", "description": "..." }
+   ```
+
+If both declare a version, marketplace config wins and VAT logs a reconciliation warning. If neither is declared, VAT falls back to the root `package.json:version` (single-version model).
+
+#### What `vat claude marketplace publish` does for multi-plugin marketplaces
+
+For each plugin with a resolved version:
+
+- The published `.claude-plugin/marketplace.json` includes the per-plugin `version` field on each plugin entry.
+- After the publish-branch push succeeds, VAT pushes a `<plugin>-v<version>` tag to the **source repo** (not the marketplace branch) — e.g., `ai-digest-v0.2.0`. "Source repo" means the working directory where you invoke `vat claude marketplace publish` (i.e., `process.cwd()`); if you invoke from a subdirectory of a worktree, tags land in the containing repo, not the subdirectory. Tag-push failures log a warning but do not roll back the publish.
+- If `<plugin.source>/CHANGELOG.md` exists in source (or the marketplace plugin entry's `changelog` field points to a file), it is bundled into the published marketplace at `plugins/<name>/CHANGELOG.md`, alongside the marketplace-level CHANGELOG.
+
+The marketplace-level CHANGELOG (under `publish.changelog` in the config) continues to work unchanged.
+
+#### Default CHANGELOG location
+
+The default per-plugin CHANGELOG path is `<plugin.source>/CHANGELOG.md`, anchored to the entry's `source` field (default `plugins/<name>`). It is NOT assumed to be `plugins/<name>/CHANGELOG.md` — if you override `source`, the default CHANGELOG path follows.
+
+To use a non-default path, set the `changelog` field on the marketplace plugin entry (relative to the plugin source dir):
+
+```yaml
+plugins:
+  - name: ai-digest
+    source: plugins/ai-digest
+    changelog: docs/RELEASES.md
+    skills: '*'
+```
+
+#### Backwards compatibility
+
+Marketplaces with no per-plugin version anywhere are unaffected. The root `package.json` version flows through to every plugin, the published `marketplace.json` either omits per-plugin `version` or includes the same value for all plugins, and tag pushes use the inherited version (e.g., both plugins tagged `<plugin>-v1.0.0`).
+
 ## Step 5: User Install
 
 ### Recommended: npm global install (postinstall runs automatically)

@@ -1,0 +1,19 @@
+version: 1
+
+claude:
+  marketplaces:
+    single-version:
+      owner:
+        name: Single Version Test
+      plugins:
+        - name: plugin-a
+          description: First plugin (no per-plugin version)
+          source: plugins/plugin-a
+          skills: []
+        - name: plugin-b
+          description: Second plugin (no per-plugin version)
+          source: plugins/plugin-b
+          skills: []
+      publish:
+        branch: claude-marketplace
+        remote: origin

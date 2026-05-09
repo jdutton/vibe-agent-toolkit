@@ -1,0 +1,19 @@
+version: 1
+
+claude:
+  marketplaces:
+    multi-plugin:
+      owner:
+        name: Multi Plugin Test
+      plugins:
+        - name: plugin-a
+          description: First plugin in the multi-plugin fixture
+          source: plugins/plugin-a
+          skills: []
+        - name: plugin-b
+          description: Second plugin in the multi-plugin fixture
+          source: plugins/plugin-b
+          skills: []
+      publish:
+        branch: claude-marketplace
+        remote: origin
