@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.35] - 2026-05-09
+
+### Added
+- **Multi-plugin marketplaces with independent versioning.** Each plugin in a marketplace can now declare its own version (in `plugins/<name>/.claude-plugin/plugin.json:version` or via the marketplace config's per-plugin `version` field), get its own per-plugin source-repo tag (`<plugin>-v<version>`) on `vat claude marketplace publish`, and ship its own CHANGELOG (default `<plugin.source>/CHANGELOG.md`, override via the per-plugin `changelog` field) bundled into the published marketplace at `plugins/<name>/CHANGELOG.md`. The published `marketplace.json` includes `version` per plugin entry when defined. Marketplaces with no per-plugin version inherit the root `package.json:version` (backwards compatible — exercised by integration test scenario 3 against the existing avonrisk-sdlc shape). Unblocks the AvonRiskBuilders marketplace where each topical plugin must version and release independently.
+
+### Changed
+- **Version precedence in `mergePluginJson` flipped.** When both a marketplace-config version and a `plugin.json:version` are present, config wins (with a reconciliation warning); when only `plugin.json:version` is present, it now wins over the root `package.json` version. Previously the root version always won. Single-version marketplaces (no per-plugin version anywhere) are unaffected.
+
 ## [0.1.34] - 2026-05-06
 
 ### Added
