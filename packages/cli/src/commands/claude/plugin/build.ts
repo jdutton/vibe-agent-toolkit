@@ -419,7 +419,7 @@ function matchesSelector(skillName: string, selector: string): boolean {
  */
 function readAuthorPluginJson(
   pluginSourceDir: string,
-): Record<string, unknown> | undefined {
+): (Record<string, unknown> & { version?: string }) | undefined {
   const authorPluginJsonPath = safePath.join(pluginSourceDir, CLAUDE_PLUGIN_DIRNAME, 'plugin.json');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
   if (!existsSync(authorPluginJsonPath)) {
@@ -582,7 +582,7 @@ async function buildPlugin(
   const authorJson = readAuthorPluginJson(pluginSourceDir);
   const pluginVersion = resolveVersion(
     pluginDef,
-    authorJson as { version?: string } | undefined,
+    authorJson,
     rootVersion,
     { warn: (message) => logger.info(`warning: ${message}`) },
   );

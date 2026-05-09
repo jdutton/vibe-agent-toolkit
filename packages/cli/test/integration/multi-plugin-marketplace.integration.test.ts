@@ -145,7 +145,7 @@ function findPluginEntry(
   if (!entry) {
     throw new Error(
       `Plugin "${name}" not found in marketplace.json plugins (got: ` +
-        `${plugins.map((p) => String(p['name'])).join(', ')})`,
+        `${plugins.map((p) => JSON.stringify(p['name'])).join(', ')})`,
     );
   }
   return entry;
