@@ -19,8 +19,9 @@ import { createLogger } from '../../../utils/logger.js';
 import { writeYamlOutput } from '../../../utils/output.js';
 import { loadClaudeProjectConfig } from '../claude-config.js';
 
+import { resolvePluginChangelogPath } from './plugin-changelog.js';
 import { applyPluginFiles } from './plugin-files.js';
-import { mergePluginJson } from './plugin-json-merge.js';
+import { mergePluginJson, resolveVersion } from './plugin-json-merge.js';
 import {
   parsePluginJsonFiles,
   verifyNoCaseCollidingPluginNames,
@@ -38,6 +39,7 @@ const CLAUDE_PLUGIN_DIRNAME = '.claude-plugin';
 interface PluginBuildResult {
   pluginName: string;
   pluginDir: string;
+  pluginVersion: string | undefined;
   skillsCopied: string[];
   commandsCopied: number;
   hooksCopied: number;
@@ -133,15 +135,17 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
       process.exit(0);
     }
 
-    // Read version from package.json — used in plugin.json so Claude Code
-    // caches by version instead of "unknown/"
-    let packageVersion: string | undefined;
+    // Read version from root package.json — lowest-precedence fallback in the
+    // per-plugin version chain (config > plugin.json > root). Used so Claude
+    // Code caches by version instead of "unknown/" when no per-plugin version
+    // is supplied.
+    let rootVersion: string | undefined;
     try {
       const pkgPath = safePath.join(configDir, 'package.json');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- configDir from loadClaudeProjectConfig
       const pkgRaw = readFileSync(pkgPath, 'utf-8');
       const pkg = JSON.parse(pkgRaw) as { version?: string };
-      packageVersion = pkg.version;
+      rootVersion = pkg.version;
     } catch {
       // No package.json or unreadable — version will be omitted
     }
@@ -176,7 +180,7 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
         mpConfig,
         availableSkills,
         configDir,
-        packageVersion,
+        rootVersion,
         logger,
       );
       results.push(result);
@@ -263,7 +267,7 @@ async function buildMarketplace(
   config: ClaudeMarketplaceConfig,
   availableSkills: string[],
   configDir: string,
-  packageVersion: string | undefined,
+  rootVersion: string | undefined,
   logger: ReturnType<typeof createLogger>,
 ): Promise<MarketplaceBuildResult> {
   const plugins: PluginBuildResult[] = [];
@@ -292,7 +296,7 @@ async function buildMarketplace(
       marketplaceAvailable,
       configDir,
       config.owner,
-      packageVersion,
+      rootVersion,
       logger,
     );
     plugins.push(pluginResult);
@@ -317,6 +321,7 @@ async function buildMarketplace(
         name: p.pluginName,
         ...(pluginDesc ? { description: pluginDesc } : {}),
         source: `./plugins/${p.pluginName}`,
+        ...(p.pluginVersion ? { version: p.pluginVersion } : {}),
         author: {
           name: config.owner.name,
           ...(config.owner.email ? { email: config.owner.email } : {}),
@@ -408,38 +413,46 @@ function matchesSelector(skillName: string, selector: string): boolean {
   return regex.test(skillName);
 }
 
+/**
+ * Read the author-supplied .claude-plugin/plugin.json from the plugin source dir,
+ * if present. Returns undefined when the file doesn't exist; throws on invalid JSON.
+ */
+function readAuthorPluginJson(
+  pluginSourceDir: string,
+): (Record<string, unknown> & { version?: string }) | undefined {
+  const authorPluginJsonPath = safePath.join(pluginSourceDir, CLAUDE_PLUGIN_DIRNAME, 'plugin.json');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
+  if (!existsSync(authorPluginJsonPath)) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
+      readFileSync(authorPluginJsonPath, 'utf-8'),
+    ) as Record<string, unknown>;
+  } catch (e) {
+    throw new Error(
+      `Author .claude-plugin/plugin.json is not valid JSON: ${(e as Error).message}`,
+    );
+  }
+}
+
 async function writeMergedPluginJson(
   pluginDef: ClaudeMarketplacePluginEntry,
-  pluginSourceDir: string,
+  authorJson: Record<string, unknown> | undefined,
+  pluginVersion: string | undefined,
   pluginDir: string,
   owner: ClaudeMarketplaceConfig['owner'],
-  packageVersion: string | undefined,
   logger: ReturnType<typeof createLogger>,
 ): Promise<void> {
   const pluginJsonDir = safePath.join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
   await mkdir(pluginJsonDir, { recursive: true });
 
-  const authorPluginJsonPath = safePath.join(pluginSourceDir, CLAUDE_PLUGIN_DIRNAME, 'plugin.json');
-  let authorJson: Record<string, unknown> | undefined;
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
-  if (existsSync(authorPluginJsonPath)) {
-    try {
-      authorJson = JSON.parse(
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled path
-        readFileSync(authorPluginJsonPath, 'utf-8'),
-      ) as Record<string, unknown>;
-    } catch (e) {
-      throw new Error(
-        `Author .claude-plugin/plugin.json is not valid JSON: ${(e as Error).message}`,
-      );
-    }
-  }
-
   const { merged, warnings } = mergePluginJson({
     vat: {
       name: pluginDef.name,
-      version: packageVersion,
+      version: pluginVersion,
       author: { name: owner.name, ...(owner.email ? { email: owner.email } : {}) },
     },
     configDescription: pluginDef.description,
@@ -493,7 +506,7 @@ async function buildPlugin(
   marketplaceAvailable: string[],
   configDir: string,
   owner: ClaudeMarketplaceConfig['owner'],
-  packageVersion: string | undefined,
+  rootVersion: string | undefined,
   logger: ReturnType<typeof createLogger>,
 ): Promise<PluginBuildResult> {
   const pluginDir = safePath.join(
@@ -564,18 +577,39 @@ async function buildPlugin(
   }
 
   // Phase 5: plugin.json merge-write (always last, always wins).
+  // Read author plugin.json once, resolve version once — single source of
+  // truth that flows into both the merged plugin.json and marketplace.json.
+  const authorJson = readAuthorPluginJson(pluginSourceDir);
+  const pluginVersion = resolveVersion(
+    pluginDef,
+    authorJson,
+    rootVersion,
+    { warn: (message) => logger.info(`warning: ${message}`) },
+  );
+
   await writeMergedPluginJson(
     pluginDef,
-    pluginSourceDir,
+    authorJson,
+    pluginVersion,
     pluginDir,
     owner,
-    packageVersion,
     logger,
   );
+
+  // Phase 6: per-plugin CHANGELOG copy. Resolves to <pluginSourceDir>/CHANGELOG.md
+  // by default, or `entry.changelog` (relative to plugin source) when configured.
+  // No-op when neither resolves — marketplace-level CHANGELOG (handled in
+  // copyDistributionFiles) is unaffected.
+  const changelogPath = resolvePluginChangelogPath(pluginSourceDir, pluginDef);
+  if (changelogPath) {
+    cpSync(changelogPath, safePath.join(pluginDir, 'CHANGELOG.md'));
+    logger.info(`         CHANGELOG.md`);
+  }
 
   return {
     pluginName: pluginDef.name,
     pluginDir,
+    pluginVersion,
     skillsCopied,
     commandsCopied: treeResult.commandsCopied,
     hooksCopied: treeResult.hooksCopied,

@@ -64,10 +64,28 @@ Description:
     [version] section matching package.json, or (as a fallback) a
     non-empty [Unreleased] section. Publish fails if neither is
     present. VAT never mutates CHANGELOG.md.
+  - Per-plugin CHANGELOG.md — when plugins/<name>/CHANGELOG.md exists
+    (or the marketplace plugin entry's changelog field points to one),
+    it is bundled into the published marketplace at
+    plugins/<name>/CHANGELOG.md alongside the marketplace-level
+    CHANGELOG.md.
   - README.md
   - LICENSE (SPDX shortcut or file)
 
   Creates one squashed commit per version on the target branch.
+
+  Per-plugin source-repo tags:
+  After a successful publish, pushes <plugin>-v<version> tags to the
+  source repo for each plugin with a resolved version. Tag-push failures
+  log a warning but do not roll back the publish (publish branch is
+  already pushed at that point). Skipped during --dry-run and --no-push.
+
+Per-plugin versioning:
+  Each plugin can declare its own version via plugins/<name>/.claude-plugin/plugin.json:version
+  or the marketplace config's per-plugin version field. Precedence:
+    marketplace config > plugin.json:version > root package.json:version
+  When neither is set, all plugins inherit the root version (existing
+  single-version model — preserved for backwards compatibility).
 
 Output:
   YAML summary -> stdout
@@ -207,6 +225,7 @@ async function publishOneMarketplace(ctx: PublishOneOptions): Promise<PublishRes
     force: options.force ?? false,
     dryRun: options.dryRun ?? false,
     noPush: options.push === false,
+    publishedPlugins: composeResult.publishedPlugins,
     logger,
   });
 

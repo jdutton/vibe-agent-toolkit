@@ -1,7 +1,10 @@
 /* eslint-disable sonarjs/no-duplicate-string */
 import { describe, expect, it } from 'vitest';
 
-import { mergePluginJson } from '../../../../src/commands/claude/plugin/plugin-json-merge.js';
+import {
+  mergePluginJson,
+  resolveVersion,
+} from '../../../../src/commands/claude/plugin/plugin-json-merge.js';
 
 describe('mergePluginJson', () => {
   const vatFields = {
@@ -61,13 +64,17 @@ describe('mergePluginJson', () => {
     expect(merged['license']).toBe('Apache-2.0');
   });
 
-  it('VAT wins on name/version/author (shallow wholesale replace)', () => {
+  it('VAT wins on name/author/version (caller pre-resolves version)', () => {
+    // Per the multi-plugin marketplace versioning design, version precedence
+    // (config > plugin.json > root) is resolved by the caller via
+    // resolveVersion BEFORE invoking mergePluginJson. By the time we get here,
+    // vat.version IS the resolved answer — author-supplied versions are
+    // discarded. Name and author follow the same VAT-wins pattern.
     const { merged, warnings } = mergePluginJson({
       vat: vatFields,
       configDescription: undefined,
       authorJson: {
         name: 'author-picked-name',
-        version: '9.9.9',
         author: 'author-picked-author-string',
       },
     });
@@ -77,7 +84,6 @@ describe('mergePluginJson', () => {
     expect(warnings).toEqual(
       expect.arrayContaining([
         expect.stringContaining('name'),
-        expect.stringContaining('version'),
         expect.stringContaining('author'),
       ]),
     );
@@ -105,14 +111,20 @@ describe('mergePluginJson', () => {
     expect(merged['author']).toEqual({ name: 'Org', email: 'ops@org.example' });
   });
 
-  it('preserves author version when VAT has no version (no package.json)', () => {
+  it('omits version when caller-resolved vat.version is undefined (even if authorJson has one)', () => {
+    // Under Option A semantics, the caller pre-resolves version via resolveVersion.
+    // If vat.version is undefined here, all three sources (config, plugin.json,
+    // root) were absent — the author-supplied value would already have been
+    // picked up upstream. Reaching this with vat.version=undefined plus an
+    // authorJson.version means the upstream resolution explicitly chose
+    // undefined; mergePluginJson must respect that.
     const vatNoVersion = { name: 'my-plugin', version: undefined, author: { name: 'Org' } };
     const { merged, warnings } = mergePluginJson({
       vat: vatNoVersion,
       configDescription: undefined,
       authorJson: { version: '7.8.9' },
     });
-    expect(merged['version']).toBe('7.8.9');
+    expect('version' in merged).toBe(false);
     expect(warnings.filter((w) => w.includes('version'))).toEqual([]);
   });
 
@@ -124,5 +136,89 @@ describe('mergePluginJson', () => {
       authorJson: {},
     });
     expect('version' in merged).toBe(false);
+  });
+});
+
+function makeSink(): { warnings: string[]; warn: (m: string) => void } {
+  const warnings: string[] = [];
+  return {
+    warnings,
+    warn(m: string) {
+      warnings.push(m);
+    },
+  };
+}
+
+describe('resolveVersion', () => {
+  it('config wins over plugin.json over root', () => {
+    const sink = makeSink();
+    const result = resolveVersion(
+      { version: '3.0.0' },
+      { version: '2.0.0' },
+      '1.0.0',
+      sink,
+    );
+    expect(result).toBe('3.0.0');
+  });
+
+  it('plugin.json wins over root when no config', () => {
+    const sink = makeSink();
+    const result = resolveVersion(undefined, { version: '2.0.0' }, '1.0.0', sink);
+    expect(result).toBe('2.0.0');
+    expect(sink.warnings).toEqual([]);
+  });
+
+  it('root is fallback when neither config nor plugin.json supplied', () => {
+    const sink = makeSink();
+    const result = resolveVersion(undefined, undefined, '1.0.0', sink);
+    expect(result).toBe('1.0.0');
+    expect(sink.warnings).toEqual([]);
+  });
+
+  it('returns undefined when all three are undefined', () => {
+    const sink = makeSink();
+    const result = resolveVersion(undefined, undefined, undefined, sink);
+    expect(result).toBeUndefined();
+    expect(sink.warnings).toEqual([]);
+  });
+
+  it('warns when config and plugin.json disagree (config still wins)', () => {
+    const sink = makeSink();
+    const result = resolveVersion(
+      { version: '3.0.0' },
+      { version: '2.0.0' },
+      '1.0.0',
+      sink,
+    );
+    expect(result).toBe('3.0.0');
+    expect(sink.warnings).toHaveLength(1);
+    expect(sink.warnings[0]).toContain('3.0.0');
+    expect(sink.warnings[0]).toContain('2.0.0');
+    expect(sink.warnings[0]).toMatch(/mismatch/i);
+  });
+
+  it('does NOT warn when config and plugin.json agree', () => {
+    const sink = makeSink();
+    const result = resolveVersion(
+      { version: '2.0.0' },
+      { version: '2.0.0' },
+      '1.0.0',
+      sink,
+    );
+    expect(result).toBe('2.0.0');
+    expect(sink.warnings).toEqual([]);
+  });
+
+  it('handles empty configEntry object (no version field)', () => {
+    const sink = makeSink();
+    const result = resolveVersion({}, { version: '2.0.0' }, '1.0.0', sink);
+    expect(result).toBe('2.0.0');
+    expect(sink.warnings).toEqual([]);
+  });
+
+  it('defaults logger to console when not provided', () => {
+    // Just ensure no throw with default logger; agreement case so no warn fires.
+    const result = resolveVersion({ version: '2.0.0' }, { version: '2.0.0' }, '1.0.0');
+    expect(result).toBe('2.0.0');
   });
 });

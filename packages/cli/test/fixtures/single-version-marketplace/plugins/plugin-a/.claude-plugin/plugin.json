@@ -1,0 +1,5 @@
+{
+  "name": "plugin-a",
+  "description": "Plugin A — no per-plugin version, falls back to root package.json",
+  "license": "MIT"
+}

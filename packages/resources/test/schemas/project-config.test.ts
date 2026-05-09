@@ -190,6 +190,79 @@ describe('ClaudeMarketplacePluginEntrySchema (full plugin support)', () => {
     });
     expect(result.success).toBe(false);
   });
+
+  describe('version field', () => {
+    it('accepts a valid semver version', () => {
+      const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+        name: 'p',
+        skills: '*',
+        version: '0.2.0',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts a prerelease semver version', () => {
+      const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+        name: 'p',
+        skills: '*',
+        version: '1.0.0-rc.1',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts an entry without version (backwards compat)', () => {
+      const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+        name: 'p',
+        skills: '*',
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.version).toBeUndefined();
+      }
+    });
+
+    it('rejects a non-semver version string', () => {
+      for (const version of ['not-a-version', '1.2', '1', 'latest', '']) {
+        const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+          name: 'p',
+          skills: '*',
+          version,
+        });
+        expect(result.success).toBe(false);
+      }
+    });
+  });
+
+  describe('changelog field', () => {
+    it('accepts a relative changelog path', () => {
+      const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+        name: 'p',
+        skills: '*',
+        changelog: 'CHANGELOG.md',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('accepts a nested relative changelog path', () => {
+      const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+        name: 'p',
+        skills: '*',
+        changelog: 'docs/CHANGELOG.md',
+      });
+      expect(result.success).toBe(true);
+    });
+
+    it('leaves changelog undefined when not declared', () => {
+      const result = ClaudeMarketplacePluginEntrySchema.safeParse({
+        name: 'p',
+        skills: '*',
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.changelog).toBeUndefined();
+      }
+    });
+  });
 });
 
 describe('ClaudeMarketplaceSchema (pool filter)', () => {

@@ -44,6 +44,18 @@ export interface ComposeResult {
   version: string;
   changelogDelta: string;
   files: string[];
+  /**
+   * Plugins listed in the published marketplace.json with their resolved versions.
+   * Used by the publish flow to push per-plugin source-repo tags after a successful
+   * branch push. Plugins without a `version` field are skipped.
+   */
+  publishedPlugins: { name: string; version: string }[];
+}
+
+/** Shape we read defensively out of the published marketplace.json. */
+interface PublishedPluginInfo {
+  name: string;
+  version?: string;
 }
 
 export async function composePublishTree(options: ComposeOptions): Promise<ComposeResult> {
@@ -64,6 +76,22 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
   // Use cpSync instead of async cp() — Node 22 cp() drops files in nested directories
   cpSync(buildDir, outputDir, { recursive: true });
   files.push('.claude-plugin/marketplace.json', 'plugins/');
+
+  // 2b. Read the published marketplace.json so the publish flow knows which
+  //     plugins (and resolved versions) to tag after a successful push. The
+  //     build pipeline writes this file; we just observe it here. Defensive
+  //     parsing because marketplace.json is build output, not validated input
+  //     at this layer.
+  const marketplaceJsonPath = safePath.join(outputDir, '.claude-plugin', 'marketplace.json');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated config
+  const marketplaceJsonRaw = readFileSync(marketplaceJsonPath, 'utf-8');
+  const marketplaceJson = JSON.parse(marketplaceJsonRaw) as { plugins?: PublishedPluginInfo[] };
+  // Plugins without a resolved version are not eligible for tagging — skip them.
+  const publishedPlugins = (marketplaceJson.plugins ?? [])
+    .filter((p): p is { name: string; version: string } =>
+      Boolean(p.name) && typeof p.version === 'string' && p.version.length > 0,
+    )
+    .map((p) => ({ name: p.name, version: p.version }));
 
   // 3. Process changelog — VAT copies the source file byte-for-byte into the publish tree.
   //    We only extract a release-note string for the commit body (changelogDelta).
@@ -118,5 +146,5 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
     files.push('LICENSE');
   }
 
-  return { version, changelogDelta, files };
+  return { version, changelogDelta, files, publishedPlugins };
 }

@@ -1,0 +1,6 @@
+{
+  "name": "plugin-b",
+  "version": "0.2.5",
+  "description": "Plugin B — second plugin in the multi-plugin fixture",
+  "license": "MIT"
+}
