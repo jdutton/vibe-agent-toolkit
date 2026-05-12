@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Bumped `vibe-validate` and `@vibe-validate/cli` dev deps from `0.19.5-rc.1` to `0.19.5` (stable). The stable release fixes a git worktree corruption issue.
+
 ## [0.1.35] - 2026-05-09
 
 ### Added
