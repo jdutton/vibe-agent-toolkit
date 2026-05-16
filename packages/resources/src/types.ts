@@ -125,3 +125,10 @@ export {
   hasSchemaErrors,
   validateFrontmatterMultiSchema,
 } from './multi-schema-validator.js';
+
+// Frontmatter link validation
+export type {
+  FrontmatterExternalUrl,
+  FrontmatterLinkValidationResult,
+} from './frontmatter-link-validator.js';
+export { validateFrontmatterLinks } from './frontmatter-link-validator.js';

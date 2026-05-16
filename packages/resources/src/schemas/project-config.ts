@@ -61,6 +61,8 @@ export const CollectionValidationSchema = z.object({
     .describe('Whether to validate external URL links (default: false)'),
   checkGitIgnored: z.boolean().optional()
     .describe('Whether to check if non-ignored files link to git-ignored files (default: true)'),
+  checkFrontmatterLinks: z.boolean().optional()
+    .describe('Whether to validate frontmatter values at JSON Schema positions with a URI-family format (default: true). Set to false to disable for this collection.'),
   externalUrls: ExternalUrlValidationSchema.optional()
     .describe('External URL validation configuration'),
 }).describe('Validation configuration for a collection');
