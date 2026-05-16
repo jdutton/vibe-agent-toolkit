@@ -5,7 +5,7 @@
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 
-import type { CollectionStats, RegistryStats } from '@vibe-agent-toolkit/resources';
+import type { CollectionStats, ProjectConfig, RegistryStats } from '@vibe-agent-toolkit/resources';
 import type { GitTracker } from '@vibe-agent-toolkit/utils';
 import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
@@ -404,6 +404,22 @@ interface ValidateOptions {
   collection?: string; // Filter by collection ID
   checkExternalUrls?: boolean; // NEW: Validate external URLs
   noCache?: boolean; // NEW: Disable cache for external URL validation
+  checkFrontmatterLinks?: boolean; // Commander negates this when --no-check-frontmatter-links is passed; absent = true
+}
+
+/**
+ * Apply the --no-check-frontmatter-links CLI flag to the loaded config.
+ *
+ * Mutates the config object in place (the registry holds a reference to the
+ * same object, so validate() will see the updated value).
+ */
+function applyNoCheckFrontmatterLinksFlag(config: ProjectConfig | undefined): void {
+  if (!config?.resources?.collections) return;
+  for (const collection of Object.values(config.resources.collections)) {
+    if (collection.validation) {
+      collection.validation.checkFrontmatterLinks = false;
+    }
+  }
 }
 
 export async function validateCommand(
@@ -415,7 +431,13 @@ export async function validateCommand(
 
   try {
     // Load resources with config support (includes GitTracker initialization)
-    const { registry, gitTracker } = await loadResourcesWithConfig(pathArg, logger);
+    const { registry, config, gitTracker } = await loadResourcesWithConfig(pathArg, logger);
+
+    // CLI flag: --no-check-frontmatter-links disables the check for every collection.
+    // Commander represents the negated form as options.checkFrontmatterLinks === false.
+    if (options.checkFrontmatterLinks === false) {
+      applyNoCheckFrontmatterLinksFlag(config);
+    }
 
     // Load frontmatter schema if provided
     let frontmatterSchemaObj: object | undefined;

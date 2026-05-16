@@ -72,6 +72,7 @@ vat resources scan docs/
 **Options:**
 - `[path]` - Base directory to crawl (defaults to current directory)
 - `--debug` - Enable debug logging
+- `--no-check-frontmatter-links` - Skip frontmatter URI-reference link validation across all collections (default: enabled)
 
 **Exit Codes:**
 - `0` - Validation passed
