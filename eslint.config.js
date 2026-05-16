@@ -38,6 +38,7 @@ const localRulesConfig = {
   'local/no-url-pathname-for-fs': 'error',
   'local/no-bare-dynamic-import-path': 'error',
   'local/no-file-url-string-concat': 'error',
+  'local/no-jsyaml-default-schema': 'error',
   'local/prefer-startswith-over-regex': 'error',
 };
 

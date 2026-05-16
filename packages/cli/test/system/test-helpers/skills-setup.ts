@@ -70,7 +70,7 @@ export function executeSkillsCommandAndExpectYaml(
     encoding: 'utf-8',
   });
 
-  const parsed = yaml.load(result.stdout) as Record<string, unknown>;
+  const parsed = yaml.load(result.stdout, { schema: yaml.CORE_SCHEMA }) as Record<string, unknown>;
   return { result, parsed };
 }
 

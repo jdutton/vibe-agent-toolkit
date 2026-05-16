@@ -57,7 +57,8 @@ export function loadSeedFile(path: string): Seed {
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied seed file path
   const raw = readFileSync(path, 'utf-8');
-  const parsed = yaml.load(raw);
+  // CORE_SCHEMA: YAML 1.2 spec — see link-parser.ts for rationale.
+  const parsed = yaml.load(raw, { schema: yaml.CORE_SCHEMA });
   const seed = SeedSchema.parse(parsed);
 
   const sources = new Set<string>();

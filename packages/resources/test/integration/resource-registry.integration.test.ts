@@ -86,7 +86,10 @@ describe('ResourceRegistry - Integration Tests', () => {
       expect(resource.frontmatter).toEqual({
         title: 'Test Document',
         tags: ['test', 'example'],
-        date: new Date('2024-01-15T00:00:00.000Z'),
+        // YAML 1.2 CORE_SCHEMA keeps unquoted ISO dates as strings —
+        // previous Date-object assertion codified the YAML 1.1 timestamp
+        // promotion bug that broke schema validation for adopters.
+        date: '2024-01-15',
       });
     });
 

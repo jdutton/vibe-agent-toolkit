@@ -45,7 +45,7 @@ describe('skills list command (system test)', () => {
       encoding: 'utf-8',
       cwd: process.cwd(),
     });
-    defaultParsed = yaml.load(defaultResult.stdout) as SkillsListOutput;
+    defaultParsed = yaml.load(defaultResult.stdout, { schema: yaml.CORE_SCHEMA }) as SkillsListOutput;
 
     // Run the verbose scan once
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
@@ -122,7 +122,7 @@ describe('skills list command (system test)', () => {
       cwd: process.cwd(),
     });
 
-    const parsed = yaml.load(result.stdout) as SkillsListOutput;
+    const parsed = yaml.load(result.stdout, { schema: yaml.CORE_SCHEMA }) as SkillsListOutput;
 
     // Debug output if test fails
     if (result.status !== 0) {

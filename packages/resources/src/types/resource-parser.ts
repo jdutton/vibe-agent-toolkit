@@ -213,7 +213,8 @@ export async function parseYamlResource(
   // Read and parse YAML
   // eslint-disable-next-line security/detect-non-literal-fs-filename
   const content = await fs.readFile(absolutePath, 'utf-8');
-  const data = yaml.load(content);
+  // CORE_SCHEMA: YAML 1.2 spec — see link-parser.ts for rationale.
+  const data = yaml.load(content, { schema: yaml.CORE_SCHEMA });
 
   // Calculate checksum
   const checksum = await calculateChecksum(absolutePath);

@@ -152,7 +152,7 @@ describe('skills validate command (system test)', () => {
 
     expect(result.status).toBe(0);
 
-    const parsed = yaml.load(result.stdout) as PackagingValidationOutput;
+    const parsed = yaml.load(result.stdout, { schema: yaml.CORE_SCHEMA }) as PackagingValidationOutput;
 
     // In verbose mode, excludedReferences should be present in metadata
     for (const skillResult of parsed.results) {

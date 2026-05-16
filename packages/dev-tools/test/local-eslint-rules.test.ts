@@ -63,6 +63,47 @@ const NO_FILE_URL_STRING_CONCAT_CASES: RuleCases = {
   ],
 };
 
+const NO_JSYAML_DEFAULT_SCHEMA_CASES: RuleCases = {
+  valid: [
+    // js-yaml with an explicit schema option — all three named schemas accepted
+    { code: "import yaml from 'js-yaml'; yaml.load(content, { schema: yaml.CORE_SCHEMA });" },
+    { code: "import yaml from 'js-yaml'; yaml.load(content, { schema: yaml.JSON_SCHEMA });" },
+    { code: "import yaml from 'js-yaml'; yaml.load(content, { schema: yaml.FAILSAFE_SCHEMA });" },
+    { code: "import { load, CORE_SCHEMA } from 'js-yaml'; load(content, { schema: CORE_SCHEMA });" },
+    { code: "import * as yaml from 'js-yaml'; yaml.loadAll(content, { schema: yaml.CORE_SCHEMA }, () => {});" },
+    // Different library (eemeli/yaml) — already YAML 1.2 by default, not flagged
+    { code: "import yaml from 'yaml'; yaml.parse(content);" },
+    // Unrelated .load() on a non-yaml import — not flagged
+    { code: "import other from 'some-other-lib'; other.load(content);" },
+  ],
+  invalid: [
+    {
+      code: "import yaml from 'js-yaml'; yaml.load(content);",
+      errors: [{ messageId: 'requireSchema' }],
+    },
+    {
+      code: "import yaml from 'js-yaml'; yaml.load(content, {});",
+      errors: [{ messageId: 'requireSchema' }],
+    },
+    {
+      code: "import yaml from 'js-yaml'; yaml.loadAll(content);",
+      errors: [{ messageId: 'requireSchema' }],
+    },
+    {
+      code: "import { load } from 'js-yaml'; load(content);",
+      errors: [{ messageId: 'requireSchema' }],
+    },
+    {
+      code: "import { load as loadYaml } from 'js-yaml'; loadYaml(content);",
+      errors: [{ messageId: 'requireSchema' }],
+    },
+    {
+      code: "import * as yaml from 'js-yaml'; yaml.load(content);",
+      errors: [{ messageId: 'requireSchema' }],
+    },
+  ],
+};
+
 const PREFER_STARTSWITH_OVER_REGEX_CASES: RuleCases = {
   valid: [
     // unicorn would catch these, but our rule treats them as redundant — both are fine.
@@ -99,6 +140,7 @@ const SUITES: readonly RuleSuite[] = [
   { name: 'no-url-pathname-for-fs', cases: NO_URL_PATHNAME_FOR_FS_CASES },
   { name: 'no-bare-dynamic-import-path', cases: NO_BARE_DYNAMIC_IMPORT_PATH_CASES },
   { name: 'no-file-url-string-concat', cases: NO_FILE_URL_STRING_CONCAT_CASES },
+  { name: 'no-jsyaml-default-schema', cases: NO_JSYAML_DEFAULT_SCHEMA_CASES },
   { name: 'prefer-startswith-over-regex', cases: PREFER_STARTSWITH_OVER_REGEX_CASES },
 ];
 

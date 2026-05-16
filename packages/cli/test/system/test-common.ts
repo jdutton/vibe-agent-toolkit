@@ -294,7 +294,7 @@ export async function executeCliAndParseYaml(
   const result = await executeCli(binPath, args, options);
 
   // Parse YAML output (use loadAll to handle document markers)
-  const docs = yaml.loadAll(result.stdout) as Array<Record<string, unknown>>;
+  const docs = yaml.loadAll(result.stdout, { schema: yaml.CORE_SCHEMA }) as Array<Record<string, unknown>>;
   const parsed = docs[0] ?? {};
 
   return { result, parsed };

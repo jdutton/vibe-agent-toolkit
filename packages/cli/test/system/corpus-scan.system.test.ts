@@ -50,7 +50,7 @@ const NET = process.env.NET_AVAILABLE === '1';
       if (!firstRun) throw new Error('no run dir created');
       const summaryPath = safePath.join(outDir, firstRun, 'summary.yaml');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
-      const summary = yaml.load(readFileSync(summaryPath, 'utf-8')) as Record<string, unknown>;
+      const summary = yaml.load(readFileSync(summaryPath, 'utf-8'), { schema: yaml.CORE_SCHEMA }) as Record<string, unknown>;
       expect((summary.plugins as unknown[]).length).toBe(1);
     },
     60_000

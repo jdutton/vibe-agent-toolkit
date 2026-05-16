@@ -157,7 +157,7 @@ describe('auditOnePlugin — validation overlay', () => {
 
     const overlayPath = safePath.join(pluginDir, 'vibe-agent-toolkit.config.yaml');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
-    const written = yaml.load(readFileSync(overlayPath, 'utf-8')) as Record<string, unknown>;
+    const written = yaml.load(readFileSync(overlayPath, 'utf-8'), { schema: yaml.CORE_SCHEMA }) as Record<string, unknown>;
     expect((written.skills as Record<string, unknown>).defaults).toEqual({
       validation: { severity: { LINK_TO_NAVIGATION_FILE: 'ignore' } },
     });
