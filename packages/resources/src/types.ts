@@ -110,6 +110,7 @@ export {
 // Link validation
 export type { ValidateLinkOptions } from './link-validator.js';
 export { validateLink } from './link-validator.js';
+export { classifyLink } from './link-parser.js';
 
 // Schema assignment
 export {
