@@ -1,5 +1,5 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- temp dir paths constructed in test setup */
-import { symlinkSync, writeFileSync } from 'node:fs';
+import { rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import * as nodePath from 'node:path';
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
@@ -143,5 +143,52 @@ describe('resolveAssetReference with workspace-symlink layout (integration)', ()
     const resolved = resolveAssetReference(BARE_SPECIFIER, osNativeBase);
 
     expect(toForwardSlash(resolved)).toBe(toForwardSlash(expectedSchema));
+  });
+
+  // Regression test for the actual issue #102 root cause. The adopter shipped a
+  // package whose `exports` map pointed `./schemas/*.json` → `./dist/schemas/*.json`
+  // but its `dist/schemas/` was empty on disk (a publisher-side build glitch:
+  // the package's `gen-schemas` script had a broken Windows main-module check,
+  // so the write loop never ran on Windows). VAT's resolver correctly threw
+  // MODULE_NOT_FOUND — but the original error message ("Cannot find module
+  // 'C:\...\dist\schemas\adr.schema.json'. Check the package's exports field,
+  // or run install in <baseDir>") pointed everyone at VAT and at install state,
+  // turning an obvious "publisher didn't build the artifact" into a multi-day
+  // platform-bug hunt.
+  //
+  // This test pins the *adopter-facing diagnosis*: when the exports map
+  // resolves to a path that doesn't exist on disk, VAT must say so plainly,
+  // name the missing file, and point at the publishing package's build —
+  // not at the consumer's install.
+  it('error message names the missing on-disk file when exports map points to a non-existent path', () => {
+    const tempDir = suite.getTempDir();
+    const { expectedSchema } = setupDirectPackageFixture(tempDir);
+
+    // Simulate a publisher that shipped package.json + exports map but did
+    // not produce the build output. Delete the schema file (and the schemas
+    // dir) — the exports pattern still maps to this path.
+    rmSync(expectedSchema);
+
+    let err: unknown;
+    try {
+      resolveAssetReference(BARE_SPECIFIER, tempDir);
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(Error);
+    const message = (err as Error).message;
+
+    // Must name the original specifier (so the user can find the offending config line)
+    expect(message).toContain(BARE_SPECIFIER);
+    // Must name the resolved on-disk path (so the user can verify it's missing)
+    expect(toForwardSlash(message)).toContain(toForwardSlash(expectedSchema));
+    // Must explain that the file is missing on disk, not that the package is missing
+    expect(message).toMatch(/does not exist on disk/);
+    // Must point at the publisher's build, not the consumer's install
+    expect(message).toMatch(/[Rr]ebuild|build step|"exports" subpath/);
+    // Should NOT push the user toward running install in baseDir — that was
+    // the unhelpful hint that wasted hours of debugging in the avonrisk-sdlc
+    // case. The package is installed; the publisher's build is incomplete.
+    expect(message).not.toMatch(/run install in/);
   });
 });

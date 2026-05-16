@@ -4,6 +4,7 @@ import { resolveAssetReference, safePath, toForwardSlash } from '../src/index.js
 
 const REPO_ROOT = safePath.resolve(import.meta.dirname, '..', '..', '..');
 const PACKAGE_JSON = 'package.json';
+const MISSING_PKG_SPECIFIER = '@nonexistent/never-published/schemas/foo.json';
 
 describe('resolveAssetReference', () => {
   describe('bare specifiers', () => {
@@ -18,12 +19,12 @@ describe('resolveAssetReference', () => {
     it('throws MODULE_NOT_FOUND when package is not installed', () => {
       let err: unknown;
       try {
-        resolveAssetReference('@nonexistent/never-published/schemas/foo.json', REPO_ROOT);
+        resolveAssetReference(MISSING_PKG_SPECIFIER, REPO_ROOT);
       } catch (e) {
         err = e;
       }
       expect(err).toBeInstanceOf(Error);
-      expect((err as Error).message).toContain('@nonexistent/never-published/schemas/foo.json');
+      expect((err as Error).message).toContain(MISSING_PKG_SPECIFIER);
       const cause = (err as { cause?: { code?: string } }).cause;
       expect(cause?.code).toBe('MODULE_NOT_FOUND');
     });
@@ -42,6 +43,41 @@ describe('resolveAssetReference', () => {
       const cause = (err as { cause?: { code?: string } }).cause;
       // Node 22+ emits ERR_PACKAGE_PATH_NOT_EXPORTED for these
       expect(cause?.code).toMatch(/PATH_NOT_EXPORTED|MODULE_NOT_FOUND/);
+    });
+
+    it('error message distinguishes "package not installed" from generic failures', () => {
+      let err: unknown;
+      try {
+        resolveAssetReference(MISSING_PKG_SPECIFIER, REPO_ROOT);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(Error);
+      const message = (err as Error).message;
+      // Headline still names the specifier
+      expect(message).toContain(MISSING_PKG_SPECIFIER);
+      // For Mode 3 (package missing) we point adopters at install / exports
+      expect(message).toMatch(/run install|"exports" field/);
+    });
+
+    it('error message for ERR_PACKAGE_PATH_NOT_EXPORTED names the exports map', () => {
+      let err: unknown;
+      try {
+        resolveAssetReference(
+          '@vibe-agent-toolkit/agent-skills/this-subpath-is-not-exported.json',
+          REPO_ROOT,
+        );
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(Error);
+      const message = (err as Error).message;
+      const cause = (err as { cause?: { code?: string } }).cause;
+      // Only assert the improved wording when Node actually reports
+      // ERR_PACKAGE_PATH_NOT_EXPORTED (some Node versions emit MODULE_NOT_FOUND).
+      if (cause?.code === 'ERR_PACKAGE_PATH_NOT_EXPORTED') {
+        expect(message).toContain('does not expose this subpath');
+      }
     });
   });
 
