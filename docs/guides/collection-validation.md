@@ -427,7 +427,7 @@ resources:
 
 ### Schema Paths
 
-Schema paths are relative to the config file location:
+Schema paths accept either a filesystem path or an npm bare specifier:
 
 ```yaml
 # Config at: /project/vibe-agent-toolkit.config.yaml
@@ -435,9 +435,18 @@ resources:
   collections:
     guides:
       validation:
+        # Filesystem path — relative to config file, or absolute
         frontmatterSchema: "schemas/guide.json"
         # Resolves to: /project/schemas/guide.json
+
+    skills:
+      validation:
+        # npm bare specifier — resolved via Node module resolution,
+        # honoring the publisher's "exports" map
+        frontmatterSchema: "@vibe-agent-toolkit/agent-skills/schemas/skill-frontmatter.json"
 ```
+
+Use bare specifiers when your schemas live in a published npm package and you don't want consumers hardcoding the package's internal `dist/` layout. Resolution failures (package not installed, subpath not exported) surface as `frontmatter_schema_error`.
 
 ## Troubleshooting
 

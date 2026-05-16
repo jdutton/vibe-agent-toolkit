@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - **Frontmatter URI-reference link validation.** `vat resources validate` now walks frontmatter values at JSON Schema positions with a URI-family format (`uri-reference`, `uri`, `iri-reference`, `iri`) and validates them through the same engine as markdown links — file existence, anchor resolution, gitignore safety. Absolute URLs in those fields feed into the existing external URL health-check pass when enabled on the collection. Default-on for any collection whose schema declares those formats; opt out via `validation.checkFrontmatterLinks: false` per collection or the global CLI flag `--no-check-frontmatter-links`. Four new issue codes (`frontmatter_link_broken`, `frontmatter_anchor_missing`, `frontmatter_link_to_gitignored`, `frontmatter_unknown_link`) — see [`docs/validation-codes.md`](docs/validation-codes.md). Full guide: [`docs/guides/collection-validation.md#frontmatter-link-validation`](docs/guides/collection-validation.md#frontmatter-link-validation).
+- **npm bare specifiers for `frontmatterSchema`.** Collection `frontmatterSchema` in `vibe-agent-toolkit.config.yaml` and the `vat resources validate --frontmatter-schema` flag now accept npm bare specifiers (`@scope/pkg/schemas/foo.json` or `pkg/schemas/foo.json`) in addition to filesystem paths. VAT resolves them from your project's `node_modules`, honoring the target package's `exports` map — so schema-publishing packages own their internal layout and consumers don't hardcode `dist/` paths. Filesystem-path behavior is unchanged.
+
+### Fixed
+- **`vat resources validate --frontmatter-schema` now resolves against your current working directory.** Previously the flag was anchored at VAT's own installation, so adopter-installed schema packages were not visible. Schemas referenced by filesystem path are unaffected.
 
 ### Changed
 - Bumped `vibe-validate` and `@vibe-validate/cli` dev deps from `0.19.5-rc.1` to `0.19.5` (stable). The stable release fixes a git worktree corruption issue.
