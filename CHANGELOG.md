@@ -7,12 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.37] - 2026-05-16
+
 ### Fixed
-- **Glob matchers now match through dotfile path segments.** Three call sites that compiled user-supplied glob patterns via `picomatch(...)` without `{ dot: true }` silently failed to match any path traversing a dotfile directory (`.claude/...`, `.worktrees/...`, `.config/...`) — picomatch's default behavior. Affected:
-  - **`applyAllowFilter`** (`@vibe-agent-toolkit/agent-skills`) — `validation.allow[CODE].paths` entries against issue locations. Adopters whose skills sit under `.claude/skills/...` had allow entries silently never apply; suppressed `CAPABILITY_*` issues kept emitting. Latent since `0.1.30`.
-  - **`walkLinkGraph`'s `excludeReferencesFromBundle` rules** (`@vibe-agent-toolkit/agent-skills`) — exclude patterns against link paths during skill bundling. Adopters with links into dotfile-prefixed dirs saw those references included in bundles when they should have been dropped. Latent since the introduction of `excludeReferencesFromBundle`.
-  - **`vat audit --exclude` patterns** (`@vibe-agent-toolkit/cli`) — user excludes against scanned plugin paths. Adopters running `vat audit ~/.claude/plugins --exclude '**/foo'` had their exclude silently ignored.
-  Mutation-verified regression tests in `packages/agent-skills/test/validators/allow-filter.test.ts`, `packages/agent-skills/test/walk-link-graph.test.ts`, and a new behavior-contract guard at `packages/resources/test/utils-matches-glob-pattern.test.ts` pin the fix and the adjacent already-correct matchers.
+- **Clearer diagnosis when a `frontmatterSchema` resolves to a missing file.** When a `frontmatterSchema` configured as an npm bare specifier resolves through the package's `exports` map to a path that doesn't exist on disk (typically because the publishing package shipped its `exports` field but its build never wrote the artifact — e.g. a broken Windows-only main-module check in the publisher's `gen-schemas` script), `vat resources validate` now names the missing file, says "does not exist on disk", and points at the publisher's build. The previous generic "Cannot find module … Check the package's exports field, or run install in `<baseDir>`" message sent adopters hunting for install-state or path-separator bugs. `ERR_PACKAGE_PATH_NOT_EXPORTED` and "package not installed" remain distinct failure modes with their own messages.
+- **`validation.allow` entries now match paths under dotfile directories.** `validation.allow[CODE].paths` globs like `**/*` and `**/SKILL.md` previously failed to match any path traversing a dotfile directory (`.claude/skills/...`, `.worktrees/<branch>/...`, `.config/...`). Allow entries on skills under those locations silently never applied, so suppressed `CAPABILITY_*` issues kept emitting and `unused` records stayed empty even when the allow was correct. Latent since `0.1.30`.
+- **`excludeReferencesFromBundle` rules now match links under dotfile directories.** Same root cause: `excludeReferencesFromBundle` patterns silently failed to drop bundle references whose paths traversed a dotfile dir. Bundles included files the config asked to exclude.
+- **`vat audit --exclude` patterns now match paths under dotfile directories.** Same root cause: `vat audit ~/.claude/plugins --exclude '**/foo'` silently ignored the exclude on dotfile-traversing paths.
 
 ## [0.1.36] - 2026-05-16
 
