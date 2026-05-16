@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
@@ -111,7 +112,7 @@ describe('auditOnePlugin — URL source', () => {
     const bare = makeBareRepoWithSkill();
     const runDir = makeRunDir();
 
-    const entry: PluginEntry = { source: `file://${bare}`, name: 'foo' };
+    const entry: PluginEntry = { source: pathToFileURL(bare).href, name: 'foo' };
     const row = await auditOnePlugin(entry, { runDir, withReview: false, debug: false });
 
     expect(row.audit.status).toBe('success');

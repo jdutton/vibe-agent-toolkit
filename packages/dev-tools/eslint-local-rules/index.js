@@ -54,6 +54,7 @@ export default {
     'no-fs-promises-cp': require('./no-fs-promises-cp.cjs'),
     'no-url-pathname-for-fs': require('./no-url-pathname-for-fs.cjs'),
     'no-bare-dynamic-import-path': require('./no-bare-dynamic-import-path.cjs'),
+    'no-file-url-string-concat': require('./no-file-url-string-concat.cjs'),
     'prefer-startswith-over-regex': require('./prefer-startswith-over-regex.cjs'),
   },
 };

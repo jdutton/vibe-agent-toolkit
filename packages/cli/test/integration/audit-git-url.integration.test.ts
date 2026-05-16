@@ -8,6 +8,7 @@
 
 import { spawnSync } from 'node:child_process';
 import fs, { mkdtempSync, readdirSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -34,7 +35,7 @@ beforeAll(() => {
   bareRepo = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-integ-bare-'));
   // file:// URL for the bare repo — `isGitUrl` dispatches URLs only, not
   // absolute filesystem paths. `git clone` accepts file:// natively.
-  bareRepoUrl = `file://${bareRepo}`;
+  bareRepoUrl = pathToFileURL(bareRepo).href;
   workTree = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-integ-work-'));
 
   // `--initial-branch=main` so HEAD points to a branch we'll actually push.

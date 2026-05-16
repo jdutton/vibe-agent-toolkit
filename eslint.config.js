@@ -37,6 +37,7 @@ const localRulesConfig = {
   'local/no-fs-promises-cp': 'error',
   'local/no-url-pathname-for-fs': 'error',
   'local/no-bare-dynamic-import-path': 'error',
+  'local/no-file-url-string-concat': 'error',
   'local/prefer-startswith-over-regex': 'error',
 };
 

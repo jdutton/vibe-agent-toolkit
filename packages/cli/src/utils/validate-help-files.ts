@@ -8,7 +8,7 @@
 
 import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
@@ -57,7 +57,7 @@ export function validateHelpFiles(): void {
  * Run validation if this file is executed directly
  * (via tsx or node during build process)
  */
-if (import.meta.url === `file://${String(process.argv[1] ?? '')}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
     validateHelpFiles();
     console.log('✓ All required help documentation files exist');
