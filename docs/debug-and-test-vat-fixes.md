@@ -57,7 +57,30 @@ vat resources validate .
 ```
 
 The globally-installed `vat` wrapper detects `VAT_ROOT_DIR` and re-dispatches to
-`$VAT_ROOT_DIR/packages/cli/dist/bin.js` automatically.
+`$VAT_ROOT_DIR/packages/cli/dist/bin.js` automatically. This also works for
+adopter projects using `npx vat` — the umbrella `vibe-agent-toolkit` package's
+bin entry routes through the same dispatcher, so a local install picks up the
+override just like a global one.
+
+**Verify the override is active** with `VAT_DEBUG=1`:
+
+```bash
+VAT_DEBUG=1 VAT_ROOT_DIR=/path/to/vibe-agent-toolkit vat resources validate .
+# Expect on stderr:
+#   [vat debug] Using VAT_ROOT_DIR override
+#   [vat debug] Binary: /path/to/vibe-agent-toolkit/packages/cli/dist/bin.js
+```
+
+If you don't see those lines, the override didn't fire — usually because
+`$VAT_ROOT_DIR/packages/cli/dist/bin.js` doesn't exist (run `bun run build`
+in the monorepo first) or the env var isn't being passed through your shell
+to the subprocess (check with `env | grep VAT_ROOT_DIR`).
+
+**Identical output with and without the override usually means the local
+checkout has the same code as the installed version**, not that the override
+failed. Confirm with `git log -1` in the monorepo — if it points at the same
+commit as the published version, there's nothing different for `VAT_ROOT_DIR`
+to surface.
 
 **Alternative (no global install needed):**
 
