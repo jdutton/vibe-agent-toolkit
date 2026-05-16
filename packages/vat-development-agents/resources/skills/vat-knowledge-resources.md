@@ -79,6 +79,18 @@ frontmatterSchema: "@vibe-agent-toolkit/agent-skills/..."  # npm package export
 3. Run `vat resources validate` — any existing docs missing required fields will be flagged
 4. Fix frontmatter in existing docs, then CI is clean
 
+## Recommend `format: "uri-reference"` for path-shaped frontmatter fields
+
+When designing a schema for a knowledge-base collection that references other files (e.g., `parent_prd`, `supersedes`, `adr_citations[*].adr`, `artifacts`), declare `format: "uri-reference"` on the field. VAT will then validate those values against the file system using the same engine as markdown link checking — broken paths, missing anchors, gitignore violations, and unknown URI schemes all produce errors.
+
+To require local committed files (no absolute URLs), add a `pattern` excluding scheme prefixes. Standard JSON Schema; stays portable.
+
+VAT walks four URI-family formats: `uri-reference`, `uri`, `iri-reference`, `iri`. `uri-template` (RFC 6570) is intentionally NOT walked — templated values contain placeholders.
+
+Absolute URLs in URI-reference fields feed into the existing external URL health-check pass when `checkUrlLinks: true` is set on the collection.
+
+Opt-out: `checkFrontmatterLinks: false` per collection, or `--no-check-frontmatter-links` on the CLI.
+
 ## Validation Output
 
 ```yaml

@@ -263,6 +263,84 @@ Ensure descriptions are meaningful:
 }
 ```
 
+## Frontmatter link validation
+
+When a collection's frontmatter schema declares a URI-family `format` on a field — `uri-reference`, `uri`, `iri-reference`, or `iri` — VAT walks every matching value and runs it through the same engine that validates markdown `[](href)` links:
+
+- Relative paths are resolved against the source file's directory and checked for existence.
+- `#anchor` fragments are validated against the target file's headings.
+- Gitignore safety is enforced: non-ignored files cannot reference gitignored targets.
+- Absolute `http(s)://` URLs feed into the existing external URL health check (when `checkUrlLinks: true` is set on the collection); otherwise they're silently skipped.
+- `mailto:` values are silently skipped.
+- Unknown URI schemes (`tel:`, `javascript:`, etc.) emit `frontmatter_unknown_link`.
+
+### Recommended pattern
+
+Declare `format: "uri-reference"` on path-shaped fields:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "parent_prd": { "type": "string", "format": "uri-reference" },
+    "adr_citations": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "adr": { "type": "string", "format": "uri-reference" },
+          "note": { "type": "string" }
+        }
+      }
+    }
+  }
+}
+```
+
+### Enforcing locality (no absolute URLs allowed)
+
+`format: "uri-reference"` accepts both relative and absolute URI references per spec. To require local paths, add a `pattern`:
+
+```json
+{
+  "type": "string",
+  "format": "uri-reference",
+  "pattern": "^[^:]+\\.md(#.+)?$"
+}
+```
+
+Pattern violations are reported by the AJV pass; broken local references by the link-validator pass. Both produce errors.
+
+### Opting out
+
+Per-collection:
+
+```yaml
+collections:
+  external-docs:
+    include: ["docs/external/**/*.md"]
+    validation:
+      frontmatterSchema: "schemas/external-doc.schema.json"
+      checkFrontmatterLinks: false
+```
+
+Global CLI escape hatch:
+
+```bash
+vat resources validate --no-check-frontmatter-links
+```
+
+### Issue codes
+
+| Code | When |
+|---|---|
+| `frontmatter_link_broken` | relative path doesn't resolve |
+| `frontmatter_anchor_missing` | `#anchor` doesn't match a heading in target |
+| `frontmatter_link_to_gitignored` | non-ignored file → gitignored target |
+| `frontmatter_unknown_link` | unknown URI scheme (`tel:`, `javascript:`, etc.) |
+
+Configure severity per code via `validation.severity.<code>` in `vibe-agent-toolkit.config.yaml`. See [`docs/validation-codes.md`](../validation-codes.md) for the full reference.
+
 ## Error Messages
 
 Validation errors show **actual values** and **expected values**:
