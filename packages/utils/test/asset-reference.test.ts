@@ -1,9 +1,14 @@
-import { describe, expect, it } from 'vitest';
+/* eslint-disable security/detect-non-literal-fs-filename -- tmpdir paths constructed in test setup */
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 
-import { resolveAssetReference, safePath, toForwardSlash } from '../src/index.js';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { mkdirSyncReal, normalizedTmpdir, resolveAssetReference, safePath, toForwardSlash } from '../src/index.js';
 
 const REPO_ROOT = safePath.resolve(import.meta.dirname, '..', '..', '..');
 const PACKAGE_JSON = 'package.json';
+const MISSING_PKG_SPECIFIER = '@nonexistent/never-published/schemas/foo.json';
+const FIXTURE_PKG_SPECIFIER = '@vat-test/missing-file-mock/schemas/foo.json';
 
 describe('resolveAssetReference', () => {
   describe('bare specifiers', () => {
@@ -18,12 +23,12 @@ describe('resolveAssetReference', () => {
     it('throws MODULE_NOT_FOUND when package is not installed', () => {
       let err: unknown;
       try {
-        resolveAssetReference('@nonexistent/never-published/schemas/foo.json', REPO_ROOT);
+        resolveAssetReference(MISSING_PKG_SPECIFIER, REPO_ROOT);
       } catch (e) {
         err = e;
       }
       expect(err).toBeInstanceOf(Error);
-      expect((err as Error).message).toContain('@nonexistent/never-published/schemas/foo.json');
+      expect((err as Error).message).toContain(MISSING_PKG_SPECIFIER);
       const cause = (err as { cause?: { code?: string } }).cause;
       expect(cause?.code).toBe('MODULE_NOT_FOUND');
     });
@@ -42,6 +47,98 @@ describe('resolveAssetReference', () => {
       const cause = (err as { cause?: { code?: string } }).cause;
       // Node 22+ emits ERR_PACKAGE_PATH_NOT_EXPORTED for these
       expect(cause?.code).toMatch(/PATH_NOT_EXPORTED|MODULE_NOT_FOUND/);
+    });
+
+    it('error message distinguishes "package not installed" from generic failures', () => {
+      let err: unknown;
+      try {
+        resolveAssetReference(MISSING_PKG_SPECIFIER, REPO_ROOT);
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(Error);
+      const message = (err as Error).message;
+      // Headline still names the specifier
+      expect(message).toContain(MISSING_PKG_SPECIFIER);
+      // For Mode 3 (package missing) we point adopters at install / exports
+      expect(message).toMatch(/run install|"exports" field/);
+    });
+
+    it('error message for ERR_PACKAGE_PATH_NOT_EXPORTED names the exports map', () => {
+      let err: unknown;
+      try {
+        resolveAssetReference(
+          '@vibe-agent-toolkit/agent-skills/this-subpath-is-not-exported.json',
+          REPO_ROOT,
+        );
+      } catch (e) {
+        err = e;
+      }
+      expect(err).toBeInstanceOf(Error);
+      const message = (err as Error).message;
+      const cause = (err as { cause?: { code?: string } }).cause;
+      // Only assert the improved wording when Node actually reports
+      // ERR_PACKAGE_PATH_NOT_EXPORTED (some Node versions emit MODULE_NOT_FOUND).
+      if (cause?.code === 'ERR_PACKAGE_PATH_NOT_EXPORTED') {
+        expect(message).toContain('does not expose this subpath');
+      }
+    });
+
+    // Mode 1 (exports map → file missing on disk) — the most confusing
+    // failure for adopters and the one that motivated the actionable-error
+    // refactor. Inline tmp fixture to exercise the branch under the unit-
+    // test coverage glob (the integration test covers the same path but
+    // doesn't count toward patch coverage).
+    describe('exports map resolves but target file is missing on disk', () => {
+      let fixtureDir: string;
+
+      beforeAll(() => {
+        fixtureDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-asset-mode1-'));
+        // Consumer package.json — anchors createRequire lookup
+        writeFileSync(
+          safePath.join(fixtureDir, PACKAGE_JSON),
+          JSON.stringify({ name: 'consumer', type: 'module' }),
+        );
+        // Synthetic package: exports map points at dist/schemas/*.json, but
+        // we deliberately do NOT write any files into dist/schemas (mirrors
+        // a publisher whose build step never ran).
+        const pkgDir = safePath.join(fixtureDir, 'node_modules', '@vat-test', 'missing-file-mock');
+        mkdirSyncReal(safePath.join(pkgDir, 'dist', 'schemas'), { recursive: true });
+        writeFileSync(
+          safePath.join(pkgDir, PACKAGE_JSON),
+          JSON.stringify({
+            name: '@vat-test/missing-file-mock',
+            version: '0.0.0',
+            type: 'module',
+            exports: { './schemas/*.json': './dist/schemas/*.json' },
+          }),
+        );
+      });
+
+      afterAll(() => {
+        rmSync(fixtureDir, { recursive: true, force: true });
+      });
+
+      it('error message names the missing file and points at the publisher build', () => {
+        let err: unknown;
+        try {
+          resolveAssetReference(FIXTURE_PKG_SPECIFIER, fixtureDir);
+        } catch (e) {
+          err = e;
+        }
+        expect(err).toBeInstanceOf(Error);
+        const message = (err as Error).message;
+        // Names the original specifier so adopters can find the offending config line
+        expect(message).toContain(FIXTURE_PKG_SPECIFIER);
+        // Names the resolved on-disk path so adopters can verify it's missing
+        expect(toForwardSlash(message)).toMatch(/dist\/schemas\/foo\.json/);
+        // Explains that the file is missing on disk
+        expect(message).toMatch(/does not exist on disk/);
+        // Points at the publisher's build, not the consumer's install
+        expect(message).toMatch(/Rebuild|build step|"exports" subpath/);
+        // Does NOT push the user toward running install in baseDir
+        expect(message).not.toMatch(/run install in/);
+      });
     });
   });
 

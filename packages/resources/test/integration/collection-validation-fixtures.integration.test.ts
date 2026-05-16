@@ -21,7 +21,7 @@ import { basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { load as loadYaml } from 'js-yaml';
+import { CORE_SCHEMA, load as loadYaml } from 'js-yaml';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { ResourceRegistry } from '../../src/resource-registry.js';
@@ -35,7 +35,7 @@ const configPath = safePath.join(fixturesDir, 'vibe-agent-toolkit.config.yaml');
 function loadTestConfig(): ProjectConfig {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- configPath is from controlled constant
   const configContent = readFileSync(configPath, 'utf-8');
-  return loadYaml(configContent) as ProjectConfig;
+  return loadYaml(configContent, { schema: CORE_SCHEMA }) as ProjectConfig;
 }
 
 // Helper to create registry and run validation

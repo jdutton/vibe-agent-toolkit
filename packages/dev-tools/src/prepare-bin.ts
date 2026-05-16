@@ -4,6 +4,7 @@
  */
 
 import { copyFileSync, chmodSync, existsSync } from 'node:fs';
+import { pathToFileURL } from 'node:url';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 
@@ -41,7 +42,7 @@ export function prepareBinaries(packageRoot: string): void {
 }
 
 // CLI entry point
-if (import.meta.url === `file://${String(process.argv[1] ?? '')}`) {
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const packageRoot = process.cwd();
   prepareBinaries(packageRoot);
 }

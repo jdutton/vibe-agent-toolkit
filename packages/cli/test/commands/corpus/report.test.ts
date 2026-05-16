@@ -68,7 +68,7 @@ describe('writeRunReport', () => {
     expect(statSync(summaryPath).isFile()).toBe(true);
 
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled path
-    const written = yaml.load(readFileSync(summaryPath, 'utf-8')) as Record<string, unknown>;
+    const written = yaml.load(readFileSync(summaryPath, 'utf-8'), { schema: yaml.CORE_SCHEMA }) as Record<string, unknown>;
 
     expect(written.schema_version).toBe(1);
     expect(written.totals).toEqual({
@@ -89,7 +89,7 @@ describe('writeRunReport', () => {
 
     const runDir = await writeRunReport(report, outDir);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled path
-    const written = yaml.load(readFileSync(safePath.join(runDir, 'summary.yaml'), 'utf-8')) as Record<string, unknown>;
+    const written = yaml.load(readFileSync(safePath.join(runDir, 'summary.yaml'), 'utf-8'), { schema: yaml.CORE_SCHEMA }) as Record<string, unknown>;
     expect((written.totals as Record<string, number>).reviewed).toBe(1);
   });
 

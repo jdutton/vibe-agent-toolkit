@@ -29,7 +29,7 @@ export function parseYamlOutput(stdout: string): Record<string, unknown> {
 
   // Parse the first document (there should only be one valid document)
   const yamlContent = parts[0];
-  return yaml.load(yamlContent) as Record<string, unknown>;
+  return yaml.load(yamlContent, { schema: yaml.CORE_SCHEMA }) as Record<string, unknown>;
 }
 
 /**

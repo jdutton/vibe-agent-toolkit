@@ -26,7 +26,7 @@ describe('skills list command - fixture tests (system test)', () => {
 
     expect(result.status).toBe(0);
 
-    const parsed = yaml.load(result.stdout) as {
+    const parsed = yaml.load(result.stdout, { schema: yaml.CORE_SCHEMA }) as {
       status: string;
       context: string;
       skillsFound: number;

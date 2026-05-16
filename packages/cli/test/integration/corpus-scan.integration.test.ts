@@ -77,7 +77,7 @@ describe('vat corpus scan — integration', () => {
     expect(statSync(summaryPath).isFile()).toBe(true);
 
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
-    const summary = yaml.load(readFileSync(summaryPath, 'utf-8')) as Record<string, unknown>;
+    const summary = yaml.load(readFileSync(summaryPath, 'utf-8'), { schema: yaml.CORE_SCHEMA }) as Record<string, unknown>;
     expect((summary.plugins as unknown[]).length).toBe(2);
     expect((summary.totals as Record<string, number>).plugins).toBe(2);
 
@@ -108,7 +108,7 @@ describe('vat corpus scan — integration', () => {
 
     const runDir = safePath.join(out2, firstEntry(out2));
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
-    const summary = yaml.load(readFileSync(safePath.join(runDir, 'summary.yaml'), 'utf-8')) as Record<
+    const summary = yaml.load(readFileSync(safePath.join(runDir, 'summary.yaml'), 'utf-8'), { schema: yaml.CORE_SCHEMA }) as Record<
       string,
       unknown
     >;

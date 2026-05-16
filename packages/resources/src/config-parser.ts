@@ -8,7 +8,7 @@ import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { load as loadYaml } from 'js-yaml';
+import { CORE_SCHEMA, load as loadYaml } from 'js-yaml';
 
 import { ProjectConfigSchema, type ProjectConfig } from './schemas/project-config.js';
 
@@ -81,7 +81,8 @@ export async function parseConfigFile(configPath: string): Promise<ProjectConfig
   // Parse YAML
   let parsed: unknown;
   try {
-    parsed = loadYaml(content);
+    // CORE_SCHEMA: YAML 1.2 spec — see link-parser.ts for rationale.
+    parsed = loadYaml(content, { schema: CORE_SCHEMA });
   } catch (error) {
     throw new Error(`Invalid YAML in config file: ${error instanceof Error ? error.message : String(error)}`);
   }

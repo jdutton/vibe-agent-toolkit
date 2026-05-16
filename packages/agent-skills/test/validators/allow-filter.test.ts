@@ -52,6 +52,26 @@ describe('applyAllowFilter', () => {
     expect(first?.reason).toBe('stale');
   });
 
+  // Regression guard: picomatch defaults exclude dotfile segments, so
+  // `**/*` silently fails to match any path traversing `.claude/`,
+  // `.worktrees/`, `.config/`, etc. — causing allow entries to never apply
+  // and capability suppressions to leak. The matcher must enable dot.
+  it('matches paths containing dotfile segments (e.g., .claude/, .worktrees/)', () => {
+    const dotfilePaths = [
+      '.claude/skills/foo/SKILL.md',
+      '.worktrees/wt1/packages/x/SKILL.md',
+      'project/.config/agents/y.md',
+    ];
+    for (const location of dotfilePaths) {
+      const issues = [issue(LINK_DROPPED, location)];
+      const result = applyAllowFilter(issues, {
+        allow: { [LINK_DROPPED]: [{ paths: ['**/*'], reason: 'broad allow' }] },
+      });
+      expect(result.allowed, `expected '**/*' to match '${location}'`).toHaveLength(1);
+      expect(result.emitted).toHaveLength(0);
+    }
+  });
+
   it('flags allow entries with past expires as expired', () => {
     const issues = [issue(LINK_DROPPED, DOCS_FOO)];
     const result = applyAllowFilter(issues, {

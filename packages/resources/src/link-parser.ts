@@ -431,7 +431,16 @@ function extractFrontmatter(tree: Root): {
     }
 
     try {
-      const parsed = yaml.load(node.value);
+      // CORE_SCHEMA is the YAML 1.2 spec — keeps unquoted ISO dates as
+      // strings (`2026-04-15` stays `"2026-04-15"`) instead of promoting
+      // them to JS Date objects (js-yaml's default DEFAULT_SCHEMA still
+      // applies the YAML 1.1 timestamp tag). Date promotion broke schema
+      // validation for any frontmatter field typed `string` in the schema:
+      // the validator saw an instanceof Date and rejected it. Adopters'
+      // ADR/PRD frontmatter conventionally uses unquoted ISO dates per
+      // YAML 1.2; quoting all of them just to placate the parser is
+      // unreasonable.
+      const parsed = yaml.load(node.value, { schema: yaml.CORE_SCHEMA });
       if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
         frontmatterData = parsed as Record<string, unknown>;
       }

@@ -58,7 +58,7 @@ describe('serializeInventory', () => {
 
 	it('round-trips through YAML without loss', () => {
 		const yamlOut = serializeInventory(fixturePlugin, 'yaml');
-		const parsed = yaml.load(yamlOut) as Record<string, unknown>;
+		const parsed = yaml.load(yamlOut, { schema: yaml.CORE_SCHEMA }) as Record<string, unknown>;
 		expect(parsed['kind']).toBe('plugin');
 		expect(parsed['vendor']).toBe(VENDOR);
 		expect((parsed['discovered'] as { skills: unknown[] }).skills).toHaveLength(1);
@@ -72,7 +72,7 @@ describe('serializeInventory', () => {
 
 	it('shallow projection drops nested skills', () => {
 		const out = serializeInventoryShallow(fixturePlugin, 'yaml');
-		const parsed = yaml.load(out) as { discovered: { skills: unknown[] } };
+		const parsed = yaml.load(out, { schema: yaml.CORE_SCHEMA }) as { discovered: { skills: unknown[] } };
 		expect(parsed.discovered.skills).toEqual([]);
 	});
 

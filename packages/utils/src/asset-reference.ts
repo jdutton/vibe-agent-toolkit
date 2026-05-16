@@ -1,7 +1,8 @@
+import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 
-import { safePath } from './path-utils.js';
+import { isAbsolutePath, safePath } from './path-utils.js';
 
 // First segment must be a valid npm package name (scoped or unscoped),
 // followed by `/` and at least one subpath segment. Paths starting with
@@ -59,11 +60,76 @@ export function resolveAssetReference(specifier: string, baseDir: string): strin
     if (!specifier.startsWith('@') && isModuleNotFound(cause)) {
       return safePath.resolve(baseDir, specifier);
     }
-    throw new Error(
-      `Failed to resolve asset reference '${specifier}': ${formatResolutionError(cause)}\n` +
-        `Check the package's "exports" field, or run install in ${baseDir}.`,
-      { cause: cause as Error },
+    throw new Error(formatActionableError(specifier, baseDir, cause), { cause: cause as Error });
+  }
+}
+
+/**
+ * Build a message that distinguishes the three common failure modes so callers
+ * know where to look. Node's raw error often points at the resolved on-disk
+ * path, which adopters easily misread as a VAT path-handling bug.
+ */
+function formatActionableError(specifier: string, baseDir: string, cause: unknown): string {
+  const headline = formatResolutionError(cause);
+  const code = (cause as { code?: string } | null)?.code;
+  const missingPath = extractMissingModulePath(cause);
+
+  // Mode 1: Node walked the package's `exports` map, computed an absolute
+  // target path, and that file is not on disk. This is the most confusing
+  // case for adopters: the package IS installed, the exports map IS correct,
+  // but a build step in the target package didn't run (or produced different
+  // output). Name the missing file explicitly and point at the publisher.
+  if (code === 'MODULE_NOT_FOUND' && missingPath && missingPath !== specifier && isAbsolutePath(missingPath)) {
+    const fileExists = safeExistsSync(missingPath);
+    if (!fileExists) {
+      return (
+        `Failed to resolve asset reference '${specifier}': ` +
+        `the package's "exports" map points to '${missingPath}', but that file does not exist on disk.\n` +
+        `Hint: the target package was found, but a build step did not produce this file. ` +
+        `Rebuild the publishing package (e.g., \`pnpm --filter <package> build\`) to generate the missing artifact, ` +
+        `or verify the package's "exports" subpath pattern matches what its build emits.\n` +
+        `Node error: ${headline}`
+      );
+    }
+  }
+
+  // Mode 2: Exports map didn't expose the requested subpath at all.
+  if (code === 'ERR_PACKAGE_PATH_NOT_EXPORTED') {
+    return (
+      `Failed to resolve asset reference '${specifier}': ` +
+      `the target package does not expose this subpath in its "exports" map.\n` +
+      `Hint: check the package's package.json "exports" field — only paths declared there are reachable via bare specifier.\n` +
+      `Node error: ${headline}`
     );
+  }
+
+  // Mode 3: Package itself not installed / not reachable from baseDir.
+  return (
+    `Failed to resolve asset reference '${specifier}': ${headline}\n` +
+    `Check the package's "exports" field, or run install in ${baseDir}.`
+  );
+}
+
+/**
+ * Node's MODULE_NOT_FOUND message has the form: `Cannot find module 'X'`.
+ * Pull `X` out so we can decide whether the error refers to the original
+ * specifier (package not installed) or to a resolved on-disk path (file
+ * missing at exports target).
+ */
+const CANNOT_FIND_MODULE_RE = /Cannot find module '([^']+)'/;
+
+function extractMissingModulePath(cause: unknown): string | undefined {
+  if (!(cause instanceof Error)) return undefined;
+  const match = CANNOT_FIND_MODULE_RE.exec(cause.message);
+  return match?.[1];
+}
+
+function safeExistsSync(filePath: string): boolean {
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is a Node-resolved exports target, used only to refine the error message
+    return existsSync(filePath);
+  } catch {
+    return false;
   }
 }
 

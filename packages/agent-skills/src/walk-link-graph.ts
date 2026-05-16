@@ -358,7 +358,11 @@ export function walkLinkGraph(
   // Compile exclude patterns once
   const excludeMatchers: ExcludeMatcher[] = options.excludeRules.map((rule) => ({
     rule,
-    isMatch: picomatch(rule.patterns),
+    // dot:true — adopter link paths may traverse dotfile segments (.claude/,
+    // .worktrees/, .config/). Without it, exclude rules silently never match
+    // such paths and the references aren't dropped from the bundle. See
+    // [[allow-filter dotfile fix]] for the sibling case.
+    isMatch: picomatch(rule.patterns, { dot: true }),
   }));
 
   // Initialize walk state

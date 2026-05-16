@@ -38,7 +38,8 @@ async function loadSchema(schemaPath: string): Promise<object> {
   if (ext === '.json') {
     return JSON.parse(content) as object;
   } else if (ext === '.yaml' || ext === '.yml') {
-    const parsed = yaml.load(content);
+    // CORE_SCHEMA: YAML 1.2 spec — see link-parser.ts for rationale.
+    const parsed = yaml.load(content, { schema: yaml.CORE_SCHEMA });
     if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
       return parsed as object;
     }

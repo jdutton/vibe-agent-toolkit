@@ -70,7 +70,10 @@ export function loadConfig(projectRoot: string): ProjectConfig | undefined {
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- configPath is derived from projectRoot parameter
     const content = readFileSync(configPath, 'utf-8');
-    const parsed = yaml.load(content);
+    // CORE_SCHEMA = YAML 1.2 spec; prevents js-yaml's default DEFAULT_SCHEMA
+    // from auto-promoting unquoted ISO dates to JS Date objects (a YAML 1.1
+    // tag). See packages/resources/src/link-parser.ts for the full rationale.
+    const parsed = yaml.load(content, { schema: yaml.CORE_SCHEMA });
 
     // Validate with canonical schema from resources package
     const result = ProjectConfigSchema.safeParse(parsed);

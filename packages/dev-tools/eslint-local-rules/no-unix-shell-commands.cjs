@@ -26,7 +26,14 @@ const UNIX_COMMANDS = {
   archive: ['tar', 'gzip', 'gunzip', 'zip', 'unzip', 'bzip2'],
 
   // Text processing
-  text: ['grep', 'sed', 'awk', 'cat', 'head', 'tail', 'wc', 'cut', 'sort', 'uniq', 'tr'],
+  // Note on `echo`: on Windows `echo` is a shell builtin (cmd.exe / PowerShell),
+  // not an .EXE on PATH — except inside Git Bash's MSYS, where `/usr/bin/echo.exe`
+  // ships from coreutils. So `safeExecSync('echo', …)` works only when the
+  // launching shell happens to have `C:\Program Files\Git\usr\bin` on PATH
+  // (e.g., Git Bash, or GitHub-hosted windows-latest runners that add it).
+  // Use Node (`safeExecSync('node', [echoFixturePath, …])`) instead — see
+  // packages/utils/test/fixtures/portable-echo.cjs for the standard fixture.
+  text: ['grep', 'sed', 'awk', 'cat', 'head', 'tail', 'wc', 'cut', 'sort', 'uniq', 'tr', 'echo'],
 
   // File searching
   search: ['find', 'locate'],
@@ -65,6 +72,7 @@ function getAlternatives(command) {
     tail: 'Read tool with offset parameter',
     sed: 'Edit tool or string.replace()',
     awk: 'string.split() and array methods',
+    echo: 'safeExecSync(\'node\', [echoFixturePath, ...args]) using packages/utils/test/fixtures/portable-echo.cjs — `echo` is only present on Windows when Git\'s coreutils are on PATH',
   };
 
    
