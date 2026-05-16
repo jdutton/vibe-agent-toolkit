@@ -17,6 +17,22 @@ import {
   CommandExecutionError,
 } from '../../src/safe-exec.js';
 
+// Resolve the portable-echo fixture once at module load. The fixture replaces
+// the system `echo` binary (whose presence on Windows depends on which shell
+// launched vitest — see test/fixtures/portable-echo.cjs and issue #102 followup).
+const PORTABLE_ECHO_PATH = safePath.resolve(import.meta.dirname, '..', 'fixtures', 'portable-echo.cjs');
+
+/**
+ * Build `safeExecSync`-style `args` that turn `node` into a portable echo:
+ * the resulting command prints `args.join(' ')` to stdout, unchanged.
+ *
+ * Cross-platform: depends only on `node` being on PATH (which is required to
+ * run vitest in the first place), not on GNU coreutils being installed.
+ */
+function nodeEchoArgs(args: readonly string[]): string[] {
+  return [PORTABLE_ECHO_PATH, ...args];
+}
+
 /**
  * Test helper: Creates a temporary failing tool script
  * Used to test error handling for tools that exist but fail
@@ -107,10 +123,12 @@ describe('safeExecSync', () => {
   });
 
   it('should handle commands with multiple arguments', () => {
-    // Test that all args are passed correctly - use echo since node -e consumes first arg
+    // Test that all args are passed correctly. Uses the portable-echo fixture
+    // (node) instead of the system `echo` binary so the test does not depend
+    // on Git's coreutils being on PATH (issue #102 followup).
     const result = safeExecSync(
-      'echo',
-      ['arg1', 'arg2', 'arg3'],
+      'node',
+      nodeEchoArgs(['arg1', 'arg2', 'arg3']),
       { encoding: 'utf8' },
     );
     expect((result as string).trim()).toBe('arg1 arg2 arg3');
@@ -161,11 +179,11 @@ describe('safeExecSync', () => {
     // Malicious input that would work with shell: true
     const maliciousArg = '; rm -rf / #';
 
-    // With shell: false, this is treated as a literal argument
-    // Use echo which just outputs its arguments unchanged
+    // With shell: false, this is treated as a literal argument.
+    // Uses the portable-echo fixture (node) to print args unchanged.
     const result = safeExecSync(
-      'echo',
-      [maliciousArg],
+      'node',
+      nodeEchoArgs([maliciousArg]),
       { encoding: 'utf8' },
     );
 
@@ -176,8 +194,8 @@ describe('safeExecSync', () => {
   it('should handle special characters in arguments safely', () => {
     const specialChars = '$(whoami) `date` $HOME | & ; < > *';
     const result = safeExecSync(
-      'echo',
-      [specialChars],
+      'node',
+      nodeEchoArgs([specialChars]),
       { encoding: 'utf8' },
     );
     expect((result as string).trim()).toBe(specialChars);
@@ -351,11 +369,11 @@ describe('Security - Command Injection Prevention', () => {
   it('should not execute commands embedded in arguments', () => {
     const maliciousCommand = '$(rm -rf /)';
 
-    // If shell was enabled, this would be dangerous
-    // With shell: false, it's just a string passed to echo
+    // If shell was enabled, this would be dangerous.
+    // With shell: false, it's just a string passed to the portable-echo fixture.
     const result = safeExecSync(
-      'echo',
-      [maliciousCommand],
+      'node',
+      nodeEchoArgs([maliciousCommand]),
       { encoding: 'utf8' },
     );
 
@@ -366,8 +384,8 @@ describe('Security - Command Injection Prevention', () => {
     const maliciousCommand = '`whoami`';
 
     const result = safeExecSync(
-      'echo',
-      [maliciousCommand],
+      'node',
+      nodeEchoArgs([maliciousCommand]),
       { encoding: 'utf8' },
     );
 
@@ -421,18 +439,18 @@ describe('DRY Principle Validation', () => {
 
     const specialArg = '$(echo "injected")';
 
-    // Test safeExecSync - use echo to test argument passing
+    // Test safeExecSync via the portable-echo fixture (node) — proves arg passes through
     const exec1 = safeExecSync(
-      'echo',
-      [specialArg],
+      'node',
+      nodeEchoArgs([specialArg]),
       { encoding: 'utf8' },
     );
     expect((exec1 as string).trim()).toBe(specialArg);
 
-    // Test safeExecResult - use echo to test argument passing
+    // Test safeExecResult via the portable-echo fixture
     const exec2 = safeExecResult(
-      'echo',
-      [specialArg],
+      'node',
+      nodeEchoArgs([specialArg]),
       { encoding: 'utf8' },
     );
     expect((exec2.stdout as string).trim()).toBe(specialArg);
@@ -493,7 +511,14 @@ describe('safeExecFromString', () => {
     });
 
     it('should allow commands with multiple unquoted arguments', () => {
-      const result = safeExecFromString('echo hello world', { encoding: 'utf8' });
+      // Uses the portable-echo fixture (node) instead of system `echo` so the
+      // test does not depend on GNU coreutils being on PATH. safeExecFromString
+      // splits on whitespace — the fixture path must not contain spaces (true
+      // for both the repo and standard CI runner paths).
+      const result = safeExecFromString(
+        `node ${PORTABLE_ECHO_PATH} hello world`,
+        { encoding: 'utf8' },
+      );
       expect((result as string).trim()).toBe('hello world');
     });
 
