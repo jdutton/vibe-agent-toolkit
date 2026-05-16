@@ -27,29 +27,17 @@ describe('decodeJsonPointerSegment', () => {
 });
 
 describe('formatJsonPointerAsDotted', () => {
-  it('returns empty string for root pointer', () => {
-    expect(formatJsonPointerAsDotted('')).toBe('');
-  });
-  it('formats single property', () => {
-    expect(formatJsonPointerAsDotted('/foo')).toBe('foo');
-  });
-  it('formats nested properties with dots', () => {
-    expect(formatJsonPointerAsDotted('/foo/bar')).toBe('foo.bar');
-  });
-  it('formats numeric segments as array indices', () => {
-    expect(formatJsonPointerAsDotted('/items/0')).toBe('items[0]');
-  });
-  it('formats deep nested array index then property', () => {
-    expect(formatJsonPointerAsDotted('/adr-citations/0/adr')).toBe('adr-citations[0].adr');
-  });
-  it('formats multiple array indices', () => {
-    expect(formatJsonPointerAsDotted('/matrix/0/1')).toBe('matrix[0][1]');
-  });
-  it('unescapes RFC 6901 escapes (~1 -> /, ~0 -> ~)', () => {
-    expect(formatJsonPointerAsDotted('/foo~1bar')).toBe('foo/bar');
-    expect(formatJsonPointerAsDotted('/foo~0bar')).toBe('foo~bar');
-  });
-  it('treats leading-zero numeric segment as property name', () => {
-    expect(formatJsonPointerAsDotted('/items/01')).toBe('items.01');
+  it.each([
+    { name: 'root pointer',                       pointer: '',                       expected: '' },
+    { name: 'single property',                    pointer: '/foo',                   expected: 'foo' },
+    { name: 'nested properties (dot-joined)',     pointer: '/foo/bar',               expected: 'foo.bar' },
+    { name: 'numeric segment (array index)',      pointer: '/items/0',               expected: 'items[0]' },
+    { name: 'array index then property',          pointer: '/adr-citations/0/adr',   expected: 'adr-citations[0].adr' },
+    { name: 'multiple array indices',             pointer: '/matrix/0/1',            expected: 'matrix[0][1]' },
+    { name: 'unescapes ~1 to /',                  pointer: '/foo~1bar',              expected: 'foo/bar' },
+    { name: 'unescapes ~0 to ~',                  pointer: '/foo~0bar',              expected: 'foo~bar' },
+    { name: 'leading-zero numeric → property',    pointer: '/items/01',              expected: 'items.01' },
+  ])('formats $name', ({ pointer, expected }) => {
+    expect(formatJsonPointerAsDotted(pointer)).toBe(expected);
   });
 });

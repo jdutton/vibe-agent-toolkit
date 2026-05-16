@@ -41,20 +41,26 @@ describe('validateFrontmatterLinks', () => {
     properties: { ref: { type: 'string', format: 'uri-reference' } },
   };
 
+  // Bind the test fixture's common arguments once so each test body shows only
+  // what's unique to it. Keeps assertions readable AND avoids structural
+  // duplication that SonarCloud flags on new code.
+  const run = (
+    frontmatter: Record<string, unknown> | undefined,
+    schema: object = refSchema,
+  ) =>
+    validateFrontmatterLinks(frontmatter, schema, sourceFile, headingsByFile, {
+      projectRoot,
+      skipGitIgnoreCheck: true,
+    });
+
   it('returns no issues and no external URLs when path exists', async () => {
-    const { issues, externalUrls } = await validateFrontmatterLinks(
-      { ref: 'target.md' }, refSchema, sourceFile, headingsByFile,
-      { projectRoot, skipGitIgnoreCheck: true },
-    );
+    const { issues, externalUrls } = await run({ ref: 'target.md' });
     expect(issues).toEqual([]);
     expect(externalUrls).toEqual([]);
   });
 
   it('reports frontmatter_link_broken for missing file', async () => {
-    const { issues } = await validateFrontmatterLinks(
-      { ref: 'missing.md' }, refSchema, sourceFile, headingsByFile,
-      { projectRoot, skipGitIgnoreCheck: true },
-    );
+    const { issues } = await run({ ref: 'missing.md' });
     expect(issues).toHaveLength(1);
     expect(issues[0]?.type).toBe('frontmatter_link_broken');
     expect(issues[0]?.message).toContain('ref');
@@ -62,25 +68,16 @@ describe('validateFrontmatterLinks', () => {
   });
 
   it('validates anchor in target file', async () => {
-    const ok = await validateFrontmatterLinks(
-      { ref: 'target.md#section-a' }, refSchema, sourceFile, headingsByFile,
-      { projectRoot, skipGitIgnoreCheck: true },
-    );
+    const ok = await run({ ref: 'target.md#section-a' });
     expect(ok.issues).toEqual([]);
 
-    const bad = await validateFrontmatterLinks(
-      { ref: 'target.md#nonexistent' }, refSchema, sourceFile, headingsByFile,
-      { projectRoot, skipGitIgnoreCheck: true },
-    );
+    const bad = await run({ ref: 'target.md#nonexistent' });
     expect(bad.issues).toHaveLength(1);
     expect(bad.issues[0]?.type).toBe('frontmatter_anchor_missing');
   });
 
   it('collects absolute https URLs as externalUrls (no issue emitted)', async () => {
-    const { issues, externalUrls } = await validateFrontmatterLinks(
-      { ref: 'https://example.com/foo' }, refSchema, sourceFile, headingsByFile,
-      { projectRoot, skipGitIgnoreCheck: true },
-    );
+    const { issues, externalUrls } = await run({ ref: 'https://example.com/foo' });
     expect(issues).toEqual([]);
     expect(externalUrls).toHaveLength(1);
     expect(externalUrls[0]).toMatchObject({
@@ -91,19 +88,13 @@ describe('validateFrontmatterLinks', () => {
   });
 
   it('skips mailto values silently', async () => {
-    const { issues, externalUrls } = await validateFrontmatterLinks(
-      { ref: 'mailto:a@b.c' }, refSchema, sourceFile, headingsByFile,
-      { projectRoot, skipGitIgnoreCheck: true },
-    );
+    const { issues, externalUrls } = await run({ ref: 'mailto:a@b.c' });
     expect(issues).toEqual([]);
     expect(externalUrls).toEqual([]);
   });
 
   it('emits frontmatter_unknown_link for unknown schemes', async () => {
-    const { issues } = await validateFrontmatterLinks(
-      { ref: 'tel:+15555550100' }, refSchema, sourceFile, headingsByFile,
-      { projectRoot, skipGitIgnoreCheck: true },
-    );
+    const { issues } = await run({ ref: 'tel:+15555550100' });
     expect(issues).toHaveLength(1);
     expect(issues[0]?.type).toBe('frontmatter_unknown_link');
     expect(issues[0]?.message).toContain('ref');
@@ -122,19 +113,13 @@ describe('validateFrontmatterLinks', () => {
         },
       },
     };
-    const { issues } = await validateFrontmatterLinks(
-      { citations: [{ adr: 'missing.md' }] }, schema, sourceFile, headingsByFile,
-      { projectRoot, skipGitIgnoreCheck: true },
-    );
+    const { issues } = await run({ citations: [{ adr: 'missing.md' }] }, schema);
     expect(issues).toHaveLength(1);
     expect(issues[0]?.message).toContain('citations[0].adr');
   });
 
   it('returns empty when frontmatter is undefined', async () => {
-    const { issues, externalUrls } = await validateFrontmatterLinks(
-      undefined, refSchema, sourceFile, headingsByFile,
-      { projectRoot, skipGitIgnoreCheck: true },
-    );
+    const { issues, externalUrls } = await run(undefined);
     expect(issues).toEqual([]);
     expect(externalUrls).toEqual([]);
   });

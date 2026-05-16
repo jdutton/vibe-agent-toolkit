@@ -204,7 +204,7 @@ function isCanonicalArrayIndex(s: string): boolean {
   // except for "0" itself.
   if (s === '') return false;
   if (s === '0') return true;
-  if (s[0] === '0') return false;
+  if (s.startsWith('0')) return false;
   for (const ch of s) {
     if (ch < '0' || ch > '9') return false;
   }
