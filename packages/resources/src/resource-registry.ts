@@ -11,7 +11,7 @@
 import type fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, type GitTracker, normalizedTmpdir, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, type GitTracker, normalizedTmpdir, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { calculateChecksum } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
@@ -574,9 +574,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       return [];
     }
 
-    const schemaPath = safePath.resolve(
+    const schemaPath = resolveAssetReference(
+      validation.frontmatterSchema,
       this.baseDir ?? process.cwd(),
-      validation.frontmatterSchema
     );
 
     try {

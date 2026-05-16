@@ -434,6 +434,33 @@ export async function assertAllLinksClassifiedAs(
 // ============================================================================
 
 /**
+ * Write a markdown file with optional YAML frontmatter.
+ *
+ * Renders each frontmatter entry as `key: <JSON-encoded value>` so strings,
+ * numbers, booleans, arrays, and null all round-trip correctly through the
+ * YAML parser. Pass `null` (or omit) to write a body-only file.
+ *
+ * @param filePath - Absolute path of the file to write
+ * @param frontmatter - Frontmatter entries, or null for no frontmatter block
+ * @param body - Markdown body content (defaults to a minimal placeholder)
+ */
+export async function writeMarkdownFileWithFrontmatter(
+  filePath: string,
+  frontmatter: Record<string, unknown> | null,
+  body: string = '# Test\n\nContent here.',
+): Promise<void> {
+  let frontmatterBlock = '';
+  if (frontmatter) {
+    const entries = Object.entries(frontmatter)
+      .map(([key, value]) => `${key}: ${JSON.stringify(value)}`)
+      .join('\n');
+    frontmatterBlock = `---\n${entries}\n---\n\n`;
+  }
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is from test caller, safe in test context
+  await writeFile(filePath, frontmatterBlock + body, 'utf-8');
+}
+
+/**
  * Create a JSON Schema file in the temp directory
  *
  * @param tempDir - Temporary directory path
