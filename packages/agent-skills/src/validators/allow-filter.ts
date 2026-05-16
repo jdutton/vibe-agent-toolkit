@@ -60,7 +60,17 @@ function buildMatchers(
   const matchers = new Map<IssueCode, CompiledEntry[]>();
   for (const [code, entries] of Object.entries(allowByCode) as Array<[IssueCode, AllowEntry[] | undefined]>) {
     if (!entries) continue;
-    matchers.set(code, entries.map(e => ({ entry: e, match: picomatch(e.paths), used: false })));
+    // `dot: true` — adopter paths often contain dotfile segments (.claude/,
+    // .worktrees/, .config/). Without it `picomatch('**/*')` silently fails
+    // to match any path traversing a dotfile dir, so allow entries are
+    // never applied. The path was given to us by the validator; we are not
+    // doing glob discovery on the filesystem.
+    // `dot: true` — adopter paths often contain dotfile segments (.claude/,
+    // .worktrees/, .config/). Without it `picomatch('**/*')` silently fails
+    // to match any path traversing a dotfile dir, so allow entries are
+    // never applied. The path was given to us by the validator; we are not
+    // doing glob discovery on the filesystem.
+    matchers.set(code, entries.map(e => ({ entry: e, match: picomatch(e.paths, { dot: true }), used: false })));
   }
   return matchers;
 }
