@@ -79,6 +79,38 @@ frontmatterSchema: "@vibe-agent-toolkit/agent-skills/..."  # npm package export
 3. Run `vat resources validate` — any existing docs missing required fields will be flagged
 4. Fix frontmatter in existing docs, then CI is clean
 
+## Recommend `format: "uri-reference"` for path-shaped frontmatter fields
+
+When designing a schema for a knowledge-base collection that references other files (e.g., `parent_prd`, `supersedes`, `adr_citations[*].adr`, `artifacts`), declare `format: "uri-reference"` on the field. VAT will then validate those values against the file system using the same engine as markdown link checking — broken paths, missing anchors, gitignore violations, and unknown URI schemes all produce errors.
+
+To require local committed files (no absolute URLs), add a `pattern` excluding scheme prefixes. Standard JSON Schema; stays portable.
+
+VAT walks four URI-family formats: `uri-reference`, `uri`, `iri-reference`, `iri`. `uri-template` (RFC 6570) is intentionally NOT walked — templated values contain placeholders.
+
+Absolute URLs in URI-reference fields feed into the existing external URL health-check pass when `checkUrlLinks: true` is set on the collection.
+
+Opt-out: `checkFrontmatterLinks: false` per collection, or `--no-check-frontmatter-links` on the CLI.
+
+## Annotating Frontmatter Schemas with Zod 4
+
+If your project generates JSON Schemas from Zod (via `z.toJSONSchema()`), annotate frontmatter fields that hold links with the appropriate `format` so VAT's link validator picks them up:
+
+```typescript
+import { z } from 'zod';
+
+const PrdFrontmatter = z.object({
+  spec_ref:   z.string().meta({ format: 'uri-reference' }),   // repo-relative or absolute
+  roadmap:    z.url().meta({ format: 'uri' }),                // full URL only
+  doc_anchor: z.string().meta({ format: 'json-pointer' }),    // JSON Pointer
+});
+```
+
+`format` values VAT walks for link validation: `uri`, `uri-reference`, `iri`, `iri-reference`. `uri-template` (RFC 6570) is intentionally NOT walked — templated values contain placeholders.
+
+**Zod 3 users:** `.meta()` does not exist in Zod 3. Either upgrade your schema-generation step to Zod 4 (runtime consumers can stay on Zod 3 via peer dependency + common-subset usage), or post-process the generated JSON Schema to inject `format` on the relevant field paths.
+
+**Tip:** `format` is advisory in JSON Schema; pair it with a `pattern` regex when you also need parse-time rejection of invalid inputs.
+
 ## Validation Output
 
 ```yaml
