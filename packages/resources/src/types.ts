@@ -110,6 +110,7 @@ export {
 // Link validation
 export type { ValidateLinkOptions } from './link-validator.js';
 export { validateLink } from './link-validator.js';
+export { classifyLink } from './link-parser.js';
 
 // Schema assignment
 export {
@@ -124,3 +125,10 @@ export {
   hasSchemaErrors,
   validateFrontmatterMultiSchema,
 } from './multi-schema-validator.js';
+
+// Frontmatter link validation
+export type {
+  FrontmatterExternalUrl,
+  FrontmatterLinkValidationResult,
+} from './frontmatter-link-validator.js';
+export { validateFrontmatterLinks } from './frontmatter-link-validator.js';

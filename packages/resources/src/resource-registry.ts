@@ -11,14 +11,18 @@
 import type fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, type GitTracker, normalizedTmpdir, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, type GitTracker, normalizedTmpdir, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { calculateChecksum } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
 import { ExternalLinkValidator } from './external-link-validator.js';
+import {
+  validateFrontmatterLinks,
+  type FrontmatterExternalUrl,
+} from './frontmatter-link-validator.js';
 import { validateFrontmatter } from './frontmatter-validator.js';
 import { parseMarkdown } from './link-parser.js';
-import { validateLink } from './link-validator.js';
+import { validateLink, type ValidateLinkOptions } from './link-validator.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { SHA256 } from './schemas/checksum.js';
 import type { ProjectConfig } from './schemas/project-config.js';
@@ -149,6 +153,13 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private readonly resourcesById: Map<string, ResourceMetadata> = new Map();
   private readonly resourcesByName: Map<string, ResourceMetadata[]> = new Map();
   private readonly resourcesByChecksum: Map<SHA256, ResourceMetadata[]> = new Map();
+
+  /**
+   * Frontmatter-sourced external URLs keyed by resource absolute path.
+   * Populated during collection-schema validation; consumed by
+   * collectExternalUrls so the URLs feed into the existing health-check pass.
+   */
+  private readonly frontmatterExternalUrlsByResource: Map<string, FrontmatterExternalUrl[]> = new Map();
 
   constructor(options?: ResourceRegistryOptions) {
     if (options?.baseDir !== undefined) {
@@ -479,7 +490,10 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * Validate frontmatter against per-collection schemas.
    * @private
    */
-  private async validateCollectionFrontmatter(): Promise<ValidationIssue[]> {
+  private async validateCollectionFrontmatter(
+    headingsByFile: Map<string, HeadingNode[]>,
+    skipGitIgnoreCheck: boolean,
+  ): Promise<ValidationIssue[]> {
     const issues: ValidationIssue[] = [];
 
     // Skip if no config
@@ -498,7 +512,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       // Validate against each collection's schema
       const collectionIssues = await this.validateResourceCollectionSchemas(
         resource,
-        fsPromises
+        fsPromises,
+        headingsByFile,
+        skipGitIgnoreCheck,
       );
       issues.push(...collectionIssues);
     }
@@ -512,7 +528,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   private async validateResourceCollectionSchemas(
     resource: ResourceMetadata,
-    fsModule: typeof fs
+    fsModule: typeof fs,
+    headingsByFile: Map<string, HeadingNode[]>,
+    skipGitIgnoreCheck: boolean,
   ): Promise<ValidationIssue[]> {
     const issues: ValidationIssue[] = [];
 
@@ -531,7 +549,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       const collectionIssues = await this.validateAgainstCollectionSchema(
         resource,
         collection.validation,
-        fsModule
+        fsModule,
+        headingsByFile,
+        skipGitIgnoreCheck,
       );
       issues.push(...collectionIssues);
     }
@@ -546,15 +566,17 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private async validateAgainstCollectionSchema(
     resource: ResourceMetadata,
     validation: NonNullable<NonNullable<ProjectConfig['resources']>['collections']>[string]['validation'],
-    fsModule: typeof fs
+    fsModule: typeof fs,
+    headingsByFile: Map<string, HeadingNode[]>,
+    skipGitIgnoreCheck: boolean,
   ): Promise<ValidationIssue[]> {
     if (!validation?.frontmatterSchema) {
       return [];
     }
 
-    const schemaPath = safePath.resolve(
+    const schemaPath = resolveAssetReference(
+      validation.frontmatterSchema,
       this.baseDir ?? process.cwd(),
-      validation.frontmatterSchema
     );
 
     try {
@@ -564,14 +586,41 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       // Determine validation mode (default to permissive)
       const mode = validation.mode ?? 'permissive';
 
-      // Validate frontmatter
-      return validateFrontmatter(
+      // Validate frontmatter against JSON Schema
+      const issues = validateFrontmatter(
         resource.frontmatter,
         schema,
         resource.filePath,
         mode,
-        schemaPath
+        schemaPath,
       );
+
+      // New: walk URI-family frontmatter values. Default-on; explicit `false` disables.
+      if (validation.checkFrontmatterLinks !== false && resource.frontmatter) {
+        const linkOptions: ValidateLinkOptions = this.baseDir === undefined
+          ? { skipGitIgnoreCheck }
+          : {
+              projectRoot: this.baseDir,
+              skipGitIgnoreCheck,
+              ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker }),
+            };
+
+        const { issues: linkIssues, externalUrls } = await validateFrontmatterLinks(
+          resource.frontmatter,
+          schema,
+          resource.filePath,
+          headingsByFile,
+          linkOptions,
+        );
+        issues.push(...linkIssues);
+
+        if (externalUrls.length > 0) {
+          const prior = this.frontmatterExternalUrlsByResource.get(resource.filePath) ?? [];
+          this.frontmatterExternalUrlsByResource.set(resource.filePath, [...prior, ...externalUrls]);
+        }
+      }
+
+      return issues;
     } catch (error) {
       // Handle missing or invalid schema files gracefully
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -622,6 +671,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Build headings map for validation
     const headingsByFile = this.buildHeadingsByFileMap();
 
+    // Reset frontmatter external URL state for this validation run
+    this.frontmatterExternalUrlsByResource.clear();
+
     // Collect all validation issues
     const issues: ValidationIssue[] = [];
 
@@ -636,7 +688,10 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     issues.push(...linkIssues);
 
     // Per-collection frontmatter validation
-    const collectionFrontmatterIssues = await this.validateCollectionFrontmatter();
+    const collectionFrontmatterIssues = await this.validateCollectionFrontmatter(
+      headingsByFile,
+      options?.skipGitIgnoreCheck ?? false,
+    );
     issues.push(...collectionFrontmatterIssues);
 
     // Global frontmatter validation (if schema provided)
@@ -740,6 +795,15 @@ export class ResourceRegistry implements ResourceCollectionInterface {
           locations.push(location);
           urlsToValidate.set(link.href, locations);
         }
+      }
+    }
+
+    // Merge frontmatter-sourced external URLs from collection validation
+    for (const [resourcePath, urls] of this.frontmatterExternalUrlsByResource) {
+      for (const fmUrl of urls) {
+        const locations = urlsToValidate.get(fmUrl.url) ?? [];
+        locations.push({ resourcePath });
+        urlsToValidate.set(fmUrl.url, locations);
       }
     }
 

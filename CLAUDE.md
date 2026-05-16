@@ -222,6 +222,27 @@ resources:
 
 **Why this matters:** Without collections, you get one schema for all files. With collections, each doc type enforces its own contract. This is essential for multi-type knowledge bases (systems, teams, ADRs, processes, etc.).
 
+### Asset References — The Canonical Pattern for Config-Supplied File References
+
+When a VAT config field accepts "where is this file?" — a schema path, a template path, any analogous resource — the value flows through `resolveAssetReference(specifier, baseDir)` from `@vibe-agent-toolkit/utils`. This is non-negotiable.
+
+The helper supports both filesystem paths (relative to `baseDir`, or absolute) and npm bare specifiers (`@scope/pkg/subpath` or `pkg/subpath`) honoring the target package's `exports` map. Bare specifiers let consumers reference resources published as npm packages without hardcoding the package's internal layout.
+
+**Existing call sites (templates for new ones):**
+
+- `packages/resources/src/resource-registry.ts` — `validateAgainstCollectionSchema` (collection `frontmatterSchema`)
+- `packages/cli/src/commands/resources/validate.ts` — `loadSchema` (`--frontmatter-schema` flag)
+- `packages/cli/src/commands/doctor.ts` — `checkSchemaFiles` (doctor schema existence checks)
+
+**When adding a new config-supplied file reference, route through `resolveAssetReference` from day one.** Don't write a parallel path-only resolver and plan to consolidate later — the consolidation never happens.
+
+**Where this does NOT apply:**
+
+- Markdown URI-references (RFC 3986 — `format: "uri-reference"` walker stays standards-conformant; no bare-specifier resolution there)
+- Dynamic JS imports (use `dynamicImportPath()` from utils)
+- `node_modules` enumeration walks (different concern: listing, not resolving a known specifier)
+- CJS interop shims
+
 ### CLI Development
 
 **Commander.js for Command-Line Interface**

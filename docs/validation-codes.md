@@ -94,6 +94,38 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 - **Why it matters:** Each `SKILL.md` is a skill entry point. Including one skill's entry point inside another skill's bundle causes the agent framework to register the same skill twice, leading to unpredictable trigger behavior.
 - **Fix:** Link to a specific resource inside the other skill, or reference the other skill by name.
 
+## Frontmatter Link Codes
+
+Validation codes that fire when a collection's frontmatter schema declares a URI-family `format` (`uri-reference`, `uri`, `iri-reference`, `iri`) on a field and `vat resources validate` walks those values through the same engine as markdown link checking. Disabled per-collection via `validation.checkFrontmatterLinks: false` or globally via `vat resources validate --no-check-frontmatter-links`. See [Frontmatter link validation](./guides/collection-validation.md#frontmatter-link-validation).
+
+### `frontmatter_link_broken`
+
+- **Default:** `error`
+- **What:** A frontmatter value at a JSON Schema position with a URI-family `format` resolves to a relative path that does not exist on disk.
+- **Why it matters:** The schema author's explicit `format: "uri-reference"` declaration is a contract that this field points at a real artifact. A broken value silently passes AJV validation today and only surfaces when an agent or human follows the link.
+- **Fix:** Correct the path, create the target, or remove the field. The `frontmatter_link_broken` markdown-link equivalent is [`LINK_MISSING_TARGET`](#link_missing_target).
+
+### `frontmatter_anchor_missing`
+
+- **Default:** `error`
+- **What:** A frontmatter URI-reference value contains `#anchor` and the anchor does not match any heading slug in the target file.
+- **Why it matters:** Anchor drift silently breaks deep-links from frontmatter (e.g., `adr_citations[0].adr: docs/adr/0007.md#decision`). Agents and humans following the reference land at the top of the file instead of the cited section.
+- **Fix:** Update the anchor to match a heading slug in the target, or drop the `#anchor` portion if no specific section is meant.
+
+### `frontmatter_link_to_gitignored`
+
+- **Default:** `error`
+- **What:** A non-gitignored file references a gitignored target via a URI-reference frontmatter field.
+- **Why it matters:** Same risk as the markdown-link equivalent: a committed file claims a dependency on a target that isn't tracked, breaking portability for anyone cloning the repo and risking exposure of locally-only content.
+- **Fix:** Reference a non-ignored file, or adjust `.gitignore`. The markdown-link equivalent is [`LINK_TO_GITIGNORED_FILE`](#link_to_gitignored_file).
+
+### `frontmatter_unknown_link`
+
+- **Default:** `error`
+- **What:** A frontmatter URI-reference value uses an unknown URI scheme (e.g., `tel:`, `javascript:`, `git+ssh:`).
+- **Why it matters:** URI-family fields are expected to be `http(s)://`, `mailto:`, or local path references. Unknown schemes typically indicate a typo, a paste error, or a deliberately unsupported protocol that won't resolve at runtime. Distinct from the markdown-link `unknown_link` so severity can be configured per surface.
+- **Fix:** Correct the value to a supported scheme, or add a `pattern` constraint to the field if a specific allow-list is required.
+
 ## Packaging-Only Codes
 
 *Stance: see [Packaging](./skill-quality-and-compatibility.md#packaging).*

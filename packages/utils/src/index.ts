@@ -11,6 +11,9 @@ export * from './safe-exec.js';
 // Cross-platform path utilities
 export * from './path-utils.js';
 
+// Asset reference resolution (paths + npm bare specifiers)
+export * from './asset-reference.js';
+
 // Filesystem utilities
 export * from './fs-utils.js';
 

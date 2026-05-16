@@ -10,7 +10,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 
 
-import { getToolVersion, safePath } from '@vibe-agent-toolkit/utils';
+import { getToolVersion, resolveAssetReference, safePath } from '@vibe-agent-toolkit/utils';
 import type { Command } from 'commander';
 import * as semver from 'semver';
 
@@ -258,9 +258,17 @@ function checkSchemaFiles(
     const schemaPath = collectionConfig.validation?.frontmatterSchema;
     if (schemaPath) {
       schemaFiles.push(schemaPath);
-      const absoluteSchemaPath = safePath.join(configDir, schemaPath);
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- schemaPath is from validated config
-      if (!existsSync(absoluteSchemaPath)) {
+      try {
+        const absoluteSchemaPath = resolveAssetReference(schemaPath, configDir);
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- absoluteSchemaPath resolved via resolveAssetReference
+        if (!existsSync(absoluteSchemaPath)) {
+          missingSchemas.push(schemaPath);
+        }
+      } catch {
+        // resolveAssetReference throws for unresolvable bare specifiers
+        // (package not installed, subpath not exported). vat doctor's
+        // contract is "report what's missing" — convert the throw back
+        // to a missingSchemas entry.
         missingSchemas.push(schemaPath);
       }
     }

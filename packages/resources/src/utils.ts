@@ -156,3 +156,57 @@ export function isWithinProject(filePath: string, projectRoot: string): boolean 
   // /project-other starting with /project
   return normalizedFile.startsWith(normalizedRoot + '/') || normalizedFile === normalizedRoot;
 }
+
+/**
+ * Escape a property name as a JSON Pointer segment per RFC 6901:
+ * `~` -> `~0`, `/` -> `~1`. Order matters (escape `~` first).
+ */
+export function encodeJsonPointerSegment(name: string): string {
+  return name.replaceAll('~', '~0').replaceAll('/', '~1');
+}
+
+/**
+ * Reverse RFC 6901 escapes: `~1` -> `/`, `~0` -> `~`. Order matters
+ * (unescape `~1` first).
+ */
+export function decodeJsonPointerSegment(segment: string): string {
+  return segment.replaceAll('~1', '/').replaceAll('~0', '~');
+}
+
+/**
+ * Format a JSON Pointer (RFC 6901) as developer-friendly dotted notation.
+ *
+ * Numeric segments become bracketed array indices (`0` → `[0]`); non-numeric
+ * segments are dot-joined. Reverses RFC 6901 escapes inside segments.
+ *
+ * @example
+ *   formatJsonPointerAsDotted('/adr-citations/0/adr')  // 'adr-citations[0].adr'
+ *   formatJsonPointerAsDotted('')                       // ''
+ */
+export function formatJsonPointerAsDotted(pointer: string): string {
+  if (pointer === '') return '';
+  // eslint-disable-next-line local/no-hardcoded-path-split -- JSON Pointer RFC 6901 delimiter, not a file path
+  const segments = pointer.slice(1).split('/').map(decodeJsonPointerSegment);
+
+  let out = '';
+  for (const seg of segments) {
+    if (isCanonicalArrayIndex(seg)) {
+      out += `[${seg}]`;
+    } else {
+      out += out === '' ? seg : `.${seg}`;
+    }
+  }
+  return out;
+}
+
+function isCanonicalArrayIndex(s: string): boolean {
+  // Canonical integer per RFC 6901 §4 + JSON canonical form: no leading zeros
+  // except for "0" itself.
+  if (s === '') return false;
+  if (s === '0') return true;
+  if (s.startsWith('0')) return false;
+  for (const ch of s) {
+    if (ch < '0' || ch > '9') return false;
+  }
+  return true;
+}

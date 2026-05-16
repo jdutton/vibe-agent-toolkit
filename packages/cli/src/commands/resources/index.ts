@@ -67,6 +67,7 @@ Examples:
     .option('--collection <id>', 'Filter by collection ID')
     .option('--check-external-urls', 'Validate external URLs (default: false, slow operation)')
     .option('--no-cache', 'Disable cache for external URL validation (forces fresh checks)')
+    .option('--no-check-frontmatter-links', 'Skip frontmatter URI-reference link validation across all collections (default: enabled)')
     .action(validateCommand)
     .addHelpText(
       'after',

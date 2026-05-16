@@ -169,7 +169,11 @@ function extractLinkText(node: Link | LinkReference): string {
 }
 
 /**
- * Classify a link based on its href.
+ * Classify a link based on its href shape.
+ *
+ * Public so frontmatter-link validation can reuse identical URI classification
+ * logic (markdown links and frontmatter URI-reference values share one
+ * classifier).
  *
  * @param href - The href attribute from the link
  * @returns Classified link type
@@ -183,7 +187,7 @@ function extractLinkText(node: Link | LinkReference): string {
  * classifyLink('./file.md#anchor') // 'local_file'
  * ```
  */
-function classifyLink(href: string): LinkType {
+export function classifyLink(href: string): LinkType {
   if (href.startsWith('http://') || href.startsWith('https://')) {
     return 'external';
   }

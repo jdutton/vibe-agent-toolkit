@@ -5,9 +5,9 @@
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 
-import type { CollectionStats, RegistryStats } from '@vibe-agent-toolkit/resources';
+import type { CollectionStats, ProjectConfig, RegistryStats } from '@vibe-agent-toolkit/resources';
 import type { GitTracker } from '@vibe-agent-toolkit/utils';
-import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { resolveAssetReference } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
 
 import { formatDurationSecs } from '../../utils/duration.js';
@@ -28,104 +28,10 @@ interface CollectionStatWithErrors {
   errorCount?: number;
 }
 
-/**
- * Resolve schema path (supports both package paths and file paths).
- *
- * This function implements Node.js-style module resolution for schema paths,
- * allowing users to reference schemas from installed packages OR local files.
- *
- * **Path Resolution Rules:**
- *
- * 1. **Absolute paths** (start with `/`) → Used as-is
- *    - Example: `/Users/jeff/project/schema.json`
- *
- * 2. **Explicit relative paths** (start with `./` or `../`) → Used as-is
- *    - Example: `./schemas/skill-schema.json`
- *    - Example: `../shared/schema.json`
- *
- * 3. **Scoped package paths** (start with `@`) → Resolved via Node.js module system
- *    - Example: `@vibe-agent-toolkit/agent-skills/schemas/skill-frontmatter.json`
- *    - Requires package to be installed and subpath to be exported
- *    - Throws error if package not found or subpath not exported
- *
- * 4. **Bare specifiers** (everything else) → Try package first, fallback to file
- *    - Example: `lodash/fp/array.json` → Tries package "lodash", falls back to file
- *    - Example: `schemas/file.json` → Tries package "schemas" (unlikely), falls back to file
- *    - Only collides if a package with matching name is installed
- *
- * **Why This Works Everywhere:**
- * - Uses Node.js's `import.meta.resolve()` which works in any environment
- * - Respects package.json "exports" field
- * - Works in development (monorepo) and production (npm install)
- *
- * **Best Practices for Users:**
- * - Package references: Use full package path with `@scope` prefix when possible
- * - File references: Use explicit `./` prefix to avoid ambiguity
- * - Avoid bare specifiers unless you know they won't collide
- *
- * @param schemaPath - Path to schema (package path or file path)
- * @returns Resolved absolute file path
- * @throws Error if scoped package path cannot be resolved
- * @internal Exported for testing
- */
-export async function resolveSchemaPath(schemaPath: string): Promise<string> {
-  // Rule 1 & 2: Absolute or explicit relative paths → File
-  const normalizedPath = toForwardSlash(schemaPath);
-  if (path.isAbsolute(schemaPath) ||
-      normalizedPath.startsWith('./') ||
-      normalizedPath.startsWith('../')) {
-    return schemaPath;
-  }
-
-  // Rule 3 & 4: Package paths or bare specifiers → Try module resolution
-  try {
-    // Use Node.js native module resolution
-    // This respects package.json "exports" and works everywhere
-    const resolved = import.meta.resolve(schemaPath, import.meta.url);
-
-    // Convert file:// URL to filesystem path
-    return new URL(resolved).pathname;
-  } catch (error) {
-    // Package resolution failed - could be:
-    // 1. Package not installed
-    // 2. Subpath not exported in package.json
-    // 3. Not actually a package reference (just a file path)
-
-    // For scoped packages, this is definitely an error
-    if (normalizedPath.startsWith('@')) {
-      const message = error instanceof Error ? error.message : 'Unknown error';
-      // Extract package name from scoped package path like "@scope/package/sub/path.json"
-      const pathParts = normalizedPath.split('/');
-      const packageName = pathParts.length >= 2 ? `${pathParts[0] ?? ''}/${pathParts[1] ?? ''}` : schemaPath;
-      throw new Error(
-        `Cannot resolve package path: ${schemaPath}\n` +
-        `Possible causes:\n` +
-        `  - Package not installed (run: npm install ${String(packageName)})\n` +
-        `  - Subpath not exported in package.json "exports" field\n` +
-        `  - Typo in package name or path\n` +
-        `Original error: ${message}`
-      );
-    }
-
-    // For bare specifiers, assume it's a file path
-    // This allows "schemas/file.json" to work when no package "schemas" exists
-    return schemaPath;
-  }
-}
-
-/**
- * Load JSON Schema from file (supports .json and .yaml).
- *
- * Supports both package-based paths (via import.meta.resolve) and file paths.
- * See `resolveSchemaPath()` for path resolution rules.
- *
- * @param schemaPath - Path to schema file (package path or file path)
- * @returns Parsed schema object
- */
 async function loadSchema(schemaPath: string): Promise<object> {
-  const resolvedPath = await resolveSchemaPath(schemaPath);
+  const resolvedPath = resolveAssetReference(schemaPath, process.cwd());
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- schemaPath is user-provided CLI argument, validated by resolveSchemaPath
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- schemaPath resolved via resolveAssetReference
   const content = await readFile(resolvedPath, 'utf-8');
   const ext = path.extname(resolvedPath).toLowerCase();
 
@@ -404,6 +310,22 @@ interface ValidateOptions {
   collection?: string; // Filter by collection ID
   checkExternalUrls?: boolean; // NEW: Validate external URLs
   noCache?: boolean; // NEW: Disable cache for external URL validation
+  checkFrontmatterLinks?: boolean; // Commander negates this when --no-check-frontmatter-links is passed; absent = true
+}
+
+/**
+ * Apply the --no-check-frontmatter-links CLI flag to the loaded config.
+ *
+ * Mutates the config object in place (the registry holds a reference to the
+ * same object, so validate() will see the updated value).
+ */
+function applyNoCheckFrontmatterLinksFlag(config: ProjectConfig | undefined): void {
+  if (!config?.resources?.collections) return;
+  for (const collection of Object.values(config.resources.collections)) {
+    if (collection.validation) {
+      collection.validation.checkFrontmatterLinks = false;
+    }
+  }
 }
 
 export async function validateCommand(
@@ -415,7 +337,13 @@ export async function validateCommand(
 
   try {
     // Load resources with config support (includes GitTracker initialization)
-    const { registry, gitTracker } = await loadResourcesWithConfig(pathArg, logger);
+    const { registry, config, gitTracker } = await loadResourcesWithConfig(pathArg, logger);
+
+    // CLI flag: --no-check-frontmatter-links disables the check for every collection.
+    // Commander represents the negated form as options.checkFrontmatterLinks === false.
+    if (options.checkFrontmatterLinks === false) {
+      applyNoCheckFrontmatterLinksFlag(config);
+    }
 
     // Load frontmatter schema if provided
     let frontmatterSchemaObj: object | undefined;
