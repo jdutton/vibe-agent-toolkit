@@ -1686,8 +1686,10 @@ async function scanDirectory(
     );
   }
 
-  // Compile picomatch for user-supplied --exclude patterns
-  const isMatch = userExcludes.length > 0 ? picomatch(userExcludes) : null;
+  // Compile picomatch for user-supplied --exclude patterns.
+  // dot:true so excludes like `**/private/*` match through dotfile dirs
+  // (`.claude/.../private/x`); without it the exclude silently never fires.
+  const isMatch = userExcludes.length > 0 ? picomatch(userExcludes, { dot: true }) : null;
 
   const entries = await fs.readdir(dirPath, { withFileTypes: true });
 

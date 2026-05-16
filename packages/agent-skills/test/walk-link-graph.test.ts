@@ -164,6 +164,24 @@ function expectEmptyWalkResult(result: ReturnType<typeof walkLinkGraph>): void {
   expect(result.excludedReferences).toHaveLength(0);
 }
 
+/**
+ * Build a skill→child link graph and run walkLinkGraph with a single exclude
+ * rule. Shared between exclude-pattern tests to avoid scenario duplication.
+ */
+function runExcludeScenario(args: {
+  rule: ExcludeRule;
+  childHref: string;
+  childAbsPath: string;
+  childId: string;
+}): ReturnType<typeof walkLinkGraph> {
+  const skill = createMockResource(SKILL_ID, SKILL_PATH, [
+    createLocalLink('secret', args.childHref, args.childId),
+  ]);
+  const secret = createMockResource(args.childId, args.childAbsPath);
+  const registry = createMockRegistry([skill, secret]);
+  return walkLinkGraph(SKILL_ID, registry, defaultOptions({ excludeRules: [args.rule] }));
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -280,20 +298,34 @@ describe('walkLinkGraph', () => {
   describe('pattern matching', () => {
     it('should exclude files matching exclude patterns', () => {
       const rule: ExcludeRule = { patterns: ['docs/private/**'] };
-      const privateId = 'private-md';
-      const privatePath = safePath.resolve('/project/docs/private/secret.md');
-      const skill = createMockResource(SKILL_ID, SKILL_PATH, [
-        createLocalLink('secret', './docs/private/secret.md', privateId),
-      ]);
-      const secret = createMockResource(privateId, privatePath);
-      const registry = createMockRegistry([skill, secret]);
-
-      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions({ excludeRules: [rule] }));
+      const result = runExcludeScenario({
+        rule,
+        childHref: './docs/private/secret.md',
+        childAbsPath: safePath.resolve('/project/docs/private/secret.md'),
+        childId: 'private-md',
+      });
 
       expect(result.bundledResources).toHaveLength(0);
       expect(result.excludedReferences).toHaveLength(1);
       expect(result.excludedReferences[0]?.excludeReason).toBe('pattern-matched');
       expect(result.excludedReferences[0]?.matchedRule).toBe(rule);
+    });
+
+    // Regression guard: picomatch defaults silently exclude paths traversing
+    // dotfile segments (.claude/, .worktrees/, .config/). Without dot:true on
+    // the exclude matcher, rules like `**/private/**` never fire for links
+    // under `.claude/...` and references aren't dropped from the bundle.
+    it('should exclude files under dotfile-prefixed directories', () => {
+      const result = runExcludeScenario({
+        rule: { patterns: ['**/private/**'] },
+        childHref: './.claude/private/secret.md',
+        childAbsPath: safePath.resolve('/project/.claude/private/secret.md'),
+        childId: 'private-dot-md',
+      });
+
+      expect(result.bundledResources).toHaveLength(0);
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe('pattern-matched');
     });
   });
 

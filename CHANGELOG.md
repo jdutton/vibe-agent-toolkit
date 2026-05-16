@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Glob matchers now match through dotfile path segments.** Three call sites that compiled user-supplied glob patterns via `picomatch(...)` without `{ dot: true }` silently failed to match any path traversing a dotfile directory (`.claude/...`, `.worktrees/...`, `.config/...`) — picomatch's default behavior. Affected:
+  - **`applyAllowFilter`** (`@vibe-agent-toolkit/agent-skills`) — `validation.allow[CODE].paths` entries against issue locations. Adopters whose skills sit under `.claude/skills/...` had allow entries silently never apply; suppressed `CAPABILITY_*` issues kept emitting. Latent since `0.1.30`.
+  - **`walkLinkGraph`'s `excludeReferencesFromBundle` rules** (`@vibe-agent-toolkit/agent-skills`) — exclude patterns against link paths during skill bundling. Adopters with links into dotfile-prefixed dirs saw those references included in bundles when they should have been dropped. Latent since the introduction of `excludeReferencesFromBundle`.
+  - **`vat audit --exclude` patterns** (`@vibe-agent-toolkit/cli`) — user excludes against scanned plugin paths. Adopters running `vat audit ~/.claude/plugins --exclude '**/foo'` had their exclude silently ignored.
+  Mutation-verified regression tests in `packages/agent-skills/test/validators/allow-filter.test.ts`, `packages/agent-skills/test/walk-link-graph.test.ts`, and a new behavior-contract guard at `packages/resources/test/utils-matches-glob-pattern.test.ts` pin the fix and the adjacent already-correct matchers.
+
 ## [0.1.36] - 2026-05-16
 
 ### Added
