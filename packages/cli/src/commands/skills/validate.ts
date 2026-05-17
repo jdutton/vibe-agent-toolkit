@@ -221,7 +221,13 @@ async function buildSharedValidationContext(
   const gitRoots = new Set<string>();
   for (const skill of skills) {
     const skillDir = safePath.resolve(skill.sourcePath, '..');
-    projectRoots.add(findProjectRoot(skillDir));
+    const root = findProjectRoot(skillDir);
+    // Skills with no governing config or git ancestor have no enforceable
+    // project root; we skip them rather than degrading to a per-skill dir
+    // (which would explode the set and disable the shared-registry path).
+    if (root !== null) {
+      projectRoots.add(root);
+    }
     const gitRoot = gitFindRoot(skillDir);
     if (gitRoot !== null) {
       gitRoots.add(safePath.resolve(gitRoot));

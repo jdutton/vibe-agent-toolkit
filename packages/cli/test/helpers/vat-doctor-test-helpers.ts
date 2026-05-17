@@ -207,11 +207,11 @@ export async function mockDoctorFileSystem(
     return true;
   });
 
-  // Mock findConfigPath
-  const { findConfigPath } = await import('../../src/utils/config-loader.js');
-  (findConfigPath as ReturnType<typeof vi.fn>).mockReturnValue(
-    opts.configExists ? CONFIG_FILENAME : null,
-  );
+  // findConfigFile from @vibe-agent-toolkit/utils walks up the directory tree
+  // calling existsSync. The existsSync mock above already returns true for
+  // the config filename based on opts.configExists, so no separate mock is
+  // needed — the walk will resolve to the cwd-joined CONFIG_FILENAME on the
+  // first hit.
 
   return () => {
     vi.restoreAllMocks();

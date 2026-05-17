@@ -310,8 +310,12 @@ export async function packageSkill(
   const parseResult = await parseMarkdown(skillPath);
   const skillMetadata = extractSkillMetadata(parseResult, skillPath);
 
-  // 2. Find project boundary (workspace root -> git root -> skill dir)
-  const projectRoot = findProjectRoot(dirname(skillPath));
+  // 2. Find project boundary (config root -> git root -> skill dir).
+  // Library callers fall back to the skill directory when canonical
+  // findProjectRoot returns null. The CLI command boundary is responsible
+  // for any user-facing warning about missing project roots.
+  // See docs/superpowers/specs/2026-05-17-root-model-and-leading-slash-design.md.
+  const projectRoot = findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
   const skillRoot = dirname(skillPath);
 
   // 3. Get or create the resource registry

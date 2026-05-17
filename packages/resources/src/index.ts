@@ -105,7 +105,6 @@ export { resolveLocalHref } from './utils.js';
 
 // Export project config parsing
 export {
-  findConfigFile,
   parseConfigFile,
   loadConfig,
 } from './config-parser.js';

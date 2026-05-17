@@ -10,11 +10,17 @@
 import { existsSync, readFileSync } from 'node:fs';
 
 
-import { getToolVersion, resolveAssetReference, safePath } from '@vibe-agent-toolkit/utils';
+import {
+  findConfigFile,
+  findProjectRoot,
+  getToolVersion,
+  resolveAssetReference,
+  safePath,
+} from '@vibe-agent-toolkit/utils';
 import type { Command } from 'commander';
 import * as semver from 'semver';
 
-import { findConfigPath, loadConfig } from '../utils/config-loader.js';
+import { loadConfig } from '../utils/config-loader.js';
 
 /**
  * Result of a single doctor check
@@ -213,11 +219,11 @@ export function checkGitRepository(): DoctorCheckResult {
 /**
  * Check if configuration file exists
  *
- * Uses findConfigPath() to walk up directory tree.
+ * Walks up directory tree from cwd via canonical findConfigFile.
  */
 export function checkConfigFile(): DoctorCheckResult {
   try {
-    const configPath = findConfigPath();
+    const configPath = findConfigFile(process.cwd());
 
     if (configPath) {
       return {
@@ -282,7 +288,7 @@ function checkSchemaFiles(
  */
 export function checkConfigValid(): DoctorCheckResult {
   try {
-    const configPath = findConfigPath();
+    const configPath = findConfigFile(process.cwd());
     if (!configPath) {
       return {
         name: CHECK_NAME_CONFIG_VALID,
@@ -431,35 +437,11 @@ export async function checkVatVersion(
 }
 
 /**
- * Find project root by walking up directory tree
- */
-function findProjectRoot(): string | null {
-  let currentDir = process.cwd();
-  let previousDir = '';
-
-  // Loop until we reach root (works on both Unix / and Windows C:\)
-  while (currentDir !== previousDir) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path walking is required for project root detection
-    const hasConfig = existsSync(safePath.join(currentDir, 'vibe-agent-toolkit.config.yaml'));
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path walking is required for project root detection
-    const hasGit = existsSync(safePath.join(currentDir, '.git'));
-
-    if (hasConfig || hasGit) {
-      return currentDir;
-    }
-    previousDir = currentDir;
-    currentDir = safePath.join(currentDir, '..');
-  }
-
-  return null;
-}
-
-/**
  * Detect if running in VAT source tree
  */
 function isVatSourceTree(): boolean {
   try {
-    const projectRoot = findProjectRoot();
+    const projectRoot = findProjectRoot(process.cwd());
     if (!projectRoot) return false;
 
     const cliPackagePath = safePath.join(projectRoot, 'packages/cli/package.json');
@@ -487,7 +469,7 @@ export function checkCliBuildSync(): DoctorCheckResult {
       };
     }
 
-    const projectRoot = findProjectRoot();
+    const projectRoot = findProjectRoot(process.cwd());
     if (!projectRoot) {
       return {
         name: CHECK_NAME_CLI_BUILD_STATUS,
@@ -542,8 +524,8 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
 
   // 1. Detect project context
   const currentDir = process.cwd();
-  const projectRoot = findProjectRoot();
-  const configPath = findConfigPath();
+  const projectRoot = findProjectRoot(currentDir);
+  const configPath = findConfigFile(currentDir);
 
   const projectContext: ProjectContext = {
     currentDir,

@@ -21,9 +21,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import {  dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
-
-import { findProjectRoot } from '../utils/project-root.js';
+import { findNodeWorkspaceRoot, safePath } from '@vibe-agent-toolkit/utils';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -121,7 +119,11 @@ function readVersion(packageJsonPath: string): string | null {
  * Main entry point - detects context and executes appropriate binary
  */
 function main(): void {
-  const cwd = process.cwd();
+  // VAT_TEST_ROOT: legacy test override that pins the project root to a
+  // specific directory. Applied at the bin boundary so library code stays
+  // pure. See docs/superpowers/specs/2026-05-17-root-model-and-leading-slash-design.md §7.
+  const testRoot = process.env['VAT_TEST_ROOT'];
+  const cwd = testRoot ? safePath.resolve(testRoot) : process.cwd();
   const args = process.argv.slice(2);
   const debug = process.env['VAT_DEBUG'] === '1';
 
@@ -138,8 +140,10 @@ function main(): void {
     }
   }
 
-  // Find project root from current working directory
-  const projectRoot = findProjectRoot(cwd) ?? cwd;
+  // Find the Node monorepo workspace root from the current working directory.
+  // bin/vat.ts uses this to locate packages/cli/dist/bin.js in dev mode —
+  // strictly a workspace-binary lookup, not a VAT-project lookup.
+  const projectRoot = findNodeWorkspaceRoot(cwd) ?? cwd;
 
   let binPath: string;
   let context: Context;

@@ -959,8 +959,10 @@ describe('skill-packager: integration', () => {
 const ORPHAN_DEST = 'resources/orphan.txt';
 
 /**
- * Set up a temp project with a package.json so findProjectRoot() anchors correctly,
- * then create a skill and an orphan asset. Returns the skill path and output path.
+ * Set up a temp project with a vibe-agent-toolkit.config.yaml (so canonical
+ * findProjectRoot anchors to rootDir under the config-first ladder added in
+ * plan 2026-05-17) plus a package.json with "workspaces". Then create a
+ * skill and an orphan asset. Returns the skill path and output path.
  */
 async function setupUnreferencedFixture(
   rootDir: string,
@@ -969,6 +971,10 @@ async function setupUnreferencedFixture(
   await writeFile(
     safePath.join(rootDir, 'package.json'),
     JSON.stringify({ name: 'unref-fixture', workspaces: ['skills/*'] }),
+  );
+  await writeFile(
+    safePath.join(rootDir, 'vibe-agent-toolkit.config.yaml'),
+    'version: 1\n',
   );
   const skillDir = safePath.join(rootDir, 'skills', skillName);
   await mkdir(skillDir, { recursive: true });

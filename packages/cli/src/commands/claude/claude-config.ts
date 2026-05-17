@@ -4,7 +4,8 @@
 
 import { dirname } from 'node:path';
 
-import { findConfigFile, parseConfigFile, type ClaudeConfig } from '@vibe-agent-toolkit/resources';
+import { parseConfigFile, type ClaudeConfig } from '@vibe-agent-toolkit/resources';
+import { findConfigFile } from '@vibe-agent-toolkit/utils';
 
 export interface LoadedClaudeConfig {
   configPath: string;
@@ -22,7 +23,8 @@ export async function loadClaudeProjectConfig(): Promise<{
   configDir: string;
   claudeConfig: ClaudeConfig | undefined;
 }> {
-  const configPath = await findConfigFile();
+  // findConfigFile from utils is synchronous; await of a non-promise is a no-op.
+  const configPath = findConfigFile(process.cwd());
   if (!configPath) {
     throw new Error('No vibe-agent-toolkit.config.yaml found. Run from a project directory.');
   }

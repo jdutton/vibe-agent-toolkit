@@ -40,7 +40,6 @@ vi.mock('node:fs', () => ({
   readFileSync: vi.fn(),
 }));
 vi.mock('../../src/utils/config-loader.js', () => ({
-  findConfigPath: vi.fn(),
   loadConfig: vi.fn(),
 }));
 

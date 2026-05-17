@@ -75,8 +75,14 @@ function writeRootConfig(rootDir: string): void {
 }
 
 /**
- * pkg-a's config declares pkg-a-skill explicitly in `skills.config` with an
- * `excludeReferencesFromBundle` rule that suppresses external-docs links.
+ * pkg-a's config declares pkg-a-skill explicitly in `skills.config` with a
+ * `validation.severity` override that demotes LINK_OUTSIDE_PROJECT to
+ * `ignore` for that skill. Updated for canonical projectRoot semantics —
+ * see plan 2026-05-17. Under the new model, pkg-a is the nearest-ancestor
+ * config so external-docs is genuinely outside its project root. Audit
+ * deliberately ignores `validation.allow` (it shows every potential issue)
+ * but DOES honor `validation.severity` (which is exactly the per-skill
+ * walk-up signal this test exists to verify).
  */
 function writePkgAConfig(pkgDir: string): void {
   fs.writeFileSync(
@@ -88,10 +94,9 @@ skills:
     - "resources/skills/SKILL.md"
   config:
     pkg-a-skill:
-      excludeReferencesFromBundle:
-        rules:
-          - patterns:
-              - "external-docs/**"
+      validation:
+        severity:
+          LINK_OUTSIDE_PROJECT: ignore
 `,
   );
 }
@@ -165,7 +170,7 @@ describe('audit per-skill walk-up to nearest-ancestor config (integration)', () 
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('pkg-a: LINK_OUTSIDE_PROJECT suppressed because pkg-a config excludes external-docs/**', async () => {
+  it('pkg-a: LINK_OUTSIDE_PROJECT suppressed via validation.severity in pkg-a config', async () => {
     const { result, linkOutsideIssues } = await auditAndCollectLinkOutside(tempDir, 'pkg-a');
     expect(result).toBeDefined();
     expect(linkOutsideIssues).toHaveLength(0);

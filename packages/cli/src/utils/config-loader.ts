@@ -6,36 +6,13 @@
  */
 
 import { readFileSync, existsSync } from 'node:fs';
-import {  dirname, parse } from 'node:path';
+import { dirname } from 'node:path';
 
 import { ProjectConfigSchema, type ProjectConfig } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { findConfigFile, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
 
 const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
-
-/**
- * Find configuration file by walking up directory tree
- * @param startDir - Starting directory (defaults to cwd)
- * @returns Path to config file, or null if not found
- */
-export function findConfigPath(startDir?: string): string | null {
-  let currentDir = safePath.resolve(startDir ?? process.cwd());
-  const root = parse(currentDir).root;
-
-  while (currentDir !== root) {
-    const configPath = safePath.join(currentDir, CONFIG_FILENAME);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Dynamic path walking is required for config file search
-    if (existsSync(configPath)) {
-      return configPath;
-    }
-    const parent = dirname(currentDir);
-    if (parent === currentDir) break; // safety: at filesystem root
-    currentDir = parent;
-  }
-
-  return null;
-}
 
 /**
  * Load and validate project configuration
@@ -135,7 +112,7 @@ export function resetGoverningConfigCache(): void {
 export function findGoverningConfig(
   skillDir: string
 ): { config: ProjectConfig; configRoot: string } | null {
-  const configPath = findConfigPath(skillDir);
+  const configPath = findConfigFile(skillDir);
   if (configPath === null) {
     return null;
   }

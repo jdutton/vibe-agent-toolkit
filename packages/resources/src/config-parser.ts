@@ -5,57 +5,11 @@
  */
 
 import { readFile } from 'node:fs/promises';
-import path from 'node:path';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { findConfigFile } from '@vibe-agent-toolkit/utils';
 import { CORE_SCHEMA, load as loadYaml } from 'js-yaml';
 
 import { ProjectConfigSchema, type ProjectConfig } from './schemas/project-config.js';
-
-const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
-
-/**
- * Find the config file by walking up the directory tree.
- *
- * Starts from the current directory and walks up until the config file is found
- * or the root directory is reached.
- *
- * @param startDir - Directory to start searching from (default: process.cwd())
- * @returns Absolute path to config file, or undefined if not found
- *
- * @example
- * ```typescript
- * const configPath = await findConfigFile();
- * if (configPath) {
- *   console.log(`Found config: ${configPath}`);
- * }
- * ```
- */
-export async function findConfigFile(startDir: string = process.cwd()): Promise<string | undefined> {
-  let currentDir = safePath.resolve(startDir);
-  const { root } = path.parse(currentDir);
-
-  while (true) {
-    const configPath = safePath.join(currentDir, CONFIG_FILENAME);
-
-    try {
-      // Check if file exists by attempting to read metadata
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- constructing path during tree walk
-      await readFile(configPath, 'utf-8');
-      return configPath;
-    } catch {
-      // File doesn't exist, continue walking up
-    }
-
-    // Check if we've reached the root
-    if (currentDir === root) {
-      return undefined;
-    }
-
-    // Move up one directory
-    currentDir = path.dirname(currentDir);
-  }
-}
 
 /**
  * Parse a project configuration file.
@@ -118,7 +72,8 @@ export async function parseConfigFile(configPath: string): Promise<ProjectConfig
  * ```
  */
 export async function loadConfig(startDir: string = process.cwd()): Promise<ProjectConfig | undefined> {
-  const configPath = await findConfigFile(startDir);
+  // findConfigFile from utils is synchronous; awaiting a non-promise is a no-op.
+  const configPath = findConfigFile(startDir);
   if (!configPath) {
     return undefined;
   }

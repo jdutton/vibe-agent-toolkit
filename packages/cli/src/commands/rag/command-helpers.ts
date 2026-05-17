@@ -4,9 +4,9 @@
 
 import type { RAGQueryProvider } from '@vibe-agent-toolkit/rag';
 import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
+import { findProjectRoot } from '@vibe-agent-toolkit/utils';
 
 import { createLogger, type Logger } from '../../utils/logger.js';
-import { findProjectRoot } from '../../utils/project-root.js';
 
 // Re-export shared utilities for convenience
 export { formatDuration, handleCommandError } from '../../utils/command-error.js';

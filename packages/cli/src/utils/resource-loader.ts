@@ -7,11 +7,10 @@ import {
   type ProjectConfig,
   type ResourceRegistryOptions,
 } from '@vibe-agent-toolkit/resources';
-import { GitTracker } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, GitTracker } from '@vibe-agent-toolkit/utils';
 
 import { loadConfig } from './config-loader.js';
 import type { Logger } from './logger.js';
-import { findProjectRoot } from './project-root.js';
 
 export interface ResourceLoadResult {
   scanPath: string;
