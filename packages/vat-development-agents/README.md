@@ -71,7 +71,7 @@ vat skills install ./packages/vat-development-agents
 vat skills list --installed
 ```
 
-The `vibe-agent-toolkit` skill will be installed to `~/.claude/plugins/vibe-agent-toolkit/` and will appear in Claude Code after restarting or running `/reload-skills`.
+The `vibe-agent-toolkit` skill will be installed to `~/.claude/plugins/vibe-agent-toolkit/` and will appear in Claude Code after restarting or running `/reload-plugins`.
 
 **What the skill includes:**
 - VAT overview and use cases

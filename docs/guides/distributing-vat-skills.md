@@ -372,7 +372,7 @@ vat skills list --user
 ```
 
 > **Why symlinks?** After `vat skills build`, the built output in `dist/skills/` has rewritten links.
-> A symlink means rebuilds are immediately visible to Claude Code after `/reload-skills`.
+> A symlink means rebuilds are immediately visible to Claude Code after `/reload-plugins`.
 
 ### 3. Publish to npm
 
@@ -565,7 +565,7 @@ vat skills install npm:@vibe-agent-toolkit/vat-development-agents
 
 ### Skills Not Appearing in Claude Code
 
-**Solution:** Restart Claude Code or run `/reload-skills` command.
+**Solution:** Restart Claude Code or run `/reload-plugins` command.
 
 ### Build Fails with "Source not found"
 
@@ -704,7 +704,7 @@ To update a skill, rebuild and reinstall:
 ```bash
 # For dev installs (symlinks): just rebuild
 vat skills build
-# Then /reload-skills in Claude Code
+# Then /reload-plugins in Claude Code
 
 # For copied installs: rebuild and reinstall
 vat skills build
@@ -724,7 +724,7 @@ vat skills install --dev
 
 # 3. After changes, rebuild (symlinks reflect updates immediately)
 vat skills build
-# Then /reload-skills in Claude Code
+# Then /reload-plugins in Claude Code
 
 # 4. Clean up when done
 vat skills uninstall --all
