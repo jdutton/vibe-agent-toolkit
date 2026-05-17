@@ -75,6 +75,12 @@ Output Structure (YAML):
 Exit Codes:
   0 - Success  |  2 - System error
 
+Requirements:
+  projectRoot: optional (tolerates absence — use --db to specify path)
+  config:      required fields (rag.*) for indexing without --db
+
+  See docs/concepts/roots-and-config.md for terminology.
+
 Example:
   $ vat rag index docs/                # Recursively index all *.md under docs/
   $ vat rag index                      # Recursively index from current directory
@@ -117,6 +123,12 @@ Each chunk includes:
 Exit Codes:
   0 - Success  |  2 - System error (no database)
 
+Requirements:
+  projectRoot: optional (tolerates absence — use --db to specify path)
+  config:      required file with rag.* for default db lookup
+
+  See docs/concepts/roots-and-config.md for terminology.
+
 Example:
   $ vat rag query "error handling"     # Search for relevant content
   $ vat rag query "configuration" --limit 5
@@ -149,6 +161,12 @@ Output Structure (YAML):
 Exit Codes:
   0 - Success  |  2 - System error (no database)
 
+Requirements:
+  projectRoot: optional (tolerates absence — use --db to specify path)
+  config:      required file with rag.* for default db lookup
+
+  See docs/concepts/roots-and-config.md for terminology.
+
 Example:
   $ vat rag stats                      # Show database statistics
   $ vat rag stats --db custom.db       # Stats for specific database
@@ -180,6 +198,12 @@ Output Structure (YAML):
 
 Exit Codes:
   0 - Success  |  2 - System error
+
+Requirements:
+  projectRoot: optional (tolerates absence — use --db to specify path)
+  config:      required file with rag.* for default db lookup
+
+  See docs/concepts/roots-and-config.md for terminology.
 
 Example:
   $ vat rag clear                      # Clear default database (.rag-db/)

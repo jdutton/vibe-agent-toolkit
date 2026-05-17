@@ -4,9 +4,9 @@
 
 import type { RAGQueryProvider } from '@vibe-agent-toolkit/rag';
 import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
-import { findProjectRoot } from '@vibe-agent-toolkit/utils';
 
 import { createLogger, type Logger } from '../../utils/logger.js';
+import { projectRootOrNull } from '../../utils/project-root-policy.js';
 
 // Re-export shared utilities for convenience
 export { formatDuration, handleCommandError } from '../../utils/command-error.js';
@@ -14,7 +14,7 @@ export { formatDuration, handleCommandError } from '../../utils/command-error.js
 /**
  * Resolve database path (explicit flag or default in project)
  * @param explicitDb - Database path from --db flag
- * @param projectRoot - Project root directory (from findProjectRoot)
+ * @param projectRoot - Project root directory (pre-resolved at the CLI boundary)
  * @returns Resolved database path
  * @throws Error if no path can be determined
  */
@@ -34,7 +34,12 @@ export function resolveDbPath(
 }
 
 /**
- * Execute a RAG operation with standard setup/teardown pattern
+ * Execute a RAG operation with standard setup/teardown pattern.
+ *
+ * Per CLI-boundary rule (spec §5/§7), `projectRoot` is resolved here using
+ * the `tolerate null` policy — null is fine, the existing rag config-loading
+ * surface produces its own error if config is required.
+ *
  * @param options - Command options (db path, debug flag, readonly mode)
  * @param operation - The operation to execute with the RAG provider
  * @param commandName - Name of the command (for error reporting)
@@ -49,8 +54,8 @@ export async function executeRagOperation<T>(
   const startTime = Date.now();
 
   try {
-    // Resolve database path
-    const projectRoot = findProjectRoot(process.cwd());
+    // Resolve projectRoot at the CLI boundary (`tolerate null` policy).
+    const projectRoot = projectRootOrNull(process.cwd());
     const dbPath = resolveDbPath(options.db, projectRoot ?? undefined);
     logger.debug(`Database path: ${dbPath}`);
 

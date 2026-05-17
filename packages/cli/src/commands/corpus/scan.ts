@@ -15,6 +15,7 @@ import { safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
 
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
+import { projectRootOrNull } from '../../utils/project-root-policy.js';
 
 import { writeRunReport, type PluginRow, type RunReport } from './report.js';
 import { auditOnePlugin } from './runner.js';
@@ -56,6 +57,10 @@ export async function corpusScanCommand(
   const startTime = Date.now();
 
   try {
+    // Spec §7: `vat corpus *` uses `tolerate null` — scans operate against
+    // arbitrary external plugins without requiring a governing VAT project.
+    projectRootOrNull(process.cwd());
+
     if (!options.out) {
       throw new Error('specify an output directory: --out <path>');
     }

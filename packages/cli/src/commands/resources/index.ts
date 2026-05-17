@@ -50,6 +50,12 @@ Output Fields:
   collections: Per-collection resource counts (resourceCount)
   files: (only with --verbose) Array with per-file details
 
+Requirements:
+  projectRoot: optional (falls back to cwd with a warning)
+  config:      optional (uses defaults if absent)
+
+  See docs/concepts/roots-and-config.md for terminology.
+
 Examples:
   $ vat resources scan docs/                    # Scan all *.md under docs/
   $ vat resources scan --verbose                # Include full file details
@@ -166,6 +172,12 @@ Frontmatter Validation:
 
 Exit Codes:
   0 - Success  |  1 - Validation errors  |  2 - System error
+
+Requirements:
+  projectRoot: optional (falls back to cwd with a warning)
+  config:      optional (uses defaults if absent)
+
+  See docs/concepts/roots-and-config.md for terminology.
 
 Examples:
 

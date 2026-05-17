@@ -84,6 +84,12 @@ Exit Codes:
   1 - Validation errors found (severity=error, not allowed)
   2 - System error (config invalid, skill path not found)
 
+Requirements:
+  projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
+  config:      optional (uses defaults if absent)
+
+  See docs/concepts/roots-and-config.md for terminology.
+
 Example:
   $ vat skills validate packages/my-pkg/   # Validate skills in specific directory
 `

@@ -5,6 +5,7 @@
 import { formatDurationSecs } from '../../utils/duration.js';
 import { createLogger } from '../../utils/logger.js';
 import { writeYamlOutput } from '../../utils/output.js';
+import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
 import { loadResourcesWithConfig } from '../../utils/resource-loader.js';
 
 import { handleCommandError } from './command-helpers.js';
@@ -23,8 +24,11 @@ export async function scanCommand(
   const startTime = Date.now();
 
   try {
+    // Resolve projectRoot at the CLI boundary (spec §5/§7 — loud-cwd policy).
+    const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
+
     // Load resources with config support
-    const { registry } = await loadResourcesWithConfig(pathArg, logger);
+    const { registry } = await loadResourcesWithConfig(pathArg, projectRoot, logger);
 
     // Get all resources (filtered by collection if specified)
     let allResources = registry.getAllResources();

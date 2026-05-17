@@ -5,6 +5,7 @@
 
 export interface Logger {
   info: (message: string) => void;
+  warn: (message: string) => void;
   error: (message: string) => void;
   debug: (message: string) => void;
 }
@@ -18,6 +19,9 @@ export function createLogger(options: LoggerOptions = {}): Logger {
 
   return {
     info: (message: string) => {
+      process.stderr.write(`${message}\n`);
+    },
+    warn: (message: string) => {
       process.stderr.write(`${message}\n`);
     },
     error: (message: string) => {

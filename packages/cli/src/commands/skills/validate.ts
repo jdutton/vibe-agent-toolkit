@@ -19,6 +19,7 @@ import * as yaml from 'js-yaml';
 import { loadConfig } from '../../utils/config-loader.js';
 import { formatDurationSecs } from '../../utils/duration.js';
 import { type createLogger } from '../../utils/logger.js';
+import { requireProjectRoot } from '../../utils/project-root-policy.js';
 import { mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../../utils/skill-quality-footer.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
@@ -281,6 +282,12 @@ export async function validateCommand(
   const { logger, cwd, startTime } = setupCommandContext(pathArg, options.debug);
 
   try {
+    // Spec §7: `vat skills validate` requires a projectRoot — fails fast at
+    // the CLI boundary if no config or git ancestor exists. The resolved root
+    // is discarded here because config is read from `cwd`; the guard exists
+    // to satisfy the policy contract.
+    requireProjectRoot(cwd, 'vat skills validate');
+
     // Load config yaml from cwd (not workspace root — config lives next to the package)
     const config = loadConfig(cwd);
 

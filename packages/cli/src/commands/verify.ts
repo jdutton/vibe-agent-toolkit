@@ -18,6 +18,7 @@ import { handleCommandError } from '../utils/command-error.js';
 import { loadConfig } from '../utils/config-loader.js';
 import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
+import { requireProjectRoot } from '../utils/project-root-policy.js';
 
 import { runConsistencyChecks, type ConsistencyIssue } from './consistency-check.js';
 import { resolveBinPath, runPhase, type Phase, type PhaseResult } from './phase-utils.js';
@@ -57,6 +58,12 @@ Exit Codes:
   0 - All phases passed
   1 - Validation errors found
   2 - System error
+
+Requirements:
+  projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
+  config:      required file (used to discover phases and outputs)
+
+  See docs/concepts/roots-and-config.md for terminology.
 
 Example:
   $ vat verify                         # Verify everything
@@ -247,6 +254,9 @@ async function runConsistencyPhase(
 }
 
 async function verifyTopLevelCommand(options: VerifyCommandOptions): Promise<void> {
+  // Spec §7: `vat verify` requires a projectRoot.
+  requireProjectRoot(process.cwd(), 'vat verify');
+
   const phases = buildPhaseList(options);
 
   // Consistency is an in-process phase, not a subprocess. Allow --only consistency

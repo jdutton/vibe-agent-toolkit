@@ -13,6 +13,7 @@ import { Command } from 'commander';
 import { handleCommandError } from '../utils/command-error.js';
 import { loadConfig } from '../utils/config-loader.js';
 import { writeYamlOutput } from '../utils/output.js';
+import { requireProjectRoot } from '../utils/project-root-policy.js';
 
 import { createPhaseContext, type Phase } from './phase-utils.js';
 
@@ -47,6 +48,12 @@ Exit Codes:
   0 - All phases completed successfully
   1 - Build error
   2 - System error
+
+Requirements:
+  projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
+  config:      required file with required fields per orchestrated phase
+
+  See docs/concepts/roots-and-config.md for terminology.
 
 Example:
   $ vat build                         # Build everything
@@ -91,6 +98,9 @@ function buildPhaseList(options: BuildCommandOptions, cwd: string): Phase[] {
 
 async function buildTopLevelCommand(options: BuildCommandOptions): Promise<void> {
   const cwd = process.cwd();
+  // Spec §7: `vat build` requires a projectRoot.
+  requireProjectRoot(cwd, 'vat build');
+
   const phases = buildPhaseList(options, cwd);
   const { logger, startTime, binPath } = createPhaseContext(options.debug, phases, options.only, 'skills, claude');
 

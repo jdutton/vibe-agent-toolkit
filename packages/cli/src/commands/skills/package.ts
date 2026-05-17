@@ -23,6 +23,7 @@ import { Command } from 'commander';
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
 import { writeYamlOutput } from '../../utils/output.js';
+import { requireProjectRoot } from '../../utils/project-root-policy.js';
 
 /** Default packaging target */
 const DEFAULT_TARGET: PackagingTarget = 'claude-code';
@@ -85,6 +86,12 @@ Exit Codes:
   0 - Packaging successful (or dry-run preview)
   1 - Invalid skill path or packaging error
   2 - System error
+
+Requirements:
+  projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
+  config:      required file with skills.* fields populated
+
+  See docs/concepts/roots-and-config.md for terminology.
 
 Examples:
   $ vat skills package SKILL.md -o dist/my-skill
@@ -347,6 +354,10 @@ async function packageCommand(
   const startTime = Date.now();
 
   try {
+    // Spec §7: `vat skills package` requires a projectRoot — fails fast at
+    // the CLI boundary if no config or git ancestor exists.
+    requireProjectRoot(process.cwd(), 'vat skills package');
+
     logger.info(`📦 Packaging skill: ${skillPath}`);
 
     // Validate --target option

@@ -51,6 +51,12 @@ Exit codes:
   2  - scan failed to start (seed missing, --out missing, etc.)
   130 - interrupted by SIGINT (partial results written)
 
+Requirements:
+  projectRoot: optional (tolerates absence)
+  config:      not used
+
+  See docs/concepts/roots-and-config.md for terminology.
+
 Example:
   $ vat corpus scan --out ~/scratch/vat-corpus-runs
   $ vat corpus scan corpus/seed.yaml --out ~/scratch/vat-corpus-runs --with-review

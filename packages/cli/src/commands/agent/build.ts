@@ -8,6 +8,7 @@ import { resolveAgentPath } from '../../utils/agent-discovery.js';
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
 import { writeYamlOutput } from '../../utils/output.js';
+import { requireProjectRoot } from '../../utils/project-root-policy.js';
 
 export interface BuildCommandOptions {
   target?: string;
@@ -26,6 +27,9 @@ export async function buildCommand(
   const startTime = Date.now();
 
   try {
+    // Spec §7: `vat agent build` requires a projectRoot.
+    requireProjectRoot(process.cwd(), 'vat agent build');
+
     const target = options.target ?? 'skill';
     logger.debug(`Building agent for target: ${target}`);
 

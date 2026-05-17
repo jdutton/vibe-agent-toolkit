@@ -12,7 +12,6 @@ import { existsSync, readFileSync } from 'node:fs';
 
 import {
   findConfigFile,
-  findProjectRoot,
   getToolVersion,
   resolveAssetReference,
   safePath,
@@ -21,6 +20,7 @@ import type { Command } from 'commander';
 import * as semver from 'semver';
 
 import { loadConfig } from '../utils/config-loader.js';
+import { projectRootOrNull } from '../utils/project-root-policy.js';
 
 /**
  * Result of a single doctor check
@@ -438,10 +438,11 @@ export async function checkVatVersion(
 
 /**
  * Detect if running in VAT source tree
+ *
+ * @param projectRoot - Pre-resolved project root from the CLI boundary (null if absent)
  */
-function isVatSourceTree(): boolean {
+function isVatSourceTree(projectRoot: string | null): boolean {
   try {
-    const projectRoot = findProjectRoot(process.cwd());
     if (!projectRoot) return false;
 
     const cliPackagePath = safePath.join(projectRoot, 'packages/cli/package.json');
@@ -458,10 +459,12 @@ function isVatSourceTree(): boolean {
 
 /**
  * Check if CLI build is in sync with source code (development mode only)
+ *
+ * @param projectRoot - Pre-resolved project root from the CLI boundary (null if absent)
  */
-export function checkCliBuildSync(): DoctorCheckResult {
+export function checkCliBuildSync(projectRoot: string | null): DoctorCheckResult {
   try {
-    if (!isVatSourceTree()) {
+    if (!isVatSourceTree(projectRoot)) {
       return {
         name: CHECK_NAME_CLI_BUILD_STATUS,
         passed: true,
@@ -469,7 +472,6 @@ export function checkCliBuildSync(): DoctorCheckResult {
       };
     }
 
-    const projectRoot = findProjectRoot(process.cwd());
     if (!projectRoot) {
       return {
         name: CHECK_NAME_CLI_BUILD_STATUS,
@@ -522,9 +524,10 @@ export function checkCliBuildSync(): DoctorCheckResult {
 export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResult> {
   const { verbose = false, versionChecker } = options;
 
-  // 1. Detect project context
+  // 1. Detect project context at the CLI boundary.
+  // Doctor uses the `tolerate null` policy (spec §7) — null is reported as a finding.
   const currentDir = process.cwd();
-  const projectRoot = findProjectRoot(currentDir);
+  const projectRoot = projectRootOrNull(currentDir);
   const configPath = findConfigFile(currentDir);
 
   const projectContext: ProjectContext = {
@@ -541,7 +544,7 @@ export async function runDoctor(options: DoctorOptions = {}): Promise<DoctorResu
     checkGitRepository(),
     checkConfigFile(),
     checkConfigValid(),
-    checkCliBuildSync(),
+    checkCliBuildSync(projectRoot),
   ];
 
   // 3. Filter output based on verbose mode
@@ -581,6 +584,12 @@ When to run:
 Exit Codes:
   0 - All checks passed
   1 - One or more checks failed (see output for suggested fixes)
+
+Requirements:
+  projectRoot: optional (tolerates absence — reported as a finding)
+  config:      not used
+
+  See docs/concepts/roots-and-config.md for terminology.
 
 Example:
   $ vat doctor                  # Check environment, show only issues

@@ -63,6 +63,12 @@ Description:
     - agents/
     - . (current directory)
 
+Requirements:
+  projectRoot: optional (tolerates absence)
+  config:      not used
+
+  See docs/concepts/roots-and-config.md for terminology.
+
 Example:
   $ vat agent list                      # List all agents
   $ vat agent list --debug              # Show discovery details
@@ -95,6 +101,12 @@ Output:
 Exit Codes:
   0 - Success  |  1 - Build error  |  2 - System error
 
+Requirements:
+  projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
+  config:      required file with agents.* fields populated
+
+  See docs/concepts/roots-and-config.md for terminology.
+
 Examples:
   $ vat agent build agent-generator                    # Build as Agent Skill
   $ vat agent build agent-generator --target skill     # Explicit target
@@ -125,9 +137,15 @@ Examples:
   $ vat agent run ./my-agent "analyze this code"
   $ vat agent run my-agent "help me with..." --debug
 
-Requirements:
+Prerequisites:
   - ANTHROPIC_API_KEY environment variable (for Anthropic-based agents)
   - Valid agent manifest with prompts configured
+
+Requirements:
+  projectRoot: optional (path-explicit; tolerates absence)
+  config:      optional (uses defaults if absent)
+
+  See docs/concepts/roots-and-config.md for terminology.
 `
     );
 
@@ -155,6 +173,12 @@ Validation Checks:
 
 Exit Codes:
   0 - Valid  |  1 - Validation errors  |  2 - System error
+
+Requirements:
+  projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
+  config:      optional (uses defaults if absent)
+
+  See docs/concepts/roots-and-config.md for terminology.
 
 Examples:
   $ vat agent validate agent-generator          # Validate by name
