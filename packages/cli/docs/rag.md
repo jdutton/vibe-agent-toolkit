@@ -441,6 +441,24 @@ vat rag index docs/
 2. Query too broad/vague → Be more specific
 3. Chunk boundaries split relevant content → Adjust chunk size (future feature)
 
+## Requirements
+
+| Subcommand | `projectRoot` | Config |
+|---|---|---|
+| `vat rag index [path]` | optional (tolerates absence — `--db` supplies the path directly) | required fields (`rag.*`) when `--db` is not supplied; otherwise unused |
+| `vat rag query <text>` | optional (`--db` overrides) | required file with `rag.*` for default db lookup |
+| `vat rag stats` | optional (`--db` overrides) | required file with `rag.*` for default db lookup |
+| `vat rag clear` | optional (`--db` overrides) | required file with `rag.*` for default db lookup |
+
+RAG commands are unusual: they tolerate a missing `projectRoot` because the
+caller can always specify `--db <path>` explicitly. But when `--db` is omitted,
+VAT needs `rag.*` config fields to locate the configured store. The two
+mechanisms are complementary — `--db` is for one-off use, `rag.*` config is for
+project-default behavior.
+
+See [Roots and Config — Canonical Concepts](../../../docs/concepts/roots-and-config.md)
+for terminology.
+
 ## More Information
 
 - **GitHub:** https://github.com/jdutton/vibe-agent-toolkit

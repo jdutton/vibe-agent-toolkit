@@ -313,6 +313,25 @@ description: Generates TypeScript types from API responses. Useful when building
 3. **Validate regularly** - Run audit before commits
 4. **Anchor links** - Supported but external URLs are not validated
 
+## Requirements
+
+`vat audit` (the modern top-level command this doc covers) operates with
+per-skill governing context rather than a single top-level `projectRoot`:
+
+- **`projectRoot`**: per-skill walk-up. Each `SKILL.md` discovered during the
+  scan walks up to its own nearest `vibe-agent-toolkit.config.yaml`-or-`.git/`
+  ancestor and uses that as *its* `projectRoot`. Skills with no governing
+  config or git ancestor are reported as ungoverned (an audit finding, not a
+  fatal error). This is what lets `vat audit` work on external community trees
+  and downloaded plugin bundles.
+- **Config**: accept defaults. Per-skill `validation.severity` and
+  `validation.allow` overrides come from whichever `vibe-agent-toolkit.config.yaml`
+  each skill walks up to. The audit itself is advisory and always exits 0.
+
+See [Roots and Config — Canonical Concepts](../concepts/roots-and-config.md)
+for the `projectRoot` ladder, the per-command policy matrix, and the rationale
+behind audit's per-skill walk-up.
+
 ## Related Commands
 
 - [`vat agent import`](./import.md) - Convert SKILL.md to agent.yaml

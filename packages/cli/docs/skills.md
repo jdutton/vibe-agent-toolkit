@@ -128,6 +128,19 @@ vat skills validate --user
 vat skills validate packages/my-agent/resources/skills
 ```
 
+**Requirements:**
+
+- **`projectRoot`**: required. `vat skills validate` refuses to run if no
+  `vibe-agent-toolkit.config.yaml` or `.git/` ancestor is found. Source-mode
+  validation always runs against a real authoring boundary.
+- **Config**: optional. Falls back to built-in defaults if no config file is
+  present, but a `projectRoot` is still required to anchor link resolution and
+  the gitignore-safety gate.
+
+See [Roots and Config — Canonical Concepts](../../../docs/concepts/roots-and-config.md)
+for the discovery ladder, the loud-cwd fallback policy, and the CLI-boundary
+discovery rule that this command participates in.
+
 ---
 
 ### vat skills build
@@ -203,6 +216,18 @@ vat skills build --skill my-skill
 vat skills build --dry-run
 ```
 
+**Requirements:**
+
+- **`projectRoot`**: required. `vat skills build` refuses to run if no
+  `vibe-agent-toolkit.config.yaml` or `.git/` ancestor is found. This guards
+  against accidental builds outside a VAT project.
+- **Config**: required file with `skills.*` fields populated. The build
+  pipeline reads `skills.discovery` and `skills.config.*` directly — there are
+  no useful defaults for these.
+
+See [Roots and Config — Canonical Concepts](../../../docs/concepts/roots-and-config.md)
+for terminology.
+
 ---
 
 ### vat skills package <skill-path>
@@ -269,6 +294,18 @@ vat skills package SKILL.md -o dist --no-rewrite-links
 # Package with custom base path
 vat skills package SKILL.md -o dist -b /custom/base
 ```
+
+**Requirements:**
+
+- **`projectRoot`**: required. Packaging is an explicit-adoption operation and
+  is refused outside a discovered VAT project (no `vibe-agent-toolkit.config.yaml`
+  or `.git/` ancestor).
+- **Config**: required file with `skills.*` fields populated. Per-skill packaging
+  options (`skills.config.<name>`) drive link rewriting, bundle inclusion, and
+  validation overrides.
+
+See [Roots and Config — Canonical Concepts](../../../docs/concepts/roots-and-config.md)
+for terminology.
 
 ---
 
@@ -380,6 +417,16 @@ After installation, you need to:
 1. Restart Claude Code (or the target agent), or
 2. Run `/reload-plugins` in Claude Code to load the new skill
 
+**Requirements:**
+
+- **`projectRoot`**: N/A. `vat skills install` is a user-level operation that
+  installs into platform target directories (`~/.claude/skills/`,
+  `.claude/skills/`, etc.) regardless of where it is invoked.
+- **Config**: not used.
+
+See [Roots and Config — Canonical Concepts](../../../docs/concepts/roots-and-config.md)
+for terminology.
+
 ---
 
 ### vat skills list [path]
@@ -452,6 +499,17 @@ vat skills list packages/my-agent
 # Show detailed information
 vat skills list --verbose
 ```
+
+**Requirements:**
+
+- **`projectRoot`**: optional. `vat skills list` tolerates a missing
+  `projectRoot`. With `--user` it scans user installation directories directly
+  and skips project-root discovery entirely.
+- **Config**: optional. Project mode honors config-defined include/exclude
+  patterns when present; defaults are used otherwise.
+
+See [Roots and Config — Canonical Concepts](../../../docs/concepts/roots-and-config.md)
+for terminology.
 
 ---
 

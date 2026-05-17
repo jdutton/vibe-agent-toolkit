@@ -53,6 +53,20 @@ vat resources scan docs/
 # ---
 ```
 
+**Requirements:**
+
+- **`projectRoot`**: optional with **loud-cwd fallback**. When invoked with an
+  explicit `[path]`, that path is the effective base. Without a path, VAT walks
+  up from `cwd` for `vibe-agent-toolkit.config.yaml` then `.git/`; if neither is
+  found, the command falls back to `cwd` and emits a single stderr warning
+  identifying the fallback. The scan still completes — the warning is the
+  contract that prevents silent surprise.
+- **Config**: optional. Uses built-in include/exclude defaults if no config file
+  is present.
+
+See [Roots and Config — Canonical Concepts](../../../docs/concepts/roots-and-config.md)
+for the loud-cwd fallback policy and the projectRoot discovery ladder.
+
 ### vat resources validate [path]
 
 **Purpose:** Validate markdown resources with strict error reporting
@@ -120,6 +134,30 @@ vat resources validate docs/
 # duration: 456ms
 # ---
 ```
+
+**Requirements:**
+
+- **`projectRoot`**: optional with **loud-cwd fallback**. With an explicit
+  `[path]` the path is used as the base directory; without it VAT walks for a
+  `vibe-agent-toolkit.config.yaml` then `.git/` ancestor, and falls back to
+  `cwd` with a stderr warning if neither is found.
+- **Config**: optional. Defaults are applied when no config file is present;
+  `--frontmatter-schema` is independent of config.
+
+**Leading-`/` URI-reference resolution.** Markdown body links and frontmatter
+URI-references whose path component starts with `/` (e.g.
+`[See](/docs/foo.md)`, `parent_spec: /docs/foo.md`) are RFC 3986 §4.2
+absolute-path references and are resolved against the discovered `projectRoot`.
+Once cwd-fallback has fired, the effective `projectRoot` is `cwd` and leading-`/`
+links resolve against `cwd` — consistent with the loud-cwd contract. The
+`absolute_no_root` failure mode fires only when `projectRoot` is genuinely
+undefined (e.g. a programmatic embedder that did not supply one); leading-`/`
+links that escape `projectRoot` via path traversal surface as
+`absolute_escapes_root`. Both surface as `broken_file` issues.
+
+See [Roots and Config — Canonical Concepts](../../../docs/concepts/roots-and-config.md)
+for the projectRoot ladder, the loud-cwd fallback policy, and the rationale
+behind RFC-3986-compliant leading-`/` resolution.
 
 ## Configuration
 

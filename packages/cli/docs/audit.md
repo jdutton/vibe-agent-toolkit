@@ -555,6 +555,31 @@ Windows users: Use forward slashes even on Windows - they work correctly in Node
 
 SKILL.md files can use any line ending (LF, CRLF) - the parser handles both.
 
+## Requirements
+
+`vat audit` has an unusual policy because it operates on per-skill
+governing context rather than a single top-level `projectRoot`:
+
+- **`projectRoot`**: per-skill walk-up. There is no single `projectRoot` for an
+  audit run. Each `SKILL.md` discovered during scanning walks up to its own
+  nearest `vibe-agent-toolkit.config.yaml`-or-`.git/` ancestor and uses that as
+  *its* `projectRoot`. Skills with no governing config or git ancestor are
+  reported as ungoverned (an audit finding, not a fatal error). This lets `vat
+  audit` work on external community trees, downloaded plugin bundles, and
+  monorepos with multiple sub-package configs.
+- **Config**: accept defaults. Per-skill `validation.severity` and
+  `validation.allow` overrides come from whichever
+  `vibe-agent-toolkit.config.yaml` each skill walks up to. The audit itself
+  always exits 0 (advisory) regardless of severity outcomes.
+
+The per-skill walk-up is cached via a module-level two-layer cache and pre-warmed
+during top-down descent for efficiency on large trees.
+
+See [Roots and Config — Canonical Concepts](../../../docs/concepts/roots-and-config.md)
+for the `projectRoot` ladder and the audit walk-up model. See
+[`docs/skill-quality-and-compatibility.md`](../../../docs/skill-quality-and-compatibility.md)
+for VAT's advisory-audit stance.
+
 ## Related Commands
 
 - `vat agent audit <path>` - Legacy skill-only audit (deprecated)

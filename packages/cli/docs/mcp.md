@@ -310,6 +310,22 @@ All implementations must:
 
 See [MCP Gateway README](../../gateway-mcp/README.md) for planned features.
 
+## Requirements
+
+Both MCP subcommands run as server / discovery operations and do not consume a
+VAT authoring context:
+
+- **`vat mcp list-collections`**
+  - **`projectRoot`**: N/A.
+  - **Config**: not used.
+- **`vat mcp serve <package>`**
+  - **`projectRoot`**: N/A. The server resolves `<package>` from `node_modules`
+    or an explicit path; project context is not needed.
+  - **Config**: not used.
+
+See [Roots and Config — Canonical Concepts](../../../docs/concepts/roots-and-config.md)
+for terminology.
+
 ## See Also
 
 - [MCP Gateway README](../../gateway-mcp/README.md)
