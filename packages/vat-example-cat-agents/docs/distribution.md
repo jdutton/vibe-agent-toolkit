@@ -490,9 +490,9 @@ Use this template in your README for user-facing documentation:
    unzip cat-agents-skill.zip -d ~/.claude/plugins/
    ```
 
-3. Restart Claude Code or reload skills:
+3. Restart Claude Code or reload plugins:
    ```
-   /reload-skills
+   /reload-plugins
    ```
 
 ### Option 2: Install from npm

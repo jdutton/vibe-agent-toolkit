@@ -53,7 +53,7 @@ vat skills install ./packages/vat-example-cat-agents
 vat skills list --installed
 ```
 
-The `vat-cat-agents` skill will be installed to `~/.claude/plugins/vat-cat-agents/` and will appear in Claude Code after restarting or running `/reload-skills`.
+The `vat-cat-agents` skill will be installed to `~/.claude/plugins/vat-cat-agents/` and will appear in Claude Code after restarting or running `/reload-plugins`.
 
 **What the skill includes:**
 - SKILL.md with agent orchestration patterns

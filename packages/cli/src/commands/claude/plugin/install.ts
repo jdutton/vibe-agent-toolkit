@@ -1057,7 +1057,7 @@ function outputDevSuccess(
     logger.info(`\n✅ Dry-run complete: ${installed.length} skill(s) would be symlinked`);
   } else {
     logger.info(`\n✅ Dev-installed ${installed.length} skill(s) via symlink`);
-    logger.info(`   After rebuilding, run /reload-skills in Claude Code`);
+    logger.info(`   After rebuilding, run /reload-plugins in Claude Code`);
   }
 }
 
@@ -1088,6 +1088,6 @@ function outputInstallSuccess(
   } else {
     logger.info(`\n✅ Installed ${skills.length} skill(s)`);
     logger.info(`\n💡 Run 'vat claude plugin list' to verify installation`);
-    logger.info(`   Restart Claude Code or run /reload-skills to use the new skill`);
+    logger.info(`   Restart Claude Code or run /reload-plugins to use the new skill`);
   }
 }

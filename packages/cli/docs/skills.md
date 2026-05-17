@@ -378,7 +378,7 @@ vat skills install ./dist/skills/my-skill --target claude --scope project
 **Post-Installation:**
 After installation, you need to:
 1. Restart Claude Code (or the target agent), or
-2. Run `/reload-skills` in Claude Code to load the new skill
+2. Run `/reload-plugins` in Claude Code to load the new skill
 
 ---
 
@@ -580,7 +580,7 @@ User: /my-skill
 - Use `--dry-run` to preview what will be installed before committing
 - Use `--force` flag carefully (overwrites existing skills)
 - Verify installation: `vat skills list --user`
-- Remember to restart the target agent or run `/reload-skills` in Claude Code
+- Remember to restart the target agent or run `/reload-plugins` in Claude Code
 
 ---
 
@@ -660,7 +660,7 @@ name: my-help  # Instead of "help"
 **Solution:**
 1. Verify installation: `vat skills list --user`
 2. Check location: Should be in `~/.claude/skills/` not `~/.claude/plugins/`
-3. Restart Claude Code or run `/reload-skills`
+3. Restart Claude Code or run `/reload-plugins`
 
 ### "Windows-style backslashes"
 **Problem:** Links use backslashes: `resources\SKILL.md`
