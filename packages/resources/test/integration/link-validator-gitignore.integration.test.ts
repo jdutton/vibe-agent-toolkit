@@ -175,24 +175,33 @@ describe('validateLink - git-ignore safety', () => {
     expect(result).toBeNull();
   });
 
-  it('should skip git-ignore check for external resources', async () => {
+  it('rejects external absolute filesystem paths as broken_file', async () => {
+    // Pre-Phase 3 this test fed an external absolute filesystem path as a
+    // local_file link href and expected the gitignore safety check to skip it.
+    // Per RFC 3986 §4.2 leading-/ is now an absolute-path reference resolved
+    // against projectRoot, so an external filesystem path is treated as a
+    // projectRoot-relative path that doesn't exist (broken_file). The
+    // gitignore branch is unreachable for this input — the broader rejection
+    // is stricter and correct.
     const { projectRoot, sourceFile } = await setupGitProject(suite.tempDir);
 
     // Create an external file (outside project)
     const externalDir = safePath.join(normalizedTmpdir(), 'external-project');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is from temp dir
-    fs.mkdirSync(externalDir);
+    fs.mkdirSync(externalDir, { recursive: true });
     const externalFile = safePath.join(externalDir, 'external.md');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is from temp dir
     fs.writeFileSync(externalFile, '# External\n');
 
-    const result = await validateWithGitIgnoreCheck(sourceFile, externalFile, projectRoot);
+    try {
+      const result = await validateWithGitIgnoreCheck(sourceFile, externalFile, projectRoot);
 
-    // Should be valid (external resources skip git-ignore checks)
-    expect(result).toBeNull();
-
-    // Cleanup
-    fs.rmSync(externalDir, { recursive: true, force: true });
+      expect(result).not.toBeNull();
+      expect(result?.type).toBe('broken_file');
+    } finally {
+      // Cleanup
+      fs.rmSync(externalDir, { recursive: true, force: true });
+    }
   });
 
   it('should validate non-ignored file to non-ignored file normally', async () => {

@@ -20,12 +20,12 @@ import path from 'node:path';
 import {
   isGitIgnored,
   type GitTracker,
-  verifyCaseSensitiveFilename, safePath,
+  verifyCaseSensitiveFilename,
 } from '@vibe-agent-toolkit/utils';
 
 import type { ValidationIssue } from './schemas/validation-result.js';
 import type { HeadingNode, ResourceLink } from './types.js';
-import { isWithinProject, resolveLocalHref, splitHrefAnchor } from './utils.js';
+import { isWithinProject, resolveLocalHref } from './utils.js';
 
 /**
  * Options for link validation.
@@ -98,6 +98,120 @@ export async function validateLink(
 }
 
 /**
+ * Convert a resolution failure kind to a broken_file ValidationIssue. Returns
+ * null for `resolved` (caller continues) and `anchor_only` (defensive no-op —
+ * the parser classifies anchor-only hrefs as 'anchor', not 'local_file').
+ */
+function resolutionFailureIssue(
+  resolved: ReturnType<typeof resolveLocalHref>,
+  link: ResourceLink,
+  sourceFilePath: string,
+): ValidationIssue | null {
+  if (resolved.kind === 'absolute_no_root') {
+    return {
+      resourcePath: sourceFilePath,
+      line: link.line,
+      type: 'broken_file',
+      link: link.href,
+      message:
+        `Absolute-path link "${link.href}" requires a configured projectRoot; ` +
+        `none was provided. Configure vibe-agent-toolkit.config.yaml or run ` +
+        `from within a git repository.`,
+      suggestion:
+        'Rewrite as a source-relative link, or run from a directory with a config or git ancestor.',
+    };
+  }
+
+  if (resolved.kind === 'absolute_escapes_root') {
+    return {
+      resourcePath: sourceFilePath,
+      line: link.line,
+      type: 'broken_file',
+      link: link.href,
+      message: `Absolute-path link "${link.href}" escapes the project root via path traversal.`,
+      suggestion: '',
+    };
+  }
+
+  return null;
+}
+
+/**
+ * Convert a non-existent file result into a broken_file ValidationIssue.
+ * Returns null when the file exists.
+ */
+function fileExistenceIssue(
+  fileResult: { exists: boolean; resolvedPath: string; actualName?: string },
+  link: ResourceLink,
+  sourceFilePath: string,
+): ValidationIssue | null {
+  if (fileResult.exists) return null;
+
+  if (fileResult.actualName) {
+    const expectedName = path.basename(fileResult.resolvedPath);
+    return {
+      resourcePath: sourceFilePath,
+      line: link.line,
+      type: 'broken_file',
+      link: link.href,
+      message: `File found but case mismatch: expected "${expectedName}" but found "${fileResult.actualName}". This will fail on case-sensitive filesystems (Linux). Update the link to match the actual filename.`,
+      suggestion: `Use "${fileResult.actualName}" instead of "${expectedName}"`,
+    };
+  }
+
+  return {
+    resourcePath: sourceFilePath,
+    line: link.line,
+    type: 'broken_file',
+    link: link.href,
+    message: `File not found: ${fileResult.resolvedPath}`,
+    suggestion: '',
+  };
+}
+
+/**
+ * Check git-ignore safety: a non-ignored source file must not link to a
+ * gitignored target. Returns a ValidationIssue when this rule is violated,
+ * null otherwise (including when checks are disabled or out of scope).
+ */
+function gitIgnoreSafetyIssue(
+  link: ResourceLink,
+  sourceFilePath: string,
+  resolvedTarget: string,
+  options: ValidateLinkOptions | undefined,
+): ValidationIssue | null {
+  if (
+    options?.skipGitIgnoreCheck === true ||
+    options?.projectRoot === undefined ||
+    !isWithinProject(resolvedTarget, options.projectRoot)
+  ) {
+    return null;
+  }
+
+  // Prefer the O(1) active-set lookup on the shared GitTracker (no spawn).
+  // isIgnoredByActiveSet falls back internally to isIgnored for paths outside
+  // the project root, so this is safe for the rare out-of-project case.
+  // When no tracker is threaded in, fall back to isGitIgnored (one-off spawn).
+  const sourceIsIgnored = options.gitTracker
+    ? options.gitTracker.isIgnoredByActiveSet(sourceFilePath)
+    : isGitIgnored(sourceFilePath, options.projectRoot);
+  const targetIsIgnored = options.gitTracker
+    ? options.gitTracker.isIgnoredByActiveSet(resolvedTarget)
+    : isGitIgnored(resolvedTarget, options.projectRoot);
+
+  if (sourceIsIgnored || !targetIsIgnored) return null;
+
+  return {
+    resourcePath: sourceFilePath,
+    line: link.line,
+    type: 'link_to_gitignored',
+    link: link.href,
+    message: `Non-ignored file links to gitignored file: ${resolvedTarget}. Gitignored files are local-only and will not exist in the repository. Remove this link or unignore the target file.`,
+    suggestion: '',
+  };
+}
+
+/**
  * Validate a local file link (with optional anchor).
  */
 async function validateLocalFileLink(
@@ -106,85 +220,29 @@ async function validateLocalFileLink(
   headingsByFile: Map<string, HeadingNode[]>,
   options?: ValidateLinkOptions
 ): Promise<ValidationIssue | null> {
-  // Extract file path and anchor from href
-  const [filePath, anchor] = splitHrefAnchor(link.href);
+  const resolved = resolveLocalHref(link.href, sourceFilePath, options?.projectRoot);
 
-  // Validate the file exists
-  const fileResult = await validateLocalFile(filePath, sourceFilePath);
-
-  if (!fileResult.exists) {
-    // Check if it's a case mismatch
-    if (fileResult.actualName) {
-      const expectedName = path.basename(fileResult.resolvedPath);
-      return {
-        resourcePath: sourceFilePath,
-        line: link.line,
-        type: 'broken_file',
-        link: link.href,
-        message: `File found but case mismatch: expected "${expectedName}" but found "${fileResult.actualName}". This will fail on case-sensitive filesystems (Linux). Update the link to match the actual filename.`,
-        suggestion: `Use "${fileResult.actualName}" instead of "${expectedName}"`,
-      };
-    }
-
-    return {
-      resourcePath: sourceFilePath,
-      line: link.line,
-      type: 'broken_file',
-      link: link.href,
-      message: `File not found: ${fileResult.resolvedPath}`,
-      suggestion: '',
-    };
+  if (resolved.kind !== 'resolved') {
+    // anchor_only → null no-op; absolute_no_root / absolute_escapes_root → broken_file.
+    return resolutionFailureIssue(resolved, link, sourceFilePath);
   }
 
-  // Check git-ignore safety (Phase 3)
-  // Only check if:
-  // 1. skipGitIgnoreCheck is NOT true
-  // 2. projectRoot is provided
-  // 3. target is within project (skip for external resources)
-  if (
-    options?.skipGitIgnoreCheck !== true &&
-    options?.projectRoot !== undefined &&
-    isWithinProject(fileResult.resolvedPath, options.projectRoot)
-  ) {
-    // Prefer the O(1) active-set lookup on the shared GitTracker (no spawn).
-    // isIgnoredByActiveSet falls back internally to isIgnored for paths outside
-    // the project root, so this is safe for the rare out-of-project case.
-    // When no tracker is threaded in, fall back to isGitIgnored (one-off spawn).
-    const sourceIsIgnored = options.gitTracker
-      ? options.gitTracker.isIgnoredByActiveSet(sourceFilePath)
-      : isGitIgnored(sourceFilePath, options.projectRoot);
-    const targetIsIgnored = options.gitTracker
-      ? options.gitTracker.isIgnoredByActiveSet(fileResult.resolvedPath)
-      : isGitIgnored(fileResult.resolvedPath, options.projectRoot);
+  const fileResult = await validateResolvedFile(resolved.resolvedPath);
+  const notFound = fileExistenceIssue(fileResult, link, sourceFilePath);
+  if (notFound) return notFound;
 
-    // Error ONLY if: source is NOT ignored AND target IS ignored
-    if (!sourceIsIgnored && targetIsIgnored) {
-      return {
-        resourcePath: sourceFilePath,
-        line: link.line,
-        type: 'link_to_gitignored',
-        link: link.href,
-        message: `Non-ignored file links to gitignored file: ${fileResult.resolvedPath}. Gitignored files are local-only and will not exist in the repository. Remove this link or unignore the target file.`,
-        suggestion: '',
-      };
-    }
-  }
+  const gitIgnoreIssue = gitIgnoreSafetyIssue(link, sourceFilePath, fileResult.resolvedPath, options);
+  if (gitIgnoreIssue) return gitIgnoreIssue;
 
-  // If there's an anchor, validate it too
-  if (anchor) {
-    const anchorValid = await validateAnchor(
-      anchor,
-      fileResult.resolvedPath,
-      headingsByFile
-    );
-
+  if (resolved.anchor) {
+    const anchorValid = await validateAnchor(resolved.anchor, fileResult.resolvedPath, headingsByFile);
     if (!anchorValid) {
       return {
         resourcePath: sourceFilePath,
         line: link.line,
         type: 'broken_anchor',
         link: link.href,
-        message: `Anchor not found: #${anchor} in ${fileResult.resolvedPath}`,
+        message: `Anchor not found: #${resolved.anchor} in ${fileResult.resolvedPath}`,
         suggestion: '',
       };
     }
@@ -223,34 +281,16 @@ async function validateAnchorLink(
 
 
 /**
- * Validate that a local file exists with the correct case.
+ * Verify that the resolved filesystem path exists with the correct case.
  *
- * @param href - The href to the file (relative or absolute)
- * @param sourceFilePath - Absolute path to the source file
- * @returns Object with exists flag, resolved absolute path, and optional case mismatch info
- *
- * @example
- * ```typescript
- * const result = await validateLocalFile('./docs/guide.md', '/project/README.md');
- * if (result.exists) {
- *   console.log('File exists at:', result.resolvedPath);
- * } else if (result.actualName) {
- *   console.log('Case mismatch:', result.actualName);
- * }
- * ```
+ * @param resolvedPath - Absolute filesystem path produced by {@link resolveLocalHref}.
+ * @returns Object with exists flag, the path, and optional case-mismatch info.
  */
-async function validateLocalFile(
-  href: string,
-  sourceFilePath: string
+async function validateResolvedFile(
+  resolvedPath: string,
 ): Promise<{ exists: boolean; resolvedPath: string; actualName?: string }> {
-  // Resolve href to filesystem path (decode percent-encoding, resolve relative to source)
-  const resolved = resolveLocalHref(href, sourceFilePath);
-  const resolvedPath = resolved?.resolvedPath ?? safePath.resolve(path.dirname(sourceFilePath), href);
-
-  // Check if file exists with correct case
   const verification = await verifyCaseSensitiveFilename(resolvedPath);
 
-  // Build result with optional actualName (only include if present)
   const result: { exists: boolean; resolvedPath: string; actualName?: string } = {
     exists: verification.exists,
     resolvedPath,
