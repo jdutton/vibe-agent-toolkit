@@ -3,7 +3,11 @@ import * as fs from 'node:fs';
 import { setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
-import { loadConfig } from '../../src/utils/config-loader.js';
+import {
+  loadConfig,
+  loadConfigCached,
+  resetLoadedConfigCache,
+} from '../../src/utils/config-loader.js';
 
 describe('loadConfig', () => {
   const suite = setupSyncTempDirSuite('vat-config');
@@ -144,5 +148,80 @@ claude:
     expect(result?.claude?.marketplaces?.['vat-skills']?.owner?.name).toBe(
       'vibe-agent-toolkit contributors'
     );
+  });
+});
+
+const CACHED_CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
+const VALID_CONFIG_YAML = 'version: 1\n';
+
+function writeConfigToDir(dir: string, content: string): string {
+  const configPath = safePath.join(dir, CACHED_CONFIG_FILENAME);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
+  fs.writeFileSync(configPath, content, 'utf-8');
+  return configPath;
+}
+
+describe('loadConfigCached (Layer 2 cache — spec §8 / §13.5)', () => {
+  const suite = setupSyncTempDirSuite('vat-config-cached');
+  let tempDir: string;
+
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+
+  beforeEach(() => {
+    suite.beforeEach();
+    tempDir = suite.getTempDir();
+    resetLoadedConfigCache();
+  });
+
+  it('returns cached config without re-parsing on second call', () => {
+    writeConfigToDir(tempDir, VALID_CONFIG_YAML);
+
+    const first = loadConfigCached(tempDir);
+    expect(first?.version).toBe(1);
+
+    // Mutate to broken yaml. If the cache hits, we still get the previous
+    // parsed result — proving the second call did not re-parse.
+    writeConfigToDir(tempDir, ':::: not yaml :::\n');
+
+    const second = loadConfigCached(tempDir);
+    expect(second).toBe(first); // same object reference proves cache hit
+  });
+
+  it('caches "not found" as undefined (no re-stat per call)', () => {
+    // tempDir has no config file. First call returns undefined.
+    const first = loadConfigCached(tempDir);
+    expect(first).toBeUndefined();
+
+    // Even if we now write a config, the cached undefined wins until reset.
+    writeConfigToDir(tempDir, VALID_CONFIG_YAML);
+
+    const second = loadConfigCached(tempDir);
+    expect(second).toBeUndefined();
+  });
+
+  it('resetLoadedConfigCache() clears the cache', () => {
+    // Same setup as above: cache `undefined` then mutate.
+    const first = loadConfigCached(tempDir);
+    expect(first).toBeUndefined();
+
+    writeConfigToDir(tempDir, VALID_CONFIG_YAML);
+    resetLoadedConfigCache();
+
+    const fresh = loadConfigCached(tempDir);
+    expect(fresh?.version).toBe(1);
+  });
+
+  it('caches parse failures as undefined to avoid re-parse storm', () => {
+    // Invalid yaml — loadConfig throws.
+    writeConfigToDir(tempDir, 'version: not-a-number\n');
+
+    const first = loadConfigCached(tempDir);
+    expect(first).toBeUndefined();
+
+    // Even fixing the file should NOT re-parse without reset.
+    writeConfigToDir(tempDir, VALID_CONFIG_YAML);
+    const second = loadConfigCached(tempDir);
+    expect(second).toBeUndefined();
   });
 });

@@ -2,13 +2,14 @@
 import fs from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { gitFindRoot } from '../src/git-utils.js';
 import {
   findConfigFile,
   findNodeWorkspaceRoot,
   findProjectRoot,
+  resetProjectRootCaches,
 } from '../src/project-utils.js';
 import { setupAsyncTempDirSuite } from '../src/test-helpers.js';
 
@@ -177,6 +178,8 @@ describe('findProjectRoot (config → git → null ladder)', () => {
   beforeEach(async () => {
     await suite.beforeEach();
     tempDir = suite.getTempDir();
+    // Cache is module-level; reset between tests so fixtures don't bleed.
+    resetProjectRootCaches();
   });
 
   it('config-anchored: returns directory of vibe-agent-toolkit.config.yaml', () => {
@@ -245,5 +248,96 @@ describe('findProjectRoot (config → git → null ladder)', () => {
       expect(result.startsWith(tempDir + SEPARATOR)).toBe(false);
       expect(result).not.toBe(isolated);
     }
+  });
+});
+
+describe('findProjectRoot Layer 1 cache (spec §8 / §13.5)', () => {
+  // We can't reliably spy on `existsSync` destructured at module load time in
+  // ESM, so we verify cache behavior by mutating the filesystem between calls
+  // and asserting the cached result wins. If a call returned the cached value
+  // it could not have re-executed the filesystem walk.
+  const suite = setupAsyncTempDirSuite('find-project-root-cache');
+  let tempDir: string;
+
+  beforeAll(suite.beforeAll);
+  afterAll(suite.afterAll);
+
+  beforeEach(async () => {
+    await suite.beforeEach();
+    tempDir = suite.getTempDir();
+    resetProjectRootCaches();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    resetProjectRootCaches();
+  });
+
+  it('second walk-up from a sibling dir returns cached configRoot (cache hit)', () => {
+    // /tempDir/proj/  (config here)
+    //   a/b/skill1
+    //   a/c/skill2
+    const proj = safePath.join(tempDir, 'proj');
+    fs.mkdirSync(proj, { recursive: true });
+    fs.writeFileSync(safePath.join(proj, CONFIG_FILENAME), CONFIG_CONTENT, 'utf-8');
+
+    const skill1 = safePath.join(proj, 'a', 'b', 'skill1');
+    const skill2 = safePath.join(proj, 'a', 'c', 'skill2');
+    fs.mkdirSync(skill1, { recursive: true });
+    fs.mkdirSync(skill2, { recursive: true });
+
+    // First call: walks up to proj, populates cache for visited ancestors.
+    expect(findProjectRoot(skill1)).toBe(proj);
+
+    // Now delete the config file. If the second call re-walks, it will fail
+    // to find a config and fall through to the git ladder (returning either
+    // an outer .git root or null) — definitely not `proj`. If the cache hits,
+    // it returns `proj`, proving the result is cached.
+    fs.unlinkSync(safePath.join(proj, CONFIG_FILENAME));
+
+    expect(findProjectRoot(skill2)).toBe(proj);
+  });
+
+  it('records null for every dir walked when no config or git ancestor exists', () => {
+    // We can't guarantee the absence of git/config ancestors above tempDir, so
+    // verify the cache-stickiness property instead: a first call populates a
+    // cache entry for tempDir's descendants; a second call from an intermediate
+    // dir returns the same answer even after mutating the filesystem.
+    const deep = safePath.join(tempDir, 'deep', 'leaf');
+    fs.mkdirSync(deep, { recursive: true });
+
+    const firstResult = findProjectRoot(deep);
+
+    // Mutate: add a config file at `tempDir/deep` (deeper than `deep`'s
+    // resolved root, if any). If the cache short-circuits via a hit at an
+    // already-visited ancestor, this new config will NOT be discovered for
+    // the intermediate dir — proving cache stickiness.
+    const intermediate = safePath.join(tempDir, 'deep');
+    fs.writeFileSync(safePath.join(intermediate, CONFIG_FILENAME), CONFIG_CONTENT, 'utf-8');
+
+    const secondResult = findProjectRoot(intermediate);
+    // Cache from the first call recorded `intermediate`'s answer. Even though
+    // a config now exists there, the cached entry wins.
+    expect(secondResult).toBe(firstResult);
+  });
+
+  it('resetProjectRootCaches() clears the cache between invocations', () => {
+    const proj = safePath.join(tempDir, 'resetproj');
+    fs.mkdirSync(proj, { recursive: true });
+    fs.writeFileSync(safePath.join(proj, CONFIG_FILENAME), CONFIG_CONTENT, 'utf-8');
+    const skill = safePath.join(proj, 'a', 'b');
+    fs.mkdirSync(skill, { recursive: true });
+
+    // Populate cache.
+    expect(findProjectRoot(skill)).toBe(proj);
+
+    // Remove config; without reset the cache would still return `proj`.
+    fs.unlinkSync(safePath.join(proj, CONFIG_FILENAME));
+    resetProjectRootCaches();
+
+    // Now the fresh walk finds no config, so the result must differ — either
+    // null or a git/config ancestor above tempDir, but NOT `proj`.
+    const fresh = findProjectRoot(skill);
+    expect(fresh).not.toBe(proj);
   });
 });

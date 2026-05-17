@@ -9,7 +9,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { ProjectConfigSchema, type ProjectConfig } from '@vibe-agent-toolkit/resources';
-import { findConfigFile, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'js-yaml';
 
 const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
@@ -78,62 +78,47 @@ export function getConfigDir(configPath: string): string {
 }
 
 /**
- * Module-level cache keyed by configRoot → parsed ProjectConfig (or null if
- * the file failed to load). Avoids re-parsing the same config yaml repeatedly
- * when audit walks up from many sibling skills.
+ * Layer 2 cache for {@link loadConfigCached}.
  *
- * Tests that mutate fixtures between runs must call {@link resetGoverningConfigCache}
- * to invalidate this cache.
+ * Keyed by `projectRoot` → parsed {@link ProjectConfig} (or `null` if the
+ * file failed to load). Avoids re-parsing the same config yaml repeatedly
+ * when audit walks up from many sibling skills sharing one governing config.
+ *
+ * Tests that mutate fixtures between runs must call
+ * {@link resetLoadedConfigCache} to invalidate this cache.
+ *
+ * See spec docs/superpowers/specs/2026-05-17-root-model-and-leading-slash-design.md §8.
  */
-const governingConfigCache: Map<string, ProjectConfig | null> = new Map();
+const loadedConfigCache: Map<string, ProjectConfig | null> = new Map();
 
 /**
- * Reset the governing-config cache used by {@link findGoverningConfig}.
- * Call at the start of each `vat audit` invocation so in-process test suites
- * that mutate fixtures between runs do not observe stale config data.
+ * Reset the cache used by {@link loadConfigCached}.
+ *
+ * Call at the start of each independent CLI invocation (e.g. `vat audit`) so
+ * in-process callers don't observe stale config data across runs.
  */
-export function resetGoverningConfigCache(): void {
-  governingConfigCache.clear();
+export function resetLoadedConfigCache(): void {
+  loadedConfigCache.clear();
 }
 
 /**
- * Walk UP from `skillDir` looking for the nearest-ancestor
- * `vibe-agent-toolkit.config.yaml`. Loads and caches the config on first hit.
+ * Cached variant of {@link loadConfig} keyed by `projectRoot`.
  *
- * Returns the parsed config plus the `configRoot` (directory that contained the
- * yaml), or `null` if no config is found anywhere up the tree.
- *
- * **Cache behavior:** Both successful loads and parse failures are cached
- * (failures as `null`) so a broken config doesn't re-parse on every skill in
- * the same scan. A test that edits a broken config into a good one between
- * calls must invoke {@link resetGoverningConfigCache} to pick up the new
- * state — the audit CLI entrypoint already does this via `resetAuditCaches()`.
+ * Both successful loads and parse failures are cached (failures as `null`)
+ * so a broken config doesn't re-parse on every skill in the same scan. A
+ * test that edits a broken config into a good one between calls must invoke
+ * {@link resetLoadedConfigCache} (audit's `resetAuditCaches()` does this).
  */
-export function findGoverningConfig(
-  skillDir: string
-): { config: ProjectConfig; configRoot: string } | null {
-  const configPath = findConfigFile(skillDir);
-  if (configPath === null) {
-    return null;
-  }
-  const configRoot = dirname(configPath);
-
-  const cached = governingConfigCache.get(configRoot);
-  if (cached !== undefined) {
-    return cached === null ? null : { config: cached, configRoot };
-  }
-
+export function loadConfigCached(projectRoot: string): ProjectConfig | undefined {
+  const cached = loadedConfigCache.get(projectRoot);
+  if (cached !== undefined) return cached ?? undefined;
   try {
-    const config = loadConfig(configRoot);
-    if (config === undefined) {
-      governingConfigCache.set(configRoot, null);
-      return null;
-    }
-    governingConfigCache.set(configRoot, config);
-    return { config, configRoot };
+    const config = loadConfig(projectRoot);
+    loadedConfigCache.set(projectRoot, config ?? null);
+    return config;
   } catch {
-    // Invalid config — cache as null so we don't re-parse on every skill.
-    governingConfigCache.set(configRoot, null);
-    return null;
+    // Cache failures as null so a broken config doesn't re-parse per skill.
+    loadedConfigCache.set(projectRoot, null);
+    return undefined;
   }
 }
