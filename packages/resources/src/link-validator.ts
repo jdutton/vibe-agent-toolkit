@@ -15,6 +15,7 @@
  * - External resources (outside project) skip git-ignore checks
  */
 
+import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import {
@@ -231,6 +232,18 @@ async function validateLocalFileLink(
   const notFound = fileExistenceIssue(fileResult, link, sourceFilePath);
   if (notFound) return notFound;
 
+  if (fileResult.isDirectory) {
+    return {
+      resourcePath: sourceFilePath,
+      line: link.line,
+      type: 'broken_file',
+      link: link.href,
+      message: `Link target is a directory: ${fileResult.resolvedPath}`,
+      suggestion:
+        'Link to a file inside the directory (e.g., README.md or index.md), or fix the link to point at the intended file.',
+    };
+  }
+
   const gitIgnoreIssue = gitIgnoreSafetyIssue(link, sourceFilePath, fileResult.resolvedPath, options);
   if (gitIgnoreIssue) return gitIgnoreIssue;
 
@@ -288,12 +301,24 @@ async function validateAnchorLink(
  */
 async function validateResolvedFile(
   resolvedPath: string,
-): Promise<{ exists: boolean; resolvedPath: string; actualName?: string }> {
+): Promise<{ exists: boolean; resolvedPath: string; actualName?: string; isDirectory: boolean }> {
   const verification = await verifyCaseSensitiveFilename(resolvedPath);
 
-  const result: { exists: boolean; resolvedPath: string; actualName?: string } = {
+  let isDirectory = false;
+  if (verification.exists) {
+    try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolvedPath validated by verifyCaseSensitiveFilename
+      const stats = await fs.stat(resolvedPath);
+      isDirectory = stats.isDirectory();
+    } catch {
+      // Stat failed after verifyCaseSensitiveFilename said exists — treat as file.
+    }
+  }
+
+  const result: { exists: boolean; resolvedPath: string; actualName?: string; isDirectory: boolean } = {
     exists: verification.exists,
     resolvedPath,
+    isDirectory,
   };
 
   if (verification.actualName) {

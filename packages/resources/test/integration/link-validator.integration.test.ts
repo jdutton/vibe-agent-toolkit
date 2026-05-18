@@ -697,5 +697,33 @@ describe('validateLink', () => {
       });
       expect(result).toBeNull();
     });
+
+    it('emits broken_file when leading-/ target is a directory', async () => {
+      // /docs/ resolves to projectRoot/docs (an existing directory).
+      await assertValidation(
+        {
+          sourceFile,
+          link: createLink('local_file', '/docs/', 'Directory target', 1),
+          headingsMap: new Map<string, HeadingNode[]>(),
+          expected: { type: 'broken_file', messageContains: 'Link target is a directory' },
+          validationOptions: { projectRoot, skipGitIgnoreCheck: true },
+        },
+        expect,
+      );
+    });
+
+    it('emits broken_file when relative link target is a directory', async () => {
+      // sourceFile is in projectRoot/docs/sub; ../  resolves to projectRoot/docs.
+      await assertValidation(
+        {
+          sourceFile,
+          link: createLink('local_file', '../', 'Relative directory target', 1),
+          headingsMap: new Map<string, HeadingNode[]>(),
+          expected: { type: 'broken_file', messageContains: 'Link target is a directory' },
+          validationOptions: { projectRoot, skipGitIgnoreCheck: true },
+        },
+        expect,
+      );
+    });
   });
 });

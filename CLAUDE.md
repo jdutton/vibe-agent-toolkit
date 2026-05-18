@@ -769,7 +769,7 @@ VAT ships a plugin of skills for agents working on VAT itself. They live at `pac
 
 ## Contributor Reference Docs
 
-Material for developers working on VAT itself (not for users of VAT) lives under [`docs/contributing/`](docs/contributing/):
+Material for developers working on VAT itself (not for users of VAT) lives under `docs/contributing/`:
 
 - [vat-debugging.md](docs/contributing/vat-debugging.md) — reproducing VAT bugs, `VAT_ROOT_DIR` adopter testing, failing-test-first fixes before landing changes
 - [vat-install-architecture.md](docs/contributing/vat-install-architecture.md) — design landscape for VAT's install/uninstall surfaces; read before proposing new install methods
@@ -782,9 +782,9 @@ Cached copies of external guidance (e.g., Anthropic's skill-authoring best-pract
 
 ## Questions?
 
-- [Architecture](./docs/architecture/) - Package structure, evolution plan, and cross-cutting architectural concerns (the directory's CLAUDE.md pulls in its README)
+- [Architecture](./docs/architecture/README.md) - Package structure, evolution plan, and cross-cutting architectural concerns (the directory's CLAUDE.md pulls in its README)
 - [Getting Started](./docs/getting-started.md) - Detailed setup guide
-- [Documentation](./docs/) - Full documentation index (the directory's CLAUDE.md pulls in its README)
+- [Documentation](./docs/README.md) - Full documentation index (the directory's CLAUDE.md pulls in its README)
 - [Build System](./docs/build-system.md) - TypeScript monorepo build configuration
 - [Publishing](./docs/publishing.md) - Version management and publishing workflow
 - [Best Practices](./docs/best-practices.md) - Enterprise development standards

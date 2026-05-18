@@ -300,7 +300,7 @@ interface ConversationalResult<TOutput, TState = Record<string, unknown>> {
 
 ## Examples
 
-See [@vibe-agent-toolkit/vat-example-cat-agents](../vat-example-cat-agents) for complete agent examples that work with this adapter.
+See [@vibe-agent-toolkit/vat-example-cat-agents](../vat-example-cat-agents/README.md) for complete agent examples that work with this adapter.
 
 ## License
 

@@ -1082,7 +1082,7 @@ Valid by default.
 
 ## Related Packages
 
-- [@vibe-agent-toolkit/utils](../utils) - Core shared utilities
+- [@vibe-agent-toolkit/utils](../utils/README.md) - Core shared utilities
 
 ## Future Enhancements
 
@@ -1098,7 +1098,7 @@ Planned features for future releases:
 
 ## Documentation
 
-- [Project Documentation](../../docs)
+- [Project Documentation](../../docs/README.md)
 - [Architecture](../../docs/architecture/README.md)
 
 ## License

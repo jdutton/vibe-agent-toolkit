@@ -394,7 +394,7 @@ See how this toolkit uses collections:
 
 - **Config**: [`vibe-agent-toolkit.config.yaml`](../../vibe-agent-toolkit.config.yaml)
 - **Schemas**: `schemas/` directory
-- **Test fixtures**: [`packages/resources/test-fixtures/collections/`](../../packages/resources/test-fixtures/collections/)
+- **Test fixtures**: [`packages/resources/test-fixtures/collections/`](../../packages/resources/test-fixtures/collections/README.md)
 
 The test fixtures demonstrate:
 - Multiple collections (guides, documentation, skills)
@@ -502,4 +502,4 @@ Schema paths are relative to config file location.
 - [Writing Tests Guide](../writing-tests.md) - How to test your validation
 - [CLI Documentation](../../packages/cli/docs/index.md) - Full CLI reference
 - [Configuration Schema](../../packages/resources/src/schemas/project-config.ts) - TypeScript schema definition
-- [Test Fixtures](../../packages/resources/test-fixtures/collections/) - Working examples
+- [Test Fixtures](../../packages/resources/test-fixtures/collections/README.md) - Working examples
