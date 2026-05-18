@@ -14,9 +14,20 @@
  */
 
 import { Ajv } from 'ajv';
+// ajv-formats is a CJS module published with `module.exports = formatsPlugin`
+// plus an `exports.default` alias. Under NodeNext module resolution the default
+// import is typed as the namespace object (not callable), even though the
+// runtime value IS the plugin function. The `.default ?? namespace` pattern
+// below resolves both at type level and runtime without `// @ts-expect-error`.
+import * as ajvFormatsModule from 'ajv-formats';
 
 import type { ValidationMode } from './schemas/project-config.js';
 import type { ValidationIssue } from './schemas/validation-result.js';
+
+type AddFormatsFn = (ajv: Ajv) => Ajv;
+const addFormats: AddFormatsFn =
+  (ajvFormatsModule as unknown as { default?: AddFormatsFn }).default ??
+  (ajvFormatsModule as unknown as AddFormatsFn);
 
 /**
  * Validate frontmatter against a JSON Schema.
@@ -71,6 +82,17 @@ export function validateFrontmatter(
     allErrors: true,         // Report all errors, not just first
     allowUnionTypes: true,   // Support JSON Schema draft features
   });
+
+  // Register standard JSON Schema formats (uri, uri-reference, date, date-time,
+  // email, uuid, etc. — see ajv-formats FormatName for the full list). Without
+  // this, Ajv logs `unknown format "X" ignored` via console.warn once per
+  // occurrence when schemas reference these formats. The formats are now
+  // recognized and validated (matches JSON Schema spec behavior); the noise
+  // is gone.
+  //
+  // Note: ajv-formats does NOT register `iri` or `iri-reference`. Schemas that
+  // use those will still log a warning. None of VAT's own schemas use them.
+  addFormats(ajv);
 
   const validate = ajv.compile(effectiveSchema);
 
