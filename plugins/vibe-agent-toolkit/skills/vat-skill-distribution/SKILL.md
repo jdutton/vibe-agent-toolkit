@@ -1,6 +1,9 @@
 ---
 name: vat-skill-distribution
-description: Use when setting up `vat build`, configuring plugin distribution (marketplace, plugins, managed settings), npm publishing with postinstall hooks, or `vat verify` — the full pipeline from skill source to installed plugin.
+description: Use when setting up `vat build`, configuring plugin distribution
+  (marketplace, plugins, managed settings), npm publishing with postinstall
+  hooks, or `vat verify` — the full pipeline from skill source to installed
+  plugin.
 ---
 
 # VAT Distribution: Build, Publish & Install
@@ -468,4 +471,4 @@ everything (minus `skills/` and `.claude-plugin/`), merges author `plugin.json` 
 VAT-owned identity fields, and applies any `files[]` mappings for artifacts built
 outside the plugin dir.
 
-See [docs/guides/marketplace-distribution.md](resources/marketplace-distribution.md) section "Full-plugin authoring".
+See [docs/guides/marketplace-distribution.md]() section "Full-plugin authoring".

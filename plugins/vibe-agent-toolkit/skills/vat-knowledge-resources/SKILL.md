@@ -1,6 +1,8 @@
 ---
 name: vat-knowledge-resources
-description: Use when working with VAT resource collections, per-directory frontmatter schema validation, link validation, or the vat resources command. Covers collection configuration, schema mapping, and validation modes.
+description: Use when working with VAT resource collections, per-directory
+  frontmatter schema validation, link validation, or the vat resources command.
+  Covers collection configuration, schema mapping, and validation modes.
 ---
 
 # VAT Resources: Collections & Frontmatter Validation
@@ -110,6 +112,46 @@ const PrdFrontmatter = z.object({
 **Zod 3 users:** `.meta()` does not exist in Zod 3. Either upgrade your schema-generation step to Zod 4 (runtime consumers can stay on Zod 3 via peer dependency + common-subset usage), or post-process the generated JSON Schema to inject `format` on the relevant field paths.
 
 **Tip:** `format` is advisory in JSON Schema; pair it with a `pattern` regex when you also need parse-time rejection of invalid inputs.
+
+## URI-references in frontmatter
+
+VAT validates frontmatter fields whose schema position has `format: uri-reference`
+(or `uri`, `iri-reference`, `iri`) against the same rules as body links:
+
+- Leading-`/` is RFC 3986 §4.2 absolute-path reference — resolved against
+  the project root. Same semantics as body links.
+- Anchor fragments and external URLs are accepted; broken local refs error.
+- Inline comments on URI-ref fields are **preserved** when any tool rewrites
+  the file via `openFrontmatter` (VAT packager, hand-rolled adopter scripts).
+
+Example:
+
+```yaml
+---
+parent_spec: /docs/specs/foo.md  # the spec this one supersedes
+adrs-cited:
+  - /docs/adrs/0007-storage.md  # primary reference
+  - /docs/adrs/0011-snapshot.md  # impacted by storage choice
+---
+```
+
+Schema:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "parent_spec": { "type": "string", "format": "uri-reference" },
+    "adrs-cited": {
+      "type": "array",
+      "items": { "type": "string", "format": "uri-reference" }
+    }
+  }
+}
+```
+
+For tools that **modify** frontmatter (not just validate it), see
+[[markdown-rewriting]].
 
 ## Validation Output
 

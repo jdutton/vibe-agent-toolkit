@@ -1,6 +1,9 @@
 ---
 name: vat-agent-authoring
-description: Use when authoring TypeScript portable agents — agent archetypes, agent.yaml, result envelopes, orchestration patterns, and runtime adapters (Vercel/LangChain/OpenAI/Claude Agent SDK). Paired with vat-skill-authoring for the SKILL.md side.
+description: Use when authoring TypeScript portable agents — agent archetypes,
+  agent.yaml, result envelopes, orchestration patterns, and runtime adapters
+  (Vercel/LangChain/OpenAI/Claude Agent SDK). Paired with vat-skill-authoring
+  for the SKILL.md side.
 ---
 
 # VAT Agent Authoring: Archetypes, Envelopes, Orchestration

@@ -1,6 +1,9 @@
 ---
 name: vibe-agent-toolkit
-description: Use when starting VAT work or deciding which VAT sub-skill applies. Router that points at sub-skills for adoption, skill/agent authoring, audit, distribution, RAG, knowledge resources, skill review, and enterprise org admin.
+description: Use when starting VAT work or deciding which VAT sub-skill applies.
+  Router that points at sub-skills for adoption, skill/agent authoring, audit,
+  distribution, RAG, knowledge resources, skill review, and enterprise org
+  admin.
 ---
 
 # Vibe Agent Toolkit
@@ -38,6 +41,7 @@ Poor fits:
 | `vat rag index` / `vat rag query`, embedding providers, vector stores, chunking | `vibe-agent-toolkit:vat-rag` |
 | Pre-publication quality review, `vat skill review`, validation-code triage | `vibe-agent-toolkit:vat-skill-review` |
 | Anthropic Admin API: org users, cost/usage, workspace skills, `ANTHROPIC_ADMIN_API_KEY` | `vibe-agent-toolkit:vat-enterprise-org` |
+| Programmatic markdown/frontmatter edits — moving files, updating references, schema-evolution migrations; comment-preserving FrontmatterEditor + rewriteBodyLinks | `vibe-agent-toolkit:markdown-rewriting` |
 
 ## CLI Surface at a Glance
 

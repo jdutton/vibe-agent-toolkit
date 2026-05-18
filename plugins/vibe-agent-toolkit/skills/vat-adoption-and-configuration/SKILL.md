@@ -1,6 +1,9 @@
 ---
 name: vat-adoption-and-configuration
-description: Use when starting a new VAT project, adding VAT to an existing repo, or orienting to `vibe-agent-toolkit.config.yaml`. Covers project setup, repo structure, package.json wiring, vibe-validate integration, and the npm postinstall hook.
+description: Use when starting a new VAT project, adding VAT to an existing
+  repo, or orienting to `vibe-agent-toolkit.config.yaml`. Covers project setup,
+  repo structure, package.json wiring, vibe-validate integration, and the npm
+  postinstall hook.
 ---
 
 # VAT Adoption and Configuration
