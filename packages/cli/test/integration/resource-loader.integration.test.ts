@@ -46,9 +46,9 @@ function expectSingleResource(resources: Array<{ headings: Array<{ text: string 
 /**
  * Helper to assert result paths match expected values
  */
-function expectProjectPaths(result: { scanPath: string; projectRoot: string | null }, expectedPath: string): void {
+function expectProjectPaths(result: { scanPath: string; projectRoot: string }, expectedPath: string): void {
   expect(normalizePath(result.scanPath)).toBe(normalizePath(expectedPath));
-  expect(normalizePath(result.projectRoot ?? '')).toBe(normalizePath(expectedPath));
+  expect(normalizePath(result.projectRoot)).toBe(normalizePath(expectedPath));
 }
 
 /**
@@ -109,10 +109,10 @@ describe('loadResourcesWithConfig (integration test)', () => {
 
       await inProjectDir(projectDir, async () => {
         const docsPath = safePath.join(projectDir, 'docs');
-        const result = await loadResourcesWithConfig(docsPath, logger);
+        const result = await loadResourcesWithConfig(docsPath, projectDir, logger);
 
         expect(normalizePath(result.scanPath)).toBe(normalizePath(docsPath));
-        expect(normalizePath(result.projectRoot ?? '')).toBe(normalizePath(projectDir));
+        expect(normalizePath(result.projectRoot)).toBe(normalizePath(projectDir));
         expect(result.config).toBeDefined();
         expect(result.registry).toBeDefined();
 
@@ -124,7 +124,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
     it('should crawl from pathArg with default patterns', async () => {
       await inProjectDir(projectDir, async () => {
         const otherPath = safePath.join(projectDir, 'other');
-        const result = await loadResourcesWithConfig(otherPath, logger);
+        const result = await loadResourcesWithConfig(otherPath, projectDir, logger);
 
         expect(normalizePath(result.scanPath)).toBe(normalizePath(otherPath));
 
@@ -143,7 +143,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
       );
 
       await inProjectDir(projectDir, async () => {
-        const result = await loadResourcesWithConfig(undefined, logger);
+        const result = await loadResourcesWithConfig(undefined, projectDir, logger);
 
         expectProjectPaths(result, projectDir);
         expect(result.config).toBeDefined();
@@ -166,7 +166,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
       );
 
       await inProjectDir(projectDir, async () => {
-        const result = await loadResourcesWithConfig(undefined, logger);
+        const result = await loadResourcesWithConfig(undefined, projectDir, logger);
 
         // Should only find docs/guide.md
         expectSingleResource(result.registry.getAllResources(), 'Guide');
@@ -175,7 +175,7 @@ describe('loadResourcesWithConfig (integration test)', () => {
 
     it('should work without config file', async () => {
       await inProjectDir(projectDir, async () => {
-        const result = await loadResourcesWithConfig(undefined, logger);
+        const result = await loadResourcesWithConfig(undefined, projectDir, logger);
 
         expectProjectPaths(result, projectDir);
         expect(result.config).toBeUndefined();
@@ -188,25 +188,25 @@ describe('loadResourcesWithConfig (integration test)', () => {
   });
 
   describe('GitTracker integration', () => {
-    it('should create and initialize GitTracker when project root exists', async () => {
-      const result = await loadResourcesWithConfig(projectDir, logger);
+    it('should create and initialize GitTracker for the provided project root', async () => {
+      const result = await loadResourcesWithConfig(projectDir, projectDir, logger);
 
       expect(result.gitTracker).toBeDefined();
       expect(result.gitTracker?.getStats().cacheSize).toBeGreaterThanOrEqual(0);
     });
 
-    it('should not create GitTracker when no project root', async () => {
-      // Create isolated directory without package.json
+    it('still initializes GitTracker even when the supplied root has no .git ancestor', async () => {
+      // The CLI-boundary policy resolves a root before this is reached; this
+      // function trusts its caller and always creates a GitTracker anchored
+      // at the supplied projectRoot. Verify the new contract.
       const isolatedDir = safePath.join(testDir, 'isolated');
       await mkdir(isolatedDir, { recursive: true });
       await writeFile(safePath.join(isolatedDir, 'test.md'), '# Test\n');
 
-      await inProjectDir(isolatedDir, async () => {
-        const result = await loadResourcesWithConfig(isolatedDir, logger);
+      const result = await loadResourcesWithConfig(isolatedDir, isolatedDir, logger);
 
-        expect(result.projectRoot).toBeNull();
-        expect(result.gitTracker).toBeUndefined();
-      });
+      expect(normalizePath(result.projectRoot)).toBe(normalizePath(isolatedDir));
+      expect(result.gitTracker).toBeDefined();
     });
   });
 
@@ -230,7 +230,7 @@ resources:
 `
       );
 
-      const result = await loadResourcesWithConfig(projectDir, logger);
+      const result = await loadResourcesWithConfig(projectDir, projectDir, logger);
 
       expect(result.config).toBeDefined();
       expect(result.config?.resources?.collections).toBeDefined();
@@ -244,7 +244,7 @@ resources:
 
   describe('return value structure', () => {
     it('should return all expected fields', async () => {
-      const result = await loadResourcesWithConfig(projectDir, logger);
+      const result = await loadResourcesWithConfig(projectDir, projectDir, logger);
 
       expect(result).toHaveProperty('scanPath');
       expect(result).toHaveProperty('projectRoot');
@@ -253,7 +253,7 @@ resources:
       expect(result).toHaveProperty('gitTracker');
 
       expect(typeof result.scanPath).toBe('string');
-      expect(typeof result.projectRoot === 'string' || result.projectRoot === null).toBe(true);
+      expect(typeof result.projectRoot).toBe('string');
       expect(result.registry).toBeDefined();
     });
   });

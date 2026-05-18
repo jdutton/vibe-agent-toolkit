@@ -122,6 +122,32 @@ describe('isWithinProject', () => {
 
     expect(isWithinProject(filePath, projectRoot)).toBe(false);
   });
+
+  it('handles symlinked projectRoot symmetrically', () => {
+    // Regression for asymmetric realpath: when a caller passes a projectRoot
+    // that traverses a symlink (e.g. macOS /tmp → /private/tmp, or any bind
+    // mount), isWithinProject must canonicalize BOTH sides. Otherwise a file
+    // legitimately inside the project gets false-flagged as outside, surfacing
+    // in resolveLocalHref as a bogus absolute_escapes_root for leading-/ links.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
+    const realRoot = fs.realpathSync(suite.tempDir);
+    const symlinkRoot = realRoot + '-symlink';
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
+    fs.symlinkSync(realRoot, symlinkRoot);
+    try {
+      const fileInsideRealRoot = safePath.join(realRoot, 'inside.md');
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
+      fs.writeFileSync(fileInsideRealRoot, '# inside\n');
+      expect(isWithinProject(fileInsideRealRoot, symlinkRoot)).toBe(true);
+    } finally {
+      try {
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
+        fs.unlinkSync(symlinkRoot);
+      } catch {
+        /* ignore */
+      }
+    }
+  });
 });
 
 describe('validateLink - git-ignore safety', () => {
@@ -175,24 +201,24 @@ describe('validateLink - git-ignore safety', () => {
     expect(result).toBeNull();
   });
 
-  it('should skip git-ignore check for external resources', async () => {
+  it('rejects external absolute filesystem paths as broken_file', async () => {
+    // Pre-Phase 3 this test fed an external absolute filesystem path as a
+    // local_file link href and expected the gitignore safety check to skip it.
+    // Per RFC 3986 §4.2 leading-/ is now an absolute-path reference resolved
+    // against projectRoot, so an external-looking absolute path is treated
+    // as a projectRoot-relative path that doesn't exist (broken_file). Use a
+    // literal leading-/ href so the test exercises the absolute-path branch on
+    // Windows too (where safePath.join would produce C:/... and bypass it).
     const { projectRoot, sourceFile } = await setupGitProject(suite.tempDir);
 
-    // Create an external file (outside project)
-    const externalDir = safePath.join(normalizedTmpdir(), 'external-project');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is from temp dir
-    fs.mkdirSync(externalDir);
-    const externalFile = safePath.join(externalDir, 'external.md');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path is from temp dir
-    fs.writeFileSync(externalFile, '# External\n');
+    const result = await validateWithGitIgnoreCheck(
+      sourceFile,
+      '/external-project/external.md',
+      projectRoot,
+    );
 
-    const result = await validateWithGitIgnoreCheck(sourceFile, externalFile, projectRoot);
-
-    // Should be valid (external resources skip git-ignore checks)
-    expect(result).toBeNull();
-
-    // Cleanup
-    fs.rmSync(externalDir, { recursive: true, force: true });
+    expect(result).not.toBeNull();
+    expect(result?.type).toBe('broken_file');
   });
 
   it('should validate non-ignored file to non-ignored file normally', async () => {

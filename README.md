@@ -123,7 +123,7 @@ Diagnose project setup:
 vat doctor
 ```
 
-See [CLI Reference](./packages/cli/docs/) for complete documentation (or run `vat --help --verbose`).
+See [CLI Reference](./packages/cli/docs/index.md) for complete documentation (or run `vat --help --verbose`).
 
 ### Development Setup
 

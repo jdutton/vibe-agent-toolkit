@@ -166,15 +166,21 @@ describe('validateLink', () => {
       );
     });
 
-    it('should handle absolute paths', async () => {
-      const targetFile = safePath.join(FIXTURES_DIR, TARGET_MD);
+    it('treats leading-/ filesystem path with no projectRoot as absolute_no_root', async () => {
+      // Per RFC 3986 §4.2, leading-/ is an absolute-path reference. Without a
+      // configured projectRoot we surface broken_file with the absolute_no_root
+      // message. Use a literal leading-/ href so the test is meaningful on
+      // Windows too (where safePath.join would produce C:/... and miss the
+      // leading-/ branch entirely).
       const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
-      const link = createLink('local_file', targetFile, 'Absolute path');
+      const link = createLink('local_file', '/does/not/exist.md', 'Absolute path');
       const headingsMap = new Map<string, HeadingNode[]>();
 
       const result = await validateLink(link, sourceFile, headingsMap);
 
-      expect(result).toBeNull();
+      expect(result).not.toBeNull();
+      expect(result?.type).toBe('broken_file');
+      expect(result?.message).toContain('requires a configured projectRoot');
     });
 
     it('should resolve percent-encoded paths to existing files', async () => {
@@ -435,7 +441,10 @@ describe('validateLink', () => {
 
     it('should handle file with only anchor (empty file path)', async () => {
       const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
-      // This would be classified as 'anchor' type by the parser, not 'local_file'
+      // The parser classifies anchor-only hrefs as 'anchor', not 'local_file'.
+      // If a synthetic ResourceLink slips through with type='local_file' and an
+      // anchor-only href, validateLocalFileLink returns null (treats it as
+      // valid no-op) instead of synthesizing a broken_file against cwd.
       const link = createLink('local_file', '#heading', 'Anchor as file', 5);
 
       const targetFile = safePath.join(FIXTURES_DIR, 'target.md');
@@ -445,9 +454,7 @@ describe('validateLink', () => {
 
       const result = await validateLink(link, sourceFile, headingsMap);
 
-      // Empty file path before # means current directory + "#heading"
-      // This will likely fail as a file lookup
-      expect(result).not.toBeNull();
+      expect(result).toBeNull();
     });
 
     it('should handle multiple nested levels', async () => {
@@ -619,6 +626,105 @@ describe('validateLink', () => {
       fs.writeFileSync(sourceFile, '# Source');
 
       await assertGitignoreError(gitRoot, './private/secret.md', 'Link to secret');
+    });
+  });
+
+  describe('leading-/ links (RFC 3986 §4.2 absolute-path reference)', () => {
+    let projectRoot: string;
+    let sourceFile: string;
+
+    beforeEach(async () => {
+      const fs = await import('node:fs');
+      projectRoot = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'leading-slash-'));
+      // realpath to avoid macOS /private symlink mismatch with isWithinProject
+      projectRoot = fs.realpathSync(projectRoot);
+      const docsSub = safePath.join(projectRoot, 'docs', 'sub');
+      fs.mkdirSync(docsSub, { recursive: true });
+      const targetFile = safePath.join(projectRoot, 'docs', 'foo.md');
+      sourceFile = safePath.join(docsSub, 'page.md');
+      fs.writeFileSync(targetFile, '# Foo\n\n## Section A\n');
+      fs.writeFileSync(sourceFile, '# Page\n');
+    });
+
+    afterEach(async () => {
+      const fs = await import('node:fs');
+      fs.rmSync(projectRoot, { recursive: true, force: true });
+    });
+
+    it('resolves /docs/foo.md against projectRoot', async () => {
+      const link = createLink('local_file', '/docs/foo.md', 'Leading slash', 1);
+      const result = await validateLink(link, sourceFile, new Map<string, HeadingNode[]>(), {
+        projectRoot,
+        skipGitIgnoreCheck: true,
+      });
+      expect(result).toBeNull();
+    });
+
+    it('emits absolute_no_root broken_file when projectRoot is undefined', async () => {
+      const link = createLink('local_file', '/docs/foo.md', 'Leading slash', 1);
+      const result = await validateLink(link, sourceFile, new Map<string, HeadingNode[]>(), {
+        skipGitIgnoreCheck: true,
+      });
+      expect(result).not.toBeNull();
+      expect(result?.type).toBe('broken_file');
+      expect(result?.message).toContain('requires a configured projectRoot');
+    });
+
+    it('emits absolute_escapes_root broken_file when leading-/ escapes projectRoot', async () => {
+      const link = createLink('local_file', '/../escape.md', 'Escape', 1);
+      const result = await validateLink(link, sourceFile, new Map<string, HeadingNode[]>(), {
+        projectRoot,
+        skipGitIgnoreCheck: true,
+      });
+      expect(result).not.toBeNull();
+      expect(result?.type).toBe('broken_file');
+      expect(result?.message).toContain('escapes the project root via path traversal');
+    });
+
+    it('resolves anchor on leading-/ link', async () => {
+      const link = createLink('local_file', '/docs/foo.md#section-a', 'Leading slash anchor', 1);
+      const headings = new Map<string, HeadingNode[]>([
+        [
+          safePath.join(projectRoot, 'docs', 'foo.md'),
+          createHeadings(
+            { text: 'Foo', slug: 'foo', level: 1 },
+            { text: 'Section A', slug: 'section-a', level: 2 },
+          ),
+        ],
+      ]);
+      const result = await validateLink(link, sourceFile, headings, {
+        projectRoot,
+        skipGitIgnoreCheck: true,
+      });
+      expect(result).toBeNull();
+    });
+
+    it('emits broken_file when leading-/ target is a directory', async () => {
+      // /docs/ resolves to projectRoot/docs (an existing directory).
+      await assertValidation(
+        {
+          sourceFile,
+          link: createLink('local_file', '/docs/', 'Directory target', 1),
+          headingsMap: new Map<string, HeadingNode[]>(),
+          expected: { type: 'broken_file', messageContains: 'Link target is a directory' },
+          validationOptions: { projectRoot, skipGitIgnoreCheck: true },
+        },
+        expect,
+      );
+    });
+
+    it('emits broken_file when relative link target is a directory', async () => {
+      // sourceFile is in projectRoot/docs/sub; ../  resolves to projectRoot/docs.
+      await assertValidation(
+        {
+          sourceFile,
+          link: createLink('local_file', '../', 'Relative directory target', 1),
+          headingsMap: new Map<string, HeadingNode[]>(),
+          expected: { type: 'broken_file', messageContains: 'Link target is a directory' },
+          validationOptions: { projectRoot, skipGitIgnoreCheck: true },
+        },
+        expect,
+      );
     });
   });
 });

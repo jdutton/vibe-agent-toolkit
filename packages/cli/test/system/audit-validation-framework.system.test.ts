@@ -41,33 +41,38 @@ const makeSkillMd = (name: string, body = 'This is a test skill.') =>
 // ---------------------------------------------------------------------------
 
 /**
- * Create a project whose SKILL.md links to a file OUTSIDE the skill directory.
+ * Create a project whose SKILL.md links to a file OUTSIDE the project root.
  *
  * Layout:
- *   projectDir/
- *     skills/
- *       SKILL.md  → links to ../outside.md (LINK_OUTSIDE_PROJECT, severity=warning in audit)
- *     outside.md
- *     vibe-agent-toolkit.config.yaml  (no validation overrides)
+ *   tempDir/
+ *     outside.md                       (lives ABOVE the project root)
+ *     outside-link/                    ← projectDir (config root)
+ *       skills/
+ *         SKILL.md  → links to ../../outside.md (LINK_OUTSIDE_PROJECT, severity=warning)
+ *       vibe-agent-toolkit.config.yaml (no validation overrides — config anchors projectRoot here)
  *
- * Because validateSkill (used by audit) emits LINK_OUTSIDE_PROJECT at
- * severity=warning, this fixture verifies: audit exits 0 even when issues
- * are present. Use LINK_MISSING_TARGET (a broken link) to get severity=error.
+ * The packaging walker emits LINK_OUTSIDE_PROJECT when a link target falls
+ * outside `findProjectRoot(skillDir)`. With the config-first root model
+ * (config → git → null), the config at `outside-link/` anchors the project
+ * root there, so `../../outside.md` does escape it.
+ *
+ * This fixture verifies: audit exits 0 even when LINK_OUTSIDE_PROJECT
+ * (severity=warning) fires.
  */
 function setupProjectWithOutsideLink(tempDir: string): string {
   const projectDir = safePath.join(tempDir, 'outside-link');
   mkdirSyncReal(safePath.join(projectDir, 'skills'), { recursive: true });
 
-  // File outside the skill dir (so the link escapes the boundary)
-  writeTestFile(safePath.join(projectDir, 'outside.md'), '# Outside\n\nContent.\n');
+  // File outside the project root (so the link escapes the project boundary)
+  writeTestFile(safePath.join(tempDir, 'outside.md'), '# Outside\n\nContent.\n');
 
   // SKILL.md that links to the outside file (LINK_OUTSIDE_PROJECT)
   writeTestFile(
     safePath.join(projectDir, 'skills', 'SKILL.md'),
-    makeSkillMd(SKILL_NAME, 'See [outside](../outside.md).'),
+    makeSkillMd(SKILL_NAME, 'See [outside](../../outside.md).'),
   );
 
-  // Config: no validation overrides
+  // Config: no validation overrides (its presence anchors projectRoot to projectDir)
   writeTestFile(
     safePath.join(projectDir, VAT_CONFIG_FILENAME),
     'version: 1\nskills:\n  include:\n    - "skills/SKILL.md"\n',
@@ -148,11 +153,12 @@ function setupProjectWithIgnoredSeverity(tempDir: string): string {
   const projectDir = safePath.join(tempDir, 'ignored-severity');
   mkdirSyncReal(safePath.join(projectDir, 'skills'), { recursive: true });
 
-  writeTestFile(safePath.join(projectDir, 'outside.md'), '# Outside\n\nContent.\n');
+  // outside.md lives ABOVE projectDir so the link escapes the config-anchored project root
+  writeTestFile(safePath.join(tempDir, 'outside.md'), '# Outside\n\nContent.\n');
 
   writeTestFile(
     safePath.join(projectDir, 'skills', 'SKILL.md'),
-    makeSkillMd(SKILL_NAME, 'See [outside](../outside.md).'),
+    makeSkillMd(SKILL_NAME, 'See [outside](../../outside.md).'),
   );
 
   // Config: severity.LINK_OUTSIDE_PROJECT set to ignore — audit must hide it

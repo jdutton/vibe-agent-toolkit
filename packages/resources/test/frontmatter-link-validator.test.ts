@@ -123,4 +123,36 @@ describe('validateFrontmatterLinks', () => {
     expect(issues).toEqual([]);
     expect(externalUrls).toEqual([]);
   });
+
+  describe('leading-/ frontmatter URI-references (RFC 3986 §4.2)', () => {
+    it('resolves /docs/target.md against projectRoot', async () => {
+      const { issues } = await run({ ref: '/docs/target.md' });
+      expect(issues).toEqual([]);
+    });
+
+    it('preserves anchor on leading-/ frontmatter reference', async () => {
+      const { issues } = await run({ ref: '/docs/target.md#section-a' });
+      expect(issues).toEqual([]);
+    });
+
+    it('emits frontmatter_link_broken with absolute_no_root message when projectRoot omitted', async () => {
+      const { issues } = await validateFrontmatterLinks(
+        { ref: '/docs/target.md' },
+        refSchema,
+        sourceFile,
+        headingsByFile,
+        { skipGitIgnoreCheck: true },
+      );
+      expect(issues).toHaveLength(1);
+      expect(issues[0]?.type).toBe('frontmatter_link_broken');
+      expect(issues[0]?.message).toContain('requires a configured projectRoot');
+    });
+
+    it('emits frontmatter_link_broken with traversal message on absolute_escapes_root', async () => {
+      const { issues } = await run({ ref: '/../escape.md' });
+      expect(issues).toHaveLength(1);
+      expect(issues[0]?.type).toBe('frontmatter_link_broken');
+      expect(issues[0]?.message).toContain('escapes the project root via path traversal');
+    });
+  });
 });

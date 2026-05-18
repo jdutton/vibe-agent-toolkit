@@ -166,9 +166,12 @@ function validateLocalLink(
   fileIssues: ValidationIssue[],
   issues: ValidationIssue[],
 ): { status: 'skip' | 'boundary' | 'broken' | 'valid'; resolvedPath: string } {
-  // Resolve href to filesystem path (strips anchor, decodes percent-encoding)
+  // Resolve href to filesystem path (strips anchor, decodes percent-encoding).
+  // Skill validation is a single-skill bounded walk — leading-/ links are
+  // treated as unresolved (skipped) here. The resources-validate / audit paths
+  // surface the projectRoot-aware cases as broken_file issues.
   const resolved = resolveLocalHref(link.href, currentPath);
-  if (!resolved) {
+  if (resolved.kind !== 'resolved') {
     return { status: 'skip', resolvedPath: '' };
   }
 

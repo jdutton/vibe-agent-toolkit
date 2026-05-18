@@ -89,7 +89,6 @@ export type {
 
 // Config parsing
 export {
-  findConfigFile,
   parseConfigFile,
   loadConfig,
 } from './config-parser.js';

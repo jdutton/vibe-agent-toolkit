@@ -5,7 +5,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { findConfigFile, loadConfig, parseConfigFile } from '../src/config-parser.js';
+import { loadConfig, parseConfigFile } from '../src/config-parser.js';
 import { ClaudeMarketplaceSchema, ProjectConfigSchema } from '../src/schemas/project-config.js';
 
 import { setupTempDirTestSuite } from './test-helpers.js';
@@ -136,41 +136,6 @@ resources:
     await writeFile(configPath, content);
 
     await expect(parseConfigFile(configPath)).rejects.toThrow('Invalid config file');
-  });
-});
-
-describe('findConfigFile', () => {
-  const suite = setupTempDirTestSuite('config-find-');
-  beforeEach(suite.beforeEach);
-  afterEach(suite.afterEach);
-
-  it('should find config in current directory', async () => {
-    const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
-    await writeFile(configPath, 'version: 1\n');
-
-    const found = await findConfigFile(suite.tempDir);
-    expect(found).toBe(configPath);
-  });
-
-  it('should find config in parent directory', async () => {
-    const configPath = safePath.join(suite.tempDir, 'vibe-agent-toolkit.config.yaml');
-    await writeFile(configPath, 'version: 1\n');
-
-    const subDir = safePath.join(suite.tempDir, 'sub', 'deep');
-    await mkdir(subDir, { recursive: true });
-
-    const found = await findConfigFile(subDir);
-    expect(found).toBe(configPath);
-  });
-
-  it('should return undefined when no config exists', async () => {
-    const found = await findConfigFile(suite.tempDir);
-    expect(found).toBeUndefined();
-  });
-
-  it('should stop at root directory', async () => {
-    const found = await findConfigFile('/');
-    expect(found).toBeUndefined();
   });
 });
 

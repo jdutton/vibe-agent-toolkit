@@ -316,6 +316,6 @@ MIT
 
 ## Related Packages
 
-- [@vibe-agent-toolkit/agent-runtime](../agent-runtime) - Core agent definitions
-- [@vibe-agent-toolkit/vat-example-cat-agents](../vat-example-cat-agents) - Example agents
-- [@vibe-agent-toolkit/agent-skills](../agent-skills) - Agent Skills adapter
+- [@vibe-agent-toolkit/agent-runtime](../agent-runtime/README.md) - Core agent definitions
+- [@vibe-agent-toolkit/vat-example-cat-agents](../vat-example-cat-agents/README.md) - Example agents
+- [@vibe-agent-toolkit/agent-skills](../agent-skills/README.md) - Agent Skills adapter

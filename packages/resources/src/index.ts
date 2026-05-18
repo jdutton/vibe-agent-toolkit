@@ -101,11 +101,10 @@ export {
 // They are implementation details. Users should use ResourceRegistry API.
 
 // Export href resolution utility (shared by audit and validate code paths)
-export { resolveLocalHref } from './utils.js';
+export { resolveLocalHref, type ResolveLocalHrefResult } from './utils.js';
 
 // Export project config parsing
 export {
-  findConfigFile,
   parseConfigFile,
   loadConfig,
 } from './config-parser.js';

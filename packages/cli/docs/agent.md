@@ -93,6 +93,31 @@ vat agent validate ./my-custom-agent/agent.yaml
 - `OPENAI_API_KEY` - API key for OpenAI
 - `GOOGLE_API_KEY` - API key for Google (Gemini)
 
+## Requirements
+
+Each `vat agent` subcommand declares its own `projectRoot` and config policy:
+
+| Subcommand | `projectRoot` | Config |
+|---|---|---|
+| `vat agent list` | optional (tolerates absence) | not used |
+| `vat agent installed` | N/A | not used |
+| `vat agent build <pathOrName>` | required (errors without `vibe-agent-toolkit.config.yaml` or `.git/` ancestor) | required file with `agents.*` fields populated |
+| `vat agent run <pathOrName> <input>` | optional (path-explicit; tolerates absence) | optional (uses defaults if absent) |
+| `vat agent validate <pathOrName>` | required | optional (uses defaults if absent) |
+| `vat agent import <skillPath>` | N/A | not used |
+| `vat agent install <agentName>` | N/A | not used |
+| `vat agent uninstall <agentName>` | N/A | not used |
+
+**Why `build` and `validate` require `projectRoot`:** both are explicit-adoption
+operations. Building or source-validating an agent without an authoring
+boundary would silently accept arbitrary trees as "the project" and would not
+participate in the unified validation framework. `vat agent run` is
+path-explicit and runs from anywhere; `vat agent list` discovers without
+needing a project context.
+
+See [Roots and Config — Canonical Concepts](../../../docs/concepts/roots-and-config.md)
+for terminology.
+
 ## See Also
 
 - [@vibe-agent-toolkit/agent-schema](../../agent-schema/README.md) - Schema reference

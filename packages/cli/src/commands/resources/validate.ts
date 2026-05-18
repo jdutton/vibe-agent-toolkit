@@ -13,6 +13,7 @@ import * as yaml from 'js-yaml';
 import { formatDurationSecs } from '../../utils/duration.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { writeTestFormatError } from '../../utils/output.js';
+import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
 import { loadResourcesWithConfig } from '../../utils/resource-loader.js';
 
 import { handleCommandError } from './command-helpers.js';
@@ -337,8 +338,15 @@ export async function validateCommand(
   const startTime = Date.now();
 
   try {
+    // Resolve projectRoot at the CLI boundary (spec §5/§7 — loud-cwd policy).
+    const projectRoot = projectRootOrLoudCwd(pathArg ?? process.cwd(), logger);
+
     // Load resources with config support (includes GitTracker initialization)
-    const { registry, config, gitTracker } = await loadResourcesWithConfig(pathArg, logger);
+    const { registry, config, gitTracker } = await loadResourcesWithConfig(
+      pathArg,
+      projectRoot,
+      logger,
+    );
 
     // CLI flag: --no-check-frontmatter-links disables the check for every collection.
     // Commander represents the negated form as options.checkFrontmatterLinks === false.

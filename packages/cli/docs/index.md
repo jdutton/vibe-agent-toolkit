@@ -332,6 +332,25 @@ The `vat` wrapper automatically detects your execution context:
 When running global `vat` from within the toolkit repository, it automatically
 switches to dev mode and shows the `-dev` suffix.
 
+## Requirements
+
+Every VAT command declares a `projectRoot` policy and a config policy. The
+short version:
+
+- **`projectRoot` = the VAT authoring boundary.** Discovered as: nearest
+  `vibe-agent-toolkit.config.yaml` → else nearest `.git/` → else `null`.
+- **Per-command policy varies.** Some commands require it (`vat skills build`,
+  `vat agent build`, `vat build`, `vat verify`). Some tolerate its absence
+  (`vat skills validate --user`, `vat agent list`, `vat rag *` with `--db`).
+  Some have a **loud-cwd fallback** that warns to stderr and continues
+  (`vat resources scan`, `vat resources validate`).
+- **`vat audit` is special:** there is no single `projectRoot`; each scanned
+  skill walks up to its own governing context.
+
+Every command's `--help` output includes a `Requirements:` section declaring
+its policy. The full matrix and rationale live in
+[Roots and Config — Canonical Concepts](../../../docs/concepts/roots-and-config.md).
+
 ## Configuration
 
 Place `vibe-agent-toolkit.config.yaml` at project root:

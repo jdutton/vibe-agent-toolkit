@@ -40,7 +40,6 @@ vi.mock('node:fs', () => ({
   readFileSync: vi.fn(),
 }));
 vi.mock('../../src/utils/config-loader.js', () => ({
-  findConfigPath: vi.fn(),
   loadConfig: vi.fn(),
 }));
 
@@ -266,13 +265,15 @@ describe('doctor command - unit tests', () => {
   });
 
   describe('checkCliBuildSync', () => {
+    const FAKE_PROJECT_ROOT = '/fake/project/root';
+
     it('passes when CLI version matches source', async () => {
       await mockDoctorFileSystem({
         isVatSourceTree: true,
         packageVersion: '0.1.0',
       });
 
-      const result = checkCliBuildSync();
+      const result = checkCliBuildSync(FAKE_PROJECT_ROOT);
 
       assertCheckPassed(result, 'CLI build status', 'up to date');
     });
@@ -304,7 +305,7 @@ describe('doctor command - unit tests', () => {
       });
       vi.mocked(existsSync).mockReturnValue(true);
 
-      const result = checkCliBuildSync();
+      const result = checkCliBuildSync(FAKE_PROJECT_ROOT);
 
       assertCheckFailed(
         result,
@@ -317,7 +318,14 @@ describe('doctor command - unit tests', () => {
     it('skips when not in VAT source tree', async () => {
       await mockDoctorFileSystem({ isVatSourceTree: false });
 
-      const result = checkCliBuildSync();
+      const result = checkCliBuildSync(FAKE_PROJECT_ROOT);
+
+      expect(result.passed).toBe(true);
+      expect(result.message).toContain('Skipped');
+    });
+
+    it('skips when projectRoot is null', () => {
+      const result = checkCliBuildSync(null);
 
       expect(result.passed).toBe(true);
       expect(result.message).toContain('Skipped');

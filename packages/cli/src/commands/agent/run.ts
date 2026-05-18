@@ -8,6 +8,7 @@ import { resolveAgentPath } from '../../utils/agent-discovery.js';
 import { runAgent } from '../../utils/agent-runner.js';
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
+import { projectRootOrNull } from '../../utils/project-root-policy.js';
 
 export interface RunCommandOptions {
   debug?: boolean;
@@ -29,6 +30,11 @@ export async function runCommand(
   const startTime = Date.now();
 
   try {
+    // Spec §7: `vat agent run` uses `tolerate null` (path-explicit).
+    // The result is currently not consumed downstream; the call records the
+    // policy decision at the CLI boundary.
+    projectRootOrNull(process.cwd());
+
     const targetPath = await resolveAgentPath(pathOrName, logger);
     logger.info(`Running agent: ${targetPath}`);
     logger.info('');

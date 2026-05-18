@@ -114,13 +114,18 @@ describe('skills build command (system test)', () => {
     expect(result.stdout).toContain('Exit Codes:');
   });
 
-  it('should exit 0 when no config yaml found (nothing to build)', async () => {
+  it('should fail-fast when no config yaml or .git/ ancestor exists (required projectRoot policy)', async () => {
     const tempDir = suite.createTempDir();
 
     const { result } = await suite.runBuildCommand(tempDir);
 
-    // No config yaml -> exits 0 with "nothing to build" message
-    expect(result.status).toBe(0);
+    // Phase 4 spec §7: `vat skills build` enforces the "required" projectRoot
+    // policy — no config and no .git/ ancestor → non-zero exit with a clear
+    // error message naming the required marker.
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(
+      /vat skills build (?:failed: )?requires a vibe-agent-toolkit\.config\.yaml or \.git\/ ancestor/,
+    );
   });
 
   it('should exit 0 when config yaml has no skills section', async () => {

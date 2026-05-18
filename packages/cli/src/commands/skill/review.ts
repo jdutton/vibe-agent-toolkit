@@ -27,6 +27,7 @@ import * as yaml from 'js-yaml';
 import { handleCommandError } from '../../utils/command-error.js';
 import { loadConfig } from '../../utils/config-loader.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
+import { projectRootOrNull } from '../../utils/project-root-policy.js';
 import { mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../../utils/skill-quality-footer.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
@@ -291,6 +292,12 @@ export async function reviewCommand(
       throw new Error('Missing required argument: <path> (path to SKILL.md or a skill directory)');
     }
 
+    // Spec §7: `vat skill review` uses `tolerate null` (single-skill review
+    // operates with or without a governing project). The result is recorded
+    // for future use; today resolvePackagingConfig walks per-skill (will be
+    // consolidated in Phase 5 once the audit walk-up cache lands).
+    projectRootOrNull(process.cwd());
+
     const skillPath = resolveSkillPath(pathArg);
     logger.debug(`Reviewing SKILL.md at: ${skillPath}`);
 
@@ -351,6 +358,12 @@ Exit Codes:
   0 - No errors and no warnings emitted
   1 - At least one error or warning present (errors and warnings treated equally — this is a review, not a gate)
   2 - System error (path missing, internal failure)
+
+Requirements:
+  projectRoot: optional (tolerates absence)
+  config:      optional (uses defaults if absent)
+
+  See docs/concepts/roots-and-config.md for terminology.
 
 Example:
   $ vat skill review packages/my-agents/src/skills/ado/SKILL.md

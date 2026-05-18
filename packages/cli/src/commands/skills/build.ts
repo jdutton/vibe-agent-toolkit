@@ -29,6 +29,7 @@ import { Command } from 'commander';
 import { handleCommandError } from '../../utils/command-error.js';
 import { loadConfig } from '../../utils/config-loader.js';
 import { type createLogger } from '../../utils/logger.js';
+import { requireProjectRoot } from '../../utils/project-root-policy.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
 
 import {
@@ -109,6 +110,12 @@ Exit Codes:
   0 - All skills built successfully (or dry-run preview)
   1 - One or more skills emitted validation errors
   2 - System error (config invalid, directory not found)
+
+Requirements:
+  projectRoot: required (errors if no vibe-agent-toolkit.config.yaml or .git/ ancestor)
+  config:      required file with skills.* fields populated
+
+  See docs/concepts/roots-and-config.md for terminology.
 
 Example:
   $ vat skills build                    # Build all skills from config
@@ -361,6 +368,12 @@ async function buildCommand(
   const { logger, cwd, startTime } = setupCommandContext(pathArg, options.debug);
 
   try {
+    // Spec §7: `vat skills build` requires a projectRoot — fails fast at the
+    // CLI boundary if no config or git ancestor exists. The resolved root is
+    // discarded here because config is read from `cwd` (the package dir),
+    // not the project root; the guard exists to satisfy the policy contract.
+    requireProjectRoot(cwd, 'vat skills build');
+
     // Load config yaml from cwd (not workspace root — config lives next to the package)
     const config = loadConfig(cwd);
 

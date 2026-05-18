@@ -73,35 +73,58 @@ export function splitHrefAnchor(href: string): [string, string | undefined] {
 }
 
 /**
- * Resolve a markdown link href to an absolute filesystem path.
+ * Discriminated union returned by {@link resolveLocalHref}.
+ *
+ * - `anchor_only` — the href was `#fragment` only (no file component).
+ * - `resolved` — the href resolved to an absolute filesystem path.
+ * - `absolute_no_root` — the href is an RFC 3986 §4.2 absolute-path
+ *   reference (starts with `/`) but no `projectRoot` was supplied.
+ * - `absolute_escapes_root` — the absolute-path reference resolved to a
+ *   location outside `projectRoot` (e.g., via `..` traversal or a symlink
+ *   pointing outside the project).
+ */
+export type ResolveLocalHrefResult =
+  | { kind: 'anchor_only' }
+  | { kind: 'resolved'; resolvedPath: string; anchor: string | undefined }
+  | { kind: 'absolute_no_root'; href: string; anchor: string | undefined }
+  | { kind: 'absolute_escapes_root'; href: string; anchor: string | undefined };
+
+/**
+ * Resolve a markdown link href to a filesystem path or a typed failure.
  *
  * Performs the standard href → path conversion used by both audit and validate:
  * 1. Strips anchor fragment (`#section`)
  * 2. Decodes URL-encoded characters (`%20` → space, `%26` → `&`)
- * 3. Resolves the path relative to the source file's directory
- *
- * Returns `null` for anchor-only links (e.g., `#heading`).
+ * 3. Resolves the path:
+ *    - Leading `/` (RFC 3986 §4.2 absolute-path reference) → resolve against
+ *      `projectRoot`. Requires a `projectRoot`; must not escape it.
+ *    - Otherwise → resolve relative to the source file's directory.
  *
  * @param href - Raw href from a markdown link
  * @param sourceFilePath - Absolute path of the file containing the link
- * @returns Resolved path info, or null for anchor-only links
+ * @param projectRoot - Optional project root for absolute-path references.
+ * @returns A {@link ResolveLocalHrefResult} discriminating success vs failure modes.
  *
  * @example
  * ```typescript
  * resolveLocalHref('My%20Folder/doc.md#intro', '/project/README.md')
- * // { resolvedPath: '/project/My Folder/doc.md', anchor: 'intro' }
+ * // { kind: 'resolved', resolvedPath: '/project/My Folder/doc.md', anchor: 'intro' }
  *
  * resolveLocalHref('#heading', '/project/README.md')
- * // null
+ * // { kind: 'anchor_only' }
+ *
+ * resolveLocalHref('/docs/foo.md', '/project/docs/sub/page.md', '/project')
+ * // { kind: 'resolved', resolvedPath: '/project/docs/foo.md', anchor: undefined }
  * ```
  */
 export function resolveLocalHref(
   href: string,
   sourceFilePath: string,
-): { resolvedPath: string; anchor: string | undefined } | null {
+  projectRoot?: string,
+): ResolveLocalHrefResult {
   const [fileHref, anchor] = splitHrefAnchor(href);
   if (fileHref === '') {
-    return null;
+    return { kind: 'anchor_only' };
   }
 
   let decodedHref: string;
@@ -111,10 +134,22 @@ export function resolveLocalHref(
     decodedHref = fileHref;
   }
 
+  // RFC 3986 §4.2 absolute-path reference — resolve against projectRoot.
+  if (decodedHref.startsWith('/')) {
+    if (!projectRoot) {
+      return { kind: 'absolute_no_root', href: fileHref, anchor };
+    }
+    const candidate = safePath.resolve(projectRoot, decodedHref.slice(1));
+    if (!isWithinProject(candidate, projectRoot)) {
+      return { kind: 'absolute_escapes_root', href: fileHref, anchor };
+    }
+    return { kind: 'resolved', resolvedPath: candidate, anchor };
+  }
+
+  // Relative reference — resolve against the source file's directory.
   const sourceDir = path.dirname(sourceFilePath);
   const resolvedPath = safePath.resolve(sourceDir, decodedHref);
-
-  return { resolvedPath, anchor };
+  return { kind: 'resolved', resolvedPath, anchor };
 }
 
 /**
@@ -135,7 +170,9 @@ export function resolveLocalHref(
  * ```
  */
 export function isWithinProject(filePath: string, projectRoot: string): boolean {
-  // Resolve symlinks to get real paths
+  // Canonicalize both sides symmetrically. Asymmetric handling (realpath one
+  // side, resolve the other) false-flags legitimate matches when projectRoot
+  // traverses a symlink — e.g. macOS /tmp → /private/tmp, bind mounts.
   let resolvedFilePath: string;
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is validated path parameter
@@ -145,7 +182,13 @@ export function isWithinProject(filePath: string, projectRoot: string): boolean 
     resolvedFilePath = safePath.resolve(filePath);
   }
 
-  const resolvedProjectRoot = safePath.resolve(projectRoot);
+  let resolvedProjectRoot: string;
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- projectRoot is validated path parameter
+    resolvedProjectRoot = fs.realpathSync(projectRoot);
+  } catch {
+    resolvedProjectRoot = safePath.resolve(projectRoot);
+  }
 
   // Normalize to forward slashes for cross-platform comparison
   const normalizedFile = toForwardSlash(resolvedFilePath);

@@ -8,6 +8,7 @@ import { resolveAgentPath } from '../../utils/agent-discovery.js';
 import { handleCommandError } from '../../utils/command-error.js';
 import { createLogger } from '../../utils/logger.js';
 import { writeYamlOutput } from '../../utils/output.js';
+import { requireProjectRoot } from '../../utils/project-root-policy.js';
 
 export interface ValidateCommandOptions {
   debug?: boolean;
@@ -21,6 +22,9 @@ export async function validateCommand(
   const startTime = Date.now();
 
   try {
+    // Spec §7: `vat agent validate` requires a projectRoot.
+    requireProjectRoot(process.cwd(), 'vat agent validate');
+
     // Resolve agent name to path if needed
     const targetPath = await resolveAgentPath(pathOrName, logger);
 

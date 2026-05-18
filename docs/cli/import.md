@@ -378,6 +378,21 @@ After editing SKILL.md, regenerate agent.yaml:
 vat agent import SKILL.md --force
 ```
 
+## Requirements
+
+`vat agent import` is a one-shot file conversion and does not consume a VAT
+authoring context:
+
+- **`projectRoot`**: N/A. The command operates on the explicit `<skillPath>`
+  argument; it does not walk up for `vibe-agent-toolkit.config.yaml` or
+  `.git/`. Use it from anywhere — inside a project, outside a project, on a
+  downloaded skill tarball.
+- **Config**: not used.
+
+See [Roots and Config — Canonical Concepts](../concepts/roots-and-config.md)
+for the per-command policy matrix and the rationale behind which commands
+demand a `projectRoot` and which do not.
+
 ## Related Commands
 
 - [`vat agent audit`](./audit.md) - Validate Agent Skills before import

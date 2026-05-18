@@ -61,7 +61,8 @@ async function parseFrontmatterFields(
 async function walkLinkedFiles(absolute: string, parseErrors: ParseErrors): Promise<string[]> {
 	const linked: string[] = [];
 	try {
-		const projectRoot = findProjectRoot(dirname(absolute));
+		// Library fallback to skill dir; see plan 2026-05-17 / spec §7.
+		const projectRoot = findProjectRoot(dirname(absolute)) ?? dirname(absolute);
 		// Crawl with respectGitignore: false so untracked skills and linked documents
 		// that the user is actively authoring are included alongside committed files.
 		const files = await crawlDirectory({

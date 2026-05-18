@@ -13,6 +13,21 @@ skills:
     # require local shell to invoke `vat`/`bun`/`git` — claude-code is the
     # only runtime that fits.
     targets: ['claude-code']
+    validation:
+      # After plan 2026-05-17 narrowed findProjectRoot to the nearest
+      # config-anchored ancestor (vat-development-agents/), several skills
+      # link cross-monorepo to the top-level docs/ tree. These links are
+      # intentional text pointers (not bundled) — allow them globally for
+      # all skills in this package.
+      allow:
+        LINK_OUTSIDE_PROJECT:
+          - paths:
+              - "../../../docs/**"
+              - "../../docs/**"
+              - "../../CHANGELOG.md"
+              - "../*/README.md"        # sibling packages/<name>/README.md
+              - "../../packages/**"      # any sibling-package reference
+            reason: "Cross-monorepo text pointers to top-level docs/, CHANGELOG.md, and sibling-package READMEs"
   config:
     vibe-agent-toolkit:
       linkFollowDepth: 0

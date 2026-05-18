@@ -41,15 +41,22 @@ import {
   type Target,
 } from '@vibe-agent-toolkit/claude-marketplace';
 import { detectFormat } from '@vibe-agent-toolkit/discovery';
-import { gitFindRoot, GitTracker, isAbsolutePath, safePath } from '@vibe-agent-toolkit/utils';
+import {
+  findProjectRoot,
+  gitFindRoot,
+  GitTracker,
+  isAbsolutePath,
+  resetProjectRootCaches,
+  safePath,
+} from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import picomatch from 'picomatch';
 
 import { handleCommandError } from '../utils/command-error.js';
 import {
-  findGoverningConfig,
   loadConfig,
-  resetGoverningConfigCache,
+  loadConfigCached,
+  resetLoadedConfigCache,
 } from '../utils/config-loader.js';
 import { isGitUrl, parseGitUrl } from '../utils/git-url.js';
 import { createLogger } from '../utils/logger.js';
@@ -169,9 +176,10 @@ async function getDiscoveredSkillsByPath(
  * absolute SKILL.md path.
  *
  * Used by compat analysis to resolve the plugin-level `targets` union. For
- * scan-time per-skill validation, see {@link findGoverningConfig} — audit
- * walks UP from each discovered SKILL.md to its nearest-ancestor config so
- * per-skill packaging rules still apply when auditing from above a project.
+ * scan-time per-skill validation, see {@link resolveSkillPackagingConfig} —
+ * audit walks UP from each discovered SKILL.md to its nearest-ancestor
+ * config (via `findProjectRoot` + `loadConfigCached`) so per-skill packaging
+ * rules still apply when auditing from above a project.
  *
  * Returns `null` if `scanRoot` has no config or the config has no skills.
  */
@@ -243,10 +251,13 @@ async function resolveSkillPackagingConfig(
 ): Promise<SkillPackagingConfig | null> {
   const absSkillPath = safePath.resolve(skillPath);
   const skillDir = safePath.resolve(safePath.join(absSkillPath, '..'));
-  const governing = findGoverningConfig(skillDir);
-  if (governing === null) return null;
+  const projectRoot = findProjectRoot(skillDir);
+  if (projectRoot === null) return null;
+  const governingConfig = loadConfigCached(projectRoot);
+  if (governingConfig === undefined) return null;
 
-  const { config, configRoot } = governing;
+  const config = governingConfig;
+  const configRoot = projectRoot;
   if (config.skills === undefined) return null;
 
   const { defaults, config: perSkillConfig } = config.skills;
@@ -1559,7 +1570,8 @@ const gitTrackerCache: Map<string, GitTracker> = new Map();
  */
 export function resetAuditCaches(): void {
   gitTrackerCache.clear();
-  resetGoverningConfigCache();
+  resetProjectRootCaches();
+  resetLoadedConfigCache();
   resetConfigSkillDiscoveryCache();
 }
 
@@ -1671,6 +1683,12 @@ async function scanDirectory(
   // subsequent recursion reuses them.
   const resolvedScanCtx: ScanContext = scanCtx ?? (await resolveScanContext(dirPath));
   const resolvedNestedLog = nestedConfigLog ?? new Set<string>();
+
+  // Top-down pre-warm of findProjectRoot's walk-up cache (spec §8). The first
+  // call here drives a single ancestor walk; every subsequent recursion is a
+  // Layer-1 hit chain. By the time we reach leaf SKILL.md files,
+  // resolveSkillPackagingConfig's per-skill walk-up is all cache hits.
+  findProjectRoot(dirPath);
 
   // Emit a one-time info breadcrumb when we encounter a nested
   // vibe-agent-toolkit.config.yaml that is NOT at the scan root. Configs do

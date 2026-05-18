@@ -17,8 +17,10 @@ const CLI_FILES_ENTRY = [{ source: 'dist/bin/cli.mjs', dest: 'scripts/cli.mjs' }
  * simulates a project build step by copying the build artifact into
  * dist/bin/ (which would be gitignored in a real project).
  *
- * Also writes a package.json with "workspaces" so findProjectRoot()
- * anchors to tempDir instead of walking up to the monorepo root.
+ * Writes both a `vibe-agent-toolkit.config.yaml` (so the canonical
+ * findProjectRoot anchors to tempDir under the config-first ladder
+ * introduced by plan 2026-05-17) and a package.json with "workspaces"
+ * (preserved for any test logic that inspects npm-workspace metadata).
  */
 function setupSkillFilesTestDir(): { getTempDir: () => string } {
   let tempDir = '';
@@ -39,6 +41,13 @@ function setupSkillFilesTestDir(): { getTempDir: () => string } {
     await writeFile(
       safePath.join(tempDir, 'package.json'),
       JSON.stringify({ name: 'skill-files-test', workspaces: ['skills/*'] }),
+    );
+
+    // Anchor canonical findProjectRoot at tempDir (plan 2026-05-17 narrowed
+    // findProjectRoot to config-first, no longer consults npm workspaces).
+    await writeFile(
+      safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'),
+      'version: 1\n',
     );
   });
 

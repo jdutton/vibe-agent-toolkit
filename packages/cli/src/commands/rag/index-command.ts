@@ -6,6 +6,7 @@ import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
 
 import { createLogger } from '../../utils/logger.js';
 import { writeYamlOutput } from '../../utils/output.js';
+import { projectRootOrNull } from '../../utils/project-root-policy.js';
 import { loadResourcesWithConfig } from '../../utils/resource-loader.js';
 
 import { formatDuration, handleCommandError, resolveDbPath } from './command-helpers.js';
@@ -23,12 +24,20 @@ export async function indexCommand(
   const startTime = Date.now();
 
   try {
-    // Load resources with config support
-    const { registry, projectRoot } = await loadResourcesWithConfig(pathArg, logger);
+    // Resolve projectRoot at the CLI boundary.
+    // `vat rag index` uses `tolerate null` (spec §7) — rag config-loading
+    // produces its own error if config is required.
+    const projectRoot = projectRootOrNull(process.cwd());
 
-    // Resolve database path
+    // Resolve database path (allow `--db <path>` without a projectRoot).
     const dbPath = resolveDbPath(options.db, projectRoot ?? undefined);
     logger.debug(`Database path: ${dbPath}`);
+
+    // Load resources. `loadResourcesWithConfig` requires a non-null root, so
+    // when projectRoot is null we fall back to cwd for the crawl baseDir.
+    // Indexing doesn't surface URI-reference resolution, so cwd is fine here.
+    const crawlRoot = projectRoot ?? process.cwd();
+    const { registry } = await loadResourcesWithConfig(pathArg, crawlRoot, logger);
 
     const allResources = registry.getAllResources();
     logger.debug(`Found ${allResources.length} resources to index`);

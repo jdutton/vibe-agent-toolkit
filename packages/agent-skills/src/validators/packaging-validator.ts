@@ -282,8 +282,10 @@ export async function validateSkillForPackaging(
   const excludeNavigationFiles = packagingConfig?.excludeNavigationFiles ?? true;
   const maxDepth = linkFollowDepth === 'full' ? Infinity : linkFollowDepth;
 
-  // Find project boundary (workspace root -> git root -> skill dir)
-  const projectRoot = findProjectRoot(dirname(skillPath));
+  // Find project boundary (config root -> git root -> skill dir).
+  // Library fallback to skill dir keeps callers null-safe; CLI command
+  // boundary owns any user-facing warning. See plan 2026-05-17.
+  const projectRoot = findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
 
   // Build resource registry and walk the link graph.
   // Prefer the caller-supplied shared registry (when `vat skills validate` or

@@ -75,6 +75,12 @@ Exit Codes:
   0 - List successful
   2 - System error
 
+Requirements:
+  projectRoot: optional (tolerates absence; --user scope skips it entirely)
+  config:      optional (uses defaults if absent)
+
+  See docs/concepts/roots-and-config.md for terminology.
+
 Example:
   $ vat skills list                    # List project skills
   $ vat skills list --user             # List user-installed skills

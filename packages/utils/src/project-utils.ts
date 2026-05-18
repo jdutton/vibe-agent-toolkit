@@ -1,59 +1,189 @@
 /**
- * Project root discovery utilities.
+ * Canonical root-discovery primitives for VAT.
  *
- * Finds the project root directory using a layered detection strategy:
- * workspace root (monorepo) -> git root -> directory fallback.
+ * Per spec docs/superpowers/specs/2026-05-17-root-model-and-leading-slash-design.md §6,
+ * these are CLI-boundary functions: inner libraries take roots as parameters, not these.
+ * All return `string | null` with no internal fallbacks.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, parse } from 'node:path';
 
-import { gitFindRoot } from './git-utils.js';
 import { safePath } from './path-utils.js';
 
-
+const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 const PACKAGE_JSON_FILENAME = 'package.json';
 
 /**
- * Find the project root for boundary enforcement.
+ * Find the nearest vibe-agent-toolkit.config.yaml by walking up from startDir.
  *
- * Detection order:
- * 1. Walk up from startDir looking for package.json with "workspaces" (monorepo root)
- * 2. Fall back to git repository root
- * 3. Fall back to startDir itself (tests / standalone)
+ * Returns the path to the config file itself (not its directory). Returns null
+ * if no config exists in any ancestor.
  *
- * @param startDir - Directory to start searching from (e.g., dirname of SKILL.md)
- * @returns Project root directory
+ * @param startDir - Directory to start the walk from
+ * @returns Path to the config file, or null if not found
  */
-export function findProjectRoot(startDir: string): string {
-  let currentDir = safePath.resolve(startDir);
-  const resolvedStartDir = currentDir;
+export function findConfigFile(startDir: string): string | null {
+  let current = safePath.resolve(startDir);
+  const root = parse(current).root;
+  while (true) {
+    const candidate = safePath.join(current, CONFIG_FILENAME);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- walk-up is intentional
+    if (existsSync(candidate)) return candidate;
+    if (current === root) return null;
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
 
-  // 1. Walk up looking for workspace root (package.json with "workspaces")
-  while (currentDir !== dirname(currentDir)) {
-    const packageJsonPath = safePath.join(currentDir, PACKAGE_JSON_FILENAME);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Walking up from validated startDir
-    if (existsSync(packageJsonPath)) {
+/**
+ * Find the nearest package.json with a "workspaces" key by walking up.
+ *
+ * Used for Node-monorepo binary discovery and Node-specific tooling only.
+ * NOT a substitute for findProjectRoot — VAT projects are not required to be
+ * npm workspaces. Returns null when no workspaces-bearing package.json is found.
+ *
+ * @param startDir - Directory to start the walk from
+ * @returns Path to the workspace root directory, or null if not found
+ */
+export function findNodeWorkspaceRoot(startDir: string): string | null {
+  let current = safePath.resolve(startDir);
+  while (current !== dirname(current)) {
+    const pkgPath = safePath.join(current, PACKAGE_JSON_FILENAME);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- walk-up is intentional
+    if (existsSync(pkgPath)) {
       try {
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- Walking up from validated startDir
-        const content = readFileSync(packageJsonPath, 'utf-8');
-        const parsed: unknown = JSON.parse(content);
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- walk-up is intentional
+        const parsed: unknown = JSON.parse(readFileSync(pkgPath, 'utf-8'));
         if (typeof parsed === 'object' && parsed !== null && 'workspaces' in parsed) {
-          return currentDir;
+          return current;
         }
       } catch {
-        // Invalid JSON - skip this package.json
+        // Invalid JSON — skip and continue walking up.
       }
     }
-    currentDir = dirname(currentDir);
+    current = dirname(current);
   }
+  return null;
+}
 
-  // 2. Fall back to git root
-  const gitRoot = gitFindRoot(resolvedStartDir);
-  if (gitRoot !== null) {
-    return gitRoot;
+/**
+ * Layer 1 cache for {@link findProjectRoot}.
+ *
+ * Each entry answers a property *of the keyed directory*: "what `projectRoot`
+ * governs files at or below this dir?" Because the answer is independent of
+ * where a walk-up started, entries can be safely shared across starting
+ * points.
+ *
+ * Tests that mutate fixtures between runs (or in-process callers that
+ * re-enter `vat audit` in the same process) must call
+ * {@link resetProjectRootCaches} to invalidate this cache.
+ *
+ * See spec docs/superpowers/specs/2026-05-17-root-model-and-leading-slash-design.md §8.
+ */
+const walkUpCache: Map<string, { configRoot: string | null }> = new Map();
+
+/**
+ * Reset {@link findProjectRoot}'s module-level cache.
+ *
+ * Call at the start of each independent CLI invocation so in-process callers
+ * (and integration tests sharing a vitest worker) don't observe stale results.
+ */
+export function resetProjectRootCaches(): void {
+  walkUpCache.clear();
+}
+
+/** Write `entry` into walkUpCache for every dir in `visited`. */
+function propagateCache(visited: ReadonlyArray<string>, entry: { configRoot: string | null }): void {
+  for (const dir of visited) walkUpCache.set(dir, entry);
+}
+
+/**
+ * Config-anchored walk-up phase. Walks ancestors of `startDir`, populating
+ * `visited` and consulting/writing the walk-up cache.
+ *
+ * Returns one of three results:
+ * - `{ kind: 'found', configRoot }` — a config or cache hit produced an
+ *   answer; cache has already been propagated to all visited dirs.
+ * - `{ kind: 'exhausted' }` — reached filesystem root without finding a
+ *   config; the caller should run the git-anchored phase.
+ *
+ * @returns walk result
+ */
+function configWalkPhase(
+  startDir: string,
+  visited: string[],
+): { kind: 'found'; configRoot: string | null } | { kind: 'exhausted' } {
+  let current = safePath.resolve(startDir);
+  while (true) {
+    const cached = walkUpCache.get(current);
+    if (cached !== undefined) {
+      propagateCache(visited, cached);
+      return { kind: 'found', configRoot: cached.configRoot };
+    }
+    visited.push(current);
+
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- walk-up is intentional
+    if (existsSync(safePath.join(current, CONFIG_FILENAME))) {
+      const entry = { configRoot: current };
+      propagateCache(visited, entry);
+      return { kind: 'found', configRoot: current };
+    }
+
+    const parent = dirname(current);
+    if (parent === current) return { kind: 'exhausted' };
+    current = parent;
   }
+}
 
-  // 3. Fall back to start directory
-  return resolvedStartDir;
+/**
+ * Git-anchored walk-up phase. Only runs after `configWalkPhase` reports
+ * `exhausted`. Walks the same chain looking for `.git/` and writes the final
+ * answer (the .git dir or null) into walkUpCache for every visited dir.
+ */
+function gitWalkPhase(startDir: string, visited: ReadonlyArray<string>): string | null {
+  let current = safePath.resolve(startDir);
+  while (true) {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- walk-up is intentional
+    if (existsSync(safePath.join(current, '.git'))) {
+      const entry = { configRoot: current };
+      propagateCache(visited, entry);
+      return current;
+    }
+    const parent = dirname(current);
+    if (parent === current) {
+      propagateCache(visited, { configRoot: null });
+      return null;
+    }
+    current = parent;
+  }
+}
+
+/**
+ * Find the VAT project root.
+ *
+ * Discovery ladder (checks startDir itself first, then each ancestor):
+ *   1. Directory containing vibe-agent-toolkit.config.yaml → that directory
+ *   2. Directory containing .git/                          → that directory
+ *   3. null
+ *
+ * The config-anchored ladder runs to completion first; only if no config is
+ * found anywhere up the tree do we walk a second time looking for .git/.
+ * This implements the "config wins over git, regardless of relative depth"
+ * semantic from spec §4 (config-file placement is a stronger declaration of
+ * intent than the git boundary).
+ *
+ * Cached at the module level via {@link walkUpCache}. The cache is keyed by
+ * each walked directory; entries are written for every dir touched on the
+ * walk so subsequent calls from siblings/descendants become Layer-1 hits.
+ *
+ * @param startDir - Directory to start the walk from
+ * @returns Project root directory, or null if neither config nor git root found
+ */
+export function findProjectRoot(startDir: string): string | null {
+  const visited: string[] = [];
+  const configPhase = configWalkPhase(startDir, visited);
+  if (configPhase.kind === 'found') return configPhase.configRoot;
+  return gitWalkPhase(startDir, visited);
 }

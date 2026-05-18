@@ -260,6 +260,19 @@ fi
 - **Skipped:** When running installed VAT globally
 - **Fix:** Run `bun run build` in VAT source directory
 
+## Requirements
+
+- **`projectRoot`**: optional. `vat doctor` tolerates a missing `projectRoot`
+  and reports its absence as a diagnostic finding rather than refusing to run.
+  This is by design: doctor is the command users invoke when they suspect their
+  setup is wrong, so it must run anywhere.
+- **Config**: not used as input. Doctor checks whether a config file *exists*
+  and parses as a finding, but it does not consume config fields to drive its
+  behavior.
+
+See [Roots and Config — Canonical Concepts](../../../docs/concepts/roots-and-config.md)
+for terminology.
+
 ## Tips
 
 - Run `vat doctor` before reporting issues to verify environment
