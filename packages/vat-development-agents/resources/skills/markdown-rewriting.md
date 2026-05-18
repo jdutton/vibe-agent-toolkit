@@ -20,8 +20,8 @@ For **any** programmatic markdown edit, use `@vibe-agent-toolkit/resources`:
 - `openFrontmatter(markdown)` — round-trip-safe editor. Comments,
   blank lines, EOL, YAML style all survive read → mutate → write. Exposes
   `.body` (settable), `.get(path)`, `.set(path, value)`, `.setArrayItem`,
-  `.appendArrayItem`, `.delete(path)`, and `.toString()`. The underlying
-  `yaml.Document` is intentionally not exposed.
+  `.appendArrayItem`, `.delete(path)`, `.isDirty()`, and `.toString()`.
+  The underlying `yaml.Document` is intentionally not exposed.
 - `rewriteBodyLinks(body, rewriteHref)` — walk inline + reference-style
   body links with a per-href callback.
 - `rewriteFrontmatterFieldsAtPaths(editor, paths, rewriteHref)` — rewrite
@@ -34,6 +34,15 @@ For **any** programmatic markdown edit, use `@vibe-agent-toolkit/resources`:
 **The `rewriteHref` callback contract.** Return the new href, or return the
 input string unchanged to skip that link. Anchor-only hrefs (`#section`),
 external URLs, and refs that don't match your rule should all return as-is.
+The callback receives only the href string — there is no field-path
+context. When rules differ per field (e.g. `parent_spec` strict; `related[]`
+permissive), use `rewriteFrontmatterFieldsAtPaths` with one call per path
+group rather than the schema-driven helper.
+
+**The primitives are pure (no I/O).** Read and write with whatever FS API
+fits — `fs/promises`, `fs-extra`, streams, anything. The recipes below
+use `readFileSync` / `writeFileSync` for clarity; production code is
+free to use async equivalents.
 
 ## Anti-patterns — do NOT use these
 
@@ -105,11 +114,86 @@ writeFileSync(filePath, editor.toString());
 The schema-driven call walks every field whose schema position has
 `format: uri-reference` (or `uri`, `iri-reference`, `iri`) and rewrites
 the value via your callback. Fields outside the URI-family are not
-touched. **Frontmatter-only**: drop the `rewriteBodyLinks` line — the rest
+touched. **Templated-URI formats are intentionally excluded** —
+`uri-template` (RFC 6570 templates with `{var}` placeholders) and
+JSON-Pointer-derived formats aren't file references and don't fit the
+rewrite shape.
+
+**Frontmatter-only**: drop the `rewriteBodyLinks` line — the rest
 is identical.
 
 After running, diff the file (`git diff <path>`) to confirm the rewrite
 touched only the fields and links you expected.
+
+## Bulk migration: many files at once
+
+When the rewrite spans dozens or thousands of files (folder rename,
+schema-evolution migration, citation cleanup), the natural shape is
+glob + iterate + dry-run + `isDirty()` gate. Pattern:
+
+```typescript
+import { readFileSync, writeFileSync } from 'node:fs';
+import { globSync } from 'glob';  // or `node:fs`'s glob, or fast-glob
+import {
+  openFrontmatter,
+  rewriteBodyLinks,
+  rewriteFrontmatterUriReferencesFromSchema,
+} from '@vibe-agent-toolkit/resources';
+
+const DRY_RUN = process.env['DRY_RUN'] !== 'false';
+const rewriteHref = (href: string): string =>
+  href.replace('/docs/specs/', '/docs/architecture/');
+
+const schema = JSON.parse(readFileSync('schemas/spec.schema.json', 'utf8'));
+const files = globSync('docs/**/*.md');
+
+let changed = 0;
+let unchanged = 0;
+for (const filePath of files) {
+  const original = readFileSync(filePath, 'utf8');
+  const editor = openFrontmatter(original);
+
+  editor.body = rewriteBodyLinks(editor.body, rewriteHref);
+  rewriteFrontmatterUriReferencesFromSchema(editor, schema, rewriteHref);
+
+  // Skip files where nothing material changed. Avoids the no-op churn
+  // described in §"What's preserved, what isn't".
+  const next = editor.toString();
+  if (!editor.isDirty() || next === original) {
+    unchanged++;
+    continue;
+  }
+
+  if (DRY_RUN) {
+    console.log(`would update ${filePath}`);
+  } else {
+    writeFileSync(filePath, next);
+  }
+  changed++;
+}
+
+console.log(`${DRY_RUN ? 'DRY RUN: ' : ''}${changed} changed, ${unchanged} unchanged`);
+```
+
+**Recommended workflow for bulk runs:**
+
+1. **Sentinel-first.** Run on a single representative file first
+   (`globSync` pattern that matches exactly one path). Eyeball the diff.
+2. **Dry-run the full set.** `DRY_RUN=true` lists every file the script
+   would touch. Spot-check at least 3 entries before going wet.
+3. **Iterate.** Adjust the callback or schema until the dry-run plan
+   matches your intent.
+4. **Run wet.** `DRY_RUN=false`. Then run your project's link validator
+   (`vat resources validate`, link-check CI, etc.) on the corpus before
+   committing — the rewrite is reversible via `git checkout` if any
+   targets are wrong.
+
+**Delegating to a subagent.** Bulk rewrites are good subagent work, but
+brief them with the same three guardrails: provide the exact callback
+rule, mandate dry-run first, and ask for a structured report (counts
+of files changed/unchanged, a sample of 3 before/after diffs). Without
+those guardrails, a subagent can silently produce a thousand-file diff
+that's wrong in a subtle way and only catchable on careful review.
 
 ## What's preserved, what isn't
 
@@ -134,8 +218,19 @@ things normalize:
 **Consequence:** even a "no-op" rewrite (callback returns the input
 unchanged) re-emits frontmatter and can collapse `  #` → ` #` on every
 line that has an inline comment. The change is harmless but shows up in
-`git diff`. If you don't want it, gate your `writeFileSync` on whether
-the editor actually changed anything material.
+`git diff`. Two ways to skip the write in this case:
+
+- **`editor.isDirty()`** — returns `true` if any mutator was called or
+  `body` was reassigned to a different string. Cheap, no string compare,
+  but flips on any mutator call even when the value didn't change
+  (e.g. `set('foo', sameValue)`). Fine for most workflows.
+- **Byte-level dirty check** — `editor.toString() !== originalText`. Catches
+  the no-op-rewrite case exactly; one extra serialize per file. Use this
+  when you must produce zero diff on no-op runs.
+
+The bulk-migration recipe above combines both: `isDirty()` as the cheap
+short-circuit, then a byte compare to filter out comment-whitespace-only
+deltas.
 
 ## Cross-links
 

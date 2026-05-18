@@ -38,6 +38,19 @@ export interface FrontmatterEditor {
   appendArrayItem(path: FrontmatterPath, value: FrontmatterScalar): void;
   delete(path: FrontmatterPath): void;
   toString(): string;
+  /**
+   * Returns true if any mutating method has been called or `body` was
+   * reassigned to a different string. Use to gate writeFileSync and avoid
+   * the no-op-rewrite churn described in §"What's preserved, what isn't"
+   * of the markdown-rewriting skill.
+   *
+   * **Caveat:** any call to `set` / `setArrayItem` / `appendArrayItem` /
+   * `delete` flips the flag, even if the underlying value didn't change
+   * (e.g. `set('foo', sameValue)`). For strict byte-level dirty detection
+   * compare `editor.toString() !== originalText` instead. `body =` is the
+   * one exception — it only flips dirty on actual string change.
+   */
+  isDirty(): boolean;
 }
 
 interface FrontmatterSplit {
@@ -91,13 +104,29 @@ class FrontmatterEditorImpl implements FrontmatterEditor {
   private readonly doc: Document.Parsed | Document;
   private readonly hasFrontmatter: boolean;
   private readonly eol: '\n' | '\r\n';
-  public body: string;
+  private _body: string;
+  private _dirty = false;
+
+  get body(): string {
+    return this._body;
+  }
+
+  set body(value: string) {
+    if (value !== this._body) {
+      this._body = value;
+      this._dirty = true;
+    }
+  }
+
+  isDirty(): boolean {
+    return this._dirty;
+  }
 
   constructor(input: string) {
     const split = splitFrontmatter(input);
     this.hasFrontmatter = split.hasFrontmatter;
     this.eol = split.eol;
-    this.body = split.body;
+    this._body = split.body;
     if (!split.hasFrontmatter) {
       this.doc = new Document({});
       return;
@@ -134,21 +163,25 @@ class FrontmatterEditorImpl implements FrontmatterEditor {
   set(path: FrontmatterPath, value: FrontmatterScalar): void {
     const segments = this.toPath(path);
     this.doc.setIn(segments as Iterable<unknown>, value);
+    this._dirty = true;
   }
 
   setArrayItem(path: FrontmatterPath, index: number, value: FrontmatterScalar): void {
     const segments = [...this.toPath(path), index];
     this.doc.setIn(segments as Iterable<unknown>, value);
+    this._dirty = true;
   }
 
   appendArrayItem(path: FrontmatterPath, value: FrontmatterScalar): void {
     const segments = this.toPath(path);
     this.doc.addIn(segments as Iterable<unknown>, value);
+    this._dirty = true;
   }
 
   delete(path: FrontmatterPath): void {
     const segments = this.toPath(path);
     this.doc.deleteIn(segments as Iterable<unknown>);
+    this._dirty = true;
   }
 
   toString(): string {

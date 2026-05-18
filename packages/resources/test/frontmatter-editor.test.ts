@@ -9,6 +9,10 @@ import { FrontmatterParseError, openFrontmatter } from '../src/frontmatter-edito
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const FIXTURES_DIR = safePath.join(__dirname, 'fixtures', 'round-trip');
 
+const FIXTURE_SCALAR_INLINE_COMMENT = 'scalar-with-inline-comment.md';
+const FIXTURE_ARRAY_ITEM_COMMENTS = 'array-with-item-comments.md';
+const ARRAY_FIELD_NAME = 'adrs-cited';
+
 function readFixture(name: string): string {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- fixture path is test-controlled
   return readFileSync(safePath.join(FIXTURES_DIR, name), 'utf-8');
@@ -36,7 +40,7 @@ describe('FrontmatterEditor — malformed input', () => {
 
 describe('FrontmatterEditor — mutation locality', () => {
   it('mutating one scalar leaves unrelated bytes unchanged', () => {
-    const original = readFixture('scalar-with-inline-comment.md');
+    const original = readFixture(FIXTURE_SCALAR_INLINE_COMMENT);
     const editor = openFrontmatter(original);
     editor.set('description', 'A new description');
     const updated = editor.toString();
@@ -47,9 +51,9 @@ describe('FrontmatterEditor — mutation locality', () => {
   });
 
   it('setting an array item preserves siblings inline comments', () => {
-    const original = readFixture('array-with-item-comments.md');
+    const original = readFixture(FIXTURE_ARRAY_ITEM_COMMENTS);
     const editor = openFrontmatter(original);
-    editor.setArrayItem('adrs-cited', 0, '/docs/adrs/0007-storage-renamed.md');
+    editor.setArrayItem(ARRAY_FIELD_NAME, 0, '/docs/adrs/0007-storage-renamed.md');
     const updated = editor.toString();
     expect(updated).toContain('0007-storage-renamed.md');
     // Sibling comments survive
@@ -72,9 +76,9 @@ describe('FrontmatterEditor — mutation locality', () => {
   });
 
   it('appendArrayItem adds a comment-less item without disturbing existing items', () => {
-    const original = readFixture('array-with-item-comments.md');
+    const original = readFixture(FIXTURE_ARRAY_ITEM_COMMENTS);
     const editor = openFrontmatter(original);
-    editor.appendArrayItem('adrs-cited', '/docs/adrs/0022-new.md');
+    editor.appendArrayItem(ARRAY_FIELD_NAME, '/docs/adrs/0022-new.md');
     const updated = editor.toString();
     expect(updated).toContain('0022-new.md');
     expect(updated).toContain('primary reference'); // existing comment survives
@@ -90,5 +94,56 @@ describe('FrontmatterEditor — adding frontmatter to a file that has none', () 
     expect(updated.startsWith('---\n')).toBe(true);
     expect(updated).toContain('title: Added');
     expect(updated).toContain('# Just a heading');
+  });
+});
+
+describe('FrontmatterEditor — isDirty()', () => {
+  it('is false on a freshly-opened editor', () => {
+    const editor = openFrontmatter(readFixture(FIXTURE_SCALAR_INLINE_COMMENT));
+    expect(editor.isDirty()).toBe(false);
+  });
+
+  it('stays false when body is reassigned to the same string', () => {
+    const editor = openFrontmatter(readFixture(FIXTURE_SCALAR_INLINE_COMMENT));
+    // eslint-disable-next-line no-self-assign -- intentionally testing same-value setter
+    editor.body = editor.body;
+    expect(editor.isDirty()).toBe(false);
+  });
+
+  it('flips true when body is reassigned to a different string', () => {
+    const editor = openFrontmatter(readFixture(FIXTURE_SCALAR_INLINE_COMMENT));
+    editor.body = `${editor.body}\n\nAppended.`;
+    expect(editor.isDirty()).toBe(true);
+  });
+
+  it('flips true after set()', () => {
+    const editor = openFrontmatter(readFixture(FIXTURE_SCALAR_INLINE_COMMENT));
+    editor.set('description', 'New value');
+    expect(editor.isDirty()).toBe(true);
+  });
+
+  it('flips true after setArrayItem()', () => {
+    const editor = openFrontmatter(readFixture(FIXTURE_ARRAY_ITEM_COMMENTS));
+    editor.setArrayItem(ARRAY_FIELD_NAME, 0, '/docs/adrs/new.md');
+    expect(editor.isDirty()).toBe(true);
+  });
+
+  it('flips true after appendArrayItem()', () => {
+    const editor = openFrontmatter(readFixture(FIXTURE_ARRAY_ITEM_COMMENTS));
+    editor.appendArrayItem(ARRAY_FIELD_NAME, '/docs/adrs/new.md');
+    expect(editor.isDirty()).toBe(true);
+  });
+
+  it('flips true after delete()', () => {
+    const editor = openFrontmatter(readFixture(FIXTURE_SCALAR_INLINE_COMMENT));
+    editor.delete('description');
+    expect(editor.isDirty()).toBe(true);
+  });
+
+  it('flips true even when set() is called with the same value (documented caveat)', () => {
+    const editor = openFrontmatter(readFixture(FIXTURE_SCALAR_INLINE_COMMENT));
+    const before = editor.get('description');
+    editor.set('description', before as string);
+    expect(editor.isDirty()).toBe(true);
   });
 });
