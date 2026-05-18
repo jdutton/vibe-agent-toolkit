@@ -10,7 +10,7 @@ import * as fs from 'node:fs';
 
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
-import * as yaml from 'js-yaml';
+import * as yaml from 'yaml';
 
 import type { CliResult } from './cli-runner.js';
 import { createTestTempDir } from './project-setup.js';
@@ -70,7 +70,7 @@ export function executeSkillsCommandAndExpectYaml(
     encoding: 'utf-8',
   });
 
-  const parsed = yaml.load(result.stdout, { schema: yaml.CORE_SCHEMA }) as Record<string, unknown>;
+  const parsed = yaml.parse(result.stdout) as Record<string, unknown>;
   return { result, parsed };
 }
 

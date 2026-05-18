@@ -38,7 +38,6 @@ const localRulesConfig = {
   'local/no-url-pathname-for-fs': 'error',
   'local/no-bare-dynamic-import-path': 'error',
   'local/no-file-url-string-concat': 'error',
-  'local/no-jsyaml-default-schema': 'error',
   'local/prefer-startswith-over-regex': 'error',
 };
 
@@ -84,6 +83,20 @@ const unicornRulesConfig = {
   'unicorn/no-array-push-push': 'error',
   'unicorn/prefer-set-has': 'error',
 };
+
+// Ban legacy YAML / frontmatter libraries — see CLAUDE.md yaml-lib rule.
+// Applied to both TS and JS blocks below.
+const OPEN_FRONTMATTER_MESSAGE = 'Use openFrontmatter from @vibe-agent-toolkit/resources — preserves comments.';
+const noRestrictedImportsConfig = ['error', {
+  paths: [
+    {
+      name: 'js-yaml',
+      message: 'Use `yaml` (eemeli) per CLAUDE.md yaml-lib rule. Frontmatter writes: openFrontmatter from @vibe-agent-toolkit/resources.',
+    },
+    { name: 'gray-matter', message: OPEN_FRONTMATTER_MESSAGE },
+    { name: 'front-matter', message: OPEN_FRONTMATTER_MESSAGE },
+  ],
+}];
 
 // General rules that apply to both TS and JS — except `no-unused-vars`,
 // which the TS block overrides with the @typescript-eslint variant.
@@ -167,6 +180,8 @@ export default [
       ...unicornRulesConfig,
       ...generalRulesConfig,
 
+      'no-restricted-imports': noRestrictedImportsConfig,
+
       // TypeScript-specific (use @typescript-eslint variant of no-unused-vars)
       'no-unused-vars': 'off',
       '@typescript-eslint/no-unused-vars': ['error', {
@@ -237,6 +252,8 @@ export default [
       ...importRulesConfig,
       ...unicornRulesConfig,
       ...generalRulesConfig,
+
+      'no-restricted-imports': noRestrictedImportsConfig,
 
       // JS-only: use the core no-unused-vars (the TS block uses the
       // @typescript-eslint variant instead).

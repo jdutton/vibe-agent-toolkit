@@ -13,8 +13,8 @@ import { fileURLToPath } from 'node:url';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
 import Ajv, { type ValidateFunction } from 'ajv';
-import { CORE_SCHEMA, load as parseYaml } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const SCHEMAS_DIR = safePath.join(__dirname, '..', 'schemas');
@@ -44,7 +44,7 @@ function extractFrontmatter(filePath: string) {
   const content = readFileSync(filePath, 'utf-8');
   const match = FRONTMATTER_PATTERN.exec(content);
   expect(match).toBeTruthy();
-  return parseYaml(match?.[1] ?? '', { schema: CORE_SCHEMA });
+  return parseYaml(match?.[1] ?? '');
 }
 
 describe('Schema Export', () => {

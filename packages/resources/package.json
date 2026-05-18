@@ -36,8 +36,8 @@
     "@vibe-agent-toolkit/agent-schema": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
     "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
     "github-slugger": "^2.0.0",
-    "js-yaml": "^4.1.1",
     "markdown-link-check": "^3.14.2",
     "picomatch": "^4.0.3",
     "remark-frontmatter": "^5.0.0",
@@ -50,7 +50,6 @@
     "zod": "^3.24.1"
   },
   "devDependencies": {
-    "@types/js-yaml": "^4.0.9",
     "@types/mdast": "^4.0.4",
     "@types/node": "^22.10.5",
     "@types/picomatch": "^4.0.2",

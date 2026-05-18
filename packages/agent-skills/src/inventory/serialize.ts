@@ -1,4 +1,4 @@
-import yaml from 'js-yaml';
+import * as yaml from 'yaml';
 
 import type { AnyInventory, InstallInventory, MarketplaceInventory, PluginInventory } from './types.js';
 
@@ -17,7 +17,7 @@ export function serializeInventory(inv: AnyInventory, format: Format = 'yaml'): 
 	if (format === 'json') {
 		return JSON.stringify(envelope, null, 2) + '\n';
 	}
-	return yaml.dump(envelope, { noRefs: true, lineWidth: 120, sortKeys: false });
+	return yaml.stringify(envelope, { aliasDuplicateObjects: false, lineWidth: 120 });
 }
 
 /**

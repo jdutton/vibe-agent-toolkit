@@ -7,7 +7,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 
-import * as yaml from 'js-yaml';
+import * as yaml from 'yaml';
 import { z } from 'zod';
 
 const ValidationAllowEntrySchema = z.object({
@@ -57,8 +57,7 @@ export function loadSeedFile(path: string): Seed {
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller-supplied seed file path
   const raw = readFileSync(path, 'utf-8');
-  // CORE_SCHEMA: YAML 1.2 spec — see link-parser.ts for rationale.
-  const parsed = yaml.load(raw, { schema: yaml.CORE_SCHEMA });
+  const parsed = yaml.parse(raw);
   const seed = SeedSchema.parse(parsed);
 
   const sources = new Set<string>();

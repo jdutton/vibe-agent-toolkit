@@ -22,7 +22,7 @@ import {
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
 import { gitFindRoot, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
-import * as yaml from 'js-yaml';
+import * as yaml from 'yaml';
 
 import { handleCommandError } from '../../utils/command-error.js';
 import { loadConfig } from '../../utils/config-loader.js';
@@ -266,7 +266,7 @@ function outputYaml(
   };
 
   process.stdout.write('---\n');
-  process.stdout.write(yaml.dump(payload, { indent: 2, lineWidth: 120, noRefs: true }));
+  process.stdout.write(yaml.stringify(payload, { indent: 2, lineWidth: 120, aliasDuplicateObjects: false }));
 }
 
 /** Footer: share the checklist link when any skill-level finding fires. */

@@ -1,8 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-import { CORE_SCHEMA, load as loadYaml } from 'js-yaml';
 import { describe, expect, it } from 'vitest';
+import { parse as parseYaml } from 'yaml';
 import type { ZodSchema } from 'zod';
 
 import {
@@ -115,7 +115,7 @@ describe('ProjectConfigSchema', () => {
   it('parses the vat-development-agents config from disk', async () => {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only fixture path resolved from known monorepo location
     const content = await readFile(VAT_DEV_AGENTS_CONFIG, 'utf-8');
-    const parsed = loadYaml(content, { schema: CORE_SCHEMA });
+    const parsed = parseYaml(content);
 
     const result = ProjectConfigSchema.safeParse(parsed);
     if (!result.success) {

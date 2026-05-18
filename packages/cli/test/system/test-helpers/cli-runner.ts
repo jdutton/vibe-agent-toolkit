@@ -10,8 +10,8 @@ import * as fs from 'node:fs';
 
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import * as yaml from 'js-yaml';
 import { expect } from 'vitest';
+import * as yaml from 'yaml';
 
 import { setupTestProject } from './project-setup.js';
 
@@ -29,7 +29,7 @@ export function parseYamlOutput(stdout: string): Record<string, unknown> {
 
   // Parse the first document (there should only be one valid document)
   const yamlContent = parts[0];
-  return yaml.load(yamlContent, { schema: yaml.CORE_SCHEMA }) as Record<string, unknown>;
+  return yaml.parse(yamlContent) as Record<string, unknown>;
 }
 
 /**

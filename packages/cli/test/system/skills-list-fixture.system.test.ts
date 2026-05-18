@@ -7,8 +7,8 @@
 import { spawnSync } from 'node:child_process';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import * as yaml from 'js-yaml';
 import { describe, expect, it } from 'vitest';
+import * as yaml from 'yaml';
 
 import { getBinPath } from './test-common.js';
 import { executeSkillsCommandAndExpectYaml } from './test-helpers/index.js';
@@ -26,7 +26,7 @@ describe('skills list command - fixture tests (system test)', () => {
 
     expect(result.status).toBe(0);
 
-    const parsed = yaml.load(result.stdout, { schema: yaml.CORE_SCHEMA }) as {
+    const parsed = yaml.parse(result.stdout) as {
       status: string;
       context: string;
       skillsFound: number;

@@ -2,8 +2,8 @@ import { mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 
 import { basename } from 'node:path';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import * as yaml from 'js-yaml';
 import { beforeAll, describe, expect, it } from 'vitest';
+import * as yaml from 'yaml';
 
 import { corpusScanCommand } from '../../src/commands/corpus/scan.js';
 
@@ -51,7 +51,7 @@ beforeAll(() => {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled path
   writeFileSync(
     seedPath,
-    yaml.dump({
+    yaml.stringify({
       plugins: [
         { source: cleanRoot, name: 'clean' },
         { source: noisyRoot, name: 'noisy' },
@@ -77,7 +77,7 @@ describe('vat corpus scan — integration', () => {
     expect(statSync(summaryPath).isFile()).toBe(true);
 
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
-    const summary = yaml.load(readFileSync(summaryPath, 'utf-8'), { schema: yaml.CORE_SCHEMA }) as Record<string, unknown>;
+    const summary = yaml.parse(readFileSync(summaryPath, 'utf-8')) as Record<string, unknown>;
     expect((summary.plugins as unknown[]).length).toBe(2);
     expect((summary.totals as Record<string, number>).plugins).toBe(2);
 
@@ -94,7 +94,7 @@ describe('vat corpus scan — integration', () => {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
     writeFileSync(
       seedWithBad,
-      yaml.dump({
+      yaml.stringify({
         plugins: [
           { source: '/absolutely/missing/plugin', name: 'ghost' },
           { source: safePath.join(workspace, 'clean-plugin'), name: 'clean2' },
@@ -108,7 +108,7 @@ describe('vat corpus scan — integration', () => {
 
     const runDir = safePath.join(out2, firstEntry(out2));
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
-    const summary = yaml.load(readFileSync(safePath.join(runDir, 'summary.yaml'), 'utf-8'), { schema: yaml.CORE_SCHEMA }) as Record<
+    const summary = yaml.parse(readFileSync(safePath.join(runDir, 'summary.yaml'), 'utf-8')) as Record<
       string,
       unknown
     >;

@@ -12,13 +12,13 @@
 import { readFile, stat } from 'node:fs/promises';
 
 import GithubSlugger from 'github-slugger';
-import * as yaml from 'js-yaml';
 import type { Definition, Heading, Link, LinkReference, Root } from 'mdast';
 import remarkFrontmatter from 'remark-frontmatter';
 import remarkGfm from 'remark-gfm';
 import remarkParse from 'remark-parse';
 import { unified } from 'unified';
 import { visit } from 'unist-util-visit';
+import * as yaml from 'yaml';
 
 import type { HeadingNode, LinkType, ResourceLink } from './types.js';
 
@@ -431,16 +431,7 @@ function extractFrontmatter(tree: Root): {
     }
 
     try {
-      // CORE_SCHEMA is the YAML 1.2 spec — keeps unquoted ISO dates as
-      // strings (`2026-04-15` stays `"2026-04-15"`) instead of promoting
-      // them to JS Date objects (js-yaml's default DEFAULT_SCHEMA still
-      // applies the YAML 1.1 timestamp tag). Date promotion broke schema
-      // validation for any frontmatter field typed `string` in the schema:
-      // the validator saw an instanceof Date and rejected it. Adopters'
-      // ADR/PRD frontmatter conventionally uses unquoted ISO dates per
-      // YAML 1.2; quoting all of them just to placate the parser is
-      // unreasonable.
-      const parsed = yaml.load(node.value, { schema: yaml.CORE_SCHEMA });
+      const parsed = yaml.parse(node.value);
       if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
         frontmatterData = parsed as Record<string, unknown>;
       }

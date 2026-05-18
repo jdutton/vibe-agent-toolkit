@@ -2,8 +2,8 @@
  * Markdown parser for extracting frontmatter and H2 fragments
  */
 
+import { openFrontmatter } from '@vibe-agent-toolkit/resources';
 import GithubSlugger from 'github-slugger';
-import matter from 'gray-matter';
 
 import type { MarkdownResource, MarkdownFragment } from './types.js';
 
@@ -34,8 +34,10 @@ import type { MarkdownResource, MarkdownFragment } from './types.js';
  * ```
  */
 export function parseMarkdown(content: string): MarkdownResource {
-  // Parse frontmatter
-  const { data: frontmatter, content: markdownContent } = matter(content);
+  // Parse frontmatter (openFrontmatter preserves comments and supports round-trip).
+  const editor = openFrontmatter(content);
+  const frontmatter = (editor.get([]) ?? {}) as Record<string, unknown>;
+  const markdownContent = editor.body;
 
   // Extract H2 fragments
   const fragments = extractH2Fragments(markdownContent);

@@ -3,7 +3,7 @@
  * YAML output on stdout, logs on stderr
  */
 
-import * as yaml from 'js-yaml';
+import * as yaml from 'yaml';
 
 /**
  * Write YAML output to stdout with document markers
@@ -11,10 +11,10 @@ import * as yaml from 'js-yaml';
  */
 export function writeYamlOutput(data: unknown): void {
   process.stdout.write('---\n');
-  process.stdout.write(yaml.dump(data, {
+  process.stdout.write(yaml.stringify(data, {
     indent: 2,
     lineWidth: 120,
-    noRefs: true,
+    aliasDuplicateObjects: false,
   }));
   process.stdout.write('---\n');
 }

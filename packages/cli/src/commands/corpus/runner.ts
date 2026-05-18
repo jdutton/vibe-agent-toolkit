@@ -18,7 +18,7 @@ import { fileURLToPath } from 'node:url';
 
 import { scan } from '@vibe-agent-toolkit/discovery';
 import { safePath } from '@vibe-agent-toolkit/utils';
-import * as yaml from 'js-yaml';
+import * as yaml from 'yaml';
 
 import { isGitUrl, parseGitUrl } from '../../utils/git-url.js';
 import { createLogger } from '../../utils/logger.js';
@@ -127,7 +127,7 @@ async function auditAndRecord(
     const status = statusFromCounts(summary.errors, summary.warnings);
     const auditYamlPath = safePath.join(opts.runDir, `${entry.name}-audit.yaml`);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- composed under run dir
-    writeFileSync(auditYamlPath, yaml.dump({ results }, { lineWidth: -1 }), 'utf-8');
+    writeFileSync(auditYamlPath, yaml.stringify({ results }, { lineWidth: 0, aliasDuplicateObjects: false }), 'utf-8');
 
     audit = {
       status,
@@ -292,7 +292,7 @@ function applyValidationOverlay(entry: PluginEntry, scanPath: string): boolean {
     },
   };
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- composed under audit target
-  writeFileSync(overlayPath, yaml.dump(overlay, { lineWidth: -1 }), 'utf-8');
+  writeFileSync(overlayPath, yaml.stringify(overlay, { lineWidth: 0, aliasDuplicateObjects: false }), 'utf-8');
   return true;
 }
 
