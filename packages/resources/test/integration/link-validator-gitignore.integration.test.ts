@@ -122,6 +122,32 @@ describe('isWithinProject', () => {
 
     expect(isWithinProject(filePath, projectRoot)).toBe(false);
   });
+
+  it('handles symlinked projectRoot symmetrically', () => {
+    // Regression for asymmetric realpath: when a caller passes a projectRoot
+    // that traverses a symlink (e.g. macOS /tmp → /private/tmp, or any bind
+    // mount), isWithinProject must canonicalize BOTH sides. Otherwise a file
+    // legitimately inside the project gets false-flagged as outside, surfacing
+    // in resolveLocalHref as a bogus absolute_escapes_root for leading-/ links.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
+    const realRoot = fs.realpathSync(suite.tempDir);
+    const symlinkRoot = realRoot + '-symlink';
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
+    fs.symlinkSync(realRoot, symlinkRoot);
+    try {
+      const fileInsideRealRoot = safePath.join(realRoot, 'inside.md');
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
+      fs.writeFileSync(fileInsideRealRoot, '# inside\n');
+      expect(isWithinProject(fileInsideRealRoot, symlinkRoot)).toBe(true);
+    } finally {
+      try {
+        // eslint-disable-next-line security/detect-non-literal-fs-filename -- paths are from temp dir
+        fs.unlinkSync(symlinkRoot);
+      } catch {
+        /* ignore */
+      }
+    }
+  });
 });
 
 describe('validateLink - git-ignore safety', () => {

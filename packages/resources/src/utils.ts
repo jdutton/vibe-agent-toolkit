@@ -170,7 +170,9 @@ export function resolveLocalHref(
  * ```
  */
 export function isWithinProject(filePath: string, projectRoot: string): boolean {
-  // Resolve symlinks to get real paths
+  // Canonicalize both sides symmetrically. Asymmetric handling (realpath one
+  // side, resolve the other) false-flags legitimate matches when projectRoot
+  // traverses a symlink — e.g. macOS /tmp → /private/tmp, bind mounts.
   let resolvedFilePath: string;
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath is validated path parameter
@@ -180,7 +182,13 @@ export function isWithinProject(filePath: string, projectRoot: string): boolean 
     resolvedFilePath = safePath.resolve(filePath);
   }
 
-  const resolvedProjectRoot = safePath.resolve(projectRoot);
+  let resolvedProjectRoot: string;
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- projectRoot is validated path parameter
+    resolvedProjectRoot = fs.realpathSync(projectRoot);
+  } catch {
+    resolvedProjectRoot = safePath.resolve(projectRoot);
+  }
 
   // Normalize to forward slashes for cross-platform comparison
   const normalizedFile = toForwardSlash(resolvedFilePath);
