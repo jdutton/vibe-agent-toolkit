@@ -11,7 +11,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import * as yaml from 'js-yaml';
+import * as yaml from 'yaml';
 
 export type AuditStatus = 'success' | 'warning' | 'error' | 'unloadable';
 export type ReviewStatus = 'ok' | 'error' | 'skipped';
@@ -140,7 +140,7 @@ export async function writeRunReport(report: RunReport, outDir: string): Promise
 
   const summaryPath = safePath.join(runDir, 'summary.yaml');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- summaryPath composed under our run dir
-  writeFileSync(summaryPath, yaml.dump(dump, { lineWidth: -1 }), 'utf-8');
+  writeFileSync(summaryPath, yaml.stringify(dump, { lineWidth: 0, aliasDuplicateObjects: false }), 'utf-8');
 
   return runDir;
 }

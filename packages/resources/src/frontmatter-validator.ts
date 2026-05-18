@@ -13,8 +13,7 @@
  * This is the ONLY place in the codebase that should use AJV.
  */
 
-import { Ajv } from 'ajv';
-
+import { createAjvWithUriFormats } from './ajv-factory.js';
 import type { ValidationMode } from './schemas/project-config.js';
 import type { ValidationIssue } from './schemas/validation-result.js';
 
@@ -65,11 +64,16 @@ export function validateFrontmatter(
     effectiveSchema = makeSchemaPermissive(schema);
   }
 
-  // Configure AJV with permissive settings
-  const ajv = new Ajv({
-    strict: false,           // Allow non-strict schemas
-    allErrors: true,         // Report all errors, not just first
-    allowUnionTypes: true,   // Support JSON Schema draft features
+  // Use the shared Ajv factory so the internal validator and any adopter
+  // consuming `createAjvWithUriFormats` see identical format behavior.
+  // Permissive options match how VAT validates user-supplied schemas:
+  // - strict: false so non-strict schemas compile (older JSON Schema drafts).
+  // - allErrors: true so we report all issues, not just the first.
+  // - allowUnionTypes: true for draft-2019-09+ union type support.
+  const ajv = createAjvWithUriFormats({
+    strict: false,
+    allErrors: true,
+    allowUnionTypes: true,
   });
 
   const validate = ajv.compile(effectiveSchema);

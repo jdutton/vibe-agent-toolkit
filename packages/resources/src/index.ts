@@ -88,6 +88,11 @@ export { parseMarkdown, type ParseResult } from './link-parser.js';
 // Export frontmatter validation
 export { validateFrontmatter } from './frontmatter-validator.js';
 
+// Public Ajv factory for adopters consuming VAT-generated schemas. Registers
+// URI-family formats (uri, uri-reference, iri, iri-reference) so schemas
+// compile cleanly under Ajv strict mode without throwing on "unknown format".
+export { createAjvWithUriFormats } from './ajv-factory.js';
+
 // Export content transform engine for link rewriting
 export {
   transformContent,
@@ -102,6 +107,21 @@ export {
 
 // Export href resolution utility (shared by audit and validate code paths)
 export { resolveLocalHref, type ResolveLocalHrefResult } from './utils.js';
+
+// Export frontmatter editor primitive (comment-preserving round-trip)
+export {
+  openFrontmatter,
+  FrontmatterParseError,
+  type FrontmatterEditor,
+} from './frontmatter-editor.js';
+
+// Export rewriter helpers (built on FrontmatterEditor + shared callback shape)
+export {
+  rewriteFrontmatterUriReferencesFromSchema,
+  rewriteFrontmatterFieldsAtPaths,
+  rewriteBodyLinks,
+  type RewriteHref,
+} from './rewriter-helpers.js';
 
 // Export project config parsing
 export {

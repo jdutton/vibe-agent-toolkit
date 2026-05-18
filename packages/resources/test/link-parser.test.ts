@@ -712,13 +712,11 @@ Some content here.`,
       expect(result.frontmatter).toBeUndefined();
     });
 
-    // Regression guard: js-yaml's default DEFAULT_SCHEMA still applies the
-    // YAML 1.1 timestamp tag, auto-promoting unquoted ISO dates to JS Date
-    // objects. ADR/PRD frontmatter conventionally uses unquoted ISO dates
-    // per YAML 1.2; promotion broke schema validation for any field typed
-    // `string`. Parser must use CORE_SCHEMA (YAML 1.2 spec) so dates stay
-    // strings without forcing adopters to quote every date field.
-    it('keeps unquoted ISO dates as strings (YAML 1.2 CORE_SCHEMA, not 1.1 timestamp promotion)', async () => {
+    // Regression guard: ADR/PRD frontmatter conventionally uses unquoted ISO
+    // dates per YAML 1.2; the parser must keep them as strings (not promote
+    // them to JS Date objects) so schema validation for fields typed `string`
+    // doesn't break.
+    it('keeps unquoted ISO dates as strings (YAML 1.2, no 1.1 timestamp promotion)', async () => {
       const mdPath = safePath.join(tempDir, 'iso-date.md');
       await writeFile(
         mdPath,

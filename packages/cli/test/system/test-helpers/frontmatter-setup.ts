@@ -8,7 +8,7 @@
 import * as fs from 'node:fs';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import * as yaml from 'js-yaml';
+import * as yaml from 'yaml';
 
 import type { CliResult } from './cli-runner.js';
 import { executeCli } from './cli-runner.js';
@@ -26,7 +26,7 @@ export function createSchemaFile(
 ): string {
   const schemaPath = safePath.join(dir, filename);
   const content = filename.endsWith('.yaml') || filename.endsWith('.yml')
-    ? yaml.dump(schema)
+    ? yaml.stringify(schema)
     : JSON.stringify(schema, null, 2);
   fs.writeFileSync(schemaPath, content);
   return schemaPath;
@@ -49,8 +49,8 @@ export function createMarkdownWithFrontmatter(
   let fileContent = '';
 
   if (frontmatter) {
-    // Use yaml.dump for proper YAML formatting (handles arrays, objects, etc.)
-    const frontmatterYaml = yaml.dump(frontmatter).trim();
+    // Use yaml.stringify for proper YAML formatting (handles arrays, objects, etc.)
+    const frontmatterYaml = yaml.stringify(frontmatter).trim();
     fileContent = `---\n${frontmatterYaml}\n---\n\n${content}`;
   } else {
     fileContent = content;

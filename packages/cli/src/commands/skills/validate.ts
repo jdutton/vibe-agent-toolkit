@@ -14,7 +14,7 @@ import {
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
 import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, gitFindRoot, GitTracker, safePath } from '@vibe-agent-toolkit/utils';
-import * as yaml from 'js-yaml';
+import * as yaml from 'yaml';
 
 import { loadConfig } from '../../utils/config-loader.js';
 import { formatDurationSecs } from '../../utils/duration.js';
@@ -78,7 +78,7 @@ function outputYamlSummary(
     durationSecs: formatDurationSecs(duration),
   };
 
-  console.log(yaml.dump(output, { indent: 2, lineWidth: -1, noRefs: true }));
+  console.log(yaml.stringify(output, { indent: 2, lineWidth: 0, aliasDuplicateObjects: false }));
 }
 
 /**

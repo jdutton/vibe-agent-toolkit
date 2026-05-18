@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/resource-compiler",
-  "version": "0.1.37",
+  "version": "0.1.38",
   "description": "Compile markdown resources to TypeScript with full IDE support",
   "type": "module",
   "main": "./dist/index.js",
@@ -42,12 +42,12 @@
     "typecheck": "tsc --build --dry --force"
   },
   "dependencies": {
-    "gray-matter": "^4.0.3",
-    "github-slugger": "^2.0.0",
-    "glob": "^10.3.10",
+    "@vibe-agent-toolkit/resources": "workspace:*",
+    "@vibe-agent-toolkit/utils": "workspace:*",
     "chokidar": "^3.6.0",
     "commander": "^11.1.0",
-    "@vibe-agent-toolkit/utils": "workspace:*"
+    "github-slugger": "^2.0.0",
+    "glob": "^10.3.10"
   },
   "devDependencies": {
     "@types/node": "^20.11.5",

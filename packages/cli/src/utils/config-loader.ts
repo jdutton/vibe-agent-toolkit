@@ -10,7 +10,7 @@ import { dirname } from 'node:path';
 
 import { ProjectConfigSchema, type ProjectConfig } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
-import * as yaml from 'js-yaml';
+import * as yaml from 'yaml';
 
 const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 
@@ -47,10 +47,7 @@ export function loadConfig(projectRoot: string): ProjectConfig | undefined {
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- configPath is derived from projectRoot parameter
     const content = readFileSync(configPath, 'utf-8');
-    // CORE_SCHEMA = YAML 1.2 spec; prevents js-yaml's default DEFAULT_SCHEMA
-    // from auto-promoting unquoted ISO dates to JS Date objects (a YAML 1.1
-    // tag). See packages/resources/src/link-parser.ts for the full rationale.
-    const parsed = yaml.load(content, { schema: yaml.CORE_SCHEMA });
+    const parsed = yaml.parse(content);
 
     // Validate with canonical schema from resources package
     const result = ProjectConfigSchema.safeParse(parsed);

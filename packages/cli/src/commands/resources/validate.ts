@@ -8,7 +8,7 @@ import * as path from 'node:path';
 import type { CollectionStats, ProjectConfig, RegistryStats } from '@vibe-agent-toolkit/resources';
 import type { GitTracker } from '@vibe-agent-toolkit/utils';
 import { resolveAssetReference } from '@vibe-agent-toolkit/utils';
-import * as yaml from 'js-yaml';
+import * as yaml from 'yaml';
 
 import { formatDurationSecs } from '../../utils/duration.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
@@ -39,8 +39,7 @@ async function loadSchema(schemaPath: string): Promise<object> {
   if (ext === '.json') {
     return JSON.parse(content) as object;
   } else if (ext === '.yaml' || ext === '.yml') {
-    // CORE_SCHEMA: YAML 1.2 spec — see link-parser.ts for rationale.
-    const parsed = yaml.load(content, { schema: yaml.CORE_SCHEMA });
+    const parsed = yaml.parse(content);
     if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
       return parsed as object;
     }
@@ -87,7 +86,7 @@ function writeStructuredOutput(data: ValidationOutputData, format: Exclude<Outpu
   if (format === 'json') {
     console.log(JSON.stringify(data, null, 2));
   } else {
-    console.log(yaml.dump(data, { indent: 2, lineWidth: -1 }));
+    console.log(yaml.stringify(data, { indent: 2, lineWidth: 0, aliasDuplicateObjects: false }));
   }
 }
 

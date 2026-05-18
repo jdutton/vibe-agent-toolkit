@@ -10,7 +10,7 @@ import { dirname as pathDirname, join as pathJoin, resolve as pathResolve } from
 import { fileURLToPath as urlFileURLToPath } from 'node:url';
 
 import { mkdirSyncReal, normalizedTmpdir, safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
-import * as yaml from 'js-yaml';
+import * as yaml from 'yaml';
 
 // Re-export commonly used functions
 export { spawnSync } from 'node:child_process';
@@ -293,8 +293,8 @@ export async function executeCliAndParseYaml(
 }> {
   const result = await executeCli(binPath, args, options);
 
-  // Parse YAML output (use loadAll to handle document markers)
-  const docs = yaml.loadAll(result.stdout, { schema: yaml.CORE_SCHEMA }) as Array<Record<string, unknown>>;
+  // Parse YAML output (use parseAllDocuments to handle document markers)
+  const docs = yaml.parseAllDocuments(result.stdout).map((d) => d.toJSON() as Record<string, unknown>);
   const parsed = docs[0] ?? {};
 
   return { result, parsed };

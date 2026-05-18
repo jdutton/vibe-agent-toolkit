@@ -30,7 +30,6 @@ vi.mock('@vibe-agent-toolkit/resources', () => ({
 
 vi.mock('@vibe-agent-toolkit/utils', () => ({
   GitTracker: class {
-    constructor(_root: string) {}
     async initialize(): Promise<void> {
       await gitTrackerInitializeMock();
     }

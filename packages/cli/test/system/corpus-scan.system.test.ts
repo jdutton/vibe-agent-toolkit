@@ -13,8 +13,8 @@
 import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import * as yaml from 'js-yaml';
 import { describe, expect, it } from 'vitest';
+import * as yaml from 'yaml';
 
 import { binPath } from '../test-helpers.js';
 
@@ -31,7 +31,7 @@ const NET = process.env.NET_AVAILABLE === '1';
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled path
       writeFileSync(
         seedPath,
-        yaml.dump({
+        yaml.stringify({
           plugins: [
             { source: 'https://github.com/octocat/Hello-World.git', name: 'hello-world' },
           ],
@@ -50,7 +50,7 @@ const NET = process.env.NET_AVAILABLE === '1';
       if (!firstRun) throw new Error('no run dir created');
       const summaryPath = safePath.join(outDir, firstRun, 'summary.yaml');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
-      const summary = yaml.load(readFileSync(summaryPath, 'utf-8'), { schema: yaml.CORE_SCHEMA }) as Record<string, unknown>;
+      const summary = yaml.parse(readFileSync(summaryPath, 'utf-8')) as Record<string, unknown>;
       expect((summary.plugins as unknown[]).length).toBe(1);
     },
     60_000

@@ -11,8 +11,8 @@
 import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import * as yaml from 'js-yaml';
 import { beforeAll, describe, expect, it } from 'vitest';
+import * as yaml from 'yaml';
 
 import { getBinPath } from './test-common.js';
 
@@ -45,7 +45,7 @@ describe('skills list command (system test)', () => {
       encoding: 'utf-8',
       cwd: process.cwd(),
     });
-    defaultParsed = yaml.load(defaultResult.stdout, { schema: yaml.CORE_SCHEMA }) as SkillsListOutput;
+    defaultParsed = yaml.parse(defaultResult.stdout) as SkillsListOutput;
 
     // Run the verbose scan once
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
@@ -122,7 +122,7 @@ describe('skills list command (system test)', () => {
       cwd: process.cwd(),
     });
 
-    const parsed = yaml.load(result.stdout, { schema: yaml.CORE_SCHEMA }) as SkillsListOutput;
+    const parsed = yaml.parse(result.stdout) as SkillsListOutput;
 
     // Debug output if test fails
     if (result.status !== 0) {

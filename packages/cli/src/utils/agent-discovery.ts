@@ -5,7 +5,7 @@
 import fs from 'node:fs/promises';
 
 import { safePath } from '@vibe-agent-toolkit/utils';
-import * as yaml from 'js-yaml';
+import * as yaml from 'yaml';
 
 export interface DiscoveredAgent {
   name: string;
@@ -81,8 +81,7 @@ async function parseAgentManifest(
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- manifestPath from findManifest, trusted
     const content = await fs.readFile(manifestPath, 'utf-8');
-    // CORE_SCHEMA: YAML 1.2 spec — see link-parser.ts for rationale.
-    const data = yaml.load(content, { schema: yaml.CORE_SCHEMA }) as {
+    const data = yaml.parse(content) as {
       metadata?: { name?: string; version?: string };
     };
 

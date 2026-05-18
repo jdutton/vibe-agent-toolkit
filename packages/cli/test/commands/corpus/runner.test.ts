@@ -3,8 +3,8 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import * as yaml from 'js-yaml';
 import { describe, expect, it } from 'vitest';
+import * as yaml from 'yaml';
 
 import { auditOnePlugin } from '../../../src/commands/corpus/runner.js';
 import type { PluginEntry } from '../../../src/commands/corpus/seed.js';
@@ -157,7 +157,7 @@ describe('auditOnePlugin — validation overlay', () => {
 
     const overlayPath = safePath.join(pluginDir, 'vibe-agent-toolkit.config.yaml');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
-    const written = yaml.load(readFileSync(overlayPath, 'utf-8'), { schema: yaml.CORE_SCHEMA }) as Record<string, unknown>;
+    const written = yaml.parse(readFileSync(overlayPath, 'utf-8')) as Record<string, unknown>;
     expect((written.skills as Record<string, unknown>).defaults).toEqual({
       validation: { severity: { LINK_TO_NAVIGATION_FILE: 'ignore' } },
     });

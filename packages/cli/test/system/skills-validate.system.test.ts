@@ -5,8 +5,8 @@
 import { spawnSync } from 'node:child_process';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
-import * as yaml from 'js-yaml';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import * as yaml from 'yaml';
 
 import {
   createSuiteContext,
@@ -152,7 +152,7 @@ describe('skills validate command (system test)', () => {
 
     expect(result.status).toBe(0);
 
-    const parsed = yaml.load(result.stdout, { schema: yaml.CORE_SCHEMA }) as PackagingValidationOutput;
+    const parsed = yaml.parse(result.stdout) as PackagingValidationOutput;
 
     // In verbose mode, excludedReferences should be present in metadata
     for (const skillResult of parsed.results) {

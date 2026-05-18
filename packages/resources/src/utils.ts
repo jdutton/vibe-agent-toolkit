@@ -242,7 +242,7 @@ export function formatJsonPointerAsDotted(pointer: string): string {
   return out;
 }
 
-function isCanonicalArrayIndex(s: string): boolean {
+export function isCanonicalArrayIndex(s: string): boolean {
   // Canonical integer per RFC 6901 §4 + JSON canonical form: no leading zeros
   // except for "0" itself.
   if (s === '') return false;

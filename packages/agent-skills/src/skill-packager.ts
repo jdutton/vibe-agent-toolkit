@@ -21,13 +21,24 @@ import { basename, dirname } from 'node:path';
 
 import {
   ResourceRegistry,
+  loadConfig,
+  openFrontmatter,
+  resolveLocalHref,
+  rewriteFrontmatterUriReferencesFromSchema,
   transformContent,
   type LinkRewriteRule,
   type ParseResult,
+  type ProjectConfig,
   type ResourceMetadata,
   parseMarkdown,
 } from '@vibe-agent-toolkit/resources';
-import { findProjectRoot, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
+import {
+  findProjectRoot,
+  resolveAssetReference,
+  toForwardSlash,
+  safePath,
+  type GitTracker,
+} from '@vibe-agent-toolkit/utils';
 
 import { getTargetSubdir } from './content-type-routing.js';
 import type { SkillFileEntry } from './files-config.js';
@@ -321,6 +332,10 @@ export async function packageSkill(
   // 3. Get or create the resource registry
   const registry = options.registry ?? await createStandaloneRegistry(projectRoot);
 
+  // 3b. Load per-collection frontmatter schemas (Gap 3: packager rewrites frontmatter URI-refs
+  // against the same schemas the validator uses, with body parity).
+  const collectionSchemas = await loadCollectionSchemas(registry.config, projectRoot);
+
   // 4. Walk the link graph using registry data
   const linkFollowDepth = options.linkFollowDepth ?? 2;
   const excludeConfig = options.excludeReferencesFromBundle;
@@ -463,6 +478,8 @@ export async function packageSkill(
     toRegistry: outputRegistry,
     rewriteRules,
     templateContext: { skill: { name: skillMetadata.name } },
+    collectionSchemas,
+    projectRoot,
   });
 
   // 12b. Copy files config entries that were not auto-discovered via link traversal.
@@ -588,12 +605,51 @@ function assemblePackageResult(input: AssembleResultInput): PackageSkillResult {
  * Create a standalone registry for a single skill (when no shared registry is provided).
  */
 async function createStandaloneRegistry(projectRoot: string): Promise<ResourceRegistry> {
-  const registry = await ResourceRegistry.fromCrawl({
-    baseDir: projectRoot,
-    include: ['**/*.md'],
-  });
+  // Load the project config so the registry knows which collections each
+  // resource belongs to (Gap 3: packager rewrites frontmatter URI-refs per
+  // collection schema, mirroring validator).
+  const config = await loadConfig(projectRoot);
+  const registry = await ResourceRegistry.fromCrawl(
+    {
+      baseDir: projectRoot,
+      include: ['**/*.md'],
+    },
+    config === undefined ? undefined : { config },
+  );
   registry.resolveLinks();
   return registry;
+}
+
+/**
+ * Load frontmatter schemas for all configured collections, keyed by collection ID.
+ *
+ * Mirrors ResourceRegistry.validateAgainstCollectionSchema's loading flow so
+ * the packager rewrites frontmatter URI-refs against the same schemas the
+ * validator uses. Collections without a frontmatterSchema configured are
+ * absent from the map. Schema file read/parse failures are silently skipped
+ * — the validator will surface those errors elsewhere; the packager just
+ * won't rewrite the un-routed collection's frontmatter.
+ */
+async function loadCollectionSchemas(
+  config: ProjectConfig | undefined,
+  baseDir: string,
+): Promise<Map<string, object>> {
+  const schemas = new Map<string, object>();
+  const collections = config?.resources?.collections;
+  if (!collections) return schemas;
+  for (const [collectionId, collectionConfig] of Object.entries(collections)) {
+    const schemaPath = collectionConfig.validation?.frontmatterSchema;
+    if (schemaPath === undefined) continue;
+    try {
+      const resolvedPath = resolveAssetReference(schemaPath, baseDir);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- schema path from validated config
+      const content = await readFile(resolvedPath, 'utf-8');
+      schemas.set(collectionId, JSON.parse(content) as object);
+    } catch {
+      // Schema unavailable — validator will report; packager skips rewrite.
+    }
+  }
+  return schemas;
 }
 
 /**
@@ -891,6 +947,10 @@ interface CopyRewriteContext {
   toRegistry: ResourceRegistry;
   rewriteRules: LinkRewriteRule[];
   templateContext?: Record<string, unknown>;
+  /** Per-collection frontmatter JSON Schemas, keyed by collection ID. Drives Gap 3 frontmatter URI-ref rewriting. */
+  collectionSchemas: Map<string, object>;
+  /** Absolute path to the project root — required for RFC 3986 §4.2 leading-`/` href resolution in frontmatter. */
+  projectRoot: string;
 }
 
 /**
@@ -987,16 +1047,87 @@ async function copyAndRewriteFile(
     return;
   }
 
-  // Unified link rewriting: bundled + excluded, inline + definitions
-  const transformed = transformContent(content, resource.links, {
+  // Parse once via FrontmatterEditor so comments survive any frontmatter
+  // rewrites. The body is held verbatim; we run it through transformContent
+  // for the existing rule/template body-link rewrite contract (unchanged).
+  const editor = openFrontmatter(content);
+
+  // Body rewrite (existing behavior, unchanged contract).
+  editor.body = transformContent(editor.body, resource.links, {
     linkRewriteRules: ctx.rewriteRules,
     resourceRegistry: ctx.toRegistry,
     sourceFilePath: targetPath, // Output path so relativePath is computed from output location
     ...(ctx.templateContext === undefined ? {} : { context: ctx.templateContext }),
   });
 
+  // Frontmatter URI-ref rewrite (Gap 3) — parity with body. Apply every
+  // collection schema that matches this resource. The rewrite policy reuses
+  // the same path-map lookups that body rewriting consumes, so frontmatter
+  // and body agree on target paths.
+  const matchingCollections = (resource.collections ?? []).filter(
+    (id) => ctx.collectionSchemas.has(id),
+  );
+  if (matchingCollections.length > 0) {
+    const rewriteHref = buildFrontmatterHrefRewriter(
+      ctx.fromRegistry,
+      ctx.toRegistry,
+      sourcePath,
+      targetPath,
+      ctx.projectRoot,
+    );
+    for (const collectionId of matchingCollections) {
+      const schema = ctx.collectionSchemas.get(collectionId);
+      if (schema) {
+        rewriteFrontmatterUriReferencesFromSchema(editor, schema, rewriteHref);
+      }
+    }
+  }
+
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
-  await writeFile(targetPath, transformed, 'utf-8');
+  await writeFile(targetPath, editor.toString(), 'utf-8');
+}
+
+/**
+ * Build the per-href rewrite callback used for frontmatter URI-refs.
+ *
+ * Mirrors the body-rewrite path so frontmatter and body link rewriting agree
+ * on target paths:
+ *   1. Resolve the href against `sourcePath` (RFC 3986 — leading `/` =
+ *      project-root-relative; bare relative = source-dir-relative).
+ *   2. Look up the resolved file in the `fromRegistry` by absolute path.
+ *   3. If found, look up its output entry in `toRegistry` by ID and return
+ *      a path relative to the OUTPUT file location (`dirname(targetPath)`),
+ *      preserving any anchor fragment from the original href.
+ *   4. Anchor-only, unresolved-absolute, or unknown hrefs pass through
+ *      unchanged.
+ *
+ * Returns the original href when no rewrite applies.
+ */
+function buildFrontmatterHrefRewriter(
+  fromRegistry: WalkableRegistry,
+  toRegistry: ResourceRegistry,
+  sourcePath: string,
+  targetPath: string,
+  projectRoot: string,
+): (href: string) => string {
+  const targetDir = dirname(targetPath);
+  return (href) => {
+    const resolution = resolveLocalHref(href, sourcePath, projectRoot);
+    if (resolution.kind !== 'resolved') {
+      // anchor_only | absolute_no_root | absolute_escapes_root — leave unchanged.
+      return href;
+    }
+    const fromResource = fromRegistry.getResource(resolution.resolvedPath);
+    if (!fromResource) {
+      return href;
+    }
+    const toResource = toRegistry.getResourceById(fromResource.id);
+    if (!toResource) {
+      return href;
+    }
+    const relative = toForwardSlash(safePath.relative(targetDir, toResource.filePath));
+    return resolution.anchor === undefined ? relative : `${relative}#${resolution.anchor}`;
+  };
 }
 
 
