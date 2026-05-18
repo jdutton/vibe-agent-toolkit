@@ -1,0 +1,5 @@
+# These fixtures exercise EOL preservation in the FrontmatterEditor.
+# Preserve their exact on-disk bytes (CRLF / mixed line endings) regardless
+# of the root .gitattributes `*.md text eol=lf` rule.
+crlf-full.md -text
+crlf-mixed-first-break.md -text

@@ -103,6 +103,21 @@ export {
 // Export href resolution utility (shared by audit and validate code paths)
 export { resolveLocalHref, type ResolveLocalHrefResult } from './utils.js';
 
+// Export frontmatter editor primitive (comment-preserving round-trip)
+export {
+  openFrontmatter,
+  FrontmatterParseError,
+  type FrontmatterEditor,
+} from './frontmatter-editor.js';
+
+// Export rewriter helpers (built on FrontmatterEditor + shared callback shape)
+export {
+  rewriteFrontmatterUriReferencesFromSchema,
+  rewriteFrontmatterFieldsAtPaths,
+  rewriteBodyLinks,
+  type RewriteHref,
+} from './rewriter-helpers.js';
+
 // Export project config parsing
 export {
   parseConfigFile,
