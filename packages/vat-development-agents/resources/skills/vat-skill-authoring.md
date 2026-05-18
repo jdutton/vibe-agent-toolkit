@@ -34,6 +34,29 @@ Best practices for `description`:
 - Write in third person. First-person ("I can...") and conversational second-person ("You can use...") fire `SKILL_DESCRIPTION_WRONG_PERSON`.
 - Keep under 250 characters so the Claude Code `/skills` listing doesn't truncate the tail (target ≤200 for safety, ≤130 if shipping a large skill collection). The hard schema limit is 1024.
 
+## Cross-document references in SKILL.md frontmatter
+
+When SKILL.md frontmatter references other documents (parent specs, ADRs,
+related skills), use **leading-`/`** URI-references:
+
+```yaml
+---
+parent_spec: /docs/specs/foo.md
+related-skills:
+  - /packages/foo/resources/skills/bar/SKILL.md
+---
+```
+
+These resolve against the project root per RFC 3986 §4.2 (same rule VAT
+applies to body links). Source-relative paths (`../../docs/foo.md`) also
+work but are fragile when skills move.
+
+If a tool needs to programmatically rewrite these references — e.g., when
+moving a file — load [[markdown-rewriting]] for the canonical pattern.
+Never use `gray-matter`, `front-matter`, or `js-yaml` directly for SKILL.md
+edits; they silently drop frontmatter comments. ESLint enforces this for
+VAT-internal code.
+
 ## Body Structure
 
 - Lead with a short orientation paragraph: what the skill owns and when to reach for it.
