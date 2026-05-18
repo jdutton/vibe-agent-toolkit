@@ -97,6 +97,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `front-matter`, or raw `yaml.parse` for any write path — those drop
   comments silently.
 
+- **`createAjvWithUriFormats(options?)` from `@vibe-agent-toolkit/resources`** —
+  Ajv factory pre-registered with the URI-family formats (`uri`,
+  `uri-reference`, `iri`, `iri-reference`) plus the rest of the
+  `ajv-formats` standard vocabulary. Use this anywhere downstream code
+  compiles a schema that may reference those formats: vanilla
+  `new Ajv({ allErrors: true })` throws `unknown format "uri-reference"
+  ignored` under default strict mode, and adopters had to invent the
+  workaround themselves. `iri` / `iri-reference` are registered as no-op
+  validators (semantic validation is the caller's job — VAT uses
+  `resolveLocalHref` for that). Ajv options pass through unchanged so
+  callers control `allErrors`, `strict`, `verbose`, etc.
+
 - **Three rewriter helpers sharing one `(href: string) => string` callback
   shape**, exported from `@vibe-agent-toolkit/resources`:
   - `rewriteBodyLinks(body, rewriteHref)` — inline links + reference
