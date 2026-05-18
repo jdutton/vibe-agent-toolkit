@@ -103,7 +103,7 @@ export async function validateLink(
  * null for `resolved` (caller continues) and `anchor_only` (defensive no-op —
  * the parser classifies anchor-only hrefs as 'anchor', not 'local_file').
  */
-function resolutionFailureIssue(
+export function resolutionFailureIssue(
   resolved: ReturnType<typeof resolveLocalHref>,
   link: ResourceLink,
   sourceFilePath: string,
@@ -141,7 +141,7 @@ function resolutionFailureIssue(
  * Convert a non-existent file result into a broken_file ValidationIssue.
  * Returns null when the file exists.
  */
-function fileExistenceIssue(
+export function fileExistenceIssue(
   fileResult: { exists: boolean; resolvedPath: string; actualName?: string },
   link: ResourceLink,
   sourceFilePath: string,
@@ -175,7 +175,7 @@ function fileExistenceIssue(
  * gitignored target. Returns a ValidationIssue when this rule is violated,
  * null otherwise (including when checks are disabled or out of scope).
  */
-function gitIgnoreSafetyIssue(
+export function gitIgnoreSafetyIssue(
   link: ResourceLink,
   sourceFilePath: string,
   resolvedTarget: string,

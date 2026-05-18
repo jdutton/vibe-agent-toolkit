@@ -167,12 +167,13 @@ describe('validateLink', () => {
     });
 
     it('treats leading-/ filesystem path with no projectRoot as absolute_no_root', async () => {
-      // Pre-Phase 3 this resolved as a filesystem-absolute path. Per RFC 3986
-      // §4.2 leading-/ is an absolute-path reference, so without a projectRoot
-      // we surface broken_file with the absolute_no_root message.
-      const targetFile = safePath.join(FIXTURES_DIR, TARGET_MD);
+      // Per RFC 3986 §4.2, leading-/ is an absolute-path reference. Without a
+      // configured projectRoot we surface broken_file with the absolute_no_root
+      // message. Use a literal leading-/ href so the test is meaningful on
+      // Windows too (where safePath.join would produce C:/... and miss the
+      // leading-/ branch entirely).
       const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
-      const link = createLink('local_file', targetFile, 'Absolute path');
+      const link = createLink('local_file', '/does/not/exist.md', 'Absolute path');
       const headingsMap = new Map<string, HeadingNode[]>();
 
       const result = await validateLink(link, sourceFile, headingsMap);

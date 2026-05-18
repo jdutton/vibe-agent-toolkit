@@ -26,6 +26,12 @@ describe('createLogger', () => {
     expect(stderrSpy).toHaveBeenCalledWith('error message\n');
   });
 
+  it('should write warn messages to stderr', () => {
+    const logger = createLogger();
+    logger.warn('loud-cwd fallback warning');
+    expect(stderrSpy).toHaveBeenCalledWith('loud-cwd fallback warning\n');
+  });
+
   it('should write debug messages only when debug enabled', () => {
     const logger = createLogger({ debug: true });
     logger.debug('debug message');
