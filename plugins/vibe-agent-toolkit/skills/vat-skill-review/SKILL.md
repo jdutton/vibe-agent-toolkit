@@ -1,6 +1,9 @@
 ---
 name: vat-skill-review
-description: Use when reviewing a skill before publication or running `vat skill review`. Pre-publication quality checklist grouped into general (all skills) and CLI-backed items, tied to VAT validation codes and Anthropic's skill-authoring best practices.
+description: Use when reviewing a skill before publication or running `vat skill
+  review`. Pre-publication quality checklist grouped into general (all skills)
+  and CLI-backed items, tied to VAT validation codes and Anthropic's
+  skill-authoring best practices.
 ---
 
 # Skill Quality Checklist (vat skill review)

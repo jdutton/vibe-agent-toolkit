@@ -1,6 +1,9 @@
 ---
 name: vat-rag
-description: Use when running `vat rag index` / `vat rag query` or configuring RAG for agent context — covers the CLI commands, native embedding providers and vector store support, chunking, custom metadata, and extension points for adding new backends.
+description: Use when running `vat rag index` / `vat rag query` or configuring
+  RAG for agent context — covers the CLI commands, native embedding providers
+  and vector store support, chunking, custom metadata, and extension points for
+  adding new backends.
 ---
 
 # VAT RAG: Indexing and Querying Markdown with Native Providers

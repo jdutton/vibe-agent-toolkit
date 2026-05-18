@@ -1,6 +1,9 @@
 ---
 name: vat-audit
-description: Use when running vat audit to validate Claude plugins, agent skills, or marketplaces. Covers the audit command, --compat flag for surface compatibility analysis, --exclude for noise filtering, and interpreting audit output.
+description: Use when running vat audit to validate Claude plugins, agent
+  skills, or marketplaces. Covers the audit command, --compat flag for surface
+  compatibility analysis, --exclude for noise filtering, and interpreting audit
+  output.
 ---
 
 # VAT Audit: Validating Plugins, Skills & Marketplaces

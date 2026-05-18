@@ -7,6 +7,190 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.38] - 2026-05-18
+
+### Changed (breaking, pre-1.0)
+
+- **`findProjectRoot` from `@vibe-agent-toolkit/utils` has new semantics.** It
+  now walks `vibe-agent-toolkit.config.yaml` → `.git/` and returns
+  `string | null` with no fallback to `cwd`. The previous workspace-anchored
+  behavior (workspace `package.json` → git → `cwd`, returning `string`) moved
+  to a new function: `findNodeWorkspaceRoot`, scoped to workspace `package.json`
+  lookup only and also returning `string | null`. Migration: use
+  `findNodeWorkspaceRoot` if you wanted Node-monorepo binary discovery; use
+  `findProjectRoot` if you wanted the VAT authoring boundary. Either way,
+  handle the `null` return — there is no more silent `cwd` fallback.
+
+- **`resolveLocalHref` returns a discriminated union.** From
+  `{ resolvedPath; anchor } | null` to one of `anchor_only | resolved |
+  absolute_no_root | absolute_escapes_root`. The function exported from
+  `@vibe-agent-toolkit/resources` now also accepts an optional `projectRoot`
+  parameter. Leading-`/` markdown links and frontmatter URI-references now
+  resolve against `projectRoot` per RFC 3986 §4.2 absolute-path-reference
+  semantics — matching GitHub, MkDocs, Sphinx, Docusaurus, VuePress, Jekyll,
+  Astro Starlight, Nextra, and MDN. Previously `safePath.resolve(sourceDir,
+  '/docs/foo.md')` resolved to filesystem-absolute `/docs/foo.md`. The two
+  new union kinds (`absolute_no_root`, `absolute_escapes_root`) surface to
+  consumers as the existing `broken_file` issue with distinct messages — no
+  new validation-code names. External callers destructuring the old return
+  shape must update to switch on `kind`.
+
+- **`ValidateLinkOptions.projectRoot` semantic narrowing.** In monorepos, the
+  effective root for link validation is now the nearest
+  `vibe-agent-toolkit.config.yaml` ancestor (or `.git/` ancestor), not the
+  workspace root. Cross-package relative links (`../sibling-pkg/foo.md`) are
+  still validated for file existence, case mismatches, and anchor resolution
+  — path-based logic is unaffected. **The gitignore-safety gate, however,
+  scopes to the sub-package's `projectRoot` only.** Adopters who own per-package
+  `vibe-agent-toolkit.config.yaml` files in a monorepo and rely on
+  workspace-wide gitignore checking for cross-package doc links must either
+  move the config up to the workspace root or accept the narrower scope. In
+  practice, the file-existence + anchor checks are what catch broken links;
+  the narrower gitignore gate matches how VAT already treats links to
+  truly-external files.
+
+- **Some adopter configs may need `validation.allow.LINK_OUTSIDE_PROJECT`.**
+  Because the effective `projectRoot` narrows in monorepos with per-package
+  configs, cross-package links that previously passed under workspace-wide
+  scope may now emit `LINK_OUTSIDE_PROJECT`. Add a `validation.allow` entry
+  for the affected paths or `validation.severity` override at the config that
+  governs the linking skill.
+
+- **`Logger.warn` added to the CLI `Logger` interface.** The interface widened
+  with a `warn(message: string): void` method that writes to stderr. If you
+  implement the `Logger` interface directly (custom embedders, test doubles),
+  add the method.
+
+- **`excludeReferencesFromBundle` no longer masks cross-package links flagged
+  as outside-project.** Under the new `projectRoot` model, `outside-project`
+  fires before bundle-exclusion pattern match. If you used
+  `excludeReferencesFromBundle` to hide cross-package links from audit, those
+  links will now surface — switch to `validation.severity` or `validation.allow`
+  on `LINK_OUTSIDE_PROJECT` for the relevant skill.
+
+- **Skill packager rewrites frontmatter URI-references during packaging.**
+  When a markdown file's collection has a `frontmatterSchema` configured, the
+  packager now walks every schema-annotated URI-reference field (`format:
+  uri-reference`, `uri`, `iri-reference`, `iri`) and rewrites the value with
+  the same target-path lookup that drives body-link rewriting. Body and
+  frontmatter URI-refs now agree on packaged paths, and inline comments on
+  rewritten fields survive. Previously, packaged artifacts could ship with
+  rewritten body links but stale source-path frontmatter pointers — a silent
+  half-correct rewrite.
+
+- **`@vibe-agent-toolkit/resource-compiler` now depends on
+  `@vibe-agent-toolkit/resources`.** The markdown parser there goes through
+  `openFrontmatter` so frontmatter comments survive into compiled output.
+  Pure transitive consumers see no API change; embedders who installed
+  `resource-compiler` standalone now pull `resources` too.
+
+### Added
+
+- **Canonical comment-preserving primitive for frontmatter edits:
+  `openFrontmatter` from `@vibe-agent-toolkit/resources`.** Wraps `yaml`
+  (eemeli) in a round-trip-safe editor with `get` / `set` / `setArrayItem` /
+  `appendArrayItem` / `delete` / `toString` and a settable `body`. Comments,
+  blank lines, key order, quoting style, anchors, and EOL survive on
+  mutation. `openFrontmatter(x).toString()` is byte-identical to `x` until
+  you mutate. Malformed YAML throws `FrontmatterParseError` with the
+  underlying error on `.cause`. Use this instead of `gray-matter`,
+  `front-matter`, or raw `yaml.parse` for any write path — those drop
+  comments silently.
+
+- **`createAjvWithUriFormats(options?)` from `@vibe-agent-toolkit/resources`** —
+  Ajv factory pre-registered with the URI-family formats (`uri`,
+  `uri-reference`, `iri`, `iri-reference`) plus the rest of the
+  `ajv-formats` standard vocabulary. Use this anywhere downstream code
+  compiles a schema that may reference those formats: vanilla
+  `new Ajv({ allErrors: true })` throws `unknown format "uri-reference"
+  ignored` under default strict mode, and adopters had to invent the
+  workaround themselves. `iri` / `iri-reference` are registered as no-op
+  validators (semantic validation is the caller's job — VAT uses
+  `resolveLocalHref` for that). Ajv options pass through unchanged so
+  callers control `allErrors`, `strict`, `verbose`, etc.
+
+- **Three rewriter helpers sharing one `(href: string) => string` callback
+  shape**, exported from `@vibe-agent-toolkit/resources`:
+  - `rewriteBodyLinks(body, rewriteHref)` — inline links + reference
+    definitions in the markdown body.
+  - `rewriteFrontmatterFieldsAtPaths(editor, paths, rewriteHref)` — when you
+    know the field paths by convention (`'meta.parent'`, `'adrs-cited[]'`).
+  - `rewriteFrontmatterUriReferencesFromSchema(editor, schema, rewriteHref)`
+    — when you have a JSON Schema and want every `format: uri-reference`
+    field walked automatically. Compose with `rewriteBodyLinks` for the
+    common file/folder-rename case.
+
+- **New `markdown-rewriting` skill in the `vibe-agent-toolkit` Claude Code
+  plugin** — steers any session about to programmatically edit markdown or
+  frontmatter toward the comment-preserving primitives above. Includes the
+  canonical file-move recipe (body + frontmatter together) and the
+  schema-driven variant. Triggers on prompts like "rewrite references
+  across these docs", "rename `/docs/specs/` to `/docs/architecture/`",
+  "batch-update parent_spec".
+
+- **URI-references in frontmatter are now a documented affordance.** Updates
+  to two existing skills:
+  - `vat-knowledge-resources` — explains the leading-`/` resolution
+    + comment-preservation story for schema-annotated URI-ref fields.
+  - `vat-skill-authoring` — recommends leading-`/` URI-refs for cross-document
+    references in SKILL.md frontmatter and cross-links `markdown-rewriting`
+    for programmatic edits.
+
+- **Per-command `projectRoot` and config policies, documented and enforced.**
+  Every `vat` command now declares its `projectRoot` policy (`required` /
+  `tolerate null` / `loud-cwd` / `N/A`) and config policy (`required file` /
+  `required fields` / `accept defaults` / `not used`) in `--help` output and
+  in its CLI reference doc under `packages/cli/docs/` or `docs/cli/`. The
+  canonical source is the new [Roots and Config — Canonical
+  Concepts](docs/concepts/roots-and-config.md) doc. Run `vat <cmd> --help` to
+  see the `Requirements:` block for any command.
+
+- **Loud-cwd fallback for `vat resources scan` and `vat resources validate`.**
+  When invoked without an explicit path and no `vibe-agent-toolkit.config.yaml`
+  or `.git/` ancestor is found, these commands now fall back to `cwd` and emit
+  a single stderr warning (`warn: no vibe-agent-toolkit.config.yaml or .git/
+  ancestor; using <cwd> as projectRoot`) instead of failing silently or
+  surprising the user. With an explicit path argument the path is used and no
+  warning fires.
+
+- **`docs/concepts/roots-and-config.md`** — single source of truth for the
+  three-root model (`projectRoot` / `gitRoot` / `nodeWorkspaceRoot`), the
+  config-then-git discovery ladder, the CLI-boundary discovery rule, the
+  per-command policy matrix, and the loud-cwd fallback contract. Every
+  command's `Requirements:` help block links to this doc.
+
+### Removed
+
+- `findConfigPath`, `findConfigFile` (from `packages/resources/src/config-parser.ts`),
+  `findGoverningConfig`, `resetGoverningConfigCache`. Use `findConfigFile`
+  from `@vibe-agent-toolkit/utils` for config discovery, and `findProjectRoot`
+  + `loadConfigCached` for root + config loading at CLI boundaries. Cache
+  resets: `resetGoverningConfigCache()` → `resetProjectRootCaches() +
+  resetLoadedConfigCache()`.
+
+### Performance
+
+- **`vat audit` is faster on large scan targets.** Per-skill `projectRoot`
+  lookup now hits a module-level cache pre-warmed during the scan descent, so
+  large multi-skill audits no longer repeat filesystem walk-ups per skill.
+
+### Fixed
+
+- **Markdown links to directories now surface as `broken_file`.** Previously, links resolving to an existing directory (e.g., `/docs/`, `../`, or any href whose resolved path is a directory rather than a file) silently passed validation. They now emit `broken_file` with `Link target is a directory: <path>` and a suggestion to link to a file inside the directory.
+
+- **Leading-`/` links no longer false-flag as path-traversal escapes when the project root traverses a symlink.** `isWithinProject` now canonicalizes both sides of the within-check symmetrically (via `realpathSync`). Previously, when `projectRoot` was a symlinked path — common on macOS (`/tmp` → `/private/tmp`), bind mounts, and CI containers — a legitimate `/foo.md` resolution to `projectRoot/foo.md` was incorrectly reported as `absolute_escapes_root` because only the file side was realpath'd. The same fix also corrects the latent identical bug in the pre-existing gitignore-safety gate of `validateLocalFile`.
+
+- **`vat claude plugin install` post-install hints now point to the correct Claude Code slash command.** Both the standard and `--dev` install paths previously suggested `/reload-skills`, which is not a registered Claude Code CLI command — the real one is `/reload-plugins`. Docs (`packages/cli/docs/skills.md`, `docs/guides/distributing-vat-skills.md`, plugin READMEs, `vat-example-cat-agents` distribution doc) updated to match.
+
+- **`vat resources validate` no longer floods stderr with `unknown format
+  "uri-reference" ignored` warnings.** Ajv's default vocabulary doesn't
+  include URI-family formats; with `format: uri-reference` first-class in
+  frontmatter, the validator used to log one warning per occurrence (often 20+
+  per validate run). The validator now registers `ajv-formats` against its
+  Ajv instance, which silences the warnings without changing semantics — VAT's
+  own walker validates URI-ref hrefs against `resolveLocalHref`, not Ajv's
+  format definitions. Adopter-surfaced cleanup.
+
 ## [0.1.37] - 2026-05-16
 
 ### Fixed
