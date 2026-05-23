@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Internal
+
+- **Empirical compatibility harness (`packages/dev-tools/src/compat-empirical/`).** Per-#100 research scaffold: a CLI (`predict`/`run`/`judge`/`report`/`all`) that runs candidate skills against claude-code, claude-cowork, and claude-chat, then joins VAT's static predictions with deterministic runtime observations and an LLM-judge semantic read into a reality-vs-prediction matrix. The output is an evidence artifact a follow-up PR will draw on to propose detector improvements, each citing specific (skill, runtime) cells. No detector code or `RUNTIME_PROFILES` changes here. Lives in the private `@vibe-agent-toolkit/dev-tools` package no adopter-facing surface.
+
 ### Fixed
 
 - **Config-first skill discovery now honors `..` in `skills.include` patterns.** `vat build`, `vat verify`, and `vat skills validate` all funnel through `discoverSkillsFromConfig`, which previously passed every include pattern to a single downward-only crawl rooted at `projectRoot` — so an include like `"../../docs/skills/*/SKILL.md"` (common in monorepos where SKILL.md sources live alongside, not inside, the package) silently matched zero skills. `vat audit` accepted the same config only because it has a separate filesystem-first walker. Each include pattern is now split into a literal base + glob remainder via `picomatch.scan`, patterns are grouped by their resolved absolute base, and the crawler runs once per base — making config-first discovery agree with audit. User-supplied excludes stay anchored to `projectRoot` so patterns like `docs/private/**` keep their original meaning, and a pattern resolving to a nonexistent base now silently produces zero matches.
