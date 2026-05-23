@@ -1,0 +1,16 @@
+version: 1
+prompts:
+  - id: skill-one-default
+    forSkillId: skill-one
+    prompt: Help me run skill one
+    expectedBehavior:
+      description: The agent invokes skill-one and produces output.
+      invocationSignals: [skill-one]
+    authoring: hand
+  - id: skill-two-default
+    forSkillId: skill-two
+    prompt: Help me run skill two
+    expectedBehavior:
+      description: The agent invokes skill-two and produces output.
+      invocationSignals: [skill-two]
+    authoring: llm-draft-human-edited

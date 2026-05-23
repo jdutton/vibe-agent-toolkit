@@ -8,6 +8,8 @@
   "include": ["src/**/*.ts"],
   "exclude": ["dist", "node_modules"],
   "references": [
-    { "path": "../utils" }
+    { "path": "../utils" },
+    { "path": "../agent-skills" },
+    { "path": "../claude-marketplace" }
   ]
 }
