@@ -26,12 +26,19 @@ function runtimeSucceeded(deterministic: DeterministicClass, judge: JudgeVerdict
 }
 
 function runtimeFailed(deterministic: DeterministicClass, judge: JudgeVerdict | undefined): boolean {
+  // TASK-7-WILL-REPLACE: temporary mapping for new 9-value DeterministicClass.
+  // Task 7 rewrites these predicates with proper succeeded/failed semantics
+  // (including refused, install-failed, runtime-error, and not-invoked-* splits).
   return (
-    deterministic === 'error' ||
-    deterministic === 'not-invoked' ||
+    deterministic === 'install-failed' ||
+    deterministic === 'runtime-error' ||
+    deterministic === 'refused' ||
+    deterministic === 'not-invoked-engaged' ||
+    deterministic === 'not-invoked-empty' ||
     deterministic === 'timeout' ||
     judge === 'failed' ||
-    judge === 'off-task'
+    judge === 'off-task' ||
+    judge === 'refused'
   );
 }
 
@@ -90,6 +97,46 @@ export interface JoinOptions {
   bucketBySkillId: ReadonlyMap<string, Bucket>;
 }
 
+function buildRow(args: {
+  prediction: StaticPrediction;
+  perTarget: PerTargetPrediction;
+  bucket: Bucket;
+  obs: RuntimeObservation | undefined;
+  judge: JudgeResult | undefined;
+}): JoinedMatrixRow {
+  const { prediction, perTarget, bucket, obs, judge } = args;
+  const deterministic: DeterministicClass = obs ? classifyDeterministic(obs) : 'skipped';
+
+  const row: JoinedMatrixRow = {
+    skillId: prediction.skillId,
+    bucket,
+    target: perTarget.target,
+    // TASK-7-WILL-REPLACE: temporary single-prompt path; Task 7 joins per
+    // (skillId, promptId, target) and aggregates attemptStats from all
+    // observations. For now we surface the observed promptId if present
+    // (else a placeholder) so the schema accepts the row.
+    promptId: obs?.promptId ?? 'fixture-prompt',
+    predicted: perTarget.predictedOutcome,
+    observedDeterministic: deterministic,
+    agreement: classifyAgreement(perTarget.predictedOutcome, deterministic, judge?.verdict),
+    driverMode: obs?.driverMode ?? 'manual',
+    evidenceRefs: collectEvidenceRefs(prediction, perTarget.target),
+    // TASK-7-WILL-REPLACE: temporary single-attempt stats; Task 7 aggregates
+    // across attemptIdx for the (skillId, promptId, target) cell.
+    attemptStats: {
+      n: 1,
+      extendedFromN3: false,
+      byDeterministicClass: { [deterministic]: 1 },
+      byJudgeVerdict: judge ? { [judge.verdict]: 1 } : {},
+    },
+    highVariance: false,
+  };
+  if (judge !== undefined) {
+    row.observedJudge = judge.verdict;
+  }
+  return row;
+}
+
 export function joinMatrix(options: JoinOptions): JoinedMatrixRow[] {
   const { predictions, observations, judgments, bucketBySkillId } = options;
 
@@ -115,27 +162,7 @@ export function joinMatrix(options: JoinOptions): JoinedMatrixRow[] {
     for (const perTarget of prediction.verdictByTarget) {
       const obs = obsIndex.get(key(prediction.skillId, perTarget.target));
       const judge = judgeIndex.get(key(prediction.skillId, perTarget.target));
-
-      const deterministic: DeterministicClass = obs
-        ? classifyDeterministic(obs)
-        : 'skipped';
-
-      const row: JoinedMatrixRow = {
-        skillId: prediction.skillId,
-        bucket,
-        target: perTarget.target,
-        predicted: perTarget.predictedOutcome,
-        observedDeterministic: deterministic,
-        agreement: classifyAgreement(perTarget.predictedOutcome, deterministic, judge?.verdict),
-        driverMode: obs?.driverMode ?? 'manual',
-        evidenceRefs: collectEvidenceRefs(prediction, perTarget.target),
-      };
-
-      if (judge !== undefined) {
-        row.observedJudge = judge.verdict;
-      }
-
-      rows.push(row);
+      rows.push(buildRow({ prediction, perTarget, bucket, obs, judge }));
     }
   }
 

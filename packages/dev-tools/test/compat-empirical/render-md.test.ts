@@ -25,21 +25,32 @@ function meta(overrides: Partial<RunMetadata> = {}): RunMetadata {
   };
 }
 
+const FIXTURE_PROMPT = 'fixture-prompt';
+const EMPTY_ATTEMPT_STATS = {
+  n: 1,
+  extendedFromN3: false,
+  byDeterministicClass: {},
+  byJudgeVerdict: {},
+};
+
 const sampleRows: JoinedMatrixRow[] = [
   {
-    skillId: 's1', bucket: 'own', target: TARGET_CODE,
+    skillId: 's1', bucket: 'own', target: TARGET_CODE, promptId: FIXTURE_PROMPT,
     predicted: 'expected', observedDeterministic: 'invoked-output', observedJudge: 'completed',
     agreement: 'agree', driverMode: 'scripted', evidenceRefs: ['obs:CAPABILITY_LOCAL_SHELL'],
+    attemptStats: EMPTY_ATTEMPT_STATS, highVariance: false,
   },
   {
-    skillId: 's1', bucket: 'own', target: 'claude-chat',
-    predicted: 'incompatible', observedDeterministic: 'error',
+    skillId: 's1', bucket: 'own', target: 'claude-chat', promptId: FIXTURE_PROMPT,
+    predicted: 'incompatible', observedDeterministic: 'runtime-error',
     agreement: 'agree', driverMode: 'manual', evidenceRefs: [],
+    attemptStats: EMPTY_ATTEMPT_STATS, highVariance: false,
   },
   {
-    skillId: 'community-x', bucket: 'community', target: TARGET_CODE,
+    skillId: 'community-x', bucket: 'community', target: TARGET_CODE, promptId: FIXTURE_PROMPT,
     predicted: 'expected', observedDeterministic: 'invoked-output', observedJudge: 'completed',
     agreement: 'agree', driverMode: 'scripted', evidenceRefs: [],
+    attemptStats: EMPTY_ATTEMPT_STATS, highVariance: false,
   },
 ];
 

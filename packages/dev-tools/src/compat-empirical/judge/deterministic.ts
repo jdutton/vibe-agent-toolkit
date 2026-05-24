@@ -16,10 +16,14 @@ export function classifyDeterministic(obs: RuntimeObservation): DeterministicCla
     return 'timeout';
   }
   if (obs.exitStatus === 'error') {
-    return 'error';
+    // TASK-5-WILL-REPLACE: temporary mapping — Task 5 splits this into
+    // install-failed vs runtime-error and adds the refused-detection regex.
+    return obs.installResult.ok ? 'runtime-error' : 'install-failed';
   }
   if (!obs.invocationDetected) {
-    return 'not-invoked';
+    // TASK-5-WILL-REPLACE: temporary mapping — Task 5 distinguishes
+    // not-invoked-engaged (output present) from not-invoked-empty.
+    return obs.outputText.trim().length > 0 ? 'not-invoked-engaged' : 'not-invoked-empty';
   }
   return obs.outputText.trim().length > 0 ? 'invoked-output' : 'invoked-no-output';
 }

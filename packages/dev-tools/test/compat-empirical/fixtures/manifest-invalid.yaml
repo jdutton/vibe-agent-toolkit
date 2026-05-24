@@ -7,4 +7,4 @@ entries:
       path: x
     skillRelPath: SKILL.md
     expectedCapabilities: []
-    triggerPromptRef: bad
+    triggerPromptRefs: [bad-1, bad-2]

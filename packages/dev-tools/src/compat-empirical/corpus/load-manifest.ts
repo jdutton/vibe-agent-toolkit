@@ -12,6 +12,7 @@ import {
   CorpusManifestSchema,
   TriggerPromptsFileSchema,
   type CorpusManifest,
+  type TriggerPrompt,
   type TriggerPromptsFile,
 } from '../types.js';
 
@@ -36,4 +37,35 @@ export function indexPromptsById(file: TriggerPromptsFile): Map<string, TriggerP
     idx.set(p.id, p);
   }
   return idx;
+}
+
+/**
+ * Cross-file invariant: every manifest entry must reference at least one
+ * `positive` AND one `negative` trigger prompt. Zod can't express this since
+ * the prompts live in a separate YAML file; the run loop relies on this
+ * pairing so positive (should-invoke) and negative (should-not-invoke)
+ * coverage are guaranteed per skill.
+ */
+export function validateEntryPromptKinds(
+  manifest: CorpusManifest,
+  promptById: ReadonlyMap<string, TriggerPrompt>,
+): void {
+  for (const entry of manifest.entries) {
+    const resolved: TriggerPrompt[] = [];
+    for (const id of entry.triggerPromptRefs) {
+      const prompt = promptById.get(id);
+      if (!prompt) {
+        throw new Error(`entry ${entry.id} references missing prompt ${id}`);
+      }
+      resolved.push(prompt);
+    }
+    const hasPositive = resolved.some((p) => p.kind === 'positive');
+    const hasNegative = resolved.some((p) => p.kind === 'negative');
+    if (!hasPositive || !hasNegative) {
+      throw new Error(
+        `entry ${entry.id} must reference at least one positive and one negative prompt; ` +
+          `got kinds: [${resolved.map((p) => p.kind).join(', ')}]`,
+      );
+    }
+  }
 }

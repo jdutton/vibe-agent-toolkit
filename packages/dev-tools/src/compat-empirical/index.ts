@@ -26,7 +26,12 @@ import { PROJECT_ROOT, colors, getDirname, log } from '../common.js';
 
 import { fetchSource } from './corpus/fetch-sources.js';
 import type { StagedSkill } from './corpus/fetch-sources.js';
-import { indexPromptsById, loadManifest, loadTriggerPrompts } from './corpus/load-manifest.js';
+import {
+  indexPromptsById,
+  loadManifest,
+  loadTriggerPrompts,
+  validateEntryPromptKinds,
+} from './corpus/load-manifest.js';
 import { createJudgeClient, judgeCompletion } from './judge/llm-judge.js';
 import { joinMatrix } from './report/join.js';
 import { renderReport } from './report/render-md.js';
@@ -97,6 +102,9 @@ function loadCorpus(opts: CommonOpts): {
   const manifest = loadManifest(opts.manifest);
   const prompts = loadTriggerPrompts(opts.prompts);
   const promptById = indexPromptsById(prompts);
+  // Cross-file invariant: every entry has >=1 positive AND >=1 negative prompt.
+  // Throw here so an invalid manifest fails before any driver setup happens.
+  validateEntryPromptKinds(manifest, promptById);
   const outDir = toForwardSlash(opts.out);
   ensureDir(outDir);
   const transcriptsDir = safePath.join(outDir, 'transcripts');
@@ -175,9 +183,12 @@ async function commandRun(opts: RunOptions): Promise<void> {
     for (const d of drivers.values()) await d.setup();
 
     for (const entry of entries) {
-      const trigger = promptById.get(entry.triggerPromptRef);
+      // TASK-2-WILL-REPLACE: temporary single-prompt path; Task 2 rewrites for multi-prompt + repeat-N.
+      const firstRef = entry.triggerPromptRefs[0];
+      if (firstRef === undefined) continue;
+      const trigger = promptById.get(firstRef);
       if (!trigger) {
-        log(`[run] ${entry.id}: missing trigger prompt ${entry.triggerPromptRef}; skipping`, 'yellow');
+        log(`[run] ${entry.id}: missing trigger prompt ${firstRef}; skipping`, 'yellow');
         continue;
       }
       const staged: StagedSkill = fetchSource(entry, PROJECT_ROOT);
@@ -202,6 +213,9 @@ async function commandRun(opts: RunOptions): Promise<void> {
             installResult,
             transcriptPath: '',
             driverMode: driver.driverMode,
+            // TASK-2-WILL-REPLACE: temporary single-prompt path; Task 2 rewrites for multi-prompt + repeat-N.
+            promptId: firstRef,
+            attemptIdx: 0,
           }));
           continue;
         }
@@ -212,7 +226,12 @@ async function commandRun(opts: RunOptions): Promise<void> {
           expected: trigger.expectedBehavior,
           transcriptDir: transcriptsDir,
         });
-        const parsedObs = RuntimeObservationSchema.parse(obs);
+        const parsedObs = RuntimeObservationSchema.parse({
+          ...obs,
+          // TASK-2-WILL-REPLACE: temporary single-prompt path; Task 2 rewrites for multi-prompt + repeat-N.
+          promptId: firstRef,
+          attemptIdx: 0,
+        });
         observations.push(parsedObs);
         writeFileSync(
           safePath.join(observationsDir, `${entry.id}-${target}.json`),
@@ -259,7 +278,10 @@ async function commandJudge(opts: CommonOpts): Promise<void> {
   for (const obs of observations) {
     const entry = entries.find((e) => e.id === obs.skillId);
     if (!entry) continue;
-    const trigger = promptById.get(entry.triggerPromptRef);
+    // TASK-2-WILL-REPLACE: temporary single-prompt path; Task 2 routes by obs.promptId.
+    const firstRef = entry.triggerPromptRefs[0];
+    if (firstRef === undefined) continue;
+    const trigger = promptById.get(firstRef);
     if (!trigger) continue;
     if (!shouldJudge(obs)) continue;
     log(`[judge] ${obs.skillId} / ${obs.target}`, 'cyan');

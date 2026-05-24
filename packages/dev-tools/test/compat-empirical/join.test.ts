@@ -42,6 +42,8 @@ function makeObservation(skillId: string, target: Target, overrides: Partial<Run
     installResult: { ok: true, notes: '' },
     transcriptPath: FAKE_TRANSCRIPT,
     driverMode: 'scripted',
+    promptId: 'fixture-prompt',
+    attemptIdx: 0,
     ...overrides,
   };
 }

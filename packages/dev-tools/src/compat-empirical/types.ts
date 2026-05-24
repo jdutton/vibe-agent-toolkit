@@ -42,6 +42,8 @@ export const TriggerPromptSchema = z
     prompt: z.string(),
     expectedBehavior: ExpectedBehaviorSchema,
     authoring: z.enum(['hand', 'llm-draft-human-edited']),
+    kind: z.enum(['positive', 'paraphrase', 'edge', 'negative']),
+    tag: z.string().optional(),
   })
   .strict();
 export type TriggerPrompt = z.infer<typeof TriggerPromptSchema>;
@@ -54,7 +56,7 @@ export const CorpusEntrySchema = z
     skillRelPath: z.string(),
     declaredTargets: z.array(TargetSchema).optional(),
     expectedCapabilities: z.array(z.string()),
-    triggerPromptRef: z.string(),
+    triggerPromptRefs: z.array(z.string()).min(2),
     notes: z.string().optional(),
   })
   .strict();
@@ -64,6 +66,7 @@ export const CorpusManifestSchema = z
   .object({
     version: z.literal(1),
     entries: z.array(CorpusEntrySchema),
+    repeatN: z.number().int().positive().default(1),
   })
   .strict();
 export type CorpusManifest = z.infer<typeof CorpusManifestSchema>;
@@ -141,6 +144,8 @@ export const RuntimeObservationSchema = z
     installResult: InstallResultSchema,
     transcriptPath: z.string(),
     driverMode: DriverModeSchema,
+    promptId: z.string(),
+    attemptIdx: z.number().int().nonnegative(),
   })
   .strict();
 export type RuntimeObservation = z.infer<typeof RuntimeObservationSchema>;
@@ -148,14 +153,17 @@ export type RuntimeObservation = z.infer<typeof RuntimeObservationSchema>;
 export const DeterministicClassSchema = z.enum([
   'invoked-output',
   'invoked-no-output',
-  'not-invoked',
+  'not-invoked-engaged',
+  'not-invoked-empty',
+  'install-failed',
+  'runtime-error',
+  'refused',
   'timeout',
-  'error',
   'skipped',
 ]);
 export type DeterministicClass = z.infer<typeof DeterministicClassSchema>;
 
-export const JudgeVerdictSchema = z.enum(['completed', 'partial', 'failed', 'off-task']);
+export const JudgeVerdictSchema = z.enum(['completed', 'partial', 'failed', 'off-task', 'refused']);
 export type JudgeVerdict = z.infer<typeof JudgeVerdictSchema>;
 
 export const JudgeResultSchema = z
@@ -166,6 +174,7 @@ export const JudgeResultSchema = z
     rationale: z.string().max(240),
     confidence: z.enum(['high', 'medium', 'low']),
     judgeModel: z.string(),
+    judgeCallRef: z.string().optional(),
   })
   .strict();
 export type JudgeResult = z.infer<typeof JudgeResultSchema>;
@@ -178,17 +187,30 @@ export const AgreementSchema = z.enum([
 ]);
 export type Agreement = z.infer<typeof AgreementSchema>;
 
+export const AttemptStatsSchema = z
+  .object({
+    n: z.number().int().positive(),
+    extendedFromN3: z.boolean(),
+    byDeterministicClass: z.record(DeterministicClassSchema, z.number().int().nonnegative()),
+    byJudgeVerdict: z.record(JudgeVerdictSchema, z.number().int().nonnegative()),
+  })
+  .strict();
+export type AttemptStats = z.infer<typeof AttemptStatsSchema>;
+
 export const JoinedMatrixRowSchema = z
   .object({
     skillId: z.string(),
     bucket: BucketSchema,
     target: TargetSchema,
+    promptId: z.string(),
     predicted: z.enum(['expected', 'needs-review', 'incompatible', 'undeclared']),
     observedDeterministic: DeterministicClassSchema,
     observedJudge: JudgeVerdictSchema.optional(),
     agreement: AgreementSchema,
     driverMode: DriverModeSchema,
     evidenceRefs: z.array(z.string()),
+    attemptStats: AttemptStatsSchema,
+    highVariance: z.boolean(),
   })
   .strict();
 export type JoinedMatrixRow = z.infer<typeof JoinedMatrixRowSchema>;

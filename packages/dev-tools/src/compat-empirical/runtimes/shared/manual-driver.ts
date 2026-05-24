@@ -99,6 +99,10 @@ export class ManualDriverBase implements RuntimeDriver {
         installResult: { ok: true, notes: 'user-skipped before invoke' },
         transcriptPath,
         driverMode: this.driverMode,
+        // TASK-2-WILL-REPLACE: promptId/attemptIdx flow in via InvokeOpts in Task 2;
+        // here we emit placeholders so the run loop can overwrite them at the call site.
+        promptId: '',
+        attemptIdx: 0,
       };
     }
 
@@ -126,6 +130,10 @@ export class ManualDriverBase implements RuntimeDriver {
       installResult: { ok: true, notes: outcome.notes },
       transcriptPath,
       driverMode: this.driverMode,
+      // TASK-2-WILL-REPLACE: promptId/attemptIdx flow in via InvokeOpts in Task 2;
+      // here we emit placeholders so the run loop can overwrite them at the call site.
+      promptId: '',
+      attemptIdx: 0,
     };
   }
 

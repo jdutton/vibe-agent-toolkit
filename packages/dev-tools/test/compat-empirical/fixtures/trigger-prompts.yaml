@@ -7,6 +7,7 @@ prompts:
       description: The agent invokes skill-one and produces output.
       invocationSignals: [skill-one]
     authoring: hand
+    kind: positive
   - id: skill-two-default
     forSkillId: skill-two
     prompt: Help me run skill two
@@ -14,3 +15,4 @@ prompts:
       description: The agent invokes skill-two and produces output.
       invocationSignals: [skill-two]
     authoring: llm-draft-human-edited
+    kind: positive

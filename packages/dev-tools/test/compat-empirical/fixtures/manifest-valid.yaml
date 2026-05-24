@@ -8,7 +8,7 @@ entries:
     skillRelPath: SKILL.md
     declaredTargets: [claude-code]
     expectedCapabilities: []
-    triggerPromptRef: skill-one-default
+    triggerPromptRefs: [skill-one-default, skill-one-negative]
   - id: skill-two
     bucket: community
     source:
@@ -17,4 +17,4 @@ entries:
       ref: 0123456789abcdef0123456789abcdef01234567
     skillRelPath: SKILL.md
     expectedCapabilities: [CAPABILITY_LOCAL_SHELL]
-    triggerPromptRef: skill-two-default
+    triggerPromptRefs: [skill-two-default, skill-two-negative]

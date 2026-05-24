@@ -17,6 +17,8 @@ function baseObservation(overrides: Partial<RuntimeObservation> = {}): RuntimeOb
     installResult: { ok: true, notes: '' },
     transcriptPath: 'tests/fake-transcript.log',
     driverMode: 'scripted',
+    promptId: 'fixture-prompt',
+    attemptIdx: 0,
     ...overrides,
   };
 }
@@ -33,14 +35,19 @@ describe('classifyDeterministic', () => {
     ).toBe('timeout');
   });
 
-  it('marks error exits as error', () => {
-    expect(classifyDeterministic(baseObservation({ exitStatus: 'error' }))).toBe('error');
+  it('marks error exits as runtime-error', () => {
+    // TASK-5-WILL-REPLACE: classifier currently maps any error exit with ok install
+    // to runtime-error; Task 5 splits install-failed vs runtime-error properly.
+    expect(classifyDeterministic(baseObservation({ exitStatus: 'error' }))).toBe('runtime-error');
   });
 
-  it('marks completed runs with no invocation as not-invoked', () => {
+  it('marks completed runs with no invocation as not-invoked-engaged', () => {
+    // TASK-5-WILL-REPLACE: classifier currently distinguishes not-invoked-engaged
+    // (output present) from not-invoked-empty by trimmed output length; Task 5
+    // refines this with proper engagement detection.
     expect(
       classifyDeterministic(baseObservation({ invocationDetected: false, outputText: 'noise' })),
-    ).toBe('not-invoked');
+    ).toBe('not-invoked-engaged');
   });
 
   it('distinguishes invoked-output from invoked-no-output', () => {

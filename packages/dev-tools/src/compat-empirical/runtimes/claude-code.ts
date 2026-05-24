@@ -160,6 +160,10 @@ export class ClaudeCodeDriver implements RuntimeDriver {
       installResult: { ok: true, notes: '' },
       transcriptPath,
       driverMode: 'scripted',
+      // TASK-2-WILL-REPLACE: promptId/attemptIdx flow in via InvokeOpts in Task 2;
+      // here we emit placeholders so the run loop can overwrite them at the call site.
+      promptId: '',
+      attemptIdx: 0,
     };
   }
 
