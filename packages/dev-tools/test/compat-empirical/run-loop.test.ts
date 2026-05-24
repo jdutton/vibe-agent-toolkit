@@ -210,6 +210,40 @@ describe('runMatrix iteration', () => {
     expect(new Set(tuples).size).toBe(tuples.length);
     expect(tuples).toHaveLength(4);
   });
+
+  it('extends to N=5 when first 3 attempts are ambiguous', async () => {
+    // Per-prompt attempt counter; attempt 2 of each prompt produces a
+    // not-invoked observation, so criterion #1 (mixed trigger outcomes)
+    // fires and the loop runs 2 more attempts (indices 3 and 4).
+    const attemptsByPrompt = new Map<string, number>();
+    const driver = makeFakeDriver(TARGET_CLAUDE_CODE);
+    driver.invoke.mockImplementation(async (invokeOpts: InvokeArgs) => {
+      const seenBefore = attemptsByPrompt.get(invokeOpts.promptId) ?? 0;
+      attemptsByPrompt.set(invokeOpts.promptId, seenBefore + 1);
+      const invoked = invokeOpts.attemptIdx !== 2;
+      return {
+        ...buildFakeObservation(invokeOpts, TARGET_CLAUDE_CODE),
+        invocationDetected: invoked,
+        outputText: invoked ? 'fake' : 'agent ignored the skill',
+      };
+    });
+
+    const observations = await runWithDriver(driver, 3);
+
+    // Both pos-1 and neg-1 should extend (each has attempt 2 not-invoked).
+    const pos1 = observations.filter((o) => o.promptId === PROMPT_POS_1);
+    const neg1 = observations.filter((o) => o.promptId === PROMPT_NEG_1);
+    expect(pos1).toHaveLength(5);
+    expect(neg1).toHaveLength(5);
+
+    const pos1AttemptIdxs = pos1.map((o) => o.attemptIdx).sort((a, b) => a - b);
+    expect(pos1AttemptIdxs).toEqual([0, 1, 2, 3, 4]);
+    const neg1AttemptIdxs = neg1.map((o) => o.attemptIdx).sort((a, b) => a - b);
+    expect(neg1AttemptIdxs).toEqual([0, 1, 2, 3, 4]);
+
+    // invoke was called 5 times per prompt × 2 prompts = 10 total.
+    expect(driver.invoke).toHaveBeenCalledTimes(10);
+  });
 });
 
 /**

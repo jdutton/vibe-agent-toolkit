@@ -33,6 +33,8 @@ import {
   type TriggerPrompt,
 } from '../types.js';
 
+import { evaluateExtensionDecision } from './extension.js';
+
 type StageFn = (entry: CorpusEntry) => StagedSkill;
 type LogFn = (msg: string, color?: Color) => void;
 
@@ -173,6 +175,44 @@ async function runCell(ctx: CellContext): Promise<RuntimeObservation[]> {
   return results;
 }
 
+/**
+ * Adaptive extension: if the first 3 attempts of a scripted cell are
+ * ambiguous (per evaluateExtensionDecision), run 2 more attempts (capping
+ * at N=5). Only fires when repeatN===3 and the driver is scripted; no-op
+ * otherwise. Returns the additional observations (possibly empty).
+ *
+ * The cap at N=5 is hard: extension is single-shot, never re-evaluated
+ * after the additional attempts. Cells still ambiguous at N=5 get
+ * highVariance:true via the join phase.
+ */
+async function maybeExtendCell(
+  ctx: CellContext,
+  cellResults: readonly RuntimeObservation[],
+  repeatN: number,
+): Promise<RuntimeObservation[]> {
+  if (repeatN !== 3 || ctx.driver.driverMode !== 'scripted') return [];
+  if (cellResults.length !== 3) return [];
+
+  const decision = evaluateExtensionDecision(cellResults, repeatN);
+  if (!decision.extend) return [];
+
+  ctx.log(
+    `[run]   extending ${ctx.entry.id}/${ctx.trigger.id}/${ctx.target}: ambiguous at N=3 (${decision.reason}); running attempts 3 and 4`,
+    'yellow',
+  );
+
+  const extra: RuntimeObservation[] = [];
+  for (let attemptIdx = 3; attemptIdx < 5; attemptIdx++) {
+    ctx.log(
+      `[run] ${ctx.entry.id}/${ctx.trigger.id} -> ${ctx.target} (attempt ${attemptIdx + 1}/5)`,
+      'cyan',
+    );
+    const outcome = await runAttempt(ctx, attemptIdx, undefined);
+    extra.push(outcome.observation);
+  }
+  return extra;
+}
+
 export async function runMatrix(opts: RunMatrixOptions): Promise<RuntimeObservation[]> {
   const log = opts.log ?? ((): void => undefined);
   const observations: RuntimeObservation[] = [];
@@ -195,7 +235,7 @@ export async function runMatrix(opts: RunMatrixOptions): Promise<RuntimeObservat
             'yellow',
           );
         }
-        const cellResults = await runCell({
+        const cellCtx: CellContext = {
           entry,
           trigger,
           target,
@@ -205,8 +245,11 @@ export async function runMatrix(opts: RunMatrixOptions): Promise<RuntimeObservat
           transcriptsDir: opts.transcriptsDir,
           observationsDir: opts.observationsDir,
           log,
-        });
+        };
+        const cellResults = await runCell(cellCtx);
         observations.push(...cellResults);
+        const extra = await maybeExtendCell(cellCtx, cellResults, opts.repeatN);
+        observations.push(...extra);
       }
     }
   }
