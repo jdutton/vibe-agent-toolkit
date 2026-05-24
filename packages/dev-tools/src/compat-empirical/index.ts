@@ -25,7 +25,6 @@ import { Command } from 'commander';
 import { PROJECT_ROOT, colors, getDirname, log } from '../common.js';
 
 import { fetchSource } from './corpus/fetch-sources.js';
-import type { StagedSkill } from './corpus/fetch-sources.js';
 import {
   indexPromptsById,
   loadManifest,
@@ -35,6 +34,7 @@ import {
 import { createJudgeClient, judgeCompletion } from './judge/llm-judge.js';
 import { joinMatrix } from './report/join.js';
 import { renderReport } from './report/render-md.js';
+import { runMatrix } from './run/run-matrix.js';
 import { ClaudeChatDriver } from './runtimes/claude-chat.js';
 import { captureClaudeCodeVersion, ClaudeCodeDriver } from './runtimes/claude-code.js';
 import { ClaudeCoworkDriver } from './runtimes/claude-cowork.js';
@@ -47,6 +47,7 @@ import {
   StaticPredictionSchema,
   TargetSchema,
   type CorpusEntry,
+  type CorpusManifest,
   type JudgeResult,
   type RunMetadata,
   type RuntimeObservation,
@@ -94,6 +95,7 @@ function buildDriverFor(target: Target): RuntimeDriver {
 }
 
 function loadCorpus(opts: CommonOpts): {
+  manifest: CorpusManifest;
   entries: CorpusEntry[];
   promptById: Map<string, TriggerPrompt>;
   outDir: string;
@@ -109,7 +111,7 @@ function loadCorpus(opts: CommonOpts): {
   ensureDir(outDir);
   const transcriptsDir = safePath.join(outDir, 'transcripts');
   ensureDir(transcriptsDir);
-  return { entries: manifest.entries, promptById, outDir, transcriptsDir };
+  return { manifest, entries: manifest.entries, promptById, outDir, transcriptsDir };
 }
 
 async function commandPredict(opts: CommonOpts): Promise<void> {
@@ -162,7 +164,7 @@ async function teardownAllDrivers(drivers: Map<Target, RuntimeDriver>): Promise<
 }
 
 async function commandRun(opts: RunOptions): Promise<void> {
-  const { entries, promptById, outDir, transcriptsDir } = loadCorpus(opts);
+  const { entries, promptById, outDir, transcriptsDir, manifest } = loadCorpus(opts);
   const targetsCsv = opts.targets ?? DEFAULT_TARGETS_CSV;
   // Validate each token via TargetSchema so a typo like `claude-cod` produces
   // a clean Zod error here rather than a TypeError on `d.setup()` later.
@@ -174,7 +176,7 @@ async function commandRun(opts: RunOptions): Promise<void> {
   const drivers = new Map<Target, RuntimeDriver>();
   for (const t of targets) drivers.set(t, buildDriverFor(t));
 
-  const observations: RuntimeObservation[] = [];
+  let observations: RuntimeObservation[] = [];
   const observationsPath = safePath.join(outDir, OBSERVATIONS_JSON_FILE);
 
   try {
@@ -182,64 +184,16 @@ async function commandRun(opts: RunOptions): Promise<void> {
     // finally still tears down the earlier drivers that did set up.
     for (const d of drivers.values()) await d.setup();
 
-    for (const entry of entries) {
-      // TASK-2-WILL-REPLACE: temporary single-prompt path; Task 2 rewrites for multi-prompt + repeat-N.
-      const firstRef = entry.triggerPromptRefs[0];
-      if (firstRef === undefined) continue;
-      const trigger = promptById.get(firstRef);
-      if (!trigger) {
-        log(`[run] ${entry.id}: missing trigger prompt ${firstRef}; skipping`, 'yellow');
-        continue;
-      }
-      const staged: StagedSkill = fetchSource(entry, PROJECT_ROOT);
-
-      for (const target of targets) {
-        const driver = drivers.get(target);
-        if (!driver) continue;
-        log(`[run] ${entry.id} -> ${target}`, 'cyan');
-        const installResult = await driver.install(staged);
-        if (!installResult.ok) {
-          log(`[run]   install failed: ${installResult.notes}`, 'red');
-          observations.push(RuntimeObservationSchema.parse({
-            skillId: entry.id,
-            target,
-            startedAt: new Date().toISOString(),
-            durationMs: 0,
-            exitStatus: 'error',
-            invocationDetected: false,
-            outputText: '',
-            toolUseEvents: [],
-            errors: [`install failed: ${installResult.notes}`],
-            installResult,
-            transcriptPath: '',
-            driverMode: driver.driverMode,
-            // TASK-2-WILL-REPLACE: temporary single-prompt path; Task 2 rewrites for multi-prompt + repeat-N.
-            promptId: firstRef,
-            attemptIdx: 0,
-          }));
-          continue;
-        }
-
-        const obs = await driver.invoke({
-          skillId: entry.id,
-          triggerPrompt: trigger.prompt,
-          expected: trigger.expectedBehavior,
-          transcriptDir: transcriptsDir,
-        });
-        const parsedObs = RuntimeObservationSchema.parse({
-          ...obs,
-          // TASK-2-WILL-REPLACE: temporary single-prompt path; Task 2 rewrites for multi-prompt + repeat-N.
-          promptId: firstRef,
-          attemptIdx: 0,
-        });
-        observations.push(parsedObs);
-        writeFileSync(
-          safePath.join(observationsDir, `${entry.id}-${target}.json`),
-          JSON.stringify(parsedObs, null, 2),
-          'utf8',
-        );
-      }
-    }
+    observations = await runMatrix({
+      entries,
+      promptById,
+      drivers,
+      repeatN: manifest.repeatN,
+      transcriptsDir,
+      observationsDir,
+      stageFn: (entry) => fetchSource(entry, PROJECT_ROOT),
+      log,
+    });
   } finally {
     // Persist whatever was collected even if the loop threw, so a mid-corpus
     // failure doesn't lose every cell completed before the crash. Helpers
@@ -278,11 +232,14 @@ async function commandJudge(opts: CommonOpts): Promise<void> {
   for (const obs of observations) {
     const entry = entries.find((e) => e.id === obs.skillId);
     if (!entry) continue;
-    // TASK-2-WILL-REPLACE: temporary single-prompt path; Task 2 routes by obs.promptId.
-    const firstRef = entry.triggerPromptRefs[0];
-    if (firstRef === undefined) continue;
-    const trigger = promptById.get(firstRef);
-    if (!trigger) continue;
+    // Route by the observation's own promptId — the run loop stamps every
+    // observation with the trigger it was produced under, so the judge sees
+    // the exact prompt the runtime saw (no guessing from entry.triggerPromptRefs).
+    const trigger = promptById.get(obs.promptId);
+    if (!trigger) {
+      log(`[judge]   skip ${obs.skillId}/${obs.target}: missing prompt ${obs.promptId}`, 'yellow');
+      continue;
+    }
     if (!shouldJudge(obs)) continue;
     log(`[judge] ${obs.skillId} / ${obs.target}`, 'cyan');
     try {

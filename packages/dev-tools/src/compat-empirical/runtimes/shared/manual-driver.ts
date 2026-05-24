@@ -71,14 +71,20 @@ export class ManualDriverBase implements RuntimeDriver {
     const startedTs = Date.now();
 
     const bundleDir = this.currentBundleDir ?? this.bundleRoot;
-    const transcriptPath = safePath.join(opts.transcriptDir, `${opts.skillId}-${this.target}.log`);
+    // promptId + attemptIdx are part of the transcript filename so concurrent
+    // attempts (or repeats per prompt) don't overwrite each other's transcripts.
+    const transcriptPath = safePath.join(
+      opts.transcriptDir,
+      `${opts.skillId}-${opts.promptId}-${opts.attemptIdx}-${this.target}.log`,
+    );
 
     const banner = [
       '',
       `─── [${this.target}] manual confirmation ────────────────────`,
       `skill:  ${opts.skillId}`,
+      `prompt: ${opts.promptId} (attempt ${opts.attemptIdx})`,
       `bundle: ${bundleDir}`,
-      `prompt: ${opts.triggerPrompt}`,
+      `text:   ${opts.triggerPrompt}`,
       '─────────────────────────────────────────────────────────────',
       this.instructionText,
     ].join('\n');
@@ -99,10 +105,8 @@ export class ManualDriverBase implements RuntimeDriver {
         installResult: { ok: true, notes: 'user-skipped before invoke' },
         transcriptPath,
         driverMode: this.driverMode,
-        // TASK-2-WILL-REPLACE: promptId/attemptIdx flow in via InvokeOpts in Task 2;
-        // here we emit placeholders so the run loop can overwrite them at the call site.
-        promptId: '',
-        attemptIdx: 0,
+        promptId: opts.promptId,
+        attemptIdx: opts.attemptIdx,
       };
     }
 
@@ -130,10 +134,8 @@ export class ManualDriverBase implements RuntimeDriver {
       installResult: { ok: true, notes: outcome.notes },
       transcriptPath,
       driverMode: this.driverMode,
-      // TASK-2-WILL-REPLACE: promptId/attemptIdx flow in via InvokeOpts in Task 2;
-      // here we emit placeholders so the run loop can overwrite them at the call site.
-      promptId: '',
-      attemptIdx: 0,
+      promptId: opts.promptId,
+      attemptIdx: opts.attemptIdx,
     };
   }
 

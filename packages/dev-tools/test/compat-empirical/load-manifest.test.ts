@@ -68,7 +68,7 @@ describe('loadManifest', () => {
 describe('loadTriggerPrompts', () => {
   it('parses a well-formed prompts file', () => {
     const prompts = loadTriggerPrompts(safePath.join(fixturesDir, TRIGGER_PROMPTS_FIXTURE));
-    expect(prompts.prompts).toHaveLength(2);
+    expect(prompts.prompts).toHaveLength(4);
     expect(prompts.prompts[0]?.authoring).toBe('hand');
   });
 });
@@ -77,7 +77,7 @@ describe('indexPromptsById', () => {
   it('indexes prompts by id', () => {
     const prompts = loadTriggerPrompts(safePath.join(fixturesDir, TRIGGER_PROMPTS_FIXTURE));
     const idx = indexPromptsById(prompts);
-    expect(idx.size).toBe(2);
+    expect(idx.size).toBe(4);
     expect(idx.get('skill-one-default')?.prompt).toContain('skill one');
   });
 

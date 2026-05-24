@@ -8,6 +8,14 @@ prompts:
       invocationSignals: [skill-one]
     authoring: hand
     kind: positive
+  - id: skill-one-negative
+    forSkillId: skill-one
+    prompt: Unrelated question about cats
+    expectedBehavior:
+      description: The agent should not invoke skill-one.
+      invocationSignals: [skill-one]
+    authoring: hand
+    kind: negative
   - id: skill-two-default
     forSkillId: skill-two
     prompt: Help me run skill two
@@ -16,3 +24,11 @@ prompts:
       invocationSignals: [skill-two]
     authoring: llm-draft-human-edited
     kind: positive
+  - id: skill-two-negative
+    forSkillId: skill-two
+    prompt: Tell me an unrelated joke
+    expectedBehavior:
+      description: The agent should not invoke skill-two.
+      invocationSignals: [skill-two]
+    authoring: hand
+    kind: negative
