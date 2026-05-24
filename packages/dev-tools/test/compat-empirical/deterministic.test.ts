@@ -35,19 +35,82 @@ describe('classifyDeterministic', () => {
     ).toBe('timeout');
   });
 
-  it('marks error exits as runtime-error', () => {
-    // TASK-5-WILL-REPLACE: classifier currently maps any error exit with ok install
-    // to runtime-error; Task 5 splits install-failed vs runtime-error properly.
-    expect(classifyDeterministic(baseObservation({ exitStatus: 'error' }))).toBe('runtime-error');
+  it('returns install-failed when installResult.ok is false', () => {
+    expect(
+      classifyDeterministic(
+        baseObservation({
+          exitStatus: 'error',
+          installResult: { ok: false, notes: 'missing bundle' },
+        }),
+      ),
+    ).toBe('install-failed');
   });
 
-  it('marks completed runs with no invocation as not-invoked-engaged', () => {
-    // TASK-5-WILL-REPLACE: classifier currently distinguishes not-invoked-engaged
-    // (output present) from not-invoked-empty by trimmed output length; Task 5
-    // refines this with proper engagement detection.
+  it('install-failed takes precedence even when exit completed', () => {
     expect(
-      classifyDeterministic(baseObservation({ invocationDetected: false, outputText: 'noise' })),
+      classifyDeterministic(
+        baseObservation({
+          exitStatus: 'completed',
+          installResult: { ok: false, notes: 'pre-install failure' },
+        }),
+      ),
+    ).toBe('install-failed');
+  });
+
+  it('returns runtime-error when install succeeded but exit was error', () => {
+    expect(
+      classifyDeterministic(baseObservation({ exitStatus: 'error', errors: ['ENOENT'] })),
+    ).toBe('runtime-error');
+  });
+
+  it('returns not-invoked-engaged when output exists but no invocation', () => {
+    expect(
+      classifyDeterministic(
+        baseObservation({ invocationDetected: false, outputText: 'agent did something else' }),
+      ),
     ).toBe('not-invoked-engaged');
+  });
+
+  it('returns not-invoked-empty when transcript is empty', () => {
+    expect(
+      classifyDeterministic(baseObservation({ invocationDetected: false, outputText: '' })),
+    ).toBe('not-invoked-empty');
+  });
+
+  it('returns not-invoked-empty when transcript is whitespace only', () => {
+    expect(
+      classifyDeterministic(baseObservation({ invocationDetected: false, outputText: '   \n\t' })),
+    ).toBe('not-invoked-empty');
+  });
+
+  it('returns refused when refusal pattern matches in the not-invoked path', () => {
+    expect(
+      classifyDeterministic(
+        baseObservation({
+          invocationDetected: false,
+          outputText: "I'm not able to help with that request.",
+        }),
+      ),
+    ).toBe('refused');
+  });
+
+  it('returns refused when refusal pattern matches in the invoked path', () => {
+    expect(
+      classifyDeterministic(
+        baseObservation({
+          invocationDetected: true,
+          outputText: 'I cannot perform this action.',
+        }),
+      ),
+    ).toBe('refused');
+  });
+
+  it('refusal regex does not match incidental phrases like "I will help"', () => {
+    expect(
+      classifyDeterministic(
+        baseObservation({ outputText: 'I will help by running the skill now.' }),
+      ),
+    ).toBe('invoked-output');
   });
 
   it('distinguishes invoked-output from invoked-no-output', () => {

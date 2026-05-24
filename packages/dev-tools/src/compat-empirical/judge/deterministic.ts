@@ -31,9 +31,16 @@ export function classifyDeterministic(obs: RuntimeObservation): DeterministicCla
   if (obs.exitStatus === 'timeout') {
     return 'timeout';
   }
-  if (obs.exitStatus === 'error') {
-    return obs.installResult.ok ? 'runtime-error' : 'install-failed';
+
+  // install-failed takes precedence over runtime-error: an unsuccessful install
+  // is always classified as install-failed regardless of how the runtime exited.
+  if (!obs.installResult.ok) {
+    return 'install-failed';
   }
+  if (obs.exitStatus === 'error') {
+    return 'runtime-error';
+  }
+
   if (!obs.invocationDetected) {
     if (matchesRefusal(obs.outputText)) return 'refused';
     return obs.outputText.trim().length > 0 ? 'not-invoked-engaged' : 'not-invoked-empty';
