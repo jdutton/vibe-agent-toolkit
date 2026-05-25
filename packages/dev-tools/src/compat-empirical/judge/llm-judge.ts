@@ -60,13 +60,15 @@ const RECORD_VERDICT_TOOL: Anthropic.Messages.Tool = {
   input_schema: {
     type: 'object',
     properties: {
-      verdict: { type: 'string', enum: ['completed', 'partial', 'failed', 'off-task'] },
+      verdict: { type: 'string', enum: ['completed', 'partial', 'failed', 'off-task', 'refused'] },
       rationale: { type: 'string', maxLength: 240 },
       confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
     },
     required: ['verdict', 'rationale', 'confidence'],
   },
 };
+
+const STDERR_PREVIEW_LIMIT = 500;
 
 function buildUserMessage(
   triggerPrompt: string,
@@ -78,6 +80,10 @@ function buildUserMessage(
     ? '<no tool-use events captured>'
     : obs.toolUseEvents.map((t) => `- ${t.name}: ${t.inputSummary}`).join('\n');
   const errorLines = obs.errors.length === 0 ? '<none>' : obs.errors.map((e) => `- ${e}`).join('\n');
+  const installLine = obs.installResult.ok ? 'ok' : `failed: ${obs.installResult.notes}`;
+  // Pull stderr from the existing errors[] payload — the scripted driver
+  // includes stderr in errors[] when exitStatus === 'error'.
+  const stderrPreview = obs.errors.slice(0, 3).join('\n').slice(0, STDERR_PREVIEW_LIMIT);
 
   return [
     `# User request (trigger prompt)`,
@@ -96,11 +102,17 @@ function buildUserMessage(
     `- durationMs: ${obs.durationMs}`,
     `- invocationDetected: ${String(obs.invocationDetected)}`,
     '',
+    `# Install result`,
+    installLine,
+    '',
     `# Tool-use events`,
     toolUseLines,
     '',
     `# Errors`,
     errorLines,
+    '',
+    `# Stderr preview`,
+    stderrPreview || '<none>',
     '',
     `# Transcript`,
     transcript,
