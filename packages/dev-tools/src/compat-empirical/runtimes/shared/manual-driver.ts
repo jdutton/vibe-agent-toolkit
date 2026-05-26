@@ -48,6 +48,15 @@ export class ManualDriverBase implements RuntimeDriver {
   }
 
   async setup(): Promise<void> {
+    // Idempotency: if setup() is called twice in the same process without an
+    // intervening teardown, the second call would silently reuse the prior
+    // bundleRoot (same PID → same path), leaking the first run's bundles into
+    // the second "run". `mkdirSyncReal` with recursive:true is a no-op on an
+    // existing dir, so no crash today — but any future code that batches runs
+    // would inherit the wrong state. Teardown first, then mkdir from scratch.
+    if (this.bundleRoot) {
+      await this.teardown();
+    }
     this.bundleRoot = toForwardSlash(safePath.join(normalizedTmpdir(), `${this.tmpdirPrefix}-${process.pid}`));
     mkdirSyncReal(this.bundleRoot, { recursive: true });
   }

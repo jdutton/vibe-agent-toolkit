@@ -77,6 +77,23 @@ function stageLocal(entry: CorpusEntry, source: Extract<SkillSource, { kind: 'lo
 const SHA_REF_RE = /^[0-9a-f]{7,40}$/i;
 
 function refreshGitRef(stageDir: string, ref: string): void {
+  // Force-refresh tags before the named-ref fetch. Without `--tags --force`,
+  // a moved annotated tag (a tag object pointing at a new commit) won't
+  // update the local tag ref — and the FETCH_HEAD-based checkout below
+  // then resolves to the cached old commit, silently serving stale source.
+  // The named `fetch origin <ref>` on the next line covers branches and
+  // unmoved tags; this line specifically handles the moved-tag case.
+  // Force-refresh tags before the named-ref fetch. The named fetch below
+  // updates FETCH_HEAD correctly for the common case, but does not refresh
+  // local tag refs — operations downstream of refreshGitRef that resolve
+  // the tag by name (debugging, log inspection, etc.) would see stale refs.
+  // `--tags --force` is also a hedge against the shallow-boundary case where
+  // the new tag commit lies outside the `--depth 50` window: this fetch
+  // deepens as needed before the depth-limited named fetch runs.
+  const tagsRes = safeExecResult('git', ['-C', stageDir, 'fetch', '--quiet', '--tags', '--force', 'origin']);
+  if (!tagsRes.success) {
+    throw new Error(`git fetch --tags failed in ${stageDir}: ${tagsRes.stderr.toString()}`);
+  }
   const fetchRes = safeExecResult('git', ['-C', stageDir, 'fetch', '--quiet', '--depth', '50', 'origin', ref]);
   if (!fetchRes.success) {
     throw new Error(`git fetch ${ref} failed in ${stageDir}: ${fetchRes.stderr.toString()}`);
