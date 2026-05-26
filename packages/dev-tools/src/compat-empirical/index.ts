@@ -31,7 +31,12 @@ import {
   loadTriggerPrompts,
   validateEntryPromptKinds,
 } from './corpus/load-manifest.js';
-import { createJudgeClient, judgeCompletion } from './judge/llm-judge.js';
+import {
+  createJudgeClient,
+  judgeCompletion,
+  readCurrentSystemPrompt,
+  reJudgeCompletion,
+} from './judge/llm-judge.js';
 import { joinMatrix } from './report/join.js';
 import { renderReport } from './report/render-md.js';
 import { runMatrix } from './run/run-matrix.js';
@@ -41,6 +46,7 @@ import { ClaudeCoworkDriver } from './runtimes/claude-cowork.js';
 import type { RuntimeDriver } from './runtimes/driver.js';
 import { predictForSkill } from './static-predict/predict.js';
 import {
+  JudgeCallArtifactSchema,
   JudgeResultSchema,
   RunMetadataSchema,
   RuntimeObservationSchema,
@@ -228,6 +234,11 @@ async function commandJudge(opts: CommonOpts): Promise<void> {
 
   const client = createJudgeClient();
   const judgments: JudgeResult[] = [];
+  // Persisting judge calls is what makes the `re-judge` subcommand cheap:
+  // an A/B prompt iteration becomes a 30-second read-from-disk loop instead
+  // of a re-spend of all the operator hours that went into the run phase.
+  const callsDir = safePath.join(outDir, 'judge-calls');
+  const judgePromptSha = judgePromptShaFor();
 
   for (const obs of observations) {
     const entry = entries.find((e) => e.id === obs.skillId);
@@ -248,6 +259,8 @@ async function commandJudge(opts: CommonOpts): Promise<void> {
         expected: trigger.expectedBehavior,
         observation: obs,
         client,
+        callsDir,
+        judgePromptSha,
       });
       judgments.push(JudgeResultSchema.parse(judgment));
     } catch (err) {
@@ -256,7 +269,7 @@ async function commandJudge(opts: CommonOpts): Promise<void> {
   }
 
   writeFileSync(safePath.join(outDir, 'judgments.json'), JSON.stringify(judgments, null, 2), 'utf8');
-  log(`[judge] wrote ${judgments.length} judgments`, 'green');
+  log(`[judge] wrote ${judgments.length} judgments (calls persisted to ${callsDir})`, 'green');
 }
 
 async function commandReport(opts: CommonOpts): Promise<void> {
@@ -316,6 +329,64 @@ async function commandAll(opts: RunOptions): Promise<void> {
   await commandReport(opts);
 }
 
+interface ReJudgeOpts {
+  run: string;
+  judgeModel?: string;
+  usePersistedSystemPrompt?: boolean;
+}
+
+/**
+ * Re-execute every persisted judge call in `${opts.run}/judge-calls/` against
+ * an optionally different model, optionally swapping in the current
+ * on-disk judge-system.md (default) or the persisted system prompt
+ * (`--use-persisted-system-prompt`). Writes `judgments-rerun.json` alongside
+ * the original `judgments.json` so the two are diffable.
+ *
+ * No corpus or observations are re-loaded — the persisted artifact contains
+ * the verbatim user message that was sent, so re-judge is a closed-form
+ * replay against the model API only.
+ */
+async function commandReJudge(opts: ReJudgeOpts): Promise<void> {
+  const outDir = toForwardSlash(opts.run);
+  const callsDir = safePath.join(outDir, 'judge-calls');
+  if (!existsSync(callsDir)) {
+    throw new Error(`no judge-calls directory at ${callsDir} — run \`judge\` first.`);
+  }
+  // Lazy import to keep glob/fs ergonomics co-located with the subcommand.
+  const { readdirSync } = await import('node:fs');
+  const callFiles = readdirSync(callsDir).filter((f) => f.endsWith('.json'));
+  if (callFiles.length === 0) {
+    throw new Error(`no *.json artifacts under ${callsDir}`);
+  }
+
+  const client = createJudgeClient();
+  const systemPromptOverride = opts.usePersistedSystemPrompt ? undefined : readCurrentSystemPrompt();
+  const rerun: JudgeResult[] = [];
+
+  // Stable iteration order so a re-judge log line stays diffable across runs.
+  const sortedFiles = [...callFiles].sort((a, b) => a.localeCompare(b));
+  for (const file of sortedFiles) {
+    const path = safePath.join(callsDir, file);
+    const artifact = JudgeCallArtifactSchema.parse(JSON.parse(readFileSync(path, 'utf8')));
+    log(`[re-judge] ${artifact.skillId} / ${artifact.target} (${file})`, 'cyan');
+    try {
+      const result = await reJudgeCompletion({
+        artifact,
+        client,
+        ...(opts.judgeModel === undefined ? {} : { model: opts.judgeModel }),
+        ...(systemPromptOverride === undefined ? {} : { systemPromptOverride }),
+      });
+      rerun.push(result);
+    } catch (err) {
+      log(`[re-judge]   error: ${err instanceof Error ? err.message : String(err)}`, 'red');
+    }
+  }
+
+  const rerunPath = safePath.join(outDir, 'judgments-rerun.json');
+  writeFileSync(rerunPath, JSON.stringify(rerun, null, 2), 'utf8');
+  log(`[re-judge] wrote ${rerun.length} re-judgments -> ${rerunPath}`, 'green');
+}
+
 function main(): void {
   const program = new Command();
 
@@ -362,6 +433,15 @@ function main(): void {
     .option('-t, --targets <csv>', 'comma-separated targets', DEFAULT_TARGETS_CSV)
     .action(async (opts: RunOptions) => {
       await commandAll(opts);
+    });
+
+  program.command('re-judge')
+    .description('Re-execute persisted judge calls against an optionally different model / system prompt')
+    .requiredOption('-r, --run <dir>', 'run directory containing judge-calls/')
+    .option('--judge-model <model>', 'model to re-judge against (defaults to each artifact\'s judgeModel)')
+    .option('--use-persisted-system-prompt', 'use the artifact\'s persisted system prompt (default: use the current judge-system.md on disk)', false)
+    .action(async (opts: ReJudgeOpts) => {
+      await commandReJudge(opts);
     });
 
   program.parseAsync(process.argv).catch((err: unknown) => {

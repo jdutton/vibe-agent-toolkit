@@ -179,6 +179,35 @@ export const JudgeResultSchema = z
   .strict();
 export type JudgeResult = z.infer<typeof JudgeResultSchema>;
 
+/**
+ * Verbatim record of a judge call — system prompt, user message, raw model
+ * response blocks, usage, and identifying metadata. Persisted at
+ * `judge-calls/<skillId>-<promptId>-<target>-<attemptIdx>.json` during the
+ * judge phase so the `re-judge` subcommand can re-run the same user message
+ * against a different model (or the same model with a freshly edited system
+ * prompt) without re-spending operator hours on the run/install side.
+ *
+ * Strict (Postel's Law — VAT-emitted). The `responseContent` and
+ * `responseUsage` fields hold opaque SDK shapes; z.unknown() preserves them
+ * without claiming a fragile contract over the Anthropic response schema.
+ */
+export const JudgeCallArtifactSchema = z
+  .object({
+    skillId: z.string(),
+    target: TargetSchema,
+    promptId: z.string(),
+    attemptIdx: z.number().int().nonnegative(),
+    judgeModel: z.string(),
+    judgePromptSha: z.string(),
+    systemPrompt: z.string(),
+    userMessage: z.string(),
+    responseContent: z.array(z.unknown()),
+    responseUsage: z.unknown().optional(),
+    requestId: z.string().optional(),
+  })
+  .strict();
+export type JudgeCallArtifact = z.infer<typeof JudgeCallArtifactSchema>;
+
 export const AgreementSchema = z.enum([
   'agree',
   'vat-pessimistic',
