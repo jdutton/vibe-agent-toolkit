@@ -260,7 +260,7 @@ async function commandJudge(opts: CommonOpts): Promise<void> {
 }
 
 async function commandReport(opts: CommonOpts): Promise<void> {
-  const { entries, outDir } = loadCorpus(opts);
+  const { entries, promptById, outDir } = loadCorpus(opts);
   const predictions = JSON.parse(readFileSync(safePath.join(outDir, 'predictions.json'), 'utf8')) as StaticPrediction[];
   const observations = JSON.parse(readFileSync(safePath.join(outDir, OBSERVATIONS_JSON_FILE), 'utf8')) as RuntimeObservation[];
   const judgmentsPath = safePath.join(outDir, 'judgments.json');
@@ -274,6 +274,7 @@ async function commandReport(opts: CommonOpts): Promise<void> {
     observations: observations.map((o) => RuntimeObservationSchema.parse(o)),
     judgments: judgments.map((j) => JudgeResultSchema.parse(j)),
     bucketBySkillId,
+    promptById,
   });
 
   writeFileSync(safePath.join(outDir, 'matrix.json'), JSON.stringify(rows, null, 2), 'utf8');
