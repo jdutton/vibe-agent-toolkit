@@ -304,9 +304,9 @@ Start a new Claude Code session to confirm skills load. See the [Marketplace Dis
 
 VAT supports two versioning models for a marketplace:
 
-**Single-version (default for skills-only marketplaces).** No `version` is declared on individual plugins. All plugins inherit the root `package.json:version`. This is the model used by `vibe-agent-toolkit` and `avonrisk-sdlc` — the marketplace is treated as one release artifact.
+**Single-version (default for skills-only marketplaces).** No `version` is declared on individual plugins. All plugins inherit the root `package.json:version`. This is the model used by `vibe-agent-toolkit` — the marketplace is treated as one release artifact.
 
-**Per-plugin versioning** (multi-plugin marketplaces with independent release cadences). Each plugin declares its own `version`. Recommended when topical plugins under one marketplace evolve on independent timelines (e.g., AvonRiskBuilders' `ai-digest`, `bank-reconciliation`).
+**Per-plugin versioning** (multi-plugin marketplaces with independent release cadences). Each plugin declares its own `version`. Recommended when topical plugins under one marketplace evolve on independent timelines.
 
 #### Where to declare a per-plugin version
 

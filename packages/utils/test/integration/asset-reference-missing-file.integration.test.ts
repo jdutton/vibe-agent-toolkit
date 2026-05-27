@@ -13,10 +13,9 @@ import { setupSyncTempDirSuite } from '../../src/test-helpers.js';
  * shipped package.json + exports map but its build never wrote the artifact),
  * VAT's error message must point at the missing file and the publisher's
  * build — not at the consumer's install state. The original misleading hint
- * ("run install in <baseDir>") cost multiple days of debugging in the
- * avonrisk-sdlc case.
+ * ("run install in <baseDir>") cost multiple days of debugging in practice.
  *
- * Fixture mirrors `@ihiservices/sdlc-data-types` shape: subpath-pattern
+ * Fixture mirrors a real-world shape: subpath-pattern
  * exports (`"./schemas/*.json": "./dist/schemas/*.json"`) + a workspace
  * package directly placed under `node_modules/`. (Symlink/junction variants
  * intentionally not modeled — Node's resolver handles those transparently;
@@ -129,8 +128,8 @@ describe('resolveAssetReference exports-map missing-file diagnosis (integration)
     // Must point at the publisher's build, not the consumer's install
     expect(message).toMatch(/[Rr]ebuild|build step|"exports" subpath/);
     // Should NOT push the user toward running install in baseDir — that was
-    // the unhelpful hint that wasted hours of debugging in the avonrisk-sdlc
-    // case. The package is installed; the publisher's build is incomplete.
+    // the unhelpful hint that wasted hours of debugging in practice. The
+    // package is installed; the publisher's build is incomplete.
     expect(message).not.toMatch(/run install in/);
   });
 });

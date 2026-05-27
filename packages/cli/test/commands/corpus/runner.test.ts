@@ -9,6 +9,12 @@ import * as yaml from 'yaml';
 import { auditOnePlugin } from '../../../src/commands/corpus/runner.js';
 import type { PluginEntry } from '../../../src/commands/corpus/seed.js';
 
+const META = {
+  bucket: 'official',
+  confidence: 'first-party',
+  maturity: 'production',
+} as const;
+
 const RUN_DIR_PREFIX = 'vat-corpus-rundir-';
 
 function makeRunDir(): string {
@@ -52,7 +58,7 @@ describe('auditOnePlugin — local source', () => {
     );
     const runDir = makeRunDir();
 
-    const entry: PluginEntry = { source: pluginDir, name: 'foo' };
+    const entry: PluginEntry = { source: pluginDir, name: 'foo', ...META };
 
     const row = await auditOnePlugin(entry, { runDir, withReview: false, debug: false });
 
@@ -66,7 +72,7 @@ describe('auditOnePlugin — local source', () => {
 
   it('records unloadable when the local source path does not exist', async () => {
     const runDir = makeRunDir();
-    const entry: PluginEntry = { source: '/absolutely/does/not/exist', name: 'ghost' };
+    const entry: PluginEntry = { source: '/absolutely/does/not/exist', name: 'ghost', ...META };
 
     const row = await auditOnePlugin(entry, { runDir, withReview: false, debug: false });
 
@@ -112,7 +118,7 @@ describe('auditOnePlugin — URL source', () => {
     const bare = makeBareRepoWithSkill();
     const runDir = makeRunDir();
 
-    const entry: PluginEntry = { source: pathToFileURL(bare).href, name: 'foo' };
+    const entry: PluginEntry = { source: pathToFileURL(bare).href, name: 'foo', ...META };
     const row = await auditOnePlugin(entry, { runDir, withReview: false, debug: false });
 
     expect(row.audit.status).toBe('success');
@@ -124,6 +130,7 @@ describe('auditOnePlugin — URL source', () => {
     const entry: PluginEntry = {
       source: 'file:///absolutely/does/not/exist/repo.git',
       name: 'ghost',
+      ...META,
     };
 
     const row = await auditOnePlugin(entry, { runDir, withReview: false, debug: false });
@@ -146,6 +153,7 @@ describe('auditOnePlugin — validation overlay', () => {
     const entry: PluginEntry = {
       source: pluginDir,
       name: 'overlay',
+      ...META,
       validation: {
         severity: { LINK_TO_NAVIGATION_FILE: 'ignore' },
       },
@@ -169,7 +177,7 @@ describe('auditOnePlugin — validation overlay', () => {
     );
     const runDir = makeRunDir();
 
-    const entry: PluginEntry = { source: pluginDir, name: 'no-overlay' };
+    const entry: PluginEntry = { source: pluginDir, name: 'no-overlay', ...META };
 
     const row = await auditOnePlugin(entry, { runDir, withReview: false, debug: false });
 
@@ -195,6 +203,15 @@ function makeMultiSkillPluginDir(skillNames: string[]): string {
   return root;
 }
 
+async function runReviewedAudit(pluginDir: string, name: string): Promise<string> {
+  const runDir = makeRunDir();
+  const entry: PluginEntry = { source: pluginDir, name, ...META };
+  const row = await auditOnePlugin(entry, { runDir, withReview: true, debug: false });
+  expect(row.review.status).toBe('ok');
+  expect(row.review.output_path).toBe(`${name}-review.md`);
+  return safePath.join(runDir, `${name}-review.md`);
+}
+
 describe('auditOnePlugin — --with-review', () => {
   it('writes an aggregated review.md and records review.status=ok when withReview is true', async () => {
     // Single-skill plugin tree: SKILL.md at the root. The runner now discovers
@@ -204,15 +221,8 @@ describe('auditOnePlugin — --with-review', () => {
       'reviewed',
       'Skill that runs the review pipeline end-to-end so the runner test exercises the with-review path.'
     );
-    const runDir = makeRunDir();
+    const reviewPath = await runReviewedAudit(pluginDir, 'reviewed');
 
-    const entry: PluginEntry = { source: pluginDir, name: 'reviewed' };
-
-    const row = await auditOnePlugin(entry, { runDir, withReview: true, debug: false });
-
-    expect(row.review.status).toBe('ok');
-    expect(row.review.output_path).toBe('reviewed-review.md');
-    const reviewPath = safePath.join(runDir, 'reviewed-review.md');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
     expect(existsSync(reviewPath)).toBe(true);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
@@ -224,15 +234,8 @@ describe('auditOnePlugin — --with-review', () => {
 
   it('reviews every SKILL.md in a multi-skill plugin tree', async () => {
     const pluginDir = makeMultiSkillPluginDir(['alpha', 'beta']);
-    const runDir = makeRunDir();
+    const reviewPath = await runReviewedAudit(pluginDir, 'multi');
 
-    const entry: PluginEntry = { source: pluginDir, name: 'multi' };
-
-    const row = await auditOnePlugin(entry, { runDir, withReview: true, debug: false });
-
-    expect(row.review.status).toBe('ok');
-    expect(row.review.output_path).toBe('multi-review.md');
-    const reviewPath = safePath.join(runDir, 'multi-review.md');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-controlled
     const contents = toForwardSlash(readFileSync(reviewPath, 'utf-8'));
     expect(contents).toContain('Reviewed 2 of 2 skills');
@@ -245,7 +248,7 @@ describe('auditOnePlugin — --with-review', () => {
     const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-corpus-empty-'));
     const runDir = makeRunDir();
 
-    const entry: PluginEntry = { source: root, name: 'empty' };
+    const entry: PluginEntry = { source: root, name: 'empty', ...META };
 
     const row = await auditOnePlugin(entry, { runDir, withReview: true, debug: false });
 
@@ -256,7 +259,7 @@ describe('auditOnePlugin — --with-review', () => {
 
   it('records review.status=skipped when audit was unloadable', async () => {
     const runDir = makeRunDir();
-    const entry: PluginEntry = { source: '/does/not/exist', name: 'ghost' };
+    const entry: PluginEntry = { source: '/does/not/exist', name: 'ghost', ...META };
 
     const row = await auditOnePlugin(entry, { runDir, withReview: true, debug: false });
 
