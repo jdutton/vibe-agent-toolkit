@@ -317,8 +317,8 @@ describe('ClaudeCodeDriver per-attempt independence', () => {
     const transcriptDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-claude-code-invoke-test-'));
 
     spawnedHomes.length = 0;
-    (tempProfile.createTempProfile as ReturnType<typeof vi.fn>).mockClear();
-    (tempProfile.teardownTempProfile as ReturnType<typeof vi.fn>).mockClear();
+    vi.mocked(tempProfile.createTempProfile).mockClear();
+    vi.mocked(tempProfile.teardownTempProfile).mockClear();
 
     const driver = new ClaudeCodeDriver();
     const fakeSkill = { entryId: SKILL_A, rootDir: '/fake', skillPath: '/fake/SKILL.md' };
