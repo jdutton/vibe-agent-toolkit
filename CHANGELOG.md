@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed (breaking, pre-1.0)
+
+- **Corpus seed entries now require `bucket`, `confidence`, and `maturity` metadata fields.** `PluginEntrySchema` in `vat corpus scan`'s seed loader gains three required enum fields: `bucket: 'official' | 'community'`, `confidence: 'first-party' | 'curated' | 'listed'`, and `maturity: 'production' | 'experimental' | 'example'`. The bundled `corpus/seed.yaml` is updated; downstream callers running custom seeds must add the fields to every entry. `bucket` is the load-bearing discriminator (`official` entries report named findings; `community` entries are aggregate-only in follow-up work). The other two are descriptive metadata used by triage tooling.
+
 ### Fixed
 
 - **Config-first skill discovery now honors `..` in `skills.include` patterns.** `vat build`, `vat verify`, and `vat skills validate` all funnel through `discoverSkillsFromConfig`, which previously passed every include pattern to a single downward-only crawl rooted at `projectRoot` — so an include like `"../../docs/skills/*/SKILL.md"` (common in monorepos where SKILL.md sources live alongside, not inside, the package) silently matched zero skills. `vat audit` accepted the same config only because it has a separate filesystem-first walker. Each include pattern is now split into a literal base + glob remainder via `picomatch.scan`, patterns are grouped by their resolved absolute base, and the crawler runs once per base — making config-first discovery agree with audit. User-supplied excludes stay anchored to `projectRoot` so patterns like `docs/private/**` keep their original meaning, and a pattern resolving to a nonexistent base now silently produces zero matches.

@@ -13,16 +13,27 @@ function writeSeed(content: string): string {
   return file;
 }
 
+const METADATA = `    bucket: official
+    confidence: first-party
+    maturity: production`;
+
 describe('loadSeedFile', () => {
   it('parses a minimal seed with one entry', () => {
     const file = writeSeed(`
 plugins:
   - source: .
     name: vibe-agent-toolkit
+${METADATA}
 `);
     const seed = loadSeedFile(file);
     expect(seed.plugins).toHaveLength(1);
-    expect(seed.plugins[0]).toEqual({ source: '.', name: 'vibe-agent-toolkit' });
+    expect(seed.plugins[0]).toEqual({
+      source: '.',
+      name: 'vibe-agent-toolkit',
+      bucket: 'official',
+      confidence: 'first-party',
+      maturity: 'production',
+    });
   });
 
   it('parses an entry with a validation block', () => {
@@ -30,6 +41,7 @@ plugins:
 plugins:
   - source: https://github.com/foo/bar.git
     name: bar
+${METADATA}
     validation:
       severity:
         SKILL_DESCRIPTION_FILLER_OPENER: ignore
@@ -51,8 +63,10 @@ plugins:
 plugins:
   - source: .
     name: a
+${METADATA}
   - source: .
     name: b
+${METADATA}
 `);
     expect(() => loadSeedFile(file)).toThrow(/duplicate source/i);
   });
@@ -62,8 +76,10 @@ plugins:
 plugins:
   - source: a/b
     name: same
+${METADATA}
   - source: c/d
     name: same
+${METADATA}
 `);
     expect(() => loadSeedFile(file)).toThrow(/duplicate name/i);
   });
@@ -72,8 +88,32 @@ plugins:
     const file = writeSeed(`
 plugins:
   - source: .
+${METADATA}
 `);
     expect(() => loadSeedFile(file)).toThrow(/name/i);
+  });
+
+  it('rejects an entry missing one of the metadata fields', () => {
+    const file = writeSeed(`
+plugins:
+  - source: .
+    name: foo
+    confidence: first-party
+    maturity: production
+`);
+    expect(() => loadSeedFile(file)).toThrow(/bucket/i);
+  });
+
+  it('rejects an entry with an invalid bucket value', () => {
+    const file = writeSeed(`
+plugins:
+  - source: .
+    name: foo
+    bucket: not-a-valid-value
+    confidence: first-party
+    maturity: production
+`);
+    expect(() => loadSeedFile(file)).toThrow();
   });
 
   it('rejects a seed file that does not exist', () => {

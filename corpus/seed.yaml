@@ -15,27 +15,50 @@ plugins:
   # from what Claude Code actually receives at install time.
   - source: https://github.com/jdutton/vibe-agent-toolkit.git#claude-marketplace:plugins/vibe-agent-toolkit
     name: vibe-agent-toolkit
+    bucket: official
+    confidence: first-party
+    maturity: production
   - source: https://github.com/jdutton/vibe-validate.git#claude-marketplace
     name: vibe-validate
-  - source: https://github.com/ihiservices/avonrisk-sdlc-claude-marketplace.git#main:plugins/avonrisk-sdlc
-    name: avonrisk-sdlc
-  - source: https://github.com/ihiservices/avonrisk-sdlc-claude-marketplace.git#main:plugins/avonrisk-builders
-    name: avonrisk-builders
+    bucket: official
+    confidence: first-party
+    maturity: production
 
   # claude-plugins-official samples (verified via gh api 2026-05-01)
   - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/skill-creator
     name: skill-creator
+    bucket: official
+    confidence: first-party
+    maturity: production
   - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/plugin-dev
     name: plugin-dev
+    bucket: official
+    confidence: first-party
+    maturity: production
   - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/code-review
     name: code-review
+    bucket: official
+    confidence: first-party
+    maturity: production
   - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/pr-review-toolkit
     name: pr-review-toolkit
+    bucket: official
+    confidence: first-party
+    maturity: production
   - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/feature-dev
     name: feature-dev
+    bucket: official
+    confidence: first-party
+    maturity: production
 
   # knowledge-work-plugins samples (each plugin is at the repo root, not under plugins/)
   - source: https://github.com/anthropics/knowledge-work-plugins.git#main:data
     name: knowledge-work-data
+    bucket: official
+    confidence: first-party
+    maturity: production
   - source: https://github.com/anthropics/knowledge-work-plugins.git#main:engineering
     name: knowledge-work-engineering
+    bucket: official
+    confidence: first-party
+    maturity: production

@@ -22,6 +22,12 @@ import { executeCli } from './test-helpers/cli-runner.js';
 
 const NET = process.env.NET_AVAILABLE === '1';
 
+const META = {
+  bucket: 'official',
+  confidence: 'first-party',
+  maturity: 'production',
+} as const;
+
 (NET ? describe : describe.skip)('vat corpus scan — system (network)', () => {
   it(
     'clones a public repo, audits it, and writes a valid summary',
@@ -33,7 +39,7 @@ const NET = process.env.NET_AVAILABLE === '1';
         seedPath,
         yaml.stringify({
           plugins: [
-            { source: 'https://github.com/octocat/Hello-World.git', name: 'hello-world' },
+            { source: 'https://github.com/octocat/Hello-World.git', name: 'hello-world', ...META },
           ],
         }),
         'utf-8'

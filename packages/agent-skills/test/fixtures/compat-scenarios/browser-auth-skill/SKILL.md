@@ -1,6 +1,6 @@
 ---
 name: browser-auth-skill
-description: Sample skill that authenticates via Microsoft MSAL browser login. Models the real avonrisk-sdlc azure-msal-auth shape for compat-detector regression tests.
+description: Sample skill that authenticates via Microsoft MSAL browser login. Models a real Azure MSAL auth shape for compat-detector regression tests.
 ---
 
 # Browser-auth skill

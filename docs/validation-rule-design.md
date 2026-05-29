@@ -8,7 +8,7 @@ The sibling doc [`docs/skill-quality-and-compatibility.md`](./skill-quality-and-
 
 A rule must describe a pattern that appears in real corpora. Rules follow observation; they do not precede it.
 
-"I can imagine someone doing this and it seems wrong" is not evidence. Neither is "another linter has this rule." What qualifies is a concrete artifact — a SKILL.md, a `plugin.json`, a hook script — where the pattern was observed, captured, and can be pointed at when the rule is proposed. Pre-v1, the three adopter corpora (`vibe-agent-toolkit`, `vibe-validate`, `avonrisk-sdlc`) are the minimum evidence floor. Post community scanning (Workstream B in the strategy spec), the corpus expands and the evidence bar rises with it.
+"I can imagine someone doing this and it seems wrong" is not evidence. Neither is "another linter has this rule." What qualifies is a concrete artifact — a SKILL.md, a `plugin.json`, a hook script — where the pattern was observed, captured, and can be pointed at when the rule is proposed. Pre-v1, the two adopter corpora (`vibe-agent-toolkit`, `vibe-validate`) are the minimum evidence floor. Post community scanning (Workstream B in the strategy spec), the corpus expands and the evidence bar rises with it.
 
 Rules added against synthetic, theoretical, or aesthetic-only cases get rejected. This is not a matter of taste; it is a matter of keeping false-positive rates low enough that adopters still trust the tool. A linter that cries wolf in plausible-but-unobserved territory trains users to ignore it.
 

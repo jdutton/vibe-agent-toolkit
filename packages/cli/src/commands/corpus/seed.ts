@@ -22,6 +22,8 @@ const ValidationBlockSchema = z
   })
   .strict();
 
+// `bucket` is the reporting posture: `official` entries allow named findings;
+// `community` entries are aggregate-only.
 const PluginEntrySchema = z
   .object({
     source: z.string().min(1),
@@ -29,6 +31,9 @@ const PluginEntrySchema = z
       .string()
       .min(1)
       .regex(/^[A-Za-z0-9_-]+$/, 'name must be [A-Za-z0-9_-]+ (presentation label)'),
+    bucket: z.enum(['official', 'community']),
+    confidence: z.enum(['first-party', 'curated', 'listed']),
+    maturity: z.enum(['production', 'experimental', 'example']),
     validation: ValidationBlockSchema.optional(),
   })
   .strict();
