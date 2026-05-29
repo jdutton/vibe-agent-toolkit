@@ -25,4 +25,6 @@ Strict rules:
 - A refusal sentence ("I cannot", "I'm not able to") with no attempt to perform the task is `refused`.
 - Do not credit imagined effort. If the transcript is empty or unrelated, that is `off-task`.
 
-Output: call the `record_verdict` tool with one of the five verdicts, a `rationale` of at most 240 characters that names the specific transcript evidence, and a `confidence` of `high`, `medium`, or `low`.
+Output: respond with a SINGLE JSON object and nothing else — no prose, no code fence, no preamble. The object must have exactly these keys:
+
+{"verdict": "<completed|partial|failed|off-task|refused>", "rationale": "<at most 240 characters naming the specific transcript evidence>", "confidence": "<high|medium|low>"}

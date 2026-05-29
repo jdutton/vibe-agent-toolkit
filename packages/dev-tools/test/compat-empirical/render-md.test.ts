@@ -22,6 +22,7 @@ function meta(overrides: Partial<RunMetadata> = {}): RunMetadata {
     vatVersion: '0.1.37',
     nodeVersion: 'v22.0.0',
     judgeModel: JUDGE_MODEL,
+    authMode: 'subscription',
     judgePromptSha: 'aaaaaaaaaaaaaaaa',
     triggerPromptsSha: 'bbbbbbbbbbbbbbbb',
     manifestSha: 'cccccccccccccccc',

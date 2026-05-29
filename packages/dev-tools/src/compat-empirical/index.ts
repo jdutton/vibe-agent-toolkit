@@ -32,7 +32,6 @@ import {
   validateEntryPromptKinds,
 } from './corpus/load-manifest.js';
 import {
-  createJudgeClient,
   judgeCompletion,
   readCurrentSystemPrompt,
   reJudgeCompletion,
@@ -44,6 +43,7 @@ import { ClaudeChatDriver } from './runtimes/claude-chat.js';
 import { captureClaudeCodeVersion, ClaudeCodeDriver } from './runtimes/claude-code.js';
 import { ClaudeCoworkDriver } from './runtimes/claude-cowork.js';
 import type { RuntimeDriver } from './runtimes/driver.js';
+import { resolveOAuthToken } from './runtimes/shared/claude-cli.js';
 import { predictForSkill } from './static-predict/predict.js';
 import {
   JudgeCallArtifactSchema,
@@ -170,6 +170,7 @@ async function teardownAllDrivers(drivers: Map<Target, RuntimeDriver>): Promise<
 }
 
 async function commandRun(opts: RunOptions): Promise<void> {
+  await resolveOAuthToken(); // prompt the operator for their own token once, up front (or read env), before any spawn
   const { entries, promptById, outDir, transcriptsDir, manifest } = loadCorpus(opts);
   const targetsCsv = opts.targets ?? DEFAULT_TARGETS_CSV;
   // Validate each token via TargetSchema so a typo like `claude-cod` produces
@@ -225,6 +226,7 @@ function shouldJudge(obs: RuntimeObservation): boolean {
 }
 
 async function commandJudge(opts: CommonOpts): Promise<void> {
+  await resolveOAuthToken(); // prompt the operator for their own token once, up front (or read env), before any spawn
   const { entries, promptById, outDir } = loadCorpus(opts);
   const observationsPath = safePath.join(outDir, OBSERVATIONS_JSON_FILE);
   if (!existsSync(observationsPath)) {
@@ -232,7 +234,6 @@ async function commandJudge(opts: CommonOpts): Promise<void> {
   }
   const observations = JSON.parse(readFileSync(observationsPath, 'utf8')) as RuntimeObservation[];
 
-  const client = createJudgeClient();
   const judgments: JudgeResult[] = [];
   // Persisting judge calls is what makes the `re-judge` subcommand cheap:
   // an A/B prompt iteration becomes a 30-second read-from-disk loop instead
@@ -258,7 +259,6 @@ async function commandJudge(opts: CommonOpts): Promise<void> {
         triggerPrompt: trigger.prompt,
         expected: trigger.expectedBehavior,
         observation: obs,
-        client,
         callsDir,
         judgePromptSha,
       });
@@ -305,6 +305,7 @@ async function commandReport(opts: CommonOpts): Promise<void> {
     vatVersion: readVatVersion(),
     nodeVersion: process.version,
     judgeModel: judgments[0]?.judgeModel ?? 'claude-sonnet-4-6',
+    authMode: 'subscription',
     judgePromptSha: judgePromptShaFor(),
     triggerPromptsSha: sha256OfFile(opts.prompts),
     manifestSha: sha256OfFile(opts.manifest),
@@ -347,6 +348,7 @@ interface ReJudgeOpts {
  * replay against the model API only.
  */
 async function commandReJudge(opts: ReJudgeOpts): Promise<void> {
+  await resolveOAuthToken(); // prompt the operator for their own token once, up front (or read env), before any spawn
   const outDir = toForwardSlash(opts.run);
   const callsDir = safePath.join(outDir, 'judge-calls');
   if (!existsSync(callsDir)) {
@@ -359,7 +361,6 @@ async function commandReJudge(opts: ReJudgeOpts): Promise<void> {
     throw new Error(`no *.json artifacts under ${callsDir}`);
   }
 
-  const client = createJudgeClient();
   const systemPromptOverride = opts.usePersistedSystemPrompt ? undefined : readCurrentSystemPrompt();
   const rerun: JudgeResult[] = [];
 
@@ -372,7 +373,6 @@ async function commandReJudge(opts: ReJudgeOpts): Promise<void> {
     try {
       const result = await reJudgeCompletion({
         artifact,
-        client,
         ...(opts.judgeModel === undefined ? {} : { model: opts.judgeModel }),
         ...(systemPromptOverride === undefined ? {} : { systemPromptOverride }),
       });

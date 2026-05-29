@@ -12,7 +12,6 @@
  * claude-code driver tests.
  */
 
-import type * as ChildProcessModule from 'node:child_process';
 import { mkdtempSync } from 'node:fs';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
@@ -263,8 +262,8 @@ describe('runMatrix iteration', () => {
 // FAKE_HOME_PREFIX has to be hoisted for the same reason (factories read it
 // at hoist time, before module-scope `const`s are initialized).
 // FAKE_HOME_PREFIX is a synthetic string used only to assert identity-by-path
-// inside the spawn mock — it is never written to or read from disk, so the
-// "publicly-writable-directories" guidance for `/tmp/...` is N/A here.
+// inside the runClaudeSubscription mock — it is never written to or read from
+// disk, so the "publicly-writable-directories" guidance for `/tmp/...` is N/A.
 const { spawnedHomes, FAKE_HOME_PREFIX } = vi.hoisted(() => ({
   spawnedHomes: [] as string[],
   FAKE_HOME_PREFIX: '<fake-home>/',
@@ -287,30 +286,12 @@ vi.mock('../../src/compat-empirical/runtimes/shared/temp-profile.js', async () =
   };
 });
 
-vi.mock('node:child_process', async () => {
-  const actual = await vi.importActual<typeof ChildProcessModule>('node:child_process');
-  return {
-    ...actual,
-    spawn: vi.fn((_cmd: string, _args: string[], options: { env: NodeJS.ProcessEnv }) => {
-      spawnedHomes.push(options.env['HOME'] ?? '');
-      const noopStream = { on: (_e: string, _l: () => void): void => undefined };
-      let closeListener: ((code: number) => void) | undefined;
-      const child = {
-        stdout: noopStream,
-        stderr: noopStream,
-        kill: (): void => undefined,
-        on(event: string, listener: (code: number) => void): typeof child {
-          if (event === 'close') {
-            closeListener = listener;
-            queueMicrotask(() => closeListener?.(0));
-          }
-          return child;
-        },
-      };
-      return child as never;
-    }),
-  };
-});
+vi.mock('../../src/compat-empirical/runtimes/shared/claude-cli.js', () => ({
+  runClaudeSubscription: vi.fn((_args: string[], opts: { homeDir?: string; timeoutMs: number }) => {
+    spawnedHomes.push(opts.homeDir ?? '');
+    return Promise.resolve({ stdout: '', stderr: '', exitCode: 0, timedOut: false });
+  }),
+}));
 
 describe('ClaudeCodeDriver per-attempt independence', () => {
   it('recreates the temp profile on each invoke (different homeDir per attempt)', async () => {

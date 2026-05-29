@@ -1,5 +1,5 @@
 /**
- * LLM judge — Sonnet 4.6, temperature 0, forced tool use for structured output.
+ * LLM judge — Sonnet 4.6, subscription auth via `claude` CLI.
  *
  * Single-message call. The harness controls reproducibility by pinning the
  * model snapshot and the system-prompt file's git SHA in RunMetadata.
@@ -9,15 +9,13 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 
-import Anthropic from '@anthropic-ai/sdk';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
-import { z } from 'zod';
 
 import { getDirname } from '../../common.js';
+import { runClaudeSubscription, type ClaudeSpawnResult } from '../runtimes/shared/claude-cli.js';
 import {
   JudgeCallArtifactSchema,
   JudgeResultSchema,
-  JudgeVerdictSchema,
   type ExpectedBehavior,
   type JudgeCallArtifact,
   type JudgeResult,
@@ -25,24 +23,10 @@ import {
   type RuntimeObservation,
 } from '../types.js';
 
-/**
- * The schema the Anthropic input_schema declares for the record_verdict tool.
- * Validated locally so a malformed model response produces a clear Zod error
- * with the offending field, not a TypeError on `undefined.slice` downstream.
- *
- * Strict because the tool's input_schema fully specifies what the model should
- * return — extras indicate a model bug we'd rather see than silently absorb.
- */
-const ToolUseInputSchema = z
-  .object({
-    verdict: JudgeVerdictSchema,
-    rationale: z.string(),
-    confidence: z.enum(['high', 'medium', 'low']),
-  })
-  .strict();
+import { parseVerdictFromEnvelope } from './parse-verdict.js';
 
 const DEFAULT_JUDGE_MODEL = 'claude-sonnet-4-6';
-const MAX_TOKENS = 512;
+const JUDGE_TIMEOUT_MS = 120_000;
 
 const SYSTEM_PROMPT_PATH = safePath.join(
   getDirname(import.meta.url),
@@ -56,20 +40,6 @@ function getSystemPrompt(): string {
   cachedSystemPrompt ??= readFileSync(SYSTEM_PROMPT_PATH, 'utf8');
   return cachedSystemPrompt;
 }
-
-const RECORD_VERDICT_TOOL: Anthropic.Messages.Tool = {
-  name: 'record_verdict',
-  description: 'Record the judge\'s classification of the runtime transcript.',
-  input_schema: {
-    type: 'object',
-    properties: {
-      verdict: { type: 'string', enum: ['completed', 'partial', 'failed', 'off-task', 'refused'] },
-      rationale: { type: 'string', maxLength: 240 },
-      confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
-    },
-    required: ['verdict', 'rationale', 'confidence'],
-  },
-};
 
 const STDERR_PREVIEW_LIMIT = 500;
 
@@ -131,45 +101,53 @@ interface RecordVerdictCallResult {
   requestId?: string;
 }
 
+/** Injectable so tests can stub the spawn without a real `claude` on PATH. */
+export type ClaudeRunner = (args: string[], opts: { timeoutMs: number }) => Promise<ClaudeSpawnResult>;
+
+const defaultRunner: ClaudeRunner = (args, opts) => runClaudeSubscription(args, opts);
+
 /**
  * Shared call body for both the initial judge phase and the re-judge
- * subcommand. Both want the same `system + user → record_verdict tool_use`
- * round-trip; the difference is what they do with the result and whether
- * they persist a verbatim artifact.
+ * subcommand. Both want the same `system + user → JSON verdict` round-trip;
+ * the difference is what they do with the result and whether they persist a
+ * verbatim artifact.
  */
 async function executeRecordVerdictCall(args: {
-  client: Anthropic;
+  runClaude: ClaudeRunner;
   model: string;
   systemPrompt: string;
   userMessage: string;
 }): Promise<RecordVerdictCallResult> {
-  const { client, model, systemPrompt, userMessage } = args;
+  const { runClaude, model, systemPrompt, userMessage } = args;
+  const cliArgs = [
+    '-p', userMessage,
+    '--append-system-prompt', systemPrompt,
+    '--model', model,
+    '--output-format', 'json',
+  ];
 
-  const response = await client.messages.create({
-    model,
-    max_tokens: MAX_TOKENS,
-    temperature: 0,
-    system: systemPrompt,
-    tools: [RECORD_VERDICT_TOOL],
-    tool_choice: { type: 'tool', name: RECORD_VERDICT_TOOL.name },
-    messages: [{ role: 'user', content: userMessage }],
-  });
-
-  const toolBlock = response.content.find((b) => b.type === 'tool_use');
-  if (toolBlock?.type !== 'tool_use') {
-    throw new Error(`judge response missing tool_use block (stop_reason=${String(response.stop_reason)})`);
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const res = await runClaude(cliArgs, { timeoutMs: JUDGE_TIMEOUT_MS });
+    if (res.exitCode !== 0) {
+      lastErr = new Error(`claude judge exited ${String(res.exitCode)}: ${res.stderr.slice(0, 500)}`);
+      continue;
+    }
+    try {
+      const parsed = parseVerdictFromEnvelope(res.stdout);
+      return {
+        verdict: parsed.verdict.verdict,
+        rationale: parsed.verdict.rationale,
+        confidence: parsed.verdict.confidence,
+        responseContent: [parsed.envelope],
+        responseUsage: parsed.usage,
+        ...(parsed.sessionId === undefined ? {} : { requestId: parsed.sessionId }),
+      };
+    } catch (err) {
+      lastErr = err; // malformed verdict — retry once
+    }
   }
-  const input = ToolUseInputSchema.parse(toolBlock.input);
-  // The Anthropic SDK puts request_id on the response object as `_request_id`.
-  const requestId = (response as { _request_id?: string })._request_id;
-  return {
-    verdict: input.verdict,
-    rationale: input.rationale.slice(0, 240),
-    confidence: input.confidence,
-    responseContent: response.content as unknown[],
-    responseUsage: response.usage,
-    ...(requestId === undefined ? {} : { requestId }),
-  };
+  throw new Error(`judge verdict unparseable after retry: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`);
 }
 
 /**
@@ -192,7 +170,7 @@ export interface JudgeOptions {
   triggerPrompt: string;
   expected: ExpectedBehavior;
   observation: RuntimeObservation;
-  client: Anthropic;
+  runClaude?: ClaudeRunner;
   model?: string;
   /**
    * When set, judgeCompletion writes the verbatim system+user+response
@@ -215,7 +193,7 @@ export async function judgeCompletion(options: JudgeOptions): Promise<JudgeResul
     triggerPrompt,
     expected,
     observation,
-    client,
+    runClaude = defaultRunner,
     model = DEFAULT_JUDGE_MODEL,
     callsDir,
     judgePromptSha = 'unknown',
@@ -223,7 +201,7 @@ export async function judgeCompletion(options: JudgeOptions): Promise<JudgeResul
 
   const systemPrompt = getSystemPrompt();
   const userMessage = buildUserMessage(triggerPrompt, expected, observation);
-  const call = await executeRecordVerdictCall({ client, model, systemPrompt, userMessage });
+  const call = await executeRecordVerdictCall({ runClaude, model, systemPrompt, userMessage });
 
   let judgeCallRef: string | undefined;
   if (callsDir) {
@@ -257,7 +235,7 @@ export async function judgeCompletion(options: JudgeOptions): Promise<JudgeResul
 
 export interface ReJudgeOptions {
   artifact: JudgeCallArtifact;
-  client: Anthropic;
+  runClaude?: ClaudeRunner;
   /** Model to re-judge against — may differ from artifact.judgeModel. */
   model?: string;
   /**
@@ -276,9 +254,9 @@ export interface ReJudgeOptions {
  * stays diffable.
  */
 export async function reJudgeCompletion(options: ReJudgeOptions): Promise<JudgeResult> {
-  const { artifact, client, model = artifact.judgeModel, systemPromptOverride } = options;
+  const { artifact, runClaude = defaultRunner, model = artifact.judgeModel, systemPromptOverride } = options;
   const call = await executeRecordVerdictCall({
-    client,
+    runClaude,
     model,
     systemPrompt: systemPromptOverride ?? artifact.systemPrompt,
     userMessage: artifact.userMessage,
@@ -296,12 +274,4 @@ export async function reJudgeCompletion(options: ReJudgeOptions): Promise<JudgeR
 /** Re-read the on-disk system prompt — used by `re-judge` to A/B against an edited prompt. */
 export function readCurrentSystemPrompt(): string {
   return readFileSync(SYSTEM_PROMPT_PATH, 'utf8');
-}
-
-export function createJudgeClient(): Anthropic {
-  const apiKey = process.env['ANTHROPIC_API_KEY'];
-  if (!apiKey) {
-    throw new Error('ANTHROPIC_API_KEY is not set; LLM judge cannot run.');
-  }
-  return new Anthropic({ apiKey });
 }

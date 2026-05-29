@@ -23,7 +23,6 @@
 
 /* eslint-disable security/detect-non-literal-fs-filename -- transcript path is harness-controlled */
 
-import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 
 import { isToolAvailable, safePath, safeExecResult } from '@vibe-agent-toolkit/utils';
@@ -37,72 +36,13 @@ import type {
 } from '../types.js';
 
 import type { InvokeOpts, RuntimeDriver } from './driver.js';
+import { runClaudeSubscription, type ClaudeSpawnResult } from './shared/claude-cli.js';
 import { createTempProfile, installSkillIntoProfile, teardownTempProfile } from './shared/temp-profile.js';
 import { detectInvocationFromTranscript, parseStreamJsonTranscript } from './shared/transcript.js';
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 
-interface SpawnResult {
-  stdout: string;
-  stderr: string;
-  exitCode: number | null;
-  timedOut: boolean;
-}
-
-function runClaudeCommand(
-  args: string[],
-  homeDir: string,
-  timeoutMs: number,
-): Promise<SpawnResult> {
-  return new Promise((resolve) => {
-    // Override every home-discovery env var the Claude CLI might consult so the
-    // temp profile holds regardless of platform: HOME on POSIX, USERPROFILE on
-    // Windows, XDG_CONFIG_HOME for tools that follow the XDG spec.
-    const env = {
-      ...process.env,
-      HOME: homeDir,
-      USERPROFILE: homeDir,
-      XDG_CONFIG_HOME: safePath.join(homeDir, '.config'),
-    };
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- claude is the runtime we are explicitly testing; PATH is the standard location for the CLI
-    const child = spawn('claude', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
-
-    const stdoutChunks: Buffer[] = [];
-    const stderrChunks: Buffer[] = [];
-    let timedOut = false;
-
-    const handle = setTimeout(() => {
-      timedOut = true;
-      child.kill('SIGTERM');
-      setTimeout(() => child.kill('SIGKILL'), 2000).unref();
-    }, timeoutMs);
-
-    child.stdout.on('data', (b: Buffer) => stdoutChunks.push(b));
-    child.stderr.on('data', (b: Buffer) => stderrChunks.push(b));
-
-    child.on('close', (code) => {
-      clearTimeout(handle);
-      resolve({
-        stdout: Buffer.concat(stdoutChunks).toString('utf8'),
-        stderr: Buffer.concat(stderrChunks).toString('utf8'),
-        exitCode: code,
-        timedOut,
-      });
-    });
-
-    child.on('error', () => {
-      clearTimeout(handle);
-      resolve({
-        stdout: Buffer.concat(stdoutChunks).toString('utf8'),
-        stderr: Buffer.concat(stderrChunks).toString('utf8'),
-        exitCode: -1,
-        timedOut: false,
-      });
-    });
-  });
-}
-
-function classifyExitStatus(result: SpawnResult): ExitStatus {
+function classifyExitStatus(result: ClaudeSpawnResult): ExitStatus {
   if (result.timedOut) return 'timeout';
   if (result.exitCode === 0) return 'completed';
   return 'error';
@@ -140,10 +80,9 @@ export class ClaudeCodeDriver implements RuntimeDriver {
     try {
       installSkillIntoProfile(profile, opts.skill, opts.skill.entryId);
 
-      const spawnResult = await runClaudeCommand(
+      const spawnResult = await runClaudeSubscription(
         ['-p', opts.triggerPrompt, '--output-format', 'stream-json', '--verbose'],
-        profile.homeDir,
-        timeoutMs,
+        { homeDir: profile.homeDir, timeoutMs },
       );
 
       // promptId + attemptIdx in the path so concurrent / repeat attempts

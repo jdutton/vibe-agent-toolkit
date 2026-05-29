@@ -1,7 +1,7 @@
 /**
  * Round-trip tests for the judge-replay artifact + reJudgeCompletion.
  *
- * No live API calls — we stub the Anthropic client so we can assert:
+ * No live API calls — we stub the claude runner so we can assert:
  *   1. judgeCompletion persists a complete JudgeCallArtifact when callsDir is
  *      passed, and stamps JudgeResult.judgeCallRef with the relative path.
  *   2. reJudgeCompletion reads the artifact back and produces a fresh
@@ -12,11 +12,12 @@
 
 import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 
-import type Anthropic from '@anthropic-ai/sdk';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import type { ClaudeRunner } from '../../src/compat-empirical/judge/llm-judge.js';
 import { judgeCompletion, reJudgeCompletion } from '../../src/compat-empirical/judge/llm-judge.js';
+import type { ClaudeSpawnResult } from '../../src/compat-empirical/runtimes/shared/claude-cli.js';
 import {
   JudgeCallArtifactSchema,
   type ExpectedBehavior,
@@ -53,50 +54,26 @@ interface StubResponse {
   verdict: string;
   rationale: string;
   confidence: 'high' | 'medium' | 'low';
-  usage?: { input_tokens: number; output_tokens: number };
-  requestId?: string;
+  sessionId?: string;
 }
 
 /**
- * Minimal stub of the Anthropic client surface judgeCompletion / reJudgeCompletion
- * touch — `messages.create` returning a tool_use content block keyed to the
- * `record_verdict` tool. We capture each invocation so tests can assert what
- * the real client would have received.
+ * Minimal stub of the claude runner surface judgeCompletion / reJudgeCompletion
+ * touch — returns a JSON envelope with the verdict. We capture each invocation
+ * so tests can assert what CLI args would have been passed to the real claude.
  */
-function makeStubClient(responses: StubResponse[]): { client: Anthropic; calls: Anthropic.Messages.MessageCreateParams[] } {
-  const calls: Anthropic.Messages.MessageCreateParams[] = [];
-  const client = {
-    messages: {
-      create: async (params: Anthropic.Messages.MessageCreateParams) => {
-        calls.push(params);
-        const next = responses.shift();
-        if (!next) throw new Error('stub client: no more queued responses');
-        return {
-          id: 'msg_stub',
-          type: 'message',
-          role: 'assistant',
-          model: typeof params.model === 'string' ? params.model : 'stub-model',
-          stop_reason: 'tool_use',
-          stop_sequence: null,
-          content: [
-            {
-              type: 'tool_use',
-              id: 'tool_stub',
-              name: 'record_verdict',
-              input: {
-                verdict: next.verdict,
-                rationale: next.rationale,
-                confidence: next.confidence,
-              },
-            },
-          ],
-          usage: next.usage ?? { input_tokens: 10, output_tokens: 5 },
-          _request_id: next.requestId,
-        };
-      },
-    },
-  } as unknown as Anthropic;
-  return { client, calls };
+function makeStubRunner(responses: StubResponse[]): { runClaude: ClaudeRunner; calls: string[][] } {
+  const calls: string[][] = [];
+  const runClaude: ClaudeRunner = async (args) => {
+    calls.push(args);
+    const next = responses.shift();
+    if (!next) throw new Error('stub runner: no more queued responses');
+    const result = JSON.stringify({ verdict: next.verdict, rationale: next.rationale, confidence: next.confidence });
+    const envelope = JSON.stringify({ type: 'result', is_error: false, result, session_id: next.sessionId ?? 'sess', usage: { output_tokens: 5 } });
+    const res: ClaudeSpawnResult = { stdout: envelope, stderr: '', exitCode: 0, timedOut: false };
+    return res;
+  };
+  return { runClaude, calls };
 }
 
 let tmpRoot: string;
@@ -118,29 +95,29 @@ afterEach(() => {
  */
 async function runJudgeAndLoadArtifact(stubResponse: StubResponse): Promise<{
   artifact: ReturnType<typeof JudgeCallArtifactSchema.parse>;
-  firstStubCall: Anthropic.Messages.MessageCreateParams | undefined;
+  calls: string[][];
 }> {
-  const { client, calls } = makeStubClient([stubResponse]);
+  const { runClaude, calls } = makeStubRunner([stubResponse]);
   await judgeCompletion({
     triggerPrompt: TRIGGER_PROMPT,
     expected: FIXTURE_EXPECTED,
     observation: FIXTURE_OBS,
-    client,
+    runClaude,
     callsDir,
     judgePromptSha: ARTIFACT_SHA,
   });
   const artifactPath = safePath.join(callsDir, ARTIFACT_BASENAME);
   const artifact = JudgeCallArtifactSchema.parse(JSON.parse(readFileSync(artifactPath, 'utf8')));
-  return { artifact, firstStubCall: calls[0] };
+  return { artifact, calls };
 }
 
 describe('judgeCompletion + reJudgeCompletion round-trip', () => {
   it('persists a JudgeCallArtifact with verbatim system+user+response when callsDir is set', async () => {
-    const { artifact, firstStubCall } = await runJudgeAndLoadArtifact({
+    const { artifact, calls } = await runJudgeAndLoadArtifact({
       verdict: 'completed',
       rationale: 'looks right',
       confidence: 'high',
-      requestId: 'req_abc',
+      sessionId: 'req_abc',
     });
 
     expect(readdirSync(callsDir)).toContain(ARTIFACT_BASENAME);
@@ -156,19 +133,20 @@ describe('judgeCompletion + reJudgeCompletion round-trip', () => {
 
     // Sanity-check that the stub saw the same system prompt + user message we
     // round-tripped through the artifact.
-    expect(firstStubCall?.system).toBe(artifact.systemPrompt);
-    expect(firstStubCall?.messages[0]?.content).toBe(artifact.userMessage);
+    // CLI args: ['-p', userMessage, '--append-system-prompt', systemPrompt, '--model', model, '--output-format', 'json']
+    expect(calls[0]?.[3]).toBe(artifact.systemPrompt);
+    expect(calls[0]?.[1]).toBe(artifact.userMessage);
   });
 
   it('returns a judgeCallRef pointing at the persisted artifact', async () => {
-    const { client } = makeStubClient([
+    const { runClaude } = makeStubRunner([
       { verdict: 'completed', rationale: 'looks right', confidence: 'high' },
     ]);
     const result = await judgeCompletion({
       triggerPrompt: TRIGGER_PROMPT,
       expected: FIXTURE_EXPECTED,
       observation: FIXTURE_OBS,
-      client,
+      runClaude,
       callsDir,
       judgePromptSha: ARTIFACT_SHA,
     });
@@ -176,7 +154,7 @@ describe('judgeCompletion + reJudgeCompletion round-trip', () => {
   });
 
   it('does NOT persist an artifact when callsDir is omitted', async () => {
-    const { client } = makeStubClient([
+    const { runClaude } = makeStubRunner([
       { verdict: 'completed', rationale: 'ok', confidence: 'medium' },
     ]);
 
@@ -184,7 +162,7 @@ describe('judgeCompletion + reJudgeCompletion round-trip', () => {
       triggerPrompt: TRIGGER_PROMPT,
       expected: FIXTURE_EXPECTED,
       observation: FIXTURE_OBS,
-      client,
+      runClaude,
     });
 
     expect(result.judgeCallRef).toBeUndefined();
@@ -200,19 +178,20 @@ describe('judgeCompletion + reJudgeCompletion round-trip', () => {
     });
 
     const swappedModel = 'claude-haiku-4-5-20251001';
-    const { client: reClient, calls: reCalls } = makeStubClient([
+    const { runClaude: reRunner, calls: reCalls } = makeStubRunner([
       { verdict: 'partial', rationale: 'second pass disagrees', confidence: 'low' },
     ]);
 
-    const reResult = await reJudgeCompletion({ artifact, client: reClient, model: swappedModel });
+    const reResult = await reJudgeCompletion({ artifact, runClaude: reRunner, model: swappedModel });
 
     expect(reResult.verdict).toBe('partial');
     expect(reResult.judgeModel).toBe(swappedModel);
     // The re-judge call used the persisted system prompt and user message verbatim.
+    // CLI args: ['-p', userMessage, '--append-system-prompt', systemPrompt, '--model', model, '--output-format', 'json']
     expect(reCalls).toHaveLength(1);
-    expect(reCalls[0]?.model).toBe(swappedModel);
-    expect(reCalls[0]?.system).toBe(artifact.systemPrompt);
-    expect(reCalls[0]?.messages[0]?.content).toBe(artifact.userMessage);
+    expect(reCalls[0]?.[5]).toBe(swappedModel);
+    expect(reCalls[0]?.[3]).toBe(artifact.systemPrompt);
+    expect(reCalls[0]?.[1]).toBe(artifact.userMessage);
   });
 
   it('reJudgeCompletion honors systemPromptOverride for prompt A/B', async () => {
@@ -223,17 +202,17 @@ describe('judgeCompletion + reJudgeCompletion round-trip', () => {
     });
 
     const newSystemPrompt = '## NEW SYSTEM PROMPT for A/B testing\nBe stricter.';
-    const { client: reClient, calls: reCalls } = makeStubClient([
+    const { runClaude: reRunner, calls: reCalls } = makeStubRunner([
       { verdict: 'failed', rationale: 'stricter rubric flags this', confidence: 'medium' },
     ]);
 
     await reJudgeCompletion({
       artifact,
-      client: reClient,
+      runClaude: reRunner,
       systemPromptOverride: newSystemPrompt,
     });
 
-    expect(reCalls[0]?.system).toBe(newSystemPrompt);
-    expect(reCalls[0]?.system).not.toBe(artifact.systemPrompt);
+    expect(reCalls[0]?.[3]).toBe(newSystemPrompt);
+    expect(reCalls[0]?.[3]).not.toBe(artifact.systemPrompt);
   });
 });

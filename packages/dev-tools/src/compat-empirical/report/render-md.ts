@@ -438,7 +438,8 @@ detector improvements proposed in a follow-up PR, scoped per the
 - **Runtimes covered:** ${meta.runtimesCovered.join(', ')}
 - **Sample size:** ${meta.totalEntries} skills (own + official named in findings; community aggregated)
 - **VAT version:** ${meta.vatVersion}
-- **Judge model:** ${meta.judgeModel} (temperature 0)
+- **Judge model:** ${meta.judgeModel}
+- **Auth mode:** ${meta.authMode} (judged via the subscription-authenticated \`claude\` CLI; no API billing)
 - **Judge system-prompt SHA:** ${meta.judgePromptSha}
 - **Trigger-prompts SHA:** ${meta.triggerPromptsSha}
 - **Manifest SHA:** ${meta.manifestSha}
@@ -448,7 +449,9 @@ ${driverModeNote}
 
 "Completion" is judged two ways per cell, both stored: a deterministic
 presence-check (invocation detected? non-empty output? exit status?) and an
-LLM judge (Sonnet 4.6, temperature 0). Cells where the two disagree are
+LLM judge run through the subscription \`claude\` CLI. The judge's structured
+verdict is parsed from its JSON output (not tool-forced), validated strictly,
+and retried once on a parse failure. Cells where the two signals disagree are
 themselves findings; they get a callout below.
 
 ## Confusion matrices

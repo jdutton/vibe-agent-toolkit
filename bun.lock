@@ -166,7 +166,6 @@
       "name": "@vibe-agent-toolkit/dev-tools",
       "version": "0.1.38",
       "dependencies": {
-        "@anthropic-ai/sdk": "^0.71.2",
         "@vibe-agent-toolkit/agent-skills": "workspace:*",
         "@vibe-agent-toolkit/claude-marketplace": "workspace:*",
         "@vibe-agent-toolkit/utils": "workspace:*",

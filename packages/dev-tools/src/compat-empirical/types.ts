@@ -252,6 +252,7 @@ export const RunMetadataSchema = z
     nodeVersion: z.string(),
     bunVersion: z.string().optional(),
     judgeModel: z.string(),
+    authMode: z.literal('subscription'),
     judgePromptSha: z.string(),
     triggerPromptsSha: z.string(),
     manifestSha: z.string(),

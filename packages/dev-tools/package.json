@@ -23,7 +23,6 @@
     "compat-empirical": "tsx src/compat-empirical/index.ts"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.71.2",
     "@vibe-agent-toolkit/agent-skills": "workspace:*",
     "@vibe-agent-toolkit/claude-marketplace": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
