@@ -58,7 +58,7 @@ export function parseVerdictFromEnvelope(stdout: string): ParsedVerdict {
   const envelope = JSON.parse(stdout) as Record<string, unknown>;
   const result = envelope['result'];
   if (typeof result !== 'string') {
-    throw new Error('claude --output-format json envelope missing string `result` field');
+    throw new TypeError('claude --output-format json envelope missing string `result` field');
   }
   const objText = extractFirstJsonObject(result.trim());
   const parsed = VerdictObjectSchema.parse(JSON.parse(objText));
