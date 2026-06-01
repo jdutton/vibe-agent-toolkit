@@ -126,7 +126,7 @@ export async function mockDoctorEnvironment(
 
   // Also mock getToolVersion from utils
   const { getToolVersion } = await import('@vibe-agent-toolkit/utils');
-  (getToolVersion as ReturnType<typeof vi.fn>).mockImplementation((toolName: string) => {
+  vi.mocked(getToolVersion).mockImplementation((toolName: string) => {
     if (toolName === 'node') return opts.nodeVersion;
     if (toolName === 'git') return opts.gitVersion;
     return null;
@@ -235,9 +235,9 @@ export async function mockDoctorConfig(
 
   if (opts.valid) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Mock config can be any shape
-    (loadConfig as ReturnType<typeof vi.fn>).mockReturnValue(opts.config as any);
+    vi.mocked(loadConfig).mockReturnValue(opts.config as any);
   } else {
-    (loadConfig as ReturnType<typeof vi.fn>).mockImplementation(() => {
+    vi.mocked(loadConfig).mockImplementation(() => {
       throw new Error(opts.errors.join(', ') || 'Invalid config');
     });
   }

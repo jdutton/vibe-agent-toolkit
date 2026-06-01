@@ -54,7 +54,7 @@ const USER_PROMPT_CONTENT = 'User input: {{userInput}}';
 // Helper to mock loadAgentManifest with custom manifest for a single test
 async function mockAgentManifestOnce(mPath: string, partialManifest: Record<string, unknown>): Promise<void> {
   const agentConfig = await import('@vibe-agent-toolkit/agent-config');
-  const mockLoadAgentManifest = agentConfig.loadAgentManifest as ReturnType<typeof vi.fn>;
+  const mockLoadAgentManifest = vi.mocked(agentConfig.loadAgentManifest);
   mockLoadAgentManifest.mockResolvedValueOnce({
     __manifestPath: mPath,
     ...partialManifest,
@@ -85,7 +85,7 @@ describe('agent-runner', () => {
 
     // Setup default mock for loadAgentManifest
     const agentConfig = await import('@vibe-agent-toolkit/agent-config');
-    const mockLoadAgentManifest = agentConfig.loadAgentManifest as ReturnType<typeof vi.fn>;
+    const mockLoadAgentManifest = vi.mocked(agentConfig.loadAgentManifest);
     mockLoadAgentManifest.mockResolvedValue({
       __manifestPath: manifestPath,
       metadata: {

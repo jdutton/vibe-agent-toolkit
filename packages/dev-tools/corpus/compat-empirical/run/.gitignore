@@ -1,0 +1,6 @@
+# Run scratch — only the rendered report is committed; everything else
+# (transcripts, per-attempt observations, judge-call replay artifacts, and
+# intermediate JSON) is regenerable run output and stays out of git.
+*
+!.gitignore
+!report.md

@@ -60,6 +60,7 @@ export { calculateValidationStatus, generateFixSuggestion } from './validators/v
 export { detectKebabCaseViolation, type KebabCaseSurface } from './validators/kebab-case-detection.js';
 export { detectMissingRecommendedFields } from './validators/plugin-recommended-fields.js';
 export {
+  deriveObservations,
   observationToIssue,
   runCompatDetectors,
   type DetectorOutput,

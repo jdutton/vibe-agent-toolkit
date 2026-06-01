@@ -1,0 +1,20 @@
+version: 1
+entries:
+  - id: skill-one
+    bucket: own
+    source:
+      kind: local
+      path: packages/agent-skills/test/fixtures/compat-scenarios/portable-skill
+    skillRelPath: SKILL.md
+    declaredTargets: [claude-code]
+    expectedCapabilities: []
+    triggerPromptRefs: [skill-one-default, skill-one-negative]
+  - id: skill-two
+    bucket: community
+    source:
+      kind: git
+      repo: https://github.com/example/skill.git
+      ref: 0123456789abcdef0123456789abcdef01234567
+    skillRelPath: SKILL.md
+    expectedCapabilities: [CAPABILITY_LOCAL_SHELL]
+    triggerPromptRefs: [skill-two-default, skill-two-negative]

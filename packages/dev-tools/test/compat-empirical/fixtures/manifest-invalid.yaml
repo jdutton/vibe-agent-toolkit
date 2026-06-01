@@ -1,0 +1,10 @@
+version: 1
+entries:
+  - id: BadId-WithCapitals
+    bucket: invalid-bucket
+    source:
+      kind: unknown
+      path: x
+    skillRelPath: SKILL.md
+    expectedCapabilities: []
+    triggerPromptRefs: [bad-1, bad-2]
