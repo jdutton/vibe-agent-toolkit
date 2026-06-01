@@ -170,6 +170,8 @@ export const JudgeResultSchema = z
   .object({
     skillId: z.string(),
     target: TargetSchema,
+    promptId: z.string(),
+    attemptIdx: z.number().int().nonnegative(),
     verdict: JudgeVerdictSchema,
     rationale: z.string().max(240),
     confidence: z.enum(['high', 'medium', 'low']),

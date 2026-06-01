@@ -14,6 +14,7 @@ const ALL_TARGETS: readonly Target[] = ['claude-chat', 'claude-cowork', 'claude-
 const TARGET_CODE: Target = 'claude-code';
 const TARGET_CHAT: Target = 'claude-chat';
 const FAKE_TRANSCRIPT = 'tests/fake-transcript.log';
+const DET_INVOKED_OUTPUT = 'invoked-output';
 
 function makePrediction(skillId: string, overrides: Partial<StaticPrediction> = {}): StaticPrediction {
   return {
@@ -49,10 +50,17 @@ function makeObservation(skillId: string, target: Target, overrides: Partial<Run
   };
 }
 
-function judge(skillId: string, target: Target, verdict: JudgeResult['verdict']): JudgeResult {
+function judge(
+  skillId: string,
+  target: Target,
+  verdict: JudgeResult['verdict'],
+  overrides: Partial<Pick<JudgeResult, 'promptId' | 'attemptIdx'>> = {},
+): JudgeResult {
   return {
     skillId,
     target,
+    promptId: overrides.promptId ?? 'fixture-prompt',
+    attemptIdx: overrides.attemptIdx ?? 0,
     verdict,
     rationale: 'r',
     confidence: 'high',
@@ -105,7 +113,7 @@ describe('joinMatrix', () => {
     });
     const row = rows.find((r) => r.target === TARGET_CODE);
     expect(row?.agreement).toBe('agree');
-    expect(row?.observedDeterministic).toBe('invoked-output');
+    expect(row?.observedDeterministic).toBe(DET_INVOKED_OUTPUT);
     expect(row?.observedJudge).toBe('completed');
   });
 
@@ -146,6 +154,104 @@ describe('joinMatrix', () => {
       bucketBySkillId: new Map<string, Bucket>(),
     });
     expect(rows).toHaveLength(0);
+  });
+
+  it('emits one row per (skillId, target, promptId) when a cell has multiple prompts', () => {
+    // Regression: prior to the per-prompt join, observations for the same
+    // (skillId, target) but different promptIds collapsed via Map.set
+    // overwrite — only the last-iterated prompt survived in the matrix and
+    // the others were silently dropped. This test pins the per-prompt
+    // behavior so the bug can't come back.
+    const POS_ID = 'pos-1';
+    const NEG_ID = 'neg-1';
+    const positivePrompt: TriggerPrompt = {
+      id: POS_ID,
+      forSkillId: 's1',
+      prompt: 'do the thing',
+      kind: 'positive',
+      expectedBehavior: { description: 'should invoke', invocationSignals: ['ok'] },
+      authoring: 'hand',
+    };
+    const negativePrompt: TriggerPrompt = {
+      id: NEG_ID,
+      forSkillId: 's1',
+      prompt: 'unrelated',
+      kind: 'negative',
+      expectedBehavior: { description: 'should not invoke', invocationSignals: ['ok'] },
+      authoring: 'hand',
+    };
+    const promptById = new Map<string, TriggerPrompt>([
+      [POS_ID, positivePrompt],
+      [NEG_ID, negativePrompt],
+    ]);
+
+    const positiveObs = makeObservation('s1', TARGET_CODE, {
+      promptId: POS_ID,
+      invocationDetected: true,
+      outputText: 'ok',
+    });
+    const negativeObs = makeObservation('s1', TARGET_CODE, {
+      promptId: NEG_ID,
+      invocationDetected: false,
+      outputText: '4',
+      toolUseEvents: [],
+    });
+
+    const rows = runJoin({
+      predictions: [makePrediction('s1')],
+      observations: [positiveObs, negativeObs],
+      judgments: [
+        judge('s1', TARGET_CODE, 'completed', { promptId: POS_ID }),
+        judge('s1', TARGET_CODE, 'completed', { promptId: NEG_ID }),
+      ],
+      bucketBySkillId: bucketMap('s1', 'own'),
+      promptById,
+    });
+
+    // 2 observed rows for CODE (one per prompt) + 1 skipped row each for CHAT and COWORK.
+    expect(rows).toHaveLength(4);
+    const codeRows = rows.filter((r) => r.target === TARGET_CODE);
+    expect(codeRows).toHaveLength(2);
+    const byPrompt = new Map(codeRows.map((r) => [r.promptId, r]));
+    expect(byPrompt.get(POS_ID)?.observedDeterministic).toBe(DET_INVOKED_OUTPUT);
+    expect(byPrompt.get(POS_ID)?.observedJudge).toBe('completed');
+    expect(byPrompt.get(POS_ID)?.agreement).toBe('agree');
+    expect(byPrompt.get(NEG_ID)?.observedDeterministic).toBe('not-invoked-engaged');
+    expect(byPrompt.get(NEG_ID)?.observedJudge).toBe('completed');
+    // Negative prompt that didn't trigger + predicted=expected → agree
+    // (negative inversion flips the runtime success/failure booleans).
+    expect(byPrompt.get(NEG_ID)?.agreement).toBe('agree');
+  });
+
+  it('aggregates per-attempt counts when repeatN > 1 for a (skillId, target, promptId) cell', () => {
+    const promptById = new Map<string, TriggerPrompt>();
+    const observations = [
+      makeObservation('s1', TARGET_CODE, { attemptIdx: 0, invocationDetected: true, outputText: 'ok' }),
+      makeObservation('s1', TARGET_CODE, { attemptIdx: 1, invocationDetected: true, outputText: 'ok' }),
+      makeObservation('s1', TARGET_CODE, { attemptIdx: 2, invocationDetected: false, outputText: 'wat' }),
+    ];
+
+    const rows = runJoin({
+      predictions: [makePrediction('s1')],
+      observations,
+      judgments: [
+        judge('s1', TARGET_CODE, 'completed', { attemptIdx: 0 }),
+        judge('s1', TARGET_CODE, 'completed', { attemptIdx: 1 }),
+        judge('s1', TARGET_CODE, 'failed', { attemptIdx: 2 }),
+      ],
+      bucketBySkillId: bucketMap('s1', 'own'),
+      promptById,
+    });
+
+    const codeRow = rows.find((r) => r.target === TARGET_CODE);
+    expect(codeRow?.attemptStats.n).toBe(3);
+    expect(codeRow?.attemptStats.byDeterministicClass[DET_INVOKED_OUTPUT]).toBe(2);
+    expect(codeRow?.attemptStats.byDeterministicClass['not-invoked-engaged']).toBe(1);
+    expect(codeRow?.attemptStats.byJudgeVerdict['completed']).toBe(2);
+    expect(codeRow?.attemptStats.byJudgeVerdict['failed']).toBe(1);
+    // Mode wins for the displayed cell.
+    expect(codeRow?.observedDeterministic).toBe(DET_INVOKED_OUTPUT);
+    expect(codeRow?.observedJudge).toBe('completed');
   });
 
   it('inverts agreement for negative prompts that trigger the skill', () => {

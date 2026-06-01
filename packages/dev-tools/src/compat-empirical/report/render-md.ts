@@ -131,19 +131,26 @@ function buildNamedTable(rows: JoinedMatrixRow[]): string {
   const skillIds = [...bySkill.keys()].sort(compareStrings);
 
   const lines: string[] = [
-    '| skill | target | predicted | observed (det / judge) | agreement |',
-    '|---|---|---|---|---|',
+    '| skill | target | prompt | predicted | observed (det / judge) | agreement |',
+    '|---|---|---|---|---|---|',
   ];
 
   for (const skillId of skillIds) {
-    const byTarget = new Map<Target, JoinedMatrixRow>();
-    for (const r of bySkill.get(skillId) ?? []) byTarget.set(r.target, r);
+    const byTarget = new Map<Target, JoinedMatrixRow[]>();
+    for (const r of bySkill.get(skillId) ?? []) {
+      const list = byTarget.get(r.target) ?? [];
+      list.push(r);
+      byTarget.set(r.target, list);
+    }
     for (const target of TARGETS_IN_ORDER) {
-      const r = byTarget.get(target);
-      if (!r) continue;
-      lines.push(
-        `| \`${skillId}\` | ${TARGET_HEADERS[target]} | ${r.predicted} | ${observedCell(r)} | ${AGREEMENT_BADGES[r.agreement]} |`,
+      const rowsForCell = [...(byTarget.get(target) ?? [])].sort((a, b) =>
+        compareStrings(a.promptId, b.promptId),
       );
+      for (const r of rowsForCell) {
+        lines.push(
+          `| \`${skillId}\` | ${TARGET_HEADERS[target]} | ${r.promptId} | ${r.predicted} | ${observedCell(r)} | ${AGREEMENT_BADGES[r.agreement]} |`,
+        );
+      }
     }
   }
   return `${lines.join('\n')}\n`;
@@ -390,7 +397,16 @@ function renderHighVarianceSection(rows: readonly JoinedMatrixRow[]): string {
 }
 
 function renderDriverModeList(rows: readonly JoinedMatrixRow[]): string {
-  const modes = new Set(rows.map((r) => `${r.target}:${r.driverMode}`));
+  // "Observed" means cells that actually ran. Skipped rows carry a synthetic
+  // driverMode (no driver executed), so including them would advertise a mode
+  // that was never exercised — e.g. a skipped cowork cell mislabelled `manual`
+  // when the cowork driver is `scripted-assisted`. Filter them out.
+  const modes = new Set(
+    rows
+      .filter((r) => r.observedDeterministic !== 'skipped')
+      .map((r) => `${r.target}:${r.driverMode}`),
+  );
+  if (modes.size === 0) return '- _none — all cells skipped_';
   return [...modes].sort(compareStrings).map((m) => `- ${m}`).join('\n');
 }
 

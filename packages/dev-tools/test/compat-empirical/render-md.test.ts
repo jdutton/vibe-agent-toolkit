@@ -142,6 +142,25 @@ describe('renderReport', () => {
     });
   });
 
+  describe('driver modes observed', () => {
+    it('lists modes from ran cells but never from skipped cells', () => {
+      // A skipped cowork row carries a synthetic driverMode; it must not
+      // advertise a mode that was never exercised.
+      const rows: JoinedMatrixRow[] = [
+        row({ target: TARGET_CODE, driverMode: 'scripted' }),
+        skippedRow({ target: 'claude-cowork', driverMode: 'manual' }),
+      ];
+      const out = renderReport({ rows, meta: meta() });
+      expect(out).toContain('- claude-code:scripted');
+      expect(out).not.toContain('claude-cowork:manual');
+    });
+
+    it('falls back to a placeholder when every cell was skipped', () => {
+      const out = renderReport({ rows: [skippedRow()], meta: meta() });
+      expect(out).toContain('_none — all cells skipped_');
+    });
+  });
+
   describe('per-bucket headline table', () => {
     it('emits one row per bucket with agree-percentage and gray-zone count', () => {
       const rows: JoinedMatrixRow[] = [

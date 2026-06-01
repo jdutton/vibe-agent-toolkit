@@ -1,11 +1,19 @@
 /**
  * Pure function: join predictions + runtime observations + judgments into
- * one row per (skillId, target).
+ * one row per (skillId, target, promptId).
+ *
+ * Multiple prompts per (skill, target) are first-class: every prompt referenced
+ * by a corpus entry produces its own row, so the matrix doesn't silently drop
+ * cells when a skill has both a positive and a negative prompt (the manifest
+ * validator already requires ≥1 of each). When `repeatN > 1` each observation
+ * group aggregates per-attempt counts into `attemptStats` and surfaces the mode
+ * as the cell's primary deterministic/judge label.
  */
 
 import { classifyDeterministic } from '../judge/deterministic.js';
 import type {
   Agreement,
+  AttemptStats,
   Bucket,
   DeterministicClass,
   JoinedMatrixRow,
@@ -18,8 +26,16 @@ import type {
   TriggerPrompt,
 } from '../types.js';
 
-function key(skillId: string, target: Target): string {
-  return `${skillId}::${target}`;
+/**
+ * Sentinel promptId stamped on "skipped" rows — (skill, target) cells with
+ * zero observations. The schema requires a string promptId and the renderer
+ * surfaces this as-is in the prompt column, so a sentinel keeps skipped cells
+ * grouped sensibly when sorted and visually distinct from real prompt IDs.
+ */
+const SKIPPED_PROMPT_ID = '-';
+
+function cellKey(skillId: string, target: Target, promptId: string): string {
+  return `${skillId}::${target}::${promptId}`;
 }
 
 function runtimeSucceeded(deterministic: DeterministicClass, judge: JudgeVerdict | undefined): boolean {
@@ -27,9 +43,6 @@ function runtimeSucceeded(deterministic: DeterministicClass, judge: JudgeVerdict
 }
 
 function runtimeFailed(deterministic: DeterministicClass, judge: JudgeVerdict | undefined): boolean {
-  // TASK-7-WILL-REPLACE: temporary mapping for new 9-value DeterministicClass.
-  // Task 7 rewrites these predicates with proper succeeded/failed semantics
-  // (including refused, install-failed, runtime-error, and not-invoked-* splits).
   return (
     deterministic === 'install-failed' ||
     deterministic === 'runtime-error' ||
@@ -109,92 +122,189 @@ export interface JoinOptions {
   /**
    * Lookup map from `TriggerPrompt.id` to the prompt itself, used to identify
    * negative prompts so the join classifier can invert success/failure
-   * semantics for them. Task 7 will absorb this into a richer per-attempt
-   * aggregation path; the contract is established here so the negative-prompt
-   * inversion stays first-class through that rewrite.
+   * semantics for them.
    */
   promptById: ReadonlyMap<string, TriggerPrompt>;
 }
 
-function buildRow(args: {
+function pickMode<T extends string>(counts: Record<string, number>, fallback: T): T {
+  let bestKey: string | undefined;
+  let bestCount = -1;
+  for (const [k, n] of Object.entries(counts)) {
+    if (n > bestCount) {
+      bestCount = n;
+      bestKey = k;
+    }
+  }
+  return (bestKey ?? fallback) as T;
+}
+
+function aggregateObservations(observations: readonly RuntimeObservation[]): {
+  primaryDet: DeterministicClass;
+  byDet: Record<DeterministicClass, number>;
+} {
+  const byDet: Partial<Record<DeterministicClass, number>> = {};
+  for (const obs of observations) {
+    const cls = classifyDeterministic(obs);
+    byDet[cls] = (byDet[cls] ?? 0) + 1;
+  }
+  const primaryDet = pickMode<DeterministicClass>(byDet as Record<string, number>, 'skipped');
+  return { primaryDet, byDet: byDet as Record<DeterministicClass, number> };
+}
+
+function aggregateJudgments(judgments: readonly JudgeResult[]): {
+  primaryJudge: JudgeVerdict | undefined;
+  byJudge: Record<JudgeVerdict, number>;
+} {
+  const byJudge: Partial<Record<JudgeVerdict, number>> = {};
+  for (const j of judgments) {
+    byJudge[j.verdict] = (byJudge[j.verdict] ?? 0) + 1;
+  }
+  if (judgments.length === 0) {
+    return { primaryJudge: undefined, byJudge: byJudge as Record<JudgeVerdict, number> };
+  }
+  const primaryJudge = pickMode<JudgeVerdict>(byJudge as Record<string, number>, 'completed');
+  return { primaryJudge, byJudge: byJudge as Record<JudgeVerdict, number> };
+}
+
+function makeAttemptStats(
+  n: number,
+  byDet: Record<DeterministicClass, number>,
+  byJudge: Record<JudgeVerdict, number>,
+): AttemptStats {
+  return {
+    n: Math.max(n, 1),
+    extendedFromN3: false,
+    byDeterministicClass: byDet,
+    byJudgeVerdict: byJudge,
+  };
+}
+
+function buildObservedRow(args: {
   prediction: StaticPrediction;
   perTarget: PerTargetPrediction;
   bucket: Bucket;
-  obs: RuntimeObservation | undefined;
-  judge: JudgeResult | undefined;
+  promptId: string;
+  observations: readonly RuntimeObservation[];
+  judgments: readonly JudgeResult[];
   isNegativePrompt: boolean;
 }): JoinedMatrixRow {
-  const { prediction, perTarget, bucket, obs, judge, isNegativePrompt } = args;
-  const deterministic: DeterministicClass = obs ? classifyDeterministic(obs) : 'skipped';
+  const { prediction, perTarget, bucket, promptId, observations, judgments, isNegativePrompt } = args;
+  const { primaryDet, byDet } = aggregateObservations(observations);
+  const { primaryJudge, byJudge } = aggregateJudgments(judgments);
+  const driverMode = observations[0]?.driverMode ?? 'manual';
 
   const row: JoinedMatrixRow = {
     skillId: prediction.skillId,
     bucket,
     target: perTarget.target,
-    // TASK-7-WILL-REPLACE: temporary single-prompt path; Task 7 joins per
-    // (skillId, promptId, target) and aggregates attemptStats from all
-    // observations. For now we surface the observed promptId if present
-    // (else a placeholder) so the schema accepts the row.
-    promptId: obs?.promptId ?? 'fixture-prompt',
+    promptId,
     predicted: perTarget.predictedOutcome,
-    observedDeterministic: deterministic,
-    agreement: classifyAgreement(
-      perTarget.predictedOutcome,
-      deterministic,
-      judge?.verdict,
-      isNegativePrompt,
-    ),
-    driverMode: obs?.driverMode ?? 'manual',
+    observedDeterministic: primaryDet,
+    agreement: classifyAgreement(perTarget.predictedOutcome, primaryDet, primaryJudge, isNegativePrompt),
+    driverMode,
     evidenceRefs: collectEvidenceRefs(prediction, perTarget.target),
-    // TASK-7-WILL-REPLACE: temporary single-attempt stats; Task 7 aggregates
-    // across attemptIdx for the (skillId, promptId, target) cell.
+    attemptStats: makeAttemptStats(observations.length, byDet, byJudge),
+    highVariance: false,
+  };
+  if (primaryJudge !== undefined) {
+    row.observedJudge = primaryJudge;
+  }
+  return row;
+}
+
+function buildSkippedRow(args: {
+  prediction: StaticPrediction;
+  perTarget: PerTargetPrediction;
+  bucket: Bucket;
+}): JoinedMatrixRow {
+  const { prediction, perTarget, bucket } = args;
+  return {
+    skillId: prediction.skillId,
+    bucket,
+    target: perTarget.target,
+    promptId: SKIPPED_PROMPT_ID,
+    predicted: perTarget.predictedOutcome,
+    observedDeterministic: 'skipped',
+    agreement: classifyAgreement(perTarget.predictedOutcome, 'skipped', undefined, false),
+    driverMode: 'manual',
+    evidenceRefs: collectEvidenceRefs(prediction, perTarget.target),
     attemptStats: {
       n: 1,
       extendedFromN3: false,
-      byDeterministicClass: { [deterministic]: 1 },
-      byJudgeVerdict: judge ? { [judge.verdict]: 1 } : {},
+      byDeterministicClass: { skipped: 1 },
+      byJudgeVerdict: {},
     },
     highVariance: false,
   };
-  if (judge !== undefined) {
-    row.observedJudge = judge.verdict;
+}
+
+function groupByCellKey<T extends { skillId: string; target: Target; promptId: string }>(
+  items: readonly T[],
+): Map<string, T[]> {
+  const out = new Map<string, T[]>();
+  for (const it of items) {
+    const k = cellKey(it.skillId, it.target, it.promptId);
+    const list = out.get(k) ?? [];
+    list.push(it);
+    out.set(k, list);
   }
-  return row;
+  return out;
+}
+
+function collectPromptIdsForCell(
+  observations: readonly RuntimeObservation[],
+  skillId: string,
+  target: Target,
+): string[] {
+  const seen = new Set<string>();
+  for (const o of observations) {
+    if (o.skillId === skillId && o.target === target) {
+      seen.add(o.promptId);
+    }
+  }
+  // Stable order for diffable output.
+  return [...seen].sort((a, b) => a.localeCompare(b));
 }
 
 export function joinMatrix(options: JoinOptions): JoinedMatrixRow[] {
   const { predictions, observations, judgments, bucketBySkillId, promptById } = options;
 
-  const obsIndex = new Map<string, RuntimeObservation>();
-  for (const o of observations) {
-    obsIndex.set(key(o.skillId, o.target), o);
-  }
-
-  const judgeIndex = new Map<string, JudgeResult>();
-  for (const j of judgments) {
-    judgeIndex.set(key(j.skillId, j.target), j);
-  }
+  const obsByCell = groupByCellKey(observations);
+  const judgesByCell = groupByCellKey(judgments);
 
   const rows: JoinedMatrixRow[] = [];
 
   for (const prediction of predictions) {
     const bucket = bucketBySkillId.get(prediction.skillId);
-    if (!bucket) {
-      // Skill ran predict but has no manifest entry — skip; the manifest is
-      // the source of truth for bucket assignment.
-      continue;
-    }
+    if (!bucket) continue;
+
     for (const perTarget of prediction.verdictByTarget) {
-      const obs = obsIndex.get(key(prediction.skillId, perTarget.target));
-      const judge = judgeIndex.get(key(prediction.skillId, perTarget.target));
-      // Look up the prompt this observation was produced under (if any) so
-      // the classifier can invert success/failure semantics for negatives.
-      // Missing observation, missing promptId, or unknown promptId all collapse
-      // to "not negative" — those branches are handled by the existing
-      // classifier paths (skipped cells, fixture rows, etc.).
-      const prompt = obs ? promptById.get(obs.promptId) : undefined;
-      const isNegativePrompt = prompt?.kind === 'negative';
-      rows.push(buildRow({ prediction, perTarget, bucket, obs, judge, isNegativePrompt }));
+      const promptIds = collectPromptIdsForCell(observations, prediction.skillId, perTarget.target);
+
+      if (promptIds.length === 0) {
+        rows.push(buildSkippedRow({ prediction, perTarget, bucket }));
+        continue;
+      }
+
+      for (const promptId of promptIds) {
+        const k = cellKey(prediction.skillId, perTarget.target, promptId);
+        const cellObs = obsByCell.get(k) ?? [];
+        const cellJudges = judgesByCell.get(k) ?? [];
+        const prompt = promptById.get(promptId);
+        const isNegativePrompt = prompt?.kind === 'negative';
+        rows.push(
+          buildObservedRow({
+            prediction,
+            perTarget,
+            bucket,
+            promptId,
+            observations: cellObs,
+            judgments: cellJudges,
+            isNegativePrompt,
+          }),
+        );
+      }
     }
   }
 

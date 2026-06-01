@@ -225,6 +225,8 @@ export async function judgeCompletion(options: JudgeOptions): Promise<JudgeResul
   return JudgeResultSchema.parse({
     skillId: observation.skillId,
     target: observation.target,
+    promptId: observation.promptId,
+    attemptIdx: observation.attemptIdx,
     verdict: call.verdict,
     rationale: call.rationale,
     confidence: call.confidence,
@@ -264,6 +266,8 @@ export async function reJudgeCompletion(options: ReJudgeOptions): Promise<JudgeR
   return JudgeResultSchema.parse({
     skillId: artifact.skillId,
     target: artifact.target,
+    promptId: artifact.promptId,
+    attemptIdx: artifact.attemptIdx,
     verdict: call.verdict,
     rationale: call.rationale,
     confidence: call.confidence,
