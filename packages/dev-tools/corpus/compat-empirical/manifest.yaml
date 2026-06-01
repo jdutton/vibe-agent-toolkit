@@ -1,0 +1,367 @@
+version: 1
+repeatN: 3
+entries:
+  # --- own-real: VAT's own prose skills (flat-file source) ---
+  - id: vat-audit
+    bucket: own
+    source:
+      kind: local
+      path: packages/vat-development-agents/resources/skills
+    skillRelPath: vat-audit.md
+    declaredTargets:
+      - claude-code
+      - claude-cowork
+      - claude-chat
+    expectedCapabilities:
+      - text-generation
+    triggerPromptRefs:
+      - vat-audit-pos
+      - vat-audit-neg
+
+  - id: vat-skill-authoring
+    bucket: own
+    source:
+      kind: local
+      path: packages/vat-development-agents/resources/skills
+    skillRelPath: vat-skill-authoring.md
+    declaredTargets:
+      - claude-code
+      - claude-cowork
+      - claude-chat
+    expectedCapabilities:
+      - text-generation
+    triggerPromptRefs:
+      - vat-skill-authoring-pos
+      - vat-skill-authoring-neg
+
+  - id: vat-knowledge-resources
+    bucket: own
+    source:
+      kind: local
+      path: packages/vat-development-agents/resources/skills
+    skillRelPath: vat-knowledge-resources.md
+    declaredTargets:
+      - claude-code
+      - claude-cowork
+      - claude-chat
+    expectedCapabilities:
+      - text-generation
+    triggerPromptRefs:
+      - vat-knowledge-resources-pos
+      - vat-knowledge-resources-neg
+
+  - id: vat-rag
+    bucket: own
+    source:
+      kind: local
+      path: packages/vat-development-agents/resources/skills
+    skillRelPath: vat-rag.md
+    declaredTargets:
+      - claude-code
+      - claude-cowork
+      - claude-chat
+    expectedCapabilities:
+      - text-generation
+    triggerPromptRefs:
+      - vat-rag-pos
+      - vat-rag-neg
+
+  - id: vat-enterprise-org
+    bucket: own
+    source:
+      kind: local
+      path: packages/vat-development-agents/resources/skills
+    skillRelPath: vat-enterprise-org.md
+    declaredTargets:
+      - claude-code
+      - claude-cowork
+      - claude-chat
+    expectedCapabilities:
+      - text-generation
+    triggerPromptRefs:
+      - vat-enterprise-org-pos
+      - vat-enterprise-org-neg
+
+  # --- synthetic skills (own bucket, SKILL.md per dir) ---
+  - id: syn-shell-gitstatus
+    bucket: own
+    source:
+      kind: local
+      path: packages/dev-tools/corpus/compat-empirical/skills/syn-shell-gitstatus
+    skillRelPath: SKILL.md
+    declaredTargets:
+      - claude-chat
+      - claude-code
+    expectedCapabilities:
+      - text-generation
+    triggerPromptRefs:
+      - syn-shell-gitstatus-pos
+      - syn-shell-gitstatus-neg
+
+  - id: syn-browser-azlogin
+    bucket: own
+    source:
+      kind: local
+      path: packages/dev-tools/corpus/compat-empirical/skills/syn-browser-azlogin
+    skillRelPath: SKILL.md
+    declaredTargets:
+      - claude-cowork
+      - claude-code
+    expectedCapabilities:
+      - text-generation
+    triggerPromptRefs:
+      - syn-browser-azlogin-pos
+      - syn-browser-azlogin-neg
+
+  - id: syn-cli-gh
+    bucket: own
+    source:
+      kind: local
+      path: packages/dev-tools/corpus/compat-empirical/skills/syn-cli-gh
+    skillRelPath: SKILL.md
+    declaredTargets:
+      - claude-code
+    expectedCapabilities:
+      - text-generation
+    triggerPromptRefs:
+      - syn-cli-gh-pos
+      - syn-cli-gh-neg
+
+  - id: syn-cli-docker
+    bucket: own
+    source:
+      kind: local
+      path: packages/dev-tools/corpus/compat-empirical/skills/syn-cli-docker
+    skillRelPath: SKILL.md
+    declaredTargets:
+      - claude-code
+    expectedCapabilities:
+      - text-generation
+    triggerPromptRefs:
+      - syn-cli-docker-pos
+      - syn-cli-docker-neg
+
+  - id: syn-net-httpfetch
+    bucket: own
+    source:
+      kind: local
+      path: packages/dev-tools/corpus/compat-empirical/skills/syn-net-httpfetch
+    skillRelPath: SKILL.md
+    declaredTargets:
+      - claude-code
+      - claude-chat
+    expectedCapabilities:
+      - text-generation
+    triggerPromptRefs:
+      - syn-net-httpfetch-pos
+      - syn-net-httpfetch-neg
+
+  - id: syn-mcp-postgres
+    bucket: own
+    source:
+      kind: local
+      path: packages/dev-tools/corpus/compat-empirical/skills/syn-mcp-postgres
+    skillRelPath: SKILL.md
+    declaredTargets:
+      - claude-code
+    expectedCapabilities:
+      - text-generation
+    triggerPromptRefs:
+      - syn-mcp-postgres-pos
+      - syn-mcp-postgres-neg
+
+  # --- official: Anthropic plugins (SHA-pinned, resolved 2026-06-01) ---
+  - id: skill-creator
+    bucket: official
+    source:
+      kind: git
+      repo: https://github.com/anthropics/claude-plugins-official.git
+      ref: 3d368d2972d9af8f52e96ae7d86d2686967af31f
+    skillRelPath: plugins/skill-creator/skills/skill-creator/SKILL.md
+    declaredTargets:
+      - claude-code
+      - claude-cowork
+      - claude-chat
+    expectedCapabilities:
+      - text-generation
+    triggerPromptRefs:
+      - skill-creator-pos
+      - skill-creator-neg
+
+  - id: plugin-dev-skill
+    bucket: official
+    source:
+      kind: git
+      repo: https://github.com/anthropics/claude-plugins-official.git
+      ref: 3d368d2972d9af8f52e96ae7d86d2686967af31f
+    skillRelPath: plugins/plugin-dev/skills/skill-development/SKILL.md
+    declaredTargets:
+      - claude-code
+      - claude-cowork
+      - claude-chat
+    expectedCapabilities:
+      - text-generation
+    triggerPromptRefs:
+      - plugin-dev-skill-pos
+      - plugin-dev-skill-neg
+
+  - id: mcp-server-dev
+    bucket: official
+    source:
+      kind: git
+      repo: https://github.com/anthropics/claude-plugins-official.git
+      ref: 3d368d2972d9af8f52e96ae7d86d2686967af31f
+    skillRelPath: plugins/mcp-server-dev/skills/build-mcp-server/SKILL.md
+    declaredTargets:
+      - claude-code
+      - claude-cowork
+      - claude-chat
+    expectedCapabilities:
+      - text-generation
+    triggerPromptRefs:
+      - mcp-server-dev-pos
+      - mcp-server-dev-neg
+
+  - id: frontend-design
+    bucket: official
+    source:
+      kind: git
+      repo: https://github.com/anthropics/claude-plugins-official.git
+      ref: 3d368d2972d9af8f52e96ae7d86d2686967af31f
+    skillRelPath: plugins/frontend-design/skills/frontend-design/SKILL.md
+    declaredTargets:
+      - claude-code
+      - claude-cowork
+      - claude-chat
+    expectedCapabilities:
+      - text-generation
+    triggerPromptRefs:
+      - frontend-design-pos
+      - frontend-design-neg
+
+  - id: kw-code-review
+    bucket: official
+    source:
+      kind: git
+      repo: https://github.com/anthropics/knowledge-work-plugins.git
+      ref: 250bdfd752d7f006ef93cc1aa2c58ec998ead871
+    skillRelPath: engineering/skills/code-review/SKILL.md
+    declaredTargets:
+      - claude-code
+      - claude-cowork
+      - claude-chat
+    expectedCapabilities:
+      - text-generation
+    triggerPromptRefs:
+      - kw-code-review-pos
+      - kw-code-review-neg
+
+  - id: kw-sql-queries
+    bucket: official
+    source:
+      kind: git
+      repo: https://github.com/anthropics/knowledge-work-plugins.git
+      ref: 250bdfd752d7f006ef93cc1aa2c58ec998ead871
+    skillRelPath: data/skills/sql-queries/SKILL.md
+    declaredTargets:
+      - claude-code
+      - claude-cowork
+      - claude-chat
+    expectedCapabilities:
+      - text-generation
+    triggerPromptRefs:
+      - kw-sql-queries-pos
+      - kw-sql-queries-neg
+
+  # --- community: third-party skills (anonymized in report; SHA-pinned, resolved 2026-06-01) ---
+  # Candidates found that meet criteria: 5 (target ~5; no shortfall, no silent cap).
+  # Opaque ids comm-1..comm-5; real source recorded per entry for maintainer traceability.
+  - id: comm-1
+    # real source: jlevy/repren — skill "repren" (Bash repren CLI; multi-pattern search/replace + rename)
+    bucket: community
+    source:
+      kind: git
+      repo: https://github.com/jlevy/repren.git
+      ref: 3056b538094ba5019d435b1f696c0ce515a24039
+    skillRelPath: repren/skills/SKILL.md
+    declaredTargets:
+      - claude-code
+      - claude-cowork
+      - claude-chat
+    expectedCapabilities:
+      - text-generation
+    triggerPromptRefs:
+      - comm-1-pos
+      - comm-1-neg
+
+  - id: comm-2
+    # real source: ryan-lingle/claude-worktrees — skill "worktree" (git worktree management via Bash)
+    bucket: community
+    source:
+      kind: git
+      repo: https://github.com/ryan-lingle/claude-worktrees.git
+      ref: 460cdeb2edb643593f79941bb403e6fdb4f8d5c2
+    skillRelPath: skill.md
+    declaredTargets:
+      - claude-code
+      - claude-cowork
+      - claude-chat
+    expectedCapabilities:
+      - text-generation
+    triggerPromptRefs:
+      - comm-2-pos
+      - comm-2-neg
+
+  - id: comm-3
+    # real source: signalwire/swml_claude_skill — skill "swml" (SignalWire Markup Language authoring; prose, Read/Grep/Glob)
+    bucket: community
+    source:
+      kind: git
+      repo: https://github.com/signalwire/swml_claude_skill.git
+      ref: 47bccf39500e3c33a705a2cc2a3385ebc90886c8
+    skillRelPath: SKILL.md
+    declaredTargets:
+      - claude-code
+      - claude-cowork
+      - claude-chat
+    expectedCapabilities:
+      - text-generation
+    triggerPromptRefs:
+      - comm-3-pos
+      - comm-3-neg
+
+  - id: comm-4
+    # real source: danielcregg/coderunner-skill — skill "moodle-coderunner" (Moodle CodeRunner question generation; Bash + Jobe)
+    bucket: community
+    source:
+      kind: git
+      repo: https://github.com/danielcregg/coderunner-skill.git
+      ref: 8e2589a70b5f33ba1e835c93b613c516ceaee9fc
+    skillRelPath: SKILL.md
+    declaredTargets:
+      - claude-code
+      - claude-cowork
+      - claude-chat
+    expectedCapabilities:
+      - text-generation
+    triggerPromptRefs:
+      - comm-4-pos
+      - comm-4-neg
+
+  - id: comm-5
+    # real source: Rheinmir/skills-kit — skill "review-safe" (read-only safe code audit; prose, Read/Glob/Grep)
+    bucket: community
+    source:
+      kind: git
+      repo: https://github.com/Rheinmir/skills-kit.git
+      ref: 41a5a1d4007cbc8621d9353f83b47e3ab437431b
+    skillRelPath: skills/review-safe/SKILL.md
+    declaredTargets:
+      - claude-code
+      - claude-cowork
+      - claude-chat
+    expectedCapabilities:
+      - text-generation
+    triggerPromptRefs:
+      - comm-5-pos
+      - comm-5-neg

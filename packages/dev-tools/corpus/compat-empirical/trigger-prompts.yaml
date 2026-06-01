@@ -1,0 +1,527 @@
+version: 1
+prompts:
+  # --- vat-audit ---
+  - id: vat-audit-pos
+    forSkillId: vat-audit
+    prompt: Run vat audit on this plugin and explain how to read the compatibility output.
+    authoring: hand
+    kind: positive
+    expectedBehavior:
+      description: >-
+        The vat-audit skill loads and walks through running vat audit, the
+        --compat flag, and interpreting the surface-compatibility output.
+      invocationSignals:
+        - vat audit
+  - id: vat-audit-neg
+    forSkillId: vat-audit
+    prompt: Write a haiku about autumn leaves.
+    authoring: hand
+    kind: negative
+    expectedBehavior:
+      description: >-
+        The vat-audit skill does NOT load; the assistant writes a haiku instead.
+      invocationSignals:
+        - vat audit
+
+  # --- vat-skill-authoring ---
+  - id: vat-skill-authoring-pos
+    forSkillId: vat-skill-authoring
+    prompt: Help me write the frontmatter and body for a new SKILL.md file.
+    authoring: hand
+    kind: positive
+    expectedBehavior:
+      description: >-
+        The vat-skill-authoring skill loads and guides SKILL.md frontmatter,
+        body structure, references, and packaging options.
+      invocationSignals:
+        - SKILL.md
+  - id: vat-skill-authoring-neg
+    forSkillId: vat-skill-authoring
+    prompt: What is the capital of France?
+    authoring: hand
+    kind: negative
+    expectedBehavior:
+      description: >-
+        The vat-skill-authoring skill does NOT load; the assistant answers the
+        geography question directly.
+      invocationSignals:
+        - SKILL.md
+
+  # --- vat-knowledge-resources ---
+  - id: vat-knowledge-resources-pos
+    forSkillId: vat-knowledge-resources
+    prompt: How do I set up per-directory frontmatter schema validation with resource collections in VAT?
+    authoring: hand
+    kind: positive
+    expectedBehavior:
+      description: >-
+        The vat-knowledge-resources skill loads and explains resource
+        collections, schema mapping, and validation modes.
+      invocationSignals:
+        - resource collections
+  - id: vat-knowledge-resources-neg
+    forSkillId: vat-knowledge-resources
+    prompt: Recommend a good recipe for chocolate chip cookies.
+    authoring: hand
+    kind: negative
+    expectedBehavior:
+      description: >-
+        The vat-knowledge-resources skill does NOT load; the assistant suggests
+        a cookie recipe instead.
+      invocationSignals:
+        - resource collections
+
+  # --- vat-rag ---
+  - id: vat-rag-pos
+    forSkillId: vat-rag
+    prompt: Show me how to run vat rag index and vat rag query to set up retrieval for agent context.
+    authoring: hand
+    kind: positive
+    expectedBehavior:
+      description: >-
+        The vat-rag skill loads and covers the rag index/query CLI, embedding
+        providers, and vector-store support.
+      invocationSignals:
+        - vat rag
+  - id: vat-rag-neg
+    forSkillId: vat-rag
+    prompt: What time is sunset in Tokyo today?
+    authoring: hand
+    kind: negative
+    expectedBehavior:
+      description: >-
+        The vat-rag skill does NOT load; the assistant answers the time
+        question directly.
+      invocationSignals:
+        - vat rag
+
+  # --- vat-enterprise-org ---
+  - id: vat-enterprise-org-pos
+    forSkillId: vat-enterprise-org
+    prompt: Use the Anthropic Admin API to report org user cost and usage for our Enterprise plan.
+    authoring: hand
+    kind: positive
+    expectedBehavior:
+      description: >-
+        The vat-enterprise-org skill loads and covers Admin API org
+        administration — users, cost/usage, and workspace admin.
+      invocationSignals:
+        - Admin API
+  - id: vat-enterprise-org-neg
+    forSkillId: vat-enterprise-org
+    prompt: Translate "good morning" into Spanish.
+    authoring: hand
+    kind: negative
+    expectedBehavior:
+      description: >-
+        The vat-enterprise-org skill does NOT load; the assistant translates
+        the phrase directly.
+      invocationSignals:
+        - Admin API
+
+  # --- syn-shell-gitstatus ---
+  - id: syn-shell-gitstatus-pos
+    forSkillId: syn-shell-gitstatus
+    prompt: Give me a summary of the uncommitted changes in this repo.
+    authoring: hand
+    kind: positive
+    expectedBehavior:
+      description: >-
+        The syn-shell-gitstatus skill loads and reports the working-tree
+        status, ending with "git-status".
+      invocationSignals:
+        - git-status
+  - id: syn-shell-gitstatus-neg
+    forSkillId: syn-shell-gitstatus
+    prompt: Write a haiku about autumn leaves.
+    authoring: hand
+    kind: negative
+    expectedBehavior:
+      description: >-
+        The syn-shell-gitstatus skill does NOT load; the assistant writes a
+        haiku instead.
+      invocationSignals:
+        - git-status
+
+  # --- syn-browser-azlogin ---
+  - id: syn-browser-azlogin-pos
+    forSkillId: syn-browser-azlogin
+    prompt: Which Azure subscriptions can my signed-in account access?
+    authoring: hand
+    kind: positive
+    expectedBehavior:
+      description: >-
+        The syn-browser-azlogin skill loads, lists Azure subscriptions, and
+        ends with "az-subscriptions".
+      invocationSignals:
+        - az-subscriptions
+  - id: syn-browser-azlogin-neg
+    forSkillId: syn-browser-azlogin
+    prompt: Recommend a good recipe for chocolate chip cookies.
+    authoring: hand
+    kind: negative
+    expectedBehavior:
+      description: >-
+        The syn-browser-azlogin skill does NOT load; the assistant suggests a
+        cookie recipe instead.
+      invocationSignals:
+        - az-subscriptions
+
+  # --- syn-cli-gh ---
+  - id: syn-cli-gh-pos
+    forSkillId: syn-cli-gh
+    prompt: List the open pull requests on this GitHub repository.
+    authoring: hand
+    kind: positive
+    expectedBehavior:
+      description: >-
+        The syn-cli-gh skill loads and lists open PRs via gh, ending with
+        "gh-pr-list".
+      invocationSignals:
+        - gh-pr-list
+  - id: syn-cli-gh-neg
+    forSkillId: syn-cli-gh
+    prompt: Write a haiku about autumn leaves.
+    authoring: hand
+    kind: negative
+    expectedBehavior:
+      description: >-
+        The syn-cli-gh skill does NOT load; the assistant writes a haiku
+        instead.
+      invocationSignals:
+        - gh-pr-list
+
+  # --- syn-cli-docker ---
+  - id: syn-cli-docker-pos
+    forSkillId: syn-cli-docker
+    prompt: Build and start the project's Docker container.
+    authoring: hand
+    kind: positive
+    expectedBehavior:
+      description: >-
+        The syn-cli-docker skill loads, builds and runs the image, and ends
+        with "docker-build".
+      invocationSignals:
+        - docker-build
+  - id: syn-cli-docker-neg
+    forSkillId: syn-cli-docker
+    prompt: What is the capital of France?
+    authoring: hand
+    kind: negative
+    expectedBehavior:
+      description: >-
+        The syn-cli-docker skill does NOT load; the assistant answers the
+        geography question directly.
+      invocationSignals:
+        - docker-build
+
+  # --- syn-net-httpfetch ---
+  - id: syn-net-httpfetch-pos
+    forSkillId: syn-net-httpfetch
+    prompt: What is the current UTC network time right now?
+    authoring: hand
+    kind: positive
+    expectedBehavior:
+      description: >-
+        The syn-net-httpfetch skill loads, fetches the current UTC time from a
+        public API, and ends with "network-time".
+      invocationSignals:
+        - network-time
+  - id: syn-net-httpfetch-neg
+    forSkillId: syn-net-httpfetch
+    prompt: Translate "good morning" into Spanish.
+    authoring: hand
+    kind: negative
+    expectedBehavior:
+      description: >-
+        The syn-net-httpfetch skill does NOT load; the assistant translates the
+        phrase directly.
+      invocationSignals:
+        - network-time
+
+  # --- syn-mcp-postgres ---
+  - id: syn-mcp-postgres-pos
+    forSkillId: syn-mcp-postgres
+    prompt: How many rows are in the users table of the app database?
+    authoring: hand
+    kind: positive
+    expectedBehavior:
+      description: >-
+        The syn-mcp-postgres skill loads and queries the database via the
+        Postgres MCP tool, ending with "postgres-mcp".
+      invocationSignals:
+        - postgres-mcp
+  - id: syn-mcp-postgres-neg
+    forSkillId: syn-mcp-postgres
+    prompt: What time is sunset in Tokyo today?
+    authoring: hand
+    kind: negative
+    expectedBehavior:
+      description: >-
+        The syn-mcp-postgres skill does NOT load; the assistant answers the
+        time question directly.
+      invocationSignals:
+        - postgres-mcp
+
+  # --- skill-creator ---
+  - id: skill-creator-pos
+    forSkillId: skill-creator
+    prompt: I want to create a new skill from scratch and run evals to benchmark how well it triggers.
+    authoring: hand
+    kind: positive
+    expectedBehavior:
+      description: >-
+        The skill-creator skill loads and walks through drafting a skill,
+        writing test prompts, and running evals to iterate.
+      invocationSignals:
+        - skill-creator
+  - id: skill-creator-neg
+    forSkillId: skill-creator
+    prompt: Write a haiku about autumn leaves.
+    authoring: hand
+    kind: negative
+    expectedBehavior:
+      description: >-
+        The skill-creator skill does NOT load; the assistant writes a haiku
+        instead.
+      invocationSignals:
+        - skill-creator
+
+  # --- plugin-dev-skill ---
+  - id: plugin-dev-skill-pos
+    forSkillId: plugin-dev-skill
+    prompt: How should I structure and organize the content of a skill for a Claude Code plugin?
+    authoring: hand
+    kind: positive
+    expectedBehavior:
+      description: >-
+        The skill-development skill loads and explains skill structure,
+        progressive disclosure, and SKILL.md best practices.
+      invocationSignals:
+        - skill-development
+  - id: plugin-dev-skill-neg
+    forSkillId: plugin-dev-skill
+    prompt: What is the capital of France?
+    authoring: hand
+    kind: negative
+    expectedBehavior:
+      description: >-
+        The skill-development skill does NOT load; the assistant answers the
+        geography question directly.
+      invocationSignals:
+        - skill-development
+
+  # --- mcp-server-dev ---
+  - id: mcp-server-dev-pos
+    forSkillId: mcp-server-dev
+    prompt: Help me build an MCP server that wraps our REST API and exposes tools to Claude.
+    authoring: hand
+    kind: positive
+    expectedBehavior:
+      description: >-
+        The build-mcp-server skill loads, interrogates the use case, and picks a
+        deployment model and tool-design pattern.
+      invocationSignals:
+        - build-mcp-server
+  - id: mcp-server-dev-neg
+    forSkillId: mcp-server-dev
+    prompt: Recommend a good recipe for chocolate chip cookies.
+    authoring: hand
+    kind: negative
+    expectedBehavior:
+      description: >-
+        The build-mcp-server skill does NOT load; the assistant suggests a
+        cookie recipe instead.
+      invocationSignals:
+        - build-mcp-server
+
+  # --- frontend-design ---
+  - id: frontend-design-pos
+    forSkillId: frontend-design
+    prompt: Build a polished landing page with a bold, distinctive visual aesthetic.
+    authoring: hand
+    kind: positive
+    expectedBehavior:
+      description: >-
+        The frontend-design skill loads and produces distinctive,
+        production-grade frontend code with a clear aesthetic direction.
+      invocationSignals:
+        - frontend-design
+  - id: frontend-design-neg
+    forSkillId: frontend-design
+    prompt: Translate "good morning" into Spanish.
+    authoring: hand
+    kind: negative
+    expectedBehavior:
+      description: >-
+        The frontend-design skill does NOT load; the assistant translates the
+        phrase directly.
+      invocationSignals:
+        - frontend-design
+
+  # --- kw-code-review ---
+  - id: kw-code-review-pos
+    forSkillId: kw-code-review
+    prompt: Review this pull request for security, performance, and correctness before I merge.
+    authoring: hand
+    kind: positive
+    expectedBehavior:
+      description: >-
+        The code-review skill loads and reviews the change across security,
+        performance, correctness, and maintainability dimensions.
+      invocationSignals:
+        - code-review
+  - id: kw-code-review-neg
+    forSkillId: kw-code-review
+    prompt: What time is sunset in Tokyo today?
+    authoring: hand
+    kind: negative
+    expectedBehavior:
+      description: >-
+        The code-review skill does NOT load; the assistant answers the time
+        question directly.
+      invocationSignals:
+        - code-review
+
+  # --- kw-sql-queries ---
+  - id: kw-sql-queries-pos
+    forSkillId: kw-sql-queries
+    prompt: Write a performant Snowflake query with a CTE and a window function to rank monthly sales.
+    authoring: hand
+    kind: positive
+    expectedBehavior:
+      description: >-
+        The sql-queries skill loads and writes correct, performant SQL for the
+        target warehouse dialect using CTEs and window functions.
+      invocationSignals:
+        - sql-queries
+  - id: kw-sql-queries-neg
+    forSkillId: kw-sql-queries
+    prompt: Write a haiku about autumn leaves.
+    authoring: hand
+    kind: negative
+    expectedBehavior:
+      description: >-
+        The sql-queries skill does NOT load; the assistant writes a haiku
+        instead.
+      invocationSignals:
+        - sql-queries
+
+  # --- comm-1 (repren: multi-pattern search/replace + rename CLI) ---
+  - id: comm-1-pos
+    forSkillId: comm-1
+    prompt: I need to rename a symbol across hundreds of files and also rename the matching files — do a case-preserving bulk refactor.
+    authoring: hand
+    kind: positive
+    expectedBehavior:
+      description: >-
+        The repren skill loads and uses repren for simultaneous multi-pattern
+        search-and-replace with case-preserving file/directory renaming.
+      invocationSignals:
+        - repren
+  - id: comm-1-neg
+    forSkillId: comm-1
+    prompt: Write a haiku about autumn leaves.
+    authoring: hand
+    kind: negative
+    expectedBehavior:
+      description: >-
+        The repren skill does NOT load; the assistant writes a haiku instead.
+      invocationSignals:
+        - repren
+
+  # --- comm-2 (worktree: parallel git worktree management) ---
+  - id: comm-2-pos
+    forSkillId: comm-2
+    prompt: Create a new git worktree so I can run a parallel session on a feature branch, then list my existing worktrees.
+    authoring: hand
+    kind: positive
+    expectedBehavior:
+      description: >-
+        The worktree skill loads and creates/lists git worktrees for parallel
+        sessions using absolute paths and git -C.
+      invocationSignals:
+        - worktree
+  - id: comm-2-neg
+    forSkillId: comm-2
+    prompt: What is the capital of France?
+    authoring: hand
+    kind: negative
+    expectedBehavior:
+      description: >-
+        The worktree skill does NOT load; the assistant answers the geography
+        question directly.
+      invocationSignals:
+        - worktree
+
+  # --- comm-3 (swml: SignalWire Markup Language authoring) ---
+  - id: comm-3-pos
+    forSkillId: comm-3
+    prompt: Write a SWML document for an IVR menu that answers a call, plays a greeting, and collects digits.
+    authoring: hand
+    kind: positive
+    expectedBehavior:
+      description: >-
+        The swml skill loads and crafts a valid SWML document with sections and
+        call-control methods for the IVR flow.
+      invocationSignals:
+        - swml
+  - id: comm-3-neg
+    forSkillId: comm-3
+    prompt: Recommend a good recipe for chocolate chip cookies.
+    authoring: hand
+    kind: negative
+    expectedBehavior:
+      description: >-
+        The swml skill does NOT load; the assistant suggests a cookie recipe
+        instead.
+      invocationSignals:
+        - swml
+
+  # --- comm-4 (moodle-coderunner: Moodle CodeRunner question generation) ---
+  - id: comm-4-pos
+    forSkillId: comm-4
+    prompt: Generate a Moodle CodeRunner programming question for a Python function, with tests, as import-ready XML.
+    authoring: hand
+    kind: positive
+    expectedBehavior:
+      description: >-
+        The moodle-coderunner skill loads and generates a CodeRunner question
+        with code plus tests and produces import-ready Moodle XML.
+      invocationSignals:
+        - moodle-coderunner
+  - id: comm-4-neg
+    forSkillId: comm-4
+    prompt: Translate "good morning" into Spanish.
+    authoring: hand
+    kind: negative
+    expectedBehavior:
+      description: >-
+        The moodle-coderunner skill does NOT load; the assistant translates the
+        phrase directly.
+      invocationSignals:
+        - moodle-coderunner
+
+  # --- comm-5 (review-safe: read-only safe code audit) ---
+  - id: comm-5-pos
+    forSkillId: comm-5
+    prompt: Do a read-only safe audit of this file for security and logic issues — findings only, do not edit anything.
+    authoring: hand
+    kind: positive
+    expectedBehavior:
+      description: >-
+        The review-safe skill loads and produces a read-only audit reporting
+        security, logic, and correctness findings without making edits.
+      invocationSignals:
+        - review-safe
+  - id: comm-5-neg
+    forSkillId: comm-5
+    prompt: What time is sunset in Tokyo today?
+    authoring: hand
+    kind: negative
+    expectedBehavior:
+      description: >-
+        The review-safe skill does NOT load; the assistant answers the time
+        question directly.
+      invocationSignals:
+        - review-safe
