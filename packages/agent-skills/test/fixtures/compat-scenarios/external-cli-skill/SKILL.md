@@ -1,6 +1,6 @@
 ---
 name: external-cli-skill
-description: Sample skill wrapping the Azure `az` CLI. Models the real avonrisk-sdlc azure-inventory shape for compat-detector regression tests.
+description: Sample skill wrapping the Azure `az` CLI. Models a real Azure inventory shape for compat-detector regression tests.
 allowed-tools: [Bash, Read]
 ---
 

@@ -7,6 +7,12 @@ import * as yaml from 'yaml';
 
 import { corpusScanCommand } from '../../src/commands/corpus/scan.js';
 
+const META = {
+  bucket: 'official',
+  confidence: 'first-party',
+  maturity: 'production',
+} as const;
+
 let workspace: string;
 let seedPath: string;
 let outDir: string;
@@ -53,8 +59,8 @@ beforeAll(() => {
     seedPath,
     yaml.stringify({
       plugins: [
-        { source: cleanRoot, name: 'clean' },
-        { source: noisyRoot, name: 'noisy' },
+        { source: cleanRoot, name: 'clean', ...META },
+        { source: noisyRoot, name: 'noisy', ...META },
       ],
     }),
     'utf-8'
@@ -96,8 +102,8 @@ describe('vat corpus scan — integration', () => {
       seedWithBad,
       yaml.stringify({
         plugins: [
-          { source: '/absolutely/missing/plugin', name: 'ghost' },
-          { source: safePath.join(workspace, 'clean-plugin'), name: 'clean2' },
+          { source: '/absolutely/missing/plugin', name: 'ghost', ...META },
+          { source: safePath.join(workspace, 'clean-plugin'), name: 'clean2', ...META },
         ],
       }),
       'utf-8'
