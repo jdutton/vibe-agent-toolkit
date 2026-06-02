@@ -12,7 +12,7 @@
  * - https://github.com/anthropics/skills (official examples)
  */
 
-import type { ValidationIssue } from './types.js';
+import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 
 /**
  * Validation rule category

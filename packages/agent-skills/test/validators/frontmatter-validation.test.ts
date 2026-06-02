@@ -8,6 +8,7 @@
  * - Schema validation for VAT-generated skills
  */
 
+import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -15,7 +16,6 @@ import {
 	validateFrontmatterRules,
 	validateFrontmatterSchema,
 } from '../../src/validators/frontmatter-validation.js';
-import type { ValidationIssue } from '../../src/validators/types.js';
 
 // ---------------------------------------------------------------------------
 // Helpers

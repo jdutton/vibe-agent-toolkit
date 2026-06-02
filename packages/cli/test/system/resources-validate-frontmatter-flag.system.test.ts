@@ -67,20 +67,20 @@ describe('vat resources validate --no-check-frontmatter-links (system test)', ()
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('reports frontmatter_link_broken without the flag', () => {
+  it('reports FRONTMATTER_LINK_BROKEN without the flag', () => {
     const projectDir = setupBrokenFrontmatterLinkProject(tempDir, 'without-flag');
 
     const result = executeCli(binPath, ['resources', 'validate'], { cwd: projectDir });
 
     expect(result.status).toBe(1);
-    expect(result.stdout + result.stderr).toContain('frontmatter_link_broken');
+    expect(result.stdout + result.stderr).toContain('FRONTMATTER_LINK_BROKEN');
   });
 
-  it('suppresses frontmatter_link_broken with --no-check-frontmatter-links', () => {
+  it('suppresses FRONTMATTER_LINK_BROKEN with --no-check-frontmatter-links', () => {
     const projectDir = setupBrokenFrontmatterLinkProject(tempDir, 'with-flag');
 
     const result = executeCli(binPath, ['resources', 'validate', '--no-check-frontmatter-links'], { cwd: projectDir });
 
-    expect(result.stdout + result.stderr).not.toContain('frontmatter_link_broken');
+    expect(result.stdout + result.stderr).not.toContain('FRONTMATTER_LINK_BROKEN');
   });
 });

@@ -7,7 +7,8 @@
  * and are silently skipped.
  */
 
-import type { ValidationIssue } from '../../validators/types.js';
+import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+
 import type { MarketplaceInventory } from '../types.js';
 
 export function detectMarketplacePluginSourceMissing(inv: MarketplaceInventory): ValidationIssue[] {

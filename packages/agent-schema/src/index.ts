@@ -11,6 +11,13 @@ export { toJsonSchema, type JsonSchemaOptions } from './schema-utils.js';
 export * from './result-types.js';
 export * from './output-envelopes.js';
 
+// Canonical validation code registry
+export * from './validation-codes.js';
+
+// Unified validation issue + framework
+export * from './validation-issue.js';
+export * from './validation-framework.js';
+
 // Core schemas
 export {
   AgentMetadataSchema,
@@ -90,3 +97,7 @@ export {
   type SeverityLevel,
   type ValidationConfig,
 } from './validation-config.js';
+// `ValidationConfig` is the single canonical config type: the Zod-inferred type
+// from validation-config.ts. validation-framework.ts re-exports the same type
+// (and derives SeverityConfig/AllowConfig from it), so there is no collision —
+// `export *` from validation-framework.js surfaces the identical symbol.

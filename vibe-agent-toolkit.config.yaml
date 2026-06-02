@@ -50,8 +50,4 @@ resources:
         frontmatterSchema: "packages/agent-skills/schemas/skill-frontmatter.json"
         mode: strict  # Skills MUST have valid frontmatter
 
-  # Default validation for all resources (applies to all files)
-  validation:
-    checkLinks: true
-    checkAnchors: true
-    allowExternal: true
+  # Per-code severity overrides available via resources.validation.severity (see docs/validation-codes.md)

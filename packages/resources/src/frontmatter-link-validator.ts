@@ -7,21 +7,31 @@
  * frontmatter-specific type codes plus a list of external URLs the registry
  * can fold into its existing external URL collection.
  *
- * Type mapping:
- *   broken_file        -> frontmatter_link_broken
- *   broken_anchor      -> frontmatter_anchor_missing
- *   link_to_gitignored -> frontmatter_link_to_gitignored
- *   unknown_link       -> frontmatter_unknown_link
+ * Code mapping:
+ *   LINK_BROKEN_FILE    -> FRONTMATTER_LINK_BROKEN
+ *   LINK_BROKEN_ANCHOR  -> FRONTMATTER_ANCHOR_MISSING
+ *   LINK_TO_GITIGNORED  -> FRONTMATTER_LINK_TO_GITIGNORED
+ *   LINK_UNKNOWN        -> FRONTMATTER_UNKNOWN_LINK
  *
  * Skipped (no issue, no external):
  *   email (mailto:)
  *   anchor-only (validated as anchor in current file via validateLink)
  */
 
+import { createRegistryIssue, type IssueCode } from '@vibe-agent-toolkit/agent-schema';
+
 import { classifyLink } from './link-parser.js';
 import { validateLink, type ValidateLinkOptions } from './link-validator.js';
 import { walkFrontmatterUriReferences } from './schema-uri-walker.js';
 import type { HeadingNode, ResourceLink, ValidationIssue } from './types.js';
+
+/** Map the link-level code emitted by validateLink to its frontmatter-scoped code. */
+const LINK_CODE_TO_FRONTMATTER_CODE: Partial<Record<IssueCode, IssueCode>> = {
+  LINK_BROKEN_FILE: 'FRONTMATTER_LINK_BROKEN',
+  LINK_BROKEN_ANCHOR: 'FRONTMATTER_ANCHOR_MISSING',
+  LINK_TO_GITIGNORED: 'FRONTMATTER_LINK_TO_GITIGNORED',
+  LINK_UNKNOWN: 'FRONTMATTER_UNKNOWN_LINK',
+};
 
 /** A frontmatter-sourced external URL captured for downstream health checking. */
 export interface FrontmatterExternalUrl {
@@ -89,24 +99,12 @@ export async function validateFrontmatterLinks(
 }
 
 function rewriteIssue(issue: ValidationIssue, dottedPath: string): ValidationIssue {
-  return {
-    ...issue,
-    type: mapType(issue.type),
-    message: `field \`${dottedPath}\`: ${issue.message}`,
-  };
-}
-
-function mapType(originalType: string): string {
-  switch (originalType) {
-    case 'broken_file':
-      return 'frontmatter_link_broken';
-    case 'broken_anchor':
-      return 'frontmatter_anchor_missing';
-    case 'link_to_gitignored':
-      return 'frontmatter_link_to_gitignored';
-    case 'unknown_link':
-      return 'frontmatter_unknown_link';
-    default:
-      return originalType;
-  }
+  const mappedCode = LINK_CODE_TO_FRONTMATTER_CODE[issue.code as IssueCode] ?? (issue.code as IssueCode);
+  const message = `field \`${dottedPath}\`: ${issue.message}`;
+  const extras: Partial<Pick<ValidationIssue, 'location' | 'line' | 'link' | 'suggestion'>> = {};
+  if (issue.location !== undefined) extras.location = issue.location;
+  if (issue.line !== undefined) extras.line = issue.line;
+  if (issue.link !== undefined) extras.link = issue.link;
+  if (issue.suggestion !== undefined) extras.suggestion = issue.suggestion;
+  return createRegistryIssue(mappedCode, message, extras);
 }

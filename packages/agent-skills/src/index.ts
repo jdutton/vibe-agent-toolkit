@@ -65,7 +65,6 @@ export {
   runCompatDetectors,
   type DetectorOutput,
 } from './validators/compat-detectors.js';
-export { CODE_REGISTRY, type CodeRegistryEntry } from './validators/code-registry.js';
 export { validateMarketplace } from './validators/marketplace-validator.js';
 export { validateSkill } from './validators/skill-validator.js';
 export { validate, type UnifiedValidateOptions } from './validators/unified-validator.js';
@@ -78,7 +77,6 @@ export {
   type SkillPackagingConfig,
   type SkillValidationSharedContext,
 } from './validators/packaging-validator.js';
-export { type ValidationConfig } from './validators/validation-framework.js';
 export {
   createIssue,
   NAVIGATION_FILE_PATTERNS,
@@ -90,7 +88,6 @@ export {
 } from './validators/validation-rules.js';
 export type {
   ValidationResult,
-  ValidationIssue,
   ValidateOptions,
   ResourceFormat,
   Surface,

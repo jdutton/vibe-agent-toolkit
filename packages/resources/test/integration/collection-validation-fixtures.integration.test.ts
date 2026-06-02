@@ -73,7 +73,7 @@ describe('Collection validation with test fixtures', () => {
     expect(result.issues).toHaveLength(7);
 
     // Verify all expected files have errors
-    const errorFiles = result.issues.map((e) => basename(e.resourcePath));
+    const errorFiles = result.issues.map((e) => basename(e.location));
     expect(errorFiles).toContain('guide-invalid-category.md');
     expect(errorFiles).toContain('guide-missing-required.md');
     expect(errorFiles).toContain('doc-invalid-status.md');
@@ -89,7 +89,7 @@ describe('Collection validation with test fixtures', () => {
     // Valid files should have no errors
     const validFiles = ['guide-valid.md', 'doc-valid.md', 'code-reviewer-SKILL.md'];
     const validFileErrors = result.issues.filter(
-      (i) => validFiles.some((f) => i.resourcePath.includes(f))
+      (i) => validFiles.some((f) => i.location.includes(f))
     );
 
     expect(validFileErrors).toHaveLength(0);
@@ -101,7 +101,7 @@ describe('Collection validation with test fixtures', () => {
     // Find enum validation error (invalid category)
     const categoryError = result.issues.find(
       (i) =>
-        i.resourcePath.includes('guide-invalid-category.md') &&
+        i.location.includes('guide-invalid-category.md') &&
         i.message.includes('category')
     );
     expect(categoryError).toBeDefined();
@@ -111,7 +111,7 @@ describe('Collection validation with test fixtures', () => {
     // Find missing required field error
     const missingError = result.issues.find(
       (i) =>
-        i.resourcePath.includes('guide-missing-required.md') &&
+        i.location.includes('guide-missing-required.md') &&
         i.message.includes('title')
     );
     expect(missingError).toBeDefined();
@@ -120,7 +120,7 @@ describe('Collection validation with test fixtures', () => {
     // Find pattern validation error (kebab-case)
     const patternError = result.issues.find(
       (i) =>
-        i.resourcePath.includes('badName-SKILL.md') &&
+        i.location.includes('badName-SKILL.md') &&
         i.message.includes('name')
     );
     expect(patternError).toBeDefined();
@@ -152,7 +152,7 @@ describe('Collection validation with test fixtures', () => {
 
     // doc-valid.md has custom_field and another_custom which should be allowed
     const docErrors = result.issues.filter(
-      (i) => i.resourcePath.includes('doc-valid.md')
+      (i) => i.location.includes('doc-valid.md')
     );
     expect(docErrors).toHaveLength(0);
   });
@@ -163,8 +163,8 @@ describe('Collection validation with test fixtures', () => {
     // Skills collection should catch multiple error types
     const skillErrors = result.issues.filter(
       (i) =>
-        i.resourcePath.includes('-SKILL.md') &&
-        !i.resourcePath.includes('code-reviewer')
+        i.location.includes('-SKILL.md') &&
+        !i.location.includes('code-reviewer')
     );
 
     // 4 invalid skill files
@@ -182,7 +182,7 @@ describe('Collection validation with test fixtures', () => {
 
     // Verify short-description error is present (one of the 4 skill errors)
     expect(skillErrors.some((e) =>
-      e.resourcePath.includes('short-description-SKILL.md')
+      e.location.includes('short-description-SKILL.md')
     )).toBe(true);
   });
 

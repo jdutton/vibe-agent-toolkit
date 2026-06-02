@@ -5,9 +5,9 @@
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 
-import type { CollectionStats, ProjectConfig, RegistryStats } from '@vibe-agent-toolkit/resources';
+import type { CollectionStats, ProjectConfig, RegistryStats, ValidationResult } from '@vibe-agent-toolkit/resources';
 import type { GitTracker } from '@vibe-agent-toolkit/utils';
-import { resolveAssetReference } from '@vibe-agent-toolkit/utils';
+import { resolveAssetReference, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
 import { formatDurationSecs } from '../../utils/duration.js';
@@ -50,14 +50,20 @@ async function loadSchema(schemaPath: string): Promise<object> {
 }
 
 /**
- * Error grouped by file.
+ * Issues grouped by file.
+ *
+ * Each entry carries the validation `code` and resolved `severity` so the
+ * serialized output is honest about what fired and at what level. Warning- and
+ * info-severity issues appear here too (so users see them); only error-severity
+ * issues drive the exit code, which the library decides via `hasErrors`.
  */
 interface FileErrors {
   file: string;
   errors: Array<{
     line: number;
     column: number;
-    type: string;
+    code: string;
+    severity: string;
     message: string;
   }>;
 }
@@ -91,9 +97,21 @@ function writeStructuredOutput(data: ValidationOutputData, format: Exclude<Outpu
 }
 
 /**
- * Error data for a single validation issue.
+ * Issue data for a single validation issue, flattened for display.
+ *
+ * - `file` is RELATIVE to projectRoot (matches `issue.location`), used for display.
+ * - `absPath` is the ABSOLUTE resource path, used for registry/collection lookups.
+ * - `code` / `severity` come straight from the unified `ValidationIssue`.
  */
-type ErrorData = { file: string; line: number; column: number; type: string; message: string };
+type ErrorData = {
+  file: string;
+  absPath: string;
+  line: number;
+  column: number;
+  code: string;
+  severity: string;
+  message: string;
+};
 
 /**
  * Output format options.
@@ -107,24 +125,18 @@ function groupErrorsByFile(errors: ErrorData[]): FileErrors[] {
   const fileMap = new Map<string, FileErrors>();
 
   for (const error of errors) {
+    const entry = {
+      line: error.line,
+      column: error.column,
+      code: error.code,
+      severity: error.severity,
+      message: error.message,
+    };
     const existing = fileMap.get(error.file);
     if (existing) {
-      existing.errors.push({
-        line: error.line,
-        column: error.column,
-        type: error.type,
-        message: error.message,
-      });
+      existing.errors.push(entry);
     } else {
-      fileMap.set(error.file, {
-        file: error.file,
-        errors: [{
-          line: error.line,
-          column: error.column,
-          type: error.type,
-          message: error.message,
-        }],
-      });
+      fileMap.set(error.file, { file: error.file, errors: [entry] });
     }
   }
 
@@ -153,43 +165,63 @@ interface ValidationContext {
 }
 
 /**
- * Output validation failure results.
+ * Merge per-collection error stats into the base collection stats for output.
  */
-function outputFailure(
-  errorData: ErrorData[],
+function buildCollectionsWithErrors(
+  collectionStats: CollectionStats | undefined,
+  collectionErrorStats: Map<string, { filesWithErrors: number; errorCount: number }>
+): Record<string, CollectionStatWithErrors> {
+  const collectionsWithErrors: Record<string, CollectionStatWithErrors> = {};
+  if (!collectionStats) {
+    return collectionsWithErrors;
+  }
+  for (const [id, baseStat] of Object.entries(collectionStats.collections)) {
+    const errorStat = collectionErrorStats.get(id);
+    collectionsWithErrors[id] = {
+      ...baseStat,
+      ...(errorStat ? {
+        filesWithErrors: errorStat.filesWithErrors,
+        errorCount: errorStat.errorCount,
+      } : {}),
+    };
+  }
+  return collectionsWithErrors;
+}
+
+/**
+ * Output validation results when one or more issues fired.
+ *
+ * Surfaces ALL severity-resolved issues (errors AND warnings/info) so users see
+ * them, but the `failed` flag — derived from the library's `hasErrors` — controls
+ * the reported `status`. The caller, not this function, owns the exit code.
+ */
+function outputIssues(
+  issueData: ErrorData[],
   outputFormat: OutputFormat,
   context: ValidationContext,
-  registry: { getResource: (path: string) => { collections?: (string[] | undefined) } | undefined }
+  registry: { getResource: (path: string) => { collections?: (string[] | undefined) } | undefined },
+  failed: boolean
 ): void {
   if (outputFormat === 'text') {
-    // Text format: test-format errors to stderr
-    for (const error of errorData) {
-      writeTestFormatError(error.file, error.line, error.column, error.message);
+    // Text format: test-format issues to stderr
+    for (const issue of issueData) {
+      writeTestFormatError(issue.file, issue.line, issue.column, issue.message);
     }
   } else {
-    // Calculate error summary
-    const summary = buildErrorSummary(errorData, registry);
+    // Calculate issue summary (keyed by code)
+    const summary = buildErrorSummary(issueData, registry);
 
     // Build collection stats with error info
-    const collectionsWithErrors: Record<string, CollectionStatWithErrors> = {};
-    if (context.collectionStats) {
-      for (const [id, baseStat] of Object.entries(context.collectionStats.collections)) {
-        const errorStat = summary.collectionErrorStats.get(id);
-        collectionsWithErrors[id] = {
-          ...baseStat,
-          ...(errorStat ? {
-            filesWithErrors: errorStat.filesWithErrors,
-            errorCount: errorStat.errorCount,
-          } : {}),
-        };
-      }
-    }
+    const collectionsWithErrors = buildCollectionsWithErrors(
+      context.collectionStats,
+      summary.collectionErrorStats
+    );
 
-    // Group errors by file
-    const groupedErrors = groupErrorsByFile(errorData);
+    // Group issues by file
+    const groupedErrors = groupErrorsByFile(issueData);
 
     const outputData: ValidationOutputData = {
-      status: 'failed',
+      status: failed ? 'failed' : 'success',
       filesScanned: context.stats.totalResources,
       filesWithErrors: summary.filesWithErrors,
       errorsFound: context.errorCount,
@@ -244,35 +276,36 @@ function outputSuccess(
  * - Unique files with errors
  * - Per-collection error statistics
  *
- * @param issues - Validation issues from registry (using ErrorData format with file instead of resourcePath)
- * @param registry - Resource registry for collection lookups
+ * @param issues - Flattened validation issues (relative `file`, absolute `absPath`, `code`)
+ * @param registry - Resource registry for collection lookups (keyed by ABSOLUTE path)
  * @returns Error summary statistics
  */
 function buildErrorSummary(
-  issues: Array<{ type: string; file: string }>,
+  issues: Array<{ code: string; file: string; absPath: string }>,
   registry: { getResource: (path: string) => { collections?: (string[] | undefined) } | undefined }
 ): {
   errorSummary: Record<string, number>;
   filesWithErrors: number;
   collectionErrorStats: Map<string, { filesWithErrors: number; errorCount: number }>;
 } {
-  // 1. Count by error type
+  // 1. Count by code
   const errorSummary: Record<string, number> = {};
   for (const issue of issues) {
-    errorSummary[issue.type] = (errorSummary[issue.type] ?? 0) + 1;
+    errorSummary[issue.code] = (errorSummary[issue.code] ?? 0) + 1;
   }
 
   // 2. Count unique files with errors
   const filesWithErrorsSet = new Set(issues.map(i => i.file));
 
-  // 3. Map files to collections and count errors per collection
+  // 3. Map files to collections and count errors per collection.
+  //    registry.getResource keys on the ABSOLUTE path, so look up via absPath.
   const collectionErrors = new Map<string, {
     filesWithErrors: Set<string>;
     errorCount: number;
   }>();
 
   for (const issue of issues) {
-    const resource = registry.getResource(issue.file);
+    const resource = registry.getResource(issue.absPath);
     const collections = resource?.collections;
     if (collections) {
       for (const collectionId of collections) {
@@ -301,6 +334,64 @@ function buildErrorSummary(
     filesWithErrors: filesWithErrorsSet.size,
     collectionErrorStats: collectionStats,
   };
+}
+
+/**
+ * Restrict issues and stats to a single collection.
+ *
+ * Issue locations are RELATIVE to projectRoot, but `resource.filePath` is
+ * ABSOLUTE — convert the collection's resource paths to the same relative basis
+ * before comparing, so the filter actually matches.
+ */
+function filterByCollection(
+  registry: {
+    getAllResources: () => Array<{ collections?: string[] | undefined; filePath: string; links: unknown[] }>;
+  },
+  validationResult: ValidationResult,
+  collection: string,
+  projectRoot: string
+): { filteredIssues: ValidationResult['issues']; filteredStats: RegistryStats } {
+  const collectionResources = registry
+    .getAllResources()
+    .filter(r => r.collections?.includes(collection) ?? false);
+  const collectionPaths = new Set(
+    collectionResources.map(r => safePath.relative(projectRoot, r.filePath))
+  );
+
+  const filteredIssues = validationResult.issues.filter(
+    issue => issue.location !== undefined && collectionPaths.has(issue.location)
+  );
+
+  const totalLinks = collectionResources.reduce((sum, r) => sum + r.links.length, 0);
+  return {
+    filteredIssues,
+    filteredStats: {
+      totalResources: collectionResources.length,
+      totalLinks,
+      linksByType: validationResult.linksByType, // Keep all link types
+    },
+  };
+}
+
+/**
+ * Flatten severity-resolved issues for display.
+ *
+ * `file` is RELATIVE to projectRoot (matches `issue.location`, used for display);
+ * `absPath` is ABSOLUTE (for registry/collection lookups via getResource).
+ */
+function flattenIssuesForDisplay(issues: ValidationResult['issues'], projectRoot: string): ErrorData[] {
+  return issues.map(issue => {
+    const file = issue.location ?? '';
+    return {
+      file,
+      absPath: file ? safePath.resolve(projectRoot, file) : '',
+      line: issue.line ?? 1,
+      column: 1,
+      code: issue.code,
+      severity: issue.severity,
+      message: issue.message,
+    };
+  });
 }
 
 interface ValidateOptions {
@@ -367,35 +458,15 @@ export async function validateCommand(
       validationMode,
       checkExternalUrls: options.checkExternalUrls ?? false,
       noCache: options.noCache ?? false,
+      // Thread the project's resources.validation config in. The CLI does NOT
+      // resolve severity itself — ResourceRegistry.validate() runs the framework.
+      validationConfig: config?.resources?.validation ?? {},
     });
 
     // Filter by collection if specified
-    let filteredIssues = validationResult.issues;
-    let filteredStats: RegistryStats;
-
-    if (options.collection) {
-      // Get resources in the specified collection
-      const { collection } = options;
-      const collectionResources = registry
-        .getAllResources()
-        .filter(r => (collection ? r.collections?.includes(collection) ?? false : false));
-      const collectionPaths = new Set(collectionResources.map(r => r.filePath));
-
-      // Only show issues from files in this collection
-      filteredIssues = validationResult.issues.filter(issue =>
-        collectionPaths.has(issue.resourcePath)
-      );
-
-      // Calculate filtered stats
-      const totalLinks = collectionResources.reduce((sum, r) => sum + r.links.length, 0);
-      filteredStats = {
-        totalResources: collectionResources.length,
-        totalLinks,
-        linksByType: validationResult.linksByType, // Keep all link types
-      };
-    } else {
-      filteredStats = registry.getStats();
-    }
+    const { filteredIssues, filteredStats } = options.collection
+      ? filterByCollection(registry, validationResult, options.collection, projectRoot)
+      : { filteredIssues: validationResult.issues, filteredStats: registry.getStats() };
 
     const duration = Date.now() - startTime;
 
@@ -405,58 +476,76 @@ export async function validateCommand(
       ...(options.frontmatterSchema ? { frontmatterSchema: options.frontmatterSchema } : {}),
     };
 
-    // Get collection stats (filtered if collection specified)
-    let collectionStats = registry.getCollectionStats();
-    if (options.collection && collectionStats) {
-      // Only show the specified collection
-      const collectionStat = collectionStats.collections[options.collection];
-      if (collectionStat) {
-        collectionStats = {
-          totalCollections: 1,
-          resourcesInCollections: collectionStat.resourceCount,
-          collections: { [options.collection]: collectionStat },
-        };
-      }
-    }
+    // Get collection stats (narrowed to the requested collection, if any).
+    const collectionStats = narrowCollectionStats(registry.getCollectionStats(), options.collection);
 
-    // Filter out external_url issues (informational only, not actual errors)
-    const actualErrors = filteredIssues.filter(
-      issue => issue.type !== 'external_url'
-    );
-    const hasErrors = actualErrors.length > 0;
+    // The library already severity-resolved every issue (allow-filtered, ignored
+    // dropped) and decided pass/fail. The CLI is a dumb orchestrator: the failure
+    // decision is exactly the framework's severity-based `hasErrors`. Warning- and
+    // info-severity issues are surfaced below but DO NOT flip the exit code.
+    const { hasErrors } = validationResult;
 
-    // Determine output format (default: yaml)
-    const outputFormat = options.format ?? 'yaml';
+    // Flatten issues for display (relative `file` + absolute `absPath`).
+    const issueData = flattenIssuesForDisplay(filteredIssues, projectRoot);
 
-    if (hasErrors) {
-      // Failure path
-      const errorData = actualErrors.map(issue => ({
-        file: issue.resourcePath,
-        line: issue.line ?? 1,
-        column: 1,
-        type: issue.type,
-        message: issue.message,
-      }));
+    // The count shown to the user as "errors" counts only error-severity issues.
+    const errorSeverityCount = issueData.filter(i => i.severity === 'error').length;
 
-      const context: ValidationContext = {
-        stats: filteredStats,
-        errorCount: validationResult.errorCount,
-        validationMetadata,
-        collectionStats,
-        duration,
-      };
+    const context: ValidationContext = {
+      stats: filteredStats,
+      errorCount: errorSeverityCount,
+      validationMetadata,
+      collectionStats,
+      duration,
+    };
 
-      outputFailure(errorData, outputFormat, context, registry);
-      logGitTrackerStats(gitTracker, logger);
-      process.exit(1);
-    } else {
-      // Success path
-      const context = { stats: filteredStats, validationMetadata, collectionStats, duration };
-      outputSuccess(outputFormat, context);
-      logGitTrackerStats(gitTracker, logger);
-      process.exit(0);
-    }
+    emitResult(issueData, context, registry, hasErrors, options.format ?? 'yaml');
+    logGitTrackerStats(gitTracker, logger);
+    // Exit decision is purely the library's severity-based `hasErrors`.
+    process.exit(hasErrors ? 1 : 0);
   } catch (error) {
     handleCommandError(error, logger, startTime, 'Validation');
+  }
+}
+
+/**
+ * Narrow collection stats to a single requested collection (no-op when no
+ * collection filter is active or the collection has no stats).
+ */
+function narrowCollectionStats(
+  collectionStats: CollectionStats | undefined,
+  collection: string | undefined
+): CollectionStats | undefined {
+  if (!collection || !collectionStats) {
+    return collectionStats;
+  }
+  const collectionStat = collectionStats.collections[collection];
+  if (!collectionStat) {
+    return collectionStats;
+  }
+  return {
+    totalCollections: 1,
+    resourcesInCollections: collectionStat.resourceCount,
+    collections: { [collection]: collectionStat },
+  };
+}
+
+/**
+ * Emit the result to stdout. Surfaces all issues when any fired; otherwise emits
+ * a clean success. Does NOT decide the exit code — the caller owns that.
+ */
+function emitResult(
+  issueData: ErrorData[],
+  context: ValidationContext,
+  registry: { getResource: (path: string) => { collections?: (string[] | undefined) } | undefined },
+  hasErrors: boolean,
+  outputFormat: OutputFormat
+): void {
+  if (issueData.length > 0) {
+    // Issues to surface (errors and/or warnings/info). Reported status follows
+    // the exit decision: 'failed' iff the framework flagged errors.
+    outputIssues(issueData, outputFormat, context, registry, hasErrors);
+  } else {
+    outputSuccess(outputFormat, context);
   }
 }

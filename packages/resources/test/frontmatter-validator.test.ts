@@ -54,7 +54,7 @@ describe('validateFrontmatter', () => {
     const issues = validateFrontmatter(frontmatter, simpleSchema, '/test.md');
 
     expect(issues).toHaveLength(1);
-    expect(issues[0]?.type).toBe('frontmatter_schema_error');
+    expect(issues[0]?.code).toBe('FRONTMATTER_SCHEMA_ERROR');
     expect(issues[0]?.message).toContain('description');
   });
 
@@ -62,7 +62,7 @@ describe('validateFrontmatter', () => {
     const issues = validateFrontmatter(undefined, simpleSchema, '/test.md');
 
     expect(issues).toHaveLength(1);
-    expect(issues[0]?.type).toBe('frontmatter_missing');
+    expect(issues[0]?.code).toBe('FRONTMATTER_MISSING');
     expect(issues[0]?.message).toContain('title');
     expect(issues[0]?.message).toContain('description');
   });

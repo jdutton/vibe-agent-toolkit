@@ -9,10 +9,10 @@
  */
 
 
+import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+
 import { AgentSkillFrontmatterSchema, VATAgentSkillFrontmatterSchema } from '../schemas/agent-skill-frontmatter.js';
 
-import { CODE_REGISTRY } from './code-registry.js';
-import type { ValidationIssue } from './types.js';
 import { VALIDATION_THRESHOLDS } from './validation-rules.js';
 
 // Location constants for validation messages

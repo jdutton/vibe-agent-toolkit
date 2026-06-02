@@ -12,8 +12,8 @@
  * provides a more actionable second message at info severity.
  */
 
-import { CODE_REGISTRY } from './code-registry.js';
-import type { ValidationIssue } from './types.js';
+import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+
 
 // eslint-disable-next-line security/detect-unsafe-regex -- Simple pattern with bounded length, safe from ReDoS (mirrors the regex in ClaudePluginSchema)
 const KEBAB_CASE_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;

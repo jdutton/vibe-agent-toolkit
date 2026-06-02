@@ -7,6 +7,7 @@
  * - Validation mode behavior (strict vs permissive)
  */
 
+import { createRegistryIssue } from '@vibe-agent-toolkit/agent-schema';
 import { describe, expect, it } from 'vitest';
 
 import type { SchemaReference } from '../src/types.js';
@@ -48,13 +49,12 @@ describe('SchemaReference', () => {
         source: 'docs-collection',
         applied: true,
         valid: false,
-        errors: [{
-          resourcePath: 'test.md',
-          line: 1,
-          type: 'frontmatter_schema_error',
-          link: '',
-          message: 'Missing required field: title',
-        }],
+        errors: [
+          createRegistryIssue('FRONTMATTER_SCHEMA_ERROR', 'Missing required field: title', {
+            location: 'test.md',
+            line: 1,
+          }),
+        ],
       };
 
       expect(ref.source).toBe('docs-collection');

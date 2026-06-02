@@ -11,6 +11,7 @@
 import type fs from 'node:fs/promises';
 import path from 'node:path';
 
+import { createRegistryIssue, type IssueCode, runValidationFramework, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, type GitTracker, normalizedTmpdir, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { calculateChecksum } from './checksum.js';
@@ -27,8 +28,8 @@ import type { ResourceCollectionInterface } from './resource-collection-interfac
 import type { SHA256 } from './schemas/checksum.js';
 import type { ProjectConfig } from './schemas/project-config.js';
 import type { HeadingNode, ResourceMetadata } from './schemas/resource-metadata.js';
-import type { ValidationIssue, ValidationResult } from './schemas/validation-result.js';
-import { matchesGlobPattern, splitHrefAnchor } from './utils.js';
+import type { ValidationResult } from './schemas/validation-result.js';
+import { issueLocation, matchesGlobPattern, splitHrefAnchor } from './utils.js';
 
 /**
  * Options for crawling directories to add resources.
@@ -72,6 +73,13 @@ export interface ValidateOptions {
   checkExternalUrls?: boolean;
   /** Disable cache for external URL checks (default: false) */
   noCache?: boolean;
+  /**
+   * Validation framework config (severity overrides + per-code allow entries).
+   * Applied INSIDE validate() via runValidationFramework — the library, not the
+   * CLI, resolves severity and drops ignored issues. Defaults to `{}` (no
+   * overrides: every issue keeps its registry default severity).
+   */
+  validationConfig?: ValidationConfig;
 }
 
 /**
@@ -422,13 +430,13 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     const issues: ValidationIssue[] = [];
     for (const resource of this.resourcesByPath.values()) {
       if (resource.frontmatterError) {
-        issues.push({
-          resourcePath: resource.filePath,
-          line: 1,
-          type: 'frontmatter_invalid_yaml',
-          link: '',
-          message: `Invalid YAML syntax in frontmatter: ${resource.frontmatterError}`,
-        });
+        issues.push(
+          createRegistryIssue(
+            'FRONTMATTER_INVALID_YAML',
+            `Invalid YAML syntax in frontmatter: ${resource.frontmatterError}`,
+            { location: issueLocation(resource.filePath, this.baseDir), line: 1 },
+          ),
+        );
       }
     }
     return issues;
@@ -479,7 +487,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         resource.frontmatter,
         schema,
         resource.filePath,
-        mode
+        mode,
+        undefined,
+        this.baseDir,
       );
       issues.push(...frontmatterIssues);
     }
@@ -593,6 +603,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         resource.filePath,
         mode,
         schemaPath,
+        this.baseDir,
       );
 
       // New: walk URI-family frontmatter values. Default-on; explicit `false` disables.
@@ -624,13 +635,13 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     } catch (error) {
       // Handle missing or invalid schema files gracefully
       const errorMessage = error instanceof Error ? error.message : String(error);
-      return [{
-        resourcePath: resource.filePath,
-        line: 1,
-        type: 'frontmatter_schema_error',
-        link: '',
-        message: `Failed to load or parse frontmatter schema '${validation.frontmatterSchema}': ${errorMessage}`,
-      }];
+      return [
+        createRegistryIssue(
+          'FRONTMATTER_SCHEMA_ERROR',
+          `Failed to load or parse frontmatter schema '${validation.frontmatterSchema}': ${errorMessage}`,
+          { location: issueLocation(resource.filePath, this.baseDir), line: 1 },
+        ),
+      ];
     }
   }
 
@@ -706,8 +717,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       issues.push(...externalUrlIssues);
     }
 
-    // Count issues (all are errors now)
-    const errorCount = issues.length;
+    // Resolve severity + apply allow-filter INSIDE the library (not the CLI).
+    // `emitted` = post-allow-filter, severity-resolved, with `ignore`d dropped.
+    const framework = runValidationFramework(issues, options?.validationConfig ?? {});
+    const emitted = framework.emitted;
+    const errorCount = emitted.length;
 
     // Count links by type
     const linksByType: Record<string, number> = {};
@@ -726,9 +740,10 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         0
       ),
       linksByType,
-      issues,
+      issues: emitted,
       errorCount,
       passed: errorCount === 0,
+      hasErrors: framework.hasErrors,
       durationMs,
       timestamp: new Date(),
     };
@@ -830,17 +845,17 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         continue;
       }
 
-      const issueType = this.determineExternalUrlIssueType(result.statusCode, result.error);
+      const issueCode = this.determineExternalUrlIssueCode(result.statusCode, result.error);
       const errorMessage = result.error ?? `HTTP ${result.statusCode}`;
 
       for (const location of locations) {
-        issues.push({
-          resourcePath: location.resourcePath,
-          line: location.line,
-          type: issueType,
-          link: result.url,
-          message: `External URL failed: ${errorMessage}`,
-        });
+        issues.push(
+          createRegistryIssue(issueCode, `External URL failed: ${errorMessage}`, {
+            location: issueLocation(location.resourcePath, this.baseDir),
+            link: result.url,
+            ...(location.line !== undefined && { line: location.line }),
+          }),
+        );
       }
     }
 
@@ -848,18 +863,18 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
-   * Determine issue type based on validation error.
+   * Determine the registry issue code based on the external-URL validation error.
    * @private
    */
-  private determineExternalUrlIssueType(statusCode: number, error?: string): string {
+  private determineExternalUrlIssueCode(statusCode: number, error?: string): IssueCode {
     if (statusCode === 0) {
       const errorLower = error?.toString().toLowerCase();
       if (errorLower?.includes('timeout')) {
-        return 'external_url_timeout';
+        return 'EXTERNAL_URL_TIMEOUT';
       }
-      return 'external_url_error';
+      return 'EXTERNAL_URL_ERROR';
     }
-    return 'external_url_dead';
+    return 'EXTERNAL_URL_DEAD';
   }
 
   /**

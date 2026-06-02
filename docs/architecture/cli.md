@@ -142,10 +142,11 @@ resources:
   exclude:
     - "node_modules/**"
     - "**/test/fixtures/**"
+  # Optional per-code severity overrides (error | warning | info | ignore).
   validation:
-    checkLinks: true
-    checkAnchors: true
-    allowExternal: true
+    severity:
+      EXTERNAL_URL_DEAD: ignore
+      FRONTMATTER_SCHEMA_ERROR: error
 ```
 
 #### Agent-Level Config

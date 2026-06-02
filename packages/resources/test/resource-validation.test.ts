@@ -1,40 +1,33 @@
+import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { describe, expect, it } from 'vitest';
-
-import type { ValidationIssue } from '../src/schemas/validation-result.js';
 
 const TEST_URL = 'https://example.com';
 
 describe('external URL validation', () => {
-  it('should create external_url_dead issue type', () => {
-    const issue: ValidationIssue = {
-      resourcePath: '/test.md',
+  it('should create EXTERNAL_URL_DEAD issue', () => {
+    const issue: ValidationIssue = createRegistryIssue('EXTERNAL_URL_DEAD', 'External URL returned 404', {
+      location: 'test.md',
       line: 1,
-      type: 'external_url_dead',
       link: TEST_URL,
-      message: 'External URL returned 404',
-    };
-    expect(issue.type).toBe('external_url_dead');
+    });
+    expect(issue.code).toBe('EXTERNAL_URL_DEAD');
   });
 
-  it('should create external_url_timeout issue type', () => {
-    const issue: ValidationIssue = {
-      resourcePath: '/test.md',
+  it('should create EXTERNAL_URL_TIMEOUT issue', () => {
+    const issue: ValidationIssue = createRegistryIssue('EXTERNAL_URL_TIMEOUT', 'Connection timeout after 15s', {
+      location: 'test.md',
       line: 1,
-      type: 'external_url_timeout',
       link: TEST_URL,
-      message: 'Connection timeout after 15s',
-    };
-    expect(issue.type).toBe('external_url_timeout');
+    });
+    expect(issue.code).toBe('EXTERNAL_URL_TIMEOUT');
   });
 
-  it('should create external_url_error issue type', () => {
-    const issue: ValidationIssue = {
-      resourcePath: '/test.md',
+  it('should create EXTERNAL_URL_ERROR issue', () => {
+    const issue: ValidationIssue = createRegistryIssue('EXTERNAL_URL_ERROR', 'DNS resolution failed', {
+      location: 'test.md',
       line: 1,
-      type: 'external_url_error',
       link: TEST_URL,
-      message: 'DNS resolution failed',
-    };
-    expect(issue.type).toBe('external_url_error');
+    });
+    expect(issue.code).toBe('EXTERNAL_URL_ERROR');
   });
 });

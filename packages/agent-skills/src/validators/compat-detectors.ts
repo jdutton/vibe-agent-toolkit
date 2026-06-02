@@ -10,6 +10,8 @@
  * is called against every emitted record).
  */
 
+import { CODE_REGISTRY, type IssueCode, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
 import {
   assertPatternRegistered,
@@ -18,8 +20,6 @@ import {
   getPatternDefinition,
 } from '../evidence/index.js';
 
-import { CODE_REGISTRY, type IssueCode } from './code-registry.js';
-import type { ValidationIssue } from './types.js';
 
 const SHELL_LANGUAGES = new Set(['bash', 'sh', 'shell', 'zsh']);
 const LOCAL_SHELL_TOOLS = ['Bash', 'Edit', 'Write', 'NotebookEdit'] as const;

@@ -259,7 +259,7 @@ describe('ResourceRegistry - Integration Tests', () => {
       expect(result.passed).toBe(false);
       expect(result.errorCount).toBeGreaterThan(0);
 
-      const brokenFileIssue = result.issues.find((i) => i.type === 'broken_file');
+      const brokenFileIssue = result.issues.find((i) => i.code === 'LINK_BROKEN_FILE');
       expect(brokenFileIssue).toBeDefined();
       expect(brokenFileIssue?.message).toContain('File not found');
     });
@@ -274,7 +274,7 @@ describe('ResourceRegistry - Integration Tests', () => {
       expect(result.passed).toBe(false);
       expect(result.errorCount).toBeGreaterThan(0);
 
-      const brokenAnchorIssue = result.issues.find((i) => i.type === 'broken_anchor');
+      const brokenAnchorIssue = result.issues.find((i) => i.code === 'LINK_BROKEN_ANCHOR');
       expect(brokenAnchorIssue).toBeDefined();
       expect(brokenAnchorIssue?.message).toContain('Anchor not found');
     });
@@ -288,7 +288,7 @@ describe('ResourceRegistry - Integration Tests', () => {
       const result = await registry.validate();
 
       // Filter to only issues from valid.md
-      const validIssues = result.issues.filter((i) => i.resourcePath.endsWith('valid.md'));
+      const validIssues = result.issues.filter((i) => i.location.endsWith('valid.md'));
 
       // Should have no errors from valid.md
       expect(validIssues).toHaveLength(0);
@@ -580,7 +580,7 @@ describe('ResourceRegistry - Integration Tests', () => {
 
       // Should have 1 error for the file without frontmatter
       expect(result.errorCount).toBe(1);
-      const error = result.issues.find((i) => i.type === 'frontmatter_missing');
+      const error = result.issues.find((i) => i.code === 'FRONTMATTER_MISSING');
       expect(error).toBeDefined();
       expect(error?.message).toContain('title');
     });
@@ -608,7 +608,7 @@ tags: test
 
       // Should have 1 error for invalid YAML
       expect(result.errorCount).toBe(1);
-      const error = result.issues.find((i) => i.type === 'frontmatter_invalid_yaml');
+      const error = result.issues.find((i) => i.code === 'FRONTMATTER_INVALID_YAML');
       expect(error).toBeDefined();
       expect(error?.message).toContain('Invalid YAML syntax');
     });

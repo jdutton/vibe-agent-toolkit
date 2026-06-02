@@ -266,7 +266,7 @@ export interface ValidateLinkOptions {
   headingsMap: Map<string, HeadingNode[]>;
   /** Expected validation result (null = valid, object = error) */
   expected: null | {
-    type: ValidationIssue['type'];
+    code: ValidationIssue['code'];
     messageContains?: string | string[];
     hasSuggestion?: boolean;
     /** Expected link property value */
@@ -301,8 +301,8 @@ function assertValidationError(
   expected: NonNullable<ValidateLinkOptions['expected']>,
   expectFn: (_: unknown) => Assertion<unknown>,
 ): void {
-  // Assert type
-  expectFn(result?.type).toBe(expected.type);
+  // Assert code
+  expectFn(result?.code).toBe(expected.code);
 
   // Assert message contains expected text(s)
   if (expected.messageContains !== undefined) {

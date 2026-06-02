@@ -155,7 +155,7 @@ describe('Frontmatter URI-reference link validation (integration)', () => {
     });
 
     const result = await validate(project, baseConfig);
-    const validIssues = result.issues.filter((i) => i.resourcePath.endsWith('valid-prd.md'));
+    const validIssues = result.issues.filter((i) => i.location.endsWith('valid-prd.md'));
     expect(validIssues).toEqual([]);
   });
 
@@ -183,7 +183,7 @@ describe('Frontmatter URI-reference link validation (integration)', () => {
 
     const result = await validate(project, baseConfig);
     const brokenIssues = result.issues.filter(
-      (i) => i.resourcePath.endsWith('broken-prd.md') && i.type === 'frontmatter_link_broken',
+      (i) => i.location.endsWith('broken-prd.md') && i.code === 'FRONTMATTER_LINK_BROKEN',
     );
     expect(brokenIssues).toHaveLength(4);
     const messages = brokenIssues.map((i) => i.message);
@@ -193,7 +193,7 @@ describe('Frontmatter URI-reference link validation (integration)', () => {
     expect(messages.some((m) => m.includes('artifacts[0]'))).toBe(true);
 
     const anchorIssues = result.issues.filter(
-      (i) => i.resourcePath.endsWith('broken-prd.md') && i.type === 'frontmatter_anchor_missing',
+      (i) => i.location.endsWith('broken-prd.md') && i.code === 'FRONTMATTER_ANCHOR_MISSING',
     );
     expect(anchorIssues).toHaveLength(1);
     expect(anchorIssues[0]?.message).toContain('adr_citations[1].adr');
@@ -218,7 +218,7 @@ describe('Frontmatter URI-reference link validation (integration)', () => {
 
     const result = await validate(project, baseConfig);
     const ignoredIssues = result.issues.filter(
-      (i) => i.type === 'frontmatter_link_to_gitignored',
+      (i) => i.code === 'FRONTMATTER_LINK_TO_GITIGNORED',
     );
     expect(ignoredIssues).toHaveLength(1);
     expect(ignoredIssues[0]?.message).toContain('parent_prd');
@@ -240,7 +240,7 @@ describe('Frontmatter URI-reference link validation (integration)', () => {
     });
 
     const result = await validate(project, baseConfig);
-    const unknownIssues = result.issues.filter((i) => i.type === 'frontmatter_unknown_link');
+    const unknownIssues = result.issues.filter((i) => i.code === 'FRONTMATTER_UNKNOWN_LINK');
     expect(unknownIssues).toHaveLength(1);
   });
 
@@ -279,10 +279,10 @@ describe('Frontmatter URI-reference link validation (integration)', () => {
     const result = await validate(project, config);
     const fmIssues = result.issues.filter(
       (i) =>
-        i.type === 'frontmatter_link_broken' ||
-        i.type === 'frontmatter_anchor_missing' ||
-        i.type === 'frontmatter_unknown_link' ||
-        i.type === 'frontmatter_link_to_gitignored',
+        i.code === 'FRONTMATTER_LINK_BROKEN' ||
+        i.code === 'FRONTMATTER_ANCHOR_MISSING' ||
+        i.code === 'FRONTMATTER_UNKNOWN_LINK' ||
+        i.code === 'FRONTMATTER_LINK_TO_GITIGNORED',
     );
     expect(fmIssues).toEqual([]);
   });
@@ -304,7 +304,7 @@ describe('Frontmatter URI-reference link validation (integration)', () => {
     });
 
     const result = await validate(project, baseConfig);
-    const issues = result.issues.filter((i) => i.resourcePath.endsWith('external-prd.md'));
+    const issues = result.issues.filter((i) => i.location.endsWith('external-prd.md'));
     expect(issues).toEqual([]);
   });
 });

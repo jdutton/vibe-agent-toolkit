@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { CODE_REGISTRY, type IssueCode } from '../../src/validators/code-registry.js';
+import { CODE_REGISTRY, IssueCodeSchema, type IssueCode } from '../src/validation-codes.js';
 
 describe('CODE_REGISTRY', () => {
   it('contains every overridable code with a default severity', () => {
@@ -82,5 +82,11 @@ describe('CODE_REGISTRY — capability and compat codes', () => {
     for (const code of ['COMPAT_TARGET_INCOMPATIBLE', 'COMPAT_TARGET_NEEDS_REVIEW', 'COMPAT_TARGET_UNDECLARED'] as const) {
       expect(CODE_REGISTRY[code].reference).toMatch(/^#compat_target_/);
     }
+  });
+});
+
+describe('IssueCodeSchema', () => {
+  it('IssueCodeSchema enumerates exactly the registry keys', () => {
+    expect(new Set(IssueCodeSchema.options)).toEqual(new Set(Object.keys(CODE_REGISTRY)));
   });
 });

@@ -13,9 +13,11 @@
  * This is the ONLY place in the codebase that should use AJV.
  */
 
+import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+
 import { createAjvWithUriFormats } from './ajv-factory.js';
 import type { ValidationMode } from './schemas/project-config.js';
-import type { ValidationIssue } from './schemas/validation-result.js';
+import { issueLocation } from './utils.js';
 
 /**
  * Validate frontmatter against a JSON Schema.
@@ -31,6 +33,7 @@ import type { ValidationIssue } from './schemas/validation-result.js';
  * @param resourcePath - File path for error reporting
  * @param mode - Validation mode: 'strict' (default) or 'permissive'
  * @param schemaPath - Path to schema file (for error context)
+ * @param projectRoot - Project root for computing relative issue locations
  * @returns Array of validation issues (empty if valid)
  *
  * @example
@@ -54,7 +57,8 @@ export function validateFrontmatter(
   schema: object,
   resourcePath: string,
   mode: ValidationMode = 'strict',
-  schemaPath?: string
+  schemaPath?: string,
+  projectRoot?: string,
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
 
@@ -87,13 +91,13 @@ export function validateFrontmatter(
       const schemaContext = schemaPath ? ` (schema: ${schemaPath}, mode: ${mode})` : '';
       const requiredFields = schemaRequires.join(', ');
 
-      issues.push({
-        resourcePath,
-        line: 1,
-        type: 'frontmatter_missing',
-        link: '',
-        message: `No frontmatter found in file. Schema requires: ${requiredFields}${schemaContext}`,
-      });
+      issues.push(
+        createRegistryIssue(
+          'FRONTMATTER_MISSING',
+          `No frontmatter found in file. Schema requires: ${requiredFields}${schemaContext}`,
+          { location: issueLocation(resourcePath, projectRoot), line: 1 },
+        ),
+      );
     }
     return issues;
   }
@@ -108,13 +112,12 @@ export function validateFrontmatter(
   // Format validation errors with helpful messages
   for (const error of validate.errors) {
     const message = formatValidationError(error, frontmatter, mode, schemaPath);
-    issues.push({
-      resourcePath,
-      line: 1,
-      type: 'frontmatter_schema_error',
-      link: '',
-      message,
-    });
+    issues.push(
+      createRegistryIssue('FRONTMATTER_SCHEMA_ERROR', message, {
+        location: issueLocation(resourcePath, projectRoot),
+        line: 1,
+      }),
+    );
   }
 
   return issues;

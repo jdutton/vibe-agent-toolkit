@@ -31,7 +31,7 @@ async function assertGitignoreError(gitRoot: string, linkHref: string, linkText:
       link,
       headingsMap,
       expected: {
-        type: 'link_to_gitignored',
+        code: 'LINK_TO_GITIGNORED',
         messageContains: 'gitignored',
         hasSuggestion: true,
       },
@@ -91,7 +91,7 @@ describe('validateLink', () => {
           link: createLink('local_file', NONEXISTENT_FILE_LINK, 'Broken link', 3),
           headingsMap: new Map<string, HeadingNode[]>(),
           expected: {
-            type: 'broken_file',
+            code: 'LINK_BROKEN_FILE',
             messageContains: ['File not found', 'nonexistent.md'],
             hasSuggestion: true,
           },
@@ -120,7 +120,7 @@ describe('validateLink', () => {
             link: createLink('local_file', './testfile.md', 'Wrong case link', 3),
             headingsMap: new Map<string, HeadingNode[]>(),
             expected: {
-              type: 'broken_file',
+              code: 'LINK_BROKEN_FILE',
               messageContains: ['case mismatch', 'TestFile.md', 'testfile.md'],
               hasSuggestion: true,
             },
@@ -157,7 +157,7 @@ describe('validateLink', () => {
             [targetFile, createHeadings(VALID_ANCHOR_HEADING)],
           ]),
           expected: {
-            type: 'broken_anchor',
+            code: 'LINK_BROKEN_ANCHOR',
             messageContains: ['Anchor not found', 'nonexistent-heading'],
             hasSuggestion: true,
           },
@@ -179,7 +179,7 @@ describe('validateLink', () => {
       const result = await validateLink(link, sourceFile, headingsMap);
 
       expect(result).not.toBeNull();
-      expect(result?.type).toBe('broken_file');
+      expect(result?.code).toBe('LINK_BROKEN_FILE');
       expect(result?.message).toContain('requires a configured projectRoot');
     });
 
@@ -235,7 +235,7 @@ describe('validateLink', () => {
             [sourceFile, createHeadings(HEADING_ANCHOR_HEADING)],
           ]),
           expected: {
-            type: 'broken_anchor',
+            code: 'LINK_BROKEN_ANCHOR',
             messageContains: ['Anchor not found', NONEXISTENT_ANCHOR],
           },
         },
@@ -289,7 +289,7 @@ describe('validateLink', () => {
           link: createLink('anchor', '#any-heading', 'No headings', 5),
           headingsMap: new Map<string, HeadingNode[]>(),
           expected: {
-            type: 'broken_anchor',
+            code: 'LINK_BROKEN_ANCHOR',
           },
         },
         expect,
@@ -350,7 +350,7 @@ describe('validateLink', () => {
           link: createLink('unknown', 'ftp://example.com/file', 'FTP link', 10),
           headingsMap: new Map<string, HeadingNode[]>(),
           expected: {
-            type: 'unknown_link',
+            code: 'LINK_UNKNOWN',
             messageContains: 'Unknown link type',
             link: 'ftp://example.com/file',
           },
@@ -367,7 +367,7 @@ describe('validateLink', () => {
           link: createLink('unknown', 'tel:+1234567890', 'Tel link', 11),
           headingsMap: new Map<string, HeadingNode[]>(),
           expected: {
-            type: 'unknown_link',
+            code: 'LINK_UNKNOWN',
           },
         },
         expect,
@@ -424,7 +424,7 @@ describe('validateLink', () => {
       const result = await validateLink(link, sourceFile, headingsMap);
 
       expect(result).not.toBeNull();
-      expect(result?.type).toBe('broken_anchor');
+      expect(result?.code).toBe('LINK_BROKEN_ANCHOR');
     });
 
     it('should handle file path with anchor where file does not exist', async () => {
@@ -436,7 +436,7 @@ describe('validateLink', () => {
 
       // Should fail on file check, not anchor check
       expect(result).not.toBeNull();
-      expect(result?.type).toBe('broken_file');
+      expect(result?.code).toBe('LINK_BROKEN_FILE');
     });
 
     it('should handle file with only anchor (empty file path)', async () => {
@@ -499,14 +499,14 @@ describe('validateLink', () => {
       const result = await validateLink(link, sourceFile, headingsMap);
 
       expect(result).not.toBeNull();
-      expect(result).toHaveProperty('resourcePath');
+      expect(result).toHaveProperty('location');
       expect(result).toHaveProperty('line');
-      expect(result).toHaveProperty('type');
+      expect(result).toHaveProperty('code');
       expect(result).toHaveProperty('link');
       expect(result).toHaveProperty('message');
       expect(result).toHaveProperty('suggestion');
 
-      expect(result?.resourcePath).toBe(sourceFile);
+      expect(result?.location).toBe(sourceFile);
       expect(result?.line).toBe(3);
       expect(result?.link).toBe(NONEXISTENT_FILE_LINK);
     });
@@ -666,7 +666,7 @@ describe('validateLink', () => {
         skipGitIgnoreCheck: true,
       });
       expect(result).not.toBeNull();
-      expect(result?.type).toBe('broken_file');
+      expect(result?.code).toBe('LINK_BROKEN_FILE');
       expect(result?.message).toContain('requires a configured projectRoot');
     });
 
@@ -677,7 +677,7 @@ describe('validateLink', () => {
         skipGitIgnoreCheck: true,
       });
       expect(result).not.toBeNull();
-      expect(result?.type).toBe('broken_file');
+      expect(result?.code).toBe('LINK_BROKEN_FILE');
       expect(result?.message).toContain('escapes the project root via path traversal');
     });
 
@@ -706,7 +706,7 @@ describe('validateLink', () => {
           sourceFile,
           link: createLink('local_file', '/docs/', 'Directory target', 1),
           headingsMap: new Map<string, HeadingNode[]>(),
-          expected: { type: 'broken_file', messageContains: 'Link target is a directory' },
+          expected: { code: 'LINK_BROKEN_FILE', messageContains: 'Link target is a directory' },
           validationOptions: { projectRoot, skipGitIgnoreCheck: true },
         },
         expect,
@@ -720,7 +720,7 @@ describe('validateLink', () => {
           sourceFile,
           link: createLink('local_file', '../', 'Relative directory target', 1),
           headingsMap: new Map<string, HeadingNode[]>(),
-          expected: { type: 'broken_file', messageContains: 'Link target is a directory' },
+          expected: { code: 'LINK_BROKEN_FILE', messageContains: 'Link target is a directory' },
           validationOptions: { projectRoot, skipGitIgnoreCheck: true },
         },
         expect,

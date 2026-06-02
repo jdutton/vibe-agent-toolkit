@@ -160,7 +160,7 @@ describe('validateLink - git-ignore safety', () => {
     const result = await validateWithGitIgnoreCheck(sourceFile, '../ignored/secret.md', projectRoot);
 
     expect(result).not.toBeNull();
-    expect(result?.type).toBe('link_to_gitignored');
+    expect(result?.code).toBe('LINK_TO_GITIGNORED');
     expect(result?.message).toContain('gitignored');
     expect(result?.message).toContain(ignoredFile);
     expect(result?.suggestion).toBeDefined();
@@ -218,7 +218,7 @@ describe('validateLink - git-ignore safety', () => {
     );
 
     expect(result).not.toBeNull();
-    expect(result?.type).toBe('broken_file');
+    expect(result?.code).toBe('LINK_BROKEN_FILE');
   });
 
   it('should validate non-ignored file to non-ignored file normally', async () => {
@@ -241,6 +241,6 @@ describe('validateLink - git-ignore safety', () => {
     const result = await validateWithGitIgnoreCheck(sourceFile, './password.secret', projectRoot);
 
     expect(result).not.toBeNull();
-    expect(result?.type).toBe('link_to_gitignored');
+    expect(result?.code).toBe('LINK_TO_GITIGNORED');
   });
 });

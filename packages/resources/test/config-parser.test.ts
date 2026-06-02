@@ -327,6 +327,27 @@ describe('collections optional', () => {
   });
 });
 
+describe('resources.validation config block', () => {
+  it('should accept a resources.validation severity override', () => {
+    const result = ProjectConfigSchema.safeParse({
+      version: 1,
+      resources: { validation: { severity: { EXTERNAL_URL_DEAD: 'ignore' } } },
+    });
+
+    expect(result.success).toBe(true);
+    expect(result.data?.resources?.validation?.severity?.EXTERNAL_URL_DEAD).toBe('ignore');
+  });
+
+  it('should reject a bogus issue-code key in resources.validation.severity', () => {
+    const result = ProjectConfigSchema.safeParse({
+      version: 1,
+      resources: { validation: { severity: { NOT_A_REAL_CODE: 'error' } } },
+    });
+
+    expect(result.success).toBe(false);
+  });
+});
+
 describe('ClaudeMarketplaceSchema with publish config', () => {
   it('should accept valid publish config with all fields', () => {
     const result = ClaudeMarketplaceSchema.safeParse({

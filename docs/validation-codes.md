@@ -13,6 +13,8 @@ This reference lists every overridable validation code VAT emits, plus the two m
 - **`ignore`** — do not emit (check still runs; result is discarded).
 - **`info`** — structural reports (inventory, file counts); outside this framework, always emitted, never block.
 
+Both `warning` and `info` are non-failing — neither ever flips the exit code; `info` is the quieter, display-only level (structural reports and low-confidence observations) while `warning` signals something the author should address.
+
 No per-code blocking/non-blocking exceptions. If severity is `error`, it blocks. Every code.
 
 ## Configuring
@@ -94,37 +96,111 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 - **Why it matters:** Each `SKILL.md` is a skill entry point. Including one skill's entry point inside another skill's bundle causes the agent framework to register the same skill twice, leading to unpredictable trigger behavior.
 - **Fix:** Link to a specific resource inside the other skill, or reference the other skill by name.
 
+### `LINK_BROKEN_FILE`
+
+- **Default:** `error`
+- **What:** A local file link points to a non-existent file.
+- **Why it matters:** A broken local link is a dead reference — an agent or human following it lands on nothing. In a resources-path document this almost always means a typo, a renamed file, or a target that was deleted without updating the link. Distinct from the packaging-oriented [`LINK_MISSING_TARGET`](#link_missing_target): this fires in the `vat resources validate` path where build-artifact declarations do not apply.
+- **Fix:** Fix the path or create the target file.
+
+### `LINK_BROKEN_ANCHOR`
+
+- **Default:** `error`
+- **What:** An anchor link (`file.md#section` or in-page `#section`) points to a heading or id that does not exist in the target.
+- **Why it matters:** Anchor drift silently breaks deep-links. The file resolves, so the link looks valid, but the reader lands at the top of the document instead of the cited section — the worst kind of broken link because it is invisible until followed.
+- **Fix:** Fix the fragment to match an existing heading slug, or fix the target heading.
+
+### `LINK_UNKNOWN`
+
+- **Default:** `warning`
+- **What:** A link could not be classified into any recognized link form (local file, anchor, external URL, mailto, etc.).
+- **Why it matters:** An unclassifiable link usually indicates a malformed reference or an unsupported scheme. A warning (not an error) because the link engine cannot prove it is broken — only that it does not recognize the form. The markdown-link counterpart to the frontmatter [`frontmatter_unknown_link`](#frontmatter_unknown_link).
+- **Fix:** Use a recognized link form.
+
+### `LINK_TO_GITIGNORED`
+
+- **Default:** `error`
+- **What:** A tracked file links to a gitignored file.
+- **Why it matters:** A committed document declaring a dependency on a gitignored target breaks portability — anyone cloning the repo gets the document but not the target. It also risks treating local-only or generated content as if it were part of the published artifact. Distinct from the skills-packaging code [`LINK_TO_GITIGNORED_FILE`](#link_to_gitignored_file), which guards against leaking ignored data into a *bundle*; this code fires in the `vat resources validate` path and the two coexist intentionally.
+- **Fix:** Link a tracked target, or un-ignore the file in `.gitignore` if it should be committed.
+
 ## Frontmatter Link Codes
 
 Validation codes that fire when a collection's frontmatter schema declares a URI-family `format` (`uri-reference`, `uri`, `iri-reference`, `iri`) on a field and `vat resources validate` walks those values through the same engine as markdown link checking. Disabled per-collection via `validation.checkFrontmatterLinks: false` or globally via `vat resources validate --no-check-frontmatter-links`. See [Frontmatter link validation](./guides/collection-validation.md#frontmatter-link-validation).
 
-### `frontmatter_link_broken`
+### `FRONTMATTER_MISSING`
+
+- **Default:** `error`
+- **What:** A collection's schema requires frontmatter but the file has none.
+- **Why it matters:** When a collection's frontmatter schema declares required fields, a file with no frontmatter block cannot satisfy the contract. The absence is almost always an authoring oversight — the file was added to a schema-governed collection without the metadata the collection expects.
+- **Fix:** Add the required frontmatter block to the file, or move the file out of the schema-governed collection if it is not meant to carry metadata.
+
+### `FRONTMATTER_INVALID_YAML`
+
+- **Default:** `error`
+- **What:** The file's frontmatter block failed to parse as YAML.
+- **Why it matters:** A frontmatter block that does not parse cannot be validated or consumed downstream. The metadata is effectively lost, and tooling that depends on it (collection schema validation, link checking, indexing) silently sees an empty document.
+- **Fix:** Fix the YAML syntax in the frontmatter block (indentation, quoting, unescaped special characters).
+
+### `FRONTMATTER_SCHEMA_ERROR`
+
+- **Default:** `error`
+- **What:** The file's frontmatter parsed as YAML but failed JSON Schema validation for its collection.
+- **Why it matters:** A schema validation failure means the metadata violates the contract the collection declares — a missing required field, a wrong type, or a disallowed extra field under `strict` mode. Downstream consumers relying on the schema's guarantees will misbehave.
+- **Fix:** Make the frontmatter conform to the collection's schema — add missing required fields, correct field types, or remove disallowed fields.
+
+### `FRONTMATTER_LINK_BROKEN`
 
 - **Default:** `error`
 - **What:** A frontmatter value at a JSON Schema position with a URI-family `format` resolves to a relative path that does not exist on disk.
 - **Why it matters:** The schema author's explicit `format: "uri-reference"` declaration is a contract that this field points at a real artifact. A broken value silently passes AJV validation today and only surfaces when an agent or human follows the link.
 - **Fix:** Correct the path, create the target, or remove the field. The `frontmatter_link_broken` markdown-link equivalent is [`LINK_MISSING_TARGET`](#link_missing_target).
 
-### `frontmatter_anchor_missing`
+### `FRONTMATTER_ANCHOR_MISSING`
 
 - **Default:** `error`
 - **What:** A frontmatter URI-reference value contains `#anchor` and the anchor does not match any heading slug in the target file.
 - **Why it matters:** Anchor drift silently breaks deep-links from frontmatter (e.g., `adr_citations[0].adr: docs/adr/0007.md#decision`). Agents and humans following the reference land at the top of the file instead of the cited section.
 - **Fix:** Update the anchor to match a heading slug in the target, or drop the `#anchor` portion if no specific section is meant.
 
-### `frontmatter_link_to_gitignored`
+### `FRONTMATTER_LINK_TO_GITIGNORED`
 
 - **Default:** `error`
 - **What:** A non-gitignored file references a gitignored target via a URI-reference frontmatter field.
 - **Why it matters:** Same risk as the markdown-link equivalent: a committed file claims a dependency on a target that isn't tracked, breaking portability for anyone cloning the repo and risking exposure of locally-only content.
 - **Fix:** Reference a non-ignored file, or adjust `.gitignore`. The markdown-link equivalent is [`LINK_TO_GITIGNORED_FILE`](#link_to_gitignored_file).
 
-### `frontmatter_unknown_link`
+### `FRONTMATTER_UNKNOWN_LINK`
 
-- **Default:** `error`
-- **What:** A frontmatter URI-reference value uses an unknown URI scheme (e.g., `tel:`, `javascript:`, `git+ssh:`).
-- **Why it matters:** URI-family fields are expected to be `http(s)://`, `mailto:`, or local path references. Unknown schemes typically indicate a typo, a paste error, or a deliberately unsupported protocol that won't resolve at runtime. Distinct from the markdown-link `unknown_link` so severity can be configured per surface.
-- **Fix:** Correct the value to a supported scheme, or add a `pattern` constraint to the field if a specific allow-list is required.
+- **Default:** `warning`
+- **What:** A frontmatter URI reference could not be classified — it uses an unknown URI scheme (e.g., `tel:`, `javascript:`, `git+ssh:`) or a form the link engine does not recognize.
+- **Why it matters:** URI-family fields are expected to be `http(s)://`, `mailto:`, or local path references. Unknown schemes typically indicate a typo, a paste error, or a deliberately unsupported protocol that won't resolve at runtime. A warning (not an error) because an unclassifiable reference is a signal to review, not a guaranteed breakage. Distinct from the markdown-link [`LINK_UNKNOWN`](#link_unknown) so severity can be configured per surface.
+- **Fix:** Use a recognized reference form — correct the value to a supported scheme, or add a `pattern` constraint to the field if a specific allow-list is required.
+
+## External URL Codes
+
+Codes that fire when `vat resources validate` checks external `http(s)://` links by issuing network requests. Network checks are opt-in and best-effort — all three default to `warning` because a failed request may reflect a transient outage, a rate limit, or a network condition on the validating machine rather than a genuinely broken link. Set the relevant `severity` to `ignore` to disable a class, or use `validation.allow` to suppress specific URLs.
+
+### `EXTERNAL_URL_DEAD`
+
+- **Default:** `warning`
+- **What:** An external URL returned an error status (4xx/5xx).
+- **Why it matters:** A 4xx/5xx response usually means the linked resource moved, was removed, or requires auth the validator does not have. Readers following the link hit an error page. A warning rather than an error because the status may be transient (a 503) or environment-specific (a 403 behind a corporate proxy).
+- **Fix:** Fix or remove the link; or set `severity.EXTERNAL_URL_DEAD` to `ignore` if the endpoint is expected to be unreachable from validation.
+
+### `EXTERNAL_URL_TIMEOUT`
+
+- **Default:** `warning`
+- **What:** An external URL request timed out before a response arrived.
+- **Why it matters:** A timeout may mean the host is slow, the link is dead, or the validating machine's network is constrained. The ambiguity is why this is a warning — a timeout is not proof the link is broken.
+- **Fix:** Retry; raise the request timeout; or set `severity.EXTERNAL_URL_TIMEOUT` to `ignore` for known-slow hosts.
+
+### `EXTERNAL_URL_ERROR`
+
+- **Default:** `warning`
+- **What:** An external URL request failed at the network level (DNS resolution failure, connection refused, TLS error).
+- **Why it matters:** A network-level failure often reflects a transient DNS or connectivity problem on the validating machine rather than a genuinely broken link, so it is surfaced as a warning rather than blocking the build.
+- **Fix:** Check the host (DNS, reachability, certificate); or set `severity.EXTERNAL_URL_ERROR` to `ignore` if the host is intentionally unreachable from the validation environment.
 
 ## Packaging-Only Codes
 
@@ -324,28 +400,28 @@ Best-practice checks about skill shape and content.
 
 Structural checks derived from the plugin inventory layer. These codes fire when the inventory model detects a mismatch between what a manifest declares and what exists on disk. They are emitted during `vat audit` (and any future command that consumes the inventory layer). All four are detector-based (pure functions) — no filesystem I/O at detection time.
 
-### `COMPONENT_DECLARED_BUT_MISSING` {#component_declared_but_missing}
+### `COMPONENT_DECLARED_BUT_MISSING`
 
 - **Default:** `warning`
 - **What:** A component path declared in the plugin manifest (`skills`, `commands`, `agents`, `hooks`, `mcpServers`, `outputStyles`, or `lspServers`) does not exist on disk.
 - **Why it matters:** Claude Code logs a warn-level message and continues install when a declared component is absent — the plugin installs but the missing component is silently skipped. This is often a path typo, a file that was deleted without updating the manifest, or a build artifact that was not generated. Catching it at audit time shifts the failure from a silent runtime skip to a visible pre-flight warning.
 - **Fix:** Add the missing file, remove the manifest declaration, or correct the path. Use `validation.allow` if the artifact is intentionally generated by an install-time build step.
 
-### `COMPONENT_PRESENT_BUT_UNDECLARED` {#component_present_but_undeclared}
+### `COMPONENT_PRESENT_BUT_UNDECLARED`
 
 - **Default:** `info`
 - **What:** A component (skill, command, or agent) is present under the canonical layout but the manifest declares an explicit list that omits it; the runtime may silently skip it at install.
 - **Why it matters:** Claude Code applies auto-discovery when the manifest _omits_ a field entirely. But when the manifest provides an explicit list (including an empty `[]`), auto-discovery is suppressed — only listed components are installed. A file that ships but is absent from the explicit list will be silently skipped. This code fires only when `declared !== null` (explicit list present); a missing field is intentional auto-discovery and is not flagged.
 - **Fix:** Add the component to the appropriate manifest field, or remove the file if unintended. Skipped when the manifest omits the field entirely.
 
-### `REFERENCE_TARGET_MISSING` {#reference_target_missing}
+### `REFERENCE_TARGET_MISSING`
 
 - **Default:** `error`
 - **What:** A cross-component reference resolved from the manifest (e.g., a hook's `script` path, an MCP server's `path`) points to a file that does not exist on disk.
 - **Why it matters:** These are direct manifest-level pointers — not auto-discovered paths but explicit path declarations. A missing target means the component cannot be loaded at all. Unlike a missing declared component (which the loader skips), a broken cross-reference causes the manifest to be malformed in a way that prevents the referencing component from initializing.
 - **Fix:** Add the referenced file or correct the path in the manifest.
 
-### `MARKETPLACE_PLUGIN_SOURCE_MISSING` {#marketplace_plugin_source_missing}
+### `MARKETPLACE_PLUGIN_SOURCE_MISSING`
 
 - **Default:** `error`
 - **What:** A marketplace manifest declares a plugin with a `path`-based source that does not exist on disk.

@@ -1,10 +1,10 @@
 import { fileURLToPath } from 'node:url';
 
+import { runValidationFramework } from '@vibe-agent-toolkit/agent-schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { validateSkill } from '../../src/validators/skill-validator.js';
-import { runValidationFramework } from '../../src/validators/validation-framework.js';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const FIXTURES = safePath.join(__dirname, '..', 'fixtures', 'compat-scenarios');

@@ -10,6 +10,21 @@ import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
 /**
+ * Compute a `ValidationIssue.location`: the (absolute) source file path made
+ * relative to the project root. When no project root is known, fall back to the
+ * source path forward-slashed so the location is still useful and stable.
+ *
+ * @param sourceFilePath - Absolute path to the file the issue was found in.
+ * @param projectRoot - Project root, or undefined when none could be determined.
+ * @returns Forward-slashed relative location (or the forward-slashed absolute path).
+ */
+export function issueLocation(sourceFilePath: string, projectRoot: string | undefined): string {
+  return projectRoot === undefined
+    ? toForwardSlash(sourceFilePath)
+    : safePath.relative(projectRoot, sourceFilePath);
+}
+
+/**
  * Check if a file path matches a glob pattern.
  *
  * Uses picomatch with Unix-style paths for cross-platform compatibility.

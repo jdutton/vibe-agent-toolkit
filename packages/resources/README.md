@@ -47,7 +47,7 @@ console.log(`Errors: ${result.errorCount}, Warnings: ${result.warningCount}`);
 // Show any issues
 for (const issue of result.issues) {
   console.log(`${issue.severity.toUpperCase()}: ${issue.message}`);
-  if (issue.line) console.log(`  at ${issue.resourcePath}:${issue.line}`);
+  if (issue.line) console.log(`  at ${issue.location}:${issue.line}`);
 }
 ```
 
@@ -546,27 +546,35 @@ interface ValidationResult {
 
 A single validation issue found during link validation.
 
+`ValidationIssue` is the unified issue shape every VAT validator emits (defined
+in `@vibe-agent-toolkit/agent-schema`). Each issue carries a registry `code`
+(see [Validation Codes](../../docs/validation-codes.md)) and a resolved
+`severity`.
+
 ```typescript
 interface ValidationIssue {
-  severity: ValidationSeverity;      // Issue severity level
-  resourcePath: string;              // Absolute path to the resource containing the issue
-  line?: number;                     // Line number where the issue occurs
-  type: string;                      // Issue type identifier (e.g., 'broken_file', 'broken_anchor')
-  link: string;                      // The problematic link
+  code: string;                      // Registry code, e.g. 'LINK_BROKEN_FILE', 'EXTERNAL_URL_DEAD'
+  severity: SeverityLevel;           // Resolved severity (after config overrides)
   message: string;                   // Human-readable description
+  location?: string;                 // Project-relative path of the file containing the issue
+  line?: number;                     // Line number where the issue occurs
+  link?: string;                     // The problematic link (when applicable)
+  fix?: string;                      // Fix hint from the code registry
+  reference?: string;                // Anchor into docs/validation-codes.md
   suggestion?: string;               // Optional suggestion for fixing
 }
 ```
 
-### ValidationSeverity
+### SeverityLevel
 
 ```typescript
-type ValidationSeverity = 'error' | 'warning' | 'info';
+type SeverityLevel = 'error' | 'warning' | 'info' | 'ignore';
 ```
 
 - `error` - Critical issue that should block usage (e.g., broken file link)
-- `warning` - Non-critical issue that should be addressed (e.g., questionable link format)
-- `info` - Informational message (e.g., external URL not validated)
+- `warning` - Non-critical issue that should be addressed (e.g., dead external URL)
+- `info` - Informational message
+- `ignore` - Suppressed; the issue is not emitted (set via `validation.severity` config)
 
 ## Frontmatter Support
 
@@ -721,19 +729,19 @@ vat resources validate docs/ --frontmatter-schema schema.json
 
 ### Validation Result
 
-Frontmatter validation results are included in `ValidationResult`:
+Frontmatter findings are emitted into the same unified `result.issues` array as
+link findings — each carries a `FRONTMATTER_*` registry code (e.g.
+`FRONTMATTER_MISSING`, `FRONTMATTER_SCHEMA_ERROR`, `FRONTMATTER_INVALID_YAML`)
+and a resolved `severity`. There is no separate `frontmatterValidation` field.
 
 ```typescript
-interface ValidationResult {
-  // ... existing fields
-  frontmatterValidation?: {
-    valid: boolean;
-    errors: Array<{
-      resourcePath: string;
-      message: string;
-      field?: string;
-    }>;
-  };
+const result = await registry.validate();
+
+const frontmatterIssues = result.issues.filter((i) =>
+  i.code.startsWith('FRONTMATTER_'),
+);
+for (const issue of frontmatterIssues) {
+  console.log(`[${issue.severity}] ${issue.code} at ${issue.location}: ${issue.message}`);
 }
 ```
 
@@ -889,9 +897,10 @@ const warnings = result.issues.filter(i => i.severity === 'warning');
 // Group by resource
 const issuesByResource = new Map<string, ValidationIssue[]>();
 for (const issue of result.issues) {
-  const issues = issuesByResource.get(issue.resourcePath) ?? [];
+  const key = issue.location ?? '(unknown)';
+  const issues = issuesByResource.get(key) ?? [];
   issues.push(issue);
-  issuesByResource.set(issue.resourcePath, issues);
+  issuesByResource.set(key, issues);
 }
 
 // Show summary
@@ -926,7 +935,7 @@ async function validateDocs() {
     console.error(`\nValidation failed with ${result.errorCount} errors\n`);
 
     for (const issue of result.issues.filter(i => i.severity === 'error')) {
-      console.error(`${issue.resourcePath}:${issue.line ?? '?'}`);
+      console.error(`${issue.location ?? '(unknown)'}:${issue.line ?? '?'}`);
       console.error(`  ${issue.message}`);
       if (issue.suggestion) {
         console.error(`  Suggestion: ${issue.suggestion}`);

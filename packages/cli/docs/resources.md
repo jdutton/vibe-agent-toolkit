@@ -172,10 +172,14 @@ resources:
   exclude:
     - "node_modules/**"
     - "**/test/fixtures/**"
+  # Optional: per-code severity overrides (keys are validation codes,
+  # values are error | warning | info | ignore). External-URL findings
+  # default to `warning` (non-fatal), so a dead external link won't fail
+  # the build unless you raise its severity here.
   validation:
-    checkLinks: true
-    checkAnchors: true
-    allowExternal: true
+    severity:
+      EXTERNAL_URL_DEAD: ignore        # don't fail the build on dead external links
+      FRONTMATTER_SCHEMA_ERROR: error
 ```
 
 ## Integration with vibe-validate

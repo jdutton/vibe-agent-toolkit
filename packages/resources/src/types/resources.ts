@@ -6,8 +6,9 @@
  * with optional absolutePath for runtime operations.
  */
 
+import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+
 import type { SHA256 } from '../schemas/checksum.js';
-import type { ValidationIssue } from '../schemas/validation-result.js';
 
 /**
  * Resource type discriminator for type-safe handling

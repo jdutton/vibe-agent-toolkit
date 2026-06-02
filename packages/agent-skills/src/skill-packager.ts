@@ -20,6 +20,12 @@ import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 import {
+  runValidationFramework,
+  type FrameworkResult,
+  type ValidationConfig,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/agent-schema';
+import {
   ResourceRegistry,
   loadConfig,
   openFrontmatter,
@@ -44,8 +50,6 @@ import { getTargetSubdir } from './content-type-routing.js';
 import type { SkillFileEntry } from './files-config.js';
 import { checkBrokenPackagedLinks, checkUnreferencedFiles } from './post-build-checks.js';
 import { validateSkillForPackaging, type PackagingValidationResult } from './validators/packaging-validator.js';
-import type { ValidationIssue } from './validators/types.js';
-import { runValidationFramework, type FrameworkResult, type ValidationConfig } from './validators/validation-framework.js';
 import { walkerExclusionsToIssues } from './validators/walker-to-issues.js';
 import { walkLinkGraph, type WalkableRegistry } from './walk-link-graph.js';
 

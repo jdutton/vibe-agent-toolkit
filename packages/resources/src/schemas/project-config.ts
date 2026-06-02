@@ -96,6 +96,8 @@ export const ResourcesConfigSchema = z.object({
     .describe('Global default exclude patterns (not used by collections in Phase 2)'),
   collections: z.record(z.string(), CollectionConfigSchema).optional()
     .describe('Named collections of resources'),
+  validation: ValidationConfigSchema.optional()
+    .describe('Validation framework config: severity overrides and per-code allow entries (applied inside ResourceRegistry.validate)'),
 }).describe('Resources section of project configuration');
 
 export type ResourcesConfig = z.infer<typeof ResourcesConfigSchema>;

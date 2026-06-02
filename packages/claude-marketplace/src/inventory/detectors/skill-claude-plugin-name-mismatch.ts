@@ -7,7 +7,7 @@
  * directory that has both a root SKILL.md and a .claude-plugin/plugin.json).
  */
 
-import type { ValidationIssue } from '@vibe-agent-toolkit/agent-skills';
+import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import type { ClaudePluginInventory } from '../types.js';

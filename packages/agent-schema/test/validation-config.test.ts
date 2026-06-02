@@ -36,6 +36,15 @@ describe('ValidationConfigSchema', () => {
     });
     expect(result.success).toBe(false);
   });
+
+  it('rejects an unknown severity code key', () => {
+    const r = ValidationConfigSchema.safeParse({ severity: { LNIK_OUTSIDE_PROJECT: 'ignore' } });
+    expect(r.success).toBe(false);
+  });
+  it("accepts 'info' as an override value", () => {
+    const r = ValidationConfigSchema.safeParse({ severity: { SKILL_TIME_SENSITIVE_CONTENT: 'info' } });
+    expect(r.success).toBe(true);
+  });
 });
 
 describe('AllowEntrySchema', () => {

@@ -202,7 +202,7 @@ describe('ResourceRegistry - per-collection frontmatter validation', () => {
     expect(result.passed).toBe(false);
     expect(result.errorCount).toBe(1);
     const issue = result.issues[0];
-    expect(issue?.type).toBe('frontmatter_schema_error');
+    expect(issue?.code).toBe('FRONTMATTER_SCHEMA_ERROR');
     expect(issue?.message).toContain('description');
   });
 
