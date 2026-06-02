@@ -11,10 +11,12 @@ export { validate, type UnifiedValidateOptions } from './unified-validator.js';
 export type {
 	IssueCode,
 	IssueSeverity,
+	ValidationIssue,
+} from '@vibe-agent-toolkit/agent-schema';
+export type {
 	LinkedFileValidationResult,
 	ResourceFormat,
 	Surface,
 	ValidateOptions,
-	ValidationIssue,
 	ValidationResult,
 } from './types.js';

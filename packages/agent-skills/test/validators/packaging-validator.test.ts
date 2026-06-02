@@ -5,12 +5,12 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import * as fs from 'node:fs';
 
+import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import type { PackagingValidationResult } from '../../src/validators/packaging-validator.js';
 import { detectNameMismatchIssue, validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
-import type { ValidationIssue } from '../../src/validators/types.js';
 import {
 	createSkillContent,
 	createTransitiveSkillStructure,

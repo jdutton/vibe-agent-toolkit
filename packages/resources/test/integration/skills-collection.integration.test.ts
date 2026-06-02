@@ -98,7 +98,7 @@ See [missing file](../../docs/MISSING.md) for more.
 
       // Should detect broken link (type is 'broken_file', not 'broken-file-link')
       expect(result.errorCount).toBeGreaterThan(0);
-      const brokenLinkIssue = result.issues.find((i) => i.type === 'broken_file');
+      const brokenLinkIssue = result.issues.find((i) => i.code === 'LINK_BROKEN_FILE');
       expect(brokenLinkIssue).toBeDefined();
       expect(brokenLinkIssue?.message).toContain('MISSING.md');
     });
@@ -149,7 +149,7 @@ This should fail validation.
       // Should have frontmatter validation error (missing description)
       expect(result.errorCount).toBeGreaterThan(0);
       const frontmatterError = result.issues.find((i) =>
-        i.type === 'frontmatter_schema_error' || i.type === 'frontmatter_missing'
+        i.code === 'FRONTMATTER_SCHEMA_ERROR' || i.code === 'FRONTMATTER_MISSING'
       );
       expect(frontmatterError).toBeDefined();
       expect(frontmatterError?.message).toMatch(/description/i);
@@ -202,7 +202,7 @@ This should fail pattern validation.
       // Should have frontmatter validation error for pattern mismatch
       expect(result.errorCount).toBeGreaterThan(0);
       const patternError = result.issues.find((i) =>
-        i.type === 'frontmatter_schema_error' &&
+        i.code === 'FRONTMATTER_SCHEMA_ERROR' &&
         (i.message.toLowerCase().includes('pattern') || i.message.toLowerCase().includes('name'))
       );
       expect(patternError).toBeDefined();
@@ -259,13 +259,13 @@ See [missing file](../../docs/MISSING.md) for more.
       expect(result.errorCount).toBeGreaterThan(1); // At least 2 errors
 
       // Should detect broken link (type is 'broken_file')
-      const brokenLinkIssue = result.issues.find((i) => i.type === 'broken_file');
+      const brokenLinkIssue = result.issues.find((i) => i.code === 'LINK_BROKEN_FILE');
       expect(brokenLinkIssue).toBeDefined();
       expect(brokenLinkIssue?.message).toContain('MISSING.md');
 
       // Should have frontmatter error (reserved word in name)
       const frontmatterError = result.issues.find((i) =>
-        i.type === 'frontmatter_schema_error' &&
+        i.code === 'FRONTMATTER_SCHEMA_ERROR' &&
         (i.message.toLowerCase().includes('pattern') || i.message.toLowerCase().includes('name'))
       );
       expect(frontmatterError).toBeDefined();

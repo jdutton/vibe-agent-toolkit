@@ -18,15 +18,36 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
+import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import {
   isGitIgnored,
   type GitTracker,
   verifyCaseSensitiveFilename,
 } from '@vibe-agent-toolkit/utils';
 
-import type { ValidationIssue } from './schemas/validation-result.js';
 import type { HeadingNode, ResourceLink } from './types.js';
-import { isWithinProject, resolveLocalHref } from './utils.js';
+import { isWithinProject, issueLocation, resolveLocalHref } from './utils.js';
+
+type LinkIssueExtras = Partial<Pick<ValidationIssue, 'location' | 'line' | 'link' | 'suggestion'>>;
+
+/**
+ * Build the common `createRegistryIssue` extras for a link issue: relative
+ * location, the problematic href, the line (only when defined — required for
+ * exactOptionalPropertyTypes), and an optional suggestion.
+ */
+function linkExtras(
+  link: ResourceLink,
+  sourceFilePath: string,
+  projectRoot: string | undefined,
+  suggestion?: string,
+): LinkIssueExtras {
+  return {
+    location: issueLocation(sourceFilePath, projectRoot),
+    link: link.href,
+    ...(link.line !== undefined && { line: link.line }),
+    ...(suggestion !== undefined && { suggestion }),
+  };
+}
 
 /**
  * Options for link validation.
@@ -71,7 +92,7 @@ export async function validateLink(
       return await validateLocalFileLink(link, sourceFilePath, headingsByFile, options);
 
     case 'anchor':
-      return await validateAnchorLink(link, sourceFilePath, headingsByFile);
+      return await validateAnchorLink(link, sourceFilePath, headingsByFile, options?.projectRoot);
 
     case 'external':
       // External URLs are not validated - don't report them
@@ -82,13 +103,11 @@ export async function validateLink(
       return null;
 
     case 'unknown':
-      return {
-        resourcePath: sourceFilePath,
-        line: link.line,
-        type: 'unknown_link',
-        link: link.href,
-        message: 'Unknown link type',
-      };
+      return createRegistryIssue(
+        'LINK_UNKNOWN',
+        'Unknown link type',
+        linkExtras(link, sourceFilePath, options?.projectRoot),
+      );
 
     default: {
       // TypeScript exhaustiveness check
@@ -107,31 +126,29 @@ export function resolutionFailureIssue(
   resolved: ReturnType<typeof resolveLocalHref>,
   link: ResourceLink,
   sourceFilePath: string,
+  projectRoot?: string,
 ): ValidationIssue | null {
   if (resolved.kind === 'absolute_no_root') {
-    return {
-      resourcePath: sourceFilePath,
-      line: link.line,
-      type: 'broken_file',
-      link: link.href,
-      message:
-        `Absolute-path link "${link.href}" requires a configured projectRoot; ` +
+    return createRegistryIssue(
+      'LINK_BROKEN_FILE',
+      `Absolute-path link "${link.href}" requires a configured projectRoot; ` +
         `none was provided. Configure vibe-agent-toolkit.config.yaml or run ` +
         `from within a git repository.`,
-      suggestion:
+      linkExtras(
+        link,
+        sourceFilePath,
+        projectRoot,
         'Rewrite as a source-relative link, or run from a directory with a config or git ancestor.',
-    };
+      ),
+    );
   }
 
   if (resolved.kind === 'absolute_escapes_root') {
-    return {
-      resourcePath: sourceFilePath,
-      line: link.line,
-      type: 'broken_file',
-      link: link.href,
-      message: `Absolute-path link "${link.href}" escapes the project root via path traversal.`,
-      suggestion: '',
-    };
+    return createRegistryIssue(
+      'LINK_BROKEN_FILE',
+      `Absolute-path link "${link.href}" escapes the project root via path traversal.`,
+      linkExtras(link, sourceFilePath, projectRoot, ''),
+    );
   }
 
   return null;
@@ -145,29 +162,29 @@ export function fileExistenceIssue(
   fileResult: { exists: boolean; resolvedPath: string; actualName?: string },
   link: ResourceLink,
   sourceFilePath: string,
+  projectRoot?: string,
 ): ValidationIssue | null {
   if (fileResult.exists) return null;
 
   if (fileResult.actualName) {
     const expectedName = path.basename(fileResult.resolvedPath);
-    return {
-      resourcePath: sourceFilePath,
-      line: link.line,
-      type: 'broken_file',
-      link: link.href,
-      message: `File found but case mismatch: expected "${expectedName}" but found "${fileResult.actualName}". This will fail on case-sensitive filesystems (Linux). Update the link to match the actual filename.`,
-      suggestion: `Use "${fileResult.actualName}" instead of "${expectedName}"`,
-    };
+    return createRegistryIssue(
+      'LINK_BROKEN_FILE',
+      `File found but case mismatch: expected "${expectedName}" but found "${fileResult.actualName}". This will fail on case-sensitive filesystems (Linux). Update the link to match the actual filename.`,
+      linkExtras(
+        link,
+        sourceFilePath,
+        projectRoot,
+        `Use "${fileResult.actualName}" instead of "${expectedName}"`,
+      ),
+    );
   }
 
-  return {
-    resourcePath: sourceFilePath,
-    line: link.line,
-    type: 'broken_file',
-    link: link.href,
-    message: `File not found: ${fileResult.resolvedPath}`,
-    suggestion: '',
-  };
+  return createRegistryIssue(
+    'LINK_BROKEN_FILE',
+    `File not found: ${fileResult.resolvedPath}`,
+    linkExtras(link, sourceFilePath, projectRoot, ''),
+  );
 }
 
 /**
@@ -202,14 +219,11 @@ export function gitIgnoreSafetyIssue(
 
   if (sourceIsIgnored || !targetIsIgnored) return null;
 
-  return {
-    resourcePath: sourceFilePath,
-    line: link.line,
-    type: 'link_to_gitignored',
-    link: link.href,
-    message: `Non-ignored file links to gitignored file: ${resolvedTarget}. Gitignored files are local-only and will not exist in the repository. Remove this link or unignore the target file.`,
-    suggestion: '',
-  };
+  return createRegistryIssue(
+    'LINK_TO_GITIGNORED',
+    `Non-ignored file links to gitignored file: ${resolvedTarget}. Gitignored files are local-only and will not exist in the repository. Remove this link or unignore the target file.`,
+    linkExtras(link, sourceFilePath, options.projectRoot, ''),
+  );
 }
 
 /**
@@ -225,23 +239,24 @@ async function validateLocalFileLink(
 
   if (resolved.kind !== 'resolved') {
     // anchor_only → null no-op; absolute_no_root / absolute_escapes_root → broken_file.
-    return resolutionFailureIssue(resolved, link, sourceFilePath);
+    return resolutionFailureIssue(resolved, link, sourceFilePath, options?.projectRoot);
   }
 
   const fileResult = await validateResolvedFile(resolved.resolvedPath);
-  const notFound = fileExistenceIssue(fileResult, link, sourceFilePath);
+  const notFound = fileExistenceIssue(fileResult, link, sourceFilePath, options?.projectRoot);
   if (notFound) return notFound;
 
   if (fileResult.isDirectory) {
-    return {
-      resourcePath: sourceFilePath,
-      line: link.line,
-      type: 'broken_file',
-      link: link.href,
-      message: `Link target is a directory: ${fileResult.resolvedPath}`,
-      suggestion:
+    return createRegistryIssue(
+      'LINK_BROKEN_FILE',
+      `Link target is a directory: ${fileResult.resolvedPath}`,
+      linkExtras(
+        link,
+        sourceFilePath,
+        options?.projectRoot,
         'Link to a file inside the directory (e.g., README.md or index.md), or fix the link to point at the intended file.',
-    };
+      ),
+    );
   }
 
   const gitIgnoreIssue = gitIgnoreSafetyIssue(link, sourceFilePath, fileResult.resolvedPath, options);
@@ -250,14 +265,11 @@ async function validateLocalFileLink(
   if (resolved.anchor) {
     const anchorValid = await validateAnchor(resolved.anchor, fileResult.resolvedPath, headingsByFile);
     if (!anchorValid) {
-      return {
-        resourcePath: sourceFilePath,
-        line: link.line,
-        type: 'broken_anchor',
-        link: link.href,
-        message: `Anchor not found: #${resolved.anchor} in ${fileResult.resolvedPath}`,
-        suggestion: '',
-      };
+      return createRegistryIssue(
+        'LINK_BROKEN_ANCHOR',
+        `Anchor not found: #${resolved.anchor} in ${fileResult.resolvedPath}`,
+        linkExtras(link, sourceFilePath, options?.projectRoot, ''),
+      );
     }
   }
 
@@ -270,7 +282,8 @@ async function validateLocalFileLink(
 async function validateAnchorLink(
   link: ResourceLink,
   sourceFilePath: string,
-  headingsByFile: Map<string, HeadingNode[]>
+  headingsByFile: Map<string, HeadingNode[]>,
+  projectRoot?: string,
 ): Promise<ValidationIssue | null> {
   // Extract anchor (strip leading #)
   const anchor = link.href.startsWith('#') ? link.href.slice(1) : link.href;
@@ -279,14 +292,11 @@ async function validateAnchorLink(
   const isValid = await validateAnchor(anchor, sourceFilePath, headingsByFile);
 
   if (!isValid) {
-    return {
-      resourcePath: sourceFilePath,
-      line: link.line,
-      type: 'broken_anchor',
-      link: link.href,
-      message: `Anchor not found: ${link.href}`,
-      suggestion: '',
-    };
+    return createRegistryIssue(
+      'LINK_BROKEN_ANCHOR',
+      `Anchor not found: ${link.href}`,
+      linkExtras(link, sourceFilePath, projectRoot, ''),
+    );
   }
 
   return null;

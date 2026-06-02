@@ -13,11 +13,11 @@
 import { existsSync, statSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import {
   validateSkillForPackaging,
   type PackagingValidationResult,
   type SkillPackagingConfig,
-  type ValidationIssue,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
 import { gitFindRoot, safePath } from '@vibe-agent-toolkit/utils';

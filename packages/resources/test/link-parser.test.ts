@@ -404,6 +404,30 @@ See [the docs][docs] for details.
       });
     });
 
+    it('should extract text from styled (bold/italic/code/link) headings for correct slugs', async () => {
+      const content = `# **CRITICAL: Code Duplication Policy**
+## _Emphasized Heading_
+### Heading with \`inlineCode\` token
+#### Heading with [a link](https://example.com)
+`;
+      await writeAndParse({
+        filePath: safePath.join(tempDir, 'styled-headings.md'),
+        content,
+        assertions: (result) => {
+          expect(result.headings[0]!.text).toBe('CRITICAL: Code Duplication Policy');
+          expect(result.headings[0]!.slug).toBe('critical-code-duplication-policy');
+          expect(result.headings[0]!.children![0]!.text).toBe('Emphasized Heading');
+          expect(result.headings[0]!.children![0]!.slug).toBe('emphasized-heading');
+          expect(result.headings[0]!.children![0]!.children![0]!.slug).toBe(
+            'heading-with-inlinecode-token'
+          );
+          expect(
+            result.headings[0]!.children![0]!.children![0]!.children![0]!.slug
+          ).toBe('heading-with-a-link');
+        },
+      });
+    });
+
     it('should handle headings with special characters', async () => {
       const content = `# Hello! World?
 ## Section: Part 1

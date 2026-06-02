@@ -64,7 +64,7 @@ describe('Collection validation with npm bare-specifier schema (integration)', (
     const result = await registry.validate();
 
     const schemaErrors = result.issues.filter(
-      (issue) => issue.type === 'frontmatter_schema_error',
+      (issue) => issue.code === 'FRONTMATTER_SCHEMA_ERROR',
     );
     expect(schemaErrors).toEqual([]);
   });

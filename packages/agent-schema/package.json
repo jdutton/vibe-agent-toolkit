@@ -33,10 +33,12 @@
     "validation"
   ],
   "dependencies": {
+    "picomatch": "^4.0.3",
     "zod": "^3.23.8",
     "zod-to-json-schema": "^3.23.5"
   },
   "devDependencies": {
+    "@types/picomatch": "^4.0.2",
     "@vibe-agent-toolkit/utils": "workspace:*",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3",

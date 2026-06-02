@@ -16,8 +16,8 @@
  * CLI call site).
  */
 
-import { CODE_REGISTRY } from './code-registry.js';
-import type { ValidationIssue } from './types.js';
+import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+
 
 export type DescriptionYamlStyle =
 	| 'folded'

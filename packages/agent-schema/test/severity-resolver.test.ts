@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { resolveSeverity } from '../../src/validators/severity-resolver.js';
+import { resolveSeverity } from '../src/validation-framework.js';
 
 describe('resolveSeverity', () => {
   it('returns registry default when no override', () => {

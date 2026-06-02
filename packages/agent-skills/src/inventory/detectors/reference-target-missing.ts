@@ -6,7 +6,8 @@
  * resolves to a path that does not exist on disk.
  */
 
-import type { ValidationIssue } from '../../validators/types.js';
+import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+
 import type { PluginInventory } from '../types.js';
 
 export function detectReferenceTargetMissing(inv: PluginInventory): ValidationIssue[] {

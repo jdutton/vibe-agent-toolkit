@@ -1,9 +1,12 @@
 /* eslint-disable sonarjs/slow-regex */
 // Test assertions legitimately use regex patterns
 
+import { createServer, type Server } from 'node:http';
+import { type AddressInfo } from 'node:net';
+
 import { it, beforeAll, afterAll } from 'vitest';
 
-import { describe, expect, fs, getBinPath, safePath, spawnSync } from './test-common.js';
+import { describe, executeCliAndParseYaml, expect, fs, getBinPath, safePath, spawnSync } from './test-common.js';
 import {
   createTestTempDir,
   executeCli,
@@ -11,6 +14,61 @@ import {
   executeValidateAndParse,
   setupTestProject,
 } from './test-helpers/index.js';
+
+/**
+ * Start a hermetic loopback HTTP server that answers every request with 404.
+ *
+ * Used to produce a deterministic DEAD external URL (HTTP 4xx → EXTERNAL_URL_DEAD)
+ * without depending on the real network. Returns the server and its base URL.
+ */
+async function startDeadUrlServer(): Promise<{ server: Server; baseUrl: string }> {
+  const server = createServer((_req, res) => {
+    res.statusCode = 404;
+    res.end('not found');
+  });
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address() as AddressInfo;
+  return { server, baseUrl: `http://127.0.0.1:${port}` };
+}
+
+/**
+ * Write a project with one markdown doc that links to a dead loopback URL.
+ * `validationConfig` is spliced into resources.validation when provided so a
+ * single helper covers both the default-warning and promoted-error cases.
+ */
+function setupDeadUrlProject(
+  tempDir: string,
+  baseUrl: string,
+  name: string,
+  validationConfig: string
+): string {
+  const config = `version: 1
+resources:
+  include:
+    - "docs/**/*.md"
+${validationConfig}`;
+  const projectDir = setupTestProject(tempDir, { name, config, withDocs: true });
+  fs.writeFileSync(
+    safePath.join(projectDir, 'docs', 'dead.md'),
+    `# Dead link\n\n[gone](${baseUrl}/dead)\n`
+  );
+  return projectDir;
+}
+
+/**
+ * Flatten the nested `errors` array of a `resources validate` YAML payload and
+ * return the first EXTERNAL_URL_DEAD finding (or undefined). Shared by the
+ * default-warning and promoted-error severity cases so the flatten/find logic
+ * lives in exactly one place.
+ */
+function findExternalUrlDeadFinding(
+  parsed: Record<string, unknown>
+): { code: string; severity: string } | undefined {
+  const errors = parsed['errors'] as
+    | Array<{ errors: Array<{ code: string; severity: string }> }>
+    | undefined;
+  return (errors ?? []).flatMap(e => e.errors).find(e => e.code === 'EXTERNAL_URL_DEAD');
+}
 
 const binPath = getBinPath(import.meta.url);
 
@@ -124,8 +182,8 @@ resources:
     expect(result.stdout).toContain('validate');
   });
 
-  it('should ignore external URLs and not report them as errors', () => {
-    // Create a file with only external URLs (no broken internal links)
+  it('should not check external URLs by default (no --check-external-urls)', () => {
+    // Create a file with only external URLs (no broken internal links).
     fs.writeFileSync(
       safePath.join(projectDir, 'docs/external.md'),
       '# External Links\n\n[GitHub](https://github.com)\n[NPM](https://npmjs.com)\n[Docs](https://example.com/docs)'
@@ -133,15 +191,75 @@ resources:
 
     const { result, parsed } = executeValidateAndParse(binPath, projectDir);
 
-    // Should pass validation (external URLs are not validated)
+    // Without the flag, external URLs are never fetched → clean success.
     expect(result.status).toBe(0);
     expect(parsed.status).toBe('success');
-
-    // Should not have any errors
     expect(parsed.errorsFound).toBeUndefined();
+  });
+});
 
-    // Stdout should not contain "External URL" messages
-    expect(result.stdout).not.toContain('External URL');
-    expect(result.stdout).not.toContain('external_url');
+/**
+ * Dead external URL → EXTERNAL_URL_DEAD. By default it is warning-severity and
+ * therefore NON-FATAL (exit 0); promoting it to error via config flips exit to 1.
+ *
+ * Hermetic: a loopback HTTP server returns 404 so no real network is touched.
+ */
+describe('Dead external URL severity → exit code (system test)', () => {
+  let tempDir: string;
+  let server: Server;
+  let baseUrl: string;
+
+  beforeAll(async () => {
+    tempDir = createTestTempDir('vat-external-url-severity-test-');
+    ({ server, baseUrl } = await startDeadUrlServer());
+  });
+
+  afterAll(async () => {
+    await new Promise<void>(resolve => server.close(() => resolve()));
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('reports EXTERNAL_URL_DEAD as a warning and exits 0 (non-fatal by default)', async () => {
+    const projectDir = setupDeadUrlProject(tempDir, baseUrl, 'default-warning', '');
+
+    const { result, parsed } = await executeCliAndParseYaml(
+      binPath,
+      ['resources', 'validate', '--check-external-urls', '--no-cache'],
+      { cwd: projectDir }
+    );
+
+    // Default severity is warning → does NOT flip the exit code.
+    expect(result.status).toBe(0);
+
+    // But the finding is still surfaced as a warning-severity EXTERNAL_URL_DEAD.
+    const dead = findExternalUrlDeadFinding(parsed);
+    expect(dead).toBeDefined();
+    expect(dead?.severity).toBe('warning');
+  });
+
+  it('exits 1 when EXTERNAL_URL_DEAD is promoted to error via config', async () => {
+    const projectDir = setupDeadUrlProject(
+      tempDir,
+      baseUrl,
+      'promoted-error',
+      `  validation:
+    severity:
+      EXTERNAL_URL_DEAD: error
+`
+    );
+
+    const { result, parsed } = await executeCliAndParseYaml(
+      binPath,
+      ['resources', 'validate', '--check-external-urls', '--no-cache'],
+      { cwd: projectDir }
+    );
+
+    // Promoted to error → fatal exit.
+    expect(result.status).toBe(1);
+    expect(parsed.status).toBe('failed');
+
+    const dead = findExternalUrlDeadFinding(parsed);
+    expect(dead).toBeDefined();
+    expect(dead?.severity).toBe('error');
   });
 });

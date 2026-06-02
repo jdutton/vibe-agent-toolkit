@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 
-import { applyAllowFilter } from '../../src/validators/allow-filter.js';
-import type { ValidationIssue } from '../../src/validators/types.js';
+import { applyAllowFilter } from '../src/validation-framework.js';
+import type { ValidationIssue } from '../src/validation-issue.js';
 
 const LINK_DROPPED = 'LINK_DROPPED_BY_DEPTH';
 const DOCS_FOO = 'docs/foo.md';

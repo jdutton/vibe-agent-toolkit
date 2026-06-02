@@ -9,10 +9,8 @@ import { existsSync, readdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
+import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-
-import { CODE_REGISTRY } from './validators/code-registry.js';
-import type { ValidationIssue } from './validators/types.js';
 
 /**
  * Regex matching markdown inline links: [text](href).

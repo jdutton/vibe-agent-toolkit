@@ -17,20 +17,24 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
+import {
+  CODE_REGISTRY,
+  runValidationFramework,
+  type AllowRecord,
+  type IssueCode,
+  type ValidationConfig,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/agent-schema';
 import { parseMarkdown, ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, normalizedTmpdir, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
 import { walkLinkGraph, type LinkResolution, type WalkableRegistry } from '../walk-link-graph.js';
 
-import type { AllowRecord } from './allow-filter.js';
-import { CODE_REGISTRY, type IssueCode } from './code-registry.js';
 import { observationToIssue, runCompatDetectors } from './compat-detectors.js';
 import { detectUndeclaredCrossSkillAuth } from './cross-skill-dependency-detection.js';
 import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
 import { SOURCE_ONLY_CODES } from './source-only-codes.js';
-import type { ValidationIssue } from './types.js';
-import { runValidationFramework, type ValidationConfig } from './validation-framework.js';
 import {
   VALIDATION_RULES,
   VALIDATION_THRESHOLDS,

@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed (breaking, pre-1.0)
 
+- **`vat resources validate` gains per-code severity configuration, and external-URL findings no longer fail the build by default.** Resource findings now use the same configurable severity framework as `vat skills`: each is a documented code (e.g. `LINK_BROKEN_FILE`, `EXTERNAL_URL_DEAD`) with a default severity, overridable per project under `resources.validation.severity` / `resources.validation.allow`. External-URL findings now default to `warning` and no longer flip the exit code (fixing a bug where they always failed the command); set their severity to `error` to restore failing. Severity now also accepts an `info` level. The never-implemented `resources.validation.checkLinks`/`checkAnchors`/`allowExternal` keys are removed.
+- **`validation.severity` / `validation.allow` keys are validated against real codes.** A mistyped code key (e.g. `LNIK_OUTSIDE_PROJECT`) is now a config-load error instead of a silent no-op.
 - **Corpus seed entries now require `bucket`, `confidence`, and `maturity` metadata fields.** `PluginEntrySchema` in `vat corpus scan`'s seed loader gains three required enum fields: `bucket: 'official' | 'community'`, `confidence: 'first-party' | 'curated' | 'listed'`, and `maturity: 'production' | 'experimental' | 'example'`. The bundled `corpus/seed.yaml` is updated; downstream callers running custom seeds must add the fields to every entry. `bucket` is the load-bearing discriminator (`official` entries report named findings; `community` entries are aggregate-only in follow-up work). The other two are descriptive metadata used by triage tooling.
 
 ### Fixed

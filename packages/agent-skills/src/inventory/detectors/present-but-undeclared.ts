@@ -8,7 +8,8 @@
  * means auto-discovery is intentional and this detector is silent.
  */
 
-import type { ValidationIssue } from '../../validators/types.js';
+import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+
 import type { PluginInventory, ComponentRef } from '../types.js';
 
 export function detectPresentButUndeclared(inv: PluginInventory): ValidationIssue[] {

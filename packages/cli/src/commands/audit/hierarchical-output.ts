@@ -1,6 +1,7 @@
 import * as os from 'node:os';
 
-import type { ValidationIssue, ValidationResult } from '@vibe-agent-toolkit/agent-skills';
+import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
 import { toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 export interface HierarchicalOutput {

@@ -1,6 +1,5 @@
+import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import type { z } from 'zod';
-
-import type { ValidationIssue } from './types.js';
 
 /**
  * Calculate validation status from issues

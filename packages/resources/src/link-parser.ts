@@ -311,28 +311,44 @@ function extractHeadingText(node: Heading): string {
 }
 
 /**
+ * Inline node shape for heading text extraction. Leaf inline nodes (`text`,
+ * `inlineCode`) carry their content in `value`; container inline nodes
+ * (`strong`, `emphasis`, `link`, `delete`) carry it in `children`.
+ */
+interface InlineNode {
+  type: string;
+  value?: unknown;
+  children?: InlineNode[];
+}
+
+/**
  * Extract text content from inline children nodes.
  *
- * Handles text nodes, inline code, emphasis, and other inline elements.
+ * Handles leaf nodes (`text`, `inlineCode`) and recurses into container inline
+ * elements (`strong`, `emphasis`, `link`, `delete`) so that styled headings —
+ * e.g. `### **CRITICAL: ...**` — produce the same text (and therefore the same
+ * GitHub slug) as their plain-text equivalents. Without recursion, bold/italic
+ * headings yielded empty text and bogus slugs, causing false LINK_BROKEN_ANCHOR
+ * errors for links targeting them.
  *
  * @param children - Array of child nodes or undefined
  * @returns Concatenated text content
  */
-function extractTextFromChildren(
-  children: Array<{ type: string; value?: unknown }> | undefined
-): string {
+function extractTextFromChildren(children: InlineNode[] | undefined): string {
   if (!children || children.length === 0) {
     return '';
   }
 
   return children
     .map((child) => {
-      if (child.type === 'text') {
-        return child.value as string;
+      // Leaf inline nodes (text, inlineCode) hold their content in `value`.
+      if (typeof child.value === 'string') {
+        return child.value;
       }
-      // Handle other inline elements (code, emphasis, etc.)
-      if ('value' in child) {
-        return String(child.value);
+      // Container inline nodes (strong, emphasis, link, delete) hold text in
+      // their children — recurse to gather it.
+      if (child.children) {
+        return extractTextFromChildren(child.children);
       }
       return '';
     })

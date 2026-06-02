@@ -162,9 +162,9 @@ resources:
       config: `version: 1
 resources:
   validation:
-    checkLinks: true
-    checkAnchors: true
-    allowExternal: false
+    severity:
+      EXTERNAL_URL_DEAD: ignore
+      FRONTMATTER_SCHEMA_ERROR: error
 `,
       withDocs: true,
     });

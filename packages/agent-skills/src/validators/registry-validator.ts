@@ -1,12 +1,13 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- File paths are validated before use */
 import { existsSync, readFileSync } from 'node:fs';
 
+import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import type { z } from 'zod';
 
 import { InstalledPluginsRegistrySchema } from '../schemas/installed-plugins-registry.js';
 import { KnownMarketplacesRegistrySchema } from '../schemas/known-marketplaces-registry.js';
 
-import type { ValidationIssue, ValidationResult } from './types.js';
+import type { ValidationResult } from './types.js';
 import {
 	calculateValidationStatus,
 	generateFixSuggestion,

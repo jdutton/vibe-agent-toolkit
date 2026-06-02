@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import { basename, dirname } from 'node:path';
 
+import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { parseMarkdown, resolveLocalHref } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
@@ -14,7 +15,7 @@ import { detectUndeclaredCrossSkillAuth } from './cross-skill-dependency-detecti
 import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
 import { detectNonImperativeBody } from './imperative-body-detection.js';
 import { detectKebabCaseViolation } from './kebab-case-detection.js';
-import type { LinkedFileValidationResult, ValidateOptions, ValidationIssue, ValidationResult } from './types.js';
+import type { LinkedFileValidationResult, ValidateOptions, ValidationResult } from './types.js';
 import { NAVIGATION_FILE_PATTERNS } from './validation-rules.js';
 
 /**
@@ -169,7 +170,8 @@ function validateLocalLink(
   // Resolve href to filesystem path (strips anchor, decodes percent-encoding).
   // Skill validation is a single-skill bounded walk — leading-/ links are
   // treated as unresolved (skipped) here. The resources-validate / audit paths
-  // surface the projectRoot-aware cases as broken_file issues.
+  // surface the projectRoot-aware cases as LINK_BROKEN_FILE (resources-validate)
+  // or LINK_MISSING_TARGET (audit/packaging) issues.
   const resolved = resolveLocalHref(link.href, currentPath);
   if (resolved.kind !== 'resolved') {
     return { status: 'skip', resolvedPath: '' };

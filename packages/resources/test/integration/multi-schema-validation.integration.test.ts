@@ -206,7 +206,7 @@ describe('Multi-Schema Validation Integration', () => {
     );
 
     expectFirstSchemaHasErrors(results, expect);
-    expect(results[0]?.errors?.[0]?.type).toBe('frontmatter_missing');
+    expect(results[0]?.errors?.[0]?.code).toBe('FRONTMATTER_MISSING');
   });
 
   it('should support complex schema layering scenario', async () => {

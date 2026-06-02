@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import type { ValidationIssue } from '../../src/validators/types.js';
-import { runValidationFramework } from '../../src/validators/validation-framework.js';
+import { runValidationFramework } from '../src/validation-framework.js';
+import type { ValidationIssue } from '../src/validation-issue.js';
 
 const issue = (code: string, location: string, severity: 'error' | 'warning' = 'error'): ValidationIssue => ({
   severity, code: code as ValidationIssue['code'], message: `${code}`, location,

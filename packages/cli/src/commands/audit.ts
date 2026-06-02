@@ -6,6 +6,7 @@
 import * as fs from 'node:fs';
 import { existsSync as fsExistsSync } from 'node:fs';
 
+import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import {
   detectDeclaredButMissing,
   detectMarketplacePluginSourceMissing,
@@ -22,7 +23,6 @@ import {
   type SkillPackagingConfig,
   type Surface,
   type ValidateOptions,
-  type ValidationIssue,
   type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
 import {

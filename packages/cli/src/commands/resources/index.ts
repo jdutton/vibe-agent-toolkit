@@ -119,7 +119,7 @@ Output Fields (success):
 
 Output Fields (failure):
   status, filesScanned, filesWithErrors, errorsFound, durationSecs
-  errorSummary: Count of each error type (broken_file, broken_anchor, etc.)
+  errorSummary: Count of each issue code (LINK_BROKEN_FILE, LINK_BROKEN_ANCHOR, etc.)
   collections: Per-collection stats including filesWithErrors, errorCount
   errors: Detailed errors grouped by file
 
@@ -132,6 +132,9 @@ Validation Checks:
 External URL Validation:
   By default, external URLs are NOT validated (for speed).
   Use --check-external-urls to enable HTTP checking of external links.
+  External-URL findings (EXTERNAL_URL_DEAD/TIMEOUT/ERROR) are configurable
+  warnings — they do NOT fail the build by default. Promote them to errors
+  or silence them via resources.validation.severity in your config.
   Results are cached in system temp directory (24h alive, 1h dead).
   Cache is shared across all projects (URLs are universal).
   Use --no-cache to force fresh checks (ignores cache).

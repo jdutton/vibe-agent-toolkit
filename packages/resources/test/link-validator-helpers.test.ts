@@ -49,7 +49,7 @@ describe('resolutionFailureIssue', () => {
       makeLink(LINK_ABSOLUTE_NO_ROOT),
       SOURCE,
     );
-    expect(issue?.type).toBe('broken_file');
+    expect(issue?.code).toBe('LINK_BROKEN_FILE');
     expect(issue?.message).toContain('requires a configured projectRoot');
     expect(issue?.suggestion).toContain('Rewrite as a source-relative link');
   });
@@ -60,7 +60,7 @@ describe('resolutionFailureIssue', () => {
       makeLink('/../etc/passwd'),
       SOURCE,
     );
-    expect(issue?.type).toBe('broken_file');
+    expect(issue?.code).toBe('LINK_BROKEN_FILE');
     expect(issue?.message).toContain('escapes the project root via path traversal');
   });
 
@@ -107,7 +107,7 @@ describe('fileExistenceIssue', () => {
       makeLink('missing.md'),
       SOURCE,
     );
-    expect(issue?.type).toBe('broken_file');
+    expect(issue?.code).toBe('LINK_BROKEN_FILE');
     expect(issue?.message).toBe('File not found: /project/missing.md');
   });
 
@@ -117,7 +117,7 @@ describe('fileExistenceIssue', () => {
       makeLink('readme.md'),
       SOURCE,
     );
-    expect(issue?.type).toBe('broken_file');
+    expect(issue?.code).toBe('LINK_BROKEN_FILE');
     expect(issue?.message).toContain('case mismatch');
     expect(issue?.message).toContain('"readme.md"');
     expect(issue?.message).toContain('"README.md"');
@@ -176,7 +176,7 @@ describe('gitIgnoreSafetyIssue', () => {
       TARGET_SECRET,
       makeGitTrackerOptions(tracker),
     );
-    expect(issue?.type).toBe('link_to_gitignored');
+    expect(issue?.code).toBe('LINK_TO_GITIGNORED');
     expect(issue?.message).toContain('Non-ignored file links to gitignored file');
     expect(issue?.message).toContain(TARGET_SECRET);
   });

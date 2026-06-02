@@ -62,7 +62,7 @@ describe('validateFrontmatterLinks', () => {
   it('reports frontmatter_link_broken for missing file', async () => {
     const { issues } = await run({ ref: 'missing.md' });
     expect(issues).toHaveLength(1);
-    expect(issues[0]?.type).toBe('frontmatter_link_broken');
+    expect(issues[0]?.code).toBe('FRONTMATTER_LINK_BROKEN');
     expect(issues[0]?.message).toContain('ref');
     expect(issues[0]?.message).toContain('missing.md');
   });
@@ -73,7 +73,7 @@ describe('validateFrontmatterLinks', () => {
 
     const bad = await run({ ref: 'target.md#nonexistent' });
     expect(bad.issues).toHaveLength(1);
-    expect(bad.issues[0]?.type).toBe('frontmatter_anchor_missing');
+    expect(bad.issues[0]?.code).toBe('FRONTMATTER_ANCHOR_MISSING');
   });
 
   it('collects absolute https URLs as externalUrls (no issue emitted)', async () => {
@@ -96,7 +96,7 @@ describe('validateFrontmatterLinks', () => {
   it('emits frontmatter_unknown_link for unknown schemes', async () => {
     const { issues } = await run({ ref: 'tel:+15555550100' });
     expect(issues).toHaveLength(1);
-    expect(issues[0]?.type).toBe('frontmatter_unknown_link');
+    expect(issues[0]?.code).toBe('FRONTMATTER_UNKNOWN_LINK');
     expect(issues[0]?.message).toContain('ref');
   });
 
@@ -144,14 +144,14 @@ describe('validateFrontmatterLinks', () => {
         { skipGitIgnoreCheck: true },
       );
       expect(issues).toHaveLength(1);
-      expect(issues[0]?.type).toBe('frontmatter_link_broken');
+      expect(issues[0]?.code).toBe('FRONTMATTER_LINK_BROKEN');
       expect(issues[0]?.message).toContain('requires a configured projectRoot');
     });
 
     it('emits frontmatter_link_broken with traversal message on absolute_escapes_root', async () => {
       const { issues } = await run({ ref: '/../escape.md' });
       expect(issues).toHaveLength(1);
-      expect(issues[0]?.type).toBe('frontmatter_link_broken');
+      expect(issues[0]?.code).toBe('FRONTMATTER_LINK_BROKEN');
       expect(issues[0]?.message).toContain('escapes the project root via path traversal');
     });
   });

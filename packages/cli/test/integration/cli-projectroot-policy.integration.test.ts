@@ -81,12 +81,12 @@ describe('CLI-boundary projectRoot policy (integration, spec §13.4)', () => {
 
       expect(result.status).toBe(1);
       expect(result.stderr).toMatch(LOUD_CWD_PATTERN);
-      // The error surfaces as broken_file with the documented message.
-      const errors = parsed['errors'] as Array<{ errors: Array<{ type: string; message: string }> }> | undefined;
+      // The error surfaces as LINK_BROKEN_FILE with the documented message.
+      const errors = parsed['errors'] as Array<{ errors: Array<{ code: string; severity: string; message: string }> }> | undefined;
       expect(errors).toBeDefined();
       const flat = (errors ?? []).flatMap(e => e.errors);
       const hasAbsoluteEscape = flat.some(
-        e => e.type === 'broken_file' && /escapes the project root/.test(e.message),
+        e => e.code === 'LINK_BROKEN_FILE' && /escapes the project root/.test(e.message),
       );
       expect(hasAbsoluteEscape).toBe(true);
     });

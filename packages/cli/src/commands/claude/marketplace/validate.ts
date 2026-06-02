@@ -13,10 +13,10 @@
 import { existsSync, readdirSync } from 'node:fs';
 
 
+import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import {
   validateMarketplace,
   validateSkill,
-  type ValidationIssue,
   type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
 import { validatePlugin } from '@vibe-agent-toolkit/claude-marketplace';

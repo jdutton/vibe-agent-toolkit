@@ -23,9 +23,9 @@ External URL validation is **opt-in** via the `--check-external-urls` flag. When
 # Validate resources and check external URLs
 vat resources validate docs/ --check-external-urls
 
-# Output shows external URL issues
-❌ docs/guide.md
-   external_url_dead: https://example.com/old-page (404 Not Found)
+# Output shows external URL findings (warnings by default)
+⚠️  docs/guide.md
+   EXTERNAL_URL_DEAD: https://example.com/old-page (404 Not Found)
 
 # Use JSON format for CI integration
 vat resources validate docs/ --check-external-urls --output json
@@ -95,26 +95,49 @@ External URL validation uses a filesystem-based cache to minimize network reques
 - Automatic: Entries expire based on TTL
 - Per-URL: Cache is per-URL (hashed), not per-file
 
-## Issue Types
+## Issue Codes
 
-External URL validation reports three issue types:
+External URL validation reports three registry **codes**. All three default to
+`severity: warning` and **do not flip the exit code** — a failed network request
+may reflect a transient outage, a rate limit, or a network condition on the
+validating machine rather than a genuinely broken link.
 
-| Issue Type | Description | Example |
-|------------|-------------|---------|
-| `external_url_dead` | URL returns 4xx or 5xx status | `404 Not Found`, `410 Gone`, `500 Internal Server Error` |
-| `external_url_timeout` | Request exceeds timeout limit | `Request timeout after 10000ms` |
-| `external_url_error` | Network or protocol error | `ENOTFOUND`, `ECONNREFUSED`, `SSL certificate error` |
+| Code | Description | Example |
+|------|-------------|---------|
+| `EXTERNAL_URL_DEAD` | URL returns 4xx or 5xx status | `404 Not Found`, `410 Gone`, `500 Internal Server Error` |
+| `EXTERNAL_URL_TIMEOUT` | Request exceeds timeout limit | `Request timeout after 10000ms` |
+| `EXTERNAL_URL_ERROR` | Network or protocol error | `ENOTFOUND`, `ECONNREFUSED`, `SSL certificate error` |
+
+**Promoting or silencing findings:** Because these default to `warning`, they
+surface in output but never fail the build on their own. To make a class of
+external-URL finding a hard error, promote it per-code in config; to silence it,
+set its severity to `ignore`:
+
+```yaml
+resources:
+  validation:
+    severity:
+      EXTERNAL_URL_DEAD: error    # promote dead links to a build-failing error
+      EXTERNAL_URL_TIMEOUT: ignore # silence timeouts entirely
+```
+
+**Findings carry the unified `ValidationIssue` shape:**
+- `code` — the registry code (e.g. `EXTERNAL_URL_DEAD`)
+- `severity` — the resolved severity (`warning` by default; `error`/`ignore` if overridden)
+- `message` — human-readable description (e.g. `404 Not Found`)
+- `link` — the external URL that was checked
+- `location` — the project-relative path of the file containing the link
 
 **JSON Output Format:**
 ```json
 {
   "issues": [
     {
-      "type": "external_url_dead",
-      "severity": "error",
-      "file": "docs/guide.md",
-      "url": "https://example.com/missing",
-      "message": "404 Not Found"
+      "code": "EXTERNAL_URL_DEAD",
+      "severity": "warning",
+      "message": "404 Not Found",
+      "link": "https://example.com/missing",
+      "location": "docs/guide.md"
     }
   ]
 }
@@ -274,9 +297,9 @@ externalUrlValidation:
 - **Timeout:** Configurable per collection (default: 10s)
 
 **Error Handling:**
-- **Network errors:** Reported as `external_url_error`
-- **Timeouts:** Reported as `external_url_timeout`
-- **HTTP errors:** Reported as `external_url_dead` (4xx/5xx)
+- **Network errors:** Reported as `EXTERNAL_URL_ERROR`
+- **Timeouts:** Reported as `EXTERNAL_URL_TIMEOUT`
+- **HTTP errors:** Reported as `EXTERNAL_URL_DEAD` (4xx/5xx)
 - **Retries:** Automatic on 429 if `retryOn429: true`
 
 ## Related Documentation

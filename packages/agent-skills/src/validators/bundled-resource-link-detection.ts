@@ -16,10 +16,9 @@
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
+import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
-import { CODE_REGISTRY } from './code-registry.js';
-import type { ValidationIssue } from './types.js';
 
 const BUNDLED_SUBDIRS = ['scripts', 'references', 'assets'] as const;
 

@@ -9,66 +9,12 @@
  * registry — no duplication.
  */
 
+import { z } from 'zod';
+
 export type IssueSeverity = 'error' | 'warning' | 'info' | 'ignore';
 
 /** Non-ignore severities actually emitted to consumers. */
 export type EmittedSeverity = Exclude<IssueSeverity, 'ignore'>;
-
-export type IssueCode =
-  // Source-detectable link codes
-  | 'LINK_OUTSIDE_PROJECT'
-  | 'LINK_TARGETS_DIRECTORY'
-  | 'LINK_TO_NAVIGATION_FILE'
-  | 'LINK_TO_GITIGNORED_FILE'
-  | 'LINK_MISSING_TARGET'
-  | 'LINK_TO_SKILL_DEFINITION'
-  // Packaging-only link / output codes
-  | 'LINK_DROPPED_BY_DEPTH'
-  | 'PACKAGED_UNREFERENCED_FILE'
-  | 'PACKAGED_BROKEN_LINK'
-  // Best-practice / quality codes
-  | 'SKILL_LENGTH_EXCEEDS_RECOMMENDED'
-  | 'SKILL_TOTAL_SIZE_LARGE'
-  | 'SKILL_TOO_MANY_FILES'
-  | 'REFERENCE_TOO_DEEP'
-  | 'DESCRIPTION_TOO_VAGUE'
-  | 'NO_PROGRESSIVE_DISCLOSURE'
-  | 'SKILL_DESCRIPTION_OVER_CLAUDE_CODE_LIMIT'
-  | 'SKILL_DESCRIPTION_FILLER_OPENER'
-  | 'SKILL_DESCRIPTION_WRONG_PERSON'
-  | 'SKILL_CLAUDE_PLUGIN_NAME_MISMATCH'
-  | 'SKILL_NAME_MISMATCHES_DIR'
-  | 'RESERVED_WORD_IN_NAME'
-  | 'SKILL_TIME_SENSITIVE_CONTENT'
-  | 'SKILL_FRONTMATTER_EXTRA_FIELDS'
-  | 'SKILL_CROSS_SKILL_AUTH_UNDECLARED'
-  | 'SKILL_DESCRIPTION_STYLE_MIXED_IN_PACKAGE'
-  // Plugin manifest recommended fields (cross-walk from plugin-dev)
-  | 'PLUGIN_MISSING_DESCRIPTION'
-  | 'PLUGIN_MISSING_AUTHOR'
-  | 'PLUGIN_MISSING_LICENSE'
-  // Naming convention codes — named promotion of generic schema errors
-  | 'PLUGIN_NAME_NOT_KEBAB_CASE'
-  | 'SKILL_NAME_NOT_KEBAB_CASE'
-  // Skill body / packaging quality
-  | 'SKILL_REFERENCES_BUT_NO_LINKS'
-  | 'SKILL_BODY_NOT_IMPERATIVE'
-  // Capability observations — what a skill requires from its runtime
-  | 'CAPABILITY_LOCAL_SHELL'
-  | 'CAPABILITY_EXTERNAL_CLI'
-  | 'CAPABILITY_BROWSER_AUTH'
-  // Compat verdicts — emitted when declared target does not cover required capability
-  | 'COMPAT_TARGET_INCOMPATIBLE'
-  | 'COMPAT_TARGET_NEEDS_REVIEW'
-  | 'COMPAT_TARGET_UNDECLARED'
-  // Meta-codes describing the state of the validation config itself
-  | 'ALLOW_EXPIRED'
-  | 'ALLOW_UNUSED'
-  // Inventory / structural codes
-  | 'COMPONENT_DECLARED_BUT_MISSING'
-  | 'COMPONENT_PRESENT_BUT_UNDECLARED'
-  | 'REFERENCE_TARGET_MISSING'
-  | 'MARKETPLACE_PLUGIN_SOURCE_MISSING';
 
 export interface CodeRegistryEntry {
   defaultSeverity: EmittedSeverity;
@@ -85,7 +31,7 @@ const entry = (
   anchor: string,
 ): CodeRegistryEntry => ({ defaultSeverity, description, fix, reference: `#${anchor}` });
 
-export const CODE_REGISTRY: Record<IssueCode, CodeRegistryEntry> = {
+export const CODE_REGISTRY = {
   LINK_OUTSIDE_PROJECT: entry(
     'error',
     'Markdown link points to a file outside the project root.',
@@ -350,4 +296,143 @@ export const CODE_REGISTRY: Record<IssueCode, CodeRegistryEntry> = {
     'Correct the source path or remove the entry from marketplace.plugins[].',
     'marketplace_plugin_source_missing',
   ),
-};
+
+  // Resources path — link / frontmatter / external-URL codes
+  // Promotions of existing resources-package validator behavior (formerly free-form
+  // lowercase `type` strings). Severities are locked by the design spec and reflect
+  // existing behavior. LINK_TO_GITIGNORED here is intentionally distinct from the
+  // skills-packaging code LINK_TO_GITIGNORED_FILE — both coexist.
+  LINK_BROKEN_FILE: entry(
+    'error',
+    'Local file link points to a non-existent file.',
+    'Fix the path or create the target.',
+    'link_broken_file',
+  ),
+  LINK_BROKEN_ANCHOR: entry(
+    'error',
+    'Anchor link points to a non-existent heading/id.',
+    'Fix the fragment or the target heading.',
+    'link_broken_anchor',
+  ),
+  LINK_UNKNOWN: entry(
+    'warning',
+    'Link type could not be classified.',
+    'Use a recognized link form.',
+    'link_unknown',
+  ),
+  LINK_TO_GITIGNORED: entry(
+    'error',
+    'A tracked file links to a gitignored file.',
+    'Link a tracked target or un-ignore it.',
+    'link_to_gitignored',
+  ),
+  FRONTMATTER_MISSING: entry(
+    'error',
+    'Schema requires frontmatter but the file has none.',
+    'Add the required frontmatter.',
+    'frontmatter_missing',
+  ),
+  FRONTMATTER_INVALID_YAML: entry(
+    'error',
+    'Frontmatter YAML failed to parse.',
+    'Fix the YAML syntax.',
+    'frontmatter_invalid_yaml',
+  ),
+  FRONTMATTER_SCHEMA_ERROR: entry(
+    'error',
+    'Frontmatter failed JSON Schema validation.',
+    'Make the frontmatter conform to the schema.',
+    'frontmatter_schema_error',
+  ),
+  FRONTMATTER_LINK_BROKEN: entry(
+    'error',
+    'A frontmatter URI reference points to a non-existent file.',
+    'Fix the reference path.',
+    'frontmatter_link_broken',
+  ),
+  FRONTMATTER_ANCHOR_MISSING: entry(
+    'error',
+    'A frontmatter URI reference points to a missing anchor.',
+    'Fix the fragment.',
+    'frontmatter_anchor_missing',
+  ),
+  FRONTMATTER_LINK_TO_GITIGNORED: entry(
+    'error',
+    'A frontmatter URI reference targets a gitignored file.',
+    'Reference a tracked target.',
+    'frontmatter_link_to_gitignored',
+  ),
+  FRONTMATTER_UNKNOWN_LINK: entry(
+    'warning',
+    'A frontmatter URI reference could not be classified.',
+    'Use a recognized reference form.',
+    'frontmatter_unknown_link',
+  ),
+  EXTERNAL_URL_DEAD: entry(
+    'warning',
+    'External URL returned an error status (4xx/5xx).',
+    'Fix or remove the link; or set severity: ignore.',
+    'external_url_dead',
+  ),
+  EXTERNAL_URL_TIMEOUT: entry(
+    'warning',
+    'External URL request timed out.',
+    'Retry; raise timeout; or set severity: ignore.',
+    'external_url_timeout',
+  ),
+  EXTERNAL_URL_ERROR: entry(
+    'warning',
+    'External URL validation failed (DNS/network).',
+    'Check the host; or set severity: ignore.',
+    'external_url_error',
+  ),
+} as const satisfies Record<string, CodeRegistryEntry>;
+
+export type IssueCode = keyof typeof CODE_REGISTRY;
+
+export const IssueCodeSchema = z.enum(
+  Object.keys(CODE_REGISTRY) as [IssueCode, ...IssueCode[]],
+);
+
+/** Codes outside the overridable framework — structural reports. */
+export type InfoCode =
+  | 'FILE_STRUCTURE_REPORT'
+  | 'RESOURCE_INVENTORY'
+  | 'METADATA_SUMMARY'
+  | 'SKILL_IMPLICIT_REFERENCE'
+  | 'SKILL_UNREFERENCED_FILE';
+
+/** Codes outside the overridable framework — structural prerequisites / errors that are not subject to severity overrides. */
+export type NonOverridableCode =
+  | 'SKILL_MISSING_FRONTMATTER'
+  | 'SKILL_MISSING_NAME'
+  | 'SKILL_MISSING_DESCRIPTION'
+  | 'SKILL_NAME_INVALID'
+  | 'SKILL_NAME_XML_TAGS'
+  | 'SKILL_DESCRIPTION_XML_TAGS'
+  | 'SKILL_DESCRIPTION_TOO_LONG'
+  | 'SKILL_DESCRIPTION_EMPTY'
+  | 'SKILL_MISCONFIGURED_LOCATION'
+  | 'LINK_INTEGRITY_BROKEN'
+  | 'PATH_STYLE_WINDOWS'
+  | 'FILENAME_COLLISION'
+  | 'DUPLICATE_FILES_DEST'
+  | 'PLUGIN_MISSING_MANIFEST'
+  | 'PLUGIN_INVALID_JSON'
+  | 'PLUGIN_INVALID_SCHEMA'
+  | 'PLUGIN_MISSING_VERSION'
+  | 'MARKETPLACE_MISSING_MANIFEST'
+  | 'MARKETPLACE_INVALID_JSON'
+  | 'MARKETPLACE_INVALID_SCHEMA'
+  | 'MARKETPLACE_MISSING_LICENSE'
+  | 'MARKETPLACE_MISSING_README'
+  | 'MARKETPLACE_MISSING_CHANGELOG'
+  | 'MARKETPLACE_MISSING_VERSION'
+  | 'REGISTRY_MISSING_FILE'
+  | 'REGISTRY_INVALID_JSON'
+  | 'REGISTRY_INVALID_SCHEMA'
+  | 'UNKNOWN_FORMAT'
+  | 'SKILL_TOO_LONG'
+  | 'REFERENCE_MISSING_TOC'
+  | 'DESCRIPTION_FIRST_PERSON'
+  | 'RESOURCE_UNREACHABLE';

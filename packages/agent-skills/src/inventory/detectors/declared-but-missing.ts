@@ -6,7 +6,8 @@
  * disk. Covers all seven component fields in the manifest.
  */
 
-import type { ValidationIssue } from '../../validators/types.js';
+import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+
 import type { PluginInventory } from '../types.js';
 
 type ComponentField = keyof PluginInventory['declared'];

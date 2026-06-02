@@ -21,6 +21,7 @@ import { AgentMetadataSchema } from '../src/metadata.js';
 import { VatPackageMetadataSchema } from '../src/package-metadata.js';
 import { ResourceRegistrySchema } from '../src/resource-registry.js';
 import { ToolSchema } from '../src/tool.js';
+import { ValidationConfigSchema } from '../src/validation-config.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -51,5 +52,6 @@ writeJsonSchema('agent-interface', AgentInterfaceSchema);
 writeJsonSchema('tool', ToolSchema);
 writeJsonSchema('resource-registry', ResourceRegistrySchema);
 writeJsonSchema('vat-package-metadata', VatPackageMetadataSchema);
+writeJsonSchema('validation-config', ValidationConfigSchema);
 
 console.log('\n✨ JSON Schema generation complete!');

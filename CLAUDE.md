@@ -517,6 +517,23 @@ bun run test:coverage      # Unit tests with coverage report
 
 **CRITICAL - Do NOT use `bun test`**: This repository uses `bun run validate` as the authoritative test suite. Direct `bun test` has known issues with parallel execution. Always use `bun run validate` which runs tests through vibe-validate orchestration.
 
+### Subagent-Driven Execution: Batch the Work, Validate ONCE at the End
+
+**This section governs how to run multi-task plans via the `superpowers:subagent-driven-development` skill (the preferred execution method in this repo).** It overrides the per-task "commit at each boundary" rhythm that skill assumes, because of how this repo's gates are wired:
+
+- **`git commit` triggers `bun run validate` via the Husky pre-commit hook, which takes ~3.5–4 minutes and requires the ENTIRE tree to be perfect** (lint, typecheck, unit + integration + system tests, zero duplication). A mid-refactor tree is *never* perfect, so a per-task commit either blocks for 4 minutes or fails outright.
+- Therefore: **do NOT commit per task or per phase. Do NOT run `bun run validate` mid-flight.** Batch all tasks/phases into one uncommitted working tree, then run `bun run validate` exactly once when everything is stable, fix what it surfaces, and commit at the very end (in as few commits as the change logically needs).
+
+**Guidance to embed in every implementer/fixer subagent prompt:**
+
+> Verify your change with the fast, isolated signal only:
+> 1. **ESLint the files you changed** — `bunx eslint <changed files> --max-warnings=0`.
+> 2. **Run only the isolated unit test(s) for the thing you changed** — `bun run test:unit -- <name-substring>` (Vitest filters by filename) or `bunx vitest run <path/to/file.test.ts>`.
+>
+> Do NOT run `bun run validate`, `bun run test:system`, or `bun run test:integration` — they are slow and will not pass on a partially-migrated tree. Do NOT use `bun test`. Do NOT commit — leave all changes uncommitted; the orchestrator commits once at the end after a single full `bun run validate`.
+
+**Why:** the per-change feedback loop must stay fast (seconds, not minutes) for subagent iteration to be worthwhile; the expensive whole-tree gate is meaningful only once, on a stable tree. See [Critical Duplication Policy](#critical-code-duplication-policy) — the single end-of-run `validate` is also where duplication is caught, so each "move/rename" task must delete the original in the same task (never leave a copy that a later task removes).
+
 ### Pre-Commit Checklist
 
 Before committing, ensure:

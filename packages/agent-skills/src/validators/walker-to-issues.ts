@@ -1,9 +1,8 @@
+import { CODE_REGISTRY, type IssueCode, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import type { LinkResolution } from '../walk-link-graph.js';
 
-import { CODE_REGISTRY, type IssueCode } from './code-registry.js';
-import type { ValidationIssue } from './types.js';
 
 const REASON_TO_CODE: Record<NonNullable<LinkResolution['excludeReason']>, IssueCode | null> = {
   'depth-exceeded': 'LINK_DROPPED_BY_DEPTH',
