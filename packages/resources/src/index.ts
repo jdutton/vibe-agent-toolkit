@@ -85,6 +85,10 @@ export {
 // Export parser interface for advanced use cases
 export { parseMarkdown, type ParseResult } from './link-parser.js';
 
+export { parseHtml } from './html-link-parser.js';
+export type { HtmlParseError } from './link-parser.js';
+export { rewriteHtmlLinks } from './html-transform.js';
+
 // Export frontmatter validation
 export { validateFrontmatter } from './frontmatter-validator.js';
 

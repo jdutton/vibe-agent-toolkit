@@ -4,7 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { packageSkill } from '../../src/skill-packager.js';
+import { buildExampleSkill } from './packager-test-helpers.js';
 
 const SCHEMA = {
   type: 'object',
@@ -76,10 +76,7 @@ describe('packager rewrites frontmatter URI-refs with body parity (Gap 3)', () =
   });
 
   it('rewrites frontmatter URI-refs to packaged output paths and preserves comments', async () => {
-    const skillPath = safePath.join(projectRoot, 'skills', 'example', 'SKILL.md');
-    const outputPath = safePath.join(projectRoot, 'dist', 'example');
-    const result = await packageSkill(skillPath, { outputPath, formats: ['directory'] });
-    expect(result.hasErrors).toBe(false);
+    const { outputPath } = await buildExampleSkill(projectRoot);
 
     const builtSkill = readFileSync(safePath.join(outputPath, 'SKILL.md'), 'utf-8');
 

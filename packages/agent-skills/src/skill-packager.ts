@@ -31,6 +31,7 @@ import {
   openFrontmatter,
   resolveLocalHref,
   rewriteFrontmatterUriReferencesFromSchema,
+  rewriteHtmlLinks,
   transformContent,
   type LinkRewriteRule,
   type ParseResult,
@@ -1031,8 +1032,12 @@ async function copyAndRewriteFile(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
   await mkdir(dirname(targetPath), { recursive: true });
 
-  // Non-markdown files or rewriting disabled: plain binary copy
-  if (!sourcePath.endsWith('.md') || !ctx.rewriteLinks) {
+  const lower = sourcePath.toLowerCase();
+  const isMarkdown = lower.endsWith('.md');
+  const isHtml = lower.endsWith('.html') || lower.endsWith('.htm');
+
+  // Non-rewritable files or rewriting disabled: plain binary copy
+  if ((!isMarkdown && !isHtml) || !ctx.rewriteLinks) {
     await copyFile(sourcePath, targetPath);
     return;
   }
@@ -1045,9 +1050,26 @@ async function copyAndRewriteFile(
   const resource = ctx.fromRegistry.getResource(safePath.resolve(sourcePath));
 
   if (!resource) {
-    // Resource not in registry — write content as-is
+    // Resource not in registry — write content as-is. For HTML this is only
+    // reachable on an ID collision (e.g. page.html + page.md), where the asset
+    // is copied verbatim and its links are NOT rewritten (v1 limitation,
+    // mirrors the pre-existing asset-collision behavior).
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
     await writeFile(targetPath, content, 'utf-8');
+    return;
+  }
+
+  // HTML: offset-splice link rewrite (no frontmatter, no template body rewrite).
+  if (isHtml) {
+    const rewriteHref = buildHrefRewriter(
+      ctx.fromRegistry,
+      ctx.toRegistry,
+      sourcePath,
+      targetPath,
+      ctx.projectRoot,
+    );
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
+    await writeFile(targetPath, rewriteHtmlLinks(content, rewriteHref), 'utf-8');
     return;
   }
 
@@ -1072,7 +1094,7 @@ async function copyAndRewriteFile(
     (id) => ctx.collectionSchemas.has(id),
   );
   if (matchingCollections.length > 0) {
-    const rewriteHref = buildFrontmatterHrefRewriter(
+    const rewriteHref = buildHrefRewriter(
       ctx.fromRegistry,
       ctx.toRegistry,
       sourcePath,
@@ -1092,7 +1114,7 @@ async function copyAndRewriteFile(
 }
 
 /**
- * Build the per-href rewrite callback used for frontmatter URI-refs.
+ * Build the per-href rewrite callback used for frontmatter URI-refs and HTML attributes.
  *
  * Mirrors the body-rewrite path so frontmatter and body link rewriting agree
  * on target paths:
@@ -1107,7 +1129,7 @@ async function copyAndRewriteFile(
  *
  * Returns the original href when no rewrite applies.
  */
-function buildFrontmatterHrefRewriter(
+function buildHrefRewriter(
   fromRegistry: WalkableRegistry,
   toRegistry: ResourceRegistry,
   sourcePath: string,
