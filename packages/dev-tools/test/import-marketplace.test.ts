@@ -15,6 +15,7 @@ import {
   deriveConfidence,
   mapEntry,
   mungeName,
+  partitionPreserved,
   type UpstreamEntry,
 } from '../src/import-marketplace.js';
 
@@ -208,9 +209,16 @@ describe('combineAndDedupe', () => {
     confidence: 'curated',
     maturity: 'production',
   };
+  const preservedX: ReturnType<typeof mapEntry> = {
+    source: 'https://github.com/example/preserved.git',
+    name: 'x-preserved',
+    bucket: 'official',
+    confidence: 'first-party',
+    maturity: 'production',
+  };
 
   it('keeps the first occurrence per source URL and reports dropped names', () => {
-    const result = combineAndDedupe([officialA, officialB, officialC], []);
+    const result = combineAndDedupe([], [officialA, officialB, officialC], []);
     expect(result.officialKept).toEqual(2);
     expect(result.kwKept).toEqual(0);
     expect(result.droppedNames).toEqual(['b-foo']);
@@ -219,17 +227,77 @@ describe('combineAndDedupe', () => {
   });
 
   it('prefers an official entry over a knowledge-work entry for the same source URL', () => {
-    const result = combineAndDedupe([officialA], [kwA]);
+    const result = combineAndDedupe([], [officialA], [kwA]);
     expect(result.officialKept).toEqual(1);
     expect(result.kwKept).toEqual(0);
     expect(result.droppedNames).toEqual(['knowledge-work-foo']);
   });
 
-  it('always emits both preserved entries first', () => {
-    const result = combineAndDedupe([officialC], []);
-    expect(result.final.slice(0, 2).map(e => e.name)).toEqual([
-      'vibe-agent-toolkit',
-      'vibe-validate',
+  it('emits preserved entries first, in input order', () => {
+    const result = combineAndDedupe([preservedX], [officialC], []);
+    expect(result.final.map(e => e.name)).toEqual(['x-preserved', 'c-bar']);
+  });
+
+  it('preserved entries win over imports with the same source URL', () => {
+    const preservedCollidingWithA: ReturnType<typeof mapEntry> = {
+      source: EXAMPLE_FOO_URL,
+      name: 'preserved-foo',
+      bucket: 'official',
+      confidence: FIRST_PARTY,
+      maturity: 'production',
+    };
+    const result = combineAndDedupe([preservedCollidingWithA], [officialA], []);
+    expect(result.officialKept).toEqual(0);
+    expect(result.droppedNames).toEqual(['a-foo']);
+    expect(result.final.map(e => e.name)).toEqual(['preserved-foo']);
+  });
+
+  it('handles empty inputs without error', () => {
+    const result = combineAndDedupe([], [], []);
+    expect(result.final).toEqual([]);
+    expect(result.droppedNames).toEqual([]);
+    expect(result.officialKept).toEqual(0);
+    expect(result.kwKept).toEqual(0);
+  });
+});
+
+describe('partitionPreserved', () => {
+  const baseExisting = [
+    {
+      source: 'https://github.com/jdutton/vibe-validate.git#claude-marketplace',
+      name: 'vibe-validate',
+      bucket: 'official' as const,
+      confidence: FIRST_PARTY as 'first-party',
+      maturity: 'production' as const,
+    },
+    {
+      source: 'https://github.com/anthropics/claude-plugins-official.git#main:plugins/skill-creator',
+      name: SKILL_CREATOR,
+      bucket: 'official' as const,
+      confidence: FIRST_PARTY as 'first-party',
+      maturity: 'production' as const,
+    },
+  ];
+
+  it('keeps entries whose source is not in the imported set', () => {
+    const imported = new Set([
+      'https://github.com/anthropics/claude-plugins-official.git#main:plugins/skill-creator',
     ]);
+    const preserved = partitionPreserved(baseExisting, imported);
+    expect(preserved.map(e => e.name)).toEqual(['vibe-validate']);
+  });
+
+  it('returns empty when every existing source is also imported', () => {
+    const imported = new Set(baseExisting.map(e => e.source));
+    expect(partitionPreserved(baseExisting, imported)).toEqual([]);
+  });
+
+  it('throws if a preserved entry carries a validation block', () => {
+    const [firstEntry] = baseExisting;
+    if (firstEntry === undefined) throw new Error('test setup invariant: baseExisting must be non-empty');
+    const withValidation = [
+      { ...firstEntry, validation: { severity: { SOME_CODE: 'ignore' } } },
+    ];
+    expect(() => partitionPreserved(withValidation, new Set<string>())).toThrow(/validation block/);
   });
 });

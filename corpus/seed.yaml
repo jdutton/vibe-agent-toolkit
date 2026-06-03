@@ -6,12 +6,15 @@
 #
 # Last imported from upstream marketplaces on 2026-06-03 by
 # packages/dev-tools/src/import-marketplace.ts
+# (SHAs reflect upstream state at import time and drift fast; re-import freely.)
 #
 # Sources:
-#   anthropics/claude-plugins-official @ 4979da0 — 205 entries
-#   anthropics/knowledge-work-plugins  @ f53ea6a — 30 entries
+#   anthropics/claude-plugins-official @ 6f90371 — 206 entries
+#   anthropics/knowledge-work-plugins  @ 8785e40 — 30 entries
 #
 # Hand-curated entries (preserved on re-import): 2 at top.
+# An existing entry is preserved iff its `source` URL isn't one the importer
+# would generate this run (i.e. it doesn't live in either upstream catalog).
 # Re-import: bun run import-marketplace
 
 plugins:
@@ -57,6 +60,11 @@ plugins:
     maturity: production
   - source: https://github.com/Airtable/skills.git#main:plugins/airtable
     name: airtable
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/airwallex/airwallex-marketplace.git#master:plugins/airwallex
+    name: airwallex
     bucket: official
     confidence: curated
     maturity: production
@@ -986,7 +994,7 @@ plugins:
     confidence: curated
     maturity: production
   - source: https://github.com/VantaInc/vanta-mcp-plugin.git
-    name: vanta-mcp-plugin
+    name: vanta
     bucket: official
     confidence: curated
     maturity: production

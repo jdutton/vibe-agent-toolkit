@@ -19,10 +19,11 @@
 /* eslint-disable security/detect-non-literal-fs-filename */
 // File paths derived from PROJECT_ROOT (controlled, not user input)
 
-import { writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
 import { safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
+import * as yaml from 'yaml';
 import { z } from 'zod';
 
 import { PROJECT_ROOT, log } from './common.js';
@@ -111,25 +112,30 @@ const NAME_REGEX = /^[A-Za-z0-9_-]+$/;
 const FIRST_PARTY: PluginEntry['confidence'] = 'first-party';
 const CURATED: PluginEntry['confidence'] = 'curated';
 
-// Hand-curated entries that pre-date the import — VAT-owned plugins that
-// don't live in either upstream catalog. Re-emitted verbatim on every run.
-const PRESERVED_ENTRIES: PluginEntry[] = [
-  {
-    source:
-      'https://github.com/jdutton/vibe-agent-toolkit.git#claude-marketplace:plugins/vibe-agent-toolkit',
-    name: 'vibe-agent-toolkit',
-    bucket: 'official',
-    confidence: FIRST_PARTY,
-    maturity: 'production',
-  },
-  {
-    source: 'https://github.com/jdutton/vibe-validate.git#claude-marketplace',
-    name: 'vibe-validate',
-    bucket: 'official',
-    confidence: FIRST_PARTY,
-    maturity: 'production',
-  },
-];
+// Minimal schema for parsing the existing seed.yaml back in. Wider than the
+// `PluginEntry` we emit (the canonical schema allows `community` bucket,
+// `experimental` maturity, `listed` confidence, and a nested validation block)
+// because the file on disk may have richer entries that we still need to
+// preserve untouched. Stays in sync with `PluginEntrySchema` in
+// `packages/cli/src/commands/corpus/seed.ts`.
+const ExistingPluginEntrySchema = z
+  .object({
+    source: z.string().min(1),
+    name: z.string().min(1),
+    bucket: z.enum(['official', 'community']),
+    confidence: z.enum(['first-party', 'curated', 'listed']),
+    maturity: z.enum(['production', 'experimental', 'example']),
+    validation: z.unknown().optional(),
+  })
+  .strict();
+
+const ExistingSeedSchema = z
+  .object({
+    plugins: z.array(ExistingPluginEntrySchema),
+  })
+  .strict();
+
+type ExistingPluginEntry = z.infer<typeof ExistingPluginEntrySchema>;
 
 // ---------------------------------------------------------------------------
 // Fetch helpers — both use `gh api` via safeExecSync so this script inherits
@@ -270,6 +276,66 @@ export function mapEntry(entry: UpstreamEntry, catalog: Catalog): PluginEntry {
 }
 
 // ---------------------------------------------------------------------------
+// Preservation — read existing seed.yaml, hold back any entry whose `source`
+// isn't going to be re-produced by the importer.
+//
+// "Preserved" is defined structurally, not by a hardcoded allowlist: anything
+// the importer wouldn't generate this run is treated as hand-curated and
+// re-emitted verbatim. This covers the 2 VAT-owned entries today and any
+// future hand-added entries without needing to update this file.
+// ---------------------------------------------------------------------------
+
+/**
+ * Read and structurally validate the existing `corpus/seed.yaml`. Throws if
+ * the file is missing or malformed — re-import is not a bootstrap operation.
+ */
+export function loadExistingSeed(path: string): ExistingPluginEntry[] {
+  if (!existsSync(path)) {
+    throw new Error(
+      `Existing seed file not found: ${path}. Re-import requires an existing seed.yaml ` +
+        `(this script preserves entries that don't come from upstream).`,
+    );
+  }
+  const raw = readFileSync(path, 'utf-8');
+  const parsed = ExistingSeedSchema.parse(yaml.parse(raw));
+  return parsed.plugins;
+}
+
+/**
+ * Pick entries from the existing seed whose `source` is NOT one the importer
+ * is about to produce. These are hand-curated and re-emitted verbatim.
+ *
+ * Throws on a preserved entry that carries a `validation:` block — the
+ * verbatim stringify path doesn't currently serialize nested validation
+ * blocks, so a silent drop here would be a real bug. Slice 1b has no such
+ * entries; a later slice that introduces validation overrides needs to
+ * extend `stringifyEntries` first.
+ */
+export function partitionPreserved(
+  existing: ExistingPluginEntry[],
+  importedSources: Set<string>,
+): PluginEntry[] {
+  const preserved: PluginEntry[] = [];
+  for (const e of existing) {
+    if (importedSources.has(e.source)) continue;
+    if (e.validation !== undefined) {
+      throw new Error(
+        `Preserved entry "${e.name}" carries a validation block; stringifyEntries doesn't ` +
+          `serialize validation blocks yet. Either remove the block or extend the importer.`,
+      );
+    }
+    preserved.push({
+      source: e.source,
+      name: e.name,
+      bucket: e.bucket as PluginEntry['bucket'],
+      confidence: e.confidence as PluginEntry['confidence'],
+      maturity: e.maturity as PluginEntry['maturity'],
+    });
+  }
+  return preserved;
+}
+
+// ---------------------------------------------------------------------------
 // Deduplication & uniqueness checks
 //
 // `loadSeedFile()` treats `source` as the unique key (it throws on dupes).
@@ -298,6 +364,7 @@ interface CombineResult {
  * alphabetical-first name in each duplicate cluster lands in the seed).
  */
 export function combineAndDedupe(
+  preserved: PluginEntry[],
   official: PluginEntry[],
   kw: PluginEntry[],
 ): CombineResult {
@@ -305,7 +372,7 @@ export function combineAndDedupe(
   const final: PluginEntry[] = [];
   const droppedNames: string[] = [];
 
-  for (const e of PRESERVED_ENTRIES) {
+  for (const e of preserved) {
     seen.add(e.source);
     final.push(e);
   }
@@ -351,6 +418,7 @@ function assertUniqueNames(entries: PluginEntry[]): void {
 // ---------------------------------------------------------------------------
 
 interface ImportCounts {
+  preserved: number;
   official: number;
   knowledgeWork: number;
 }
@@ -366,12 +434,15 @@ function buildHeader(officialSha: string, kwSha: string, counts: ImportCounts): 
     `#`,
     `# Last imported from upstream marketplaces on ${date} by`,
     `# packages/dev-tools/src/import-marketplace.ts`,
+    `# (SHAs reflect upstream state at import time and drift fast; re-import freely.)`,
     `#`,
     `# Sources:`,
     `#   anthropics/claude-plugins-official @ ${officialSha} — ${counts.official} entries`,
     `#   anthropics/knowledge-work-plugins  @ ${kwSha} — ${counts.knowledgeWork} entries`,
     `#`,
-    `# Hand-curated entries (preserved on re-import): ${PRESERVED_ENTRIES.length} at top.`,
+    `# Hand-curated entries (preserved on re-import): ${counts.preserved} at top.`,
+    `# An existing entry is preserved iff its \`source\` URL isn't one the importer`,
+    `# would generate this run (i.e. it doesn't live in either upstream catalog).`,
     `# Re-import: bun run import-marketplace`,
     ``,
     ``,
@@ -396,8 +467,12 @@ function stringifyEntries(entries: PluginEntry[]): string {
 // ---------------------------------------------------------------------------
 
 function run(): void {
-  log('Fetching upstream manifests via gh CLI…', 'cyan');
+  const seedPath = safePath.join(PROJECT_ROOT, 'corpus', 'seed.yaml');
 
+  log('Reading existing seed.yaml for preserved entries…', 'cyan');
+  const existing = loadExistingSeed(seedPath);
+
+  log('Fetching upstream manifests via gh CLI…', 'cyan');
   const official = fetchManifest(CATALOG_OFFICIAL);
   const kw = fetchManifest(CATALOG_KNOWLEDGE_WORK);
   const officialSha = fetchCatalogSha(CATALOG_OFFICIAL);
@@ -421,7 +496,14 @@ function run(): void {
     .map(e => mapEntry(e, CATALOG_KNOWLEDGE_WORK))
     .sort((a, b) => a.name.localeCompare(b.name));
 
+  const importedSources = new Set([
+    ...officialEntries.map(e => e.source),
+    ...kwEntries.map(e => e.source),
+  ]);
+  const preserved = partitionPreserved(existing, importedSources);
+
   const { final, officialKept, kwKept, droppedNames } = combineAndDedupe(
+    preserved,
     officialEntries,
     kwEntries,
   );
@@ -433,7 +515,10 @@ function run(): void {
 
   log('', 'reset');
   log('Mapping summary:', 'cyan');
-  log(`  Preserved entries:                ${PRESERVED_ENTRIES.length}`, 'reset');
+  log(`  Preserved entries:                ${preserved.length}`, 'reset');
+  if (preserved.length > 0) {
+    log(`    [${preserved.map(e => e.name).join(', ')}]`, 'reset');
+  }
   log(`  Imported (official, raw):         ${officialEntries.length}`, 'reset');
   log(`  Imported (knowledge-work, raw):   ${kwEntries.length}`, 'reset');
   log(
@@ -453,13 +538,13 @@ function run(): void {
 
   const output =
     buildHeader(officialSha, kwSha, {
+      preserved: preserved.length,
       official: officialKept,
       knowledgeWork: kwKept,
     }) +
     `plugins:\n` +
     stringifyEntries(final);
 
-  const seedPath = safePath.join(PROJECT_ROOT, 'corpus', 'seed.yaml');
   writeFileSync(seedPath, output, 'utf8');
   log('', 'reset');
   log(`✓ Wrote ${seedPath}`, 'green');
