@@ -34,14 +34,22 @@ export interface ComposeOptions {
   marketplaceName: string;
   configDir: string;
   outputDir: string;
-  version: string;
   changelog?: ChangelogOptions;
   readme?: ReadmeOptions;
   license?: LicenseOptions;
 }
 
 export interface ComposeResult {
-  version: string;
+  /**
+   * Version derived from the staged marketplace.json:
+   *   - single-plugin marketplace → that plugin's version
+   *   - multi-plugin (or zero-plugin) marketplace → undefined
+   *
+   * Consumers should render `v${version}` only when defined; for the undefined
+   * case (multi-plugin), per-plugin versions in `publishedPlugins` are the
+   * source of truth.
+   */
+  version: string | undefined;
   changelogDelta: string;
   files: string[];
   /**
@@ -58,8 +66,67 @@ interface PublishedPluginInfo {
   version?: string;
 }
 
+/**
+ * Derive a label version from the staged plugin list. A marketplace with exactly
+ * one plugin can borrow that plugin's version as its label; anything else (zero
+ * or multiple plugins) leaves the label undefined and lets per-plugin tags carry
+ * the truth.
+ *
+ * Note: `publishedPlugins` is the *version-filtered* list — entries lacking a
+ * `version` field are dropped upstream. The "one plugin" branch therefore
+ * means "exactly one *versioned* plugin." This relies on the build pipeline
+ * assigning a `version` to every plugin in the staged `marketplace.json`;
+ * a future flow that stages an unversioned plugin alongside a versioned one
+ * would emit a single-plugin label even though the marketplace contains two
+ * entries. Threading the raw plugin count if that assumption breaks is the
+ * obvious fix.
+ */
+function deriveLabelVersion(
+  publishedPlugins: { name: string; version: string }[],
+): string | undefined {
+  return publishedPlugins.length === 1 ? publishedPlugins[0]?.version : undefined;
+}
+
+/**
+ * Read the configured changelog, copy it byte-for-byte into outputDir, and
+ * return the release-note string for the commit body. Accepts both Keep a
+ * Changelog workflows:
+ *   (B) pre-stamped `## [version]` section — preferred when a label version
+ *       is available and that section is non-empty
+ *   (A) non-empty `## [Unreleased]` — fallback, and the only path when the
+ *       label is undefined (multi-plugin marketplaces)
+ * Throws when both sections are empty.
+ */
+async function extractChangelogDelta(
+  changelog: ChangelogOptions,
+  configDir: string,
+  outputDir: string,
+  derivedVersion: string | undefined,
+): Promise<string> {
+  const rawChangelog = readChangelog(changelog.sourcePath, configDir);
+
+  const stampedSection = derivedVersion
+    ? parseVersionSection(rawChangelog, derivedVersion)
+    : '';
+  const unreleasedSection = parseUnreleasedSection(rawChangelog).trim();
+
+  if (stampedSection === '' && unreleasedSection === '') {
+    const reason = derivedVersion
+      ? `has neither a non-empty [Unreleased] section nor a [${derivedVersion}] section`
+      : `has no non-empty [Unreleased] section`;
+    throw new Error(
+      `Changelog "${changelog.sourcePath}" ${reason}. Document the release before publishing.`,
+    );
+  }
+
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated config
+  await writeFile(safePath.join(outputDir, 'CHANGELOG.md'), rawChangelog);
+
+  return stampedSection === '' ? unreleasedSection : stampedSection;
+}
+
 export async function composePublishTree(options: ComposeOptions): Promise<ComposeResult> {
-  const { marketplaceName, configDir, outputDir, version } = options;
+  const { marketplaceName, configDir, outputDir } = options;
   const files: string[] = [];
   let changelogDelta = '';
 
@@ -93,29 +160,13 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
     )
     .map((p) => ({ name: p.name, version: p.version }));
 
-  // 3. Process changelog — VAT copies the source file byte-for-byte into the publish tree.
-  //    We only extract a release-note string for the commit body (changelogDelta).
-  //    Accept both Keep a Changelog workflows:
-  //      (B) pre-stamped `## [version]` section — preferred when present, and
-  //      (A) non-empty `## [Unreleased]` — fallback.
-  //    Error if both are empty.
+  const derivedVersion = deriveLabelVersion(publishedPlugins);
+
+  // 3. Process changelog
   if (options.changelog) {
-    const rawChangelog = readChangelog(options.changelog.sourcePath, configDir);
-
-    const stampedSection = parseVersionSection(rawChangelog, version);
-    const unreleasedSection = parseUnreleasedSection(rawChangelog).trim();
-
-    if (stampedSection === '' && unreleasedSection === '') {
-      throw new Error(
-        `Changelog "${options.changelog.sourcePath}" has neither a non-empty [Unreleased] ` +
-          `section nor a [${version}] section. Document the release before publishing.`,
-      );
-    }
-
-    changelogDelta = stampedSection === '' ? unreleasedSection : stampedSection;
-
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated config
-    await writeFile(safePath.join(outputDir, 'CHANGELOG.md'), rawChangelog);
+    changelogDelta = await extractChangelogDelta(
+      options.changelog, configDir, outputDir, derivedVersion,
+    );
     files.push('CHANGELOG.md');
   }
 
@@ -146,5 +197,5 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
     files.push('LICENSE');
   }
 
-  return { version, changelogDelta, files, publishedPlugins };
+  return { version: derivedVersion, changelogDelta, files, publishedPlugins };
 }

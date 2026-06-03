@@ -41,13 +41,17 @@ export interface PublishGitOptions {
 
 /**
  * Format a commit message for marketplace publish.
+ *
+ * `headline` is the literal first line of the commit message — the caller owns
+ * how to render it (e.g. `publish v1.2.0` for a single-plugin marketplace, or
+ * `publish my-marketplace` when there is no aggregate version to display).
  */
 export function createCommitMessage(
-  version: string,
+  headline: string,
   changelogDelta: string,
   metadata?: CommitMetadata
 ): string {
-  const lines = [`publish v${version}`];
+  const lines = [headline];
 
   if (changelogDelta) {
     lines.push('', changelogDelta);

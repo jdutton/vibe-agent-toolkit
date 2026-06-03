@@ -6,7 +6,7 @@
  * then creates a squashed commit on the target branch.
  */
 
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 
 
 import type { ClaudeMarketplaceConfig } from '@vibe-agent-toolkit/resources';
@@ -34,7 +34,13 @@ export interface MarketplacePublishOptions {
 
 interface PublishResult {
   marketplace: string;
-  version: string;
+  /**
+   * Marketplace label version: the single plugin's version when the marketplace
+   * contains exactly one plugin, otherwise undefined (multi-plugin marketplaces
+   * have no aggregate version — per-plugin versions are in the published
+   * marketplace.json).
+   */
+  version: string | undefined;
   branch: string;
   files: string[];
   dryRun: boolean;
@@ -105,27 +111,6 @@ Example:
 }
 
 /**
- * Read version from package.json in the given directory.
- */
-function readProjectVersion(configDir: string): string {
-  const packageJsonPath = safePath.join(configDir, 'package.json');
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated config dir
-    const raw = readFileSync(packageJsonPath, 'utf-8');
-    const parsed = JSON.parse(raw) as { version?: string };
-    if (!parsed.version) {
-      throw new Error('package.json is missing a "version" field.');
-    }
-    return parsed.version;
-  } catch (error) {
-    if (error instanceof Error && error.message.includes('ENOENT')) {
-      throw new Error(`package.json not found at ${packageJsonPath}. Run from a project directory with package.json.`);
-    }
-    throw error;
-  }
-}
-
-/**
  * Resolve a license config value to typed LicenseOptions.
  */
 function resolveLicenseOptions(
@@ -149,7 +134,6 @@ function resolveLicenseOptions(
 function buildComposeOptions(
   mpName: string,
   configDir: string,
-  version: string,
   publishConfig: NonNullable<ClaudeMarketplaceConfig['publish']>,
   licenseOpts: LicenseOptions | undefined,
 ): ComposeOptions {
@@ -157,7 +141,6 @@ function buildComposeOptions(
     marketplaceName: mpName,
     configDir,
     outputDir: mkdtempSync(safePath.join(normalizedTmpdir(), `vat-publish-tree-${mpName}-`)),
-    version,
   };
   if (publishConfig.changelog) {
     opts.changelog = { sourcePath: publishConfig.changelog };
@@ -176,7 +159,6 @@ interface PublishOneOptions {
   mpConfig: ClaudeMarketplaceConfig;
   publishConfig: NonNullable<ClaudeMarketplaceConfig['publish']>;
   configDir: string;
-  version: string;
   options: MarketplacePublishOptions;
   logger: Logger;
 }
@@ -185,33 +167,38 @@ interface PublishOneOptions {
  * Publish a single marketplace and return the result.
  */
 async function publishOneMarketplace(ctx: PublishOneOptions): Promise<PublishResult> {
-  const { mpName, mpConfig, publishConfig, configDir, version, options, logger } = ctx;
+  const { mpName, mpConfig, publishConfig, configDir, options, logger } = ctx;
   const branch = options.branch ?? publishConfig.branch ?? 'claude-marketplace';
   const remote = publishConfig.remote ?? 'origin';
-
-  logger.info(`Publishing marketplace "${mpName}" v${version}`);
 
   const licenseOpts = publishConfig.license
     ? resolveLicenseOptions(publishConfig.license, mpConfig.owner.name)
     : undefined;
 
-  const composeOpts = buildComposeOptions(mpName, configDir, version, publishConfig, licenseOpts);
+  const composeOpts = buildComposeOptions(mpName, configDir, publishConfig, licenseOpts);
   const composeResult = await composePublishTree(composeOpts);
+
+  const labelVersion = composeResult.version;
+  const banner = labelVersion
+    ? `Publishing marketplace "${mpName}" v${labelVersion}`
+    : `Publishing marketplace "${mpName}"`;
+  logger.info(banner);
 
   // Resolve source repo for commit metadata
   const sourceRepo = typeof publishConfig.sourceRepo === 'string'
     ? publishConfig.sourceRepo
     : undefined;
 
+  const headline = labelVersion ? `publish v${labelVersion}` : `publish ${mpName}`;
   const commitMessage = createCommitMessage(
-    composeResult.version,
+    headline,
     composeResult.changelogDelta,
     sourceRepo ? { sourceRepo } : undefined,
   );
 
   if (options.dryRun) {
     logger.info(`[dry-run] Would publish to ${redactUrlCredentials(remote)}/${branch}`);
-    logger.info(`[dry-run] Version: ${version}`);
+    logger.info(`[dry-run] Version: ${labelVersion ?? '(multi-plugin — no aggregate version)'}`);
     logger.info(`[dry-run] Files: ${composeResult.files.join(', ')}`);
   } else if (options.push === false) {
     logger.info(`[no-push] Creating local branch ${branch}`);
@@ -231,7 +218,7 @@ async function publishOneMarketplace(ctx: PublishOneOptions): Promise<PublishRes
 
   return {
     marketplace: mpName,
-    version,
+    version: labelVersion,
     branch,
     files: composeResult.files,
     dryRun: options.dryRun ?? false,
@@ -253,7 +240,6 @@ async function marketplacePublishCommand(_options: MarketplacePublishOptions, co
       );
     }
 
-    const version = readProjectVersion(configDir);
     const results: PublishResult[] = [];
 
     for (const [mpName, mpConfig] of Object.entries(claudeConfig.marketplaces)) {
@@ -266,7 +252,7 @@ async function marketplacePublishCommand(_options: MarketplacePublishOptions, co
       }
 
       const result = await publishOneMarketplace({
-        mpName, mpConfig, publishConfig: mpConfig.publish, configDir, version, options, logger,
+        mpName, mpConfig, publishConfig: mpConfig.publish, configDir, options, logger,
       });
       results.push(result);
     }
