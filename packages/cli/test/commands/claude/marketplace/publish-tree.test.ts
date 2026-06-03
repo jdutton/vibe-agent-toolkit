@@ -38,6 +38,26 @@ function seedMarketplaceBuild(
   return mpName;
 }
 
+/**
+ * Seed a marketplace build with the given plugin entries and run
+ * composePublishTree against it, returning the result. Used by the issue-#110
+ * version derivation tests so each case stays focused on its assertion.
+ */
+async function deriveVersionFor(
+  tempDirs: string[],
+  mpName: string,
+  plugins: { name: string; version?: string }[],
+) {
+  const sourceDir = makeTempDir(tempDirs);
+  const outputDir = makeTempDir(tempDirs);
+  seedMarketplaceBuild(sourceDir, mpName, plugins);
+  return composePublishTree({
+    marketplaceName: mpName,
+    configDir: sourceDir,
+    outputDir,
+  });
+}
+
 describe('publish-tree', () => {
   const tempDirs: string[] = [];
 
@@ -173,57 +193,27 @@ describe('publish-tree', () => {
 
   // Issue #110: ComposeResult.version must reflect what is actually being published —
   // derived from the staged marketplace.json, not the project root package.json that
-  // the caller happens to pass in.
+  // the caller previously passed in.
 
   it('derives version from the single plugin when the marketplace has exactly one plugin', async () => {
-    const sourceDir = makeTempDir(tempDirs);
-    const outputDir = makeTempDir(tempDirs);
-    const mpName = seedMarketplaceBuild(sourceDir, 'single-mp', [
+    const result = await deriveVersionFor(tempDirs, 'single-mp', [
       { name: 'only-plugin', version: '0.0.4' },
     ]);
-
-    const result = await composePublishTree({
-      marketplaceName: mpName,
-      configDir: sourceDir,
-      outputDir,
-      version: 'project-1.0.0',
-    });
-
     expect(result.version).toBe('0.0.4');
   });
 
   it('returns undefined version when the marketplace has multiple plugins', async () => {
-    const sourceDir = makeTempDir(tempDirs);
-    const outputDir = makeTempDir(tempDirs);
-    const mpName = seedMarketplaceBuild(sourceDir, 'multi-mp', [
+    const result = await deriveVersionFor(tempDirs, 'multi-mp', [
       { name: 'plugin-a', version: '0.1.0' },
       { name: 'plugin-b', version: '0.2.0' },
     ]);
-
-    const result = await composePublishTree({
-      marketplaceName: mpName,
-      configDir: sourceDir,
-      outputDir,
-      version: 'project-1.0.0',
-    });
-
     expect(result.version).toBeUndefined();
   });
 
   it('returns undefined version when no plugin entry has a usable version field', async () => {
-    const sourceDir = makeTempDir(tempDirs);
-    const outputDir = makeTempDir(tempDirs);
-    const mpName = seedMarketplaceBuild(sourceDir, 'unversioned-mp', [
+    const result = await deriveVersionFor(tempDirs, 'unversioned-mp', [
       { name: 'only-plugin' },
     ]);
-
-    const result = await composePublishTree({
-      marketplaceName: mpName,
-      configDir: sourceDir,
-      outputDir,
-      version: 'project-1.0.0',
-    });
-
     expect(result.version).toBeUndefined();
   });
 });
