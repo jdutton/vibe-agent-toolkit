@@ -718,11 +718,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Collect all validation issues
     const issues: ValidationIssue[] = [];
 
-    // Check for YAML parsing errors first
-    issues.push(...this.collectYamlErrors());
-
-    // Surface HTML well-formedness diagnostics
-    issues.push(...this.collectHtmlParseErrors());
+    // Surface parse-time diagnostics: YAML frontmatter errors first, then HTML
+    // well-formedness. Combined into one push() call (SonarCloud S7778).
+    issues.push(...this.collectYamlErrors(), ...this.collectHtmlParseErrors());
 
     // Validate each link in each resource
     const linkIssues = await this.validateAllLinks(

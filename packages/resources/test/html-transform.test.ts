@@ -45,4 +45,31 @@ describe('rewriteHtmlLinks', () => {
     const rw = (h: string) => mapping[h] ?? h;
     expect(rewriteHtmlLinks(src, rw)).toBe('<a href="x.html">1</a><a href="y.html">2</a>');
   });
+
+  it('escapes & and the active single quote', () => {
+    const src = "<img src='old.png'>";
+    expect(rewriteHtmlLinks(src, swap('old.png', "a'b&c"))).toBe("<img src='a&#39;b&amp;c'>");
+  });
+
+  it('handles whitespace around the = sign', () => {
+    const src = '<a href = "old.html">x</a>';
+    expect(rewriteHtmlLinks(src, swap('old.html', 'new.html'))).toBe('<a href = "new.html">x</a>');
+  });
+
+  it('ignores <a> elements that have no href attribute', () => {
+    const src = '<a name="anchor">x</a><a href="old.html">y</a>';
+    expect(rewriteHtmlLinks(src, swap('old.html', 'new.html'))).toBe(
+      '<a name="anchor">x</a><a href="new.html">y</a>',
+    );
+  });
+
+  it('leaves a valueless (boolean) attribute untouched', () => {
+    const src = '<a href>x</a>';
+    expect(rewriteHtmlLinks(src, () => 'changed')).toBe(src);
+  });
+
+  it('leaves an empty-value attribute (href=) untouched', () => {
+    const src = '<a href=>x</a>';
+    expect(rewriteHtmlLinks(src, () => 'changed')).toBe(src);
+  });
 });
