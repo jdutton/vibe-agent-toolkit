@@ -124,6 +124,13 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 - **Why it matters:** A committed document declaring a dependency on a gitignored target breaks portability — anyone cloning the repo gets the document but not the target. It also risks treating local-only or generated content as if it were part of the published artifact. Distinct from the skills-packaging code [`LINK_TO_GITIGNORED_FILE`](#link_to_gitignored_file), which guards against leaking ignored data into a *bundle*; this code fires in the `vat resources validate` path and the two coexist intentionally.
 - **Fix:** Link a tracked target, or un-ignore the file in `.gitignore` if it should be committed.
 
+### `MALFORMED_HTML`
+
+- **Default:** `info`
+- **What:** An HTML resource has well-formedness problems (unclosed tags, stray characters, misnested elements) reported by the HTML parser.
+- **Why it matters:** Malformed markup parses unpredictably across browsers and tools, and can hide or mangle the links VAT extracts. Surfaced as `info` because browsers are lenient and most pages still render.
+- **Fix:** Fix the markup the parser flags. Raise severity via `validation.severity.MALFORMED_HTML` to enforce well-formedness.
+
 ## Frontmatter Link Codes
 
 Validation codes that fire when a collection's frontmatter schema declares a URI-family `format` (`uri-reference`, `uri`, `iri-reference`, `iri`) on a field and `vat resources validate` walks those values through the same engine as markdown link checking. Disabled per-collection via `validation.checkFrontmatterLinks: false` or globally via `vat resources validate --no-check-frontmatter-links`. See [Frontmatter link validation](./guides/collection-validation.md#frontmatter-link-validation).

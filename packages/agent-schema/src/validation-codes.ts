@@ -326,6 +326,12 @@ export const CODE_REGISTRY = {
     'Link a tracked target or un-ignore it.',
     'link_to_gitignored',
   ),
+  MALFORMED_HTML: entry(
+    'info',
+    'HTML resource has well-formedness issues reported by the parser.',
+    'Fix the malformed markup (unclosed tags, stray characters). Informational by default; raise severity via validation.severity to enforce.',
+    'malformed_html',
+  ),
   FRONTMATTER_MISSING: entry(
     'error',
     'Schema requires frontmatter but the file has none.',

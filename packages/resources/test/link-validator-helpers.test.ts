@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  checkAnchor,
   fileExistenceIssue,
   gitIgnoreSafetyIssue,
   resolutionFailureIssue,
@@ -122,6 +123,29 @@ describe('fileExistenceIssue', () => {
     expect(issue?.message).toContain('"readme.md"');
     expect(issue?.message).toContain('"README.md"');
     expect(issue?.suggestion).toBe('Use "README.md" instead of "readme.md"');
+  });
+});
+
+describe('checkAnchor', () => {
+  const GUIDE_MD = '/abs/guide.md';
+  const PAGE_HTML = '/abs/page.html';
+  const index = new Map<string, Set<string>>([
+    [GUIDE_MD, new Set(['my-heading'])],
+    [PAGE_HTML, new Set(['Intro', 'legacy'])],
+  ]);
+
+  it('skips targets that are not indexed', () => {
+    expect(checkAnchor('anything', '/abs/not-indexed.md', index)).toBe('skip');
+  });
+
+  it('matches markdown slugs case-insensitively', () => {
+    expect(checkAnchor('My-Heading', GUIDE_MD, index)).toBe('valid');
+    expect(checkAnchor('missing', GUIDE_MD, index)).toBe('broken');
+  });
+
+  it('matches HTML ids case-sensitively', () => {
+    expect(checkAnchor('Intro', PAGE_HTML, index)).toBe('valid');
+    expect(checkAnchor('intro', PAGE_HTML, index)).toBe('broken');
   });
 });
 

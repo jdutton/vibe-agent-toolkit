@@ -22,6 +22,7 @@ import {
   type FrontmatterExternalUrl,
 } from './frontmatter-link-validator.js';
 import { validateFrontmatter } from './frontmatter-validator.js';
+import { parseHtml } from './html-link-parser.js';
 import { parseMarkdown } from './link-parser.js';
 import { validateLink, type ValidateLinkOptions } from './link-validator.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
@@ -304,8 +305,12 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Normalize path to absolute
     const absolutePath = safePath.resolve(filePath);
 
-    // Parse the markdown file (needed before ID generation for frontmatter lookup)
-    const parseResult = await parseMarkdown(absolutePath);
+    // Parse the file — HTML or markdown depending on extension
+    const lowerPath = absolutePath.toLowerCase();
+    const isHtml = lowerPath.endsWith('.html') || lowerPath.endsWith('.htm');
+    const parseResult = isHtml
+      ? await parseHtml(absolutePath)
+      : await parseMarkdown(absolutePath);
 
     // Generate ID using priority chain: frontmatter field → relative path → filename stem
     const id = this.generateId(absolutePath, parseResult.frontmatter);
@@ -336,6 +341,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       filePath: absolutePath,
       links: parseResult.links,
       headings: parseResult.headings,
+      ...(parseResult.anchors !== undefined && { anchors: parseResult.anchors }),
+      ...(parseResult.parseErrors !== undefined && { parseErrors: parseResult.parseErrors }),
       ...(parseResult.frontmatter !== undefined && { frontmatter: parseResult.frontmatter }),
       ...(parseResult.frontmatterError !== undefined && { frontmatterError: parseResult.frontmatterError }),
       sizeBytes: parseResult.sizeBytes,
@@ -396,7 +403,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   async crawl(options: CrawlOptions): Promise<ResourceMetadata[]> {
     const {
       baseDir,
-      include = ['**/*.md'],
+      include = ['**/*.md', '**/*.html', '**/*.htm'],
       exclude = ['**/node_modules/**', '**/.git/**', '**/dist/**'],
       followSymlinks = false,
     } = options;
@@ -443,11 +450,34 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
+   * Emit MALFORMED_HTML issues from each resource's HTML parse errors.
+   * @private
+   */
+  private collectHtmlParseErrors(): ValidationIssue[] {
+    const issues: ValidationIssue[] = [];
+    for (const resource of this.resourcesByPath.values()) {
+      for (const parseError of resource.parseErrors ?? []) {
+        issues.push(
+          createRegistryIssue(
+            'MALFORMED_HTML',
+            `Malformed HTML: ${parseError.message}`,
+            {
+              location: issueLocation(resource.filePath, this.baseDir),
+              ...(parseError.line !== undefined && { line: parseError.line }),
+            },
+          ),
+        );
+      }
+    }
+    return issues;
+  }
+
+  /**
    * Validate all links in all resources.
    * @private
    */
   private async validateAllLinks(
-    headingsByFile: Map<string, HeadingNode[]>,
+    fragmentsByFile: Map<string, Set<string>>,
     skipGitIgnoreCheck: boolean
   ): Promise<ValidationIssue[]> {
     const issues: ValidationIssue[] = [];
@@ -463,7 +493,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
               ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker })
             };
 
-        const issue = await validateLink(link, resource.filePath, headingsByFile, validateOptions);
+        const issue = await validateLink(link, resource.filePath, fragmentsByFile, validateOptions);
         if (issue) {
           issues.push(issue);
         }
@@ -501,7 +531,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * @private
    */
   private async validateCollectionFrontmatter(
-    headingsByFile: Map<string, HeadingNode[]>,
+    fragmentsByFile: Map<string, Set<string>>,
     skipGitIgnoreCheck: boolean,
   ): Promise<ValidationIssue[]> {
     const issues: ValidationIssue[] = [];
@@ -523,7 +553,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       const collectionIssues = await this.validateResourceCollectionSchemas(
         resource,
         fsPromises,
-        headingsByFile,
+        fragmentsByFile,
         skipGitIgnoreCheck,
       );
       issues.push(...collectionIssues);
@@ -539,7 +569,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private async validateResourceCollectionSchemas(
     resource: ResourceMetadata,
     fsModule: typeof fs,
-    headingsByFile: Map<string, HeadingNode[]>,
+    fragmentsByFile: Map<string, Set<string>>,
     skipGitIgnoreCheck: boolean,
   ): Promise<ValidationIssue[]> {
     const issues: ValidationIssue[] = [];
@@ -560,7 +590,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         resource,
         collection.validation,
         fsModule,
-        headingsByFile,
+        fragmentsByFile,
         skipGitIgnoreCheck,
       );
       issues.push(...collectionIssues);
@@ -577,7 +607,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     resource: ResourceMetadata,
     validation: NonNullable<NonNullable<ProjectConfig['resources']>['collections']>[string]['validation'],
     fsModule: typeof fs,
-    headingsByFile: Map<string, HeadingNode[]>,
+    fragmentsByFile: Map<string, Set<string>>,
     skipGitIgnoreCheck: boolean,
   ): Promise<ValidationIssue[]> {
     if (!validation?.frontmatterSchema) {
@@ -620,7 +650,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
           resource.frontmatter,
           schema,
           resource.filePath,
-          headingsByFile,
+          fragmentsByFile,
           linkOptions,
         );
         issues.push(...linkIssues);
@@ -679,8 +709,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   async validate(options?: ValidateOptions): Promise<ValidationResult> {
     const startTime = Date.now();
 
-    // Build headings map for validation
-    const headingsByFile = this.buildHeadingsByFileMap();
+    // Build fragment index for anchor validation
+    const fragmentsByFile = this.buildFragmentIndex();
 
     // Reset frontmatter external URL state for this validation run
     this.frontmatterExternalUrlsByResource.clear();
@@ -691,16 +721,19 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Check for YAML parsing errors first
     issues.push(...this.collectYamlErrors());
 
+    // Surface HTML well-formedness diagnostics
+    issues.push(...this.collectHtmlParseErrors());
+
     // Validate each link in each resource
     const linkIssues = await this.validateAllLinks(
-      headingsByFile,
+      fragmentsByFile,
       options?.skipGitIgnoreCheck ?? false
     );
     issues.push(...linkIssues);
 
     // Per-collection frontmatter validation
     const collectionFrontmatterIssues = await this.validateCollectionFrontmatter(
-      headingsByFile,
+      fragmentsByFile,
       options?.skipGitIgnoreCheck ?? false,
     );
     issues.push(...collectionFrontmatterIssues);
@@ -1253,14 +1286,19 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
-   * Build a map of file paths to their heading trees.
-   *
-   * Used for link validation.
+   * Build a format-neutral fragment index for anchor validation: each file's
+   * absolute path → the set of valid fragment targets. Markdown contributes
+   * heading slugs (lowercased); HTML contributes its `id`/`name` anchors.
    */
-  private buildHeadingsByFileMap(): Map<string, HeadingNode[]> {
-    const map = new Map<string, HeadingNode[]>();
+  private buildFragmentIndex(): Map<string, Set<string>> {
+    const map = new Map<string, Set<string>>();
     for (const resource of this.resourcesByPath.values()) {
-      map.set(resource.filePath, resource.headings);
+      const fragments = new Set<string>();
+      collectHeadingSlugs(resource.headings, fragments);
+      for (const anchor of resource.anchors ?? []) {
+        fragments.add(anchor);
+      }
+      map.set(resource.filePath, fragments);
     }
     return map;
   }
@@ -1315,6 +1353,16 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Resolve relative to source file's directory
     const sourceDir = path.dirname(sourceFilePath);
     return safePath.resolve(sourceDir, filePath);
+  }
+}
+
+/** Recursively collect lowercased heading slugs into `out`. */
+function collectHeadingSlugs(headings: HeadingNode[], out: Set<string>): void {
+  for (const heading of headings) {
+    out.add(heading.slug.toLowerCase());
+    if (heading.children) {
+      collectHeadingSlugs(heading.children, out);
+    }
   }
 }
 

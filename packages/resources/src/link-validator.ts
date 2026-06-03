@@ -25,7 +25,7 @@ import {
   verifyCaseSensitiveFilename,
 } from '@vibe-agent-toolkit/utils';
 
-import type { HeadingNode, ResourceLink } from './types.js';
+import type { ResourceLink } from './types.js';
 import { isWithinProject, issueLocation, resolveLocalHref } from './utils.js';
 
 type LinkIssueExtras = Partial<Pick<ValidationIssue, 'location' | 'line' | 'link' | 'suggestion'>>;
@@ -66,7 +66,7 @@ export interface ValidateLinkOptions {
  *
  * @param link - The link to validate
  * @param sourceFilePath - Absolute path to the file containing the link
- * @param headingsByFile - Map of file paths to their heading trees
+ * @param fragmentsByFile - Fragment index: file path → set of valid fragments (markdown slugs + HTML id/name)
  * @param options - Validation options (projectRoot, skipGitIgnoreCheck)
  * @returns ValidationIssue if link is broken, null if valid
  *
@@ -84,15 +84,15 @@ export interface ValidateLinkOptions {
 export async function validateLink(
   link: ResourceLink,
   sourceFilePath: string,
-  headingsByFile: Map<string, HeadingNode[]>,
+  fragmentsByFile: Map<string, Set<string>>,
   options?: ValidateLinkOptions
 ): Promise<ValidationIssue | null> {
   switch (link.type) {
     case 'local_file':
-      return await validateLocalFileLink(link, sourceFilePath, headingsByFile, options);
+      return await validateLocalFileLink(link, sourceFilePath, fragmentsByFile, options);
 
     case 'anchor':
-      return await validateAnchorLink(link, sourceFilePath, headingsByFile, options?.projectRoot);
+      return await validateAnchorLink(link, sourceFilePath, fragmentsByFile, options?.projectRoot);
 
     case 'external':
       // External URLs are not validated - don't report them
@@ -232,7 +232,7 @@ export function gitIgnoreSafetyIssue(
 async function validateLocalFileLink(
   link: ResourceLink,
   sourceFilePath: string,
-  headingsByFile: Map<string, HeadingNode[]>,
+  fragmentsByFile: Map<string, Set<string>>,
   options?: ValidateLinkOptions
 ): Promise<ValidationIssue | null> {
   const resolved = resolveLocalHref(link.href, sourceFilePath, options?.projectRoot);
@@ -263,8 +263,8 @@ async function validateLocalFileLink(
   if (gitIgnoreIssue) return gitIgnoreIssue;
 
   if (resolved.anchor) {
-    const anchorValid = await validateAnchor(resolved.anchor, fileResult.resolvedPath, headingsByFile);
-    if (!anchorValid) {
+    const check = checkAnchor(resolved.anchor, fileResult.resolvedPath, fragmentsByFile);
+    if (check === 'broken') {
       return createRegistryIssue(
         'LINK_BROKEN_ANCHOR',
         `Anchor not found: #${resolved.anchor} in ${fileResult.resolvedPath}`,
@@ -282,16 +282,16 @@ async function validateLocalFileLink(
 async function validateAnchorLink(
   link: ResourceLink,
   sourceFilePath: string,
-  headingsByFile: Map<string, HeadingNode[]>,
+  fragmentsByFile: Map<string, Set<string>>,
   projectRoot?: string,
 ): Promise<ValidationIssue | null> {
   // Extract anchor (strip leading #)
   const anchor = link.href.startsWith('#') ? link.href.slice(1) : link.href;
 
   // Validate anchor exists in current file
-  const isValid = await validateAnchor(anchor, sourceFilePath, headingsByFile);
+  const check = checkAnchor(anchor, sourceFilePath, fragmentsByFile);
 
-  if (!isValid) {
+  if (check === 'broken') {
     return createRegistryIssue(
       'LINK_BROKEN_ANCHOR',
       `Anchor not found: ${link.href}`,
@@ -338,65 +338,31 @@ async function validateResolvedFile(
   return result;
 }
 
+/** Result of checking an anchor against the fragment index. */
+export type AnchorCheck = 'skip' | 'valid' | 'broken';
+
 /**
- * Validate that an anchor (heading slug) exists in a file.
+ * Check whether a fragment exists in the target file's anchor set.
  *
- * @param anchor - The heading slug to find (without leading #)
- * @param targetFilePath - Absolute path to the file containing the heading
- * @param headingsByFile - Map of file paths to their heading trees
- * @returns True if anchor exists, false otherwise
+ * - `'skip'`  — target file is not indexed; we cannot prove the anchor is
+ *   broken, so callers must not emit an issue.
+ * - HTML targets (`.html`/`.htm`) are matched case-sensitively (ids are
+ *   case-sensitive); all other targets are matched lowercased (markdown slugs).
  *
- * @example
- * ```typescript
- * const valid = await validateAnchor('my-heading', '/project/docs/guide.md', headingsMap);
- * ```
+ * @param anchor - Fragment without the leading `#`.
+ * @param targetFilePath - Absolute path of the file the fragment lives in.
+ * @param fragmentsByFile - Format-neutral fragment index.
  */
-async function validateAnchor(
+export function checkAnchor(
   anchor: string,
   targetFilePath: string,
-  headingsByFile: Map<string, HeadingNode[]>
-): Promise<boolean> {
-  // Get headings for target file
-  const headings = headingsByFile.get(targetFilePath);
-  if (!headings) {
-    return false;
+  fragmentsByFile: Map<string, Set<string>>,
+): AnchorCheck {
+  const fragments = fragmentsByFile.get(targetFilePath);
+  if (!fragments) {
+    return 'skip';
   }
-
-  // Search for matching slug (case-insensitive)
-  return findHeadingBySlug(headings, anchor);
-}
-
-/**
- * Recursively search heading tree for a matching slug.
- *
- * Performs case-insensitive comparison of slugs.
- *
- * @param headings - Array of heading nodes to search
- * @param targetSlug - The slug to find
- * @returns True if slug found, false otherwise
- *
- * @example
- * ```typescript
- * const found = findHeadingBySlug(headings, 'my-heading');
- * ```
- */
-function findHeadingBySlug(
-  headings: HeadingNode[],
-  targetSlug: string
-): boolean {
-  const normalizedTarget = targetSlug.toLowerCase();
-
-  for (const heading of headings) {
-    // Check current heading
-    if (heading.slug.toLowerCase() === normalizedTarget) {
-      return true;
-    }
-
-    // Recursively check children
-    if (heading.children && findHeadingBySlug(heading.children, targetSlug)) {
-      return true;
-    }
-  }
-
-  return false;
+  const isHtml = /\.html?$/i.test(targetFilePath);
+  const found = isHtml ? fragments.has(anchor) : fragments.has(anchor.toLowerCase());
+  return found ? 'valid' : 'broken';
 }

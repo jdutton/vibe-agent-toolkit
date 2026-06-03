@@ -5,7 +5,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
@@ -185,6 +185,54 @@ export function setupTempDirTestSuite(testPrefix: string): {
 }
 
 /**
+ * Setup a suite-scoped temp directory with per-test subdirectories.
+ *
+ * Creates a single `suiteDir` once for the whole `describe` block, then
+ * allocates a numbered subdirectory (`test-1`, `test-2`, …) for each test so
+ * that tests are isolated without paying the cost of creating and deleting a
+ * fresh top-level temp directory for every test.  The suite directory is
+ * removed in `afterAll`.
+ *
+ * Lifecycle wiring (call inside the target `describe` block):
+ * ```typescript
+ * const suite = setupSubdirTestSuite('my-suite-');
+ * beforeAll(suite.beforeAll);
+ * afterAll(suite.afterAll);
+ * beforeEach(suite.beforeEach);
+ * ```
+ *
+ * @param suitePrefix - Prefix for the suite-level temp directory
+ * @returns Object with `suiteDir`/`tempDir` refs and lifecycle hook callbacks
+ */
+export function setupSubdirTestSuite(suitePrefix: string): {
+  suiteDir: string;
+  tempDir: string;
+  beforeAll: () => Promise<void>;
+  afterAll: () => Promise<void>;
+  beforeEach: () => Promise<void>;
+} {
+  let testCounter = 0;
+  const suite = {
+    suiteDir: '',
+    tempDir: '',
+    beforeAll: async () => {
+      suite.suiteDir = await mkdtemp(safePath.join(normalizedTmpdir(), suitePrefix));
+    },
+    afterAll: async () => {
+      await rm(suite.suiteDir, { recursive: true, force: true });
+    },
+    beforeEach: async () => {
+      testCounter++;
+      suite.tempDir = safePath.join(suite.suiteDir, `test-${testCounter}`);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- suite.tempDir is constructed from mkdtemp output, safe in test context
+      await mkdir(suite.tempDir, { recursive: true });
+    },
+  };
+
+  return suite;
+}
+
+/**
  * Setup external link validator test suite with temp directory and validator.
  *
  * Used by both unit tests (with mocked HTTP) and integration tests (with real HTTP)
@@ -241,20 +289,6 @@ export function createLink(
 }
 
 /**
- * Helper to create a simple heading tree
- */
-export function createHeadings(
-  ...headings: Array<{ text: string; slug: string; level?: number; children?: HeadingNode[] }>
-): HeadingNode[] {
-  return headings.map((h) => ({
-    text: h.text,
-    slug: h.slug,
-    level: h.level ?? 2,
-    children: h.children,
-  }));
-}
-
-/**
  * Options for validating a link with expected results
  */
 export interface ValidateLinkOptions {
@@ -262,8 +296,8 @@ export interface ValidateLinkOptions {
   sourceFile: string;
   /** Link to validate */
   link: ResourceLink;
-  /** Headings map for validation */
-  headingsMap: Map<string, HeadingNode[]>;
+  /** Fragment index for anchor validation (file path → set of valid fragments) */
+  headingsMap: Map<string, Set<string>>;
   /** Expected validation result (null = valid, object = error) */
   expected: null | {
     code: ValidationIssue['code'];

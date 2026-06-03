@@ -16,7 +16,7 @@ import { describe, expect, it, beforeEach, afterEach, beforeAll, afterAll } from
 
 import { ResourceRegistry } from '../../src/resource-registry.js';
 import type { ResourceMetadata } from '../../src/types.js';
-import { findPackageRoot } from '../test-helpers.js';
+import { findPackageRoot, setupSubdirTestSuite } from '../test-helpers.js';
 
 // Get test fixtures directory
 const packageRoot = findPackageRoot(import.meta.dirname);
@@ -534,27 +534,11 @@ describe('ResourceRegistry - Integration Tests', () => {
   });
 
   describe('validate with frontmatter schema', () => {
-    let suiteDir: string;
-    let tempDir: string;
-    let testCounter = 0;
+    const suite = setupSubdirTestSuite('frontmatter-suite-');
 
-    beforeAll(async () => {
-      suiteDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'frontmatter-suite-'));
-    });
-
-    afterAll(async () => {
-      await rm(suiteDir, { recursive: true, force: true });
-    });
-
-    beforeEach(async () => {
-      testCounter++;
-      tempDir = safePath.join(suiteDir, `test-${testCounter}`);
-      await mkdir(tempDir, { recursive: true });
-    });
-
-    afterEach(async () => {
-      // Per-test cleanup handled by suite cleanup
-    });
+    beforeAll(suite.beforeAll);
+    afterAll(suite.afterAll);
+    beforeEach(suite.beforeEach);
 
     it('should validate frontmatter against schema and report missing required fields', async () => {
       const registry = new ResourceRegistry();
@@ -589,7 +573,7 @@ describe('ResourceRegistry - Integration Tests', () => {
       const registry = new ResourceRegistry();
 
       // Create a file with invalid YAML
-      const invalidYamlPath = safePath.join(tempDir, 'invalid-yaml.md');
+      const invalidYamlPath = safePath.join(suite.tempDir, 'invalid-yaml.md');
       await writeFile(
         invalidYamlPath,
         `---
@@ -870,6 +854,47 @@ tags: test
           ])
         ).rejects.toThrow(/Duplicate resource ID 'readme'/);
       });
+    });
+  });
+
+  describe('HTML resource discovery', () => {
+    let htmlTempDir: string;
+
+    beforeEach(async () => {
+      htmlTempDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'html-discovery-test-'));
+    });
+
+    afterEach(async () => {
+      await rm(htmlTempDir, { recursive: true, force: true });
+    });
+
+    it('discovers and parses HTML resources', async () => {
+      await writeFile(
+        safePath.join(htmlTempDir, 'page.html'),
+        '<a href="./next.html">n</a>',
+        'utf-8',
+      );
+      const reg = new ResourceRegistry({ baseDir: htmlTempDir });
+      await reg.crawl({ baseDir: htmlTempDir });
+      const html = reg.getAllResources().find((r) => r.filePath.endsWith('page.html'));
+      expect(html).toBeDefined();
+      expect(html?.links.map((l) => l.href)).toContain('./next.html');
+    });
+
+    it('emits MALFORMED_HTML info issues for HTML parse errors', async () => {
+      // A malformed HTML file: unclosed <p> tag triggers a parse5 diagnostic
+      await writeFile(
+        safePath.join(htmlTempDir, 'bad.html'),
+        '<html><body><p>unclosed</body></html>',
+        'utf-8',
+      );
+      const reg = new ResourceRegistry({ baseDir: htmlTempDir });
+      await reg.crawl({ baseDir: htmlTempDir });
+      const result = await reg.validate({ skipGitIgnoreCheck: true });
+
+      const malformedIssues = result.issues.filter((i) => i.code === 'MALFORMED_HTML');
+      expect(malformedIssues.length).toBeGreaterThan(0);
+      expect(malformedIssues[0]?.severity).toBe('info');
     });
   });
 });

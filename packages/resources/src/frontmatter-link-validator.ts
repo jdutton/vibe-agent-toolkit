@@ -23,7 +23,7 @@ import { createRegistryIssue, type IssueCode } from '@vibe-agent-toolkit/agent-s
 import { classifyLink } from './link-parser.js';
 import { validateLink, type ValidateLinkOptions } from './link-validator.js';
 import { walkFrontmatterUriReferences } from './schema-uri-walker.js';
-import type { HeadingNode, ResourceLink, ValidationIssue } from './types.js';
+import type { ResourceLink, ValidationIssue } from './types.js';
 
 /** Map the link-level code emitted by validateLink to its frontmatter-scoped code. */
 const LINK_CODE_TO_FRONTMATTER_CODE: Partial<Record<IssueCode, IssueCode>> = {
@@ -51,14 +51,14 @@ export interface FrontmatterLinkValidationResult {
  * @param frontmatter - Parsed frontmatter (or undefined)
  * @param schema - JSON Schema for the collection
  * @param sourceFilePath - Absolute path to the source file
- * @param headingsByFile - Heading trees (for anchor validation)
+ * @param fragmentsByFile - Fragment index (file path → set of valid fragments) for anchor validation
  * @param options - Same shape as validateLink (projectRoot, gitTracker, ...)
  */
 export async function validateFrontmatterLinks(
   frontmatter: Record<string, unknown> | undefined,
   schema: object,
   sourceFilePath: string,
-  headingsByFile: Map<string, HeadingNode[]>,
+  fragmentsByFile: Map<string, Set<string>>,
   options?: ValidateLinkOptions,
 ): Promise<FrontmatterLinkValidationResult> {
   if (!frontmatter) return { issues: [], externalUrls: [] };
@@ -89,7 +89,7 @@ export async function validateFrontmatterLinks(
       line: 1, // Frontmatter per-field line numbers are post-v1.
     };
 
-    const issue = await validateLink(syntheticLink, sourceFilePath, headingsByFile, options);
+    const issue = await validateLink(syntheticLink, sourceFilePath, fragmentsByFile, options);
     if (!issue) continue;
 
     issues.push(rewriteIssue(issue, capture.dottedPath));
