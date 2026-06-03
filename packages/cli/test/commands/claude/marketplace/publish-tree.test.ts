@@ -17,13 +17,24 @@ function makeTempDir(tempDirs: string[]): string {
 /**
  * Create a minimal marketplace build output under sourceDir so composePublishTree
  * can find it. Returns the marketplace name used.
+ *
+ * Pass `plugins` to seed entries into the staged marketplace.json — used by
+ * tests that exercise version derivation from staged content.
  */
-function seedMarketplaceBuild(sourceDir: string, mpName = 'test-mp'): string {
+function seedMarketplaceBuild(
+  sourceDir: string,
+  mpName = 'test-mp',
+  plugins: { name: string; version?: string }[] = [],
+): string {
   const pluginDir = safePath.join(
     sourceDir, 'dist', '.claude', 'plugins', 'marketplaces', mpName, '.claude-plugin',
   );
   mkdirSyncReal(pluginDir, { recursive: true });
-  writeFileSync(safePath.join(pluginDir, 'marketplace.json'), `{"name":"${mpName}"}`);
+  const json: Record<string, unknown> = { name: mpName };
+  if (plugins.length > 0) {
+    json.plugins = plugins;
+  }
+  writeFileSync(safePath.join(pluginDir, 'marketplace.json'), JSON.stringify(json));
   return mpName;
 }
 
@@ -40,7 +51,9 @@ describe('publish-tree', () => {
   it('should compose tree with marketplace artifacts, changelog, readme, and license', async () => {
     const sourceDir = makeTempDir(tempDirs);
     const outputDir = makeTempDir(tempDirs);
-    const mpName = seedMarketplaceBuild(sourceDir);
+    const mpName = seedMarketplaceBuild(sourceDir, 'test-mp', [
+      { name: 'only-plugin', version: '1.0.0' },
+    ]);
 
     const sourceChangelog = '# Changelog\n\n## [Unreleased]\n\n### Added\n- Feature\n';
     writeFileSync(safePath.join(sourceDir, 'CHANGELOG.md'), sourceChangelog);
@@ -50,7 +63,6 @@ describe('publish-tree', () => {
       marketplaceName: mpName,
       configDir: sourceDir,
       outputDir,
-      version: '1.0.0',
       changelog: { sourcePath: 'CHANGELOG.md' },
       readme: { sourcePath: 'README.md' },
       license: { type: 'spdx', value: 'mit', ownerName: 'Test Org' },
@@ -79,14 +91,15 @@ describe('publish-tree', () => {
       marketplaceName: 'nonexistent',
       configDir: sourceDir,
       outputDir,
-      version: '1.0.0',
     })).rejects.toThrow(/build output/i);
   });
 
   it('should fail when changelog has neither unreleased content nor matching version section', async () => {
     const sourceDir = makeTempDir(tempDirs);
     const outputDir = makeTempDir(tempDirs);
-    const mpName = seedMarketplaceBuild(sourceDir);
+    const mpName = seedMarketplaceBuild(sourceDir, 'test-mp', [
+      { name: 'only-plugin', version: '1.0.0' },
+    ]);
 
     // Empty [Unreleased] and a stamped section for a DIFFERENT version
     writeFileSync(
@@ -98,7 +111,6 @@ describe('publish-tree', () => {
       marketplaceName: mpName,
       configDir: sourceDir,
       outputDir,
-      version: '1.0.0',
       changelog: { sourcePath: 'CHANGELOG.md' },
     })).rejects.toThrow(/neither.*\[Unreleased\].*nor.*\[1\.0\.0\]/i);
   });
@@ -106,7 +118,9 @@ describe('publish-tree', () => {
   it('should publish a pre-stamped changelog when [Unreleased] is empty (Workflow B)', async () => {
     const sourceDir = makeTempDir(tempDirs);
     const outputDir = makeTempDir(tempDirs);
-    const mpName = seedMarketplaceBuild(sourceDir);
+    const mpName = seedMarketplaceBuild(sourceDir, 'test-mp', [
+      { name: 'only-plugin', version: '1.2.0' },
+    ]);
 
     const sourceChangelog =
       '# Changelog\n\n## [Unreleased]\n\n## [1.2.0] - 2026-04-09\n\n### Added\n- New feature X\n- New feature Y\n\n## [1.1.0] - 2026-03-15\n\n### Fixed\n- Old bug\n';
@@ -116,7 +130,6 @@ describe('publish-tree', () => {
       marketplaceName: mpName,
       configDir: sourceDir,
       outputDir,
-      version: '1.2.0',
       changelog: { sourcePath: 'CHANGELOG.md' },
     });
 
@@ -134,7 +147,9 @@ describe('publish-tree', () => {
   it('should prefer stamped [X.Y.Z] over [Unreleased] when both have content', async () => {
     const sourceDir = makeTempDir(tempDirs);
     const outputDir = makeTempDir(tempDirs);
-    const mpName = seedMarketplaceBuild(sourceDir);
+    const mpName = seedMarketplaceBuild(sourceDir, 'test-mp', [
+      { name: 'only-plugin', version: '1.2.0' },
+    ]);
 
     const sourceChangelog =
       '# Changelog\n\n## [Unreleased]\n\n### Added\n- Work-in-progress for next release\n\n## [1.2.0] - 2026-04-09\n\n### Added\n- Released feature\n';
@@ -144,7 +159,6 @@ describe('publish-tree', () => {
       marketplaceName: mpName,
       configDir: sourceDir,
       outputDir,
-      version: '1.2.0',
       changelog: { sourcePath: 'CHANGELOG.md' },
     });
 
@@ -155,5 +169,61 @@ describe('publish-tree', () => {
     // Published CHANGELOG is BYTE-IDENTICAL (both sections preserved, nothing mutated).
     const changelogContent = readFileSync(safePath.join(outputDir, 'CHANGELOG.md'), 'utf-8');
     expect(changelogContent).toBe(sourceChangelog);
+  });
+
+  // Issue #110: ComposeResult.version must reflect what is actually being published —
+  // derived from the staged marketplace.json, not the project root package.json that
+  // the caller happens to pass in.
+
+  it('derives version from the single plugin when the marketplace has exactly one plugin', async () => {
+    const sourceDir = makeTempDir(tempDirs);
+    const outputDir = makeTempDir(tempDirs);
+    const mpName = seedMarketplaceBuild(sourceDir, 'single-mp', [
+      { name: 'only-plugin', version: '0.0.4' },
+    ]);
+
+    const result = await composePublishTree({
+      marketplaceName: mpName,
+      configDir: sourceDir,
+      outputDir,
+      version: 'project-1.0.0',
+    });
+
+    expect(result.version).toBe('0.0.4');
+  });
+
+  it('returns undefined version when the marketplace has multiple plugins', async () => {
+    const sourceDir = makeTempDir(tempDirs);
+    const outputDir = makeTempDir(tempDirs);
+    const mpName = seedMarketplaceBuild(sourceDir, 'multi-mp', [
+      { name: 'plugin-a', version: '0.1.0' },
+      { name: 'plugin-b', version: '0.2.0' },
+    ]);
+
+    const result = await composePublishTree({
+      marketplaceName: mpName,
+      configDir: sourceDir,
+      outputDir,
+      version: 'project-1.0.0',
+    });
+
+    expect(result.version).toBeUndefined();
+  });
+
+  it('returns undefined version when no plugin entry has a usable version field', async () => {
+    const sourceDir = makeTempDir(tempDirs);
+    const outputDir = makeTempDir(tempDirs);
+    const mpName = seedMarketplaceBuild(sourceDir, 'unversioned-mp', [
+      { name: 'only-plugin' },
+    ]);
+
+    const result = await composePublishTree({
+      marketplaceName: mpName,
+      configDir: sourceDir,
+      outputDir,
+      version: 'project-1.0.0',
+    });
+
+    expect(result.version).toBeUndefined();
   });
 });

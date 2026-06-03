@@ -189,6 +189,17 @@ describe('multi-plugin marketplace — end-to-end build + publish (integration)'
     const remoteTags = listRemoteTagNames(sourceRepo, bareRemote);
     expect(remoteTags).toContain('plugin-a-v0.1.0');
     expect(remoteTags).toContain('plugin-b-v0.2.5');
+
+    // Issue #110 regression guard: multi-plugin marketplaces have no aggregate
+    // version, so the commit subject must NOT carry a misleading `v<X>` (which
+    // historically came from the project root package.json).
+    const commitSubject = String(
+      safeExecSync('git', ['log', '-1', '--pretty=%s', 'HEAD'], {
+        cwd: inspectDir,
+        encoding: 'utf-8',
+      }),
+    ).trim();
+    expect(commitSubject).toBe('publish multi-plugin');
   });
 
   it('scenario 2: republish after one plugin bump — only that plugin advances; tags accumulate', async () => {

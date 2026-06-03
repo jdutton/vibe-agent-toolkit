@@ -59,6 +59,9 @@ function writeProjectFiles(tempDir: string, changelogContent: string): void {
 function createBuildOutput(tempDir: string): void {
   const mpDir = safePath.join(tempDir, 'dist', '.claude', 'plugins', 'marketplaces', 'test-mp');
   mkdirSyncReal(safePath.join(mpDir, '.claude-plugin'), { recursive: true });
+  // Plugin version (0.4.2) is intentionally distinct from package.json:version
+  // (1.0.0) so issue #110 assertions can prove the label was derived from the
+  // staged plugin, not the project root.
   writeTestFile(
     safePath.join(mpDir, '.claude-plugin', 'marketplace.json'),
     JSON.stringify({
@@ -66,7 +69,7 @@ function createBuildOutput(tempDir: string): void {
       description: 'Test marketplace',
       version: '1.0.0',
       owner: { name: 'Test Org' },
-      plugins: [{ name: 'test-plugin', source: './plugins/test-plugin' }],
+      plugins: [{ name: 'test-plugin', source: './plugins/test-plugin', version: '0.4.2' }],
     }),
   );
 
@@ -74,7 +77,7 @@ function createBuildOutput(tempDir: string): void {
   mkdirSyncReal(pluginDir, { recursive: true });
   writeTestFile(
     safePath.join(pluginDir, 'plugin.json'),
-    JSON.stringify({ name: 'test-plugin', description: 'Test plugin', version: '1.0.0' }),
+    JSON.stringify({ name: 'test-plugin', description: 'Test plugin', version: '0.4.2' }),
   );
 
   // Add a script in a nested skills directory — catches cp() bugs that drop non-markdown files
@@ -151,6 +154,15 @@ describe('vat claude marketplace publish (system)', () => {
 
     expect(result.status, `Expected exit 0 but got ${String(result.status)}. stderr: ${result.stderr}`).toBe(0);
     expect(result.stdout).toContain('success');
+
+    // Issue #110 regression guard: when the marketplace has exactly one plugin,
+    // the label version is the plugin's version (0.4.2), NOT the project root
+    // package.json:version (1.0.0). All four reporting sites must agree.
+    expect(result.stderr).toContain('Publishing marketplace "test-mp" v0.4.2');
+    expect(result.stderr).toContain('[dry-run] Version: 0.4.2');
+    expect(result.stderr).not.toContain('v1.0.0');
+    expect(result.stdout).toContain('version: 0.4.2');
+    expect(result.stdout).not.toContain('version: 1.0.0');
   });
 
   it('should fail when no build output exists', async () => {
