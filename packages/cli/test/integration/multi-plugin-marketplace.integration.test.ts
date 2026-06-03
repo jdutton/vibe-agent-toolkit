@@ -158,7 +158,25 @@ describe('multi-plugin marketplace — end-to-end build + publish (integration)'
     const { sourceRepo, bareRemote } = setupFixtureRepo('multi-plugin-marketplace');
 
     await runVatExpectSuccess(sourceRepo, ['claude', 'plugin', 'build']);
-    await runVatExpectSuccess(sourceRepo, ['claude', 'marketplace', 'publish']);
+
+    // Run publish via executeCli (not runVatExpectSuccess) so we can inspect
+    // stdout YAML separately from stderr log lines.
+    const publishResult = await executeCli(
+      binPath,
+      ['claude', 'marketplace', 'publish'],
+      { cwd: sourceRepo },
+    );
+    expect(
+      publishResult.status,
+      `publish failed:\nSTDOUT:\n${publishResult.stdout}\nSTDERR:\n${publishResult.stderr}`,
+    ).toBe(0);
+
+    // Issue #110 regression guard: multi-plugin marketplaces have no aggregate
+    // version, so the published[*].version field must be omitted from the YAML
+    // status payload. Match any indented `version:` line in stdout — YAML
+    // fields are always indented under the array entry, top-level keys aren't.
+    // Bounded quantifier avoids sonarjs/slow-regex backtracking concerns.
+    expect(publishResult.stdout).not.toMatch(/^ {1,8}version:/m);
 
     // Inspect published branch
     const inspectDir = cloneBranchToInspect(bareRemote, PUBLISH_BRANCH);

@@ -71,6 +71,15 @@ interface PublishedPluginInfo {
  * one plugin can borrow that plugin's version as its label; anything else (zero
  * or multiple plugins) leaves the label undefined and lets per-plugin tags carry
  * the truth.
+ *
+ * Note: `publishedPlugins` is the *version-filtered* list — entries lacking a
+ * `version` field are dropped upstream. The "one plugin" branch therefore
+ * means "exactly one *versioned* plugin." This relies on the build pipeline
+ * assigning a `version` to every plugin in the staged `marketplace.json`;
+ * a future flow that stages an unversioned plugin alongside a versioned one
+ * would emit a single-plugin label even though the marketplace contains two
+ * entries. Threading the raw plugin count if that assumption breaks is the
+ * obvious fix.
  */
 function deriveLabelVersion(
   publishedPlugins: { name: string; version: string }[],
