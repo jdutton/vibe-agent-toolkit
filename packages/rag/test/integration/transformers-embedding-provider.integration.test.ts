@@ -3,6 +3,11 @@
  *
  * Note: These are integration tests that use real transformers.js models.
  * They may download models on first run (~20MB for all-MiniLM-L6-v2).
+ *
+ * Skipped when:
+ * - @xenova/transformers is not installed (it is an optional dependency)
+ * - Running on Windows (the onnxruntime-node native backend + network model
+ *   download are flaky in CI — same reason the onnx provider test skips Windows)
  */
 
 import { describe, it, expect } from 'vitest';
@@ -11,9 +16,21 @@ import { TransformersEmbeddingProvider } from '../../src/embedding-providers/tra
 
 import { assertBatchEmbedding } from './embedding-test-helpers.js';
 
+// Detect optional dependency availability.
+let transformersAvailable = false;
+try {
+  await import('@xenova/transformers');
+  transformersAvailable = true;
+} catch {
+  // @xenova/transformers not installed
+}
+
+const isWindows = process.platform === 'win32';
+const skipTransformers = !transformersAvailable || isWindows;
+
 const DEFAULT_MODEL = 'Xenova/all-MiniLM-L6-v2';
 
-describe('TransformersEmbeddingProvider', () => {
+describe.skipIf(skipTransformers)('TransformersEmbeddingProvider', () => {
   // Use default model for tests
   const provider = new TransformersEmbeddingProvider();
 
@@ -106,7 +123,7 @@ describe('TransformersEmbeddingProvider', () => {
   });
 });
 
-describe('TransformersEmbeddingProvider - Custom Model', () => {
+describe.skipIf(skipTransformers)('TransformersEmbeddingProvider - Custom Model', () => {
   it('should support custom model configuration', async () => {
     const provider = new TransformersEmbeddingProvider({
       model: DEFAULT_MODEL,
