@@ -44,3 +44,18 @@ export * from './template.js';
 
 // Skill target resolution (cross-platform flat skill install paths)
 export * from './skill-targets.js';
+
+// linkAuth pure engine — public API only (issue #113).
+// Internal helpers (rewrite, build-headers, etc.) stay module-private.
+export {
+  type LinkAuthConfig,
+  type Provider,
+  type ProviderAuth,
+  type ProviderCheck,
+  resolveAuthenticatedUrl,
+  type ResolveOutcome,
+} from './link-auth/resolve.js';
+export type { ProviderMatch } from './link-auth/select-provider.js';
+export type { RewriteRule } from './link-auth/rewrite.js';
+export type { TokenSource } from './link-auth/resolve-token.js';
+export { expandMacro, UnknownMacroError } from './link-auth/expand-macro.js';
