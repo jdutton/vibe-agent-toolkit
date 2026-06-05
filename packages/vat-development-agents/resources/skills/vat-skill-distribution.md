@@ -334,7 +334,6 @@ If both declare a version, marketplace config wins and VAT logs a reconciliation
 For each plugin with a resolved version:
 
 - The published `.claude-plugin/marketplace.json` includes the per-plugin `version` field on each plugin entry.
-- After the publish-branch push succeeds, VAT pushes a `<plugin>-v<version>` tag to the **source repo** (not the marketplace branch) — e.g., `ai-digest-v0.2.0`. "Source repo" means the working directory where you invoke `vat claude marketplace publish` (i.e., `process.cwd()`); if you invoke from a subdirectory of a worktree, tags land in the containing repo, not the subdirectory. Tag-push failures log a warning but do not roll back the publish.
 - If `<plugin.source>/CHANGELOG.md` exists in source (or the marketplace plugin entry's `changelog` field points to a file), it is bundled into the published marketplace at `plugins/<name>/CHANGELOG.md`, alongside the marketplace-level CHANGELOG.
 
 The marketplace-level CHANGELOG (under `publish.changelog` in the config) continues to work unchanged.
@@ -355,7 +354,7 @@ plugins:
 
 #### Backwards compatibility
 
-Marketplaces with no per-plugin version anywhere are unaffected. The root `package.json` version flows through to every plugin, the published `marketplace.json` either omits per-plugin `version` or includes the same value for all plugins, and tag pushes use the inherited version (e.g., both plugins tagged `<plugin>-v1.0.0`).
+Marketplaces with no per-plugin version anywhere are unaffected. The root `package.json` version flows through to every plugin, and the published `marketplace.json` either omits per-plugin `version` or includes the same value for all plugins.
 
 ## Step 5: User Install
 

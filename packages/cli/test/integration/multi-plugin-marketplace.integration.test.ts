@@ -8,12 +8,11 @@
  * Runs the actual VAT CLI (`vat claude plugin build` + `vat claude marketplace
  * publish`) against on-disk fixtures backed by a real local bare git remote.
  * Asserts on the published artifacts (marketplace.json, per-plugin
- * CHANGELOG.md, plugin.json:version) and on the per-plugin source-repo tags
- * (`<plugin>-v<version>`) pushed after a successful publish.
+ * CHANGELOG.md, plugin.json:version).
  *
  * Three scenarios:
  *   1. Initial publish — distinct per-plugin versions and CHANGELOGs
- *   2. Republish after one plugin version bump — tags accumulate, other plugin untouched
+ *   2. Republish after one plugin version bump — only that plugin advances, the other untouched
  *   3. Backwards-compat fallback — no per-plugin versions, both inherit root package.json:version
  */
 import { cpSync, readFileSync, writeFileSync } from 'node:fs';
@@ -29,7 +28,6 @@ import {
   getBinPath,
   getFixturePath,
   initGitRepoWithRemote,
-  listRemoteTagNames,
 } from '../system/test-common.js';
 
 const binPath = getBinPath(import.meta.url);
@@ -48,8 +46,8 @@ interface FixtureRepos {
 
 /**
  * Copy a fixture into a temp source repo, init it as a real git repo, and set
- * up a bare remote at `origin`. Mirrors the structure publish-tags.integration.test.ts
- * uses, but copies the on-disk fixture tree instead of hand-building it.
+ * up a bare remote at `origin`. Copies the on-disk fixture tree into a temp
+ * source repo backed by a real local bare git remote.
  */
 function setupFixtureRepo(fixtureName: string): FixtureRepos {
   const root = createTempDir();
@@ -66,7 +64,7 @@ function setupFixtureRepo(fixtureName: string): FixtureRepos {
   const fixturePath = getFixturePath(import.meta.url, fixtureName);
   cpSync(fixturePath, sourceRepo, { recursive: true });
 
-  // Init source repo with remote, then initial commit so refs exist for tag operations
+  // Init source repo with remote, then initial commit so the branch exists before publish
   initGitRepoWithRemote(sourceRepo, bareRemote);
   commitAllAndPushMain(sourceRepo);
 
@@ -100,15 +98,6 @@ function cloneBranchToInspect(bareRemote: string, branch: string): string {
     { cwd: bareRemote },
   );
   return inspectDir;
-}
-
-/** List local tags in a working repo. */
-function listLocalTags(sourceRepo: string): string[] {
-  const out = safeExecSync('git', ['tag', '--list'], {
-    cwd: sourceRepo,
-    encoding: 'utf-8',
-  });
-  return String(out).split('\n').map((s) => s.trim()).filter(Boolean);
 }
 
 /** Read+parse the published `.claude-plugin/marketplace.json` from an inspect clone. */
@@ -154,7 +143,7 @@ function findPluginEntry(
 describe('multi-plugin marketplace — end-to-end build + publish (integration)', () => {
   afterEach(() => cleanupTempDirs());
 
-  it('scenario 1: initial publish — both plugins ship with their own version, CHANGELOG, and tag', async () => {
+  it('scenario 1: initial publish — both plugins ship with their own version and CHANGELOG', async () => {
     const { sourceRepo, bareRemote } = setupFixtureRepo('multi-plugin-marketplace');
 
     await runVatExpectSuccess(sourceRepo, ['claude', 'plugin', 'build']);
@@ -199,15 +188,6 @@ describe('multi-plugin marketplace — end-to-end build + publish (integration)'
     expect(readPublishedPluginJson(inspectDir, 'plugin-a')['version']).toBe('0.1.0');
     expect(readPublishedPluginJson(inspectDir, 'plugin-b')['version']).toBe('0.2.5');
 
-    // Source repo has the per-plugin tags, both pushed to remote
-    const localTags = listLocalTags(sourceRepo);
-    expect(localTags).toContain('plugin-a-v0.1.0');
-    expect(localTags).toContain('plugin-b-v0.2.5');
-
-    const remoteTags = listRemoteTagNames(sourceRepo, bareRemote);
-    expect(remoteTags).toContain('plugin-a-v0.1.0');
-    expect(remoteTags).toContain('plugin-b-v0.2.5');
-
     // Issue #110 regression guard: multi-plugin marketplaces have no aggregate
     // version, so the commit subject must NOT carry a misleading `v<X>` (which
     // historically came from the project root package.json).
@@ -220,7 +200,7 @@ describe('multi-plugin marketplace — end-to-end build + publish (integration)'
     expect(commitSubject).toBe('publish multi-plugin');
   });
 
-  it('scenario 2: republish after one plugin bump — only that plugin advances; tags accumulate', async () => {
+  it('scenario 2: republish after one plugin bump — only that plugin advances; the other is untouched', async () => {
     const { sourceRepo, bareRemote } = setupFixtureRepo('multi-plugin-marketplace');
 
     // First publish: plugin-a@0.1.0, plugin-b@0.2.5
@@ -279,12 +259,6 @@ describe('multi-plugin marketplace — end-to-end build + publish (integration)'
     );
     expect(publishedAChangelog).toContain('## [0.2.0]');
     expect(publishedAChangelog).toContain('## [0.1.0]');
-
-    // Tags accumulate: old plugin-a tag still on remote, new one added, plugin-b unchanged
-    const remoteTags = listRemoteTagNames(sourceRepo, bareRemote);
-    expect(remoteTags).toContain('plugin-a-v0.1.0');
-    expect(remoteTags).toContain('plugin-a-v0.2.0');
-    expect(remoteTags).toContain('plugin-b-v0.2.5');
   });
 
   it('scenario 3: backwards-compat — no per-plugin versions, both plugins inherit root package.json:version', async () => {
@@ -308,10 +282,5 @@ describe('multi-plugin marketplace — end-to-end build + publish (integration)'
     expect(
       fs.existsSync(safePath.join(inspectDir, 'plugins', 'plugin-b', 'CHANGELOG.md')),
     ).toBe(false);
-
-    // Per-plugin tags use the inherited root version
-    const remoteTags = listRemoteTagNames(sourceRepo, bareRemote);
-    expect(remoteTags).toContain('plugin-a-v1.0.0');
-    expect(remoteTags).toContain('plugin-b-v1.0.0');
   });
 });

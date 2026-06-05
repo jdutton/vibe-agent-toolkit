@@ -54,8 +54,8 @@ export interface ComposeResult {
   files: string[];
   /**
    * Plugins listed in the published marketplace.json with their resolved versions.
-   * Used by the publish flow to push per-plugin source-repo tags after a successful
-   * branch push. Plugins without a `version` field are skipped.
+   * Used to derive the marketplace label version (see `deriveLabelVersion`).
+   * Plugins without a `version` field are skipped.
    */
   publishedPlugins: { name: string; version: string }[];
 }
@@ -69,8 +69,8 @@ interface PublishedPluginInfo {
 /**
  * Derive a label version from the staged plugin list. A marketplace with exactly
  * one plugin can borrow that plugin's version as its label; anything else (zero
- * or multiple plugins) leaves the label undefined and lets per-plugin tags carry
- * the truth.
+ * or multiple plugins) leaves the label undefined; the per-plugin `version`
+ * fields in the published marketplace.json carry the truth.
  *
  * Note: `publishedPlugins` is the *version-filtered* list — entries lacking a
  * `version` field are dropped upstream. The "one plugin" branch therefore
@@ -144,16 +144,15 @@ export async function composePublishTree(options: ComposeOptions): Promise<Compo
   cpSync(buildDir, outputDir, { recursive: true });
   files.push('.claude-plugin/marketplace.json', 'plugins/');
 
-  // 2b. Read the published marketplace.json so the publish flow knows which
-  //     plugins (and resolved versions) to tag after a successful push. The
-  //     build pipeline writes this file; we just observe it here. Defensive
-  //     parsing because marketplace.json is build output, not validated input
-  //     at this layer.
+  // 2b. Read the published marketplace.json to recover each plugin's resolved
+  //     version for label derivation. The build pipeline writes this file; we
+  //     just observe it here. Defensive parsing because marketplace.json is
+  //     build output, not validated input at this layer.
   const marketplaceJsonPath = safePath.join(outputDir, '.claude-plugin', 'marketplace.json');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated config
   const marketplaceJsonRaw = readFileSync(marketplaceJsonPath, 'utf-8');
   const marketplaceJson = JSON.parse(marketplaceJsonRaw) as { plugins?: PublishedPluginInfo[] };
-  // Plugins without a resolved version are not eligible for tagging — skip them.
+  // Plugins without a resolved version don't contribute to the label — skip them.
   const publishedPlugins = (marketplaceJson.plugins ?? [])
     .filter((p): p is { name: string; version: string } =>
       Boolean(p.name) && typeof p.version === 'string' && p.version.length > 0,
