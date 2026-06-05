@@ -1,18 +1,24 @@
-# Tracked plugins for `vat corpus scan`.
-# See docs/superpowers/specs/2026-05-01-corpus-scan-phase-1-design.md
-# Source is the unique key. Each entry can carry an optional `validation:`
-# block with the same shape as `skills.defaults.validation` in
-# vibe-agent-toolkit.config.yaml — used to silence findings on this
-# plugin when we've decided the rule is wrong (or not yet right enough).
-# All entries start with no validation block; overrides accumulate as
-# evidence over scan runs.
+# Tracked plugins for `vat corpus scan`. Source is the unique key.
+#
+# Last imported from upstream marketplaces on 2026-06-03 by
+# packages/dev-tools/src/import-marketplace.ts.
+#
+# Each entry's `source` URL points at an upstream repo and (where the
+# upstream specifies one) a fragment ref — typically the default branch,
+# NOT a per-entry commit SHA. The catalog SHAs below are the audit
+# provenance of *this importer run* (which catalog HEADs were read);
+# entries themselves are not pinned and drift with upstream branches.
+#
+# Sources:
+#   anthropics/claude-plugins-official @ 6f90371 — 206 entries
+#   anthropics/knowledge-work-plugins  @ 8785e40 — 30 entries
+#
+# Hand-curated entries (preserved on re-import): 2 at top.
+# An existing entry is preserved iff its `source` URL isn't one the importer
+# would generate this run (i.e. it doesn't live in either upstream catalog).
+# Re-import: bun run import-marketplace [--allow-shrink]
 
 plugins:
-  # Policy: audit the published artifact (claude-marketplace branch or
-  # marketplace plugins/<x> path), not source. Source-tree audit can miss
-  # skills authored as flat-file siblings (e.g. VAT's resources/skills/
-  # vat-*.md → dist/skills/<name>/SKILL.md), and source layouts can drift
-  # from what Claude Code actually receives at install time.
   - source: https://github.com/jdutton/vibe-agent-toolkit.git#claude-marketplace:plugins/vibe-agent-toolkit
     name: vibe-agent-toolkit
     bucket: official
@@ -23,15 +29,258 @@ plugins:
     bucket: official
     confidence: first-party
     maturity: production
-
-  # claude-plugins-official samples (verified via gh api 2026-05-01)
-  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/skill-creator
-    name: skill-creator
+  - source: https://github.com/42Crunch-AI/claude-plugins.git#v1.5.5:plugins/api-security-testing
+    name: 42crunch-api-security-testing
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/adobe/skills.git#main:plugins/creative-cloud/adobe-for-creativity
+    name: adobe-for-creativity
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/agent-sdk-dev
+    name: agent-sdk-dev
     bucket: official
     confidence: first-party
     maturity: production
-  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/plugin-dev
-    name: plugin-dev
+  - source: https://github.com/SalesforceAIResearch/agentforce-adlc.git
+    name: agentforce-adlc
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/endorlabs/ai-plugins.git
+    name: ai-plugins
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/AikidoSec/aikido-claude-plugin.git
+    name: aikido
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/Airtable/skills.git#main:plugins/airtable
+    name: airtable
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/airwallex/airwallex-marketplace.git#master:plugins/airwallex
+    name: airwallex
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/gemini-cli-extensions/alloydb.git
+    name: alloydb
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/awslabs/agent-plugins.git#main:plugins/amazon-location-service
+    name: amazon-location-service
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/amplitude/mcp-marketplace.git#main:plugins/amplitude
+    name: amplitude
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/apolloio/apollo-mcp-plugin.git
+    name: apollo
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/apollographql/skills.git
+    name: apollo-skills
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/appwrite/claude-plugin.git
+    name: appwrite
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:external_plugins/asana
+    name: asana
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/astronomer/agents.git
+    name: astronomer-data-agents
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/atlanhq/agent-toolkit.git
+    name: atlan
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/atlassian/atlassian-mcp-server.git
+    name: atlassian
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/BrainBlend-AI/atomic-agents.git#:claude-plugin/atomic-agents
+    name: atomic-agents
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/auth0/agent-skills.git#main:plugins/auth0
+    name: auth0
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/aws/agent-toolkit-for-aws.git#main:plugins/aws-agents
+    name: aws-agents
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/awslabs/agent-plugins.git#main:plugins/aws-amplify
+    name: aws-amplify
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/aws/agent-toolkit-for-aws.git#main:plugins/aws-core
+    name: aws-core
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/aws/agent-toolkit-for-aws.git#main:plugins/aws-data-analytics
+    name: aws-data-analytics
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/aws-samples/sample-claude-code-plugins-for-startups.git#main:plugins/aws-dev-toolkit
+    name: aws-dev-toolkit
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/awslabs/agent-plugins.git#main:plugins/aws-serverless
+    name: aws-serverless
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/awslabs/startups.git#main:advisor/plugins/aws-startup-advisor
+    name: aws-startup-advisor
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/microsoft/azure-skills.git
+    name: azure
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/AzureCosmosDB/cosmosdb-claude-code-plugin.git
+    name: azure-cosmos-db-assistant
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/base44/skills.git
+    name: base44
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/Bigdata-com/bigdata-plugins-marketplace.git#main:plugins/bigdata-com
+    name: bigdata-com
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/box/box-for-ai.git
+    name: box
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/brightdata/skills.git
+    name: brightdata-plugin
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/buildkite/skills.git
+    name: buildkite
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/carta/plugins.git#main:plugins/carta-cap-table
+    name: carta-cap-table
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/carta/plugins.git#main:plugins/carta-crm
+    name: carta-crm
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/carta/plugins.git#main:plugins/carta-investors
+    name: carta-investors
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/cap-js/mcp-server.git
+    name: cds-mcp
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/ChromeDevTools/chrome-devtools-mcp.git
+    name: chrome-devtools-mcp
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/circlefin/skills.git#master:plugins/circle
+    name: circle-skills
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/circlebackai/claude-code-plugin.git
+    name: circleback
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/clangd-lsp
+    name: clangd-lsp
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/claude-code-setup
+    name: claude-code-setup
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/claude-md-management
+    name: claude-md-management
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/ClickHouse/clickhouse-claude-code-plugin.git
+    name: clickhouse
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/ClickHouse/agent-skills.git
+    name: clickhouse-best-practices
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/gemini-cli-extensions/cloud-sql-postgresql.git
+    name: cloud-sql-postgresql
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/cloudflare/skills.git
+    name: cloudflare
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/cloudinary-devs/cloudinary-plugin.git
+    name: cloudinary
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/cockroachdb/claude-plugin.git
+    name: cockroachdb
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/code-modernization
+    name: code-modernization
     bucket: official
     confidence: first-party
     maturity: production
@@ -40,20 +289,828 @@ plugins:
     bucket: official
     confidence: first-party
     maturity: production
-  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/pr-review-toolkit
-    name: pr-review-toolkit
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/code-simplifier
+    name: code-simplifier
     bucket: official
     confidence: first-party
+    maturity: production
+  - source: https://github.com/coderabbitai/skills.git
+    name: coderabbit
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/CodSpeedHQ/codspeed.git
+    name: codspeed
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/commit-commands
+    name: commit-commands
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:external_plugins/context7
+    name: context7
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/get-convex/convex-backend-skill.git
+    name: convex
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/CrowdStrike/foundry-skills.git
+    name: crowdstrike-falcon-foundry
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/csharp-lsp
+    name: csharp-lsp
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/cwc-makers
+    name: cwc-makers
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/dash0hq/dash0-agent-plugin.git
+    name: dash0
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/gemini-cli-extensions/data-agent-kit-starter-pack.git
+    name: data-agent-kit-starter-pack
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/awslabs/agent-plugins.git#main:plugins/databases-on-aws
+    name: databases-on-aws
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/datadog-labs/claude-code-plugin.git
+    name: datadog
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/datahub-project/datahub-skills.git
+    name: datahub-skills
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/datarobot-oss/datarobot-agent-skills.git
+    name: datarobot-agent-skills
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/microsoft/Dataverse-skills.git#main:.github/plugins/dataverse
+    name: dataverse
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/awslabs/agent-plugins.git#main:plugins/deploy-on-aws
+    name: deploy-on-aws
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/wonderwhy-er/DesktopCommanderMCP.git#main:plugins/claude
+    name: desktop-commander
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:external_plugins/discord
+    name: discord
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/dominodatalab/domino-claude-plugin.git
+    name: dominodatalab
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/duckdb/duckdb-skills.git
+    name: duckdb-skills
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/DuendeSoftware/duende-skills.git
+    name: duende-skills
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/exa-labs/exa-mcp-server.git
+    name: exa
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/explanatory-output-style
+    name: explanatory-output-style
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/expo/skills.git#main:plugins/expo
+    name: expo
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:external_plugins/fakechat
+    name: fakechat
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/fastly/fastly-agent-toolkit.git
+    name: fastly-agent-toolkit
+    bucket: official
+    confidence: curated
     maturity: production
   - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/feature-dev
     name: feature-dev
     bucket: official
     confidence: first-party
     maturity: production
-
-  # knowledge-work-plugins samples (each plugin is at the repo root, not under plugins/)
+  - source: https://github.com/voxel51/fiftyone-skills.git
+    name: fiftyone
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/figma/mcp-server-guide.git
+    name: figma
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:external_plugins/firebase
+    name: firebase
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/firecrawl/firecrawl-claude-plugin.git
+    name: firecrawl
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/atlassian/forge-skills.git
+    name: forge-skills
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/frontend-design
+    name: frontend-design
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/fullstorydev/fullstory-skills.git
+    name: fullstory
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:external_plugins/github
+    name: github
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:external_plugins/gitlab
+    name: gitlab
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/gopls-lsp
+    name: gopls-lsp
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:external_plugins/greptile
+    name: greptile
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/hookify
+    name: hookify
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/huggingface/skills.git
+    name: huggingface-skills
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/hunter-io/claude-plugin.git
+    name: hunter
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/heygen-com/hyperframes.git
+    name: hyperframes
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:external_plugins/imessage
+    name: imessage
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/intercom/claude-plugin-external.git
+    name: intercom
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/jdtls-lsp
+    name: jdtls-lsp
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/jfrog/claude-plugin.git
+    name: jfrog
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/kotlin-lsp
+    name: kotlin-lsp
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:external_plugins/laravel-boost
+    name: laravel-boost
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/learning-output-style
+    name: learning-output-style
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/legalzoom/claude-plugins.git#main:plugins/legalzoom
+    name: legalzoom
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:external_plugins/linear
+    name: linear
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/Shopify/liquid-skills.git#main:plugins/liquid-lsp
+    name: liquid-lsp
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/Shopify/liquid-skills.git#main:plugins/liquid-skills
+    name: liquid-skills
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/pydantic/skills.git#main:plugins/logfire
+    name: logfire
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/lua-lsp
+    name: lua-lsp
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/ory/lumen.git
+    name: lumen
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/lusha-oss/lusha-mcp-plugin.git
+    name: lusha
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/mapbox/mapbox-agent-skills.git
+    name: mapbox
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/math-olympiad
+    name: math-olympiad
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/modelcontextprotocol/ext-apps.git#main:plugins/mcp-apps
+    name: mcp-apps
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/mcp-server-dev
+    name: mcp-server-dev
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/mcp-tunnels
+    name: mcp-tunnels
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/mercadopago/mercadopago-claude-marketplace.git#main:plugins/mercadopago
+    name: mercadopago
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/MicrosoftDocs/mcp.git
+    name: microsoft-docs
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/awslabs/startups.git#main:migrate/plugins/migration-to-aws
+    name: migration-to-aws
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/mintlify/mintlify-claude-plugin.git
+    name: mintlify
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/miroapp/miro-ai.git#main:claude-plugins/miro
+    name: miro
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/mongodb/agent-skills.git
+    name: mongodb
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/neondatabase/agent-skills.git#main:plugins/neon-postgres
+    name: neon
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/netlify/context-and-tools.git
+    name: netlify-skills
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/oracle/netsuite-suitecloud-sdk.git#master:packages/agent-skills
+    name: netsuite-suitecloud
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/nvsecurity/nightvision-skills.git
+    name: nightvision
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/Nimbleway/agent-skills.git
+    name: nimble
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/makenotion/claude-code-notion-plugin.git
+    name: notion
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/NVIDIA/skills.git#main:plugins/nvidia-skills
+    name: nvidia-skills
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/oracle-samples/oracle-aidp-samples.git#main:ai/claude-code-plugins/oracle-ai-data-platform-workbench-spark-connectors
+    name: oracle-ai-data-platform-workbench-spark-connectors
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/growthxai/output.git#main:coding_assistants/claude/plugins/outputai
+    name: outputai
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/PagerDuty/claude-code-plugins.git
+    name: pagerduty
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/php-lsp
+    name: php-lsp
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/gopigment/ai-plugins.git
+    name: pigment
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/pinecone-io/pinecone-claude-code-plugin.git
+    name: pinecone
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/planetscale/claude-plugin.git
+    name: planetscale
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/playground
+    name: playground
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:external_plugins/playwright
+    name: playwright
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/plugin-dev
+    name: plugin-dev
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/PostHog/ai-plugin.git
+    name: posthog
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/gitroomhq/postiz-agent.git
+    name: postiz
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/Postman-Devrel/postman-claude-code-plugin.git
+    name: postman
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/pr-review-toolkit
+    name: pr-review-toolkit
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/prisma/claude-plugin.git
+    name: prisma
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/pydantic/skills.git#main:plugins/ai
+    name: pydantic-ai
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/pyright-lsp
+    name: pyright-lsp
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/qdrant/skills.git
+    name: qdrant-skills
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/qodo-ai/qodo-skills.git
+    name: qodo-skills
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/TheQtCompanyRnD/agent-skills.git
+    name: qt-development-skills
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/quarkusio/quarkus-agent-mcp.git
+    name: quarkus-agent
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/railwayapp/railway-skills.git#main:plugins/railway
+    name: railway
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/ralph-loop
+    name: ralph-loop
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/RevenueCat/rc-claude-code-plugin.git#:revenuecat
+    name: rc
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/redis/agent-skills.git#main:plugins/redis-development
+    name: redis-development
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/Digital-Process-Tools/claude-remember.git
+    name: remember
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/resend/resend-skills.git
+    name: resend
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/Rootly-AI-Labs/rootly-claude-plugin.git
+    name: rootly
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/ruby-lsp
+    name: ruby-lsp
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/runwayml/skills.git
+    name: runway-api
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/rust-analyzer-lsp
+    name: rust-analyzer-lsp
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/awslabs/agent-plugins.git#main:plugins/sagemaker-ai
+    name: sagemaker-ai
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/sanity-io/agent-toolkit.git
+    name: sanity
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/SAP/open-ux-tools.git#main:packages/fiori-mcp-server
+    name: sap-fiori-mcp-server
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/SAP/mdk-mcp-server.git
+    name: sap-mdk-server
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/spotify/save-to-spotify.git#main:plugin
+    name: save-to-spotify
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/security-guidance
+    name: security-guidance
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/semgrep/mcp-marketplace.git#:plugin
+    name: semgrep
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/getsentry/sentry-for-claude.git
+    name: sentry
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/getsentry/cli.git#main:plugins/sentry-cli
+    name: sentry-cli
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:external_plugins/serena
+    name: serena
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/ServiceNow/sdk.git#master:providers/claude/plugin
+    name: servicenow-sdk
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/session-report
+    name: session-report
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/Shopify/shopify-plugins.git
+    name: shopify
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/Shopify/Shopify-AI-Toolkit.git
+    name: shopify-ai-toolkit
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/skill-creator
+    name: skill-creator
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/slackapi/slack-mcp-plugin.git
+    name: slack
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/Snowflake-Labs/snowflake-ai-kit.git#main:plugins/cortex-code
+    name: snowflake-cortex-code
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/SonarSource/sonarqube-agent-plugins.git
+    name: sonarqube
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/sonatype/sonatype-guide-claude-plugin.git
+    name: sonatype-guide
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/sourcegraph-community/sourcegraph-claudecode-plugin.git
+    name: sourcegraph
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/spotify/ads-claude-plugin.git
+    name: spotify-ads-api
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/stripe/ai.git#main:providers/claude/plugin
+    name: stripe
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/sumup/sumup-skills.git#:providers/claude/plugin
+    name: sumup
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/supabase-community/supabase-plugin.git
+    name: supabase
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/obra/superpowers.git
+    name: superpowers
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/swift-lsp
+    name: swift-lsp
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/JetBrains/teamcity-cli.git
+    name: teamcity-cli
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:external_plugins/telegram
+    name: telegram
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:external_plugins/terraform
+    name: terraform
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/togethercomputer/skills.git
+    name: togetherai-skills
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/twilio/ai.git
+    name: twilio-developer-kit
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/claude-plugins-official.git#main:plugins/typescript-lsp
+    name: typescript-lsp
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/UI5/plugins-coding-agents.git#main:plugins/ui5
+    name: ui5
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/UI5/plugins-coding-agents.git#main:plugins/ui5-typescript-conversion
+    name: ui5-typescript-conversion
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/VantaInc/vanta-mcp-plugin.git
+    name: vanta
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/vercel/vercel-plugin.git
+    name: vercel
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/explorium-ai/vibeprospecting-plugin.git
+    name: vibe-prospecting
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/windsor-ai/claude-windsor-ai-plugin.git
+    name: windsor-ai
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/wix/skills.git
+    name: wix
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/Automattic/claude-code-wordpress.com.git
+    name: wordpress-com
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/workos/skills.git#main:plugins/workos
+    name: workos
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/youdotcom-oss/agent-skills.git
+    name: youdotcom-agent-skills
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/zapier/zapier-mcp.git#main:plugins/zapier
+    name: zapier
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/zilliztech/zilliz-plugin.git#:plugins/zilliz
+    name: zilliz
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/zoom/zoom-plugin.git
+    name: zoom-plugin
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/Zoominfo/zoominfo-mcp-plugin.git
+    name: zoominfo
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/zscaler/zscaler-mcp-server.git
+    name: zscaler
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/amekala/adspirer-mcp-plugin.git
+    name: knowledge-work-adspirer-ads-agent
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: techwolf-ai/ai-first-toolkit#main:plugins/ai-firstify
+    name: knowledge-work-ai-firstify
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/knowledge-work-plugins.git#main:partner-built/apollo
+    name: knowledge-work-apollo
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/knowledge-work-plugins.git#main:bio-research
+    name: knowledge-work-bio-research
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/knowledge-work-plugins.git#main:partner-built/brand-voice
+    name: knowledge-work-brand-voice
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/knowledge-work-plugins.git#main:partner-built/common-room
+    name: knowledge-work-common-room
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/knowledge-work-plugins.git#main:cowork-plugin-management
+    name: knowledge-work-cowork-plugin-management
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/knowledge-work-plugins.git#main:customer-support
+    name: knowledge-work-customer-support
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/daloopa/plugin.git
+    name: knowledge-work-daloopa
+    bucket: official
+    confidence: curated
+    maturity: production
   - source: https://github.com/anthropics/knowledge-work-plugins.git#main:data
     name: knowledge-work-data
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/knowledge-work-plugins.git#main:design
+    name: knowledge-work-design
     bucket: official
     confidence: first-party
     maturity: production
@@ -61,4 +1118,94 @@ plugins:
     name: knowledge-work-engineering
     bucket: official
     confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/knowledge-work-plugins.git#main:enterprise-search
+    name: knowledge-work-enterprise-search
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/knowledge-work-plugins.git#main:finance
+    name: knowledge-work-finance
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/knowledge-work-plugins.git#main:human-resources
+    name: knowledge-work-human-resources
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/knowledge-work-plugins.git#main:legal
+    name: knowledge-work-legal
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/LSEG-API-Samples/lseg-claude-plugin.git
+    name: knowledge-work-lseg
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/knowledge-work-plugins.git#main:marketing
+    name: knowledge-work-marketing
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/knowledge-work-plugins.git#main:operations
+    name: knowledge-work-operations
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/knowledge-work-plugins.git#main:pdf-viewer
+    name: knowledge-work-pdf-viewer
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/knowledge-work-plugins.git#main:product-management
+    name: knowledge-work-product-management
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/Accoil/product-tracking-skills.git
+    name: knowledge-work-product-tracking-skills
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/knowledge-work-plugins.git#main:productivity
+    name: knowledge-work-productivity
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/anthropics/knowledge-work-plugins.git#main:sales
+    name: knowledge-work-sales
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/searchfit/searchfit-seo.git
+    name: knowledge-work-searchfit-seo
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/ServiceNow/sdk.git#main:providers/claude/plugin
+    name: knowledge-work-servicenow-sdk
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/knowledge-work-plugins.git#main:partner-built/slack
+    name: knowledge-work-slack-by-salesforce
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/knowledge-work-plugins.git#main:small-business
+    name: knowledge-work-small-business
+    bucket: official
+    confidence: first-party
+    maturity: production
+  - source: https://github.com/kensho-technologies/spglobal-agent-skills.git#main:plugins/spglobal-plugin
+    name: knowledge-work-sp-global
+    bucket: official
+    confidence: curated
+    maturity: production
+  - source: https://github.com/anthropics/knowledge-work-plugins.git#main:partner-built/zoom-plugin
+    name: knowledge-work-zoom-plugin
+    bucket: official
+    confidence: curated
     maturity: production
