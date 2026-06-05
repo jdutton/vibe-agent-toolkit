@@ -359,7 +359,7 @@ export function fakeHomeEnv(fakeHome: string): Record<string, string> {
  *
  * Caller must have already created both directories and run `git init --bare`
  * on `bareRemote`. This helper is shared by integration tests that need a real
- * git fixture (publish-tags, multi-plugin marketplace).
+ * git fixture (multi-plugin marketplace).
  */
 export function initGitRepoWithRemote(sourceRepo: string, bareRemote: string): void {
   safeExecSync('git', ['init', '-q', '-b', 'main'], { cwd: sourceRepo });
@@ -376,25 +376,6 @@ export function commitAllAndPushMain(sourceRepo: string): void {
   safeExecSync('git', ['add', '-A'], { cwd: sourceRepo });
   safeExecSync('git', ['commit', '-q', '-m', 'init'], { cwd: sourceRepo });
   safeExecSync('git', ['push', '-q', 'origin', 'main'], { cwd: sourceRepo });
-}
-
-/**
- * List tags on a remote via `git ls-remote --tags`. Returns just the short tag
- * names (without `refs/tags/` prefix). Used by integration tests to assert on
- * pushed-tag state after a publish.
- */
-export function listRemoteTagNames(cwd: string, remoteUrl: string): string[] {
-  const out = safeExecSync('git', ['ls-remote', '--tags', remoteUrl], {
-    cwd,
-    encoding: 'utf-8',
-  });
-  return String(out)
-    .split('\n')
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .map((l) => l.split(/\s+/)[1] ?? '')
-    .filter((ref) => ref.startsWith('refs/tags/'))
-    .map((ref) => ref.replace(/^refs\/tags\//, ''));
 }
 
 /**
