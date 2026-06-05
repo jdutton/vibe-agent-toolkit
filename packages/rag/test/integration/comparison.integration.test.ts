@@ -30,7 +30,10 @@ const isWindows = process.platform === 'win32';
 // Transformers.js Provider Comparison
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!transformersAvailable)('Transformers.js Provider Comparison', () => {
+// Skip on Windows too: the transformers.js backend (onnxruntime-node native
+// binaries) + network model download are flaky in Windows CI, matching the ONNX
+// provider block below.
+describe.skipIf(!transformersAvailable || isWindows)('Transformers.js Provider Comparison', () => {
   // Lazy import to avoid errors when @xenova/transformers is not installed
   const getProvider = async () => {
     const mod = await import('../../src/embedding-providers/transformers-embedding-provider.js');
