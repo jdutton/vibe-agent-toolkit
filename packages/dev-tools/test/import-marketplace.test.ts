@@ -10,11 +10,14 @@ import { describe, expect, it } from 'vitest';
 import {
   CATALOG_KNOWLEDGE_WORK,
   CATALOG_OFFICIAL,
+  assertCatalogNonEmpty,
+  assertNoCatastrophicShrinkage,
   combineAndDedupe,
   composeSourceUrl,
   deriveConfidence,
   mapEntry,
   mungeName,
+  parseRunArgs,
   partitionPreserved,
   type UpstreamEntry,
 } from '../src/import-marketplace.js';
@@ -299,5 +302,74 @@ describe('partitionPreserved', () => {
       { ...firstEntry, validation: { severity: { SOME_CODE: 'ignore' } } },
     ];
     expect(() => partitionPreserved(withValidation, new Set<string>())).toThrow(/validation block/);
+  });
+});
+
+describe('assertCatalogNonEmpty', () => {
+  it('throws when a catalog returned 0 plugins and allowShrink is false', () => {
+    expect(() => assertCatalogNonEmpty(CATALOG_OFFICIAL, 0, false)).toThrow(
+      /returned 0 plugins/,
+    );
+  });
+
+  it('does not throw when a catalog returned 0 plugins but allowShrink is true', () => {
+    expect(() => assertCatalogNonEmpty(CATALOG_OFFICIAL, 0, true)).not.toThrow();
+  });
+
+  it('does not throw when a catalog returned any plugins', () => {
+    expect(() => assertCatalogNonEmpty(CATALOG_OFFICIAL, 1, false)).not.toThrow();
+    expect(() => assertCatalogNonEmpty(CATALOG_OFFICIAL, 200, false)).not.toThrow();
+  });
+});
+
+describe('assertNoCatastrophicShrinkage', () => {
+  it('throws when the new count drops by more than 20% vs. existing', () => {
+    // 238 → 32 is ~87% drop, the silent-data-loss scenario.
+    expect(() => assertNoCatastrophicShrinkage(238, 32, false)).toThrow(
+      /Refusing to shrink seed\.yaml/,
+    );
+  });
+
+  it('allows a drop of exactly 20% (the threshold itself)', () => {
+    // 100 → 80 is exactly 20% — must not trip the >20% guard.
+    expect(() => assertNoCatastrophicShrinkage(100, 80, false)).not.toThrow();
+  });
+
+  it('throws on a drop fractionally above 20%', () => {
+    // 100 → 79 is 21% — should trip.
+    expect(() => assertNoCatastrophicShrinkage(100, 79, false)).toThrow(
+      /Refusing to shrink seed\.yaml/,
+    );
+  });
+
+  it('does not throw on growth or no change', () => {
+    expect(() => assertNoCatastrophicShrinkage(100, 100, false)).not.toThrow();
+    expect(() => assertNoCatastrophicShrinkage(100, 250, false)).not.toThrow();
+  });
+
+  it('bypasses with allowShrink=true even for catastrophic drops', () => {
+    expect(() => assertNoCatastrophicShrinkage(238, 0, true)).not.toThrow();
+  });
+
+  it('treats an existing count of 0 as bootstrap (always allowed)', () => {
+    expect(() => assertNoCatastrophicShrinkage(0, 0, false)).not.toThrow();
+    expect(() => assertNoCatastrophicShrinkage(0, 50, false)).not.toThrow();
+  });
+
+  it('includes the actual counts in the error message for triage', () => {
+    expect(() => assertNoCatastrophicShrinkage(238, 32, false)).toThrow(/238/);
+    expect(() => assertNoCatastrophicShrinkage(238, 32, false)).toThrow(/32/);
+  });
+});
+
+describe('parseRunArgs', () => {
+  it('defaults allowShrink to false when --allow-shrink is absent', () => {
+    expect(parseRunArgs([])).toEqual({ allowShrink: false });
+    expect(parseRunArgs(['--verbose'])).toEqual({ allowShrink: false });
+  });
+
+  it('sets allowShrink to true when --allow-shrink is present', () => {
+    expect(parseRunArgs(['--allow-shrink'])).toEqual({ allowShrink: true });
+    expect(parseRunArgs(['--other', '--allow-shrink'])).toEqual({ allowShrink: true });
   });
 });

@@ -1,12 +1,13 @@
-# Tracked plugins for `vat corpus scan`.
-# Source is the unique key. Each entry can carry an optional `validation:`
-# block with the same shape as `skills.defaults.validation` in
-# vibe-agent-toolkit.config.yaml — used to silence findings on this
-# plugin when we've decided the rule is wrong (or not yet right enough).
+# Tracked plugins for `vat corpus scan`. Source is the unique key.
 #
 # Last imported from upstream marketplaces on 2026-06-03 by
-# packages/dev-tools/src/import-marketplace.ts
-# (SHAs reflect upstream state at import time and drift fast; re-import freely.)
+# packages/dev-tools/src/import-marketplace.ts.
+#
+# Each entry's `source` URL points at an upstream repo and (where the
+# upstream specifies one) a fragment ref — typically the default branch,
+# NOT a per-entry commit SHA. The catalog SHAs below are the audit
+# provenance of *this importer run* (which catalog HEADs were read);
+# entries themselves are not pinned and drift with upstream branches.
 #
 # Sources:
 #   anthropics/claude-plugins-official @ 6f90371 — 206 entries
@@ -15,7 +16,7 @@
 # Hand-curated entries (preserved on re-import): 2 at top.
 # An existing entry is preserved iff its `source` URL isn't one the importer
 # would generate this run (i.e. it doesn't live in either upstream catalog).
-# Re-import: bun run import-marketplace
+# Re-import: bun run import-marketplace [--allow-shrink]
 
 plugins:
   - source: https://github.com/jdutton/vibe-agent-toolkit.git#claude-marketplace:plugins/vibe-agent-toolkit

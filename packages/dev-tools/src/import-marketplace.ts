@@ -9,11 +9,19 @@
  * `~/code/vat-issue-99-slice-1b-plan.md` (slice 1b of issue #99).
  *
  * Usage:
- *   bun run import-marketplace
+ *   bun run import-marketplace [--allow-shrink]
+ *
+ * Flags:
+ *   --allow-shrink  Bypass the safety checks that refuse to overwrite the seed
+ *                   when (a) an upstream catalog returned 0 plugins or (b) the
+ *                   new entry count drops >20% vs. the existing seed. Use only
+ *                   when an upstream catalog is *genuinely* empty or shrinking.
  *
  * Exit codes:
  *   0 - success (seed.yaml written)
- *   1 - failure (network, schema mismatch, name collision, unknown source shape)
+ *   1 - failure (network, schema mismatch, name collision, unknown source
+ *       shape, empty catalog without --allow-shrink, catastrophic shrinkage
+ *       without --allow-shrink)
  */
 
 /* eslint-disable security/detect-non-literal-fs-filename */
@@ -22,7 +30,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
-import { safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
+import { CommandExecutionError, safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 import { z } from 'zod';
 
@@ -94,18 +102,25 @@ const ManifestSchema = z
 export type UpstreamEntry = z.infer<typeof UpstreamEntrySchema>;
 
 // ---------------------------------------------------------------------------
-// Output entry shape — kept in sync with `PluginEntrySchema` in
-// `packages/cli/src/commands/corpus/seed.ts`. We hand-write entries rather
-// than importing the schema (avoids dev-tools → cli reverse dependency).
-// The committed seed is validated by `loadSeedFile()` at downstream load time.
+// Output entry shape — the canonical `PluginEntrySchema` from
+// `packages/cli/src/commands/corpus/seed.ts`, hand-mirrored to avoid a
+// dev-tools → cli reverse dependency. The committed seed is validated by
+// `loadSeedFile()` at downstream load time.
+//
+// The full union shape is carried through the importer's pipeline so that
+// preserved entries (which can be any valid `PluginEntry`) round-trip
+// without `as`-casts that would lie about their narrow type at the
+// public-shaming gate. `mapEntry` still emits the narrow `official` /
+// `first-party|curated` / `production` literals for freshly-mapped upstream
+// entries.
 // ---------------------------------------------------------------------------
 
 interface PluginEntry {
   source: string;
   name: string;
-  bucket: 'official';
-  confidence: 'first-party' | 'curated';
-  maturity: 'production';
+  bucket: 'official' | 'community';
+  confidence: 'first-party' | 'curated' | 'listed';
+  maturity: 'production' | 'experimental' | 'example';
 }
 
 const NAME_REGEX = /^[A-Za-z0-9_-]+$/;
@@ -154,7 +169,29 @@ function fetchManifest(catalog: Catalog): z.infer<typeof ManifestSchema> {
     '-H',
     'Accept: application/vnd.github.raw',
   ]);
-  return ManifestSchema.parse(JSON.parse(raw));
+  const catalogId = `${catalog.owner}/${catalog.name}`;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    throw new Error(
+      `Failed to parse JSON from ${catalogId} marketplace.json: ${(err as Error).message}. ` +
+        `First 200 chars of body: ${JSON.stringify(raw.slice(0, 200))}`,
+    );
+  }
+  try {
+    return ManifestSchema.parse(parsed);
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      const issues = err.issues
+        .map(i => `  ${i.path.join('.') || '(root)'}: ${i.message}`)
+        .join('\n');
+      throw new Error(
+        `Manifest from ${catalogId} failed schema validation:\n${issues}`,
+      );
+    }
+    throw err;
+  }
 }
 
 function fetchCatalogSha(catalog: Catalog): string {
@@ -163,8 +200,17 @@ function fetchCatalogSha(catalog: Catalog): string {
     `repos/${catalog.owner}/${catalog.name}/commits/${catalog.ref}`,
     '--jq',
     '.sha',
-  ]);
-  return raw.trim().slice(0, 7);
+  ]).trim();
+  if (!/^[0-9a-f]{40}$/.test(raw)) {
+    // `gh` deprecation/update notices and `--jq` misses both come back as a
+    // 200 with a stdout body that isn't a SHA — without this guard, a garbage
+    // or blank value would land in the header provenance and look real.
+    throw new Error(
+      `Unexpected response from gh api for ${catalog.owner}/${catalog.name} HEAD SHA: ` +
+        `expected 40-char hex, got ${JSON.stringify(raw.slice(0, 200))}`,
+    );
+  }
+  return raw.slice(0, 7);
 }
 
 // ---------------------------------------------------------------------------
@@ -327,9 +373,9 @@ export function partitionPreserved(
     preserved.push({
       source: e.source,
       name: e.name,
-      bucket: e.bucket as PluginEntry['bucket'],
-      confidence: e.confidence as PluginEntry['confidence'],
-      maturity: e.maturity as PluginEntry['maturity'],
+      bucket: e.bucket,
+      confidence: e.confidence,
+      maturity: e.maturity,
     });
   }
   return preserved;
@@ -413,8 +459,72 @@ function assertUniqueNames(entries: PluginEntry[]): void {
 }
 
 // ---------------------------------------------------------------------------
-// YAML output — written by hand (rather than via `yaml.stringify`) to keep
-// the file format byte-identical across runs with no upstream changes.
+// Shrinkage guards — protect against silently committing a collapsed seed.
+//
+// Both upstream catalogs are eventually-consistent GitHub repos served via
+// `gh api`; a mid-deploy push, an empty `plugins: []` blob, or a transient
+// 200-with-bad-body could all reduce a catalog to zero or near-zero entries
+// without raising an exception. `writeFileSync` overwrites `seed.yaml`
+// unconditionally, so a passing run could quietly turn 238 entries into ~32.
+// These guards refuse to write under those conditions; `--allow-shrink`
+// bypasses them for the rare case where shrinkage is real.
+// ---------------------------------------------------------------------------
+
+/** Drop ratio above which `assertNoCatastrophicShrinkage` refuses. */
+const MAX_SHRINK_RATIO = 0.2;
+
+/**
+ * Refuse to write if a catalog returned 0 plugins (the most likely cause of
+ * a silently-collapsed seed). `--allow-shrink` bypasses for the rare case
+ * where an upstream catalog is genuinely empty.
+ */
+export function assertCatalogNonEmpty(
+  catalog: Catalog,
+  pluginCount: number,
+  allowShrink: boolean,
+): void {
+  if (pluginCount > 0 || allowShrink) return;
+  throw new Error(
+    `Catalog ${catalog.owner}/${catalog.name} returned 0 plugins. ` +
+      `Refusing to overwrite seed.yaml with a likely-empty catalog. ` +
+      `Re-run when the catalog is populated, or pass --allow-shrink to override.`,
+  );
+}
+
+/**
+ * Refuse to overwrite the existing seed if the new entry count would drop by
+ * more than `MAX_SHRINK_RATIO` (default 20%). `--allow-shrink` bypasses.
+ *
+ * Bootstrap case: an existing count of 0 is treated as "no prior seed to
+ * shrink from" and always allowed.
+ */
+export function assertNoCatastrophicShrinkage(
+  existingCount: number,
+  newCount: number,
+  allowShrink: boolean,
+): void {
+  if (allowShrink || existingCount === 0) return;
+  const dropRatio = (existingCount - newCount) / existingCount;
+  if (dropRatio > MAX_SHRINK_RATIO) {
+    const dropPct = (dropRatio * 100).toFixed(1);
+    throw new Error(
+      `Refusing to shrink seed.yaml by ${dropPct}% (${existingCount} → ${newCount} entries; ` +
+        `threshold ${(MAX_SHRINK_RATIO * 100).toFixed(0)}%). Likely a transient upstream issue. ` +
+        `Investigate before re-running with --allow-shrink to override.`,
+    );
+  }
+}
+
+export function parseRunArgs(argv: readonly string[]): { allowShrink: boolean } {
+  return { allowShrink: argv.includes('--allow-shrink') };
+}
+
+// ---------------------------------------------------------------------------
+// YAML output — written by hand (rather than via `yaml.stringify`) so the
+// entry block stays diff-clean run-to-run unless upstream actually moved.
+// Note: the header's date stamp and catalog HEAD SHAs *do* shift across days
+// or upstream pushes; a future `--check` drift mode would have to ignore
+// those header lines.
 // ---------------------------------------------------------------------------
 
 interface ImportCounts {
@@ -426,15 +536,16 @@ interface ImportCounts {
 function buildHeader(officialSha: string, kwSha: string, counts: ImportCounts): string {
   const date = new Date().toISOString().slice(0, 10);
   return [
-    `# Tracked plugins for \`vat corpus scan\`.`,
-    `# Source is the unique key. Each entry can carry an optional \`validation:\``,
-    `# block with the same shape as \`skills.defaults.validation\` in`,
-    `# vibe-agent-toolkit.config.yaml — used to silence findings on this`,
-    `# plugin when we've decided the rule is wrong (or not yet right enough).`,
+    `# Tracked plugins for \`vat corpus scan\`. Source is the unique key.`,
     `#`,
     `# Last imported from upstream marketplaces on ${date} by`,
-    `# packages/dev-tools/src/import-marketplace.ts`,
-    `# (SHAs reflect upstream state at import time and drift fast; re-import freely.)`,
+    `# packages/dev-tools/src/import-marketplace.ts.`,
+    `#`,
+    `# Each entry's \`source\` URL points at an upstream repo and (where the`,
+    `# upstream specifies one) a fragment ref — typically the default branch,`,
+    `# NOT a per-entry commit SHA. The catalog SHAs below are the audit`,
+    `# provenance of *this importer run* (which catalog HEADs were read);`,
+    `# entries themselves are not pinned and drift with upstream branches.`,
     `#`,
     `# Sources:`,
     `#   anthropics/claude-plugins-official @ ${officialSha} — ${counts.official} entries`,
@@ -443,7 +554,7 @@ function buildHeader(officialSha: string, kwSha: string, counts: ImportCounts): 
     `# Hand-curated entries (preserved on re-import): ${counts.preserved} at top.`,
     `# An existing entry is preserved iff its \`source\` URL isn't one the importer`,
     `# would generate this run (i.e. it doesn't live in either upstream catalog).`,
-    `# Re-import: bun run import-marketplace`,
+    `# Re-import: bun run import-marketplace [--allow-shrink]`,
     ``,
     ``,
   ].join('\n');
@@ -467,6 +578,7 @@ function stringifyEntries(entries: PluginEntry[]): string {
 // ---------------------------------------------------------------------------
 
 function run(): void {
+  const { allowShrink } = parseRunArgs(process.argv.slice(2));
   const seedPath = safePath.join(PROJECT_ROOT, 'corpus', 'seed.yaml');
 
   log('Reading existing seed.yaml for preserved entries…', 'cyan');
@@ -475,6 +587,8 @@ function run(): void {
   log('Fetching upstream manifests via gh CLI…', 'cyan');
   const official = fetchManifest(CATALOG_OFFICIAL);
   const kw = fetchManifest(CATALOG_KNOWLEDGE_WORK);
+  assertCatalogNonEmpty(CATALOG_OFFICIAL, official.plugins.length, allowShrink);
+  assertCatalogNonEmpty(CATALOG_KNOWLEDGE_WORK, kw.plugins.length, allowShrink);
   const officialSha = fetchCatalogSha(CATALOG_OFFICIAL);
   const kwSha = fetchCatalogSha(CATALOG_KNOWLEDGE_WORK);
 
@@ -536,6 +650,8 @@ function run(): void {
     mungedCount > 0 ? 'yellow' : 'reset',
   );
 
+  assertNoCatastrophicShrinkage(existing.length, final.length, allowShrink);
+
   const output =
     buildHeader(officialSha, kwSha, {
       preserved: preserved.length,
@@ -572,6 +688,23 @@ if (invokedDirectly) {
     run();
   } catch (err) {
     log(`✗ ${(err as Error).message}`, 'red');
+    // `CommandExecutionError.stderr` carries the real reason for `gh` failures
+    // (HTTP 403 rate-limit, "not authenticated", etc.) — the bare `.message`
+    // is usually just "Command failed".
+    if (err instanceof CommandExecutionError) {
+      const stderr =
+        typeof err.stderr === 'string' ? err.stderr : err.stderr.toString('utf8');
+      if (stderr.trim().length > 0) {
+        log(stderr.trimEnd(), 'red');
+      }
+    }
+    // Zod errors raised outside `fetchManifest` (e.g. from `loadExistingSeed`)
+    // surface here; print issues so the user knows which field failed.
+    if (err instanceof z.ZodError) {
+      for (const issue of err.issues) {
+        log(`  ${issue.path.join('.') || '(root)'}: ${issue.message}`, 'red');
+      }
+    }
     process.exit(1);
   }
 }
