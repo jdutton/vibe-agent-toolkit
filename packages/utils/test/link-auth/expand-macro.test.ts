@@ -146,4 +146,22 @@ describe('expandMacro — prototype-pollution defense', () => {
     expect(Object.getPrototypeOf(auth)).toBeNull();
     expect(Object.getPrototypeOf(auth['headers'])).toBeNull();
   });
+
+  it('rejects __proto__ in an override as an attack vector — no global pollution, no inheritance on result', () => {
+    // YAML-parsed configs surface `__proto__` as a real own-property (same as
+    // JSON.parse), so a hostile YAML config could try this. Use JSON.parse to
+    // construct the same shape — object literal syntax treats `__proto__`
+    // specially and would NOT exercise the relevant code path in deepMerge.
+    const override = JSON.parse('{"__proto__":{"polluted":"yes"}}') as Record<string, unknown>;
+    const result = expandMacro('github', override);
+
+    // 1. Object.prototype is untouched — no global pollution.
+    expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
+
+    // 2. The result does not inherit `polluted` via any path — it has a null
+    //    prototype, so even though `__proto__` may be present as an own key,
+    //    it is not consulted for inheritance.
+    expect((result as Record<string, unknown>)['polluted']).toBeUndefined();
+    expect(Object.getPrototypeOf(result)).toBeNull();
+  });
 });

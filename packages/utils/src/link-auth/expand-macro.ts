@@ -7,9 +7,9 @@
  * arrays and primitives are replaced wholesale (no element-wise array merge).
  *
  * The shipped macro file is at `link-auth/macros.yaml`, copied into the dist
- * tree by `scripts/copy-yaml-assets.mjs` during build so the runtime
- * `fs.readFileSync(new URL('./macros.yaml', import.meta.url))` resolves in
- * both source-mode (vitest) and built-mode (dist).
+ * tree by `packages/dev-tools/src/copy-yaml-assets.ts` during build so the
+ * runtime `fs.readFileSync(new URL('./macros.yaml', import.meta.url))`
+ * resolves in both source-mode (vitest) and built-mode (dist).
  *
  * Per design issue #113 §5 (macros are config, not a privileged code path).
  */
