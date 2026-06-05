@@ -93,6 +93,24 @@ Absolute URLs in URI-reference fields feed into the existing external URL health
 
 Opt-out: `checkFrontmatterLinks: false` per collection, or `--no-check-frontmatter-links` on the CLI.
 
+## Per-code severity and allow (`resources.validation`)
+
+Every resources finding is a registry code (e.g. `LINK_BROKEN_FILE`, `FRONTMATTER_SCHEMA_ERROR`, `EXTERNAL_URL_DEAD`) with a default severity. Tune them per-code under `resources.validation`:
+
+```yaml
+resources:
+  validation:
+    severity:
+      EXTERNAL_URL_DEAD: ignore     # silence dead external links entirely
+      LINK_UNKNOWN: error           # promote unclassified links to build-failing
+    allow:
+      LINK_TO_GITIGNORED:           # keyed by code; value is a list of allow entries
+        - paths: ["docs/internal/**"]
+          reason: "internal-only notes, intentionally gitignored"
+```
+
+`severity` accepts `error | warning | info | ignore`. External-URL findings default to `warning` and never fail the build on their own — promote them to `error` here if you want network checks to gate CI. `allow` is keyed by code; each entry's `paths` (glob list, default `**/*`) and `reason` suppress that code for matching files rather than disabling it globally. Add `expires` (a date string) to flag the allowance for re-review.
+
 ## Annotating Frontmatter Schemas with Zod 4
 
 If your project generates JSON Schemas from Zod (via `z.toJSONSchema()`), annotate frontmatter fields that hold links with the appropriate `format` so VAT's link validator picks them up:
