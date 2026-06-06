@@ -124,6 +124,10 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 - **Why it matters:** A committed document declaring a dependency on a gitignored target breaks portability — anyone cloning the repo gets the document but not the target. It also risks treating local-only or generated content as if it were part of the published artifact. Distinct from the skills-packaging code [`LINK_TO_GITIGNORED_FILE`](#link_to_gitignored_file), which guards against leaking ignored data into a *bundle*; this code fires in the `vat resources validate` path and the two coexist intentionally.
 - **Fix:** Link a tracked target, or un-ignore the file in `.gitignore` if it should be committed.
 
+## HTML Well-Formedness Codes
+
+Unlike the link codes above, this code is HTML-specific and is **not** a link code. It fires only in the `vat resources validate` path — emitted by `ResourceRegistry` while parsing `.html`/`.htm` resources — and does not run under `vat skills validate`, `vat skills build`, or `vat audit`.
+
 ### `MALFORMED_HTML`
 
 - **Default:** `info`

@@ -86,8 +86,9 @@ export {
 export { parseMarkdown, type ParseResult } from './link-parser.js';
 
 export { parseHtml } from './html-link-parser.js';
-export type { HtmlParseError } from './link-parser.js';
-export { rewriteHtmlLinks } from './html-transform.js';
+// HtmlParseError is Zod-sourced (single source of truth) — see schemas/resource-metadata.ts.
+export type { HtmlParseError } from './schemas/resource-metadata.js';
+export { rewriteHtmlLinks, type UnappliedRewrite } from './html-transform.js';
 
 // Export frontmatter validation
 export { validateFrontmatter } from './frontmatter-validator.js';

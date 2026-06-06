@@ -8,13 +8,17 @@
  *
  * Uses parse5 (WHATWG-conformant). The parse5 document + element walker are
  * exported so the link rewriter (html-transform.ts) shares one parser path.
+ *
+ * Non-goal: `<base href>` is not honored — relative links are resolved against
+ * the file's own directory, not a document base.
  */
 
 import { readFile, stat } from 'node:fs/promises';
 
 import { parse, type DefaultTreeAdapterMap } from 'parse5';
 
-import { classifyLink, type HtmlParseError, type ParseResult } from './link-parser.js';
+import { classifyLink, type ParseResult } from './link-parser.js';
+import type { HtmlParseError } from './schemas/resource-metadata.js';
 import type { ResourceLink } from './types.js';
 
 type P5Node = DefaultTreeAdapterMap['node'];

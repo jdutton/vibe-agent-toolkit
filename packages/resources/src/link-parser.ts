@@ -8,8 +8,9 @@
  *
  * Uses unified/remark for robust markdown parsing with GFM support.
  *
- * Also defines the format-neutral `ParseResult` contract and `HtmlParseError`
- * shared with the HTML parser (`html-link-parser.ts`).
+ * Also defines the format-neutral `ParseResult` contract shared with the HTML
+ * parser (`html-link-parser.ts`). The `HtmlParseError` shape is Zod-sourced
+ * from `schemas/resource-metadata.ts` (single source of truth).
  */
 
 import { readFile, stat } from 'node:fs/promises';
@@ -23,17 +24,8 @@ import { unified } from 'unified';
 import { visit } from 'unist-util-visit';
 import * as yaml from 'yaml';
 
+import type { HtmlParseError } from './schemas/resource-metadata.js';
 import type { HeadingNode, LinkType, ResourceLink } from './types.js';
-
-/**
- * A single HTML well-formedness diagnostic from the parser.
- */
-export interface HtmlParseError {
-  /** parse5 error code (e.g. "missing-end-tag"). */
-  message: string;
-  /** 1-based source line. Optional in the type for forward-compat; parse5 v7 always populates it. */
-  line?: number;
-}
 
 /**
  * Result of parsing a resource file (markdown or HTML).

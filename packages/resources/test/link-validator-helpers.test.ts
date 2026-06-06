@@ -147,6 +147,21 @@ describe('checkAnchor', () => {
     expect(checkAnchor('Intro', PAGE_HTML, index)).toBe('valid');
     expect(checkAnchor('intro', PAGE_HTML, index)).toBe('broken');
   });
+
+  it('treats the empty fragment and "top" (case-insensitive) as valid on HTML targets', () => {
+    // HTML spec: `#` and `#top` always navigate to the top of the document,
+    // valid even though neither id is in the index.
+    expect(checkAnchor('', PAGE_HTML, index)).toBe('valid');
+    expect(checkAnchor('top', PAGE_HTML, index)).toBe('valid');
+    expect(checkAnchor('TOP', PAGE_HTML, index)).toBe('valid');
+    expect(checkAnchor('Top', PAGE_HTML, index)).toBe('valid');
+  });
+
+  it('does not special-case empty/"top" for markdown targets', () => {
+    // Markdown behavior is untouched: neither is a real heading slug here.
+    expect(checkAnchor('', GUIDE_MD, index)).toBe('broken');
+    expect(checkAnchor('top', GUIDE_MD, index)).toBe('broken');
+  });
 });
 
 describe('gitIgnoreSafetyIssue', () => {

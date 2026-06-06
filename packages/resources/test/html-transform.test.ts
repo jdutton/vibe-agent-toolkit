@@ -1,8 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
-import { rewriteHtmlLinks } from '../src/html-transform.js';
+import { parseHtmlDocument, walkElements } from '../src/html-link-parser.js';
+import { rewriteHtmlLinks, type UnappliedRewrite } from '../src/html-transform.js';
 
 const swap = (from: string, to: string) => (href: string) => (href === from ? to : href);
+
+/** A valueless `href` attribute — has no value span, so a wanted rewrite cannot be applied. */
+const VALUELESS_HREF = '<a href>x</a>';
+
+/** Re-parse `html` and return the entity-decoded value of the first `<tag attr>`. */
+function readAttr(html: string, tag: string, attr: string): string | undefined {
+  const { document } = parseHtmlDocument(html);
+  for (const el of walkElements(document)) {
+    if (el.tagName !== tag) continue;
+    const found = el.attrs.find((a) => a.name === attr);
+    if (found) return found.value;
+  }
+  return undefined;
+}
 
 describe('rewriteHtmlLinks', () => {
   it('returns byte-identical source when nothing changes', () => {
@@ -64,7 +79,32 @@ describe('rewriteHtmlLinks', () => {
       rewriteHtmlLinks('<a name="anchor">x</a><a href="real.html">y</a>', swap('real.html', 'out.html')),
     ).toBe('<a name="anchor">x</a><a href="out.html">y</a>');
     // Valueless and empty-value attributes have no value span to rewrite.
-    expect(rewriteHtmlLinks('<a href>x</a>', () => 'changed')).toBe('<a href>x</a>');
+    expect(rewriteHtmlLinks(VALUELESS_HREF, () => 'changed')).toBe(VALUELESS_HREF);
     expect(rewriteHtmlLinks('<a href=>x</a>', () => 'changed')).toBe('<a href=>x</a>');
+  });
+
+  it('reports a wanted rewrite it cannot apply instead of dropping it silently', () => {
+    const unapplied: UnappliedRewrite[] = [];
+    // The rewrite is wanted (-> 'changed') but cannot be applied, so it must be recorded.
+    const out = rewriteHtmlLinks(VALUELESS_HREF, () => 'changed', (info) => unapplied.push(info));
+    expect(out).toBe(VALUELESS_HREF); // still byte-for-byte unchanged
+    expect(unapplied).toHaveLength(1);
+    expect(unapplied[0]).toMatchObject({ tagName: 'a', attr: 'href', to: 'changed', reason: 'unparseable-attribute' });
+  });
+
+  it('does not report when no rewrite is wanted', () => {
+    const unapplied: UnappliedRewrite[] = [];
+    rewriteHtmlLinks(VALUELESS_HREF, (h) => h, (info) => unapplied.push(info));
+    expect(unapplied).toHaveLength(0);
+  });
+
+  it('round-trips: the rewritten value decodes back to the exact target (no double-escape)', () => {
+    // Splicing escapes `&` and the active quote into the source; a correct
+    // implementation means a browser/parser decodes the value back to the
+    // intended target verbatim. `a&b` vs `a&amp;b` are the double-escape canary.
+    for (const target of ['a&b', 'a&amp;b', 'a"b', "a'b", 'x?y=1&z=2', 'plain.html']) {
+      const out = rewriteHtmlLinks('<a href="old">x</a>', swap('old', target));
+      expect(readAttr(out, 'a', 'href')).toBe(target);
+    }
   });
 });

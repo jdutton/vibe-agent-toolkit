@@ -348,6 +348,10 @@ export type AnchorCheck = 'skip' | 'valid' | 'broken';
  *   broken, so callers must not emit an issue.
  * - HTML targets (`.html`/`.htm`) are matched case-sensitively (ids are
  *   case-sensitive); all other targets are matched lowercased (markdown slugs).
+ * - For HTML targets the empty fragment (`#`) and `top` (ASCII
+ *   case-insensitive) are always valid: per the HTML fragment-navigation
+ *   algorithm both scroll to the top of the document regardless of whether a
+ *   matching element exists, so `href="#"` / `href="#top"` are not broken.
  *
  * @param anchor - Fragment without the leading `#`.
  * @param targetFilePath - Absolute path of the file the fragment lives in.
@@ -363,6 +367,11 @@ export function checkAnchor(
     return 'skip';
   }
   const isHtml = /\.html?$/i.test(targetFilePath);
+  // HTML spec: the empty fragment and "top" (case-insensitive) always navigate
+  // to the top of the document — valid even with no matching id.
+  if (isHtml && (anchor === '' || anchor.toLowerCase() === 'top')) {
+    return 'valid';
+  }
   const found = isHtml ? fragments.has(anchor) : fragments.has(anchor.toLowerCase());
   return found ? 'valid' : 'broken';
 }

@@ -485,6 +485,7 @@ export async function packageSkill(
     templateContext: { skill: { name: skillMetadata.name } },
     collectionSchemas,
     projectRoot,
+    warn: (message) => process.stderr.write(`warning: ${message}\n`),
   });
 
   // 12b. Copy files config entries that were not auto-discovered via link traversal.
@@ -956,6 +957,8 @@ interface CopyRewriteContext {
   collectionSchemas: Map<string, object>;
   /** Absolute path to the project root — required for RFC 3986 §4.2 leading-`/` href resolution in frontmatter. */
   projectRoot: string;
+  /** Sink for non-fatal copy/rewrite diagnostics (verbatim copies, un-appliable rewrites). */
+  warn: (message: string) => void;
 }
 
 /**
@@ -1054,6 +1057,10 @@ async function copyAndRewriteFile(
     // reachable on an ID collision (e.g. page.html + page.md), where the asset
     // is copied verbatim and its links are NOT rewritten (v1 limitation,
     // mirrors the pre-existing asset-collision behavior).
+    ctx.warn(
+      `Copied '${sourcePath}' verbatim without link rewriting: it is not in the resource registry ` +
+        `(typically an ID collision with a same-named markdown file). Source-relative links inside it are not rewritten.`,
+    );
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
     await writeFile(targetPath, content, 'utf-8');
     return;
@@ -1068,8 +1075,14 @@ async function copyAndRewriteFile(
       targetPath,
       ctx.projectRoot,
     );
+    const rewritten = rewriteHtmlLinks(content, rewriteHref, (info) => {
+      ctx.warn(
+        `Could not rewrite <${info.tagName} ${info.attr}="${info.from}"> in '${sourcePath}' (${info.reason}); ` +
+          `the original value was kept.`,
+      );
+    });
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
-    await writeFile(targetPath, rewriteHtmlLinks(content, rewriteHref), 'utf-8');
+    await writeFile(targetPath, rewritten, 'utf-8');
     return;
   }
 

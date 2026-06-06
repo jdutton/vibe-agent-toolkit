@@ -8,6 +8,10 @@
  *
  * Uses the same `RewriteHref` callback model as `rewriteBodyLinks` — callers
  * supply per-href target resolution; this module owns only the splice mechanics.
+ *
+ * Non-goal: `<base href>` is not honored. Relative hrefs are resolved by the
+ * caller against the file's own directory; a `<base>` element that would
+ * override that in a browser is ignored.
  */
 
 import { parseHtmlDocument, walkElements } from './html-link-parser.js';
@@ -80,11 +84,39 @@ function encodeValue(newValue: string, quote: string): string {
   return `"${escaped}"`;
 }
 
+/** A wanted link rewrite that could not be spliced back into the source. */
+export interface UnappliedRewrite {
+  tagName: string;
+  attr: string;
+  /** The original attribute value the rewrite targeted. */
+  from: string;
+  /** The value the rewrite wanted to write. */
+  to: string;
+  /**
+   * Why the splice could not be located:
+   * - `no-source-location` — parse5 omitted the attribute's offsets (synthesized
+   *   during error recovery on malformed input).
+   * - `unparseable-attribute` — the attribute's source span had no locatable
+   *   value (e.g. an unterminated quote).
+   */
+  reason: 'no-source-location' | 'unparseable-attribute';
+}
+
 /**
  * Rewrite `<a href>` / `<img src>` values in `source` using `rewriteHref`.
  * Returns `source` unchanged (byte-for-byte) when no value changes.
+ *
+ * A rewrite that is wanted (the href resolves to a new value) but cannot be
+ * spliced back — because parse5 omitted the source location or the attribute
+ * span is unparseable — is reported via `onUnapplied` rather than dropped
+ * silently. Malformed pages are exactly the ones that hit this path, so the
+ * caller can surface it instead of shipping a stale link.
  */
-export function rewriteHtmlLinks(source: string, rewriteHref: RewriteHref): string {
+export function rewriteHtmlLinks(
+  source: string,
+  rewriteHref: RewriteHref,
+  onUnapplied?: (info: UnappliedRewrite) => void,
+): string {
   const { document } = parseHtmlDocument(source);
   const edits: Edit[] = [];
 
@@ -97,16 +129,19 @@ export function rewriteHtmlLinks(source: string, rewriteHref: RewriteHref): stri
     if (attr === undefined) {
       continue;
     }
-    const location = element.sourceCodeLocation?.attrs?.[attrName];
-    if (location === undefined) {
-      continue;
-    }
+    // Resolve first so we only record drops that actually lose a wanted edit.
     const newValue = rewriteHref(attr.value);
     if (newValue === attr.value) {
       continue;
     }
+    const location = element.sourceCodeLocation?.attrs?.[attrName];
+    if (location === undefined) {
+      onUnapplied?.({ tagName: element.tagName, attr: attrName, from: attr.value, to: newValue, reason: 'no-source-location' });
+      continue;
+    }
     const span = valueSpan(source.slice(location.startOffset, location.endOffset), location.startOffset);
     if (span === undefined) {
+      onUnapplied?.({ tagName: element.tagName, attr: attrName, from: attr.value, to: newValue, reason: 'unparseable-attribute' });
       continue;
     }
     edits.push({ ...span, newValue });
