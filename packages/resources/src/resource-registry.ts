@@ -24,7 +24,7 @@ import {
 import { validateFrontmatter } from './frontmatter-validator.js';
 import { parseHtml } from './html-link-parser.js';
 import { parseMarkdown } from './link-parser.js';
-import { validateLink, type ValidateLinkOptions } from './link-validator.js';
+import { fragmentIndexEntry, validateLink, type FragmentIndex, type ValidateLinkOptions } from './link-validator.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { SHA256 } from './schemas/checksum.js';
 import type { ProjectConfig } from './schemas/project-config.js';
@@ -477,7 +477,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * @private
    */
   private async validateAllLinks(
-    fragmentsByFile: Map<string, Set<string>>,
+    fragmentsByFile: FragmentIndex,
     skipGitIgnoreCheck: boolean
   ): Promise<ValidationIssue[]> {
     const issues: ValidationIssue[] = [];
@@ -531,7 +531,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * @private
    */
   private async validateCollectionFrontmatter(
-    fragmentsByFile: Map<string, Set<string>>,
+    fragmentsByFile: FragmentIndex,
     skipGitIgnoreCheck: boolean,
   ): Promise<ValidationIssue[]> {
     const issues: ValidationIssue[] = [];
@@ -569,7 +569,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private async validateResourceCollectionSchemas(
     resource: ResourceMetadata,
     fsModule: typeof fs,
-    fragmentsByFile: Map<string, Set<string>>,
+    fragmentsByFile: FragmentIndex,
     skipGitIgnoreCheck: boolean,
   ): Promise<ValidationIssue[]> {
     const issues: ValidationIssue[] = [];
@@ -607,7 +607,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     resource: ResourceMetadata,
     validation: NonNullable<NonNullable<ProjectConfig['resources']>['collections']>[string]['validation'],
     fsModule: typeof fs,
-    fragmentsByFile: Map<string, Set<string>>,
+    fragmentsByFile: FragmentIndex,
     skipGitIgnoreCheck: boolean,
   ): Promise<ValidationIssue[]> {
     if (!validation?.frontmatterSchema) {
@@ -1288,15 +1288,16 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * absolute path → the set of valid fragment targets. Markdown contributes
    * heading slugs (lowercased); HTML contributes its `id`/`name` anchors.
    */
-  private buildFragmentIndex(): Map<string, Set<string>> {
-    const map = new Map<string, Set<string>>();
+  private buildFragmentIndex(): FragmentIndex {
+    const map: FragmentIndex = new Map();
     for (const resource of this.resourcesByPath.values()) {
       const fragments = new Set<string>();
       collectHeadingSlugs(resource.headings, fragments);
       for (const anchor of resource.anchors ?? []) {
         fragments.add(anchor);
       }
-      map.set(resource.filePath, fragments);
+      // Policy (case-sensitive ids vs folded slugs) is derived from the file type.
+      map.set(resource.filePath, fragmentIndexEntry(resource.filePath, fragments));
     }
     return map;
   }

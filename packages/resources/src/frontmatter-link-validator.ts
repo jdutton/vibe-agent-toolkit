@@ -21,7 +21,7 @@
 import { createRegistryIssue, type IssueCode } from '@vibe-agent-toolkit/agent-schema';
 
 import { classifyLink } from './link-parser.js';
-import { validateLink, type ValidateLinkOptions } from './link-validator.js';
+import { validateLink, type FragmentIndex, type ValidateLinkOptions } from './link-validator.js';
 import { walkFrontmatterUriReferences } from './schema-uri-walker.js';
 import type { ResourceLink, ValidationIssue } from './types.js';
 
@@ -58,7 +58,7 @@ export async function validateFrontmatterLinks(
   frontmatter: Record<string, unknown> | undefined,
   schema: object,
   sourceFilePath: string,
-  fragmentsByFile: Map<string, Set<string>>,
+  fragmentsByFile: FragmentIndex,
   options?: ValidateLinkOptions,
 ): Promise<FrontmatterLinkValidationResult> {
   if (!frontmatter) return { issues: [], externalUrls: [] };

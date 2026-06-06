@@ -5,12 +5,13 @@ import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { validateFrontmatterLinks } from '../src/frontmatter-link-validator.js';
+import { fragmentIndex, type FragmentIndex } from '../src/link-validator.js';
 
 describe('validateFrontmatterLinks', () => {
   let projectRoot: string;
   let sourceFile: string;
   let targetFile: string;
-  let fragmentsByFile: Map<string, Set<string>>;
+  let fragmentsByFile: FragmentIndex;
 
   beforeAll(async () => {
     projectRoot = await mkdtemp(safePath.join(normalizedTmpdir(), 'vat-fmlv-'));
@@ -20,9 +21,10 @@ describe('validateFrontmatterLinks', () => {
     await writeFile(sourceFile, '---\n---\n# Source\n');
     await writeFile(targetFile, '# Target\n\n## Section A\n');
 
-    fragmentsByFile = new Map();
-    fragmentsByFile.set(targetFile, new Set(['target', 'section-a']));
-    fragmentsByFile.set(sourceFile, new Set(['source']));
+    fragmentsByFile = fragmentIndex([
+      [targetFile, new Set(['target', 'section-a'])],
+      [sourceFile, new Set(['source'])],
+    ]);
   });
 
   afterAll(async () => {

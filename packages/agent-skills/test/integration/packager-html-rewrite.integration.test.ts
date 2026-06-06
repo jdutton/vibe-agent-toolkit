@@ -8,6 +8,7 @@ import { buildExampleSkill } from './packager-test-helpers.js';
 
 describe('packager rewrites links inside bundled HTML resources', () => {
   let projectRoot: string;
+  const EXTERNAL_HTML = 'external.html';
 
   beforeAll(() => {
     projectRoot = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-packager-html-'));
@@ -30,7 +31,7 @@ describe('packager rewrites links inside bundled HTML resources', () => {
         '---',
         '# Example',
         '',
-        'See [the page](./page.html).',
+        'See [the page](./page.html) and [the external page](./external.html).',
         '',
       ].join('\n'),
     );
@@ -45,6 +46,19 @@ describe('packager rewrites links inside bundled HTML resources', () => {
         '<a href="./SKILL.md">back</a>',
         '</body>',
         '</html>',
+        '',
+      ].join('\n'),
+    );
+    // No source-relative links to rewrite — only an external URL — so this page
+    // must round-trip byte-for-byte through the bundler.
+    writeFileSync(
+      safePath.join(projectRoot, 'skills', 'example', EXTERNAL_HTML),
+      [
+        '<!doctype html>',
+        '<html><body>',
+        '<a href="https://example.com/docs">external</a>',
+        '<img src="https://example.com/cat.png">',
+        '</body></html>',
         '',
       ].join('\n'),
     );
@@ -70,5 +84,13 @@ describe('packager rewrites links inside bundled HTML resources', () => {
 
     // The original source-relative href is gone (it pointed to the source layout, not the output)
     expect(html).not.toContain('href="./SKILL.md"');
+  });
+
+  it('round-trips an HTML resource with no rewritable links byte-for-byte', async () => {
+    const { outputPath } = await buildExampleSkill(projectRoot);
+    const source = readFileSync(safePath.join(projectRoot, 'skills', 'example', EXTERNAL_HTML), 'utf-8');
+    const bundled = readFileSync(safePath.join(outputPath, 'resources', EXTERNAL_HTML), 'utf-8');
+    // External-only links resolve to themselves, so the bundler must not touch a byte.
+    expect(bundled).toBe(source);
   });
 });

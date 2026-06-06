@@ -84,7 +84,7 @@ export interface ValidateLinkOptions {
 export async function validateLink(
   link: ResourceLink,
   sourceFilePath: string,
-  fragmentsByFile: Map<string, Set<string>>,
+  fragmentsByFile: FragmentIndex,
   options?: ValidateLinkOptions
 ): Promise<ValidationIssue | null> {
   switch (link.type) {
@@ -232,7 +232,7 @@ export function gitIgnoreSafetyIssue(
 async function validateLocalFileLink(
   link: ResourceLink,
   sourceFilePath: string,
-  fragmentsByFile: Map<string, Set<string>>,
+  fragmentsByFile: FragmentIndex,
   options?: ValidateLinkOptions
 ): Promise<ValidationIssue | null> {
   const resolved = resolveLocalHref(link.href, sourceFilePath, options?.projectRoot);
@@ -277,12 +277,20 @@ async function validateLocalFileLink(
 }
 
 /**
+ * Exhaustiveness guard for the {@link AnchorCheck} union: a compile error at the
+ * call site means a new variant was added without being handled here.
+ */
+function assertNever(value: never): never {
+  throw new Error(`Unhandled AnchorCheck variant: ${String(value)}`);
+}
+
+/**
  * Validate an anchor link (within current file).
  */
 async function validateAnchorLink(
   link: ResourceLink,
   sourceFilePath: string,
-  fragmentsByFile: Map<string, Set<string>>,
+  fragmentsByFile: FragmentIndex,
   projectRoot?: string,
 ): Promise<ValidationIssue | null> {
   // Extract anchor (strip leading #)
@@ -291,15 +299,19 @@ async function validateAnchorLink(
   // Validate anchor exists in current file
   const check = checkAnchor(anchor, sourceFilePath, fragmentsByFile);
 
-  if (check === 'broken') {
-    return createRegistryIssue(
-      'LINK_BROKEN_ANCHOR',
-      `Anchor not found: ${link.href}`,
-      linkExtras(link, sourceFilePath, projectRoot, ''),
-    );
+  switch (check) {
+    case 'skip':
+    case 'valid':
+      return null;
+    case 'broken':
+      return createRegistryIssue(
+        'LINK_BROKEN_ANCHOR',
+        `Anchor not found: ${link.href}`,
+        linkExtras(link, sourceFilePath, projectRoot, ''),
+      );
+    default:
+      return assertNever(check);
   }
-
-  return null;
 }
 
 
@@ -342,12 +354,55 @@ async function validateResolvedFile(
 export type AnchorCheck = 'skip' | 'valid' | 'broken';
 
 /**
+ * A file's fragment targets plus how to match against them. HTML `id`/`name`
+ * anchors are matched case-sensitively; markdown heading slugs are case-folded.
+ * The policy lives on the entry rather than being re-derived from the file
+ * extension at match time, so a new resource format only has to set this flag.
+ */
+export interface FragmentIndexEntry {
+  /** `true` for case-sensitive matching (HTML ids), `false` for case-folded (markdown slugs). */
+  caseSensitive: boolean;
+  fragments: Set<string>;
+}
+
+/** File path → its fragment targets and matching policy. */
+export type FragmentIndex = Map<string, FragmentIndexEntry>;
+
+/**
+ * Whether a path is an HTML resource (`.html`/`.htm`). The single place the
+ * extension drives format-specific behavior: case-sensitive ids (via
+ * {@link fragmentIndexEntry}) and the HTML top-fragment navigation rule.
+ */
+export function isHtmlPath(filePath: string): boolean {
+  return /\.html?$/i.test(filePath);
+}
+
+/** Build one index entry, choosing the case-folding policy from the file type. */
+export function fragmentIndexEntry(filePath: string, fragments: Set<string> = new Set()): FragmentIndexEntry {
+  return { caseSensitive: isHtmlPath(filePath), fragments };
+}
+
+/**
+ * Build a {@link FragmentIndex} from `[path, fragments]` pairs, deriving each
+ * entry's matching policy from its path. Single construction path shared by the
+ * registry and tests.
+ */
+export function fragmentIndex(entries: Iterable<readonly [string, Set<string>]> = []): FragmentIndex {
+  const map: FragmentIndex = new Map();
+  for (const [filePath, fragments] of entries) {
+    map.set(filePath, fragmentIndexEntry(filePath, fragments));
+  }
+  return map;
+}
+
+/**
  * Check whether a fragment exists in the target file's anchor set.
  *
  * - `'skip'`  — target file is not indexed; we cannot prove the anchor is
  *   broken, so callers must not emit an issue.
- * - HTML targets (`.html`/`.htm`) are matched case-sensitively (ids are
- *   case-sensitive); all other targets are matched lowercased (markdown slugs).
+ * - Matching follows the entry's `caseSensitive` policy (HTML ids exact,
+ *   markdown slugs case-folded). The index carries the policy, so this never
+ *   re-derives the folding rule from the file extension.
  * - For HTML targets the empty fragment (`#`) and `top` (ASCII
  *   case-insensitive) are always valid: per the HTML fragment-navigation
  *   algorithm both scroll to the top of the document regardless of whether a
@@ -355,23 +410,25 @@ export type AnchorCheck = 'skip' | 'valid' | 'broken';
  *
  * @param anchor - Fragment without the leading `#`.
  * @param targetFilePath - Absolute path of the file the fragment lives in.
- * @param fragmentsByFile - Format-neutral fragment index.
+ * @param fragmentsByFile - Fragment index carrying each file's matching policy.
  */
 export function checkAnchor(
   anchor: string,
   targetFilePath: string,
-  fragmentsByFile: Map<string, Set<string>>,
+  fragmentsByFile: FragmentIndex,
 ): AnchorCheck {
-  const fragments = fragmentsByFile.get(targetFilePath);
-  if (!fragments) {
+  const entry = fragmentsByFile.get(targetFilePath);
+  if (!entry) {
     return 'skip';
   }
-  const isHtml = /\.html?$/i.test(targetFilePath);
   // HTML spec: the empty fragment and "top" (case-insensitive) always navigate
-  // to the top of the document — valid even with no matching id.
-  if (isHtml && (anchor === '' || anchor.toLowerCase() === 'top')) {
+  // to the top of the document — valid even with no matching id. This is an
+  // HTML-format navigation rule, distinct from the case-folding policy above.
+  if (isHtmlPath(targetFilePath) && (anchor === '' || anchor.toLowerCase() === 'top')) {
     return 'valid';
   }
-  const found = isHtml ? fragments.has(anchor) : fragments.has(anchor.toLowerCase());
+  const found = entry.caseSensitive
+    ? entry.fragments.has(anchor)
+    : entry.fragments.has(anchor.toLowerCase());
   return found ? 'valid' : 'broken';
 }

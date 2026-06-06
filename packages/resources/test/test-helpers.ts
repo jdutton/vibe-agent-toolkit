@@ -13,7 +13,7 @@ import { expect, type Assertion } from 'vitest';
 
 import { ExternalLinkValidator } from '../src/external-link-validator.js';
 import { parseMarkdown } from '../src/link-parser.js';
-import type { ValidateLinkOptions as LinkValidatorOptions } from '../src/link-validator.js';
+import type { FragmentIndex, ValidateLinkOptions as LinkValidatorOptions } from '../src/link-validator.js';
 import { validateLink } from '../src/link-validator.js';
 import { ResourceRegistry } from '../src/resource-registry.js';
 import type { HeadingNode, ResourceLink, ValidationIssue } from '../src/types.js';
@@ -297,7 +297,7 @@ export interface ValidateLinkOptions {
   /** Link to validate */
   link: ResourceLink;
   /** Fragment index for anchor validation (file path → set of valid fragments) */
-  headingsMap: Map<string, Set<string>>;
+  headingsMap: FragmentIndex;
   /** Expected validation result (null = valid, object = error) */
   expected: null | {
     code: ValidationIssue['code'];

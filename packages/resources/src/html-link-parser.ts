@@ -49,7 +49,14 @@ export function parseHtmlDocument(source: string): HtmlDocument {
   return { document, parseErrors };
 }
 
-/** Depth-first walk yielding every element node in the tree. */
+/**
+ * Depth-first walk yielding every element node in the tree.
+ *
+ * Deliberate gap: a `<template>` element's content lives in its separate
+ * `content` fragment (not `childNodes`), so links inside `<template>` are not
+ * walked, and foreign-content (SVG/MathML) subtrees are not special-cased.
+ * Both are rare in the content link graph we rewrite.
+ */
 export function* walkElements(node: P5Node): Generator<P5Element> {
   if ('tagName' in node) {
     yield node;
