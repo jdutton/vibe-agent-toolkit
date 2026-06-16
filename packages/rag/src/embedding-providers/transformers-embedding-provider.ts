@@ -7,6 +7,8 @@
  * Requires optional dependency: npm install @xenova/transformers
  */
 
+import type { pipeline as PipelineFactory } from '@xenova/transformers';
+
 import type { EmbeddingProvider } from '../interfaces/embedding.js';
 
 /**
@@ -31,15 +33,24 @@ type PipelineFunction = (
 async function loadPipeline(
   model: string,
 ): Promise<PipelineFunction> {
+  let pipeline: typeof PipelineFactory;
   try {
-    const { pipeline } = await import('@xenova/transformers');
+    ({ pipeline } = await import('@xenova/transformers'));
+  } catch (cause) {
+    throw new Error(
+      '@xenova/transformers is not installed. Install with: npm install @xenova/transformers',
+      { cause },
+    );
+  }
+
+  try {
     return (await pipeline('feature-extraction', model, {
       quantized: true,
     })) as PipelineFunction;
-  } catch {
-    throw new Error(
-      '@xenova/transformers is not installed. Install with: npm install @xenova/transformers',
-    );
+  } catch (cause) {
+    throw new Error(`Failed to load transformers model '${model}': ${String(cause)}`, {
+      cause,
+    });
   }
 }
 
