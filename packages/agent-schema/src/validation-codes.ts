@@ -386,6 +386,36 @@ export const CODE_REGISTRY = {
     'Check the host; or set severity: ignore.',
     'external_url_error',
   ),
+  LINK_AUTH_DEAD: entry(
+    'error',
+    'Authenticated external link returned 404/410 from a host that gives honest 404s (notFoundMeaning: dead). Genuine link rot.',
+    'Fix or remove the link; or set severity.LINK_AUTH_DEAD to ignore if the path is expected to be transient.',
+    'link_auth_dead',
+  ),
+  LINK_AUTH_DEAD_OR_UNAUTHORIZED: entry(
+    'warning',
+    'Authenticated external link returned 404 from a host that masks access-denied as 404 (notFoundMeaning: ambiguous, e.g. GitHub). The link is either rotted or inaccessible to the current identity — cannot tell which.',
+    'Verify the URL by hand (or with a more-privileged token) to disambiguate; fix or remove if rotted; or set severity.LINK_AUTH_DEAD_OR_UNAUTHORIZED to ignore if cross-identity ambiguity is expected.',
+    'link_auth_dead_or_unauthorized',
+  ),
+  LINK_AUTH_FORBIDDEN: entry(
+    'warning',
+    'Authenticated external link returned 403: the configured identity is authenticated but lacks access to that resource. Not link rot.',
+    'Grant the identity access to the resource; switch to an identity that has access; or set severity.LINK_AUTH_FORBIDDEN to ignore if cross-identity inaccessibility is expected.',
+    'link_auth_forbidden',
+  ),
+  LINK_AUTH_UNAUTHORIZED: entry(
+    'warning',
+    'Authenticated external link returned 401: the configured token is missing, expired, or invalid.',
+    "Refresh the token (e.g. `gh auth login`, `az login`); check the `token` config in resources.linkAuth; or promote severity.LINK_AUTH_UNAUTHORIZED to error on strict CI lanes.",
+    'link_auth_unauthorized',
+  ),
+  LINK_AUTH_UNVERIFIED: entry(
+    'warning',
+    'A provider in resources.linkAuth claims this host, but no token source resolved (none of the configured env/command sources produced a value).',
+    "Configure a `token` source (env var or argv command); log in to the underlying CLI (e.g. `gh auth login`, `az login`); or set severity.LINK_AUTH_UNVERIFIED to ignore if running without auth is intentional.",
+    'link_auth_unverified',
+  ),
 } as const satisfies Record<string, CodeRegistryEntry>;
 
 export type IssueCode = keyof typeof CODE_REGISTRY;

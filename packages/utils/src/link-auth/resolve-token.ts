@@ -11,7 +11,7 @@
  *
  * Returns `undefined` if every source fails or yields an empty/whitespace
  * value — the caller's `resolveAuthenticatedUrl` translates that to the
- * `unverified` outcome (LINK_AUTH_UNVERIFIED in slice 2).
+ * `unverified` outcome (surfaced as `LINK_AUTH_UNVERIFIED` by the validator).
  *
  * Per design issue #113 §4 (token vocabulary) and §6.1 (command execution,
  * `safeExecSync`-backed, `shell: false`).

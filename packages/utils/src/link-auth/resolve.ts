@@ -53,7 +53,18 @@ export interface LinkAuthConfig {
 }
 
 export type ResolveOutcome =
-  | { readonly fetchUrl: string; readonly headers: Record<string, string> }
+  | {
+      readonly fetchUrl: string;
+      readonly headers: Record<string, string>;
+      /**
+       * The matched provider's `check` block, passed through so the post-fetch
+       * classifier (in `packages/resources`) can route status codes to outcomes
+       * without re-running `selectProvider`. Reading this from the engine —
+       * rather than asking the validator to re-derive it — keeps the
+       * provider-match decision in exactly one place.
+       */
+      readonly check: ProviderCheck;
+    }
   | { readonly outcome: 'unsupported' }
   | { readonly outcome: 'unverified'; readonly reason: string };
 
@@ -91,5 +102,5 @@ export function resolveAuthenticatedUrl(
   headerContext['token'] = token;
 
   const headers = buildHeaders(provider.auth.headers, headerContext);
-  return { fetchUrl: rewrite.rewrittenUrl, headers };
+  return { fetchUrl: rewrite.rewrittenUrl, headers, check: provider.check };
 }

@@ -4,12 +4,26 @@ import { promises as fs } from 'node:fs';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 /**
+ * Cache schema version. Incremented when CacheEntry shape changes; entries
+ * written by an older code path that read as a different version are treated
+ * as cache misses (rather than misparsed) — forward-compat for slice 3's
+ * content-cache additions and any future entry-shape evolution.
+ */
+const CACHE_VERSION = 1;
+
+/**
  * Cache entry for external link validation results
  */
 interface CacheEntry {
 	statusCode: number;
 	statusMessage: string;
 	timestamp: number;
+	/**
+	 * Schema version. Optional for backwards-compat: legacy entries without
+	 * `version` are treated as a cache miss, forcing a refetch. Reading on
+	 * version mismatch produces a miss rather than a parse error.
+	 */
+	version?: number;
 }
 
 /**
@@ -156,6 +170,15 @@ export class ExternalLinkCache {
 			return null;
 		}
 
+		// Forward-compat: an entry written under a different (or missing)
+		// schema version is treated as a miss. Forces a refetch rather than
+		// silently misparsing a slice-3+ shape with slice-2 reader code.
+		if (entry.version !== CACHE_VERSION) {
+			delete cache[key];
+			await this.saveCache();
+			return null;
+		}
+
 		if (this.isExpired(entry)) {
 			delete cache[key];
 			await this.saveCache();
@@ -180,6 +203,7 @@ export class ExternalLinkCache {
 			statusCode,
 			statusMessage,
 			timestamp: Date.now(),
+			version: CACHE_VERSION,
 		};
 
 		await this.saveCache();

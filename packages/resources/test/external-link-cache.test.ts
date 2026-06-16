@@ -30,6 +30,7 @@ describe('ExternalLinkCache', () => {
 			statusCode: 200,
 			statusMessage: 'OK',
 			timestamp: expect.any(Number),
+			version: 1,
 		});
 	});
 
@@ -70,6 +71,7 @@ describe('ExternalLinkCache', () => {
 			statusCode: 404,
 			statusMessage: 'Not Found',
 			timestamp: expect.any(Number),
+			version: 1,
 		});
 	});
 
@@ -82,6 +84,7 @@ describe('ExternalLinkCache', () => {
 			statusCode: 404,
 			statusMessage: 'Not Found',
 			timestamp: expect.any(Number),
+			version: 1,
 		});
 	});
 
@@ -108,6 +111,22 @@ describe('ExternalLinkCache', () => {
 
 		expect(result).not.toBeNull();
 		expect(result?.statusCode).toBe(200);
+	});
+
+	it('treats entries with a missing version field as a cache miss (forward-compat)', async () => {
+		// Hand-craft a legacy cache file (pre-version) and confirm get() rejects it.
+		// Forward-compat per #113 — keeps slice 3+ free to evolve CacheEntry without
+		// risking misparse against pre-existing files.
+		const cacheFile = safePath.join(tempDir, 'external-links.json');
+		const url = 'https://legacy.example.com';
+		const crypto = await import('node:crypto');
+		const key = crypto.createHash('sha256').update(url).digest('hex');
+		const legacy = { [key]: { statusCode: 200, statusMessage: 'OK', timestamp: Date.now() } };
+		// eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir from mkdtemp
+		await fs.writeFile(cacheFile, JSON.stringify(legacy));
+
+		const result = await cache.get(url);
+		expect(result).toBeNull();
 	});
 
 	it('should handle corrupted cache file gracefully', async () => {

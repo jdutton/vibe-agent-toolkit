@@ -12,7 +12,8 @@
  *     are NOT strictly typed at this layer because they must match the
  *     macro's shape, which we cannot see until expansion. A typo in an
  *     override silently no-ops; the full provider shape is validated
- *     after expansion (slice 2 wires that).
+ *     after expansion (`buildLinkAuthEngineConfig` validates the
+ *     fully-expanded provider against `InlineProviderSchema`).
  *   - A full inline `{ match, rewrite, auth, token, check }` — every field
  *     required, every nested object strict.
  *
@@ -92,7 +93,7 @@ export const ProviderCheckSchema = z
 // Provider entry (inline OR macro reference)
 // ---------------------------------------------------------------------------
 
-const InlineProviderSchema = z
+export const InlineProviderSchema = z
   .object({
     match: ProviderMatchSchema,
     rewrite: z.array(RewriteRuleSchema).min(1).describe('Ordered rewrite rules — first matching wins'),
@@ -140,7 +141,13 @@ export const LinkAuthConfigSchema = z
   .strict()
   .describe('`resources.linkAuth` — authenticated external link resolution config');
 
-export type LinkAuthConfig = z.infer<typeof LinkAuthConfigSchema>;
+/**
+ * Adopter-facing config shape — what an `vibe-agent-toolkit.config.yaml`
+ * parses to. Distinct from `@vibe-agent-toolkit/utils`'s `LinkAuthConfig`
+ * (the engine shape, with fully-expanded providers only). The bridge
+ * function `buildLinkAuthEngineConfig` converts between the two.
+ */
+export type LinkAuthProjectConfig = z.infer<typeof LinkAuthConfigSchema>;
 export type ProviderEntry = z.infer<typeof ProviderEntrySchema>;
 export type RewriteRule = z.infer<typeof RewriteRuleSchema>;
 export type TokenSource = z.infer<typeof TokenSourceSchema>;
