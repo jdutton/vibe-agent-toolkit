@@ -75,7 +75,13 @@ export class ExternalLinkCache {
 	}
 
 	/**
-	 * Load cache from disk
+	 * Load cache from disk. Fail-soft: any IO error (ENOENT, EACCES, EROFS,
+	 * corrupted JSON, …) degrades to an empty cache instead of throwing.
+	 *
+	 * Why no error propagation: `vat resources validate` should keep running
+	 * when the cache file isn't reachable (read-only filesystem, permission
+	 * mismatch, full disk) — a missing cache costs an extra network round-trip,
+	 * an exception costs the whole run. Per #125 review.
 	 */
 	private async loadCache(): Promise<CacheData> {
 		if (this.cache !== null) {
@@ -89,28 +95,35 @@ export class ExternalLinkCache {
 			const data = await fs.readFile(this.cacheFile, 'utf-8');
 			this.cache = JSON.parse(data) as CacheData;
 			return this.cache;
-		} catch (error) {
-			// Handle missing file or corrupted JSON - start with empty cache
-			if ((error as NodeJS.ErrnoException).code === 'ENOENT' || error instanceof SyntaxError) {
-				this.cache = {};
-				return this.cache;
-			}
-			throw error;
+		} catch {
+			// All IO and parse errors degrade to an empty cache. Subsequent
+			// reads see the same empty cache (this.cache is set), so we don't
+			// re-spam mkdir/read on every lookup within the same run.
+			this.cache = {};
+			return this.cache;
 		}
 	}
 
 	/**
-	 * Save cache to disk
+	 * Save cache to disk. Fail-soft: any IO error becomes a no-op instead of
+	 * throwing. Same rationale as `loadCache` — a non-persisted entry costs an
+	 * extra fetch on the next run, an exception costs the whole current run.
 	 */
 	private async saveCache(): Promise<void> {
 		if (this.cache === null) {
 			return;
 		}
 
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- cacheDir is constructor parameter, controlled by caller
-		await fs.mkdir(this.cacheDir, { recursive: true });
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- cacheFile is derived from cacheDir
-		await fs.writeFile(this.cacheFile, JSON.stringify(this.cache, null, 2), 'utf-8');
+		try {
+			// eslint-disable-next-line security/detect-non-literal-fs-filename -- cacheDir is constructor parameter, controlled by caller
+			await fs.mkdir(this.cacheDir, { recursive: true });
+			// eslint-disable-next-line security/detect-non-literal-fs-filename -- cacheFile is derived from cacheDir
+			await fs.writeFile(this.cacheFile, JSON.stringify(this.cache, null, 2), 'utf-8');
+		} catch {
+			// No-op on IO failure. The in-memory cache (`this.cache`) is still
+			// authoritative for the current run; only the disk persistence is
+			// lost.
+		}
 	}
 
 	/**

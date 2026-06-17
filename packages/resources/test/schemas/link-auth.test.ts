@@ -50,8 +50,11 @@ describe('TokenSourceSchema', () => {
     expect(TokenSourceSchema.safeParse({ command: [] }).success).toBe(false);
   });
 
-  it('rejects an object with both env and command (strict union)', () => {
-    expect(TokenSourceSchema.safeParse({ env: 'X', command: 'y' }).success).toBe(false);
+  it('passthrough: an object with both env and command parses against the first matching branch (engine consumes one source per entry)', () => {
+    // With passthrough on both union branches, this object matches the env
+    // branch and the `command` field passes through silently — the engine's
+    // per-source dispatcher only consults the discriminator it knows.
+    expect(TokenSourceSchema.safeParse({ env: 'X', command: 'y' }).success).toBe(true);
   });
 });
 
@@ -72,9 +75,11 @@ describe('RewriteRuleSchema', () => {
     ).toBe(true);
   });
 
-  it('rejects an unknown sibling key (typo defense)', () => {
+  it('passthrough: an unknown sibling key parses (adopter input is read liberally)', () => {
+    // Per repo Postel's Law: reading external data → passthrough. Typo-catching
+    // DX belongs in a separate lint/warn pass, not a hard parse failure.
     const result = RewriteRuleSchema.safeParse({ when: '^.+$', to: 'x', tos: 'typo' });
-    expect(result.success).toBe(false);
+    expect(result.success).toBe(true);
   });
 
   it('rejects missing required fields', () => {
@@ -94,9 +99,10 @@ describe('ProviderEntrySchema — inline provider', () => {
     expect(ProviderEntrySchema.safeParse(incomplete).success).toBe(false);
   });
 
-  it('rejects an unknown sibling key in an inline provider (typo defense)', () => {
+  it('passthrough: an unknown sibling key on an inline provider parses (adopter input is read liberally)', () => {
+    // Same Postel rationale as RewriteRuleSchema's passthrough test.
     const withTypo = { ...GITHUB_INLINE_PROVIDER, tokens: GITHUB_INLINE_PROVIDER.token };
-    expect(ProviderEntrySchema.safeParse(withTypo).success).toBe(false);
+    expect(ProviderEntrySchema.safeParse(withTypo).success).toBe(true);
   });
 
   it('rejects an empty rewrite array (at least one rule required)', () => {
@@ -160,9 +166,9 @@ describe('LinkAuthConfigSchema — top-level', () => {
     expect(LinkAuthConfigSchema.safeParse(config).success).toBe(true);
   });
 
-  it('rejects unknown top-level keys', () => {
+  it('passthrough: unknown top-level keys parse (adopter input is read liberally)', () => {
     const config = { providers: [], cachees: { ttlMinutes: 30 } };
-    expect(LinkAuthConfigSchema.safeParse(config).success).toBe(false);
+    expect(LinkAuthConfigSchema.safeParse(config).success).toBe(true);
   });
 
   it('rejects a missing `providers` field', () => {

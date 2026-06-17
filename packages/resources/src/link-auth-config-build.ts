@@ -8,10 +8,13 @@
  *   - A full inline `{ match, rewrite, auth, token, check }` — used as-is
  *
  * This function walks each provider entry, runs macro expansion when needed,
- * and re-validates each fully-expanded provider against the inline schema
- * (the macro schema's `.passthrough()` accepts unknown override keys, which
- * silently no-op at expansion time — post-expansion validation is where
- * typo'd override fields surface as errors, per #113 §5).
+ * and re-validates each fully-expanded provider against `InlineProviderSchema`.
+ * Since the schemas are passthrough (per the repo Postel's Law rule for
+ * adopter input), unknown extra keys survive expansion silently — the engine
+ * ignores them at runtime, and a separate lint/warn pass is the right home
+ * for typo-catching DX. Post-expansion validation still catches the cases
+ * passthrough doesn't relax: missing required fields, and wrong types on
+ * declared fields (e.g. `notFoundMeaning: 'totally-invalid'`).
  *
  * Per design issue #113 §5 (macros are config, not a privileged code path)
  * and §4 (engine vocabulary).
@@ -22,7 +25,6 @@ import {
   type LinkAuthConfig,
   type Provider,
 } from '@vibe-agent-toolkit/utils';
-import type { z } from 'zod';
 
 import { InlineProviderSchema, type LinkAuthProjectConfig } from './schemas/link-auth.js';
 
@@ -37,7 +39,11 @@ import { InlineProviderSchema, type LinkAuthProjectConfig } from './schemas/link
  * The schema and engine type are kept in sync by review (per slice 1 design
  * decision); this guard makes that review easier.
  */
-type _SchemaKeys = keyof z.infer<typeof InlineProviderSchema>;
+// Use `.shape` (Zod's declared-key record) rather than `keyof z.infer<...>` —
+// passthrough() injects `string | number` into the inferred key set, which
+// defeats the drift comparison. `.shape` is unaffected: it's the set of
+// declared fields, exactly what we want to compare against the engine type.
+type _SchemaKeys = keyof typeof InlineProviderSchema.shape;
 type _EngineKeys = keyof Provider;
 type _KeysAgree = [_SchemaKeys] extends [_EngineKeys]
   ? [_EngineKeys] extends [_SchemaKeys]
@@ -73,11 +79,11 @@ function expandProviderEntry(entry: unknown, index: number): Provider {
   const { use, overrides } = splitMacroEntry(entry as Record<string, unknown>);
   const expanded = expandMacro(use, overrides);
 
-  // Re-validate the fully-expanded shape. A macro override that uses a typo'd
-  // field name (e.g. `notFoundMeaningg`) is accepted by MacroProviderSchema's
-  // .passthrough(), survives expansion as a stray field on the merged object,
-  // and is caught here by InlineProviderSchema's .strict() — surfaced as a
-  // config error rather than as silently-wrong runtime behavior.
+  // Re-validate the fully-expanded shape. Unknown extra keys pass through
+  // (the engine ignores them); what we still catch are missing required
+  // fields and wrong types on declared fields — e.g. a macro override that
+  // sets `check.notFoundMeaning: 'bogus'` is rejected here even though the
+  // upstream macro schema's passthrough accepted it.
   const parsed = InlineProviderSchema.safeParse(expanded);
   if (!parsed.success) {
     throw new Error(

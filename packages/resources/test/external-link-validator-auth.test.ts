@@ -13,6 +13,7 @@ const TEST_TOKEN = 'gh_test_token_abc';
 const HOST = 'https://github.com/owner/repo/blob/main/file.md';
 const REWRITTEN = 'https://api.github.com/repos/owner/repo/contents/file.md?ref=main';
 const CACHE_FILE = 'external-links.json';
+const BEARER_TOKEN_TEMPLATE = 'Bearer ${token}';
 
 /**
  * Path-derived `existsSync` check — wraps the lint disable in one place. The
@@ -32,7 +33,7 @@ function buildProvider(notFoundMeaning: 'ambiguous' | 'dead' = 'ambiguous'): Pro
         to: 'https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${ref}',
       },
     ],
-    auth: { headers: { Authorization: 'Bearer ${token}', Accept: 'application/vnd.github+json' } },
+    auth: { headers: { Authorization: BEARER_TOKEN_TEMPLATE, Accept: 'application/vnd.github+json' } },
     token: [{ env: 'TEST_GH_TOKEN' }],
     check: { method: 'GET', aliveStatus: [200], notFoundMeaning },
   };
@@ -363,6 +364,79 @@ describe('ExternalLinkValidator — auth cache scoping (#113 §6.3)', () => {
     expect(fsExists(safePath.join(tempDir, authDir as string, CACHE_FILE))).toBe(
       true,
     );
+  });
+});
+
+describe('ExternalLinkValidator — runCommand memoization (#125 review)', () => {
+  it('reuses a token-resolution command across N URLs from the same provider', async () => {
+    // A provider configured with a command-source token. Validating multiple
+    // URLs from the same host must run the command at most once per validator
+    // instance — `gh auth token` spawns a subprocess; doing it per-URL is the
+    // exact pessimization the review caught.
+    let runCommandCalls = 0;
+    const provider: Provider = {
+      match: { host: 'github.com' },
+      rewrite: [
+        {
+          when: String.raw`^https://github\.com/(?<owner>[^/]+)/(?<repo>[^/]+)/blob/(?<ref>[^/]+)/(?<path>.+)$`,
+          to: 'https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${ref}',
+        },
+      ],
+      auth: { headers: { Authorization: BEARER_TOKEN_TEMPLATE } },
+      token: [{ command: ['gh', 'auth', 'token'] }],
+      check: { method: 'GET', aliveStatus: [200], notFoundMeaning: 'ambiguous' },
+    };
+
+    const validator = new ExternalLinkValidator(tempDir, {
+      linkAuthConfig: { providers: [provider] },
+      linkAuthDeps: {
+        env: {},
+        runCommand: (argv) => {
+          runCommandCalls++;
+          return { success: true, stdout: `tok-${argv.join('-')}` };
+        },
+      },
+      fetchImpl: stubFetch(200),
+    });
+
+    await validator.validateLink('https://github.com/owner/repo/blob/main/a.md');
+    await validator.validateLink('https://github.com/owner/repo/blob/main/b.md');
+    await validator.validateLink('https://github.com/owner/repo/blob/main/c.md');
+
+    expect(runCommandCalls).toBe(1);
+  });
+
+  it('runs separate commands for distinct argv (different providers do not share)', async () => {
+    const calls: string[][] = [];
+    const providerA: Provider = {
+      match: { host: 'a.example.com' },
+      rewrite: [{ when: '^.+$', to: 'https://api.a.example.com' }],
+      auth: { headers: { Authorization: BEARER_TOKEN_TEMPLATE } },
+      token: [{ command: ['cmd-a'] }],
+      check: { method: 'GET', aliveStatus: [200], notFoundMeaning: 'dead' },
+    };
+    const providerB: Provider = {
+      ...providerA,
+      match: { host: 'b.example.com' },
+      rewrite: [{ when: '^.+$', to: 'https://api.b.example.com' }],
+      token: [{ command: ['cmd-b'] }],
+    };
+    const validator = new ExternalLinkValidator(tempDir, {
+      linkAuthConfig: { providers: [providerA, providerB] },
+      linkAuthDeps: {
+        env: {},
+        runCommand: (argv) => {
+          calls.push([...argv]);
+          return { success: true, stdout: 'tok' };
+        },
+      },
+      fetchImpl: stubFetch(200),
+    });
+
+    await validator.validateLink('https://a.example.com/path');
+    await validator.validateLink('https://b.example.com/path');
+
+    expect(calls).toEqual([['cmd-a'], ['cmd-b']]);
   });
 });
 

@@ -2,6 +2,7 @@ import { userInfo } from 'node:os';
 
 import type { IssueCode } from '@vibe-agent-toolkit/agent-schema';
 import {
+  defaultRunCommand,
   resolveAuthenticatedUrl,
   safePath,
   type LinkAuthConfig,
@@ -48,6 +49,34 @@ function warnDefaultUserFallbackOnce(): void {
       'set the USER env var explicitly to scope per-user.',
   );
 }
+
+/**
+ * Wrap a `LinkAuthDeps` so its `runCommand` (used by the engine's
+ * `resolveToken`) caches results per unique argv. Without this, validating N
+ * URLs from the same host re-runs the token command N times — `gh auth token`
+ * spawns a subprocess each call, and we treat *all* token sources as
+ * potentially expensive per the #125 review.
+ *
+ * The memo cache is keyed by JSON-stringified argv, so semantically-identical
+ * invocations share. Cache is per-instance — code that creates a fresh
+ * validator per run gets a fresh cache.
+ */
+function wrapLinkAuthDepsWithMemo(deps: LinkAuthDeps): LinkAuthDeps {
+  type RunCommandFn = NonNullable<NonNullable<LinkAuthDeps>['runCommand']>;
+  type RunCommandResult = ReturnType<RunCommandFn>;
+  const memo = new Map<string, RunCommandResult>();
+  const baseRunCommand: RunCommandFn = deps?.runCommand ?? defaultRunCommand;
+  const runCommand: RunCommandFn = (argv) => {
+    const key = JSON.stringify(argv);
+    const cached = memo.get(key);
+    if (cached !== undefined) return cached;
+    const fresh = baseRunCommand(argv);
+    memo.set(key, fresh);
+    return fresh;
+  };
+  return { ...(deps ?? {}), runCommand };
+}
+
 
 /**
  * Make an OS username safe for use as a directory component. Replaces path
@@ -266,7 +295,13 @@ export class ExternalLinkValidator {
 
 		this.linkAuthConfig = options.linkAuthConfig;
 		this.fetchImpl = options.fetchImpl ?? globalThis.fetch;
-		this.linkAuthDeps = options.linkAuthDeps;
+		// Wrap the configured runCommand (or the engine's default) with a memo
+		// keyed by stringified argv so each unique token-resolution command runs
+		// at most once per validator instance. Validating N links to the same
+		// host previously re-resolved the token N times — including subprocess
+		// spawns for `command` sources. Per #125 review: treat all token
+		// resolvers as expensive; the memo's lifetime equals one validate() run.
+		this.linkAuthDeps = wrapLinkAuthDepsWithMemo(options.linkAuthDeps);
 		this.sleep = options.sleep;
 
 		this.cache = new ExternalLinkCache(cacheDir, this.options.cacheTtlHours);

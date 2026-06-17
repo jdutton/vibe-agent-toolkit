@@ -57,5 +57,5 @@ export {
 } from './link-auth/resolve.js';
 export type { ProviderMatch } from './link-auth/select-provider.js';
 export type { RewriteRule } from './link-auth/rewrite.js';
-export type { TokenSource } from './link-auth/resolve-token.js';
+export { defaultRunCommand, type TokenSource } from './link-auth/resolve-token.js';
 export { expandMacro, UnknownMacroError } from './link-auth/expand-macro.js';
