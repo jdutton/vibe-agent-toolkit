@@ -1,6 +1,8 @@
 import { ValidationConfigSchema } from '@vibe-agent-toolkit/agent-schema';
 import { z } from 'zod';
 
+import { LinkAuthConfigSchema } from './link-auth.js';
+
 /**
  * Official semver regex from https://semver.org/ (anchored).
  *
@@ -98,6 +100,8 @@ export const ResourcesConfigSchema = z.object({
     .describe('Named collections of resources'),
   validation: ValidationConfigSchema.optional()
     .describe('Validation framework config: severity overrides and per-code allow entries (applied inside ResourceRegistry.validate)'),
+  linkAuth: LinkAuthConfigSchema.optional()
+    .describe('Authenticated external link resolution config (issue #113 / link-auth engine)'),
 }).describe('Resources section of project configuration');
 
 export type ResourcesConfig = z.infer<typeof ResourcesConfigSchema>;

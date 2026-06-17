@@ -1,0 +1,50 @@
+# linkAuth provider macros — shipped defaults referenced by `use: <name>` in
+# adopter `vibe-agent-toolkit.config.yaml` files.
+#
+# Each entry is a full provider config in the §4 vocabulary (match, rewrite,
+# auth, token, check). Adopters reference a macro by name and may deep-merge
+# overrides on top — see design issue #113 §5.
+#
+# Adding a new host is intended to be a config-only PR: append an entry here
+# and add unit tests. Only `vocabulary` changes (e.g. a new transform) require
+# engine code.
+
+github:
+  match:
+    host: github.com
+  rewrite:
+    - when: '^https://github\.com/(?<owner>[^/]+)/(?<repo>[^/]+)/(?:blob|tree)/(?<ref>[^/]+)/(?<path>.+)$'
+      to: 'https://api.github.com/repos/${owner}/${repo}/contents/${path}?ref=${ref}'
+  auth:
+    headers:
+      Authorization: 'Bearer ${token}'
+      Accept: application/vnd.github+json
+  token:
+    - command: gh auth token
+    - env: GITHUB_TOKEN
+  check:
+    method: GET
+    aliveStatus: [200]
+    notFoundMeaning: ambiguous
+
+sharepoint:
+  match:
+    host: '*.sharepoint.com'
+    excludeHost:
+      - '*-my.sharepoint.com'
+  rewrite:
+    - when: '^(?<u>https://.+)$'
+      vars:
+        shareId: 'u!${base64url(u)}'
+      to: 'https://graph.microsoft.com/v1.0/shares/${shareId}/driveItem'
+  auth:
+    headers:
+      Authorization: 'Bearer ${token}'
+  # SharePoint has no zero-config token source (design §5.1 note): a SharePoint-
+  # scoped token requires an Entra app registration; the stock `az` token does
+  # not work. Adopter must supply their own token command.
+  token: []
+  check:
+    method: GET
+    aliveStatus: [200]
+    notFoundMeaning: dead

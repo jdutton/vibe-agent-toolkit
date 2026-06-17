@@ -80,12 +80,6 @@ Description:
 
   Creates one squashed commit per version on the target branch.
 
-  Per-plugin source-repo tags:
-  After a successful publish, pushes <plugin>-v<version> tags to the
-  source repo for each plugin with a resolved version. Tag-push failures
-  log a warning but do not roll back the publish (publish branch is
-  already pushed at that point). Skipped during --dry-run and --no-push.
-
 Per-plugin versioning:
   Each plugin can declare its own version via plugins/<name>/.claude-plugin/plugin.json:version
   or the marketplace config's per-plugin version field. Precedence:
@@ -212,7 +206,6 @@ async function publishOneMarketplace(ctx: PublishOneOptions): Promise<PublishRes
     force: options.force ?? false,
     dryRun: options.dryRun ?? false,
     noPush: options.push === false,
-    publishedPlugins: composeResult.publishedPlugins,
     logger,
   });
 
