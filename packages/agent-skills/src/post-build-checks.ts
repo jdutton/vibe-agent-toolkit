@@ -10,6 +10,7 @@ import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { parseHtml } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 /**
@@ -84,10 +85,66 @@ function extractLocalLinks(content: string): string[] {
 }
 
 /**
- * Walk the markdown link graph starting at SKILL.md and return the set of
+ * Extract local file hrefs from a content file — markdown or HTML.
+ *
+ * For markdown: regex-matches `[text](href)` links, skipping code blocks.
+ * For HTML/HTM: uses `parseHtml` (parse5-based) and returns `local_file` hrefs only.
+ * Fragments are stripped from all returned hrefs.
+ */
+async function extractLocalHrefs(filePath: string): Promise<string[]> {
+  if (filePath.endsWith('.html') || filePath.endsWith('.htm')) {
+    const result = await parseHtml(filePath);
+    return result.links
+      .filter(link => link.type === 'local_file')
+      .map(link => {
+        const [withoutFragment] = link.href.split('#');
+        return withoutFragment ?? '';
+      })
+      .filter(href => href.length > 0);
+  }
+  // Markdown: read content and regex-match
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath from walkDir
+  const content = await readFile(filePath, 'utf-8');
+  return extractLocalLinks(content);
+}
+
+/**
+ * Check hrefs from a content file against allFileSet and return PACKAGED_BROKEN_LINK
+ * issues for any that don't resolve to a file in the packaged output.
+ *
+ * Shared by markdown and HTML broken-link checks to eliminate duplicate resolve/emit logic.
+ */
+function collectBrokenLinkIssues(
+  sourceFile: string,
+  hrefs: string[],
+  allFileSet: Set<string>,
+  outputDir: string,
+): ValidationIssue[] {
+  const issues: ValidationIssue[] = [];
+  const relativeSourcePath = toForwardSlash(safePath.relative(outputDir, sourceFile));
+  for (const href of hrefs) {
+    const resolved = toForwardSlash(safePath.resolve(dirname(sourceFile), href));
+    if (!allFileSet.has(resolved)) {
+      issues.push({
+        severity: CODE_REGISTRY.PACKAGED_BROKEN_LINK.defaultSeverity,
+        code: 'PACKAGED_BROKEN_LINK',
+        message: `Broken link in packaged output: ${href} (from ${relativeSourcePath})`,
+        location: relativeSourcePath,
+        fix: CODE_REGISTRY.PACKAGED_BROKEN_LINK.fix,
+        reference: CODE_REGISTRY.PACKAGED_BROKEN_LINK.reference,
+      });
+    }
+  }
+  return issues;
+}
+
+/**
+ * Walk the markdown and HTML link graph starting at SKILL.md and return the set of
  * referenced file paths (normalized to forward slashes).
  *
- * SKILL.md itself is always included as the root.
+ * SKILL.md itself is always included as the root. Traversal follows `.md`, `.html`,
+ * and `.htm` links transitively so an HTML file referenced only by another HTML file
+ * is not reported as unreferenced.
  */
 async function collectReferencedPaths(
   outputDir: string,
@@ -95,34 +152,36 @@ async function collectReferencedPaths(
 ): Promise<Set<string>> {
   const referenced = new Set<string>();
   const skillMdPath = safePath.join(outputDir, 'SKILL.md');
-  const mdQueue: string[] = [skillMdPath];
+  const fileQueue: string[] = [skillMdPath];
   const visited = new Set<string>();
 
   // SKILL.md itself is the root — always referenced
   referenced.add(toForwardSlash(skillMdPath));
 
-  while (mdQueue.length > 0) {
-    const mdFile = mdQueue.shift();
-    if (!mdFile) break;
+  while (fileQueue.length > 0) {
+    const filePath = fileQueue.shift();
+    if (!filePath) break;
 
-    const normalized = toForwardSlash(mdFile);
+    const normalized = toForwardSlash(filePath);
     if (visited.has(normalized)) continue;
     visited.add(normalized);
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- mdFile from walkDir output
-    if (!existsSync(mdFile)) continue;
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- filePath from walkDir output
+    if (!existsSync(filePath)) continue;
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- mdFile validated above
-    const content = await readFile(mdFile, 'utf-8');
-    const links = extractLocalLinks(content);
+    const hrefs = await extractLocalHrefs(filePath);
 
-    for (const href of links) {
-      const resolved = toForwardSlash(safePath.resolve(dirname(mdFile), href));
+    for (const href of hrefs) {
+      const resolved = toForwardSlash(safePath.resolve(dirname(filePath), href));
       referenced.add(resolved);
 
-      // If it's a markdown file in the output, traverse it transitively
-      if (resolved.endsWith('.md') && allFileSet.has(resolved) && !visited.has(resolved)) {
-        mdQueue.push(resolved);
+      // Traverse .md, .html, and .htm files transitively
+      const isTraversable =
+        (resolved.endsWith('.md') || resolved.endsWith('.html') || resolved.endsWith('.htm')) &&
+        allFileSet.has(resolved) &&
+        !visited.has(resolved);
+      if (isTraversable) {
+        fileQueue.push(resolved);
       }
     }
   }
@@ -132,28 +191,28 @@ async function collectReferencedPaths(
 
 /**
  * Record packaged files whose output-relative path appears anywhere in any
- * packaged markdown — inside code blocks (`` ```bash\nnode scripts/cli.mjs `` ``),
- * inline code spans, or prose — as "documented" references.
+ * packaged content file (markdown or HTML) — inside code blocks, inline code
+ * spans, or prose — as "documented" references.
  *
  * A file that a skill author chose to bundle but never documents is the real
  * problem this check exists to catch; documentation by code-block invocation
  * is still documentation. By contrast, `collectReferencedPaths` is intentionally
- * strict (only `[text](href)` links) because it also walks the transitive link
+ * strict (only formal link syntax) because it also walks the transitive link
  * graph, which would be unbounded if we followed substring hits.
  */
 async function addMentionReferences(
   outputDir: string,
   referenced: Set<string>,
   candidates: string[],
-  mdFiles: string[],
+  contentFiles: string[],
 ): Promise<void> {
-  if (candidates.length === 0 || mdFiles.length === 0) {
+  if (candidates.length === 0 || contentFiles.length === 0) {
     return;
   }
 
   const contents = await Promise.all(
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- mdFile from walkDir
-    mdFiles.map(f => readFile(f, 'utf-8')),
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- contentFile from walkDir
+    contentFiles.map(f => readFile(f, 'utf-8')),
   );
   const haystack = contents.join('\n');
 
@@ -166,24 +225,26 @@ async function addMentionReferences(
 }
 
 /**
- * Check that every file in the packaged output is referenced from some markdown file.
+ * Check that every file in the packaged output is referenced from some markdown or HTML file.
  *
  * Two-pass detection:
- * 1. Walk `[text](href)` link graph from SKILL.md (strict, transitive).
+ * 1. Walk formal link graph from SKILL.md (strict, transitive, covers .md and .html/.htm).
  * 2. For files not covered by pass 1, check whether their output-relative path
- *    is mentioned anywhere in packaged markdown (code blocks, prose, etc.).
+ *    is mentioned anywhere in packaged content files (markdown or HTML).
  *    Authors often document CLI scripts via invocation examples rather than
- *    markdown links, and that counts as documented.
+ *    formal links, and that counts as documented.
  */
 export async function checkUnreferencedFiles(outputDir: string): Promise<ValidationIssue[]> {
   const allFiles = walkDir(outputDir);
   const allFileSet = new Set(allFiles.map(f => toForwardSlash(f)));
   const referenced = await collectReferencedPaths(outputDir, allFileSet);
 
-  // Second pass: treat any path mention in packaged markdown as documentation.
+  // Second pass: treat any path mention in packaged content files as documentation.
   const candidates = allFiles.filter(f => !referenced.has(toForwardSlash(f)));
-  const mdFiles = allFiles.filter(f => f.endsWith('.md'));
-  await addMentionReferences(outputDir, referenced, candidates, mdFiles);
+  const contentFiles = allFiles.filter(f =>
+    f.endsWith('.md') || f.endsWith('.html') || f.endsWith('.htm')
+  );
+  await addMentionReferences(outputDir, referenced, candidates, contentFiles);
 
   // Find unreferenced files
   const issues: ValidationIssue[] = [];
@@ -194,7 +255,7 @@ export async function checkUnreferencedFiles(outputDir: string): Promise<Validat
       issues.push({
         severity: CODE_REGISTRY.PACKAGED_UNREFERENCED_FILE.defaultSeverity,
         code: 'PACKAGED_UNREFERENCED_FILE',
-        message: `Packaged file not referenced from any markdown: ${relativePath}`,
+        message: `Packaged file not referenced from any content file (markdown or HTML): ${relativePath}`,
         location: relativePath,
         fix: CODE_REGISTRY.PACKAGED_UNREFERENCED_FILE.fix,
         reference: CODE_REGISTRY.PACKAGED_UNREFERENCED_FILE.reference,
@@ -206,35 +267,21 @@ export async function checkUnreferencedFiles(outputDir: string): Promise<Validat
 }
 
 /**
- * Check that every local file link in packaged markdown files resolves to a file
+ * Check that every local file link in packaged markdown and HTML files resolves to a file
  * that exists in the packaged output.
  */
 export async function checkBrokenPackagedLinks(outputDir: string): Promise<ValidationIssue[]> {
   const allFiles = walkDir(outputDir);
-  const mdFiles = allFiles.filter(f => f.endsWith('.md'));
+  const linkableFiles = allFiles.filter(f =>
+    f.endsWith('.md') || f.endsWith('.html') || f.endsWith('.htm')
+  );
   const allFileSet = new Set(allFiles.map(f => toForwardSlash(f)));
 
   const issues: ValidationIssue[] = [];
 
-  for (const mdFile of mdFiles) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- mdFile from walkDir
-    const content = await readFile(mdFile, 'utf-8');
-    const links = extractLocalLinks(content);
-    const relativeMdPath = toForwardSlash(safePath.relative(outputDir, mdFile));
-
-    for (const href of links) {
-      const resolved = toForwardSlash(safePath.resolve(dirname(mdFile), href));
-      if (!allFileSet.has(resolved)) {
-        issues.push({
-          severity: CODE_REGISTRY.PACKAGED_BROKEN_LINK.defaultSeverity,
-          code: 'PACKAGED_BROKEN_LINK',
-          message: `Broken link in packaged output: ${href} (from ${relativeMdPath})`,
-          location: relativeMdPath,
-          fix: CODE_REGISTRY.PACKAGED_BROKEN_LINK.fix,
-          reference: CODE_REGISTRY.PACKAGED_BROKEN_LINK.reference,
-        });
-      }
-    }
+  for (const sourceFile of linkableFiles) {
+    const hrefs = await extractLocalHrefs(sourceFile);
+    issues.push(...collectBrokenLinkIssues(sourceFile, hrefs, allFileSet, outputDir));
   }
 
   return issues;

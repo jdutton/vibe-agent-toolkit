@@ -86,6 +86,12 @@ export const CODE_REGISTRY = {
     'Report the issue — this indicates a VAT bug. As a temporary workaround, set severity.PACKAGED_BROKEN_LINK to ignore while the underlying bug is fixed.',
     'packaged_broken_link',
   ),
+  DUPLICATE_RESOURCE_ID: entry(
+    'error',
+    'Two files resolve to the same resource id after path normalization.',
+    'Rename one of the files so they produce distinct resource ids.',
+    'duplicate_resource_id',
+  ),
   SKILL_LENGTH_EXCEEDS_RECOMMENDED: entry(
     'warning',
     'SKILL.md line count exceeds the recommended limit; longer files degrade skill triggering.',

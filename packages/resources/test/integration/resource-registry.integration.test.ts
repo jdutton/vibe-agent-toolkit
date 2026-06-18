@@ -24,10 +24,10 @@ const fixturesDir = safePath.join(packageRoot, 'test-fixtures');
 
 // Constants for commonly used file names and patterns (avoid string duplication)
 const BROKEN_FILE_MD = 'broken-file.md';
-const BROKEN_FILE_ID = 'broken-file';
+const BROKEN_FILE_ID = 'broken-file-md';
 const EXTERNAL_MD = 'external.md';
 const VALID_MD_PATTERN = '**/valid.md';
-const NESTED_FILE_ID = 'subdir-nested';
+const NESTED_FILE_ID = 'subdir-nested-md';
 
 // Helper to extract resource IDs (avoids nested arrow functions in tests)
 function extractResourceIds(resources: ResourceMetadata[]): string[] {
@@ -45,6 +45,20 @@ async function createDuplicateNamedFiles(baseDirectory: string): Promise<void> {
   await mkdir(safePath.join(baseDirectory, 'dir2'), { recursive: true });
   await writeFile(safePath.join(baseDirectory, 'dir1', 'readme.md'), '# Dir 1', 'utf-8');
   await writeFile(safePath.join(baseDirectory, 'dir2', 'readme.md'), '# Dir 2', 'utf-8');
+}
+
+/**
+ * Validate a registry and assert exactly one `DUPLICATE_RESOURCE_ID` error issue,
+ * returning it so the caller can assert on its message. Shared by the
+ * duplicate-id collision tests to avoid repeating the validate/filter/assert tail.
+ */
+async function expectSingleDuplicateIdError(reg: ResourceRegistry) {
+  const result = await reg.validate({ skipGitIgnoreCheck: true });
+  const dupIssues = result.issues.filter((i) => i.code === 'DUPLICATE_RESOURCE_ID');
+  expect(dupIssues).toHaveLength(1);
+  const issue = dupIssues[0];
+  expect(issue?.severity).toBe('error');
+  return issue;
 }
 
 describe('ResourceRegistry - Integration Tests', () => {
@@ -69,7 +83,7 @@ describe('ResourceRegistry - Integration Tests', () => {
       const resource = await registry.addResource(validPath);
 
       expect(resource).toBeDefined();
-      expect(resource.id).toBe('valid');
+      expect(resource.id).toBe('valid-md');
       expect(resource.filePath).toBe(validPath);
       expect(resource.links.length).toBeGreaterThan(0);
       expect(resource.headings.length).toBeGreaterThan(0);
@@ -100,7 +114,7 @@ describe('ResourceRegistry - Integration Tests', () => {
       const resource1 = await registry.addResource(validPath);
       const resource2 = await registry.addResource(brokenPath);
 
-      expect(resource1.id).toBe('valid');
+      expect(resource1.id).toBe('valid-md');
       expect(resource2.id).toBe(BROKEN_FILE_ID);
     });
 
@@ -108,12 +122,12 @@ describe('ResourceRegistry - Integration Tests', () => {
       const validPath = safePath.join(fixturesDir, 'valid.md');
 
       const resource1 = await registry.addResource(validPath);
-      expect(resource1.id).toBe('valid');
+      expect(resource1.id).toBe('valid-md');
 
       // Re-adding same path should succeed (update in place)
       const resource2 = await registry.addResource(validPath);
-      expect(resource2.id).toBe('valid');
-      expect(registry.getResourceById('valid')).toBeDefined();
+      expect(resource2.id).toBe('valid-md');
+      expect(registry.getResourceById('valid-md')).toBeDefined();
     });
 
     it('should normalize relative paths to absolute', async () => {
@@ -188,9 +202,9 @@ describe('ResourceRegistry - Integration Tests', () => {
       expect(resources.length).toBeGreaterThanOrEqual(6);
 
       const ids = resources.map((r) => r.id);
-      expect(ids).toContain('valid');
+      expect(ids).toContain('valid-md');
       expect(ids).toContain(BROKEN_FILE_ID);
-      expect(ids).toContain('target');
+      expect(ids).toContain('target-md');
     });
 
     it('should respect include patterns', async () => {
@@ -200,7 +214,7 @@ describe('ResourceRegistry - Integration Tests', () => {
       });
 
       expect(resources).toHaveLength(1);
-      expect(resources[0]?.id).toBe('valid');
+      expect(resources[0]?.id).toBe('valid-md');
     });
 
     it('should respect exclude patterns', async () => {
@@ -288,7 +302,7 @@ describe('ResourceRegistry - Integration Tests', () => {
       const result = await registry.validate();
 
       // Filter to only issues from valid.md
-      const validIssues = result.issues.filter((i) => i.location.endsWith('valid.md'));
+      const validIssues = result.issues.filter((i) => i.location?.endsWith('valid.md'));
 
       // Should have no errors from valid.md
       expect(validIssues).toHaveLength(0);
@@ -324,7 +338,7 @@ describe('ResourceRegistry - Integration Tests', () => {
 
       registry.resolveLinks();
 
-      const validResource = registry.getResourceById('valid');
+      const validResource = registry.getResourceById('valid-md');
       expect(validResource).toBeDefined();
 
       const localFileLinks = validResource?.links.filter((link) => link.type === 'local_file');
@@ -339,7 +353,7 @@ describe('ResourceRegistry - Integration Tests', () => {
 
       // Verify resolved IDs are correct
       const targetLink = localFileLinks?.find((link) => link.href.includes('target.md'));
-      expect(targetLink?.resolvedId).toBe('target');
+      expect(targetLink?.resolvedId).toBe('target-md');
     });
 
     it('should not set resolvedId for non-existent targets', async () => {
@@ -361,7 +375,7 @@ describe('ResourceRegistry - Integration Tests', () => {
       await registry.addResource(safePath.join(fixturesDir, 'valid.md'));
       await registry.addResource(safePath.join(fixturesDir, 'target.md'));
 
-      const validResource = registry.getResourceById('valid');
+      const validResource = registry.getResourceById('valid-md');
       const originalLinks = validResource?.links;
 
       registry.resolveLinks();
@@ -371,7 +385,7 @@ describe('ResourceRegistry - Integration Tests', () => {
 
       // But now has resolvedId
       const targetLink = validResource?.links.find((link) => link.href.includes('target.md'));
-      expect(targetLink?.resolvedId).toBe('target');
+      expect(targetLink?.resolvedId).toBe('target-md');
     });
   });
 
@@ -386,7 +400,7 @@ describe('ResourceRegistry - Integration Tests', () => {
         const resource = registry.getResource(validPath);
 
         expect(resource).toBeDefined();
-        expect(resource?.id).toBe('valid');
+        expect(resource?.id).toBe('valid-md');
       });
 
       it('should get resource by relative path', () => {
@@ -397,7 +411,7 @@ describe('ResourceRegistry - Integration Tests', () => {
         const resource = registry.getResource(relativePath);
 
         expect(resource).toBeDefined();
-        expect(resource?.id).toBe('valid');
+        expect(resource?.id).toBe('valid-md');
       });
 
       it('should return undefined for non-existent path', () => {
@@ -408,7 +422,7 @@ describe('ResourceRegistry - Integration Tests', () => {
 
     describe('getResourceById()', () => {
       it('should get resource by ID', () => {
-        const resource = registry.getResourceById('valid');
+        const resource = registry.getResourceById('valid-md');
 
         expect(resource).toBeDefined();
         expect(resource?.filePath).toContain('valid.md');
@@ -440,7 +454,7 @@ describe('ResourceRegistry - Integration Tests', () => {
         const resources = registry.getResourcesByPattern(VALID_MD_PATTERN);
 
         expect(resources.length).toBe(1);
-        expect(resources[0]?.id).toBe('valid');
+        expect(resources[0]?.id).toBe('valid-md');
       });
 
       it('should match multiple resources with wildcard', () => {
@@ -450,7 +464,7 @@ describe('ResourceRegistry - Integration Tests', () => {
         // Extract ids mapping to avoid nested arrow function
         const resourceIds = extractResourceIds(resources);
         expect(resourceIds).toContain(BROKEN_FILE_ID);
-        expect(resourceIds).toContain('broken-anchor');
+        expect(resourceIds).toContain('broken-anchor-md');
       });
 
       it('should match nested files', () => {
@@ -518,7 +532,7 @@ describe('ResourceRegistry - Integration Tests', () => {
       registry.clear();
 
       expect(registry.getAllResources()).toHaveLength(0);
-      expect(registry.getResourceById('valid')).toBeUndefined();
+      expect(registry.getResourceById('valid-md')).toBeUndefined();
       expect(registry.getStats().totalResources).toBe(0);
     });
 
@@ -529,7 +543,7 @@ describe('ResourceRegistry - Integration Tests', () => {
       await registry.addResource(safePath.join(fixturesDir, 'target.md'));
 
       expect(registry.getAllResources()).toHaveLength(1);
-      expect(registry.getResourceById('target')).toBeDefined();
+      expect(registry.getResourceById('target-md')).toBeDefined();
     });
   });
 
@@ -607,7 +621,7 @@ tags: test
 
       // Should overwrite (path map) but keep same ID
       expect(registry.getAllResources()).toHaveLength(1);
-      expect(registry.getResourceById('valid')).toBeDefined();
+      expect(registry.getResourceById('valid-md')).toBeDefined();
     });
 
     it('should handle empty directories gracefully', async () => {
@@ -635,7 +649,7 @@ tags: test
       // Any file should work, as headings are optional
       await registry.addResource(safePath.join(fixturesDir, EXTERNAL_MD));
 
-      const resource = registry.getResourceById('external');
+      const resource = registry.getResourceById('external-md');
       expect(resource).toBeDefined();
 
       // Should handle validation even with no headings
@@ -666,8 +680,8 @@ tags: test
         const r1 = await reg.addResource(safePath.join(tempDir, 'docs', 'guide.md'));
         const r2 = await reg.addResource(safePath.join(tempDir, 'api', 'reference.md'));
 
-        expect(r1.id).toBe('docs-guide');
-        expect(r2.id).toBe('api-reference');
+        expect(r1.id).toBe('docs-guide-md');
+        expect(r2.id).toBe('api-reference-md');
       });
 
       it('should handle files at baseDir root without directory prefix', async () => {
@@ -676,7 +690,7 @@ tags: test
         const reg = new ResourceRegistry({ baseDir: tempDir });
         const resource = await reg.addResource(safePath.join(tempDir, 'readme.md'));
 
-        expect(resource.id).toBe('readme');
+        expect(resource.id).toBe('readme-md');
       });
 
       it('should avoid collisions for same-named files in different dirs', async () => {
@@ -686,8 +700,8 @@ tags: test
         const r1 = await reg.addResource(safePath.join(tempDir, 'dir1', 'readme.md'));
         const r2 = await reg.addResource(safePath.join(tempDir, 'dir2', 'readme.md'));
 
-        expect(r1.id).toBe('dir1-readme');
-        expect(r2.id).toBe('dir2-readme');
+        expect(r1.id).toBe('dir1-readme-md');
+        expect(r2.id).toBe('dir2-readme-md');
       });
 
       it('should propagate baseDir from crawl() when not set on constructor', async () => {
@@ -703,8 +717,8 @@ tags: test
         expect(reg.baseDir).toBe(tempDir);
 
         // IDs should be path-relative, not filename stems
-        const r1 = reg.getResourceById('dir1-readme');
-        const r2 = reg.getResourceById('dir2-readme');
+        const r1 = reg.getResourceById('dir1-readme-md');
+        const r2 = reg.getResourceById('dir2-readme-md');
         expect(r1).toBeDefined();
         expect(r2).toBeDefined();
       });
@@ -716,7 +730,7 @@ tags: test
         const reg = new ResourceRegistry({ baseDir: tempDir });
         const resource = await reg.addResource(safePath.join(tempDir, 'concepts', 'core', 'overview.md'));
 
-        expect(resource.id).toBe('concepts-core-overview');
+        expect(resource.id).toBe('concepts-core-overview-md');
       });
     });
 
@@ -740,7 +754,7 @@ tags: test
         const reg = new ResourceRegistry({ idField: 'slug' });
         const resource = await reg.addResource(safePath.join(tempDir, 'doc.md'));
 
-        expect(resource.id).toBe('doc');
+        expect(resource.id).toBe('doc-md');
       });
 
       it('should fall back to path-based ID when idField not in frontmatter but baseDir set', async () => {
@@ -755,7 +769,7 @@ tags: test
         const resource = await reg.addResource(safePath.join(tempDir, 'guides', 'intro.md'));
 
         // No 'slug' in frontmatter → falls back to path-relative ID
-        expect(resource.id).toBe('guides-intro');
+        expect(resource.id).toBe('guides-intro-md');
       });
 
       it('should prioritize frontmatter ID over path-based ID', async () => {
@@ -795,18 +809,20 @@ tags: test
       });
 
       it('should throw when frontmatter ID collides with path-based ID', async () => {
+        // first.md has no slug → path-based id = 'first-md'
         await writeFile(safePath.join(tempDir, 'first.md'), '# First', 'utf-8');
+        // second.md has slug: first-md → frontmatter id = 'first-md' → collision
         await writeFile(
           safePath.join(tempDir, 'second.md'),
-          '---\nslug: first\n---\n# Second',
+          '---\nslug: first-md\n---\n# Second',
           'utf-8'
         );
 
         const reg = new ResourceRegistry({ idField: 'slug' });
-        await reg.addResource(safePath.join(tempDir, 'first.md')); // ID = 'first'
+        await reg.addResource(safePath.join(tempDir, 'first.md')); // ID = 'first-md'
         await expect(
-          reg.addResource(safePath.join(tempDir, 'second.md')) // frontmatter slug = 'first'
-        ).rejects.toThrow(/Duplicate resource ID 'first'/);
+          reg.addResource(safePath.join(tempDir, 'second.md')) // frontmatter slug = 'first-md'
+        ).rejects.toThrow(/Duplicate resource ID 'first-md'/);
       });
 
       it('should throw on duplicate resource ID from different files without baseDir', async () => {
@@ -816,7 +832,7 @@ tags: test
         await reg.addResource(safePath.join(tempDir, 'dir1', 'readme.md'));
         await expect(
           reg.addResource(safePath.join(tempDir, 'dir2', 'readme.md'))
-        ).rejects.toThrow(/Duplicate resource ID 'readme'/);
+        ).rejects.toThrow(/Duplicate resource ID 'readme-md'/);
       });
 
       it('should detect duplicates in fromResources', () => {
@@ -842,17 +858,23 @@ tags: test
         ).toThrow(/Duplicate resource ID 'readme'/);
       });
 
-      it('should detect duplicates in addResources', async () => {
+      it('should record duplicate-id collisions in addResources and surface them via validate()', async () => {
         await createDuplicateNamedFiles(tempDir);
 
-        // Without baseDir, both produce 'readme' → duplicate
+        // Without baseDir, both produce 'readme-md' → duplicate.
+        // addResources() now captures the collision rather than throwing; the
+        // first-added file wins and the second is skipped. validate() surfaces
+        // the collision as a DUPLICATE_RESOURCE_ID error.
         const reg = new ResourceRegistry();
         await expect(
           reg.addResources([
             safePath.join(tempDir, 'dir1', 'readme.md'),
             safePath.join(tempDir, 'dir2', 'readme.md'),
           ])
-        ).rejects.toThrow(/Duplicate resource ID 'readme'/);
+        ).resolves.not.toThrow();
+
+        const issue = await expectSingleDuplicateIdError(reg);
+        expect(issue?.message).toMatch(/readme-md/);
       });
     });
   });
@@ -881,6 +903,24 @@ tags: test
       expect(html?.links.map((l) => l.href)).toContain('./next.html');
     });
 
+    it('produces distinct ids for foo.md and foo.html in the same directory', async () => {
+      // Acceptance test: the original crash was caused by foo.md and foo.html
+      // colliding on the same bare id. With extension suffixes they are distinct.
+      await writeFile(safePath.join(htmlTempDir, 'foo.md'), '# Foo md', 'utf-8');
+      await writeFile(safePath.join(htmlTempDir, 'foo.html'), '<h1>Foo html</h1>', 'utf-8');
+
+      const reg = new ResourceRegistry({ baseDir: htmlTempDir });
+      // Must not throw
+      await reg.crawl({ baseDir: htmlTempDir });
+
+      const resources = reg.getAllResources();
+      const ids = resources.map((r) => r.id);
+      expect(ids).toContain('foo-md');
+      expect(ids).toContain('foo-html');
+      // Confirm they are truly distinct (no deduplication / crash)
+      expect(new Set(ids).size).toBe(ids.length);
+    });
+
     it('emits MALFORMED_HTML info issues for HTML parse errors', async () => {
       // A malformed HTML file: unclosed <p> tag triggers a parse5 diagnostic
       await writeFile(
@@ -895,6 +935,60 @@ tags: test
       const malformedIssues = result.issues.filter((i) => i.code === 'MALFORMED_HTML');
       expect(malformedIssues.length).toBeGreaterThan(0);
       expect(malformedIssues[0]?.severity).toBe('info');
+    });
+  });
+
+  describe('Duplicate resource ID (graceful handling)', () => {
+    let dupTempDir: string;
+
+    beforeEach(async () => {
+      dupTempDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'dup-id-test-'));
+    });
+
+    afterEach(async () => {
+      await rm(dupTempDir, { recursive: true, force: true });
+    });
+
+    it('crawl() does not throw and validate() emits DUPLICATE_RESOURCE_ID error when two same-extension files produce the same id', async () => {
+      // 'My Guide.md' and 'my-guide.md' both normalise to 'my-guide-md' after Task 1's
+      // extension suffix. This is the canonical same-extension collision scenario.
+      await writeFile(safePath.join(dupTempDir, 'My Guide.md'), '# My Guide', 'utf-8');
+      await writeFile(safePath.join(dupTempDir, 'my-guide.md'), '# my guide', 'utf-8');
+
+      const reg = new ResourceRegistry({ baseDir: dupTempDir });
+
+      // crawl() must not throw
+      await expect(reg.crawl({ baseDir: dupTempDir })).resolves.not.toThrow();
+
+      const issue = await expectSingleDuplicateIdError(reg);
+      // Message must name both colliding paths and the shared id
+      expect(issue?.message).toMatch(/my-guide-md/);
+      expect(issue?.message).toMatch(/My Guide\.md/);
+      expect(issue?.message).toMatch(/my-guide\.md/);
+    });
+
+    it('addResources() does not throw and validate() emits DUPLICATE_RESOURCE_ID with correct paths when two files collide via idField frontmatter slug', async () => {
+      // Both files declare the same frontmatter slug value → same idField-derived ID.
+      // Before the fix the catch block re-derived the id via generateIdFromPath, which
+      // would produce 'beta-md' (not 'shared-slug'), so resourcesById.get('beta-md')
+      // returned undefined and existingPath was recorded as '' — making the emitted
+      // DUPLICATE_RESOURCE_ID issue report an empty existingPath.
+      const fileA = safePath.join(dupTempDir, 'alpha.md');
+      const fileB = safePath.join(dupTempDir, 'beta.md');
+      await writeFile(fileA, '---\nslug: shared-slug\n---\n# Alpha', 'utf-8');
+      await writeFile(fileB, '---\nslug: shared-slug\n---\n# Beta', 'utf-8');
+
+      const reg = new ResourceRegistry({ baseDir: dupTempDir, idField: 'slug' });
+
+      // addResources() must not throw
+      await expect(reg.addResources([fileA, fileB])).resolves.not.toThrow();
+
+      const issue = await expectSingleDuplicateIdError(reg);
+      // The reported id must be the frontmatter slug, NOT a path-derived id
+      expect(issue?.message).toMatch(/shared-slug/);
+      // Both file names must appear — existingPath must not be '' (the pre-fix bug)
+      expect(issue?.message).toMatch(/alpha\.md/);
+      expect(issue?.message).toMatch(/beta\.md/);
     });
   });
 });

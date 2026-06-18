@@ -240,6 +240,17 @@ Only meaningful when actually bundling a skill; fire from `vat skills build` (an
 - **Why it matters:** This code indicates VAT's own link rewriter produced an inconsistent bundle — a file was expected but wasn't written to the output. Unlike `LINK_MISSING_TARGET`, which flags source issues, this flags a post-build integrity failure.
 - **Fix:** Report the issue — this indicates a VAT bug. As a temporary workaround, set `severity.PACKAGED_BROKEN_LINK` to `ignore` while the underlying bug is fixed.
 
+## Resource Registry Codes
+
+*Fire when building the resource registry — `vat resources validate` and any command that crawls resources.*
+
+### `DUPLICATE_RESOURCE_ID`
+
+- **Default:** `error`
+- **What:** Two files resolve to the same resource id after path normalization (e.g. `My Guide.md` and `my-guide.md` both produce `my-guide-md`).
+- **Why it matters:** Resource ids must be unique — a collision means one file silently shadows the other in lookups, link resolution, and bundling. This surfaces as a reported issue rather than aborting the whole run with an uncaught error.
+- **Fix:** Rename one of the files so they produce distinct resource ids.
+
 ## Quality Codes
 
 *Stance: see [Length and Shape](./skill-quality-and-compatibility.md#length-and-shape) and [Authoring](./skill-quality-and-compatibility.md#authoring).*

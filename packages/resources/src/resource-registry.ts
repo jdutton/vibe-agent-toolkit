@@ -33,6 +33,27 @@ import type { ValidationResult } from './schemas/validation-result.js';
 import { issueLocation, matchesGlobPattern, splitHrefAnchor } from './utils.js';
 
 /**
+ * Typed error thrown when two resources produce the same ID.
+ *
+ * Carries the authoritative id and both paths so callers can record accurate
+ * issue data without re-deriving the id from the file path (which would be
+ * wrong when the id came from a frontmatter `idField` value).
+ */
+export class DuplicateResourceIdError extends Error {
+  readonly id: string;
+  readonly existingPath: string;
+  readonly conflictingPath: string;
+
+  constructor(id: string, conflictingPath: string, existingPath: string) {
+    super(`Duplicate resource ID '${id}': '${conflictingPath}' conflicts with '${existingPath}'`);
+    this.name = 'DuplicateResourceIdError';
+    this.id = id;
+    this.existingPath = existingPath;
+    this.conflictingPath = conflictingPath;
+  }
+}
+
+/**
  * Options for crawling directories to add resources.
  */
 export interface CrawlOptions {
@@ -170,6 +191,12 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   private readonly frontmatterExternalUrlsByResource: Map<string, FrontmatterExternalUrl[]> = new Map();
 
+  /**
+   * Collisions recorded by addResources() when two files produce the same resource id.
+   * Cleared by clear(). Surfaced as DUPLICATE_RESOURCE_ID issues in validate().
+   */
+  private duplicateIdCollisions: Array<{ id: string; existingPath: string; conflictingPath: string }> = [];
+
   constructor(options?: ResourceRegistryOptions) {
     if (options?.baseDir !== undefined) {
       this.baseDir = options.baseDir;
@@ -234,9 +261,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       // Check for duplicate ID
       const existingById = registry.resourcesById.get(resource.id);
       if (existingById) {
-        throw new Error(
-          `Duplicate resource ID '${resource.id}': '${resource.filePath}' conflicts with '${existingById.filePath}'`
-        );
+        throw new DuplicateResourceIdError(resource.id, resource.filePath, existingById.filePath);
       }
 
       // Add to path index
@@ -318,9 +343,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Check for duplicate ID (allow re-adding same file path)
     const existingById = this.resourcesById.get(id);
     if (existingById && existingById.filePath !== absolutePath) {
-      throw new Error(
-        `Duplicate resource ID '${id}': '${absolutePath}' conflicts with '${existingById.filePath}'`
-      );
+      throw new DuplicateResourceIdError(id, absolutePath, existingById.filePath);
     }
 
     // Get file modified time
@@ -379,7 +402,20 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   async addResources(filePaths: string[]): Promise<ResourceMetadata[]> {
     const results: ResourceMetadata[] = [];
     for (const fp of filePaths) {
-      results.push(await this.addResource(fp));
+      try {
+        results.push(await this.addResource(fp));
+      } catch (error) {
+        if (error instanceof DuplicateResourceIdError) {
+          this.duplicateIdCollisions.push({
+            id: error.id,
+            existingPath: error.existingPath,
+            conflictingPath: error.conflictingPath,
+          });
+          // First-added wins; skip conflicting file and continue crawling.
+        } else {
+          throw error;
+        }
+      }
     }
     return results;
   }
@@ -470,6 +506,19 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       }
     }
     return issues;
+  }
+
+  /**
+   * Emit DUPLICATE_RESOURCE_ID errors for collisions recorded by addResources().
+   * @private
+   */
+  private collectDuplicateIdErrors(): ValidationIssue[] {
+    return this.duplicateIdCollisions.map(({ id, existingPath, conflictingPath }) =>
+      createRegistryIssue(
+        'DUPLICATE_RESOURCE_ID',
+        `Two files resolve to the same resource id '${id}': '${issueLocation(existingPath, this.baseDir)}' and '${issueLocation(conflictingPath, this.baseDir)}'. Rename one of the files so they produce distinct resource ids.`,
+      ),
+    );
   }
 
   /**
@@ -719,8 +768,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     const issues: ValidationIssue[] = [];
 
     // Surface parse-time diagnostics: YAML frontmatter errors first, then HTML
-    // well-formedness. Combined into one push() call (SonarCloud S7778).
-    issues.push(...this.collectYamlErrors(), ...this.collectHtmlParseErrors());
+    // well-formedness, then duplicate-id collisions. Combined into one push() call
+    // (SonarCloud S7778).
+    issues.push(...this.collectYamlErrors(), ...this.collectHtmlParseErrors(), ...this.collectDuplicateIdErrors());
 
     // Validate each link in each resource
     const linkIssues = await this.validateAllLinks(
@@ -1075,6 +1125,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     this.resourcesById.clear();
     this.resourcesByName.clear();
     this.resourcesByChecksum.clear();
+    this.duplicateIdCollisions = [];
   }
 
   /**
@@ -1368,26 +1419,34 @@ function collectHeadingSlugs(headings: HeadingNode[], out: Set<string>): void {
 /**
  * Generate an ID from a file path.
  *
+ * Every resource id includes a `-<ext>` suffix derived from the file extension
+ * (dot stripped, lowercased). This makes ids from different file types distinct
+ * even when the stem is identical (e.g. `foo.md` → `foo-md`, `foo.html` → `foo-html`).
+ * Extensionless files (e.g. `Makefile`) receive no suffix.
+ *
  * When `baseDir` is provided, computes a relative path from baseDir and uses the full
  * directory structure in the ID. When no `baseDir`, uses the filename stem only.
  *
  * @param filePath - Absolute file path
  * @param baseDir - Base directory for relative path computation (optional)
- * @returns Generated ID in kebab-case
+ * @returns Generated ID in kebab-case with `-<ext>` suffix
  *
  * @example
  * ```typescript
- * // Without baseDir: filename stem only
- * generateIdFromPath('/project/docs/User Guide.md')  // 'user-guide'
- * generateIdFromPath('/project/README.md')            // 'readme'
+ * // Without baseDir: filename stem + extension suffix
+ * generateIdFromPath('/project/docs/User Guide.md')  // 'user-guide-md'
+ * generateIdFromPath('/project/README.md')            // 'readme-md'
+ * generateIdFromPath('/project/page.html')            // 'page-html'
+ * generateIdFromPath('/project/Makefile')             // 'makefile'
  *
- * // With baseDir: relative path
- * generateIdFromPath('/project/docs/concepts/core/overview.md', '/project/docs')  // 'concepts-core-overview'
- * generateIdFromPath('/project/docs/guide.md', '/project/docs')                   // 'guide'
+ * // With baseDir: relative path + extension suffix
+ * generateIdFromPath('/project/docs/concepts/core/overview.md', '/project/docs')  // 'concepts-core-overview-md'
+ * generateIdFromPath('/project/docs/guide.md', '/project/docs')                   // 'guide-md'
  * ```
  */
 export function generateIdFromPath(filePath: string, baseDir?: string): string {
   let rawId: string;
+  let extSuffix = '';
 
   if (baseDir) {
     // Compute relative path from baseDir, remove extension
@@ -1396,10 +1455,22 @@ export function generateIdFromPath(filePath: string, baseDir?: string): string {
     const withoutExt = ext ? relativePath.slice(0, -ext.length) : relativePath;
     // Normalize path separators to forward slashes (cross-platform), then replace with hyphens
     rawId = toForwardSlash(withoutExt).replaceAll('/', '-');
+    if (ext) {
+      // Strip the leading dot; lowercasing happens in the kebab pipeline below
+      extSuffix = `-${ext.slice(1)}`;
+    }
   } else {
     // Fallback: basename only (no directory context)
-    rawId = path.basename(filePath, path.extname(filePath));
+    const ext = path.extname(filePath);
+    rawId = path.basename(filePath, ext);
+    if (ext) {
+      extSuffix = `-${ext.slice(1)}`;
+    }
   }
+
+  // Append extension suffix before the kebab pipeline so hyphen-collapse and
+  // trim apply uniformly (e.g. suffixed-.md → 'suffixed--md' → 'suffixed-md')
+  rawId = `${rawId}${extSuffix}`;
 
   // Convert to kebab-case:
   // 1. Replace underscores and spaces with hyphens
