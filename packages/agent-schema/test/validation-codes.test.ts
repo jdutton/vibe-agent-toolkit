@@ -47,6 +47,14 @@ describe('CODE_REGISTRY', () => {
     expect(CODE_REGISTRY.PACKAGED_BROKEN_LINK.defaultSeverity).toBe('error');
   });
 
+  it('registers DUPLICATE_RESOURCE_ID as an error-severity overridable code', () => {
+    expect(CODE_REGISTRY.DUPLICATE_RESOURCE_ID).toBeDefined();
+    expect(CODE_REGISTRY.DUPLICATE_RESOURCE_ID.defaultSeverity).toBe('error');
+    expect(CODE_REGISTRY.DUPLICATE_RESOURCE_ID.description.length).toBeGreaterThan(10);
+    expect(CODE_REGISTRY.DUPLICATE_RESOURCE_ID.fix.length).toBeGreaterThan(10);
+    expect(CODE_REGISTRY.DUPLICATE_RESOURCE_ID.reference).toBe('#duplicate_resource_id');
+  });
+
   it('enforces warning defaults for best-practice and meta-codes', () => {
     for (const code of [
       'SKILL_LENGTH_EXCEEDS_RECOMMENDED',

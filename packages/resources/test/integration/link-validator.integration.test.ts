@@ -10,12 +10,16 @@
  */
 
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { writeFile } from 'node:fs/promises';
 
-import { validateLink } from '../../src/link-validator.js';
-import type { HeadingNode } from '../../src/types.js';
-import { assertValidation, createGitRepo, createHeadings, createLink } from '../test-helpers.js';
+/* eslint-disable security/detect-non-literal-fs-filename -- tests use dynamic file paths in temp directory */
+
+import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
+
+import { fragmentIndex, validateLink, type FragmentIndex } from '../../src/link-validator.js';
+import { ResourceRegistry } from '../../src/resource-registry.js';
+import { assertValidation, createGitRepo, createLink, setupSubdirTestSuite } from '../test-helpers.js';
 
 /**
  * Helper to test that a non-ignored file linking to a gitignored file returns an error
@@ -23,7 +27,7 @@ import { assertValidation, createGitRepo, createHeadings, createLink } from '../
 async function assertGitignoreError(gitRoot: string, linkHref: string, linkText: string): Promise<void> {
   const sourceFile = safePath.join(gitRoot, 'source.md');
   const link = createLink('local_file', linkHref, linkText, 1);
-  const headingsMap = new Map<string, HeadingNode[]>();
+  const headingsMap = fragmentIndex();
 
   await assertValidation(
     {
@@ -61,12 +65,32 @@ const NONEXISTENT_FILE_LINK = './nonexistent.md';
 const NONEXISTENT_ANCHOR = '#nonexistent';
 const TARGET_FILE_LINK = './target.md';
 
+/**
+ * Build the standard headings map used in anchor-validation tests:
+ * a single entry mapping `sourceFile` to the slug of HEADING_ANCHOR_HEADING.
+ */
+function makeAnchorHeadingsMap(sourceFile: string): FragmentIndex {
+  return fragmentIndex([
+    [sourceFile, new Set([HEADING_ANCHOR_HEADING.slug.toLowerCase()])],
+  ]);
+}
+
+/**
+ * Crawl a directory into a fresh ResourceRegistry and run validation.
+ * Extracted to eliminate the repeated 3-line setup in cross-format anchor tests.
+ */
+async function crawlAndValidate(dir: string): Promise<Awaited<ReturnType<ResourceRegistry['validate']>>> {
+  const reg = new ResourceRegistry({ baseDir: dir });
+  await reg.crawl({ baseDir: dir });
+  return reg.validate({ skipGitIgnoreCheck: true });
+}
+
 describe('validateLink', () => {
   describe('local_file links', () => {
     it('should validate valid relative path', async () => {
       const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('local_file', TARGET_FILE_LINK, 'Link to target', 3);
-      const headingsMap = new Map<string, HeadingNode[]>();
+      const headingsMap = fragmentIndex();
 
       const result = await validateLink(link, sourceFile, headingsMap);
 
@@ -76,7 +100,7 @@ describe('validateLink', () => {
     it('should validate valid relative path with ../', async () => {
       const sourceFile = safePath.join(FIXTURES_DIR, 'subdir', 'nested.md');
       const link = createLink('local_file', '../target.md', 'Link to parent', 1);
-      const headingsMap = new Map<string, HeadingNode[]>();
+      const headingsMap = fragmentIndex();
 
       const result = await validateLink(link, sourceFile, headingsMap);
 
@@ -89,7 +113,7 @@ describe('validateLink', () => {
         {
           sourceFile: safePath.join(FIXTURES_DIR, BROKEN_FILE_MD),
           link: createLink('local_file', NONEXISTENT_FILE_LINK, 'Broken link', 3),
-          headingsMap: new Map<string, HeadingNode[]>(),
+          headingsMap: fragmentIndex(),
           expected: {
             code: 'LINK_BROKEN_FILE',
             messageContains: ['File not found', 'nonexistent.md'],
@@ -118,7 +142,7 @@ describe('validateLink', () => {
           {
             sourceFile,
             link: createLink('local_file', './testfile.md', 'Wrong case link', 3),
-            headingsMap: new Map<string, HeadingNode[]>(),
+            headingsMap: fragmentIndex(),
             expected: {
               code: 'LINK_BROKEN_FILE',
               messageContains: ['case mismatch', 'TestFile.md', 'testfile.md'],
@@ -137,8 +161,8 @@ describe('validateLink', () => {
       const targetFile = safePath.join(FIXTURES_DIR, TARGET_MD);
       const link = createLink('local_file', './target.md#valid-anchor', 'Link with anchor', 5);
 
-      const headingsMap = new Map<string, HeadingNode[]>([
-        [targetFile, createHeadings(VALID_ANCHOR_HEADING)],
+      const headingsMap = fragmentIndex([
+        [targetFile, new Set([VALID_ANCHOR_HEADING.slug.toLowerCase()])],
       ]);
 
       const result = await validateLink(link, sourceFile, headingsMap);
@@ -153,8 +177,8 @@ describe('validateLink', () => {
         {
           sourceFile: safePath.join(FIXTURES_DIR, 'broken-anchor.md'),
           link: createLink('local_file', './target.md#nonexistent-heading', 'Broken anchor', 3),
-          headingsMap: new Map<string, HeadingNode[]>([
-            [targetFile, createHeadings(VALID_ANCHOR_HEADING)],
+          headingsMap: fragmentIndex([
+            [targetFile, new Set([VALID_ANCHOR_HEADING.slug.toLowerCase()])],
           ]),
           expected: {
             code: 'LINK_BROKEN_ANCHOR',
@@ -174,7 +198,7 @@ describe('validateLink', () => {
       // leading-/ branch entirely).
       const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('local_file', '/does/not/exist.md', 'Absolute path');
-      const headingsMap = new Map<string, HeadingNode[]>();
+      const headingsMap = fragmentIndex();
 
       const result = await validateLink(link, sourceFile, headingsMap);
 
@@ -196,7 +220,7 @@ describe('validateLink', () => {
         fs.writeFileSync(sourceFile, '');
 
         const link = createLink('local_file', 'files/My%20Document%20Name.pdf', 'PDF link', 3);
-        const headingsMap = new Map<string, HeadingNode[]>();
+        const headingsMap = fragmentIndex();
 
         const result = await validateLink(link, sourceFile, headingsMap);
 
@@ -215,9 +239,7 @@ describe('validateLink', () => {
         {
           sourceFile,
           link: createLink('anchor', '#heading-anchor', 'Anchor link', 5),
-          headingsMap: new Map<string, HeadingNode[]>([
-            [sourceFile, createHeadings(HEADING_ANCHOR_HEADING)],
-          ]),
+          headingsMap: makeAnchorHeadingsMap(sourceFile),
           expected: null,
         },
         expect,
@@ -231,9 +253,7 @@ describe('validateLink', () => {
         {
           sourceFile,
           link: createLink('anchor', NONEXISTENT_ANCHOR, 'Broken anchor', 10),
-          headingsMap: new Map<string, HeadingNode[]>([
-            [sourceFile, createHeadings(HEADING_ANCHOR_HEADING)],
-          ]),
+          headingsMap: makeAnchorHeadingsMap(sourceFile),
           expected: {
             code: 'LINK_BROKEN_ANCHOR',
             messageContains: ['Anchor not found', NONEXISTENT_ANCHOR],
@@ -250,9 +270,7 @@ describe('validateLink', () => {
         {
           sourceFile,
           link: createLink('anchor', '#HEADING-ANCHOR', 'Case mismatch', 5),
-          headingsMap: new Map<string, HeadingNode[]>([
-            [sourceFile, createHeadings(HEADING_ANCHOR_HEADING)],
-          ]),
+          headingsMap: makeAnchorHeadingsMap(sourceFile),
           expected: null,
         },
         expect,
@@ -263,17 +281,8 @@ describe('validateLink', () => {
       const sourceFile = safePath.join(FIXTURES_DIR, 'complex.md');
       const link = createLink('anchor', '#nested-child', 'Nested heading', 10);
 
-      const headingsMap = new Map<string, HeadingNode[]>([
-        [sourceFile, createHeadings({
-          text: 'Parent Heading',
-          slug: 'parent-heading',
-          level: 2,
-          children: createHeadings({
-            text: 'Nested Child',
-            slug: 'nested-child',
-            level: 3,
-          }),
-        })],
+      const headingsMap = fragmentIndex([
+        [sourceFile, new Set(['parent-heading', 'nested-child'])],
       ]);
 
       const result = await validateLink(link, sourceFile, headingsMap);
@@ -287,7 +296,7 @@ describe('validateLink', () => {
         {
           sourceFile: safePath.join(FIXTURES_DIR, VALID_MD),
           link: createLink('anchor', '#any-heading', 'No headings', 5),
-          headingsMap: new Map<string, HeadingNode[]>(),
+          headingsMap: fragmentIndex([[safePath.join(FIXTURES_DIR, VALID_MD), new Set<string>()]]),
           expected: {
             code: 'LINK_BROKEN_ANCHOR',
           },
@@ -301,7 +310,7 @@ describe('validateLink', () => {
     it('should return null for HTTP URL (external links not validated)', async () => {
       const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('external', 'http://example.com', 'HTTP link', 6);
-      const headingsMap = new Map<string, HeadingNode[]>();
+      const headingsMap = fragmentIndex();
 
       const result = await validateLink(link, sourceFile, headingsMap);
 
@@ -311,7 +320,7 @@ describe('validateLink', () => {
     it('should return null for HTTPS URL (external links not validated)', async () => {
       const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('external', 'https://example.com/path', 'HTTPS link', 7);
-      const headingsMap = new Map<string, HeadingNode[]>();
+      const headingsMap = fragmentIndex();
 
       const result = await validateLink(link, sourceFile, headingsMap);
 
@@ -323,7 +332,7 @@ describe('validateLink', () => {
     it('should return null for valid email', async () => {
       const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('email', 'mailto:test@example.com', 'Email link', 8);
-      const headingsMap = new Map<string, HeadingNode[]>();
+      const headingsMap = fragmentIndex();
 
       const result = await validateLink(link, sourceFile, headingsMap);
 
@@ -333,7 +342,7 @@ describe('validateLink', () => {
     it('should return null for email without mailto:', async () => {
       const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('email', 'test@example.com', 'Plain email', 9);
-      const headingsMap = new Map<string, HeadingNode[]>();
+      const headingsMap = fragmentIndex();
 
       const result = await validateLink(link, sourceFile, headingsMap);
 
@@ -348,7 +357,7 @@ describe('validateLink', () => {
         {
           sourceFile: safePath.join(FIXTURES_DIR, VALID_MD),
           link: createLink('unknown', 'ftp://example.com/file', 'FTP link', 10),
-          headingsMap: new Map<string, HeadingNode[]>(),
+          headingsMap: fragmentIndex(),
           expected: {
             code: 'LINK_UNKNOWN',
             messageContains: 'Unknown link type',
@@ -365,7 +374,7 @@ describe('validateLink', () => {
         {
           sourceFile: safePath.join(FIXTURES_DIR, VALID_MD),
           link: createLink('unknown', 'tel:+1234567890', 'Tel link', 11),
-          headingsMap: new Map<string, HeadingNode[]>(),
+          headingsMap: fragmentIndex(),
           expected: {
             code: 'LINK_UNKNOWN',
           },
@@ -379,7 +388,7 @@ describe('validateLink', () => {
     it('should handle Unix-style paths', async () => {
       const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('local_file', TARGET_FILE_LINK, 'Unix path');
-      const headingsMap = new Map<string, HeadingNode[]>();
+      const headingsMap = fragmentIndex();
 
       const result = await validateLink(link, sourceFile, headingsMap);
 
@@ -390,7 +399,7 @@ describe('validateLink', () => {
       const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       // Node's path.resolve will normalize this correctly on all platforms
       const link = createLink('local_file', './subdir/nested.md', 'Mixed path');
-      const headingsMap = new Map<string, HeadingNode[]>();
+      const headingsMap = fragmentIndex();
 
       const result = await validateLink(link, sourceFile, headingsMap);
 
@@ -404,8 +413,8 @@ describe('validateLink', () => {
       const link = createLink('anchor', '#heading-anchor', 'No line number');
       delete link.line;
 
-      const headingsMap = new Map<string, HeadingNode[]>([
-        [sourceFile, createHeadings({ text: 'Heading Anchor', slug: 'heading-anchor' })],
+      const headingsMap = fragmentIndex([
+        [sourceFile, new Set(['heading-anchor'])],
       ]);
 
       const result = await validateLink(link, sourceFile, headingsMap);
@@ -417,8 +426,8 @@ describe('validateLink', () => {
       const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('anchor', '#', 'Empty anchor', 5);
 
-      const headingsMap = new Map<string, HeadingNode[]>([
-        [sourceFile, createHeadings({ text: 'Heading', slug: 'heading' })],
+      const headingsMap = fragmentIndex([
+        [sourceFile, new Set(['heading'])],
       ]);
 
       const result = await validateLink(link, sourceFile, headingsMap);
@@ -430,7 +439,7 @@ describe('validateLink', () => {
     it('should handle file path with anchor where file does not exist', async () => {
       const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('local_file', './nonexistent.md#heading', 'Broken file with anchor', 5);
-      const headingsMap = new Map<string, HeadingNode[]>();
+      const headingsMap = fragmentIndex();
 
       const result = await validateLink(link, sourceFile, headingsMap);
 
@@ -448,8 +457,8 @@ describe('validateLink', () => {
       const link = createLink('local_file', '#heading', 'Anchor as file', 5);
 
       const targetFile = safePath.join(FIXTURES_DIR, 'target.md');
-      const headingsMap = new Map<string, HeadingNode[]>([
-        [targetFile, createHeadings({ text: 'Heading', slug: 'heading' })],
+      const headingsMap = fragmentIndex([
+        [targetFile, new Set(['heading'])],
       ]);
 
       const result = await validateLink(link, sourceFile, headingsMap);
@@ -461,27 +470,8 @@ describe('validateLink', () => {
       const sourceFile = safePath.join(FIXTURES_DIR, 'complex.md');
       const link = createLink('anchor', '#deeply-nested', 'Deep nesting', 20);
 
-      const headingsMap = new Map<string, HeadingNode[]>([
-        [sourceFile, createHeadings({
-          text: 'Level 1',
-          slug: 'level-1',
-          level: 1,
-          children: createHeadings({
-            text: 'Level 2',
-            slug: 'level-2',
-            level: 2,
-            children: createHeadings({
-              text: 'Level 3',
-              slug: 'level-3',
-              level: 3,
-              children: createHeadings({
-                text: 'Deeply Nested',
-                slug: 'deeply-nested',
-                level: 4,
-              }),
-            }),
-          }),
-        })],
+      const headingsMap = fragmentIndex([
+        [sourceFile, new Set(['level-1', 'level-2', 'level-3', 'deeply-nested'])],
       ]);
 
       const result = await validateLink(link, sourceFile, headingsMap);
@@ -494,7 +484,7 @@ describe('validateLink', () => {
     it('should include all required fields in error issue', async () => {
       const sourceFile = safePath.join(FIXTURES_DIR, BROKEN_FILE_MD);
       const link = createLink('local_file', NONEXISTENT_FILE_LINK, 'Broken', 3);
-      const headingsMap = new Map<string, HeadingNode[]>();
+      const headingsMap = fragmentIndex();
 
       const result = await validateLink(link, sourceFile, headingsMap);
 
@@ -514,7 +504,7 @@ describe('validateLink', () => {
     it('should include empty suggestion in broken file issue', async () => {
       const sourceFile = safePath.join(FIXTURES_DIR, BROKEN_FILE_MD);
       const link = createLink('local_file', NONEXISTENT_FILE_LINK, 'Broken');
-      const headingsMap = new Map<string, HeadingNode[]>();
+      const headingsMap = fragmentIndex();
 
       const result = await validateLink(link, sourceFile, headingsMap);
 
@@ -525,8 +515,8 @@ describe('validateLink', () => {
     it('should include empty suggestion in broken anchor issue', async () => {
       const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
       const link = createLink('anchor', NONEXISTENT_ANCHOR, 'Broken');
-      const headingsMap = new Map<string, HeadingNode[]>([
-        [sourceFile, createHeadings({ text: 'Valid', slug: 'valid' })],
+      const headingsMap = fragmentIndex([
+        [sourceFile, new Set(['valid'])],
       ]);
 
       const result = await validateLink(link, sourceFile, headingsMap);
@@ -591,7 +581,7 @@ describe('validateLink', () => {
       fs.writeFileSync(sourceFile, '# Source');
 
       const link = createLink('local_file', TARGET_FILE_LINK, 'Link to target', 1);
-      const headingsMap = new Map<string, HeadingNode[]>();
+      const headingsMap = fragmentIndex();
 
       await assertValidation(
         {
@@ -629,6 +619,74 @@ describe('validateLink', () => {
     });
   });
 
+  describe('cross-format anchor validation', () => {
+    const suite = setupSubdirTestSuite('cross-format-suite-');
+
+    beforeAll(suite.beforeAll);
+    afterAll(suite.afterAll);
+    beforeEach(suite.beforeEach);
+
+    it('validates markdown → HTML anchors and flags missing ones', async () => {
+      // guide.md links to page.html#intro (valid) and page.html#nope (broken)
+      await writeFile(
+        safePath.join(suite.tempDir, 'guide.md'),
+        '[a](./page.html#intro)\n[b](./page.html#nope)\n',
+        'utf-8',
+      );
+      await writeFile(
+        safePath.join(suite.tempDir, 'page.html'),
+        '<html><body><h2 id="intro">Intro</h2></body></html>',
+        'utf-8',
+      );
+
+      const result = await crawlAndValidate(suite.tempDir);
+
+      const brokenAnchors = result.issues.filter((i) => i.code === 'LINK_BROKEN_ANCHOR');
+      // Only #nope should be flagged; #intro is a valid HTML id
+      expect(brokenAnchors).toHaveLength(1);
+      expect(brokenAnchors[0]?.message).toContain('nope');
+    });
+
+    it('validates HTML → markdown anchors (zero broken-anchor)', async () => {
+      // page.html links to guide.md#my-heading — heading slug matches
+      await writeFile(
+        safePath.join(suite.tempDir, 'page.html'),
+        '<html><body><a href="./guide.md#my-heading">x</a></body></html>',
+        'utf-8',
+      );
+      await writeFile(
+        safePath.join(suite.tempDir, 'guide.md'),
+        '## My Heading\n',
+        'utf-8',
+      );
+
+      const result = await crawlAndValidate(suite.tempDir);
+
+      const brokenAnchors = result.issues.filter((i) => i.code === 'LINK_BROKEN_ANCHOR');
+      expect(brokenAnchors).toHaveLength(0);
+    });
+
+    it('skips anchor check for a non-indexed target file', async () => {
+      // doc.md links to external.md#whatever — external.md is NOT present/crawled
+      await writeFile(
+        safePath.join(suite.tempDir, 'doc.md'),
+        '[x](./external.md#whatever)\n',
+        'utf-8',
+      );
+      // external.md intentionally absent
+
+      const result = await crawlAndValidate(suite.tempDir);
+
+      const brokenFiles = result.issues.filter((i) => i.code === 'LINK_BROKEN_FILE');
+      const brokenAnchors = result.issues.filter((i) => i.code === 'LINK_BROKEN_ANCHOR');
+
+      // The file is missing → LINK_BROKEN_FILE emitted
+      expect(brokenFiles.length).toBeGreaterThan(0);
+      // But no LINK_BROKEN_ANCHOR — target is un-indexed so anchor check is skipped
+      expect(brokenAnchors).toHaveLength(0);
+    });
+  });
+
   describe('leading-/ links (RFC 3986 §4.2 absolute-path reference)', () => {
     let projectRoot: string;
     let sourceFile: string;
@@ -653,7 +711,7 @@ describe('validateLink', () => {
 
     it('resolves /docs/foo.md against projectRoot', async () => {
       const link = createLink('local_file', '/docs/foo.md', 'Leading slash', 1);
-      const result = await validateLink(link, sourceFile, new Map<string, HeadingNode[]>(), {
+      const result = await validateLink(link, sourceFile, fragmentIndex(), {
         projectRoot,
         skipGitIgnoreCheck: true,
       });
@@ -662,7 +720,7 @@ describe('validateLink', () => {
 
     it('emits absolute_no_root broken_file when projectRoot is undefined', async () => {
       const link = createLink('local_file', '/docs/foo.md', 'Leading slash', 1);
-      const result = await validateLink(link, sourceFile, new Map<string, HeadingNode[]>(), {
+      const result = await validateLink(link, sourceFile, fragmentIndex(), {
         skipGitIgnoreCheck: true,
       });
       expect(result).not.toBeNull();
@@ -672,7 +730,7 @@ describe('validateLink', () => {
 
     it('emits absolute_escapes_root broken_file when leading-/ escapes projectRoot', async () => {
       const link = createLink('local_file', '/../escape.md', 'Escape', 1);
-      const result = await validateLink(link, sourceFile, new Map<string, HeadingNode[]>(), {
+      const result = await validateLink(link, sourceFile, fragmentIndex(), {
         projectRoot,
         skipGitIgnoreCheck: true,
       });
@@ -683,13 +741,10 @@ describe('validateLink', () => {
 
     it('resolves anchor on leading-/ link', async () => {
       const link = createLink('local_file', '/docs/foo.md#section-a', 'Leading slash anchor', 1);
-      const headings = new Map<string, HeadingNode[]>([
+      const headings = fragmentIndex([
         [
           safePath.join(projectRoot, 'docs', 'foo.md'),
-          createHeadings(
-            { text: 'Foo', slug: 'foo', level: 1 },
-            { text: 'Section A', slug: 'section-a', level: 2 },
-          ),
+          new Set(['foo', 'section-a']),
         ],
       ]);
       const result = await validateLink(link, sourceFile, headings, {
@@ -705,7 +760,7 @@ describe('validateLink', () => {
         {
           sourceFile,
           link: createLink('local_file', '/docs/', 'Directory target', 1),
-          headingsMap: new Map<string, HeadingNode[]>(),
+          headingsMap: fragmentIndex(),
           expected: { code: 'LINK_BROKEN_FILE', messageContains: 'Link target is a directory' },
           validationOptions: { projectRoot, skipGitIgnoreCheck: true },
         },
@@ -719,7 +774,7 @@ describe('validateLink', () => {
         {
           sourceFile,
           link: createLink('local_file', '../', 'Relative directory target', 1),
-          headingsMap: new Map<string, HeadingNode[]>(),
+          headingsMap: fragmentIndex(),
           expected: { code: 'LINK_BROKEN_FILE', messageContains: 'Link target is a directory' },
           validationOptions: { projectRoot, skipGitIgnoreCheck: true },
         },

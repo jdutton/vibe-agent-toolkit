@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 
-
 import { ResourceMetadataSchema } from '../src/schemas/resource-metadata.js';
 
 describe('ResourceMetadataSchema with checksum', () => {
@@ -61,5 +60,32 @@ describe('ResourceMetadataSchema with checksum', () => {
     if (result.success) {
       expect(result.data.frontmatter).toBeUndefined();
     }
+  });
+});
+
+describe('ResourceMetadataSchema HTML fields', () => {
+  const base = {
+    id: 'x',
+    filePath: '/abs/x.html',
+    links: [],
+    headings: [],
+    sizeBytes: 1,
+    estimatedTokenCount: 1,
+    modifiedAt: new Date(),
+    checksum: 'a'.repeat(64),
+  };
+
+  it('accepts optional anchors and parseErrors', () => {
+    const parsed = ResourceMetadataSchema.parse({
+      ...base,
+      anchors: ['intro'],
+      parseErrors: [{ message: 'missing-end-tag', line: 3 }],
+    });
+    expect(parsed.anchors).toEqual(['intro']);
+    expect(parsed.parseErrors?.[0]?.message).toBe('missing-end-tag');
+  });
+
+  it('rejects unknown top-level fields (strict)', () => {
+    expect(() => ResourceMetadataSchema.parse({ ...base, bogus: 1 })).toThrow();
   });
 });

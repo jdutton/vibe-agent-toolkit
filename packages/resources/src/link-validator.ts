@@ -25,7 +25,7 @@ import {
   verifyCaseSensitiveFilename,
 } from '@vibe-agent-toolkit/utils';
 
-import type { HeadingNode, ResourceLink } from './types.js';
+import type { ResourceLink } from './types.js';
 import { isWithinProject, issueLocation, resolveLocalHref } from './utils.js';
 
 type LinkIssueExtras = Partial<Pick<ValidationIssue, 'location' | 'line' | 'link' | 'suggestion'>>;
@@ -66,7 +66,7 @@ export interface ValidateLinkOptions {
  *
  * @param link - The link to validate
  * @param sourceFilePath - Absolute path to the file containing the link
- * @param headingsByFile - Map of file paths to their heading trees
+ * @param fragmentsByFile - Fragment index: file path → set of valid fragments (markdown slugs + HTML id/name)
  * @param options - Validation options (projectRoot, skipGitIgnoreCheck)
  * @returns ValidationIssue if link is broken, null if valid
  *
@@ -84,15 +84,15 @@ export interface ValidateLinkOptions {
 export async function validateLink(
   link: ResourceLink,
   sourceFilePath: string,
-  headingsByFile: Map<string, HeadingNode[]>,
+  fragmentsByFile: FragmentIndex,
   options?: ValidateLinkOptions
 ): Promise<ValidationIssue | null> {
   switch (link.type) {
     case 'local_file':
-      return await validateLocalFileLink(link, sourceFilePath, headingsByFile, options);
+      return await validateLocalFileLink(link, sourceFilePath, fragmentsByFile, options);
 
     case 'anchor':
-      return await validateAnchorLink(link, sourceFilePath, headingsByFile, options?.projectRoot);
+      return await validateAnchorLink(link, sourceFilePath, fragmentsByFile, options?.projectRoot);
 
     case 'external':
       // External URLs are not validated - don't report them
@@ -232,7 +232,7 @@ export function gitIgnoreSafetyIssue(
 async function validateLocalFileLink(
   link: ResourceLink,
   sourceFilePath: string,
-  headingsByFile: Map<string, HeadingNode[]>,
+  fragmentsByFile: FragmentIndex,
   options?: ValidateLinkOptions
 ): Promise<ValidationIssue | null> {
   const resolved = resolveLocalHref(link.href, sourceFilePath, options?.projectRoot);
@@ -263,8 +263,8 @@ async function validateLocalFileLink(
   if (gitIgnoreIssue) return gitIgnoreIssue;
 
   if (resolved.anchor) {
-    const anchorValid = await validateAnchor(resolved.anchor, fileResult.resolvedPath, headingsByFile);
-    if (!anchorValid) {
+    const check = checkAnchor(resolved.anchor, fileResult.resolvedPath, fragmentsByFile);
+    if (check === 'broken') {
       return createRegistryIssue(
         'LINK_BROKEN_ANCHOR',
         `Anchor not found: #${resolved.anchor} in ${fileResult.resolvedPath}`,
@@ -277,29 +277,41 @@ async function validateLocalFileLink(
 }
 
 /**
+ * Exhaustiveness guard for the {@link AnchorCheck} union: a compile error at the
+ * call site means a new variant was added without being handled here.
+ */
+function assertNever(value: never): never {
+  throw new Error(`Unhandled AnchorCheck variant: ${String(value)}`);
+}
+
+/**
  * Validate an anchor link (within current file).
  */
 async function validateAnchorLink(
   link: ResourceLink,
   sourceFilePath: string,
-  headingsByFile: Map<string, HeadingNode[]>,
+  fragmentsByFile: FragmentIndex,
   projectRoot?: string,
 ): Promise<ValidationIssue | null> {
   // Extract anchor (strip leading #)
   const anchor = link.href.startsWith('#') ? link.href.slice(1) : link.href;
 
   // Validate anchor exists in current file
-  const isValid = await validateAnchor(anchor, sourceFilePath, headingsByFile);
+  const check = checkAnchor(anchor, sourceFilePath, fragmentsByFile);
 
-  if (!isValid) {
-    return createRegistryIssue(
-      'LINK_BROKEN_ANCHOR',
-      `Anchor not found: ${link.href}`,
-      linkExtras(link, sourceFilePath, projectRoot, ''),
-    );
+  switch (check) {
+    case 'skip':
+    case 'valid':
+      return null;
+    case 'broken':
+      return createRegistryIssue(
+        'LINK_BROKEN_ANCHOR',
+        `Anchor not found: ${link.href}`,
+        linkExtras(link, sourceFilePath, projectRoot, ''),
+      );
+    default:
+      return assertNever(check);
   }
-
-  return null;
 }
 
 
@@ -338,65 +350,85 @@ async function validateResolvedFile(
   return result;
 }
 
-/**
- * Validate that an anchor (heading slug) exists in a file.
- *
- * @param anchor - The heading slug to find (without leading #)
- * @param targetFilePath - Absolute path to the file containing the heading
- * @param headingsByFile - Map of file paths to their heading trees
- * @returns True if anchor exists, false otherwise
- *
- * @example
- * ```typescript
- * const valid = await validateAnchor('my-heading', '/project/docs/guide.md', headingsMap);
- * ```
- */
-async function validateAnchor(
-  anchor: string,
-  targetFilePath: string,
-  headingsByFile: Map<string, HeadingNode[]>
-): Promise<boolean> {
-  // Get headings for target file
-  const headings = headingsByFile.get(targetFilePath);
-  if (!headings) {
-    return false;
-  }
+/** Result of checking an anchor against the fragment index. */
+export type AnchorCheck = 'skip' | 'valid' | 'broken';
 
-  // Search for matching slug (case-insensitive)
-  return findHeadingBySlug(headings, anchor);
+/**
+ * A file's fragment targets plus how to match against them. HTML `id`/`name`
+ * anchors are matched case-sensitively; markdown heading slugs are case-folded.
+ * The policy lives on the entry rather than being re-derived from the file
+ * extension at match time, so a new resource format only has to set this flag.
+ */
+export interface FragmentIndexEntry {
+  /** `true` for case-sensitive matching (HTML ids), `false` for case-folded (markdown slugs). */
+  caseSensitive: boolean;
+  fragments: Set<string>;
+}
+
+/** File path → its fragment targets and matching policy. */
+export type FragmentIndex = Map<string, FragmentIndexEntry>;
+
+/**
+ * Whether a path is an HTML resource (`.html`/`.htm`). The single place the
+ * extension drives format-specific behavior: case-sensitive ids (via
+ * {@link fragmentIndexEntry}) and the HTML top-fragment navigation rule.
+ */
+export function isHtmlPath(filePath: string): boolean {
+  return /\.html?$/i.test(filePath);
+}
+
+/** Build one index entry, choosing the case-folding policy from the file type. */
+export function fragmentIndexEntry(filePath: string, fragments: Set<string> = new Set()): FragmentIndexEntry {
+  return { caseSensitive: isHtmlPath(filePath), fragments };
 }
 
 /**
- * Recursively search heading tree for a matching slug.
- *
- * Performs case-insensitive comparison of slugs.
- *
- * @param headings - Array of heading nodes to search
- * @param targetSlug - The slug to find
- * @returns True if slug found, false otherwise
- *
- * @example
- * ```typescript
- * const found = findHeadingBySlug(headings, 'my-heading');
- * ```
+ * Build a {@link FragmentIndex} from `[path, fragments]` pairs, deriving each
+ * entry's matching policy from its path. Single construction path shared by the
+ * registry and tests.
  */
-function findHeadingBySlug(
-  headings: HeadingNode[],
-  targetSlug: string
-): boolean {
-  const normalizedTarget = targetSlug.toLowerCase();
-
-  for (const heading of headings) {
-    // Check current heading
-    if (heading.slug.toLowerCase() === normalizedTarget) {
-      return true;
-    }
-
-    // Recursively check children
-    if (heading.children && findHeadingBySlug(heading.children, targetSlug)) {
-      return true;
-    }
+export function fragmentIndex(entries: Iterable<readonly [string, Set<string>]> = []): FragmentIndex {
+  const map: FragmentIndex = new Map();
+  for (const [filePath, fragments] of entries) {
+    map.set(filePath, fragmentIndexEntry(filePath, fragments));
   }
+  return map;
+}
 
-  return false;
+/**
+ * Check whether a fragment exists in the target file's anchor set.
+ *
+ * - `'skip'`  — target file is not indexed; we cannot prove the anchor is
+ *   broken, so callers must not emit an issue.
+ * - Matching follows the entry's `caseSensitive` policy (HTML ids exact,
+ *   markdown slugs case-folded). The index carries the policy, so this never
+ *   re-derives the folding rule from the file extension.
+ * - For HTML targets the empty fragment (`#`) and `top` (ASCII
+ *   case-insensitive) are always valid: per the HTML fragment-navigation
+ *   algorithm both scroll to the top of the document regardless of whether a
+ *   matching element exists, so `href="#"` / `href="#top"` are not broken.
+ *
+ * @param anchor - Fragment without the leading `#`.
+ * @param targetFilePath - Absolute path of the file the fragment lives in.
+ * @param fragmentsByFile - Fragment index carrying each file's matching policy.
+ */
+export function checkAnchor(
+  anchor: string,
+  targetFilePath: string,
+  fragmentsByFile: FragmentIndex,
+): AnchorCheck {
+  const entry = fragmentsByFile.get(targetFilePath);
+  if (!entry) {
+    return 'skip';
+  }
+  // HTML spec: the empty fragment and "top" (case-insensitive) always navigate
+  // to the top of the document — valid even with no matching id. This is an
+  // HTML-format navigation rule, distinct from the case-folding policy above.
+  if (isHtmlPath(targetFilePath) && (anchor === '' || anchor.toLowerCase() === 'top')) {
+    return 'valid';
+  }
+  const found = entry.caseSensitive
+    ? entry.fragments.has(anchor)
+    : entry.fragments.has(anchor.toLowerCase());
+  return found ? 'valid' : 'broken';
 }

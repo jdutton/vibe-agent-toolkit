@@ -31,6 +31,7 @@ import {
   openFrontmatter,
   resolveLocalHref,
   rewriteFrontmatterUriReferencesFromSchema,
+  rewriteHtmlLinks,
   transformContent,
   type LinkRewriteRule,
   type ParseResult,
@@ -484,6 +485,7 @@ export async function packageSkill(
     templateContext: { skill: { name: skillMetadata.name } },
     collectionSchemas,
     projectRoot,
+    warn: (message) => process.stderr.write(`warning: ${message}\n`),
   });
 
   // 12b. Copy files config entries that were not auto-discovered via link traversal.
@@ -955,6 +957,8 @@ interface CopyRewriteContext {
   collectionSchemas: Map<string, object>;
   /** Absolute path to the project root — required for RFC 3986 §4.2 leading-`/` href resolution in frontmatter. */
   projectRoot: string;
+  /** Sink for non-fatal copy/rewrite diagnostics (verbatim copies, un-appliable rewrites). */
+  warn: (message: string) => void;
 }
 
 /**
@@ -1031,8 +1035,12 @@ async function copyAndRewriteFile(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
   await mkdir(dirname(targetPath), { recursive: true });
 
-  // Non-markdown files or rewriting disabled: plain binary copy
-  if (!sourcePath.endsWith('.md') || !ctx.rewriteLinks) {
+  const lower = sourcePath.toLowerCase();
+  const isMarkdown = lower.endsWith('.md');
+  const isHtml = lower.endsWith('.html') || lower.endsWith('.htm');
+
+  // Non-rewritable files or rewriting disabled: plain binary copy
+  if ((!isMarkdown && !isHtml) || !ctx.rewriteLinks) {
     await copyFile(sourcePath, targetPath);
     return;
   }
@@ -1045,9 +1053,36 @@ async function copyAndRewriteFile(
   const resource = ctx.fromRegistry.getResource(safePath.resolve(sourcePath));
 
   if (!resource) {
-    // Resource not in registry — write content as-is
+    // Resource not in registry — write content as-is. For HTML this is only
+    // reachable on an ID collision (e.g. page.html + page.md), where the asset
+    // is copied verbatim and its links are NOT rewritten (v1 limitation,
+    // mirrors the pre-existing asset-collision behavior).
+    ctx.warn(
+      `Copied '${sourcePath}' verbatim without link rewriting: it is not in the resource registry ` +
+        `(typically an ID collision with a same-named markdown file). Source-relative links inside it are not rewritten.`,
+    );
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
     await writeFile(targetPath, content, 'utf-8');
+    return;
+  }
+
+  // HTML: offset-splice link rewrite (no frontmatter, no template body rewrite).
+  if (isHtml) {
+    const rewriteHref = buildHrefRewriter(
+      ctx.fromRegistry,
+      ctx.toRegistry,
+      sourcePath,
+      targetPath,
+      ctx.projectRoot,
+    );
+    const rewritten = rewriteHtmlLinks(content, rewriteHref, (info) => {
+      ctx.warn(
+        `Could not rewrite <${info.tagName} ${info.attr}="${info.from}"> in '${sourcePath}' (${info.reason}); ` +
+          `the original value was kept.`,
+      );
+    });
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is constructed from validated paths
+    await writeFile(targetPath, rewritten, 'utf-8');
     return;
   }
 
@@ -1072,7 +1107,7 @@ async function copyAndRewriteFile(
     (id) => ctx.collectionSchemas.has(id),
   );
   if (matchingCollections.length > 0) {
-    const rewriteHref = buildFrontmatterHrefRewriter(
+    const rewriteHref = buildHrefRewriter(
       ctx.fromRegistry,
       ctx.toRegistry,
       sourcePath,
@@ -1092,7 +1127,7 @@ async function copyAndRewriteFile(
 }
 
 /**
- * Build the per-href rewrite callback used for frontmatter URI-refs.
+ * Build the per-href rewrite callback used for frontmatter URI-refs and HTML attributes.
  *
  * Mirrors the body-rewrite path so frontmatter and body link rewriting agree
  * on target paths:
@@ -1107,7 +1142,7 @@ async function copyAndRewriteFile(
  *
  * Returns the original href when no rewrite applies.
  */
-function buildFrontmatterHrefRewriter(
+function buildHrefRewriter(
   fromRegistry: WalkableRegistry,
   toRegistry: ResourceRegistry,
   sourcePath: string,

@@ -124,6 +124,17 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 - **Why it matters:** A committed document declaring a dependency on a gitignored target breaks portability — anyone cloning the repo gets the document but not the target. It also risks treating local-only or generated content as if it were part of the published artifact. Distinct from the skills-packaging code [`LINK_TO_GITIGNORED_FILE`](#link_to_gitignored_file), which guards against leaking ignored data into a *bundle*; this code fires in the `vat resources validate` path and the two coexist intentionally.
 - **Fix:** Link a tracked target, or un-ignore the file in `.gitignore` if it should be committed.
 
+## HTML Well-Formedness Codes
+
+Unlike the link codes above, this code is HTML-specific and is **not** a link code. It fires only in the `vat resources validate` path — emitted by `ResourceRegistry` while parsing `.html`/`.htm` resources — and does not run under `vat skills validate`, `vat skills build`, or `vat audit`.
+
+### `MALFORMED_HTML`
+
+- **Default:** `info`
+- **What:** An HTML resource has well-formedness problems (unclosed tags, stray characters, misnested elements) reported by the HTML parser.
+- **Why it matters:** Malformed markup parses unpredictably across browsers and tools, and can hide or mangle the links VAT extracts. Surfaced as `info` because browsers are lenient and most pages still render.
+- **Fix:** Fix the markup the parser flags. Raise severity via `validation.severity.MALFORMED_HTML` to enforce well-formedness.
+
 ## Frontmatter Link Codes
 
 Validation codes that fire when a collection's frontmatter schema declares a URI-family `format` (`uri-reference`, `uri`, `iri-reference`, `iri`) on a field and `vat resources validate` walks those values through the same engine as markdown link checking. Disabled per-collection via `validation.checkFrontmatterLinks: false` or globally via `vat resources validate --no-check-frontmatter-links`. See [Frontmatter link validation](./guides/collection-validation.md#frontmatter-link-validation).
@@ -228,6 +239,17 @@ Only meaningful when actually bundling a skill; fire from `vat skills build` (an
 - **What:** Link in the packaged output resolves to a file that is not present in the output (likely a link-rewriter bug).
 - **Why it matters:** This code indicates VAT's own link rewriter produced an inconsistent bundle — a file was expected but wasn't written to the output. Unlike `LINK_MISSING_TARGET`, which flags source issues, this flags a post-build integrity failure.
 - **Fix:** Report the issue — this indicates a VAT bug. As a temporary workaround, set `severity.PACKAGED_BROKEN_LINK` to `ignore` while the underlying bug is fixed.
+
+## Resource Registry Codes
+
+*Fire when building the resource registry — `vat resources validate` and any command that crawls resources.*
+
+### `DUPLICATE_RESOURCE_ID`
+
+- **Default:** `error`
+- **What:** Two files resolve to the same resource id after path normalization (e.g. `My Guide.md` and `my-guide.md` both produce `my-guide-md`).
+- **Why it matters:** Resource ids must be unique — a collision means one file silently shadows the other in lookups, link resolution, and bundling. This surfaces as a reported issue rather than aborting the whole run with an uncaught error.
+- **Fix:** Rename one of the files so they produce distinct resource ids.
 
 ## Quality Codes
 

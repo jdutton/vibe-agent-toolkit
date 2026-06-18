@@ -1,5 +1,5 @@
 /**
- * Markdown link parser and analyzer.
+ * Markdown link parser and shared resource-parsing types.
  *
  * Parses markdown files to extract:
  * - Links (regular, reference-style, autolinks)
@@ -7,6 +7,10 @@
  * - File size and token estimates
  *
  * Uses unified/remark for robust markdown parsing with GFM support.
+ *
+ * Also defines the format-neutral `ParseResult` contract shared with the HTML
+ * parser (`html-link-parser.ts`). The `HtmlParseError` shape is Zod-sourced
+ * from `schemas/resource-metadata.ts` (single source of truth).
  */
 
 import { readFile, stat } from 'node:fs/promises';
@@ -20,10 +24,11 @@ import { unified } from 'unified';
 import { visit } from 'unist-util-visit';
 import * as yaml from 'yaml';
 
+import type { HtmlParseError } from './schemas/resource-metadata.js';
 import type { HeadingNode, LinkType, ResourceLink } from './types.js';
 
 /**
- * Result of parsing a markdown file.
+ * Result of parsing a resource file (markdown or HTML).
  */
 export interface ParseResult {
   links: ResourceLink[];
@@ -33,6 +38,10 @@ export interface ParseResult {
   content: string;
   sizeBytes: number;
   estimatedTokenCount: number;
+  /** Fragment targets (HTML `id`/`name` attributes). Markdown leaves this undefined. */
+  anchors?: string[];
+  /** HTML well-formedness diagnostics. Markdown leaves this undefined. */
+  parseErrors?: HtmlParseError[];
 }
 
 /**

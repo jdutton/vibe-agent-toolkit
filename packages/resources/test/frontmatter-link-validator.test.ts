@@ -5,13 +5,13 @@ import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { validateFrontmatterLinks } from '../src/frontmatter-link-validator.js';
-import type { HeadingNode } from '../src/types.js';
+import { fragmentIndex, type FragmentIndex } from '../src/link-validator.js';
 
 describe('validateFrontmatterLinks', () => {
   let projectRoot: string;
   let sourceFile: string;
   let targetFile: string;
-  let headingsByFile: Map<string, HeadingNode[]>;
+  let fragmentsByFile: FragmentIndex;
 
   beforeAll(async () => {
     projectRoot = await mkdtemp(safePath.join(normalizedTmpdir(), 'vat-fmlv-'));
@@ -21,14 +21,9 @@ describe('validateFrontmatterLinks', () => {
     await writeFile(sourceFile, '---\n---\n# Source\n');
     await writeFile(targetFile, '# Target\n\n## Section A\n');
 
-    headingsByFile = new Map();
-    headingsByFile.set(targetFile, [
-      { level: 1, text: 'Target', slug: 'target', children: [
-        { level: 2, text: 'Section A', slug: 'section-a', children: [] },
-      ] },
-    ]);
-    headingsByFile.set(sourceFile, [
-      { level: 1, text: 'Source', slug: 'source', children: [] },
+    fragmentsByFile = fragmentIndex([
+      [targetFile, new Set(['target', 'section-a'])],
+      [sourceFile, new Set(['source'])],
     ]);
   });
 
@@ -48,7 +43,7 @@ describe('validateFrontmatterLinks', () => {
     frontmatter: Record<string, unknown> | undefined,
     schema: object = refSchema,
   ) =>
-    validateFrontmatterLinks(frontmatter, schema, sourceFile, headingsByFile, {
+    validateFrontmatterLinks(frontmatter, schema, sourceFile, fragmentsByFile, {
       projectRoot,
       skipGitIgnoreCheck: true,
     });
@@ -140,7 +135,7 @@ describe('validateFrontmatterLinks', () => {
         { ref: '/docs/target.md' },
         refSchema,
         sourceFile,
-        headingsByFile,
+        fragmentsByFile,
         { skipGitIgnoreCheck: true },
       );
       expect(issues).toHaveLength(1);
