@@ -652,17 +652,18 @@ describe('packageSkill - stripPrefix edge cases', () => {
 });
 
 // ============================================================================
-// Excluded resource filtering (directory-target, outside-project)
+// Directory link handling (#126 — directories are valid navigational targets)
 // ============================================================================
 
-describe('packageSkill - excluded resource filtering', () => {
-  it('should skip directory-target exclusions from output registry', async () => {
+describe('packageSkill - directory link handling', () => {
+  it('packages a skill with a navigational directory link; the directory is not bundled', async () => {
     const tmp = getTempDir();
     const sub = safePath.join(tmp, 'docs');
     await mkdir(sub, { recursive: true });
     await writeFile(safePath.join(sub, 'page.md'), '# Page');
 
-    // Link to a directory — should be excluded with 'directory-target' reason
+    // `[docs](./docs/)` is a navigational link; the walker silently skips
+    // the directory itself but still follows `./docs/page.md`.
     const sp = await writeSkillMd(
       tmp,
       UNIT_SKILL_NAME,
@@ -671,9 +672,7 @@ describe('packageSkill - excluded resource filtering', () => {
 
     const result = await packWithOutput(sp);
 
-    // page.md should be bundled, but directory link should be excluded
     expect(existsSync(safePath.join(result.outputPath, 'resources', 'page.md'))).toBe(true);
-    // The skill should still package without errors
     expect(result.files.root).toBe('SKILL.md');
   });
 });

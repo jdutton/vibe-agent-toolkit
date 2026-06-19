@@ -64,9 +64,11 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 ### `LINK_TARGETS_DIRECTORY`
 
 - **Default:** `error`
-- **What:** Markdown link resolves to a directory rather than a file.
-- **Why it matters:** Directory links are ambiguous — agents and renderers cannot load a directory as content. The author almost certainly intended a specific file inside it.
-- **Fix:** Point the link at a specific file (e.g. `README.md` inside the directory) instead of the directory itself.
+- **What:** A **typed single-file slot** (e.g. a packaging `files:` source entry) resolves to a directory.
+- **Why it matters:** A typed single-file slot is contractually one file. A directory cannot satisfy that contract — packagers cannot copy a directory into a `dest` path declared as a file.
+- **Fix:** Point the slot at a specific file inside the directory, or remove the entry.
+- **Not in scope:** Navigational markdown/HTML links (`[docs](docs/)`, `<a href="dir/">`). A directory is a valid navigational target: it is existence-checked like any other local link, and a resolved directory passes. The trailing slash is a diagnostic hint only — never a correctness gate. This rule is also filesystem-only: an external URL whose path component looks like a directory (`https://example.com/docs/`) is never judged by this code.
+- **Not implemented (decision record, #126):** GitHub-style index resolution (`docs/` → `docs/README.md`) is intentionally not implemented. It is unnecessary once a directory is a valid navigational target.
 
 ### `LINK_TO_NAVIGATION_FILE`
 

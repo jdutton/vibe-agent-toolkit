@@ -12,12 +12,14 @@ const resolution = (reason: LinkResolution['excludeReason'], path: string): Link
 
 describe('walkerExclusionsToIssues', () => {
   it('maps each reason to the expected issue code', () => {
+    // Directory targets are silently skipped by the walker (#126) and so do
+    // not appear in excludedReferences — there is no `directory-target`
+    // reason to map.
     const input: LinkResolution[] = [
       resolution('depth-exceeded', '/root/a.md'),
       resolution('outside-project', '/other/b.md'),
       resolution('gitignored', '/root/dist/c.md'),
       resolution('skill-definition', '/root/other/SKILL.md'),
-      resolution('directory-target', '/root/dir'),
       resolution('navigation-file', '/root/README.md'),
       resolution('missing-target', '/root/nope.md'),
       resolution('pattern-matched', '/root/docs/x.md'),
@@ -29,7 +31,6 @@ describe('walkerExclusionsToIssues', () => {
       'LINK_OUTSIDE_PROJECT',
       'LINK_TO_GITIGNORED_FILE',
       'LINK_TO_SKILL_DEFINITION',
-      'LINK_TARGETS_DIRECTORY',
       'LINK_TO_NAVIGATION_FILE',
       'LINK_MISSING_TARGET',
       // pattern-matched emits no issue

@@ -40,8 +40,8 @@ export const CODE_REGISTRY = {
   ),
   LINK_TARGETS_DIRECTORY: entry(
     'error',
-    'Markdown link resolves to a directory rather than a file.',
-    'Point the link at a specific file (e.g. README.md inside the directory) instead of the directory itself.',
+    'A typed single-file slot (e.g. a packaging files: source entry) resolves to a directory.',
+    'Point the slot at a specific file inside the directory, or remove the entry. Navigational links to directories are valid and do not emit this code.',
     'link_targets_directory',
   ),
   LINK_TO_NAVIGATION_FILE: entry(

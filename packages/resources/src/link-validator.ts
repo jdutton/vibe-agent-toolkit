@@ -15,7 +15,6 @@
  * - External resources (outside project) skip git-ignore checks
  */
 
-import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
@@ -89,6 +88,9 @@ export async function validateLink(
 ): Promise<ValidationIssue | null> {
   switch (link.type) {
     case 'local_file':
+    case 'local_directory':
+      // Slash is a diagnostic hint, not a behavior gate: existence-checked the
+      // same as local_file. A resolved directory is a valid target.
       return await validateLocalFileLink(link, sourceFilePath, fragmentsByFile, options);
 
     case 'anchor':
@@ -246,18 +248,10 @@ async function validateLocalFileLink(
   const notFound = fileExistenceIssue(fileResult, link, sourceFilePath, options?.projectRoot);
   if (notFound) return notFound;
 
-  if (fileResult.isDirectory) {
-    return createRegistryIssue(
-      'LINK_BROKEN_FILE',
-      `Link target is a directory: ${fileResult.resolvedPath}`,
-      linkExtras(
-        link,
-        sourceFilePath,
-        options?.projectRoot,
-        'Link to a file inside the directory (e.g., README.md or index.md), or fix the link to point at the intended file.',
-      ),
-    );
-  }
+  // A resolved target — file or directory — is a valid link target. The
+  // directory rule (LINK_TARGETS_DIRECTORY) is reserved for typed single-file
+  // slots in packaging config (see packages/agent-skills), not navigational
+  // markdown/HTML links. See issue #126.
 
   const gitIgnoreIssue = gitIgnoreSafetyIssue(link, sourceFilePath, fileResult.resolvedPath, options);
   if (gitIgnoreIssue) return gitIgnoreIssue;
@@ -323,24 +317,12 @@ async function validateAnchorLink(
  */
 async function validateResolvedFile(
   resolvedPath: string,
-): Promise<{ exists: boolean; resolvedPath: string; actualName?: string; isDirectory: boolean }> {
+): Promise<{ exists: boolean; resolvedPath: string; actualName?: string }> {
   const verification = await verifyCaseSensitiveFilename(resolvedPath);
 
-  let isDirectory = false;
-  if (verification.exists) {
-    try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolvedPath validated by verifyCaseSensitiveFilename
-      const stats = await fs.stat(resolvedPath);
-      isDirectory = stats.isDirectory();
-    } catch {
-      // Stat failed after verifyCaseSensitiveFilename said exists — treat as file.
-    }
-  }
-
-  const result: { exists: boolean; resolvedPath: string; actualName?: string; isDirectory: boolean } = {
+  const result: { exists: boolean; resolvedPath: string; actualName?: string } = {
     exists: verification.exists,
     resolvedPath,
-    isDirectory,
   };
 
   if (verification.actualName) {

@@ -194,6 +194,7 @@ function extractLinkText(node: Link | LinkReference): string {
  * classifyLink('#heading') // 'anchor'
  * classifyLink('./file.md') // 'local_file'
  * classifyLink('./file.md#anchor') // 'local_file'
+ * classifyLink('docs/') // 'local_directory'
  * ```
  */
 export function classifyLink(href: string): LinkType {
@@ -210,6 +211,12 @@ export function classifyLink(href: string): LinkType {
   // (e.g., javascript:, tel:, data:, ftp:) — classify as unknown rather than local file
   if (href.includes(':')) {
     return 'unknown';
+  }
+  // Trailing slash signals directory intent. Diagnostic hint only — validation
+  // treats local_directory and local_file identically. Anchored hrefs are
+  // handled below (this branch only matches when there is no '#').
+  if (href.endsWith('/')) {
+    return 'local_directory';
   }
   // Links with anchors are still local file links
   if (href.includes('#')) {

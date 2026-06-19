@@ -9,7 +9,6 @@ const REASON_TO_CODE: Record<NonNullable<LinkResolution['excludeReason']>, Issue
   'outside-project': 'LINK_OUTSIDE_PROJECT',
   gitignored: 'LINK_TO_GITIGNORED_FILE',
   'skill-definition': 'LINK_TO_SKILL_DEFINITION',
-  'directory-target': 'LINK_TARGETS_DIRECTORY',
   'navigation-file': 'LINK_TO_NAVIGATION_FILE',
   'missing-target': 'LINK_MISSING_TARGET',
   'pattern-matched': null,

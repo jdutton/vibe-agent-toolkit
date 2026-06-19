@@ -14,6 +14,7 @@ import {
   fragmentIndex,
   gitIgnoreSafetyIssue,
   resolutionFailureIssue,
+  validateLink,
   type ValidateLinkOptions,
 } from '../src/link-validator.js';
 import type { ResourceLink } from '../src/types.js';
@@ -229,5 +230,22 @@ describe('gitIgnoreSafetyIssue', () => {
     expect(issue?.code).toBe('LINK_TO_GITIGNORED');
     expect(issue?.message).toContain('Non-ignored file links to gitignored file');
     expect(issue?.message).toContain(TARGET_SECRET);
+  });
+});
+
+describe('validateLink — external boundary (#126)', () => {
+  // Lock-in: the directory rule is filesystem-only. External URLs — including
+  // folder-shaped ones — must never trigger a directory determination. A
+  // server-resolved trailing slash has no client-determinable meaning, so we
+  // judge external links by network response alone.
+  it('returns null for external trailing-slash URL without filesystem checks', async () => {
+    const link: ResourceLink = {
+      type: 'external',
+      href: 'https://example.com/docs/',
+      text: 'docs',
+      line: 1,
+    };
+    const result = await validateLink(link, SOURCE, fragmentIndex(), makeOptions());
+    expect(result).toBeNull();
   });
 });

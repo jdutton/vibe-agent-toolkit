@@ -754,28 +754,60 @@ describe('validateLink', () => {
       expect(result).toBeNull();
     });
 
-    it('emits broken_file when leading-/ target is a directory', async () => {
-      // /docs/ resolves to projectRoot/docs (an existing directory).
+    it('treats existing directory as valid target (leading-/ href)', async () => {
+      // /docs/ resolves to projectRoot/docs (an existing directory). Per #126,
+      // a directory is a valid navigational link target.
       await assertValidation(
         {
           sourceFile,
-          link: createLink('local_file', '/docs/', 'Directory target', 1),
+          link: createLink('local_directory', '/docs/', 'Directory target', 1),
           headingsMap: fragmentIndex(),
-          expected: { code: 'LINK_BROKEN_FILE', messageContains: 'Link target is a directory' },
+          expected: null,
           validationOptions: { projectRoot, skipGitIgnoreCheck: true },
         },
         expect,
       );
     });
 
-    it('emits broken_file when relative link target is a directory', async () => {
+    it('treats existing directory as valid target (relative href)', async () => {
       // sourceFile is in projectRoot/docs/sub; ../  resolves to projectRoot/docs.
       await assertValidation(
         {
           sourceFile,
-          link: createLink('local_file', '../', 'Relative directory target', 1),
+          link: createLink('local_directory', '../', 'Relative directory target', 1),
           headingsMap: fragmentIndex(),
-          expected: { code: 'LINK_BROKEN_FILE', messageContains: 'Link target is a directory' },
+          expected: null,
+          validationOptions: { projectRoot, skipGitIgnoreCheck: true },
+        },
+        expect,
+      );
+    });
+
+    it('treats slashless directory-shaped href as valid when target exists', async () => {
+      // `/docs` (no trailing slash) is shape-ambiguous (local_file by
+      // classification); once resolved to a directory it is treated identically
+      // to `/docs/`.
+      await assertValidation(
+        {
+          sourceFile,
+          link: createLink('local_file', '/docs', 'Slashless directory target', 1),
+          headingsMap: fragmentIndex(),
+          expected: null,
+          validationOptions: { projectRoot, skipGitIgnoreCheck: true },
+        },
+        expect,
+      );
+    });
+
+    it('emits broken_file when a directory-shaped href targets a missing path', async () => {
+      // Regression guard: existence checking still fires; missing directories
+      // are LINK_BROKEN_FILE (not a directory error).
+      await assertValidation(
+        {
+          sourceFile,
+          link: createLink('local_directory', '/missing-dir/', 'Missing directory', 1),
+          headingsMap: fragmentIndex(),
+          expected: { code: 'LINK_BROKEN_FILE', messageContains: 'File not found' },
           validationOptions: { projectRoot, skipGitIgnoreCheck: true },
         },
         expect,

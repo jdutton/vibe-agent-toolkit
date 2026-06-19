@@ -661,29 +661,6 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 		expect(result.activeErrors.map(e => e.code)).not.toContain('OUTSIDE_PROJECT_BOUNDARY');
 	});
 
-	it('allows LINK_TARGETS_DIRECTORY per-path', async () => {
-		const tempDir = getTempDir();
-		const conceptsDir = safePath.join(tempDir, 'docs/sub');
-		fs.mkdirSync(conceptsDir, { recursive: true });
-		fs.writeFileSync(safePath.join(conceptsDir, 'README.md'), '# Sub');
-
-		const skillContent = createSkillContent(
-			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
-			'\n# Test\n\nSee [Sub](./docs/sub/) for details.',
-		);
-		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
-
-		// location is 'docs/sub' (relative to project root, no trailing slash)
-		const result = await validateSkillForPackaging(skillPath, {
-			validation: {
-				allow: {
-					LINK_TARGETS_DIRECTORY: [{ paths: ['docs/sub'], reason: 'ToC target' }],
-				},
-			},
-		});
-
-		expect(result.activeErrors).toHaveLength(0);
-	});
 });
 
 describe('validateSkillForPackaging - Metadata reporting', () => {
@@ -877,7 +854,11 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 		expect(result.metadata.excludedReferences).toEqual([]);
 	});
 
-	it('should error when skill links to a directory', async () => {
+	it('accepts a navigational directory link without emitting LINK_TARGETS_DIRECTORY (#126)', async () => {
+		// `[Concepts](./concepts/)` is a navigational link to an existing
+		// directory. Per #126, this is valid — LINK_TARGETS_DIRECTORY is
+		// reserved for typed single-file slots (e.g. packaging `files:`
+		// source entries), not navigational markdown links.
 		const tempDir = getTempDir();
 		const conceptsDir = safePath.join(tempDir, 'concepts');
 		fs.mkdirSync(conceptsDir, { recursive: true });
@@ -891,10 +872,29 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 
 		const result = await validateSkillForPackaging(skillPath);
 
-		expect(result.status).toBe('error');
+		expect(result.activeErrors.map(e => e.code)).not.toContain('LINK_TARGETS_DIRECTORY');
+	});
+
+	it('emits LINK_TARGETS_DIRECTORY when a files: source entry resolves to a directory (#126)', async () => {
+		// A `files:` source is a typed single-file slot — it cannot be
+		// satisfied by a directory, so LINK_TARGETS_DIRECTORY fires here.
+		const tempDir = getTempDir();
+		const scriptsDir = safePath.join(tempDir, 'scripts');
+		fs.mkdirSync(scriptsDir, { recursive: true });
+
+		const skillContent = createSkillContent(
+			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+			'\n# Test\n',
+		);
+		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
+
+		const result = await validateSkillForPackaging(skillPath, {
+			files: [{ source: 'scripts', dest: 'scripts/tool.mjs' }],
+		});
+
 		const dirError = result.activeErrors.find(e => e.code === 'LINK_TARGETS_DIRECTORY');
 		expect(dirError).toBeDefined();
-		expect(dirError?.message).toContain('concepts');
+		expect(dirError?.message).toContain('scripts');
 	});
 
 	it('should report directFileCount <= fileCount when links are excluded by depth', async () => {

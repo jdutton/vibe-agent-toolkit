@@ -13,7 +13,7 @@
  * - vat skills audit --user (report issues, exit 0 always)
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
@@ -42,7 +42,6 @@ import {
 import { walkerExclusionsToIssues } from './walker-to-issues.js';
 
 /** Exclude reason constants to avoid duplicate string literals */
-const EXCLUDE_REASON_DIRECTORY = 'directory-target' as const;
 const EXCLUDE_REASON_OUTSIDE_PROJECT = 'outside-project' as const;
 const DETAIL_REASON_DEPTH: ExcludedReferenceDetail['reason'] = 'depth-exceeded';
 
@@ -128,10 +127,15 @@ export interface PackagingValidationResult {
 }
 
 /**
- * Validate files config entries for duplicate dest values.
+ * Validate files config entries:
+ *  - duplicate dest values (DUPLICATE_FILES_DEST)
+ *  - source paths that resolve to a directory (LINK_TARGETS_DIRECTORY) — a
+ *    `files:` entry is a typed single-file slot; a directory cannot satisfy
+ *    the contract. See #126.
  */
 function validateFilesConfig(
   files: Array<{ source: string; dest: string }> | undefined,
+  skillDir: string,
 ): ValidationIssue[] {
   if (!files?.length) return [];
 
@@ -148,6 +152,20 @@ function validateFilesConfig(
       });
     }
     destSet.add(normalized);
+
+    const sourceAbsolute = safePath.resolve(skillDir, entry.source);
+    try {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- entry.source from validated config
+      if (existsSync(sourceAbsolute) && statSync(sourceAbsolute).isDirectory()) {
+        issues.push(createRegistryIssue(
+          'LINK_TARGETS_DIRECTORY',
+          `files: source '${entry.source}' resolves to a directory; a files: entry is a single-file slot.`,
+          toForwardSlash(entry.source),
+        ));
+      }
+    } catch {
+      // stat failure: leave it to other validation paths to report.
+    }
   }
 
   return issues;
@@ -269,7 +287,7 @@ export async function validateSkillForPackaging(
   }
 
   // Validate files config
-  rawIssues.push(...validateFilesConfig(packagingConfig?.files));
+  rawIssues.push(...validateFilesConfig(packagingConfig?.files, dirname(skillPath)));
 
   // Compat capability detection: collect observations from SKILL.md and
   // surface each as a CAPABILITY_* issue. Observations are also returned
@@ -649,11 +667,11 @@ function getResolvedMarkdownLinks(
  * Reasons that are reported as validation errors instead of excluded references.
  * These are filtered out of the excluded references list.
  */
-const VALIDATION_ERROR_REASONS: ReadonlySet<string> = new Set([EXCLUDE_REASON_DIRECTORY, EXCLUDE_REASON_OUTSIDE_PROJECT]);
+const VALIDATION_ERROR_REASONS: ReadonlySet<string> = new Set([EXCLUDE_REASON_OUTSIDE_PROJECT]);
 
 /**
  * Deduplicate excluded references by path, preserving detail from first occurrence.
- * Filters out entries reported as validation errors (directory-target, outside-project).
+ * Filters out entries reported as validation errors (outside-project).
  */
 function deduplicateExcludedReferences(
   excludedReferences: LinkResolution[],
@@ -692,7 +710,6 @@ function mapExcludeReason(
     case 'skill-definition': return 'skill-definition';
     case 'gitignored': return 'gitignored';
     case 'depth-exceeded':
-    case EXCLUDE_REASON_DIRECTORY:
     case EXCLUDE_REASON_OUTSIDE_PROJECT:
     case 'missing-target':
     case undefined:

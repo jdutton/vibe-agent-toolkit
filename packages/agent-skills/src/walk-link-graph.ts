@@ -28,7 +28,7 @@ export interface LinkResolution {
   /** Whether the file will be bundled */
   bundled: boolean;
   /** Reason it was excluded (only set when bundled is false) */
-  excludeReason?: 'depth-exceeded' | 'pattern-matched' | 'directory-target' | 'outside-project' | 'navigation-file' | 'skill-definition' | 'gitignored' | 'missing-target' | undefined;
+  excludeReason?: 'depth-exceeded' | 'pattern-matched' | 'outside-project' | 'navigation-file' | 'skill-definition' | 'gitignored' | 'missing-target' | undefined;
   /** The rule that matched (only set for pattern-matched exclusions) */
   matchedRule?: ExcludeRule | undefined;
   /** Link text from the source markdown */
@@ -183,11 +183,14 @@ function checkExclusions(
   excludeMatchers: ExcludeMatcher[],
   excludedReferences: LinkResolution[],
 ): boolean {
-  // Check if target is a directory
+  // Directory targets are valid navigational link targets (#126). A directory
+  // cannot be bundled as a file, so the walker silently skips it — no
+  // exclusion record, no surfaced issue. LINK_TARGETS_DIRECTORY is reserved
+  // for typed single-file slots (e.g. packaging `files:` source entries)
+  // where the contract demands a file.
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from parsed markdown
     if (existsSync(targetPath) && statSync(targetPath).isDirectory()) {
-      excludedReferences.push(makeExclusion(targetPath, 'directory-target', link));
       return true;
     }
   } catch {

@@ -439,7 +439,7 @@ export async function packageSkill(
   addBundledAssetsToOutputRegistry(outputResources, bundledAssets, pathMap, registry, collidedAssets);
   // Include excluded resources (with source paths) for pattern-based rule matching
   for (const excl of excludedReferences) {
-    if (excl.excludeReason === 'directory-target' || excl.excludeReason === 'outside-project') {
+    if (excl.excludeReason === 'outside-project') {
       continue;
     }
     const exclResource = (registry as WalkableRegistry).getResource(safePath.resolve(excl.path));
@@ -457,7 +457,7 @@ export async function packageSkill(
   const bundledResourceIds = new Set(bundledResources.map(r => r.id));
   const excludedIds = [...new Set(
     excludedReferences
-      .filter(r => r.excludeReason !== 'directory-target' && r.excludeReason !== 'outside-project')
+      .filter(r => r.excludeReason !== 'outside-project')
       .map(r => {
         const res = (registry as WalkableRegistry).getResource(safePath.resolve(r.path));
         return res?.id;
