@@ -29,7 +29,10 @@ describe('walkerExclusionsToIssues', () => {
       'LINK_OUTSIDE_PROJECT',
       'LINK_TO_GITIGNORED_FILE',
       'LINK_TO_SKILL_DEFINITION',
-      'LINK_TARGETS_DIRECTORY',
+      // directory-target emits no issue (like pattern-matched) — a navigational
+      // link to a directory is valid; the directory is excluded from the bundle
+      // but no error is raised. Only a files: source that is a directory is an
+      // error (checked in packaging-validator, not here).
       'LINK_TO_NAVIGATION_FILE',
       'LINK_MISSING_TARGET',
       // pattern-matched emits no issue

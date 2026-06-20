@@ -89,6 +89,7 @@ export async function validateLink(
 ): Promise<ValidationIssue | null> {
   switch (link.type) {
     case 'local_file':
+    case 'local_directory':
       return await validateLocalFileLink(link, sourceFilePath, fragmentsByFile, options);
 
     case 'anchor':
@@ -245,19 +246,6 @@ async function validateLocalFileLink(
   const fileResult = await validateResolvedFile(resolved.resolvedPath);
   const notFound = fileExistenceIssue(fileResult, link, sourceFilePath, options?.projectRoot);
   if (notFound) return notFound;
-
-  if (fileResult.isDirectory) {
-    return createRegistryIssue(
-      'LINK_BROKEN_FILE',
-      `Link target is a directory: ${fileResult.resolvedPath}`,
-      linkExtras(
-        link,
-        sourceFilePath,
-        options?.projectRoot,
-        'Link to a file inside the directory (e.g., README.md or index.md), or fix the link to point at the intended file.',
-      ),
-    );
-  }
 
   const gitIgnoreIssue = gitIgnoreSafetyIssue(link, sourceFilePath, fileResult.resolvedPath, options);
   if (gitIgnoreIssue) return gitIgnoreIssue;

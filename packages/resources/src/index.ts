@@ -83,7 +83,7 @@ export {
 } from './schemas/validation-result.js';
 
 // Export parser interface for advanced use cases
-export { parseMarkdown, type ParseResult } from './link-parser.js';
+export { parseMarkdown, classifyLink, isLocalFileLink, type ParseResult } from './link-parser.js';
 
 export { parseHtml } from './html-link-parser.js';
 // HtmlParseError is Zod-sourced (single source of truth) — see schemas/resource-metadata.ts.

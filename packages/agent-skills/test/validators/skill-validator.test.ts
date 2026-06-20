@@ -7,7 +7,7 @@
 
 import { writeFileSync } from 'node:fs';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { validateSkill } from '../../src/validators/skill-validator.js';
@@ -405,6 +405,39 @@ describe('transitive link traversal — rootDir default', () => {
     const result = await validateSkill({ skillPath });
 
     expect(result.linkedFiles).toHaveLength(1);
+    expect(findIssues(result, 'LINK_INTEGRITY_BROKEN')).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// I1 fix (#126): directory links in the config-less audit path
+// ---------------------------------------------------------------------------
+
+describe('transitive link traversal — directory links', () => {
+  const { getTempDir } = setupTempDir('skill-directory-links-');
+
+  it('should report LINK_INTEGRITY_BROKEN for a link to a MISSING directory', async () => {
+    const { result } = await createAndValidateTransitiveSkill(
+      getTempDir(), {}, skillWithLink('./missing-dir/', 'missing dir'),
+    );
+
+    const issues = findIssues(result, 'LINK_INTEGRITY_BROKEN');
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.message).toContain('missing-dir/');
+    expect(result.status).toBe('error');
+  });
+
+  it('should NOT report LINK_INTEGRITY_BROKEN for a link to an EXISTING directory', async () => {
+    const tempDir = getTempDir();
+    // Create a subdirectory (no files needed — existence is the check)
+    const { skillPath } = createTransitiveSkillStructure(
+      tempDir, {}, skillWithLink('./existing-dir/', 'existing dir'),
+    );
+    // Create the directory after the skill structure so createTransitiveSkillStructure
+    // does not try to write a file into it
+    mkdirSyncReal(safePath.join(tempDir, 'existing-dir'), { recursive: true });
+
+    const result = await validateSkill({ skillPath });
     expect(findIssues(result, 'LINK_INTEGRITY_BROKEN')).toHaveLength(0);
   });
 });

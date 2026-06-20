@@ -6,6 +6,7 @@ import { SHA256Schema } from './checksum.js';
  * Type of link found in markdown resources.
  *
  * - `local_file`: Link to a local file (relative or absolute path)
+ * - `local_directory`: Link to a local directory, e.g. a ref ending in `/`
  * - `anchor`: Link to a heading anchor (e.g., #heading-slug)
  * - `external`: HTTP/HTTPS URL to external resource
  * - `email`: Mailto link
@@ -13,6 +14,7 @@ import { SHA256Schema } from './checksum.js';
  */
 export const LinkTypeSchema = z.enum([
   'local_file',
+  'local_directory',
   'anchor',
   'external',
   'email',

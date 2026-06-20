@@ -661,7 +661,7 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 		expect(result.activeErrors.map(e => e.code)).not.toContain('OUTSIDE_PROJECT_BOUNDARY');
 	});
 
-	it('allows LINK_TARGETS_DIRECTORY per-path', async () => {
+	it('navigational directory link produces no error and needs no allow entry', async () => {
 		const tempDir = getTempDir();
 		const conceptsDir = safePath.join(tempDir, 'docs/sub');
 		fs.mkdirSync(conceptsDir, { recursive: true });
@@ -673,16 +673,10 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
 
-		// location is 'docs/sub' (relative to project root, no trailing slash)
-		const result = await validateSkillForPackaging(skillPath, {
-			validation: {
-				allow: {
-					LINK_TARGETS_DIRECTORY: [{ paths: ['docs/sub'], reason: 'ToC target' }],
-				},
-			},
-		});
+		// A navigational link to an existing directory is valid — no error, no allow needed.
+		const result = await validateSkillForPackaging(skillPath);
 
-		expect(result.activeErrors).toHaveLength(0);
+		expect(result.activeErrors.map(e => e.code)).not.toContain('LINK_TARGETS_DIRECTORY');
 	});
 });
 
@@ -754,20 +748,36 @@ function createMinimalSkill(tempDir: string): string {
 	return skillPath;
 }
 
+/**
+ * Run files-config packaging validation, assert it errored, and return the first
+ * active error matching `code`. Collapses the validate + status + find + defined
+ * scaffold shared by the files-config tests.
+ */
+async function expectFilesConfigError(
+	skillPath: string,
+	files: Array<{ source: string; dest: string }>,
+	code: string,
+): Promise<Awaited<ReturnType<typeof validateSkillForPackaging>>['activeErrors'][number] | undefined> {
+	const result = await validateSkillForPackaging(skillPath, { files });
+	expect(result.status).toBe('error');
+	const issue = result.activeErrors.find(e => e.code === code);
+	expect(issue).toBeDefined();
+	return issue;
+}
+
 describe('validateSkillForPackaging - Files config validation', () => {
 	it('should detect duplicate dest in files config', async () => {
 		const skillPath = createMinimalSkill(getTempDir());
 
-		const result = await validateSkillForPackaging(skillPath, {
-			files: [
+		const dupError = await expectFilesConfigError(
+			skillPath,
+			[
 				{ source: 'a.md', dest: FILES_DEST_A },
 				{ source: 'b.md', dest: FILES_DEST_A },
 			],
-		});
+			DUPLICATE_FILES_DEST_CODE,
+		);
 
-		expect(result.status).toBe('error');
-		const dupError = result.activeErrors.find(e => e.code === DUPLICATE_FILES_DEST_CODE);
-		expect(dupError).toBeDefined();
 		expect(dupError?.message).toContain(FILES_DEST_A);
 	});
 
@@ -809,6 +819,25 @@ describe('validateSkillForPackaging - Files config validation', () => {
 		expect(result.status).toBe('error');
 		const dupErrors = result.activeErrors.filter(e => e.code === DUPLICATE_FILES_DEST_CODE);
 		expect(dupErrors).toHaveLength(2);
+	});
+
+	it('should error when files: source resolves to an existing directory', async () => {
+		const FILES_DIR_SOURCE = 'dist/assets';
+		const tempDir = getTempDir();
+		// Create a real directory at the source path
+		const srcDir = safePath.join(tempDir, FILES_DIR_SOURCE);
+		fs.mkdirSync(srcDir, { recursive: true });
+
+		const skillPath = createMinimalSkill(tempDir);
+
+		const dirError = await expectFilesConfigError(
+			skillPath,
+			[{ source: FILES_DIR_SOURCE, dest: 'assets' }],
+			'LINK_TARGETS_DIRECTORY',
+		);
+
+		expect(dirError?.location).toBe(FILES_DIR_SOURCE);
+		expect(dirError?.message).toContain(FILES_DIR_SOURCE);
 	});
 });
 
@@ -877,7 +906,7 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 		expect(result.metadata.excludedReferences).toEqual([]);
 	});
 
-	it('should error when skill links to a directory', async () => {
+	it('navigational directory link does not produce LINK_TARGETS_DIRECTORY error', async () => {
 		const tempDir = getTempDir();
 		const conceptsDir = safePath.join(tempDir, 'concepts');
 		fs.mkdirSync(conceptsDir, { recursive: true });
@@ -889,12 +918,12 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
 
+		// A navigational link to an existing directory is valid — directory is
+		// excluded from the bundle silently, but no LINK_TARGETS_DIRECTORY error
+		// is emitted. Status must not be 'error' from this cause.
 		const result = await validateSkillForPackaging(skillPath);
 
-		expect(result.status).toBe('error');
-		const dirError = result.activeErrors.find(e => e.code === 'LINK_TARGETS_DIRECTORY');
-		expect(dirError).toBeDefined();
-		expect(dirError?.message).toContain('concepts');
+		expect(result.activeErrors.map(e => e.code)).not.toContain('LINK_TARGETS_DIRECTORY');
 	});
 
 	it('should report directFileCount <= fileCount when links are excluded by depth', async () => {

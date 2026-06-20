@@ -13,7 +13,7 @@
  * - vat skills audit --user (report issues, exit 0 always)
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
@@ -128,10 +128,16 @@ export interface PackagingValidationResult {
 }
 
 /**
- * Validate files config entries for duplicate dest values.
+ * Validate files config entries for duplicate dest values and directory sources.
+ *
+ * A `files:` entry is a typed single-file slot: its source must resolve to a
+ * file, not a directory. If the source path exists and is a directory, emit
+ * LINK_TARGETS_DIRECTORY. Missing sources are not flagged here (deferred build
+ * artifacts are handled by the skill-packager).
  */
 function validateFilesConfig(
   files: Array<{ source: string; dest: string }> | undefined,
+  projectRoot: string,
 ): ValidationIssue[] {
   if (!files?.length) return [];
 
@@ -148,6 +154,19 @@ function validateFilesConfig(
       });
     }
     destSet.add(normalized);
+
+    // Check if an existing source resolves to a directory — a typed single-file
+    // slot cannot be satisfied by a directory.
+    const resolvedSource = safePath.resolve(safePath.join(projectRoot, entry.source));
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolvedSource derived from config-supplied path
+    if (existsSync(resolvedSource) && statSync(resolvedSource).isDirectory()) {
+      const location = toForwardSlash(entry.source);
+      issues.push(createRegistryIssue(
+        'LINK_TARGETS_DIRECTORY',
+        `files: source '${entry.source}' resolves to a directory; a typed single-file slot requires a file`,
+        location,
+      ));
+    }
   }
 
   return issues;
@@ -268,9 +287,6 @@ export async function validateSkillForPackaging(
     );
   }
 
-  // Validate files config
-  rawIssues.push(...validateFilesConfig(packagingConfig?.files));
-
   // Compat capability detection: collect observations from SKILL.md and
   // surface each as a CAPABILITY_* issue. Observations are also returned
   // on the result so downstream verdict computation (CLI layer) can recover
@@ -290,6 +306,10 @@ export async function validateSkillForPackaging(
   // Library fallback to skill dir keeps callers null-safe; CLI command
   // boundary owns any user-facing warning. See plan 2026-05-17.
   const projectRoot = findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
+
+  // Validate files config (requires projectRoot to resolve source paths for
+  // directory-source detection — must run after projectRoot is computed).
+  rawIssues.push(...validateFilesConfig(packagingConfig?.files, projectRoot));
 
   // Build resource registry and walk the link graph.
   // Prefer the caller-supplied shared registry (when `vat skills validate` or
