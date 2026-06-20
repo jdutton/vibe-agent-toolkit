@@ -110,16 +110,17 @@ describe('matchLinkToFiles', () => {
 
 describe('computeDeferredPaths', () => {
   it('should return empty sets when no files config', () => {
-    const result = computeDeferredPaths([]);
+    const result = computeDeferredPaths([], { skillDir: '/proj', projectRoot: '/proj' });
     expect(result.destPaths).toEqual(new Set());
     expect(result.sourcePaths).toEqual(new Set());
   });
 
-  it('should put dest in destPaths and source in sourcePaths', () => {
+  it('should put dest in destPaths and source in sourcePaths (skill at project root)', () => {
+    // When skillDir === projectRoot, dest and source paths are project-root-relative as authored
     const files: SkillFileEntry[] = [
       { source: CLI_SOURCE, dest: CLI_DEST },
     ];
-    const result = computeDeferredPaths(files);
+    const result = computeDeferredPaths(files, { skillDir: '/proj', projectRoot: '/proj' });
     expect(result.destPaths.has(CLI_DEST)).toBe(true);
     expect(result.sourcePaths.has(CLI_SOURCE)).toBe(true);
     // Each path should be in its own set, not cross-contaminated
@@ -132,19 +133,44 @@ describe('computeDeferredPaths', () => {
       { source: CLI_SOURCE, dest: CLI_DEST },
       { source: CLI_SOURCE, dest: 'scripts/cli2.mjs' },
     ];
-    const result = computeDeferredPaths(files);
+    const result = computeDeferredPaths(files, { skillDir: '/proj', projectRoot: '/proj' });
     // CLI_SOURCE appears once in sourcePaths (deduped)
     expect(result.sourcePaths.size).toBe(1);
     // CLI_DEST and 'scripts/cli2.mjs' are distinct in destPaths
     expect(result.destPaths.size).toBe(2);
   });
 
-  it('should normalize paths with ./ prefix', () => {
+  it('should normalize paths with ./ prefix (skill at project root)', () => {
     const files: SkillFileEntry[] = [
       { source: `./${CLI_SOURCE}`, dest: `./${CLI_DEST}` },
     ];
-    const result = computeDeferredPaths(files);
+    const result = computeDeferredPaths(files, { skillDir: '/proj', projectRoot: '/proj' });
     expect(result.sourcePaths.has(CLI_SOURCE)).toBe(true);
     expect(result.destPaths.has(CLI_DEST)).toBe(true);
+  });
+
+  it('should resolve dest relative to skillDir and emit project-root-relative path for skill in subdirectory', () => {
+    // Bug regression test: skill is at /proj/skills/ado/SKILL.md
+    // skillDir = /proj/skills/ado, projectRoot = /proj
+    // files: [{ source: 'dist/bin/ado-cli.mjs', dest: 'scripts/ado-cli.mjs' }]
+    // dest authored relative to skillDir → absolute: /proj/skills/ado/scripts/ado-cli.mjs
+    // expected destPath (project-root-relative): 'skills/ado/scripts/ado-cli.mjs'
+    // source authored relative to projectRoot → absolute: /proj/dist/bin/ado-cli.mjs
+    // expected sourcePath (project-root-relative): 'dist/bin/ado-cli.mjs'
+    const files: SkillFileEntry[] = [
+      { source: 'dist/bin/ado-cli.mjs', dest: 'scripts/ado-cli.mjs' },
+    ];
+    const result = computeDeferredPaths(files, {
+      skillDir: '/proj/skills/ado',
+      projectRoot: '/proj',
+    });
+
+    // destPath must be project-root-relative (including the skill subdir prefix)
+    expect(result.destPaths.has('skills/ado/scripts/ado-cli.mjs')).toBe(true);
+    // sourcePath must be project-root-relative (as authored, relative to projectRoot)
+    expect(result.sourcePaths.has('dist/bin/ado-cli.mjs')).toBe(true);
+
+    // Must NOT contain the raw (skill-dir-relative) dest that the bug would have stored
+    expect(result.destPaths.has('scripts/ado-cli.mjs')).toBe(false);
   });
 });

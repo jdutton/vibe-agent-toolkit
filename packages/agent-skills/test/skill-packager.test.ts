@@ -1002,7 +1002,7 @@ describe('packageSkill - FILES_SOURCE_GITIGNORED (build path)', () => {
     expect(warn).toBeUndefined();
   });
 
-  it('FILES_SOURCE_GITIGNORED is un-suppressible via validation.severity on the build path', async () => {
+  it('FILES_SOURCE_GITIGNORED is suppressible via validation.allow with a reason on the build path', async () => {
     const dir = getTempDir();
     writeFileSync(safePath.join(dir, GITIGNORED_SOURCE), 'SECRET=hunter2');
 
@@ -1014,15 +1014,16 @@ describe('packageSkill - FILES_SOURCE_GITIGNORED (build path)', () => {
 
     const result = await packWithOutput(skillPath, {
       files: [{ source: GITIGNORED_SOURCE, dest: GITIGNORED_DEST }],
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test stub + intentional misuse
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test stub
       gitTracker: tracker as any,
-      // Attempt to suppress — NonOverridableCode bypasses framework finalize()
-      validation: ({ severity: { FILES_SOURCE_GITIGNORED: 'ignore' } }) as unknown as ValidationConfig,
+      // Acknowledge via allow with a reason — must silence the warning
+      validation: {
+        allow: { FILES_SOURCE_GITIGNORED: [{ paths: ['**/*'], reason: 'intentional built CLI from dist/' }] },
+      } as ValidationConfig,
     });
 
-    // Warning must still be present despite the severity override
+    // Warning must be suppressed via allow entry
     const warn = (result.postBuildIssues ?? []).find(i => i.code === 'FILES_SOURCE_GITIGNORED');
-    expect(warn).toBeDefined();
-    expect(warn?.severity).toBe('warning');
+    expect(warn).toBeUndefined();
   });
 });

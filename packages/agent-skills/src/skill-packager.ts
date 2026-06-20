@@ -352,7 +352,7 @@ export async function packageSkill(
   const skillResourceId = skillResource?.id ?? '';
 
   const filesConfig = options.files ?? [];
-  const deferredPaths = computeDeferredPaths(filesConfig);
+  const deferredPaths = computeDeferredPaths(filesConfig, { skillDir: skillRoot, projectRoot });
 
   const packagerWalkOptions: Parameters<typeof walkLinkGraph>[2] = {
     maxDepth,
@@ -526,8 +526,9 @@ export async function packageSkill(
   const rawLinkIssues = [
     ...walkerExclusionsToIssues(excludedReferences, projectRoot),
     ...deferredAssetsToIssues(deferredAssets, projectRoot),
-    // Un-suppressible security warning: a files: source that exists and is gitignored
-    // will be copied into the published bundle. Must be emitted here (not just in
+    // Suppressible security warning: a files: source that exists and is gitignored
+    // will be copied into the published bundle. Fires by default; silence with a
+    // validation.allow entry (with a reason). Must be emitted here (not just in
     // validateSkillForPackaging) because the post-build validator runs on built output
     // where gitignored sources are no longer present.
     ...detectGitignoredFilesSources(filesConfig, projectRoot, options.gitTracker),

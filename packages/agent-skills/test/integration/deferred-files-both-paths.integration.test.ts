@@ -32,7 +32,25 @@ const SKILL_NAME = 'deferred-both-paths';
 /** Description must be ≥50 chars to pass validation. */
 const SKILL_DESC =
   'Integration harness proving source-time and build-time link validation agree on deferred artifacts.';
+
+/**
+ * files: config — source is project-root-relative, dest is skill-dir-relative.
+ *
+ * With skill at <root>/skills/probe/SKILL.md:
+ *   source: 'build/gen/idx.json'  → resolves to <root>/build/gen/idx.json
+ *   dest:   'data/idx.json'       → resolves to <root>/skills/probe/data/idx.json
+ *
+ * The project-root-relative dest path is therefore 'skills/probe/data/idx.json'.
+ * The SKILL.md link `[index](data/idx.json)` targets that dest (deferred).
+ */
 const FILES_CONFIG = [{ source: 'build/gen/idx.json', dest: 'data/idx.json' }];
+
+/**
+ * Subdir where the skill lives inside the git repo.
+ * This is the critical difference from the previous version of this test:
+ * skillDir (skills/probe) !== projectRoot, which exercises the root-cause bug.
+ */
+const SKILL_SUBDIR = 'skills/probe';
 
 // ---------------------------------------------------------------------------
 // Fixture setup — a real git repo with a gitignored build artifact
@@ -47,7 +65,12 @@ interface Fixture {
  * Build a temp git repo containing:
  *  - .gitignore  →  build/
  *  - build/gen/idx.json  (EXISTS but gitignored)
- *  - SKILL.md  with the given body
+ *  - skills/probe/SKILL.md  with the given body  ← skill is in a SUBDIRECTORY
+ *
+ * The skill is placed in a subdirectory (skills/probe/) so skillDir !== projectRoot.
+ * This exercises the root-cause of issue #127: computeDeferredPaths must resolve
+ * dest paths relative to skillDir and emit project-root-relative paths so that
+ * checkDeferred() in walk-link-graph can match them correctly.
  */
 function buildFixture(prefix: string, skillBody: string): Fixture {
   const dir = safePath.join(normalizedTmpdir(), `${prefix}-${Date.now()}`);
@@ -60,15 +83,19 @@ function buildFixture(prefix: string, skillBody: string): Fixture {
 
   writeFileSync(safePath.join(dir, '.gitignore'), 'build/\n');
 
+  // Create the skill in a subdirectory (the key change from prior version).
+  const skillDir = safePath.join(dir, SKILL_SUBDIR);
+  mkdirSyncReal(skillDir, { recursive: true });
+
   const frontmatter = `---\nname: ${SKILL_NAME}\ndescription: "${SKILL_DESC}"\n---`;
-  const skillPath = safePath.join(dir, 'SKILL.md');
+  const skillPath = safePath.join(skillDir, 'SKILL.md');
   writeFileSync(skillPath, `${frontmatter}\n\n${skillBody}`);
 
-  // Stage and commit .gitignore + SKILL.md so `git ls-files` (used by the
+  // Stage and commit .gitignore + skill SKILL.md so `git ls-files` (used by the
   // file crawler) finds them and adds them to the ResourceRegistry. Without
   // a commit, git ls-files returns an empty set and the registry stays empty,
   // which causes walkLinkGraph to skip the skill's links entirely.
-  safeExecSync('git', ['add', '.gitignore', 'SKILL.md'], { cwd: dir });
+  safeExecSync('git', ['add', '.gitignore', `${SKILL_SUBDIR}/SKILL.md`], { cwd: dir });
   safeExecSync('git', ['commit', '-q', '-m', 'init'], { cwd: dir });
 
   // Create gitignored build artifact AFTER the initial commit so it is
@@ -185,7 +212,11 @@ describe('deferred-files both-paths agreement (AC-10c)', () => {
   });
 
   // Row 1 — Deferred dest: SKILL.md links data/idx.json (the dest; absent in source tree).
-  it('row 1 — deferred dest: both paths emit LINK_DEFERRED_ARTIFACT, not LINK_MISSING_TARGET', async () => {
+  // The skill is in skills/probe/SKILL.md; dest 'data/idx.json' is authored relative to
+  // skillDir, resolving to skills/probe/data/idx.json from projectRoot. This tests the
+  // root-cause fix: computeDeferredPaths must emit the project-root-relative dest path
+  // so checkDeferred() can match it correctly.
+  it('row 1 — deferred dest: both paths emit LINK_DEFERRED_ARTIFACT, not LINK_MISSING_TARGET (skill in subdir)', async () => {
     const { sourceCodes, buildCodes } = await runRow(
       ctx,
       'deferred-dest',
@@ -210,11 +241,13 @@ describe('deferred-files both-paths agreement (AC-10c)', () => {
   });
 
   // Row 2 — C1 leak: SKILL.md links the gitignored SOURCE path build/gen/idx.json (exists).
-  it('row 2 — C1 leak: gitignored present source still emits LINK_TO_GITIGNORED_FILE on both paths', async () => {
+  // The link uses a path relative to the skillDir (skills/probe/), but the target resolves
+  // to <root>/build/gen/idx.json which IS gitignored and present on disk.
+  it('row 2 — C1 leak: gitignored present source still emits LINK_TO_GITIGNORED_FILE on both paths (skill in subdir)', async () => {
     const { sourceCodes, buildCodes } = await runRow(
       ctx,
       'c1-leak',
-      '# Skill\n\nSee [index](build/gen/idx.json).',
+      '# Skill\n\nSee [index](../../build/gen/idx.json).',
     );
 
     // C1 narrowing: present gitignored source must NOT defer — it must flag.
@@ -231,7 +264,7 @@ describe('deferred-files both-paths agreement (AC-10c)', () => {
   });
 
   // Row 3 — Genuinely missing: link to a non-declared, non-existent path.
-  it('row 3 — genuinely missing: both paths emit LINK_MISSING_TARGET for a non-declared absent link', async () => {
+  it('row 3 — genuinely missing: both paths emit LINK_MISSING_TARGET for a non-declared absent link (skill in subdir)', async () => {
     const { sourceCodes, buildCodes } = await runRow(
       ctx,
       'missing-link',

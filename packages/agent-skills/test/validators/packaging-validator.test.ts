@@ -1076,28 +1076,32 @@ describe('validateSkillForPackaging - FILES_SOURCE_GITIGNORED (validate path)', 
 		expect(warn?.location).toBe(GITIGNORED_SRC);
 	});
 
-	it('FILES_SOURCE_GITIGNORED is un-suppressible via validation.severity override', async () => {
+	it('FILES_SOURCE_GITIGNORED is suppressible via validation.allow with a reason (audited acknowledgment)', async () => {
 		const tempDir = getTempDir();
 		fs.writeFileSync(safePath.join(tempDir, GITIGNORED_SRC), GITIGNORED_FILE_CONTENT);
 
 		const skillPath = createMinimalSkill(tempDir);
 		const tracker = makeGitTrackerStub(GITIGNORED_SRC);
 
-		// Attempt to suppress via severity override — should have no effect on a NonOverridableCode
+		// Suppress via allow with a reason — must silence the warning
 		const result = await validateSkillForPackaging(
 			skillPath,
 			{
 				files: [{ source: GITIGNORED_SRC, dest: GITIGNORED_DST }],
-				validation: ({ severity: { FILES_SOURCE_GITIGNORED: 'ignore' } }) as unknown as ValidationConfig,
+				validation: {
+					allow: { FILES_SOURCE_GITIGNORED: [{ paths: ['**/*'], reason: 'intentional built CLI from dist/' }] },
+				} as ValidationConfig,
 			},
 			'source',
 			{ gitTracker: tracker as Parameters<typeof validateSkillForPackaging>[3] extends { gitTracker?: infer T } ? T : never },
 		);
 
-		// NonOverridableCode bypasses finalize() → severity override has no effect
+		// Warning must be suppressed (not in emitted list)
 		const warn = result.allErrors.find(i => i.code === 'FILES_SOURCE_GITIGNORED');
-		expect(warn).toBeDefined();
-		expect(warn?.severity).toBe('warning');
+		expect(warn).toBeUndefined();
+		// The allow framework records it in ignoredErrors
+		const ignored = result.ignoredErrors.find(i => i.code === 'FILES_SOURCE_GITIGNORED');
+		expect(ignored).toBeDefined();
 	});
 
 	it('does NOT emit FILES_SOURCE_GITIGNORED when source is not gitignored', async () => {

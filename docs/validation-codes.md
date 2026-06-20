@@ -230,11 +230,19 @@ Only meaningful when actually bundling a skill; fire from `vat skills build` (an
 
 ### `FILES_SOURCE_GITIGNORED`
 
-> **Un-suppressible warning.** This code is NOT in the overridable `CODE_REGISTRY`. It cannot be silenced via `validation.severity` or `validation.allow`.
-
+- **Default:** `warning`
 - **What:** A `files:` source path declared in the skill config resolves to a gitignored file. VAT will still copy it into the published bundle — this warning confirms the action and asks the author to verify it carries no secrets.
 - **Why it matters:** Gitignored files are typically excluded from the repo for a reason (generated artifacts, local-only state, credentials). A `files:` entry that names a gitignored path will materialize that file into the bundle on any machine where the file exists, potentially leaking sensitive content to bundle consumers.
-- **Fix:** Confirm the source file carries no secrets. If it is safe to distribute, keep the `files:` entry and acknowledge this warning. If the file may contain secrets, remove it from `files:` and generate the artifact from a non-ignored intermediate.
+- **Fix:** Confirm the source file carries no secrets. If it is a known-safe build artifact (e.g. a bundled CLI from `dist/`), acknowledge it with a `validation.allow` entry that includes a `reason`:
+
+  ```yaml
+  validation:
+    allow:
+      FILES_SOURCE_GITIGNORED:
+        - reason: "intentional built CLI from dist/ — no secrets"
+  ```
+
+  To change the default severity, use `validation.severity.FILES_SOURCE_GITIGNORED`. If the file may contain secrets, remove it from `files:` and generate the artifact from a non-ignored intermediate.
 
 ### `LINK_DROPPED_BY_DEPTH`
 

@@ -178,8 +178,10 @@ function validateFilesConfig(
  *
  * A source that EXISTS and is gitignored is the security-leak case: it will be
  * copied verbatim into the published bundle by `copyFilesConfigEntries`. This
- * detector emits `FILES_SOURCE_GITIGNORED` (a NonOverridableCode) so the
- * warning is un-suppressible regardless of `validation.severity` / `validation.allow`.
+ * detector emits `FILES_SOURCE_GITIGNORED` (a suppressible registry warning).
+ * The warning fires by default; silence it with a `validation.allow` entry that
+ * includes a `reason` (audited acknowledgment), or adjust severity via
+ * `validation.severity.FILES_SOURCE_GITIGNORED`.
  *
  * Missing sources are intentionally skipped — they are deferred build artifacts
  * handled separately, not a leak risk.
@@ -368,7 +370,10 @@ export async function validateSkillForPackaging(
     : await crawlAndResolveRegistry(projectRoot);
 
   const skillResource = registry.getResource(safePath.resolve(skillPath));
-  const deferred = computeDeferredPaths(packagingConfig?.files ?? []);
+  const deferred = computeDeferredPaths(packagingConfig?.files ?? [], {
+    skillDir: dirname(skillPath),
+    projectRoot,
+  });
 
   const walkOptions: Parameters<typeof walkLinkGraph>[2] = {
     maxDepth,
