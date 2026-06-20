@@ -13,6 +13,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
+import { isLocalFileLink } from '@vibe-agent-toolkit/resources';
 import type { ResourceLink, ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { type GitTracker, isGitIgnored, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
@@ -384,7 +385,7 @@ export function walkLinkGraph(
     const [currentResource, currentDepth] = entry;
 
     for (const link of currentResource.links) {
-      if (link.type === 'local_file') {
+      if (isLocalFileLink(link.type)) {
         processLink(link, currentResource, currentDepth, registry, options, excludeMatchers, state);
       }
     }

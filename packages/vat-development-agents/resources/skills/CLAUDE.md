@@ -119,4 +119,4 @@ Watch for:
 - `SKILL_DESCRIPTION_FILLER_OPENER` — start with action verb or "Use when"
 - `SKILL_NAME_MISMATCHES_DIR` (should not fire — generic-container exemption applies here)
 - `LINK_TO_NAVIGATION_FILE` — link to specific files, not READMEs
-- `LINK_TARGETS_DIRECTORY` — link to specific files, not directories
+- `LINK_TARGETS_DIRECTORY` — point a `files:` source (typed single-file slot) at a file, not a directory; navigational directory links are valid

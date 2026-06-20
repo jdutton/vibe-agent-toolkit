@@ -194,6 +194,11 @@ function extractLinkText(node: Link | LinkReference): string {
  * classifyLink('#heading') // 'anchor'
  * classifyLink('./file.md') // 'local_file'
  * classifyLink('./file.md#anchor') // 'local_file'
+ * classifyLink('docs/') // 'local_directory'
+ * classifyLink('./docs/') // 'local_directory'
+ * classifyLink('../docs/') // 'local_directory'
+ * classifyLink('/docs/') // 'local_directory'
+ * classifyLink('https://x.com/docs/') // 'external' (not a local ref)
  * ```
  */
 export function classifyLink(href: string): LinkType {
@@ -210,6 +215,12 @@ export function classifyLink(href: string): LinkType {
   // (e.g., javascript:, tel:, data:, ftp:) — classify as unknown rather than local file
   if (href.includes(':')) {
     return 'unknown';
+  }
+  // Local directory: path component (before any # or ?) ends in '/'.
+  // Must come after all protocol guards so external URLs are never reclassified.
+  const pathPart = href.split(/[#?]/u)[0] ?? href;
+  if (pathPart.endsWith('/')) {
+    return 'local_directory';
   }
   // Links with anchors are still local file links
   if (href.includes('#')) {
@@ -249,6 +260,19 @@ export function classifyLink(href: string): LinkType {
     return 'local_file';
   }
   return 'unknown';
+}
+
+/**
+ * Returns true for link types that represent local filesystem targets — both
+ * regular files and directories. Other packages (e.g. agent-skills walker)
+ * import this predicate as the single source of truth for "should we treat
+ * this link like a file link during validation/traversal?"
+ *
+ * @param type - The classified link type
+ * @returns `true` for `'local_file'` and `'local_directory'`
+ */
+export function isLocalFileLink(type: LinkType): boolean {
+  return type === 'local_file' || type === 'local_directory';
 }
 
 /**

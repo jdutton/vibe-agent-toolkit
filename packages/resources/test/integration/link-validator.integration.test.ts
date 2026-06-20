@@ -754,32 +754,115 @@ describe('validateLink', () => {
       expect(result).toBeNull();
     });
 
-    it('emits broken_file when leading-/ target is a directory', async () => {
-      // /docs/ resolves to projectRoot/docs (an existing directory).
+    it('passes when leading-/ target is an existing directory', async () => {
+      // /docs/ resolves to projectRoot/docs (an existing directory) — must be valid.
       await assertValidation(
         {
           sourceFile,
-          link: createLink('local_file', '/docs/', 'Directory target', 1),
+          link: createLink('local_directory', '/docs/', 'Directory target', 1),
           headingsMap: fragmentIndex(),
-          expected: { code: 'LINK_BROKEN_FILE', messageContains: 'Link target is a directory' },
+          expected: null,
           validationOptions: { projectRoot, skipGitIgnoreCheck: true },
         },
         expect,
       );
     });
 
-    it('emits broken_file when relative link target is a directory', async () => {
+    it('passes when relative link target is an existing directory', async () => {
       // sourceFile is in projectRoot/docs/sub; ../  resolves to projectRoot/docs.
       await assertValidation(
         {
           sourceFile,
-          link: createLink('local_file', '../', 'Relative directory target', 1),
+          link: createLink('local_directory', '../', 'Relative directory target', 1),
           headingsMap: fragmentIndex(),
-          expected: { code: 'LINK_BROKEN_FILE', messageContains: 'Link target is a directory' },
+          expected: null,
           validationOptions: { projectRoot, skipGitIgnoreCheck: true },
         },
         expect,
       );
     });
+
+    it('emits broken_file for a link to a missing/renamed directory', async () => {
+      // /nonexistent/ resolves to a path that does not exist — must still be an error.
+      await assertValidation(
+        {
+          sourceFile,
+          link: createLink('local_directory', '/nonexistent/', 'Missing directory', 1),
+          headingsMap: fragmentIndex(),
+          expected: { code: 'LINK_BROKEN_FILE', messageContains: 'File not found' },
+          validationOptions: { projectRoot, skipGitIgnoreCheck: true },
+        },
+        expect,
+      );
+    });
+
+    it('passes for [/docs/](/docs/) where /docs/ resolves to an existing directory', async () => {
+      // Absolute-path directory link: /docs/ resolves to projectRoot/docs (exists).
+      await assertValidation(
+        {
+          sourceFile,
+          link: createLink('local_directory', '/docs/', '[/docs/](/docs/)', 1),
+          headingsMap: fragmentIndex(),
+          expected: null,
+          validationOptions: { projectRoot, skipGitIgnoreCheck: true },
+        },
+        expect,
+      );
+    });
+
+    it('passes for [/docs](/docs) where /docs resolves to an existing directory (local_file type)', async () => {
+      // Absolute bare dir name without trailing slash — classified local_file; existing dir passes.
+      await assertValidation(
+        {
+          sourceFile,
+          link: createLink('local_file', '/docs', '[/docs](/docs)', 1),
+          headingsMap: fragmentIndex(),
+          expected: null,
+          validationOptions: { projectRoot, skipGitIgnoreCheck: true },
+        },
+        expect,
+      );
+    });
+
+    it('never triggers a directory error for external folder-shaped URL', async () => {
+      // https://x.com/docs/ is classified as external — validateLink must return null.
+      const link = createLink('external', 'https://x.com/docs/', 'External dir URL', 1);
+      const result = await validateLink(link, sourceFile, fragmentIndex(), {
+        projectRoot,
+        skipGitIgnoreCheck: true,
+      });
+      expect(result).toBeNull();
+    });
+  });
+
+  describe('HTML directory links', () => {
+    let htmlProjectRoot: string;
+    let htmlSourceFile: string;
+
+    beforeAll(async () => {
+      const fs = await import('node:fs');
+      htmlProjectRoot = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'html-dir-'));
+      htmlProjectRoot = fs.realpathSync(htmlProjectRoot);
+      const dirTarget = safePath.join(htmlProjectRoot, 'dir');
+      fs.mkdirSync(dirTarget, { recursive: true });
+      htmlSourceFile = safePath.join(htmlProjectRoot, 'page.html');
+      fs.writeFileSync(htmlSourceFile, '<a href="dir/">Dir link</a>');
+    });
+
+    afterAll(async () => {
+      const fs = await import('node:fs');
+      fs.rmSync(htmlProjectRoot, { recursive: true, force: true });
+    });
+
+    it('passes for HTML href="dir/" where dir exists as a directory', async () => {
+      const link = createLink('local_directory', 'dir/', 'Dir link', 1);
+      const result = await validateLink(link, htmlSourceFile, fragmentIndex(), {
+        projectRoot: htmlProjectRoot,
+        skipGitIgnoreCheck: true,
+      });
+      expect(result).toBeNull();
+      // Confirm no "directory" phrasing in result (result is null, so diagnostics contain none)
+    });
   });
 });
+

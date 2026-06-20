@@ -5,7 +5,7 @@
  * Detects unreferenced files and broken links in the packaged output.
  */
 
-import { existsSync, readdirSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
@@ -125,6 +125,21 @@ function collectBrokenLinkIssues(
   for (const href of hrefs) {
     const resolved = toForwardSlash(safePath.resolve(dirname(sourceFile), href));
     if (!allFileSet.has(resolved)) {
+      // A navigational directory link (href ending in `/`, classified `local_directory`)
+      // is a valid target if the directory itself exists on disk — walkDir populates
+      // allFileSet with FILES only, so directory paths are never in the set.
+      // Note: a NO-SLASH link (`[Concepts](concepts)`, classified `local_file`) that
+      // happens to resolve to a directory is a different case — it matches the
+      // link-rewrite bundled-link rule (skill-packager.ts buildRewriteRules) and
+      // renders with an undefined `link.resource.*`. Fixing that is the
+      // link-rewrite engine's job, tracked under #129 (slice 3, built-path
+      // unification). The slash form (`concepts/`, `local_directory`) survives
+      // rewrite verbatim and is the realistic navigational case this guard covers.
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved is a normalized path from a validated output directory
+      const isExistingDirectory = statSync(resolved, { throwIfNoEntry: false })?.isDirectory() === true;
+      if (isExistingDirectory) {
+        continue;
+      }
       issues.push({
         severity: CODE_REGISTRY.PACKAGED_BROKEN_LINK.defaultSeverity,
         code: 'PACKAGED_BROKEN_LINK',

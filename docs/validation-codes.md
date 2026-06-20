@@ -64,9 +64,11 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 ### `LINK_TARGETS_DIRECTORY`
 
 - **Default:** `error`
-- **What:** Markdown link resolves to a directory rather than a file.
-- **Why it matters:** Directory links are ambiguous — agents and renderers cannot load a directory as content. The author almost certainly intended a specific file inside it.
-- **Fix:** Point the link at a specific file (e.g. `README.md` inside the directory) instead of the directory itself.
+- **What:** A typed single-file reference (e.g. a `files:` source entry) resolves to a directory instead of a file.
+- **Why it matters:** A single-file slot is opened or copied as exactly one file; a directory cannot satisfy that contract. Navigational prose links to a directory are valid and existence-checked — they do **not** trigger this code.
+- **Fix:** Point the typed reference at a specific file, not a directory.
+
+> **Decision record D7 — directory index resolution (GitHub-style `docs/` → `docs/README.md`) is intentionally out of scope.** Because navigational prose links to a directory are now valid targets, there is no need to infer an index file; the directory link is simply allowed as-is. Implementing index resolution would add complexity for no benefit under the current model.
 
 ### `LINK_TO_NAVIGATION_FILE`
 
