@@ -123,19 +123,36 @@ export function matchLinkToFiles(
 }
 
 /**
- * Compute the set of paths that should be treated as "deferred" during
- * source-time validation. These are paths from files config entries where
- * the file may not exist yet (build artifacts).
+ * Structured deferred path sets returned by {@link computeDeferredPaths}.
  *
- * Both source and dest paths are included because:
- * - source may be a build artifact that doesn't exist at validation time
- * - dest is the target location that won't exist until build time
+ * - `destPaths` — files: dest paths that are always deferred (the target
+ *   location won't exist until build time).
+ * - `sourcePaths` — files: source paths that are deferred ONLY when the
+ *   target does not yet exist on disk (i.e. genuine build artifacts). A
+ *   source that already exists on disk and is gitignored is a leak and must
+ *   NOT be deferred — let it fall through to the gitignore branch.
  */
-export function computeDeferredPaths(files: SkillFileEntry[]): Set<string> {
-  const paths = new Set<string>();
+export interface DeferredPaths {
+  /** files: dest paths — always deferred (won't exist until build). */
+  destPaths: Set<string>;
+  /** files: source paths — deferred ONLY when the target does not yet exist (build artifact). */
+  sourcePaths: Set<string>;
+}
+
+/**
+ * Compute the structured sets of paths that should be treated as "deferred"
+ * during source-time validation. These are paths from files config entries
+ * where the file may not exist yet (build artifacts).
+ *
+ * - dest paths are always deferred (target won't exist until build)
+ * - source paths are deferred only when the target does not yet exist on disk
+ */
+export function computeDeferredPaths(files: SkillFileEntry[]): DeferredPaths {
+  const destPaths = new Set<string>();
+  const sourcePaths = new Set<string>();
   for (const entry of files) {
-    paths.add(normalizePath(entry.source));
-    paths.add(normalizePath(entry.dest));
+    sourcePaths.add(normalizePath(entry.source));
+    destPaths.add(normalizePath(entry.dest));
   }
-  return paths;
+  return { destPaths, sourcePaths };
 }

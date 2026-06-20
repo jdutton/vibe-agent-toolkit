@@ -109,25 +109,42 @@ describe('matchLinkToFiles', () => {
 });
 
 describe('computeDeferredPaths', () => {
-  it('should return empty set when no files config', () => {
-    expect(computeDeferredPaths([])).toEqual(new Set());
+  it('should return empty sets when no files config', () => {
+    const result = computeDeferredPaths([]);
+    expect(result.destPaths).toEqual(new Set());
+    expect(result.sourcePaths).toEqual(new Set());
   });
 
-  it('should include both source and dest paths', () => {
+  it('should put dest in destPaths and source in sourcePaths', () => {
     const files: SkillFileEntry[] = [
       { source: CLI_SOURCE, dest: CLI_DEST },
     ];
     const result = computeDeferredPaths(files);
-    expect(result.has(CLI_SOURCE)).toBe(true);
-    expect(result.has(CLI_DEST)).toBe(true);
+    expect(result.destPaths.has(CLI_DEST)).toBe(true);
+    expect(result.sourcePaths.has(CLI_SOURCE)).toBe(true);
+    // Each path should be in its own set, not cross-contaminated
+    expect(result.destPaths.has(CLI_SOURCE)).toBe(false);
+    expect(result.sourcePaths.has(CLI_DEST)).toBe(false);
   });
 
-  it('should deduplicate across multiple entries', () => {
+  it('should deduplicate within each set across multiple entries', () => {
     const files: SkillFileEntry[] = [
       { source: CLI_SOURCE, dest: CLI_DEST },
       { source: CLI_SOURCE, dest: 'scripts/cli2.mjs' },
     ];
     const result = computeDeferredPaths(files);
-    expect(result.size).toBe(3);
+    // CLI_SOURCE appears once in sourcePaths (deduped)
+    expect(result.sourcePaths.size).toBe(1);
+    // CLI_DEST and 'scripts/cli2.mjs' are distinct in destPaths
+    expect(result.destPaths.size).toBe(2);
+  });
+
+  it('should normalize paths with ./ prefix', () => {
+    const files: SkillFileEntry[] = [
+      { source: `./${CLI_SOURCE}`, dest: `./${CLI_DEST}` },
+    ];
+    const result = computeDeferredPaths(files);
+    expect(result.sourcePaths.has(CLI_SOURCE)).toBe(true);
+    expect(result.destPaths.has(CLI_DEST)).toBe(true);
   });
 });

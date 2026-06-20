@@ -5,12 +5,12 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import * as fs from 'node:fs';
 
-import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import type { ValidationConfig, ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import type { PackagingValidationResult } from '../../src/validators/packaging-validator.js';
-import { detectNameMismatchIssue, validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
+import { detectGitignoredFilesSources, detectNameMismatchIssue, validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
 import {
 	createSkillContent,
 	createTransitiveSkillStructure,
@@ -733,6 +733,25 @@ describe('validateSkillForPackaging - Metadata reporting', () => {
 
 // Files config validation constants
 const DUPLICATE_FILES_DEST_CODE = 'DUPLICATE_FILES_DEST';
+
+// FILES_SOURCE_GITIGNORED test constants
+const GITIGNORED_TEST_PREFIX = 'gitignored-test-';
+const GITIGNORED_SRC = 'secret.env';
+const GITIGNORED_DST = 'config/secret.env';
+const GITIGNORED_FILE_CONTENT = 'SECRET=hunter2';
+
+/**
+ * Build a minimal gitTracker stub whose `isIgnoredByActiveSet` returns
+ * `true` for paths ending with the given basename.
+ *
+ * Exported at module scope so it is accessible across describe blocks
+ * (satisfies local/no-test-scoped-functions).
+ */
+function makeGitTrackerStub(ignoredBasename: string): { isIgnoredByActiveSet: (p: string) => boolean } {
+	return {
+		isIgnoredByActiveSet: (p: string) => p.endsWith(ignoredBasename),
+	};
+}
 const FILES_DEST_A = 'output/a.md';
 const FILES_DEST_B = 'output/b.md';
 
@@ -965,5 +984,176 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 		// Only SKILL.md should be bundled, reference.md excluded
 		expect(result.metadata.fileCount).toBe(1); // SKILL.md only
 		expect(result.metadata.excludedReferenceCount).toBe(1);
+	});
+});
+
+// ============================================================================
+// detectGitignoredFilesSources — unit tests (fast, injected stub)
+// ============================================================================
+
+describe('detectGitignoredFilesSources', () => {
+	const projectRoot = '/fake/project';
+
+	it('emits FILES_SOURCE_GITIGNORED for an existing gitignored source (injected tracker)', () => {
+		const tempDir = fs.mkdtempSync(safePath.join(fs.realpathSync('/tmp'), GITIGNORED_TEST_PREFIX));
+		try {
+			fs.writeFileSync(safePath.join(tempDir, GITIGNORED_SRC), GITIGNORED_FILE_CONTENT);
+
+			const tracker = makeGitTrackerStub(GITIGNORED_SRC);
+			const issues = detectGitignoredFilesSources(
+				[{ source: GITIGNORED_SRC, dest: GITIGNORED_DST }],
+				tempDir,
+				// Type cast: we only need isIgnoredByActiveSet; the full GitTracker is not required here
+				tracker as unknown as Parameters<typeof detectGitignoredFilesSources>[2],
+			);
+
+			expect(issues).toHaveLength(1);
+			expect(issues[0]?.code).toBe('FILES_SOURCE_GITIGNORED');
+			expect(issues[0]?.severity).toBe('warning');
+			expect(issues[0]?.message).toContain(GITIGNORED_SRC);
+			expect(issues[0]?.message).toContain('no secrets');
+			expect(issues[0]?.location).toBe(GITIGNORED_SRC);
+		} finally {
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it('does NOT emit for an existing source that is NOT gitignored', () => {
+		const tempDir = fs.mkdtempSync(safePath.join(fs.realpathSync('/tmp'), GITIGNORED_TEST_PREFIX));
+		try {
+			fs.writeFileSync(safePath.join(tempDir, 'normal.md'), '# Normal');
+
+			// Tracker reports nothing ignored
+			const tracker = { isIgnoredByActiveSet: () => false };
+			const issues = detectGitignoredFilesSources(
+				[{ source: 'normal.md', dest: 'resources/normal.md' }],
+				tempDir,
+				tracker as unknown as Parameters<typeof detectGitignoredFilesSources>[2],
+			);
+
+			expect(issues).toHaveLength(0);
+		} finally {
+			fs.rmSync(tempDir, { recursive: true, force: true });
+		}
+	});
+
+	it('does NOT emit for a missing source (deferred build artifact)', () => {
+		const issues = detectGitignoredFilesSources(
+			[{ source: 'dist/cli.mjs', dest: 'scripts/cli.mjs' }],
+			projectRoot,
+			// Even if the tracker would say "ignored", a missing file must not fire
+			{ isIgnoredByActiveSet: () => true } as unknown as Parameters<typeof detectGitignoredFilesSources>[2],
+		);
+
+		expect(issues).toHaveLength(0);
+	});
+
+	it('returns empty array when files is undefined', () => {
+		const issues = detectGitignoredFilesSources(undefined, projectRoot);
+		expect(issues).toHaveLength(0);
+	});
+
+	it('returns empty array when files is empty', () => {
+		const issues = detectGitignoredFilesSources([], projectRoot);
+		expect(issues).toHaveLength(0);
+	});
+});
+
+// ============================================================================
+// validateSkillForPackaging — FILES_SOURCE_GITIGNORED integration (validate path)
+// ============================================================================
+
+describe('validateSkillForPackaging - FILES_SOURCE_GITIGNORED (validate path)', () => {
+	it('emits FILES_SOURCE_GITIGNORED warning for an existing gitignored source via injected tracker', async () => {
+		const tempDir = getTempDir();
+		// Create the "gitignored" source file on disk
+		fs.writeFileSync(safePath.join(tempDir, GITIGNORED_SRC), GITIGNORED_FILE_CONTENT);
+
+		const skillPath = createMinimalSkill(tempDir);
+		const tracker = makeGitTrackerStub(GITIGNORED_SRC);
+
+		const result = await validateSkillForPackaging(
+			skillPath,
+			{ files: [{ source: GITIGNORED_SRC, dest: GITIGNORED_DST }] },
+			'source',
+			{ gitTracker: tracker as Parameters<typeof validateSkillForPackaging>[3] extends { gitTracker?: infer T } ? T : never },
+		);
+
+		const warn = result.activeWarnings.find(i => i.code === 'FILES_SOURCE_GITIGNORED');
+		expect(warn).toBeDefined();
+		expect(warn?.severity).toBe('warning');
+		expect(warn?.location).toBe(GITIGNORED_SRC);
+	});
+
+	it('FILES_SOURCE_GITIGNORED is un-suppressible via validation.severity override', async () => {
+		const tempDir = getTempDir();
+		fs.writeFileSync(safePath.join(tempDir, GITIGNORED_SRC), GITIGNORED_FILE_CONTENT);
+
+		const skillPath = createMinimalSkill(tempDir);
+		const tracker = makeGitTrackerStub(GITIGNORED_SRC);
+
+		// Attempt to suppress via severity override — should have no effect on a NonOverridableCode
+		const result = await validateSkillForPackaging(
+			skillPath,
+			{
+				files: [{ source: GITIGNORED_SRC, dest: GITIGNORED_DST }],
+				validation: ({ severity: { FILES_SOURCE_GITIGNORED: 'ignore' } }) as unknown as ValidationConfig,
+			},
+			'source',
+			{ gitTracker: tracker as Parameters<typeof validateSkillForPackaging>[3] extends { gitTracker?: infer T } ? T : never },
+		);
+
+		// NonOverridableCode bypasses finalize() → severity override has no effect
+		const warn = result.allErrors.find(i => i.code === 'FILES_SOURCE_GITIGNORED');
+		expect(warn).toBeDefined();
+		expect(warn?.severity).toBe('warning');
+	});
+
+	it('does NOT emit FILES_SOURCE_GITIGNORED when source is not gitignored', async () => {
+		const tempDir = getTempDir();
+		fs.writeFileSync(safePath.join(tempDir, 'normal.md'), '# Normal');
+
+		const skillPath = createMinimalSkill(tempDir);
+		const tracker = { isIgnoredByActiveSet: () => false };
+
+		const result = await validateSkillForPackaging(
+			skillPath,
+			{ files: [{ source: 'normal.md', dest: 'resources/normal.md' }] },
+			'source',
+			{ gitTracker: tracker as Parameters<typeof validateSkillForPackaging>[3] extends { gitTracker?: infer T } ? T : never },
+		);
+
+		const warn = result.allErrors.find(i => i.code === 'FILES_SOURCE_GITIGNORED');
+		expect(warn).toBeUndefined();
+	});
+});
+
+describe('validateSkillForPackaging - deferred dest links (files: config)', () => {
+	it('should succeed and emit LINK_DEFERRED_ARTIFACT info — not LINK_MISSING_TARGET — for a linked dest that does not exist on disk', async () => {
+		const tempDir = getTempDir();
+		// Skill links to 'scripts/cli.mjs' which is a files: dest (build artifact — absent from disk)
+		const DEFERRED_DEST = 'scripts/cli.mjs';
+		const skillContent = createSkillContent(
+			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+			`\n# Test Skill\n\nRun the CLI: [cli.mjs](./${DEFERRED_DEST}).`,
+		);
+		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
+
+		const result = await validateSkillForPackaging(skillPath, {
+			files: [{ source: 'dist/cli.mjs', dest: DEFERRED_DEST }],
+		});
+
+		// Should not error — deferred dest is not a missing target
+		expect(result.status).toBe('success');
+
+		// No LINK_MISSING_TARGET — it was classified as deferred
+		const missingIssue = result.allErrors.find(i => i.code === 'LINK_MISSING_TARGET');
+		expect(missingIssue).toBeUndefined();
+
+		// LINK_DEFERRED_ARTIFACT info issue should be present
+		const deferredIssue = result.allErrors.find(i => i.code === 'LINK_DEFERRED_ARTIFACT');
+		expect(deferredIssue).toBeDefined();
+		expect(deferredIssue?.severity).toBe('info');
+		expect(deferredIssue?.location).toBe(DEFERRED_DEST);
 	});
 });

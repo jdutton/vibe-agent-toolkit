@@ -42,3 +42,27 @@ export function walkerExclusionsToIssues(
   }
   return issues;
 }
+
+/**
+ * Emit one LINK_DEFERRED_ARTIFACT info issue per deferred asset path.
+ *
+ * Mirrors `walkerExclusionsToIssues` construction: pulls severity/fix/reference
+ * from CODE_REGISTRY and records a project-relative location.
+ */
+export function deferredAssetsToIssues(
+  deferredAssets: readonly string[],
+  projectRoot: string,
+): ValidationIssue[] {
+  const entry = CODE_REGISTRY.LINK_DEFERRED_ARTIFACT;
+  return deferredAssets.map((asset) => {
+    const location = toForwardSlash(safePath.relative(projectRoot, asset));
+    return {
+      severity: entry.defaultSeverity,
+      code: 'LINK_DEFERRED_ARTIFACT' as const,
+      message: `${entry.description} (${location})`,
+      location,
+      fix: entry.fix,
+      reference: entry.reference,
+    };
+  });
+}

@@ -26,9 +26,10 @@ import {
   type ValidationIssue,
 } from '@vibe-agent-toolkit/agent-schema';
 import { parseMarkdown, ResourceRegistry } from '@vibe-agent-toolkit/resources';
-import { findProjectRoot, normalizedTmpdir, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, isGitIgnored, normalizedTmpdir, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
+import { computeDeferredPaths } from '../files-config.js';
 import { walkLinkGraph, type LinkResolution, type WalkableRegistry } from '../walk-link-graph.js';
 
 import { observationToIssue, runCompatDetectors } from './compat-detectors.js';
@@ -39,7 +40,7 @@ import {
   VALIDATION_RULES,
   VALIDATION_THRESHOLDS,
 } from './validation-rules.js';
-import { walkerExclusionsToIssues } from './walker-to-issues.js';
+import { deferredAssetsToIssues, walkerExclusionsToIssues } from './walker-to-issues.js';
 
 /** Exclude reason constants to avoid duplicate string literals */
 const EXCLUDE_REASON_DIRECTORY = 'directory-target' as const;
@@ -169,6 +170,49 @@ function validateFilesConfig(
     }
   }
 
+  return issues;
+}
+
+/**
+ * Detect gitignored `files:` sources that exist on disk.
+ *
+ * A source that EXISTS and is gitignored is the security-leak case: it will be
+ * copied verbatim into the published bundle by `copyFilesConfigEntries`. This
+ * detector emits `FILES_SOURCE_GITIGNORED` (a NonOverridableCode) so the
+ * warning is un-suppressible regardless of `validation.severity` / `validation.allow`.
+ *
+ * Missing sources are intentionally skipped — they are deferred build artifacts
+ * handled separately, not a leak risk.
+ *
+ * Exported so `skill-packager.ts` can reuse this on the build path.
+ */
+export function detectGitignoredFilesSources(
+  files: Array<{ source: string; dest: string }> | undefined,
+  projectRoot: string,
+  gitTracker?: GitTracker,
+): ValidationIssue[] {
+  if (!files?.length) return [];
+
+  const issues: ValidationIssue[] = [];
+  for (const entry of files) {
+    const absSource = safePath.resolve(safePath.join(projectRoot, entry.source));
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- absSource derived from config-supplied path
+    if (!existsSync(absSource)) {
+      // Missing source = deferred build artifact; not a leak risk.
+      continue;
+    }
+    const ignored = gitTracker === undefined
+      ? isGitIgnored(absSource, projectRoot)
+      : gitTracker.isIgnoredByActiveSet(absSource);
+    if (ignored) {
+      issues.push({
+        severity: 'warning',
+        code: 'FILES_SOURCE_GITIGNORED',
+        message: `files: source '${entry.source}' is gitignored — it will be copied into the published bundle; confirm it contains no secrets.`,
+        location: toForwardSlash(entry.source),
+      });
+    }
+  }
   return issues;
 }
 
@@ -310,6 +354,8 @@ export async function validateSkillForPackaging(
   // Validate files config (requires projectRoot to resolve source paths for
   // directory-source detection — must run after projectRoot is computed).
   rawIssues.push(...validateFilesConfig(packagingConfig?.files, projectRoot));
+  // Detect gitignored files: sources — un-suppressible security warning.
+  rawIssues.push(...detectGitignoredFilesSources(packagingConfig?.files, projectRoot, shared?.gitTracker));
 
   // Build resource registry and walk the link graph.
   // Prefer the caller-supplied shared registry (when `vat skills validate` or
@@ -322,17 +368,20 @@ export async function validateSkillForPackaging(
     : await crawlAndResolveRegistry(projectRoot);
 
   const skillResource = registry.getResource(safePath.resolve(skillPath));
+  const deferred = computeDeferredPaths(packagingConfig?.files ?? []);
+
   const walkOptions: Parameters<typeof walkLinkGraph>[2] = {
     maxDepth,
     excludeRules: excludeConfig?.rules ?? [],
     projectRoot,
     skillRootPath: safePath.resolve(skillPath),
     excludeNavigationFiles,
+    deferredPaths: deferred,
   };
   if (shared?.gitTracker !== undefined) {
     walkOptions.gitTracker = shared.gitTracker;
   }
-  const { bundledResources, bundledAssets, excludedReferences, maxBundledDepth } = walkLinkGraph(
+  const { bundledResources, bundledAssets, excludedReferences, maxBundledDepth, deferredAssets } = walkLinkGraph(
     skillResource?.id ?? '',
     registry as WalkableRegistry,
     walkOptions,
@@ -346,6 +395,8 @@ export async function validateSkillForPackaging(
 
   // Emit issues from walker exclusions (LINK_OUTSIDE_PROJECT, LINK_TARGETS_DIRECTORY, etc.)
   rawIssues.push(...walkerExclusionsToIssues(excludedReferences, projectRoot));
+  // Emit one info issue per deferred asset declared in files: config
+  rawIssues.push(...deferredAssetsToIssues(deferredAssets, projectRoot));
 
   const fileCount = bundledFiles.length + 1; // +1 for SKILL.md itself
   const maxLinkDepth = maxBundledDepth;
