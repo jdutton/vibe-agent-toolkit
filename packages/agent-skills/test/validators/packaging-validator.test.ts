@@ -748,20 +748,36 @@ function createMinimalSkill(tempDir: string): string {
 	return skillPath;
 }
 
+/**
+ * Run files-config packaging validation, assert it errored, and return the first
+ * active error matching `code`. Collapses the validate + status + find + defined
+ * scaffold shared by the files-config tests.
+ */
+async function expectFilesConfigError(
+	skillPath: string,
+	files: Array<{ source: string; dest: string }>,
+	code: string,
+): Promise<Awaited<ReturnType<typeof validateSkillForPackaging>>['activeErrors'][number] | undefined> {
+	const result = await validateSkillForPackaging(skillPath, { files });
+	expect(result.status).toBe('error');
+	const issue = result.activeErrors.find(e => e.code === code);
+	expect(issue).toBeDefined();
+	return issue;
+}
+
 describe('validateSkillForPackaging - Files config validation', () => {
 	it('should detect duplicate dest in files config', async () => {
 		const skillPath = createMinimalSkill(getTempDir());
 
-		const result = await validateSkillForPackaging(skillPath, {
-			files: [
+		const dupError = await expectFilesConfigError(
+			skillPath,
+			[
 				{ source: 'a.md', dest: FILES_DEST_A },
 				{ source: 'b.md', dest: FILES_DEST_A },
 			],
-		});
+			DUPLICATE_FILES_DEST_CODE,
+		);
 
-		expect(result.status).toBe('error');
-		const dupError = result.activeErrors.find(e => e.code === DUPLICATE_FILES_DEST_CODE);
-		expect(dupError).toBeDefined();
 		expect(dupError?.message).toContain(FILES_DEST_A);
 	});
 
@@ -814,13 +830,12 @@ describe('validateSkillForPackaging - Files config validation', () => {
 
 		const skillPath = createMinimalSkill(tempDir);
 
-		const result = await validateSkillForPackaging(skillPath, {
-			files: [{ source: FILES_DIR_SOURCE, dest: 'assets' }],
-		});
+		const dirError = await expectFilesConfigError(
+			skillPath,
+			[{ source: FILES_DIR_SOURCE, dest: 'assets' }],
+			'LINK_TARGETS_DIRECTORY',
+		);
 
-		expect(result.status).toBe('error');
-		const dirError = result.activeErrors.find(e => e.code === 'LINK_TARGETS_DIRECTORY');
-		expect(dirError).toBeDefined();
 		expect(dirError?.location).toBe(FILES_DIR_SOURCE);
 		expect(dirError?.message).toContain(FILES_DIR_SOURCE);
 	});

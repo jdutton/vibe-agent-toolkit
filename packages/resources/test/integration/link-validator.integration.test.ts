@@ -19,7 +19,7 @@ import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from
 
 import { fragmentIndex, validateLink, type FragmentIndex } from '../../src/link-validator.js';
 import { ResourceRegistry } from '../../src/resource-registry.js';
-import { assertValidation, createGitRepo, createLink, setupSubdirTestSuite } from '../test-helpers.js';
+import { assertValidation, createGitRepo, createLink, setupSubdirTestSuite, type ValidateLinkOptions } from '../test-helpers.js';
 
 /**
  * Helper to test that a non-ignored file linking to a gitignored file returns an error
@@ -83,6 +83,28 @@ async function crawlAndValidate(dir: string): Promise<Awaited<ReturnType<Resourc
   const reg = new ResourceRegistry({ baseDir: dir });
   await reg.crawl({ baseDir: dir });
   return reg.validate({ skipGitIgnoreCheck: true });
+}
+
+/**
+ * Assert a directory-target link validates as `expected` against a temp projectRoot.
+ * Collapses the repeated assertValidation scaffold shared by the directory-link tests.
+ */
+async function assertDirLink(
+  sourceFile: string,
+  projectRoot: string,
+  link: ReturnType<typeof createLink>,
+  expected: ValidateLinkOptions['expected'],
+): Promise<void> {
+  await assertValidation(
+    {
+      sourceFile,
+      link,
+      headingsMap: fragmentIndex(),
+      expected,
+      validationOptions: { projectRoot, skipGitIgnoreCheck: true },
+    },
+    expect,
+  );
 }
 
 describe('validateLink', () => {
@@ -756,72 +778,32 @@ describe('validateLink', () => {
 
     it('passes when leading-/ target is an existing directory', async () => {
       // /docs/ resolves to projectRoot/docs (an existing directory) — must be valid.
-      await assertValidation(
-        {
-          sourceFile,
-          link: createLink('local_directory', '/docs/', 'Directory target', 1),
-          headingsMap: fragmentIndex(),
-          expected: null,
-          validationOptions: { projectRoot, skipGitIgnoreCheck: true },
-        },
-        expect,
-      );
+      await assertDirLink(sourceFile, projectRoot, createLink('local_directory', '/docs/', 'Directory target', 1), null);
     });
 
     it('passes when relative link target is an existing directory', async () => {
       // sourceFile is in projectRoot/docs/sub; ../  resolves to projectRoot/docs.
-      await assertValidation(
-        {
-          sourceFile,
-          link: createLink('local_directory', '../', 'Relative directory target', 1),
-          headingsMap: fragmentIndex(),
-          expected: null,
-          validationOptions: { projectRoot, skipGitIgnoreCheck: true },
-        },
-        expect,
-      );
+      await assertDirLink(sourceFile, projectRoot, createLink('local_directory', '../', 'Relative directory target', 1), null);
     });
 
     it('emits broken_file for a link to a missing/renamed directory', async () => {
       // /nonexistent/ resolves to a path that does not exist — must still be an error.
-      await assertValidation(
-        {
-          sourceFile,
-          link: createLink('local_directory', '/nonexistent/', 'Missing directory', 1),
-          headingsMap: fragmentIndex(),
-          expected: { code: 'LINK_BROKEN_FILE', messageContains: 'File not found' },
-          validationOptions: { projectRoot, skipGitIgnoreCheck: true },
-        },
-        expect,
+      await assertDirLink(
+        sourceFile,
+        projectRoot,
+        createLink('local_directory', '/nonexistent/', 'Missing directory', 1),
+        { code: 'LINK_BROKEN_FILE', messageContains: 'File not found' },
       );
     });
 
     it('passes for [/docs/](/docs/) where /docs/ resolves to an existing directory', async () => {
       // Absolute-path directory link: /docs/ resolves to projectRoot/docs (exists).
-      await assertValidation(
-        {
-          sourceFile,
-          link: createLink('local_directory', '/docs/', '[/docs/](/docs/)', 1),
-          headingsMap: fragmentIndex(),
-          expected: null,
-          validationOptions: { projectRoot, skipGitIgnoreCheck: true },
-        },
-        expect,
-      );
+      await assertDirLink(sourceFile, projectRoot, createLink('local_directory', '/docs/', '[/docs/](/docs/)', 1), null);
     });
 
     it('passes for [/docs](/docs) where /docs resolves to an existing directory (local_file type)', async () => {
       // Absolute bare dir name without trailing slash — classified local_file; existing dir passes.
-      await assertValidation(
-        {
-          sourceFile,
-          link: createLink('local_file', '/docs', '[/docs](/docs)', 1),
-          headingsMap: fragmentIndex(),
-          expected: null,
-          validationOptions: { projectRoot, skipGitIgnoreCheck: true },
-        },
-        expect,
-      );
+      await assertDirLink(sourceFile, projectRoot, createLink('local_file', '/docs', '[/docs](/docs)', 1), null);
     });
 
     it('never triggers a directory error for external folder-shaped URL', async () => {
