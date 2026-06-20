@@ -735,7 +735,6 @@ describe('validateSkillForPackaging - Metadata reporting', () => {
 const DUPLICATE_FILES_DEST_CODE = 'DUPLICATE_FILES_DEST';
 
 // FILES_SOURCE_GITIGNORED test constants
-const GITIGNORED_TEST_PREFIX = 'gitignored-test-';
 const GITIGNORED_SRC = 'secret.env';
 const GITIGNORED_DST = 'config/secret.env';
 const GITIGNORED_FILE_CONTENT = 'SECRET=hunter2';
@@ -995,46 +994,38 @@ describe('detectGitignoredFilesSources', () => {
 	const projectRoot = '/fake/project';
 
 	it('emits FILES_SOURCE_GITIGNORED for an existing gitignored source (injected tracker)', () => {
-		const tempDir = fs.mkdtempSync(safePath.join(fs.realpathSync('/tmp'), GITIGNORED_TEST_PREFIX));
-		try {
-			fs.writeFileSync(safePath.join(tempDir, GITIGNORED_SRC), GITIGNORED_FILE_CONTENT);
+		const tempDir = getTempDir();
+		fs.writeFileSync(safePath.join(tempDir, GITIGNORED_SRC), GITIGNORED_FILE_CONTENT);
 
-			const tracker = makeGitTrackerStub(GITIGNORED_SRC);
-			const issues = detectGitignoredFilesSources(
-				[{ source: GITIGNORED_SRC, dest: GITIGNORED_DST }],
-				tempDir,
-				// Type cast: we only need isIgnoredByActiveSet; the full GitTracker is not required here
-				tracker as unknown as Parameters<typeof detectGitignoredFilesSources>[2],
-			);
+		const tracker = makeGitTrackerStub(GITIGNORED_SRC);
+		const issues = detectGitignoredFilesSources(
+			[{ source: GITIGNORED_SRC, dest: GITIGNORED_DST }],
+			tempDir,
+			// Type cast: we only need isIgnoredByActiveSet; the full GitTracker is not required here
+			tracker as unknown as Parameters<typeof detectGitignoredFilesSources>[2],
+		);
 
-			expect(issues).toHaveLength(1);
-			expect(issues[0]?.code).toBe('FILES_SOURCE_GITIGNORED');
-			expect(issues[0]?.severity).toBe('warning');
-			expect(issues[0]?.message).toContain(GITIGNORED_SRC);
-			expect(issues[0]?.message).toContain('no secrets');
-			expect(issues[0]?.location).toBe(GITIGNORED_SRC);
-		} finally {
-			fs.rmSync(tempDir, { recursive: true, force: true });
-		}
+		expect(issues).toHaveLength(1);
+		expect(issues[0]?.code).toBe('FILES_SOURCE_GITIGNORED');
+		expect(issues[0]?.severity).toBe('warning');
+		expect(issues[0]?.message).toContain(GITIGNORED_SRC);
+		expect(issues[0]?.message).toContain('no secrets');
+		expect(issues[0]?.location).toBe(GITIGNORED_SRC);
 	});
 
 	it('does NOT emit for an existing source that is NOT gitignored', () => {
-		const tempDir = fs.mkdtempSync(safePath.join(fs.realpathSync('/tmp'), GITIGNORED_TEST_PREFIX));
-		try {
-			fs.writeFileSync(safePath.join(tempDir, 'normal.md'), '# Normal');
+		const tempDir = getTempDir();
+		fs.writeFileSync(safePath.join(tempDir, 'normal.md'), '# Normal');
 
-			// Tracker reports nothing ignored
-			const tracker = { isIgnoredByActiveSet: () => false };
-			const issues = detectGitignoredFilesSources(
-				[{ source: 'normal.md', dest: 'resources/normal.md' }],
-				tempDir,
-				tracker as unknown as Parameters<typeof detectGitignoredFilesSources>[2],
-			);
+		// Tracker reports nothing ignored
+		const tracker = { isIgnoredByActiveSet: () => false };
+		const issues = detectGitignoredFilesSources(
+			[{ source: 'normal.md', dest: 'resources/normal.md' }],
+			tempDir,
+			tracker as unknown as Parameters<typeof detectGitignoredFilesSources>[2],
+		);
 
-			expect(issues).toHaveLength(0);
-		} finally {
-			fs.rmSync(tempDir, { recursive: true, force: true });
-		}
+		expect(issues).toHaveLength(0);
 	});
 
 	it('does NOT emit for a missing source (deferred build artifact)', () => {
