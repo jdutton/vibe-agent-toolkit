@@ -7,6 +7,7 @@ import {
   mapErrorToExitCode,
   SkillTestExitCode,
 } from '../../src/skill-test/exit-codes.js';
+import { PromptInvariantError } from '../../src/skill-test/experimenter-prompt.js';
 import { GradingSkewError } from '../../src/skill-test/grading-adapter.js';
 import { HarnessLocationError } from '../../src/skill-test/harness-location.js';
 
@@ -19,6 +20,9 @@ describe('mapErrorToExitCode', () => {
   });
   it('HarnessLocationError → 2', () => {
     expect(mapErrorToExitCode(new HarnessLocationError('x'))).toBe(SkillTestExitCode.Preflight);
+  });
+  it('PromptInvariantError → 2 (user-correctable prompt override)', () => {
+    expect(mapErrorToExitCode(new PromptInvariantError('x'))).toBe(SkillTestExitCode.Preflight);
   });
   it('GradingSkewError → 1 (parse failure surfaced, never success)', () => {
     expect(mapErrorToExitCode(new GradingSkewError('x'))).toBe(SkillTestExitCode.Internal);

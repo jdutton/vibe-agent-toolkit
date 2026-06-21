@@ -39,9 +39,16 @@ export interface StageHarnessResult {
   subjectStagedDir: string | null;
 }
 
-/** Map a config descriptor onto Plan 1's runtime SkillSource union. */
+/**
+ * Map a config descriptor onto Plan 1's runtime SkillSource union.
+ *
+ * Implemented as a CHECKED assignment (no `as`): the config descriptor union and
+ * the runtime `SkillSource` union are a pinned cross-plan interface that must stay
+ * structurally identical. If either ever drifts, this assignment stops
+ * type-checking instead of silently laundering the mismatch through a cast.
+ */
 export function descriptorToSource(d: SkillSourceDescriptor): SkillSource {
-  return d as SkillSource; // shapes are structurally identical (see Task 1)
+  return d;
 }
 
 /** Stable content hash of a staged directory tree (sorted relative paths + bytes). */

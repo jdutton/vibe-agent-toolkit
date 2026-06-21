@@ -73,7 +73,7 @@ Edit `evals.json` to fill in expected behaviors, then re-run. The template inclu
 vat skill test run ./dist/skills/my-skill/ --i-understand-this-runs-skill-code
 ```
 
-`--allow-unverified-skill-source` skips the integrity check of the **vendored skill-creator copy** (the harness verifies the committed skill-creator's hash manifest before staging). Pass it only when you knowingly run against a modified or unverifiable vendored skill-creator:
+`--allow-unverified-skill-source` skips the integrity check of the **vendored skill-creator copy** (during preflight, the harness verifies the committed skill-creator's per-file hash manifest; a missing or mutated manifest fails preflight with exit 2). Pass it only when you knowingly run against a modified or unverifiable vendored skill-creator:
 
 ```bash
 --allow-unverified-skill-source

@@ -40,12 +40,18 @@ export async function resolveSkillSource(
   if ('vendored' in source) {
     return resolveVendoredSource(ctx);
   }
-  const skillPath = opts.workspaceSkillPaths?.[source.workspace];
-  if (skillPath === undefined) {
-    throw new Error(
-      `workspace skill source '${source.workspace}' has no SKILL.md path mapping ` +
-        `(pass opts.workspaceSkillPaths['${source.workspace}']).`,
-    );
+  if ('workspace' in source) {
+    const skillPath = opts.workspaceSkillPaths?.[source.workspace];
+    if (skillPath === undefined) {
+      throw new Error(
+        `workspace skill source '${source.workspace}' has no SKILL.md path mapping ` +
+          `(pass opts.workspaceSkillPaths['${source.workspace}']).`,
+      );
+    }
+    return resolveWorkspaceSource(source.workspace, ctx, { skillPath });
   }
-  return resolveWorkspaceSource(source.workspace, ctx, { skillPath });
+  // Exhaustiveness: every SkillSource arm is handled above. Adding a new arm to
+  // the union without a branch here makes this assignment a compile error.
+  const _exhaustive: never = source;
+  throw new Error(`Unhandled skill source: ${JSON.stringify(_exhaustive)}`);
 }

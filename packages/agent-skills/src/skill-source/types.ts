@@ -14,8 +14,13 @@ export type SkillSource =
   | { workspace: string }
   /** A bare npm specifier, e.g. "@scope/pkg@1.2.3". Version-pinned, content-hashed. */
   | { npm: string }
-  /** A git URL (cloneUrl#ref:subpath) OR an arbitrary .zip. Fetched, sha256-verified. */
-  | { url: string; sha256?: string }
+  /**
+   * A git URL (cloneUrl#ref:subpath) OR an arbitrary .zip. Fetched, sha256-verified.
+   * `sha256?: string | undefined` (not just `string`) so this stays structurally
+   * identical to the config `SkillSourceDescriptor` union under
+   * exactOptionalPropertyTypes — descriptorToSource() relies on that equality.
+   */
+  | { url: string; sha256?: string | undefined }
   /** A local directory. Content-hashed. */
   | { path: string }
   /** A committed pinned copy (e.g. skill-creator). Copied; manifest-hashed. */

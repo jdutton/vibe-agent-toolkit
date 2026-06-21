@@ -9,8 +9,9 @@
  *   → spawnHeadlessClaude → parseGradingJson → release lock → return result
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
-import { basename } from 'node:path';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import {
   getToolVersion,
@@ -41,6 +42,18 @@ import { verifyVendoredManifest } from './vendor-manifest.js';
 
 /** Default subpath of the subject's eval suite, relative to its source dir. */
 const DEFAULT_EVALS_SUBPATH = 'evals/evals.json';
+
+/**
+ * Absolute path to the committed, pinned vendored skill-creator copy that ships
+ * with this package (`packages/agent-skills/vendor/skill-creator`). Resolved from
+ * this module's own location so it is correct in both the `src` (ts) and `dist`
+ * (js) layouts — both live two levels under the package root, with `vendor/`
+ * shipped alongside `dist/`. Its hash manifest is verified during preflight.
+ */
+const VENDORED_SKILL_CREATOR_DIR = safePath.resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  '../../vendor/skill-creator',
+);
 
 // ---------------------------------------------------------------------------
 // Types
@@ -255,7 +268,6 @@ function buildFlagParseProbe(): (flag: string) => boolean {
 }
 
 function buildPreflightInput(
-  harnessRoot: string,
   evalsPath: string,
   pluginDirs: string[],
   opts: RunHarnessOptions,
@@ -276,9 +288,10 @@ function buildPreflightInput(
     declaredDepDirs: pluginDirs,
     integrityOk: () => {
       if (opts.allowUnverifiedSkillSource === true) return true;
-      const vendorDir = safePath.join(harnessRoot, 'vendor');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own harness root
-      return !existsSync(vendorDir) || verifyVendoredManifest(vendorDir);
+      // Verify the committed, pinned vendored skill-creator copy that ships with
+      // this package — the grading rubric / schema source the experimenter is told
+      // to reuse. A missing, unparseable, or mutated manifest fails preflight (exit 2).
+      return verifyVendoredManifest(VENDORED_SKILL_CREATOR_DIR);
     },
     costEstimate,
     authMode: opts.auth ?? 'auto',
@@ -299,6 +312,27 @@ function renderPreflightSummary(checks: { name: string; passed: boolean; message
 
 function isAcknowledged(opts: RunHarnessOptions): boolean {
   return opts.dryRun === true || opts.acknowledgedRunsSkillCode === true;
+}
+
+/**
+ * Translate a non-success spawn outcome into an InternalHarnessError (exit 1).
+ * A stall, a timeout, OR a non-zero exit are each authoritative — a non-zero exit
+ * is never laundered into a PASS even if a grading.json happens to be on disk.
+ */
+function assertExperimenterSucceeded(
+  spawnResult: { stalled: boolean; timedOut: boolean; status: number },
+  stallMs: number | undefined,
+  timeoutMs: number,
+): void {
+  if (spawnResult.stalled) {
+    throw new InternalHarnessError(`Experimenter stalled (no output for ${stallMs ?? 0}ms).`);
+  }
+  if (spawnResult.timedOut) {
+    throw new InternalHarnessError(`Experimenter timed out after ${timeoutMs}ms.`);
+  }
+  if (spawnResult.status !== 0) {
+    throw new InternalHarnessError(`Experimenter exited non-zero (status ${spawnResult.status}).`);
+  }
 }
 
 /**
@@ -343,16 +377,18 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
   const evalsSubpath = opts.evalsSubpath ?? DEFAULT_EVALS_SUBPATH;
   const currentUid = typeof process.getuid === 'function' ? process.getuid() : 0;
 
-  // Ensure the harness root directory exists before acquiring the lock.
+  // Ensure the harness root directory exists before validating it.
   mkdirSyncReal(harnessRoot, { recursive: true, mode: 0o700 });
 
-  // Step 1: Acquire exclusive harness lock.
+  // Step 1: Assert safe harness root (symlink/ownership/mode checks) BEFORE
+  // acquiring the lock — never write a lockfile into a directory we have not yet
+  // confirmed is non-symlinked, owned by the current uid, and 0700.
+  assertSafeHarnessRoot(harnessRoot, currentUid);
+
+  // Step 2: Acquire exclusive harness lock.
   const lock = acquireHarnessLock(harnessRoot);
 
   try {
-    // Step 2: Assert safe harness root (symlink/ownership/mode checks).
-    assertSafeHarnessRoot(harnessRoot, currentUid);
-
     // Step 3: Stage the harness FIRST — the subject's own evals/evals.json lands
     // inside its staged dir, so we must stage before we can locate it.
     const resolveCtx = buildResolveCtx(harnessRoot, repoRoot);
@@ -384,7 +420,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
 
     // Step 5: Preflight checks.
     const knobs = resolveKnobs(opts);
-    const preflightInput = buildPreflightInput(harnessRoot, evalsPath, pluginDirs, opts, knobs);
+    const preflightInput = buildPreflightInput(evalsPath, pluginDirs, opts, knobs);
     const preflightResult = runPreflight(preflightInput);
 
     if (!preflightResult.passed) {
@@ -441,13 +477,27 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     }
 
     // Step 10: Spawn headless Claude.
+    // Refuse to spawn with an unscrubbed environment. When preflight passes,
+    // resolvedAuth is always non-null; a null here is an internal invariant
+    // violation — NOT a reason to fall back to the full parent `process.env`,
+    // which would hand the untrusted skill code every secret it contains.
+    if (preflightResult.resolvedAuth === null) {
+      throw new InternalHarnessError(
+        'Internal: preflight passed but resolvedAuth is null — refusing to spawn with an unscrubbed environment.',
+      );
+    }
+
+    // A reused harness root (--out / --keep) may carry a grading.json from an
+    // earlier run. Remove it so a post-spawn read can only reflect THIS run.
+    rmSync(gradingOut, { force: true });
+
     const timeoutMs = resolveTimeoutMs(opts);
     const spawnOpts = {
       promptFile,
       pluginDirs,
       sandboxDir: harnessRoot,
       cwd: harnessRoot,
-      env: preflightResult.resolvedAuth?.forwardedEnv ?? process.env,
+      env: preflightResult.resolvedAuth.forwardedEnv,
       timeoutMs,
       onStdout: (chunk: string) => { process.stderr.write(chunk); },
       onStderr: (chunk: string) => { process.stderr.write(chunk); },
@@ -458,16 +508,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     };
 
     const spawnResult = await spawnHeadlessClaude(spawnOpts);
-
-    if (spawnResult.stalled) {
-      throw new InternalHarnessError(
-        `Experimenter stalled (no output for ${knobs.stallMs ?? 0}ms).`,
-      );
-    }
-
-    if (spawnResult.timedOut) {
-      throw new InternalHarnessError(`Experimenter timed out after ${timeoutMs}ms.`);
-    }
+    assertExperimenterSucceeded(spawnResult, knobs.stallMs, timeoutMs);
 
     // Step 11: Parse grading.json — must be present and valid.
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived path
