@@ -1,10 +1,13 @@
 import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { computeReconcilePlan, StagedManifestSchema } from '../../src/skill-test/manifest.js';
 import { descriptorToSource, stageHarness, type StageItem } from '../../src/skill-test/staging.js';
+
+/** Shared relative source spec for the fake resolver (one literal, many uses). */
+const SUBJECT_SRC = '../subject';
 
 // Fake resolver: materializes each source into a fresh dir with a marker file
 // whose content == the source identity, so contentHash is observable.
@@ -35,7 +38,7 @@ describe('stageHarness (integration)', () => {
 
   it('stages declared items, writes a content-bound manifest, returns one plugin dir per item', async () => {
     const items: StageItem[] = [
-      { name: 'subject', source: descriptorToSource({ path: '../subject' }) },
+      { name: 'subject', source: descriptorToSource({ path: SUBJECT_SRC }) },
       { name: 'skill-creator', source: descriptorToSource({ vendored: true }) },
     ];
     const result = await stageHarness({
@@ -54,8 +57,37 @@ describe('stageHarness (integration)', () => {
     expect(onDisk.entries.every(e => e.contentHash.length > 0)).toBe(true);
   });
 
+  it('reduces an absolute-path item name to a single safe child of the harness root (Windows-safe)', async () => {
+    // Regression (issue #132 Windows CI): the subject under test is the positional
+    // CLI arg — an ABSOLUTE path. Joining it raw onto the harness root put a drive
+    // letter mid-path on Windows (…\harness\C:\Users\…), an invalid path that made
+    // cpSync throw → caught → exit 1 instead of the gate codes 2/3. On POSIX the
+    // same join silently produced a wrongly-nested directory. The staged subject
+    // dir must be exactly ONE sanitized segment directly under the harness root.
+    const absName = safePath.join(srcRoot, 'poc-skill'); // absolute path used as the item name
+    const items: StageItem[] = [
+      { name: absName, source: descriptorToSource({ path: SUBJECT_SRC }), role: 'subject' },
+    ];
+    const result = await stageHarness({
+      harnessRoot: root,
+      items,
+      resolve: makeFakeResolver(srcRoot) as never,
+      ctx: {} as never,
+      currentUid: uid,
+    });
+
+    expect(result.subjectStagedDir).not.toBeNull();
+    const staged = toForwardSlash(result.subjectStagedDir as string);
+    const rootFwd = toForwardSlash(root);
+    // The staged subject dir is a DIRECT child of the harness root...
+    expect(toForwardSlash(safePath.join(staged, '..'))).toBe(rootFwd);
+    // ...and the single segment carries no separators or drive letter.
+    const segment = staged.slice(rootFwd.length + 1);
+    expect(segment).not.toMatch(/[/\\:]/);
+  });
+
   it('re-stage with unchanged inputs is a manifest-level no-op (unchanged plan)', async () => {
-    const items: StageItem[] = [{ name: 'subject', source: descriptorToSource({ path: '../subject' }) }];
+    const items: StageItem[] = [{ name: 'subject', source: descriptorToSource({ path: SUBJECT_SRC }) }];
     const opts = { harnessRoot: root, items, resolve: makeFakeResolver(srcRoot) as never, ctx: {} as never, currentUid: uid };
     const first = await stageHarness(opts);
     const desired = first.manifest.entries;

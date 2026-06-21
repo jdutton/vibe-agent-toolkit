@@ -47,6 +47,7 @@ export { acquireHarnessLock, HarnessLockBusyError, type HarnessLock } from './lo
 export {
   computeDirContentHash,
   descriptorToSource,
+  stagedDirName,
   stageHarness,
   type StageHarnessOptions,
   type StageHarnessResult,

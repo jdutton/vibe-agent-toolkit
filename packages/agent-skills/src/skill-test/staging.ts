@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { cpSync, existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { basename } from 'node:path';
 
 import type { ResolveSkillSourceContext, ResolvedSkillSource, SkillSource } from '@vibe-agent-toolkit/agent-skills';
 import type { SkillSourceDescriptor } from '@vibe-agent-toolkit/resources';
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { assertSafeHarnessRoot } from './harness-location.js';
 import { StagedManifestSchema, type StagedEntry, type StagedManifest } from './manifest.js';
@@ -49,6 +50,26 @@ export interface StageHarnessResult {
  */
 export function descriptorToSource(d: SkillSourceDescriptor): SkillSource {
   return d;
+}
+
+/**
+ * Safe single-segment directory name for a staged item under the harness root.
+ *
+ * `item.name` may be an absolute or relative path — the subject under test is the
+ * positional CLI arg (`vat skill test run <path>`). Using it raw as a path segment
+ * (`join(harnessRoot, name)`) is a bug: on Windows an absolute `C:\…` name lands a
+ * drive letter mid-path (`…\harness\C:\Users\…`), an invalid path that makes cpSync
+ * throw; on POSIX the same join silently produces a wrongly-nested directory.
+ * Reduce to the sanitized basename plus a short hash of the full name so the
+ * destination is always one valid, collision-free segment (the hash also covers the
+ * empty-after-sanitize fallback and disambiguates equal basenames).
+ */
+export function stagedDirName(name: string): string {
+  const slug = basename(toForwardSlash(name)).replaceAll(/[^A-Za-z0-9_-]/g, '_');
+  const hash = createHash('sha256').update(name).digest('hex').slice(0, 8);
+  // Require at least one alphanumeric so an all-separator basename (e.g. '...')
+  // falls back to a pure hash rather than a noise segment like '___'.
+  return /[A-Za-z0-9]/.test(slug) ? `${slug}-${hash}` : hash;
 }
 
 /** Stable content hash of a staged directory tree (sorted relative paths + bytes). */
@@ -98,7 +119,10 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
   let subjectStagedDir: string | null = null;
   for (const item of opts.items) {
     const resolved = await opts.resolve(item.source, opts.ctx);
-    const dest = safePath.join(opts.harnessRoot, item.name);
+    // item.name may be an absolute/relative path (the subject is the positional
+    // CLI arg) — never join it raw (drive-letter-mid-path on Windows). Always
+    // stage under one sanitized segment. See stagedDirName.
+    const dest = safePath.join(opts.harnessRoot, stagedDirName(item.name));
     cpSync(resolved.stagedDir, dest, { recursive: true });
     const contentHash = computeDirContentHash(dest);
     entries.push({ name: item.name, identity: resolved.identity, contentHash });

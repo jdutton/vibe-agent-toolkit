@@ -135,6 +135,30 @@ function prepareOutDir(outDir: string): void {
 
 const ctx = createSuiteContext(TEMP_DIR_PREFIX, import.meta.url);
 
+/**
+ * Assert the CLI exit status, surfacing the harness's own error in the failure
+ * message. A bare `expect(status).toBe(n)` hides WHY the command exited
+ * differently — the harness prints its error to stderr right before exiting.
+ * The CI reporter truncates long messages from the front, and the leading
+ * security-warning banner is boilerplate, so we front-load the LAST few
+ * non-empty stderr lines, where `run.ts` writes the actionable `Error: …`.
+ */
+function expectStatus(
+  result: { status: number | null; stdout: string; stderr: string },
+  expected: number,
+): void {
+  const lastLines = (result.stderr || '')
+    .split('\n')
+    .map(l => l.trimEnd())
+    .filter(l => l.trim().length > 0)
+    .slice(-6)
+    .join(' | ');
+  expect(
+    result.status,
+    `expected exit ${expected}, got ${String(result.status)}. Harness stderr (tail): ${lastLines.slice(-600)}`,
+  ).toBe(expected);
+}
+
 describe('vat skill test run (system)', () => {
   beforeAll(ctx.setup);
   afterEach(ctx.cleanup);
@@ -173,7 +197,7 @@ describe('vat skill test run (system)', () => {
       outDir,
     ]);
 
-    expect(result.status).toBe(2);
+    expectStatus(result, 2);
 
     // Confirm grading.json was NOT written inside the harness root.
     const gradingPath = safePath.join(outDir, 'results', 'grading.json');
@@ -198,7 +222,7 @@ describe('vat skill test run (system)', () => {
       outDir,
     ]);
 
-    expect(result.status).toBe(3);
+    expectStatus(result, 3);
 
     // The scaffold must persist next to the subject source (the fixture skill dir).
     const scaffoldPath = safePath.join(skillDir, 'evals', 'evals.json');
