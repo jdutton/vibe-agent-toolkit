@@ -262,22 +262,26 @@ describe('path-utils', () => {
     });
 
     describe('safePath.joinUnderRoot', () => {
+      // POSIX-absolute literal; on Windows path.resolve prepends the current drive
+      // (e.g. D:/project/root). Expected values are derived via safePath.resolve so
+      // the equality assertions hold cross-platform (joinUnderRoot returns exactly
+      // safePath.resolve(root, ...segs) for any non-escaping input).
       const TEST_ROOT = '/project/root';
 
       it('joins a normal nested segment under root', () => {
         const result = safePath.joinUnderRoot(TEST_ROOT, 'subdir', 'file.txt');
-        expect(result).toBe('/project/root/subdir/file.txt');
+        expect(result).toBe(safePath.resolve(TEST_ROOT, 'subdir', 'file.txt'));
         expect(result).not.toContain('\\');
       });
 
       it('returns root itself when no extra segments given', () => {
         const result = safePath.joinUnderRoot(TEST_ROOT);
-        expect(result).toBe('/project/root');
+        expect(result).toBe(safePath.resolve(TEST_ROOT));
       });
 
       it('allows a benign internal .. that stays under root', () => {
         const result = safePath.joinUnderRoot(TEST_ROOT, 'subdir', '..', 'other');
-        expect(result).toBe('/project/root/other');
+        expect(result).toBe(safePath.resolve(TEST_ROOT, 'other'));
       });
 
       it('throws when .. traversal escapes root', () => {
@@ -300,7 +304,7 @@ describe('path-utils', () => {
       it('returns forward-slash path', () => {
         const result = safePath.joinUnderRoot(TEST_ROOT, 'a/b/c');
         expect(result).not.toContain('\\');
-        expect(result).toBe('/project/root/a/b/c');
+        expect(result).toBe(safePath.resolve(TEST_ROOT, 'a/b/c'));
       });
     });
   });
