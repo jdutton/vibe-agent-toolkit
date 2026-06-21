@@ -67,6 +67,15 @@ const SCENARIOS: Scenario[] = [
     expect: 'LINK_TO_GITIGNORED_FILE',
   },
   {
+    // Guards the engine's check ordering: an EXISTING files:-declared target must
+    // fall through to the gitignored/leak path, NOT report LINK_DEFERRED_ARTIFACT
+    // (deferral requires !existsAtSource). If someone hoisted the inFilesConfig
+    // check above the existence-dependent branches, this row breaks.
+    intent: 'link to an existing gitignored files:-declared target (leak, not deferred)',
+    ctx: { subject: 'edge', inFilesConfig: true, gitignored: true, existsAtSource: true },
+    expect: 'LINK_TO_GITIGNORED_FILE',
+  },
+  {
     intent: 'link to a navigation file excluded from the bundle',
     ctx: { subject: 'edge', fileKind: 'nav' },
     expect: 'LINK_TO_NAVIGATION_FILE',
@@ -154,6 +163,40 @@ describe('rule-engine: evaluate()', () => {
       .filter(m => m.size > 1)
       .map(m => [...m.entries()].map(([code, intent]) => `${String(code)} (${intent})`).join(' vs '));
     expect(collisions).toEqual([]);
+  });
+});
+
+describe('rule-engine: materializeIssue() message construction', () => {
+  // A representative code; severity/fix/reference always come from the registry,
+  // so the exact code here only matters for sourcing those — the assertions
+  // below isolate the three documented message-construction paths.
+  const CODE: IssueCode = 'LINK_MISSING_TARGET';
+  const entry = CODE_REGISTRY[CODE];
+
+  it('bare description when neither message nor detail is given', () => {
+    expect(materializeIssue(CODE).message).toBe(entry.description);
+  });
+
+  it('appends detail to the registry description', () => {
+    expect(materializeIssue(CODE, { detail: './missing.md' }).message).toBe(
+      `${entry.description} (./missing.md)`,
+    );
+  });
+
+  it('message override takes precedence over detail', () => {
+    // The override path is only reached in production via createRegistryIssue
+    // (e.g. FILES_SOURCE_GITIGNORED); assert the documented precedence directly
+    // so a regression that drops the override cannot hide behind a substring.
+    expect(materializeIssue(CODE, { message: 'bespoke', detail: 'ignored-detail' }).message).toBe(
+      'bespoke',
+    );
+  });
+
+  it('always sources severity / fix / reference from the registry, even with a message override', () => {
+    const issue = materializeIssue(CODE, { message: 'bespoke' });
+    expect(issue.severity).toBe(entry.defaultSeverity);
+    expect(issue.fix).toBe(entry.fix);
+    expect(issue.reference).toBe(entry.reference);
   });
 });
 
