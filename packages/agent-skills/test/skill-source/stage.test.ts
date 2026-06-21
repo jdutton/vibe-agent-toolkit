@@ -34,7 +34,8 @@ describe('stageDirInto', () => {
     expect(statSync(safePath.join(staged, 'SKILL.md')).isFile()).toBe(true);
   });
 
-  it('creates the staging root with 0700 permissions', async () => {
+  // Windows has no POSIX mode bits — mkdir(mode 0o700) yields 0o666; skip there.
+  it.skipIf(process.platform === 'win32')('creates the staging root with 0700 permissions', async () => {
     await stageDirInto(src, ctx, 'abc123');
     const mode = statSync(ctx.stagingRoot).mode & 0o777;
     expect(mode).toBe(0o700);

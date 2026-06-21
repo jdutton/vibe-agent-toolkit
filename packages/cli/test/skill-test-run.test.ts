@@ -22,7 +22,7 @@ describe('vat skill test run (orchestration)', () => {
       harnessPath: '/h',
       exitCode: 0,
       summary: 'PASS 3/3',
-    } as never);
+    });
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     await runSkillTestRun(['my-skill'], {});
     expect(exit).toHaveBeenCalledWith(0);

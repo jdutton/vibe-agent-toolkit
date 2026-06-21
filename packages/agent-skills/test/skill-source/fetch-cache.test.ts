@@ -26,7 +26,10 @@ describe('withCachedFetch', () => {
     const dir = await withCachedFetch({ cacheDir, digest: 'd1', key: 'k1', fetchInto, verify: noopVerify });
     expect(statSync(safePath.join(dir, 'f.txt')).isFile()).toBe(true);
     expect(fetchInto).toHaveBeenCalledTimes(1);
-    expect(statSync(cacheDir).mode & 0o777).toBe(0o700);
+    // Windows has no POSIX mode bits — the 0o700 enforcement is a no-op there.
+    if (process.platform !== 'win32') {
+      expect(statSync(cacheDir).mode & 0o777).toBe(0o700);
+    }
   });
 
   it('does NOT re-fetch on a hit but DOES re-verify every time', async () => {

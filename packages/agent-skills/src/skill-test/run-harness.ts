@@ -193,7 +193,7 @@ function buildStageItems(opts: RunHarnessOptions): StageItem[] {
     const override = opts.withSources?.[name];
     const source: SkillSource = override
       ? descriptorToSource(override as Parameters<typeof descriptorToSource>[0])
-      : ({ path: name } as SkillSource);
+      : { path: name };
     items.push(name === subjectName ? { name, source, role: 'subject' } : { name, source });
   }
 

@@ -72,8 +72,10 @@ export function runPreflight(input: PreflightInput): PreflightResult {
     ? { name: 'vendored skill-creator integrity', passed: true, message: 'manifest verified' }
     : { name: 'vendored skill-creator integrity', passed: false, message: 'hash manifest mismatch', suggestion: 'Re-sync the vendored copy.' });
 
-  checks.push(checkExists('eval input files', input.evalInputPaths));
-  checks.push(checkExists('declared dependencies', input.declaredDepDirs));
+  checks.push(
+    checkExists('eval input files', input.evalInputPaths),
+    checkExists('declared dependencies', input.declaredDepDirs),
+  );
 
   let resolvedAuth: ResolvedAuth | null = null;
   try {
