@@ -62,6 +62,18 @@ export const CODE_REGISTRY = {
     'Fix the link path, create the file, or declare it under skills.config.<name>.files as a build artifact.',
     'link_missing_target',
   ),
+  LINK_DEFERRED_ARTIFACT: entry(
+    'info',
+    'Link targets a deferred build artifact declared in the skill files: config; it will exist after the build materializes it.',
+    'No action needed if the files: entry is correct. To silence, set validation.severity.LINK_DEFERRED_ARTIFACT: ignore.',
+    'link_deferred_artifact',
+  ),
+  FILES_SOURCE_GITIGNORED: entry(
+    'warning',
+    "A files: source is gitignored — it will be copied into the published bundle; confirm it contains no secrets.",
+    "If this is an intentional build artifact (e.g. a bundled CLI from dist/), acknowledge it with a validation.allow entry that includes a reason. To change severity, set validation.severity.FILES_SOURCE_GITIGNORED.",
+    'files_source_gitignored',
+  ),
   LINK_TO_SKILL_DEFINITION: entry(
     'error',
     "Markdown link targets another skill's SKILL.md; bundling it creates duplicate skill definitions.",

@@ -86,6 +86,16 @@ The four inventory kinds:
 
 The inventory schema is `vat.inventory/v1alpha`; it evolves freely under pre-1.0. Output is available via `vat inventory <path>` (YAML, JSON, or `--shallow` projection).
 
+## Decision Records
+
+### AC-10d — Plugin-local `files:` deferred paths are out of scope for issue #127 / slice 2 of #129
+
+**Decision:** Plugin-local `files:` deferred paths are **out of scope** for this slice.
+
+Tree-copied plugin-local skills (`vat claude plugin build`) have no `files:` surface of their own today — plugin-level `files[].dest` rejects `skills/…` paths, and tree-copied skills bypass `packageSkill` entirely. As a result, the deferred-path wiring introduced in issue #127 (slice 2 of #129) applies exclusively to skills built through the packaging path (`packageSkill`).
+
+A plugin-local `files:` deferred surface was deliberately **not** introduced here. The skill-stream (`packageSkill`) remains the sole owner of `files:`, and adding a parallel plugin-local deferred surface is a new feature deferred to the #129 engine slice (slice 3), where `deferredPaths` becomes an engine input rather than a per-path co-change.
+
 ## See also
 
 - [`docs/validation-codes.md`](../validation-codes.md) — every validation code by name, default severity, and applicable shapes.

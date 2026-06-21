@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { walkerExclusionsToIssues } from '../../src/validators/walker-to-issues.js';
+import { deferredAssetsToIssues, walkerExclusionsToIssues } from '../../src/validators/walker-to-issues.js';
 import type { LinkResolution } from '../../src/walk-link-graph.js';
 
 const resolution = (reason: LinkResolution['excludeReason'], path: string): LinkResolution => ({
@@ -45,5 +45,39 @@ describe('walkerExclusionsToIssues', () => {
       '/root',
     );
     expect(issues[0]?.location).toBe('docs/nope.md');
+  });
+});
+
+describe('deferredAssetsToIssues', () => {
+  it('returns one LINK_DEFERRED_ARTIFACT info issue per asset', () => {
+    const issues = deferredAssetsToIssues(
+      ['/root/scripts/cli.mjs', '/root/dist/out.js'],
+      '/root',
+    );
+    expect(issues).toHaveLength(2);
+    expect(issues[0]?.code).toBe('LINK_DEFERRED_ARTIFACT');
+    expect(issues[0]?.severity).toBe('info');
+    expect(issues[1]?.code).toBe('LINK_DEFERRED_ARTIFACT');
+    expect(issues[1]?.severity).toBe('info');
+  });
+
+  it('records project-relative paths in location', () => {
+    const issues = deferredAssetsToIssues(['/root/scripts/cli.mjs'], '/root');
+    expect(issues[0]?.location).toBe('scripts/cli.mjs');
+  });
+
+  it('includes the location in the message', () => {
+    const issues = deferredAssetsToIssues(['/root/dist/tool.js'], '/root');
+    expect(issues[0]?.message).toContain('dist/tool.js');
+  });
+
+  it('returns an empty array for no assets', () => {
+    expect(deferredAssetsToIssues([], '/root')).toHaveLength(0);
+  });
+
+  it('populates fix and reference from CODE_REGISTRY', () => {
+    const issues = deferredAssetsToIssues(['/root/dist/x.js'], '/root');
+    expect(issues[0]?.fix).toBeDefined();
+    expect(issues[0]?.reference).toBeDefined();
   });
 });

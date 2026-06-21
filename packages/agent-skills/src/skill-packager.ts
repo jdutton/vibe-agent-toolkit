@@ -48,10 +48,10 @@ import {
 } from '@vibe-agent-toolkit/utils';
 
 import { getTargetSubdir } from './content-type-routing.js';
-import type { SkillFileEntry } from './files-config.js';
+import { computeDeferredPaths, type SkillFileEntry } from './files-config.js';
 import { checkBrokenPackagedLinks, checkUnreferencedFiles } from './post-build-checks.js';
-import { validateSkillForPackaging, type PackagingValidationResult } from './validators/packaging-validator.js';
-import { walkerExclusionsToIssues } from './validators/walker-to-issues.js';
+import { detectGitignoredFilesSources, validateSkillForPackaging, type PackagingValidationResult } from './validators/packaging-validator.js';
+import { deferredAssetsToIssues, walkerExclusionsToIssues } from './validators/walker-to-issues.js';
 import { walkLinkGraph, type WalkableRegistry } from './walk-link-graph.js';
 
 const PACKAGE_JSON_FILENAME = 'package.json';
@@ -351,17 +351,21 @@ export async function packageSkill(
   const skillResource = registry.getResource(safePath.resolve(skillPath));
   const skillResourceId = skillResource?.id ?? '';
 
+  const filesConfig = options.files ?? [];
+  const deferredPaths = computeDeferredPaths(filesConfig, { skillDir: skillRoot, projectRoot });
+
   const packagerWalkOptions: Parameters<typeof walkLinkGraph>[2] = {
     maxDepth,
     excludeRules: excludeConfig?.rules ?? [],
     projectRoot,
     skillRootPath: safePath.resolve(skillPath),
     excludeNavigationFiles,
+    deferredPaths,
   };
   if (options.gitTracker !== undefined) {
     packagerWalkOptions.gitTracker = options.gitTracker;
   }
-  const { bundledResources, bundledAssets, excludedReferences } = walkLinkGraph(
+  const { bundledResources, bundledAssets, excludedReferences, deferredAssets } = walkLinkGraph(
     skillResourceId,
     registry as WalkableRegistry,
     packagerWalkOptions,
@@ -405,7 +409,6 @@ export async function packageSkill(
   const pathMap = buildPathMap(skillPath, bundledFiles, outputPath, resourceNaming, namingBasePath, stripPrefix, target);
 
   // 8b. Apply files config: copy declared files and adjust path map
-  const filesConfig = options.files ?? [];
   for (const fileEntry of filesConfig) {
     const absoluteSource = safePath.resolve(safePath.join(projectRoot, fileEntry.source));
     const absoluteDest = safePath.join(outputPath, fileEntry.dest);
@@ -437,6 +440,18 @@ export async function packageSkill(
   }
   // Add non-markdown bundled files (assets) to output registry so link rewriting resolves them
   addBundledAssetsToOutputRegistry(outputResources, bundledAssets, pathMap, registry, collidedAssets);
+  // Register files: deferred-dest links so the build preserves/rewrites them (mirrors
+  // the collided-asset handling). Stamps resolvedId on dest links and adds a synthetic
+  // output resource so the rewriter renders [text](dest) instead of stripping to ().
+  outputResources.push(
+    ...registerDeferredDestLinks(
+      filesConfig,
+      collectResourcesWithLinks(bundledResources, skillResource),
+      skillPath,
+      outputPath,
+      outputResources,
+    ),
+  );
   // Include excluded resources (with source paths) for pattern-based rule matching
   for (const excl of excludedReferences) {
     if (excl.excludeReason === 'directory-target' || excl.excludeReason === 'outside-project') {
@@ -508,7 +523,16 @@ export async function packageSkill(
     ...await checkUnreferencedFiles(outputPath),
     ...await checkBrokenPackagedLinks(outputPath),
   ];
-  const rawLinkIssues = walkerExclusionsToIssues(excludedReferences, projectRoot);
+  const rawLinkIssues = [
+    ...walkerExclusionsToIssues(excludedReferences, projectRoot),
+    ...deferredAssetsToIssues(deferredAssets, projectRoot),
+    // Suppressible security warning: a files: source that exists and is gitignored
+    // will be copied into the published bundle. Fires by default; silence with a
+    // validation.allow entry (with a reason). Must be emitted here (not just in
+    // validateSkillForPackaging) because the post-build validator runs on built output
+    // where gitignored sources are no longer present.
+    ...detectGitignoredFilesSources(filesConfig, projectRoot, options.gitTracker),
+  ];
 
   const framework = runValidationFramework(
     [...rawLinkIssues, ...rawPostBuildIssues],
@@ -814,6 +838,86 @@ function buildSyntheticAssetResource(
     // Synthetic asset; no real content hash. Use all-zeros to satisfy the SHA256 brand.
     checksum: '0'.repeat(64) as ResourceMetadata['checksum'],
   };
+}
+
+/**
+ * Register `files:` deferred-dest links so the build preserves and rewrites them.
+ *
+ * A deferred dest (e.g. `dist/bin/cli.mjs → scripts/cli.mjs`) does not exist at
+ * source-walk time, so it is neither a bundled resource nor a bundled asset: its
+ * link gets no `resolvedId` and the dest is absent from the output registry. The
+ * bundled-link template then renders an empty `relativePath` and strips the href
+ * to `()` — leaving the shipped artifact unreferenced (`PACKAGED_UNREFERENCED_FILE`).
+ *
+ * This mirrors the collided-asset handling: for each `files:` entry we synthesize
+ * a stable id (`synthesizeAssetId(absDestTarget)`), stamp it as `resolvedId` on
+ * any local_file link that resolves to the dest, and return a synthetic output
+ * resource (`buildSyntheticAssetResource`) whose `filePath` is the dest's output
+ * path so the output registry computes `relativePath = entry.dest`.
+ *
+ * Scope: dest links only. A SKILL.md link to a deferred *source* path that is
+ * copied to a different dest is an exotic case with ambiguous output mapping and
+ * is intentionally left to its existing behavior.
+ *
+ * @returns Synthetic output resources to push into `outputResources` (deduped by
+ *   filePath against the existing set) BEFORE the output registry is built.
+ */
+function registerDeferredDestLinks(
+  filesConfig: SkillFileEntry[],
+  resources: ResourceMetadata[],
+  skillPath: string,
+  outputPath: string,
+  existingOutputResources: ResourceMetadata[],
+): ResourceMetadata[] {
+  const syntheticResources: ResourceMetadata[] = [];
+  const skillDir = dirname(skillPath);
+  for (const entry of filesConfig) {
+    // Where a SKILL.md link `entry.dest` resolves at source time (SKILL.md lives at skillPath).
+    const absDestTarget = safePath.resolve(skillDir, entry.dest);
+    const absDestOutput = safePath.join(outputPath, entry.dest);
+    const id = synthesizeAssetId(absDestTarget);
+
+    if (!stampDeferredDestResolvedId(resources, absDestTarget, id)) continue;
+
+    // Dedup: skip if an output resource already targets this dest output path.
+    const alreadyPresent =
+      existingOutputResources.some(r => toForwardSlash(r.filePath) === toForwardSlash(absDestOutput)) ||
+      syntheticResources.some(r => toForwardSlash(r.filePath) === toForwardSlash(absDestOutput));
+    if (alreadyPresent) continue;
+
+    // buildSyntheticAssetResource derives the id via synthesizeAssetId(absDestTarget),
+    // matching the resolvedId stamped above.
+    syntheticResources.push(buildSyntheticAssetResource(absDestTarget, absDestOutput));
+  }
+  return syntheticResources;
+}
+
+/**
+ * Stamp `resolvedId` on every unresolved local_file link that resolves to the
+ * deferred dest target. Mirrors the link-walk in `resolveCollidedAssetLinks`.
+ *
+ * @returns true if at least one link was stamped (the dest is referenced).
+ */
+function stampDeferredDestResolvedId(
+  resources: ResourceMetadata[],
+  absDestTarget: string,
+  id: string,
+): boolean {
+  let linked = false;
+  for (const resource of resources) {
+    for (const link of resource.links) {
+      if (link.type !== 'local_file' || link.resolvedId !== undefined) {
+        continue;
+      }
+      const [hrefPath] = link.href.split('#');
+      if (hrefPath === undefined) continue;
+      if (safePath.resolve(dirname(resource.filePath), hrefPath) === absDestTarget) {
+        link.resolvedId = id;
+        linked = true;
+      }
+    }
+  }
+  return linked;
 }
 
 // ============================================================================

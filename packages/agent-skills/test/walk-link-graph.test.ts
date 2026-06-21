@@ -1,9 +1,14 @@
+/* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
+import { writeFileSync } from 'node:fs';
 
 import type { ResourceLink, ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import type { DeferredPaths } from '../src/files-config.js';
 import { walkLinkGraph, type ExcludeRule, type WalkableRegistry, type WalkLinkGraphOptions } from '../src/walk-link-graph.js';
+
+import { setupTempDir } from './test-helpers.js';
 
 // Mock isGitIgnored — default to false (not ignored), override in specific tests
 vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
@@ -41,6 +46,31 @@ const MOCK_CHECKSUM = 'a'.repeat(64) as ResourceMetadata['checksum'];
 
 // Exclude reason literal — avoids string duplication in assertions
 const REASON_SKILL_DEFINITION = 'skill-definition';
+
+// Deferred paths constants — used in "deferred files support" tests
+const DEFERRED_DEST_REL = 'scripts/cli.mjs';
+const DEFERRED_SRC_REL = 'dist/bin/cli.mjs';
+
+// Filename literal used in the real-disk deferred test
+const EXISTING_SOURCE_MJS = 'existing-source.mjs';
+
+// ============================================================================
+// Setup — temp dir for tests that need real on-disk files
+// ============================================================================
+
+const { getTempDir } = setupTempDir('walk-link-graph-test-');
+
+// ============================================================================
+// Module-scope helpers
+// ============================================================================
+
+function makeDeferredPaths(overrides?: Partial<DeferredPaths>): DeferredPaths {
+  return {
+    destPaths: new Set([DEFERRED_DEST_REL]),
+    sourcePaths: new Set([DEFERRED_SRC_REL]),
+    ...overrides,
+  };
+}
 
 // ============================================================================
 // Helpers — Resource & Registry Builders
@@ -535,40 +565,57 @@ describe('walkLinkGraph', () => {
   // ============================================================================
 
   describe('deferred files support', () => {
-    const DEFERRED_CLI_PATH = 'scripts/cli.mjs';
-
-    it('should classify missing file as deferred when path matches deferred set', () => {
-      // Skill links to scripts/cli.mjs which doesn't exist on disk
+    it.each([
+      { label: 'dest', linkText: 'CLI', linkRel: DEFERRED_DEST_REL },
+      { label: 'source', linkText: 'CLI src', linkRel: DEFERRED_SRC_REL },
+    ])('$label missing on disk → deferred (in deferredAssets, absent from excludedReferences)', ({ linkText, linkRel }) => {
       const skill = createMockResource(SKILL_ID, SKILL_PATH, [
-        createLocalLink('CLI', `./${DEFERRED_CLI_PATH}`),
+        createLocalLink(linkText, `./${linkRel}`),
       ]);
       const registry = createMockRegistry([skill]);
 
       const result = walkLinkGraph(SKILL_ID, registry, defaultOptions({
-        deferredPaths: new Set([DEFERRED_CLI_PATH]),
+        deferredPaths: makeDeferredPaths(),
       }));
 
       expect(result.deferredAssets).toHaveLength(1);
-      expect(result.deferredAssets[0]).toContain(DEFERRED_CLI_PATH);
-      // Should not be in excluded references
+      expect(result.deferredAssets[0]).toContain(linkRel);
+      // Must NOT appear in excludedReferences
       expect(result.excludedReferences).toHaveLength(0);
     });
 
-    it('should not classify genuinely missing files as deferred', () => {
-      const skill = createMockResource(SKILL_ID, SKILL_PATH, [
-        createLocalLink('missing', './nowhere/gone.txt'),
+    it('source that EXISTS on disk (not in destPaths) → NOT deferred → bundled as normal asset', () => {
+      // Create a real temp file to simulate a source that exists on disk (not a build artifact)
+      const tmpDir = getTempDir();
+      const tmpFile = safePath.join(tmpDir, EXISTING_SOURCE_MJS);
+      writeFileSync(tmpFile, '// existing source\n');
+
+      // The project root is tmpDir so the relative path resolves correctly
+      const skill = createMockResource(SKILL_ID, safePath.join(tmpDir, 'SKILL.md'), [
+        createLocalLink('existing CLI src', `./${EXISTING_SOURCE_MJS}`),
       ]);
       const registry = createMockRegistry([skill]);
 
-      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions({
-        deferredPaths: new Set([DEFERRED_CLI_PATH]), // different path
-      }));
+      const result = walkLinkGraph(SKILL_ID, registry, {
+        maxDepth: 5,
+        excludeRules: [],
+        projectRoot: tmpDir,
+        skillRootPath: safePath.join(tmpDir, 'SKILL.md'),
+        deferredPaths: {
+          destPaths: new Set<string>(),
+          // EXISTING_SOURCE_MJS is in sourcePaths, but the file EXISTS → must NOT defer
+          sourcePaths: new Set([EXISTING_SOURCE_MJS]),
+        },
+      });
 
-      // Missing file not in deferred set — recorded as missing-target, not deferred
+      // File exists on disk and is in sourcePaths → bundled as normal asset, NOT deferred
       expect(result.deferredAssets).toHaveLength(0);
+      expect(result.bundledAssets).toHaveLength(1);
+      expect(result.bundledAssets[0]).toContain(EXISTING_SOURCE_MJS);
+      expect(result.excludedReferences).toHaveLength(0);
     });
 
-    it('should return empty deferredAssets when no deferredPaths provided', () => {
+    it('no deferredPaths option → deferredAssets empty', () => {
       const skill = createMockResource(SKILL_ID, SKILL_PATH, [
         createLocalLink('guide', GUIDE_HREF, GUIDE_ID),
       ]);
@@ -578,6 +625,22 @@ describe('walkLinkGraph', () => {
       const result = walkLinkGraph(SKILL_ID, registry, defaultOptions());
 
       expect(result.deferredAssets).toEqual([]);
+    });
+
+    it('genuinely missing path not in either set → missing-target exclusion', () => {
+      const skill = createMockResource(SKILL_ID, SKILL_PATH, [
+        createLocalLink('missing', './nowhere/gone.txt'),
+      ]);
+      const registry = createMockRegistry([skill]);
+
+      // deferredPaths provided but 'nowhere/gone.txt' is not in either set
+      const result = walkLinkGraph(SKILL_ID, registry, defaultOptions({
+        deferredPaths: makeDeferredPaths(),
+      }));
+
+      expect(result.deferredAssets).toHaveLength(0);
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe('missing-target');
     });
   });
 });

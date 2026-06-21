@@ -3,6 +3,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 
 
+import type { ValidationConfig } from '@vibe-agent-toolkit/agent-schema';
 import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -25,6 +26,9 @@ const DIRECTORY_FORMAT = 'directory' as const;
 const DETAILS_MD = 'details.md';
 const CONFIG_JSON = 'config.json';
 const PRESERVE_PATH = 'preserve-path' as const;
+const SIMPLE_SKILL_BODY = '# My Skill\n\nContent.';
+const GITIGNORED_SOURCE = 'secret.env';
+const GITIGNORED_DEST = 'config/secret.env';
 
 // ============================================================================
 // Helpers - unique to this unit test file
@@ -878,7 +882,7 @@ describe('files config in packaging', () => {
     const skillPath = await writeSkillMd(
       dir,
       UNIT_SKILL_NAME,
-      '# My Skill\n\nContent.',
+      SIMPLE_SKILL_BODY,
     );
     await expect(
       packWithOutput(skillPath, {
@@ -901,5 +905,125 @@ describe('files config in packaging', () => {
       files: [{ source: CONFIG_JSON, dest: 'scripts/config.json' }],
     });
     expect(existsSync(safePath.join(result.outputPath, 'scripts', CONFIG_JSON))).toBe(true);
+  });
+});
+
+// ============================================================================
+// Deferred dest links (files: config)
+// ============================================================================
+
+describe('packageSkill - deferred dest link emits info, not LINK_MISSING_TARGET', () => {
+  it('should copy dest to output and emit LINK_DEFERRED_ARTIFACT info when SKILL.md links a files: dest missing on disk', async () => {
+    const dir = getTempDir();
+    const artifactDir = safePath.join(dir, 'dist', 'bin');
+    await mkdir(artifactDir, { recursive: true });
+    writeFileSync(safePath.join(artifactDir, 'cli.mjs'), '#!/usr/bin/env node');
+
+    // Skill links to 'scripts/cli.mjs' (the dest), which doesn't exist at source time
+    const skillPath = await writeSkillMd(
+      dir,
+      UNIT_SKILL_NAME,
+      '# My Skill\n\nRun the [CLI](scripts/cli.mjs).',
+    );
+
+    const result = await packWithOutput(skillPath, {
+      files: [{ source: 'dist/bin/cli.mjs', dest: 'scripts/cli.mjs' }],
+    });
+
+    // Dest artifact should be copied to output
+    expect(existsSync(safePath.join(result.outputPath, 'scripts', 'cli.mjs'))).toBe(true);
+
+    // The built SKILL.md must PRESERVE the dest link (href not stripped to empty ()).
+    const builtSkillMd = await readFile(safePath.join(result.outputPath, 'SKILL.md'), 'utf-8');
+    expect(builtSkillMd).toContain('](scripts/cli.mjs)');
+
+    // No LINK_MISSING_TARGET in the pre-build link issues
+    const missingIssue = (result.postBuildIssues ?? []).find(i => i.code === 'LINK_MISSING_TARGET');
+    expect(missingIssue).toBeUndefined();
+
+    // The shipped artifact is referenced — no PACKAGED_UNREFERENCED_FILE for the dest.
+    const unreferencedIssue = (result.postBuildIssues ?? []).find(
+      i => i.code === 'PACKAGED_UNREFERENCED_FILE',
+    );
+    expect(unreferencedIssue).toBeUndefined();
+
+    // LINK_DEFERRED_ARTIFACT info should be present in pre-build link issues
+    const deferredIssue = (result.postBuildIssues ?? []).find(i => i.code === 'LINK_DEFERRED_ARTIFACT');
+    expect(deferredIssue).toBeDefined();
+    expect(deferredIssue?.severity).toBe('info');
+  });
+});
+
+// ============================================================================
+// FILES_SOURCE_GITIGNORED — build path (packageSkill)
+// ============================================================================
+
+describe('packageSkill - FILES_SOURCE_GITIGNORED (build path)', () => {
+  it('emits FILES_SOURCE_GITIGNORED warning for an existing gitignored source via injected gitTracker', async () => {
+    const dir = getTempDir();
+    // Create a source file that the stub tracker will report as gitignored
+    writeFileSync(safePath.join(dir, GITIGNORED_SOURCE), 'SECRET=hunter2');
+
+    const skillPath = await writeSkillMd(dir, UNIT_SKILL_NAME, SIMPLE_SKILL_BODY);
+
+    // Inject a minimal gitTracker stub — avoids needing a real git repo
+    const tracker = {
+      isIgnoredByActiveSet: (p: string) => p.endsWith(GITIGNORED_SOURCE),
+    };
+
+    const result = await packWithOutput(skillPath, {
+      files: [{ source: GITIGNORED_SOURCE, dest: GITIGNORED_DEST }],
+      // Type cast: our stub satisfies the isIgnoredByActiveSet contract
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test stub
+      gitTracker: tracker as any,
+    });
+
+    const warn = (result.postBuildIssues ?? []).find(i => i.code === 'FILES_SOURCE_GITIGNORED');
+    expect(warn).toBeDefined();
+    expect(warn?.severity).toBe('warning');
+    expect(warn?.location).toBe(GITIGNORED_SOURCE);
+  });
+
+  it('does NOT emit FILES_SOURCE_GITIGNORED when source is not gitignored', async () => {
+    const dir = getTempDir();
+    writeFileSync(safePath.join(dir, 'normal.md'), '# Normal');
+
+    const skillPath = await writeSkillMd(dir, UNIT_SKILL_NAME, SIMPLE_SKILL_BODY);
+
+    const tracker = { isIgnoredByActiveSet: () => false };
+
+    const result = await packWithOutput(skillPath, {
+      files: [{ source: 'normal.md', dest: 'resources/normal.md' }],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test stub
+      gitTracker: tracker as any,
+    });
+
+    const warn = (result.postBuildIssues ?? []).find(i => i.code === 'FILES_SOURCE_GITIGNORED');
+    expect(warn).toBeUndefined();
+  });
+
+  it('FILES_SOURCE_GITIGNORED is suppressible via validation.allow with a reason on the build path', async () => {
+    const dir = getTempDir();
+    writeFileSync(safePath.join(dir, GITIGNORED_SOURCE), 'SECRET=hunter2');
+
+    const skillPath = await writeSkillMd(dir, UNIT_SKILL_NAME, SIMPLE_SKILL_BODY);
+
+    const tracker = {
+      isIgnoredByActiveSet: (p: string) => p.endsWith(GITIGNORED_SOURCE),
+    };
+
+    const result = await packWithOutput(skillPath, {
+      files: [{ source: GITIGNORED_SOURCE, dest: GITIGNORED_DEST }],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test stub
+      gitTracker: tracker as any,
+      // Acknowledge via allow with a reason — must silence the warning
+      validation: {
+        allow: { FILES_SOURCE_GITIGNORED: [{ paths: ['**/*'], reason: 'intentional built CLI from dist/' }] },
+      } as ValidationConfig,
+    });
+
+    // Warning must be suppressed via allow entry
+    const warn = (result.postBuildIssues ?? []).find(i => i.code === 'FILES_SOURCE_GITIGNORED');
+    expect(warn).toBeUndefined();
   });
 });
