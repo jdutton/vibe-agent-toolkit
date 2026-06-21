@@ -11,6 +11,7 @@ import {
   ProjectConfigSchema,
   SkillPackagingConfigSchema,
   SkillsConfigSchema,
+  TestConfigSchema,
 } from '../../src/schemas/project-config.js';
 
 const SKILL_GLOB_INCLUDE = 'skills/**/SKILL.md';
@@ -66,6 +67,31 @@ describe('SkillPackagingConfigSchema', () => {
 
   it('rejects unknown keys via strict mode', () => {
     expectStrictRejection(SkillPackagingConfigSchema, { unknownTypo: 123 });
+  });
+});
+
+describe('TestConfigSchema', () => {
+  it('accepts an empty test config (all fields optional)', () => {
+    const result = TestConfigSchema.safeParse({});
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts a build: command string', () => {
+    const result = TestConfigSchema.safeParse({ build: 'pnpm bundle:report' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.build).toBe('pnpm bundle:report');
+    }
+  });
+
+  it('rejects an empty build: string (min 1 char)', () => {
+    const result = TestConfigSchema.safeParse({ build: '' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects unknown keys via strict mode', () => {
+    const result = TestConfigSchema.safeParse({ unknownField: true });
+    expect(result.success).toBe(false);
   });
 });
 

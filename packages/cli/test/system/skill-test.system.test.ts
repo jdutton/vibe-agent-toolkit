@@ -265,8 +265,10 @@ describe('vat skill test run (system)', () => {
       ]);
 
       expect(result.status).toBe(0);
-      // Dry-run must mention the assembled command (not spawn).
-      expect(result.stderr).toContain('dry-run');
+      // Dry-run must mention the assembled command (not spawn). The run summary
+      // now lands on stdout (programmatic-consumer routing); only the security
+      // warning and the `Harness:` debug line stay on stderr.
+      expect(result.stdout).toContain('dry-run');
       // grading.json must NOT exist — dry-run does not spawn Claude.
       const gradingPath = safePath.join(outDir, 'results', 'grading.json');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file

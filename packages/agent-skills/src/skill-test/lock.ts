@@ -20,7 +20,7 @@ export interface HarnessLock {
  * keeps the simple fail-fast — the CLI surfaces the busy message).
  */
 export function acquireHarnessLock(harnessRoot: string, opts: { wait?: boolean } = {}): HarnessLock {
-  const lockPath = safePath.join(harnessRoot, '.vat-skill-test.lock');
+  const lockPath = safePath.joinUnderRoot(harnessRoot, '.vat-skill-test.lock');
   // eslint-disable-next-line no-void, sonarjs/void-use -- v1: fail-fast only; reserved for future polling
   void opts.wait;
   let fd: number;

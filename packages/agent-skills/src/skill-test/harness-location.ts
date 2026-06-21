@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { existsSync, lstatSync, statSync } from 'node:fs';
+import { chmodSync, existsSync, lstatSync, statSync } from 'node:fs';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 
@@ -57,6 +57,38 @@ export function assertSafeWorkdir(dir: string): void {
     }
     previous = current;
     current = safePath.join(current, '..');
+  }
+}
+
+/**
+ * Prepare the harness root directory so that `assertSafeHarnessRoot` will
+ * pass on the next call. If the path does not exist, this is a no-op (the
+ * caller creates it at 0700 via mkdirSyncReal). If it exists:
+ *
+ * - Symlink → throw HarnessLocationError (security gate; never relax).
+ * - Real directory whose mode != 0700 → chmod to 0700. Removing group/other
+ *   access is strictly safer, never a relaxation.
+ *
+ * Mode checks/changes are only performed on non-win32 (matching
+ * assertSafeHarnessRoot's platform guard).
+ */
+export function prepareHarnessRoot(dir: string): void {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
+  if (!existsSync(dir)) return;
+
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
+  const ls = lstatSync(dir);
+  if (ls.isSymbolicLink()) {
+    throw new HarnessLocationError(`Refusing to use a symlinked harness root: ${dir}.`);
+  }
+
+  if (process.platform !== 'win32') {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
+    const mode = statSync(dir).mode & 0o777;
+    if (mode !== 0o700) {
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
+      chmodSync(dir, 0o700);
+    }
   }
 }
 

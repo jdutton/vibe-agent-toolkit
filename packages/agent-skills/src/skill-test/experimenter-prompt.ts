@@ -29,6 +29,7 @@ export const DEFAULT_EXPERIMENTER_PROMPT = [
   '  3. Append each graded expectation to the SINGLE top-level `expectations` array in {{GRADING_OUT}} IMMEDIATELY',
   '     (incremental flush — a mid-run kill must leave partial results).',
   '  4. Record any packaging-fidelity friction to {{FRICTION_OUT}} using the vat friction schema.',
+  '     If a file referenced by the skill is absent from the staged tree, record a `missing-bundled-file` friction entry.',
   '',
   '{{GRADING_OUT}} MUST be ONE flat JSON object in skill-creator\'s grading.json shape (references/schemas.md):',
   'a top-level `expectations` array — one entry {"text","passed","evidence"} per expectation across ALL evals —',

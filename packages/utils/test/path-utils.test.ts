@@ -260,6 +260,49 @@ describe('path-utils', () => {
         expect(result).toBe('file.md');
       });
     });
+
+    describe('safePath.joinUnderRoot', () => {
+      const TEST_ROOT = '/project/root';
+
+      it('joins a normal nested segment under root', () => {
+        const result = safePath.joinUnderRoot(TEST_ROOT, 'subdir', 'file.txt');
+        expect(result).toBe('/project/root/subdir/file.txt');
+        expect(result).not.toContain('\\');
+      });
+
+      it('returns root itself when no extra segments given', () => {
+        const result = safePath.joinUnderRoot(TEST_ROOT);
+        expect(result).toBe('/project/root');
+      });
+
+      it('allows a benign internal .. that stays under root', () => {
+        const result = safePath.joinUnderRoot(TEST_ROOT, 'subdir', '..', 'other');
+        expect(result).toBe('/project/root/other');
+      });
+
+      it('throws when .. traversal escapes root', () => {
+        expect(() => safePath.joinUnderRoot(TEST_ROOT, '..')).toThrow();
+      });
+
+      it('throws when deep .. traversal escapes root', () => {
+        expect(() => safePath.joinUnderRoot(TEST_ROOT, 'a', '..', '..', '..', 'etc')).toThrow();
+      });
+
+      it('throws on an absolute POSIX segment', () => {
+        expect(() => safePath.joinUnderRoot(TEST_ROOT, '/etc/passwd')).toThrow();
+      });
+
+      it('throws on a Windows drive-letter segment', () => {
+        // C:\... or C:/... style segments should be caught
+        expect(() => safePath.joinUnderRoot(TEST_ROOT, String.raw`C:\Users\evil`)).toThrow();
+      });
+
+      it('returns forward-slash path', () => {
+        const result = safePath.joinUnderRoot(TEST_ROOT, 'a/b/c');
+        expect(result).not.toContain('\\');
+        expect(result).toBe('/project/root/a/b/c');
+      });
+    });
   });
 
   describe('resolveFromImportMeta', () => {

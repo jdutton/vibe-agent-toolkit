@@ -298,4 +298,21 @@ export default [
       'sonarjs/no-empty-test-file': 'off',
     },
   },
+
+  // Scoped: enforce safePath.joinUnderRoot() for security-root path joins
+  // in the skill-test staging code. This catches the Windows drive-letter
+  // escape bug class where a caller-controlled segment can break containment
+  // when joined raw under a harness root.
+  {
+    files: [
+      'packages/agent-skills/src/skill-test/**/*.ts',
+      'packages/utils/src/skill-test/**/*.ts',
+    ],
+    plugins: {
+      local: localRules,
+    },
+    rules: {
+      'local/no-unsafe-root-join': 'error',
+    },
+  },
 ];

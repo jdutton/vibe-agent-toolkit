@@ -245,6 +245,7 @@ function applyScalarMerges(opts: HarnessOpts, options: SkillTestRunOptions, conf
   if (model !== undefined) opts.model = model;
   if (config?.evals !== undefined) opts.evalsSubpath = config.evals;
   if (config?.experimenterPrompt !== undefined) opts.promptOverride = config.experimenterPrompt;
+  if (config?.build !== undefined) opts.build = config.build;
 }
 
 /** Apply flag>config merges for numeric knobs (turns/budget/timeout/stall). */
@@ -282,7 +283,13 @@ function buildHarnessOpts(
   knobs: ReturnType<typeof coerceKnobs>,
   config: TestConfig | undefined,
 ): HarnessOpts {
-  const opts: HarnessOpts = { skills, repoRoot: resolveRepoRoot() };
+  const repoRoot = resolveRepoRoot();
+  const opts: HarnessOpts = { skills, repoRoot };
+  // cwd for the pre-stage build hook. repoRoot comes from findProjectRoot, whose
+  // discovery ladder is config-anchored (vibe-agent-toolkit.config.yaml first, then
+  // .git), so the project root IS the directory holding the config — configRoot and
+  // repoRoot are the same dir by construction, not coincidence.
+  opts.configRoot = repoRoot;
   applyFlagOnlyOptions(opts, options);
   applyScalarMerges(opts, options, config);
   applyKnobMerges(opts, knobs, config);
@@ -315,7 +322,7 @@ export async function runSkillTestRun(
     const result = await runSkillTestHarness(harnessOpts);
 
     process.stderr.write(`Harness: ${result.harnessPath}\n`);
-    process.stderr.write(`Summary: ${result.summary}\n`);
+    process.stdout.write(`Summary: ${result.summary}\n`);
     process.exit(result.exitCode);
     return;
   } catch (err) {

@@ -1,5 +1,6 @@
 import { AuthPreflightError } from '@vibe-agent-toolkit/utils';
 
+import { BuildHookError } from './build-hook.js';
 import { PromptInvariantError } from './experimenter-prompt.js';
 import { GradingSkewError } from './grading-adapter.js';
 import { HarnessLocationError } from './harness-location.js';
@@ -40,13 +41,15 @@ export class InternalHarnessError extends Error {
  * Map any thrown error to the process exit code. Errors that carry their own
  * `exitCode` (Bootstrap/Auth/HarnessLocation/Internal) are authoritative;
  * a PromptInvariantError is a user-correctable preflight problem (a supplied
- * prompt override is missing a required safety instruction) → 2; GradingSkewError
- * is a parse failure → 1; everything unknown → 1.
+ * prompt override is missing a required safety instruction) → 2; a BuildHookError
+ * is a pre-stage build failure → 2; GradingSkewError is a parse failure → 1;
+ * everything unknown → 1.
  */
 export function mapErrorToExitCode(err: unknown): number {
   if (err instanceof BootstrapNeededError) return SkillTestExitCode.Bootstrap;
   if (
     err instanceof AuthPreflightError ||
+    err instanceof BuildHookError ||
     err instanceof HarnessLocationError ||
     err instanceof PromptInvariantError
   ) {

@@ -95,11 +95,53 @@ interface RuleSuite {
   cases: RuleCases;
 }
 
+
+const NO_UNSAFE_ROOT_JOIN_CASES: RuleCases = {
+  valid: [
+    // joinUnderRoot — already the safe call, not flagged
+    { code: 'safePath.joinUnderRoot(harnessRoot, name);' },
+    // First arg does NOT end in 'root' — not a security root join, not flagged
+    { code: 'safePath.join(baseDir, name);' },
+    { code: 'safePath.join(pluginDir, name);' },
+    { code: 'safePath.resolve(outputDir, name);' },
+    // Non-safePath member expression — not our rule
+    { code: "path.join(harnessRoot, 'sub');"},
+    // safePath.relative is not join/resolve — not flagged
+    { code: "safePath.relative(harnessRoot, dest);" },
+    // No arguments — not flagged
+    { code: "safePath.join();" },
+  ],
+  invalid: [
+    {
+      code: 'safePath.join(harnessRoot, name);',
+      errors: [{ messageId: 'useJoinUnderRoot' }],
+    },
+    {
+      code: 'safePath.join(stagedRoot, "subdir");',
+      errors: [{ messageId: 'useJoinUnderRoot' }],
+    },
+    {
+      code: 'safePath.join(pluginRoot, stagedDirName(item));',
+      errors: [{ messageId: 'useJoinUnderRoot' }],
+    },
+    {
+      code: 'safePath.resolve(harnessRoot, segment);',
+      errors: [{ messageId: 'useJoinUnderRoot' }],
+    },
+    {
+      // Mixed-case 'Root' suffix
+      code: 'safePath.join(outputROOT, "child");',
+      errors: [{ messageId: 'useJoinUnderRoot' }],
+    },
+  ],
+};
+
 const SUITES: readonly RuleSuite[] = [
   { name: 'no-url-pathname-for-fs', cases: NO_URL_PATHNAME_FOR_FS_CASES },
   { name: 'no-bare-dynamic-import-path', cases: NO_BARE_DYNAMIC_IMPORT_PATH_CASES },
   { name: 'no-file-url-string-concat', cases: NO_FILE_URL_STRING_CONCAT_CASES },
   { name: 'prefer-startswith-over-regex', cases: PREFER_STARTSWITH_OVER_REGEX_CASES },
+  { name: 'no-unsafe-root-join', cases: NO_UNSAFE_ROOT_JOIN_CASES },
 ];
 
 describe.each(SUITES)('$name', ({ name, cases }) => {

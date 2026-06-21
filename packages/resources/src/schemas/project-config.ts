@@ -189,6 +189,15 @@ export const TestConfigSchema = z.object({
     .describe('Declared-dependency skills/plugins to stage'),
   optional: z.array(SkillSourceDescriptorSchema).optional()
     .describe('Optional dependencies, absent by default'),
+  /**
+   * Shell command to run once, before staging, to generate build artifacts.
+   * Runs with cwd = config root (directory containing vibe-agent-toolkit.config.yaml).
+   * Useful when a skill references a generated file (e.g. `node scripts/report.mjs`)
+   * that is produced by a bundler step and not committed to source.
+   * A non-zero exit code aborts the run (preflight failure, exit 2).
+   */
+  build: z.string().min(1).optional()
+    .describe('Shell command run once, before staging, to generate build artifacts (cwd = config root)'),
 }).strict().describe('Per-skill vat skill test configuration');
 
 export type TestConfig = z.infer<typeof TestConfigSchema>;

@@ -18,6 +18,7 @@ import {
   mkdirSyncReal,
   normalizedTmpdir,
   probeAuthStatus,
+  resolveAssetReference,
   safeExecResult,
   safePath,
   spawnHeadlessClaude,
@@ -27,6 +28,7 @@ import {
 import { resolveSkillSource } from '../skill-source/resolve-skill-source.js';
 import type { ResolvedSkillSource, ResolveSkillSourceContext, SkillSource } from '../skill-source/types.js';
 
+import { runPreStageBuild } from './build-hook.js';
 import { writeEvalsTemplate } from './evals-template.js';
 import { BootstrapNeededError, InternalHarnessError, SkillTestExitCode } from './exit-codes.js';
 import {
@@ -34,8 +36,10 @@ import {
   buildExperimenterPrompt,
 } from './experimenter-prompt.js';
 import { parseGradingJson } from './grading-adapter.js';
-import { assertSafeHarnessRoot, assertSafeWorkdir, resolveHarnessRoot } from './harness-location.js';
+import { assertSafeHarnessRoot, assertSafeWorkdir, prepareHarnessRoot, resolveHarnessRoot } from './harness-location.js';
 import { acquireHarnessLock } from './lock.js';
+import { withPluginRootEnv } from './plugin-env.js';
+import { detectPluginLayout } from './plugin-layout.js';
 import { runPreflight, type PreflightInput } from './preflight.js';
 import { descriptorToSource, stageHarness, type StageItem } from './staging.js';
 import { verifyVendoredManifest } from './vendor-manifest.js';
@@ -143,6 +147,20 @@ export interface RunHarnessOptions {
   timeout?: number;
   /** Stall watchdog in seconds. */
   stall?: number;
+
+  /**
+   * Shell command to run once, before staging, to generate build artifacts
+   * (from `test.build` in vibe-agent-toolkit.config.yaml). Cwd = configRoot.
+   * Absent → no-op (behavior unchanged).
+   */
+  build?: string;
+
+  /**
+   * Absolute path to the project config root (directory containing
+   * vibe-agent-toolkit.config.yaml). Used as cwd for the pre-stage build hook.
+   * Falls back to repoRoot when omitted.
+   */
+  configRoot?: string;
 }
 
 export interface RunHarnessResult {
@@ -183,7 +201,39 @@ function resolveKnobs(opts: RunHarnessOptions): {
   return result;
 }
 
-function buildStageItems(opts: RunHarnessOptions): StageItem[] {
+/**
+ * Detect the plugin-root layout for a `{ path }` source. The resolver later COPIES
+ * the source into a temp dir (losing its plugin ancestry), so we must detect here
+ * — while the true on-disk source dir is still known — by resolving the path spec
+ * against repoRoot and walking up for `.claude-plugin/plugin.json`. Non-`{path}`
+ * sources (npm/url/vendored/workspace) have no local source tree to walk, so they
+ * are always staged flat (returns undefined). undefined → flat staging.
+ */
+function detectItemPluginLayout(
+  source: SkillSource,
+  repoRoot: string,
+): StageItem['pluginLayout'] | undefined {
+  if (!('path' in source)) return undefined;
+  const sourceDir = resolveAssetReference(source.path, repoRoot);
+  return detectPluginLayout(sourceDir, existsSync) ?? undefined;
+}
+
+function makeStageItem(
+  name: string,
+  source: SkillSource,
+  repoRoot: string,
+  role: 'subject' | undefined,
+): StageItem {
+  const pluginLayout = detectItemPluginLayout(source, repoRoot);
+  return {
+    name,
+    source,
+    ...(role === undefined ? {} : { role }),
+    ...(pluginLayout === undefined ? {} : { pluginLayout }),
+  };
+}
+
+function buildStageItems(opts: RunHarnessOptions, repoRoot: string): StageItem[] {
   const items: StageItem[] = [];
 
   // The FIRST positional skill is the subject under test; the rest of the
@@ -194,15 +244,13 @@ function buildStageItems(opts: RunHarnessOptions): StageItem[] {
     const source: SkillSource = override
       ? descriptorToSource(override as Parameters<typeof descriptorToSource>[0])
       : { path: name };
-    items.push(name === subjectName ? { name, source, role: 'subject' } : { name, source });
+    items.push(makeStageItem(name, source, repoRoot, name === subjectName ? 'subject' : undefined));
   }
 
   if (opts.withOptional !== undefined) {
     for (const [name, spec] of Object.entries(opts.withOptional)) {
-      items.push({
-        name,
-        source: descriptorToSource(spec as Parameters<typeof descriptorToSource>[0]),
-      });
+      const source = descriptorToSource(spec as Parameters<typeof descriptorToSource>[0]);
+      items.push(makeStageItem(name, source, repoRoot, undefined));
     }
   }
 
@@ -212,7 +260,7 @@ function buildStageItems(opts: RunHarnessOptions): StageItem[] {
 function buildResolveCtx(harnessRoot: string, repoRoot: string): ResolveSkillSourceContext {
   return {
     repoRoot,
-    stagingRoot: safePath.join(harnessRoot, 'staged'),
+    stagingRoot: safePath.joinUnderRoot(harnessRoot, 'staged'),
     fetchCacheDir: safePath.join(normalizedTmpdir(), 'vat-fetch-cache'),
   };
 }
@@ -353,6 +401,7 @@ function resolveScaffoldEvalsPath(opts: RunHarnessOptions, repoRoot: string, eva
   const overridePath = override && typeof override.path === 'string' ? override.path : undefined;
   // Default (no override) resolution treats the positional name as a path.
   const sourcePath = overridePath ?? subjectName;
+  // eslint-disable-next-line local/no-unsafe-root-join -- the positional skill source may be an absolute path; resolving it against repoRoot (which returns an absolute sourcePath unchanged) is intentional, documented behavior, not a containment bug.
   const sourceDir = safePath.resolve(repoRoot, sourcePath);
   return safePath.join(sourceDir, evalsSubpath);
 }
@@ -377,6 +426,11 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
   const evalsSubpath = opts.evalsSubpath ?? DEFAULT_EVALS_SUBPATH;
   const currentUid = typeof process.getuid === 'function' ? process.getuid() : 0;
 
+  // Tighten an existing directory to 0700 (if present) BEFORE mkdir — adopter
+  // may have created the --out dir with default umask (0755). This is strictly
+  // safer: we only remove access, never grant it. Symlink still throws.
+  prepareHarnessRoot(harnessRoot);
+
   // Ensure the harness root directory exists before validating it.
   mkdirSyncReal(harnessRoot, { recursive: true, mode: 0o700 });
 
@@ -389,12 +443,27 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
   const lock = acquireHarnessLock(harnessRoot);
 
   try {
+    // Step 2.5: Run pre-stage build hook (if configured).
+    // Runs ONCE before staging so generated artifacts are present for the copy step.
+    // cwd = configRoot (directory containing vibe-agent-toolkit.config.yaml).
+    // A non-zero exit throws BuildHookError → mapErrorToExitCode → exit 2 (preflight).
+    // Ordering note: build necessarily precedes the bootstrap check (Step 4), because
+    // that check reads the *staged* subject's evals (Step 3), and staging must copy the
+    // build's output. So a run on a not-yet-scaffolded skill pays the build before
+    // exiting 3 — acceptable: build emits code artifacts, not the authored evals.json,
+    // so it can't change the bootstrap outcome. (Token spend is the Step-10 spawn, far
+    // downstream; the build never reaches it.)
+    const configRoot = opts.configRoot ?? repoRoot;
+    if (opts.build !== undefined) {
+      runPreStageBuild({ buildCommand: opts.build, configRoot });
+    }
+
     // Step 3: Stage the harness FIRST — the subject's own evals/evals.json lands
     // inside its staged dir, so we must stage before we can locate it.
     const resolveCtx = buildResolveCtx(harnessRoot, repoRoot);
-    const items = buildStageItems(opts);
+    const items = buildStageItems(opts, repoRoot);
 
-    const { pluginDirs, subjectStagedDir } = await stageHarness({
+    const { pluginDirs, subjectStagedDir, subjectPluginRoot } = await stageHarness({
       harnessRoot,
       items,
       resolve: (source: SkillSource, ctx: ResolveSkillSourceContext): Promise<ResolvedSkillSource> =>
@@ -444,7 +513,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     }
 
     // Step 7: Build effective experimenter prompt and validate invariants.
-    const resultsDir = safePath.join(harnessRoot, 'results');
+    const resultsDir = safePath.joinUnderRoot(harnessRoot, 'results');
     mkdirSyncReal(resultsDir, { recursive: true });
 
     const gradingOut = safePath.join(resultsDir, 'grading.json');
@@ -497,7 +566,10 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       pluginDirs,
       sandboxDir: harnessRoot,
       cwd: harnessRoot,
-      env: preflightResult.resolvedAuth.forwardedEnv,
+      // When the SUBJECT is plugin-distributed, export CLAUDE_PLUGIN_ROOT pointing
+      // at its staged plugin root so the harness mirrors a real plugin install
+      // (the rest of the scrubbed env is preserved verbatim). Standalone → unchanged.
+      env: withPluginRootEnv(preflightResult.resolvedAuth.forwardedEnv, subjectPluginRoot),
       timeoutMs,
       onStdout: (chunk: string) => { process.stderr.write(chunk); },
       onStderr: (chunk: string) => { process.stderr.write(chunk); },
