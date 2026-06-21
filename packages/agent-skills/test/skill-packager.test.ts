@@ -3,7 +3,6 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 
 
-import type { ValidationConfig } from '@vibe-agent-toolkit/agent-schema';
 import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -27,8 +26,6 @@ const DETAILS_MD = 'details.md';
 const CONFIG_JSON = 'config.json';
 const PRESERVE_PATH = 'preserve-path' as const;
 const SIMPLE_SKILL_BODY = '# My Skill\n\nContent.';
-const GITIGNORED_SOURCE = 'secret.env';
-const GITIGNORED_DEST = 'config/secret.env';
 
 // ============================================================================
 // Helpers - unique to this unit test file
@@ -955,75 +952,31 @@ describe('packageSkill - deferred dest link emits info, not LINK_MISSING_TARGET'
 });
 
 // ============================================================================
-// FILES_SOURCE_GITIGNORED — build path (packageSkill)
+// gitignored files: source — build path (packageSkill)
+// The gitignored-source warning was retired in issue #129: a files: source
+// already declares full publish intent, so no warning fires.
 // ============================================================================
 
-describe('packageSkill - FILES_SOURCE_GITIGNORED (build path)', () => {
-  it('emits FILES_SOURCE_GITIGNORED warning for an existing gitignored source via injected gitTracker', async () => {
+describe('packageSkill - gitignored files: source (build path)', () => {
+  it('does NOT emit any warning for an existing gitignored files: source via injected gitTracker', async () => {
+    const gitIgnoredSource = 'secret.env';
     const dir = getTempDir();
-    // Create a source file that the stub tracker will report as gitignored
-    writeFileSync(safePath.join(dir, GITIGNORED_SOURCE), 'SECRET=hunter2');
-
-    const skillPath = await writeSkillMd(dir, UNIT_SKILL_NAME, SIMPLE_SKILL_BODY);
-
-    // Inject a minimal gitTracker stub — avoids needing a real git repo
-    const tracker = {
-      isIgnoredByActiveSet: (p: string) => p.endsWith(GITIGNORED_SOURCE),
-    };
-
-    const result = await packWithOutput(skillPath, {
-      files: [{ source: GITIGNORED_SOURCE, dest: GITIGNORED_DEST }],
-      // Type cast: our stub satisfies the isIgnoredByActiveSet contract
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test stub
-      gitTracker: tracker as any,
-    });
-
-    const warn = (result.postBuildIssues ?? []).find(i => i.code === 'FILES_SOURCE_GITIGNORED');
-    expect(warn).toBeDefined();
-    expect(warn?.severity).toBe('warning');
-    expect(warn?.location).toBe(GITIGNORED_SOURCE);
-  });
-
-  it('does NOT emit FILES_SOURCE_GITIGNORED when source is not gitignored', async () => {
-    const dir = getTempDir();
-    writeFileSync(safePath.join(dir, 'normal.md'), '# Normal');
-
-    const skillPath = await writeSkillMd(dir, UNIT_SKILL_NAME, SIMPLE_SKILL_BODY);
-
-    const tracker = { isIgnoredByActiveSet: () => false };
-
-    const result = await packWithOutput(skillPath, {
-      files: [{ source: 'normal.md', dest: 'resources/normal.md' }],
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test stub
-      gitTracker: tracker as any,
-    });
-
-    const warn = (result.postBuildIssues ?? []).find(i => i.code === 'FILES_SOURCE_GITIGNORED');
-    expect(warn).toBeUndefined();
-  });
-
-  it('FILES_SOURCE_GITIGNORED is suppressible via validation.allow with a reason on the build path', async () => {
-    const dir = getTempDir();
-    writeFileSync(safePath.join(dir, GITIGNORED_SOURCE), 'SECRET=hunter2');
+    writeFileSync(safePath.join(dir, gitIgnoredSource), 'SECRET=hunter2');
 
     const skillPath = await writeSkillMd(dir, UNIT_SKILL_NAME, SIMPLE_SKILL_BODY);
 
     const tracker = {
-      isIgnoredByActiveSet: (p: string) => p.endsWith(GITIGNORED_SOURCE),
+      isIgnoredByActiveSet: (p: string) => p.endsWith(gitIgnoredSource),
     };
 
     const result = await packWithOutput(skillPath, {
-      files: [{ source: GITIGNORED_SOURCE, dest: GITIGNORED_DEST }],
+      files: [{ source: gitIgnoredSource, dest: 'config/secret.env' }],
       // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test stub
       gitTracker: tracker as any,
-      // Acknowledge via allow with a reason — must silence the warning
-      validation: {
-        allow: { FILES_SOURCE_GITIGNORED: [{ paths: ['**/*'], reason: 'intentional built CLI from dist/' }] },
-      } as ValidationConfig,
     });
 
-    // Warning must be suppressed via allow entry
-    const warn = (result.postBuildIssues ?? []).find(i => i.code === 'FILES_SOURCE_GITIGNORED');
-    expect(warn).toBeUndefined();
+    // No warning — the files: entry already declares full publish intent.
+    const issues = (result.postBuildIssues ?? []).filter(i => i.location === gitIgnoredSource);
+    expect(issues).toHaveLength(0);
   });
 });

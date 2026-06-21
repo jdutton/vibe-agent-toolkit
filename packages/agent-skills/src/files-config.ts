@@ -167,9 +167,14 @@ export interface ComputeDeferredPathsOpts {
  * - `dest` is authored relative to `skillDir` (mirroring `skill-packager.ts`
  *   `resolve(skillDir, entry.dest)`). We resolve it to an absolute path and
  *   then make it relative to `projectRoot`.
- * - `source` is authored relative to `projectRoot` (mirroring `skill-packager.ts`
- *   `resolve(projectRoot, entry.source)`). Resolving then re-relativising is a
- *   no-op for clean relative paths but correctly strips any leading `./`.
+ * - `source` is authored relative to `projectRoot`. We resolve it with the
+ *   exact expression `skill-packager.ts` uses —
+ *   `resolve(join(projectRoot, entry.source))` — so an absolute-looking source
+ *   is rooted UNDER `projectRoot` identically to what the packager copies.
+ *   (A bare `resolve(projectRoot, source)` would let a leading slash escape the
+ *   root, yielding a `../`-prefixed path that never matches the walker's `rel`.)
+ *   Resolving then re-relativising is a no-op for clean relative paths but
+ *   correctly strips any leading `./`.
  *
  * - dest paths are always deferred (target won't exist until build)
  * - source paths are deferred only when the target does not yet exist on disk
@@ -185,9 +190,11 @@ export function computeDeferredPaths(
     destPaths.add(
       toForwardSlash(safePath.relative(opts.projectRoot, safePath.resolve(opts.skillDir, entry.dest))),
     );
-    // source is authored relative to projectRoot (skill-packager: resolve(projectRoot, source))
+    // source is authored relative to projectRoot. Mirror skill-packager exactly:
+    // resolve(join(projectRoot, source)) so absolute-looking sources root under
+    // projectRoot rather than escaping it.
     sourcePaths.add(
-      toForwardSlash(safePath.relative(opts.projectRoot, safePath.resolve(opts.projectRoot, entry.source))),
+      toForwardSlash(safePath.relative(opts.projectRoot, safePath.resolve(safePath.join(opts.projectRoot, entry.source)))),
     );
   }
   return { destPaths, sourcePaths };

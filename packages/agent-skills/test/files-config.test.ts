@@ -149,6 +149,21 @@ describe('computeDeferredPaths', () => {
     expect(result.destPaths.has(CLI_DEST)).toBe(true);
   });
 
+  it('resolves an absolute-looking source the same way the packager does (join, not bare resolve)', () => {
+    // Carry-forward #4: skill-packager resolves source via
+    // `safePath.resolve(safePath.join(projectRoot, source))`, which roots an
+    // absolute-looking source UNDER projectRoot. computeDeferredPaths must use
+    // the identical expression so the deferred set matches what the packager
+    // copies — a bare `resolve(projectRoot, source)` would treat the leading
+    // slash as escaping the project root and produce a '../'-prefixed path that
+    // never matches the walker's project-relative `rel`.
+    const files: SkillFileEntry[] = [
+      { source: '/dist/bin/cli.mjs', dest: CLI_DEST },
+    ];
+    const result = computeDeferredPaths(files, { skillDir: '/proj', projectRoot: '/proj' });
+    expect(result.sourcePaths.has('dist/bin/cli.mjs')).toBe(true);
+  });
+
   it('should resolve dest relative to skillDir and emit project-root-relative path for skill in subdirectory', () => {
     // Bug regression test: skill is at /proj/skills/ado/SKILL.md
     // skillDir = /proj/skills/ado, projectRoot = /proj

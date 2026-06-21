@@ -50,7 +50,7 @@ import {
 import { getTargetSubdir } from './content-type-routing.js';
 import { computeDeferredPaths, type SkillFileEntry } from './files-config.js';
 import { checkBrokenPackagedLinks, checkUnreferencedFiles } from './post-build-checks.js';
-import { detectGitignoredFilesSources, validateSkillForPackaging, type PackagingValidationResult } from './validators/packaging-validator.js';
+import { validateSkillForPackaging, type PackagingValidationResult } from './validators/packaging-validator.js';
 import { deferredAssetsToIssues, walkerExclusionsToIssues } from './validators/walker-to-issues.js';
 import { walkLinkGraph, type WalkableRegistry } from './walk-link-graph.js';
 
@@ -526,12 +526,6 @@ export async function packageSkill(
   const rawLinkIssues = [
     ...walkerExclusionsToIssues(excludedReferences, projectRoot),
     ...deferredAssetsToIssues(deferredAssets, projectRoot),
-    // Suppressible security warning: a files: source that exists and is gitignored
-    // will be copied into the published bundle. Fires by default; silence with a
-    // validation.allow entry (with a reason). Must be emitted here (not just in
-    // validateSkillForPackaging) because the post-build validator runs on built output
-    // where gitignored sources are no longer present.
-    ...detectGitignoredFilesSources(filesConfig, projectRoot, options.gitTracker),
   ];
 
   const framework = runValidationFramework(

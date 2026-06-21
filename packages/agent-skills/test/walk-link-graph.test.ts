@@ -1,8 +1,9 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import { writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 import type { ResourceLink, ResourceMetadata } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { DeferredPaths } from '../src/files-config.js';
@@ -70,6 +71,34 @@ function makeDeferredPaths(overrides?: Partial<DeferredPaths>): DeferredPaths {
     sourcePaths: new Set([DEFERRED_SRC_REL]),
     ...overrides,
   };
+}
+
+/**
+ * Walk a single skill→link graph rooted at a real on-disk temp dir, with the
+ * given deferred dest/source sets. Shared by the on-disk deferred tests so the
+ * walk-option block is written once.
+ */
+function walkOnDiskDeferred(opts: {
+  tmpDir: string;
+  linkText: string;
+  linkRel: string;
+  destPaths?: string[];
+  sourcePaths?: string[];
+}): ReturnType<typeof walkLinkGraph> {
+  const skill = createMockResource(SKILL_ID, safePath.join(opts.tmpDir, 'SKILL.md'), [
+    createLocalLink(opts.linkText, `./${opts.linkRel}`),
+  ]);
+  const registry = createMockRegistry([skill]);
+  return walkLinkGraph(SKILL_ID, registry, {
+    maxDepth: 5,
+    excludeRules: [],
+    projectRoot: opts.tmpDir,
+    skillRootPath: safePath.join(opts.tmpDir, 'SKILL.md'),
+    deferredPaths: {
+      destPaths: new Set(opts.destPaths ?? []),
+      sourcePaths: new Set(opts.sourcePaths ?? []),
+    },
+  });
 }
 
 // ============================================================================
@@ -587,25 +616,14 @@ describe('walkLinkGraph', () => {
     it('source that EXISTS on disk (not in destPaths) → NOT deferred → bundled as normal asset', () => {
       // Create a real temp file to simulate a source that exists on disk (not a build artifact)
       const tmpDir = getTempDir();
-      const tmpFile = safePath.join(tmpDir, EXISTING_SOURCE_MJS);
-      writeFileSync(tmpFile, '// existing source\n');
+      writeFileSync(safePath.join(tmpDir, EXISTING_SOURCE_MJS), '// existing source\n');
 
-      // The project root is tmpDir so the relative path resolves correctly
-      const skill = createMockResource(SKILL_ID, safePath.join(tmpDir, 'SKILL.md'), [
-        createLocalLink('existing CLI src', `./${EXISTING_SOURCE_MJS}`),
-      ]);
-      const registry = createMockRegistry([skill]);
-
-      const result = walkLinkGraph(SKILL_ID, registry, {
-        maxDepth: 5,
-        excludeRules: [],
-        projectRoot: tmpDir,
-        skillRootPath: safePath.join(tmpDir, 'SKILL.md'),
-        deferredPaths: {
-          destPaths: new Set<string>(),
-          // EXISTING_SOURCE_MJS is in sourcePaths, but the file EXISTS → must NOT defer
-          sourcePaths: new Set([EXISTING_SOURCE_MJS]),
-        },
+      // EXISTING_SOURCE_MJS is in sourcePaths, but the file EXISTS → must NOT defer
+      const result = walkOnDiskDeferred({
+        tmpDir,
+        linkText: 'existing CLI src',
+        linkRel: EXISTING_SOURCE_MJS,
+        sourcePaths: [EXISTING_SOURCE_MJS],
       });
 
       // File exists on disk and is in sourcePaths → bundled as normal asset, NOT deferred
@@ -613,6 +631,41 @@ describe('walkLinkGraph', () => {
       expect(result.bundledAssets).toHaveLength(1);
       expect(result.bundledAssets[0]).toContain(EXISTING_SOURCE_MJS);
       expect(result.excludedReferences).toHaveLength(0);
+    });
+
+    // Existence parity (carry-forward #1): the destPaths branch must be guarded
+    // by !existsSync just like the sourcePaths branch. An existing real file at a
+    // files: dest is NOT a deferred build artifact — it must fall through to the
+    // gitignore / directory-target checks rather than being downgraded to
+    // LINK_DEFERRED_ARTIFACT (info), which would mask a genuine leak signal.
+    it('dest that EXISTS on disk and is gitignored → NOT deferred → excluded as gitignored', () => {
+      const tmpDir = getTempDir();
+      const destRel = 'data/index.json';
+      const destFile = safePath.resolve(tmpDir, destRel);
+      mkdirSyncReal(dirname(destFile), { recursive: true });
+      writeFileSync(destFile, '{}\n');
+
+      vi.mocked(isGitIgnored).mockImplementation((filePath: string) =>
+        filePath === destFile,
+      );
+
+      const result = walkOnDiskDeferred({ tmpDir, linkText: 'index', linkRel: destRel, destPaths: [destRel] });
+
+      expect(result.deferredAssets).toHaveLength(0);
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe('gitignored');
+    });
+
+    it('dest that EXISTS on disk as a directory → NOT deferred → excluded as directory-target', () => {
+      const tmpDir = getTempDir();
+      const destRel = 'assets';
+      mkdirSyncReal(safePath.resolve(tmpDir, destRel), { recursive: true });
+
+      const result = walkOnDiskDeferred({ tmpDir, linkText: 'assets', linkRel: destRel, destPaths: [destRel] });
+
+      expect(result.deferredAssets).toHaveLength(0);
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe('directory-target');
     });
 
     it('no deferredPaths option → deferredAssets empty', () => {

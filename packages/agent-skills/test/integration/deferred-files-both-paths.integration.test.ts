@@ -14,14 +14,12 @@ import { validateSkillForPackaging } from '../../src/validators/packaging-valida
 const LINK_DEFERRED_ARTIFACT = 'LINK_DEFERRED_ARTIFACT';
 const LINK_MISSING_TARGET = 'LINK_MISSING_TARGET';
 const LINK_TO_GITIGNORED_FILE = 'LINK_TO_GITIGNORED_FILE';
-const FILES_SOURCE_GITIGNORED = 'FILES_SOURCE_GITIGNORED';
 
 /** The set of codes we compare between source and build paths (AC-10c). */
 const COMPARED_CODES = new Set([
   LINK_DEFERRED_ARTIFACT,
   LINK_MISSING_TARGET,
   LINK_TO_GITIGNORED_FILE,
-  FILES_SOURCE_GITIGNORED,
 ]);
 
 // ---------------------------------------------------------------------------
@@ -235,9 +233,8 @@ describe('deferred-files both-paths agreement (AC-10c)', () => {
     expect(sourceCodes.has(LINK_TO_GITIGNORED_FILE)).toBe(false);
     expect(buildCodes.has(LINK_TO_GITIGNORED_FILE)).toBe(false);
 
-    // FILES_SOURCE_GITIGNORED fires because the source (build/gen/idx.json) IS gitignored.
-    expect(sourceCodes.has(FILES_SOURCE_GITIGNORED)).toBe(true);
-    expect(buildCodes.has(FILES_SOURCE_GITIGNORED)).toBe(true);
+    // The gitignored-source warning was retired (issue #129): a files: source
+    // already declares full publish intent, so no warning fires.
   });
 
   // Row 2 — C1 leak: SKILL.md links the gitignored SOURCE path build/gen/idx.json (exists).
@@ -254,9 +251,7 @@ describe('deferred-files both-paths agreement (AC-10c)', () => {
     expect(sourceCodes.has(LINK_TO_GITIGNORED_FILE)).toBe(true);
     expect(buildCodes.has(LINK_TO_GITIGNORED_FILE)).toBe(true);
 
-    // FILES_SOURCE_GITIGNORED is also present (the files: source is gitignored).
-    expect(sourceCodes.has(FILES_SOURCE_GITIGNORED)).toBe(true);
-    expect(buildCodes.has(FILES_SOURCE_GITIGNORED)).toBe(true);
+    // Gitignored-source warning retired (issue #129) — no warning fires for a gitignored files: source.
 
     // Must NOT defer (it is NOT a dest, and it EXISTS — so C1 keeps the normal code).
     expect(sourceCodes.has(LINK_DEFERRED_ARTIFACT)).toBe(false);
@@ -279,9 +274,6 @@ describe('deferred-files both-paths agreement (AC-10c)', () => {
     expect(sourceCodes.has(LINK_DEFERRED_ARTIFACT)).toBe(false);
     expect(buildCodes.has(LINK_DEFERRED_ARTIFACT)).toBe(false);
 
-    // FILES_SOURCE_GITIGNORED still fires on both paths because the build/gen/idx.json
-    // files: source is gitignored regardless of what the link is.
-    expect(sourceCodes.has(FILES_SOURCE_GITIGNORED)).toBe(true);
-    expect(buildCodes.has(FILES_SOURCE_GITIGNORED)).toBe(true);
+    // Gitignored-source warning retired (issue #129) -- no warning fires for a gitignored files: source.
   });
 });
