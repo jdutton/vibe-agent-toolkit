@@ -23,6 +23,9 @@ export * from './file-crawler.js';
 // Git ignore checking
 export * from './gitignore-checker.js';
 
+// Git URL parsing (parse/detect git URLs, GitHub shorthand, SSH forms)
+export * from './git-url.js';
+
 // Git utilities (using git commands directly)
 export * from './git-utils.js';
 

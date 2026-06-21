@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isGitUrl, parseGitUrl, type ParsedGitUrl } from '../../src/utils/git-url.js';
+import { isGitUrl, parseGitUrl, type ParsedGitUrl } from '../src/git-url.js';
 
 const HTTPS_CLONE_URL = 'https://github.com/foo/bar.git';
 const SSH_URL_FORM = 'ssh://git@github.com/foo/bar.git';

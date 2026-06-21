@@ -17,10 +17,9 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { scan } from '@vibe-agent-toolkit/discovery';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { isGitUrl, parseGitUrl, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
-import { isGitUrl, parseGitUrl } from '../../utils/git-url.js';
 import { createLogger } from '../../utils/logger.js';
 import { withClonedRepo } from '../audit/git-url-clone.js';
 import { getValidationResults } from '../audit.js';

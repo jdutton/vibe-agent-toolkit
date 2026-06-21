@@ -46,6 +46,8 @@ import {
   gitFindRoot,
   GitTracker,
   isAbsolutePath,
+  isGitUrl,
+  parseGitUrl,
   resetProjectRootCaches,
   safePath,
 } from '@vibe-agent-toolkit/utils';
@@ -58,7 +60,6 @@ import {
   loadConfigCached,
   resetLoadedConfigCache,
 } from '../utils/config-loader.js';
-import { isGitUrl, parseGitUrl } from '../utils/git-url.js';
 import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 import { renderSkillQualityFooter } from '../utils/skill-quality-footer.js';

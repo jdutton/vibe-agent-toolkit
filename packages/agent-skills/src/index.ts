@@ -101,6 +101,17 @@ export {
   type ImportResult,
 } from './import.js';
 
+// Skill source primitives
+export { cloneGitSource, type GitCloneResult } from './skill-source/git-clone.js';
+
+// Unified skill-source resolution (spec §11c)
+export { resolveSkillSource, type ResolveSkillSourceOptions } from './skill-source/resolve-skill-source.js';
+export type {
+  SkillSource,
+  ResolvedSkillSource,
+  ResolveSkillSourceContext,
+} from './skill-source/types.js';
+
 // Evidence substrate
 export type {
   EvidenceRecord,
