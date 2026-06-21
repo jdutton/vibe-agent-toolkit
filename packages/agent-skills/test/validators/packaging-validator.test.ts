@@ -5,12 +5,12 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code with temp directories */
 import * as fs from 'node:fs';
 
-import type { ValidationConfig, ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import type { PackagingValidationResult } from '../../src/validators/packaging-validator.js';
-import { detectGitignoredFilesSources, detectNameMismatchIssue, validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
+import { detectNameMismatchIssue, validateSkillForPackaging } from '../../src/validators/packaging-validator.js';
 import {
 	createSkillContent,
 	createTransitiveSkillStructure,
@@ -734,23 +734,6 @@ describe('validateSkillForPackaging - Metadata reporting', () => {
 // Files config validation constants
 const DUPLICATE_FILES_DEST_CODE = 'DUPLICATE_FILES_DEST';
 
-// FILES_SOURCE_GITIGNORED test constants
-const GITIGNORED_SRC = 'secret.env';
-const GITIGNORED_DST = 'config/secret.env';
-const GITIGNORED_FILE_CONTENT = 'SECRET=hunter2';
-
-/**
- * Build a minimal gitTracker stub whose `isIgnoredByActiveSet` returns
- * `true` for paths ending with the given basename.
- *
- * Exported at module scope so it is accessible across describe blocks
- * (satisfies local/no-test-scoped-functions).
- */
-function makeGitTrackerStub(ignoredBasename: string): { isIgnoredByActiveSet: (p: string) => boolean } {
-	return {
-		isIgnoredByActiveSet: (p: string) => p.endsWith(ignoredBasename),
-	};
-}
 const FILES_DEST_A = 'output/a.md';
 const FILES_DEST_B = 'output/b.md';
 
@@ -987,139 +970,30 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 });
 
 // ============================================================================
-// detectGitignoredFilesSources — unit tests (fast, injected stub)
+// validateSkillForPackaging — gitignored files: source (validate path)
+// The gitignored-source warning was retired in issue #129: a files: source
+// already declares full publish intent, so no warning fires.
 // ============================================================================
 
-describe('detectGitignoredFilesSources', () => {
-	const projectRoot = '/fake/project';
-
-	it('emits FILES_SOURCE_GITIGNORED for an existing gitignored source (injected tracker)', () => {
+describe('validateSkillForPackaging - gitignored files: source (validate path)', () => {
+	it('does NOT emit any warning for an existing gitignored files: source (full publish intent declared)', async () => {
 		const tempDir = getTempDir();
-		fs.writeFileSync(safePath.join(tempDir, GITIGNORED_SRC), GITIGNORED_FILE_CONTENT);
-
-		const tracker = makeGitTrackerStub(GITIGNORED_SRC);
-		const issues = detectGitignoredFilesSources(
-			[{ source: GITIGNORED_SRC, dest: GITIGNORED_DST }],
-			tempDir,
-			// Type cast: we only need isIgnoredByActiveSet; the full GitTracker is not required here
-			tracker as unknown as Parameters<typeof detectGitignoredFilesSources>[2],
-		);
-
-		expect(issues).toHaveLength(1);
-		expect(issues[0]?.code).toBe('FILES_SOURCE_GITIGNORED');
-		expect(issues[0]?.severity).toBe('warning');
-		expect(issues[0]?.message).toContain(GITIGNORED_SRC);
-		expect(issues[0]?.message).toContain('no secrets');
-		expect(issues[0]?.location).toBe(GITIGNORED_SRC);
-	});
-
-	it('does NOT emit for an existing source that is NOT gitignored', () => {
-		const tempDir = getTempDir();
-		fs.writeFileSync(safePath.join(tempDir, 'normal.md'), '# Normal');
-
-		// Tracker reports nothing ignored
-		const tracker = { isIgnoredByActiveSet: () => false };
-		const issues = detectGitignoredFilesSources(
-			[{ source: 'normal.md', dest: 'resources/normal.md' }],
-			tempDir,
-			tracker as unknown as Parameters<typeof detectGitignoredFilesSources>[2],
-		);
-
-		expect(issues).toHaveLength(0);
-	});
-
-	it('does NOT emit for a missing source (deferred build artifact)', () => {
-		const issues = detectGitignoredFilesSources(
-			[{ source: 'dist/cli.mjs', dest: 'scripts/cli.mjs' }],
-			projectRoot,
-			// Even if the tracker would say "ignored", a missing file must not fire
-			{ isIgnoredByActiveSet: () => true } as unknown as Parameters<typeof detectGitignoredFilesSources>[2],
-		);
-
-		expect(issues).toHaveLength(0);
-	});
-
-	it('returns empty array when files is undefined', () => {
-		const issues = detectGitignoredFilesSources(undefined, projectRoot);
-		expect(issues).toHaveLength(0);
-	});
-
-	it('returns empty array when files is empty', () => {
-		const issues = detectGitignoredFilesSources([], projectRoot);
-		expect(issues).toHaveLength(0);
-	});
-});
-
-// ============================================================================
-// validateSkillForPackaging — FILES_SOURCE_GITIGNORED integration (validate path)
-// ============================================================================
-
-describe('validateSkillForPackaging - FILES_SOURCE_GITIGNORED (validate path)', () => {
-	it('emits FILES_SOURCE_GITIGNORED warning for an existing gitignored source via injected tracker', async () => {
-		const tempDir = getTempDir();
-		// Create the "gitignored" source file on disk
-		fs.writeFileSync(safePath.join(tempDir, GITIGNORED_SRC), GITIGNORED_FILE_CONTENT);
+		const gitIgnoredSrc = 'secret.env';
+		fs.writeFileSync(safePath.join(tempDir, gitIgnoredSrc), 'SECRET=hunter2');
 
 		const skillPath = createMinimalSkill(tempDir);
-		const tracker = makeGitTrackerStub(GITIGNORED_SRC);
+		const tracker = { isIgnoredByActiveSet: (p: string) => p.endsWith(gitIgnoredSrc) };
 
 		const result = await validateSkillForPackaging(
 			skillPath,
-			{ files: [{ source: GITIGNORED_SRC, dest: GITIGNORED_DST }] },
+			{ files: [{ source: gitIgnoredSrc, dest: 'config/secret.env' }] },
 			'source',
 			{ gitTracker: tracker as Parameters<typeof validateSkillForPackaging>[3] extends { gitTracker?: infer T } ? T : never },
 		);
 
-		const warn = result.activeWarnings.find(i => i.code === 'FILES_SOURCE_GITIGNORED');
-		expect(warn).toBeDefined();
-		expect(warn?.severity).toBe('warning');
-		expect(warn?.location).toBe(GITIGNORED_SRC);
-	});
-
-	it('FILES_SOURCE_GITIGNORED is suppressible via validation.allow with a reason (audited acknowledgment)', async () => {
-		const tempDir = getTempDir();
-		fs.writeFileSync(safePath.join(tempDir, GITIGNORED_SRC), GITIGNORED_FILE_CONTENT);
-
-		const skillPath = createMinimalSkill(tempDir);
-		const tracker = makeGitTrackerStub(GITIGNORED_SRC);
-
-		// Suppress via allow with a reason — must silence the warning
-		const result = await validateSkillForPackaging(
-			skillPath,
-			{
-				files: [{ source: GITIGNORED_SRC, dest: GITIGNORED_DST }],
-				validation: {
-					allow: { FILES_SOURCE_GITIGNORED: [{ paths: ['**/*'], reason: 'intentional built CLI from dist/' }] },
-				} as ValidationConfig,
-			},
-			'source',
-			{ gitTracker: tracker as Parameters<typeof validateSkillForPackaging>[3] extends { gitTracker?: infer T } ? T : never },
-		);
-
-		// Warning must be suppressed (not in emitted list)
-		const warn = result.allErrors.find(i => i.code === 'FILES_SOURCE_GITIGNORED');
-		expect(warn).toBeUndefined();
-		// The allow framework records it in ignoredErrors
-		const ignored = result.ignoredErrors.find(i => i.code === 'FILES_SOURCE_GITIGNORED');
-		expect(ignored).toBeDefined();
-	});
-
-	it('does NOT emit FILES_SOURCE_GITIGNORED when source is not gitignored', async () => {
-		const tempDir = getTempDir();
-		fs.writeFileSync(safePath.join(tempDir, 'normal.md'), '# Normal');
-
-		const skillPath = createMinimalSkill(tempDir);
-		const tracker = { isIgnoredByActiveSet: () => false };
-
-		const result = await validateSkillForPackaging(
-			skillPath,
-			{ files: [{ source: 'normal.md', dest: 'resources/normal.md' }] },
-			'source',
-			{ gitTracker: tracker as Parameters<typeof validateSkillForPackaging>[3] extends { gitTracker?: infer T } ? T : never },
-		);
-
-		const warn = result.allErrors.find(i => i.code === 'FILES_SOURCE_GITIGNORED');
-		expect(warn).toBeUndefined();
+		// No warning for a gitignored source — the files: entry is the declaration of intent.
+		const warnings = result.activeWarnings.filter(i => i.location === gitIgnoredSrc);
+		expect(warnings).toHaveLength(0);
 	});
 });
 

@@ -26,7 +26,7 @@ import {
   type ValidationIssue,
 } from '@vibe-agent-toolkit/agent-schema';
 import { parseMarkdown, ResourceRegistry } from '@vibe-agent-toolkit/resources';
-import { findProjectRoot, isGitIgnored, normalizedTmpdir, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, normalizedTmpdir, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
 import { computeDeferredPaths } from '../files-config.js';
@@ -175,50 +175,6 @@ function validateFilesConfig(
 }
 
 /**
- * Detect gitignored `files:` sources that exist on disk.
- *
- * A source that EXISTS and is gitignored is the security-leak case: it will be
- * copied verbatim into the published bundle by `copyFilesConfigEntries`. This
- * detector emits `FILES_SOURCE_GITIGNORED` (a suppressible registry warning).
- * The warning fires by default; silence it with a `validation.allow` entry that
- * includes a `reason` (audited acknowledgment), or adjust severity via
- * `validation.severity.FILES_SOURCE_GITIGNORED`.
- *
- * Missing sources are intentionally skipped — they are deferred build artifacts
- * handled separately, not a leak risk.
- *
- * Exported so `skill-packager.ts` can reuse this on the build path.
- */
-export function detectGitignoredFilesSources(
-  files: Array<{ source: string; dest: string }> | undefined,
-  projectRoot: string,
-  gitTracker?: GitTracker,
-): ValidationIssue[] {
-  if (!files?.length) return [];
-
-  const issues: ValidationIssue[] = [];
-  for (const entry of files) {
-    const absSource = safePath.resolve(safePath.join(projectRoot, entry.source));
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- absSource derived from config-supplied path
-    if (!existsSync(absSource)) {
-      // Missing source = deferred build artifact; not a leak risk.
-      continue;
-    }
-    const ignored = gitTracker === undefined
-      ? isGitIgnored(absSource, projectRoot)
-      : gitTracker.isIgnoredByActiveSet(absSource);
-    if (ignored) {
-      issues.push(createRegistryIssue(
-        'FILES_SOURCE_GITIGNORED',
-        `files: source '${entry.source}' is gitignored — it will be copied into the published bundle; confirm it contains no secrets.`,
-        toForwardSlash(entry.source),
-      ));
-    }
-  }
-  return issues;
-}
-
-/**
  * Create a validation issue from a code-registry code with a bespoke message.
  *
  * Thin wrapper over the shared {@link materializeIssue} so severity / fix /
@@ -356,9 +312,6 @@ export async function validateSkillForPackaging(
   // Validate files config (requires projectRoot to resolve source paths for
   // directory-source detection — must run after projectRoot is computed).
   rawIssues.push(...validateFilesConfig(packagingConfig?.files, projectRoot));
-  // Detect gitignored files: sources — suppressible registry security warning
-  // (acknowledge with validation.allow + a reason, or change validation.severity).
-  rawIssues.push(...detectGitignoredFilesSources(packagingConfig?.files, projectRoot, shared?.gitTracker));
 
   // Build resource registry and walk the link graph.
   // Prefer the caller-supplied shared registry (when `vat skills validate` or

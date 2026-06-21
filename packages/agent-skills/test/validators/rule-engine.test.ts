@@ -184,9 +184,9 @@ describe('rule-engine: materializeIssue() message construction', () => {
   });
 
   it('message override takes precedence over detail', () => {
-    // The override path is only reached in production via createRegistryIssue
-    // (e.g. FILES_SOURCE_GITIGNORED); assert the documented precedence directly
-    // so a regression that drops the override cannot hide behind a substring.
+    // The override path is reached in production via createRegistryIssue; assert
+    // the documented precedence directly so a regression that drops the override
+    // cannot hide behind a substring.
     expect(materializeIssue(CODE, { message: 'bespoke', detail: 'ignored-detail' }).message).toBe(
       'bespoke',
     );
@@ -212,7 +212,6 @@ describe('rule-engine: anti-workaround invariant', () => {
     'LINK_TO_SKILL_DEFINITION',
     'LINK_DROPPED_BY_DEPTH',
     'PACKAGED_UNREFERENCED_FILE',
-    'FILES_SOURCE_GITIGNORED',
   ];
 
   // "ignore / allow / severity" escape-hatch language must never lead a fix.

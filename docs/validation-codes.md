@@ -69,7 +69,6 @@ once in each code's section below (linked from the `Code` cell).
 | [`LINK_TO_GITIGNORED_FILE`](#link_to_gitignored_file) | error | Markdown link targets a gitignored file; risks leaking ignored data into the bundle. | Link to a non-ignored file or adjust .gitignore. Allow the specific path via validation.allow if the risk has been reviewed. |
 | [`LINK_MISSING_TARGET`](#link_missing_target) | error | Markdown link target does not exist on disk and is not a declared build artifact. | Fix the link path, create the file, or declare it under skills.config.<name>.files as a build artifact. |
 | [`LINK_DEFERRED_ARTIFACT`](#link_deferred_artifact) | info | Link targets a deferred build artifact declared in the skill files: config; it will exist after the build materializes it. | No action needed if the files: entry is correct. To silence, set validation.severity.LINK_DEFERRED_ARTIFACT: ignore. |
-| [`FILES_SOURCE_GITIGNORED`](#files_source_gitignored) | warning | A files: source is gitignored — it will be copied into the published bundle; confirm it contains no secrets. | If this is an intentional build artifact (e.g. a bundled CLI from dist/), acknowledge it with a validation.allow entry that includes a reason. To change severity, set validation.severity.FILES_SOURCE_GITIGNORED. |
 | [`LINK_TO_SKILL_DEFINITION`](#link_to_skill_definition) | error | Markdown link targets another skill's SKILL.md; bundling it creates duplicate skill definitions. | Link to a specific resource inside the other skill, or reference the other skill by name. |
 | [`LINK_DROPPED_BY_DEPTH`](#link_dropped_by_depth) | warning | Walker stopped following links at the configured linkFollowDepth; this link was not bundled. | Raise linkFollowDepth, bundle the file via files config, declare the drop intentional with validation.allow, or exclude via excludeReferencesFromBundle.rules. |
 | [`PACKAGED_UNREFERENCED_FILE`](#packaged_unreferenced_file) | error | File in the packaged output is not referenced from any packaged markdown. | Add a markdown link or code-block mention in SKILL.md or a linked resource. Allow via validation.allow if the file is consumed programmatically. |
@@ -90,7 +89,7 @@ and shows the `files:` edge as the resolving state once `deferredPaths` is wired
 | Broken link | Present in source but missing in **built** output | `PACKAGED_BROKEN_LINK` (link-rewriter bug) |
 | Orphan file | Runtime asset loaded by a script | Declare in `files:` → no code (declaration is the resolution) |
 | Orphan file | Forgotten / undocumented doc | `PACKAGED_UNREFERENCED_FILE` (link it or remove it) |
-| Leaves the bundle | Links a gitignored file / gitignored `files:` source | `LINK_TO_GITIGNORED_FILE` / `FILES_SOURCE_GITIGNORED` |
+| Leaves the bundle | Links a gitignored file | `LINK_TO_GITIGNORED_FILE` |
 | Leaves the bundle | Target outside the project root | `LINK_OUTSIDE_PROJECT` |
 | Directory target | Navigational prose link | *valid — no code* |
 | Directory target | Typed single-file slot (`files:` source) | `LINK_TARGETS_DIRECTORY` |
@@ -279,23 +278,6 @@ Codes that fire when `vat resources validate` checks external `http(s)://` links
 *Stance: see [Packaging](./skill-quality-and-compatibility.md#packaging).*
 
 Only meaningful when actually bundling a skill; fire from `vat skills build` (and its pre-flight in `vat skills validate`).
-
-### `FILES_SOURCE_GITIGNORED`
-
-- **Default:** `warning`
-- **What:** A `files:` source path declared in the skill config resolves to a gitignored file. VAT will still copy it into the published bundle — this warning confirms the action and asks the author to verify it carries no secrets.
-- **Why it matters:** Gitignored files are typically excluded from the repo for a reason (generated artifacts, local-only state, credentials). A `files:` entry that names a gitignored path will materialize that file into the bundle on any machine where the file exists, potentially leaking sensitive content to bundle consumers.
-- **Fix:** Confirm the source file carries no secrets. If it is a known-safe build artifact (e.g. a bundled CLI from `dist/`), acknowledge it with a `validation.allow` entry that includes a `reason`:
-
-  ```yaml
-  validation:
-    allow:
-      FILES_SOURCE_GITIGNORED:
-        - reason: "intentional built CLI from dist/ — no secrets"
-  ```
-
-  To change the default severity, use `validation.severity.FILES_SOURCE_GITIGNORED`. If the file may contain secrets, remove it from `files:` and generate the artifact from a non-ignored intermediate.
-- **CI recommendation:** The `warning` default does not fail the build, so an *un-acknowledged* gitignored source still ships (with a warning printed) and `vat skills build` exits `0`. Teams that rely on this as a hard leak guard in CI should escalate it with `validation.severity.FILES_SOURCE_GITIGNORED: error`, forcing every gitignored source to be either removed or explicitly acknowledged via `validation.allow`.
 
 ### `LINK_DROPPED_BY_DEPTH`
 
