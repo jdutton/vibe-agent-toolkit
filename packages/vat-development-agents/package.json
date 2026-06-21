@@ -21,6 +21,7 @@
       "vat-audit",
       "vat-rag",
       "vat-skill-review",
+      "vat-skill-testing",
       "vat-enterprise-org"
     ],
     "replaces": {

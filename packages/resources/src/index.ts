@@ -139,4 +139,8 @@ export {
   SkillFileEntrySchema,
   SkillsConfigSchema,
   SkillPackagingConfigSchema,
+  SkillSourceDescriptorSchema,
+  TestConfigSchema,
+  type SkillSourceDescriptor,
+  type TestConfig,
 } from './schemas/project-config.js';

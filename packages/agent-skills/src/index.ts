@@ -160,3 +160,5 @@ export {
   detectReferenceTargetMissing,
 } from './inventory/index.js';
 
+export * from './skill-test/index.js';
+

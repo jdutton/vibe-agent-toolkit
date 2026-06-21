@@ -780,6 +780,7 @@ VAT ships a plugin of skills for agents working on VAT itself. They live at `pac
 | `vat-skill-distribution.md` | `vat build`, `vat verify`, plugin/marketplace config, npm publishing with postinstall |
 | `vat-rag.md` | `vat rag index/query`, native embedding providers, vector store, extension points |
 | `vat-skill-review.md` | Pre-publication review rubric, validation-code reference, `vat skill review` CLI |
+| `vat-skill-testing.md` | Running `vat skill test run`/`configure`, friction triage, isolation/auth model, security ack |
 | `vat-enterprise-org.md` | Anthropic Admin API: org users, cost/usage, workspace skills, `ANTHROPIC_ADMIN_API_KEY` |
 
 **For AI assistants**: If you're asked a question about VAT skill authoring, audit output, distribution, or publishing and you haven't invoked the matching skill, you're probably about to give a shallower answer than you could. Invoke first.

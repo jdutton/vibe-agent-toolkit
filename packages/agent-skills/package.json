@@ -15,6 +15,7 @@
   "files": [
     "dist",
     "schemas/",
+    "vendor/",
     "README.md"
   ],
   "scripts": {

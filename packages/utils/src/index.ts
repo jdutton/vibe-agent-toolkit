@@ -62,3 +62,6 @@ export type { ProviderMatch } from './link-auth/select-provider.js';
 export type { RewriteRule } from './link-auth/rewrite.js';
 export type { TokenSource } from './link-auth/resolve-token.js';
 export { expandMacro, UnknownMacroError } from './link-auth/expand-macro.js';
+
+// Skill testing utilities (environment management for headless agent runs)
+export * from './skill-test/index.js';
