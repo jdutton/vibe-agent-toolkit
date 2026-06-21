@@ -97,11 +97,12 @@ export interface WalkLinkGraphOptions {
   /** Whether to exclude navigation files (README.md, index.md, etc.) */
   excludeNavigationFiles?: boolean;
   /**
-   * Structured deferred path sets declared in files config.
-   * - `destPaths` are always deferred (won't exist until build).
-   * - `sourcePaths` are deferred only when the target does not yet exist on
-   *   disk; a source that already exists is NOT deferred and falls through to
-   *   the normal gitignore / missing-target handling.
+   * Structured deferred path sets declared in files config. A path in either
+   * set is treated as a deferred build artifact ONLY when the target does not
+   * yet exist on disk. A `destPaths`/`sourcePaths` entry that already exists is
+   * NOT deferred and falls through to the normal directory / gitignore /
+   * missing-target handling (so an existing-but-gitignored artifact still
+   * surfaces a leak signal rather than a silent LINK_DEFERRED_ARTIFACT).
    */
   deferredPaths?: DeferredPaths;
   /**
@@ -183,9 +184,13 @@ interface ExcludeMatcher {
  * it in the deferred set if so. Must run BEFORE any statSync / directory
  * check to avoid blowing up on missing paths.
  *
- * dest paths are always deferred; source paths are deferred only when the
- * target does not yet exist on disk (a source that exists and is gitignored
- * is a leak and must fall through to the gitignore branch).
+ * Deferral is gated on the target NOT existing on disk for BOTH sets: a
+ * "deferred build artifact" is by definition not yet materialized. An existing
+ * real file at a files: dest (or source) is not deferred — it must fall through
+ * to the gitignore / directory-target checks so a genuine leak signal is not
+ * silently downgraded to LINK_DEFERRED_ARTIFACT (info). The two sets stay
+ * distinct because their `rel` values differ (dest is skill-relative, source
+ * is project-relative), but they share the same existence guard.
  *
  * @returns true if the path was classified as deferred
  */
@@ -197,7 +202,7 @@ function checkDeferred(
 ): boolean {
   const rel = toForwardSlash(safePath.relative(projectRoot, targetPath));
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from parsed markdown
-  if (deferredPaths.destPaths.has(rel) || (deferredPaths.sourcePaths.has(rel) && !existsSync(targetPath))) {
+  if ((deferredPaths.destPaths.has(rel) || deferredPaths.sourcePaths.has(rel)) && !existsSync(targetPath)) {
     deferredAssetSet.add(toForwardSlash(targetPath));
     return true;
   }

@@ -1,0 +1,195 @@
+/**
+ * Scenario harness for the intent-aware verdict engine (issue #129, slice 3).
+ *
+ * One table of `{ intent, ctx, expect }` rows drives the REAL `evaluate`
+ * engine over constructed `RuleContext`s (no filesystem). The harness enforces
+ * three meta-invariants:
+ *
+ *  1. **Per-row correctness** — `evaluate(ctx) === expect`, and when a code
+ *     fires, the materialized issue's description / fix / defaultSeverity equal
+ *     the registry (so the engine cannot drift from CODE_REGISTRY).
+ *  2. **Aliasing detector** — group rows by serialized `RuleContext`; if one
+ *     signature maps to more than one distinct `expect`, the table (or the
+ *     RuleContext shape) is ambiguous → fail and name both intents.
+ *  3. **Anti-workaround invariant** — every registry `fix` for a skill-resource
+ *     code names a sanctioned action BEFORE any "ignore / allow" escape hatch.
+ */
+import { CODE_REGISTRY, type IssueCode } from '@vibe-agent-toolkit/agent-schema';
+import { describe, expect, it } from 'vitest';
+
+import {
+  evaluate,
+  makeRuleContext,
+  materializeIssue,
+  type RuleContext,
+} from '../../src/validators/rule-engine/index.js';
+
+interface Scenario {
+  /** Human-readable intent — what real-world situation this row models. */
+  intent: string;
+  ctx: Partial<RuleContext>;
+  expect: IssueCode | null;
+}
+
+// ---------------------------------------------------------------------------
+// The scenario table — one-line deltas off makeRuleContext() defaults.
+// ---------------------------------------------------------------------------
+const SCENARIOS: Scenario[] = [
+  // --- edges: structural exclusions ----------------------------------------
+  {
+    intent: 'prose link to a file outside the project root',
+    ctx: { subject: 'edge', outsideProject: true },
+    expect: 'LINK_OUTSIDE_PROJECT',
+  },
+  {
+    intent: 'navigational prose link resolving to a directory (valid, #126)',
+    ctx: { subject: 'edge', fileKind: 'directory' },
+    expect: null,
+  },
+  {
+    intent: 'typed files: source slot resolving to a directory',
+    ctx: { subject: 'edge', fileKind: 'directory', typedSingleFileSlot: true },
+    expect: 'LINK_TARGETS_DIRECTORY',
+  },
+  {
+    intent: "link to another skill's SKILL.md",
+    ctx: { subject: 'edge', crossSkillDefinition: true },
+    expect: 'LINK_TO_SKILL_DEFINITION',
+  },
+  {
+    intent: 'link to a files:-declared build artifact not yet materialized',
+    ctx: { subject: 'edge', existsAtSource: false, inFilesConfig: true },
+    expect: 'LINK_DEFERRED_ARTIFACT',
+  },
+  {
+    intent: 'link to an existing gitignored file (leak risk)',
+    ctx: { subject: 'edge', gitignored: true, existsAtSource: true },
+    expect: 'LINK_TO_GITIGNORED_FILE',
+  },
+  {
+    intent: 'link to a navigation file excluded from the bundle',
+    ctx: { subject: 'edge', fileKind: 'nav' },
+    expect: 'LINK_TO_NAVIGATION_FILE',
+  },
+  {
+    intent: 'reference excluded by an author-configured pattern (valid)',
+    ctx: { subject: 'edge', patternExcluded: true },
+    expect: null,
+  },
+  {
+    intent: 'link dropped because it lay beyond linkFollowDepth',
+    ctx: { subject: 'edge', droppedByDepth: true },
+    expect: 'LINK_DROPPED_BY_DEPTH',
+  },
+  {
+    intent: 'source-time link to a missing target (author error)',
+    ctx: { subject: 'edge', phase: 'source', existsAtSource: false },
+    expect: 'LINK_MISSING_TARGET',
+  },
+  {
+    intent: 'built-output link to a missing file (link-rewriter bug)',
+    ctx: { subject: 'edge', phase: 'built', existsAtSource: false },
+    expect: 'PACKAGED_BROKEN_LINK',
+  },
+  {
+    intent: 'ordinary prose link resolving to an existing in-bundle file',
+    ctx: { subject: 'edge', fileKind: 'doc', existsAtSource: true, reachableFromSkillMd: true, referencedHow: 'link' },
+    expect: null,
+  },
+  // --- files: orphan candidates --------------------------------------------
+  {
+    intent: 'unreferenced file in the built output',
+    ctx: { subject: 'file', phase: 'built', reachableFromSkillMd: false, referencedHow: 'none', copyRole: 'skill-bundled' },
+    expect: 'PACKAGED_UNREFERENCED_FILE',
+  },
+  {
+    intent: 'unreferenced built file that is a plugin artifact (exempt)',
+    ctx: { subject: 'file', phase: 'built', reachableFromSkillMd: false, referencedHow: 'none', copyRole: 'plugin-artifact' },
+    expect: null,
+  },
+  {
+    intent: 'built file referenced from SKILL.md (not an orphan)',
+    ctx: { subject: 'file', phase: 'built', reachableFromSkillMd: true, referencedHow: 'link' },
+    expect: null,
+  },
+  {
+    intent: 'built file only documented via a code-block mention (not an orphan)',
+    ctx: { subject: 'file', phase: 'built', reachableFromSkillMd: false, referencedHow: 'mention' },
+    expect: null,
+  },
+  {
+    intent: 'built file declared in files: config (not an orphan)',
+    ctx: { subject: 'file', phase: 'built', reachableFromSkillMd: false, referencedHow: 'none', inFilesConfig: true },
+    expect: null,
+  },
+];
+
+describe('rule-engine: evaluate()', () => {
+  it.each(SCENARIOS)('$intent → $expect', ({ ctx, expect: expected }) => {
+    const fullCtx = makeRuleContext(ctx);
+    const code = evaluate(fullCtx);
+    expect(code).toBe(expected);
+
+    // When a code fires, the materialized issue must equal the registry.
+    if (code !== null) {
+      const entry = CODE_REGISTRY[code];
+      const issue = materializeIssue(code, { location: 'x', detail: 'd' });
+      expect(issue.severity).toBe(entry.defaultSeverity);
+      expect(issue.fix).toBe(entry.fix);
+      expect(issue.reference).toBe(entry.reference);
+      // message is the description headline plus dynamic detail
+      expect(issue.message).toContain(entry.description);
+    }
+  });
+
+  it('aliasing detector: no RuleContext signature maps to >1 distinct expected code', () => {
+    const bySignature = new Map<string, Map<IssueCode | null, string>>();
+    for (const s of SCENARIOS) {
+      const sig = JSON.stringify(sortedEntries(makeRuleContext(s.ctx)));
+      const existing = bySignature.get(sig) ?? new Map<IssueCode | null, string>();
+      existing.set(s.expect, s.intent);
+      bySignature.set(sig, existing);
+    }
+    const collisions = [...bySignature.values()]
+      .filter(m => m.size > 1)
+      .map(m => [...m.entries()].map(([code, intent]) => `${String(code)} (${intent})`).join(' vs '));
+    expect(collisions).toEqual([]);
+  });
+});
+
+describe('rule-engine: anti-workaround invariant', () => {
+  // Codes whose detection now flows through the engine / shared materializer.
+  const ENGINE_CODES: IssueCode[] = [
+    'LINK_OUTSIDE_PROJECT',
+    'LINK_TARGETS_DIRECTORY',
+    'LINK_TO_NAVIGATION_FILE',
+    'LINK_TO_GITIGNORED_FILE',
+    'LINK_MISSING_TARGET',
+    'LINK_DEFERRED_ARTIFACT',
+    'LINK_TO_SKILL_DEFINITION',
+    'LINK_DROPPED_BY_DEPTH',
+    'PACKAGED_UNREFERENCED_FILE',
+    'FILES_SOURCE_GITIGNORED',
+  ];
+
+  // "ignore / allow / severity" escape-hatch language must never lead a fix.
+  const ESCAPE_HATCH = /\b(allow|ignore|severity|suppress)\b/i;
+
+  it.each(ENGINE_CODES)('%s fix names a sanctioned action before any escape hatch', (code) => {
+    const fix = CODE_REGISTRY[code].fix;
+    const firstHatch = fix.search(ESCAPE_HATCH);
+    if (firstHatch === -1) {
+      // No escape hatch mentioned at all — fine; the whole fix is sanctioned action.
+      expect(firstHatch).toBe(-1);
+      return;
+    }
+    // There is sanctioned action text before the first escape-hatch mention.
+    const sanctioned = fix.slice(0, firstHatch).trim();
+    expect(sanctioned.length).toBeGreaterThan(0);
+  });
+});
+
+/** Stable, key-sorted entries so signature serialization is order-independent. */
+function sortedEntries(ctx: RuleContext): Array<[string, unknown]> {
+  return Object.entries(ctx).sort(([a], [b]) => a.localeCompare(b));
+}

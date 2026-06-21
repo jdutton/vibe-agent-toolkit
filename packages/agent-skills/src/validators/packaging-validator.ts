@@ -35,6 +35,7 @@ import { walkLinkGraph, type LinkResolution, type WalkableRegistry } from '../wa
 import { observationToIssue, runCompatDetectors } from './compat-detectors.js';
 import { detectUndeclaredCrossSkillAuth } from './cross-skill-dependency-detection.js';
 import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
+import { materializeIssue } from './rule-engine/index.js';
 import { SOURCE_ONLY_CODES } from './source-only-codes.js';
 import {
   VALIDATION_RULES,
@@ -207,37 +208,29 @@ export function detectGitignoredFilesSources(
       ? isGitIgnored(absSource, projectRoot)
       : gitTracker.isIgnoredByActiveSet(absSource);
     if (ignored) {
-      issues.push({
-        severity: 'warning',
-        code: 'FILES_SOURCE_GITIGNORED',
-        message: `files: source '${entry.source}' is gitignored — it will be copied into the published bundle; confirm it contains no secrets.`,
-        location: toForwardSlash(entry.source),
-      });
+      issues.push(createRegistryIssue(
+        'FILES_SOURCE_GITIGNORED',
+        `files: source '${entry.source}' is gitignored — it will be copied into the published bundle; confirm it contains no secrets.`,
+        toForwardSlash(entry.source),
+      ));
     }
   }
   return issues;
 }
 
 /**
- * Create a validation issue from a code-registry code
+ * Create a validation issue from a code-registry code with a bespoke message.
+ *
+ * Thin wrapper over the shared {@link materializeIssue} so severity / fix /
+ * reference come from the single CODE_REGISTRY source (issue #129 dedup); the
+ * caller supplies a fully-formed `message`.
  */
 function createRegistryIssue(
   code: IssueCode,
   message: string,
   location?: string,
 ): ValidationIssue {
-  const entry = CODE_REGISTRY[code];
-  const issue: ValidationIssue = {
-    severity: entry.defaultSeverity,
-    code,
-    message,
-    fix: entry.fix,
-    reference: entry.reference,
-  };
-  if (location !== undefined) {
-    issue.location = location;
-  }
-  return issue;
+  return materializeIssue(code, { message, location });
 }
 
 /**
@@ -245,13 +238,20 @@ function createRegistryIssue(
  * internal links. Extracted so the skill validator can fall back to a private
  * registry when the caller does not supply a shared one.
  *
+ * Crawls markdown AND HTML (`.html`/`.htm`) so the live audit/validate path
+ * sees the same link graph the built path does (issue #129 AC2). The registry
+ * parses HTML via parse5 and surfaces its `local_file` links, so the walker
+ * traverses HTML references and catches HTML broken links at source time — not
+ * just at build time. (Previously the crawl was markdown-only, so source HTML
+ * was invisible to audit/validate.)
+ *
  * Exported so external callers (e.g. the inventory layer) can build a registry
  * once and pass it down rather than re-crawling per skill.
  */
 export async function crawlAndResolveRegistry(projectRoot: string): Promise<ResourceRegistry> {
   const registry = await ResourceRegistry.fromCrawl({
     baseDir: projectRoot,
-    include: ['**/*.md'],
+    include: ['**/*.md', '**/*.html', '**/*.htm'],
   });
   registry.resolveLinks();
   return registry;
@@ -356,7 +356,8 @@ export async function validateSkillForPackaging(
   // Validate files config (requires projectRoot to resolve source paths for
   // directory-source detection — must run after projectRoot is computed).
   rawIssues.push(...validateFilesConfig(packagingConfig?.files, projectRoot));
-  // Detect gitignored files: sources — un-suppressible security warning.
+  // Detect gitignored files: sources — suppressible registry security warning
+  // (acknowledge with validation.allow + a reason, or change validation.severity).
   rawIssues.push(...detectGitignoredFilesSources(packagingConfig?.files, projectRoot, shared?.gitTracker));
 
   // Build resource registry and walk the link graph.

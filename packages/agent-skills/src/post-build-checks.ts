@@ -9,9 +9,11 @@ import { existsSync, readdirSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
-import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { parseHtml } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+
+import { evaluate, makeRuleContext, materializeIssue } from './validators/rule-engine/index.js';
 
 /**
  * Regex matching markdown inline links: [text](href).
@@ -140,14 +142,16 @@ function collectBrokenLinkIssues(
       if (isExistingDirectory) {
         continue;
       }
-      issues.push({
-        severity: CODE_REGISTRY.PACKAGED_BROKEN_LINK.defaultSeverity,
-        code: 'PACKAGED_BROKEN_LINK',
-        message: `Broken link in packaged output: ${href} (from ${relativeSourcePath})`,
-        location: relativeSourcePath,
-        fix: CODE_REGISTRY.PACKAGED_BROKEN_LINK.fix,
-        reference: CODE_REGISTRY.PACKAGED_BROKEN_LINK.reference,
-      });
+      // Built-path edge extraction: a link whose target is absent from the
+      // packaged output. The engine resolves this to PACKAGED_BROKEN_LINK
+      // (a link-rewriter bug) rather than LINK_MISSING_TARGET via phase: 'built'.
+      const code = evaluate(makeRuleContext({ subject: 'edge', phase: 'built', existsAtSource: false }));
+      if (code !== null) {
+        issues.push(materializeIssue(code, {
+          location: relativeSourcePath,
+          detail: `link: ${href} from ${relativeSourcePath}`,
+        }));
+      }
     }
   }
   return issues;
@@ -267,14 +271,19 @@ export async function checkUnreferencedFiles(outputDir: string): Promise<Validat
     const normalized = toForwardSlash(file);
     if (!referenced.has(normalized)) {
       const relativePath = toForwardSlash(safePath.relative(outputDir, file));
-      issues.push({
-        severity: CODE_REGISTRY.PACKAGED_UNREFERENCED_FILE.defaultSeverity,
-        code: 'PACKAGED_UNREFERENCED_FILE',
-        message: `Packaged file not referenced from any content file (markdown or HTML): ${relativePath}`,
-        location: relativePath,
-        fix: CODE_REGISTRY.PACKAGED_UNREFERENCED_FILE.fix,
-        reference: CODE_REGISTRY.PACKAGED_UNREFERENCED_FILE.reference,
-      });
+      // Built-path file extraction: a packaged file reachable by neither link
+      // nor mention nor files: declaration. The engine resolves this to
+      // PACKAGED_UNREFERENCED_FILE for a skill-bundled copy at the built phase.
+      const code = evaluate(makeRuleContext({
+        subject: 'file',
+        phase: 'built',
+        copyRole: 'skill-bundled',
+        reachableFromSkillMd: false,
+        referencedHow: 'none',
+      }));
+      if (code !== null) {
+        issues.push(materializeIssue(code, { location: relativePath, detail: relativePath }));
+      }
     }
   }
 
