@@ -27,6 +27,14 @@ describe('buildExperimenterPrompt', () => {
     expect(() => assertPromptInvariants(DEFAULT_EXPERIMENTER_PROMPT)).not.toThrow();
   });
 
+  it('pins grading.json to the flat top-level shape and forbids an evals[] wrapper', () => {
+    // Bug E: an under-specified shape let the grader nest results under `evals[]`,
+    // which parseGradingJson rejects. The prompt must pin the flat shape so the
+    // grader emits what vat reads.
+    expect(DEFAULT_EXPERIMENTER_PROMPT).toMatch(/top-level\s+`?expectations`?/i);
+    expect(DEFAULT_EXPERIMENTER_PROMPT).toMatch(/`?evals`?\s+array/i);
+  });
+
   it('mentions the baseline A/B only when enabled', () => {
     expect(buildExperimenterPrompt({ ...opts, baseline: true })).toMatch(/baseline|without the skill/i);
     expect(buildExperimenterPrompt(opts)).not.toMatch(/without the skill/i);

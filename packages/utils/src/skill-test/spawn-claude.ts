@@ -4,7 +4,6 @@ import { createReadStream } from 'node:fs';
 import which from 'which';
 
 export interface ClaudeSpawnArgs {
-  promptFile: string;
   pluginDirs: string[];
   sandboxDir: string;
   model?: string;
@@ -13,19 +12,23 @@ export interface ClaudeSpawnArgs {
 }
 
 /**
- * Pure assembly of the headless `claude -p` argv (spec §9). The prompt is read
- * from a file via the prompt-file flag — never inlined as an argv string
- * (Windows cmd-quoting safety). `--setting-sources ""` suppresses user/project
- * settings; built-in skills remain (§5).
+ * Pure assembly of the headless `claude -p` argv (spec §9). The prompt is never
+ * inlined as an argv string (Windows cmd-quoting safety) and claude 2.x has no
+ * `--prompt-file` flag — the prompt is fed to the child's stdin by
+ * {@link spawnHeadlessClaude} instead. `--setting-sources ""` suppresses
+ * user/project settings; built-in skills remain (§5).
  */
 export function assembleClaudeArgs(opts: ClaudeSpawnArgs): string[] {
   const args: string[] = [
     '-p',
+    // claude 2.x rejects `-p --output-format stream-json` unless --verbose is
+    // also passed ("--output-format=stream-json requires --verbose"). The
+    // streamed JSON is piped to stderr for progress visibility.
     '--output-format', 'stream-json',
+    '--verbose',
     '--setting-sources', '',
     '--permission-mode', 'bypassPermissions',
     '--add-dir', opts.sandboxDir,
-    '--prompt-file', opts.promptFile,
   ];
   for (const dir of opts.pluginDirs) {
     args.push('--plugin-dir', dir);
@@ -43,6 +46,13 @@ export interface SpawnResult {
 }
 
 export interface SpawnHeadlessOptions extends ClaudeSpawnArgs {
+  /**
+   * Path to the experimenter-prompt file. Its contents are streamed to the
+   * child's stdin (claude 2.x reads the `-p` prompt from stdin; there is no
+   * `--prompt-file` flag). Kept off argv so the prompt is never inlined
+   * (Windows cmd-quoting safety).
+   */
+  promptFile: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
@@ -53,15 +63,15 @@ export interface SpawnHeadlessOptions extends ClaudeSpawnArgs {
 }
 
 /**
- * Spawn the headless `claude`. stdin is redirected from the OS null device so
- * the session cannot block on input (§16). Wall-clock kill on timeout.
- * If `stallMs` is set, a resettable stall watchdog kills the child when no
- * output is received for that duration (stalled: true in result).
+ * Spawn the headless `claude`. The prompt file is streamed to the child's stdin
+ * so the session reads its prompt and then sees EOF (it cannot block on input,
+ * §16). Wall-clock kill on timeout. If `stallMs` is set, a resettable stall
+ * watchdog kills the child when no output is received for that duration
+ * (stalled: true in result).
  */
 export async function spawnHeadlessClaude(opts: SpawnHeadlessOptions): Promise<SpawnResult> {
   const bin = which.sync('claude');
   const args = assembleClaudeArgs(opts);
-  const nullDevice = process.platform === 'win32' ? 'NUL' : '/dev/null';
 
   return await new Promise<SpawnResult>((resolve, reject) => {
     const child = spawn(bin, args, { cwd: opts.cwd, env: opts.env, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -95,8 +105,19 @@ export async function spawnHeadlessClaude(opts: SpawnHeadlessOptions): Promise<S
       if (stallTimer !== undefined) clearTimeout(stallTimer);
     };
 
-    // eslint-disable-next-line security/detect-non-literal-fs-filename
-    createReadStream(nullDevice).pipe(child.stdin);
+    // Feed the prompt to the child via stdin (claude 2.x has no --prompt-file).
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived prompt path
+    const promptStream = createReadStream(opts.promptFile);
+    promptStream.on('error', err => {
+      clearAllTimers();
+      child.kill('SIGKILL');
+      reject(err);
+    });
+    // Swallow EPIPE: if the child exits before consuming all stdin, the write
+    // end errors — that is not a harness failure (the close handler reports the
+    // child's real exit status).
+    child.stdin.on('error', () => { /* ignore EPIPE on early child exit */ });
+    promptStream.pipe(child.stdin);
     child.stdout.on('data', (d: Buffer) => { opts.onStdout?.(d.toString()); });
     child.stderr.on('data', (d: Buffer) => { opts.onStderr?.(d.toString()); });
     child.on('error', err => { clearAllTimers(); reject(err); });

@@ -9,6 +9,15 @@ export {
 } from './friction-schema.js';
 export { GradingSkewError, parseGradingJson, type NormalizedGrading } from './grading-adapter.js';
 export {
+  GradedExpectationSchema,
+  GradingReportJsonSchema,
+  GradingReportSchema,
+  GradingSummarySchema,
+  type GradedExpectation,
+  type GradingReport,
+  type GradingSummary,
+} from './grading-schema.js';
+export {
   assertSafeHarnessRoot,
   assertSafeWorkdir,
   deriveHarnessKey,

@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename } from 'node:path';
 
 import type { ResolveSkillSourceContext, ResolvedSkillSource, SkillSource } from '@vibe-agent-toolkit/agent-skills';
@@ -123,6 +123,11 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
     // CLI arg) — never join it raw (drive-letter-mid-path on Windows). Always
     // stage under one sanitized segment. See stagedDirName.
     const dest = safePath.join(opts.harnessRoot, stagedDirName(item.name));
+    // v1 re-stages fully every run. The harness root is reused on a deterministic
+    // key, so wipe dest first — cpSync overlays and would leave files dropped from
+    // source behind (a stale staged evals/evals.json wrongly satisfies the
+    // bootstrap check). Pruning makes each re-stage a clean mirror of source.
+    rmSync(dest, { recursive: true, force: true });
     cpSync(resolved.stagedDir, dest, { recursive: true });
     const contentHash = computeDirContentHash(dest);
     entries.push({ name: item.name, identity: resolved.identity, contentHash });

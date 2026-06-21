@@ -26,10 +26,17 @@ export const DEFAULT_EXPERIMENTER_PROMPT = [
   '  1. Dispatch ONE executor subagent. Tell it ONLY the task prompt and the staged subject path {{SUBJECT_PATH}}.',
   '     Never tell the executor it is being tested.',
   '  2. Grade the executor output against the eval\'s `expectations` using skill-creator\'s grader.md rubric.',
-  '  3. Append the per-eval result to {{GRADING_OUT}} IMMEDIATELY (incremental flush — a mid-run kill must leave partial results).',
+  '  3. Append each graded expectation to the SINGLE top-level `expectations` array in {{GRADING_OUT}} IMMEDIATELY',
+  '     (incremental flush — a mid-run kill must leave partial results).',
   '  4. Record any packaging-fidelity friction to {{FRICTION_OUT}} using the vat friction schema.',
   '',
-  'When all evals are graded, write the final summary to {{GRADING_OUT}} and STOP.',
+  '{{GRADING_OUT}} MUST be ONE flat JSON object in skill-creator\'s grading.json shape (references/schemas.md):',
+  'a top-level `expectations` array — one entry {"text","passed","evidence"} per expectation across ALL evals —',
+  'and a top-level `summary` {"passed","total"}. Do NOT wrap results in an `evals` array or any per-eval nesting;',
+  'vat reads the flat top-level shape and rejects anything else. Example:',
+  '  {"expectations":[{"text":"...","passed":true,"evidence":"..."}],"summary":{"passed":1,"total":1}}',
+  '',
+  'When all evals are graded, write the final `summary` to {{GRADING_OUT}} and STOP.',
   '',
   'You are FORBIDDEN to: open a browser or viewer; run aggregation/optimizer scripts; wait for human feedback;',
   'or iterate/improve the skill. This is a downstream packaging check, not an authoring loop.',
@@ -55,6 +62,14 @@ const REQUIRED_PATTERNS: { test: RegExp; label: string }[] = [
   { test: /forbidden|do not|never/i, label: 'must forbid browser/aggregation/feedback/iteration' },
   { test: /browser|viewer/i, label: 'must explicitly forbid opening a browser/viewer' },
   { test: /increment/i, label: 'must emit incrementally' },
+  {
+    test: /top-level\s+`?expectations`?/i,
+    label: 'must pin grading.json to the flat top-level `expectations`/`summary` shape',
+  },
+  {
+    test: /`?evals`?\s+array|per-eval nesting/i,
+    label: 'must forbid wrapping grading results in an `evals` array',
+  },
 ];
 
 export function assertPromptInvariants(prompt: string): void {

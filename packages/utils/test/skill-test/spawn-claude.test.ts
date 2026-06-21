@@ -5,13 +5,11 @@ import { assembleClaudeArgs } from '../../src/skill-test/spawn-claude.js';
 describe('assembleClaudeArgs', () => {
   // eslint-disable sonarjs/publicly-writable-directories -- test fixtures
   const sandboxPath = '/var/lib/sandbox';
-  const promptPath = '/var/lib/sandbox/experimenter-prompt.txt';
   const subject = '/var/lib/sandbox/subject';
   const skillCreator = '/var/lib/sandbox/skill-creator';
   // eslint-enable sonarjs/publicly-writable-directories
 
   const base = {
-    promptFile: promptPath,
     pluginDirs: [subject, skillCreator],
     sandboxDir: sandboxPath,
   };
@@ -21,6 +19,14 @@ describe('assembleClaudeArgs', () => {
     const i = args.indexOf('--setting-sources');
     expect(i).toBeGreaterThanOrEqual(0);
     expect(args[i + 1]).toBe('');
+  });
+
+  it('passes --verbose (claude 2.x requires it when -p uses --output-format stream-json)', () => {
+    const args = assembleClaudeArgs(base);
+    expect(args).toContain('--output-format');
+    expect(args[args.indexOf('--output-format') + 1]).toBe('stream-json');
+    // Without --verbose, claude exits 1: "--output-format=stream-json requires --verbose".
+    expect(args).toContain('--verbose');
   });
 
   it('emits one --plugin-dir per staged item', () => {
@@ -36,9 +42,12 @@ describe('assembleClaudeArgs', () => {
     expect(args[args.indexOf('--add-dir') + 1]).toBe(sandboxPath);
   });
 
-  it('never places the prompt text in argv (only the file flag)', () => {
+  it('never includes --prompt-file and never references the prompt file in argv (prompt is fed via stdin)', () => {
     const args = assembleClaudeArgs(base);
-    expect(args.some(a => a.includes('experimenter-prompt.txt'))).toBe(true);
+    // claude 2.x has no --prompt-file flag; the prompt is piped to stdin.
+    expect(args).not.toContain('--prompt-file');
+    // The prompt path must not appear anywhere in argv.
+    expect(args.some(a => a.includes('experimenter-prompt.txt'))).toBe(false);
     // sanity: the prompt content is not inlined
     expect(args.join(' ')).not.toContain('STOP');
   });

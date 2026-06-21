@@ -8,7 +8,7 @@
 
 import { basename } from 'node:path';
 
-import { mapErrorToExitCode, runSkillTestHarness } from '@vibe-agent-toolkit/agent-skills';
+import { BootstrapNeededError, mapErrorToExitCode, runSkillTestHarness } from '@vibe-agent-toolkit/agent-skills';
 import type { SkillSourceDescriptor, TestConfig } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
@@ -320,7 +320,13 @@ export async function runSkillTestRun(
     return;
   } catch (err) {
     const exitCode = mapErrorToExitCode(err);
-    process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
+    // BootstrapNeededError (exit 3) is the happy "wrote a template, fill it in
+    // and re-run" path — surface its message plainly, not as a hard `Error:`.
+    if (err instanceof BootstrapNeededError) {
+      process.stderr.write(`${err.message}\n`);
+    } else {
+      process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
+    }
     process.exit(exitCode);
     return;
   }

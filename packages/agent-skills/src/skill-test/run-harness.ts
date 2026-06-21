@@ -472,7 +472,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       return {
         harnessPath: harnessRoot,
         exitCode: SkillTestExitCode.Ok,
-        summary: `[dry-run] Would spawn: claude -p --prompt-file ${promptFile}`,
+        summary: `[dry-run] Would spawn: claude -p (prompt via stdin from ${promptFile})`,
       };
     }
 

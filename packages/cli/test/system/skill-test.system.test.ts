@@ -224,6 +224,12 @@ describe('vat skill test run (system)', () => {
 
     expectStatus(result, 3);
 
+    // Bootstrap (exit 3) is the happy "wrote a template, fill it in" path — it
+    // must NOT be printed as a hard error. The message reaches the user without
+    // the `Error:` prefix and points at the scaffolded template.
+    expect(result.stderr).not.toContain('Error: Wrote');
+    expect(result.stderr).toContain('evals.json template');
+
     // The scaffold must persist next to the subject source (the fixture skill dir).
     const scaffoldPath = safePath.join(skillDir, 'evals', 'evals.json');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file

@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync, readFileSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -84,6 +84,40 @@ describe('stageHarness (integration)', () => {
     // ...and the single segment carries no separators or drive letter.
     const segment = staged.slice(rootFwd.length + 1);
     expect(segment).not.toMatch(/[/\\:]/);
+  });
+
+  it('re-stage prunes files deleted from source (clean mirror, not an overlay)', async () => {
+    // Regression (#132): the harness root is reused on a deterministic key and
+    // cpSync overlays source onto dest without removing files dropped from the
+    // source. A stale staged evals/evals.json then makes the bootstrap check
+    // wrongly pass → spawn/exit-1 instead of re-scaffolding (exit 3). Each
+    // re-stage must be a clean mirror of source.
+    const srcDir = safePath.join(srcRoot, 'subject');
+    mkdirSyncReal(srcDir, { recursive: true });
+    const evalsDir = safePath.join(srcDir, 'evals');
+    mkdirSyncReal(evalsDir, { recursive: true });
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own tmp src
+    writeFileSync(safePath.join(srcDir, 'SKILL.md'), '# subject\n', 'utf8');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own tmp src
+    writeFileSync(safePath.join(evalsDir, 'evals.json'), '{}\n', 'utf8');
+
+    // Resolver returns srcDir verbatim so we can mutate the source between runs.
+    const resolve = (async () => ({ stagedDir: srcDir, identity: 'id-subject' })) as never;
+    const items: StageItem[] = [{ name: 'subject', source: descriptorToSource({ path: SUBJECT_SRC }) }];
+    const opts = { harnessRoot: root, items, resolve, ctx: {} as never, currentUid: uid };
+
+    const first = await stageHarness(opts);
+    const stagedEvals = safePath.join(first.pluginDirs[0] as string, 'evals', 'evals.json');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- staged path under our tmp root
+    expect(existsSync(stagedEvals)).toBe(true);
+
+    // Drop evals/ from the SOURCE, then re-stage the same harnessRoot+item.
+    rmSync(evalsDir, { recursive: true, force: true });
+    await stageHarness(opts);
+
+    // The stale staged copy must be gone — re-stage mirrors source, not overlays.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- staged path under our tmp root
+    expect(existsSync(stagedEvals)).toBe(false);
   });
 
   it('re-stage with unchanged inputs is a manifest-level no-op (unchanged plan)', async () => {
