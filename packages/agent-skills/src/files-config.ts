@@ -5,7 +5,12 @@
  * - Merging defaults + per-skill entries (additive, per-skill wins on dest collision)
  * - Matching auto-discovered links to files entries
  * - Computing deferred paths for validation
+ * - Copying declared build artifacts into a skill output dir (every build path)
  */
+
+import { existsSync } from 'node:fs';
+import { copyFile, mkdir } from 'node:fs/promises';
+import { dirname } from 'node:path';
 
 import type { SkillFileEntry } from '@vibe-agent-toolkit/resources';
 import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
@@ -198,4 +203,54 @@ export function computeDeferredPaths(
     );
   }
   return { destPaths, sourcePaths };
+}
+
+/** Options for {@link applyFilesConfig}. */
+export interface ApplyFilesConfigOptions {
+  /** Merged `files:` entries to copy. */
+  filesConfig: SkillFileEntry[];
+  /** Absolute project root; each `source` resolves relative to it. */
+  projectRoot: string;
+  /** Absolute skill output dir; each `dest` resolves relative to it. */
+  skillOutputDir: string;
+  /**
+   * Absolute source paths already materialized by link traversal — skipped so
+   * a linked-and-copied asset isn't copied twice. Defaults to none (copy all).
+   */
+  bundledFiles?: string[];
+}
+
+/**
+ * Copy each `files:` entry's `source` → `dest` into the skill output directory.
+ *
+ * This is the single copy primitive shared by every build path so that
+ * build-provided artifacts (a bundled engine, generated data, a catalog) are
+ * VAT-managed end-to-end: the shared-pool `vat skills build` packager and the
+ * Claude plugin marketplace build both call it, instead of the latter relying on
+ * an external inject script VAT can't see. `source` is resolved the same way the
+ * packager does (`resolve(join(projectRoot, source))`, so an absolute-looking
+ * source roots UNDER the project). Returns the dest paths actually copied.
+ *
+ * @throws if a declared `source` does not exist — a declared build artifact must
+ * be present at copy time (callers that defer existence validate it upstream).
+ */
+export async function applyFilesConfig(opts: ApplyFilesConfigOptions): Promise<string[]> {
+  const bundledFileSet = new Set((opts.bundledFiles ?? []).map((f) => toForwardSlash(f)));
+  const copied: string[] = [];
+  for (const fileEntry of opts.filesConfig) {
+    const absoluteSource = safePath.resolve(safePath.join(opts.projectRoot, fileEntry.source));
+    if (bundledFileSet.has(toForwardSlash(absoluteSource))) continue;
+    const absoluteDest = safePath.join(opts.skillOutputDir, fileEntry.dest);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
+    if (!existsSync(absoluteSource)) {
+      throw new Error(
+        `files: source '${fileEntry.source}' does not exist (resolved to ${absoluteSource}).`,
+      );
+    }
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- dest path from validated config
+    await mkdir(dirname(absoluteDest), { recursive: true });
+    await copyFile(absoluteSource, absoluteDest);
+    copied.push(fileEntry.dest);
+  }
+  return copied;
 }

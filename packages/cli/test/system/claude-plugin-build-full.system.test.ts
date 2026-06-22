@@ -4,13 +4,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import {
-  createSkillMarkdown,
-  createTempDirTracker,
-  executeCliAndParseYaml,
-  getBinPath,
-  writeTestFile,
-} from './test-common.js';
+import { createTempDirTracker, executeCliAndParseYaml, getBinPath, writeTestFile } from './test-common.js';
 
 const binPath = getBinPath(import.meta.url);
 const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-plugin-full-');
@@ -24,6 +18,11 @@ function buildFixture(tempDir: string): void {
   const config = `version: 1
 skills:
   include: ["plugins/*/skills/**/SKILL.md"]
+  config:
+    local-b:
+      files:
+        - source: dist/gen/engine.mjs
+          dest: lib/engine.mjs
 claude:
   marketplaces:
     mp1:
@@ -51,9 +50,20 @@ claude:
   mkdirSyncReal(safePath.join(plugin, 'scripts'), { recursive: true });
   writeTestFile(safePath.join(plugin, 'scripts', 'util.mjs'), 'export default 1;');
   mkdirSyncReal(safePath.join(plugin, 'skills', 'local-b'), { recursive: true });
+  // Links the build-injected bundle (a files:-declared dest) so it is referenced
+  // and resolves via the deferred-artifact path rather than as a broken link.
   writeTestFile(
     safePath.join(plugin, 'skills', 'local-b', 'SKILL.md'),
-    createSkillMarkdown('local-b'),
+    `---
+name: local-b
+description: local-b - comprehensive test skill for validation and packaging coverage
+version: 1.0.0
+---
+
+# local-b
+
+Uses the bundled [engine](lib/engine.mjs).
+`,
   );
 
   mkdirSyncReal(safePath.join(plugin, '.claude-plugin'), { recursive: true });
@@ -72,6 +82,13 @@ claude:
     safePath.join(tempDir, 'dist', 'hooks', 'compiled-hook.mjs'),
     'export default 2;',
   );
+
+  // A build-injected artifact for the tree-copied skill local-b: declared via
+  // skill-level files: (source lives outside the skill dir, never in skill
+  // source). The plugin selects no pool skills, so local-b reaches the plugin
+  // ONLY via verbatim tree-copy — the path that must now apply skill-level files:.
+  mkdirSyncReal(safePath.join(tempDir, 'dist', 'gen'), { recursive: true });
+  writeTestFile(safePath.join(tempDir, 'dist', 'gen', 'engine.mjs'), 'export const engine = 3;');
 }
 
 describe('vat claude plugin build (full plugin support)', () => {
@@ -105,6 +122,11 @@ describe('vat claude plugin build (full plugin support)', () => {
     expect(existsSync(safePath.join(outDir, 'scripts', 'util.mjs'))).toBe(true);
     expect(existsSync(safePath.join(outDir, 'skills', 'local-b', 'SKILL.md'))).toBe(true);
     expect(existsSync(safePath.join(outDir, 'hooks', 'compiled-hook.mjs'))).toBe(true);
+    // The tree-copied skill's build-injected files: bundle landed in the
+    // distributed tree (skill-level files: applied in the plugin build path).
+    const engineOut = safePath.join(outDir, 'skills', 'local-b', 'lib', 'engine.mjs');
+    expect(existsSync(engineOut)).toBe(true);
+    expect(readFileSync(engineOut, 'utf-8')).toBe('export const engine = 3;');
 
     const pluginJson = JSON.parse(
       readFileSync(safePath.join(outDir, '.claude-plugin', 'plugin.json'), 'utf-8'),

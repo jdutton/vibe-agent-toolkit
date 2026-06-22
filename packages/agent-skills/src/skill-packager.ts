@@ -48,7 +48,7 @@ import {
 } from '@vibe-agent-toolkit/utils';
 
 import { getTargetSubdir } from './content-type-routing.js';
-import { computeDeferredPaths, type SkillFileEntry } from './files-config.js';
+import { applyFilesConfig, computeDeferredPaths, type SkillFileEntry } from './files-config.js';
 import { checkBrokenPackagedLinks, checkUnreferencedFiles } from './post-build-checks.js';
 import { validateSkillForPackaging, type PackagingValidationResult } from './validators/packaging-validator.js';
 import { deferredAssetsToIssues, walkerExclusionsToIssues } from './validators/walker-to-issues.js';
@@ -504,7 +504,7 @@ export async function packageSkill(
   });
 
   // 12b. Copy files config entries that were not auto-discovered via link traversal.
-  await copyFilesConfigEntries(filesConfig, bundledFiles, projectRoot, outputPath);
+  await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir: outputPath, bundledFiles });
 
   // 13. Post-build integrity check: no SKILL.md in subdirectories
   // A SKILL.md is a skill definition marker — it must only exist at the root.
@@ -1057,31 +1057,6 @@ interface CopyRewriteContext {
   projectRoot: string;
   /** Sink for non-fatal copy/rewrite diagnostics (verbatim copies, un-appliable rewrites). */
   warn: (message: string) => void;
-}
-
-/**
- * Copy files config entries that were not auto-discovered via link traversal.
- *
- * Build artifacts declared in `files` (e.g. `dist/bin/cli.mjs → scripts/cli.mjs`)
- * are not in the link graph (the linked path points to `dest`, which doesn't exist
- * at source time). This step copies them explicitly to the output directory.
- */
-async function copyFilesConfigEntries(
-  filesConfig: SkillFileEntry[],
-  bundledFiles: string[],
-  projectRoot: string,
-  outputPath: string,
-): Promise<void> {
-  const bundledFileSet = new Set(bundledFiles.map(f => toForwardSlash(f)));
-  for (const fileEntry of filesConfig) {
-    const absoluteSource = safePath.resolve(safePath.join(projectRoot, fileEntry.source));
-    const absoluteDest = safePath.join(outputPath, fileEntry.dest);
-    if (!bundledFileSet.has(toForwardSlash(absoluteSource))) {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
-      await mkdir(dirname(absoluteDest), { recursive: true });
-      await copyFile(absoluteSource, absoluteDest);
-    }
-  }
 }
 
 /**

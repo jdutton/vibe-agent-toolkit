@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'vitest';
+/* eslint-disable security/detect-non-literal-fs-filename -- test sandbox paths derived from tmp dirs */
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+
+import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  applyFilesConfig,
   mergeFilesConfig,
   matchLinkToFiles,
   computeDeferredPaths,
@@ -9,6 +14,25 @@ import {
 
 const CLI_SOURCE = 'dist/bin/cli.mjs';
 const CLI_DEST = 'scripts/cli.mjs';
+
+/** Tmp dirs created by applyFilesConfig tests, cleaned up after each. */
+const APPLY_TMP_DIRS: string[] = [];
+/** Shared filenames/dests used across applyFilesConfig cases. */
+const DATA_FILE = 'data.json';
+const DATA_DEST = `data/${DATA_FILE}`;
+const DATA_SOURCE = `dist/gen/${DATA_FILE}`;
+
+/** Create an isolated {projectRoot, skillOutputDir} sandbox with a build artifact source. */
+function makeApplySandbox(): { projectRoot: string; skillOutputDir: string } {
+  const root = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-apply-files-'));
+  APPLY_TMP_DIRS.push(root);
+  const projectRoot = safePath.join(root, 'project');
+  const skillOutputDir = safePath.join(root, 'out');
+  mkdirSyncReal(safePath.join(projectRoot, 'dist', 'gen'), { recursive: true });
+  mkdirSyncReal(skillOutputDir, { recursive: true });
+  writeFileSync(safePath.join(projectRoot, 'dist', 'gen', DATA_FILE), '{"ok":true}');
+  return { projectRoot, skillOutputDir };
+}
 
 describe('mergeFilesConfig', () => {
   it('should return empty array when no defaults and no per-skill', () => {
@@ -187,5 +211,43 @@ describe('computeDeferredPaths', () => {
 
     // Must NOT contain the raw (skill-dir-relative) dest that the bug would have stored
     expect(result.destPaths.has('scripts/ado-cli.mjs')).toBe(false);
+  });
+});
+
+describe('applyFilesConfig', () => {
+  afterEach(() => {
+    for (const dir of APPLY_TMP_DIRS.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('copies a declared source into the skill output dir at its dest', async () => {
+    const { projectRoot, skillOutputDir } = makeApplySandbox();
+    const filesConfig: SkillFileEntry[] = [{ source: DATA_SOURCE, dest: DATA_DEST }];
+
+    const copied = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
+
+    expect(copied).toEqual([DATA_DEST]);
+    const destPath = safePath.join(skillOutputDir, 'data', DATA_FILE);
+    expect(existsSync(destPath)).toBe(true);
+    expect(readFileSync(destPath, 'utf-8')).toBe('{"ok":true}');
+  });
+
+  it('skips entries whose source is already bundled', async () => {
+    const { projectRoot, skillOutputDir } = makeApplySandbox();
+    const filesConfig: SkillFileEntry[] = [{ source: DATA_SOURCE, dest: DATA_DEST }];
+    const bundledFiles = [safePath.resolve(safePath.join(projectRoot, DATA_SOURCE))];
+
+    const copied = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir, bundledFiles });
+
+    expect(copied).toEqual([]);
+    expect(existsSync(safePath.join(skillOutputDir, 'data', DATA_FILE))).toBe(false);
+  });
+
+  it('throws when a declared source does not exist', async () => {
+    const { projectRoot, skillOutputDir } = makeApplySandbox();
+    const filesConfig: SkillFileEntry[] = [{ source: 'dist/gen/missing.json', dest: 'x.json' }];
+
+    await expect(applyFilesConfig({ filesConfig, projectRoot, skillOutputDir })).rejects.toThrow(
+      /does not exist/,
+    );
   });
 });

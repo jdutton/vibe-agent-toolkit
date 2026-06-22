@@ -33,9 +33,11 @@ export {
 } from './content-type-routing.js';
 
 export {
+  applyFilesConfig,
   mergeFilesConfig,
   matchLinkToFiles,
   computeDeferredPaths,
+  type ApplyFilesConfigOptions,
   type ComputeDeferredPathsOpts,
   type DeferredPaths,
   type FilesMatchResult,
