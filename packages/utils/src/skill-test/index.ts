@@ -1,4 +1,12 @@
-export { buildForwardedEnv, type ForwardEnvOptions } from './env-scrub.js';
+export {
+  applyDeclaredEnv,
+  buildForwardedEnv,
+  formatForwardedEnvLine,
+  protectedEnvNames,
+  type DeclaredEnvInput,
+  type DeclaredEnvResult,
+  type ForwardEnvOptions,
+} from './env-scrub.js';
 export {
   AuthPreflightError,
   probeAuthStatus,

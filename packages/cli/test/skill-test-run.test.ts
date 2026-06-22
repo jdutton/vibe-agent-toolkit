@@ -79,6 +79,60 @@ describe('vat skill test run (orchestration)', () => {
   });
 });
 
+// Mocks runSkillTestHarness, runs runSkillTestRun, and returns the RunHarnessOptions
+// the mock received so tests can assert env/passEnv plumbing.
+async function runAndCaptureOpts(
+  skills: string[],
+  options: Parameters<typeof runSkillTestRun>[1],
+): Promise<Record<string, unknown>> {
+  const spy = vi
+    .spyOn(harness, 'runSkillTestHarness')
+    .mockResolvedValue({ harnessPath: '/h', exitCode: 0, summary: 'PASS 1/1' });
+  vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+  vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);
+  vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
+  await runSkillTestRun(skills, options);
+  return spy.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
+}
+
+const ENV_TEST_SKILL = 'acme-skill';
+
+describe('vat skill test run (env plumbing)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('parses --env KEY=VALUE into an env record (literal ${...} preserved)', async () => {
+    const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
+      env: ['CUSTOMER_SNAPSHOT_PATH=${fixturesDir}/snap.json'],
+      iUnderstandThisRunsSkillCode: true,
+    });
+    expect(opts.env).toEqual({ CUSTOMER_SNAPSHOT_PATH: '${fixturesDir}/snap.json' });
+  });
+
+  it('splits an --env value on the first = only', async () => {
+    const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
+      env: ['FOO=a=b'],
+      iUnderstandThisRunsSkillCode: true,
+    });
+    expect(opts.env).toEqual({ FOO: 'a=b' });
+  });
+
+  it('unions and de-duplicates --pass-env names', async () => {
+    const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
+      passEnv: ['VENDOR_LICENSE_KEY', 'VENDOR_LICENSE_KEY', 'OTHER'],
+      iUnderstandThisRunsSkillCode: true,
+    });
+    expect(opts.passEnv).toEqual(['VENDOR_LICENSE_KEY', 'OTHER']);
+  });
+
+  it('leaves env and passEnv undefined when no env flags are given', async () => {
+    const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
+      iUnderstandThisRunsSkillCode: true,
+    });
+    expect(opts.env).toBeUndefined();
+    expect(opts.passEnv).toBeUndefined();
+  });
+});
+
 describe('vat skill test run (output routing)', () => {
   afterEach(() => vi.restoreAllMocks());
 

@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildForwardedEnv } from '../../src/skill-test/env-scrub.js';
+import {
+  applyDeclaredEnv,
+  buildForwardedEnv,
+  formatForwardedEnvLine,
+  protectedEnvNames,
+} from '../../src/skill-test/env-scrub.js';
 
 const HOME_DIR = '/home/u';
 const BASE = {
@@ -16,6 +21,19 @@ const BASE = {
   PATH: '/usr/bin',
   HOME: HOME_DIR,
 } as NodeJS.ProcessEnv;
+
+/** Host source for declared-env tests: BASE plus synthetic vendor-supplied vars. */
+const DECLARED_SOURCE = {
+  ...BASE,
+  VENDOR_LICENSE_KEY: 'lic-123',
+  FOO: 'host',
+} as NodeJS.ProcessEnv;
+
+/** A forwarded env built from BASE, used as the union base for declared-env tests. */
+const FORWARDED_BASE = buildForwardedEnv(BASE, { scrubInferenceKey: false });
+
+/** Synthetic injected-value literal reused across declared-env tests. */
+const SNAPSHOT_PATH = '/x/snapshot.json';
 
 describe('buildForwardedEnv', () => {
   it('forwards CLAUDE_CONFIG_DIR and the inference credential when not scrubbing', () => {
@@ -53,5 +71,94 @@ describe('buildForwardedEnv', () => {
     expect(env.PATH).toBe('/usr/bin');
     expect(env.HOME).toBe('/home/u');
     expect(env.ANTHROPIC_MODEL).toBe('claude-x');
+  });
+});
+
+describe('applyDeclaredEnv', () => {
+  it('passEnv forwards a present source var', () => {
+    const result = applyDeclaredEnv(FORWARDED_BASE, {
+      source: DECLARED_SOURCE,
+      passEnv: ['VENDOR_LICENSE_KEY'],
+    });
+    expect(result.env.VENDOR_LICENSE_KEY).toBe('lic-123');
+    expect(result.passedThrough).toContain('VENDOR_LICENSE_KEY');
+    expect(result.warnings).toHaveLength(0);
+  });
+
+  it('passEnv naming an absent source var is skipped without warning', () => {
+    const result = applyDeclaredEnv(FORWARDED_BASE, {
+      source: DECLARED_SOURCE,
+      passEnv: ['MISSING_VENDOR_VAR'],
+    });
+    expect(result.env.MISSING_VENDOR_VAR).toBeUndefined();
+    expect(result.passedThrough).not.toContain('MISSING_VENDOR_VAR');
+    expect(result.warnings).toHaveLength(0);
+  });
+
+  it('passEnv naming a protected var is ignored with a warning, base value retained', () => {
+    const result = applyDeclaredEnv(FORWARDED_BASE, {
+      source: { ...DECLARED_SOURCE, PATH: '/evil/bin' },
+      passEnv: ['PATH'],
+    });
+    expect(result.env.PATH).toBe('/usr/bin');
+    expect(result.passedThrough).not.toContain('PATH');
+    expect(result.warnings.some((w) => w.includes('PATH'))).toBe(true);
+  });
+
+  it('injectEnv unions a new key with its literal value', () => {
+    const result = applyDeclaredEnv(FORWARDED_BASE, {
+      source: DECLARED_SOURCE,
+      injectEnv: { CUSTOMER_SNAPSHOT_PATH: SNAPSHOT_PATH },
+    });
+    expect(result.env.CUSTOMER_SNAPSHOT_PATH).toBe(SNAPSHOT_PATH);
+    expect(result.injected).toContain('CUSTOMER_SNAPSHOT_PATH');
+  });
+
+  it('injectEnv naming a protected var is ignored with a warning, base value retained', () => {
+    const result = applyDeclaredEnv(FORWARDED_BASE, {
+      source: DECLARED_SOURCE,
+      injectEnv: { PATH: '/evil/bin' },
+    });
+    expect(result.env.PATH).toBe('/usr/bin');
+    expect(result.injected).not.toContain('PATH');
+    expect(result.warnings.some((w) => w.includes('PATH'))).toBe(true);
+  });
+
+  it('injectEnv wins over passEnv for the same key', () => {
+    const result = applyDeclaredEnv(FORWARDED_BASE, {
+      source: DECLARED_SOURCE,
+      passEnv: ['FOO'],
+      injectEnv: { FOO: 'explicit' },
+    });
+    expect(result.env.FOO).toBe('explicit');
+    expect(result.injected).toContain('FOO');
+    expect(result.passedThrough).not.toContain('FOO');
+  });
+});
+
+describe('formatForwardedEnvLine', () => {
+  it('shows names, redacts secrets and pass-through values, shows injected values', () => {
+    const result = applyDeclaredEnv(FORWARDED_BASE, {
+      source: DECLARED_SOURCE,
+      passEnv: ['VENDOR_LICENSE_KEY'],
+      injectEnv: { CUSTOMER_SNAPSHOT_PATH: SNAPSHOT_PATH },
+    });
+    const line = formatForwardedEnvLine(result.env, result);
+    expect(line.startsWith('forwarded env: ')).toBe(true);
+    expect(line).toContain('ANTHROPIC_API_KEY(redacted)');
+    expect(line).toContain(`CUSTOMER_SNAPSHOT_PATH=${SNAPSHOT_PATH}`);
+    expect(line).toContain('VENDOR_LICENSE_KEY(passed-through, redacted)');
+    expect(line).not.toContain('sk-key');
+    expect(line).not.toContain('lic-123');
+  });
+});
+
+describe('protectedEnvNames', () => {
+  it('includes process essentials, auth, admin, and passed model vars', () => {
+    const names = protectedEnvNames(['ANTHROPIC_MODEL']);
+    expect(names.has('PATH')).toBe(true);
+    expect(names.has('ANTHROPIC_API_KEY')).toBe(true);
+    expect(names.has('ANTHROPIC_ADMIN_API_KEY')).toBe(true);
+    expect(names.has('ANTHROPIC_MODEL')).toBe(true);
   });
 });

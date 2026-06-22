@@ -33,6 +33,17 @@ export {
   type StagedManifest,
 } from './manifest.js';
 export {
+  assembleChildEnv,
+  computeEnvTokens,
+  interpolateEnvValue,
+  resolveInjectEnv,
+  UnknownEnvTokenError,
+  type AssembleChildEnvInput,
+  type AssembledChildEnv,
+  type EnvInterpolationTokens,
+  type EnvTokenInputs,
+} from './declared-env.js';
+export {
   BootstrapNeededError,
   InternalHarnessError,
   mapErrorToExitCode,

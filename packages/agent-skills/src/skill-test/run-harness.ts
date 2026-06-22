@@ -23,12 +23,14 @@ import {
   safePath,
   spawnHeadlessClaude,
   toForwardSlash,
+  type ResolvedAuth,
 } from '@vibe-agent-toolkit/utils';
 
 import { resolveSkillSource } from '../skill-source/resolve-skill-source.js';
 import type { ResolvedSkillSource, ResolveSkillSourceContext, SkillSource } from '../skill-source/types.js';
 
 import { runPreStageBuild } from './build-hook.js';
+import { assembleChildEnv, computeEnvTokens, resolveInjectEnv } from './declared-env.js';
 import { writeEvalsTemplate } from './evals-template.js';
 import { BootstrapNeededError, InternalHarnessError, SkillTestExitCode } from './exit-codes.js';
 import {
@@ -38,7 +40,6 @@ import {
 import { parseGradingJson } from './grading-adapter.js';
 import { assertSafeHarnessRoot, assertSafeWorkdir, prepareHarnessRoot, resolveHarnessRoot } from './harness-location.js';
 import { acquireHarnessLock } from './lock.js';
-import { withPluginRootEnv } from './plugin-env.js';
 import { detectPluginLayout } from './plugin-layout.js';
 import { runPreflight, type PreflightInput } from './preflight.js';
 import { descriptorToSource, stageHarness, type StageItem } from './staging.js';
@@ -161,6 +162,11 @@ export interface RunHarnessOptions {
    * Falls back to repoRoot when omitted.
    */
   configRoot?: string;
+
+  /** Feature B: explicit env var injections (interpolated at stage time). */
+  env?: Record<string, string>;
+  /** Feature A: host env var names to forward to the experimenter if present. */
+  passEnv?: readonly string[];
 }
 
 export interface RunHarnessResult {
@@ -406,6 +412,50 @@ function resolveScaffoldEvalsPath(opts: RunHarnessOptions, repoRoot: string, eva
   return safePath.join(sourceDir, evalsSubpath);
 }
 
+interface ResolveDeclaredChildEnvInput {
+  opts: RunHarnessOptions;
+  resolvedAuth: ResolvedAuth | null;
+  subjectStagedDir: string;
+  harnessRoot: string;
+  resultsDir: string;
+  evalsSubpath: string;
+  subjectPluginRoot: string | null;
+}
+
+/**
+ * Assemble the experimenter's child env: the scrubbed forwarded env unioned with
+ * the declared test env (Features A + B) and CLAUDE_PLUGIN_ROOT, then emit the
+ * transparency line and any protected-key collision warnings to stderr.
+ *
+ * Refuses to assemble without a resolved auth — a null here is an internal
+ * invariant violation (preflight passed), never a reason to fall back to
+ * process.env, which would hand untrusted skill code every secret it contains.
+ */
+function resolveDeclaredChildEnv(input: ResolveDeclaredChildEnvInput): ReturnType<typeof assembleChildEnv> {
+  if (input.resolvedAuth === null) {
+    throw new InternalHarnessError(
+      'Internal: preflight passed but resolvedAuth is null — refusing to spawn with an unscrubbed environment.',
+    );
+  }
+  const envTokens = computeEnvTokens({
+    subjectStagedDir: input.subjectStagedDir,
+    harnessRoot: input.harnessRoot,
+    resultsDir: input.resultsDir,
+    evalsSubpath: input.evalsSubpath,
+  });
+  const injectEnv = resolveInjectEnv(input.opts.env, envTokens);
+  const assembled = assembleChildEnv({
+    base: input.resolvedAuth.forwardedEnv,
+    source: process.env,
+    ...(input.opts.passEnv ? { passEnv: input.opts.passEnv } : {}),
+    ...(injectEnv ? { injectEnv } : {}),
+    subjectPluginRoot: input.subjectPluginRoot,
+  });
+  for (const warning of assembled.warnings) process.stderr.write(`warning: ${warning}\n`);
+  process.stderr.write(assembled.line + '\n');
+  return assembled;
+}
+
 // ---------------------------------------------------------------------------
 // Main orchestrator
 // ---------------------------------------------------------------------------
@@ -536,6 +586,19 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived path
     writeFileSync(promptFile, effectivePrompt + '\n', 'utf-8');
 
+    // Step 7.5: Resolve the declared test env (Features A + B). Token resolution
+    // can hard-fail (exit 2) on an unknown ${token}; do it before the dry-run
+    // short-circuit so a dry run validates interpolation too.
+    const assembledEnv = resolveDeclaredChildEnv({
+      opts,
+      resolvedAuth: preflightResult.resolvedAuth,
+      subjectStagedDir,
+      harnessRoot,
+      resultsDir,
+      evalsSubpath,
+      subjectPluginRoot,
+    });
+
     // Step 9: Dry-run short-circuit — return assembled info without spawning.
     if (opts.dryRun === true) {
       return {
@@ -546,16 +609,6 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     }
 
     // Step 10: Spawn headless Claude.
-    // Refuse to spawn with an unscrubbed environment. When preflight passes,
-    // resolvedAuth is always non-null; a null here is an internal invariant
-    // violation — NOT a reason to fall back to the full parent `process.env`,
-    // which would hand the untrusted skill code every secret it contains.
-    if (preflightResult.resolvedAuth === null) {
-      throw new InternalHarnessError(
-        'Internal: preflight passed but resolvedAuth is null — refusing to spawn with an unscrubbed environment.',
-      );
-    }
-
     // A reused harness root (--out / --keep) may carry a grading.json from an
     // earlier run. Remove it so a post-spawn read can only reflect THIS run.
     rmSync(gradingOut, { force: true });
@@ -566,10 +619,9 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       pluginDirs,
       sandboxDir: harnessRoot,
       cwd: harnessRoot,
-      // When the SUBJECT is plugin-distributed, export CLAUDE_PLUGIN_ROOT pointing
-      // at its staged plugin root so the harness mirrors a real plugin install
-      // (the rest of the scrubbed env is preserved verbatim). Standalone → unchanged.
-      env: withPluginRootEnv(preflightResult.resolvedAuth.forwardedEnv, subjectPluginRoot),
+      // The scrubbed forwarded env, unioned with the declared test env (Features
+      // A + B) and CLAUDE_PLUGIN_ROOT when the subject is plugin-distributed.
+      env: assembledEnv.env,
       timeoutMs,
       onStdout: (chunk: string) => { process.stderr.write(chunk); },
       onStderr: (chunk: string) => { process.stderr.write(chunk); },

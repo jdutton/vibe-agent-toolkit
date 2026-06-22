@@ -58,6 +58,8 @@ export interface SkillTestRunOptions {
   timeout?: string;
   stall?: string;
   debug?: boolean;
+  env?: string[];
+  passEnv?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -264,6 +266,57 @@ function applyKnobMerges(
   if (stall !== undefined) opts.stall = stall;
 }
 
+/**
+ * Parse a single `KEY=VALUE` pair (split on the FIRST `=`, so values may contain
+ * `=`). The key must be non-empty; the value may be empty.
+ */
+function parseEnvPair(pair: string): [string, string] {
+  const eq = pair.indexOf('=');
+  if (eq <= 0) {
+    throw new Error(
+      `--env entries must be "KEY=VALUE" (e.g. CUSTOMER_SNAPSHOT_PATH=\${fixturesDir}/snapshot.json). Got: ${pair}`,
+    );
+  }
+  return [pair.slice(0, eq), pair.slice(eq + 1)];
+}
+
+/** Parse repeated `--env KEY=VALUE` flags into a record (undefined when none). */
+function parseEnvFlags(pairs: string[] | undefined): Record<string, string> | undefined {
+  if (pairs === undefined || pairs.length === 0) return undefined;
+  const record: Record<string, string> = {};
+  for (const pair of pairs) {
+    const [key, value] = parseEnvPair(pair);
+    record[key] = value;
+  }
+  return record;
+}
+
+/** Merge config + CLI `env` maps; CLI wins per-key. undefined when both absent. */
+function mergeEnv(
+  configEnv: Record<string, string> | undefined,
+  cliEnv: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  if (configEnv === undefined && cliEnv === undefined) return undefined;
+  return { ...(configEnv ?? {}), ...(cliEnv ?? {}) };
+}
+
+/** Union config + CLI `passEnv` lists (config first), de-duplicated. */
+function mergePassEnv(
+  configPass: string[] | undefined,
+  cliPass: string[] | undefined,
+): string[] | undefined {
+  if (configPass === undefined && cliPass === undefined) return undefined;
+  return [...new Set([...(configPass ?? []), ...(cliPass ?? [])])];
+}
+
+/** Apply flag>config merges for the declared test env (Features A + B). */
+function applyEnvMerges(opts: HarnessOpts, options: SkillTestRunOptions, config: TestConfig | undefined): void {
+  const env = mergeEnv(config?.env, parseEnvFlags(options.env));
+  if (env !== undefined) opts.env = env;
+  const passEnv = mergePassEnv(config?.passEnv, options.passEnv);
+  if (passEnv !== undefined) opts.passEnv = passEnv;
+}
+
 /** Apply flag>config merges for injected-dependency records. */
 function applyDepMerges(opts: HarnessOpts, options: SkillTestRunOptions, config: TestConfig | undefined): void {
   const withSources = parseWithFlags(options.with) ?? descriptorsToRecord(config?.with);
@@ -294,6 +347,7 @@ function buildHarnessOpts(
   applyScalarMerges(opts, options, config);
   applyKnobMerges(opts, knobs, config);
   applyDepMerges(opts, options, config);
+  applyEnvMerges(opts, options, config);
   return opts;
 }
 
@@ -356,6 +410,14 @@ export function createSkillTestRunCommand(): Command {
     .option(
       '--with-optional <pair...>',
       'Inject an optional skill as name=<src> (same syntax as --with)',
+    )
+    .option(
+      '--env <pair...>',
+      'Inject an env var into the experimenter spawn as KEY=VALUE (repeatable). Values support ${fixturesDir}, ${stagedSkillDir}, ${harnessRoot}, ${resultsDir}. CLI overrides config for the same key.',
+    )
+    .option(
+      '--pass-env <key...>',
+      'Forward a host env var by NAME to the experimenter spawn if present (repeatable). Protected names (PATH, auth, model) are ignored.',
     )
     .option('--refresh', 'Force a full re-stage (ignore existing staged content)')
     .option('--workdir <dir>', 'Override the harness working directory')

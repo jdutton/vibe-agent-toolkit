@@ -38,6 +38,29 @@ describe('TestConfigSchema', () => {
     expect(() => TestConfigSchema.parse({ with: [{ sha256: 'abc' }] })).toThrow();
   });
 
+  it('accepts an env map', () => {
+    const parsed = TestConfigSchema.parse({
+      env: {
+        CUSTOMER_SNAPSHOT_PATH: '${fixturesDir}/snapshot.json',
+        VENDOR_REGION: 'us',
+      },
+    });
+    expect(parsed.env?.CUSTOMER_SNAPSHOT_PATH).toBe('${fixturesDir}/snapshot.json');
+  });
+
+  it('accepts a passEnv array', () => {
+    const parsed = TestConfigSchema.parse({ passEnv: ['VENDOR_LICENSE_KEY'] });
+    expect(parsed.passEnv).toEqual(['VENDOR_LICENSE_KEY']);
+  });
+
+  it('rejects a passEnv containing an empty string', () => {
+    expect(() => TestConfigSchema.parse({ passEnv: [''] })).toThrow();
+  });
+
+  it('rejects a non-string env value', () => {
+    expect(() => TestConfigSchema.parse({ env: { X: 123 } })).toThrow();
+  });
+
   it('is reachable as SkillPackagingConfigSchema.test', () => {
     const parsed = SkillPackagingConfigSchema.parse({
       test: { auth: 'subscription' },

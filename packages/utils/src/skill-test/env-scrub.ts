@@ -48,3 +48,109 @@ export function buildForwardedEnv(
 
   return out;
 }
+
+/**
+ * The full set of env var names protected from declared override. A declared
+ * passEnv/injectEnv entry naming one of these is ignored (the protected value
+ * wins) and a warning is surfaced — a test must never clobber PATH, the auth
+ * credentials, or the admin key. `modelVars` (run-specific model env var names)
+ * join the set so a declared var can't shadow them either.
+ */
+export function protectedEnvNames(modelVars: readonly string[] = []): Set<string> {
+  return new Set<string>([
+    ...PROCESS_ESSENTIALS,
+    ...AUTH_CONFIG_ALLOWLIST,
+    ...INFERENCE_CREDENTIALS,
+    'ANTHROPIC_ADMIN_API_KEY',
+    ...modelVars,
+  ]);
+}
+
+/** Declared test env (Features A + B) to union onto a forwarded env. */
+export interface DeclaredEnvInput {
+  /** Parent env to read Feature-A pass-through values from. */
+  source: NodeJS.ProcessEnv;
+  /** Feature A: names to forward from `source` if present. */
+  passEnv?: readonly string[];
+  /** Feature B: explicit key→value injections (already interpolated). */
+  injectEnv?: Record<string, string>;
+  /** Run-specific model env var names that are also protected. */
+  modelVars?: readonly string[];
+}
+
+export interface DeclaredEnvResult {
+  /** The forwarded env with declared additions unioned in. */
+  env: NodeJS.ProcessEnv;
+  /** Human-readable warnings (protected-key collisions). */
+  warnings: string[];
+  /** Names injected via Feature B (shown in the transparency line). */
+  injected: string[];
+  /** Names passed through via Feature A (redacted in the transparency line). */
+  passedThrough: string[];
+}
+
+/**
+ * Union declared test env (Features A + B) onto an already-built forwarded env.
+ * Protected keys always win: a declared name colliding with a process-essential,
+ * auth, model, or admin var is ignored and a warning emitted. Feature-B injection
+ * (explicit value) takes precedence over Feature-A pass-through for the same key.
+ * The input `base` object is never mutated.
+ */
+export function applyDeclaredEnv(base: NodeJS.ProcessEnv, input: DeclaredEnvInput): DeclaredEnvResult {
+  const out: NodeJS.ProcessEnv = { ...base };
+  const protectedNames = protectedEnvNames(input.modelVars);
+  const warnings: string[] = [];
+  const injected: string[] = [];
+  const passedThrough: string[] = [];
+
+  const injectKeys = new Set(Object.keys(input.injectEnv ?? {}));
+
+  // Feature A: pass-through by name.
+  for (const name of input.passEnv ?? []) {
+    if (protectedNames.has(name)) {
+      warnings.push(`passEnv "${name}" ignored: it collides with a protected variable.`);
+      continue;
+    }
+    if (injectKeys.has(name)) continue; // Feature B wins for the same key.
+    const value = input.source[name];
+    if (value === undefined) continue; // absent host var → simply not forwarded.
+    out[name] = value;
+    passedThrough.push(name);
+  }
+
+  // Feature B: explicit value injection.
+  for (const [name, value] of Object.entries(input.injectEnv ?? {})) {
+    if (protectedNames.has(name)) {
+      warnings.push(`env "${name}" ignored: it collides with a protected variable.`);
+      continue;
+    }
+    out[name] = value;
+    injected.push(name);
+  }
+
+  return { env: out, warnings, injected, passedThrough };
+}
+
+/** Names whose VALUES are secrets and must be redacted in the transparency line. */
+const SECRET_NAMES = new Set<string>(INFERENCE_CREDENTIALS);
+
+/**
+ * Render the single-line stderr transparency summary of the forwarded env. Key
+ * names are always shown. Auth/secret values are redacted; Feature-A pass-through
+ * values are redacted (host-sourced, may be a secret); Feature-B injected values
+ * are shown (they come from committed config).
+ */
+export function formatForwardedEnvLine(
+  env: NodeJS.ProcessEnv,
+  classified: { injected: readonly string[]; passedThrough: readonly string[] },
+): string {
+  const injected = new Set(classified.injected);
+  const passedThrough = new Set(classified.passedThrough);
+  const parts = Object.keys(env).map((name) => {
+    if (injected.has(name)) return `${name}=${env[name] ?? ''}`;
+    if (passedThrough.has(name)) return `${name}(passed-through, redacted)`;
+    if (SECRET_NAMES.has(name)) return `${name}(redacted)`;
+    return name;
+  });
+  return `forwarded env: ${parts.join(', ')}`;
+}
