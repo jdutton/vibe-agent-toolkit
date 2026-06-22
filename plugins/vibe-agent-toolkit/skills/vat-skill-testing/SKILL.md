@@ -7,7 +7,7 @@ description: Use when running `vat skill test run`/`configure`, triaging
 
 # VAT Skill Testing: Behavioral Downstream Packaging Check
 
-`vat skill test` answers one question: **does this packaged skill actually work when installed in isolation?** It stages the built skill into a hardened temp harness and runs a headless behavioral evaluation — no interactive session required.
+`vat skill test` answers one question: **does this packaged skill actually work when installed in isolation?** It stages the built skill into a fresh, context-isolated temp harness — a scrubbed env allowlist and no user/project settings, **not** an OS security sandbox — and runs a headless behavioral evaluation, no interactive session required.
 
 ## Boundary: Where `vat skill test` Fits
 
@@ -68,7 +68,7 @@ Edit `evals.json` to fill in expected behaviors, then re-run. The template inclu
 
 ## Security Caveat and Required Acknowledgment
 
-`vat skill test run` **executes arbitrary skill code** in the sandboxed harness. Before spawning the experimenter, the command prints a security warning and requires the `--i-understand-this-runs-skill-code` flag:
+`vat skill test run` **executes the skill's code on your machine.** The headless session runs with `--permission-mode bypassPermissions`, so staged skill files run with **your user account's full privileges** — they can read/write your files (including credentials under `~/.claude`, SSH keys, cloud configs), run shell commands, and make network requests, and the auth credential billing the run is reachable by that code. The harness gives **context isolation, not an OS security sandbox**, so only run skills you trust. Before spawning the experimenter, the command prints this warning and requires the `--i-understand-this-runs-skill-code` flag:
 
 ```bash
 # Required — preflight exits 2 without it
