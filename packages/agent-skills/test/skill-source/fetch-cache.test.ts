@@ -58,4 +58,25 @@ describe('withCachedFetch', () => {
       withCachedFetch({ cacheDir, digest: 'd1', key: 'k1', fetchInto, verify }),
     ).rejects.toThrow(/integrity mismatch/);
   });
+
+  it('re-fetches on a hit when refresh is true', async () => {
+    const fetchInto = vi.fn(writeOne);
+    await withCachedFetch({ cacheDir, digest: 'd1', key: 'k1', fetchInto, verify: noopVerify });
+    await withCachedFetch({ cacheDir, digest: 'd1', key: 'k1', refresh: true, fetchInto, verify: noopVerify });
+    expect(fetchInto).toHaveBeenCalledTimes(2); // hit was purged then re-fetched
+  });
+
+  it('rethrows and removes the temp entry when fetchInto fails (no partial entry left)', async () => {
+    const fetchInto = vi.fn(async () => {
+      throw new Error('fetch exploded');
+    });
+    await expect(
+      withCachedFetch({ cacheDir, digest: 'd1', key: 'k1', fetchInto, verify: noopVerify }),
+    ).rejects.toThrow(/fetch exploded/);
+    // No populated entry exists, so a retry with a working fetch must run fetchInto again.
+    const retry = vi.fn(writeOne);
+    const dir = await withCachedFetch({ cacheDir, digest: 'd1', key: 'k1', fetchInto: retry, verify: noopVerify });
+    expect(statSync(safePath.join(dir, 'f.txt')).isFile()).toBe(true);
+    expect(retry).toHaveBeenCalledTimes(1);
+  });
 });

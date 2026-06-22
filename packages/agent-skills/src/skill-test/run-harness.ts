@@ -183,15 +183,15 @@ const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const DEFAULT_MAX_TURNS = 50;
 const DEFAULT_MAX_BUDGET_USD = 5;
 
-function resolveTimeoutMs(opts: RunHarnessOptions): number {
+export function resolveTimeoutMs(opts: RunHarnessOptions): number {
   return opts.timeout === undefined ? DEFAULT_TIMEOUT_MS : opts.timeout * 1000;
 }
 
-function resolveStallMs(opts: RunHarnessOptions): number | undefined {
+export function resolveStallMs(opts: RunHarnessOptions): number | undefined {
   return opts.stall === undefined ? undefined : opts.stall * 1000;
 }
 
-function resolveKnobs(opts: RunHarnessOptions): {
+export function resolveKnobs(opts: RunHarnessOptions): {
   model?: string;
   maxTurns: number;
   maxBudgetUsd: number;
@@ -215,7 +215,7 @@ function resolveKnobs(opts: RunHarnessOptions): {
  * sources (npm/url/vendored/workspace) have no local source tree to walk, so they
  * are always staged flat (returns undefined). undefined → flat staging.
  */
-function detectItemPluginLayout(
+export function detectItemPluginLayout(
   source: SkillSource,
   repoRoot: string,
 ): StageItem['pluginLayout'] | undefined {
@@ -224,7 +224,7 @@ function detectItemPluginLayout(
   return detectPluginLayout(sourceDir, existsSync) ?? undefined;
 }
 
-function makeStageItem(
+export function makeStageItem(
   name: string,
   source: SkillSource,
   repoRoot: string,
@@ -239,7 +239,7 @@ function makeStageItem(
   };
 }
 
-function buildStageItems(opts: RunHarnessOptions, repoRoot: string): StageItem[] {
+export function buildStageItems(opts: RunHarnessOptions, repoRoot: string): StageItem[] {
   const items: StageItem[] = [];
 
   // The FIRST positional skill is the subject under test; the rest of the
@@ -263,7 +263,7 @@ function buildStageItems(opts: RunHarnessOptions, repoRoot: string): StageItem[]
   return items;
 }
 
-function buildResolveCtx(harnessRoot: string, repoRoot: string): ResolveSkillSourceContext {
+export function buildResolveCtx(harnessRoot: string, repoRoot: string): ResolveSkillSourceContext {
   return {
     repoRoot,
     stagingRoot: safePath.joinUnderRoot(harnessRoot, 'staged'),
@@ -291,7 +291,7 @@ const FLAG_DUMMY_VALUES: Record<string, string> = {
  * Return a sensible dummy value for a given CLI flag so that value-validation
  * doesn't reject the argument before `--help` can short-circuit the session.
  */
-function flagDummyValueFor(flag: string): string {
+export function flagDummyValueFor(flag: string): string {
   return FLAG_DUMMY_VALUES[flag] ?? '1';
 }
 
@@ -321,7 +321,7 @@ function buildFlagParseProbe(): (flag: string) => boolean {
   };
 }
 
-function buildPreflightInput(
+export function buildPreflightInput(
   evalsPath: string,
   pluginDirs: string[],
   opts: RunHarnessOptions,
@@ -357,14 +357,14 @@ function buildPreflightInput(
   return preflightOpts;
 }
 
-function renderPreflightSummary(checks: { name: string; passed: boolean; message: string }[]): string {
+export function renderPreflightSummary(checks: { name: string; passed: boolean; message: string }[]): string {
   const failed = checks.filter(c => !c.passed);
   return failed.length > 0
     ? failed.map(c => `  [FAIL] ${c.name}: ${c.message}`).join('\n')
     : '  All preflight checks passed.';
 }
 
-function isAcknowledged(opts: RunHarnessOptions): boolean {
+export function isAcknowledged(opts: RunHarnessOptions): boolean {
   return opts.dryRun === true || opts.acknowledgedRunsSkillCode === true;
 }
 
@@ -373,7 +373,7 @@ function isAcknowledged(opts: RunHarnessOptions): boolean {
  * A stall, a timeout, OR a non-zero exit are each authoritative — a non-zero exit
  * is never laundered into a PASS even if a grading.json happens to be on disk.
  */
-function assertExperimenterSucceeded(
+export function assertExperimenterSucceeded(
   spawnResult: { stalled: boolean; timedOut: boolean; status: number },
   stallMs: number | undefined,
   timeoutMs: number,
@@ -396,12 +396,12 @@ function assertExperimenterSucceeded(
  * that real source dir; otherwise we anchor under the repo root by skill name.
  */
 /** The subject skill's display name (trailing segment of the positional skill arg). */
-function subjectSkillName(opts: RunHarnessOptions): string {
+export function subjectSkillName(opts: RunHarnessOptions): string {
   const subject = opts.skills[0] ?? 'skill';
   return basename(toForwardSlash(subject)) || subject;
 }
 
-function resolveScaffoldEvalsPath(opts: RunHarnessOptions, repoRoot: string, evalsSubpath: string): string {
+export function resolveScaffoldEvalsPath(opts: RunHarnessOptions, repoRoot: string, evalsSubpath: string): string {
   const subjectName = opts.skills[0] ?? '';
   const override = opts.withSources?.[subjectName];
   const overridePath = override && typeof override.path === 'string' ? override.path : undefined;

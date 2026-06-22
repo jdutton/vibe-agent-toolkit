@@ -6,7 +6,7 @@
  * platform guard).
  */
 
-import { chmodSync, mkdtempSync, rmSync, statSync, symlinkSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync, statSync } from 'node:fs';
 
 import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -15,6 +15,7 @@ import {
   HarnessLocationError,
   prepareHarnessRoot,
 } from '../../src/skill-test/harness-location.js';
+import { createSymlinkedDir } from '../test-helpers.js';
 
 describe('prepareHarnessRoot', () => {
   let tmpBase: string;
@@ -64,12 +65,7 @@ describe('prepareHarnessRoot', () => {
     'still throws HarnessLocationError when the path is a symlink',
     { skip: process.platform === 'win32' },
     () => {
-      const target = safePath.join(tmpBase, 'target');
-      mkdirSyncReal(target, { mode: 0o700 });
-      const link = safePath.join(tmpBase, 'link');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture, controlled directory
-      symlinkSync(target, link);
-
+      const { link } = createSymlinkedDir(tmpBase);
       expect(() => prepareHarnessRoot(link)).toThrow(HarnessLocationError);
     },
   );

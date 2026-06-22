@@ -31,6 +31,19 @@ export function setupTempDir(prefix: string): { getTempDir: () => string } {
 }
 
 /**
+ * Create a 0700 target directory and a symlink pointing at it under `baseDir`.
+ * Shared by harness-root safety tests that exercise the symlink-refusal path.
+ * Returns both absolute paths (forward-slash via safePath).
+ */
+export function createSymlinkedDir(baseDir: string): { target: string; link: string } {
+  const target = safePath.join(baseDir, 'target');
+  mkdirSyncReal(target, { mode: 0o700 });
+  const link = safePath.join(baseDir, 'link');
+  fs.symlinkSync(target, link);
+  return { target, link };
+}
+
+/**
  * Create a SKILL.md file with given content and validate it
  */
 export async function createSkillAndValidate(

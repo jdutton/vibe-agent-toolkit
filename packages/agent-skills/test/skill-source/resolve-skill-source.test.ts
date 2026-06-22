@@ -47,4 +47,27 @@ describe('resolveSkillSource dispatch', () => {
   it('throws when a { workspace } source has no SKILL.md path mapping', async () => {
     await expect(resolveSkillSource({ workspace: 'missing' }, suite.ctx)).rejects.toThrow(/workspace/i);
   });
+
+  it('routes a { npm } source (surfacing the npm resolver version-pin error)', async () => {
+    // An unpinned spec proves the dispatch reached resolveNpmSource, which is the
+    // arm that enforces version pinning — no installed package needed.
+    await expect(resolveSkillSource({ npm: 'unpinned-pkg' }, suite.ctx)).rejects.toThrow(
+      /version-pinned/i,
+    );
+  });
+
+  it('routes a { url } source via the lazily-imported url resolver', async () => {
+    // A .zip url with no sha256 proves the dynamic import of resolveUrlSource ran:
+    // that resolver is the only place the "requires a sha256" error originates.
+    await expect(
+      resolveSkillSource({ url: 'https://example.test/skill.zip' }, suite.ctx),
+    ).rejects.toThrow(/sha256/i);
+  });
+
+  it('throws on an unknown descriptor shape (exhaustiveness guard)', async () => {
+    await expect(
+      // Cast through unknown: a runtime-invalid descriptor with no recognized arm.
+      resolveSkillSource({ bogus: true } as unknown as Parameters<typeof resolveSkillSource>[0], suite.ctx),
+    ).rejects.toThrow(/Unhandled skill source/i);
+  });
 });
