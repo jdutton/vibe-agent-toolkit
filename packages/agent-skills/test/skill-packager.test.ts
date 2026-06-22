@@ -1062,6 +1062,16 @@ describe('generateTargetPath', () => {
 
 describe('findCommonAncestor', () => {
   const fwd = (p: string) => toForwardSlash(p);
+  // The inputs are POSIX-absolute literals; findCommonAncestor resolves them via
+  // safePath.resolve, which on Windows prepends the current drive letter (D:/proj).
+  // Anchor expectations on the same resolve so the assertions hold on both the
+  // POSIX and windows-latest CI gates. exp() yields the resolved path; ROOT_SEG is
+  // the filesystem-root segment ('' on POSIX, 'D:' on Windows).
+  const exp = (p: string) => fwd(safePath.resolve(p));
+  // Root segment = text before the first '/' of a resolved+normalized path:
+  // '' on POSIX (resolve('/x') === '/x'), 'D:' on Windows (resolve === 'D:/x').
+  const resolvedRoot = fwd(safePath.resolve('/x'));
+  const ROOT_SEG = resolvedRoot.slice(0, resolvedRoot.indexOf('/'));
 
   it('returns the cwd for an empty input', () => {
     expect(fwd(findCommonAncestor([]))).toBe(fwd(process.cwd()));
@@ -1072,15 +1082,15 @@ describe('findCommonAncestor', () => {
   });
 
   it('returns the shared ancestor for files in sibling directories', () => {
-    expect(findCommonAncestor(['/proj/a/x.md', '/proj/b/y.md'])).toBe('/proj');
+    expect(findCommonAncestor(['/proj/a/x.md', '/proj/b/y.md'])).toBe(exp('/proj'));
   });
 
   it('includes the shared directory when files live in the same directory', () => {
-    expect(findCommonAncestor(['/proj/a/x.md', '/proj/a/y.md'])).toBe('/proj/a');
+    expect(findCommonAncestor(['/proj/a/x.md', '/proj/a/y.md'])).toBe(exp('/proj/a'));
   });
 
   it('returns the filesystem root when files share no named ancestor', () => {
-    expect(findCommonAncestor(['/aaa/x.md', '/bbb/y.md'])).toBe('');
+    expect(findCommonAncestor(['/aaa/x.md', '/bbb/y.md'])).toBe(ROOT_SEG);
   });
 });
 
@@ -1104,6 +1114,8 @@ describe('synthesizeAssetId', () => {
   it('prefixes the forward-slashed absolute path with asset::', () => {
     const id = synthesizeAssetId('/a/b/c.yaml');
     expect(id.startsWith('asset::')).toBe(true);
-    expect(id).toBe('asset::/a/b/c.yaml');
+    // synthesizeAssetId resolves via safePath.resolve, which prepends the current
+    // drive letter on Windows (asset::D:/a/b/c.yaml). Anchor on the same resolve.
+    expect(id).toBe(`asset::${toForwardSlash(safePath.resolve('/a/b/c.yaml'))}`);
   });
 });
