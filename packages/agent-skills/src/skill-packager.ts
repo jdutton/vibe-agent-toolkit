@@ -669,7 +669,7 @@ async function loadCollectionSchemas(
  * to guarantee uniqueness — this id is used only for skill-packager internal
  * lookups (output registry + link rewriting), not for user-facing output.
  */
-function synthesizeAssetId(assetPath: string): string {
+export function synthesizeAssetId(assetPath: string): string {
   return `asset::${toForwardSlash(safePath.resolve(assetPath))}`;
 }
 
@@ -1040,7 +1040,7 @@ function stampDeferredDestResolvedId(
  * For claude-web target: uses the existing references directory.
  * For claude-code target: uses content-type routing based on file extension.
  */
-function getResourceSubdirForFile(filePath: string, target: PackagingTarget): string {
+export function getResourceSubdirForFile(filePath: string, target: PackagingTarget): string {
   if (target === 'claude-web') {
     return 'references';
   }
@@ -1474,7 +1474,7 @@ export function extractH1Title(content: string): string | undefined {
  * @param filePaths - Array of absolute file paths
  * @returns Common ancestor directory path
  */
-function findCommonAncestor(filePaths: string[]): string {
+export function findCommonAncestor(filePaths: string[]): string {
   if (filePaths.length === 0) {
     return process.cwd();
   }
@@ -1523,7 +1523,7 @@ function findCommonAncestor(filePaths: string[]): string {
  * @param stripPrefix - Path prefix to remove before applying strategy (works for all strategies)
  * @returns Target path (relative) for the packaged resource
  */
-function generateTargetPath(
+export function generateTargetPath(
   filePath: string,
   basePath: string,
   strategy: ResourceNamingStrategy = 'basename',

@@ -94,6 +94,20 @@ describe('resolveAuth', () => {
     ).toThrow(/Refusing to spend tokens/);
   });
 
+  it('requireAuth=api-key fails exit 2 when effective is subscription (vice-versa)', () => {
+    // subscription mode scrubs the key, so the effective mechanism is subscription;
+    // requiring api-key must then refuse.
+    expect(() =>
+      resolveAuth({ mode: 'subscription', requireAuth: 'api-key', sourceEnv: SUB_ENV, probe: realisticProbe }),
+    ).toThrow(AuthPreflightError);
+  });
+
+  it('forwards modelVars names into the built env (allowlist extension)', () => {
+    const env = { CLAUDE_CONFIG_DIR: '/c', ANTHROPIC_API_KEY: 'sk', ANTHROPIC_MODEL: 'claude-x' } as NodeJS.ProcessEnv;
+    const r = resolveAuth({ mode: 'auto', sourceEnv: env, modelVars: ['ANTHROPIC_MODEL'], probe: realisticProbe });
+    expect(r.forwardedEnv.ANTHROPIC_MODEL).toBe('claude-x');
+  });
+
   it('passes through authMethod and apiKeySource from the probe when present', () => {
     const r = resolveAuth({ mode: 'api-key', sourceEnv: SUB_ENV, probe: realisticProbe });
     expect(r.authMethod).toBe('claude.ai');

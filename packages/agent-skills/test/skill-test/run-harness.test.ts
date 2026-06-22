@@ -34,7 +34,7 @@ import {
   subjectSkillName,
   type RunHarnessOptions,
 } from '../../src/skill-test/run-harness.js';
-import { setupTempDir } from '../test-helpers.js';
+import { createTestPlugin, setupTempDir } from '../test-helpers.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -43,6 +43,9 @@ import { setupTempDir } from '../test-helpers.js';
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
 const SUBJECT_NAME = 'report-tools';
 const PLAIN_SKILL = 'plain-skill';
+const PLUGIN_NAME = 'my-plugin';
+const PLUGIN_SKILL_REL = 'skills/report-tools';
+const OVERRIDE_LOC = 'override-loc';
 
 /** Build a minimal RunHarnessOptions with the given skills and overrides. */
 function makeOpts(overrides: Partial<RunHarnessOptions> = {}): RunHarnessOptions {
@@ -86,6 +89,18 @@ function makePlainDir(tempDir: string, name: string): string {
   const dir = safePath.join(tempDir, name);
   mkdirSyncReal(dir, { recursive: true });
   return dir;
+}
+
+/**
+ * Create a Claude-plugin source tree under `tempDir`: a plugin root holding
+ * `.claude-plugin/plugin.json` with a skill nested at `relSkill` beneath it.
+ * Returns the skill source path RELATIVE to tempDir (the repoRoot anchor) so it
+ * can be passed straight to a `{ path }` source.
+ */
+function makePluginSkillDir(tempDir: string, pluginName: string, relSkill: string): string {
+  createTestPlugin(tempDir, { name: pluginName }, pluginName);
+  mkdirSyncReal(safePath.join(tempDir, pluginName, relSkill), { recursive: true });
+  return `${pluginName}/${relSkill}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -298,6 +313,24 @@ describe('stage item construction', () => {
     expect(detectItemPluginLayout({ path: PLAIN_SKILL }, tempDir)).toBeUndefined();
   });
 
+  it('detectItemPluginLayout detects the plugin root for a {path} nested under a plugin', () => {
+    const tempDir = getTempDir();
+    const rel = makePluginSkillDir(tempDir, PLUGIN_NAME, PLUGIN_SKILL_REL);
+    const layout = detectItemPluginLayout({ path: rel }, tempDir);
+    expect(layout).toBeDefined();
+    expect(toForwardSlash(layout?.pluginRoot ?? '').endsWith(`/${PLUGIN_NAME}`)).toBe(true);
+    expect(layout?.relPathUnderPlugin).toBe(PLUGIN_SKILL_REL);
+  });
+
+  it('makeStageItem includes pluginLayout for a plugin-distributed {path} subject', () => {
+    const tempDir = getTempDir();
+    const rel = makePluginSkillDir(tempDir, PLUGIN_NAME, PLUGIN_SKILL_REL);
+    const item = makeStageItem(SUBJECT_NAME, { path: rel }, tempDir, 'subject');
+    expect(item.role).toBe('subject');
+    expect(item.pluginLayout?.relPathUnderPlugin).toBe(PLUGIN_SKILL_REL);
+    expect(toForwardSlash(item.pluginLayout?.pluginRoot ?? '').endsWith(`/${PLUGIN_NAME}`)).toBe(true);
+  });
+
   it('makeStageItem stages a plain dir flat with the subject role', () => {
     const tempDir = getTempDir();
     makePlainDir(tempDir, PLAIN_SKILL);
@@ -329,6 +362,19 @@ describe('stage item construction', () => {
     expect('role' in (items[1] ?? {})).toBe(false);
     expect(items[2]?.name).toBe('opt');
     expect('role' in (items[2] ?? {})).toBe(false);
+  });
+
+  it('buildStageItems uses the withSources override for a primary skill', () => {
+    const tempDir = getTempDir();
+    makePlainDir(tempDir, OVERRIDE_LOC);
+    const items = buildStageItems(
+      makeOpts({ skills: ['first'], withSources: { first: { path: OVERRIDE_LOC } } }),
+      tempDir,
+    );
+
+    expect(items).toHaveLength(1);
+    expect(items[0]?.source).toEqual({ path: OVERRIDE_LOC });
+    expect(items[0]?.role).toBe('subject');
   });
 });
 

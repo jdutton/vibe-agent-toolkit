@@ -26,6 +26,16 @@ describe('assembleClaudeArgs', () => {
   const valueAfter = (args: string[], flag: string): string | undefined =>
     args.includes(flag) ? args[args.indexOf(flag) + 1] : undefined;
 
+  /** The fixed base argv emitted for every invocation (no plugin dirs, no caps). */
+  const baseExpected = [
+    '-p',
+    OUTPUT_FORMAT, 'stream-json',
+    '--verbose',
+    '--setting-sources', '',
+    PERMISSION_MODE, 'bypassPermissions',
+    '--add-dir', sandboxPath,
+  ];
+
   it('sets --setting-sources to empty (built-ins remain, user/project settings suppressed)', () => {
     const args = assembleClaudeArgs(base);
     const i = args.indexOf('--setting-sources');
@@ -81,14 +91,7 @@ describe('assembleClaudeArgs', () => {
 
   it('emits the base args in the fixed expected order', () => {
     const args = assembleClaudeArgs({ pluginDirs: [], sandboxDir: sandboxPath });
-    expect(args).toEqual([
-      '-p',
-      OUTPUT_FORMAT, 'stream-json',
-      '--verbose',
-      '--setting-sources', '',
-      PERMISSION_MODE, 'bypassPermissions',
-      '--add-dir', sandboxPath,
-    ]);
+    expect(args).toEqual(baseExpected);
   });
 
   it('emits no --plugin-dir when pluginDirs is empty', () => {
@@ -118,5 +121,17 @@ describe('assembleClaudeArgs', () => {
     expect(valueAfter(args, MAX_BUDGET)).toBe('1.5');
     expect(valueAfter(args, MODEL)).toBeUndefined();
     expect(valueAfter(args, MAX_TURNS)).toBeUndefined();
+  });
+
+  it('emits the full argv in fixed order: base, then plugin dirs, then model/turns/budget', () => {
+    const args = assembleClaudeArgs({ ...base, model: MODEL_VALUE, maxTurns: 30, maxBudgetUsd: 2 });
+    expect(args).toEqual([
+      ...baseExpected,
+      PLUGIN_DIR, subject,
+      PLUGIN_DIR, skillCreator,
+      MODEL, MODEL_VALUE,
+      MAX_TURNS, '30',
+      MAX_BUDGET, '2',
+    ]);
   });
 });
