@@ -10,7 +10,7 @@
 import { cpSync, existsSync, readFileSync } from 'node:fs';
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 
-import { applyFilesConfig, mergeFilesConfig } from '@vibe-agent-toolkit/agent-skills';
+import { applyFilesConfig, getPluginOutputDir, getPluginSourceDir, listPluginSourceSkillDirs, mergeFilesConfig } from '@vibe-agent-toolkit/agent-skills';
 import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
@@ -530,16 +530,11 @@ async function applyTreeCopiedSkillFiles(input: {
   skillsConfig: SkillsConfig | undefined;
   logger: ReturnType<typeof createLogger>;
 }): Promise<number> {
-  const sourceSkillsDir = safePath.join(input.pluginSourceDir, 'skills');
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from config
-  if (!existsSync(sourceSkillsDir)) return 0;
-
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved from config
-  const entries = await readdir(sourceSkillsDir, { withFileTypes: true });
+  // Enumerate via the shared layout helper so build and verify resolve a plugin's
+  // tree-copied skills through ONE definition — verify's files-config-dests check
+  // (via computeTreeCopiedSkillLocations) and this write path can never diverge.
   let copied = 0;
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const skillName = entry.name;
+  for (const skillName of listPluginSourceSkillDirs(input.pluginSourceDir)) {
     const filesConfig = mergeFilesConfig(
       input.skillsConfig?.defaults?.files,
       input.skillsConfig?.config?.[skillName]?.files,
@@ -574,14 +569,8 @@ interface BuildPluginInput {
 async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> {
   const { marketplaceName, pluginDef, marketplaceAvailable, configDir, skillsConfig, owner, rootVersion, logger } =
     input;
-  const pluginDir = safePath.join(
-    configDir, 'dist', '.claude', 'plugins', 'marketplaces',
-    marketplaceName, 'plugins', pluginDef.name,
-  );
-  const pluginSourceDir = safePath.join(
-    configDir,
-    pluginDef.source ?? safePath.join('plugins', pluginDef.name),
-  );
+  const pluginDir = getPluginOutputDir(configDir, marketplaceName, pluginDef.name);
+  const pluginSourceDir = getPluginSourceDir(configDir, pluginDef);
 
   logger.info(`      Building plugin: ${pluginDef.name}`);
 

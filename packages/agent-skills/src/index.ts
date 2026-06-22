@@ -164,3 +164,10 @@ export {
 
 export * from './skill-test/index.js';
 
+export {
+  computeTreeCopiedSkillLocations,
+  getPluginOutputDir,
+  getPluginSourceDir,
+  listPluginSourceSkillDirs,
+  type DistributedSkillLocation,
+} from './plugin-distribution-layout.js';

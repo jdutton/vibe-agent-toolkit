@@ -8,8 +8,9 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 
+import { getPluginSourceDir } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig, SkillPackagingConfig } from '@vibe-agent-toolkit/resources';
-import { safeExecResult, safePath } from '@vibe-agent-toolkit/utils';
+import { safeExecResult, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import type { DiscoveredSkill } from './skills/command-helpers.js';
 
@@ -159,12 +160,18 @@ function addMatchingSkills(
 /**
  * Resolve which published skills are assigned to at least one plugin.
  *
- * Returns the set of published skill names that matched at least one
- * plugin skill selector across all marketplaces.
+ * Assignment is additive per plugin:
+ * - **Pool path**: `plugin.skills` glob selectors matched against published skill names.
+ * - **Source tree-copy path**: any discovered published skill whose `sourcePath` lives
+ *   under `<getPluginSourceDir(projectRoot, plugin)>/skills/` is considered assigned,
+ *   matched by physical location rather than name selectors.
+ *
+ * Returns the set of published skill names assigned to at least one plugin.
  */
 export function resolveAssignedSkills(
   config: ProjectConfig,
-  publishedSkillNames: string[]
+  discoveredSkills: DiscoveredSkill[],
+  projectRoot: string
 ): Set<string> {
   const assigned = new Set<string>();
   const marketplaces = config.claude?.marketplaces;
@@ -173,9 +180,28 @@ export function resolveAssignedSkills(
     return assigned;
   }
 
+  // Compute published names once for pool-selector matching
+  const publishedNames = discoveredSkills
+    .filter((s) => isSkillPublished(s.name, config))
+    .map((s) => s.name);
+
   for (const marketplace of Object.values(marketplaces)) {
     for (const plugin of marketplace.plugins) {
-      addMatchingSkills(assigned, plugin.skills, publishedSkillNames);
+      // Pool path: existing glob selector matching (unchanged)
+      addMatchingSkills(assigned, plugin.skills, publishedNames);
+
+      // Source tree-copy path: match by physical location under <pluginSourceDir>/skills/
+      // Use a trailing slash to enforce a path-separator boundary and avoid false matches
+      // against sibling directories with a common prefix (e.g. /skills vs /skills-extra).
+      const srcSkillsDir = safePath.join(getPluginSourceDir(projectRoot, plugin), 'skills');
+      const srcSkillsPrefix = `${srcSkillsDir}/`;
+
+      for (const skill of discoveredSkills) {
+        if (!isSkillPublished(skill.name, config)) continue;
+        if (toForwardSlash(skill.sourcePath).startsWith(srcSkillsPrefix)) {
+          assigned.add(skill.name);
+        }
+      }
     }
   }
 
@@ -525,7 +551,7 @@ export function runConsistencyChecks(
   }
 
   const vatSkills = readVatSkillsFromPackageJson(projectRoot);
-  const assignedSkills = resolveAssignedSkills(config, publishedNames);
+  const assignedSkills = resolveAssignedSkills(config, discoveredSkills, projectRoot);
 
   // Run checks in specified order
   const issues: ConsistencyIssue[] = [

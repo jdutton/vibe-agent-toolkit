@@ -10,7 +10,7 @@
 
 import { existsSync } from 'node:fs';
 
-import { mergeFilesConfig } from '@vibe-agent-toolkit/agent-skills';
+import { computeTreeCopiedSkillLocations, mergeFilesConfig } from '@vibe-agent-toolkit/agent-skills';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
@@ -75,9 +75,11 @@ Example:
   return command;
 }
 
-/** Result of checking files config dests for a single skill */
-interface FilesDestCheckResult {
+/** Result of checking files config dests for a single (skill, outputDir) pair */
+export interface FilesDestCheckResult {
   skillName: string;
+  /** The actual output directory that was checked (pool dir or plugin-tree dir). */
+  outputDir: string;
   missing: string[];
 }
 
@@ -89,38 +91,78 @@ function skillNameToFsPath(name: string): string {
   return name.replaceAll(':', '__');
 }
 
+/** Internal pending-check record: one per (skillName, outputDir) candidate. */
+type CheckEntry = {
+  skillName: string;
+  outputDir: string;
+  mergedFiles: ReturnType<typeof mergeFilesConfig>;
+};
+
+/**
+ * Register a check for (skillName, outputDir, mergedFiles) in the dedup map.
+ *
+ * Skips silently if:
+ *   - mergedFiles is empty (no entries to verify)
+ *   - outputDir does not exist on disk (not a candidate)
+ *   - the key was already added (dedup guard)
+ */
+function tryAddCheckEntry(
+  checks: Map<string, CheckEntry>,
+  skillName: string,
+  outputDir: string,
+  mergedFiles: ReturnType<typeof mergeFilesConfig>,
+): void {
+  if (mergedFiles.length === 0) return;
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- outputDir is resolved from config, not user input
+  if (!existsSync(outputDir)) return;
+  const key = `${skillName}\0${outputDir}`;
+  if (!checks.has(key)) {
+    checks.set(key, { skillName, outputDir, mergedFiles });
+  }
+}
+
 /**
  * Check that all dest paths from the merged files config exist in the built output.
- * Returns one result per skill that has files config entries.
+ *
+ * Checks each skill's dests in the location(s) where `vat build` actually wrote them:
+ *   - Pool skills: `dist/skills/<fsName>/`            (only when that dir exists)
+ *   - Tree-copy skills: `dist/.claude/plugins/.../skills/<name>/` (only when that dir exists)
+ *
+ * A dest is "missing" ONLY when absent from a candidate dir that exists. If a skill
+ * has no existing candidate dir, it is not reported (build didn't run for that mode).
+ *
+ * @returns One result per (skill, outputDir) pair where dests are absent.
  */
-function checkFilesConfigDests(cwd: string): FilesDestCheckResult[] {
+export function checkFilesConfigDests(cwd: string): FilesDestCheckResult[] {
   try {
     const config = loadConfig(cwd);
-    if (!config?.skills?.config && !config?.skills?.defaults?.files) {
-      return [];
-    }
+    if (!config) return [];
 
     const skillsConfig = config.skills;
-    const results: FilesDestCheckResult[] = [];
+    const defaults = skillsConfig?.defaults;
 
-    // Collect all skill names from config
-    const skillNames = Object.keys(skillsConfig.config ?? {});
+    // Dedup map: key = `skillName\0outputDir` → check entry
+    const checks = new Map<string, CheckEntry>();
 
-    // Also check defaults-only (no per-skill config) — but we need skill names for output paths.
-    // If there's no per-skill config we can't know which skills to check without discovery,
-    // so we only check skills that are explicitly listed in config.
-    for (const skillName of skillNames) {
-      const perSkill = skillsConfig.config?.[skillName];
-      const defaults = skillsConfig.defaults;
-
+    // --- Pool/config skills: candidate dir is dist/skills/<fsName> ---
+    for (const skillName of Object.keys(skillsConfig?.config ?? {})) {
+      const perSkill = skillsConfig?.config?.[skillName];
       const mergedFiles = mergeFilesConfig(defaults?.files, perSkill?.files);
-      if (mergedFiles.length === 0) {
-        continue;
-      }
-
       const outputDir = safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skillName));
-      const missing: string[] = [];
+      tryAddCheckEntry(checks, skillName, outputDir, mergedFiles);
+    }
 
+    // --- Tree-copy skills: candidate dirs are plugin output skill dirs ---
+    for (const loc of computeTreeCopiedSkillLocations(config, cwd)) {
+      const perSkill = skillsConfig?.config?.[loc.skillDirName];
+      const mergedFiles = mergeFilesConfig(defaults?.files, perSkill?.files);
+      tryAddCheckEntry(checks, loc.skillDirName, loc.skillOutputDir, mergedFiles);
+    }
+
+    // --- Run each pending check and collect results ---
+    const results: FilesDestCheckResult[] = [];
+    for (const { skillName, outputDir, mergedFiles } of checks.values()) {
+      const missing: string[] = [];
       for (const entry of mergedFiles) {
         const destPath = safePath.resolve(outputDir, entry.dest);
         // eslint-disable-next-line security/detect-non-literal-fs-filename -- destPath resolved from config
@@ -128,9 +170,8 @@ function checkFilesConfigDests(cwd: string): FilesDestCheckResult[] {
           missing.push(entry.dest);
         }
       }
-
       if (missing.length > 0) {
-        results.push({ skillName, missing });
+        results.push({ skillName, outputDir, missing });
       }
     }
 
@@ -164,8 +205,8 @@ function reportFilesDestErrors(
   logger: ReturnType<typeof createLogger>
 ): void {
   logger.error('\n▶ Phase: files-config-dests');
-  for (const { skillName, missing } of results) {
-    logger.error(`  Skill '${skillName}': missing dest file(s) in dist/skills/${skillNameToFsPath(skillName)}/:`);
+  for (const { skillName, outputDir, missing } of results) {
+    logger.error(`  Skill '${skillName}': missing dest file(s) in ${outputDir}/:`);
     for (const dest of missing) {
       logger.error(`    - ${dest}`);
     }
