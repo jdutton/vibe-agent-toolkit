@@ -13,6 +13,7 @@ import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import type { SkillSourceDescriptor } from '@vibe-agent-toolkit/resources';
 import {
   getToolVersion,
   mkdirSyncReal,
@@ -70,16 +71,6 @@ export type HarnessAuthMode = 'inherit' | 'subscription' | 'api-key' | 'auto';
 /** Auth mechanism requirements. */
 export type HarnessAuthMechanism = 'subscription' | 'api-key';
 
-/** A skill source descriptor (mirrors SkillSource union). */
-export interface SkillSourceSpec {
-  path?: string;
-  npm?: string;
-  url?: string;
-  sha256?: string;
-  workspace?: string;
-  vendored?: true;
-}
-
 export interface RunHarnessOptions {
   /** Primary skill names (subject set, required). */
   skills: string[];
@@ -102,10 +93,10 @@ export interface RunHarnessOptions {
    * Optional additional skill sources mapped by name. If provided, overrides
    * the default path-based resolution for that skill name.
    */
-  withSources?: Record<string, SkillSourceSpec>;
+  withSources?: Record<string, SkillSourceDescriptor>;
 
   /** Additional optional skills to inject (with-optional). */
-  withOptional?: Record<string, SkillSourceSpec>;
+  withOptional?: Record<string, SkillSourceDescriptor>;
 
   /** Override the harness working directory (base for harnessKey derivation). */
   workdir?: string;
@@ -248,14 +239,14 @@ export function buildStageItems(opts: RunHarnessOptions, repoRoot: string): Stag
   for (const name of opts.skills) {
     const override = opts.withSources?.[name];
     const source: SkillSource = override
-      ? descriptorToSource(override as Parameters<typeof descriptorToSource>[0])
+      ? descriptorToSource(override)
       : { path: name };
     items.push(makeStageItem(name, source, repoRoot, name === subjectName ? 'subject' : undefined));
   }
 
   if (opts.withOptional !== undefined) {
     for (const [name, spec] of Object.entries(opts.withOptional)) {
-      const source = descriptorToSource(spec as Parameters<typeof descriptorToSource>[0]);
+      const source = descriptorToSource(spec);
       items.push(makeStageItem(name, source, repoRoot, undefined));
     }
   }
@@ -404,7 +395,7 @@ export function subjectSkillName(opts: RunHarnessOptions): string {
 export function resolveScaffoldEvalsPath(opts: RunHarnessOptions, repoRoot: string, evalsSubpath: string): string {
   const subjectName = opts.skills[0] ?? '';
   const override = opts.withSources?.[subjectName];
-  const overridePath = override && typeof override.path === 'string' ? override.path : undefined;
+  const overridePath = override && 'path' in override ? override.path : undefined;
   // Default (no override) resolution treats the positional name as a path.
   const sourcePath = overridePath ?? subjectName;
   // eslint-disable-next-line local/no-unsafe-root-join -- the positional skill source may be an absolute path; resolving it against repoRoot (which returns an absolute sourcePath unchanged) is intentional, documented behavior, not a containment bug.
@@ -486,8 +477,12 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
 
   // Step 1: Assert safe harness root (symlink/ownership/mode checks) BEFORE
   // acquiring the lock — never write a lockfile into a directory we have not yet
-  // confirmed is non-symlinked, owned by the current uid, and 0700.
-  assertSafeHarnessRoot(harnessRoot, currentUid);
+  // confirmed is non-symlinked, owned by the current uid, and 0700. The trusted
+  // boundary is the tmp/workdir base the harness root was derived from; every
+  // component beneath it (incl. the recursively-created `vat-skill-test` parent)
+  // is validated, closing the shared-/tmp TOCTOU on intermediate components.
+  const trustedTmpRoot = opts.workdir ?? normalizedTmpdir();
+  assertSafeHarnessRoot(harnessRoot, currentUid, trustedTmpRoot);
 
   // Step 2: Acquire exclusive harness lock.
   const lock = acquireHarnessLock(harnessRoot);
@@ -609,9 +604,11 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     }
 
     // Step 10: Spawn headless Claude.
-    // A reused harness root (--out / --keep) may carry a grading.json from an
-    // earlier run. Remove it so a post-spawn read can only reflect THIS run.
+    // A reused harness root (--out / --keep) may carry a grading.json OR a
+    // friction.json from an earlier run. Remove both so a post-spawn read can
+    // only reflect THIS run (a stale friction.json must not leak across runs).
     rmSync(gradingOut, { force: true });
+    rmSync(frictionOut, { force: true });
 
     const timeoutMs = resolveTimeoutMs(opts);
     const spawnOpts = {

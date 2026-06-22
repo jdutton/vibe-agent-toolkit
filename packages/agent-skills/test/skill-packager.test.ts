@@ -896,6 +896,19 @@ describe('files config in packaging', () => {
     ).rejects.toThrow(/does not exist/i);
   });
 
+  it('should throw when a files entry dest escapes the skill output dir (joinUnderRoot guard)', async () => {
+    const dir = getTempDir();
+    // Source must exist so we reach the dest-join guard rather than the
+    // "does not exist" check.
+    writeFileSync(safePath.join(dir, CONFIG_JSON), '{"key":"value"}');
+    const skillPath = await writeSkillMd(dir, UNIT_SKILL_NAME, SIMPLE_SKILL_BODY);
+    await expect(
+      packWithOutput(skillPath, {
+        files: [{ source: CONFIG_JSON, dest: '../../escape.json' }],
+      }),
+    ).rejects.toThrow(/escapes root|joinUnderRoot/);
+  });
+
   it('should let files entry override auto-discovered routing', async () => {
     const dir = getTempDir();
     // Create a .json file that would normally go to templates/

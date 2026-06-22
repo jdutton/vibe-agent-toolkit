@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto';
 import { mkdtempSync, readFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { basename } from 'node:path';
 
 import { isGitUrl, normalizedTmpdir, parseGitUrl, safePath } from '@vibe-agent-toolkit/utils';
 
@@ -9,6 +8,9 @@ import { withCachedFetch } from '../fetch-cache.js';
 import { cloneGitSource } from '../git-clone.js';
 import { stageDirInto } from '../stage.js';
 import type { ResolvedSkillSource, ResolveSkillSourceContext } from '../types.js';
+
+/** Wall-clock cap on a single network fetch of zip bytes. */
+const FETCH_TIMEOUT_MS = 30_000;
 
 /**
  * Resolve a `{ url, sha256? }` skill source.
@@ -55,7 +57,7 @@ async function resolveGitUrl(
     const cached = await withCachedFetch({
       cacheDir: ctx.fetchCacheDir,
       digest: commit,
-      key: sanitizeKey(parsed.cloneUrl),
+      key: keyForUrl(parsed.cloneUrl),
       ...(ctx.refresh === undefined ? {} : { refresh: ctx.refresh }),
       fetchInto: async (dir) => {
         await stageDirInto(targetDir, { ...ctx, stagingRoot: dir }, '.');
@@ -83,11 +85,11 @@ async function resolveZipUrl(
   const cached = await withCachedFetch({
     cacheDir: ctx.fetchCacheDir,
     digest: sha256,
-    key: sanitizeKey(url),
+    key: keyForUrl(url),
     ...(ctx.refresh === undefined ? {} : { refresh: ctx.refresh }),
     fetchInto: async (dir) => {
       const bytes = await fetchBytes(url);
-      const actual = createHash('sha256').update(bytes).digest('hex');
+      const actual = sha256Of(bytes);
       if (actual !== sha256) {
         throw new Error(
           `sha256 mismatch for ${url}: expected ${sha256}, got ${actual} (integrity check failed).`,
@@ -110,7 +112,17 @@ async function fetchBytes(url: string): Promise<Buffer> {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- file:// URL provided by config
     return readFileSync(fileURLToPath(url));
   }
-  const res = await fetch(url);
+  let res: Response;
+  try {
+    res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+  } catch (err) {
+    if (err instanceof Error && err.name === 'TimeoutError') {
+      throw new Error(
+        `Timed out fetching ${url} after ${(FETCH_TIMEOUT_MS / 1000).toString()}s.`,
+      );
+    }
+    throw err;
+  }
   if (!res.ok) {
     throw new Error(`Failed to fetch ${url}: HTTP ${res.status.toString()}.`);
   }
@@ -124,9 +136,14 @@ async function extractZipBytes(bytes: Buffer, dir: string): Promise<void> {
   zip.extractAllTo(dir, /* overwrite */ true);
 }
 
-/** Reduce a URL to a filesystem-safe key segment. */
-function sanitizeKey(url: string): string {
-  return basename(url).replaceAll(/[^A-Za-z0-9._-]/g, '_') || 'url';
+/**
+ * Derive a filesystem-safe, collision-resistant cache key from the FULL url
+ * (host + path), not its basename. `github.com/a/skill.git` and
+ * `gitlab.com/b/skill.git` share the basename `skill.git`; hashing the whole url
+ * keeps their cache entries distinct so a hit never serves the wrong tree.
+ */
+function keyForUrl(url: string): string {
+  return sha256Of(Buffer.from(url, 'utf-8'));
 }
 
 /** Re-export so unit tests / callers can compute a zip digest the same way. */

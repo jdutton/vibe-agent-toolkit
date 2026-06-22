@@ -7,6 +7,8 @@ import { describe, expect, it } from 'vitest';
 import {
   dynamicImportPath,
   getRelativePath,
+  hasParentTraversalSegment,
+  isAbsoluteAnyPlatform,
   isAbsolutePath,
   normalizePath,
   resolveFromImportMeta,
@@ -83,6 +85,50 @@ describe('path-utils', () => {
         expect(isAbsolutePath(String.raw`..\parent`)).toBe(false);
       });
     }
+  });
+
+  describe('isAbsoluteAnyPlatform', () => {
+    it('returns true for POSIX absolute paths (host-independent)', () => {
+      expect(isAbsoluteAnyPlatform('/etc/passwd')).toBe(true);
+      expect(isAbsoluteAnyPlatform('/')).toBe(true);
+    });
+
+    it('returns true for Windows drive-letter paths even on POSIX hosts', () => {
+      expect(isAbsoluteAnyPlatform(String.raw`C:\Users\evil`)).toBe(true);
+      expect(isAbsoluteAnyPlatform('C:/Users/evil')).toBe(true);
+    });
+
+    it('returns true for UNC paths', () => {
+      expect(isAbsoluteAnyPlatform(String.raw`\\host\share`)).toBe(true);
+    });
+
+    it('returns false for relative paths', () => {
+      expect(isAbsoluteAnyPlatform('scripts/cli.mjs')).toBe(false);
+      expect(isAbsoluteAnyPlatform('./relative')).toBe(false);
+      expect(isAbsoluteAnyPlatform('../parent')).toBe(false);
+      expect(isAbsoluteAnyPlatform('')).toBe(false);
+    });
+  });
+
+  describe('hasParentTraversalSegment', () => {
+    it('returns true when a ".." segment is present', () => {
+      expect(hasParentTraversalSegment('a/../b')).toBe(true);
+      expect(hasParentTraversalSegment('../escape')).toBe(true);
+      expect(hasParentTraversalSegment('dist/*/../../../etc/*')).toBe(true);
+    });
+
+    it('normalizes backslash separators before checking', () => {
+      expect(hasParentTraversalSegment(String.raw`..\evil`)).toBe(true);
+      expect(hasParentTraversalSegment(String.raw`a\..\b`)).toBe(true);
+    });
+
+    it('returns false when no whole ".." segment is present', () => {
+      expect(hasParentTraversalSegment('a/b/c')).toBe(false);
+      expect(hasParentTraversalSegment('scripts/cli.mjs')).toBe(false);
+      // ".." must be a WHOLE segment — "a..b" is not traversal
+      expect(hasParentTraversalSegment('a..b/c')).toBe(false);
+      expect(hasParentTraversalSegment('...rc')).toBe(false);
+    });
   });
 
   describe('toAbsolutePath', () => {

@@ -88,6 +88,28 @@ it('serves a .zip url from the warm cache on a second resolve', async () => {
   expect(readFileSync(safePath.join(second.stagedDir, 'SKILL.md'), 'utf-8')).toBe(ZIP_SKILL_BODY);
 });
 
+it('keys the git cache on the full url so two distinct repos never cross-contaminate (M3)', async () => {
+  // Two independent bare repos with DIFFERENT content. A basename-only cache key
+  // would risk a collision; the full-url hash key must keep them distinct.
+  const repoA = makeBareRepoWithSkill({ skillContent: '# repo A skill' });
+  const repoB = makeBareRepoWithSkill({ skillContent: '# repo B skill' });
+  try {
+    const a = await resolveUrlSource(`${repoA.bareUrl}#main`, undefined, ctx);
+    const b = await resolveUrlSource(`${repoB.bareUrl}#main`, undefined, ctx);
+    expect(a.identity).not.toBe(b.identity);
+    expect(readFileSync(safePath.join(a.stagedDir, 'SKILL.md'), 'utf-8')).toBe('# repo A skill');
+    expect(readFileSync(safePath.join(b.stagedDir, 'SKILL.md'), 'utf-8')).toBe('# repo B skill');
+  } finally {
+    repoA.cleanup();
+    repoB.cleanup();
+  }
+});
+
+it('embeds the full 40-char commit SHA in a git url identity (M3)', async () => {
+  const result = await resolveUrlSource(bareUrl, undefined, ctx);
+  expect(result.identity).toMatch(/^url:.*:[0-9a-f]{40}$/);
+});
+
 it('exposes sha256Of computing the same digest used for zip integrity', () => {
   const bytes = readFileSync(zipPath);
   expect(sha256Of(bytes)).toBe(zipSha);

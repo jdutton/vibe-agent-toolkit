@@ -32,4 +32,13 @@ describe('vendored manifest', () => {
   it('verify fails when the manifest is absent', () => {
     expect(verifyVendoredManifest(dir)).toBe(false);
   });
+
+  it('verify fails (fail-closed) when an unlisted extra file is added after the manifest is written', () => {
+    regenerateVendoredManifest(dir);
+    expect(verifyVendoredManifest(dir)).toBe(true);
+    // Inject a file not present when the manifest was generated.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture mutation, controlled directory
+    writeFileSync(safePath.join(dir, 'agents', 'injected.md'), '# injected\n', 'utf8');
+    expect(verifyVendoredManifest(dir)).toBe(false);
+  });
 });

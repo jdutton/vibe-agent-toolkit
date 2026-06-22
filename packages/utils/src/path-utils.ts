@@ -183,6 +183,42 @@ export function isAbsolutePath(p: string): boolean {
 }
 
 /**
+ * True if `p` is absolute on ANY platform — a POSIX root path (`/etc`), a
+ * Windows drive-letter path (`C:\…` or `C:/…`), or a UNC path (`\\host\share`).
+ *
+ * Unlike {@link isAbsolutePath} (host-platform only), this is host-independent,
+ * so config-containment checks reject Windows-absolute paths even when run on
+ * POSIX CI, and vice versa. Used to keep config-supplied relative paths (skill
+ * `files:` dest) from escaping their anchor directory (zip-slip class).
+ *
+ * @example
+ * isAbsoluteAnyPlatform('/etc/passwd')   // true (POSIX)
+ * isAbsoluteAnyPlatform('C:\\Users')      // true (Windows drive)
+ * isAbsoluteAnyPlatform('scripts/cli')    // false (relative)
+ */
+export function isAbsoluteAnyPlatform(p: string): boolean {
+  return path.posix.isAbsolute(p) || path.win32.isAbsolute(p);
+}
+
+/**
+ * True if `p` contains a `..` parent-directory traversal segment.
+ *
+ * Forward-slash-normalized, then inspects each `/`-delimited segment — so a
+ * `..` is caught regardless of the original OS separator. A containment guard
+ * for config-supplied relative paths (skill `files:` dest values, glob magic
+ * remainders) that must never climb above their anchor directory.
+ *
+ * @example
+ * hasParentTraversalSegment('a/../b')      // true
+ * hasParentTraversalSegment('a/b/c')       // false
+ * hasParentTraversalSegment('..\\evil')     // true (backslash normalized)
+ * hasParentTraversalSegment('a..b/c')      // false (".." must be a whole segment)
+ */
+export function hasParentTraversalSegment(p: string): boolean {
+  return toForwardSlash(p).split('/').includes('..');
+}
+
+/**
  * Convert a relative path to absolute
  *
  * If path is already absolute, returns it normalized.

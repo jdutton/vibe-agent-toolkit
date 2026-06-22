@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { assembleClaudeArgs } from '../../src/skill-test/spawn-claude.js';
+import { assembleClaudeArgs, killProcessTree } from '../../src/skill-test/spawn-claude.js';
 
 describe('assembleClaudeArgs', () => {
   // eslint-disable sonarjs/publicly-writable-directories -- test fixtures
@@ -133,5 +133,40 @@ describe('assembleClaudeArgs', () => {
       MAX_TURNS, '30',
       MAX_BUDGET, '2',
     ]);
+  });
+});
+
+describe('killProcessTree', () => {
+  const onPosix = process.platform !== 'win32';
+
+  it('no-ops (no kill) when the child has no pid', () => {
+    const spy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    try {
+      killProcessTree({ pid: undefined });
+      expect(spy).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.skipIf(!onPosix)('SIGKILLs the whole process group via the negated pid on POSIX', () => {
+    const spy = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    try {
+      killProcessTree({ pid: 4242 });
+      expect(spy).toHaveBeenCalledWith(-4242, 'SIGKILL');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.skipIf(!onPosix)('swallows ESRCH when the group is already gone', () => {
+    const spy = vi.spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('ESRCH'), { code: 'ESRCH' });
+    });
+    try {
+      expect(() => killProcessTree({ pid: 9999 })).not.toThrow();
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

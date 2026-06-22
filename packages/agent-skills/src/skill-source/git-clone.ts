@@ -1,16 +1,45 @@
-import { spawnSync } from 'node:child_process';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { existsSync, readdirSync } from 'node:fs';
 
 import { safePath, type ParsedGitUrl } from '@vibe-agent-toolkit/utils';
 
-/** Result of a shallow git clone: the resolved ref, short commit SHA, and target dir. */
+/** Hard wall-clock cap on any single git invocation (clone or rev-parse). */
+const GIT_TIMEOUT_MS = 60_000;
+/** Generous stdout/stderr cap (64 MiB) so large clones don't trip the default 1 MiB limit. */
+const GIT_MAX_BUFFER = 64 * 1024 * 1024;
+
+/** Result of a shallow git clone: the resolved ref, full commit SHA, and target dir. */
 export interface GitCloneResult {
   /** The ref cloned (the requested `--branch <ref>`, or 'HEAD' for the default branch). */
   ref: string;
-  /** 8-char resolved HEAD commit SHA. */
+  /** Full 40-char resolved HEAD commit SHA. */
   commit: string;
   /** The (subpath-resolved) directory the caller should consume. */
   targetDir: string;
+}
+
+/**
+ * Run git with a wall-clock timeout and a generous output buffer. On timeout,
+ * spawnSync sets `.error` (code `ETIMEDOUT`) and kills the process — surface a
+ * clear error instead of letting a generic non-zero-status message swallow it.
+ */
+function runGit(args: string[], cwd?: string): SpawnSyncReturns<string> {
+  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git is a standard system command
+  const result = spawnSync('git', args, {
+    ...(cwd === undefined ? {} : { cwd }),
+    encoding: 'utf-8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+    timeout: GIT_TIMEOUT_MS,
+    maxBuffer: GIT_MAX_BUFFER,
+  });
+  const err = result.error as NodeJS.ErrnoException | undefined;
+  if (err?.code === 'ETIMEDOUT') {
+    throw new Error(
+      `git ${args[0] ?? ''} timed out after ${(GIT_TIMEOUT_MS / 1000).toString()}s ` +
+        `(possible unreachable remote or hang).`,
+    );
+  }
+  return result;
 }
 
 /**
@@ -58,8 +87,7 @@ function cloneShallow(parsed: ParsedGitUrl, tempdir: string): string {
   if (parsed.ref !== undefined) args.push('--branch', parsed.ref);
   args.push(parsed.cloneUrl, tempdir);
 
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git is a standard system command
-  const result = spawnSync('git', args, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+  const result = runGit(args);
   const status = result.status ?? 1;
   if (status !== 0) {
     const stderr = (result.stderr ?? '').trim();
@@ -75,15 +103,11 @@ function cloneShallow(parsed: ParsedGitUrl, tempdir: string): string {
 }
 
 function revParseHead(tempdir: string): string {
-  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git is a standard system command
-  const result = spawnSync('git', ['rev-parse', 'HEAD'], {
-    cwd: tempdir,
-    encoding: 'utf-8',
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  const result = runGit(['rev-parse', 'HEAD'], tempdir);
   const status = result.status ?? 1;
   if (status !== 0) {
     throw new Error(`Failed to resolve HEAD commit in cloned repo: ${(result.stderr ?? '').trim()}`);
   }
-  return (result.stdout ?? '').trim().slice(0, 8);
+  // Full 40-char SHA: the commit is the git cache key, so truncation risks cross-repo collisions.
+  return (result.stdout ?? '').trim();
 }

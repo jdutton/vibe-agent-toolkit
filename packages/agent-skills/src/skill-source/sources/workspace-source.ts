@@ -1,4 +1,5 @@
 import { mkdtempSync } from 'node:fs';
+import { rm } from 'node:fs/promises';
 
 import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
@@ -30,12 +31,18 @@ export async function resolveWorkspaceSource(
   const buildOut = toForwardSlash(
     mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-ws-build-')),
   );
-  const result = await packageSkill(opts.skillPath, {
-    outputPath: safePath.join(buildOut, skillName),
-    formats: ['directory'],
-  });
-  const builtDir = result.outputPath;
-  const hash = await hashDirectory(builtDir);
-  const stagedDir = await stageDirInto(builtDir, ctx, `workspace-${skillName}-${hash}`);
-  return { stagedDir, identity: `workspace:${skillName}:${hash}` };
+  try {
+    const result = await packageSkill(opts.skillPath, {
+      outputPath: safePath.join(buildOut, skillName),
+      formats: ['directory'],
+    });
+    const builtDir = result.outputPath;
+    const hash = await hashDirectory(builtDir);
+    // stageDirInto copies the built bundle OUT into the staging root before we
+    // return, so the build temp dir is safe to remove in the finally below.
+    const stagedDir = await stageDirInto(builtDir, ctx, `workspace-${skillName}-${hash}`);
+    return { stagedDir, identity: `workspace:${skillName}:${hash}` };
+  } finally {
+    await rm(buildOut, { recursive: true, force: true });
+  }
 }

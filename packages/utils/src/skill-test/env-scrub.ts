@@ -12,8 +12,17 @@ export interface ForwardEnvOptions {
   modelVars?: string[];
 }
 
-/** Process-essential vars that must survive for the child to even start. */
-const PROCESS_ESSENTIALS = ['PATH', 'Path', 'HOME', 'USERPROFILE', 'SystemRoot', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL'] as const;
+/**
+ * Process-essential vars that must survive for the child to even start. Includes
+ * the standard Windows essentials (APPDATA/LOCALAPPDATA — Claude's default config
+ * dir derives from these when CLAUDE_CONFIG_DIR is unset; SystemDrive, windir,
+ * PATHEXT, COMSPEC — needed to locate and launch executables). None are
+ * secret-bearing; the allowlist stays strict/exact-name.
+ */
+const PROCESS_ESSENTIALS = [
+  'PATH', 'Path', 'HOME', 'USERPROFILE', 'SystemRoot', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL',
+  'APPDATA', 'LOCALAPPDATA', 'SystemDrive', 'windir', 'PATHEXT', 'COMSPEC',
+] as const;
 
 /** The only auth/config vars ever forwarded. */
 const AUTH_CONFIG_ALLOWLIST = ['CLAUDE_CONFIG_DIR'] as const;

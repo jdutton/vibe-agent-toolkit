@@ -25,10 +25,19 @@ function lastPathSegment(p: string): string {
 // ---------------------------------------------------------------------------
 
 const SECURITY_WARNING = `
-WARNING: vat skill test run executes arbitrary skill code inside a headless
-Claude session. The experimenter prompt and all staged skill files run with
-bypassPermissions. Pass --i-understand-this-runs-skill-code to acknowledge
-this and proceed.
+WARNING: 'vat skill test run' EXECUTES the skill's code on your machine.
+
+It spawns a headless Claude session with --permission-mode bypassPermissions,
+so the staged skill files and experimenter prompt run with YOUR user account's
+full privileges: they can read and write your files (including credentials under
+~/.claude, SSH keys, cloud configs), run shell commands, and make network
+requests. The auth credential used to bill the run is reachable by that code.
+
+This harness provides CONTEXT isolation only (a fresh temp working directory, a
+scrubbed env allowlist, and no user/project settings) -- it is NOT an OS-level
+security sandbox. Only run skills whose code you trust and have reviewed.
+
+Pass --i-understand-this-runs-skill-code to acknowledge this and proceed.
 `.trim();
 
 function printSecurityWarning(): void {
@@ -189,7 +198,7 @@ function descriptorsToRecord(
 ): Record<string, SkillSourceSpec> | undefined {
   if (list === undefined || list.length === 0) return undefined;
   const record: Record<string, SkillSourceSpec> = {};
-  for (const d of list) record[descriptorName(d)] = d as SkillSourceSpec;
+  for (const d of list) record[descriptorName(d)] = d;
   return record;
 }
 
@@ -401,7 +410,7 @@ export function createSkillTestRunCommand(): Command {
   const command = new Command('run');
 
   command
-    .description('Execute the eval suite for a packaged skill in a headless Claude sandbox')
+    .description('Execute a packaged skill\'s eval suite in a headless, context-isolated Claude session (runs the skill\'s code; not an OS sandbox)')
     .argument('<skill...>', 'Skill name(s) to test (primary subject set)')
     .option(
       '--with <pair...>',
@@ -440,13 +449,17 @@ export function createSkillTestRunCommand(): Command {
       'after',
       `
 Description:
-  Stages the named skill(s) into an isolated tmp directory, runs preflight
-  checks (claude binary, auth, eval inputs, budget), then spawns a headless
-  Claude session with a non-interactive experimenter prompt. The experimenter
-  grades each eval against the skill's expectations and writes grading.json.
+  Stages the named skill(s) into a fresh temp harness (context isolation: a
+  scrubbed env allowlist and no user/project settings -- NOT an OS security
+  sandbox), runs preflight checks (claude binary, auth, eval inputs, budget),
+  then spawns a headless Claude session with a non-interactive experimenter
+  prompt. The experimenter grades each eval against the skill's expectations
+  and writes grading.json.
 
-  IMPORTANT: This command executes arbitrary skill code. You MUST pass
-  --i-understand-this-runs-skill-code to acknowledge this and proceed.
+  IMPORTANT: This command EXECUTES the skill's code with your user account's
+  full privileges (filesystem, network, shell) and a reachable auth credential.
+  Only run skills you trust. You MUST pass --i-understand-this-runs-skill-code
+  to acknowledge this and proceed.
 
 Exit Codes:
   0 - Harness ran to completion and produced a valid grading.json (check summary/grading.json for pass/fail counts)

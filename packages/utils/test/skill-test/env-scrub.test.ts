@@ -72,6 +72,25 @@ describe('buildForwardedEnv', () => {
     expect(env.HOME).toBe('/home/u');
     expect(env.ANTHROPIC_MODEL).toBe('claude-x');
   });
+
+  it('forwards Windows process essentials (APPDATA/LOCALAPPDATA/SystemDrive/windir/PATHEXT/COMSPEC)', () => {
+    const winSource = {
+      ...BASE,
+      APPDATA: 'C:/Users/u/AppData/Roaming',
+      LOCALAPPDATA: 'C:/Users/u/AppData/Local',
+      SystemDrive: 'C:',
+      windir: 'C:/Windows',
+      PATHEXT: '.COM;.EXE;.BAT;.CMD',
+      COMSPEC: 'C:/Windows/System32/cmd.exe',
+    } as NodeJS.ProcessEnv;
+    const env = buildForwardedEnv(winSource, { scrubInferenceKey: false });
+    expect(env.APPDATA).toBe('C:/Users/u/AppData/Roaming');
+    expect(env.LOCALAPPDATA).toBe('C:/Users/u/AppData/Local');
+    expect(env.SystemDrive).toBe('C:');
+    expect(env.windir).toBe('C:/Windows');
+    expect(env.PATHEXT).toBe('.COM;.EXE;.BAT;.CMD');
+    expect(env.COMSPEC).toBe('C:/Windows/System32/cmd.exe');
+  });
 });
 
 describe('applyDeclaredEnv', () => {

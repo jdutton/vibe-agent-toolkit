@@ -73,6 +73,29 @@ describe('SkillFileEntrySchema', () => {
     const entry: SkillFileEntry = { source: 'dist/a.mjs', dest: 'a.mjs', integrity: true };
     expect(entry.integrity).toBe(true);
   });
+
+  // H1 — dest must be a contained relative path (zip-slip-class write-anywhere guard).
+  it('accepts a nested relative dest', () => {
+    const result = SkillFileEntrySchema.safeParse({ source: BASE_SOURCE, dest: 'a/b/c.mjs' });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a dest containing a ".." traversal segment', () => {
+    for (const dest of ['../../../etc/x', '../escape.json', 'a/../../b']) {
+      const result = SkillFileEntrySchema.safeParse({ source: BASE_SOURCE, dest });
+      expect(result.success).toBe(false);
+    }
+  });
+
+  it('rejects an absolute POSIX dest', () => {
+    const result = SkillFileEntrySchema.safeParse({ source: BASE_SOURCE, dest: '/etc/passwd' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a Windows drive-letter dest (host-independent)', () => {
+    const result = SkillFileEntrySchema.safeParse({ source: BASE_SOURCE, dest: String.raw`C:\Users\evil` });
+    expect(result.success).toBe(false);
+  });
 });
 
 describe('SkillPackagingConfigSchema', () => {

@@ -1,4 +1,5 @@
 import { ValidationConfigSchema } from '@vibe-agent-toolkit/agent-schema';
+import { hasParentTraversalSegment, isAbsoluteAnyPlatform } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 import { LinkAuthConfigSchema } from './link-auth.js';
@@ -136,7 +137,21 @@ export const ExcludeReferencesFromBundleSchema = z.object({
  */
 export const SkillFileEntrySchema = z.object({
   source: z.string().min(1).describe('Source path relative to project root'),
-  dest: z.string().min(1).describe('Destination path relative to skill output directory'),
+  dest: z.string().min(1)
+    // Containment guard (zip-slip class): dest is OUR config output and is joined
+    // onto the skill output directory at build time, so it must stay inside it.
+    // Reject absolute paths (POSIX `/…`, Windows `C:\…`, UNC) and any `..`
+    // traversal segment. Defense-in-depth: copy sites also route through
+    // safePath.joinUnderRoot().
+    .refine(
+      (d) => !isAbsoluteAnyPlatform(d) && !hasParentTraversalSegment(d),
+      {
+        message:
+          'dest must be a relative path contained in the skill output directory: ' +
+          'no absolute paths (e.g. "/etc/x" or a Windows drive path) and no ".." traversal segments',
+      },
+    )
+    .describe('Destination path relative to skill output directory'),
   integrity: z.boolean().optional().describe('When true, the build asserts the copied dest set exactly matches the matched source set and each file is byte-identical (a future copy-time check; late-bound)'),
 });
 

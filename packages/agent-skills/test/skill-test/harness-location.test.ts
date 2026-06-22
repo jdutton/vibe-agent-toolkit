@@ -94,6 +94,21 @@ describe('assertSafeHarnessRoot', () => {
       expect(() => assertSafeHarnessRoot(dir, bogusUid)).toThrow(/owned by the current user/);
     },
   );
+
+  it(
+    'throws when an INTERMEDIATE path component (not just the leaf) is a symlink',
+    { skip: process.platform === 'win32' },
+    () => {
+      // link -> target; the real leaf lives under target, reached via the symlink.
+      const { target, link } = createSymlinkedDir(tmpBase);
+      const realLeaf = safePath.join(target, 'child');
+      mkdirSyncReal(realLeaf, { mode: 0o700 });
+      // The leaf itself is a real 0700 dir; only the `link` ancestor is a symlink.
+      // tmpBase is the trusted boundary so the walk reaches the `link` component.
+      const leafViaLink = safePath.join(link, 'child');
+      expect(() => assertSafeHarnessRoot(leafViaLink, dirUid(target), tmpBase)).toThrow(HarnessLocationError);
+    },
+  );
 });
 
 describe('assertSafeWorkdir', () => {

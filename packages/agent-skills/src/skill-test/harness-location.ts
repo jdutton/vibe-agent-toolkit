@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, lstatSync, statSync } from 'node:fs';
 
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { isAbsolutePath, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 
 /** Harness-location failure — maps to exit code 2. */
 export class HarnessLocationError extends Error {
@@ -92,27 +92,90 @@ export function prepareHarnessRoot(dir: string): void {
   }
 }
 
+/** True when `child` is a strict descendant of `root` (neither equal nor escaping). */
+function isStrictlyUnder(root: string, child: string): boolean {
+  if (child === root) return false;
+  const rel = safePath.relative(root, child);
+  return rel !== '' && rel !== '..' && !rel.startsWith('../') && !isAbsolutePath(rel);
+}
+
 /**
- * FS-bound hardening for the shared-tmp harness root (spec §7): the root must
- * be 0700 and owned by the current uid, and no path component may be a symlink.
+ * The harness path components to validate, leaf-first: the leaf and every
+ * ancestor strictly between it and `trustedRoot` (exclusive). When the leaf is
+ * not a descendant of `trustedRoot` (e.g. an explicit --out elsewhere), only the
+ * leaf is returned — we cannot bound the walk without a trusted boundary, so we
+ * fall back to leaf-only validation.
+ */
+function harnessAncestry(leaf: string, trustedRoot: string): string[] {
+  if (!isStrictlyUnder(trustedRoot, leaf)) return [leaf];
+  const components: string[] = [];
+  let current = leaf;
+  while (current !== trustedRoot) {
+    const parent = safePath.join(current, '..');
+    if (parent === current) break; // reached the filesystem root defensively
+    components.push(current);
+    current = parent;
+  }
+  return components;
+}
+
+/**
+ * Reject a single harness path component that is a symlink or not owned by the
+ * current user. A non-existent component is skipped (an absent ancestor cannot
+ * be a live attacker-controlled symlink). On Windows the ownership check is
+ * skipped (no real uids); the symlink refusal still applies.
+ */
+function assertComponentSafe(component: string, currentUid: number): void {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness path component
+  if (!existsSync(component)) return;
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness path component
+  const ls = lstatSync(component);
+  if (ls.isSymbolicLink()) {
+    throw new HarnessLocationError(`Refusing to use a symlinked harness path component: ${component}.`);
+  }
+  if (process.platform !== 'win32' && typeof ls.uid === 'number' && ls.uid !== currentUid) {
+    throw new HarnessLocationError(
+      `Harness path component ${component} is not owned by the current user (uid ${ls.uid} != ${currentUid}).`,
+    );
+  }
+}
+
+/**
+ * FS-bound hardening for the shared-tmp harness root (spec §7). Validates EVERY
+ * path component from the leaf up to (but excluding) `trustedRoot`: no component
+ * may be a symlink, and on POSIX each must be owned by the current uid. This
+ * closes the shared-/tmp TOCTOU where the recursively-created intermediate parent
+ * (`<tmp>/vat-skill-test`) — not just the leaf — could be pre-created as a symlink
+ * or under another user's ownership. The leaf must additionally be 0700.
+ *
+ * `trustedRoot` (default: the OS tmp dir) is the boundary: it is system-owned
+ * (sticky-bit /tmp) so ownership/mode checks are not applied to it. When the leaf
+ * is not a descendant of `trustedRoot` (an explicit --out elsewhere), validation
+ * degrades to the leaf alone.
+ *
  * Integration-tested (requires real lstat/stat). On Windows, uid checks are
  * skipped (process.getuid is undefined) but the symlink refusal still applies.
  */
-export function assertSafeHarnessRoot(dir: string, currentUid: number): void {
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
-  if (!existsSync(dir)) return; // not yet created — caller creates it 0700
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
-  const ls = lstatSync(dir);
-  if (ls.isSymbolicLink()) {
-    throw new HarnessLocationError(`Refusing to use a symlinked harness root: ${dir}.`);
+export function assertSafeHarnessRoot(
+  dir: string,
+  currentUid: number,
+  trustedRoot: string = normalizedTmpdir(),
+): void {
+  const resolved = safePath.resolve(dir);
+  // eslint-disable-next-line local/no-unsafe-root-join -- single-arg normalization of the trusted boundary itself (no caller-controlled segment is joined here); it is only used as an equality boundary for the ancestry walk.
+  const root = safePath.resolve(trustedRoot);
+
+  for (const component of harnessAncestry(resolved, root)) {
+    assertComponentSafe(component, currentUid);
   }
+
+  // Leaf-only 0700 check (intermediates are created 0700 by recursive mkdir and
+  // need only the symlink/ownership guarantees above). Skipped on win32.
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
-  const st = statSync(dir);
-  if (typeof st.uid === 'number' && st.uid !== currentUid) {
-    throw new HarnessLocationError(`Harness root ${dir} is not owned by the current user (uid ${st.uid} != ${currentUid}).`);
-  }
-  const mode = st.mode & 0o777;
+  if (!existsSync(resolved)) return; // not yet created — caller creates it 0700
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
+  const mode = statSync(resolved).mode & 0o777;
   if (mode !== 0o700 && process.platform !== 'win32') {
-    throw new HarnessLocationError(`Harness root ${dir} must be 0700 (found ${mode.toString(8)}).`);
+    throw new HarnessLocationError(`Harness root ${resolved} must be 0700 (found ${mode.toString(8)}).`);
   }
 }

@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { createReadStream } from 'node:fs';
 
 import which from 'which';
@@ -45,6 +45,33 @@ export interface SpawnResult {
   stalled: boolean;
 }
 
+/**
+ * SIGKILL the child AND every process in its group. The child is spawned
+ * `detached` (POSIX) so it leads a new process group; killing the negated pid
+ * reaps backgrounded grandchildren (e.g. a skill that runs `nohup … &`) and
+ * orphaned MCP subprocesses that a direct `child.kill()` would leave running.
+ *
+ * - Guards an undefined pid (child never spawned — nothing to kill).
+ * - Swallows the throw (ESRCH) when the group is already gone.
+ * - Windows has no POSIX process groups: fall back to `taskkill /T /F`, which
+ *   terminates the whole process tree.
+ */
+export function killProcessTree(child: { pid?: number | undefined }): void {
+  const { pid } = child;
+  if (pid === undefined) return;
+  try {
+    if (process.platform === 'win32') {
+      // eslint-disable-next-line sonarjs/no-os-command-from-path -- taskkill is a fixed Windows system command (no PATH-injection surface); it is the only POSIX-process-group-free way to terminate the child's tree.
+      spawnSync('taskkill', ['/pid', String(pid), '/T', '/F']);
+    } else {
+      // Negated pid → deliver the signal to the whole process group.
+      process.kill(-pid, 'SIGKILL');
+    }
+  } catch {
+    // ESRCH (no such process/group): the child and its group are already dead.
+  }
+}
+
 export interface SpawnHeadlessOptions extends ClaudeSpawnArgs {
   /**
    * Path to the experimenter-prompt file. Its contents are streamed to the
@@ -74,13 +101,28 @@ export async function spawnHeadlessClaude(opts: SpawnHeadlessOptions): Promise<S
   const args = assembleClaudeArgs(opts);
 
   return await new Promise<SpawnResult>((resolve, reject) => {
-    const child = spawn(bin, args, { cwd: opts.cwd, env: opts.env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn(bin, args, {
+      cwd: opts.cwd,
+      env: opts.env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      // POSIX: lead a new process group so the kill paths can SIGKILL the whole
+      // group (backgrounded grandchildren + MCP subprocesses), not just the
+      // direct child. Windows has no process groups (taskkill handles the tree).
+      detached: process.platform !== 'win32',
+    });
     let timedOut = false;
     let stalled = false;
 
+    // Feed the prompt to the child via stdin (claude 2.x has no --prompt-file).
+    // Opened here (before the timers) so every kill path can destroy it and
+    // release the prompt-file FD when the child is SIGKILL'd before stdin is
+    // fully consumed.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived prompt path
+    const promptStream = createReadStream(opts.promptFile);
+
     const wallTimer = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGKILL');
+      killProcessTree(child);
     }, opts.timeoutMs);
 
     // Stall watchdog: reset on every stdout/stderr chunk; fire if silent for stallMs.
@@ -91,7 +133,7 @@ export async function spawnHeadlessClaude(opts: SpawnHeadlessOptions): Promise<S
         if (stallTimer !== undefined) clearTimeout(stallTimer);
         stallTimer = setTimeout(() => {
           stalled = true;
-          child.kill('SIGKILL');
+          killProcessTree(child);
         }, stallMs);
       };
       resetStallTimer();
@@ -103,14 +145,15 @@ export async function spawnHeadlessClaude(opts: SpawnHeadlessOptions): Promise<S
     const clearAllTimers = (): void => {
       clearTimeout(wallTimer);
       if (stallTimer !== undefined) clearTimeout(stallTimer);
+      // Destroy the prompt stream so its file descriptor is released on every
+      // terminal path (timeout/stall reach here via 'close'; error paths call
+      // it directly). On a clean run the stream has already ended — no-op.
+      promptStream.destroy();
     };
 
-    // Feed the prompt to the child via stdin (claude 2.x has no --prompt-file).
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived prompt path
-    const promptStream = createReadStream(opts.promptFile);
     promptStream.on('error', err => {
       clearAllTimers();
-      child.kill('SIGKILL');
+      killProcessTree(child);
       reject(err);
     });
     // Swallow EPIPE: if the child exits before consuming all stdin, the write

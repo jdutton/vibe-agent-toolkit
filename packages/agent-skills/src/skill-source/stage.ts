@@ -57,8 +57,11 @@ function assertOwnedIfExists(dir: string, currentUid: number): void {
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- ownership probe on our own staging path
     st = statSync(dir);
-  } catch {
-    return; // does not exist yet — fine
+  } catch (err) {
+    // Only an absent path is safe to ignore. A different error (e.g. EACCES on
+    // an unreadable path) must NOT be silently treated as "absent/safe".
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw err;
   }
   if (currentUid >= 0 && st.uid !== currentUid) {
     throw new Error(

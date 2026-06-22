@@ -22,11 +22,13 @@ afterAll(() => {
 });
 
 describe('cloneGitSource', () => {
-  it('clones a ref and returns ref + 8-char commit + repo-root targetDir', () => {
+  it('clones a ref and returns ref + full 40-char commit + repo-root targetDir', () => {
     const tempdir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-gc-clone-'));
     const out = cloneGitSource(parseGitUrl(`${bareUrl}#main`), tempdir);
     expect(out.ref).toBe('main');
-    expect(out.commit).toMatch(/^[0-9a-f]{8}$/);
+    // Full SHA (not truncated): the commit is the git cache key, so a short SHA
+    // risks cross-repo collisions / silent stale-tree reuse (M3).
+    expect(out.commit).toMatch(/^[0-9a-f]{40}$/);
     expect(out.targetDir).toBe(tempdir);
     rmSync(tempdir, { recursive: true, force: true });
   });
@@ -50,7 +52,7 @@ describe('cloneGitSource', () => {
     const tempdir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-gc-head-'));
     const out = cloneGitSource(parseGitUrl(bareUrl), tempdir);
     expect(out.ref).toBe('HEAD');
-    expect(out.commit).toMatch(/^[0-9a-f]{8}$/);
+    expect(out.commit).toMatch(/^[0-9a-f]{40}$/);
     rmSync(tempdir, { recursive: true, force: true });
   });
 

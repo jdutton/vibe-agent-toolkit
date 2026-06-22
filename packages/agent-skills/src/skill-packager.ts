@@ -842,7 +842,9 @@ function applyNonGlobEntriesToPathMap(
     if (isGlob(fileEntry.source)) continue;
 
     const absoluteSource = safePath.resolve(safePath.join(projectRoot, fileEntry.source));
-    const absoluteDest = safePath.join(outputPath, fileEntry.dest);
+    // joinUnderRoot guards against a dest escaping the output dir (zip-slip class),
+    // defense-in-depth beyond the schema refine on SkillFileEntry.dest.
+    const absoluteDest = safePath.joinUnderRoot(outputPath, fileEntry.dest);
 
     // Validate source exists at build time
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
@@ -900,7 +902,8 @@ function registerDeferredDestLinks(
     } else {
       // Single-file entry: UNCHANGED — exact dest match (resolved against skillDir).
       const absDestTarget = safePath.resolve(skillDir, entry.dest);
-      const absDestOutput = safePath.join(outputPath, entry.dest);
+      // joinUnderRoot keeps the synthesized output path inside the skill output dir.
+      const absDestOutput = safePath.joinUnderRoot(outputPath, entry.dest);
       const id = synthesizeAssetId(absDestTarget);
 
       if (!stampDeferredDestResolvedId(resources, absDestTarget, id)) continue;
@@ -990,8 +993,10 @@ function synthesizeGlobLinkResource(
   // Stamp resolvedId per-linked-file
   link.resolvedId = synthesizeAssetId(T);
 
-  // absDestOutput: preserve T's path relative to skillDir under outputPath
-  const absDestOutput = safePath.join(ctx.outputPath, safePath.relative(ctx.skillDir, T));
+  // absDestOutput: preserve T's path relative to skillDir under outputPath.
+  // joinUnderRoot keeps it inside the output dir (T is verified under absDestDir,
+  // itself under skillDir once the dest schema rejects '..'/absolute).
+  const absDestOutput = safePath.joinUnderRoot(ctx.outputPath, safePath.relative(ctx.skillDir, T));
 
   // Dedup against existing + already-synthesized
   const alreadyPresent =

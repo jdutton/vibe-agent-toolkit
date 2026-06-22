@@ -100,12 +100,12 @@ export function regenerateVendoredManifest(vendorDir: string): void {
 /**
  * Verify the integrity of `vendorDir` against its stored manifest.
  *
- * Returns `false` when:
+ * Fail-closed: returns `false` when:
  *   - `vendored.manifest.json` is absent or unparseable
  *   - Any listed file is missing on disk
  *   - Any listed file's current hash differs from the stored hash
- *
- * Extra files on disk not listed in the manifest are silently allowed.
+ *   - Any on-disk file (other than the manifest itself) is NOT listed in the
+ *     manifest — an extra/injected file is treated as tampering, not allowed.
  */
 export function verifyVendoredManifest(vendorDir: string): boolean {
   const manifestPath = safePath.join(vendorDir, MANIFEST_FILENAME);
@@ -131,6 +131,16 @@ export function verifyVendoredManifest(vendorDir: string): boolean {
     }
     const actualHash = hashFile(abs);
     if (actualHash !== expectedHash) {
+      return false;
+    }
+  }
+
+  // Fail-closed on extra files: every on-disk file (except the manifest itself)
+  // must be accounted for in the manifest. An unlisted file is tampering.
+  const onDisk = collectFiles(vendorDir, vendorDir);
+  for (const rel of onDisk) {
+    if (rel === MANIFEST_FILENAME) continue;
+    if (!(rel in manifest.files)) {
       return false;
     }
   }

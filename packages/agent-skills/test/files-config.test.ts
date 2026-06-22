@@ -422,6 +422,64 @@ describe('applyFilesConfig', () => {
     expect(existsSync(safePath.join(pkgDir, 'main.js'))).toBe(true);
     expect(existsSync(staleFile)).toBe(false);
   });
+
+  // H1 — a dest that would escape the skill output dir must be rejected by
+  // joinUnderRoot (defense-in-depth beyond the schema refine).
+  it('throws when a non-glob dest escapes the skill output dir (joinUnderRoot guard)', async () => {
+    const { projectRoot, skillOutputDir } = makeApplySandbox();
+    const filesConfig: SkillFileEntry[] = [{ source: DATA_SOURCE, dest: '../escape.json' }];
+
+    await expect(applyFilesConfig({ filesConfig, projectRoot, skillOutputDir })).rejects.toThrow(
+      /escapes root|joinUnderRoot/,
+    );
+  });
+
+  // H2 — a glob whose MAGIC REMAINDER (the part after the static base) contains
+  // a '..' segment must be rejected; it would let `glob` climb above the base.
+  it('throws when a glob magic remainder contains a ".." segment', async () => {
+    const { projectRoot, skillOutputDir } = makeApplySandbox();
+    const filesConfig: SkillFileEntry[] = [{ source: 'dist/gen/*/../../../etc/*', dest: 'out' }];
+
+    await expect(applyFilesConfig({ filesConfig, projectRoot, skillOutputDir })).rejects.toThrow(
+      /\.\.|traversal|glob portion/,
+    );
+  });
+
+  // H2 — the deliberate sibling-base feature (static base with leading '..') must
+  // keep working: only the MAGIC REMAINDER is constrained, not the static base.
+  it('still expands a sibling-base glob (../pkg/dist/**) whose remainder has no ".."', async () => {
+    const { projectRoot } = makeApplySandbox();
+    // projectRoot is <root>/project; create a sibling <root>/sibling/lib/x.js
+    const siblingLib = safePath.join(projectRoot, '..', 'sibling', 'lib');
+    mkdirSyncReal(siblingLib, { recursive: true });
+    writeFileSync(safePath.join(siblingLib, 'x.js'), 'export const x = 1;');
+    const skillOutputDir = safePath.join(projectRoot, '..', 'sibling-out');
+    mkdirSyncReal(skillOutputDir, { recursive: true });
+    APPLY_TMP_DIRS.push(skillOutputDir);
+
+    const filesConfig: SkillFileEntry[] = [{ source: '../sibling/lib/**/*.js', dest: 'lib' }];
+    const copied = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
+
+    expect(copied).toEqual([toForwardSlash(safePath.join('lib', 'x.js'))]);
+    expect(existsSync(safePath.join(skillOutputDir, 'lib', 'x.js'))).toBe(true);
+  });
+
+  // M10 — dot-files under a glob source must be included (copy + integrity stay
+  // symmetric: both globs pass dot: true).
+  it('includes dot-files when expanding a glob source', async () => {
+    const { projectRoot, skillOutputDir } = makeApplySandbox();
+    const hiddenFile = '.hidden.json';
+    mkdirSyncReal(safePath.join(projectRoot, 'dist', 'packs'), { recursive: true });
+    writeFileSync(safePath.join(projectRoot, 'dist', 'packs', 'visible.json'), '{"v":1}');
+    writeFileSync(safePath.join(projectRoot, 'dist', 'packs', hiddenFile), '{"h":1}');
+
+    const filesConfig: SkillFileEntry[] = [{ source: 'dist/packs/**/*', dest: 'packs', integrity: true }];
+    const copied = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir });
+
+    expect(copied).toContain(toForwardSlash(safePath.join('packs', hiddenFile)));
+    expect(existsSync(safePath.join(skillOutputDir, 'packs', hiddenFile))).toBe(true);
+    expect(existsSync(safePath.join(skillOutputDir, 'packs', 'visible.json'))).toBe(true);
+  });
 });
 
 const INTEGRITY_TMP_PREFIX = 'vat-integrity-';

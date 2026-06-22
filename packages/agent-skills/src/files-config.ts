@@ -16,6 +16,7 @@ import type { SkillFileEntry } from '@vibe-agent-toolkit/resources';
 import {
   fileContentHash,
   globMagicRemainder,
+  hasParentTraversalSegment,
   isGlob,
   safePath,
   staticGlobBase,
@@ -312,7 +313,9 @@ export async function verifyDestSet(
   expectedRel: string[],
   source: string,
 ): Promise<void> {
-  const actual = (await glob('**/*', { cwd: destDir, nodir: true }))
+  // dot: true to stay symmetric with the copy glob (M10) — both sides must see
+  // hidden files, otherwise a dropped dot-file is invisible to integrity.
+  const actual = (await glob('**/*', { cwd: destDir, nodir: true, dot: true }))
     .map((m) => toForwardSlash(m))
     .sort((a, b) => a.localeCompare(b));
   const expected = [...expectedRel].sort((a, b) => a.localeCompare(b));
@@ -359,7 +362,9 @@ async function copyNonGlobEntry(
       `files: source '${entry.source}' is a directory; use a glob like '${entry.source}/**/*' to copy its contents.`,
     );
   }
-  const absoluteDest = safePath.join(skillOutputDir, entry.dest);
+  // joinUnderRoot rejects a dest that escapes the skill output dir (absolute /
+  // drive-letter / '..'), defense-in-depth beyond the schema refine.
+  const absoluteDest = safePath.joinUnderRoot(skillOutputDir, entry.dest);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- dest path from validated config
   await mkdir(dirname(absoluteDest), { recursive: true });
   await copyFile(absoluteSource, absoluteDest);
@@ -378,9 +383,20 @@ async function copyGlobEntry(
 ): Promise<{ copied: string[]; pairs: { absSource: string; absDest: string }[]; rels: string[] }> {
   const base = staticGlobBase(entry.source);
   const remainder = globMagicRemainder(entry.source);
+  // H2: the static base may legitimately contain leading '..' (the deliberate
+  // sibling-base monorepo feature), but the MAGIC REMAINDER must never contain a
+  // '..' segment — `glob` honors it and climbs above absoluteBase. Reject it.
+  if (hasParentTraversalSegment(remainder)) {
+    throw new Error(
+      `files: source '${entry.source}' (glob) has a '..' segment in its glob portion ('${remainder}'); ` +
+      `parent-directory traversal is not allowed after the static base.`,
+    );
+  }
   const absoluteBase = safePath.resolve(safePath.join(projectRoot, base));
 
-  const rawMatches = await glob(remainder, { cwd: absoluteBase, nodir: true });
+  // dot: true so hidden files under the source subtree are included — keeps the
+  // package symmetric with verifyDestSet (M10: silent dot-file drop).
+  const rawMatches = await glob(remainder, { cwd: absoluteBase, nodir: true, dot: true });
   const matches = rawMatches.map((m) => toForwardSlash(m)).sort((a, b) => a.localeCompare(b));
 
   if (matches.length === 0) {
@@ -397,11 +413,14 @@ async function copyGlobEntry(
   const rels: string[] = [];
 
   for (const rel of matches) {
-    const absSource = safePath.join(absoluteBase, rel);
+    // joinUnderRoot asserts each matched file stays under absoluteBase (read) and
+    // that the rebased dest stays under the skill output dir (write) — H1/H2
+    // defense-in-depth against a traversal that slipped past earlier guards.
+    const absSource = safePath.joinUnderRoot(absoluteBase, rel);
     if (bundledFileSet.has(toForwardSlash(absSource))) continue;
 
     const relDest = toForwardSlash(safePath.join(entry.dest, rel));
-    const absDest = safePath.join(skillOutputDir, entry.dest, rel);
+    const absDest = safePath.joinUnderRoot(skillOutputDir, entry.dest, rel);
 
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- dest path from validated config
     await mkdir(dirname(absDest), { recursive: true });
@@ -457,7 +476,7 @@ export async function applyFilesConfig(opts: ApplyFilesConfigOptions): Promise<s
         // wiped the output dir first, so the on-disk subtree must equal exactly
         // the rels we copied — catches a misrouted rebase the pair-hash misses.
         await verifyDestSet(
-          safePath.join(opts.skillOutputDir, fileEntry.dest),
+          safePath.joinUnderRoot(opts.skillOutputDir, fileEntry.dest),
           rels,
           fileEntry.source,
         );
