@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.39] - 2026-06-22
+
 ### Added
 
 - **`files:` entries now support glob sources and an optional `integrity` byte-verify.** A `source` containing glob magic (`*`, `**`, `?`, `[`) fans out into a directory `dest`, preserving the directory structure below the static base (no `recursive` flag — glob is VAT's existing idiom, as in `skills.include`). Globbed dests are late-bound, so `SKILL.md` links into them are treated as deferred artifacts at validate time (no `LINK_TO_GITIGNORED_FILE` allowlist needed). Add `integrity: true` to byte-verify the copy at build time (and assert an exact dest subtree for glob entries) — it verifies the copy, not generated-vs-committed drift.
