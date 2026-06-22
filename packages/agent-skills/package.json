@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/agent-skills",
-  "version": "0.1.39-rc.10",
+  "version": "0.1.39-rc.11",
   "description": "Build, validate, and package agent skills in the Agent Skills format",
   "type": "module",
   "main": "./dist/index.js",
@@ -34,6 +34,7 @@
     "@vibe-agent-toolkit/resources": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
     "adm-zip": "^0.5.16",
+    "glob": "^10.3.10",
     "picomatch": "^4.0.3",
     "yaml": "^2.6.1",
     "zod": "^3.24.1",

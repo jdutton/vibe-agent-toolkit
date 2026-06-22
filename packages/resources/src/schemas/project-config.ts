@@ -132,10 +132,12 @@ export const ExcludeReferencesFromBundleSchema = z.object({
  * Used for build artifacts, unlinked files, and routing overrides.
  * - source: path relative to project root (where vibe-agent-toolkit.config.yaml lives)
  * - dest: path relative to the skill's output directory (sibling to SKILL.md)
+ * - integrity (optional): byte-verify the copied set against the matched source set at build time
  */
 export const SkillFileEntrySchema = z.object({
   source: z.string().min(1).describe('Source path relative to project root'),
   dest: z.string().min(1).describe('Destination path relative to skill output directory'),
+  integrity: z.boolean().optional().describe('When true, the build asserts the copied dest set exactly matches the matched source set and each file is byte-identical (a future copy-time check; late-bound)'),
 });
 
 export type SkillFileEntry = z.infer<typeof SkillFileEntrySchema>;

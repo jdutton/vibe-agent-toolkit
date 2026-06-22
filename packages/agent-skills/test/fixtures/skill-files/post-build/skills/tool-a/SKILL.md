@@ -11,6 +11,10 @@ This skill provides CLI-based workflows.
 
 Run the [bundled CLI](scripts/cli.mjs) to get started.
 
+## Data Packs
+
+See the [alpha data pack](packs/alpha/data.json) for configuration.
+
 ## Resources
 
 - See the [helper script](../shared/helper.mjs) for automation

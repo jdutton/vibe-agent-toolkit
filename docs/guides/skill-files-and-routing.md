@@ -168,6 +168,81 @@ skills:
           dest: scripts/tool-config.json    # Override: goes to scripts/
 ```
 
+### Glob Sources (Directory Fan-Out)
+
+A `files:` entry whose `source` contains glob magic (`*`, `**`, `?`, or `[`) is a **glob entry**. Everything else is a single-file copy, as described above. There is no `recursive` flag — glob is VAT's existing idiom for multi-file selection (the same syntax used in `skills.include` and resource collection patterns), keeping `files:` consistent with the rest of the config.
+
+#### Prefix-strip + tail-preserve mapping
+
+For a glob entry, `dest` is a **directory** (for a single-file source, `dest` is a file, as before). VAT strips the *static base* of the pattern — the longest leading path with no glob magic — and re-roots each match's tail under `dest`.
+
+Example:
+
+```yaml
+skills:
+  config:
+    report-tools:
+      files:
+        - source: dist/packs/**/*     # static base = dist/packs
+          dest: packs/                 # dest is a directory
+```
+
+If the build produces `dist/packs/claims/large-loss.json` and `dist/packs/claims/summary.csv`, they land at:
+
+```
+packs/claims/large-loss.json
+packs/claims/summary.csv
+```
+
+The `dist/packs` prefix is stripped; the `claims/...` tail is preserved under `packs/`. Matches are **not flattened** — directory structure below the static base is maintained in the output.
+
+Sibling sources work: a static base like `../shared/dist` is supported; the glob runs with its `cwd` at the resolved static base.
+
+#### Late binding
+
+The glob is **never expanded at parse or validate time** — only at build/copy time (`vat skills build`). This means a `SKILL.md` link to a file that will land under a glob `dest` (e.g. `packs/claims/large-loss.json`) is treated as a deferred build artifact at validate time — reported as [`LINK_DEFERRED_ARTIFACT`](../validation-codes.md#link_deferred_artifact) (info), never a broken-link error — whether or not a build has run. `vat skills build` preserves and rewrites the link to the materialized dest. This is what lets you drop a `LINK_TO_GITIGNORED_FILE` / broken-link allowlist once you switch to a glob entry.
+
+#### Build-time errors
+
+A glob that matches **zero files** is a hard error at build time:
+
+```
+files entry for skill 'report-tools': glob 'dist/packs/**/*' matched no files.
+Has your build run?
+```
+
+A **non-glob** `source` that resolves to a directory is a hard error telling you to use a glob instead:
+
+```
+files entry for skill 'report-tools': source 'dist/packs' is a directory.
+Use a glob to copy a directory tree: 'dist/packs/**/*'
+```
+
+### Verifying the Copy (`integrity`)
+
+Add `integrity: true` to any `files:` entry to byte-verify the copy at build time:
+
+```yaml
+skills:
+  config:
+    report-tools:
+      files:
+        - source: dist/packs/**/*
+          dest: packs/
+          integrity: true
+```
+
+With `integrity: true`, `vat skills build` asserts, for every file copied, that the dest file is **byte-identical** to its matched source. For a glob entry it also asserts that the dest subtree contains **exactly** the matched set — no missing files, no extra files left over from a prior build. A mismatch fails the build and names the offending path.
+
+Use `integrity` for entries where a faithful copy is a correctness invariant — for example, a generated data catalog where a truncated or stale copy would silently produce wrong results.
+
+**Scope and limits.** `integrity` verifies a faithful **source → dest copy** within a single build. It does not cover:
+
+- **Generated-vs-committed drift** — whether a committed artifact still matches what its generator would produce today. That invariant needs a separate build-and-compare step (a future `vat verify` extension), not `files: integrity`.
+- **Cross-artifact / cross-bundle identity** — asserting that the same shared binary is byte-identical across two different packaged bundles (guarding against two divergent dependency versions). Those invariants must live in a dedicated verify step.
+
+If you need those broader guarantees, wire them into your own CI pipeline. `files: integrity` is deliberately scoped to one thing: confirming the copy fidelity of a single entry.
+
 ## How Links Are Matched
 
 When VAT encounters a `[]()` link during packaging:

@@ -41,6 +41,7 @@ import {
 } from '@vibe-agent-toolkit/resources';
 import {
   findProjectRoot,
+  isGlob,
   resolveAssetReference,
   toForwardSlash,
   safePath,
@@ -408,23 +409,9 @@ export async function packageSkill(
   const namingBasePath = projectRoot;
   const pathMap = buildPathMap(skillPath, bundledFiles, outputPath, resourceNaming, namingBasePath, stripPrefix, target);
 
-  // 8b. Apply files config: copy declared files and adjust path map
-  for (const fileEntry of filesConfig) {
-    const absoluteSource = safePath.resolve(safePath.join(projectRoot, fileEntry.source));
-    const absoluteDest = safePath.join(outputPath, fileEntry.dest);
-
-    // Validate source exists at build time
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
-    if (!existsSync(absoluteSource)) {
-      throw new Error(
-        `files entry for skill '${skillMetadata.name}': source '${fileEntry.source}' does not exist. ` +
-        `Has your project's build step run?`
-      );
-    }
-
-    // If this source was auto-discovered, override its destination; otherwise add it
-    pathMap.set(toForwardSlash(absoluteSource), absoluteDest);
-  }
+  // 8b. Apply files config: register single-file entries in path map.
+  // GLOB entries are skipped — late binding via applyFilesConfig owns their expansion.
+  applyNonGlobEntriesToPathMap(filesConfig, projectRoot, outputPath, pathMap, skillMetadata.name);
 
   // 9. Build "to" registry for link rewriting (maps same resource IDs to output paths)
   const outputResources = bundledResources.map(resource => ({
@@ -835,6 +822,43 @@ function buildSyntheticAssetResource(
 }
 
 /**
+ * Register single-file (non-glob) files config entries in the path map.
+ *
+ * GLOB entries are skipped — their source contains glob magic, never exists as a
+ * literal path at build time, and would wrongly throw. Late binding via
+ * applyFilesConfig owns their expansion at copy time.
+ *
+ * Called from step 8b of packageSkill to keep the main function under the
+ * cognitive-complexity limit.
+ */
+function applyNonGlobEntriesToPathMap(
+  filesConfig: SkillFileEntry[],
+  projectRoot: string,
+  outputPath: string,
+  pathMap: Map<string, string>,
+  skillName: string,
+): void {
+  for (const fileEntry of filesConfig) {
+    if (isGlob(fileEntry.source)) continue;
+
+    const absoluteSource = safePath.resolve(safePath.join(projectRoot, fileEntry.source));
+    const absoluteDest = safePath.join(outputPath, fileEntry.dest);
+
+    // Validate source exists at build time
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
+    if (!existsSync(absoluteSource)) {
+      throw new Error(
+        `files entry for skill '${skillName}': source '${fileEntry.source}' does not exist. ` +
+        `Has your project's build step run?`
+      );
+    }
+
+    // If this source was auto-discovered, override its destination; otherwise add it
+    pathMap.set(toForwardSlash(absoluteSource), absoluteDest);
+  }
+}
+
+/**
  * Register `files:` deferred-dest links so the build preserves and rewrites them.
  *
  * A deferred dest (e.g. `dist/bin/cli.mjs → scripts/cli.mjs`) does not exist at
@@ -848,6 +872,10 @@ function buildSyntheticAssetResource(
  * any local_file link that resolves to the dest, and return a synthetic output
  * resource (`buildSyntheticAssetResource`) whose `filePath` is the dest's output
  * path so the output registry computes `relativePath = entry.dest`.
+ *
+ * For GLOB entries, the dest is a DIRECTORY. We scan each unresolved local_file
+ * link across all resources; any link whose resolved target T falls under the dest
+ * dir gets an individual synthetic resource stamped per-file (see registerGlobDestLinks).
  *
  * Scope: dest links only. A SKILL.md link to a deferred *source* path that is
  * copied to a different dest is an exotic case with ambiguous output mapping and
@@ -866,24 +894,112 @@ function registerDeferredDestLinks(
   const syntheticResources: ResourceMetadata[] = [];
   const skillDir = dirname(skillPath);
   for (const entry of filesConfig) {
-    // Where a SKILL.md link `entry.dest` resolves at source time (SKILL.md lives at skillPath).
-    const absDestTarget = safePath.resolve(skillDir, entry.dest);
-    const absDestOutput = safePath.join(outputPath, entry.dest);
-    const id = synthesizeAssetId(absDestTarget);
+    if (isGlob(entry.source)) {
+      // Glob entry: dest is a directory. Synthesize per-linked-file.
+      registerGlobDestLinks(entry, resources, skillDir, outputPath, existingOutputResources, syntheticResources);
+    } else {
+      // Single-file entry: UNCHANGED — exact dest match (resolved against skillDir).
+      const absDestTarget = safePath.resolve(skillDir, entry.dest);
+      const absDestOutput = safePath.join(outputPath, entry.dest);
+      const id = synthesizeAssetId(absDestTarget);
 
-    if (!stampDeferredDestResolvedId(resources, absDestTarget, id)) continue;
+      if (!stampDeferredDestResolvedId(resources, absDestTarget, id)) continue;
 
-    // Dedup: skip if an output resource already targets this dest output path.
-    const alreadyPresent =
-      existingOutputResources.some(r => toForwardSlash(r.filePath) === toForwardSlash(absDestOutput)) ||
-      syntheticResources.some(r => toForwardSlash(r.filePath) === toForwardSlash(absDestOutput));
-    if (alreadyPresent) continue;
+      // Dedup: skip if an output resource already targets this dest output path.
+      const alreadyPresent =
+        existingOutputResources.some(r => toForwardSlash(r.filePath) === toForwardSlash(absDestOutput)) ||
+        syntheticResources.some(r => toForwardSlash(r.filePath) === toForwardSlash(absDestOutput));
+      if (alreadyPresent) continue;
 
-    // buildSyntheticAssetResource derives the id via synthesizeAssetId(absDestTarget),
-    // matching the resolvedId stamped above.
-    syntheticResources.push(buildSyntheticAssetResource(absDestTarget, absDestOutput));
+      // buildSyntheticAssetResource derives the id via synthesizeAssetId(absDestTarget),
+      // matching the resolvedId stamped above.
+      syntheticResources.push(buildSyntheticAssetResource(absDestTarget, absDestOutput));
+    }
   }
   return syntheticResources;
+}
+
+/**
+ * For a GLOB files entry whose dest is a DIRECTORY, walk every unresolved
+ * local_file link across `resources`. If a link's resolved target T falls under
+ * the entry's dest dir, synthesize a per-file entry: stamp `resolvedId` on the
+ * link and push a synthetic output resource so the output registry can compute
+ * `relativePath = skillDir-relative(T)`.
+ *
+ * Prefix test (T is "under" absDestDir):
+ *   T === absDestDir  OR  toForwardSlash(T).startsWith(toForwardSlash(absDestDir) + '/')
+ */
+interface GlobDestLinkContext {
+  absDestDir: string;
+  absDestDirFwd: string;
+  skillDir: string;
+  outputPath: string;
+  existingOutputResources: ResourceMetadata[];
+  syntheticResources: ResourceMetadata[];
+}
+
+function registerGlobDestLinks(
+  entry: SkillFileEntry,
+  resources: ResourceMetadata[],
+  skillDir: string,
+  outputPath: string,
+  existingOutputResources: ResourceMetadata[],
+  syntheticResources: ResourceMetadata[],
+): void {
+  const absDestDir = safePath.resolve(skillDir, entry.dest);
+  const ctx: GlobDestLinkContext = {
+    absDestDir,
+    absDestDirFwd: toForwardSlash(absDestDir),
+    skillDir,
+    outputPath,
+    existingOutputResources,
+    syntheticResources,
+  };
+
+  for (const resource of resources) {
+    for (const link of resource.links) {
+      synthesizeGlobLinkResource(link, resource.filePath, ctx);
+    }
+  }
+}
+
+/**
+ * Attempt to synthesize a glob-dest output resource for a single link.
+ *
+ * Stamps `link.resolvedId` and pushes a synthetic resource if the link target
+ * falls under the glob entry's dest dir and has not been synthesized yet.
+ * No-ops for already-resolved links, non-local-file links, and links outside
+ * the dest dir.
+ */
+function synthesizeGlobLinkResource(
+  link: ResourceMetadata['links'][number],
+  resourceFilePath: string,
+  ctx: GlobDestLinkContext,
+): void {
+  if (link.type !== 'local_file' || link.resolvedId !== undefined) return;
+
+  const [hrefPath] = link.href.split('#');
+  if (hrefPath === undefined) return;
+
+  const T = safePath.resolve(dirname(resourceFilePath), hrefPath);
+  const Tfwd = toForwardSlash(T);
+
+  // Prefix test: T must be equal to or under absDestDir
+  if (T !== ctx.absDestDir && !Tfwd.startsWith(ctx.absDestDirFwd + '/')) return;
+
+  // Stamp resolvedId per-linked-file
+  link.resolvedId = synthesizeAssetId(T);
+
+  // absDestOutput: preserve T's path relative to skillDir under outputPath
+  const absDestOutput = safePath.join(ctx.outputPath, safePath.relative(ctx.skillDir, T));
+
+  // Dedup against existing + already-synthesized
+  const alreadyPresent =
+    ctx.existingOutputResources.some(r => toForwardSlash(r.filePath) === toForwardSlash(absDestOutput)) ||
+    ctx.syntheticResources.some(r => toForwardSlash(r.filePath) === toForwardSlash(absDestOutput));
+  if (!alreadyPresent) {
+    ctx.syntheticResources.push(buildSyntheticAssetResource(T, absDestOutput));
+  }
 }
 
 /**

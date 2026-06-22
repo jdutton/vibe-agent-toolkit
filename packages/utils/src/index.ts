@@ -65,3 +65,9 @@ export { expandMacro, UnknownMacroError } from './link-auth/expand-macro.js';
 
 // Skill testing utilities (environment management for headless agent runs)
 export * from './skill-test/index.js';
+
+// Glob pattern helpers (isGlob, staticGlobBase, globMagicRemainder)
+export * from './glob/glob-pattern.js';
+
+// Filesystem hashing (sha256 of raw file bytes)
+export * from './fs/file-hash.js';

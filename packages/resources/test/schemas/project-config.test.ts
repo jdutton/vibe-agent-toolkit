@@ -9,10 +9,12 @@ import {
   ClaudeMarketplacePluginEntrySchema,
   ClaudeMarketplaceSchema,
   ProjectConfigSchema,
+  SkillFileEntrySchema,
   SkillPackagingConfigSchema,
   SkillsConfigSchema,
   TestConfigSchema,
 } from '../../src/schemas/project-config.js';
+import type { SkillFileEntry } from '../../src/schemas/project-config.js';
 
 const SKILL_GLOB_INCLUDE = 'skills/**/SKILL.md';
 
@@ -29,6 +31,49 @@ function expectStrictRejection(schema: ZodSchema, input: unknown): void {
     expect(issue).toBeDefined();
   }
 }
+
+describe('SkillFileEntrySchema', () => {
+  const BASE_SOURCE = 'dist/report.mjs';
+  const BASE_DEST = 'report.mjs';
+
+  it('parses a valid entry with integrity: true', () => {
+    const result = SkillFileEntrySchema.safeParse({
+      source: BASE_SOURCE,
+      dest: BASE_DEST,
+      integrity: true,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.integrity).toBe(true);
+    }
+  });
+
+  it('parses a valid entry with integrity omitted (undefined)', () => {
+    const result = SkillFileEntrySchema.safeParse({
+      source: BASE_SOURCE,
+      dest: BASE_DEST,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.integrity).toBeUndefined();
+    }
+  });
+
+  it('rejects integrity: "yes" (wrong type — must be boolean)', () => {
+    const result = SkillFileEntrySchema.safeParse({
+      source: BASE_SOURCE,
+      dest: BASE_DEST,
+      integrity: 'yes',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('type-level: SkillFileEntry accepts integrity?: boolean', () => {
+    // compile-time check — if the type is wrong this file will not typecheck
+    const entry: SkillFileEntry = { source: 'dist/a.mjs', dest: 'a.mjs', integrity: true };
+    expect(entry.integrity).toBe(true);
+  });
+});
 
 describe('SkillPackagingConfigSchema', () => {
   it('parses validation.severity and validation.allow', () => {
