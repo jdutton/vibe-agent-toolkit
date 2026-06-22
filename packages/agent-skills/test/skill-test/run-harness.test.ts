@@ -241,18 +241,27 @@ describe('resolveScaffoldEvalsPath', () => {
   const repoRoot = '/repo';
   const evalsSubpath = 'evals/evals.json';
 
+  // repoRoot is an absolute POSIX-style path; on Windows safePath.resolve prepends
+  // a drive letter, so assertions anchor on the resolved root + relative tail
+  // rather than a hardcoded literal (the Windows CI gate).
+  const resolvedRepoRoot = toForwardSlash(safePath.resolve(repoRoot));
+
   it('resolves against repoRoot + the positional name when no override', () => {
-    const out = resolveScaffoldEvalsPath(makeOpts({ skills: ['skills/foo'] }), repoRoot, evalsSubpath);
-    expect(toForwardSlash(out)).toBe('/repo/skills/foo/evals/evals.json');
+    const out = toForwardSlash(resolveScaffoldEvalsPath(makeOpts({ skills: ['skills/foo'] }), repoRoot, evalsSubpath));
+    expect(out.startsWith(resolvedRepoRoot)).toBe(true);
+    expect(out.endsWith('/skills/foo/evals/evals.json')).toBe(true);
   });
 
   it('honors a withSources[name].path override', () => {
-    const out = resolveScaffoldEvalsPath(
-      makeOpts({ skills: ['foo'], withSources: { foo: { path: 'custom/loc' } } }),
-      repoRoot,
-      evalsSubpath,
+    const out = toForwardSlash(
+      resolveScaffoldEvalsPath(
+        makeOpts({ skills: ['foo'], withSources: { foo: { path: 'custom/loc' } } }),
+        repoRoot,
+        evalsSubpath,
+      ),
     );
-    expect(toForwardSlash(out)).toBe('/repo/custom/loc/evals/evals.json');
+    expect(out.startsWith(resolvedRepoRoot)).toBe(true);
+    expect(out.endsWith('/custom/loc/evals/evals.json')).toBe(true);
   });
 });
 
@@ -264,7 +273,10 @@ describe('buildResolveCtx', () => {
   it('returns repoRoot, a staged staging root, and a fetch cache dir', () => {
     const ctx = buildResolveCtx('/harness', '/repo');
     expect(ctx.repoRoot).toBe('/repo');
-    expect(toForwardSlash(ctx.stagingRoot)).toBe('/harness/staged');
+    const staging = toForwardSlash(ctx.stagingRoot);
+    // Windows: joinUnderRoot resolves the harness root and prepends a drive letter.
+    expect(staging.startsWith(toForwardSlash(safePath.resolve('/harness')))).toBe(true);
+    expect(staging.endsWith('/staged')).toBe(true);
     expect(toForwardSlash(ctx.fetchCacheDir).endsWith('/vat-fetch-cache')).toBe(true);
   });
 });
