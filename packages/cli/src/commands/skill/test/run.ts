@@ -297,7 +297,7 @@ function mergeEnv(
   cliEnv: Record<string, string> | undefined,
 ): Record<string, string> | undefined {
   if (configEnv === undefined && cliEnv === undefined) return undefined;
-  return { ...(configEnv ?? {}), ...(cliEnv ?? {}) };
+  return { ...configEnv, ...cliEnv };
 }
 
 /** Union config + CLI `passEnv` lists (config first), de-duplicated. */

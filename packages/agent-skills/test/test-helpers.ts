@@ -215,8 +215,8 @@ export function createSkillContent(
  * Assert that validation result has specific error code
  */
 export function expectError(result: ValidationResult, code: string): void {
-  const issue = result.issues.find((i) => i.code === code);
-  if (!issue) {
+  const found = result.issues.some((i) => i.code === code);
+  if (!found) {
     throw new Error(
       `Expected error code '${code}' but found: ${result.issues.map((i) => i.code).join(', ')}`,
     );
@@ -227,8 +227,8 @@ export function expectError(result: ValidationResult, code: string): void {
  * Assert that validation result has specific warning code
  */
 export function expectWarning(result: ValidationResult, code: string): void {
-  const issue = result.issues.find((i) => i.code === code && i.severity === 'warning');
-  if (!issue) {
+  const found = result.issues.some((i) => i.code === code && i.severity === 'warning');
+  if (!found) {
     throw new Error(
       `Expected warning code '${code}' but found: ${result.issues.filter((i) => i.severity === 'warning').map((i) => i.code).join(', ')}`,
     );

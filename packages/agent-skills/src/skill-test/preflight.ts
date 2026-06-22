@@ -68,11 +68,10 @@ export function runPreflight(input: PreflightInput): PreflightResult {
     });
   }
 
-  checks.push(input.integrityOk()
-    ? { name: 'vendored skill-creator integrity', passed: true, message: 'manifest verified' }
-    : { name: 'vendored skill-creator integrity', passed: false, message: 'hash manifest mismatch', suggestion: 'Re-sync the vendored copy.' });
-
   checks.push(
+    input.integrityOk()
+      ? { name: 'vendored skill-creator integrity', passed: true, message: 'manifest verified' }
+      : { name: 'vendored skill-creator integrity', passed: false, message: 'hash manifest mismatch', suggestion: 'Re-sync the vendored copy.' },
     checkExists('eval input files', input.evalInputPaths),
     checkExists('declared dependencies', input.declaredDepDirs),
   );
