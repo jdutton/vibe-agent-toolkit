@@ -113,11 +113,15 @@ describe('assertSafeHarnessRoot', () => {
 
 describe('assertSafeWorkdir', () => {
   let dir: string;
-  beforeEach(() => { dir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-workdir-')); });
+  // Scope the ancestry walk to the OS tmp dir (the parent of these fixtures).
+  // On Windows the OS tmp dir lives under the user's home, whose ambient
+  // ~/.claude would otherwise be surfaced by an unbounded walk to the root.
+  const tmpBoundary = normalizedTmpdir();
+  beforeEach(() => { dir = mkdtempSync(safePath.join(tmpBoundary, 'vat-workdir-')); });
   afterEach(() => { rmSync(dir, { recursive: true, force: true }); });
 
   it('passes a clean directory', () => {
-    expect(() => assertSafeWorkdir(dir)).not.toThrow();
+    expect(() => assertSafeWorkdir(dir, tmpBoundary)).not.toThrow();
   });
 
   it('refuses a dir with CLAUDE.md in its ancestry (exit 2)', () => {
@@ -125,20 +129,20 @@ describe('assertSafeWorkdir', () => {
     writeFileSync(safePath.join(dir, 'CLAUDE.md'), '# ambient', 'utf8');
     const child = safePath.join(dir, 'sub');
     mkdirSyncReal(child);
-    expect(() => assertSafeWorkdir(child)).toThrow(HarnessLocationError);
+    expect(() => assertSafeWorkdir(child, tmpBoundary)).toThrow(HarnessLocationError);
   });
 
   it('refuses a dir with .claude/ in its ancestry (exit 2)', () => {
     mkdirSyncReal(safePath.join(dir, '.claude'));
     const child = safePath.join(dir, 'sub');
     mkdirSyncReal(child);
-    expect(() => assertSafeWorkdir(child)).toThrow(HarnessLocationError);
+    expect(() => assertSafeWorkdir(child, tmpBoundary)).toThrow(HarnessLocationError);
   });
 
   it('HarnessLocationError carries exitCode 2', () => {
     expect.assertions(1);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture setup, controlled directory
     writeFileSync(safePath.join(dir, 'CLAUDE.md'), 'x', 'utf8');
-    try { assertSafeWorkdir(dir); } catch (e) { expect((e as HarnessLocationError).exitCode).toBe(2); }
+    try { assertSafeWorkdir(dir, tmpBoundary); } catch (e) { expect((e as HarnessLocationError).exitCode).toBe(2); }
   });
 });

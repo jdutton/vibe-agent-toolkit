@@ -42,11 +42,20 @@ export function resolveHarnessRoot(skillNames: string[], tmpRoot?: string): stri
  * Refuse a --workdir whose ancestry contains CLAUDE.md or .claude/ — cwd
  * discovery would re-pollute the run (spec §7). Defense in depth with
  * --setting-sources "".
+ *
+ * `stopAt` (optional) bounds the ancestry walk: when the walk reaches that
+ * directory it stops *before* inspecting it (exclusive boundary), mirroring
+ * `assertSafeHarnessRoot`'s `trustedRoot`. Default (undefined) walks to the
+ * filesystem root, preserving the strictest production behavior. Tests use it
+ * to scope the walk to a sandbox — necessary on Windows, where the OS tmp dir
+ * lives inside the user's home and would otherwise surface an ambient
+ * ~/.claude during the walk.
  */
-export function assertSafeWorkdir(dir: string): void {
+export function assertSafeWorkdir(dir: string, stopAt?: string): void {
+  const boundary = stopAt === undefined ? undefined : safePath.resolve(stopAt);
   let current = safePath.resolve(dir);
   let previous = '';
-  while (current !== previous) {
+  while (current !== previous && current !== boundary) {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- ancestry walk over a user-supplied workdir
     if (existsSync(safePath.join(current, 'CLAUDE.md'))) {
       throw new HarnessLocationError(`--workdir is inside a project: CLAUDE.md found at ${current}. Use an OS-tmp location.`);

@@ -41,7 +41,10 @@ describe('stageDirInto', () => {
     expect(mode).toBe(0o700);
   });
 
-  it('refuses to copy through a symlinked entry in the source tree', async () => {
+  // Needs real symlink creation, which requires admin/Developer Mode on Windows.
+  // The refusal logic is platform-agnostic and fully covered on POSIX CI, so skip
+  // on Windows rather than carry a privilege probe for near-zero extra coverage.
+  it.skipIf(process.platform === 'win32')('refuses to copy through a symlinked entry in the source tree', async () => {
     mkdirSyncReal(safePath.join(src, 'sub'));
     symlinkSync('/etc', safePath.join(src, 'sub', 'evil'));
     await expect(stageDirInto(src, ctx, 'sym')).rejects.toThrow(/symlink/i);

@@ -122,7 +122,11 @@ describe('isWithinProject', () => {
     expect(isWithinProject(filePath, projectRoot)).toBe(false);
   });
 
-  it('handles symlinked projectRoot symmetrically', () => {
+  // Needs real symlink creation (admin/Developer Mode on Windows). This is a
+  // realpath-symmetry regression for symlinked roots (e.g. macOS /tmp →
+  // /private/tmp); the logic is platform-agnostic and covered on POSIX CI, so
+  // skip on Windows.
+  it.skipIf(process.platform === 'win32')('handles symlinked projectRoot symmetrically', () => {
     // Regression for asymmetric realpath: when a caller passes a projectRoot
     // that traverses a symlink (e.g. macOS /tmp → /private/tmp, or any bind
     // mount), isWithinProject must canonicalize BOTH sides. Otherwise a file
