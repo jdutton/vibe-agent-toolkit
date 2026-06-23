@@ -29,6 +29,15 @@ export class BootstrapNeededError extends Error {
   }
 }
 
+/** Thrown when building a declared skill (pool packageSkill or plugin build) fails. Exit 2 (preflight class). */
+export class SkillBuildError extends Error {
+  readonly exitCode = 2 as const;
+  constructor(message: string) {
+    super(message);
+    this.name = 'SkillBuildError';
+  }
+}
+
 /** Internal harness failure (incl. experimenter exiting without valid grading.json). Exit 1. */
 export class InternalHarnessError extends Error {
   readonly exitCode = 1 as const;
@@ -43,7 +52,8 @@ export class InternalHarnessError extends Error {
  * `exitCode` (Bootstrap/Auth/HarnessLocation/Internal) are authoritative;
  * a PromptInvariantError is a user-correctable preflight problem (a supplied
  * prompt override is missing a required safety instruction) → 2; a BuildHookError
- * is a pre-stage build failure → 2; an UnknownEnvTokenError is a bad ${token} in a
+ * is a pre-stage build failure → 2; a SkillBuildError is a declared-skill build
+ * failure → 2; an UnknownEnvTokenError is a bad ${token} in a
  * declared env value → 2; GradingSkewError is a parse failure → 1;
  * everything unknown → 1.
  */
@@ -54,6 +64,7 @@ export function mapErrorToExitCode(err: unknown): number {
     err instanceof BuildHookError ||
     err instanceof HarnessLocationError ||
     err instanceof PromptInvariantError ||
+    err instanceof SkillBuildError ||
     err instanceof UnknownEnvTokenError
   ) {
     return SkillTestExitCode.Preflight;

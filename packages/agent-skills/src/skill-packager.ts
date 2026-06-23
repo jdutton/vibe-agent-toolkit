@@ -51,7 +51,7 @@ import {
 import { getTargetSubdir } from './content-type-routing.js';
 import { applyFilesConfig, computeDeferredPaths, type SkillFileEntry } from './files-config.js';
 import { checkBrokenPackagedLinks, checkUnreferencedFiles } from './post-build-checks.js';
-import { validateSkillForPackaging, type PackagingValidationResult } from './validators/packaging-validator.js';
+import { validateSkillForPackaging, type PackagingValidationResult, type SkillPackagingConfig } from './validators/packaging-validator.js';
 import { deferredAssetsToIssues, walkerExclusionsToIssues } from './validators/walker-to-issues.js';
 import { walkLinkGraph, type WalkableRegistry } from './walk-link-graph.js';
 
@@ -188,6 +188,31 @@ export interface PackageSkillOptions {
    * See docs/validation-codes.md for codes and defaults.
    */
   validation?: ValidationConfig | undefined;
+}
+
+/**
+ * Map a merged {@link SkillPackagingConfig} onto {@link PackageSkillOptions}.
+ *
+ * The single canonical conversion used by BOTH `vat skills build` and
+ * `vat skill test` (the pool build), so the dist a test exercises is byte-for-byte
+ * what `vat skills build` would produce. `basePath` defaults to `dirname(skillPath)`.
+ */
+export function packagingConfigToPackageOptions(
+  config: SkillPackagingConfig,
+  anchors: { skillPath: string; outputPath: string },
+): PackageSkillOptions {
+  return {
+    outputPath: anchors.outputPath,
+    formats: ['directory'],
+    rewriteLinks: true,
+    basePath: dirname(anchors.skillPath),
+    ...(config.resourceNaming && { resourceNaming: config.resourceNaming }),
+    ...(config.stripPrefix && { stripPrefix: config.stripPrefix }),
+    ...(config.linkFollowDepth !== undefined && { linkFollowDepth: config.linkFollowDepth }),
+    ...(config.excludeReferencesFromBundle && { excludeReferencesFromBundle: config.excludeReferencesFromBundle }),
+    ...(config.files && { files: config.files }),
+    ...(config.validation && { validation: config.validation }),
+  };
 }
 
 export interface SkillMetadata {

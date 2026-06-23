@@ -3,7 +3,7 @@
  * (`buildEvalsTemplate`) and its writer (`writeEvalsTemplate`).
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
@@ -68,5 +68,21 @@ describe('writeEvalsTemplate', () => {
     expect(existsSync(evalsPath)).toBe(true);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled temp path
     expect(readFileSync(evalsPath, 'utf8')).toBe(buildEvalsTemplate(SKILL_NAME));
+  });
+
+  it('never overwrites an existing eval suite (data-loss guard)', () => {
+    const evalsPath = safePath.join(getTempDir(), 'authored', 'evals.json');
+    const authored = '{ "skill_name": "real", "evals": [{ "id": 1 }] }\n';
+    // First call creates the parent dir; then simulate the user's authored suite.
+    writeEvalsTemplate(evalsPath, SKILL_NAME);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled temp path
+    writeFileSync(evalsPath, authored, 'utf8');
+
+    const returned = writeEvalsTemplate(evalsPath, SKILL_NAME);
+
+    expect(toForwardSlash(returned)).toBe(toForwardSlash(evalsPath));
+    // The authored content must survive — the writer must not clobber it.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- controlled temp path
+    expect(readFileSync(evalsPath, 'utf8')).toBe(authored);
   });
 });

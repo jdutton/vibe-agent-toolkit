@@ -6,14 +6,26 @@
  * All domain logic lives in run-harness.ts (agent-skills package).
  */
 
-import { basename } from 'node:path';
+import { existsSync } from 'node:fs';
+import { basename, dirname } from 'node:path';
 
-import { BootstrapNeededError, mapErrorToExitCode, runSkillTestHarness } from '@vibe-agent-toolkit/agent-skills';
+import {
+  BootstrapNeededError,
+  mapErrorToExitCode,
+  packageSkill,
+  packagingConfigToPackageOptions,
+  runPreStageBuild,
+  runSkillTestHarness,
+  SkillBuildError,
+} from '@vibe-agent-toolkit/agent-skills';
 import type { SkillSourceDescriptor, TestConfig } from '@vibe-agent-toolkit/resources';
-import { findProjectRoot, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
+import { parseSourceSpec } from '../../../skill-resolution/classify.js';
+import { resolveSkillReference, type BuildableReference } from '../../../skill-resolution/index.js';
 import { loadConfig } from '../../../utils/config-loader.js';
+import { runClaudePluginBuild } from '../../claude/plugin/build.js';
 
 /** Extract the trailing path segment (cross-platform) from a path-like string. */
 function lastPathSegment(p: string): string {
@@ -69,6 +81,8 @@ export interface SkillTestRunOptions {
   debug?: boolean;
   env?: string[];
   passEnv?: string[];
+  /** Skip building a declared subject and stage its existing dist instead. */
+  noBuild?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -143,33 +157,11 @@ function parseWithPair(pair: string): [string, SkillSourceSpec] {
     );
   }
   const name = pair.slice(0, eq);
-  const src = pair.slice(eq + 1);
-  return [name, parseSourceSpec(src, pair)];
-}
-
-/** Parse the `kind:value` source half of a --with pair into a SkillSourceSpec. */
-function parseSourceSpec(src: string, original: string): SkillSourceSpec {
-  if (src === 'vendored') return { vendored: true };
-  const colon = src.indexOf(':');
-  const kind = colon === -1 ? src : src.slice(0, colon);
-  const value = colon === -1 ? '' : src.slice(colon + 1);
-  switch (kind) {
-    case 'workspace': return requireValue(value, original, () => ({ workspace: value }));
-    case 'npm': return requireValue(value, original, () => ({ npm: value }));
-    case 'path': return requireValue(value, original, () => ({ path: value }));
-    case 'url': return requireValue(value, original, () => ({ url: value }));
-    default:
-      throw new Error(
-        `--with source must start with workspace:|npm:|url:|path:|vendored. Got: ${original}`,
-      );
+  try {
+    return [name, parseSourceSpec(pair.slice(eq + 1))];
+  } catch (e) {
+    throw new Error(`--with: ${e instanceof Error ? e.message : String(e)} (in ${pair})`);
   }
-}
-
-function requireValue(value: string, original: string, build: () => SkillSourceSpec): SkillSourceSpec {
-  if (!value) {
-    throw new Error(`--with source is missing a value: ${original}`);
-  }
-  return build();
 }
 
 /** Parse an array of `name=src` flag values into a name→spec record. */
@@ -256,7 +248,6 @@ function applyScalarMerges(opts: HarnessOpts, options: SkillTestRunOptions, conf
   if (model !== undefined) opts.model = model;
   if (config?.evals !== undefined) opts.evalsSubpath = config.evals;
   if (config?.experimenterPrompt !== undefined) opts.promptOverride = config.experimenterPrompt;
-  if (config?.build !== undefined) opts.build = config.build;
 }
 
 /** Apply flag>config merges for numeric knobs (turns/budget/timeout/stall). */
@@ -347,17 +338,113 @@ function buildHarnessOpts(
 ): HarnessOpts {
   const repoRoot = resolveRepoRoot();
   const opts: HarnessOpts = { skills, repoRoot };
-  // cwd for the pre-stage build hook. repoRoot comes from findProjectRoot, whose
-  // discovery ladder is config-anchored (vibe-agent-toolkit.config.yaml first, then
-  // .git), so the project root IS the directory holding the config — configRoot and
-  // repoRoot are the same dir by construction, not coincidence.
-  opts.configRoot = repoRoot;
   applyFlagOnlyOptions(opts, options);
   applyScalarMerges(opts, options, config);
   applyKnobMerges(opts, knobs, config);
   applyDepMerges(opts, options, config);
   applyEnvMerges(opts, options, config);
   return opts;
+}
+
+// ---------------------------------------------------------------------------
+// Subject resolution (project-aware): resolve -> build -> stage
+// ---------------------------------------------------------------------------
+
+export interface ResolvedSubject {
+  /** The source staged + tested ({ path: <distDir> } for a built declared skill). */
+  subjectSource: SkillSourceSpec;
+  /** Authored source dir (bootstrap eval scaffolding); absent for nameless sources. */
+  subjectScaffoldDir?: string;
+  /** True only when this resolution actually built the subject (declared skill, no --no-build/--dry-run). */
+  rebuilt: boolean;
+}
+
+/**
+ * Project-aware subject resolution for `vat skill test run`. Resolves the subject
+ * reference; for a declared skill, builds it (real entry points) and returns the
+ * dist dir to stage; everything else is staged as-is. Throws SkillBuildError
+ * (exit 2) for name-miss / not-found / --no-build-without-dist / build failure.
+ */
+export async function resolveSubjectForTest(
+  ref: string,
+  cwd: string,
+  flags: { noBuild: boolean; dryRun: boolean; build?: string },
+): Promise<ResolvedSubject> {
+  const resolved = await resolveSkillReference(ref, cwd);
+  switch (resolved.kind) {
+    case 'source':
+      return {
+        subjectSource: resolved.source,
+        rebuilt: false,
+        // A path subject points at the skill DIR itself (not its SKILL.md), so the
+        // authored scaffold dir is the resolved path — not its parent. Mirrors the
+        // legacy positional-path behavior in resolveScaffoldEvalsPath.
+        ...('path' in resolved.source
+          ? { subjectScaffoldDir: safePath.resolve(cwd, resolved.source.path) }
+          : {}),
+      };
+    case 'name-miss':
+      throw new SkillBuildError(
+        `no skill named '${resolved.name}' in ${resolved.configRoot}; known skills: ${resolved.knownSkills.join(', ') || '(none)'}. (For a directory, use './${resolved.name}'.)`,
+      );
+    case 'not-found':
+      throw new SkillBuildError(
+        `no path '${resolved.ref}' and no governing config to resolve a name; pass a path or run inside a VAT project.`,
+      );
+    case 'buildable':
+      return resolveBuildableSubject(resolved, flags);
+  }
+}
+
+/** Build a declared skill (or stage its existing dist under --no-build/--dry-run), then return the dist to stage. */
+async function resolveBuildableSubject(
+  ref: BuildableReference,
+  flags: { noBuild: boolean; dryRun: boolean; build?: string },
+): Promise<ResolvedSubject> {
+  const scaffoldDir = dirname(ref.sourcePath);
+
+  // --no-build and --dry-run never build. Stage the existing dist if present; for a
+  // dry-run with no dist yet, fall back to the source dir so the preview still
+  // assembles without triggering a build (the surprising side-effect we avoid).
+  if (flags.noBuild || flags.dryRun) {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- expectedDistDir derived from project config
+    if (existsSync(ref.expectedDistDir)) {
+      if (flags.noBuild) {
+        process.stderr.write(`Using existing dist (NOT rebuilt): ${ref.expectedDistDir}\n`);
+      }
+      return { subjectSource: { path: ref.expectedDistDir }, subjectScaffoldDir: scaffoldDir, rebuilt: false };
+    }
+    if (flags.dryRun) {
+      return { subjectSource: { path: scaffoldDir }, subjectScaffoldDir: scaffoldDir, rebuilt: false };
+    }
+    throw new SkillBuildError(
+      `--no-build: no built dist at ${ref.expectedDistDir}. Run \`vat build\` first, or point at a built path.`,
+    );
+  }
+
+  // test.build hook (upstream artifacts) BEFORE the skill build -- ordering matters.
+  if (flags.build !== undefined) {
+    runPreStageBuild({ buildCommand: flags.build, configRoot: ref.configRoot });
+  }
+
+  try {
+    if (ref.distribution.kind === 'pool') {
+      await packageSkill(
+        ref.sourcePath,
+        packagingConfigToPackageOptions(ref.packagingConfig, {
+          skillPath: ref.sourcePath,
+          outputPath: ref.expectedDistDir,
+        }),
+      );
+    } else {
+      await runClaudePluginBuild(ref.configRoot, { marketplace: ref.distribution.marketplaceName });
+    }
+  } catch (e) {
+    throw new SkillBuildError(
+      `Skill build failed for '${ref.name}': ${e instanceof Error ? e.message : String(e)}`,
+    );
+  }
+  return { subjectSource: { path: ref.expectedDistDir }, subjectScaffoldDir: scaffoldDir, rebuilt: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -379,7 +466,30 @@ export async function runSkillTestRun(
 
   const knobs = coerceKnobs(options);
   const config = loadTestConfig(skills);
+
+  // Commander stores the `--no-build` negatable flag under `build` (=== false when set);
+  // honor an explicit programmatic `noBuild` too.
+  const noBuild = options.noBuild === true || (options as { build?: boolean }).build === false;
+  let subject: ResolvedSubject;
+  try {
+    subject = await resolveSubjectForTest(skills[0] ?? '', process.cwd(), {
+      noBuild,
+      dryRun: options.dryRun === true,
+      ...(config?.build === undefined ? {} : { build: config.build }),
+    });
+  } catch (err) {
+    const exitCode = mapErrorToExitCode(err);
+    process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.exit(exitCode);
+    return;
+  }
+
   const harnessOpts = buildHarnessOpts(skills, options, knobs, config);
+  harnessOpts.subjectSource = subject.subjectSource;
+  harnessOpts.rebuilt = subject.rebuilt;
+  if (subject.subjectScaffoldDir !== undefined) {
+    harnessOpts.subjectScaffoldDir = subject.subjectScaffoldDir;
+  }
 
   try {
     const result = await runSkillTestHarness(harnessOpts);
@@ -429,6 +539,7 @@ export function createSkillTestRunCommand(): Command {
       'Forward a host env var by NAME to the experimenter spawn if present (repeatable). Protected names (PATH, auth, model) are ignored.',
     )
     .option('--refresh', 'Force a full re-stage (ignore existing staged content)')
+    .option('--no-build', 'Skip building a declared skill; stage its existing dist instead (errors if absent)')
     .option('--workdir <dir>', 'Override the harness working directory')
     .option('--out <dir>', 'Override the harness output directory')
     .option('--keep', 'Keep the harness directory after the run')
@@ -464,7 +575,7 @@ Description:
 Exit Codes:
   0 - Harness ran to completion and produced a valid grading.json (check summary/grading.json for pass/fail counts)
   1 - Internal error (grading.json absent/invalid, experimenter crash, stall/timeout)
-  2 - Preflight failed (missing binary, auth error, eval inputs absent, unsafe workdir, ack missing)
+  2 - Preflight failed (missing binary, auth error, eval inputs absent, unsafe workdir, ack missing, skill build failed, or --no-build with no existing dist)
   3 - Bootstrap needed: evals.json was absent, so VAT wrote a starter template next to the skill source. Fill it in and re-run.
 
   Note: eval pass/fail is NOT reflected in the exit code. Read the printed summary

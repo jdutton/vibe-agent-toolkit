@@ -9,12 +9,12 @@
 
 import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
-import { dirname } from 'node:path';
-
 
 import {
   mergeFilesConfig,
   packageSkills,
+  packagingConfigToPackageOptions,
+  skillNameToFsPath,
   validateSkillForPackaging,
   type PackageSkillResult,
   type PackagingValidationResult,
@@ -44,17 +44,6 @@ export interface SkillsBuildCommandOptions {
   skill?: string;
   dryRun?: boolean;
   debug?: boolean;
-}
-
-/**
- * Sanitize skill names with colon namespaces for filesystem paths.
- *
- * Skill names use colon-namespacing (e.g. "vibe-agent-toolkit:vat-audit") which is
- * valid in YAML/JSON but invalid as a directory name on Windows. Replace colons with
- * double-underscore -- unambiguous, reversible, and safe on all platforms.
- */
-function skillNameToFsPath(name: string): string {
-  return name.replaceAll(':', '__');
 }
 
 export function createBuildCommand(): Command {
@@ -434,18 +423,10 @@ async function buildCommand(
     // Build all skills with a shared registry
     const specs: SkillBuildSpec[] = validatedSpecs.map(({ skill, packagingConfig }) => ({
       skillPath: skill.sourcePath,
-      options: {
+      options: packagingConfigToPackageOptions(packagingConfig, {
+        skillPath: skill.sourcePath,
         outputPath: safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skill.name)),
-        formats: ['directory' as const],
-        rewriteLinks: true,
-        basePath: dirname(skill.sourcePath),
-        ...(packagingConfig.resourceNaming && { resourceNaming: packagingConfig.resourceNaming }),
-        ...(packagingConfig.stripPrefix && { stripPrefix: packagingConfig.stripPrefix }),
-        ...(packagingConfig.linkFollowDepth !== undefined && { linkFollowDepth: packagingConfig.linkFollowDepth }),
-        ...(packagingConfig.excludeReferencesFromBundle && { excludeReferencesFromBundle: packagingConfig.excludeReferencesFromBundle }),
-        ...(packagingConfig.files && { files: packagingConfig.files }),
-        ...(packagingConfig.validation && { validation: packagingConfig.validation }),
-      },
+      }),
     }));
 
     const packageResults = await packageSkills(specs, cwd);

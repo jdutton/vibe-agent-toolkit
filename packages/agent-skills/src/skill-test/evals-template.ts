@@ -13,7 +13,7 @@
  * read `_comment`.
  */
 
-import { writeFileSync } from 'node:fs';
+import { existsSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 
@@ -53,7 +53,12 @@ export function buildEvalsTemplate(skillName: string): string {
 export function writeEvalsTemplate(evalsPath: string, skillName: string): string {
   const parent = safePath.join(evalsPath, '..');
   mkdirSyncReal(parent, { recursive: true });
+  // Defensive: never clobber an authored eval suite. Callers only reach here when
+  // the suite is absent, but guard so a stray call can never destroy real evals.
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own resolved scaffold path
-  writeFileSync(evalsPath, buildEvalsTemplate(skillName), 'utf8');
+  if (!existsSync(evalsPath)) {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own resolved scaffold path
+    writeFileSync(evalsPath, buildEvalsTemplate(skillName), 'utf8');
+  }
   return evalsPath;
 }

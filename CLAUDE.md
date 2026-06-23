@@ -243,6 +243,22 @@ The helper supports both filesystem paths (relative to `baseDir`, or absolute) a
 - `node_modules` enumeration walks (different concern: listing, not resolving a known specifier)
 - CJS interop shims
 
+### Skill References — The Canonical Pattern for Resolving a Skill by Name or Path
+
+When a command takes a skill by reference (a bare name or a path), route it through
+`resolveSkillReference(ref, cwd)` from `packages/cli/src/skill-resolution/`. It is
+**project-aware**: a config-declared skill resolves to `buildable` (build with the real
+entry points, then test the built dist — because **source ≠ dist** for every declared
+skill: link-following, reference-rewriting, nav-stripping, and `files:` injection all
+happen at build); everything else resolves to `source` (test the tree as-is). It accepts
+the full reference grammar (`<name>` | `<path>` | `workspace:` | `npm:` | `url:` |
+`path:` | `vendored`), shared with `--with`.
+
+**Do not write a parallel path-only resolver** — that is the exact bug this module exists
+to prevent (a path-only subject staged raw source and tested something that never ships).
+Mirrors the `resolveAssetReference` rule above. Model: `docs/architecture/skill-packaging.md`
+→ "Skill Reference Resolution".
+
 ### CLI Development
 
 **Commander.js for Command-Line Interface**

@@ -54,14 +54,19 @@ import {
 import { Command } from 'commander';
 import picomatch from 'picomatch';
 
+import {
+  resetSkillDiscoveryCache,
+  resolveSkillPackagingConfig,
+  stripValidationAllowForDisplay,
+} from '../skill-resolution/packaging-config.js';
 import { handleCommandError } from '../utils/command-error.js';
 import {
   loadConfig,
-  loadConfigCached,
   resetLoadedConfigCache,
 } from '../utils/config-loader.js';
 import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
+import { mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../utils/skill-quality-footer.js';
 import { computeConfigVerdicts } from '../utils/verdict-helpers.js';
 
@@ -101,72 +106,7 @@ export interface VATProjectContext {
   skillConfigs: Map<string, SkillPackagingConfig>;
 }
 
-/**
- * Merge per-skill config for audit: keeps all packaging options but strips
- * validation.allow (audit shows everything). Preserves validation.severity.
- *
- * Strips undefined values from the spread to satisfy exactOptionalPropertyTypes.
- */
-function mergeSkillConfigForAudit(
-  defaults: Record<string, unknown> | undefined,
-  perSkillOverrides: Record<string, unknown> | undefined
-): SkillPackagingConfig {
-  const merged = { ...defaults, ...perSkillOverrides };
-  const packagingConfig: SkillPackagingConfig = {};
-
-  for (const [key, value] of Object.entries(merged)) {
-    if (value !== undefined && key !== 'validation') {
-      (packagingConfig as Record<string, unknown>)[key] = value;
-    }
-  }
-
-  // Keep validation.severity but strip validation.allow
-  const mergedValidation = merged['validation'] as { severity?: unknown; allow?: unknown } | undefined;
-  if (mergedValidation?.severity !== undefined) {
-    (packagingConfig as Record<string, unknown>)['validation'] = { severity: mergedValidation.severity };
-  }
-
-  return packagingConfig;
-}
-
 const VAT_CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
-
-/**
- * Cache of `configRoot → (absSkillPath → skillName)` derived from
- * `discoverSkillsFromConfig`. Audit walks up from each SKILL.md it discovers
- * to the skill's nearest-ancestor config; re-expanding the governing config's
- * skills-globs per skill is O(N²) on multi-skill packages and dominates audit
- * wall time on Windows (per-path FS spawns amplify the cost). The cache
- * collapses it back to one expansion per configRoot per audit invocation.
- *
- * Invalidated at the top of {@link auditCommand} alongside the other scoped
- * caches so test suites that mutate fixtures between in-process audits do not
- * see stale discovery data.
- */
-const configSkillDiscoveryCache: Map<string, Map<string, string>> = new Map();
-
-function resetConfigSkillDiscoveryCache(): void {
-  configSkillDiscoveryCache.clear();
-}
-
-async function getDiscoveredSkillsByPath(
-  skillsSection: NonNullable<ReturnType<typeof loadConfig>>['skills'],
-  configRoot: string,
-): Promise<Map<string, string>> {
-  const cached = configSkillDiscoveryCache.get(configRoot);
-  if (cached !== undefined) {
-    return cached;
-  }
-  const map = new Map<string, string>();
-  if (skillsSection !== undefined) {
-    const discovered = await discoverSkillsFromConfig(skillsSection, configRoot);
-    for (const entry of discovered) {
-      map.set(safePath.resolve(entry.sourcePath), entry.name);
-    }
-  }
-  configSkillDiscoveryCache.set(configRoot, map);
-  return map;
-}
 
 /**
  * Build config-aware context for a single VAT project at `scanRoot`.
@@ -211,9 +151,11 @@ async function buildVATProjectContext(
 
     for (const skill of discovered) {
       const absPath = safePath.resolve(skill.sourcePath);
-      const packagingConfig = mergeSkillConfigForAudit(
-        defaults as Record<string, unknown> | undefined,
-        perSkillConfig?.[skill.name] as Record<string, unknown> | undefined,
+      const packagingConfig = stripValidationAllowForDisplay(
+        mergeSkillPackagingConfig(
+          defaults as Record<string, unknown> | undefined,
+          perSkillConfig?.[skill.name] as Record<string, unknown> | undefined,
+        ),
       );
       skillConfigs.set(absPath, packagingConfig);
     }
@@ -228,62 +170,6 @@ async function buildVATProjectContext(
   }
 
   return { skillConfigs };
-}
-
-/**
- * Resolve the per-skill packaging config for a single discovered SKILL.md.
- *
- * Walks UP from the skill's directory to the nearest-ancestor
- * `vibe-agent-toolkit.config.yaml`. If that config declares a matching skill
- * (by resolving its `skills.include`/`config` globs and comparing sourcePath
- * to this skill's absolute path), merges `skills.defaults` + the per-skill
- * `skills.config[name]` block via {@link mergeSkillConfigForAudit} and
- * returns the result.
- *
- * Returns `null` in "wild mode" cases: no governing config, the config has no
- * `skills` section, or the skill is not declared in any `skills.config[name]`
- * entry. Callers should fall back to basic (non-packaging) validation.
- *
- * Does NOT merge across configs — audit does not compose configs across VAT
- * projects. Only the nearest-ancestor config contributes.
- */
-async function resolveSkillPackagingConfig(
-  skillPath: string,
-): Promise<SkillPackagingConfig | null> {
-  const absSkillPath = safePath.resolve(skillPath);
-  const skillDir = safePath.resolve(safePath.join(absSkillPath, '..'));
-  const projectRoot = findProjectRoot(skillDir);
-  if (projectRoot === null) return null;
-  const governingConfig = loadConfigCached(projectRoot);
-  if (governingConfig === undefined) return null;
-
-  const config = governingConfig;
-  const configRoot = projectRoot;
-  if (config.skills === undefined) return null;
-
-  const { defaults, config: perSkillConfig } = config.skills;
-
-  // Find which declared skill (by name) corresponds to this skill path.
-  // The discovery map is cached per governing configRoot so audits against
-  // multi-skill packages don't re-expand the same globs N times.
-  let matchedName: string | undefined;
-  try {
-    const byPath = await getDiscoveredSkillsByPath(config.skills, configRoot);
-    matchedName = byPath.get(absSkillPath);
-  } catch {
-    return null;
-  }
-
-  if (matchedName === undefined) {
-    // Governing config exists but does not declare this skill — fall back to
-    // wild mode (no config composition across unrelated skills).
-    return null;
-  }
-
-  return mergeSkillConfigForAudit(
-    defaults as Record<string, unknown> | undefined,
-    perSkillConfig?.[matchedName] as Record<string, unknown> | undefined,
-  );
 }
 
 /**
@@ -348,7 +234,8 @@ async function validateSingleSkill(
 ): Promise<ValidationResult> {
   // Try config-aware validation: walk UP to the skill's nearest-ancestor
   // vibe-agent-toolkit.config.yaml and apply the skill's packaging block.
-  const skillConfig = await resolveSkillPackagingConfig(skillPath);
+  const fullConfig = await resolveSkillPackagingConfig(skillPath);
+  const skillConfig = fullConfig === null ? null : stripValidationAllowForDisplay(fullConfig);
   if (skillConfig !== null) {
     logger.debug(`  Using config-aware validation for: ${skillPath}`);
     const { gitTracker } = await resolveScanContext(safePath.resolve(skillPath));
@@ -1488,7 +1375,8 @@ async function handleFileEntry(
     // Config-aware: walk UP to the skill's nearest-ancestor config and apply
     // ONLY that skill's declared packaging rules. Configs do not compose
     // across VAT projects — audit does not merge rules across sibling configs.
-    const skillConfig = await resolveSkillPackagingConfig(fullPath);
+    const fullConfig = await resolveSkillPackagingConfig(fullPath);
+    const skillConfig = fullConfig === null ? null : stripValidationAllowForDisplay(fullConfig);
     if (skillConfig !== null) {
       logger.debug(`  Using config-aware validation for: ${fullPath}`);
       // Thread the per-scan tracker into packaging validation so gitignore
@@ -1573,7 +1461,7 @@ export function resetAuditCaches(): void {
   gitTrackerCache.clear();
   resetProjectRootCaches();
   resetLoadedConfigCache();
-  resetConfigSkillDiscoveryCache();
+  resetSkillDiscoveryCache();
 }
 
 async function getOrCreateGitTracker(gitRoot: string): Promise<GitTracker> {

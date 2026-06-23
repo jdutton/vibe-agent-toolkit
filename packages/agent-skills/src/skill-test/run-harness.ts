@@ -9,7 +9,7 @@
  *   → spawnHeadlessClaude → parseGradingJson → release lock → return result
  */
 
-import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -30,7 +30,6 @@ import {
 import { resolveSkillSource } from '../skill-source/resolve-skill-source.js';
 import type { ResolvedSkillSource, ResolveSkillSourceContext, SkillSource } from '../skill-source/types.js';
 
-import { runPreStageBuild } from './build-hook.js';
 import { assembleChildEnv, computeEnvTokens, resolveInjectEnv } from './declared-env.js';
 import { writeEvalsTemplate } from './evals-template.js';
 import { BootstrapNeededError, InternalHarnessError, SkillTestExitCode } from './exit-codes.js';
@@ -141,18 +140,26 @@ export interface RunHarnessOptions {
   stall?: number;
 
   /**
-   * Shell command to run once, before staging, to generate build artifacts
-   * (from `test.build` in vibe-agent-toolkit.config.yaml). Cwd = configRoot.
-   * Absent → no-op (behavior unchanged).
+   * Pre-resolved source for the subject (skills[0]); set by run.ts after
+   * project-aware resolution + build. A built dist dir for a declared skill, or
+   * the resolved as-is source. Absent → legacy { path: skills[0] }.
    */
-  build?: string;
+  subjectSource?: SkillSource;
 
   /**
-   * Absolute path to the project config root (directory containing
-   * vibe-agent-toolkit.config.yaml). Used as cwd for the pre-stage build hook.
-   * Falls back to repoRoot when omitted.
+   * Authored source dir for the subject, where the eval suite (`evals/`, incl.
+   * `fixtures/`) is maintained. Used to (a) overlay that suite onto a built/dist
+   * subject that doesn't carry it, and (b) write the bootstrap template when no
+   * suite exists yet. For a built declared skill this is the SOURCE skill dir,
+   * not the dist. Absent → derived from skills[0] (legacy).
    */
-  configRoot?: string;
+  subjectScaffoldDir?: string;
+
+  /**
+   * True when run.ts actually rebuilt the subject (declared skill, no
+   * --no-build/--dry-run). Recorded in provenance. Absent/false → staged as-is.
+   */
+  rebuilt?: boolean;
 
   /** Feature B: explicit env var injections (interpolated at stage time). */
   env?: Record<string, string>;
@@ -238,9 +245,14 @@ export function buildStageItems(opts: RunHarnessOptions, repoRoot: string): Stag
   const subjectName = opts.skills[0];
   for (const name of opts.skills) {
     const override = opts.withSources?.[name];
-    const source: SkillSource = override
-      ? descriptorToSource(override)
-      : { path: name };
+    let source: SkillSource;
+    if (name === subjectName && opts.subjectSource !== undefined) {
+      source = opts.subjectSource;
+    } else if (override) {
+      source = descriptorToSource(override);
+    } else {
+      source = { path: name };
+    }
     items.push(makeStageItem(name, source, repoRoot, name === subjectName ? 'subject' : undefined));
   }
 
@@ -393,6 +405,11 @@ export function subjectSkillName(opts: RunHarnessOptions): string {
 }
 
 export function resolveScaffoldEvalsPath(opts: RunHarnessOptions, repoRoot: string, evalsSubpath: string): string {
+  // Prefer the explicit authored source dir resolved by run.ts (the staged/built
+  // tree is ephemeral; this is where the user can edit the scaffolded template).
+  if (opts.subjectScaffoldDir !== undefined) {
+    return safePath.join(opts.subjectScaffoldDir, evalsSubpath);
+  }
   const subjectName = opts.skills[0] ?? '';
   const override = opts.withSources?.[subjectName];
   const overridePath = override && 'path' in override ? override.path : undefined;
@@ -488,27 +505,14 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
   const lock = acquireHarnessLock(harnessRoot);
 
   try {
-    // Step 2.5: Run pre-stage build hook (if configured).
-    // Runs ONCE before staging so generated artifacts are present for the copy step.
-    // cwd = configRoot (directory containing vibe-agent-toolkit.config.yaml).
-    // A non-zero exit throws BuildHookError → mapErrorToExitCode → exit 2 (preflight).
-    // Ordering note: build necessarily precedes the bootstrap check (Step 4), because
-    // that check reads the *staged* subject's evals (Step 3), and staging must copy the
-    // build's output. So a run on a not-yet-scaffolded skill pays the build before
-    // exiting 3 — acceptable: build emits code artifacts, not the authored evals.json,
-    // so it can't change the bootstrap outcome. (Token spend is the Step-10 spawn, far
-    // downstream; the build never reaches it.)
-    const configRoot = opts.configRoot ?? repoRoot;
-    if (opts.build !== undefined) {
-      runPreStageBuild({ buildCommand: opts.build, configRoot });
-    }
-
     // Step 3: Stage the harness FIRST — the subject's own evals/evals.json lands
-    // inside its staged dir, so we must stage before we can locate it.
+    // inside its staged dir, so we must stage before we can locate it. The subject's
+    // source is pre-resolved (and, for declared skills, pre-built) by run.ts and
+    // arrives via opts.subjectSource; build no longer happens in-domain here.
     const resolveCtx = buildResolveCtx(harnessRoot, repoRoot);
     const items = buildStageItems(opts, repoRoot);
 
-    const { pluginDirs, subjectStagedDir, subjectPluginRoot } = await stageHarness({
+    const stageResult = await stageHarness({
       harnessRoot,
       items,
       resolve: (source: SkillSource, ctx: ResolveSkillSourceContext): Promise<ResolvedSkillSource> =>
@@ -517,13 +521,34 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       currentUid,
     });
 
+    const { pluginDirs, subjectStagedDir, subjectPluginRoot } = stageResult;
+
     if (subjectStagedDir === null) {
       throw new InternalHarnessError('Staging did not yield a subject directory (no item tagged role:subject).');
     }
 
-    // Step 4: Resolve the subject's eval path inside its staged dir. Bootstrap
-    // (exit 3) fires when it is absent — scaffold a persistent template the user
-    // can edit, then throw pointing at that real location.
+    // Step 4: Resolve the subject's eval path inside its staged dir.
+    //
+    // The eval suite (`evals/`, incl. `fixtures/`) is authored TEST INPUT, not a
+    // shipped artifact — a built/dist subject won't carry it (packageSkill bundles
+    // only link-reachable resources + `files:`). Since the harness reads evals and
+    // fixtures relative to the staged subject, overlay the authored suite from the
+    // scaffold (source) dir when the staged subject lacks it. The bootstrap below
+    // then fires — and writes a template to the source scaffold — ONLY when the suite
+    // genuinely doesn't exist anywhere, so authored evals are never overwritten.
+    const evalsDir = dirname(evalsSubpath);
+    const scaffoldEvalsDir =
+      opts.subjectScaffoldDir === undefined
+        ? undefined
+        : safePath.join(opts.subjectScaffoldDir, evalsDir);
+    const stagedEvalsDir = safePath.join(subjectStagedDir, evalsDir);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own staged/scaffold paths
+    if (evalsDir !== '.' && scaffoldEvalsDir !== undefined && !existsSync(stagedEvalsDir) && existsSync(scaffoldEvalsDir)) {
+      cpSync(scaffoldEvalsDir, stagedEvalsDir, { recursive: true });
+    }
+
+    // Bootstrap (exit 3) fires when the suite is absent everywhere — scaffold a
+    // persistent template at the source location the user can edit, then throw.
     const evalsPath = safePath.join(subjectStagedDir, evalsSubpath);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own staged-subject path
     if (!existsSync(evalsPath)) {
@@ -560,6 +585,23 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // Step 7: Build effective experimenter prompt and validate invariants.
     const resultsDir = safePath.joinUnderRoot(harnessRoot, 'results');
     mkdirSyncReal(resultsDir, { recursive: true });
+
+    // Record what was actually staged & tested (the subject identity + the
+    // staged manifest fingerprint + per-entry content hashes) so a run is
+    // auditable: which source was resolved, and whether it was rebuilt by run.ts.
+    const provenance = {
+      subject: subjectSkillName(opts),
+      fingerprint: stageResult.manifest.fingerprint,
+      entries: stageResult.manifest.entries,
+      rebuilt: opts.rebuilt === true,
+    };
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
+    writeFileSync(
+      safePath.join(resultsDir, 'provenance.json'),
+      JSON.stringify(provenance, null, 2) + '\n',
+      'utf-8',
+    );
+    process.stderr.write(`Provenance: ${provenance.fingerprint}\n`);
 
     const gradingOut = safePath.join(resultsDir, 'grading.json');
     const frictionOut = safePath.join(resultsDir, 'friction.json');

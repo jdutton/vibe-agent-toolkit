@@ -7,9 +7,11 @@ import { describe, expect, it } from 'vitest';
 
 import {
   computeTreeCopiedSkillLocations,
+  findDistributedSkillLocationBySource,
   getPluginOutputDir,
   getPluginSourceDir,
   listPluginSourceSkillDirs,
+  skillNameToFsPath,
   type DistributedSkillLocation,
 } from '../src/plugin-distribution-layout.js';
 
@@ -74,6 +76,18 @@ function createPluginSourceTree(
   for (const name of skillDirNames) {
     mkdirSyncReal(safePath.join(skillsDir, name), { recursive: true });
   }
+}
+
+/** Pool-plugin dir + a source tree carrying `skills`; returns the temp root + config. */
+function setupTreeFixture(
+  getTempDir: () => string,
+  skills: string[] = [SKILL_ONE],
+): { tempDir: string; config: ProjectConfig } {
+  const tempDir = getTempDir();
+  const config = makeTwoPluginConfig();
+  mkdirSyncReal(safePath.join(tempDir, 'plugins', POOL_PLUGIN), { recursive: true });
+  createPluginSourceTree(tempDir, TREE_SOURCE, skills);
+  return { tempDir, config };
 }
 
 // ---------------------------------------------------------------------------
@@ -207,17 +221,21 @@ describe('computeTreeCopiedSkillLocations', () => {
       ),
     );
 
+    const expectedSourceBase = toForwardSlash(safePath.join(tempDir, TREE_SOURCE));
+
     const one = result.find(loc => loc.skillDirName === SKILL_ONE) as DistributedSkillLocation;
     expect(one).toBeDefined();
     expect(one.marketplaceName).toBe(MARKET);
     expect(one.pluginName).toBe(TREE_PLUGIN);
     expect(toForwardSlash(one.skillOutputDir)).toBe(`${expectedOutputBase}/skills/${SKILL_ONE}`);
+    expect(toForwardSlash(one.skillSourceDir)).toBe(`${expectedSourceBase}/skills/${SKILL_ONE}`);
 
     const two = result.find(loc => loc.skillDirName === SKILL_TWO) as DistributedSkillLocation;
     expect(two).toBeDefined();
     expect(two.marketplaceName).toBe(MARKET);
     expect(two.pluginName).toBe(TREE_PLUGIN);
     expect(toForwardSlash(two.skillOutputDir)).toBe(`${expectedOutputBase}/skills/${SKILL_TWO}`);
+    expect(toForwardSlash(two.skillSourceDir)).toBe(`${expectedSourceBase}/skills/${SKILL_TWO}`);
   });
 
   it('stray files under skills/ are excluded from locations', () => {
@@ -242,5 +260,71 @@ describe('computeTreeCopiedSkillLocations', () => {
     const result = computeTreeCopiedSkillLocations(config, tempDir);
     expect(result).toHaveLength(1);
     expect(result[0]?.skillDirName).toBe('real-skill');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// skillNameToFsPath
+// ---------------------------------------------------------------------------
+
+describe('skillNameToFsPath', () => {
+  it('replaces colons with double underscores', () => {
+    expect(skillNameToFsPath('pkg:sub')).toBe('pkg__sub');
+  });
+
+  it('replaces every colon in a multi-segment name', () => {
+    expect(skillNameToFsPath('a:b:c')).toBe('a__b__c');
+  });
+
+  it('leaves a plain name unchanged', () => {
+    expect(skillNameToFsPath('plain')).toBe('plain');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// findDistributedSkillLocationBySource
+// ---------------------------------------------------------------------------
+
+describe('findDistributedSkillLocationBySource', () => {
+  const { getTempDir } = setupTempDir('vat-plugin-layout-by-source-');
+
+  it('returns the matching location for a known source skill dir', () => {
+    const { tempDir, config } = setupTreeFixture(getTempDir, [SKILL_ONE, SKILL_TWO]);
+
+    const skillSourceDir = safePath.join(tempDir, TREE_SOURCE, 'skills', SKILL_ONE);
+    const match = findDistributedSkillLocationBySource(config, tempDir, skillSourceDir);
+
+    expect(match).toBeDefined();
+    expect(match?.skillDirName).toBe(SKILL_ONE);
+    expect(match?.pluginName).toBe(TREE_PLUGIN);
+    expect(toForwardSlash(match?.skillSourceDir ?? '')).toBe(
+      toForwardSlash(skillSourceDir),
+    );
+  });
+
+  it('matches across path forms (resolves before comparing)', () => {
+    const { tempDir, config } = setupTreeFixture(getTempDir);
+
+    const unnormalized = safePath.join(tempDir, TREE_SOURCE, 'skills', '.', SKILL_ONE);
+    const match = findDistributedSkillLocationBySource(config, tempDir, unnormalized);
+
+    expect(match?.skillDirName).toBe(SKILL_ONE);
+  });
+
+  it('returns undefined for a source dir not declared in any plugin', () => {
+    const { tempDir, config } = setupTreeFixture(getTempDir);
+
+    const unknown = safePath.join(tempDir, TREE_SOURCE, 'skills', 'not-a-skill');
+    expect(findDistributedSkillLocationBySource(config, tempDir, unknown)).toBeUndefined();
+  });
+
+  it('returns undefined when no tree-copied locations exist (pool-only)', () => {
+    const tempDir = getTempDir();
+    const config = makeTwoPluginConfig();
+
+    mkdirSyncReal(safePath.join(tempDir, 'plugins', POOL_PLUGIN), { recursive: true });
+
+    const anyPath = safePath.join(tempDir, 'plugins', POOL_PLUGIN, 'skills', 'x');
+    expect(findDistributedSkillLocationBySource(config, tempDir, anyPath)).toBeUndefined();
   });
 });

@@ -5,6 +5,7 @@ import {
   BootstrapNeededError,
   InternalHarnessError,
   mapErrorToExitCode,
+  SkillBuildError,
   SkillTestExitCode,
 } from '../../src/skill-test/exit-codes.js';
 import { PromptInvariantError } from '../../src/skill-test/experimenter-prompt.js';
@@ -23,6 +24,9 @@ describe('mapErrorToExitCode', () => {
   });
   it('PromptInvariantError → 2 (user-correctable prompt override)', () => {
     expect(mapErrorToExitCode(new PromptInvariantError('x'))).toBe(SkillTestExitCode.Preflight);
+  });
+  it('maps SkillBuildError to exit 2', () => {
+    expect(mapErrorToExitCode(new SkillBuildError('build blew up'))).toBe(2);
   });
   it('GradingSkewError → 1 (parse failure surfaced, never success)', () => {
     expect(mapErrorToExitCode(new GradingSkewError('x'))).toBe(SkillTestExitCode.Internal);

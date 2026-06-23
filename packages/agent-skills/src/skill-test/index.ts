@@ -47,9 +47,11 @@ export {
   BootstrapNeededError,
   InternalHarnessError,
   mapErrorToExitCode,
+  SkillBuildError,
   SkillTestExitCode,
   type SkillTestExitCodeValue,
 } from './exit-codes.js';
+export { BuildHookError, runPreStageBuild } from './build-hook.js';
 export {
   runPreflight,
   type PreflightCheck,

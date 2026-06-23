@@ -170,6 +170,10 @@ Remember: **Other agent repos won't have packages/cli/**. If an agent package ne
 
 **This is not technical debt** - it's recognition that discovery and audit have fundamentally different scanning needs. Forcing them to share scanning logic would violate single responsibility principle and make both implementations more complex.
 
+### Skill Reference Resolution
+
+Project-aware skill-reference resolution lives in `src/skill-resolution/` and is the shared dependency of `vat audit`, `vat skill review`, and `vat skill test`. Any command that takes a skill by name or path resolves it through `resolveSkillReference(ref, cwd)` there — so **future CLI work extends that module, not a new copy.** (This is the exception to "the CLI must be dumb": the resolver is CLI-only because its sole consumers are CLI commands.) See [`../../docs/architecture/skill-packaging.md`](../../docs/architecture/skill-packaging.md#skill-reference-resolution) — "Skill Reference Resolution".
+
 ## Writing Useful CLI Help Documentation
 
 **Golden Rule**: Help text should answer "What does this do?" and "How do I use it?" without requiring users to read external documentation.

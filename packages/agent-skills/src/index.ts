@@ -9,6 +9,7 @@ export {
   extractH1Title,
   packageSkill,
   packageSkills,
+  packagingConfigToPackageOptions,
   ZipSizeLimitError,
   type PackageSkillOptions,
   type PackageSkillResult,
@@ -166,8 +167,10 @@ export * from './skill-test/index.js';
 
 export {
   computeTreeCopiedSkillLocations,
+  findDistributedSkillLocationBySource,
   getPluginOutputDir,
   getPluginSourceDir,
   listPluginSourceSkillDirs,
+  skillNameToFsPath,
   type DistributedSkillLocation,
 } from './plugin-distribution-layout.js';

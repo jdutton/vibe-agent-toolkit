@@ -10,7 +10,7 @@
 import { cpSync, existsSync, readFileSync } from 'node:fs';
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 
-import { applyFilesConfig, getPluginOutputDir, getPluginSourceDir, listPluginSourceSkillDirs, mergeFilesConfig } from '@vibe-agent-toolkit/agent-skills';
+import { applyFilesConfig, getPluginOutputDir, getPluginSourceDir, listPluginSourceSkillDirs, mergeFilesConfig, skillNameToFsPath } from '@vibe-agent-toolkit/agent-skills';
 import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
@@ -52,7 +52,7 @@ interface PluginBuildResult {
   skillFilesCopied: number;
 }
 
-interface MarketplaceBuildResult {
+export interface MarketplaceBuildResult {
   name: string;
   status: 'built' | 'error';
   reason?: string;
@@ -122,12 +122,105 @@ async function discoverBuiltSkills(configDir: string): Promise<string[]> {
   return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
 }
 
+/**
+ * Build Claude plugin artifacts for a project — the non-exiting orchestration
+ * core shared by the `vat claude plugin build` CLI action and `vat skill test`
+ * (which builds a declared skill's owning marketplace before staging its dist).
+ *
+ * Throws on any build error; never calls `process.exit` and never emits the YAML
+ * summary — those belong to the CLI wrapper. Returns one result per built
+ * marketplace (empty when no `claude.marketplaces` are configured).
+ *
+ * `configDir` is threaded in (the project root that holds
+ * vibe-agent-toolkit.config.yaml), so callers that already know the root build
+ * against it rather than re-discovering from cwd. `options.marketplace` restricts
+ * the build to a single marketplace by name.
+ */
+export async function runClaudePluginBuild(
+  configDir: string,
+  options: { marketplace?: string; logger?: ReturnType<typeof createLogger> } = {},
+): Promise<MarketplaceBuildResult[]> {
+  const logger = options.logger ?? createLogger({});
+
+  const projectConfig = loadConfig(configDir);
+  const marketplaces = projectConfig?.claude?.marketplaces;
+  if (!marketplaces || Object.keys(marketplaces).length === 0) {
+    return [];
+  }
+
+  // Read version from root package.json — lowest-precedence fallback in the
+  // per-plugin version chain (config > plugin.json > root). Used so Claude
+  // Code caches by version instead of "unknown/" when no per-plugin version
+  // is supplied.
+  let rootVersion: string | undefined;
+  try {
+    const pkgPath = safePath.join(configDir, 'package.json');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- configDir is the project root
+    const pkgRaw = readFileSync(pkgPath, 'utf-8');
+    const pkg = JSON.parse(pkgRaw) as { version?: string };
+    rootVersion = pkg.version;
+  } catch {
+    // No package.json or unreadable — version will be omitted
+  }
+
+  // Discover available skills from dist/skills/ for pool-to-plugin selectors
+  const availableSkills = await discoverBuiltSkills(configDir);
+
+  // Load the project's skills config (defaults + per-skill) so the plugin build
+  // can apply each tree-copied skill's skill-level `files:` mapping — the
+  // verbatim tree-copy never runs the skill-packager, so without this a skill's
+  // build-provided artifacts (a bundled engine, generated data, a catalog)
+  // would be missing from the shipped plugin tree. Undefined when no config.
+  const skillsConfig = projectConfig?.skills;
+
+  logger.info(`Building Claude plugin artifacts`);
+  logger.info(`   Config: ${safePath.join(configDir, 'vibe-agent-toolkit.config.yaml')}`);
+  logger.info(`   Skills available: ${availableSkills.length}`);
+
+  const results: MarketplaceBuildResult[] = [];
+
+  const allPluginNames: string[] = [];
+  for (const mp of Object.values(marketplaces)) {
+    for (const p of mp.plugins) allPluginNames.push(p.name);
+  }
+  verifyNoCaseCollidingPluginNames(allPluginNames);
+
+  for (const name of Object.keys(marketplaces)) {
+    // Skip if --marketplace filter specified and doesn't match
+    if (options.marketplace && options.marketplace !== name) {
+      continue;
+    }
+
+    const mpConfig = marketplaces[name] as ClaudeMarketplaceConfig;
+
+    logger.info(`\n   Building marketplace: ${name}`);
+    const result = await buildMarketplace(
+      name,
+      mpConfig,
+      availableSkills,
+      configDir,
+      skillsConfig,
+      rootVersion,
+      logger,
+    );
+    results.push(result);
+
+    if (result.status === 'error') {
+      throw new Error(
+        `Claude plugin build failed for marketplace '${name}': ${result.reason ?? 'unknown error'}`,
+      );
+    }
+  }
+
+  return results;
+}
+
 async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<void> {
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
 
   try {
-    const { configPath, configDir, claudeConfig } = await loadClaudeProjectConfig();
+    const { configDir, claudeConfig } = await loadClaudeProjectConfig();
 
     if (!claudeConfig?.marketplaces || Object.keys(claudeConfig.marketplaces).length === 0) {
       writeYamlOutput({
@@ -138,76 +231,10 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
       process.exit(0);
     }
 
-    // Read version from root package.json — lowest-precedence fallback in the
-    // per-plugin version chain (config > plugin.json > root). Used so Claude
-    // Code caches by version instead of "unknown/" when no per-plugin version
-    // is supplied.
-    let rootVersion: string | undefined;
-    try {
-      const pkgPath = safePath.join(configDir, 'package.json');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- configDir from loadClaudeProjectConfig
-      const pkgRaw = readFileSync(pkgPath, 'utf-8');
-      const pkg = JSON.parse(pkgRaw) as { version?: string };
-      rootVersion = pkg.version;
-    } catch {
-      // No package.json or unreadable — version will be omitted
-    }
-
-    // Discover available skills from dist/skills/ for pool-to-plugin selectors
-    const availableSkills = await discoverBuiltSkills(configDir);
-
-    // Load the project's skills config (defaults + per-skill) so the plugin build
-    // can apply each tree-copied skill's skill-level `files:` mapping — the
-    // verbatim tree-copy never runs the skill-packager, so without this a skill's
-    // build-provided artifacts (a bundled engine, generated data, a catalog)
-    // would be missing from the shipped plugin tree. Undefined when no config.
-    const skillsConfig = loadConfig(configDir)?.skills;
-
-    logger.info(`Building Claude plugin artifacts`);
-    logger.info(`   Config: ${configPath}`);
-    logger.info(`   Skills available: ${availableSkills.length}`);
-
-    const results: MarketplaceBuildResult[] = [];
-
-    const marketplaces = claudeConfig.marketplaces;
-    const allPluginNames: string[] = [];
-    for (const mp of Object.values(marketplaces)) {
-      for (const p of mp.plugins) allPluginNames.push(p.name);
-    }
-    verifyNoCaseCollidingPluginNames(allPluginNames);
-
-    for (const name of Object.keys(marketplaces)) {
-      const mpConfig = marketplaces[name] as ClaudeMarketplaceConfig;
-
-      // Skip if --marketplace filter specified and doesn't match
-      if (options.marketplace && options.marketplace !== name) {
-        continue;
-      }
-
-      logger.info(`\n   Building marketplace: ${name}`);
-      const result = await buildMarketplace(
-        name,
-        mpConfig,
-        availableSkills,
-        configDir,
-        skillsConfig,
-        rootVersion,
-        logger,
-      );
-      results.push(result);
-
-      if (result.status === 'error') {
-        logger.error(`   Failed: ${result.reason ?? 'unknown error'}`);
-        const duration = Date.now() - startTime;
-        writeYamlOutput({
-          status: 'error',
-          error: result.reason ?? 'Build failed',
-          marketplace: name,
-          duration: `${duration}ms`,
-        });
-        process.exit(1);
-      }
-    }
+    const results = await runClaudePluginBuild(configDir, {
+      ...(options.marketplace ? { marketplace: options.marketplace } : {}),
+      logger,
+    });
 
     const duration = Date.now() - startTime;
     const totalPlugins = results.flatMap((r) => r.plugins).length;
@@ -402,15 +429,6 @@ function resolvePluginSkills(
   }
 
   return [...matched];
-}
-
-/**
- * Convert a skill name to a filesystem-safe path segment.
- * Colon-namespaced skill names (e.g. "pkg:sub-skill") are valid VAT identifiers
- * but invalid on Windows; replace with `__`.
- */
-function skillNameToFsPath(name: string): string {
-  return name.replaceAll(':', '__');
 }
 
 /**

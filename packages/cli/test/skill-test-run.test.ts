@@ -12,7 +12,13 @@
 import * as harness from '@vibe-agent-toolkit/agent-skills';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { runSkillTestRun } from '../src/commands/skill/test/run.js';
+import { resolveSubjectForTest, runSkillTestRun } from '../src/commands/skill/test/run.js';
+import { resetSkillDiscoveryCache } from '../src/skill-resolution/index.js';
+
+import { setupReferenceFixture } from './skill-resolution/helpers.js';
+
+/** Path-form subject so resolution returns `source` without a declared skill. */
+const PATH_SUBJECT = './my-skill';
 
 // Mocks runSkillTestHarness with the given result, captures stdout/stderr writes
 // while runSkillTestRun executes, and returns the captured write payloads.
@@ -26,7 +32,7 @@ async function runAndCaptureStreams(result: {
   const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);
   const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
 
-  await runSkillTestRun(['my-skill'], {});
+  await runSkillTestRun([PATH_SUBJECT], {});
 
   return {
     stdoutCalls: stdoutSpy.mock.calls.map((c) => String(c[0])),
@@ -44,7 +50,7 @@ describe('vat skill test run (orchestration)', () => {
       summary: 'PASS 3/3',
     });
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
-    await runSkillTestRun(['my-skill'], {});
+    await runSkillTestRun([PATH_SUBJECT], {});
     expect(exit).toHaveBeenCalledWith(0);
   });
 
@@ -54,7 +60,7 @@ describe('vat skill test run (orchestration)', () => {
       new BootstrapNeededError('/h/evals/evals.json'),
     );
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
-    await runSkillTestRun(['my-skill'], {});
+    await runSkillTestRun([PATH_SUBJECT], {});
     expect(exit).toHaveBeenCalledWith(3);
   });
 
@@ -64,7 +70,7 @@ describe('vat skill test run (orchestration)', () => {
       new HarnessLocationError('harness root is unsafe'),
     );
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
-    await runSkillTestRun(['my-skill'], {});
+    await runSkillTestRun([PATH_SUBJECT], {});
     expect(exit).toHaveBeenCalledWith(2);
   });
 
@@ -74,7 +80,7 @@ describe('vat skill test run (orchestration)', () => {
       new InternalHarnessError('grading.json missing'),
     );
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
-    await runSkillTestRun(['my-skill'], {});
+    await runSkillTestRun([PATH_SUBJECT], {});
     expect(exit).toHaveBeenCalledWith(1);
   });
 });
@@ -95,7 +101,7 @@ async function runAndCaptureOpts(
   return spy.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
 }
 
-const ENV_TEST_SKILL = 'acme-skill';
+const ENV_TEST_SKILL = './acme-skill';
 
 describe('vat skill test run (env plumbing)', () => {
   afterEach(() => vi.restoreAllMocks());
@@ -159,5 +165,31 @@ describe('vat skill test run (output routing)', () => {
 
     expect(stdoutCalls.some((s) => s.includes('Summary:'))).toBe(true);
     expect(stderrCalls.some((s) => s.includes('Summary:'))).toBe(false);
+  });
+});
+
+describe('resolveSubjectForTest (run.ts subject resolution)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('name-miss → throws a SkillBuildError listing known skills', async () => {
+    const fx = setupReferenceFixture({ pool: ['declared'] });
+    resetSkillDiscoveryCache();
+    await expect(
+      resolveSubjectForTest('undeclared', fx.root, { noBuild: false, dryRun: false }),
+    ).rejects.toThrow(/no skill named 'undeclared'/);
+  });
+
+  it('--no-build with no built dist → an exit-2 build error', async () => {
+    const fx = setupReferenceFixture({ pool: ['declared-pool'] });
+    resetSkillDiscoveryCache();
+    await expect(
+      resolveSubjectForTest('declared-pool', fx.root, { noBuild: true, dryRun: false }),
+    ).rejects.toThrow(/no built dist/);
+  });
+
+  it('source-arm path → returns { subjectSource: { path } } without building', async () => {
+    const out = await resolveSubjectForTest('./some/dist', process.cwd(), { noBuild: false, dryRun: false });
+    expect(out.subjectSource).toEqual({ path: './some/dist' });
+    expect(out.rebuilt).toBe(false);
   });
 });

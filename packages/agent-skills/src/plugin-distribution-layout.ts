@@ -82,6 +82,8 @@ export interface DistributedSkillLocation {
   pluginName: string;
   /** Directory name under the plugin's `skills/` source dir (also the skill fs path segment). */
   skillDirName: string;
+  /** Absolute SOURCE skill dir: `<pluginSourceDir>/skills/<skillDirName>`. */
+  skillSourceDir: string;
   /** Absolute output path where `vat build` places the skill: `getPluginOutputDir(...)/skills/<skillDirName>`. */
   skillOutputDir: string;
 }
@@ -114,6 +116,7 @@ export function computeTreeCopiedSkillLocations(
           marketplaceName,
           pluginName: plugin.name,
           skillDirName,
+          skillSourceDir: safePath.join(pluginSourceDir, 'skills', skillDirName),
           skillOutputDir: safePath.join(pluginOutputDir, 'skills', skillDirName),
         });
       }
@@ -121,4 +124,25 @@ export function computeTreeCopiedSkillLocations(
   }
 
   return locations;
+}
+
+/** FS-safe single path segment for a skill name (colon → `__`, invalid on Windows). */
+export function skillNameToFsPath(name: string): string {
+  return name.replaceAll(':', '__');
+}
+
+/**
+ * Find the tree-copied location whose SOURCE skill dir equals `skillSourceDir`
+ * (compared via resolved absolute paths). Returns `undefined` for pool skills
+ * or skills not declared in any plugin's `skills/` source dir.
+ */
+export function findDistributedSkillLocationBySource(
+  config: ProjectConfig,
+  configDir: string,
+  skillSourceDir: string,
+): DistributedSkillLocation | undefined {
+  const target = safePath.resolve(skillSourceDir);
+  return computeTreeCopiedSkillLocations(config, configDir).find(
+    loc => safePath.resolve(loc.skillSourceDir) === target,
+  );
 }

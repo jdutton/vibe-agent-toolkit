@@ -364,6 +364,20 @@ describe('stage item construction', () => {
     expect('role' in (items[2] ?? {})).toBe(false);
   });
 
+  it('uses subjectSource for the subject item when provided', () => {
+    const items = buildStageItems(
+      { skills: ['my-skill'], subjectSource: { path: '/built/dist/skills/my-skill' } } as never,
+      '/repo',
+    );
+    const subject = items.find((i) => i.role === 'subject');
+    expect(subject?.source).toEqual({ path: '/built/dist/skills/my-skill' });
+  });
+
+  it('falls back to {path: name} when subjectSource absent', () => {
+    const items = buildStageItems({ skills: ['my-skill'] } as never, '/repo');
+    expect(items.find((i) => i.role === 'subject')?.source).toEqual({ path: 'my-skill' });
+  });
+
   it('buildStageItems uses the withSources override for a primary skill', () => {
     const tempDir = getTempDir();
     makePlainDir(tempDir, OVERRIDE_LOC);
