@@ -161,6 +161,21 @@ export interface RunHarnessOptions {
    */
   rebuilt?: boolean;
 
+  /**
+   * True when the resolved reference is `buildable` — a real run WOULD build +
+   * stage it before spawning. False/absent for plain `source` subjects. Set by
+   * run.ts after project-aware resolution; used in the dry-run summary.
+   */
+  wouldBuild?: boolean;
+
+  /**
+   * Meaningful only when wouldBuild is true and dryRun is true. True = the
+   * dry-run staged the EXISTING on-disk dist without rebuilding (may be stale).
+   * False = no dist existed yet so the preview fell back to the source dir.
+   * Absent when not a dry-run or when the subject is a plain source.
+   */
+  dryRunStagedExistingDist?: boolean;
+
   /** Feature B: explicit env var injections (interpolated at stage time). */
   env?: Record<string, string>;
   /** Feature A: host env var names to forward to the experimenter if present. */
@@ -489,6 +504,75 @@ function resolveDeclaredChildEnv(input: ResolveDeclaredChildEnvInput): ReturnTyp
 }
 
 // ---------------------------------------------------------------------------
+// Dry-run summary builder (pure — exported for unit tests)
+// ---------------------------------------------------------------------------
+
+/** Inputs for the dry-run summary string. */
+export interface DryRunSummaryInput {
+  /** True when the resolved subject is buildable (a real run would build + stage it). */
+  wouldBuild: boolean;
+  /**
+   * When wouldBuild is true: true = the dry-run staged the existing dist without
+   * rebuilding (may be stale); false = no dist existed, fell back to source dir.
+   */
+  dryRunStagedExistingDist?: boolean;
+  /** Absolute path to the written provenance.json (already on disk). */
+  provenancePath: string;
+  /** Content fingerprint from the staged manifest. */
+  provenanceFingerprint: string;
+  /** Number of entries in the staged manifest. */
+  provenanceEntryCount: number;
+  /** The assembled model flag string (e.g. `--model claude-opus-4-8`). */
+  modelFlag: string;
+}
+
+/**
+ * Build the dry-run summary string. Pure function so it can be unit-tested
+ * without running the full harness.
+ *
+ * The summary covers three scenarios:
+ *   1. Declared (buildable) subject — no dist existed, fell back to source dir.
+ *   2. Declared (buildable) subject — existing dist was staged WITHOUT rebuilding
+ *      (potentially stale).
+ *   3. Plain source subject — staged as-is, no build step.
+ *
+ * Always includes the assembled spawn command, the staged-manifest entry count +
+ * fingerprint, and the provenance.json path so a stale tree is visible at a glance.
+ */
+export function buildDryRunSummary(input: DryRunSummaryInput): string {
+  const lines: string[] = [];
+
+  if (input.wouldBuild) {
+    lines.push(
+      '[dry-run] A real run would: build + stage the declared skill, then spawn claude.',
+    );
+    if (input.dryRunStagedExistingDist === true) {
+      lines.push(
+        '[dry-run] WARNING: This preview used the EXISTING built dist WITHOUT rebuilding — it may be STALE.',
+        '[dry-run] Run `vat build` before testing to ensure the preview reflects current source.',
+      );
+    } else if (input.dryRunStagedExistingDist === false) {
+      lines.push(
+        '[dry-run] No built dist exists yet; this preview fell back to the source dir.',
+      );
+    }
+  } else {
+    lines.push(
+      '[dry-run] A real run would: stage the source dir as-is, then spawn claude.',
+    );
+  }
+
+  const count = input.provenanceEntryCount;
+  lines.push(
+    `[dry-run] Would spawn: claude -p ${input.modelFlag} (prompt via stdin)`,
+    `[dry-run] Staged manifest: ${count} entr${count === 1 ? 'y' : 'ies'} | fingerprint: ${input.provenanceFingerprint}`,
+    `[dry-run] Provenance: ${input.provenancePath}`,
+  );
+
+  return lines.join('\n');
+}
+
+// ---------------------------------------------------------------------------
 // Main orchestrator
 // ---------------------------------------------------------------------------
 
@@ -606,9 +690,10 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       entries: stageResult.manifest.entries,
       rebuilt: opts.rebuilt === true,
     };
+    const provenancePath = safePath.join(resultsDir, 'provenance.json');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
     writeFileSync(
-      safePath.join(resultsDir, 'provenance.json'),
+      provenancePath,
       JSON.stringify(provenance, null, 2) + '\n',
       'utf-8',
     );
@@ -659,7 +744,16 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       return {
         harnessPath: harnessRoot,
         exitCode: SkillTestExitCode.Ok,
-        summary: `[dry-run] Would spawn: claude -p ${modelFlag} (prompt via stdin from ${promptFile})`,
+        summary: buildDryRunSummary({
+          wouldBuild: opts.wouldBuild === true,
+          ...(opts.dryRunStagedExistingDist === undefined
+            ? {}
+            : { dryRunStagedExistingDist: opts.dryRunStagedExistingDist }),
+          provenancePath,
+          provenanceFingerprint: provenance.fingerprint,
+          provenanceEntryCount: provenance.entries.length,
+          modelFlag,
+        }),
       };
     }
 

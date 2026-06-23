@@ -215,6 +215,44 @@ function readProvenance(outDir: string): Record<string, unknown> {
   return JSON.parse(fs.readFileSync(provenancePath, 'utf-8')) as Record<string, unknown>;
 }
 
+/**
+ * Shared scaffold for declared-pool skill dry-run tests.
+ *
+ * Builds a synthetic VAT project declaring 'poc-skill', optionally pre-creates
+ * the built dist dir, invokes `vat skill test run --dry-run`, asserts exit 0,
+ * and returns the CLI result + outDir path for per-test assertions.
+ *
+ * @param outDirName       - Name for the output dir (nested inside the temp dir).
+ * @param withPreBuiltDist - When true, pre-creates a stale dist dir so dry-run
+ *   stages it rather than falling back to the source dir.
+ */
+async function runDeclaredDryRun(
+  outDirName: string,
+  withPreBuiltDist = false,
+): Promise<{ result: Awaited<ReturnType<typeof executeCli>>; outDir: string }> {
+  const tempDir = ctx.createTempDir();
+  const { projectRoot, skillName } = buildDeclaredPoolProject(tempDir, 'poc-skill');
+  if (withPreBuiltDist) {
+    buildFixtureSkillDir(safePath.join(projectRoot, 'dist', 'skills'), skillName, false);
+  }
+  const outDir = safePath.join(tempDir, outDirName);
+  prepareOutDir(outDir);
+
+  const result = await executeCli(
+    ctx.binPath,
+    [
+      'skill', 'test', 'run', skillName,
+      '--dry-run',
+      '--i-understand-this-runs-skill-code',
+      '--out', outDir,
+    ],
+    { cwd: projectRoot },
+  );
+
+  expectStatus(result, 0);
+  return { result, outDir };
+}
+
 describe('vat skill test run (system)', () => {
   beforeAll(ctx.setup);
   afterEach(ctx.cleanup);
@@ -355,6 +393,41 @@ describe('vat skill test run (system)', () => {
       const gradingPath = safePath.join(outDir, 'results', 'grading.json');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
       expect(fs.existsSync(gradingPath)).toBe(false);
+    });
+
+    it('--dry-run for a declared pool skill (no dist): states it would build + stage, flags no dist fallback', async () => {
+      // Synthetic declared project; the bare name resolves to `buildable`.
+      // No dist pre-built → dry-run falls back to source (dryRunStagedExistingDist=false).
+      const { result, outDir } = await runDeclaredDryRun('harness-dry-declared-nodist');
+
+      // Must declare it WOULD build + stage (not just spawn as-is)
+      expect(result.stdout).toContain('build + stage the declared skill');
+      // Must say it fell back to source since no dist exists yet
+      expect(result.stdout).toContain('fell back to the source dir');
+      // grading.json must NOT be written
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
+      expect(fs.existsSync(safePath.join(outDir, 'results', 'grading.json'))).toBe(false);
+      // Provenance must exist (written before the dry-run short-circuit)
+      const provenance = readProvenance(outDir);
+      // Summary must reference the provenance fingerprint and path
+      expect(result.stdout).toContain(String(provenance['fingerprint']));
+      expect(result.stdout).toContain('provenance.json');
+    });
+
+    it('--dry-run for a declared pool skill (existing dist): states would build + stage, flags stale', async () => {
+      // Pre-create the expected dist dir (no evals/) so dry-run stages it instead
+      // of falling back. The harness overlays the authored evals from source onto
+      // the staged dist so the bootstrap check passes. (dryRunStagedExistingDist=true)
+      const { result } = await runDeclaredDryRun('harness-dry-declared-stale', true);
+
+      // Must declare it WOULD build + stage
+      expect(result.stdout).toContain('build + stage the declared skill');
+      // Must warn that the preview used an unbuilt (possibly stale) dist
+      expect(result.stdout).toContain('STALE');
+      // Must point users at `vat build`
+      expect(result.stdout).toContain('vat build');
+      // Must reference the provenance path
+      expect(result.stdout).toContain('provenance.json');
     });
   });
 

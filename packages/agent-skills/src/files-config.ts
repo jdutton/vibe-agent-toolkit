@@ -26,6 +26,29 @@ import { glob } from 'glob';
 
 export type { SkillFileEntry } from '@vibe-agent-toolkit/resources';
 
+/**
+ * Returns a hint clause (with a leading space) when `source` looks like a build
+ * artifact that hasn't been produced yet, otherwise returns `''`.
+ *
+ * Heuristic (conservative):
+ * - The source path contains a `dist/`, `build/`, or `out/` path *segment* (exact
+ *   segment equality, so `redistribute/data.json` does NOT match), OR
+ * - The source ends in a bundle-ish extension: `.mjs`, `.cjs`, `.js`, `.bundle.*`
+ */
+const BUILD_SEGMENTS = new Set(['dist', 'build', 'out']);
+
+export function buildArtifactHint(source: string): string {
+  const normalized = toForwardSlash(source);
+  const segments = normalized.split('/');
+  const hasArtifactSegment = segments.some((seg) => BUILD_SEGMENTS.has(seg));
+  const hasArtifactExtension =
+    /\.(mjs|cjs|js)$/.test(normalized) || /\.bundle\.[^./]+$/.test(normalized);
+  if (hasArtifactSegment || hasArtifactExtension) {
+    return ' This looks like a build artifact — run your project\'s build to produce it before testing.';
+  }
+  return '';
+}
+
 /** Result of matching a link target against files config */
 export interface FilesMatchResult {
   /** Whether the link matched source or dest */
@@ -353,7 +376,7 @@ async function copyNonGlobEntry(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
   if (!existsSync(absoluteSource)) {
     throw new Error(
-      `files: source '${entry.source}' does not exist (resolved to ${absoluteSource}).`,
+      `files: source '${entry.source}' does not exist (resolved to ${absoluteSource}).${buildArtifactHint(entry.source)}`,
     );
   }
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config

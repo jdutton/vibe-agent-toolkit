@@ -357,6 +357,18 @@ export interface ResolvedSubject {
   subjectScaffoldDir?: string;
   /** True only when this resolution actually built the subject (declared skill, no --no-build/--dry-run). */
   rebuilt: boolean;
+  /**
+   * True when the resolved reference is `buildable` — a real run would build + stage
+   * it before spawning. False for plain `source` subjects (path/npm/url/vendored).
+   */
+  wouldBuild: boolean;
+  /**
+   * Set only for a `buildable` subject under --dry-run: true = the dry-run staged
+   * the existing on-disk dist WITHOUT rebuilding (may be stale); false = no dist
+   * existed yet so the preview fell back to the source dir. Absent when not a dry-run
+   * or when the subject is a plain source.
+   */
+  dryRunStagedExistingDist?: boolean;
 }
 
 /**
@@ -376,6 +388,7 @@ export async function resolveSubjectForTest(
       return {
         subjectSource: resolved.source,
         rebuilt: false,
+        wouldBuild: false,
         // A path subject points at the skill DIR itself (not its SKILL.md), so the
         // authored scaffold dir is the resolved path — not its parent. Mirrors the
         // legacy positional-path behavior in resolveScaffoldEvalsPath.
@@ -396,6 +409,46 @@ export async function resolveSubjectForTest(
   }
 }
 
+/**
+ * Resolve a buildable subject under --no-build or --dry-run (no build step). Stage
+ * the existing dist if present; for a dry-run with no dist yet, fall back to the
+ * source dir so the preview still assembles without triggering a build. Throws when
+ * --no-build is set but no dist exists.
+ */
+function resolveNoBuildDryRunBranch(
+  ref: BuildableReference,
+  scaffoldDir: string,
+  flags: { noBuild: boolean; dryRun: boolean },
+): ResolvedSubject {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- expectedDistDir derived from project config
+  if (existsSync(ref.expectedDistDir)) {
+    if (flags.noBuild) {
+      process.stderr.write(`Using existing dist (NOT rebuilt): ${ref.expectedDistDir}\n`);
+    }
+    return {
+      subjectSource: { path: ref.expectedDistDir },
+      subjectScaffoldDir: scaffoldDir,
+      rebuilt: false,
+      wouldBuild: true,
+      // For a dry-run that staged an existing (unbuilt) dist, flag it as
+      // potentially stale so the summary can warn the user.
+      ...(flags.dryRun ? { dryRunStagedExistingDist: true } : {}),
+    };
+  }
+  if (flags.dryRun) {
+    return {
+      subjectSource: { path: scaffoldDir },
+      subjectScaffoldDir: scaffoldDir,
+      rebuilt: false,
+      wouldBuild: true,
+      dryRunStagedExistingDist: false,
+    };
+  }
+  throw new SkillBuildError(
+    `--no-build: no built dist at ${ref.expectedDistDir}. Run \`vat build\` first, or point at a built path.`,
+  );
+}
+
 /** Build a declared skill (or stage its existing dist under --no-build/--dry-run), then return the dist to stage. */
 async function resolveBuildableSubject(
   ref: BuildableReference,
@@ -403,23 +456,9 @@ async function resolveBuildableSubject(
 ): Promise<ResolvedSubject> {
   const scaffoldDir = dirname(ref.sourcePath);
 
-  // --no-build and --dry-run never build. Stage the existing dist if present; for a
-  // dry-run with no dist yet, fall back to the source dir so the preview still
-  // assembles without triggering a build (the surprising side-effect we avoid).
+  // --no-build and --dry-run never build — delegate to the dedicated branch helper.
   if (flags.noBuild || flags.dryRun) {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- expectedDistDir derived from project config
-    if (existsSync(ref.expectedDistDir)) {
-      if (flags.noBuild) {
-        process.stderr.write(`Using existing dist (NOT rebuilt): ${ref.expectedDistDir}\n`);
-      }
-      return { subjectSource: { path: ref.expectedDistDir }, subjectScaffoldDir: scaffoldDir, rebuilt: false };
-    }
-    if (flags.dryRun) {
-      return { subjectSource: { path: scaffoldDir }, subjectScaffoldDir: scaffoldDir, rebuilt: false };
-    }
-    throw new SkillBuildError(
-      `--no-build: no built dist at ${ref.expectedDistDir}. Run \`vat build\` first, or point at a built path.`,
-    );
+    return resolveNoBuildDryRunBranch(ref, scaffoldDir, flags);
   }
 
   // test.build hook (upstream artifacts) BEFORE the skill build -- ordering matters.
@@ -444,7 +483,7 @@ async function resolveBuildableSubject(
       `Skill build failed for '${ref.name}': ${e instanceof Error ? e.message : String(e)}`,
     );
   }
-  return { subjectSource: { path: ref.expectedDistDir }, subjectScaffoldDir: scaffoldDir, rebuilt: true };
+  return { subjectSource: { path: ref.expectedDistDir }, subjectScaffoldDir: scaffoldDir, rebuilt: true, wouldBuild: true };
 }
 
 // ---------------------------------------------------------------------------
@@ -487,8 +526,12 @@ export async function runSkillTestRun(
   const harnessOpts = buildHarnessOpts(skills, options, knobs, config);
   harnessOpts.subjectSource = subject.subjectSource;
   harnessOpts.rebuilt = subject.rebuilt;
+  harnessOpts.wouldBuild = subject.wouldBuild;
   if (subject.subjectScaffoldDir !== undefined) {
     harnessOpts.subjectScaffoldDir = subject.subjectScaffoldDir;
+  }
+  if (subject.dryRunStagedExistingDist !== undefined) {
+    harnessOpts.dryRunStagedExistingDist = subject.dryRunStagedExistingDist;
   }
 
   try {

@@ -49,7 +49,7 @@ import {
 } from '@vibe-agent-toolkit/utils';
 
 import { getTargetSubdir } from './content-type-routing.js';
-import { applyFilesConfig, computeDeferredPaths, type SkillFileEntry } from './files-config.js';
+import { applyFilesConfig, buildArtifactHint, computeDeferredPaths, type SkillFileEntry } from './files-config.js';
 import { checkBrokenPackagedLinks, checkUnreferencedFiles } from './post-build-checks.js';
 import { validateSkillForPackaging, type PackagingValidationResult, type SkillPackagingConfig } from './validators/packaging-validator.js';
 import { deferredAssetsToIssues, walkerExclusionsToIssues } from './validators/walker-to-issues.js';
@@ -875,8 +875,7 @@ function applyNonGlobEntriesToPathMap(
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
     if (!existsSync(absoluteSource)) {
       throw new Error(
-        `files entry for skill '${skillName}': source '${fileEntry.source}' does not exist. ` +
-        `Has your project's build step run?`
+        `files entry for skill '${skillName}': source '${fileEntry.source}' does not exist.${buildArtifactHint(fileEntry.source)}`,
       );
     }
 

@@ -34,6 +34,7 @@ const CONFIG_JSON = 'config.json';
 const PRESERVE_PATH = 'preserve-path' as const;
 const RESOURCE_ID = 'resource-id' as const;
 const SIMPLE_SKILL_BODY = '# My Skill\n\nContent.';
+const BUILD_ARTIFACT_FRAGMENT = 'build artifact';
 
 // ============================================================================
 // Helpers - unique to this unit test file
@@ -894,6 +895,31 @@ describe('files config in packaging', () => {
         files: [{ source: 'nonexistent/tool.mjs', dest: 'scripts/tool.mjs' }],
       })
     ).rejects.toThrow(/does not exist/i);
+  });
+
+  it('throws with build-artifact hint when missing files source looks like a build product', async () => {
+    const dir = getTempDir();
+    const skillPath = await writeSkillMd(dir, UNIT_SKILL_NAME, SIMPLE_SKILL_BODY);
+    await expect(
+      packWithOutput(skillPath, {
+        files: [{ source: 'dist/bin/missing.mjs', dest: 'scripts/missing.mjs' }],
+      }),
+    ).rejects.toThrow(new RegExp(BUILD_ARTIFACT_FRAGMENT));
+  });
+
+  it('throws WITHOUT build-artifact hint when missing files source is a plain reference file', async () => {
+    const dir = getTempDir();
+    const skillPath = await writeSkillMd(dir, UNIT_SKILL_NAME, SIMPLE_SKILL_BODY);
+    await expect(
+      packWithOutput(skillPath, {
+        files: [{ source: 'references/data.json', dest: 'data.json' }],
+      }),
+    ).rejects.toThrow(/does not exist/i);
+    await expect(
+      packWithOutput(skillPath, {
+        files: [{ source: 'references/data.json', dest: 'data.json' }],
+      }),
+    ).rejects.not.toThrow(new RegExp(BUILD_ARTIFACT_FRAGMENT));
   });
 
   it('should throw when a files entry dest escapes the skill output dir (joinUnderRoot guard)', async () => {

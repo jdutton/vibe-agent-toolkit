@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   applyFilesConfig,
+  buildArtifactHint,
   mergeFilesConfig,
   matchLinkToFiles,
   computeDeferredPaths,
@@ -18,6 +19,7 @@ const CLI_SOURCE = 'dist/bin/cli.mjs';
 const CLI_DEST = 'scripts/cli.mjs';
 const GLOB_PACKS_SOURCE = 'dist/packs/**/*';
 const GLOB_PACKS_DEST = 'packs';
+const BUILD_ARTIFACT_FRAGMENT = 'build artifact';
 
 /** Tmp dirs created by applyFilesConfig tests, cleaned up after each. */
 const APPLY_TMP_DIRS: string[] = [];
@@ -230,7 +232,7 @@ describe('computeDeferredPaths', () => {
       { source: '/dist/bin/cli.mjs', dest: CLI_DEST },
     ];
     const result = computeDeferredPaths(files, { skillDir: PROJ_ROOT, projectRoot: PROJ_ROOT });
-    expect(result.sourcePaths.has('dist/bin/cli.mjs')).toBe(true);
+    expect(result.sourcePaths.has(CLI_SOURCE)).toBe(true);
   });
 
   it('should resolve dest relative to skillDir and emit project-root-relative path for skill in subdirectory', () => {
@@ -331,6 +333,27 @@ describe('applyFilesConfig', () => {
 
     await expect(applyFilesConfig({ filesConfig, projectRoot, skillOutputDir })).rejects.toThrow(
       /use a glob/,
+    );
+  });
+
+  it('throws with build-artifact hint when missing source looks like a build product', async () => {
+    const { projectRoot, skillOutputDir } = makeApplySandbox();
+    const filesConfig: SkillFileEntry[] = [{ source: CLI_SOURCE, dest: CLI_DEST }];
+
+    await expect(applyFilesConfig({ filesConfig, projectRoot, skillOutputDir })).rejects.toThrow(
+      new RegExp(BUILD_ARTIFACT_FRAGMENT),
+    );
+  });
+
+  it('throws WITHOUT build-artifact hint when missing source is a plain reference file', async () => {
+    const { projectRoot, skillOutputDir } = makeApplySandbox();
+    const filesConfig: SkillFileEntry[] = [{ source: 'references/data.json', dest: 'data.json' }];
+
+    await expect(applyFilesConfig({ filesConfig, projectRoot, skillOutputDir })).rejects.toThrow(
+      /does not exist/,
+    );
+    await expect(applyFilesConfig({ filesConfig, projectRoot, skillOutputDir })).rejects.not.toThrow(
+      new RegExp(BUILD_ARTIFACT_FRAGMENT),
     );
   });
 
@@ -567,5 +590,69 @@ describe('verifyDestSet', () => {
     await expect(
       verifyDestSet(destDir, ['a.json', 'b.json'], GLOB_SOURCE),
     ).rejects.toThrow(/missing expected file 'b\.json'/);
+  });
+});
+
+// ============================================================================
+// buildArtifactHint
+// ============================================================================
+
+describe('buildArtifactHint', () => {
+  // Positives: should return a non-empty hint clause
+
+  it('returns hint for dist/ segment (bin/cli.mjs)', () => {
+    expect(buildArtifactHint(CLI_SOURCE)).toContain(BUILD_ARTIFACT_FRAGMENT);
+  });
+
+  it('returns hint for build/ segment', () => {
+    expect(buildArtifactHint('build/out.js')).toContain(BUILD_ARTIFACT_FRAGMENT);
+  });
+
+  it('returns hint for out/ segment', () => {
+    expect(buildArtifactHint('a/out/b.mjs')).toContain(BUILD_ARTIFACT_FRAGMENT);
+  });
+
+  it('returns hint for nested dist/ segment in a longer path', () => {
+    expect(buildArtifactHint('packages/x/dist/y.cjs')).toContain(BUILD_ARTIFACT_FRAGMENT);
+  });
+
+  it('returns hint for .mjs extension alone (no dist segment)', () => {
+    expect(buildArtifactHint('scripts/bundle.mjs')).toContain(BUILD_ARTIFACT_FRAGMENT);
+  });
+
+  it('returns hint for .cjs extension alone', () => {
+    expect(buildArtifactHint('lib/helper.cjs')).toContain(BUILD_ARTIFACT_FRAGMENT);
+  });
+
+  it('returns hint for .js extension alone', () => {
+    expect(buildArtifactHint('generated/output.js')).toContain(BUILD_ARTIFACT_FRAGMENT);
+  });
+
+  it('returns hint for .bundle.* extension', () => {
+    expect(buildArtifactHint('assets/app.bundle.min')).toContain(BUILD_ARTIFACT_FRAGMENT);
+  });
+
+  // Negatives: should return empty string
+
+  it('returns empty string for references/data.json (no artifact segment or extension)', () => {
+    expect(buildArtifactHint('references/data.json')).toBe('');
+  });
+
+  it('returns empty string for README.md', () => {
+    expect(buildArtifactHint('README.md')).toBe('');
+  });
+
+  it('returns empty string for assets/logo.png', () => {
+    expect(buildArtifactHint('assets/logo.png')).toBe('');
+  });
+
+  it('returns empty string for redistribute/data.json (dist is NOT a segment match)', () => {
+    // "redistribute" contains "dist" as a substring but must NOT match
+    expect(buildArtifactHint('redistribute/data.json')).toBe('');
+  });
+
+  it('returns hint for a backslash path (toForwardSlash normalization at the call site)', () => {
+    // Windows-style backslash path must be normalized before segment matching.
+    expect(buildArtifactHint(String.raw`dist\bin\cli.mjs`)).toContain(BUILD_ARTIFACT_FRAGMENT);
   });
 });

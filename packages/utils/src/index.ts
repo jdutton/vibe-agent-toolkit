@@ -71,3 +71,6 @@ export * from './glob/glob-pattern.js';
 
 // Filesystem hashing (sha256 of raw file bytes)
 export * from './fs/file-hash.js';
+
+// Byte-surgical YAML value updater (replace/insert without reflowing the doc)
+export * from './yaml/surgical-yaml.js';

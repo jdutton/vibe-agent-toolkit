@@ -19,6 +19,7 @@ import { describe, expect, it } from 'vitest';
 import { InternalHarnessError } from '../../src/skill-test/exit-codes.js';
 import {
   assertExperimenterSucceeded,
+  buildDryRunSummary,
   buildPreflightInput,
   buildResolveCtx,
   buildStageItems,
@@ -32,6 +33,7 @@ import {
   resolveStallMs,
   resolveTimeoutMs,
   subjectSkillName,
+  type DryRunSummaryInput,
   type RunHarnessOptions,
 } from '../../src/skill-test/run-harness.js';
 import { createTestPlugin, setupTempDir } from '../test-helpers.js';
@@ -389,6 +391,87 @@ describe('stage item construction', () => {
     expect(items).toHaveLength(1);
     expect(items[0]?.source).toEqual({ path: OVERRIDE_LOC });
     expect(items[0]?.role).toBe('subject');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Dry-run summary builder
+// ---------------------------------------------------------------------------
+
+// Shared constants for the dry-run summary assertions (avoids sonarjs/no-duplicate-string).
+const DRY_RUN_BUILD_PHRASE = 'build + stage the declared skill';
+const DRY_RUN_FALLBACK_PHRASE = 'fell back to the source dir';
+
+/** Build a minimal DryRunSummaryInput with the given overrides. */
+function makeDryRunInput(overrides: Partial<DryRunSummaryInput> = {}): DryRunSummaryInput {
+  return {
+    wouldBuild: false,
+    provenancePath: '/harness/results/provenance.json',
+    provenanceFingerprint: 'abc123',
+    provenanceEntryCount: 3,
+    modelFlag: '--model claude-sonnet-4-6',
+    ...overrides,
+  };
+}
+
+describe('buildDryRunSummary', () => {
+  it('plain source subject: states stage-as-is, no build mention in opening line', () => {
+    const summary = buildDryRunSummary(makeDryRunInput({ wouldBuild: false }));
+    expect(summary).toContain('stage the source dir as-is');
+    expect(summary).not.toContain(DRY_RUN_BUILD_PHRASE);
+  });
+
+  it('declared subject, no dist (dryRunStagedExistingDist=false): states build + stage, fell back to source', () => {
+    const summary = buildDryRunSummary(
+      makeDryRunInput({ wouldBuild: true, dryRunStagedExistingDist: false }),
+    );
+    expect(summary).toContain(DRY_RUN_BUILD_PHRASE);
+    expect(summary).toContain(DRY_RUN_FALLBACK_PHRASE);
+    expect(summary).not.toContain('STALE');
+  });
+
+  it('declared subject, existing dist (dryRunStagedExistingDist=true): states build + stage and flags stale', () => {
+    const summary = buildDryRunSummary(
+      makeDryRunInput({ wouldBuild: true, dryRunStagedExistingDist: true }),
+    );
+    expect(summary).toContain(DRY_RUN_BUILD_PHRASE);
+    expect(summary).toContain('STALE');
+    expect(summary).toContain('vat build');
+    expect(summary).not.toContain(DRY_RUN_FALLBACK_PHRASE);
+  });
+
+  it('declared subject, wouldBuild=true, no dryRunStagedExistingDist: states build but no stale/fallback detail', () => {
+    // wouldBuild=true but dryRunStagedExistingDist absent (e.g. from a real build run
+    // that somehow has dryRun=true and opts set but no flag threaded — edge case).
+    const summary = buildDryRunSummary(makeDryRunInput({ wouldBuild: true }));
+    expect(summary).toContain(DRY_RUN_BUILD_PHRASE);
+    expect(summary).not.toContain('STALE');
+    expect(summary).not.toContain(DRY_RUN_FALLBACK_PHRASE);
+  });
+
+  it('always includes the spawn command with the model flag', () => {
+    const summary = buildDryRunSummary(makeDryRunInput({ modelFlag: '--model opus' }));
+    expect(summary).toContain('Would spawn: claude -p --model opus');
+  });
+
+  it('includes entry count and fingerprint in the manifest line', () => {
+    const summary = buildDryRunSummary(
+      makeDryRunInput({ provenanceEntryCount: 5, provenanceFingerprint: 'deadbeef' }),
+    );
+    expect(summary).toContain('5 entries');
+    expect(summary).toContain('fingerprint: deadbeef');
+  });
+
+  it('uses singular "entry" for a count of 1', () => {
+    const summary = buildDryRunSummary(makeDryRunInput({ provenanceEntryCount: 1 }));
+    expect(summary).toContain('1 entry');
+    expect(summary).not.toContain('1 entries');
+  });
+
+  it('includes the provenance path in the summary', () => {
+    const customPath = '/harness/custom/results/provenance.json';
+    const summary = buildDryRunSummary(makeDryRunInput({ provenancePath: customPath }));
+    expect(summary).toContain(`Provenance: ${customPath}`);
   });
 });
 

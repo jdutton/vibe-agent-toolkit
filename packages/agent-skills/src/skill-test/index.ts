@@ -79,7 +79,9 @@ export { regenerateVendoredManifest, verifyVendoredManifest, VendoredManifestSch
 export { upsertTestConfig } from './configure-writer.js';
 export { buildEvalsTemplate, writeEvalsTemplate } from './evals-template.js';
 export {
+  buildDryRunSummary,
   runSkillTestHarness,
+  type DryRunSummaryInput,
   type RunHarnessOptions,
   type RunHarnessResult,
 } from './run-harness.js';
