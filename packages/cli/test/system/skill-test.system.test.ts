@@ -335,6 +335,8 @@ describe('vat skill test run (system)', () => {
         'run',
         skillDir,
         '--dry-run',
+        '--model',
+        'claude-opus-4-8',
         '--i-understand-this-runs-skill-code',
         '--out',
         outDir,
@@ -345,6 +347,10 @@ describe('vat skill test run (system)', () => {
       // now lands on stdout (programmatic-consumer routing); only the security
       // warning and the `Harness:` debug line stay on stderr.
       expect(result.stdout).toContain('dry-run');
+      // The assembled command surfaces the model passed verbatim to claude --model,
+      // and the selected model is echoed to stderr on every run.
+      expect(result.stdout).toContain('--model claude-opus-4-8');
+      expect(result.stderr).toContain('Model: claude-opus-4-8');
       // grading.json must NOT exist — dry-run does not spawn Claude.
       const gradingPath = safePath.join(outDir, 'results', 'grading.json');
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file

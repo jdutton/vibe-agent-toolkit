@@ -549,7 +549,10 @@ export function createSkillTestRunCommand(): Command {
     .option('--baseline', 'Enable A/B baseline run (with/without skill)')
     .option('--allow-unverified-skill-source', 'Skip the vendored manifest integrity check')
     .option('--i-understand-this-runs-skill-code', 'Acknowledge this command executes skill code (required)')
-    .option('--model <id>', 'Pinned model ID override')
+    .option(
+      '--model <id>',
+      "Model ID passed VERBATIM to `claude --model <id>` (VAT does no mapping/validation; e.g. opus, sonnet, claude-opus-4-8). Omit to use claude's own default model.",
+    )
     .option('--max-turns <n>', 'Cap on experimenter turns (positive integer)')
     .option('--max-budget-usd <n>', 'Hard USD budget cap (positive number)')
     .option('--timeout <s>', 'Wall-clock timeout in seconds (positive integer)')
@@ -571,6 +574,13 @@ Description:
   full privileges (filesystem, network, shell) and a reachable auth credential.
   Only run skills you trust. You MUST pass --i-understand-this-runs-skill-code
   to acknowledge this and proceed.
+
+Model:
+  --model <id> is passed straight through to the experimenter spawn as
+  \`claude --model <id>\` (verbatim -- VAT does not map or validate it). With no
+  --model, no flag is passed and claude picks its own default. The selected
+  model is echoed to stderr ("Model: <id>") on every run, and the --dry-run
+  output shows the exact assembled command including the --model flag.
 
 Exit Codes:
   0 - Harness ran to completion and produced a valid grading.json (check summary/grading.json for pass/fail counts)

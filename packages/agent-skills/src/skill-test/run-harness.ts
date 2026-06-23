@@ -420,6 +420,30 @@ export function resolveScaffoldEvalsPath(opts: RunHarnessOptions, repoRoot: stri
   return safePath.join(sourceDir, evalsSubpath);
 }
 
+/**
+ * The eval suite (`evals/`, incl. `fixtures/`) is authored TEST INPUT, not a
+ * shipped artifact — a built/dist subject won't carry it (packageSkill bundles
+ * only link-reachable resources + `files:`). Since the harness reads evals and
+ * fixtures relative to the staged subject, overlay the authored suite from the
+ * scaffold (source) dir onto the staged subject when it lacks it. No-op when there
+ * is no scaffold dir, the suite subpath has no directory, or the staged subject
+ * already carries the suite — so authored evals are never overwritten.
+ */
+function overlayAuthoredEvalSuite(
+  opts: RunHarnessOptions,
+  subjectStagedDir: string,
+  evalsSubpath: string,
+): void {
+  const evalsDir = dirname(evalsSubpath);
+  if (evalsDir === '.' || opts.subjectScaffoldDir === undefined) return;
+  const scaffoldEvalsDir = safePath.join(opts.subjectScaffoldDir, evalsDir);
+  const stagedEvalsDir = safePath.join(subjectStagedDir, evalsDir);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own staged/scaffold paths
+  if (!existsSync(stagedEvalsDir) && existsSync(scaffoldEvalsDir)) {
+    cpSync(scaffoldEvalsDir, stagedEvalsDir, { recursive: true });
+  }
+}
+
 interface ResolveDeclaredChildEnvInput {
   opts: RunHarnessOptions;
   resolvedAuth: ResolvedAuth | null;
@@ -527,25 +551,12 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       throw new InternalHarnessError('Staging did not yield a subject directory (no item tagged role:subject).');
     }
 
-    // Step 4: Resolve the subject's eval path inside its staged dir.
-    //
-    // The eval suite (`evals/`, incl. `fixtures/`) is authored TEST INPUT, not a
-    // shipped artifact — a built/dist subject won't carry it (packageSkill bundles
-    // only link-reachable resources + `files:`). Since the harness reads evals and
-    // fixtures relative to the staged subject, overlay the authored suite from the
-    // scaffold (source) dir when the staged subject lacks it. The bootstrap below
-    // then fires — and writes a template to the source scaffold — ONLY when the suite
-    // genuinely doesn't exist anywhere, so authored evals are never overwritten.
-    const evalsDir = dirname(evalsSubpath);
-    const scaffoldEvalsDir =
-      opts.subjectScaffoldDir === undefined
-        ? undefined
-        : safePath.join(opts.subjectScaffoldDir, evalsDir);
-    const stagedEvalsDir = safePath.join(subjectStagedDir, evalsDir);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own staged/scaffold paths
-    if (evalsDir !== '.' && scaffoldEvalsDir !== undefined && !existsSync(stagedEvalsDir) && existsSync(scaffoldEvalsDir)) {
-      cpSync(scaffoldEvalsDir, stagedEvalsDir, { recursive: true });
-    }
+    // Step 4: Resolve the subject's eval path inside its staged dir, overlaying the
+    // authored suite onto a built/dist subject that doesn't carry it (see
+    // overlayAuthoredEvalSuite). The bootstrap below then fires — and writes a
+    // template to the source scaffold — ONLY when the suite genuinely doesn't exist
+    // anywhere, so authored evals are never overwritten.
+    overlayAuthoredEvalSuite(opts, subjectStagedDir, evalsSubpath);
 
     // Bootstrap (exit 3) fires when the suite is absent everywhere — scaffold a
     // persistent template at the source location the user can edit, then throw.
@@ -636,12 +647,19 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       subjectPluginRoot,
     });
 
+    // Echo the selected model on EVERY run (regular + dry-run) so it is
+    // unambiguous which model the experimenter spawn uses. The id is forwarded
+    // verbatim to `claude --model`; with none set, no flag is passed and claude
+    // uses its own default.
+    const modelFlag = knobs.model === undefined ? '(no --model; claude default)' : `--model ${knobs.model}`;
+    process.stderr.write(`Model: ${knobs.model ?? '(claude default)'}\n`);
+
     // Step 9: Dry-run short-circuit — return assembled info without spawning.
     if (opts.dryRun === true) {
       return {
         harnessPath: harnessRoot,
         exitCode: SkillTestExitCode.Ok,
-        summary: `[dry-run] Would spawn: claude -p (prompt via stdin from ${promptFile})`,
+        summary: `[dry-run] Would spawn: claude -p ${modelFlag} (prompt via stdin from ${promptFile})`,
       };
     }
 
