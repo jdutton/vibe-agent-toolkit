@@ -41,3 +41,25 @@ describe('mapErrorToExitCode', () => {
     expect(SkillTestExitCode.Ok).toBe(0);
   });
 });
+
+describe('BootstrapNeededError message', () => {
+  const path = '/p/evals/evals.json';
+
+  it('real run: states the template was written', () => {
+    const err = new BootstrapNeededError(path);
+    expect(err.expectedPath).toBe(path);
+    expect(err.message).toContain('Wrote an evals.json template');
+    expect(err.message).toContain(path);
+  });
+
+  it('dry run: states nothing was written and names where it would scaffold', () => {
+    const err = new BootstrapNeededError(path, { dryRun: true });
+    expect(err.expectedPath).toBe(path);
+    expect(err.message).toContain('[dry-run]');
+    expect(err.message).toContain('nothing was written');
+    expect(err.message).toContain(path);
+    expect(err.message).not.toContain('Wrote an evals.json template');
+    // Same bootstrap-needed signal regardless of mode.
+    expect(mapErrorToExitCode(err)).toBe(SkillTestExitCode.Bootstrap);
+  });
+});

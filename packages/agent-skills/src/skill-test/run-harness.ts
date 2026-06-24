@@ -436,6 +436,30 @@ export function resolveScaffoldEvalsPath(opts: RunHarnessOptions, repoRoot: stri
 }
 
 /**
+ * Bootstrap (exit 3) when the eval suite is absent everywhere. A real run writes
+ * a persistent template at the source scaffold location and reports it; a dry run
+ * must never touch the filesystem, so it reports where a real run *would* scaffold
+ * and writes nothing. Both surface the same exit-3 BootstrapNeededError. No-op when
+ * `evalsPath` already exists.
+ */
+function bootstrapEvalSuiteIfMissing(
+  opts: RunHarnessOptions,
+  repoRoot: string,
+  evalsSubpath: string,
+  evalsPath: string,
+): void {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own staged-subject path
+  if (existsSync(evalsPath)) {
+    return;
+  }
+  const scaffoldPath = resolveScaffoldEvalsPath(opts, repoRoot, evalsSubpath);
+  if (opts.dryRun === true) {
+    throw new BootstrapNeededError(scaffoldPath, { dryRun: true });
+  }
+  throw new BootstrapNeededError(writeEvalsTemplate(scaffoldPath, subjectSkillName(opts)));
+}
+
+/**
  * The eval suite (`evals/`, incl. `fixtures/`) is authored TEST INPUT, not a
  * shipped artifact — a built/dist subject won't carry it (packageSkill bundles
  * only link-reachable resources + `files:`). Since the harness reads evals and
@@ -645,12 +669,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // Bootstrap (exit 3) fires when the suite is absent everywhere — scaffold a
     // persistent template at the source location the user can edit, then throw.
     const evalsPath = safePath.join(subjectStagedDir, evalsSubpath);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own staged-subject path
-    if (!existsSync(evalsPath)) {
-      const scaffoldPath = resolveScaffoldEvalsPath(opts, repoRoot, evalsSubpath);
-      const written = writeEvalsTemplate(scaffoldPath, subjectSkillName(opts));
-      throw new BootstrapNeededError(written);
-    }
+    bootstrapEvalSuiteIfMissing(opts, repoRoot, evalsSubpath, evalsPath);
 
     // Step 5: Preflight checks.
     const knobs = resolveKnobs(opts);

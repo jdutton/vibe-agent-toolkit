@@ -18,13 +18,22 @@ export type SkillTestExitCodeValue = (typeof SkillTestExitCode)[keyof typeof Ski
 
 /**
  * A required input is absent in a way vat can scaffold (missing evals.json).
- * Exit 3, NOT a failure. `expectedPath` is the real, persistent location where
- * the harness wrote the annotated starter template for the user to fill in.
+ * Exit 3, NOT a failure. `expectedPath` is the persistent location of the
+ * annotated starter template.
+ *
+ * In a real run the harness has already written that template, and the message
+ * says so. Under `--dry-run` nothing is written — a dry run must never touch the
+ * filesystem — so the message instead describes what a real run *would* scaffold
+ * and where, while surfacing the same exit-3 "bootstrap needed" signal.
  */
 export class BootstrapNeededError extends Error {
   readonly exitCode = 3 as const;
-  constructor(public readonly expectedPath: string) {
-    super(`Wrote an evals.json template at ${expectedPath} — fill it in and re-run.`);
+  constructor(public readonly expectedPath: string, opts?: { dryRun?: boolean }) {
+    super(
+      opts?.dryRun === true
+        ? `[dry-run] No evals.json found. A real run would scaffold an annotated template at ${expectedPath} — fill it in and re-run. (dry-run: nothing was written.)`
+        : `Wrote an evals.json template at ${expectedPath} — fill it in and re-run.`,
+    );
     this.name = 'BootstrapNeededError';
   }
 }

@@ -334,6 +334,40 @@ describe('vat skill test run (system)', () => {
     expect(Array.isArray(template['evals'])).toBe(true);
   });
 
+  it('--dry-run with no evals/ describes the scaffold path WITHOUT writing it (exit 3)', async () => {
+    const tempDir = ctx.createTempDir();
+    // Fixture skill WITHOUT evals/ so the bootstrap path fires — but under
+    // --dry-run, which must never touch the filesystem. (Bootstrap fires before
+    // the auth-gated preflight, so this needs neither claude nor auth.)
+    const skillDir = buildFixtureSkillDir(tempDir, 'poc-skill', false);
+    const outDir = safePath.join(tempDir, 'harness-bootstrap-dryrun');
+    prepareOutDir(outDir);
+
+    const result = await executeCli(ctx.binPath, [
+      'skill',
+      'test',
+      'run',
+      skillDir,
+      '--dry-run',
+      '--out',
+      outDir,
+    ]);
+
+    // Same bootstrap-needed signal as a real run — the precondition (no eval
+    // suite) is identical; only the side effect differs.
+    expectStatus(result, 3);
+
+    const scaffoldPath = safePath.join(skillDir, 'evals', 'evals.json');
+    // The whole point: --dry-run must NOT scaffold the template on disk.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
+    expect(fs.existsSync(scaffoldPath)).toBe(false);
+
+    // Instead it must say what a real run WOULD write, and where.
+    expect(result.stderr).toContain('dry-run');
+    expect(result.stderr).toContain(scaffoldPath);
+    expect(result.stderr).not.toContain('Error:');
+  });
+
   it('exits 2 with a "vat build" hint when --no-build is used and the dist is absent', async () => {
     // A config-declared pool skill resolves to `buildable`; --no-build with no
     // built dist fails in resolveSubjectForTest (SkillBuildError -> exit 2) BEFORE
