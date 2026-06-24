@@ -571,6 +571,32 @@ describe('validateSkillForPackaging - Non-portable asset references', () => {
 		expect(issue).toBeUndefined();
 	});
 
+	it('should flag the CLAUDE_PROJECT_DIR anchor (another Claude-only variable)', async () => {
+		const issue = await findNonPortableAssetIssue(
+			getTempDir,
+			'\n# Test Skill\n\nRun: `node "${CLAUDE_PROJECT_DIR}/skills/x/scripts/run.mjs" go`',
+		);
+		expect(issue).toBeDefined();
+		expect(issue?.severity).toBe('warning');
+	});
+
+	it('should flag an absolute script path passed to a runtime', async () => {
+		const issue = await findNonPortableAssetIssue(
+			getTempDir,
+			'\n# Test Skill\n\nRun: `node /Users/me/skill/scripts/run.mjs go`',
+		);
+		expect(issue).toBeDefined();
+		expect(issue?.severity).toBe('warning');
+	});
+
+	it('names the offending family variant in the message', async () => {
+		const issue = await findNonPortableAssetIssue(
+			getTempDir,
+			'\n# Test Skill\n\nRun: `node "${CLAUDE_PLUGIN_ROOT}/scripts/run.mjs" go`',
+		);
+		expect(issue?.message).toContain('claude-plugin-root');
+	});
+
 	it('should flag CLAUDE_PLUGIN_ROOT in a reachable bundled reference file, not just SKILL.md', async () => {
 		const tempDir = getTempDir();
 		// SKILL.md body is clean; the anti-pattern lives in a linked reference file.

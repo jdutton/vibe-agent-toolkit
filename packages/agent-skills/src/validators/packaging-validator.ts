@@ -593,14 +593,47 @@ const TIME_SENSITIVE_PATTERNS: readonly RegExp[] = [
 /* eslint-enable security/detect-non-literal-regexp */
 
 /**
- * Non-portable asset-reference anchors in a SKILL.md body. `CLAUDE_PLUGIN_ROOT`
- * is a Claude Code plugin-only variable that resolves to the plugin (not the
- * skill), so a bundled-script path anchored on it breaks the moment the skill is
- * mounted standalone (claude.ai upload, API container). Matches both
- * `$CLAUDE_PLUGIN_ROOT` and `${CLAUDE_PLUGIN_ROOT}`; case-sensitive so prose that
- * merely names the variable in lowercase is not flagged.
+ * The NON_PORTABLE_ASSET_REFERENCE *family*. Each variant detects one way a skill
+ * document hard-codes a path to a bundled asset that won't resolve across the
+ * surfaces a skill runs on (Claude Code plugin, claude.ai upload, API container).
+ *
+ * All variants roll up to the single `NON_PORTABLE_ASSET_REFERENCE` code, so one
+ * `validation.allow` entry (or severity override) silences the whole family for a
+ * file — adding an esoteric check never explodes the override surface. Each
+ * variant still carries its own `label` (named in the finding) and `fix` (tailored
+ * remediation), so the guidance stays specific. Add a check by appending a row.
+ *
+ * Patterns are case-sensitive (env vars are upper-case; lowercase prose mentions
+ * are not flagged).
  */
-const NON_PORTABLE_ASSET_PATTERNS: readonly RegExp[] = [/\$\{?CLAUDE_PLUGIN_ROOT\}?/];
+interface NonPortableAssetVariant {
+  /** Short stable id for the sub-check, surfaced in the finding message. */
+  readonly label: string;
+  readonly pattern: RegExp;
+  /** Variant-specific remediation shown as the finding's `fix`. */
+  readonly fix: string;
+}
+
+const RELATIVE_PATH_HINT =
+  'Reference bundled files by a path relative to the skill directory (e.g. `scripts/run.mjs`).';
+
+const NON_PORTABLE_ASSET_VARIANTS: readonly NonPortableAssetVariant[] = [
+  {
+    label: 'claude-plugin-root',
+    pattern: /\$\{?CLAUDE_PLUGIN_ROOT\}?/,
+    fix: `\`CLAUDE_PLUGIN_ROOT\` is a Claude Code plugin-only variable that points at the plugin, not the skill, and is absent under standalone mounts. ${RELATIVE_PATH_HINT}`,
+  },
+  {
+    label: 'claude-project-dir',
+    pattern: /\$\{?CLAUDE_PROJECT_DIR\}?/,
+    fix: `\`CLAUDE_PROJECT_DIR\` is a Claude Code-only variable absent on other runtimes. ${RELATIVE_PATH_HINT}`,
+  },
+  {
+    label: 'absolute-script-path',
+    pattern: /\b(?:node|bun|deno|python3?|ruby|sh|bash|uv)\s+["']?\/[^\s"']+\.(?:mjs|cjs|js|ts|py|rb|sh)\b/,
+    fix: `An absolute path to a bundled script will not exist on another machine or runtime. ${RELATIVE_PATH_HINT}`,
+  },
+];
 
 /**
  * Collect SKILL_TIME_SENSITIVE_CONTENT issues — scan the SKILL.md body for
@@ -636,31 +669,32 @@ function collectTimeSensitiveContentIssues(
 }
 
 /**
- * Collect NON_PORTABLE_ASSET_REFERENCE issues — scan the SKILL.md body for
- * non-portable asset-reference anchors (`CLAUDE_PLUGIN_ROOT`). One issue per
- * distinct match with line-number location (first match per line wins).
+ * Collect NON_PORTABLE_ASSET_REFERENCE issues — scan one skill document for any
+ * member of the non-portable asset-reference family. One issue per line (first
+ * matching variant wins), located at `docPath:line`, carrying the variant's
+ * label and tailored fix.
  */
 function collectNonPortableAssetReferenceIssues(
   content: string,
-  skillPath: string,
+  docPath: string,
   issues: ValidationIssue[],
 ): void {
   const registryEntry = CODE_REGISTRY.NON_PORTABLE_ASSET_REFERENCE;
   const lines = content.split('\n');
 
   for (const [index, line] of lines.entries()) {
-    for (const pattern of NON_PORTABLE_ASSET_PATTERNS) {
-      const match = pattern.exec(line);
+    for (const variant of NON_PORTABLE_ASSET_VARIANTS) {
+      const match = variant.pattern.exec(line);
       if (match !== null) {
         issues.push({
           severity: registryEntry.defaultSeverity,
           code: 'NON_PORTABLE_ASSET_REFERENCE',
-          message: `Non-portable asset reference "${match[0]}" — reference bundled files by a path relative to the skill directory`,
-          location: `${skillPath}:${index + 1}`,
-          fix: registryEntry.fix,
+          message: `Non-portable asset reference [${variant.label}]: "${match[0]}" — reference bundled files relative to the skill directory`,
+          location: `${docPath}:${index + 1}`,
+          fix: variant.fix,
           reference: registryEntry.reference,
         });
-        // Only emit one issue per line (first match wins)
+        // Only emit one issue per line (first matching variant wins)
         break;
       }
     }

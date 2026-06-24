@@ -12,6 +12,19 @@ A rule must describe a pattern that appears in real corpora. Rules follow observ
 
 Rules added against synthetic, theoretical, or aesthetic-only cases get rejected. This is not a matter of taste; it is a matter of keeping false-positive rates low enough that adopters still trust the tool. A linter that cries wolf in plausible-but-unobserved territory trains users to ignore it.
 
+## Check Families — One Code, Many Variants
+
+Not every new check deserves its own top-level code. When a check is a *variant* of an existing concern — same underlying problem, remediation only slightly different — model it as a member of a **family**: one registry code that internally dispatches to a table of labeled sub-checks.
+
+A family is the right shape when:
+
+- the sub-checks share a severity and a remediation theme (e.g. "reference bundled assets portably", "avoid non-portable shell utilities"), and
+- an adopter who wants to silence one almost always wants to silence the whole concern for that file.
+
+The mechanics: each variant is a `{ label, pattern, fix }` row; every finding emits the single family code but names its variant (`[<label>]`) and carries the variant's tailored `fix`. Because they share one code, a single `validation.allow` / `validation.severity` entry governs the **entire family** — adding an esoteric variant never multiplies the override surface an adopter has to manage, and a per-file allow silences the whole concern in one line instead of an exception per sub-check. Reference implementation: `NON_PORTABLE_ASSET_REFERENCE` (`packaging-validator.ts` → `NON_PORTABLE_ASSET_VARIANTS`).
+
+Prefer a family over a new code for small or esoteric checks. Reserve a new top-level code for a genuinely distinct concern that needs its own severity story and its own override. Collapsing *already-shipped* distinct codes into a family is a breaking change (adopter configs reference code names), so this guidance governs *new* checks, not retroactive consolidation.
+
 ## Default Severity Posture
 
 New rules ship at `info` or `warning`. `error` requires demonstrated harm, not disagreement with the pattern.
