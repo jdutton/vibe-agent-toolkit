@@ -360,13 +360,16 @@ export async function validateSkillForPackaging(
   const fileCount = bundledFiles.length + 1; // +1 for SKILL.md itself
   const maxLinkDepth = maxBundledDepth;
 
-  // Calculate total lines from bundled markdown files only
+  // Calculate total lines from bundled markdown files only, and scan each
+  // reachable bundled doc for non-portable asset references (the agent reads
+  // and copies invocations from reference files too, not just SKILL.md).
   let totalLines = skillLines;
   for (const bundledFile of bundledFiles) {
     if (bundledFile.endsWith('.md')) {
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- bundledFile resolved from markdown parser
       const content = await readFile(bundledFile, 'utf-8');
       totalLines += content.split('\n').length;
+      collectNonPortableAssetReferenceIssues(content, bundledFile, rawIssues);
     }
   }
 

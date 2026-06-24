@@ -570,6 +570,26 @@ describe('validateSkillForPackaging - Non-portable asset references', () => {
 		);
 		expect(issue).toBeUndefined();
 	});
+
+	it('should flag CLAUDE_PLUGIN_ROOT in a reachable bundled reference file, not just SKILL.md', async () => {
+		const tempDir = getTempDir();
+		// SKILL.md body is clean; the anti-pattern lives in a linked reference file.
+		const files = {
+			'toolbox.md': '# Toolbox\n\nRun `node "${CLAUDE_PLUGIN_ROOT}/skills/x/scripts/dxa.mjs" go`\n',
+		};
+		const skillContent = createSkillContent(
+			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+			'\n# Test Skill\n\nSee [toolbox](./toolbox.md).',
+		);
+		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
+		const result = await validateSkillForPackaging(skillPath);
+		const allIssues = [...result.activeErrors, ...result.activeWarnings, ...result.allErrors];
+		const issue = allIssues.find((e) => e.code === 'NON_PORTABLE_ASSET_REFERENCE');
+		expect(issue).toBeDefined();
+		expect(issue?.severity).toBe('warning');
+		// Location points at the reference file, not SKILL.md.
+		expect(issue?.location).toContain('toolbox.md');
+	});
 });
 
 describe('validateSkillForPackaging - Progressive disclosure validation', () => {
