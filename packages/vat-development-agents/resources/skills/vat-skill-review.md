@@ -86,7 +86,7 @@ These apply to skills that bundle executable scripts and instruct agents to run 
 - **[VAT] CLI invocation section**: provide exact command patterns with placeholder arguments. Agents copy these verbatim — ambiguous prose gets misinterpreted.
 - **[VAT] Error handling guidance**: document what to do when the CLI fails. Which errors are retryable? When should the agent stop and ask the user?
 - **[VAT] No bare command names in prose or tables**: agents may try to execute anything that looks like a command. Wrap command references in context or use code blocks with clear framing.
-- **[VAT] Cross-platform commands**: avoid `timeout` (not on macOS), platform-specific `sed` flags, `grep -P`, and other non-portable utilities. If platform-specific, document alternatives.
+- **[NON_PORTABLE_COMMAND] Cross-platform commands**: bundled commands use portable utilities/flags, not GNU/Linux-only ones. The `NON_PORTABLE_COMMAND` code (warning) flags `timeout` (not on macOS), `grep -P` (use `grep -E`), `sed -i` with no suffix (use `sed -i.bak`), `readlink -f`, and GNU `date -d` automatically — matching only commands in command position, not prose. If an occurrence is an intentional teaching example, allow it with a reason via `validation.allow`.
 - **[VAT] `files` config declares CLI binaries**: use `files` entries in `vibe-agent-toolkit.config.yaml` so VAT copies scripts into the skill package at build time. Don't rely on external copy scripts.
 - **[VAT] Document bundled assets and templates**: if scripts reference files programmatically (not via markdown links), explain what's bundled and why in the SKILL.md. The consuming agent should understand the full package contents.
 

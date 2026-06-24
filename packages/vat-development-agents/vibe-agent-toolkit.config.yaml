@@ -37,6 +37,13 @@ skills:
               - "**/vat-skill-authoring.md:*"
               - "**/vat-skill-review.md:*"
             reason: "Intentional CLAUDE_PLUGIN_ROOT mentions: these skills document the anti-pattern they enforce"
+        # vat-skill-review's checklist deliberately names `grep -P` (and other
+        # non-portable utilities) to TEACH the NON_PORTABLE_COMMAND rule. Scoped
+        # to that file so the check still fires for every other skill.
+        NON_PORTABLE_COMMAND:
+          - paths:
+              - "**/vat-skill-review.md:*"
+            reason: "Intentional non-portable-command mentions: this skill documents the anti-pattern it enforces"
   config:
     vibe-agent-toolkit:
       linkFollowDepth: 0

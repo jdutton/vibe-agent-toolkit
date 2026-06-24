@@ -422,6 +422,22 @@ Best-practice checks about skill shape and content.
 - **Overriding:** because every variant emits this one code, a single `validation.allow` entry (or severity override) silences the **whole family** for a file — adding an esoteric variant never multiplies the override surface. Allow `paths` match the offending file's location, so an intentional mention (e.g. a doc teaching the anti-pattern) can be scoped to that doc.
 - **Extending:** add a variant by appending a `{ label, pattern, fix }` row to `NON_PORTABLE_ASSET_VARIANTS` in `packaging-validator.ts` — no new top-level code. (Absolute Windows paths are covered separately by `PATH_STYLE_WINDOWS`.)
 
+### `NON_PORTABLE_COMMAND`
+
+- **Default:** `warning`
+- **What:** A skill document instructs an agent to run a shell command that hard-codes a GNU/Linux-only utility or flag. This is a **family** of sub-checks rolled up under one code; each finding names the variant that fired (`[<label>]`) and carries a tailored fix. Current variants:
+  - `timeout` — `timeout <arg>` (not installed on macOS by default)
+  - `grep-pcre` — `grep -P` / `grep --perl-regexp` (PCRE unsupported by BSD/macOS grep)
+  - `sed-i-no-backup` — `sed -i` with no attached suffix (GNU `sed -i` vs BSD `sed -i ''` differ; `sed -i.bak` is portable and not flagged)
+  - `readlink-f` — `readlink -f` (not on macOS by default)
+  - `date-d` — GNU `date -d` (BSD uses `-v` / `-j -f`)
+
+  Patterns match commands in **command position** only — start of line, or after a pipe/semicolon/ampersand or a backtick/code fence — so bare prose nouns ("the request will timeout", "grep the logs") are not flagged. Scans the `SKILL.md` body **and every markdown doc reachable through it** (the bundled link graph), since agents copy invocations from reference files too. One issue fires per matched line, located at the offending file.
+- **Why it matters:** Agents copy bundled commands verbatim. A command that only works on GNU/Linux fails the moment the skill runs on macOS/BSD — `timeout` is absent, `grep -P` errors, `sed -i` mangles its arguments, `readlink -f` is unrecognized, and `date -d` is rejected. The skill that "works on my machine" breaks on the user's first invocation elsewhere.
+- **Fix:** Use a portable equivalent: `grep -E` for PCRE; `sed -i.bak`/an explicit suffix (or a temp file) instead of bare `sed -i`; a portable resolve instead of `readlink -f`; `date -v`/`-j -f` instead of `date -d`; gate `timeout` on availability (`command -v timeout`) or drop it. See the `vibe-agent-toolkit:vat-skill-review` skill.
+- **Overriding:** because every variant emits this one code, a single `validation.allow` entry (or severity override) silences the **whole family** for a file — adding an esoteric variant never multiplies the override surface. Allow `paths` match the offending file's location, so an intentional mention (e.g. a doc teaching the anti-pattern) can be scoped to that doc.
+- **Extending:** add a variant by appending a `{ label, pattern, fix }` row to `NON_PORTABLE_COMMAND_VARIANTS` in `packaging-validator.ts` — no new top-level code.
+
 ### `SKILL_FRONTMATTER_EXTRA_FIELDS`
 
 - **Default:** `warning`

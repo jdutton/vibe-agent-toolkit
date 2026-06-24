@@ -370,6 +370,7 @@ export async function validateSkillForPackaging(
       const content = await readFile(bundledFile, 'utf-8');
       totalLines += content.split('\n').length;
       collectNonPortableAssetReferenceIssues(content, bundledFile, rawIssues);
+      collectNonPortableCommandIssues(content, bundledFile, rawIssues);
     }
   }
 
@@ -382,6 +383,7 @@ export async function validateSkillForPackaging(
   collectNameMismatchIssue(parseResult.frontmatter, skillPath, rawIssues);
   collectTimeSensitiveContentIssues(parseResult.content, skillPath, rawIssues);
   collectNonPortableAssetReferenceIssues(parseResult.content, skillPath, rawIssues);
+  collectNonPortableCommandIssues(parseResult.content, skillPath, rawIssues);
 
   // Cross-skill dependency smell: body declares a requires/depends token the
   // description does not mention. Uses the post-frontmatter content slice.
@@ -593,20 +595,15 @@ const TIME_SENSITIVE_PATTERNS: readonly RegExp[] = [
 /* eslint-enable security/detect-non-literal-regexp */
 
 /**
- * The NON_PORTABLE_ASSET_REFERENCE *family*. Each variant detects one way a skill
- * document hard-codes a path to a bundled asset that won't resolve across the
- * surfaces a skill runs on (Claude Code plugin, claude.ai upload, API container).
- *
- * All variants roll up to the single `NON_PORTABLE_ASSET_REFERENCE` code, so one
- * `validation.allow` entry (or severity override) silences the whole family for a
- * file — adding an esoteric check never explodes the override surface. Each
- * variant still carries its own `label` (named in the finding) and `fix` (tailored
- * remediation), so the guidance stays specific. Add a check by appending a row.
- *
- * Patterns are case-sensitive (env vars are upper-case; lowercase prose mentions
- * are not flagged).
+ * A member of a *portability check family*. Each variant detects one specific
+ * non-portable pattern; all variants in a family roll up to a single registry
+ * code so one `validation.allow` entry (or severity override) silences the whole
+ * concern for a file — adding an esoteric check never explodes the override
+ * surface. Each variant still carries its own `label` (named in the finding) and
+ * `fix` (tailored remediation), so the guidance stays specific. Extend a family
+ * by appending a row.
  */
-interface NonPortableAssetVariant {
+interface PortabilityVariant {
   /** Short stable id for the sub-check, surfaced in the finding message. */
   readonly label: string;
   readonly pattern: RegExp;
@@ -614,10 +611,18 @@ interface NonPortableAssetVariant {
   readonly fix: string;
 }
 
+/**
+ * The NON_PORTABLE_ASSET_REFERENCE family — ways a skill document hard-codes a
+ * path to a bundled asset that won't resolve across the surfaces a skill runs on
+ * (Claude Code plugin, claude.ai upload, API container).
+ *
+ * Patterns are case-sensitive (env vars are upper-case; lowercase prose mentions
+ * are not flagged).
+ */
 const RELATIVE_PATH_HINT =
   'Reference bundled files by a path relative to the skill directory (e.g. `scripts/run.mjs`).';
 
-const NON_PORTABLE_ASSET_VARIANTS: readonly NonPortableAssetVariant[] = [
+const NON_PORTABLE_ASSET_VARIANTS: readonly PortabilityVariant[] = [
   {
     label: 'claude-plugin-root',
     pattern: /\$\{?CLAUDE_PLUGIN_ROOT\}?/,
@@ -634,6 +639,59 @@ const NON_PORTABLE_ASSET_VARIANTS: readonly NonPortableAssetVariant[] = [
     fix: `An absolute path to a bundled script will not exist on another machine or runtime. ${RELATIVE_PATH_HINT}`,
   },
 ];
+
+/**
+ * The NON_PORTABLE_COMMAND family — ways a skill document instructs an agent to
+ * run a shell command that hard-codes a GNU/Linux-only utility or flag. The agent
+ * copies these invocations verbatim, so a command that only works on Linux fails
+ * the moment the skill runs on macOS/BSD.
+ *
+ * Patterns match commands in *command position* only (start of line, or after a
+ * pipe/semicolon/ampersand or a backtick/code fence) so bare prose nouns
+ * ("the request will timeout", "grep the logs") are not flagged. See
+ * COMMAND_POSITION / COMMAND_SEGMENT below.
+ */
+/* eslint-disable security/detect-non-literal-regexp -- compile-time constants composed from COMMAND_POSITION/COMMAND_SEGMENT, no user input */
+// Command position: start of line, or after a pipe/semicolon/ampersand or a
+// backtick (\x60). Leading whitespace is consumed so indented code blocks match.
+const COMMAND_POSITION = String.raw`(?:^|[|;&\x60])\s*`;
+// One command segment: characters up to the next separator (lazy), used to skip
+// over leading flags/args before the non-portable flag the variant looks for.
+const COMMAND_SEGMENT = String.raw`[^\n|;&\x60]*?`;
+
+const NON_PORTABLE_COMMAND_VARIANTS: readonly PortabilityVariant[] = [
+  {
+    label: 'timeout',
+    // `timeout <arg>` in command position; requires an argument so backtick-wrapped
+    // lone mentions (`timeout`) and object keys (`timeout:`) are not flagged.
+    pattern: new RegExp(COMMAND_POSITION + String.raw`timeout\s+\S+`),
+    fix: '`timeout` is not installed on macOS by default. Gate on its availability (`command -v timeout`), use a portable alternative, or drop it.',
+  },
+  {
+    label: 'grep-pcre',
+    pattern: new RegExp(COMMAND_POSITION + String.raw`grep\b` + COMMAND_SEGMENT + String.raw`\s(?:-[A-Za-z]*P|--perl-regexp)\b`),
+    fix: 'PCRE (`grep -P` / `--perl-regexp`) is unsupported by BSD/macOS grep. Use `grep -E` (extended regex) instead.',
+  },
+  {
+    label: 'sed-i-no-backup',
+    // `sed -i` followed by whitespace/end (no attached suffix). GNU `sed -i` and
+    // BSD `sed -i ''` differ; `sed -i.bak` (attached suffix) is portable and is
+    // not flagged (the `-i` here is followed by `.`, not whitespace).
+    pattern: new RegExp(COMMAND_POSITION + String.raw`sed\b` + COMMAND_SEGMENT + String.raw`\s-i(?=\s|$)`),
+    fix: 'GNU `sed -i` and BSD `sed -i \'\'` differ. Pass an explicit suffix (`sed -i.bak ...`) or write to a temp file and move it back.',
+  },
+  {
+    label: 'readlink-f',
+    pattern: new RegExp(COMMAND_POSITION + String.raw`readlink\b` + COMMAND_SEGMENT + String.raw`\s-[a-z]*f\b`),
+    fix: '`readlink -f` is not available on macOS by default. Use a portable resolve (e.g. a `cd "$(dirname …)" && pwd` shell function or a Node/Python one-liner).',
+  },
+  {
+    label: 'date-d',
+    pattern: new RegExp(COMMAND_POSITION + String.raw`date\b` + COMMAND_SEGMENT + String.raw`\s-d\b`),
+    fix: 'GNU `date -d` is not supported by BSD/macOS `date`, which uses `-v` or `-j -f`. Avoid `-d` or branch on the platform.',
+  },
+];
+/* eslint-enable security/detect-non-literal-regexp */
 
 /**
  * Collect SKILL_TIME_SENSITIVE_CONTENT issues — scan the SKILL.md body for
@@ -669,27 +727,32 @@ function collectTimeSensitiveContentIssues(
 }
 
 /**
- * Collect NON_PORTABLE_ASSET_REFERENCE issues — scan one skill document for any
- * member of the non-portable asset-reference family. One issue per line (first
- * matching variant wins), located at `docPath:line`, carrying the variant's
- * label and tailored fix.
+ * Scan one skill document for any member of a portability check family. One issue
+ * per line (first matching variant wins), located at `docPath:line`, carrying the
+ * variant's label and tailored fix. Shared by the NON_PORTABLE_ASSET_REFERENCE and
+ * NON_PORTABLE_COMMAND families.
  */
-function collectNonPortableAssetReferenceIssues(
+function collectPortabilityFamilyIssues(
   content: string,
   docPath: string,
   issues: ValidationIssue[],
+  family: {
+    readonly code: IssueCode;
+    readonly variants: readonly PortabilityVariant[];
+    readonly summarize: (label: string, match: string) => string;
+  },
 ): void {
-  const registryEntry = CODE_REGISTRY.NON_PORTABLE_ASSET_REFERENCE;
+  const registryEntry = CODE_REGISTRY[family.code];
   const lines = content.split('\n');
 
   for (const [index, line] of lines.entries()) {
-    for (const variant of NON_PORTABLE_ASSET_VARIANTS) {
+    for (const variant of family.variants) {
       const match = variant.pattern.exec(line);
       if (match !== null) {
         issues.push({
           severity: registryEntry.defaultSeverity,
-          code: 'NON_PORTABLE_ASSET_REFERENCE',
-          message: `Non-portable asset reference [${variant.label}]: "${match[0]}" — reference bundled files relative to the skill directory`,
+          code: family.code,
+          message: family.summarize(variant.label, match[0].trim()),
           location: `${docPath}:${index + 1}`,
           fix: variant.fix,
           reference: registryEntry.reference,
@@ -699,6 +762,42 @@ function collectNonPortableAssetReferenceIssues(
       }
     }
   }
+}
+
+/**
+ * Collect NON_PORTABLE_ASSET_REFERENCE issues — scan one skill document for any
+ * member of the non-portable asset-reference family.
+ */
+function collectNonPortableAssetReferenceIssues(
+  content: string,
+  docPath: string,
+  issues: ValidationIssue[],
+): void {
+  collectPortabilityFamilyIssues(content, docPath, issues, {
+    code: 'NON_PORTABLE_ASSET_REFERENCE',
+    variants: NON_PORTABLE_ASSET_VARIANTS,
+    summarize: (label, match) =>
+      `Non-portable asset reference [${label}]: "${match}" — reference bundled files relative to the skill directory`,
+  });
+}
+
+/**
+ * Collect NON_PORTABLE_COMMAND issues — scan one skill document for any member of
+ * the non-portable shell-command family.
+ */
+function collectNonPortableCommandIssues(
+  content: string,
+  docPath: string,
+  issues: ValidationIssue[],
+): void {
+  collectPortabilityFamilyIssues(content, docPath, issues, {
+    code: 'NON_PORTABLE_COMMAND',
+    variants: NON_PORTABLE_COMMAND_VARIANTS,
+    // Strip the leading command-position separator (backtick / pipe / etc.) the
+    // pattern captured, so the message shows just the command.
+    summarize: (label, match) =>
+      `Non-portable command [${label}]: "${match.replace(/^[`|;&\s]+/, '')}" — fails on macOS/BSD; use a portable equivalent`,
+  });
 }
 
 /**

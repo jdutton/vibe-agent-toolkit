@@ -618,6 +618,120 @@ describe('validateSkillForPackaging - Non-portable asset references', () => {
 	});
 });
 
+async function findNonPortableCommandIssue(
+	getTempDirFn: () => string,
+	bodyText: string,
+): Promise<ValidationIssue | undefined> {
+	const tempDir = getTempDirFn();
+	const skillContent = createSkillContent(
+		{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+		bodyText,
+	);
+	const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
+	const result = await validateSkillForPackaging(skillPath);
+	const allIssues = [...result.activeErrors, ...result.activeWarnings, ...result.allErrors];
+	return allIssues.find((e) => e.code === 'NON_PORTABLE_COMMAND');
+}
+
+describe('validateSkillForPackaging - Non-portable commands', () => {
+	it('should flag `timeout` invoked in command position', async () => {
+		const issue = await findNonPortableCommandIssue(
+			getTempDir,
+			'\n# Test Skill\n\nRun: `timeout 30 node scripts/run.mjs`',
+		);
+		expect(issue).toBeDefined();
+		expect(issue?.severity).toBe('warning');
+		expect(issue?.location).toMatch(/:\d+$/);
+		expect(issue?.message).toContain('timeout');
+	});
+
+	it('should flag `grep -P` (PCRE unsupported by BSD/macOS grep)', async () => {
+		const issue = await findNonPortableCommandIssue(
+			getTempDir,
+			'\n# Test Skill\n\nFilter: `grep -P "\\d+" file.txt`',
+		);
+		expect(issue).toBeDefined();
+		expect(issue?.message).toContain('grep-pcre');
+	});
+
+	it('should flag `sed -i` with no backup suffix', async () => {
+		const issue = await findNonPortableCommandIssue(
+			getTempDir,
+			'\n# Test Skill\n\nEdit: `sed -i s/foo/bar/ file.txt`',
+		);
+		expect(issue).toBeDefined();
+		expect(issue?.message).toContain('sed-i-no-backup');
+	});
+
+	it('should flag `readlink -f`', async () => {
+		const issue = await findNonPortableCommandIssue(
+			getTempDir,
+			'\n# Test Skill\n\nResolve: `readlink -f ./path`',
+		);
+		expect(issue).toBeDefined();
+		expect(issue?.message).toContain('readlink-f');
+	});
+
+	it('should flag GNU `date -d`', async () => {
+		const issue = await findNonPortableCommandIssue(
+			getTempDir,
+			'\n# Test Skill\n\nParse: `date -d "2026-01-01" +%s`',
+		);
+		expect(issue).toBeDefined();
+		expect(issue?.message).toContain('date-d');
+	});
+
+	it('should NOT flag a portable command (`grep -E`)', async () => {
+		const issue = await findNonPortableCommandIssue(
+			getTempDir,
+			'\n# Test Skill\n\nFilter: `grep -E "[0-9]+" file.txt`',
+		);
+		expect(issue).toBeUndefined();
+	});
+
+	it('should NOT flag `sed -i.bak` (portable attached suffix)', async () => {
+		const issue = await findNonPortableCommandIssue(
+			getTempDir,
+			'\n# Test Skill\n\nEdit: `sed -i.bak s/foo/bar/ file.txt`',
+		);
+		expect(issue).toBeUndefined();
+	});
+
+	it('should NOT flag a prose mention of "timeout" (not in command position)', async () => {
+		const issue = await findNonPortableCommandIssue(
+			getTempDir,
+			'\n# Test Skill\n\nThe request will timeout if the server is slow.',
+		);
+		expect(issue).toBeUndefined();
+	});
+
+	it('should NOT flag prose use of the word "grep" without the -P flag', async () => {
+		const issue = await findNonPortableCommandIssue(
+			getTempDir,
+			'\n# Test Skill\n\nYou can grep the logs to find the error.',
+		);
+		expect(issue).toBeUndefined();
+	});
+
+	it('should flag a non-portable command in a reachable bundled reference file, not just SKILL.md', async () => {
+		const tempDir = getTempDir();
+		const files = {
+			'toolbox.md': '# Toolbox\n\nRun `grep -P "\\d+" log.txt`\n',
+		};
+		const skillContent = createSkillContent(
+			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+			'\n# Test Skill\n\nSee [toolbox](./toolbox.md).',
+		);
+		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
+		const result = await validateSkillForPackaging(skillPath);
+		const allIssues = [...result.activeErrors, ...result.activeWarnings, ...result.allErrors];
+		const issue = allIssues.find((e) => e.code === 'NON_PORTABLE_COMMAND');
+		expect(issue).toBeDefined();
+		expect(issue?.severity).toBe('warning');
+		expect(issue?.location).toContain('toolbox.md');
+	});
+});
+
 describe('validateSkillForPackaging - Progressive disclosure validation', () => {
 	it('should pass for large SKILL.md with reference files', async () => {
 		const tempDir = getTempDir();
