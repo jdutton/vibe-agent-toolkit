@@ -408,6 +408,14 @@ Best-practice checks about skill shape and content.
 - **Why it matters:** Anthropic's best-practices doc advises against content that will become outdated — time-sensitive prose goes stale and misleads agents. The `info` severity reflects that this is sometimes intentional (historical context); it surfaces the pattern without asserting it is wrong.
 - **Fix:** Remove the time qualifier, or move deprecated guidance into a clearly labeled `## Old patterns` section with a `<details>` block so agents skip it.
 
+### `NON_PORTABLE_ASSET_REFERENCE`
+
+- **Default:** `warning`
+- **What:** `SKILL.md` body references a bundled script/asset via a non-portable anchor — currently `CLAUDE_PLUGIN_ROOT` (both `$CLAUDE_PLUGIN_ROOT` and `${CLAUDE_PLUGIN_ROOT}`). One issue fires per matched line (case-sensitive, so lowercase prose mentions are not flagged).
+- **Why it matters:** `CLAUDE_PLUGIN_ROOT` is a Claude Code *plugin* variable — it is not part of the portable Agent Skills contract and does not exist when the skill is mounted standalone (a claude.ai upload, an API container, `~/.claude/skills/`). It also resolves to the *plugin* directory, not the skill, so authors append a `skills/<name>/…` segment that only exists under plugin mounting; under a standalone mount that path 404s on the agent's first invocation. Anthropic's [skill authoring best practices](https://platform.claude.com/docs/en/docs/agents-and-tools/agent-skills/best-practices) reference bundled scripts by skill-relative paths exclusively; `CLAUDE_PLUGIN_ROOT` appears nowhere.
+- **Fix:** Reference bundled files by a path relative to the skill directory (e.g. `scripts/run.mjs`), never via `CLAUDE_PLUGIN_ROOT`, an absolute path, or an env-var anchor. See the `vibe-agent-toolkit:vat-skill-authoring` skill → "Referencing bundled scripts and assets". If a mention is intentional (e.g. documentation teaching the anti-pattern), allow it with a reason via `validation.allow`.
+- **Scope:** v1 scans the `SKILL.md` body and detects `CLAUDE_PLUGIN_ROOT`. Absolute-path detection and scanning of bundled reference files are candidate future extensions.
+
 ### `SKILL_FRONTMATTER_EXTRA_FIELDS`
 
 - **Default:** `warning`

@@ -80,6 +80,7 @@ Tooling enforcement: items marked with a bracketed code (e.g., `[SKILL_DESCRIPTI
 
 These apply to skills that bundle executable scripts and instruct agents to run commands.
 
+- **[NON_PORTABLE_ASSET_REFERENCE] Portable script paths (relative to the skill root)**: bundled scripts/assets are referenced by a skill-relative path (`scripts/run.mjs`), never via `CLAUDE_PLUGIN_ROOT`, an absolute path, or any env-var anchor. `CLAUDE_PLUGIN_ROOT` is Claude-Code-plugin-only and points at the plugin (not the skill), so a `${CLAUDE_PLUGIN_ROOT}/skills/<name>/…` path breaks the moment the skill is mounted standalone (claude.ai upload, API container) — on the user's first invocation. The `NON_PORTABLE_ASSET_REFERENCE` code (warning) flags `CLAUDE_PLUGIN_ROOT` in a SKILL.md body automatically; see `vibe-agent-toolkit:vat-skill-authoring` → "Referencing bundled scripts and assets". If an occurrence is an intentional teaching example, allow it with a reason via `validation.allow`.
 - **[VAT] Environment guard**: the skill checks that the CLI binary exists before running commands (e.g., verify `scripts/cli.mjs` is present). Agents should get a clear error, not a cryptic Node.js stack trace.
 - **[VAT] Pre-flight auth check**: if the CLI requires credentials or tokens, the skill verifies them before operations. Fail fast with clear guidance on how to authenticate.
 - **[VAT] CLI invocation section**: provide exact command patterns with placeholder arguments. Agents copy these verbatim — ambiguous prose gets misinterpreted.

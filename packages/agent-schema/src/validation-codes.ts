@@ -176,6 +176,12 @@ export const CODE_REGISTRY = {
     'Remove the time qualifier, or move deprecated guidance into a clearly labeled "## Old patterns" section with a <details> block.',
     'skill_time_sensitive_content',
   ),
+  NON_PORTABLE_ASSET_REFERENCE: entry(
+    'warning',
+    'SKILL.md body references a bundled script/asset via a non-portable anchor (CLAUDE_PLUGIN_ROOT). It is a Claude Code plugin-only variable that points at the plugin, not the skill, so the path breaks when the skill is mounted standalone (claude.ai upload, API container).',
+    'Reference bundled files by a path relative to the skill directory (e.g. `scripts/run.mjs`), never via CLAUDE_PLUGIN_ROOT, an absolute path, or an env-var anchor. See the vibe-agent-toolkit:vat-skill-authoring skill.',
+    'non_portable_asset_reference',
+  ),
   SKILL_FRONTMATTER_EXTRA_FIELDS: entry(
     'warning',
     'SKILL.md frontmatter contains a field outside the standard agentskills.io + Claude Code key set.',

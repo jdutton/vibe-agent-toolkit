@@ -69,6 +69,14 @@ describe('CODE_REGISTRY', () => {
       expect(CODE_REGISTRY[code].defaultSeverity).toBe('warning');
     }
   });
+
+  it('registers NON_PORTABLE_ASSET_REFERENCE as a warning-severity overridable code', () => {
+    expect(CODE_REGISTRY.NON_PORTABLE_ASSET_REFERENCE).toBeDefined();
+    expect(CODE_REGISTRY.NON_PORTABLE_ASSET_REFERENCE.defaultSeverity).toBe('warning');
+    expect(CODE_REGISTRY.NON_PORTABLE_ASSET_REFERENCE.description.length).toBeGreaterThan(10);
+    expect(CODE_REGISTRY.NON_PORTABLE_ASSET_REFERENCE.fix.length).toBeGreaterThan(10);
+    expect(CODE_REGISTRY.NON_PORTABLE_ASSET_REFERENCE.reference).toBe('#non_portable_asset_reference');
+  });
 });
 
 describe('CODE_REGISTRY — capability and compat codes', () => {

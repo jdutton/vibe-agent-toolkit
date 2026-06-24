@@ -378,6 +378,7 @@ export async function validateSkillForPackaging(
   collectProgressiveDisclosureIssue(skillLines, bundledFiles.length, skillPath, rawIssues);
   collectNameMismatchIssue(parseResult.frontmatter, skillPath, rawIssues);
   collectTimeSensitiveContentIssues(parseResult.content, skillPath, rawIssues);
+  collectNonPortableAssetReferenceIssues(parseResult.content, skillPath, rawIssues);
 
   // Cross-skill dependency smell: body declares a requires/depends token the
   // description does not mention. Uses the post-frontmatter content slice.
@@ -589,6 +590,16 @@ const TIME_SENSITIVE_PATTERNS: readonly RegExp[] = [
 /* eslint-enable security/detect-non-literal-regexp */
 
 /**
+ * Non-portable asset-reference anchors in a SKILL.md body. `CLAUDE_PLUGIN_ROOT`
+ * is a Claude Code plugin-only variable that resolves to the plugin (not the
+ * skill), so a bundled-script path anchored on it breaks the moment the skill is
+ * mounted standalone (claude.ai upload, API container). Matches both
+ * `$CLAUDE_PLUGIN_ROOT` and `${CLAUDE_PLUGIN_ROOT}`; case-sensitive so prose that
+ * merely names the variable in lowercase is not flagged.
+ */
+const NON_PORTABLE_ASSET_PATTERNS: readonly RegExp[] = [/\$\{?CLAUDE_PLUGIN_ROOT\}?/];
+
+/**
  * Collect SKILL_TIME_SENSITIVE_CONTENT issues — scan the SKILL.md body for
  * time-sensitive prose that may become stale. One issue per distinct match
  * with line-number location.
@@ -611,6 +622,38 @@ function collectTimeSensitiveContentIssues(
           code: 'SKILL_TIME_SENSITIVE_CONTENT',
           message: `Time-sensitive phrase "${match[0]}" may become stale`,
           location: `${skillPath}:${lineNumber}`,
+          fix: registryEntry.fix,
+          reference: registryEntry.reference,
+        });
+        // Only emit one issue per line (first match wins)
+        break;
+      }
+    }
+  }
+}
+
+/**
+ * Collect NON_PORTABLE_ASSET_REFERENCE issues — scan the SKILL.md body for
+ * non-portable asset-reference anchors (`CLAUDE_PLUGIN_ROOT`). One issue per
+ * distinct match with line-number location (first match per line wins).
+ */
+function collectNonPortableAssetReferenceIssues(
+  content: string,
+  skillPath: string,
+  issues: ValidationIssue[],
+): void {
+  const registryEntry = CODE_REGISTRY.NON_PORTABLE_ASSET_REFERENCE;
+  const lines = content.split('\n');
+
+  for (const [index, line] of lines.entries()) {
+    for (const pattern of NON_PORTABLE_ASSET_PATTERNS) {
+      const match = pattern.exec(line);
+      if (match !== null) {
+        issues.push({
+          severity: registryEntry.defaultSeverity,
+          code: 'NON_PORTABLE_ASSET_REFERENCE',
+          message: `Non-portable asset reference "${match[0]}" — reference bundled files by a path relative to the skill directory`,
+          location: `${skillPath}:${index + 1}`,
           fix: registryEntry.fix,
           reference: registryEntry.reference,
         });

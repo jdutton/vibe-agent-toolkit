@@ -28,6 +28,15 @@ skills:
               - "../*/README.md"        # sibling packages/<name>/README.md
               - "../../packages/**"      # any sibling-package reference
             reason: "Cross-monorepo text pointers to top-level docs/, CHANGELOG.md, and sibling-package READMEs"
+        # vat-skill-authoring and vat-skill-review deliberately contain
+        # CLAUDE_PLUGIN_ROOT to TEACH the NON_PORTABLE_ASSET_REFERENCE rule
+        # (anti-pattern example + checklist text). Scoped to those two files so
+        # the check still fires for every other skill in this package.
+        NON_PORTABLE_ASSET_REFERENCE:
+          - paths:
+              - "**/vat-skill-authoring.md:*"
+              - "**/vat-skill-review.md:*"
+            reason: "Intentional CLAUDE_PLUGIN_ROOT mentions: these skills document the anti-pattern they enforce"
   config:
     vibe-agent-toolkit:
       linkFollowDepth: 0

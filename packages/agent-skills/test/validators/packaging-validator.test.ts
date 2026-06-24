@@ -520,6 +520,58 @@ describe('validateSkillForPackaging - Time-sensitive content', () => {
 	});
 });
 
+async function findNonPortableAssetIssue(
+	getTempDirFn: () => string,
+	bodyText: string,
+): Promise<ValidationIssue | undefined> {
+	const tempDir = getTempDirFn();
+	const skillContent = createSkillContent(
+		{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+		bodyText,
+	);
+	const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
+	const result = await validateSkillForPackaging(skillPath);
+	const allIssues = [...result.activeErrors, ...result.activeWarnings, ...result.allErrors];
+	return allIssues.find((e) => e.code === 'NON_PORTABLE_ASSET_REFERENCE');
+}
+
+describe('validateSkillForPackaging - Non-portable asset references', () => {
+	it('should emit a warning for a ${CLAUDE_PLUGIN_ROOT}-anchored script path', async () => {
+		const issue = await findNonPortableAssetIssue(
+			getTempDir,
+			'\n# Test Skill\n\nRun: `node "${CLAUDE_PLUGIN_ROOT}/skills/test-skill/scripts/run.mjs" go`',
+		);
+		expect(issue).toBeDefined();
+		expect(issue?.severity).toBe('warning');
+		expect(issue?.location).toMatch(/:\d+$/);
+	});
+
+	it('should also catch the bare $CLAUDE_PLUGIN_ROOT form (no braces)', async () => {
+		const issue = await findNonPortableAssetIssue(
+			getTempDir,
+			'\n# Test Skill\n\nRun: `node $CLAUDE_PLUGIN_ROOT/scripts/run.mjs go`',
+		);
+		expect(issue).toBeDefined();
+		expect(issue?.severity).toBe('warning');
+	});
+
+	it('should NOT emit for a portable skill-relative script path', async () => {
+		const issue = await findNonPortableAssetIssue(
+			getTempDir,
+			'\n# Test Skill\n\nRun: `node scripts/run.mjs go`',
+		);
+		expect(issue).toBeUndefined();
+	});
+
+	it('should NOT emit for a legitimate non-plugin env var (e.g. ${TMPDIR})', async () => {
+		const issue = await findNonPortableAssetIssue(
+			getTempDir,
+			'\n# Test Skill\n\nSet a cache dir: `export CACHE="${TMPDIR:-/tmp}/test-cache"`',
+		);
+		expect(issue).toBeUndefined();
+	});
+});
+
 describe('validateSkillForPackaging - Progressive disclosure validation', () => {
 	it('should pass for large SKILL.md with reference files', async () => {
 		const tempDir = getTempDir();
