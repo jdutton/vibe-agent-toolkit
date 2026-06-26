@@ -36,6 +36,8 @@ export {
   mergeFilesConfig,
   matchLinkToFiles,
   computeDeferredPaths,
+  type ComputeDeferredPathsOpts,
+  type DeferredPaths,
   type FilesMatchResult,
 } from './files-config.js';
 

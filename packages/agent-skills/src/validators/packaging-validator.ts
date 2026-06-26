@@ -13,7 +13,7 @@
  * - vat skills audit --user (report issues, exit 0 always)
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
@@ -29,17 +29,19 @@ import { parseMarkdown, ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, normalizedTmpdir, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
+import { computeDeferredPaths } from '../files-config.js';
 import { walkLinkGraph, type LinkResolution, type WalkableRegistry } from '../walk-link-graph.js';
 
 import { observationToIssue, runCompatDetectors } from './compat-detectors.js';
 import { detectUndeclaredCrossSkillAuth } from './cross-skill-dependency-detection.js';
 import { validateFrontmatterRules, validateFrontmatterSchema } from './frontmatter-validation.js';
+import { materializeIssue } from './rule-engine/index.js';
 import { SOURCE_ONLY_CODES } from './source-only-codes.js';
 import {
   VALIDATION_RULES,
   VALIDATION_THRESHOLDS,
 } from './validation-rules.js';
-import { walkerExclusionsToIssues } from './walker-to-issues.js';
+import { deferredAssetsToIssues, walkerExclusionsToIssues } from './walker-to-issues.js';
 
 /** Exclude reason constants to avoid duplicate string literals */
 const EXCLUDE_REASON_DIRECTORY = 'directory-target' as const;
@@ -128,10 +130,16 @@ export interface PackagingValidationResult {
 }
 
 /**
- * Validate files config entries for duplicate dest values.
+ * Validate files config entries for duplicate dest values and directory sources.
+ *
+ * A `files:` entry is a typed single-file slot: its source must resolve to a
+ * file, not a directory. If the source path exists and is a directory, emit
+ * LINK_TARGETS_DIRECTORY. Missing sources are not flagged here (deferred build
+ * artifacts are handled by the skill-packager).
  */
 function validateFilesConfig(
   files: Array<{ source: string; dest: string }> | undefined,
+  projectRoot: string,
 ): ValidationIssue[] {
   if (!files?.length) return [];
 
@@ -148,31 +156,37 @@ function validateFilesConfig(
       });
     }
     destSet.add(normalized);
+
+    // Check if an existing source resolves to a directory — a typed single-file
+    // slot cannot be satisfied by a directory.
+    const resolvedSource = safePath.resolve(safePath.join(projectRoot, entry.source));
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolvedSource derived from config-supplied path
+    if (existsSync(resolvedSource) && statSync(resolvedSource).isDirectory()) {
+      const location = toForwardSlash(entry.source);
+      issues.push(createRegistryIssue(
+        'LINK_TARGETS_DIRECTORY',
+        `files: source '${entry.source}' resolves to a directory; a typed single-file slot requires a file`,
+        location,
+      ));
+    }
   }
 
   return issues;
 }
 
 /**
- * Create a validation issue from a code-registry code
+ * Create a validation issue from a code-registry code with a bespoke message.
+ *
+ * Thin wrapper over the shared {@link materializeIssue} so severity / fix /
+ * reference come from the single CODE_REGISTRY source (issue #129 dedup); the
+ * caller supplies a fully-formed `message`.
  */
 function createRegistryIssue(
   code: IssueCode,
   message: string,
   location?: string,
 ): ValidationIssue {
-  const entry = CODE_REGISTRY[code];
-  const issue: ValidationIssue = {
-    severity: entry.defaultSeverity,
-    code,
-    message,
-    fix: entry.fix,
-    reference: entry.reference,
-  };
-  if (location !== undefined) {
-    issue.location = location;
-  }
-  return issue;
+  return materializeIssue(code, { message, location });
 }
 
 /**
@@ -180,13 +194,20 @@ function createRegistryIssue(
  * internal links. Extracted so the skill validator can fall back to a private
  * registry when the caller does not supply a shared one.
  *
+ * Crawls markdown AND HTML (`.html`/`.htm`) so the live audit/validate path
+ * sees the same link graph the built path does (issue #129 AC2). The registry
+ * parses HTML via parse5 and surfaces its `local_file` links, so the walker
+ * traverses HTML references and catches HTML broken links at source time — not
+ * just at build time. (Previously the crawl was markdown-only, so source HTML
+ * was invisible to audit/validate.)
+ *
  * Exported so external callers (e.g. the inventory layer) can build a registry
  * once and pass it down rather than re-crawling per skill.
  */
 export async function crawlAndResolveRegistry(projectRoot: string): Promise<ResourceRegistry> {
   const registry = await ResourceRegistry.fromCrawl({
     baseDir: projectRoot,
-    include: ['**/*.md'],
+    include: ['**/*.md', '**/*.html', '**/*.htm'],
   });
   registry.resolveLinks();
   return registry;
@@ -268,9 +289,6 @@ export async function validateSkillForPackaging(
     );
   }
 
-  // Validate files config
-  rawIssues.push(...validateFilesConfig(packagingConfig?.files));
-
   // Compat capability detection: collect observations from SKILL.md and
   // surface each as a CAPABILITY_* issue. Observations are also returned
   // on the result so downstream verdict computation (CLI layer) can recover
@@ -291,6 +309,10 @@ export async function validateSkillForPackaging(
   // boundary owns any user-facing warning. See plan 2026-05-17.
   const projectRoot = findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
 
+  // Validate files config (requires projectRoot to resolve source paths for
+  // directory-source detection — must run after projectRoot is computed).
+  rawIssues.push(...validateFilesConfig(packagingConfig?.files, projectRoot));
+
   // Build resource registry and walk the link graph.
   // Prefer the caller-supplied shared registry (when `vat skills validate` or
   // similar batches multiple skills under the same project root) so the
@@ -302,17 +324,23 @@ export async function validateSkillForPackaging(
     : await crawlAndResolveRegistry(projectRoot);
 
   const skillResource = registry.getResource(safePath.resolve(skillPath));
+  const deferred = computeDeferredPaths(packagingConfig?.files ?? [], {
+    skillDir: dirname(skillPath),
+    projectRoot,
+  });
+
   const walkOptions: Parameters<typeof walkLinkGraph>[2] = {
     maxDepth,
     excludeRules: excludeConfig?.rules ?? [],
     projectRoot,
     skillRootPath: safePath.resolve(skillPath),
     excludeNavigationFiles,
+    deferredPaths: deferred,
   };
   if (shared?.gitTracker !== undefined) {
     walkOptions.gitTracker = shared.gitTracker;
   }
-  const { bundledResources, bundledAssets, excludedReferences, maxBundledDepth } = walkLinkGraph(
+  const { bundledResources, bundledAssets, excludedReferences, maxBundledDepth, deferredAssets } = walkLinkGraph(
     skillResource?.id ?? '',
     registry as WalkableRegistry,
     walkOptions,
@@ -326,6 +354,8 @@ export async function validateSkillForPackaging(
 
   // Emit issues from walker exclusions (LINK_OUTSIDE_PROJECT, LINK_TARGETS_DIRECTORY, etc.)
   rawIssues.push(...walkerExclusionsToIssues(excludedReferences, projectRoot));
+  // Emit one info issue per deferred asset declared in files: config
+  rawIssues.push(...deferredAssetsToIssues(deferredAssets, projectRoot));
 
   const fileCount = bundledFiles.length + 1; // +1 for SKILL.md itself
   const maxLinkDepth = maxBundledDepth;

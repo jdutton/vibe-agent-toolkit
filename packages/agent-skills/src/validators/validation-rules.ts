@@ -94,8 +94,8 @@ export const VALIDATION_RULES: Record<ValidationRuleCode, ValidationRule> = {
   LINK_TARGETS_DIRECTORY: {
     code: 'LINK_TARGETS_DIRECTORY',
     category: 'required',
-    message: (ctx) => `Link targets directory "${(ctx['dirPath'] as string) ?? 'unknown'}". Link to a specific file instead (e.g., "${(ctx['dirPath'] as string) ?? 'unknown'}/README.md" or "${(ctx['dirPath'] as string) ?? 'unknown'}/index.md").`,
-    fix: 'Link to a specific file instead of a directory',
+    message: (ctx) => `files: source '${(ctx['source'] as string) ?? 'unknown'}' resolves to a directory; a typed single-file slot requires a file`,
+    fix: 'Point the files: source (or other single-file reference) at a specific file, not a directory.',
   },
 
   // Best practice rules (overridable)

@@ -274,4 +274,30 @@ describe('checkBrokenPackagedLinks', () => {
     const issues = await checkBrokenPackagedLinks(outputDir);
     expect(issues).toHaveLength(0);
   });
+
+  // C1 fix (#126): directory links should NOT be flagged as broken when the
+  // directory exists on disk (walkDir only tracks files, never directories).
+  it('should NOT flag a navigational directory link when the target directory exists', async () => {
+    const outputDir = await setupOutputDir(['refs']);
+    await writeSkillMd(
+      outputDir,
+      ['# Skill', '', 'See [refs](refs/).'].join('\n'),
+    );
+    // Add a file inside refs/ so walkDir has something to find there
+    await writeResource(outputDir, 'refs/overview.md', '# Refs\n');
+
+    const issues = await checkBrokenPackagedLinks(outputDir);
+    expect(issues).toHaveLength(0);
+  });
+
+  it('should still flag a navigational directory link when the target directory does not exist', async () => {
+    const outputDir = await setupOutputDir();
+    await writeSkillMd(
+      outputDir,
+      ['# Skill', '', 'See [gone](gone/).'].join('\n'),
+    );
+
+    const issues = await checkBrokenPackagedLinks(outputDir);
+    expectSingleIssue(issues, 'PACKAGED_BROKEN_LINK', 'gone/');
+  });
 });

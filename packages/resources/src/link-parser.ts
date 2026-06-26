@@ -1,5 +1,5 @@
 /**
- * Markdown link parser and analyzer.
+ * Markdown link parser and shared resource-parsing types.
  *
  * Parses markdown files to extract:
  * - Links (regular, reference-style, autolinks)
@@ -7,6 +7,10 @@
  * - File size and token estimates
  *
  * Uses unified/remark for robust markdown parsing with GFM support.
+ *
+ * Also defines the format-neutral `ParseResult` contract shared with the HTML
+ * parser (`html-link-parser.ts`). The `HtmlParseError` shape is Zod-sourced
+ * from `schemas/resource-metadata.ts` (single source of truth).
  */
 
 import { readFile, stat } from 'node:fs/promises';
@@ -20,10 +24,11 @@ import { unified } from 'unified';
 import { visit } from 'unist-util-visit';
 import * as yaml from 'yaml';
 
+import type { HtmlParseError } from './schemas/resource-metadata.js';
 import type { HeadingNode, LinkType, ResourceLink } from './types.js';
 
 /**
- * Result of parsing a markdown file.
+ * Result of parsing a resource file (markdown or HTML).
  */
 export interface ParseResult {
   links: ResourceLink[];
@@ -33,6 +38,10 @@ export interface ParseResult {
   content: string;
   sizeBytes: number;
   estimatedTokenCount: number;
+  /** Fragment targets (HTML `id`/`name` attributes). Markdown leaves this undefined. */
+  anchors?: string[];
+  /** HTML well-formedness diagnostics. Markdown leaves this undefined. */
+  parseErrors?: HtmlParseError[];
 }
 
 /**
@@ -185,6 +194,11 @@ function extractLinkText(node: Link | LinkReference): string {
  * classifyLink('#heading') // 'anchor'
  * classifyLink('./file.md') // 'local_file'
  * classifyLink('./file.md#anchor') // 'local_file'
+ * classifyLink('docs/') // 'local_directory'
+ * classifyLink('./docs/') // 'local_directory'
+ * classifyLink('../docs/') // 'local_directory'
+ * classifyLink('/docs/') // 'local_directory'
+ * classifyLink('https://x.com/docs/') // 'external' (not a local ref)
  * ```
  */
 export function classifyLink(href: string): LinkType {
@@ -201,6 +215,12 @@ export function classifyLink(href: string): LinkType {
   // (e.g., javascript:, tel:, data:, ftp:) — classify as unknown rather than local file
   if (href.includes(':')) {
     return 'unknown';
+  }
+  // Local directory: path component (before any # or ?) ends in '/'.
+  // Must come after all protocol guards so external URLs are never reclassified.
+  const pathPart = href.split(/[#?]/u)[0] ?? href;
+  if (pathPart.endsWith('/')) {
+    return 'local_directory';
   }
   // Links with anchors are still local file links
   if (href.includes('#')) {
@@ -240,6 +260,19 @@ export function classifyLink(href: string): LinkType {
     return 'local_file';
   }
   return 'unknown';
+}
+
+/**
+ * Returns true for link types that represent local filesystem targets — both
+ * regular files and directories. Other packages (e.g. agent-skills walker)
+ * import this predicate as the single source of truth for "should we treat
+ * this link like a file link during validation/traversal?"
+ *
+ * @param type - The classified link type
+ * @returns `true` for `'local_file'` and `'local_directory'`
+ */
+export function isLocalFileLink(type: LinkType): boolean {
+  return type === 'local_file' || type === 'local_directory';
 }
 
 /**

@@ -40,8 +40,8 @@ export const CODE_REGISTRY = {
   ),
   LINK_TARGETS_DIRECTORY: entry(
     'error',
-    'Markdown link resolves to a directory rather than a file.',
-    'Point the link at a specific file (e.g. README.md inside the directory) instead of the directory itself.',
+    'A typed single-file reference (e.g. a packaging `files:` source entry) resolves to a directory instead of a file.',
+    'Point the `files:` source (or other single-file reference) at a specific file, not a directory. Navigational prose links to a directory are valid and do not trigger this code.',
     'link_targets_directory',
   ),
   LINK_TO_NAVIGATION_FILE: entry(
@@ -61,6 +61,12 @@ export const CODE_REGISTRY = {
     'Markdown link target does not exist on disk and is not a declared build artifact.',
     'Fix the link path, create the file, or declare it under skills.config.<name>.files as a build artifact.',
     'link_missing_target',
+  ),
+  LINK_DEFERRED_ARTIFACT: entry(
+    'info',
+    'Link targets a deferred build artifact declared in the skill files: config; it will exist after the build materializes it.',
+    'No action needed if the files: entry is correct. To silence, set validation.severity.LINK_DEFERRED_ARTIFACT: ignore.',
+    'link_deferred_artifact',
   ),
   LINK_TO_SKILL_DEFINITION: entry(
     'error',
@@ -85,6 +91,12 @@ export const CODE_REGISTRY = {
     'Link in the packaged output resolves to a file that is not present in the output (likely a link-rewriter bug).',
     'Report the issue — this indicates a VAT bug. As a temporary workaround, set severity.PACKAGED_BROKEN_LINK to ignore while the underlying bug is fixed.',
     'packaged_broken_link',
+  ),
+  DUPLICATE_RESOURCE_ID: entry(
+    'error',
+    'Two files resolve to the same resource id after path normalization.',
+    'Rename one of the files so they produce distinct resource ids.',
+    'duplicate_resource_id',
   ),
   SKILL_LENGTH_EXCEEDS_RECOMMENDED: entry(
     'warning',
@@ -325,6 +337,12 @@ export const CODE_REGISTRY = {
     'A tracked file links to a gitignored file.',
     'Link a tracked target or un-ignore it.',
     'link_to_gitignored',
+  ),
+  MALFORMED_HTML: entry(
+    'info',
+    'HTML resource has well-formedness issues reported by the parser.',
+    'Fix the malformed markup (unclosed tags, stray characters). Informational by default; raise severity via validation.severity to enforce.',
+    'malformed_html',
   ),
   FRONTMATTER_MISSING: entry(
     'error',

@@ -202,19 +202,31 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
       modelPath = safePath.join(this.configModelPath, 'model.onnx');
       vocabPath = safePath.join(this.configModelPath, 'vocab.txt');
     } else {
-      const files = await ensureModelFiles(this.model, this.cacheDir);
-      modelPath = files.modelPath;
-      vocabPath = files.vocabPath;
+      try {
+        const files = await ensureModelFiles(this.model, this.cacheDir);
+        modelPath = files.modelPath;
+        vocabPath = files.vocabPath;
+      } catch (cause) {
+        throw new Error(`Failed to download ONNX model '${this.model}': ${String(cause)}`, {
+          cause,
+        });
+      }
     }
 
     const sessionOptions = this.executionProviders
       ? { executionProviders: this.executionProviders }
       : undefined;
 
-    const session = await ort.InferenceSession.create(modelPath, sessionOptions);
-    const tokenizer = await BertTokenizer.fromVocabFile(vocabPath);
+    try {
+      const session = await ort.InferenceSession.create(modelPath, sessionOptions);
+      const tokenizer = await BertTokenizer.fromVocabFile(vocabPath);
 
-    return { session, tokenizer };
+      return { session, tokenizer };
+    } catch (cause) {
+      throw new Error(`Failed to load ONNX model '${this.model}': ${String(cause)}`, {
+        cause,
+      });
+    }
   }
 
   /**
