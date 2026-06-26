@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { classifyLink } from '../src/link-parser.js';
+import { classifyLink, isLocalFileLink } from '../src/link-parser.js';
+import type { LinkType } from '../src/types.js';
 
 describe('classifyLink (exported)', () => {
   it('classifies https URLs as external', () => {
@@ -24,5 +25,33 @@ describe('classifyLink (exported)', () => {
     // eslint-disable-next-line sonarjs/code-eval -- test input; classifyLink must reject this href as 'unknown'
     expect(classifyLink('javascript:void(0)')).toBe('unknown');
     expect(classifyLink('tel:+1234567890')).toBe('unknown');
+  });
+
+  describe('local_directory classification', () => {
+    it.each<{ href: string; expected: LinkType }>([
+      { href: 'docs/', expected: 'local_directory' },
+      { href: './docs/', expected: 'local_directory' },
+      { href: '../docs/', expected: 'local_directory' },
+      { href: '/docs/', expected: 'local_directory' },
+      { href: 'docs', expected: 'local_file' }, // no trailing slash — stays local_file
+      { href: 'docs/x.md', expected: 'local_file' }, // ends in a file — stays local_file
+      { href: 'https://x.com/docs/', expected: 'external' }, // trailing-slash URL — stays external
+      { href: '#heading', expected: 'anchor' }, // fragment-only — stays anchor
+    ])('classifies $href as $expected', ({ href, expected }) => {
+      expect(classifyLink(href)).toBe(expected);
+    });
+  });
+});
+
+describe('isLocalFileLink', () => {
+  it.each<{ type: LinkType; expected: boolean }>([
+    { type: 'local_file', expected: true },
+    { type: 'local_directory', expected: true },
+    { type: 'external', expected: false },
+    { type: 'anchor', expected: false },
+    { type: 'email', expected: false },
+    { type: 'unknown', expected: false },
+  ])('returns $expected for $type', ({ type, expected }) => {
+    expect(isLocalFileLink(type)).toBe(expected);
   });
 });

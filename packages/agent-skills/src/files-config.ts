@@ -8,7 +8,7 @@
  */
 
 import type { SkillFileEntry } from '@vibe-agent-toolkit/resources';
-import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 
 export type { SkillFileEntry } from '@vibe-agent-toolkit/resources';
 
@@ -123,19 +123,79 @@ export function matchLinkToFiles(
 }
 
 /**
- * Compute the set of paths that should be treated as "deferred" during
- * source-time validation. These are paths from files config entries where
- * the file may not exist yet (build artifacts).
+ * Structured deferred path sets returned by {@link computeDeferredPaths}.
  *
- * Both source and dest paths are included because:
- * - source may be a build artifact that doesn't exist at validation time
- * - dest is the target location that won't exist until build time
+ * - `destPaths` — files: dest paths that are always deferred (the target
+ *   location won't exist until build time).
+ * - `sourcePaths` — files: source paths that are deferred ONLY when the
+ *   target does not yet exist on disk (i.e. genuine build artifacts). A
+ *   source that already exists on disk and is gitignored is a leak and must
+ *   NOT be deferred — let it fall through to the gitignore branch.
  */
-export function computeDeferredPaths(files: SkillFileEntry[]): Set<string> {
-  const paths = new Set<string>();
+export interface DeferredPaths {
+  /** files: dest paths — always deferred (won't exist until build). */
+  destPaths: Set<string>;
+  /** files: source paths — deferred ONLY when the target does not yet exist (build artifact). */
+  sourcePaths: Set<string>;
+}
+
+/**
+ * Options for {@link computeDeferredPaths}.
+ *
+ * - `skillDir`    — absolute path to the directory containing SKILL.md.
+ *                   `files:` dest values are authored relative to this dir.
+ * - `projectRoot` — absolute path to the project root (git / config root).
+ *                   `files:` source values are authored relative to this dir.
+ */
+export interface ComputeDeferredPathsOpts {
+  skillDir: string;
+  projectRoot: string;
+}
+
+/**
+ * Compute the structured sets of paths that should be treated as "deferred"
+ * during source-time validation. These are paths from files config entries
+ * where the file may not exist yet (build artifacts).
+ *
+ * Both sets contain **project-root-relative, forward-slash** paths so they
+ * match the `rel` value computed in `checkDeferred()` inside walk-link-graph:
+ *
+ * ```ts
+ * const rel = toForwardSlash(safePath.relative(projectRoot, targetPath));
+ * ```
+ *
+ * - `dest` is authored relative to `skillDir` (mirroring `skill-packager.ts`
+ *   `resolve(skillDir, entry.dest)`). We resolve it to an absolute path and
+ *   then make it relative to `projectRoot`.
+ * - `source` is authored relative to `projectRoot`. We resolve it with the
+ *   exact expression `skill-packager.ts` uses —
+ *   `resolve(join(projectRoot, entry.source))` — so an absolute-looking source
+ *   is rooted UNDER `projectRoot` identically to what the packager copies.
+ *   (A bare `resolve(projectRoot, source)` would let a leading slash escape the
+ *   root, yielding a `../`-prefixed path that never matches the walker's `rel`.)
+ *   Resolving then re-relativising is a no-op for clean relative paths but
+ *   correctly strips any leading `./`.
+ *
+ * - dest paths are always deferred (target won't exist until build)
+ * - source paths are deferred only when the target does not yet exist on disk
+ */
+export function computeDeferredPaths(
+  files: SkillFileEntry[],
+  opts: ComputeDeferredPathsOpts,
+): DeferredPaths {
+  const destPaths = new Set<string>();
+  const sourcePaths = new Set<string>();
   for (const entry of files) {
-    paths.add(normalizePath(entry.source));
-    paths.add(normalizePath(entry.dest));
+    // dest is authored relative to skillDir (skill-packager: resolve(skillDir, dest))
+    destPaths.add(
+      toForwardSlash(safePath.relative(opts.projectRoot, safePath.resolve(opts.skillDir, entry.dest))),
+    );
+    // source is authored relative to projectRoot. Mirror skill-packager exactly:
+    // resolve(join(projectRoot, source)) so absolute-looking sources root under
+    // projectRoot rather than escaping it.
+    sourcePaths.add(
+      toForwardSlash(safePath.relative(opts.projectRoot, safePath.resolve(safePath.join(opts.projectRoot, entry.source)))),
+    );
   }
-  return paths;
+  return { destPaths, sourcePaths };
 }

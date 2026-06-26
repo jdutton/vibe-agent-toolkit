@@ -6,6 +6,7 @@ import { SHA256Schema } from './checksum.js';
  * Type of link found in markdown resources.
  *
  * - `local_file`: Link to a local file (relative or absolute path)
+ * - `local_directory`: Link to a local directory, e.g. a ref ending in `/`
  * - `anchor`: Link to a heading anchor (e.g., #heading-slug)
  * - `external`: HTTP/HTTPS URL to external resource
  * - `email`: Mailto link
@@ -13,6 +14,7 @@ import { SHA256Schema } from './checksum.js';
  */
 export const LinkTypeSchema = z.enum([
   'local_file',
+  'local_directory',
   'anchor',
   'external',
   'email',
@@ -35,6 +37,16 @@ export const LinkNodeTypeSchema = z.enum([
 ]).describe('AST node type that produced this link');
 
 export type LinkNodeType = z.infer<typeof LinkNodeTypeSchema>;
+
+/**
+ * Zod schema for an HTML well-formedness diagnostic.
+ */
+export const HtmlParseErrorSchema = z.object({
+  message: z.string().describe('parse5 error code (e.g. "missing-end-tag")'),
+  line: z.number().int().positive().optional().describe('1-based source line, when known'),
+}).describe('HTML well-formedness diagnostic');
+
+export type HtmlParseError = z.infer<typeof HtmlParseErrorSchema>;
 
 /**
  * Represents a heading node in the document's table of contents.
@@ -96,6 +108,10 @@ export const ResourceMetadataSchema = z.object({
   filePath: z.string().describe('Absolute path to the resource file'),
   links: z.array(ResourceLinkSchema).describe('All links found in the resource'),
   headings: z.array(HeadingNodeSchema).describe('Document table of contents (top-level headings only; children are nested)'),
+  anchors: z.array(z.string()).optional()
+    .describe('Fragment targets for anchor validation (HTML id/name attributes)'),
+  parseErrors: z.array(HtmlParseErrorSchema).optional()
+    .describe('HTML well-formedness diagnostics (populated for HTML resources only)'),
   frontmatter: z.record(z.string(), z.unknown()).optional()
     .describe('Parsed YAML frontmatter (if present in markdown file)'),
   frontmatterError: z.string().optional()
@@ -106,6 +122,6 @@ export const ResourceMetadataSchema = z.object({
   checksum: SHA256Schema.describe('SHA-256 checksum of file content'),
   collections: z.array(z.string()).optional()
     .describe('Collection names this resource belongs to (populated when using config-based discovery)'),
-}).describe('Complete metadata for a markdown resource');
+}).strict().describe('Complete metadata for a markdown resource');
 
 export type ResourceMetadata = z.infer<typeof ResourceMetadataSchema>;

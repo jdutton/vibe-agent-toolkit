@@ -661,7 +661,7 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 		expect(result.activeErrors.map(e => e.code)).not.toContain('OUTSIDE_PROJECT_BOUNDARY');
 	});
 
-	it('allows LINK_TARGETS_DIRECTORY per-path', async () => {
+	it('navigational directory link produces no error and needs no allow entry', async () => {
 		const tempDir = getTempDir();
 		const conceptsDir = safePath.join(tempDir, 'docs/sub');
 		fs.mkdirSync(conceptsDir, { recursive: true });
@@ -673,16 +673,10 @@ describe('validateSkillForPackaging - Severity / allow config (framework)', () =
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
 
-		// location is 'docs/sub' (relative to project root, no trailing slash)
-		const result = await validateSkillForPackaging(skillPath, {
-			validation: {
-				allow: {
-					LINK_TARGETS_DIRECTORY: [{ paths: ['docs/sub'], reason: 'ToC target' }],
-				},
-			},
-		});
+		// A navigational link to an existing directory is valid — no error, no allow needed.
+		const result = await validateSkillForPackaging(skillPath);
 
-		expect(result.activeErrors).toHaveLength(0);
+		expect(result.activeErrors.map(e => e.code)).not.toContain('LINK_TARGETS_DIRECTORY');
 	});
 });
 
@@ -739,6 +733,7 @@ describe('validateSkillForPackaging - Metadata reporting', () => {
 
 // Files config validation constants
 const DUPLICATE_FILES_DEST_CODE = 'DUPLICATE_FILES_DEST';
+
 const FILES_DEST_A = 'output/a.md';
 const FILES_DEST_B = 'output/b.md';
 
@@ -754,20 +749,36 @@ function createMinimalSkill(tempDir: string): string {
 	return skillPath;
 }
 
+/**
+ * Run files-config packaging validation, assert it errored, and return the first
+ * active error matching `code`. Collapses the validate + status + find + defined
+ * scaffold shared by the files-config tests.
+ */
+async function expectFilesConfigError(
+	skillPath: string,
+	files: Array<{ source: string; dest: string }>,
+	code: string,
+): Promise<Awaited<ReturnType<typeof validateSkillForPackaging>>['activeErrors'][number] | undefined> {
+	const result = await validateSkillForPackaging(skillPath, { files });
+	expect(result.status).toBe('error');
+	const issue = result.activeErrors.find(e => e.code === code);
+	expect(issue).toBeDefined();
+	return issue;
+}
+
 describe('validateSkillForPackaging - Files config validation', () => {
 	it('should detect duplicate dest in files config', async () => {
 		const skillPath = createMinimalSkill(getTempDir());
 
-		const result = await validateSkillForPackaging(skillPath, {
-			files: [
+		const dupError = await expectFilesConfigError(
+			skillPath,
+			[
 				{ source: 'a.md', dest: FILES_DEST_A },
 				{ source: 'b.md', dest: FILES_DEST_A },
 			],
-		});
+			DUPLICATE_FILES_DEST_CODE,
+		);
 
-		expect(result.status).toBe('error');
-		const dupError = result.activeErrors.find(e => e.code === DUPLICATE_FILES_DEST_CODE);
-		expect(dupError).toBeDefined();
 		expect(dupError?.message).toContain(FILES_DEST_A);
 	});
 
@@ -809,6 +820,25 @@ describe('validateSkillForPackaging - Files config validation', () => {
 		expect(result.status).toBe('error');
 		const dupErrors = result.activeErrors.filter(e => e.code === DUPLICATE_FILES_DEST_CODE);
 		expect(dupErrors).toHaveLength(2);
+	});
+
+	it('should error when files: source resolves to an existing directory', async () => {
+		const FILES_DIR_SOURCE = 'dist/assets';
+		const tempDir = getTempDir();
+		// Create a real directory at the source path
+		const srcDir = safePath.join(tempDir, FILES_DIR_SOURCE);
+		fs.mkdirSync(srcDir, { recursive: true });
+
+		const skillPath = createMinimalSkill(tempDir);
+
+		const dirError = await expectFilesConfigError(
+			skillPath,
+			[{ source: FILES_DIR_SOURCE, dest: 'assets' }],
+			'LINK_TARGETS_DIRECTORY',
+		);
+
+		expect(dirError?.location).toBe(FILES_DIR_SOURCE);
+		expect(dirError?.message).toContain(FILES_DIR_SOURCE);
 	});
 });
 
@@ -877,7 +907,7 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 		expect(result.metadata.excludedReferences).toEqual([]);
 	});
 
-	it('should error when skill links to a directory', async () => {
+	it('navigational directory link does not produce LINK_TARGETS_DIRECTORY error', async () => {
 		const tempDir = getTempDir();
 		const conceptsDir = safePath.join(tempDir, 'concepts');
 		fs.mkdirSync(conceptsDir, { recursive: true });
@@ -889,12 +919,12 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 		);
 		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
 
+		// A navigational link to an existing directory is valid — directory is
+		// excluded from the bundle silently, but no LINK_TARGETS_DIRECTORY error
+		// is emitted. Status must not be 'error' from this cause.
 		const result = await validateSkillForPackaging(skillPath);
 
-		expect(result.status).toBe('error');
-		const dirError = result.activeErrors.find(e => e.code === 'LINK_TARGETS_DIRECTORY');
-		expect(dirError).toBeDefined();
-		expect(dirError?.message).toContain('concepts');
+		expect(result.activeErrors.map(e => e.code)).not.toContain('LINK_TARGETS_DIRECTORY');
 	});
 
 	it('should report directFileCount <= fileCount when links are excluded by depth', async () => {
@@ -936,5 +966,63 @@ describe('validateSkillForPackaging - Link collection integration', () => {
 		// Only SKILL.md should be bundled, reference.md excluded
 		expect(result.metadata.fileCount).toBe(1); // SKILL.md only
 		expect(result.metadata.excludedReferenceCount).toBe(1);
+	});
+});
+
+// ============================================================================
+// validateSkillForPackaging — gitignored files: source (validate path)
+// The gitignored-source warning was retired in issue #129: a files: source
+// already declares full publish intent, so no warning fires.
+// ============================================================================
+
+describe('validateSkillForPackaging - gitignored files: source (validate path)', () => {
+	it('does NOT emit any warning for an existing gitignored files: source (full publish intent declared)', async () => {
+		const tempDir = getTempDir();
+		const gitIgnoredSrc = 'secret.env';
+		fs.writeFileSync(safePath.join(tempDir, gitIgnoredSrc), 'SECRET=hunter2');
+
+		const skillPath = createMinimalSkill(tempDir);
+		const tracker = { isIgnoredByActiveSet: (p: string) => p.endsWith(gitIgnoredSrc) };
+
+		const result = await validateSkillForPackaging(
+			skillPath,
+			{ files: [{ source: gitIgnoredSrc, dest: 'config/secret.env' }] },
+			'source',
+			{ gitTracker: tracker as Parameters<typeof validateSkillForPackaging>[3] extends { gitTracker?: infer T } ? T : never },
+		);
+
+		// No warning for a gitignored source — the files: entry is the declaration of intent.
+		const warnings = result.activeWarnings.filter(i => i.location === gitIgnoredSrc);
+		expect(warnings).toHaveLength(0);
+	});
+});
+
+describe('validateSkillForPackaging - deferred dest links (files: config)', () => {
+	it('should succeed and emit LINK_DEFERRED_ARTIFACT info — not LINK_MISSING_TARGET — for a linked dest that does not exist on disk', async () => {
+		const tempDir = getTempDir();
+		// Skill links to 'scripts/cli.mjs' which is a files: dest (build artifact — absent from disk)
+		const DEFERRED_DEST = 'scripts/cli.mjs';
+		const skillContent = createSkillContent(
+			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+			`\n# Test Skill\n\nRun the CLI: [cli.mjs](./${DEFERRED_DEST}).`,
+		);
+		const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
+
+		const result = await validateSkillForPackaging(skillPath, {
+			files: [{ source: 'dist/cli.mjs', dest: DEFERRED_DEST }],
+		});
+
+		// Should not error — deferred dest is not a missing target
+		expect(result.status).toBe('success');
+
+		// No LINK_MISSING_TARGET — it was classified as deferred
+		const missingIssue = result.allErrors.find(i => i.code === 'LINK_MISSING_TARGET');
+		expect(missingIssue).toBeUndefined();
+
+		// LINK_DEFERRED_ARTIFACT info issue should be present
+		const deferredIssue = result.allErrors.find(i => i.code === 'LINK_DEFERRED_ARTIFACT');
+		expect(deferredIssue).toBeDefined();
+		expect(deferredIssue?.severity).toBe('info');
+		expect(deferredIssue?.location).toBe(DEFERRED_DEST);
 	});
 });

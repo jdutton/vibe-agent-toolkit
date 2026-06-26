@@ -25,6 +25,7 @@ const DIRECTORY_FORMAT = 'directory' as const;
 const DETAILS_MD = 'details.md';
 const CONFIG_JSON = 'config.json';
 const PRESERVE_PATH = 'preserve-path' as const;
+const SIMPLE_SKILL_BODY = '# My Skill\n\nContent.';
 
 // ============================================================================
 // Helpers - unique to this unit test file
@@ -878,7 +879,7 @@ describe('files config in packaging', () => {
     const skillPath = await writeSkillMd(
       dir,
       UNIT_SKILL_NAME,
-      '# My Skill\n\nContent.',
+      SIMPLE_SKILL_BODY,
     );
     await expect(
       packWithOutput(skillPath, {
@@ -901,5 +902,81 @@ describe('files config in packaging', () => {
       files: [{ source: CONFIG_JSON, dest: 'scripts/config.json' }],
     });
     expect(existsSync(safePath.join(result.outputPath, 'scripts', CONFIG_JSON))).toBe(true);
+  });
+});
+
+// ============================================================================
+// Deferred dest links (files: config)
+// ============================================================================
+
+describe('packageSkill - deferred dest link emits info, not LINK_MISSING_TARGET', () => {
+  it('should copy dest to output and emit LINK_DEFERRED_ARTIFACT info when SKILL.md links a files: dest missing on disk', async () => {
+    const dir = getTempDir();
+    const artifactDir = safePath.join(dir, 'dist', 'bin');
+    await mkdir(artifactDir, { recursive: true });
+    writeFileSync(safePath.join(artifactDir, 'cli.mjs'), '#!/usr/bin/env node');
+
+    // Skill links to 'scripts/cli.mjs' (the dest), which doesn't exist at source time
+    const skillPath = await writeSkillMd(
+      dir,
+      UNIT_SKILL_NAME,
+      '# My Skill\n\nRun the [CLI](scripts/cli.mjs).',
+    );
+
+    const result = await packWithOutput(skillPath, {
+      files: [{ source: 'dist/bin/cli.mjs', dest: 'scripts/cli.mjs' }],
+    });
+
+    // Dest artifact should be copied to output
+    expect(existsSync(safePath.join(result.outputPath, 'scripts', 'cli.mjs'))).toBe(true);
+
+    // The built SKILL.md must PRESERVE the dest link (href not stripped to empty ()).
+    const builtSkillMd = await readFile(safePath.join(result.outputPath, 'SKILL.md'), 'utf-8');
+    expect(builtSkillMd).toContain('](scripts/cli.mjs)');
+
+    // No LINK_MISSING_TARGET in the pre-build link issues
+    const missingIssue = (result.postBuildIssues ?? []).find(i => i.code === 'LINK_MISSING_TARGET');
+    expect(missingIssue).toBeUndefined();
+
+    // The shipped artifact is referenced — no PACKAGED_UNREFERENCED_FILE for the dest.
+    const unreferencedIssue = (result.postBuildIssues ?? []).find(
+      i => i.code === 'PACKAGED_UNREFERENCED_FILE',
+    );
+    expect(unreferencedIssue).toBeUndefined();
+
+    // LINK_DEFERRED_ARTIFACT info should be present in pre-build link issues
+    const deferredIssue = (result.postBuildIssues ?? []).find(i => i.code === 'LINK_DEFERRED_ARTIFACT');
+    expect(deferredIssue).toBeDefined();
+    expect(deferredIssue?.severity).toBe('info');
+  });
+});
+
+// ============================================================================
+// gitignored files: source — build path (packageSkill)
+// The gitignored-source warning was retired in issue #129: a files: source
+// already declares full publish intent, so no warning fires.
+// ============================================================================
+
+describe('packageSkill - gitignored files: source (build path)', () => {
+  it('does NOT emit any warning for an existing gitignored files: source via injected gitTracker', async () => {
+    const gitIgnoredSource = 'secret.env';
+    const dir = getTempDir();
+    writeFileSync(safePath.join(dir, gitIgnoredSource), 'SECRET=hunter2');
+
+    const skillPath = await writeSkillMd(dir, UNIT_SKILL_NAME, SIMPLE_SKILL_BODY);
+
+    const tracker = {
+      isIgnoredByActiveSet: (p: string) => p.endsWith(gitIgnoredSource),
+    };
+
+    const result = await packWithOutput(skillPath, {
+      files: [{ source: gitIgnoredSource, dest: 'config/secret.env' }],
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any -- test stub
+      gitTracker: tracker as any,
+    });
+
+    // No warning — the files: entry already declares full publish intent.
+    const issues = (result.postBuildIssues ?? []).filter(i => i.location === gitIgnoredSource);
+    expect(issues).toHaveLength(0);
   });
 });

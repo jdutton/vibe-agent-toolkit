@@ -462,3 +462,112 @@ describe('ExternalLinkValidator — unsupported host falls through', () => {
     expect(calls()).toBe(0);
   });
 });
+
+// Shared helper for the "network-level failure" describe block: construct a
+// validator whose only variable is the fetchImpl, run validateLink, return result.
+async function validateWithThrowingFetch(fetchImpl: typeof fetch) {
+  return new ExternalLinkValidator(tempDir, {
+    linkAuthConfig: configWithProvider(),
+    linkAuthDeps: { env: ENV_WITH_TOKEN },
+    fetchImpl,
+  }).validateLink(HOST);
+}
+
+describe('ExternalLinkValidator — network-level failure (catch block)', () => {
+  it('fetchImpl throws Error → status=error, statusCode=0, cached=false, no code', async () => {
+    const result = await validateWithThrowingFetch((async () => {
+      throw new Error('ECONNREFUSED: connection refused');
+    }) as typeof fetch);
+    expect(result.status).toBe('error');
+    expect(result.statusCode).toBe(0);
+    expect(result.cached).toBe(false);
+    expect(result.code).toBeUndefined();
+    expect(result.error).toBe('ECONNREFUSED: connection refused');
+  });
+
+  it('fetchImpl rejects with null (falsy) → fallback message "Authenticated fetch failed"', async () => {
+    const result = await validateWithThrowingFetch(
+      (async () => Promise.reject(null)) as typeof fetch,
+    );
+    expect(result.status).toBe('error');
+    expect(result.statusCode).toBe(0);
+    expect(result.error).toBe('Authenticated fetch failed');
+  });
+
+  it('fetchImpl rejects with serializable plain object → JSON in error message', async () => {
+    const result = await validateWithThrowingFetch(
+      (async () => Promise.reject({ code: 'ETIMEDOUT', host: 'api.github.com' })) as typeof fetch,
+    );
+    expect(result.status).toBe('error');
+    expect(result.error).toContain('ETIMEDOUT');
+  });
+
+  it('fetchImpl rejects with empty object {} → "Unknown error" fallback', async () => {
+    const result = await validateWithThrowingFetch(
+      (async () => Promise.reject({})) as typeof fetch,
+    );
+    expect(result.status).toBe('error');
+    expect(result.error).toBe('Unknown error');
+  });
+});
+
+describe('ExternalLinkValidator — clearCache and getCacheStats', () => {
+  it('getCacheStats returns combined totals from both caches', async () => {
+    const validator = new ExternalLinkValidator(tempDir, {
+      linkAuthConfig: configWithProvider(),
+      linkAuthDeps: { env: ENV_WITH_TOKEN },
+      fetchImpl: stubFetch(200),
+      osUser: 'statsuser',
+    });
+    // Prime the auth cache with one validated URL.
+    await validator.validateLink(HOST);
+    const stats = await validator.getCacheStats();
+    expect(stats.total).toBeGreaterThanOrEqual(1);
+    expect(typeof stats.expired).toBe('number');
+  });
+
+  it('clearCache wipes both caches — next validateLink is a fresh fetch, not a hit', async () => {
+    let fetchCount = 0;
+    const fetchImpl = (async () => {
+      fetchCount++;
+      return new Response(null, { status: 200 });
+    }) as typeof fetch;
+    const validator = new ExternalLinkValidator(tempDir, {
+      linkAuthConfig: configWithProvider(),
+      linkAuthDeps: { env: ENV_WITH_TOKEN },
+      fetchImpl,
+      osUser: 'clearuser',
+    });
+    // First call — cache miss.
+    const first = await validator.validateLink(HOST);
+    expect(first.cached).toBe(false);
+    expect(fetchCount).toBe(1);
+    // Second call — cache hit.
+    const second = await validator.validateLink(HOST);
+    expect(second.cached).toBe(true);
+    expect(fetchCount).toBe(1);
+    // Clear, then re-validate — cache gone, must fetch again.
+    await validator.clearCache();
+    const third = await validator.validateLink(HOST);
+    expect(third.cached).toBe(false);
+    expect(fetchCount).toBe(2);
+  });
+});
+
+describe('ExternalLinkValidator — resolveOsUser (no osUser option)', () => {
+  it('omitting osUser does not throw — an auth-* directory is created under cacheDir', async () => {
+    // When osUser is omitted the constructor calls resolveOsUser(), which reads
+    // os.userInfo() or falls back to USER/USERNAME env. This verifies the
+    // default path runs without error and produces the expected directory layout.
+    const validator = new ExternalLinkValidator(tempDir, {
+      linkAuthConfig: configWithProvider(),
+      linkAuthDeps: { env: ENV_WITH_TOKEN },
+      fetchImpl: stubFetch(200),
+      // osUser intentionally omitted — exercises resolveOsUser()
+    });
+    await validator.validateLink(HOST);
+    const { readdirSync } = await import('node:fs');
+    const entries = readdirSync(tempDir);
+    expect(entries.some((e) => e.startsWith('auth-'))).toBe(true);
+  });
+});

@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
-import { parseMarkdown, resolveLocalHref } from '@vibe-agent-toolkit/resources';
+import { isLocalFileLink, parseMarkdown, resolveLocalHref, type LinkType } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 
@@ -232,7 +232,7 @@ function processFileLinks(
   issues: ValidationIssue[],
   visited: Set<string>,
 ): FileProcessResult {
-  const localLinks = parseResult.links.filter(link => link.type === 'local_file');
+  const localLinks = parseResult.links.filter(link => isLocalFileLink(link.type as LinkType));
   const fileIssues: ValidationIssue[] = [];
   const newPaths: string[] = [];
   let linksValidated = 0;

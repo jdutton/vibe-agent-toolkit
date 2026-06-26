@@ -71,4 +71,63 @@ describe('docs/validation-codes.md', () => {
     expect(doc).toMatch(/validation\.severity/);
     expect(doc).toMatch(/validation\.allow/);
   });
+
+  // --- Single-source rule catalog (issue #129 AC5) -------------------------
+  // The catalog table is the spine: its Severity / Description / Fix cells must
+  // equal CODE_REGISTRY exactly, so the registry, docs, and runtime cannot
+  // drift. Tightened from anchor-presence to full cell equality.
+  describe('rule catalog (registry == docs)', () => {
+    const rows = parseCatalogRows(doc);
+
+    it('has a catalog table between the BEGIN/END markers', () => {
+      expect(rows.size).toBeGreaterThan(0);
+    });
+
+    it('every catalog code is a real registry code', () => {
+      for (const code of rows.keys()) {
+        expect(CODE_REGISTRY).toHaveProperty(code);
+      }
+    });
+
+    for (const [code, cells] of parseCatalogRows(doc)) {
+      it(`${code} catalog row equals registry severity/description/fix`, () => {
+        const entry = CODE_REGISTRY[code as keyof typeof CODE_REGISTRY];
+        expect(cells.severity).toBe(entry.defaultSeverity);
+        expect(cells.description).toBe(entry.description);
+        expect(cells.fix).toBe(entry.fix);
+      });
+    }
+  });
 });
+
+interface CatalogCells {
+  severity: string;
+  description: string;
+  fix: string;
+}
+
+/**
+ * Parse the `<!-- BEGIN:rule-catalog -->`…`<!-- END:rule-catalog -->` markdown
+ * table into `code → {severity, description, fix}`. Unescapes `\|` cell escapes
+ * and extracts the code name from the `[`CODE`](#anchor)` link cell.
+ */
+function parseCatalogRows(doc: string): Map<string, CatalogCells> {
+  const block = /<!-- BEGIN:rule-catalog[^>]*-->([\s\S]*?)<!-- END:rule-catalog -->/.exec(doc);
+  const rows = new Map<string, CatalogCells>();
+  if (!block?.[1]) return rows;
+  const codeCell = /`([A-Z0-9_]+)`/;
+  for (const rawLine of block[1].split('\n')) {
+    const line = rawLine.trim();
+    if (!line.startsWith('|')) continue;
+    const cells = line.slice(1, -1).split('|').map(c => c.trim().replaceAll(String.raw`\|`, '|'));
+    if (cells.length !== 4) continue;
+    const codeMatch = codeCell.exec(cells[0] ?? '');
+    if (!codeMatch?.[1]) continue; // skip header / separator rows
+    rows.set(codeMatch[1], {
+      severity: cells[1] ?? '',
+      description: cells[2] ?? '',
+      fix: cells[3] ?? '',
+    });
+  }
+  return rows;
+}

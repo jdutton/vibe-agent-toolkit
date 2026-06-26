@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/resources",
-  "version": "0.1.39-rc.1",
+  "version": "0.1.39-rc.6",
   "description": "Markdown resource parsing, validation, and link integrity checking",
   "type": "module",
   "main": "./dist/index.js",
@@ -39,6 +39,7 @@
     "ajv-formats": "^3.0.1",
     "github-slugger": "^2.0.0",
     "markdown-link-check": "^3.14.2",
+    "parse5": "^7.2.1",
     "picomatch": "^4.0.3",
     "remark-frontmatter": "^5.0.0",
     "remark-gfm": "^4.0.0",

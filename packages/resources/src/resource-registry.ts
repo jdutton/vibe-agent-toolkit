@@ -22,15 +22,37 @@ import {
   type FrontmatterExternalUrl,
 } from './frontmatter-link-validator.js';
 import { validateFrontmatter } from './frontmatter-validator.js';
+import { parseHtml } from './html-link-parser.js';
 import { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
 import { parseMarkdown } from './link-parser.js';
-import { validateLink, type ValidateLinkOptions } from './link-validator.js';
+import { fragmentIndexEntry, validateLink, type FragmentIndex, type ValidateLinkOptions } from './link-validator.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
 import type { SHA256 } from './schemas/checksum.js';
 import type { ProjectConfig } from './schemas/project-config.js';
 import type { HeadingNode, ResourceMetadata } from './schemas/resource-metadata.js';
 import type { ValidationResult } from './schemas/validation-result.js';
 import { issueLocation, matchesGlobPattern, splitHrefAnchor } from './utils.js';
+
+/**
+ * Typed error thrown when two resources produce the same ID.
+ *
+ * Carries the authoritative id and both paths so callers can record accurate
+ * issue data without re-deriving the id from the file path (which would be
+ * wrong when the id came from a frontmatter `idField` value).
+ */
+export class DuplicateResourceIdError extends Error {
+  readonly id: string;
+  readonly existingPath: string;
+  readonly conflictingPath: string;
+
+  constructor(id: string, conflictingPath: string, existingPath: string) {
+    super(`Duplicate resource ID '${id}': '${conflictingPath}' conflicts with '${existingPath}'`);
+    this.name = 'DuplicateResourceIdError';
+    this.id = id;
+    this.existingPath = existingPath;
+    this.conflictingPath = conflictingPath;
+  }
+}
 
 /**
  * Options for crawling directories to add resources.
@@ -170,6 +192,12 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   private readonly frontmatterExternalUrlsByResource: Map<string, FrontmatterExternalUrl[]> = new Map();
 
+  /**
+   * Collisions recorded by addResources() when two files produce the same resource id.
+   * Cleared by clear(). Surfaced as DUPLICATE_RESOURCE_ID issues in validate().
+   */
+  private duplicateIdCollisions: Array<{ id: string; existingPath: string; conflictingPath: string }> = [];
+
   constructor(options?: ResourceRegistryOptions) {
     if (options?.baseDir !== undefined) {
       this.baseDir = options.baseDir;
@@ -234,9 +262,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       // Check for duplicate ID
       const existingById = registry.resourcesById.get(resource.id);
       if (existingById) {
-        throw new Error(
-          `Duplicate resource ID '${resource.id}': '${resource.filePath}' conflicts with '${existingById.filePath}'`
-        );
+        throw new DuplicateResourceIdError(resource.id, resource.filePath, existingById.filePath);
       }
 
       // Add to path index
@@ -305,8 +331,12 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Normalize path to absolute
     const absolutePath = safePath.resolve(filePath);
 
-    // Parse the markdown file (needed before ID generation for frontmatter lookup)
-    const parseResult = await parseMarkdown(absolutePath);
+    // Parse the file — HTML or markdown depending on extension
+    const lowerPath = absolutePath.toLowerCase();
+    const isHtml = lowerPath.endsWith('.html') || lowerPath.endsWith('.htm');
+    const parseResult = isHtml
+      ? await parseHtml(absolutePath)
+      : await parseMarkdown(absolutePath);
 
     // Generate ID using priority chain: frontmatter field → relative path → filename stem
     const id = this.generateId(absolutePath, parseResult.frontmatter);
@@ -314,9 +344,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Check for duplicate ID (allow re-adding same file path)
     const existingById = this.resourcesById.get(id);
     if (existingById && existingById.filePath !== absolutePath) {
-      throw new Error(
-        `Duplicate resource ID '${id}': '${absolutePath}' conflicts with '${existingById.filePath}'`
-      );
+      throw new DuplicateResourceIdError(id, absolutePath, existingById.filePath);
     }
 
     // Get file modified time
@@ -337,6 +365,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       filePath: absolutePath,
       links: parseResult.links,
       headings: parseResult.headings,
+      ...(parseResult.anchors !== undefined && { anchors: parseResult.anchors }),
+      ...(parseResult.parseErrors !== undefined && { parseErrors: parseResult.parseErrors }),
       ...(parseResult.frontmatter !== undefined && { frontmatter: parseResult.frontmatter }),
       ...(parseResult.frontmatterError !== undefined && { frontmatterError: parseResult.frontmatterError }),
       sizeBytes: parseResult.sizeBytes,
@@ -373,7 +403,20 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   async addResources(filePaths: string[]): Promise<ResourceMetadata[]> {
     const results: ResourceMetadata[] = [];
     for (const fp of filePaths) {
-      results.push(await this.addResource(fp));
+      try {
+        results.push(await this.addResource(fp));
+      } catch (error) {
+        if (error instanceof DuplicateResourceIdError) {
+          this.duplicateIdCollisions.push({
+            id: error.id,
+            existingPath: error.existingPath,
+            conflictingPath: error.conflictingPath,
+          });
+          // First-added wins; skip conflicting file and continue crawling.
+        } else {
+          throw error;
+        }
+      }
     }
     return results;
   }
@@ -397,7 +440,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   async crawl(options: CrawlOptions): Promise<ResourceMetadata[]> {
     const {
       baseDir,
-      include = ['**/*.md'],
+      include = ['**/*.md', '**/*.html', '**/*.htm'],
       exclude = ['**/node_modules/**', '**/.git/**', '**/dist/**'],
       followSymlinks = false,
     } = options;
@@ -444,11 +487,47 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
+   * Emit MALFORMED_HTML issues from each resource's HTML parse errors.
+   * @private
+   */
+  private collectHtmlParseErrors(): ValidationIssue[] {
+    const issues: ValidationIssue[] = [];
+    for (const resource of this.resourcesByPath.values()) {
+      for (const parseError of resource.parseErrors ?? []) {
+        issues.push(
+          createRegistryIssue(
+            'MALFORMED_HTML',
+            `Malformed HTML: ${parseError.message}`,
+            {
+              location: issueLocation(resource.filePath, this.baseDir),
+              ...(parseError.line !== undefined && { line: parseError.line }),
+            },
+          ),
+        );
+      }
+    }
+    return issues;
+  }
+
+  /**
+   * Emit DUPLICATE_RESOURCE_ID errors for collisions recorded by addResources().
+   * @private
+   */
+  private collectDuplicateIdErrors(): ValidationIssue[] {
+    return this.duplicateIdCollisions.map(({ id, existingPath, conflictingPath }) =>
+      createRegistryIssue(
+        'DUPLICATE_RESOURCE_ID',
+        `Two files resolve to the same resource id '${id}': '${issueLocation(existingPath, this.baseDir)}' and '${issueLocation(conflictingPath, this.baseDir)}'. Rename one of the files so they produce distinct resource ids.`,
+      ),
+    );
+  }
+
+  /**
    * Validate all links in all resources.
    * @private
    */
   private async validateAllLinks(
-    headingsByFile: Map<string, HeadingNode[]>,
+    fragmentsByFile: FragmentIndex,
     skipGitIgnoreCheck: boolean
   ): Promise<ValidationIssue[]> {
     const issues: ValidationIssue[] = [];
@@ -464,7 +543,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
               ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker })
             };
 
-        const issue = await validateLink(link, resource.filePath, headingsByFile, validateOptions);
+        const issue = await validateLink(link, resource.filePath, fragmentsByFile, validateOptions);
         if (issue) {
           issues.push(issue);
         }
@@ -502,7 +581,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * @private
    */
   private async validateCollectionFrontmatter(
-    headingsByFile: Map<string, HeadingNode[]>,
+    fragmentsByFile: FragmentIndex,
     skipGitIgnoreCheck: boolean,
   ): Promise<ValidationIssue[]> {
     const issues: ValidationIssue[] = [];
@@ -524,7 +603,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       const collectionIssues = await this.validateResourceCollectionSchemas(
         resource,
         fsPromises,
-        headingsByFile,
+        fragmentsByFile,
         skipGitIgnoreCheck,
       );
       issues.push(...collectionIssues);
@@ -540,7 +619,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private async validateResourceCollectionSchemas(
     resource: ResourceMetadata,
     fsModule: typeof fs,
-    headingsByFile: Map<string, HeadingNode[]>,
+    fragmentsByFile: FragmentIndex,
     skipGitIgnoreCheck: boolean,
   ): Promise<ValidationIssue[]> {
     const issues: ValidationIssue[] = [];
@@ -561,7 +640,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         resource,
         collection.validation,
         fsModule,
-        headingsByFile,
+        fragmentsByFile,
         skipGitIgnoreCheck,
       );
       issues.push(...collectionIssues);
@@ -578,7 +657,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     resource: ResourceMetadata,
     validation: NonNullable<NonNullable<ProjectConfig['resources']>['collections']>[string]['validation'],
     fsModule: typeof fs,
-    headingsByFile: Map<string, HeadingNode[]>,
+    fragmentsByFile: FragmentIndex,
     skipGitIgnoreCheck: boolean,
   ): Promise<ValidationIssue[]> {
     if (!validation?.frontmatterSchema) {
@@ -621,7 +700,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
           resource.frontmatter,
           schema,
           resource.filePath,
-          headingsByFile,
+          fragmentsByFile,
           linkOptions,
         );
         issues.push(...linkIssues);
@@ -680,8 +759,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   async validate(options?: ValidateOptions): Promise<ValidationResult> {
     const startTime = Date.now();
 
-    // Build headings map for validation
-    const headingsByFile = this.buildHeadingsByFileMap();
+    // Build fragment index for anchor validation
+    const fragmentsByFile = this.buildFragmentIndex();
 
     // Reset frontmatter external URL state for this validation run
     this.frontmatterExternalUrlsByResource.clear();
@@ -689,19 +768,21 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Collect all validation issues
     const issues: ValidationIssue[] = [];
 
-    // Check for YAML parsing errors first
-    issues.push(...this.collectYamlErrors());
+    // Surface parse-time diagnostics: YAML frontmatter errors first, then HTML
+    // well-formedness, then duplicate-id collisions. Combined into one push() call
+    // (SonarCloud S7778).
+    issues.push(...this.collectYamlErrors(), ...this.collectHtmlParseErrors(), ...this.collectDuplicateIdErrors());
 
     // Validate each link in each resource
     const linkIssues = await this.validateAllLinks(
-      headingsByFile,
+      fragmentsByFile,
       options?.skipGitIgnoreCheck ?? false
     );
     issues.push(...linkIssues);
 
     // Per-collection frontmatter validation
     const collectionFrontmatterIssues = await this.validateCollectionFrontmatter(
-      headingsByFile,
+      fragmentsByFile,
       options?.skipGitIgnoreCheck ?? false,
     );
     issues.push(...collectionFrontmatterIssues);
@@ -1059,6 +1140,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     this.resourcesById.clear();
     this.resourcesByName.clear();
     this.resourcesByChecksum.clear();
+    this.duplicateIdCollisions = [];
   }
 
   /**
@@ -1268,14 +1350,20 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
-   * Build a map of file paths to their heading trees.
-   *
-   * Used for link validation.
+   * Build a format-neutral fragment index for anchor validation: each file's
+   * absolute path → the set of valid fragment targets. Markdown contributes
+   * heading slugs (lowercased); HTML contributes its `id`/`name` anchors.
    */
-  private buildHeadingsByFileMap(): Map<string, HeadingNode[]> {
-    const map = new Map<string, HeadingNode[]>();
+  private buildFragmentIndex(): FragmentIndex {
+    const map: FragmentIndex = new Map();
     for (const resource of this.resourcesByPath.values()) {
-      map.set(resource.filePath, resource.headings);
+      const fragments = new Set<string>();
+      collectHeadingSlugs(resource.headings, fragments);
+      for (const anchor of resource.anchors ?? []) {
+        fragments.add(anchor);
+      }
+      // Policy (case-sensitive ids vs folded slugs) is derived from the file type.
+      map.set(resource.filePath, fragmentIndexEntry(resource.filePath, fragments));
     }
     return map;
   }
@@ -1333,29 +1421,47 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 }
 
+/** Recursively collect lowercased heading slugs into `out`. */
+function collectHeadingSlugs(headings: HeadingNode[], out: Set<string>): void {
+  for (const heading of headings) {
+    out.add(heading.slug.toLowerCase());
+    if (heading.children) {
+      collectHeadingSlugs(heading.children, out);
+    }
+  }
+}
+
 /**
  * Generate an ID from a file path.
+ *
+ * Every resource id includes a `-<ext>` suffix derived from the file extension
+ * (dot stripped, lowercased). This makes ids from different file types distinct
+ * even when the stem is identical (e.g. `foo.md` → `foo-md`, `foo.html` → `foo-html`).
+ * Extensionless files (e.g. `Makefile`) receive no suffix.
  *
  * When `baseDir` is provided, computes a relative path from baseDir and uses the full
  * directory structure in the ID. When no `baseDir`, uses the filename stem only.
  *
  * @param filePath - Absolute file path
  * @param baseDir - Base directory for relative path computation (optional)
- * @returns Generated ID in kebab-case
+ * @returns Generated ID in kebab-case with `-<ext>` suffix
  *
  * @example
  * ```typescript
- * // Without baseDir: filename stem only
- * generateIdFromPath('/project/docs/User Guide.md')  // 'user-guide'
- * generateIdFromPath('/project/README.md')            // 'readme'
+ * // Without baseDir: filename stem + extension suffix
+ * generateIdFromPath('/project/docs/User Guide.md')  // 'user-guide-md'
+ * generateIdFromPath('/project/README.md')            // 'readme-md'
+ * generateIdFromPath('/project/page.html')            // 'page-html'
+ * generateIdFromPath('/project/Makefile')             // 'makefile'
  *
- * // With baseDir: relative path
- * generateIdFromPath('/project/docs/concepts/core/overview.md', '/project/docs')  // 'concepts-core-overview'
- * generateIdFromPath('/project/docs/guide.md', '/project/docs')                   // 'guide'
+ * // With baseDir: relative path + extension suffix
+ * generateIdFromPath('/project/docs/concepts/core/overview.md', '/project/docs')  // 'concepts-core-overview-md'
+ * generateIdFromPath('/project/docs/guide.md', '/project/docs')                   // 'guide-md'
  * ```
  */
 export function generateIdFromPath(filePath: string, baseDir?: string): string {
   let rawId: string;
+  let extSuffix = '';
 
   if (baseDir) {
     // Compute relative path from baseDir, remove extension
@@ -1364,10 +1470,22 @@ export function generateIdFromPath(filePath: string, baseDir?: string): string {
     const withoutExt = ext ? relativePath.slice(0, -ext.length) : relativePath;
     // Normalize path separators to forward slashes (cross-platform), then replace with hyphens
     rawId = toForwardSlash(withoutExt).replaceAll('/', '-');
+    if (ext) {
+      // Strip the leading dot; lowercasing happens in the kebab pipeline below
+      extSuffix = `-${ext.slice(1)}`;
+    }
   } else {
     // Fallback: basename only (no directory context)
-    rawId = path.basename(filePath, path.extname(filePath));
+    const ext = path.extname(filePath);
+    rawId = path.basename(filePath, ext);
+    if (ext) {
+      extSuffix = `-${ext.slice(1)}`;
+    }
   }
+
+  // Append extension suffix before the kebab pipeline so hyphen-collapse and
+  // trim apply uniformly (e.g. suffixed-.md → 'suffixed--md' → 'suffixed-md')
+  rawId = `${rawId}${extSuffix}`;
 
   // Convert to kebab-case:
   // 1. Replace underscores and spaces with hyphens

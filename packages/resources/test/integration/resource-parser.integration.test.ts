@@ -3,11 +3,10 @@
  * Tests parsing real markdown, JSON, and YAML files with proper resource type detection
  */
 
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
 
-
-import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { safePath } from '@vibe-agent-toolkit/utils';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   detectResourceType,
@@ -17,6 +16,7 @@ import {
   parseYamlResource,
 } from '../../src/types/resource-parser.ts';
 import { ResourceType } from '../../src/types/resources.ts';
+import { setupSubdirTestSuite } from '../test-helpers.js';
 
 // ============================================================================
 // File-scope test constants (accessible to all tests)
@@ -34,33 +34,13 @@ const CONFIG_YAML_FILE = 'config.yaml';
 // Test suite setup
 // ============================================================================
 
-let testCounter = 0;
-const suite = {
-  suiteDir: '',
-  tempDir: '',
-  beforeAll: async () => {
-    suite.suiteDir = await mkdtemp(safePath.join(normalizedTmpdir(), 'resource-parser-suite-'));
-  },
-  afterAll: async () => {
-    await rm(suite.suiteDir, { recursive: true, force: true });
-  },
-  beforeEach: async () => {
-    testCounter++;
-    suite.tempDir = safePath.join(suite.suiteDir, `test-${testCounter}`);
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- tempDir is from mkdtemp
-    await mkdir(suite.tempDir, { recursive: true });
-  },
-  afterEach: async () => {
-    // Per-test cleanup handled by suite cleanup
-  },
-};
+const suite = setupSubdirTestSuite('resource-parser-suite-');
 
 describe('parseMarkdownResource', () => {
 
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
   beforeEach(suite.beforeEach);
-  afterEach(suite.afterEach);
 
   it('should parse markdown with frontmatter', async () => {
     const filePath = safePath.join(suite.tempDir, 'doc.md');
@@ -202,7 +182,6 @@ describe('parseJsonSchemaResource', () => {
   beforeAll(suite.beforeAll);
   afterAll(suite.afterAll);
   beforeEach(suite.beforeEach);
-  afterEach(suite.afterEach);
 
   it('should parse JSON Schema with $schema keyword', async () => {
     const filePath = safePath.join(suite.tempDir, USER_SCHEMA_FILE);
@@ -281,7 +260,6 @@ describe('parseJsonSchemaResource', () => {
 
 describe('parseJsonResource', () => {
   beforeEach(suite.beforeEach);
-  afterEach(suite.afterEach);
 
   it('should parse regular JSON data', async () => {
     const filePath = safePath.join(suite.tempDir, 'data.json');
@@ -331,7 +309,6 @@ describe('parseJsonResource', () => {
 
 describe('parseYamlResource', () => {
   beforeEach(suite.beforeEach);
-  afterEach(suite.afterEach);
 
   it('should parse YAML data', async () => {
     const filePath = safePath.join(suite.tempDir, CONFIG_YAML_FILE);

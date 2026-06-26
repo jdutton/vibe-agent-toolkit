@@ -13,10 +13,12 @@
 import { existsSync, statSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
+import { isLocalFileLink } from '@vibe-agent-toolkit/resources';
 import type { ResourceLink, ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { type GitTracker, isGitIgnored, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
+import { type DeferredPaths } from './files-config.js';
 import { NAVIGATION_FILE_PATTERNS } from './validators/validation-rules.js';
 
 /**
@@ -94,8 +96,15 @@ export interface WalkLinkGraphOptions {
   skillRootPath: string;
   /** Whether to exclude navigation files (README.md, index.md, etc.) */
   excludeNavigationFiles?: boolean;
-  /** Paths declared in files config that may not exist at source time */
-  deferredPaths?: Set<string>;
+  /**
+   * Structured deferred path sets declared in files config. A path in either
+   * set is treated as a deferred build artifact ONLY when the target does not
+   * yet exist on disk. A `destPaths`/`sourcePaths` entry that already exists is
+   * NOT deferred and falls through to the normal directory / gitignore /
+   * missing-target handling (so an existing-but-gitignored artifact still
+   * surfaces a leak signal rather than a silent LINK_DEFERRED_ARTIFACT).
+   */
+  deferredPaths?: DeferredPaths;
   /**
    * Optional pre-populated {@link GitTracker} for O(1) gitignore checks.
    *
@@ -171,10 +180,41 @@ interface ExcludeMatcher {
 }
 
 /**
- * Check if a target path should be excluded for structural reasons
- * (directory, outside project, navigation file, or pattern match).
+ * C2 + C1: Check if a target path is a deferred build artifact, and record
+ * it in the deferred set if so. Must run BEFORE any statSync / directory
+ * check to avoid blowing up on missing paths.
  *
- * @returns true if the link was excluded (caller should skip to next link)
+ * Deferral is gated on the target NOT existing on disk for BOTH sets: a
+ * "deferred build artifact" is by definition not yet materialized. An existing
+ * real file at a files: dest (or source) is not deferred — it must fall through
+ * to the gitignore / directory-target checks so a genuine leak signal is not
+ * silently downgraded to LINK_DEFERRED_ARTIFACT (info). The two sets stay
+ * distinct because their `rel` values differ (dest is skill-relative, source
+ * is project-relative), but they share the same existence guard.
+ *
+ * @returns true if the path was classified as deferred
+ */
+function checkDeferred(
+  targetPath: string,
+  projectRoot: string,
+  deferredPaths: DeferredPaths,
+  deferredAssetSet: Set<string>,
+): boolean {
+  const rel = toForwardSlash(safePath.relative(projectRoot, targetPath));
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from parsed markdown
+  if ((deferredPaths.destPaths.has(rel) || deferredPaths.sourcePaths.has(rel)) && !existsSync(targetPath)) {
+    deferredAssetSet.add(toForwardSlash(targetPath));
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Check if a target path should be excluded for structural reasons
+ * (deferred build artifact, directory, outside project, navigation file, or
+ * pattern match).
+ *
+ * @returns true if the link was excluded or deferred (caller should skip to next link)
  */
 function checkExclusions(
   targetPath: string,
@@ -182,7 +222,13 @@ function checkExclusions(
   options: WalkLinkGraphOptions,
   excludeMatchers: ExcludeMatcher[],
   excludedReferences: LinkResolution[],
+  deferredAssetSet: Set<string>,
 ): boolean {
+  // Deferred check is the FIRST discriminator (C2 ordering fix).
+  if (options.deferredPaths && checkDeferred(targetPath, options.projectRoot, options.deferredPaths, deferredAssetSet)) {
+    return true;
+  }
+
   // Check if target is a directory
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from parsed markdown
@@ -268,8 +314,8 @@ function processLink(
     return;
   }
 
-  // Check structural exclusions (directory, boundary, navigation, pattern)
-  if (checkExclusions(targetPath, link, options, excludeMatchers, state.excludedReferences)) {
+  // Check structural exclusions (deferred, directory, boundary, navigation, pattern, gitignore)
+  if (checkExclusions(targetPath, link, options, excludeMatchers, state.excludedReferences, state.deferredAssetSet)) {
     return;
   }
 
@@ -285,14 +331,8 @@ function processLink(
     // Not in registry — non-markdown asset that exists on disk
     state.bundledAssetSet.add(toForwardSlash(targetPath));
   } else {
-    // File doesn't exist and not in registry
-    // Check if it's a deferred path (declared build artifact)
-    const relativePath = toForwardSlash(safePath.relative(options.projectRoot, targetPath));
-    if (options.deferredPaths?.has(relativePath)) {
-      state.deferredAssetSet.add(toForwardSlash(targetPath));
-      return;
-    }
-    // Not deferred — record as missing-target so downstream emits LINK_MISSING_TARGET.
+    // File doesn't exist and not in registry, and not deferred (handled above).
+    // Record as missing-target so downstream emits LINK_MISSING_TARGET.
     state.excludedReferences.push(makeExclusion(targetPath, 'missing-target', link));
   }
 }
@@ -384,7 +424,7 @@ export function walkLinkGraph(
     const [currentResource, currentDepth] = entry;
 
     for (const link of currentResource.links) {
-      if (link.type === 'local_file') {
+      if (isLocalFileLink(link.type)) {
         processLink(link, currentResource, currentDepth, registry, options, excludeMatchers, state);
       }
     }

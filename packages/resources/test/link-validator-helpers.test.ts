@@ -9,7 +9,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  checkAnchor,
   fileExistenceIssue,
+  fragmentIndex,
   gitIgnoreSafetyIssue,
   resolutionFailureIssue,
   type ValidateLinkOptions,
@@ -122,6 +124,54 @@ describe('fileExistenceIssue', () => {
     expect(issue?.message).toContain('"readme.md"');
     expect(issue?.message).toContain('"README.md"');
     expect(issue?.suggestion).toBe('Use "README.md" instead of "readme.md"');
+  });
+});
+
+describe('checkAnchor', () => {
+  const GUIDE_MD = '/abs/guide.md';
+  const PAGE_HTML = '/abs/page.html';
+  const PAGE_HTM = '/abs/legacy.htm';
+  const index = fragmentIndex([
+    [GUIDE_MD, new Set(['my-heading'])],
+    [PAGE_HTML, new Set(['Intro', 'legacy'])],
+    [PAGE_HTM, new Set(['Section'])],
+  ]);
+
+  it('skips targets that are not indexed', () => {
+    expect(checkAnchor('anything', '/abs/not-indexed.md', index)).toBe('skip');
+  });
+
+  it('matches markdown slugs case-insensitively', () => {
+    expect(checkAnchor('My-Heading', GUIDE_MD, index)).toBe('valid');
+    expect(checkAnchor('missing', GUIDE_MD, index)).toBe('broken');
+  });
+
+  it('matches HTML ids case-sensitively', () => {
+    expect(checkAnchor('Intro', PAGE_HTML, index)).toBe('valid');
+    expect(checkAnchor('intro', PAGE_HTML, index)).toBe('broken');
+  });
+
+  it('treats the empty fragment and "top" (case-insensitive) as valid on HTML targets', () => {
+    // HTML spec: `#` and `#top` always navigate to the top of the document,
+    // valid even though neither id is in the index.
+    expect(checkAnchor('', PAGE_HTML, index)).toBe('valid');
+    expect(checkAnchor('top', PAGE_HTML, index)).toBe('valid');
+    expect(checkAnchor('TOP', PAGE_HTML, index)).toBe('valid');
+    expect(checkAnchor('Top', PAGE_HTML, index)).toBe('valid');
+  });
+
+  it('does not special-case empty/"top" for markdown targets', () => {
+    // Markdown behavior is untouched: neither is a real heading slug here.
+    expect(checkAnchor('', GUIDE_MD, index)).toBe('broken');
+    expect(checkAnchor('top', GUIDE_MD, index)).toBe('broken');
+  });
+
+  it('applies the HTML matching rules to the .htm extension too', () => {
+    // .htm is HTML: case-sensitive ids + empty/top navigation, same as .html.
+    expect(checkAnchor('Section', PAGE_HTM, index)).toBe('valid');
+    expect(checkAnchor('section', PAGE_HTM, index)).toBe('broken');
+    expect(checkAnchor('', PAGE_HTM, index)).toBe('valid');
+    expect(checkAnchor('top', PAGE_HTM, index)).toBe('valid');
   });
 });
 

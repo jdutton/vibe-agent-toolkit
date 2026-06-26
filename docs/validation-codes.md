@@ -48,6 +48,57 @@ skills:
 | `vat resources validate` | ✓ | ✓ | Yes (exit 1) |
 | `vat audit` | Display grouping only | ✗ | No (always exit 0) |
 
+## Skill-resource rule catalog (single source of truth)
+
+These are the intent-aware skill-resource codes decided by the shared verdict
+engine (issue #129). The table below is the **spine**: its `Severity`,
+`Description`, and `Fix headline` cells are asserted **equal to** the
+`CODE_REGISTRY` entries by `packages/agent-skills/test/docs/validation-codes.test.ts`,
+so the registry, this doc, and the runtime cannot drift. The runtime `message`
+is dynamic (the headline plus per-issue detail such as the link href) and is not
+asserted here. The longer "why / when it's fine / how to override" prose lives
+once in each code's section below (linked from the `Code` cell).
+
+<!-- BEGIN:rule-catalog (generated from CODE_REGISTRY; cells are asserted equal by the docs test) -->
+
+| Code | Severity | Description | Fix headline |
+|---|---|---|---|
+| [`LINK_OUTSIDE_PROJECT`](#link_outside_project) | error | Markdown link points to a file outside the project root. | Move the target inside the project or remove the link. Use validation.allow if the reference is intentional and cross-project. |
+| [`LINK_TARGETS_DIRECTORY`](#link_targets_directory) | error | A typed single-file reference (e.g. a packaging `files:` source entry) resolves to a directory instead of a file. | Point the `files:` source (or other single-file reference) at a specific file, not a directory. Navigational prose links to a directory are valid and do not trigger this code. |
+| [`LINK_TO_NAVIGATION_FILE`](#link_to_navigation_file) | warning | Markdown link targets a navigation file (README.md, index.md, etc.) which was excluded from the bundle. | Link to the specific content instead of the navigation file, or set severity.LINK_TO_NAVIGATION_FILE to ignore if this is intentional. |
+| [`LINK_TO_GITIGNORED_FILE`](#link_to_gitignored_file) | error | Markdown link targets a gitignored file; risks leaking ignored data into the bundle. | Link to a non-ignored file or adjust .gitignore. Allow the specific path via validation.allow if the risk has been reviewed. |
+| [`LINK_MISSING_TARGET`](#link_missing_target) | error | Markdown link target does not exist on disk and is not a declared build artifact. | Fix the link path, create the file, or declare it under skills.config.<name>.files as a build artifact. |
+| [`LINK_DEFERRED_ARTIFACT`](#link_deferred_artifact) | info | Link targets a deferred build artifact declared in the skill files: config; it will exist after the build materializes it. | No action needed if the files: entry is correct. To silence, set validation.severity.LINK_DEFERRED_ARTIFACT: ignore. |
+| [`LINK_TO_SKILL_DEFINITION`](#link_to_skill_definition) | error | Markdown link targets another skill's SKILL.md; bundling it creates duplicate skill definitions. | Link to a specific resource inside the other skill, or reference the other skill by name. |
+| [`LINK_DROPPED_BY_DEPTH`](#link_dropped_by_depth) | warning | Walker stopped following links at the configured linkFollowDepth; this link was not bundled. | Raise linkFollowDepth, bundle the file via files config, declare the drop intentional with validation.allow, or exclude via excludeReferencesFromBundle.rules. |
+| [`PACKAGED_UNREFERENCED_FILE`](#packaged_unreferenced_file) | error | File in the packaged output is not referenced from any packaged markdown. | Add a markdown link or code-block mention in SKILL.md or a linked resource. Allow via validation.allow if the file is consumed programmatically. |
+| [`PACKAGED_BROKEN_LINK`](#packaged_broken_link) | error | Link in the packaged output resolves to a file that is not present in the output (likely a link-rewriter bug). | Report the issue — this indicates a VAT bug. As a temporary workaround, set severity.PACKAGED_BROKEN_LINK to ignore while the underlying bug is fixed. |
+
+<!-- END:rule-catalog -->
+
+### Disambiguation map (symptom × intent → code)
+
+The same surface symptom (a "broken" link or an "orphan" file) means different
+things depending on **intent**. This view names the broken⇄orphan oscillation
+and shows the `files:` edge as the resolving state once `deferredPaths` is wired.
+
+| Symptom | Intent behind the file | Resolves to |
+|---|---|---|
+| Broken link | Build artifact declared in `files:` (not yet materialized) | `LINK_DEFERRED_ARTIFACT` (info — resolves after build) |
+| Broken link | Typo / wrong path at source | `LINK_MISSING_TARGET` |
+| Broken link | Present in source but missing in **built** output | `PACKAGED_BROKEN_LINK` (link-rewriter bug) |
+| Orphan file | Runtime asset loaded by a script | Declare in `files:` → no code (declaration is the resolution) |
+| Orphan file | Forgotten / undocumented doc | `PACKAGED_UNREFERENCED_FILE` (link it or remove it) |
+| Leaves the bundle | Links a gitignored file | `LINK_TO_GITIGNORED_FILE` |
+| Leaves the bundle | Target outside the project root | `LINK_OUTSIDE_PROJECT` |
+| Directory target | Navigational prose link | *valid — no code* |
+| Directory target | Typed single-file slot (`files:` source) | `LINK_TARGETS_DIRECTORY` |
+
+**Known limit (not faked):** an asset loaded by a packaged script but neither
+linked nor declared in `files:` cannot be distinguished from a forgotten orphan
+without parsing the script — VAT reports it as `PACKAGED_UNREFERENCED_FILE`; the
+resolution is to declare it in `files:`. See the "Out of scope" section of issue #129.
+
 ## Source-Detectable Link Codes
 
 *Stance: see [Structure](./skill-quality-and-compatibility.md#structure).*
@@ -64,9 +115,11 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 ### `LINK_TARGETS_DIRECTORY`
 
 - **Default:** `error`
-- **What:** Markdown link resolves to a directory rather than a file.
-- **Why it matters:** Directory links are ambiguous — agents and renderers cannot load a directory as content. The author almost certainly intended a specific file inside it.
-- **Fix:** Point the link at a specific file (e.g. `README.md` inside the directory) instead of the directory itself.
+- **What:** A typed single-file reference (e.g. a `files:` source entry) resolves to a directory instead of a file.
+- **Why it matters:** A single-file slot is opened or copied as exactly one file; a directory cannot satisfy that contract. Navigational prose links to a directory are valid and existence-checked — they do **not** trigger this code.
+- **Fix:** Point the typed reference at a specific file, not a directory.
+
+> **Decision record D7 — directory index resolution (GitHub-style `docs/` → `docs/README.md`) is intentionally out of scope.** Because navigational prose links to a directory are now valid targets, there is no need to infer an index file; the directory link is simply allowed as-is. Implementing index resolution would add complexity for no benefit under the current model.
 
 ### `LINK_TO_NAVIGATION_FILE`
 
@@ -88,6 +141,13 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 - **What:** Markdown link target does not exist on disk and is not a declared build artifact.
 - **Why it matters:** Broken links in skill documentation mean agents hit dead ends when they follow references. This usually indicates a typo, a removed file, or a build-artifact path that needs declaring under `skills.config.<name>.files`.
 - **Fix:** Fix the link path, create the file, or declare it under `skills.config.<name>.files` as a build artifact.
+
+### `LINK_DEFERRED_ARTIFACT`
+
+- **Default:** `info`
+- **What:** Markdown link in `SKILL.md` targets a path that does not exist on disk but is declared as a build artifact under `skills.config.<name>.files`. VAT downgrades the [`LINK_MISSING_TARGET`](#link_missing_target) finding to this info notice and skips the [`LINK_TO_GITIGNORED_FILE`](#link_to_gitignored_file) check because the artifact has not been materialized yet at source time.
+- **Why it matters:** Deferred artifacts are intentional: the file is generated by a build step declared in the `files:` config, so a broken-link error would be a false positive. The info notice keeps the situation visible without blocking the build.
+- **Fix:** No action needed if the `files:` entry is correct and the artifact will be produced before distribution. To silence the notice, set `validation.severity.LINK_DEFERRED_ARTIFACT: ignore`.
 
 ### `LINK_TO_SKILL_DEFINITION`
 
@@ -123,6 +183,17 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 - **What:** A tracked file links to a gitignored file.
 - **Why it matters:** A committed document declaring a dependency on a gitignored target breaks portability — anyone cloning the repo gets the document but not the target. It also risks treating local-only or generated content as if it were part of the published artifact. Distinct from the skills-packaging code [`LINK_TO_GITIGNORED_FILE`](#link_to_gitignored_file), which guards against leaking ignored data into a *bundle*; this code fires in the `vat resources validate` path and the two coexist intentionally.
 - **Fix:** Link a tracked target, or un-ignore the file in `.gitignore` if it should be committed.
+
+## HTML Well-Formedness Codes
+
+Unlike the link codes above, this code is HTML-specific and is **not** a link code. It fires only in the `vat resources validate` path — emitted by `ResourceRegistry` while parsing `.html`/`.htm` resources — and does not run under `vat skills validate`, `vat skills build`, or `vat audit`.
+
+### `MALFORMED_HTML`
+
+- **Default:** `info`
+- **What:** An HTML resource has well-formedness problems (unclosed tags, stray characters, misnested elements) reported by the HTML parser.
+- **Why it matters:** Malformed markup parses unpredictably across browsers and tools, and can hide or mangle the links VAT extracts. Surfaced as `info` because browsers are lenient and most pages still render.
+- **Fix:** Fix the markup the parser flags. Raise severity via `validation.severity.MALFORMED_HTML` to enforce well-formedness.
 
 ## Frontmatter Link Codes
 
@@ -267,6 +338,17 @@ Only meaningful when actually bundling a skill; fire from `vat skills build` (an
 - **What:** Link in the packaged output resolves to a file that is not present in the output (likely a link-rewriter bug).
 - **Why it matters:** This code indicates VAT's own link rewriter produced an inconsistent bundle — a file was expected but wasn't written to the output. Unlike `LINK_MISSING_TARGET`, which flags source issues, this flags a post-build integrity failure.
 - **Fix:** Report the issue — this indicates a VAT bug. As a temporary workaround, set `severity.PACKAGED_BROKEN_LINK` to `ignore` while the underlying bug is fixed.
+
+## Resource Registry Codes
+
+*Fire when building the resource registry — `vat resources validate` and any command that crawls resources.*
+
+### `DUPLICATE_RESOURCE_ID`
+
+- **Default:** `error`
+- **What:** Two files resolve to the same resource id after path normalization (e.g. `My Guide.md` and `my-guide.md` both produce `my-guide-md`).
+- **Why it matters:** Resource ids must be unique — a collision means one file silently shadows the other in lookups, link resolution, and bundling. This surfaces as a reported issue rather than aborting the whole run with an uncaught error.
+- **Fix:** Rename one of the files so they produce distinct resource ids.
 
 ## Quality Codes
 

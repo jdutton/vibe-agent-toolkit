@@ -252,3 +252,36 @@ describe('fetchAuthenticated — interaction', () => {
     expect(sleep.mock.calls).toEqual([[1000]]);
   });
 });
+
+describe('fetchAuthenticated — signal pass-through', () => {
+  it('AbortSignal in options is forwarded to every fetchImpl call', async () => {
+    let capturedSignal: AbortSignal | null | undefined;
+    const impl = (async (_u: string | URL, init?: RequestInit) => {
+      capturedSignal = init?.signal as AbortSignal | undefined;
+      return new Response(null, { status: 200 });
+    }) as typeof fetch;
+    const signal = AbortSignal.timeout(30_000);
+    await fetchAuthenticated(ORIGIN_URL, AUTH_HEADERS, impl, { signal });
+    expect(capturedSignal).toBe(signal);
+  });
+});
+
+describe('fetchAuthenticated — defaultSleep (no sleep injection)', () => {
+  it('uses real setTimeout when sleep option is omitted', async () => {
+    vi.useFakeTimers();
+    try {
+      const impl = sequenceFetch([
+        { status: 429, headers: { 'retry-after': '1' } },
+        { status: 200 },
+      ]);
+      // No sleep option → defaultSleep runs (covers lines 46-49).
+      const promise = fetchAuthenticated(ORIGIN_URL, AUTH_HEADERS, impl, { maxRetries: 1 });
+      // Advance fake time past the 1000ms Retry-After delay.
+      await vi.advanceTimersByTimeAsync(1000);
+      const response = await promise;
+      expect(response.status).toBe(200);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
