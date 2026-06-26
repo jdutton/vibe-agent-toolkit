@@ -23,6 +23,7 @@ import {
 } from './frontmatter-link-validator.js';
 import { validateFrontmatter } from './frontmatter-validator.js';
 import { parseHtml } from './html-link-parser.js';
+import { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
 import { parseMarkdown } from './link-parser.js';
 import { fragmentIndexEntry, validateLink, type FragmentIndex, type ValidateLinkOptions } from './link-validator.js';
 import type { ResourceCollectionInterface } from './resource-collection-interface.js';
@@ -838,10 +839,20 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Determine cache directory
     const cacheDir = this.getCacheDirectory();
 
+    // Expand any `resources.linkAuth` providers from macro refs into the engine
+    // shape (#113 §5). When the adopter has no linkAuth config, the validator
+    // skips the authenticated branch and uses the existing markdown-link-check
+    // path for every URL — identical to pre-#113 behavior.
+    const adopterLinkAuth = this.config?.resources?.linkAuth;
+    const linkAuthConfig = adopterLinkAuth
+      ? buildLinkAuthEngineConfig(adopterLinkAuth)
+      : undefined;
+
     // Create validator
     const validator = new ExternalLinkValidator(cacheDir, {
       timeout: 15000,
       cacheTtlHours: noCache ? 0 : 24,
+      ...(linkAuthConfig !== undefined && { linkAuthConfig }),
     });
 
     // Collect all external URLs from all resources
@@ -911,7 +922,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    * @private
    */
   private convertValidationResultsToIssues(
-    results: Array<{ url: string; status: 'ok' | 'error'; statusCode: number; error?: string }>,
+    results: Array<{ url: string; status: 'ok' | 'error'; statusCode: number; error?: string; code?: IssueCode }>,
     urlsToValidate: Map<string, Array<{ resourcePath: string; line?: number }>>,
   ): ValidationIssue[] {
     const issues: ValidationIssue[] = [];
@@ -926,7 +937,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         continue;
       }
 
-      const issueCode = this.determineExternalUrlIssueCode(result.statusCode, result.error);
+      // Prefer a code surfaced by the validator's authenticated branch (#113 §7) —
+      // those LINK_AUTH_* codes encode per-provider notFoundMeaning routing that
+      // statusCode alone cannot express. Fall back to the statusCode mapping for
+      // the anonymous markdown-link-check path.
+      const issueCode = result.code ?? this.determineExternalUrlIssueCode(result.statusCode, result.error);
       const errorMessage = result.error ?? `HTTP ${result.statusCode}`;
 
       for (const location of locations) {

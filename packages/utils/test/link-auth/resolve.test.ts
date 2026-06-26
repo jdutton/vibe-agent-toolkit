@@ -16,6 +16,32 @@ function assertHasFetch(
 }
 
 const BEARER_TOKEN_TEMPLATE = 'Bearer ${token}';
+const GITHUB_RAW_ACCEPT = 'application/vnd.github.raw';
+
+/**
+ * Build the example.com provider used by the "token capture vs resolved
+ * token" precedence tests. Both the auth.headers and fetch.headers tests use
+ * the same regex-with-`token`-capture-group shape — extracted to one helper
+ * so the two tests don't repeat the rewrite + token + check blocks.
+ */
+function exampleCaptureProvider(overrides: Partial<Provider> = {}): Provider {
+  return {
+    match: { host: 'example.com' },
+    rewrite: [
+      {
+        when: String.raw`^https://example\.com/(?<token>.+)$`,
+        to: 'rewritten/${token}',
+      },
+    ],
+    auth: { headers: { Authorization: BEARER_TOKEN_TEMPLATE } },
+    token: [{ env: 'REAL_TOKEN' }],
+    check: { method: 'GET', aliveStatus: [200], notFoundMeaning: 'dead' },
+    ...overrides,
+  };
+}
+
+const EXAMPLE_CAPTURE_URL = 'https://example.com/url-part-not-a-token';
+const EXAMPLE_REAL_TOKEN_ENV = { env: { REAL_TOKEN: 'actual-secret' } };
 
 function githubProvider(opts: Partial<Provider> = {}): Provider {
   return {
@@ -171,22 +197,10 @@ describe('resolveAuthenticatedUrl', () => {
       // If a rewrite rule captures a group named "token", that capture would
       // appear in the merged header context. The RESOLVED token must win for
       // headers — otherwise URL-derived data could leak into Authorization.
-      const provider: Provider = {
-        match: { host: 'example.com' },
-        rewrite: [
-          {
-            when: String.raw`^https://example\.com/(?<token>.+)$`,
-            to: 'rewritten/${token}',
-          },
-        ],
-        auth: { headers: { Authorization: BEARER_TOKEN_TEMPLATE } },
-        token: [{ env: 'REAL_TOKEN' }],
-        check: { method: 'GET', aliveStatus: [200], notFoundMeaning: 'dead' },
-      };
       const result = resolveAuthenticatedUrl(
-        'https://example.com/url-part-not-a-token',
-        { providers: [provider] },
-        { env: { REAL_TOKEN: 'actual-secret' } },
+        EXAMPLE_CAPTURE_URL,
+        { providers: [exampleCaptureProvider()] },
+        EXAMPLE_REAL_TOKEN_ENV,
       );
       assertHasFetch(result);
       // The URL captures "url-part-not-a-token" and uses it for the rewrite.
@@ -203,6 +217,104 @@ describe('resolveAuthenticatedUrl', () => {
       );
       assertHasFetch(result);
       expect(Object.getPrototypeOf(result.headers)).toBeNull();
+    });
+  });
+
+  describe('provider.fetch (content-fetch header override, §6.2)', () => {
+    it('omits fetchHeaders when provider has no fetch block', () => {
+      const result = resolveAuthenticatedUrl(
+        GITHUB_BLOB_URL,
+        { providers: [githubProvider()] },
+        { env: { GITHUB_TOKEN: 't' } },
+      );
+      assertHasFetch(result);
+      expect(result.fetchHeaders).toBeUndefined();
+    });
+
+    it('returns fetchHeaders, expanded against the same context as auth.headers', () => {
+      // GitHub example from §6.2: check uses application/vnd.github+json (returns
+      // 200 for >1 MiB files but omits bytes); content fetch uses
+      // application/vnd.github.raw to stream the bytes inline.
+      const provider = githubProvider({
+        fetch: {
+          headers: {
+            Authorization: BEARER_TOKEN_TEMPLATE,
+            Accept: GITHUB_RAW_ACCEPT,
+          },
+        },
+      });
+      const result = resolveAuthenticatedUrl(
+        GITHUB_BLOB_URL,
+        { providers: [provider] },
+        { env: { GITHUB_TOKEN: 'ghp_xyz' } },
+      );
+      assertHasFetch(result);
+      expect(result.fetchHeaders).toEqual({
+        Authorization: 'Bearer ghp_xyz',
+        Accept: GITHUB_RAW_ACCEPT,
+      });
+    });
+
+    it('fetchHeaders templates can reference regex captures alongside ${token}', () => {
+      const provider = githubProvider({
+        fetch: {
+          headers: {
+            Authorization: BEARER_TOKEN_TEMPLATE,
+            'X-Fetch-Owner': '${owner}',
+          },
+        },
+      });
+      const result = resolveAuthenticatedUrl(
+        GITHUB_BLOB_URL,
+        { providers: [provider] },
+        { env: { GITHUB_TOKEN: 't' } },
+      );
+      assertHasFetch(result);
+      expect(result.fetchHeaders?.['X-Fetch-Owner']).toBe('acme');
+      expect(result.fetchHeaders?.['Authorization']).toBe('Bearer t');
+    });
+
+    it('resolved token wins over a regex capture named "token" in fetch.headers too', () => {
+      // Same precedence discipline as auth.headers — URL-derived data must never
+      // leak into Authorization, regardless of which header block reads it.
+      const provider = exampleCaptureProvider({
+        fetch: { headers: { Authorization: BEARER_TOKEN_TEMPLATE } },
+      });
+      const result = resolveAuthenticatedUrl(
+        EXAMPLE_CAPTURE_URL,
+        { providers: [provider] },
+        EXAMPLE_REAL_TOKEN_ENV,
+      );
+      assertHasFetch(result);
+      expect(result.fetchHeaders?.['Authorization']).toBe('Bearer actual-secret');
+    });
+
+    it('returned fetchHeaders map has null prototype', () => {
+      const provider = githubProvider({
+        fetch: { headers: { Accept: GITHUB_RAW_ACCEPT } },
+      });
+      const result = resolveAuthenticatedUrl(
+        GITHUB_BLOB_URL,
+        { providers: [provider] },
+        { env: { GITHUB_TOKEN: 't' } },
+      );
+      assertHasFetch(result);
+      expect(Object.getPrototypeOf(result.fetchHeaders)).toBeNull();
+    });
+
+    it('unverified short-circuit when fetch.headers present but token missing', () => {
+      // fetch.headers existing shouldn't cause the engine to "succeed" without
+      // a token — the unverified path must still trigger when no token source
+      // resolves, regardless of whether fetch.headers is configured.
+      const provider = githubProvider({
+        fetch: { headers: { Accept: GITHUB_RAW_ACCEPT } },
+      });
+      const result = resolveAuthenticatedUrl(
+        GITHUB_BLOB_URL,
+        { providers: [provider] },
+        { env: {} },
+      );
+      expect('outcome' in result && result.outcome).toBe('unverified');
     });
   });
 });

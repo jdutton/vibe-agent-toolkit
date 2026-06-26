@@ -109,6 +109,35 @@ describe('CODE_REGISTRY — capability and compat codes', () => {
   });
 });
 
+describe('CODE_REGISTRY — link-auth codes (#113 slice 2)', () => {
+  it('registers all five LINK_AUTH_* codes', () => {
+    const codes: IssueCode[] = [
+      'LINK_AUTH_DEAD',
+      'LINK_AUTH_DEAD_OR_UNAUTHORIZED',
+      'LINK_AUTH_FORBIDDEN',
+      'LINK_AUTH_UNAUTHORIZED',
+      'LINK_AUTH_UNVERIFIED',
+    ];
+    for (const code of codes) {
+      expect(CODE_REGISTRY[code], `registry missing ${code}`).toBeDefined();
+      expect(CODE_REGISTRY[code].description.length).toBeGreaterThan(10);
+      expect(CODE_REGISTRY[code].fix.length).toBeGreaterThan(10);
+      expect(CODE_REGISTRY[code].reference).toMatch(/^#link_auth_/);
+    }
+  });
+
+  it('enforces expected default severities per #113 §7', () => {
+    // Only LINK_AUTH_DEAD is an error (honest-404 host like SharePoint —
+    // 404 with valid auth is link rot). The four others default to warning;
+    // strict CI lanes can promote LINK_AUTH_UNAUTHORIZED to error.
+    expect(CODE_REGISTRY.LINK_AUTH_DEAD.defaultSeverity).toBe('error');
+    expect(CODE_REGISTRY.LINK_AUTH_DEAD_OR_UNAUTHORIZED.defaultSeverity).toBe('warning');
+    expect(CODE_REGISTRY.LINK_AUTH_FORBIDDEN.defaultSeverity).toBe('warning');
+    expect(CODE_REGISTRY.LINK_AUTH_UNAUTHORIZED.defaultSeverity).toBe('warning');
+    expect(CODE_REGISTRY.LINK_AUTH_UNVERIFIED.defaultSeverity).toBe('warning');
+  });
+});
+
 describe('IssueCodeSchema', () => {
   it('IssueCodeSchema enumerates exactly the registry keys', () => {
     expect(new Set(IssueCodeSchema.options)).toEqual(new Set(Object.keys(CODE_REGISTRY)));
