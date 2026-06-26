@@ -165,7 +165,7 @@ phases:
         run: vat verify
 ```
 
-`vat verify` runs the full artifact check (resources → skills → marketplace → consistency); it's the authoritative gate before `npm publish`. In this repo's own config, `bun run validate` already does this — adopters typically mirror the pattern.
+`vat verify` runs the full artifact check (resources → skills → marketplace → consistency) against the built `dist/` tree; it's the authoritative gate before `npm publish`, so it runs after `vat build`. For source-only checks that need no build — links and SKILL.md frontmatter, ideal for pre-commit and CI-before-build — use `vat validate` (resources + skills). In this repo's own config, `bun run validate` already does this — adopters typically mirror the pattern.
 
 ## First-Time Setup Checklist
 

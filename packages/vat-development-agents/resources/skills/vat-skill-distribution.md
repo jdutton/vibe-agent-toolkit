@@ -436,8 +436,9 @@ TypeScript files in `scripts` are tree-shaken and compiled to standalone `.mjs`.
 
 | Task | Command |
 |---|---|
+| Validate sources (no build) | `vat validate` |
 | Build everything | `vat build` |
-| Verify everything | `vat verify` |
+| Verify built artifacts (after build) | `vat verify` |
 | Build skills only | `vat skills build` |
 | Build claude plugin artifacts only | `vat claude plugin build` |
 | Install via npm (end user) | `npm install -g @org/pkg` |
