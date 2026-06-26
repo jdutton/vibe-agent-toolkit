@@ -32,6 +32,20 @@ export interface ProviderAuth {
   readonly headers: Record<string, string>;
 }
 
+/**
+ * Optional content-fetch header overrides (design issue #113 §6.2).
+ *
+ * Health-check and content retrieval often need different `Accept` (or other)
+ * headers. The canonical example: GitHub's `application/vnd.github+json`
+ * returns 200 for any size but omits bytes >1 MiB, while
+ * `application/vnd.github.raw` streams the bytes inline. The provider declares
+ * `auth.headers` for health-check and an optional `fetch.headers` for content
+ * retrieval. Both are templated against the same context (URL captures + token).
+ */
+export interface ProviderFetch {
+  readonly headers: Record<string, string>;
+}
+
 export interface ProviderCheck {
   readonly method: 'GET' | 'HEAD';
   readonly aliveStatus: readonly number[];
@@ -42,18 +56,50 @@ export interface Provider {
   readonly match: ProviderMatch;
   readonly rewrite: readonly RewriteRule[];
   readonly auth: ProviderAuth;
+  /**
+   * Optional — present when a provider needs different headers for content
+   * retrieval than for health-check. Absent for hosts where one header set
+   * does both jobs.
+   */
+  readonly fetch?: ProviderFetch;
   readonly token: readonly TokenSource[];
   readonly check: ProviderCheck;
 }
 
 export interface LinkAuthConfig {
   readonly providers: readonly Provider[];
-  // `cache` lands in slice 3 (content-fetch primitive). Not used by the
-  // pure engine.
+  /**
+   * Optional content-cache config (consumed by the slice-3 content-fetch
+   * primitive, not by the engine itself). The engine stays stateless; this
+   * field rides along on the config object so the primitive doesn't need a
+   * second source of truth.
+   */
+  readonly cache?: {
+    readonly ttlMinutes?: number;
+  };
 }
 
 export type ResolveOutcome =
-  | { readonly fetchUrl: string; readonly headers: Record<string, string> }
+  | {
+      readonly fetchUrl: string;
+      readonly headers: Record<string, string>;
+      /**
+       * Expanded fetch-mode headers, only present when the provider declared
+       * a `fetch` block. Templated against the same context as `headers`
+       * (URL captures + resolved token), so callers do not need to re-resolve
+       * the token to send these. Per §6.2 — content-fetch consumers send
+       * these instead of (or merged over) `headers` for the request body.
+       */
+      readonly fetchHeaders?: Record<string, string>;
+      /**
+       * The matched provider's `check` block, passed through so the post-fetch
+       * classifier (in `packages/resources`) can route status codes to outcomes
+       * without re-running `selectProvider`. Reading this from the engine —
+       * rather than asking the validator to re-derive it — keeps the
+       * provider-match decision in exactly one place.
+       */
+      readonly check: ProviderCheck;
+    }
   | { readonly outcome: 'unsupported' }
   | { readonly outcome: 'unverified'; readonly reason: string };
 
@@ -91,5 +137,17 @@ export function resolveAuthenticatedUrl(
   headerContext['token'] = token;
 
   const headers = buildHeaders(provider.auth.headers, headerContext);
-  return { fetchUrl: rewrite.rewrittenUrl, headers };
+  // Expand fetch.headers against the same context so the resolved token wins
+  // over any URL-captured "token" group here too — the precedence discipline
+  // applies to both header sets, not just auth.headers.
+  const fetchHeaders =
+    provider.fetch === undefined
+      ? undefined
+      : buildHeaders(provider.fetch.headers, headerContext);
+  return {
+    fetchUrl: rewrite.rewrittenUrl,
+    headers,
+    ...(fetchHeaders === undefined ? {} : { fetchHeaders }),
+    check: provider.check,
+  };
 }

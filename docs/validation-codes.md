@@ -273,6 +273,45 @@ Codes that fire when `vat resources validate` checks external `http(s)://` links
 - **Why it matters:** A network-level failure often reflects a transient DNS or connectivity problem on the validating machine rather than a genuinely broken link, so it is surfaced as a warning rather than blocking the build.
 - **Fix:** Check the host (DNS, reachability, certificate); or set `severity.EXTERNAL_URL_ERROR` to `ignore` if the host is intentionally unreachable from the validation environment.
 
+## Authenticated External Link Codes
+
+Codes that fire when `vat resources validate` checks external links whose host is claimed by a provider in `resources.linkAuth` (e.g. private GitHub repos, SharePoint files). The validator issues an authenticated request via the configured token source and classifies the response; outcome-to-code mapping is per-provider because hosts disagree about what a 404 means (GitHub masks `403 access-denied` as `404`; Microsoft Graph distinguishes cleanly). All five codes are configurable like any other code (`validation.severity` / `validation.allow`); the provider's `check` block routes an outcome to a *code*, never to a *severity*.
+
+### `LINK_AUTH_DEAD`
+
+- **Default:** `error`
+- **What:** An authenticated external link returned `404` or `410` from a host whose provider declares `notFoundMeaning: dead` (i.e. honest-404 hosts like SharePoint). The request was authenticated, so `404` here is not a permissions problem — the resource is missing.
+- **Why it matters:** Unlike the anonymous external-URL check, an authenticated 404 against an honest-404 host is high-confidence evidence of link rot, which is why this is the only `LINK_AUTH_*` code that defaults to `error`. The provider declares this property; hosts that mask access-denied as 404 instead use [`LINK_AUTH_DEAD_OR_UNAUTHORIZED`](#link_auth_dead_or_unauthorized).
+- **Fix:** Fix or remove the link; or set `severity.LINK_AUTH_DEAD` to `ignore` if the path is expected to be transient.
+
+### `LINK_AUTH_DEAD_OR_UNAUTHORIZED`
+
+- **Default:** `warning`
+- **What:** An authenticated external link returned `404` from a host whose provider declares `notFoundMeaning: ambiguous` (i.e. hosts that mask `403 access-denied` as `404`, like GitHub). The link is either rotted *or* inaccessible to the current identity — the response alone cannot distinguish.
+- **Why it matters:** GitHub deliberately does not leak existence of private resources via `403`; both "the file doesn't exist" and "you don't have permission to see this file" return `404`. The checker cannot prove rot, so this is a warning rather than an error. Contributors on a repo where some links point at resources they lack access to will see warnings, not red builds.
+- **Fix:** Verify the URL by hand (or with a more-privileged token) to disambiguate; fix or remove if rotted; or set `severity.LINK_AUTH_DEAD_OR_UNAUTHORIZED` to `ignore` if cross-identity ambiguity is expected.
+
+### `LINK_AUTH_FORBIDDEN`
+
+- **Default:** `warning`
+- **What:** An authenticated external link returned `403`: the configured identity is authenticated, but the resource refuses access. (Only fires for hosts that emit honest `403`s — see `LINK_AUTH_DEAD_OR_UNAUTHORIZED` for hosts that mask access-denied as `404`.)
+- **Why it matters:** A `403` is a permissions signal, not link rot. Treating it as an error would block builds whenever a contributor lacks access to some linked resource — common on cross-team docs. The remedy is granting access or switching identity, not editing the link.
+- **Fix:** Grant the identity access to the resource; switch to an identity that has access; or set `severity.LINK_AUTH_FORBIDDEN` to `ignore` if cross-identity inaccessibility is expected.
+
+### `LINK_AUTH_UNAUTHORIZED`
+
+- **Default:** `warning`
+- **What:** An authenticated external link returned `401`: the token sent with the request was missing, expired, or invalid for the resource's auth scheme.
+- **Why it matters:** Usually a configuration or session problem — the token source resolved a value, but the host rejected it. The link itself may be perfectly fine. Strict CI lanes that should fail on stale credentials can promote this to `error`.
+- **Fix:** Refresh the token (e.g. `gh auth login`, `az login`); check the `token` config in `resources.linkAuth`; or promote `severity.LINK_AUTH_UNAUTHORIZED` to `error` on strict CI lanes.
+
+### `LINK_AUTH_UNVERIFIED`
+
+- **Default:** `warning`
+- **What:** A provider in `resources.linkAuth` claims this host, but no token source resolved — none of the configured env vars or argv commands produced a non-empty value, so no authenticated request was attempted.
+- **Why it matters:** External-URL checking is opt-in, so silently skipping links the project asked to check would be misleading. But `unverified` is not link rot — the link may be fine; the validator just couldn't authenticate. The fix is configuration, not link editing. (`unverified` outcomes are never cached, because the result flips the moment a token appears.)
+- **Fix:** Configure a `token` source (env var or argv command); log in to the underlying CLI (e.g. `gh auth login`, `az login`); or set `severity.LINK_AUTH_UNVERIFIED` to `ignore` if running without auth is intentional.
+
 ## Packaging-Only Codes
 
 *Stance: see [Packaging](./skill-quality-and-compatibility.md#packaging).*

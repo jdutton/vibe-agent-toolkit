@@ -77,7 +77,12 @@
               "FRONTMATTER_UNKNOWN_LINK",
               "EXTERNAL_URL_DEAD",
               "EXTERNAL_URL_TIMEOUT",
-              "EXTERNAL_URL_ERROR"
+              "EXTERNAL_URL_ERROR",
+              "LINK_AUTH_DEAD",
+              "LINK_AUTH_DEAD_OR_UNAUTHORIZED",
+              "LINK_AUTH_FORBIDDEN",
+              "LINK_AUTH_UNAUTHORIZED",
+              "LINK_AUTH_UNVERIFIED"
             ]
           }
         },
@@ -175,7 +180,12 @@
               "FRONTMATTER_UNKNOWN_LINK",
               "EXTERNAL_URL_DEAD",
               "EXTERNAL_URL_TIMEOUT",
-              "EXTERNAL_URL_ERROR"
+              "EXTERNAL_URL_ERROR",
+              "LINK_AUTH_DEAD",
+              "LINK_AUTH_DEAD_OR_UNAUTHORIZED",
+              "LINK_AUTH_FORBIDDEN",
+              "LINK_AUTH_UNAUTHORIZED",
+              "LINK_AUTH_UNVERIFIED"
             ]
           }
         }

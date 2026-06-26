@@ -11,7 +11,7 @@
  *
  * Returns `undefined` if every source fails or yields an empty/whitespace
  * value — the caller's `resolveAuthenticatedUrl` translates that to the
- * `unverified` outcome (LINK_AUTH_UNVERIFIED in slice 2).
+ * `unverified` outcome (surfaced as `LINK_AUTH_UNVERIFIED` by the validator).
  *
  * Per design issue #113 §4 (token vocabulary) and §6.1 (command execution,
  * `safeExecSync`-backed, `shell: false`).
@@ -37,7 +37,12 @@ export interface TokenResolutionDeps {
   readonly runCommand: (argv: readonly string[]) => { success: boolean; stdout: string };
 }
 
-const DEFAULT_RUN_COMMAND: TokenResolutionDeps['runCommand'] = (argv) => {
+/**
+ * Default `runCommand` implementation — exported so callers that want to
+ * memoize per-validate-run can wrap it without duplicating the spawn logic.
+ * Forwards to `safeExecResult` (no shell, argv-based).
+ */
+export const defaultRunCommand: TokenResolutionDeps['runCommand'] = (argv) => {
   if (argv.length === 0) return { success: false, stdout: '' };
   const [bin, ...args] = argv;
   if (bin === undefined) return { success: false, stdout: '' };
@@ -58,7 +63,7 @@ export function resolveToken(
   deps?: Partial<TokenResolutionDeps>,
 ): string | undefined {
   const env = deps?.env ?? process.env;
-  const runCommand = deps?.runCommand ?? DEFAULT_RUN_COMMAND;
+  const runCommand = deps?.runCommand ?? defaultRunCommand;
 
   for (const source of sources) {
     const value = tryResolveSource(source, env, runCommand);

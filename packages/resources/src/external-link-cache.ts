@@ -4,12 +4,26 @@ import { promises as fs } from 'node:fs';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 /**
+ * Cache schema version. Incremented when CacheEntry shape changes; entries
+ * written by an older code path that read as a different version are treated
+ * as cache misses (rather than misparsed) — forward-compat for slice 3's
+ * content-cache additions and any future entry-shape evolution.
+ */
+const CACHE_VERSION = 1;
+
+/**
  * Cache entry for external link validation results
  */
 interface CacheEntry {
 	statusCode: number;
 	statusMessage: string;
 	timestamp: number;
+	/**
+	 * Schema version. Optional for backwards-compat: legacy entries without
+	 * `version` are treated as a cache miss, forcing a refetch. Reading on
+	 * version mismatch produces a miss rather than a parse error.
+	 */
+	version?: number;
 }
 
 /**
@@ -61,7 +75,13 @@ export class ExternalLinkCache {
 	}
 
 	/**
-	 * Load cache from disk
+	 * Load cache from disk. Fail-soft: any IO error (ENOENT, EACCES, EROFS,
+	 * corrupted JSON, …) degrades to an empty cache instead of throwing.
+	 *
+	 * Why no error propagation: `vat resources validate` should keep running
+	 * when the cache file isn't reachable (read-only filesystem, permission
+	 * mismatch, full disk) — a missing cache costs an extra network round-trip,
+	 * an exception costs the whole run. Per #125 review.
 	 */
 	private async loadCache(): Promise<CacheData> {
 		if (this.cache !== null) {
@@ -75,28 +95,35 @@ export class ExternalLinkCache {
 			const data = await fs.readFile(this.cacheFile, 'utf-8');
 			this.cache = JSON.parse(data) as CacheData;
 			return this.cache;
-		} catch (error) {
-			// Handle missing file or corrupted JSON - start with empty cache
-			if ((error as NodeJS.ErrnoException).code === 'ENOENT' || error instanceof SyntaxError) {
-				this.cache = {};
-				return this.cache;
-			}
-			throw error;
+		} catch {
+			// All IO and parse errors degrade to an empty cache. Subsequent
+			// reads see the same empty cache (this.cache is set), so we don't
+			// re-spam mkdir/read on every lookup within the same run.
+			this.cache = {};
+			return this.cache;
 		}
 	}
 
 	/**
-	 * Save cache to disk
+	 * Save cache to disk. Fail-soft: any IO error becomes a no-op instead of
+	 * throwing. Same rationale as `loadCache` — a non-persisted entry costs an
+	 * extra fetch on the next run, an exception costs the whole current run.
 	 */
 	private async saveCache(): Promise<void> {
 		if (this.cache === null) {
 			return;
 		}
 
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- cacheDir is constructor parameter, controlled by caller
-		await fs.mkdir(this.cacheDir, { recursive: true });
-		// eslint-disable-next-line security/detect-non-literal-fs-filename -- cacheFile is derived from cacheDir
-		await fs.writeFile(this.cacheFile, JSON.stringify(this.cache, null, 2), 'utf-8');
+		try {
+			// eslint-disable-next-line security/detect-non-literal-fs-filename -- cacheDir is constructor parameter, controlled by caller
+			await fs.mkdir(this.cacheDir, { recursive: true });
+			// eslint-disable-next-line security/detect-non-literal-fs-filename -- cacheFile is derived from cacheDir
+			await fs.writeFile(this.cacheFile, JSON.stringify(this.cache, null, 2), 'utf-8');
+		} catch {
+			// No-op on IO failure. The in-memory cache (`this.cache`) is still
+			// authoritative for the current run; only the disk persistence is
+			// lost.
+		}
 	}
 
 	/**
@@ -156,6 +183,15 @@ export class ExternalLinkCache {
 			return null;
 		}
 
+		// Forward-compat: an entry written under a different (or missing)
+		// schema version is treated as a miss. Forces a refetch rather than
+		// silently misparsing a slice-3+ shape with slice-2 reader code.
+		if (entry.version !== CACHE_VERSION) {
+			delete cache[key];
+			await this.saveCache();
+			return null;
+		}
+
 		if (this.isExpired(entry)) {
 			delete cache[key];
 			await this.saveCache();
@@ -180,6 +216,7 @@ export class ExternalLinkCache {
 			statusCode,
 			statusMessage,
 			timestamp: Date.now(),
+			version: CACHE_VERSION,
 		};
 
 		await this.saveCache();
