@@ -139,6 +139,16 @@ describe('buildLinkAuthEngineConfig — cache config propagation (§6.3)', () =>
   });
 });
 
+describe('buildLinkAuthEngineConfig — non-string use value', () => {
+  it('throws TypeError when the use property is not a string', () => {
+    expect(() =>
+      buildLinkAuthEngineConfig({
+        providers: [{ use: 42 }] as unknown as LinkAuthProjectConfig['providers'],
+      }),
+    ).toThrow(/must be a string/);
+  });
+});
+
 describe('buildLinkAuthEngineConfig — prototype-pollution defense in macro entries', () => {
   it('uses Object.hasOwn to discriminate {use} so prototype-injected `use` cannot trigger macro expansion', () => {
     // Build an object whose prototype carries `use: github` but whose own
