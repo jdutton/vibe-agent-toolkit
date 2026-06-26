@@ -9,10 +9,22 @@ import { WebSocketTransport, type WebSocketIncomingMessage } from '../src/websoc
 
 import { createConnectedClient, startTransport, waitForClose, waitForResponse } from './test-helpers.js';
 
+// Port 0 lets the OS assign a free ephemeral port at start(); the actual bound
+// port is read back via `transport.boundPort`. A hardcoded port made these
+// tests flake with EADDRINUSE when a prior server had not fully released it or
+// a parallel worker claimed the same number.
+const ephemeralPort = 0;
+
+/** The OS-assigned port a started transport is listening on. */
+function boundPort(t: WebSocketTransport<{ count: number }>): number {
+  const port = t.boundPort;
+  if (port === null) throw new Error('transport is not listening');
+  return port;
+}
+
 describe('WebSocketTransport', () => {
   let mockFn: ConversationalFunction<string, string, { count: number }>;
   let transport: WebSocketTransport<{ count: number }>;
-  const testPort = 8081; // Use non-default port for tests
 
   beforeEach(() => {
     // Mock conversational function that tracks message count
@@ -30,14 +42,14 @@ describe('WebSocketTransport', () => {
   });
 
   it('should create transport with default options', () => {
-    transport = new WebSocketTransport({ fn: mockFn, port: testPort });
+    transport = new WebSocketTransport({ fn: mockFn, port: ephemeralPort });
     expect(transport).toBeDefined();
   });
 
   it('should create transport with custom options', () => {
     transport = new WebSocketTransport({
       fn: mockFn,
-      port: testPort,
+      port: ephemeralPort,
       host: '127.0.0.1',
       createInitialState: () => ({ count: 0 }),
     });
@@ -45,7 +57,7 @@ describe('WebSocketTransport', () => {
   });
 
   it('should start and stop server', async () => {
-    transport = new WebSocketTransport({ fn: mockFn, port: testPort });
+    transport = new WebSocketTransport({ fn: mockFn, port: ephemeralPort });
 
     await transport.start();
     expect(transport).toBeDefined();
@@ -55,11 +67,11 @@ describe('WebSocketTransport', () => {
   it('should handle client connection and message exchange', async () => {
     transport = await startTransport({
       fn: mockFn,
-      port: testPort,
+      port: ephemeralPort,
       createInitialState: () => ({ count: 0 }),
     });
 
-    const client = await createConnectedClient(testPort);
+    const client = await createConnectedClient(boundPort(transport));
 
     // Send message
     const message: WebSocketIncomingMessage = {
@@ -85,15 +97,14 @@ describe('WebSocketTransport', () => {
   it('should maintain separate sessions per connection', async () => {
     transport = await startTransport({
       fn: mockFn,
-      port: testPort,
+      port: ephemeralPort,
       createInitialState: () => ({ count: 0 }),
     });
 
+    const port = boundPort(transport);
+
     // Create two client connections
-    const [client1, client2] = await Promise.all([
-      createConnectedClient(testPort),
-      createConnectedClient(testPort),
-    ]);
+    const [client1, client2] = await Promise.all([createConnectedClient(port), createConnectedClient(port)]);
 
     // Send message from client1
     const message1: WebSocketIncomingMessage = {
@@ -126,11 +137,11 @@ describe('WebSocketTransport', () => {
   });
 
   it('should handle invalid message format', async () => {
-    transport = new WebSocketTransport({ fn: mockFn, port: testPort });
+    transport = new WebSocketTransport({ fn: mockFn, port: ephemeralPort });
 
     await transport.start();
 
-    const client = await createConnectedClient(testPort);
+    const client = await createConnectedClient(boundPort(transport));
 
     const errorPromise = waitForResponse(client);
     client.send(JSON.stringify({ type: 'invalid' }));
@@ -144,11 +155,11 @@ describe('WebSocketTransport', () => {
   });
 
   it('should handle disconnect gracefully', async () => {
-    transport = new WebSocketTransport({ fn: mockFn, port: testPort });
+    transport = new WebSocketTransport({ fn: mockFn, port: ephemeralPort });
 
     await transport.start();
 
-    const client = await createConnectedClient(testPort);
+    const client = await createConnectedClient(boundPort(transport));
 
     // Send a message
     const message: WebSocketIncomingMessage = {

@@ -82,6 +82,16 @@ export class WebSocketTransport<TState = any> implements Transport {
   }
 
   /**
+   * The port the server is actually listening on. When the configured `port`
+   * is `0`, the OS assigns an ephemeral port at `start()` — this getter reports
+   * the real one. Returns `null` before `start()` or after `stop()`.
+   */
+  get boundPort(): number | null {
+    const address = this.server?.address();
+    return address !== null && address !== undefined && typeof address !== 'string' ? address.port : null;
+  }
+
+  /**
    * Start the WebSocket server.
    */
   async start(): Promise<void> {
@@ -91,7 +101,7 @@ export class WebSocketTransport<TState = any> implements Transport {
       this.server.on('error', reject);
 
       this.server.on('listening', () => {
-        console.log(`WebSocket server listening on ws://${this.host}:${this.port}`);
+        console.log(`WebSocket server listening on ws://${this.host}:${this.boundPort ?? this.port}`);
         resolve();
       });
 
