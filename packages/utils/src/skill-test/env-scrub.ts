@@ -30,6 +30,26 @@ const AUTH_CONFIG_ALLOWLIST = ['CLAUDE_CONFIG_DIR'] as const;
 /** The active inference credential candidates (forwarded unless scrubbed). */
 const INFERENCE_CREDENTIALS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'] as const;
 
+/**
+ * Vars that a declared env entry (injectEnv / passEnv) may NEVER override.
+ * These are deny-only — they are not in the forward allowlist either.
+ *
+ * WHY: Any of these names let a committed config attack without skill code:
+ *   • ANTHROPIC_*_BASE_URL / ANTHROPIC_API_URL — redirect the inference endpoint
+ *     so the forwarded ANTHROPIC_API_KEY is sent to an attacker-controlled server.
+ *   • *_PROXY / *_proxy — redirect all HTTPS traffic (including API calls) through
+ *     a MITM proxy even when the base URL looks correct.
+ *   • NODE_OPTIONS — inject arbitrary code into the claude child process via
+ *     --require or --import before any userland code runs.
+ *   • NODE_EXTRA_CA_CERTS — add a rogue CA certificate, enabling TLS interception.
+ */
+const CREDENTIAL_ROUTING_DENY = [
+  'ANTHROPIC_BASE_URL', 'ANTHROPIC_API_URL', 'ANTHROPIC_BEDROCK_BASE_URL', 'ANTHROPIC_VERTEX_BASE_URL',
+  'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
+  'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy',
+  'NODE_OPTIONS', 'NODE_EXTRA_CA_CERTS',
+] as const;
+
 export function buildForwardedEnv(
   source: NodeJS.ProcessEnv,
   opts: ForwardEnvOptions,
@@ -71,8 +91,34 @@ export function protectedEnvNames(modelVars: readonly string[] = []): Set<string
     ...AUTH_CONFIG_ALLOWLIST,
     ...INFERENCE_CREDENTIALS,
     'ANTHROPIC_ADMIN_API_KEY',
+    ...CREDENTIAL_ROUTING_DENY,
     ...modelVars,
   ]);
+}
+
+/**
+ * Returns true if `name` is in `protectedSet`.
+ *
+ * On Windows (win32) env names are case-insensitive — `path` and `PATH` are the
+ * same variable — so we upper-case both sides before comparing. On POSIX, names
+ * are genuinely case-distinct, so the comparison stays exact.
+ *
+ * The `platform` parameter defaults to `process.platform` but is exposed so
+ * unit tests can exercise the win32 branch on any host OS.
+ */
+export function isProtectedName(
+  name: string,
+  protectedSet: Set<string>,
+  platform: string = process.platform,
+): boolean {
+  if (platform === 'win32') {
+    const upper = name.toUpperCase();
+    for (const p of protectedSet) {
+      if (p.toUpperCase() === upper) return true;
+    }
+    return false;
+  }
+  return protectedSet.has(name);
 }
 
 /** Declared test env (Features A + B) to union onto a forwarded env. */
@@ -116,7 +162,7 @@ export function applyDeclaredEnv(base: NodeJS.ProcessEnv, input: DeclaredEnvInpu
 
   // Feature A: pass-through by name.
   for (const name of input.passEnv ?? []) {
-    if (protectedNames.has(name)) {
+    if (isProtectedName(name, protectedNames)) {
       warnings.push(`passEnv "${name}" ignored: it collides with a protected variable.`);
       continue;
     }
@@ -129,7 +175,7 @@ export function applyDeclaredEnv(base: NodeJS.ProcessEnv, input: DeclaredEnvInpu
 
   // Feature B: explicit value injection.
   for (const [name, value] of Object.entries(input.injectEnv ?? {})) {
-    if (protectedNames.has(name)) {
+    if (isProtectedName(name, protectedNames)) {
       warnings.push(`env "${name}" ignored: it collides with a protected variable.`);
       continue;
     }

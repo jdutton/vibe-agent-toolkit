@@ -59,7 +59,9 @@ export function isGlob(source: string): boolean {
  * 2. Accumulate segments until (and **excluding**) the first magic segment.
  * 3. Join accumulated segments with `/`.
  * 4. If the very first segment is magic → return `'.'`.
- * 5. If NO segment is magic (not a glob at all) → return the whole pattern.
+ * 5. If the joined base is empty but the pattern is absolute (leading `/`,
+ *    first real segment magic, e.g. `'/*.mjs'`) → return the root `'/'`.
+ * 6. If NO segment is magic (not a glob at all) → return the whole pattern.
  *
  * Output always uses forward slashes (pure string ops, no `node:path`).
  *
@@ -67,6 +69,7 @@ export function isGlob(source: string): boolean {
  * staticGlobBase('modules/packs/**\/*')    // 'modules/packs'
  * staticGlobBase('a/b/*.mjs')              // 'a/b'
  * staticGlobBase('*.mjs')                  // '.'
+ * staticGlobBase('/*.mjs')                 // '/'   (absolute root, not '')
  * staticGlobBase('../mycli/dist/*.mjs')    // '../mycli/dist'
  * staticGlobBase('foo/bar.txt')            // 'foo/bar.txt'
  */
@@ -91,7 +94,17 @@ export function staticGlobBase(pattern: string): string {
     // No magic found — return the whole (normalized) pattern unchanged.
     return normalized;
   }
-  return staticSegments.join('/');
+
+  const joined = staticSegments.join('/');
+  if (joined === '') {
+    // Every static segment was empty — the only static prefix is a leading
+    // slash (e.g. '/*.mjs' → segments ['', '*.mjs']). A glob runner handed
+    // cwd:'' misbehaves; the correct base is the absolute root '/' for an
+    // absolute pattern, '.' otherwise (defensive — relative-first-magic is
+    // already handled by the length-0 guard above).
+    return normalized.startsWith('/') ? '/' : DOT;
+  }
+  return joined;
 }
 
 /**
@@ -108,15 +121,21 @@ export function staticGlobBase(pattern: string): string {
  * globMagicRemainder('../mycli/dist/*.mjs')   // '*.mjs'
  */
 export function globMagicRemainder(pattern: string): string {
+  const forward = toForwardSlash(pattern);
   const base = staticGlobBase(pattern);
   if (base === DOT) {
     // First segment was magic — the remainder is the full (forward-slash) pattern.
-    return toForwardSlash(pattern);
+    return forward;
   }
-  if (base === toForwardSlash(pattern)) {
+  if (base === forward) {
     // No magic at all — degenerate case: remainder is empty.
     return '';
   }
+  if (base === '/') {
+    // Absolute-root base ('/*.mjs'): the leading slash IS the base, so strip
+    // just that one char (there is no separator between base and remainder).
+    return forward.slice(1);
+  }
   // Strip the base prefix and the trailing '/' separator.
-  return toForwardSlash(pattern).slice(base.length + 1);
+  return forward.slice(base.length + 1);
 }

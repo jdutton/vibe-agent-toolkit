@@ -5,6 +5,7 @@ import {
   BootstrapNeededError,
   InternalHarnessError,
   mapErrorToExitCode,
+  SecurityAckError,
   SkillBuildError,
   SkillTestExitCode,
 } from '../../src/skill-test/exit-codes.js';
@@ -28,6 +29,12 @@ describe('mapErrorToExitCode', () => {
   it('maps SkillBuildError to exit 2', () => {
     expect(mapErrorToExitCode(new SkillBuildError('build blew up'))).toBe(2);
   });
+  it('SecurityAckError → 2 (missing ack before a build)', () => {
+    const err = new SecurityAckError();
+    expect(mapErrorToExitCode(err)).toBe(SkillTestExitCode.Preflight);
+    expect(err.exitCode).toBe(2);
+    expect(err.message).toContain('--i-understand-this-runs-skill-code');
+  });
   it('GradingSkewError → 1 (parse failure surfaced, never success)', () => {
     expect(mapErrorToExitCode(new GradingSkewError('x'))).toBe(SkillTestExitCode.Internal);
   });
@@ -39,6 +46,14 @@ describe('mapErrorToExitCode', () => {
   });
   it('exposes Ok = 0', () => {
     expect(SkillTestExitCode.Ok).toBe(0);
+  });
+});
+
+describe('SkillTestExitCode.EvalFailure', () => {
+  it('is a distinct, unused numeric code (4)', () => {
+    expect(SkillTestExitCode.EvalFailure).toBe(4);
+    const values = Object.values(SkillTestExitCode);
+    expect(new Set(values).size).toBe(values.length); // all codes distinct
   });
 });
 

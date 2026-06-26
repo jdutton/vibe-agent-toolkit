@@ -57,3 +57,50 @@ export function parseGradingJson(raw: unknown): NormalizedGrading {
     })),
   };
 }
+
+/** The authoritative eval verdict, recomputed from per-expectation `passed` flags. */
+export interface GradingVerdict {
+  passed: number;
+  total: number;
+  allPassed: boolean;
+}
+
+/**
+ * Reconcile the grader's self-reported `summary` against the authoritative
+ * per-expectation `passed` flags and return the recomputed verdict.
+ *
+ * The grader emits BOTH an aggregate `summary.{passed,total}` AND one
+ * `expectations[]` entry per graded expectation (each with its own `passed`).
+ * The schema (docs/skill-test-grading-schema.md) defines `summary` as the exact
+ * aggregate of `expectations`, so the two MUST agree. We never trust the
+ * self-reported summary alone — a grader that emits `summary {5,5}` alongside a
+ * failing expectation would otherwise be a false green.
+ *
+ * Throws {@link GradingSkewError} when:
+ *  - there are zero expectations (the grader graded NOTHING — an error, never a
+ *    pass); or
+ *  - the summary disagrees with the recomputed counts (a grader bug, surfaced
+ *    loudly rather than silently flowing a wrong verdict downstream).
+ */
+export function reconcileGrading(report: NormalizedGrading): GradingVerdict {
+  const computedPassed = report.expectations.filter(e => e.passed).length;
+  const computedTotal = report.expectations.length;
+
+  if (computedTotal === 0) {
+    throw new GradingSkewError(
+      'the grader recorded zero expectations — nothing was graded, so this can never be a pass. ' +
+        'A valid grading.json lists every graded expectation in top-level `expectations`',
+    );
+  }
+
+  const { passed, total } = report.summary;
+  if (passed !== computedPassed || total !== computedTotal) {
+    throw new GradingSkewError(
+      `the grader's summary disagrees with its expectations: summary={passed:${passed},total:${total}} ` +
+        `but expectations recompute to {passed:${computedPassed},total:${computedTotal}}. ` +
+        '`summary` must be the exact aggregate of `expectations` (one entry per graded expectation)',
+    );
+  }
+
+  return { passed: computedPassed, total: computedTotal, allPassed: computedPassed === computedTotal };
+}

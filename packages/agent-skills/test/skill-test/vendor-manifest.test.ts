@@ -33,6 +33,24 @@ describe('vendored manifest', () => {
     expect(verifyVendoredManifest(dir)).toBe(false);
   });
 
+  it('verify fails (fail-closed) when the manifest JSON is unparseable', () => {
+    regenerateVendoredManifest(dir);
+    expect(verifyVendoredManifest(dir)).toBe(true);
+    // Corrupt the manifest into invalid JSON — the JSON.parse throw must be
+    // caught and treated as tampering (false), never silently accepted.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture mutation, controlled directory
+    writeFileSync(safePath.join(dir, 'vendored.manifest.json'), '{ this is not json', 'utf8');
+    expect(verifyVendoredManifest(dir)).toBe(false);
+  });
+
+  it('verify fails (fail-closed) when a manifest-listed file is missing on disk', () => {
+    regenerateVendoredManifest(dir);
+    expect(verifyVendoredManifest(dir)).toBe(true);
+    // Delete a file the manifest still lists — a missing listed file is tampering.
+    rmSync(safePath.join(dir, 'agents', 'grader.md'), { force: true });
+    expect(verifyVendoredManifest(dir)).toBe(false);
+  });
+
   it('verify fails (fail-closed) when an unlisted extra file is added after the manifest is written', () => {
     regenerateVendoredManifest(dir);
     expect(verifyVendoredManifest(dir)).toBe(true);

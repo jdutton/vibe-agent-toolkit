@@ -66,11 +66,17 @@ export interface StageHarnessResult {
  *                    else the flat skill dir).
  *   - `skillDir`   → where the skill's own files (incl. evals/) actually live.
  *   - `pluginRoot` → the staged plugin root, or null for a standalone skill.
+ *
+ * `preparedPluginRoots` tracks which staged plugin roots have already been wiped
+ * and had their `.claude-plugin/` manifest copied in this `stageHarness` run. When
+ * two items share the same on-disk plugin the root is prepared exactly ONCE; later
+ * items skip the destructive rmSync so already-staged sibling skill dirs survive.
  */
 function stageOneItem(
   harnessRoot: string,
   item: StageItem,
   resolvedStagedDir: string,
+  preparedPluginRoots: Set<string>,
 ): { pluginDir: string; skillDir: string; pluginRoot: string | null } {
   if (item.pluginLayout === undefined) {
     // Standalone: flat dest, exactly as before. item.name may be an absolute path
@@ -91,14 +97,18 @@ function stageOneItem(
   const { pluginRoot: realPluginDir, relPathUnderPlugin } = item.pluginLayout;
   const pluginName = basename(toForwardSlash(realPluginDir));
   const pluginStageRoot = safePath.joinUnderRoot(harnessRoot, stagedDirName(pluginName));
-  rmSync(pluginStageRoot, { recursive: true, force: true });
 
-  // Copy the plugin's manifest dir (`.claude-plugin/`) from the REAL source so the
-  // staged tree is recognized as a plugin.
-  const realManifestDir = safePath.join(realPluginDir, '.claude-plugin');
-  const stagedManifestDir = safePath.joinUnderRoot(pluginStageRoot, '.claude-plugin');
-  mkdirSyncReal(stagedManifestDir, { recursive: true });
-  cpSync(realManifestDir, stagedManifestDir, { recursive: true });
+  if (!preparedPluginRoots.has(pluginStageRoot)) {
+    // First item for this plugin root in this stageHarness run: wipe the stale
+    // staged tree (clean re-stage) and copy the plugin's manifest dir so the
+    // staged tree is recognized as a plugin.
+    rmSync(pluginStageRoot, { recursive: true, force: true });
+    const realManifestDir = safePath.join(realPluginDir, '.claude-plugin');
+    const stagedManifestDir = safePath.joinUnderRoot(pluginStageRoot, '.claude-plugin');
+    mkdirSyncReal(stagedManifestDir, { recursive: true });
+    cpSync(realManifestDir, stagedManifestDir, { recursive: true });
+    preparedPluginRoots.add(pluginStageRoot);
+  }
 
   // Copy the skill contents (the resolved flat copy) INTO the nested skill slot so
   // `${pluginStageRoot}/skills/<name>/...` resolves like a real install.
@@ -187,10 +197,13 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
   const pluginDirs: string[] = [];
   let subjectStagedDir: string | null = null;
   let subjectPluginRoot: string | null = null;
+  // Track which staged plugin roots have been prepared (wiped + manifest copied) this
+  // run so that sibling skills sharing the same plugin don't clobber each other.
+  const preparedPluginRoots = new Set<string>();
   for (const item of opts.items) {
     const resolved = await opts.resolve(item.source, opts.ctx);
     // Stage flat (standalone) or under the real plugin-root layout (plugin skill).
-    const { pluginDir, skillDir, pluginRoot } = stageOneItem(opts.harnessRoot, item, resolved.stagedDir);
+    const { pluginDir, skillDir, pluginRoot } = stageOneItem(opts.harnessRoot, item, resolved.stagedDir, preparedPluginRoots);
     // Content-hash the staged plugin dir (the whole thing pushed to --plugin-dir),
     // so a change to the plugin manifest OR the skill body invalidates the entry.
     const contentHash = computeDirContentHash(pluginDir);

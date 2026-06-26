@@ -120,6 +120,17 @@ describe('glob-pattern', () => {
       expect(staticGlobBase('*')).toBe(CURRENT_DIR);
     });
 
+    it('returns the absolute root "/" (not "") for a leading-slash magic-first pattern', () => {
+      // '/*.mjs' splits to ['', '*.mjs']; the only static segment is the empty
+      // leading one. Joining yields '' — an empty base misbehaves as a runner cwd.
+      // The correct base is the absolute root '/'.
+      expect(staticGlobBase('/*.mjs')).toBe('/');
+    });
+
+    it('preserves a deeper absolute static prefix', () => {
+      expect(staticGlobBase('/abs/dir/*.mjs')).toBe('/abs/dir');
+    });
+
     it('returns "." for standalone ** pattern', () => {
       expect(staticGlobBase('**/*')).toBe(CURRENT_DIR);
     });
@@ -162,6 +173,15 @@ describe('glob-pattern', () => {
 
     it('returns glob suffix for leading ../ path', () => {
       expect(globMagicRemainder('../mycli/dist/modules/*.mjs')).toBe('*.mjs');
+    });
+
+    it('returns the magic suffix for a leading-slash magic-first pattern (root base)', () => {
+      // base is '/' — the leading slash IS the base, so only it is stripped.
+      expect(globMagicRemainder('/*.mjs')).toBe('*.mjs');
+    });
+
+    it('returns the magic suffix for a deeper absolute pattern', () => {
+      expect(globMagicRemainder('/abs/dir/*.mjs')).toBe('*.mjs');
     });
 
     it('returns ** for bare globstar', () => {

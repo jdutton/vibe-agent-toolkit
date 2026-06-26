@@ -12,6 +12,15 @@ export const SkillTestExitCode = {
   Internal: 1,
   Preflight: 2,
   Bootstrap: 3,
+  /**
+   * At least one eval FAILED and the caller opted into eval-gating via
+   * `--fail-on-eval-failure`. Distinct from the harness-broke codes (1/2):
+   * the harness ran to completion and produced a valid grading.json — the
+   * skill's expectations simply did not all pass. Returned DIRECTLY by the
+   * harness verdict (see verdictExitCode in run-harness.ts), not via
+   * mapErrorToExitCode, because it is an outcome, not a thrown error.
+   */
+  EvalFailure: 4,
 } as const;
 
 export type SkillTestExitCodeValue = (typeof SkillTestExitCode)[keyof typeof SkillTestExitCode];
@@ -47,6 +56,20 @@ export class SkillBuildError extends Error {
   }
 }
 
+/**
+ * The §12 security acknowledgment is required but absent, thrown BEFORE any
+ * build/pre-stage command (which executes untrusted repo code) runs for a
+ * buildable subject. Exit 2 (preflight class). Mirrors the harness Step-6 ack
+ * message wording so the two enforcement points read identically.
+ */
+export class SecurityAckError extends Error {
+  readonly exitCode = 2 as const;
+  constructor() {
+    super('Security acknowledgment required. Pass --i-understand-this-runs-skill-code to proceed.');
+    this.name = 'SecurityAckError';
+  }
+}
+
 /** Internal harness failure (incl. experimenter exiting without valid grading.json). Exit 1. */
 export class InternalHarnessError extends Error {
   readonly exitCode = 1 as const;
@@ -62,9 +85,14 @@ export class InternalHarnessError extends Error {
  * a PromptInvariantError is a user-correctable preflight problem (a supplied
  * prompt override is missing a required safety instruction) → 2; a BuildHookError
  * is a pre-stage build failure → 2; a SkillBuildError is a declared-skill build
- * failure → 2; an UnknownEnvTokenError is a bad ${token} in a
+ * failure → 2; a SecurityAckError is a missing security ack before a build → 2;
+ * an UnknownEnvTokenError is a bad ${token} in a
  * declared env value → 2; GradingSkewError is a parse failure → 1;
  * everything unknown → 1.
+ *
+ * Note: SkillTestExitCode.EvalFailure (4) is NOT produced here — it is an
+ * outcome of a completed run (an eval failed under `--fail-on-eval-failure`),
+ * not a thrown error, so the harness returns it directly (see verdictExitCode).
  */
 export function mapErrorToExitCode(err: unknown): number {
   if (err instanceof BootstrapNeededError) return SkillTestExitCode.Bootstrap;
@@ -73,6 +101,7 @@ export function mapErrorToExitCode(err: unknown): number {
     err instanceof BuildHookError ||
     err instanceof HarnessLocationError ||
     err instanceof PromptInvariantError ||
+    err instanceof SecurityAckError ||
     err instanceof SkillBuildError ||
     err instanceof UnknownEnvTokenError
   ) {

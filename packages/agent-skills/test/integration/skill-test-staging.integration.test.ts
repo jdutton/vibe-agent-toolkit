@@ -13,6 +13,9 @@ const SUBJECT_SRC = '../subject';
 /** The plugin-manifest dir name (one literal, asserted in several tests). */
 const CLAUDE_PLUGIN_DIR = '.claude-plugin';
 
+/** The plugin manifest filename (one literal, asserted in several tests). */
+const PLUGIN_JSON = 'plugin.json';
+
 /**
  * Build a real on-disk plugin tree (the TRUE source) under `srcRoot` so
  * plugin-layout staging has a `.claude-plugin/` dir to copy. Returns the layout
@@ -27,7 +30,7 @@ function makeRealPlugin(srcRoot: string, pluginName: string, skillName: string):
   const cp = safePath.join(pluginRoot, CLAUDE_PLUGIN_DIR);
   mkdirSyncReal(cp, { recursive: true });
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own tmp src
-  writeFileSync(safePath.join(cp, 'plugin.json'), `{"name":"${pluginName}"}\n`, 'utf8');
+  writeFileSync(safePath.join(cp, PLUGIN_JSON), `{"name":"${pluginName}"}\n`, 'utf8');
   const relPathUnderPlugin = `skills/${skillName}`;
   return { pluginRoot, relPathUnderPlugin, layout: { pluginRoot, relPathUnderPlugin } };
 }
@@ -190,7 +193,7 @@ describe('stageHarness (integration)', () => {
     const stageRoot = result.pluginDirs[0] as string;
     // The plugin manifest is copied into the staged plugin root...
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- staged path under our tmp root
-    expect(existsSync(safePath.join(stageRoot, CLAUDE_PLUGIN_DIR, 'plugin.json'))).toBe(true);
+    expect(existsSync(safePath.join(stageRoot, CLAUDE_PLUGIN_DIR, PLUGIN_JSON))).toBe(true);
     // ...and the skill lands at its real nesting, scripts intact.
     const stagedSkill = safePath.join(stageRoot, relPathUnderPlugin);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- staged path under our tmp root
@@ -203,6 +206,63 @@ describe('stageHarness (integration)', () => {
     // subjectStagedDir points INTO the skill dir (where evals/evals.json lives).
     expect(toForwardSlash(result.subjectStagedDir as string)).toBe(toForwardSlash(stagedSkill));
     expect(pluginRoot).toContain('acme-platform'); // sanity on the real source
+  });
+
+  it('stages two skills from the same plugin without the second rmSync clobbering the first (M4)', async () => {
+    // Bug: stageOneItem called rmSync(pluginStageRoot) unconditionally for every item.
+    // When subject + helper share the same plugin, staging helper wiped the already-staged
+    // subject dir — leaving subjectStagedDir pointing at a deleted path.
+    // Use a distinct plugin name to avoid triggering the sonarjs no-duplicate-string
+    // rule for 'acme-platform', which is already used twice in the test above.
+    const { pluginRoot: sharedRoot, layout: subjectLayout } = makeRealPlugin(srcRoot, 'dual-skills-plugin', 'subject-skill');
+    const helperLayout: PluginLayout = { pluginRoot: sharedRoot, relPathUnderPlugin: 'skills/helper-skill' };
+
+    const items: StageItem[] = [
+      {
+        name: 'subject-skill',
+        source: descriptorToSource({ path: '../subject-skill' }),
+        role: 'subject',
+        pluginLayout: subjectLayout,
+      },
+      {
+        name: 'helper-skill',
+        source: descriptorToSource({ path: '../helper-skill' }),
+        pluginLayout: helperLayout,
+      },
+    ];
+
+    const result = await stageHarness({
+      harnessRoot: root,
+      items,
+      resolve: makeFakeResolver(srcRoot) as never,
+      ctx: {} as never,
+      currentUid: uid,
+    });
+
+    // Both items staged to the same plugin root.
+    expect(result.pluginDirs).toHaveLength(2);
+    const stageRoot = result.pluginDirs[0] as string;
+    // Both items share the same staged plugin root.
+    expect(toForwardSlash(result.pluginDirs[1] as string)).toBe(toForwardSlash(stageRoot));
+
+    // Critical: BOTH nested skill dirs must exist after staging. Derive paths from
+    // the layout objects so changing skill names in the future doesn't duplicate literals.
+    const stagedSubject = safePath.join(stageRoot, subjectLayout.relPathUnderPlugin);
+    const stagedHelper = safePath.join(stageRoot, helperLayout.relPathUnderPlugin);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- staged path under our tmp root
+    expect(existsSync(stagedSubject)).toBe(true); // was wiped without the fix
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- staged path under our tmp root
+    expect(existsSync(stagedHelper)).toBe(true);
+
+    // The subject's SKILL.md is readable (subjectStagedDir was not deleted).
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- staged path under our tmp root
+    expect(existsSync(safePath.join(result.subjectStagedDir as string, 'SKILL.md'))).toBe(true);
+    // subjectStagedDir points at the nested subject slot, not the plugin root.
+    expect(toForwardSlash(result.subjectStagedDir as string)).toBe(toForwardSlash(stagedSubject));
+
+    // Plugin manifest is present (copied once; not lost after second skill staged).
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- staged path under our tmp root
+    expect(existsSync(safePath.join(stageRoot, CLAUDE_PLUGIN_DIR, PLUGIN_JSON))).toBe(true);
   });
 
   it('keeps a standalone skill staged flat (no plugin layout regression)', async () => {

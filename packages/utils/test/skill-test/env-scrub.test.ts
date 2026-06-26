@@ -4,6 +4,7 @@ import {
   applyDeclaredEnv,
   buildForwardedEnv,
   formatForwardedEnvLine,
+  isProtectedName,
   protectedEnvNames,
 } from '../../src/skill-test/env-scrub.js';
 
@@ -179,5 +180,95 @@ describe('protectedEnvNames', () => {
     expect(names.has('ANTHROPIC_API_KEY')).toBe(true);
     expect(names.has('ANTHROPIC_ADMIN_API_KEY')).toBe(true);
     expect(names.has('ANTHROPIC_MODEL')).toBe(true);
+  });
+
+  it('includes all credential-routing deny names (FIX A)', () => {
+    const names = protectedEnvNames();
+    const denyNames = [
+      'ANTHROPIC_BASE_URL', 'ANTHROPIC_API_URL', 'ANTHROPIC_BEDROCK_BASE_URL', 'ANTHROPIC_VERTEX_BASE_URL',
+      'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
+      'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy',
+      'NODE_OPTIONS', 'NODE_EXTRA_CA_CERTS',
+    ];
+    for (const name of denyNames) {
+      expect(names.has(name), `expected ${name} to be protected`).toBe(true);
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FIX A: credential-routing deny list
+// ---------------------------------------------------------------------------
+
+/** Names from the deny list used as injection/passthrough targets in tests. */
+const DENY_CASES = [
+  ['ANTHROPIC_BASE_URL', 'https://attacker.example'],
+  ['NODE_OPTIONS', '--require=/evil.js'],
+  ['HTTPS_PROXY', 'https://mitm.proxy'],
+  ['http_proxy', 'https://mitm.proxy'],
+] as const;
+
+describe('credential-routing deny list (FIX A)', () => {
+  it.each(DENY_CASES)('injectEnv %s is ignored with warning and absent from result', (name, value) => {
+    const result = applyDeclaredEnv(FORWARDED_BASE, {
+      source: DECLARED_SOURCE,
+      injectEnv: { [name]: value },
+    });
+    expect(result.env[name]).toBeUndefined();
+    expect(result.injected).not.toContain(name);
+    expect(result.warnings.some((w) => w.includes(name))).toBe(true);
+  });
+
+  it.each(DENY_CASES)('passEnv %s is ignored with warning and absent from result', (name) => {
+    const source = { ...DECLARED_SOURCE, [name]: 'some-value' };
+    const result = applyDeclaredEnv(FORWARDED_BASE, {
+      source,
+      passEnv: [name],
+    });
+    expect(result.env[name]).toBeUndefined();
+    expect(result.passedThrough).not.toContain(name);
+    expect(result.warnings.some((w) => w.includes(name))).toBe(true);
+  });
+
+  it('injectEnv MY_FLAG (non-protected) still injects normally', () => {
+    const result = applyDeclaredEnv(FORWARDED_BASE, {
+      source: DECLARED_SOURCE,
+      injectEnv: { MY_FLAG: 'hello' },
+    });
+    expect(result.env.MY_FLAG).toBe('hello');
+    expect(result.injected).toContain('MY_FLAG');
+    expect(result.warnings).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FIX B: Windows case-insensitive protected-name matching
+// ---------------------------------------------------------------------------
+
+describe('isProtectedName (FIX B — Windows case-insensitive)', () => {
+  const names = protectedEnvNames();
+
+  it('treats "path" as protected on win32 (case-insensitive match against PATH)', () => {
+    expect(isProtectedName('path', names, 'win32')).toBe(true);
+  });
+
+  it('treats "tmp" as protected on win32 (case-insensitive match against TMP)', () => {
+    expect(isProtectedName('tmp', names, 'win32')).toBe(true);
+  });
+
+  it('treats "PATH" (exact) as protected on win32', () => {
+    expect(isProtectedName('PATH', names, 'win32')).toBe(true);
+  });
+
+  it('treats "path" as NOT protected on linux (POSIX is case-sensitive)', () => {
+    expect(isProtectedName('path', names, 'linux')).toBe(false);
+  });
+
+  it('treats "tmp" as NOT protected on linux (POSIX is case-sensitive)', () => {
+    expect(isProtectedName('tmp', names, 'linux')).toBe(false);
+  });
+
+  it('treats MY_FLAG as NOT protected on win32 (non-protected name)', () => {
+    expect(isProtectedName('MY_FLAG', names, 'win32')).toBe(false);
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { GradingSkewError, parseGradingJson } from '../../src/skill-test/grading-adapter.js';
+import { GradingSkewError, parseGradingJson, reconcileGrading } from '../../src/skill-test/grading-adapter.js';
 
 const VALID = {
   summary: { passed: 3, total: 3 },
@@ -78,5 +78,60 @@ describe('parseGradingJson', () => {
       expect(msg).toContain('evals');
       expect(msg).toContain('top-level `expectations`');
     }
+  });
+});
+
+describe('reconcileGrading', () => {
+  it('returns recomputed counts when summary agrees with expectations', () => {
+    const v = reconcileGrading({
+      summary: { passed: 1, total: 2 },
+      expectations: [
+        { text: 'a', passed: true },
+        { text: 'b', passed: false },
+      ],
+    });
+    expect(v).toEqual({ passed: 1, total: 2, allPassed: false });
+  });
+
+  it('reports allPassed when every expectation passed', () => {
+    const v = reconcileGrading({
+      summary: { passed: 2, total: 2 },
+      expectations: [
+        { text: 'a', passed: true },
+        { text: 'b', passed: true },
+      ],
+    });
+    expect(v).toEqual({ passed: 2, total: 2, allPassed: true });
+  });
+
+  it('throws GradingSkewError when there are zero expectations (nothing graded is never a pass)', () => {
+    expect(() => reconcileGrading({ summary: { passed: 0, total: 0 }, expectations: [] })).toThrow(
+      GradingSkewError,
+    );
+  });
+
+  it('throws GradingSkewError when the grader summary disagrees with the recomputed counts', () => {
+    expect(() =>
+      reconcileGrading({
+        summary: { passed: 5, total: 5 },
+        expectations: [
+          { text: 'a', passed: true },
+          { text: 'b', passed: true },
+        ],
+      }),
+    ).toThrow(GradingSkewError);
+  });
+
+  it('throws when summary undercounts a failing expectation (summary {5,5} but one expectation failed)', () => {
+    const expectations = [
+      { text: '1', passed: true },
+      { text: '2', passed: true },
+      { text: '3', passed: true },
+      { text: '4', passed: true },
+      { text: '5', passed: false },
+    ];
+    expect(() => reconcileGrading({ summary: { passed: 5, total: 5 }, expectations })).toThrow(
+      GradingSkewError,
+    );
   });
 });

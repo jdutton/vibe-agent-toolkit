@@ -87,6 +87,13 @@ export interface SpawnHeadlessOptions extends ClaudeSpawnArgs {
   stallMs?: number;
   onStdout?: (chunk: string) => void;
   onStderr?: (chunk: string) => void;
+  /**
+   * INTERNAL test seam. When set, this executable is spawned instead of resolving
+   * `claude` on PATH — letting tests exercise the wall-timeout / stall watchdog
+   * against a tiny fake child without a real `claude` install. Production callers
+   * never set this; `claude` is resolved via `which`.
+   */
+  binPath?: string;
 }
 
 /**
@@ -97,7 +104,9 @@ export interface SpawnHeadlessOptions extends ClaudeSpawnArgs {
  * (stalled: true in result).
  */
 export async function spawnHeadlessClaude(opts: SpawnHeadlessOptions): Promise<SpawnResult> {
-  const bin = which.sync('claude');
+  // opts.binPath is an internal test seam (see SpawnHeadlessOptions); production
+  // callers leave it unset and `claude` is resolved on PATH.
+  const bin = opts.binPath ?? which.sync('claude');
   const args = assembleClaudeArgs(opts);
 
   return await new Promise<SpawnResult>((resolve, reject) => {

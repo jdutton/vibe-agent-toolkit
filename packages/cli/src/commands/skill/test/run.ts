@@ -11,11 +11,13 @@ import { basename, dirname } from 'node:path';
 
 import {
   BootstrapNeededError,
+  isAcknowledged,
   mapErrorToExitCode,
   packageSkill,
   packagingConfigToPackageOptions,
   runPreStageBuild,
   runSkillTestHarness,
+  SecurityAckError,
   SkillBuildError,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { SkillSourceDescriptor, TestConfig } from '@vibe-agent-toolkit/resources';
@@ -83,6 +85,8 @@ export interface SkillTestRunOptions {
   passEnv?: string[];
   /** Skip building a declared subject and stage its existing dist instead. */
   noBuild?: boolean;
+  /** Exit non-zero (EvalFailure) when any eval fails, instead of the default Ok. */
+  failOnEvalFailure?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -234,6 +238,7 @@ function applyFlagOnlyOptions(opts: HarnessOpts, options: SkillTestRunOptions): 
   if (options.dryRun !== undefined) opts.dryRun = options.dryRun;
   if (options.allowUnverifiedSkillSource !== undefined) opts.allowUnverifiedSkillSource = options.allowUnverifiedSkillSource;
   if (options.iUnderstandThisRunsSkillCode !== undefined) opts.acknowledgedRunsSkillCode = options.iUnderstandThisRunsSkillCode;
+  if (options.failOnEvalFailure !== undefined) opts.failOnEvalFailure = options.failOnEvalFailure;
 }
 
 /** Apply flag>config merges for scalar knobs (auth, model, baseline, eval/prompt). */
@@ -380,7 +385,7 @@ export interface ResolvedSubject {
 export async function resolveSubjectForTest(
   ref: string,
   cwd: string,
-  flags: { noBuild: boolean; dryRun: boolean; build?: string },
+  flags: { noBuild: boolean; dryRun: boolean; acknowledged: boolean; build?: string },
 ): Promise<ResolvedSubject> {
   const resolved = await resolveSkillReference(ref, cwd);
   switch (resolved.kind) {
@@ -452,13 +457,22 @@ function resolveNoBuildDryRunBranch(
 /** Build a declared skill (or stage its existing dist under --no-build/--dry-run), then return the dist to stage. */
 async function resolveBuildableSubject(
   ref: BuildableReference,
-  flags: { noBuild: boolean; dryRun: boolean; build?: string },
+  flags: { noBuild: boolean; dryRun: boolean; acknowledged: boolean; build?: string },
 ): Promise<ResolvedSubject> {
   const scaffoldDir = dirname(ref.sourcePath);
 
   // --no-build and --dry-run never build — delegate to the dedicated branch helper.
   if (flags.noBuild || flags.dryRun) {
     return resolveNoBuildDryRunBranch(ref, scaffoldDir, flags);
+  }
+
+  // SECURITY (§12): reaching here means a real build WOULD run — runPreStageBuild
+  // executes an ARBITRARY shell command from the repo's committed `test.build`, and
+  // packageSkill/runClaudePluginBuild run the repo's build. Enforce the ack BEFORE
+  // any of that, so an untrusted clone never executes its build without the user's
+  // explicit acknowledgment. (Defense-in-depth: the harness Step-6 check remains.)
+  if (!flags.acknowledged) {
+    throw new SecurityAckError();
   }
 
   // test.build hook (upstream artifacts) BEFORE the skill build -- ordering matters.
@@ -494,8 +508,10 @@ async function resolveBuildableSubject(
  * The unit-testable action for `vat skill test run`. Exported so tests can
  * call it directly without parsing CLI args. Calls process.exit on completion.
  *
- * Note: the security ack enforcement lives inside runSkillTestHarness (domain),
- * NOT here — this ensures the mock in tests can bypass it cleanly.
+ * Security ack enforcement happens in TWO places that share the isAcknowledged
+ * predicate: (1) here, BEFORE resolveSubjectForTest builds a declared subject —
+ * so an untrusted clone never runs its `test.build`/packageSkill without the ack;
+ * (2) inside runSkillTestHarness (Step 6) as defense-in-depth before spawning.
  */
 export async function runSkillTestRun(
   skills: string[],
@@ -509,11 +525,18 @@ export async function runSkillTestRun(
   // Commander stores the `--no-build` negatable flag under `build` (=== false when set);
   // honor an explicit programmatic `noBuild` too.
   const noBuild = options.noBuild === true || (options as { build?: boolean }).build === false;
+  // Reuse the harness's ack predicate so the pre-build gate and the harness
+  // Step-6 gate share one definition of "acknowledged" (a dry-run counts).
+  const acknowledged = isAcknowledged({
+    dryRun: options.dryRun === true,
+    acknowledgedRunsSkillCode: options.iUnderstandThisRunsSkillCode === true,
+  });
   let subject: ResolvedSubject;
   try {
     subject = await resolveSubjectForTest(skills[0] ?? '', process.cwd(), {
       noBuild,
       dryRun: options.dryRun === true,
+      acknowledged,
       ...(config?.build === undefined ? {} : { build: config.build }),
     });
   } catch (err) {
@@ -590,6 +613,10 @@ export function createSkillTestRunCommand(): Command {
     .option('--auth <mode>', 'Auth mechanism: inherit | subscription | api-key | auto')
     .option('--require-auth <mech>', 'Require a specific auth mechanism: subscription | api-key')
     .option('--baseline', 'Enable A/B baseline run (with/without skill)')
+    .option(
+      '--fail-on-eval-failure',
+      'Exit non-zero when any eval fails (default: the run exits 0 if the harness completed and produced grading.json; eval pass/fail is in the summary).',
+    )
     .option('--allow-unverified-skill-source', 'Skip the vendored manifest integrity check')
     .option('--i-understand-this-runs-skill-code', 'Acknowledge this command executes skill code (required)')
     .option(
@@ -627,12 +654,14 @@ Model:
 
 Exit Codes:
   0 - Harness ran to completion and produced a valid grading.json (check summary/grading.json for pass/fail counts)
-  1 - Internal error (grading.json absent/invalid, experimenter crash, stall/timeout)
+  1 - Internal error (grading.json absent/invalid, summary/expectations skew, experimenter crash, stall/timeout)
   2 - Preflight failed (missing binary, auth error, eval inputs absent, unsafe workdir, ack missing, skill build failed, or --no-build with no existing dist)
   3 - Bootstrap needed: evals.json was absent, so VAT wrote a starter template next to the skill source. Fill it in and re-run.
+  4 - An eval FAILED and --fail-on-eval-failure was passed (the harness completed; expectations did not all pass). Without the flag this is exit 0.
 
-  Note: eval pass/fail is NOT reflected in the exit code. Read the printed summary
-  ("PASS N/N" or "FAIL N/N") or grading.json to determine whether expectations passed.
+  Note: by DEFAULT, eval pass/fail is NOT reflected in the exit code -- read the
+  printed summary ("PASS N/N" or "FAIL N/N") or grading.json. Pass
+  --fail-on-eval-failure to make a failing eval exit 4 (e.g. to gate CI).
 
 Example:
   $ vat skill test run my-skill --i-understand-this-runs-skill-code

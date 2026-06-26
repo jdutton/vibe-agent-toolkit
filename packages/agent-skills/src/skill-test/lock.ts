@@ -44,3 +44,53 @@ export function acquireHarnessLock(harnessRoot: string, opts: { wait?: boolean }
     },
   };
 }
+
+/** Conventional shell exit-code base for a process terminated by a signal. */
+const SIGNAL_EXIT_BASE = 128;
+
+/** Signals we trap so an interrupted run cleans up instead of leaking the lock. */
+const SIGNAL_NUMBERS: ReadonlyArray<readonly [NodeJS.Signals, number]> = [
+  ['SIGINT', 2],
+  ['SIGTERM', 15],
+];
+
+export interface InstallSignalCleanupOptions {
+  /**
+   * Invoked once on the first trapped signal, BEFORE exiting — the place to
+   * release the harness lock and remove the harness dir so a Ctrl-C mid-run does
+   * not leave `.vat-skill-test.lock` (or staged untrusted bytes) behind.
+   */
+  onSignal: () => void;
+  /**
+   * Exit hook, injectable for tests. Defaults to `process.exit`. Called with the
+   * conventional 128+signal code so the signal is honored, not swallowed.
+   */
+  exit?: (code: number) => void;
+}
+
+/**
+ * Trap SIGINT/SIGTERM while the harness lock is held. On the first such signal
+ * the handler removes ITSELF (no listener leak, no re-entry), runs `onSignal`
+ * (release lock + clean up), then exits with the conventional 128+signal code.
+ *
+ * Returns a disposer that removes the handlers — the caller MUST call it on
+ * normal completion so listeners do not accumulate across runs in a long-lived
+ * process (and so tests stay isolated).
+ */
+export function installSignalCleanup(opts: InstallSignalCleanupOptions): () => void {
+  const exit = opts.exit ?? ((code: number): void => { process.exit(code); });
+  const registered: Array<readonly [NodeJS.Signals, () => void]> = [];
+  const remove = (): void => {
+    for (const [sig, handler] of registered) process.off(sig, handler);
+  };
+  for (const [sig, num] of SIGNAL_NUMBERS) {
+    const handler = (): void => {
+      remove();
+      opts.onSignal();
+      exit(SIGNAL_EXIT_BASE + num);
+    };
+    process.on(sig, handler);
+    registered.push([sig, handler]);
+  }
+  return remove;
+}

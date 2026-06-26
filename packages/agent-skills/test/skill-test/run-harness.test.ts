@@ -13,16 +13,20 @@
  * does NOT widen the public package surface.
  */
 
+/* eslint-disable security/detect-non-literal-fs-filename -- tests use controlled temp directories */
+import { existsSync, symlinkSync, writeFileSync } from 'node:fs';
+
 import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { InternalHarnessError } from '../../src/skill-test/exit-codes.js';
+import { InternalHarnessError, SkillTestExitCode } from '../../src/skill-test/exit-codes.js';
 import {
   assertExperimenterSucceeded,
   buildDryRunSummary,
   buildPreflightInput,
   buildResolveCtx,
   buildStageItems,
+  cleanupHarness,
   detectItemPluginLayout,
   flagDummyValueFor,
   isAcknowledged,
@@ -33,6 +37,7 @@ import {
   resolveStallMs,
   resolveTimeoutMs,
   subjectSkillName,
+  verdictExitCode,
   type DryRunSummaryInput,
   type RunHarnessOptions,
 } from '../../src/skill-test/run-harness.js';
@@ -91,6 +96,13 @@ function makePlainDir(tempDir: string, name: string): string {
   const dir = safePath.join(tempDir, name);
   mkdirSyncReal(dir, { recursive: true });
   return dir;
+}
+
+/** Create a populated harness-like directory (one staged file) and return its path. */
+function makeHarnessDir(tempDir: string, name: string): string {
+  const root = makePlainDir(tempDir, name);
+  writeFileSync(safePath.join(root, 'staged.txt'), 'untrusted', 'utf-8');
+  return root;
 }
 
 /**
@@ -502,5 +514,64 @@ describe('buildPreflightInput', () => {
     expect(input.authMode).toBe('api-key');
     expect(input.requireAuth).toBe('api-key');
     expect(input.costEstimate.maxBudgetUsd).toBe(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Harness cleanup
+// ---------------------------------------------------------------------------
+
+describe('cleanupHarness', () => {
+  const { getTempDir } = setupTempDir('vat-cleanup-test-');
+
+  it('removes the harness dir by default (created, not kept)', () => {
+    const root = makeHarnessDir(getTempDir(), 'default');
+    cleanupHarness(root, { keep: false, created: true });
+    expect(existsSync(root)).toBe(false);
+  });
+
+  it('retains the dir when keep is set', () => {
+    const root = makeHarnessDir(getTempDir(), 'kept');
+    cleanupHarness(root, { keep: true, created: true });
+    expect(existsSync(root)).toBe(true);
+  });
+
+  it('retains a user-supplied dir (created=false, e.g. --out/--workdir)', () => {
+    const root = makeHarnessDir(getTempDir(), 'user-owned');
+    cleanupHarness(root, { keep: false, created: false });
+    expect(existsSync(root)).toBe(true);
+  });
+
+  it('is a no-op (no throw) on an already-removed dir', () => {
+    const root = safePath.join(getTempDir(), 'missing');
+    expect(() => cleanupHarness(root, { keep: false, created: true })).not.toThrow();
+  });
+
+  it.skipIf(process.platform === 'win32')(
+    'does not follow a symlinked root — leaves the link target intact',
+    () => {
+      const target = makeHarnessDir(getTempDir(), 'symlink-target');
+      const link = safePath.join(getTempDir(), 'symlink-root');
+      symlinkSync(target, link);
+      cleanupHarness(link, { keep: false, created: true });
+      // The symlink target (and its contents) must survive — cleanup must not
+      // follow a swapped symlink out of tmp.
+      expect(existsSync(safePath.join(target, 'staged.txt'))).toBe(true);
+    },
+  );
+});
+
+describe('verdictExitCode', () => {
+  it('returns Ok when all expectations passed (regardless of the flag)', () => {
+    expect(verdictExitCode(true, false)).toBe(SkillTestExitCode.Ok);
+    expect(verdictExitCode(true, true)).toBe(SkillTestExitCode.Ok);
+  });
+
+  it('returns Ok on a failing verdict when fail-on-eval-failure is NOT set (default behavior)', () => {
+    expect(verdictExitCode(false, false)).toBe(SkillTestExitCode.Ok);
+  });
+
+  it('escalates a failing verdict to EvalFailure when fail-on-eval-failure is set', () => {
+    expect(verdictExitCode(false, true)).toBe(SkillTestExitCode.EvalFailure);
   });
 });

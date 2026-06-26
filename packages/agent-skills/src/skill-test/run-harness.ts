@@ -9,7 +9,7 @@
  *   → spawnHeadlessClaude → parseGradingJson → release lock → return result
  */
 
-import { cpSync, existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -32,14 +32,19 @@ import type { ResolvedSkillSource, ResolveSkillSourceContext, SkillSource } from
 
 import { assembleChildEnv, computeEnvTokens, resolveInjectEnv } from './declared-env.js';
 import { writeEvalsTemplate } from './evals-template.js';
-import { BootstrapNeededError, InternalHarnessError, SkillTestExitCode } from './exit-codes.js';
+import {
+  BootstrapNeededError,
+  InternalHarnessError,
+  SkillTestExitCode,
+  type SkillTestExitCodeValue,
+} from './exit-codes.js';
 import {
   assertPromptInvariants,
   buildExperimenterPrompt,
 } from './experimenter-prompt.js';
-import { parseGradingJson } from './grading-adapter.js';
+import { parseGradingJson, reconcileGrading } from './grading-adapter.js';
 import { assertSafeHarnessRoot, assertSafeWorkdir, prepareHarnessRoot, resolveHarnessRoot } from './harness-location.js';
-import { acquireHarnessLock } from './lock.js';
+import { acquireHarnessLock, installSignalCleanup } from './lock.js';
 import { detectPluginLayout } from './plugin-layout.js';
 import { runPreflight, type PreflightInput } from './preflight.js';
 import { descriptorToSource, stageHarness, type StageItem } from './staging.js';
@@ -180,6 +185,13 @@ export interface RunHarnessOptions {
   env?: Record<string, string>;
   /** Feature A: host env var names to forward to the experimenter if present. */
   passEnv?: readonly string[];
+
+  /**
+   * Opt-in eval gating. When true and any eval fails, the run returns exit
+   * EvalFailure (4) instead of Ok. Default (false/absent): a completed run
+   * always returns Ok and the pass/fail count lives only in the summary.
+   */
+  failOnEvalFailure?: boolean;
 }
 
 export interface RunHarnessResult {
@@ -198,6 +210,16 @@ const DEFAULT_MAX_BUDGET_USD = 5;
 
 export function resolveTimeoutMs(opts: RunHarnessOptions): number {
   return opts.timeout === undefined ? DEFAULT_TIMEOUT_MS : opts.timeout * 1000;
+}
+
+/**
+ * Map an eval verdict to a process exit code. Default behavior: a completed run
+ * exits Ok regardless of pass/fail (the count lives in the summary). When
+ * `failOnEvalFailure` is set, a failing verdict escalates to EvalFailure (4) so
+ * CI can gate on eval outcomes without conflating them with harness breakage.
+ */
+export function verdictExitCode(allPassed: boolean, failOnEvalFailure: boolean): SkillTestExitCodeValue {
+  return failOnEvalFailure && !allPassed ? SkillTestExitCode.EvalFailure : SkillTestExitCode.Ok;
 }
 
 export function resolveStallMs(opts: RunHarnessOptions): number | undefined {
@@ -382,7 +404,16 @@ export function renderPreflightSummary(checks: { name: string; passed: boolean; 
     : '  All preflight checks passed.';
 }
 
-export function isAcknowledged(opts: RunHarnessOptions): boolean {
+/**
+ * The single source of truth for "is this run acknowledged?": a dry-run never
+ * executes skill code (so it is implicitly acknowledged), otherwise the caller
+ * must pass --i-understand-this-runs-skill-code. Narrowed to the two fields it
+ * reads so run.ts can reuse the SAME predicate to gate the pre-build ack check
+ * (the harness Step-6 check and the run.ts pre-build check cannot diverge).
+ */
+export function isAcknowledged(
+  opts: Pick<RunHarnessOptions, 'dryRun' | 'acknowledgedRunsSkillCode'>,
+): boolean {
   return opts.dryRun === true || opts.acknowledgedRunsSkillCode === true;
 }
 
@@ -597,6 +628,49 @@ export function buildDryRunSummary(input: DryRunSummaryInput): string {
 }
 
 // ---------------------------------------------------------------------------
+// Harness cleanup
+// ---------------------------------------------------------------------------
+
+export interface CleanupHarnessOptions {
+  /** User asked to retain the harness dir (`--keep`) — never remove. */
+  keep: boolean;
+  /**
+   * True only when the harness itself created the dir under the OS tmp dir (no
+   * `--out`/`--workdir`). A user-supplied location is theirs to keep, so we only
+   * auto-remove the dir we created.
+   */
+  created: boolean;
+}
+
+/**
+ * Remove the harness directory after a run so staged untrusted skill bytes and
+ * prompts do not accumulate in OS tmp. No-op when the user asked to keep it, when
+ * the dir is a user-supplied location (`--out`/`--workdir`), or when it is already
+ * gone. Idempotent and never throws — it runs from a `finally`, so it must not
+ * mask the run's real outcome.
+ *
+ * SAFETY: re-asserts the root is not a symlink immediately before removal (via
+ * `lstat`, which does NOT follow the link). A root swapped to a symlink between
+ * the run and cleanup is left in place rather than followed — `rmSync(recursive)`
+ * could otherwise delete the symlink's target outside tmp.
+ */
+export function cleanupHarness(harnessRoot: string, opts: CleanupHarnessOptions): void {
+  if (opts.keep || !opts.created) return;
+  // Best-effort: cleanup runs from a `finally`, so a TOCTOU race (the dir is
+  // reaped between checks) or a permission error must never throw out and mask
+  // the run's real outcome. Worst case is a leftover 0700 tmp dir, not a failure.
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
+    if (!existsSync(harnessRoot)) return;
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived harness root
+    if (lstatSync(harnessRoot).isSymbolicLink()) return;
+    rmSync(harnessRoot, { recursive: true, force: true });
+  } catch {
+    // Swallow: a failed cleanup is not a run failure.
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main orchestrator
 // ---------------------------------------------------------------------------
 
@@ -612,6 +686,10 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
   }
 
   const harnessRoot = opts.out ?? resolveHarnessRoot(opts.skills, opts.workdir);
+  // Only auto-remove the dir the harness itself created under OS tmp. An explicit
+  // --out (exact dir) or --workdir (user-chosen base) is a location the user owns;
+  // treat it like --keep and never delete it.
+  const harnessCreated = opts.out === undefined && opts.workdir === undefined;
   const repoRoot = opts.repoRoot ?? harnessRoot;
   const evalsSubpath = opts.evalsSubpath ?? DEFAULT_EVALS_SUBPATH;
   const currentUid = typeof process.getuid === 'function' ? process.getuid() : 0;
@@ -635,6 +713,15 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
 
   // Step 2: Acquire exclusive harness lock.
   const lock = acquireHarnessLock(harnessRoot);
+
+  // Release the lock and remove the harness dir if the run is interrupted by
+  // SIGINT/SIGTERM — a try/finally alone does not run on a signal, so without
+  // this the lockfile (and staged bytes) would leak and break the next run.
+  const cleanup = (): void => {
+    lock.release();
+    cleanupHarness(harnessRoot, { keep: opts.keep === true, created: harnessCreated });
+  };
+  const removeSignalCleanup = installSignalCleanup({ onSignal: cleanup });
 
   try {
     // Step 3: Stage the harness FIRST — the subject's own evals/evals.json lands
@@ -821,19 +908,25 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     }
 
     const grading = parseGradingJson(gradingRaw);
-    const { passed, total } = grading.summary;
-    const allPassed = passed === total;
+    // Verdict comes from the authoritative per-expectation `passed` flags, NOT
+    // the grader's self-reported summary. reconcileGrading throws GradingSkewError
+    // if the grader graded nothing or its summary disagrees with the expectations.
+    const { passed, total, allPassed } = reconcileGrading(grading);
     const summary = `${allPassed ? 'PASS' : 'FAIL'} ${passed}/${total}`;
 
-    // Exit 0 = harness ran to completion and produced a valid grading.json.
-    // Pass/fail counts are reported in the summary string and grading.json;
-    // callers should not use the exit code to distinguish eval pass from fail.
+    // Default: exit Ok whenever the harness ran to completion and produced a
+    // valid grading.json — pass/fail lives in the summary string and grading.json,
+    // and callers should not read the exit code to distinguish eval pass from fail.
+    // Opt-in: with failOnEvalFailure, a failing verdict escalates to EvalFailure (4).
     return {
       harnessPath: harnessRoot,
-      exitCode: SkillTestExitCode.Ok,
+      exitCode: verdictExitCode(allPassed, opts.failOnEvalFailure === true),
       summary,
     };
   } finally {
-    lock.release();
+    // Remove the signal handlers first (no listener leak across runs), then run
+    // the same cleanup: release the lock, then remove the harness dir.
+    removeSignalCleanup();
+    cleanup();
   }
 }

@@ -49,9 +49,12 @@ fields:
 | `expectations` | array | **One entry per graded expectation across ALL evals.** Not grouped per-eval. |
 | `expectations[].text` | string | The expectation being graded. |
 | `expectations[].passed` | boolean | Verdict. |
-| `summary` | object | Aggregate counts. |
-| `summary.passed` | number | Count of passed expectations. |
-| `summary.total` | number | Total expectations evaluated. |
+| `summary` | object | Aggregate counts. The **exact** aggregate of `expectations` (see below). |
+| `summary.passed` | non-negative integer | Count of passed expectations. Must be `<= summary.total`. |
+| `summary.total` | non-negative integer | Total expectations evaluated. |
+
+Counts are non-negative integers (a negative or float count is rejected) and
+`summary.passed` may never exceed `summary.total`.
 
 ### Optional / recommended fields
 
@@ -92,6 +95,22 @@ an `evals` array.
    ([`grading-adapter.ts`](../packages/agent-skills/src/skill-test/grading-adapter.ts))
    validates against `GradingReportSchema` and throws `GradingSkewError` on any
    mismatch.
+3. **Verdict reconciliation:** `reconcileGrading` (same file) recomputes the
+   pass/fail counts from the authoritative per-expectation `passed` flags and
+   refuses to trust the grader's self-reported `summary` alone. It throws
+   `GradingSkewError` when the grader graded **zero** expectations (nothing was
+   graded — never a pass) or when `summary` disagrees with the recomputed counts
+   (a grader emitting `summary {5,5}` next to a failing expectation is a bug, not
+   a pass). The recomputed verdict drives the printed `PASS N/N` / `FAIL N/N`
+   summary and the exit code.
+
+## Exit codes and `--fail-on-eval-failure`
+
+By default a completed run exits **0** whenever it produced a valid
+`grading.json` — eval pass/fail is reported only in the summary string, not the
+exit code. Pass `--fail-on-eval-failure` to make a failing verdict exit **4**
+(`EvalFailure`), distinct from harness-breakage codes (1 internal / 2 preflight),
+so CI can gate on eval outcomes.
 
 The end-to-end producer→consumer path is exercised by the opt-in e2e test in
 `packages/cli/test/system/skill-test.system.test.ts`

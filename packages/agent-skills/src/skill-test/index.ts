@@ -7,7 +7,13 @@ export {
   type FrictionItem,
   type FrictionReport,
 } from './friction-schema.js';
-export { GradingSkewError, parseGradingJson, type NormalizedGrading } from './grading-adapter.js';
+export {
+  GradingSkewError,
+  parseGradingJson,
+  reconcileGrading,
+  type GradingVerdict,
+  type NormalizedGrading,
+} from './grading-adapter.js';
 export {
   GradedExpectationSchema,
   GradingReportJsonSchema,
@@ -47,6 +53,7 @@ export {
   BootstrapNeededError,
   InternalHarnessError,
   mapErrorToExitCode,
+  SecurityAckError,
   SkillBuildError,
   SkillTestExitCode,
   type SkillTestExitCodeValue,
@@ -80,7 +87,9 @@ export { upsertTestConfig } from './configure-writer.js';
 export { buildEvalsTemplate, writeEvalsTemplate } from './evals-template.js';
 export {
   buildDryRunSummary,
+  isAcknowledged,
   runSkillTestHarness,
+  verdictExitCode,
   type DryRunSummaryInput,
   type RunHarnessOptions,
   type RunHarnessResult,

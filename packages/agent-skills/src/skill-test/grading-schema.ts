@@ -40,15 +40,22 @@ export const GradedExpectationSchema = z
 
 export type GradedExpectation = z.infer<typeof GradedExpectationSchema>;
 
-/** Aggregate pass/fail counts. `failed`/`pass_rate` are documented but optional. */
+/**
+ * Aggregate pass/fail counts. `failed`/`pass_rate` are documented but optional.
+ * Counts are non-negative integers (a float or negative count is a grader bug),
+ * and `passed` can never exceed `total`.
+ */
 export const GradingSummarySchema = z
   .object({
-    passed: z.number(),
-    total: z.number(),
-    failed: z.number().optional(),
+    passed: z.number().int().nonnegative(),
+    total: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative().optional(),
     pass_rate: z.number().optional(),
   })
-  .passthrough();
+  .passthrough()
+  .refine(s => s.passed <= s.total, {
+    message: 'summary.passed must not exceed summary.total',
+  });
 
 export type GradingSummary = z.infer<typeof GradingSummarySchema>;
 

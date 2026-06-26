@@ -20,6 +20,9 @@ import { setupReferenceFixture } from './skill-resolution/helpers.js';
 /** Path-form subject so resolution returns `source` without a declared skill. */
 const PATH_SUBJECT = './my-skill';
 
+/** Name of the config-declared (buildable) pool skill used across resolution tests. */
+const DECLARED_POOL = 'declared-pool';
+
 // Mocks runSkillTestHarness with the given result, captures stdout/stderr writes
 // while runSkillTestRun executes, and returns the captured write payloads.
 async function runAndCaptureStreams(result: {
@@ -137,6 +140,21 @@ describe('vat skill test run (env plumbing)', () => {
     expect(opts.env).toBeUndefined();
     expect(opts.passEnv).toBeUndefined();
   });
+
+  it('threads --fail-on-eval-failure through to the harness opts', async () => {
+    const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
+      failOnEvalFailure: true,
+      iUnderstandThisRunsSkillCode: true,
+    });
+    expect(opts.failOnEvalFailure).toBe(true);
+  });
+
+  it('leaves failOnEvalFailure undefined by default (opt-in)', async () => {
+    const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
+      iUnderstandThisRunsSkillCode: true,
+    });
+    expect(opts.failOnEvalFailure).toBeUndefined();
+  });
 });
 
 describe('vat skill test run (output routing)', () => {
@@ -175,21 +193,98 @@ describe('resolveSubjectForTest (run.ts subject resolution)', () => {
     const fx = setupReferenceFixture({ pool: ['declared'] });
     resetSkillDiscoveryCache();
     await expect(
-      resolveSubjectForTest('undeclared', fx.root, { noBuild: false, dryRun: false }),
+      resolveSubjectForTest('undeclared', fx.root, { noBuild: false, dryRun: false, acknowledged: false }),
     ).rejects.toThrow(/no skill named 'undeclared'/);
   });
 
   it('--no-build with no built dist → an exit-2 build error', async () => {
-    const fx = setupReferenceFixture({ pool: ['declared-pool'] });
+    const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
     resetSkillDiscoveryCache();
     await expect(
-      resolveSubjectForTest('declared-pool', fx.root, { noBuild: true, dryRun: false }),
+      resolveSubjectForTest(DECLARED_POOL, fx.root, { noBuild: true, dryRun: false, acknowledged: false }),
     ).rejects.toThrow(/no built dist/);
   });
 
   it('source-arm path → returns { subjectSource: { path } } without building', async () => {
-    const out = await resolveSubjectForTest('./some/dist', process.cwd(), { noBuild: false, dryRun: false });
+    const out = await resolveSubjectForTest('./some/dist', process.cwd(), {
+      noBuild: false,
+      dryRun: false,
+      acknowledged: false,
+    });
     expect(out.subjectSource).toEqual({ path: './some/dist' });
     expect(out.rebuilt).toBe(false);
+  });
+});
+
+// Stage a declared-pool fixture, spy packageSkill, and resolve the buildable
+// subject for the given gate inputs — shared by the ack-present / dry-run cases.
+async function resolveBuildableWithPkgSpy(opts: { dryRun: boolean; acknowledged: boolean }) {
+  const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
+  resetSkillDiscoveryCache();
+  const pkg = vi.spyOn(harness, 'packageSkill').mockResolvedValue(undefined as never);
+  const out = await resolveSubjectForTest(DECLARED_POOL, fx.root, {
+    noBuild: false,
+    dryRun: opts.dryRun,
+    acknowledged: opts.acknowledged,
+  });
+  return { out, pkg };
+}
+
+describe('resolveSubjectForTest (security ack gates the build — M2)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('buildable subject + ack ABSENT + non-dry-run → SecurityAckError BEFORE any build/pre-stage command runs', async () => {
+    const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
+    resetSkillDiscoveryCache();
+    const preStage = vi.spyOn(harness, 'runPreStageBuild').mockImplementation((() => undefined) as never);
+    const pkg = vi.spyOn(harness, 'packageSkill').mockResolvedValue(undefined as never);
+
+    await expect(
+      resolveSubjectForTest(DECLARED_POOL, fx.root, {
+        noBuild: false,
+        dryRun: false,
+        acknowledged: false,
+        // An ARBITRARY committed shell command — must NOT run without the ack.
+        build: 'echo pwned > /tmp/pwned',
+      }),
+    ).rejects.toThrow(/Security acknowledgment required\. Pass --i-understand-this-runs-skill-code to proceed\./);
+
+    expect(preStage).not.toHaveBeenCalled();
+    expect(pkg).not.toHaveBeenCalled();
+  });
+
+  it('buildable subject + ack PRESENT → build proceeds (packageSkill invoked, rebuilt=true)', async () => {
+    const { out, pkg } = await resolveBuildableWithPkgSpy({ dryRun: false, acknowledged: true });
+    expect(pkg).toHaveBeenCalledTimes(1);
+    expect(out.rebuilt).toBe(true);
+  });
+
+  it('--dry-run with ack ABSENT does NOT trigger SecurityAckError (no build runs)', async () => {
+    const { out, pkg } = await resolveBuildableWithPkgSpy({ dryRun: true, acknowledged: false });
+    expect(pkg).not.toHaveBeenCalled();
+    expect(out.wouldBuild).toBe(true);
+  });
+});
+
+describe('runSkillTestRun (security ack gates the build end-to-end — M2)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('buildable subject + ack ABSENT + non-dry-run → exit 2 and neither build nor harness runs', async () => {
+    const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
+    resetSkillDiscoveryCache();
+    vi.spyOn(process, 'cwd').mockReturnValue(fx.root);
+    const pkg = vi.spyOn(harness, 'packageSkill').mockResolvedValue(undefined as never);
+    const harnessSpy = vi
+      .spyOn(harness, 'runSkillTestHarness')
+      .mockResolvedValue({ harnessPath: '/h', exitCode: 0, summary: '' });
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);
+    vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
+
+    await runSkillTestRun([DECLARED_POOL], {});
+
+    expect(exit).toHaveBeenCalledWith(2);
+    expect(pkg).not.toHaveBeenCalled();
+    expect(harnessSpy).not.toHaveBeenCalled();
   });
 });
