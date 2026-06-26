@@ -127,6 +127,33 @@ describe('ProviderEntrySchema — inline provider', () => {
   });
 });
 
+describe('ProviderEntrySchema — provider.fetch (§6.2 content-fetch override)', () => {
+  it('accepts an inline provider with a fetch.headers override', () => {
+    const provider = {
+      ...GITHUB_INLINE_PROVIDER,
+      fetch: { headers: { Accept: 'application/vnd.github.raw' } },
+    };
+    expect(ProviderEntrySchema.safeParse(provider).success).toBe(true);
+  });
+
+  it('accepts an inline provider WITHOUT a fetch block (field is optional)', () => {
+    expect(ProviderEntrySchema.safeParse(GITHUB_INLINE_PROVIDER).success).toBe(true);
+  });
+
+  it('rejects a fetch block missing required headers field', () => {
+    const provider = { ...GITHUB_INLINE_PROVIDER, fetch: {} };
+    expect(ProviderEntrySchema.safeParse(provider).success).toBe(false);
+  });
+
+  it('passthrough: an unknown sibling key inside fetch parses (adopter input is read liberally)', () => {
+    const provider = {
+      ...GITHUB_INLINE_PROVIDER,
+      fetch: { headers: { Accept: 'application/vnd.github.raw' }, unknownField: 42 },
+    };
+    expect(ProviderEntrySchema.safeParse(provider).success).toBe(true);
+  });
+});
+
 describe('ProviderEntrySchema — macro reference (use:)', () => {
   it('accepts a bare `use: <name>` reference', () => {
     expect(ProviderEntrySchema.safeParse({ use: 'github' }).success).toBe(true);

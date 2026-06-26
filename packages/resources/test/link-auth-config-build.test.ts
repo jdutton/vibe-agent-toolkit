@@ -111,6 +111,34 @@ describe('buildLinkAuthEngineConfig — interop with the engine', () => {
   });
 });
 
+describe('buildLinkAuthEngineConfig — cache config propagation (§6.3)', () => {
+  it('propagates cache.ttlMinutes onto the engine config when adopter sets it', () => {
+    const engine = buildLinkAuthEngineConfig({
+      providers: [INLINE_PROVIDER],
+      cache: { ttlMinutes: 45 },
+    });
+    expect(engine.cache?.ttlMinutes).toBe(45);
+  });
+
+  it('omits cache when adopter does not set it (engine consumers fall back to default)', () => {
+    const engine = buildLinkAuthEngineConfig({ providers: [INLINE_PROVIDER] });
+    expect(engine.cache).toBeUndefined();
+  });
+
+  it('propagates an empty cache object as { } (no ttlMinutes set)', () => {
+    // Adopters that opt into cache configuration without overriding TTL still
+    // need the object to land on the engine config, even if it is empty —
+    // future cache fields can be added without forcing every adopter to set
+    // a value.
+    const engine = buildLinkAuthEngineConfig({
+      providers: [INLINE_PROVIDER],
+      cache: {},
+    });
+    expect(engine.cache).toBeDefined();
+    expect(engine.cache?.ttlMinutes).toBeUndefined();
+  });
+});
+
 describe('buildLinkAuthEngineConfig — prototype-pollution defense in macro entries', () => {
   it('uses Object.hasOwn to discriminate {use} so prototype-injected `use` cannot trigger macro expansion', () => {
     // Build an object whose prototype carries `use: github` but whose own

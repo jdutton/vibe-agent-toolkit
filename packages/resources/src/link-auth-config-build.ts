@@ -59,7 +59,23 @@ export function buildLinkAuthEngineConfig(adopter: LinkAuthProjectConfig): LinkA
   const providers: Provider[] = adopter.providers.map((entry, index) =>
     expandProviderEntry(entry, index),
   );
+  // Pass the cache block through to the engine config so the slice-3
+  // content-fetch primitive can read `ttlMinutes` from the same source of
+  // truth as the rest of the engine config. The engine itself doesn't consume
+  // this field — it stays stateless — but riding along on the config keeps
+  // callers from having to pass two objects to the primitive.
+  if (adopter.cache !== undefined) {
+    return { providers, cache: buildEngineCache(adopter.cache) };
+  }
   return { providers };
+}
+
+function buildEngineCache(
+  adopterCache: NonNullable<LinkAuthProjectConfig['cache']>,
+): NonNullable<LinkAuthConfig['cache']> {
+  // Schema is passthrough so adopterCache may carry forward-compatible extras
+  // we don't know about — copy only the fields the engine type declares.
+  return adopterCache.ttlMinutes === undefined ? {} : { ttlMinutes: adopterCache.ttlMinutes };
 }
 
 function expandProviderEntry(entry: unknown, index: number): Provider {

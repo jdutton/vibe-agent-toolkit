@@ -1,7 +1,9 @@
 /**
- * Authenticated fetch primitive for link checking (design issue #113 §5.2, §8).
+ * Auth-safe HTTP transport for the linkAuth feature (design issue #113 §5.2, §8).
  *
- * Wraps a caller-supplied `fetchImpl` with two behaviors required by the design:
+ * Lower-level than the public `fetchAuthenticated` primitive — this transport
+ * does not know about providers, token resolution, or caching. It takes a URL
+ * + already-built headers and adds two behaviors required by the design:
  *
  *   §8 (cross-origin token leak defense) — `redirect: 'manual'`, then a
  *   bounded loop that follows Location headers. On any redirect to a
@@ -18,7 +20,7 @@
  * touch the network or wall-clock. Production callers pass `globalThis.fetch`.
  */
 
-export interface AuthFetchOptions {
+export interface AuthTransportOptions {
   /** Maximum redirect hops to follow before returning the last 3xx response (default: 5). */
   readonly maxRedirects?: number;
   /** Maximum 429 retries before returning the final 429 response (default: 2). */
@@ -76,11 +78,11 @@ export function parseRetryAfter(value: string | null): number | null {
   return Math.max(0, parsedMs - Date.now());
 }
 
-export async function fetchAuthenticated(
+export async function authTransport(
   url: string,
   headers: Record<string, string>,
   fetchImpl: typeof fetch,
-  options: AuthFetchOptions = {},
+  options: AuthTransportOptions = {},
 ): Promise<Response> {
   const maxRedirects = options.maxRedirects ?? DEFAULT_MAX_REDIRECTS;
   const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
@@ -126,7 +128,7 @@ export async function fetchAuthenticated(
   }
   // Unreachable: the loop returns or continues on every iteration, and the
   // loop condition strictly bounds total iterations.
-  throw new Error('fetchAuthenticated: unreachable iteration cap exceeded');
+  throw new Error('authTransport: unreachable iteration cap exceeded');
 }
 
 /**

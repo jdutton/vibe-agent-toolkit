@@ -2,7 +2,6 @@ import { userInfo } from 'node:os';
 
 import type { IssueCode } from '@vibe-agent-toolkit/agent-schema';
 import {
-  defaultRunCommand,
   resolveAuthenticatedUrl,
   safePath,
   type LinkAuthConfig,
@@ -12,7 +11,8 @@ import markdownLinkCheck from 'markdown-link-check';
 
 import { ExternalLinkCache } from './external-link-cache.js';
 import { classifyAuthenticatedResponse } from './link-auth-classify.js';
-import { fetchAuthenticated } from './link-auth-fetch.js';
+import { type LinkAuthDeps, wrapLinkAuthDepsWithMemo } from './link-auth-deps-memo.js';
+import { authTransport } from './link-auth-transport.js';
 
 /**
  * Resolve the OS user for cache scoping. Falls back through several layers
@@ -51,34 +51,6 @@ function warnDefaultUserFallbackOnce(): void {
 }
 
 /**
- * Wrap a `LinkAuthDeps` so its `runCommand` (used by the engine's
- * `resolveToken`) caches results per unique argv. Without this, validating N
- * URLs from the same host re-runs the token command N times — `gh auth token`
- * spawns a subprocess each call, and we treat *all* token sources as
- * potentially expensive per the #125 review.
- *
- * The memo cache is keyed by JSON-stringified argv, so semantically-identical
- * invocations share. Cache is per-instance — code that creates a fresh
- * validator per run gets a fresh cache.
- */
-function wrapLinkAuthDepsWithMemo(deps: LinkAuthDeps): LinkAuthDeps {
-  type RunCommandFn = NonNullable<NonNullable<LinkAuthDeps>['runCommand']>;
-  type RunCommandResult = ReturnType<RunCommandFn>;
-  const memo = new Map<string, RunCommandResult>();
-  const baseRunCommand: RunCommandFn = deps?.runCommand ?? defaultRunCommand;
-  const runCommand: RunCommandFn = (argv) => {
-    const key = JSON.stringify(argv);
-    const cached = memo.get(key);
-    if (cached !== undefined) return cached;
-    const fresh = baseRunCommand(argv);
-    memo.set(key, fresh);
-    return fresh;
-  };
-  return { ...(deps ?? {}), runCommand };
-}
-
-
-/**
  * Make an OS username safe for use as a directory component. Replaces path
  * separators (`/`, `\`), the parent-directory shorthand (`..`), and other
  * characters that could escape the cacheDir. Windows can produce
@@ -91,7 +63,6 @@ function sanitizeOsUser(user: string): string {
   return replaced.length > 0 ? replaced : 'default';
 }
 
-type LinkAuthDeps = Parameters<typeof resolveAuthenticatedUrl>[2];
 type VerifiedPlan = Extract<ResolveOutcome, { fetchUrl: string }>;
 
 /**
@@ -412,22 +383,22 @@ export class ExternalLinkValidator {
 			return buildAuthResult(originalUrl, cached.statusCode, plan, true, cached.statusMessage);
 		}
 
-		// Fresh fetch via the auth-aware helper (handles cross-origin redirect
+		// Fresh fetch via the auth-aware transport (handles cross-origin redirect
 		// Authorization stripping + 429/Retry-After per §5.2 §8). The conditional
-		// spread builds the object in one pass — AuthFetchOptions.sleep is
+		// spread builds the object in one pass — AuthTransportOptions.sleep is
 		// readonly so post-construction assignment would be a TS error.
-		const fetchOptions: Parameters<typeof fetchAuthenticated>[3] = {
+		const transportOptions: Parameters<typeof authTransport>[3] = {
 			signal: AbortSignal.timeout(this.options.timeout),
 			...(this.sleep === undefined ? {} : { sleep: this.sleep }),
 		};
 
 		let response: Response;
 		try {
-			response = await fetchAuthenticated(
+			response = await authTransport(
 				plan.fetchUrl,
 				plan.headers,
 				this.fetchImpl,
-				fetchOptions,
+				transportOptions,
 			);
 		} catch (err) {
 			// Network-level failure (DNS/connect/TLS/timeout) — return error with

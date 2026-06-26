@@ -63,6 +63,21 @@ export const ProviderAuthSchema = z
   .passthrough()
   .describe('Auth headers attached to the authenticated fetch');
 
+/**
+ * Optional fetch-mode header overrides (§6.2). Same shape as ProviderAuth,
+ * different role: `auth.headers` covers the health-check request; `fetch.headers`
+ * covers content retrieval (e.g. GitHub `application/vnd.github.raw` instead of
+ * `application/vnd.github+json`). Both templates expand against the same context.
+ */
+export const ProviderFetchSchema = z
+  .object({
+    headers: z
+      .record(z.string(), z.string())
+      .describe('Header name → value template, same templating as auth.headers.'),
+  })
+  .passthrough()
+  .describe('Optional content-fetch header overrides — distinct from health-check headers');
+
 export const TokenSourceSchema = z
   .union([
     z.object({ env: z.string().min(1) }).passthrough(),
@@ -99,6 +114,9 @@ export const InlineProviderSchema = z
     match: ProviderMatchSchema,
     rewrite: z.array(RewriteRuleSchema).min(1).describe('Ordered rewrite rules — first matching wins'),
     auth: ProviderAuthSchema,
+    fetch: ProviderFetchSchema
+      .optional()
+      .describe('Optional fetch-mode header override (§6.2) — content retrieval, distinct from health-check'),
     token: z.array(TokenSourceSchema).describe('Ordered token sources — first non-empty wins'),
     check: ProviderCheckSchema,
   })

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { fetchAuthenticated, parseRetryAfter } from '../src/link-auth-fetch.js';
+import { authTransport, parseRetryAfter } from '../src/link-auth-transport.js';
 
 import { sequenceFetch } from './auth-fetch-mocks.js';
 
@@ -44,7 +44,7 @@ describe('parseRetryAfter', () => {
   });
 });
 
-describe('fetchAuthenticated — happy path (no redirect, no retry)', () => {
+describe('authTransport — happy path (no redirect, no retry)', () => {
   it('passes URL and headers through to fetchImpl, returns response', async () => {
     const impl = sequenceFetch([
       {
@@ -53,7 +53,7 @@ describe('fetchAuthenticated — happy path (no redirect, no retry)', () => {
         assertHeaders: (h) => expect(h['Authorization']).toBe(TEST_TOKEN),
       },
     ]);
-    const response = await fetchAuthenticated(
+    const response = await authTransport(
       'https://api.github.com/repos/o/r/contents/f',
       AUTH_HEADERS,
       impl,
@@ -62,7 +62,7 @@ describe('fetchAuthenticated — happy path (no redirect, no retry)', () => {
   });
 });
 
-describe('fetchAuthenticated — cross-origin Authorization stripping (§8)', () => {
+describe('authTransport — cross-origin Authorization stripping (§8)', () => {
   it('same-origin redirect preserves Authorization header', async () => {
     const impl = sequenceFetch([
       { status: 302, headers: { location: 'https://api.github.com/redirected' } },
@@ -71,7 +71,7 @@ describe('fetchAuthenticated — cross-origin Authorization stripping (§8)', ()
         assertHeaders: (h) => expect(h['Authorization']).toBe(TEST_TOKEN),
       },
     ]);
-    const response = await fetchAuthenticated(
+    const response = await authTransport(
       ORIGIN_URL,
       AUTH_HEADERS,
       impl,
@@ -87,7 +87,7 @@ describe('fetchAuthenticated — cross-origin Authorization stripping (§8)', ()
         assertHeaders: (h) => expect(h['Authorization']).toBeUndefined(),
       },
     ]);
-    const response = await fetchAuthenticated(
+    const response = await authTransport(
       ORIGIN_URL,
       AUTH_HEADERS,
       impl,
@@ -109,7 +109,7 @@ describe('fetchAuthenticated — cross-origin Authorization stripping (§8)', ()
         },
       },
     ]);
-    await fetchAuthenticated(
+    await authTransport(
       'https://api.github.com/o',
       { authorization: 'Bearer t', Accept: 'application/json' },
       impl,
@@ -125,7 +125,7 @@ describe('fetchAuthenticated — cross-origin Authorization stripping (§8)', ()
         assertHeaders: (h) => expect(h['Authorization']).toBe(TEST_TOKEN),
       },
     ]);
-    await fetchAuthenticated(ORIGIN_URL, AUTH_HEADERS, impl);
+    await authTransport(ORIGIN_URL, AUTH_HEADERS, impl);
   });
 
   it('chain of redirects: first cross-origin strip propagates to subsequent hops', async () => {
@@ -143,7 +143,7 @@ describe('fetchAuthenticated — cross-origin Authorization stripping (§8)', ()
         assertHeaders: (h) => expect(h['Authorization']).toBeUndefined(),
       },
     ]);
-    await fetchAuthenticated('https://api.github.com/start', AUTH_HEADERS, impl);
+    await authTransport('https://api.github.com/start', AUTH_HEADERS, impl);
   });
 
   it('exceeding maxRedirects returns the last 3xx response (does not throw)', async () => {
@@ -152,7 +152,7 @@ describe('fetchAuthenticated — cross-origin Authorization stripping (§8)', ()
       { status: 302, headers: { location: 'https://api.github.com/3' } },
       { status: 302, headers: { location: 'https://api.github.com/4' } },
     ]);
-    const response = await fetchAuthenticated(
+    const response = await authTransport(
       'https://api.github.com/1',
       AUTH_HEADERS,
       impl,
@@ -163,13 +163,13 @@ describe('fetchAuthenticated — cross-origin Authorization stripping (§8)', ()
 
   it('redirect with no Location header returns the 3xx response', async () => {
     const impl = sequenceFetch([{ status: 301 }]);
-    const response = await fetchAuthenticated(ORIGIN_URL, AUTH_HEADERS, impl);
+    const response = await authTransport(ORIGIN_URL, AUTH_HEADERS, impl);
     expect(response.status).toBe(301);
   });
 });
 
 /**
- * Helper: invoke fetchAuthenticated with the standard test args (ORIGIN_URL +
+ * Helper: invoke authTransport with the standard test args (ORIGIN_URL +
  * AUTH_HEADERS) and a caller-supplied impl/sleep. Eliminates the repeated
  * 4-arg call boilerplate across the retry tests.
  */
@@ -178,14 +178,14 @@ function callWithRetry(
   sleep: ReturnType<typeof vi.fn>,
   overrides: { maxRetries?: number; maxRetryAfterMs?: number } = {},
 ): Promise<Response> {
-  return fetchAuthenticated(ORIGIN_URL, AUTH_HEADERS, impl, {
+  return authTransport(ORIGIN_URL, AUTH_HEADERS, impl, {
     maxRetries: 2,
     sleep,
     ...overrides,
   });
 }
 
-describe('fetchAuthenticated — 429 + Retry-After (§5.2)', () => {
+describe('authTransport — 429 + Retry-After (§5.2)', () => {
   it('429 with Retry-After=2 → sleeps 2000ms, retries, returns 200', async () => {
     const sleep = vi.fn(async () => undefined);
     const impl = sequenceFetch([
@@ -239,7 +239,7 @@ describe('fetchAuthenticated — 429 + Retry-After (§5.2)', () => {
   });
 });
 
-describe('fetchAuthenticated — interaction', () => {
+describe('authTransport — interaction', () => {
   it('429 → Retry-After → redirect: each phase honored in order', async () => {
     const sleep = vi.fn(async () => undefined);
     const impl = sequenceFetch([

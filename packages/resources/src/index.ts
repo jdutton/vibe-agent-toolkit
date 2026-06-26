@@ -140,3 +140,26 @@ export {
   SkillsConfigSchema,
   SkillPackagingConfigSchema,
 } from './schemas/project-config.js';
+
+// linkAuth content-fetch primitive (issue #113 slice 3). Ships standalone;
+// callers wire it into asset-reference / bundling consumers as they need.
+export {
+  fetchAuthenticated,
+  type ContentFetchResult,
+  type FetchAuthenticatedOptions,
+} from './link-auth-content-fetch.js';
+
+export { ContentCache, type ContentMetadata } from './content-cache.js';
+
+// Token-resolution memo wrapper. High-volume callers iterating many URLs
+// from the same provider wrap their deps once and reuse the result, so
+// expensive token sources (`gh auth token` etc.) run at most once.
+export {
+  wrapLinkAuthDepsWithMemo,
+  type LinkAuthDeps,
+} from './link-auth-deps-memo.js';
+
+// Bridge from adopter `resources.linkAuth` (Zod-validated) to the engine's
+// `LinkAuthConfig` (fully-expanded providers). Adopters carrying a parsed
+// config can hand it directly to `fetchAuthenticated` via this bridge.
+export { buildLinkAuthEngineConfig } from './link-auth-config-build.js';
