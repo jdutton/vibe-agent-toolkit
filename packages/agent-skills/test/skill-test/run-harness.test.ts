@@ -19,6 +19,7 @@ import { existsSync, symlinkSync, writeFileSync } from 'node:fs';
 import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
+import { EvalInputError } from '../../src/skill-test/eval-inputs.js';
 import { InternalHarnessError, SkillTestExitCode } from '../../src/skill-test/exit-codes.js';
 import {
   assertExperimenterSucceeded,
@@ -36,6 +37,7 @@ import {
   resolveScaffoldEvalsPath,
   resolveStallMs,
   resolveTimeoutMs,
+  stageWorkspacesForRun,
   subjectSkillName,
   verdictExitCode,
   type DryRunSummaryInput,
@@ -48,6 +50,7 @@ import { createTestPlugin, setupTempDir } from '../test-helpers.js';
 // ---------------------------------------------------------------------------
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000;
+const EVALS_JSON = 'evals.json';
 const SUBJECT_NAME = 'report-tools';
 const PLAIN_SKILL = 'plain-skill';
 const PLUGIN_NAME = 'my-plugin';
@@ -573,5 +576,42 @@ describe('verdictExitCode', () => {
 
   it('escalates a failing verdict to EvalFailure when fail-on-eval-failure is set', () => {
     expect(verdictExitCode(false, true)).toBe(SkillTestExitCode.EvalFailure);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// stageWorkspacesForRun
+// ---------------------------------------------------------------------------
+
+describe('stageWorkspacesForRun', () => {
+  const { getTempDir } = setupTempDir('vat-wsrun-');
+
+  it('materializes declared eval files under the harness workspaces dir', () => {
+    const root = getTempDir();
+    const evalsDir = safePath.join(root, 'evals');
+    mkdirSyncReal(safePath.join(evalsDir, 'fixtures'), { recursive: true });
+    writeFileSync(safePath.join(evalsDir, 'fixtures', 'doc.md'), 'x', 'utf-8');
+    writeFileSync(safePath.join(evalsDir, EVALS_JSON), JSON.stringify({
+      skill_name: 'demo',
+      evals: [{ id: 5, prompt: 'p', expected_output: 'o', files: ['fixtures/doc.md'], expectations: ['e'] }],
+    }), 'utf-8');
+    const harnessRoot = safePath.join(root, 'harness');
+    mkdirSyncReal(harnessRoot, { recursive: true });
+    const wsRoot = stageWorkspacesForRun(safePath.join(evalsDir, EVALS_JSON), harnessRoot);
+    expect(existsSync(safePath.join(wsRoot, '5', 'fixtures', 'doc.md'))).toBe(true);
+  });
+
+  it('throws EvalInputError when a declared eval file is absent', () => {
+    const root = getTempDir();
+    const evalsDir = safePath.join(root, 'evals');
+    mkdirSyncReal(evalsDir, { recursive: true });
+    const evalsPath = safePath.join(evalsDir, EVALS_JSON);
+    writeFileSync(evalsPath, JSON.stringify({
+      skill_name: 'demo',
+      evals: [{ id: 1, prompt: 'p', expected_output: 'o', files: ['fixtures/nope.md'], expectations: ['e'] }],
+    }), 'utf-8');
+    const harnessRoot = safePath.join(root, 'harness');
+    mkdirSyncReal(harnessRoot, { recursive: true });
+    expect(() => stageWorkspacesForRun(evalsPath, harnessRoot)).toThrow(EvalInputError);
   });
 });

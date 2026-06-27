@@ -60,7 +60,11 @@ describe('runSkillTestHarness — security ack gate', () => {
     subjectStagedDir = safePath.join(tempDir, 'staged-subject');
     mkdirSyncReal(safePath.join(subjectStagedDir, 'evals'), { recursive: true });
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own temp fixture
-    writeFileSync(safePath.join(subjectStagedDir, 'evals', 'evals.json'), '{"evals":[]}\n', 'utf8');
+    writeFileSync(
+      safePath.join(subjectStagedDir, 'evals', 'evals.json'),
+      JSON.stringify({ skill_name: 'demo', evals: [{ id: 1, prompt: 'p', expected_output: 'o', expectations: ['e'] }] }) + '\n',
+      'utf8',
+    );
 
     vi.mocked(stageHarness).mockResolvedValue({
       manifest: { fingerprint: 'test', entries: [] },

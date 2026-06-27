@@ -1,4 +1,14 @@
 export {
+  EvalEntrySchema,
+  EvalInputError,
+  EvalSuiteSchema,
+  parseEvalSuite,
+  stageEvalWorkspaces,
+  type EvalEntry,
+  type EvalSuite,
+  type StageEvalWorkspacesInput,
+} from './eval-inputs.js';
+export {
   FrictionCategorySchema,
   FrictionItemSchema,
   FrictionReportJsonSchema,

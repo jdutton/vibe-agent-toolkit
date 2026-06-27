@@ -10,6 +10,7 @@ export interface BuildPromptOptions {
   evalsPath: string;
   gradingOut: string;
   frictionOut: string;
+  workspacesRoot: string;
   baseline: boolean;
 }
 
@@ -24,11 +25,12 @@ export const DEFAULT_EXPERIMENTER_PROMPT = [
   '',
   'For each eval in {{EVALS_PATH}}:',
   '  1. Dispatch ONE executor subagent. Tell it ONLY the task prompt and the staged subject path {{SUBJECT_PATH}}.',
-  '     Never tell the executor it is being tested.',
+  '     When the eval declares input `files`, ALSO tell the executor its working directory is {{WORKSPACES_ROOT}}/<id>',
+  '     (substitute the eval\'s own id) — the project it should operate on. Never tell the executor it is being tested.',
   '  2. Grade the executor output against the eval\'s `expectations` using skill-creator\'s grader.md rubric.',
   '  3. Append each graded expectation to the SINGLE top-level `expectations` array in {{GRADING_OUT}} IMMEDIATELY',
   '     (incremental flush — a mid-run kill must leave partial results).',
-  '  4. Record any packaging-fidelity friction to {{FRICTION_OUT}} using the vat friction schema.',
+  '  4. Record any packaging-fidelity friction to {{FRICTION_OUT}} using the vat friction.json schema.',
   '     If a file referenced by the skill is absent from the staged tree, record a `missing-bundled-file` friction entry.',
   '',
   '{{GRADING_OUT}} MUST be ONE flat JSON object in skill-creator\'s grading.json shape (references/schemas.md):',
@@ -51,6 +53,7 @@ export function buildExperimenterPrompt(opts: BuildPromptOptions): string {
   return DEFAULT_EXPERIMENTER_PROMPT
     .replace('{{EVALS_PATH}}', opts.evalsPath)
     .replace('{{SUBJECT_PATH}}', opts.subjectPath)
+    .replaceAll('{{WORKSPACES_ROOT}}', opts.workspacesRoot)
     .replaceAll('{{GRADING_OUT}}', opts.gradingOut)
     .replace('{{FRICTION_OUT}}', opts.frictionOut)
     .replace('{{BASELINE_BLOCK}}', opts.baseline ? BASELINE_BLOCK : '');

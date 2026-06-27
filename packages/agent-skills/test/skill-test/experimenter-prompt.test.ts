@@ -12,6 +12,7 @@ const opts = {
   evalsPath: '/h/subject/evals/evals.json',
   gradingOut: '/h/results/grading.json',
   frictionOut: '/h/results/friction.json',
+  workspacesRoot: '/w',
   baseline: false,
 };
 
@@ -48,5 +49,28 @@ describe('assertPromptInvariants', () => {
 
   it('rejects an override that fails to forbid the browser viewer', () => {
     expect(() => assertPromptInvariants('Do exactly this then STOP. Write grading.json and friction.json.')).toThrow(PromptInvariantError);
+  });
+});
+
+describe('buildExperimenterPrompt — workspacesRoot token', () => {
+  it('substitutes WORKSPACES_ROOT and leaves no template placeholders', () => {
+    const prompt = buildExperimenterPrompt({
+      subjectPath: '/staged/subject',
+      evalsPath: '/staged/subject/evals/evals.json',
+      gradingOut: '/results/grading.json',
+      frictionOut: '/results/friction.json',
+      workspacesRoot: '/harness/workspaces',
+      baseline: false,
+    });
+    expect(prompt).toContain('/harness/workspaces');
+    expect(prompt).not.toMatch(/\{\{[A-Z_]+\}\}/);
+  });
+
+  it('still passes all prompt invariants with the workspace line present', () => {
+    const prompt = buildExperimenterPrompt({
+      subjectPath: '/s', evalsPath: '/e', gradingOut: '/g', frictionOut: '/f',
+      workspacesRoot: '/w', baseline: true,
+    });
+    expect(() => assertPromptInvariants(prompt)).not.toThrow();
   });
 });

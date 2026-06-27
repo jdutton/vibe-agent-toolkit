@@ -31,6 +31,7 @@ import { resolveSkillSource } from '../skill-source/resolve-skill-source.js';
 import type { ResolvedSkillSource, ResolveSkillSourceContext, SkillSource } from '../skill-source/types.js';
 
 import { assembleChildEnv, computeEnvTokens, resolveInjectEnv } from './declared-env.js';
+import { EvalInputError, parseEvalSuite, stageEvalWorkspaces } from './eval-inputs.js';
 import { writeEvalsTemplate } from './evals-template.js';
 import {
   BootstrapNeededError,
@@ -514,6 +515,51 @@ function overlayAuthoredEvalSuite(
   }
 }
 
+/** Parse the staged eval suite and materialize each eval's input `files` into
+ * `<harnessRoot>/workspaces/<id>/`. Returns the workspaces root. The dir is wiped
+ * first so a reused harness root cannot leak a prior run's inputs. Throws
+ * {@link EvalInputError} (mapped by the caller to exit 2) on a bad suite or a
+ * missing input file. */
+export function stageWorkspacesForRun(evalsPath: string, harnessRoot: string): string {
+  const workspacesRoot = safePath.joinUnderRoot(harnessRoot, 'workspaces');
+  rmSync(workspacesRoot, { recursive: true, force: true });
+  mkdirSyncReal(workspacesRoot, { recursive: true });
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- evalsPath is our staged-subject path
+  const suite = parseEvalSuite(readFileSync(evalsPath, 'utf-8'));
+  return stageEvalWorkspaces({ suite, evalsDir: dirname(evalsPath), workspacesRoot });
+}
+
+/** Format the model flag string for logging and dry-run summary output. */
+function buildModelFlag(model: string | undefined): string {
+  return model === undefined ? '(no --model; claude default)' : `--model ${model}`;
+}
+
+/**
+ * Wrap {@link stageWorkspacesForRun} for the orchestrator: returns the
+ * `workspacesRoot` string on success, or a {@link RunHarnessResult} early-return
+ * value when the suite is invalid or a declared input file is missing. Any other
+ * error is re-thrown so it propagates as an InternalHarnessError upstream.
+ * Keeping the try/catch in a private helper avoids inflating the orchestrator's
+ * cognitive complexity.
+ */
+function attemptStageWorkspaces(
+  evalsPath: string,
+  harnessRoot: string,
+): { workspacesRoot: string } | RunHarnessResult {
+  try {
+    return { workspacesRoot: stageWorkspacesForRun(evalsPath, harnessRoot) };
+  } catch (e) {
+    if (e instanceof EvalInputError) {
+      return {
+        harnessPath: harnessRoot,
+        exitCode: SkillTestExitCode.Preflight,
+        summary: `Eval input error:\n  ${e.message}`,
+      };
+    }
+    throw e;
+  }
+}
+
 interface ResolveDeclaredChildEnvInput {
   opts: RunHarnessOptions;
   resolvedAuth: ResolvedAuth | null;
@@ -772,6 +818,11 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       };
     }
 
+    // Step 5.5: Parse the eval suite and stage per-eval input workspaces.
+    const workspaceStageResult = attemptStageWorkspaces(evalsPath, harnessRoot);
+    if ('exitCode' in workspaceStageResult) return workspaceStageResult;
+    const { workspacesRoot } = workspaceStageResult;
+
     // Step 6: Enforce the §12 security ack (must pass --i-understand-this-runs-skill-code).
     // Only enforced when not a dry-run and not already acknowledged.
     if (!isAcknowledged(opts)) {
@@ -815,6 +866,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
         evalsPath,
         gradingOut,
         frictionOut,
+        workspacesRoot,
         baseline: opts.baseline ?? false,
       });
 
@@ -842,7 +894,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // unambiguous which model the experimenter spawn uses. The id is forwarded
     // verbatim to `claude --model`; with none set, no flag is passed and claude
     // uses its own default.
-    const modelFlag = knobs.model === undefined ? '(no --model; claude default)' : `--model ${knobs.model}`;
+    const modelFlag = buildModelFlag(knobs.model);
     process.stderr.write(`Model: ${knobs.model ?? '(claude default)'}\n`);
 
     // Step 9: Dry-run short-circuit — return assembled info without spawning.
