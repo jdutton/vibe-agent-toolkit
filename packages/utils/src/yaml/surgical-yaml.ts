@@ -334,7 +334,7 @@ function getAtPath(root: unknown, path: YamlPath): { present: boolean; value: un
       return { present: false, value: undefined };
     }
     const key = String(segment);
-    if (!Object.prototype.hasOwnProperty.call(current, key)) {
+    if (!Object.hasOwn(current, key)) {
       return { present: false, value: undefined };
     }
     current = (current as Record<string, unknown>)[key];

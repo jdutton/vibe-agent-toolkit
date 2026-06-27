@@ -122,7 +122,7 @@ describe('upsertTestConfig — byte-surgical regression', () => {
     // report-tool.test has auth + maxTurns; we overwrite auth only.
     const out = upsertTestConfig(RICH_FIXTURE, 'report-tool', { auth: 'subscription' });
     // Same line count: this is a replace, not an insert.
-    expect(out.split('\n').length).toBe(RICH_FIXTURE.split('\n').length);
+    expect(out.split('\n')).toHaveLength(RICH_FIXTURE.split('\n').length);
     // Sibling knob with its inline comment is byte-identical.
     expect(out).toContain('maxTurns: 10  # turn cap');
     // Lines not containing any auth key are byte-identical to input.
