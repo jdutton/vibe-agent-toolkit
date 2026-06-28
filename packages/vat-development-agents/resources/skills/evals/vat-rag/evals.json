@@ -1,0 +1,73 @@
+{
+  "skill_name": "vat-rag",
+  "_category_note": "Three categories. 'index-query-guidance': does the agent give the correct vat rag CLI workflow (index, query, multi-store via --db, incremental re-index) a no-skill baseline would not know exactly? 'provider-correctness': does it correctly describe the native embedding providers and the EmbeddingProvider extension point? 'catch-mistake': a realistic 'what did I do wrong' scenario (provider-switch dimension mismatch) where the right answer is to re-index, not tweak a flag.",
+  "evals": [
+    {
+      "id": "index-then-query-getting-started",
+      "category": "index-query-guidance",
+      "prompt": "I've got a big folder of markdown docs under docs/ and I'm tired of grepping for keywords — I want to ask questions in plain English and get the right page back. How do I set that up with vat?",
+      "files": [],
+      "expected_output": "Walks through the two-step vat rag workflow: build the index with `vat rag index docs/`, then ask questions with `vat rag query \"...\"`, which returns the most relevant chunks with their file paths and heading context. Notes the default embedding provider (transformers-js, Xenova/all-MiniLM-L6-v2) runs locally on CPU with no API key, so it works out of the box; an API key is only needed if you opt into the OpenAI provider.",
+      "expectations": [
+        "The answer recommends building the index first with `vat rag index` pointed at the docs directory (e.g. `vat rag index docs/`).",
+        "The answer recommends searching with `vat rag query` passing a natural-language question, and notes results come back as chunks with file paths / heading context.",
+        "The answer states the default embedding path (transformers-js / all-MiniLM, local CPU) requires NO API key, so it works without external credentials.",
+        "The answer does NOT claim an OpenAI or other external API key is required for the default/out-of-the-box setup.",
+        "The answer does NOT just suggest continuing to grep or invent a command outside the `vat rag` surface (e.g. a made-up `vat search` or `vat rag ask`)."
+      ]
+    },
+    {
+      "id": "multi-corpus-separate-search",
+      "category": "index-query-guidance",
+      "prompt": "Our documentation is split into docs/en and docs/fr. I want to be able to search just the English set or just the French set — not have results from both mixed together. How do I do that with the rag commands?",
+      "files": [],
+      "expected_output": "Recommends keeping the two corpora in separate indices/databases rather than one shared index. Practically: index each into its own DB with `vat rag index --db ./dist/rag-en docs/en/` and `vat rag index --db ./dist/rag-fr docs/fr/` (or declare separate entries under `rag.stores` in vibe-agent-toolkit.config.yaml), then query a single language by pointing `vat rag query` at that database with the matching `--db` path.",
+      "expectations": [
+        "The answer recommends maintaining two separate indices/databases (one per language), either via the `--db <path>` flag on the CLI or separate entries under `rag.stores` in config.",
+        "The answer shows `vat rag index` targeting a specific database per corpus (e.g. `vat rag index --db <path> docs/en/`).",
+        "The answer shows `vat rag query` selecting one language by pointing at that language's specific database (e.g. `--db <path>`).",
+        "The answer does NOT claim both languages must share a single index that is then filtered at query time by a language flag — there is no such flag in the `vat rag` CLI."
+      ]
+    },
+    {
+      "id": "incremental-reindex-after-edits",
+      "category": "index-query-guidance",
+      "prompt": "I just added a couple of new pages and edited one existing file under docs/. Do I have to wipe the whole index and rebuild from scratch to get the new content searchable, or is there a faster way?",
+      "files": [],
+      "expected_output": "Explains that re-running `vat rag index docs/` is incremental — unchanged files are skipped and only the new/changed files are re-indexed (their stale chunks are replaced), so a full wipe is unnecessary. A full reset is only needed when you actually want to rebuild clean, and that is done with `vat rag clear` followed by re-indexing. Mentions `vat rag stats` to confirm chunk/resource counts afterward.",
+      "expectations": [
+        "The answer states that simply re-running `vat rag index` is incremental: unchanged files are skipped and only changed/new files are re-indexed.",
+        "The answer does NOT claim you must delete the database or fully rebuild the whole index just to pick up a few changed files.",
+        "If a full reset is mentioned at all, it is correctly tied to `vat rag clear` (then re-index) rather than an invented flag, and framed as optional.",
+        "The answer does NOT invent a nonexistent flag such as `--rebuild`, `--incremental`, or `--update` as the mechanism."
+      ]
+    },
+    {
+      "id": "custom-embedding-backend-extension",
+      "category": "provider-correctness",
+      "prompt": "Our team standardizes on Cohere for embeddings. vat doesn't seem to ship a Cohere option out of the box — are we stuck with the built-in providers, or can we wire our own embedding backend into the rag pipeline?",
+      "files": [],
+      "expected_output": "Confirms the embedding side is a deliberate extension point — you are not limited to the shipped providers. The path is to implement the `EmbeddingProvider` interface (name, model, dimensions, and the embed / embedBatch methods) in your own module for Cohere, then wire it into the RAG provider so the rest of the pipeline is unchanged. The native LanceDB store and chunking keep working regardless of which embedding provider is plugged in.",
+      "expectations": [
+        "The answer confirms custom embedding backends ARE supported via an extension point — the user is not limited to the built-in providers.",
+        "The answer names the `EmbeddingProvider` interface as the contract to implement for a Cohere backend.",
+        "The answer references the methods that interface requires — at least `embed`/`embedBatch` (and ideally name/model/dimensions).",
+        "The answer does NOT claim only the shipped providers (transformers-js / openai) can be used or that supporting Cohere requires forking/modifying VAT itself."
+      ]
+    },
+    {
+      "id": "provider-switch-dimension-mismatch",
+      "category": "catch-mistake",
+      "prompt": "I built my rag index a while back with the default local embeddings. I just switched the config over to OpenAI embeddings for better quality, but now every query errors out with something about a dimension mismatch — expected 384, got 1536. What did I do wrong and how do I fix it?",
+      "files": [],
+      "expected_output": "Diagnoses a provider/model mismatch against an existing index: the database was built with the default local model (all-MiniLM, 384-dimensional vectors), but OpenAI text-embedding-3-small produces 1536-dimensional vectors, so the query vector no longer matches the stored vectors. You cannot mix embedding providers/models on one database — the same provider and model must be used for both indexing and querying. The fix is to re-index the corpus from scratch with the new provider (clear the existing DB, then `vat rag index` again), not to tweak a flag and re-query the old index.",
+      "expectations": [
+        "The answer explains the cause as a vector-dimension mismatch: the existing index holds 384-dim (local all-MiniLM) vectors while OpenAI produces 1536-dim vectors.",
+        "The answer states you cannot mix embedding providers/models on a single database — indexing and querying must use the same provider and model.",
+        "The recommended fix is to re-index the corpus from scratch with the new provider (e.g. clear the DB, then `vat rag index` again).",
+        "The answer does NOT suggest the existing index can be queried with the new provider by only changing a config value or flag without re-indexing.",
+        "The answer does NOT misattribute the error to an unrelated cause such as a missing API key, an empty index, or a corrupted database file."
+      ]
+    }
+  ]
+}

@@ -46,6 +46,8 @@ resources:
 | `permissive` | Enforced | Allowed | Docs with project-specific extras |
 | `strict` | Enforced | Error | SKILL.md, API specs, tightly controlled schemas |
 
+**`strict` only rejects extras when the JSON Schema sets `"additionalProperties": false`.** `mode: strict` makes VAT *honor* that schema constraint; without it (or with `additionalProperties: true`), extra fields are still allowed even in strict mode. So a tight schema is two parts: `mode: strict` in the collection config **and** `"additionalProperties": false` in the schema file. `permissive` ignores `additionalProperties` and always allows extras. When `mode` is omitted, collection validation defaults to `permissive`.
+
 ## Running Validation
 
 ```bash

@@ -1,0 +1,69 @@
+{
+  "skill_name": "markdown-rewriting",
+  "_category_note": "Two categories. 'reaches-for-right-tool': given a realistic markdown/frontmatter editing coding task, does the agent write code that uses VAT's comment-preserving openFrontmatter + rewriteBodyLinks / rewriteFrontmatter* helpers from @vibe-agent-toolkit/resources, instead of gray-matter / js-yaml / hand-rolled regex? These are the A/B skill-lift cases — a no-skill baseline typically reaches for gray-matter or a regex/replaceAll and gets them wrong. 'guidance-correctness': when asked directly, does it give correct advice about the API, the import, and why gray-matter/regex are the wrong tools?",
+  "evals": [
+    {
+      "id": "bump-version-field-bulk",
+      "category": "reaches-for-right-tool",
+      "prompt": "We just cut a release. Write me a Node + TypeScript script that walks every markdown doc under docs/ and bumps the `version` field in each file's YAML frontmatter from 0.3.0 to 0.4.0, writing the files back in place. Heads up: the frontmatter has hand-written `#` comments that explain some of the fields, and those comments have to survive exactly — last time we did this with a quick script the comments all got wiped and it made the diff a nightmare.",
+      "files": ["fixtures/docs/specs/auth-spec.md", "fixtures/docs/specs/billing-spec.md"],
+      "expected_output": "Produces a script that reads each markdown file, edits the frontmatter through VAT's comment-preserving editor — openFrontmatter() from @vibe-agent-toolkit/resources, mutating via editor.set('version', '0.4.0') (or equivalent) and writing editor.toString() back. The approach round-trips the YAML comments untouched. It does NOT parse the frontmatter into a plain object and re-serialize (gray-matter / js-yaml / yaml.parse→stringify), which would drop the comments, and does NOT mutate the value with a regex over the `---` fences.",
+      "expectations": [
+        "The script edits the frontmatter using VAT's openFrontmatter from @vibe-agent-toolkit/resources (e.g. editor.set('version', '0.4.0') then writing editor.toString()), i.e. a round-trip-safe editor rather than parse-to-object-and-reserialize.",
+        "The chosen approach preserves the existing frontmatter `#` comments, and the explanation makes clear that this is WHY this editor is used (a plain YAML parse/stringify would discard them).",
+        "The script does NOT use gray-matter, front-matter, or js-yaml to read or write the frontmatter.",
+        "The script does NOT change the version by running a regex or naive string replace against the `---` frontmatter fences."
+      ]
+    },
+    {
+      "id": "move-file-update-references",
+      "category": "reaches-for-right-tool",
+      "prompt": "I'm renaming docs/specs/auth-spec.md to docs/architecture/auth-spec.md. Write a script that scans the other docs under docs/ and updates anything that points at the old path: markdown links in the body AND the frontmatter cross-reference fields (parent_spec and the related-specs list). One catch — we have example links sitting inside fenced code blocks and inline code spans that document the old path on purpose, so those must be left alone.",
+      "files": ["fixtures/docs/specs/auth-spec.md", "fixtures/docs/specs/billing-spec.md"],
+      "expected_output": "Produces a script that rewrites body links with rewriteBodyLinks(body, rewriteHref) from @vibe-agent-toolkit/resources (which only touches real markdown links, leaving code blocks and inline code untouched), and rewrites the frontmatter reference fields with openFrontmatter + rewriteFrontmatterFieldsAtPaths(editor, ['parent_spec', 'related-specs[]'], rewriteHref) (or the schema-driven helper). The rewriteHref callback maps /docs/specs/auth-spec.md to /docs/architecture/auth-spec.md and returns other hrefs unchanged. It does NOT use a whole-file string replace / regex (which would also rewrite the code-block links) and does NOT use gray-matter / js-yaml.",
+      "expectations": [
+        "For the body, the script uses rewriteBodyLinks(body, rewriteHref) from @vibe-agent-toolkit/resources so only genuine markdown links are rewritten and occurrences inside fenced code blocks / inline code are left alone.",
+        "For the frontmatter reference fields, the script uses openFrontmatter plus a VAT rewriter helper (rewriteFrontmatterFieldsAtPaths with paths like 'parent_spec' and 'related-specs[]', or rewriteFrontmatterUriReferencesFromSchema), not hand-written YAML mutation.",
+        "The script does NOT rewrite the links with a naive String.replace / replaceAll or a hand-rolled regex over the whole file or body (which the prompt's code-block links would be wrongly caught by).",
+        "The script does NOT use gray-matter, front-matter, or js-yaml to read or write the frontmatter."
+      ]
+    },
+    {
+      "id": "folder-rename-schema-driven-dry-run",
+      "category": "reaches-for-right-tool",
+      "prompt": "We're relocating the entire docs/specs/ folder to docs/architecture/specs/. There's a JSON Schema at schemas/spec.schema.json describing the frontmatter, and several fields in it are file references (format: uri-reference). Write a migration that walks docs/specs/**/*.md and rewrites every schema-defined URI-reference frontmatter field and every body link from the old folder prefix to the new one. I want to dry-run it across the corpus before I let it write anything.",
+      "files": ["fixtures/docs/specs/auth-spec.md", "fixtures/docs/specs/billing-spec.md", "fixtures/schemas/spec.schema.json"],
+      "expected_output": "Produces a migration script that loads schemas/spec.schema.json and uses rewriteFrontmatterUriReferencesFromSchema(editor, schema, rewriteHref) to rewrite the schema-annotated URI-reference fields automatically, plus rewriteBodyLinks(body, rewriteHref) for the body, with openFrontmatter from @vibe-agent-toolkit/resources doing the round-trip. The rewriteHref maps /docs/specs/ to /docs/architecture/specs/ and returns non-matching hrefs unchanged. It provides a real dry-run mode (lists files it would change without writing) and gates writes with editor.isDirty() and/or a byte comparison to skip no-op churn. It does NOT use gray-matter / js-yaml / a regex over the `---` fences.",
+      "expectations": [
+        "The script loads the provided JSON Schema and uses rewriteFrontmatterUriReferencesFromSchema(editor, schema, rewriteHref) to rewrite the schema-annotated URI-reference fields, rather than enumerating or parsing frontmatter fields by hand.",
+        "The script uses rewriteBodyLinks for the body and openFrontmatter from @vibe-agent-toolkit/resources for the read/mutate/write round-trip.",
+        "The script provides a genuine dry-run path (reports which files would change without writing) and gates the write step (e.g. editor.isDirty() or comparing editor.toString() to the original) to avoid no-op rewrites.",
+        "The script does NOT use gray-matter, front-matter, js-yaml, or a regex over the `---` fences to read or mutate the frontmatter."
+      ]
+    },
+    {
+      "id": "why-frontmatter-comments-disappear",
+      "category": "guidance-correctness",
+      "prompt": "I've got a small script that uses gray-matter to read a markdown file's frontmatter, change one field, and write it back out with matter.stringify. It works, except every time it runs all the `# ...` comments I keep in the YAML frontmatter disappear. What's actually causing that, and is there a better way to do this here?",
+      "files": [],
+      "expected_output": "Explains the root cause: gray-matter (like js-yaml or yaml.parse) parses the frontmatter into a plain JavaScript object, and comments have no representation in that object, so re-serializing with matter.stringify cannot reproduce them — this is inherent to parse-to-object-then-stringify, not a missing option or flag. Recommends switching to openFrontmatter from @vibe-agent-toolkit/resources, the comment-preserving round-trip editor (mutate via editor.set / editor.body, write editor.toString()), and notes gray-matter / js-yaml are the wrong tool for this in the repo.",
+      "expectations": [
+        "The answer identifies the root cause as gray-matter parsing the frontmatter into a plain object that does not carry comments, so re-serializing necessarily drops them — i.e. it is inherent to the parse-then-stringify approach, not a fixable config option.",
+        "The answer recommends openFrontmatter from @vibe-agent-toolkit/resources (the comment-preserving round-trip editor) as the fix.",
+        "The answer does NOT claim there is a gray-matter (or js-yaml) option/flag that would make it keep the comments, and does NOT suggest staying on gray-matter for this edit."
+      ]
+    },
+    {
+      "id": "which-api-and-import-for-frontmatter-edit",
+      "category": "guidance-correctness",
+      "prompt": "What's the right way in this codebase to programmatically open a markdown file, change a single frontmatter field, and write it back without disturbing the rest of the file's formatting? Point me at the API and show me the import line.",
+      "files": [],
+      "expected_output": "Names openFrontmatter from @vibe-agent-toolkit/resources as the canonical API and shows the import (import { openFrontmatter } from '@vibe-agent-toolkit/resources'). Shows correct usage: read the file text, pass it to openFrontmatter, mutate via editor.set(path, value) (or assign editor.body), then write editor.toString() back. Does not recommend gray-matter / js-yaml / a yaml.parse→stringify round-trip or a regex.",
+      "expectations": [
+        "The answer names openFrontmatter and shows it imported from @vibe-agent-toolkit/resources (e.g. import { openFrontmatter } from '@vibe-agent-toolkit/resources').",
+        "The usage shown is correct: open the file's text with openFrontmatter, mutate through the returned editor (e.g. set(path, value) or assigning body), then serialize with editor.toString() to write back.",
+        "The answer does NOT recommend gray-matter, front-matter, js-yaml, a yaml.parse→yaml.stringify round-trip, or a regex over the `---` fences for the edit."
+      ]
+    }
+  ]
+}

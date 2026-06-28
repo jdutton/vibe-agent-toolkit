@@ -22,7 +22,8 @@
       "vat-rag",
       "vat-skill-review",
       "vat-skill-testing",
-      "vat-enterprise-org"
+      "vat-enterprise-org",
+      "markdown-rewriting"
     ],
     "replaces": {
       "plugins": ["vat-development-agents"],

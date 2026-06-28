@@ -1,0 +1,8 @@
+# vibe-agent-toolkit.config.yaml
+version: 1
+
+resources:
+  exclude:
+    - "node_modules/**"
+    - "**/dist/**"
+  # TODO: wire up per-folder frontmatter validation for our knowledge base

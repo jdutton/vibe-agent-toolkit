@@ -1,0 +1,85 @@
+{
+  "skill_name": "vat-skill-distribution",
+  "_category_note": "Three categories. 'build-verify-guidance': does the agent correctly explain vat build vs vat verify (source -> dist), what each phase does, and VAT's non-npm marketplace-branch path? 'publish-correctness': npm publishing mechanics that only work the VAT way (vibe-agent-toolkit in dependencies for the postinstall PATH, vat.skills as a discoverability hint vs config.yaml as the source of truth). 'catch-distribution-mistake': given a misconfigured packaging/publish setup (a plugin rename with no vat.replaces, a package.json that won't ship its dist tree), does the agent spot the VAT-specific failure mode a baseline Claude would miss?",
+  "evals": [
+    {
+      "id": "build-vs-verify-before-publish",
+      "category": "build-verify-guidance",
+      "prompt": "I'm cutting a release of our Claude skills package this afternoon. I keep mixing up `vat build` and `vat verify` — which one actually produces the files that end up in the npm tarball, and is running verify enough before I `npm publish`?",
+      "files": [],
+      "expected_output": "Explains that `vat build` is the command that produces the publishable artifacts (it runs two phases: `vat skills build` -> dist/skills/, then `vat claude plugin build` -> dist/.claude/plugins/marketplaces/...), while `vat verify` only validates resources/skills/claude artifacts and does NOT produce them. Concludes that verify alone is not enough: you must run `vat build` before `npm publish`, otherwise the package ships with no dist plugin tree and the postinstall hook finds nothing to install (emits a guidance message and exits 0), so the plugin never registers.",
+      "expectations": [
+        "States that `vat build` is the step that produces the publishable artifacts (the dist tree the package ships), and describes it running two phases in order: skills build then the claude plugin build.",
+        "States that `vat verify` only validates artifacts and does NOT itself build/produce the publishable dist tree.",
+        "Concludes that `vat build` must be run before `npm publish` (verify alone is not sufficient to produce a publishable package).",
+        "Notes that if the build is skipped, a consumer's postinstall finds no dist plugin/marketplace tree and exits 0 with a guidance message rather than installing anything — OR otherwise warns that an unbuilt package installs nothing.",
+        "Does NOT claim that `vat verify` builds or generates the publishable artifacts, and does NOT claim verify alone is sufficient before publishing."
+      ]
+    },
+    {
+      "id": "non-npm-marketplace-distribution",
+      "category": "build-verify-guidance",
+      "prompt": "Our end users don't have npm configured and IT won't hand out registry tokens to everyone just to install our skills. Is there any way to get our VAT skills plugin onto their machines without going through npm at all?",
+      "files": [],
+      "expected_output": "Yes — VAT supports GitHub marketplace-branch distribution: after `vat build`, `vat claude marketplace publish` pushes the dist/.claude/ tree to a dedicated branch (e.g. claude-marketplace) in your GitHub repo, and users install with the Claude Code slash command `/plugin marketplace add owner/repo#branch` — no npm account, registry, or token required. Notes this needs a `publish.github` (repo + branch) section under the marketplace in vibe-agent-toolkit.config.yaml.",
+      "expectations": [
+        "Describes the GitHub marketplace-branch path: `vat claude marketplace publish` pushes the built dist/.claude tree to a dedicated branch (e.g. claude-marketplace) of a GitHub repo.",
+        "States users install via the Claude Code slash command in the form `/plugin marketplace add owner/repo#<branch>` (a marketplace add against the repo+branch), requiring no npm/registry/token.",
+        "Notes the marketplace still needs to be built (`vat build`) and configured with a `publish` / github repo+branch section in vibe-agent-toolkit.config.yaml.",
+        "Does NOT claim npm/registry publishing is the only way to distribute the plugin."
+      ]
+    },
+    {
+      "id": "runtime-dep-placement-for-postinstall",
+      "category": "publish-correctness",
+      "prompt": "Here's the package.json for the skills package we're about to publish to our internal registry. Before I ship it, does anything here look like it'll bite users when they run `npm install -g @acme/claude-skills`?",
+      "files": ["fixtures/package-devdep.json"],
+      "expected_output": "Flags that `vibe-agent-toolkit` is in devDependencies but the postinstall hook calls `vat` — and npm does NOT install devDependencies when a user installs the package, so `vat` will not be on PATH and the postinstall fails (command not found). The fix is to move `vibe-agent-toolkit` into `dependencies`; npm adds a runtime dependency's bin entries to node_modules/.bin and onto PATH during lifecycle scripts, which is how `vat` becomes available during postinstall.",
+      "expectations": [
+        "Identifies that `vibe-agent-toolkit` is placed in devDependencies and that this is the problem (it must be a regular runtime dependency).",
+        "Explains that npm does not install devDependencies on the consumer's machine, so the `vat` binary the postinstall invokes is absent and the postinstall fails (e.g. command not found).",
+        "Recommends moving `vibe-agent-toolkit` into `dependencies`, and ideally explains npm exposes a runtime dependency's bin entries on PATH during lifecycle scripts (that is what makes `vat` runnable in postinstall).",
+        "Does NOT conclude the dependency placement is fine/correct as written, and does NOT claim devDependencies are installed for end users of a published package."
+      ]
+    },
+    {
+      "id": "vat-skills-vs-config-source-of-truth",
+      "category": "publish-correctness",
+      "prompt": "I'm adding a new skill called `validating-invoices` to our already-published plugin. I added \"validating-invoices\" to the `vat.skills` array in package.json — is that all I need for it to actually ship and show up for users, or is there more to it?",
+      "files": [],
+      "expected_output": "Explains that `vat.skills` is only an npm-discoverability/packaging hint — it is NOT the build input — so adding the name there alone does not make the skill ship. The skill's source path and packaging come from vibe-agent-toolkit.config.yaml (the `skills:` discovery globs and the `claude:` plugin definition); the SKILL.md must live where the config/plugin layout discovers it (e.g. plugins/<name>/skills/<skill>/SKILL.md) to be packaged. Then you must run `vat build` and re-publish for it to reach users.",
+      "expectations": [
+        "States that the `vat.skills` array is a discoverability/packaging hint and is NOT the source of truth that drives the build — editing it alone does not ship the skill.",
+        "Identifies vibe-agent-toolkit.config.yaml (the skills discovery globs and/or the claude plugin definition) as the actual source of truth for which skills are built and packaged, and/or that the SKILL.md must reside in the discovered/plugin location.",
+        "States that the package must be rebuilt with `vat build` and re-published for the new skill to reach users.",
+        "Does NOT claim that adding the name to `vat.skills` in package.json is by itself sufficient to ship the skill."
+      ]
+    },
+    {
+      "id": "rename-stale-skill-vat-replaces",
+      "category": "catch-distribution-mistake",
+      "prompt": "We renamed our plugin from `acme-helpers` to `acme-skills` and published the new version. Several teammates updated, but they say Claude Code is still loading the OLD skill content. What's going on and how do we fix it?",
+      "files": [],
+      "expected_output": "Diagnoses the stale-registration problem: renaming the plugin leaves the old `acme-helpers` registration in place, and Claude Code does not warn on conflicting skill names — the first-registered (stale) plugin silently wins, so users keep loading old content. The fix is `vat.replaces.plugins` in package.json listing the old plugin name so the installer uninstalls the old registration before installing the new one. Notes the name in replaces.plugins is the bare plugin name (`acme-helpers`) with NO @marketplace suffix, and that this is exactly the rename case a normal version bump does not handle.",
+      "expectations": [
+        "Diagnoses that the old plugin registration (acme-helpers) was left behind and that Claude Code does not warn on conflicting skill names — the stale/first-registered plugin silently wins, so old content keeps loading.",
+        "Prescribes adding `vat.replaces.plugins` (with the old name `acme-helpers`) to package.json so the installer removes the old plugin registration before installing the renamed one.",
+        "States that the value in replaces.plugins is the bare plugin name with no @marketplace suffix.",
+        "Does NOT claim that a normal version bump / plain reinstall alone resolves the rename, and does NOT attribute the symptom solely to an npm cache."
+      ]
+    },
+    {
+      "id": "files-omits-dist-nothing-installs",
+      "category": "catch-distribution-mistake",
+      "prompt": "We ran `vat build` and `npm publish` succeeded, but after teammates `npm install -g @acme/claude-skills` nothing shows up in Claude Code — no error, just no skills. The dist/ folder builds fine locally. Here's our package.json — can you see why?",
+      "files": ["fixtures/package-missing-dist.json"],
+      "expected_output": "Identifies that the `files` array only lists README.md and omits `dist`, so the built plugin tree (dist/.claude/plugins/marketplaces/...) is never included in the published npm tarball. When the consumer's postinstall runs, VAT finds no dist/.claude/plugins/marketplaces directory in the installed package, emits a guidance message, and exits 0 — which exactly matches the silent 'nothing shows up, no error' symptom. Fix: add `dist` to the `files` array and re-publish.",
+      "expectations": [
+        "Identifies that the `files` array omits `dist`, so the built plugin/marketplace tree is not included in the published package even though it builds locally.",
+        "Explains that the postinstall hook therefore finds no dist plugin/marketplace directory in the installed package and exits 0 with a guidance message rather than registering anything — matching the 'nothing shows up, no error' symptom.",
+        "Recommends adding `dist` to the `files` array and re-publishing.",
+        "Does NOT conclude the package.json correctly ships the built skills, and does NOT pin the cause on the postinstall script crashing/erroring (it exits 0 gracefully)."
+      ]
+    }
+  ]
+}

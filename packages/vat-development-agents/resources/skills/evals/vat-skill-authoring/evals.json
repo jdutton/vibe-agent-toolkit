@@ -1,0 +1,73 @@
+{
+  "skill_name": "vat-skill-authoring",
+  "_category_note": "Three categories, scoped to AUTHORING (producing correct SKILL.md + packaging guidance) to stay clear of vat-skill-review, which owns reviewing a finished skill for violations. 'produce-correct-frontmatter': asked to draft/write part of a SKILL.md, does the agent emit frontmatter and script references that follow VAT's rules? 'guidance-correctness': when asked how to set something up, does it give the correct VAT config mechanism (packagingOptions, validation overrides)? 'catch-authoring-mistake': given a draft with misplaced config/keys, does it spot the authoring placement errors?",
+  "evals": [
+    {
+      "id": "draft-frontmatter-reserved-word-and-tracking-fields",
+      "category": "produce-correct-frontmatter",
+      "prompt": "Can you draft me a SKILL.md to get started on a new skill? It takes a plain-English description of a workflow and turns it into a Claude Code slash-command file. We track ownership on everything we build, so stamp our team name (platform-tooling) and a version (1.0.0) into the file up top. Just the frontmatter plus a short starter body is fine.",
+      "files": [],
+      "expected_output": "Produces a SKILL.md whose name is kebab-case (gerund or an acceptable noun/verb-phrase form) and contains NEITHER 'claude' NOR 'anthropic' — flagging that Claude Code refuses to install non-certified skills whose name contains those reserved words even though the skill generates Claude Code commands. The description is third-person, under ~250 chars, and leads with the action/trigger. The requested team and version are nested under a metadata: mapping (an allowed key) rather than added as top-level frontmatter keys, or the agent explains those tracking fields belong in metadata or vibe-agent-toolkit.config.yaml, not as standard frontmatter keys.",
+      "expectations": [
+        "The drafted frontmatter `name` is kebab-case and does NOT contain the reserved word 'claude' (or 'anthropic'), even though the skill's subject is Claude Code slash commands.",
+        "The answer notes that 'claude'/'anthropic' must be kept out of the skill name because Claude Code rejects non-certified skills named that way (RESERVED_WORD_IN_NAME).",
+        "The drafted `description` is written in third person — it contains no first-person ('I can', 'I'll') or conversational second-person ('You can', 'You'll') phrasing — and is at or under ~250 characters.",
+        "The requested `version` and team/ownership values are placed under a `metadata:` mapping OR the agent states they belong in `metadata.<key>` or vibe-agent-toolkit.config.yaml rather than as standard frontmatter keys.",
+        "The frontmatter does NOT introduce bare top-level `version:` or `team:` (or similarly named) keys as if they were standard skill frontmatter fields."
+      ]
+    },
+    {
+      "id": "draft-portable-bundled-script-section",
+      "category": "produce-correct-frontmatter",
+      "prompt": "I'm writing the SKILL.md body for a skill that ships a bundled converter script at scripts/convert.mjs. Can you write the part of the body that tells the agent how to run it on an input file? It'll be installed as a Claude Code plugin in our marketplace.",
+      "files": [],
+      "expected_output": "Writes a 'run the script' section that invokes the bundled script by a skill-relative path (e.g. `node scripts/convert.mjs <input>`), NOT via ${CLAUDE_PLUGIN_ROOT}, an absolute path, or any environment variable — despite the prompt saying it ships as a Claude Code plugin. Addresses the working-directory caveat: states that the path is relative to the skill's own directory (the folder containing SKILL.md) or has the skill cd into that directory first, because the agent's cwd is not guaranteed to be the skill dir. May note skill-relative paths are the only form portable across every mount surface (plugin, claude.ai upload, API container, ~/.claude/skills).",
+      "expectations": [
+        "The script invocation references it by a skill-relative path (e.g. `scripts/convert.mjs`) and not via an absolute path.",
+        "The output does NOT anchor the script path on `${CLAUDE_PLUGIN_ROOT}` / `CLAUDE_PLUGIN_ROOT`, any other environment variable, or a `skills/<name>/` plugin-relative segment.",
+        "The section addresses the working-directory issue — it states the path is relative to the skill's own directory (the folder containing SKILL.md) or instructs the skill to cd into that directory before running.",
+        "The output does NOT claim that a CLAUDE_PLUGIN_ROOT-anchored or absolute path is the correct/portable way to reference the bundled script."
+      ]
+    },
+    {
+      "id": "guidance-exclude-references-from-bundle",
+      "category": "guidance-correctness",
+      "prompt": "My skill links out to a big folder of conceptual background docs. I don't want them bloating the packaged bundle, but I still want the agent to know those concepts exist and go find them itself. How do I set this up with VAT so the build doesn't just choke on the links it's not bundling?",
+      "files": [],
+      "expected_output": "Points to excludeReferencesFromBundle as the mechanism: ordered rules[] of glob patterns (first match wins) plus a defaultTemplate, each with a Handlebars template that rewrites the excluded link to prose (e.g. using {{link.text}}) so the reference survives as text rather than a broken/dropped link. States it is configured in vibe-agent-toolkit.config.yaml under skills.config.<name> (alongside linkFollowDepth), NOT in SKILL.md frontmatter. May add that this is what cleanly handles depth-dropped links (otherwise LINK_DROPPED_BY_DEPTH) without bundling the whole folder.",
+      "expectations": [
+        "The answer names `excludeReferencesFromBundle` (with its `rules` glob patterns and/or `defaultTemplate`) as the mechanism for excluding-but-rewriting those links.",
+        "The answer states the configuration lives in `vibe-agent-toolkit.config.yaml` under `skills.config.<name>` (the packaging config), not in SKILL.md frontmatter.",
+        "The answer explains the excluded links are rewritten via a (Handlebars) template — e.g. referencing `{{link.text}}` — into prose the agent can act on, rather than left as dropped or broken links.",
+        "The answer does NOT claim this is set in SKILL.md frontmatter, and does NOT present 'delete the links' or 'just bundle everything by raising linkFollowDepth' as the only options."
+      ]
+    },
+    {
+      "id": "guidance-allow-unreferenced-runtime-file",
+      "category": "guidance-correctness",
+      "prompt": "VAT's build keeps failing my skill over one file in the bundle — a JSON template my script reads at runtime — because nothing in the markdown links to it. The file has to ship. How do I get the build to pass without just disabling that whole check across the skill?",
+      "files": [],
+      "expected_output": "Recommends a per-instance validation.allow entry scoped to that specific file path, with a required reason (and optional expires), under skills.config.<name>.validation in vibe-agent-toolkit.config.yaml. Distinguishes allow (suppresses a specific (code, path) instance, leaving the check live elsewhere) from severity: ignore (silences the entire code class) and steers toward the scoped allow rather than class-wide silencing. May name the underlying code PACKAGED_UNREFERENCED_FILE.",
+      "expectations": [
+        "The answer recommends a `validation.allow` entry scoped to that specific file path as the right fix, rather than turning the check off for the whole skill.",
+        "The answer states the allow entry requires a `reason` (and notes `expires` is optional).",
+        "The answer distinguishes `validation.allow` (per-instance / per-path suppression) from `validation.severity: ignore` (class-wide suppression) and prefers the scoped allow.",
+        "The answer locates the setting in `vibe-agent-toolkit.config.yaml` under `skills.config.<name>` (the validation overrides), not in SKILL.md frontmatter.",
+        "The answer does NOT recommend setting `severity.PACKAGED_UNREFERENCED_FILE: ignore` (or equivalent class-wide silencing) as the primary fix, and does NOT insist the file must be linked or deleted."
+      ]
+    },
+    {
+      "id": "catch-config-and-keys-in-frontmatter",
+      "category": "catch-authoring-mistake",
+      "prompt": "Here's a draft SKILL.md I put together. I tried to wire up the packaging behavior and a couple of tracking fields right in the file. Before I wire it into our config, does this look like it'll build and package the way I expect, or did I put something in the wrong place?",
+      "files": ["fixtures/misplaced-config-skill.md"],
+      "expected_output": "Identifies the placement mistakes: linkFollowDepth and excludeReferencesFromBundle are packaging options that belong in vibe-agent-toolkit.config.yaml under skills.config.<name>, not in SKILL.md frontmatter; the version and category keys are non-standard frontmatter fields (would fire SKILL_FRONTMATTER_EXTRA_FIELDS) and should move under a metadata: mapping or into config; and the markdown link to the sibling skill ([the audit skill](./vat-audit.md)) should be a prose reference (vibe-agent-toolkit:vat-audit) because linking another skill's SKILL.md transcludes/duplicates that skill (LINK_TO_SKILL_DEFINITION). Concludes it will NOT package as the author expects.",
+      "expectations": [
+        "The review flags that `linkFollowDepth` and `excludeReferencesFromBundle` do NOT belong in SKILL.md frontmatter — they are packaging config set in vibe-agent-toolkit.config.yaml under `skills.config.<name>`.",
+        "The review flags `version` and `category` as non-standard frontmatter keys that should move under a `metadata:` mapping or into config (they are not part of the standard skill frontmatter set).",
+        "The review flags the markdown link to the sibling skill's SKILL.md (`./vat-audit.md`) and recommends referencing it in prose (e.g. `vibe-agent-toolkit:vat-audit`) instead, because linking a SKILL.md transcludes/duplicates the other skill.",
+        "The review does NOT tell the author the frontmatter packaging keys (`linkFollowDepth`, `excludeReferencesFromBundle`) are correct or will be honored as written from the frontmatter."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "name": "release-notifier",
+  "description": "Announce a tagged release to the team chat channel.",
+  "version": "0.3.0",
+  "author": { "name": "Platform Team" },
+  "license": "MIT"
+}

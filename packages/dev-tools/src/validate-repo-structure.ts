@@ -344,6 +344,12 @@ async function validateSourceFileLocations(): Promise<void> {
         return;
       }
 
+      // Allow skill-test eval fixtures (test input for `vat skill test`, often
+      // intentionally broken TypeScript the eval asks an agent to review — not source).
+      if (/^packages\/[^/]+\/resources\/skills\/evals\//.test(normalizedPath)) {
+        return;
+      }
+
       // Check if in valid location
       const isInPackageSrc = /^packages\/[^/]+\/src\//.test(normalizedPath);
       const isInPackageTest = /^packages\/[^/]+\/test\//.test(normalizedPath);

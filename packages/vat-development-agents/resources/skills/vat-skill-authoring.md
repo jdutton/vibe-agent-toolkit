@@ -34,6 +34,11 @@ Best practices for `description`:
 - Write in third person. First-person ("I can...") and conversational second-person ("You can use...") fire `SKILL_DESCRIPTION_WRONG_PERSON`.
 - Keep under 250 characters so the Claude Code `/skills` listing doesn't truncate the tail (target ≤200 for safety, ≤130 if shipping a large skill collection). The hard schema limit is 1024.
 
+Other frontmatter keys — keep them conservative:
+
+- The standard key set is `name`, `description`, `allowed-tools`, `argument-hint`, `metadata`, `license`, `compatibility`, `model` (plus the Claude Code behavior flags `disable-model-invocation`, `user-invocable`, `context`, `agent`, `hooks`). VAT warns on anything outside it via `SKILL_FRONTMATTER_EXTRA_FIELDS` (one issue per non-standard field) — spec-compliant consumers silently ignore unknown keys, so a bare `version:` or `team:` looks declarative but carries no semantics off your project.
+- Stamp per-skill data — `version`, `team`/owner, status — under the allowed `metadata:` mapping (nest `version:`/`team:` beneath `metadata:`), **not** as bare top-level keys. For VAT packaging/validation config, use `vibe-agent-toolkit.config.yaml` under `skills.config.<name>`, never the frontmatter. (The cross-document reference keys below are the one routine exception — VAT resolves them for link validation; keep other custom data under `metadata:`.)
+
 ## Cross-document references in SKILL.md frontmatter
 
 When SKILL.md frontmatter references other documents (parent specs, ADRs,

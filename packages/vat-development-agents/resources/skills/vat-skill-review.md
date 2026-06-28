@@ -66,7 +66,7 @@ Tooling enforcement: items marked with a bracketed code (e.g., `[SKILL_DESCRIPTI
 
 ### Frontmatter hygiene
 
-- **[VAT] Frontmatter keys stay conservative**: use only the standard keys `name`, `description`, `allowed-tools` (plus `argument-hint` for slash-command-shaped skills). VAT generates SKILL.md under strict schema — novel keys like project-specific `version:` or `metadata:` fields will be rejected. If you need per-skill config, put it in `vibe-agent-toolkit.config.yaml`, not the frontmatter. `[SKILL_FRONTMATTER_EXTRA_FIELDS]` warns on non-standard keys.
+- **[VAT] Frontmatter keys stay conservative**: stick to the standard key set (`name`, `description`, `allowed-tools`, `argument-hint`, `metadata`, `license`, `compatibility`, `model`, and the Claude Code behavior flags). `[SKILL_FRONTMATTER_EXTRA_FIELDS]` warns (one issue per field) on anything outside it — a bare project-specific `version:` or `team:` key looks declarative but carries no semantics off your project. Put custom data under the allowed `metadata:` mapping (e.g. `metadata.version`), or per-project VAT config in `vibe-agent-toolkit.config.yaml` — not as a bare top-level key.
 - **[VAT] Sibling skills use consistent YAML styling**: within a single skill package, don't mix folded (`description: >-`) and inline (`description: "..."`) string forms. Pick one and apply it to every skill. `[SKILL_DESCRIPTION_STYLE_MIXED_IN_PACKAGE]` flags mixed styles across a package (detector implemented, pipeline wiring pending).
 
 ### Cross-skill dependencies
