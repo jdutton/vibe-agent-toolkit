@@ -4,7 +4,25 @@
 import argparse
 import json
 import os
+import sys
 import urllib.request
+from pathlib import Path
+
+
+def resolve_changelog(raw_path: str) -> Path:
+    """Resolve --changelog and confirm it stays inside the project directory.
+
+    The path comes from the command line, so validate it before touching the
+    filesystem: resolve it against the project root and reject anything that
+    escapes the root (e.g. '../../etc/passwd') or that is not a regular file.
+    """
+    project_root = Path.cwd().resolve()
+    candidate = (project_root / raw_path).resolve()
+    if not candidate.is_relative_to(project_root):
+        sys.exit(f"refusing to read {raw_path!r}: path escapes the project directory")
+    if not candidate.is_file():
+        sys.exit(f"changelog not found: {raw_path}")
+    return candidate
 
 
 def main() -> None:
@@ -13,8 +31,8 @@ def main() -> None:
     parser.add_argument("--changelog", required=True)
     args = parser.parse_args()
 
-    with open(args.changelog, encoding="utf-8") as handle:
-        highlights = handle.read().split("\n\n", 1)[0]
+    changelog = resolve_changelog(args.changelog)
+    highlights = changelog.read_text(encoding="utf-8").split("\n\n", 1)[0]
 
     payload = {"text": f"Release {args.tag}\n{highlights}"}
     request = urllib.request.Request(
