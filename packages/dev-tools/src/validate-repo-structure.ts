@@ -346,6 +346,9 @@ async function validateSourceFileLocations(): Promise<void> {
 
       // Allow skill-test eval fixtures (test input for `vat skill test`, often
       // intentionally broken TypeScript the eval asks an agent to review — not source).
+      // NOTE: the `resources/skills/evals/` exclusion is mirrored in eslint.config.js
+      // (ignores) and vibe-agent-toolkit.config.yaml (resources.exclude). Keep all
+      // three in sync if this path ever moves.
       if (/^packages\/[^/]+\/resources\/skills\/evals\//.test(normalizedPath)) {
         return;
       }

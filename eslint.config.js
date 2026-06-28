@@ -141,7 +141,7 @@ export default [
       '**/test-fixtures/**',  // Test fixture data (third-party code)
       '**/test/fixtures/**',  // Test fixture data (emulates user/3p content)
       '**/transformer-fixtures/**',  // Transformer test fixtures (sample code)
-      '**/resources/skills/evals/**',  // Skill-test eval suites + fixtures (test input, often intentionally broken)
+      '**/resources/skills/evals/**',  // Skill-test eval suites + fixtures (test input, often intentionally broken). Mirrored in validate-repo-structure.ts + vibe-agent-toolkit.config.yaml — keep in sync.
     ],
   },
 

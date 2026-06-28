@@ -4,6 +4,16 @@
 
 version: 1
 
+resources:
+  # Skill-test eval suites are TEST INPUT, not project docs: their fixtures are
+  # deliberately-broken SKILL.md / .md files (used to verify vat-audit and
+  # vat-skill-review catch the violations), so `vat verify`'s resources phase
+  # (which runs `vat resources validate` here) must not link/portability-validate
+  # them as real docs. Mirrors the same exclusion in the repo-root
+  # vibe-agent-toolkit.config.yaml, eslint.config.js, and validate-repo-structure.ts.
+  exclude:
+    - "**/resources/skills/evals/**"
+
 skills:
   include: ["resources/skills/SKILL.md", "resources/skills/vat-*.md", "resources/skills/markdown-rewriting.md"]
   defaults:

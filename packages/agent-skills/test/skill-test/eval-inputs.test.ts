@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest';
 import { EvalInputError, parseEvalSuite, stageEvalWorkspaces } from '../../src/skill-test/eval-inputs.js';
 
 const FIXTURES_DOC = 'fixtures/doc.md';
+const DESCRIPTIVE_ID = 'cast-smell-typed-column';
 
 const VALID = JSON.stringify({
   skill_name: 'demo',
@@ -47,15 +48,33 @@ describe('parseEvalSuite', () => {
 
   it('accepts a descriptive string id (skill-creator encourages descriptive eval names)', () => {
     const stringId = JSON.stringify({ skill_name: 'demo', evals: [
-      { id: 'cast-smell-typed-column', prompt: 'p', expected_output: 'o', expectations: ['e'] },
+      { id: DESCRIPTIVE_ID, prompt: 'p', expected_output: 'o', expectations: ['e'] },
     ] });
     const suite = parseEvalSuite(stringId);
-    expect(suite.evals[0]?.id).toBe('cast-smell-typed-column');
+    expect(suite.evals[0]?.id).toBe(DESCRIPTIVE_ID);
   });
 
   it('still errors when a load-bearing field is missing (passthrough only relaxes unknown fields)', () => {
     const missingExpectations = JSON.stringify({ skill_name: 'demo', evals: [{ id: 1, prompt: 'p', expected_output: 'o' }] });
     expect(() => parseEvalSuite(missingExpectations)).toThrow(EvalInputError);
+  });
+
+  it('accepts an eval with no expected_output (graded on expectations alone — real dxa-consumption shape)', () => {
+    const noExpectedOutput = JSON.stringify({ skill_name: 'demo', evals: [
+      { id: 'anti-re-parse', prompt: 'p', expectations: ['e'] },
+    ] });
+    const suite = parseEvalSuite(noExpectedOutput);
+    expect(suite.evals[0]?.expected_output).toBeUndefined();
+    expect(suite.evals[0]?.expectations).toEqual(['e']);
+  });
+
+  it('accepts a suite that mixes numeric and descriptive string ids (real dxa shape)', () => {
+    const mixed = JSON.stringify({ skill_name: 'demo', evals: [
+      { id: 1, prompt: 'p', expected_output: 'o', expectations: ['e'] },
+      { id: DESCRIPTIVE_ID, prompt: 'p2', expected_output: 'o2', expectations: ['e2'] },
+    ] });
+    const suite = parseEvalSuite(mixed);
+    expect(suite.evals.map((e) => e.id)).toEqual([1, DESCRIPTIVE_ID]);
   });
 
   it('throws EvalInputError on duplicate eval ids', () => {
@@ -64,6 +83,39 @@ describe('parseEvalSuite', () => {
       { id: 1, prompt: 'p2', expected_output: 'o2', expectations: ['e2'] },
     ] });
     expect(() => parseEvalSuite(dup)).toThrow(/unique/i);
+  });
+
+  it('treats numeric 1 and string "1" as colliding ids (both name the same workspace dir)', () => {
+    const collide = JSON.stringify({ skill_name: 'demo', evals: [
+      { id: 1, prompt: 'p', expected_output: 'o', expectations: ['e'] },
+      { id: '1', prompt: 'p2', expected_output: 'o2', expectations: ['e2'] },
+    ] });
+    expect(() => parseEvalSuite(collide)).toThrow(/unique/i);
+  });
+
+  it('rejects a string id with filesystem-illegal characters (it names a working dir)', () => {
+    const colon = JSON.stringify({ skill_name: 'demo', evals: [
+      { id: 'year:extraction', prompt: 'p', expected_output: 'o', expectations: ['e'] },
+    ] });
+    expect(() => parseEvalSuite(colon)).toThrow(EvalInputError);
+    const slash = JSON.stringify({ skill_name: 'demo', evals: [
+      { id: 'docs/parse', prompt: 'p', expected_output: 'o', expectations: ['e'] },
+    ] });
+    expect(() => parseEvalSuite(slash)).toThrow(EvalInputError);
+  });
+
+  it('flags a near-miss typo of the optional `files` field (would otherwise be silently swallowed)', () => {
+    const typo = JSON.stringify({ skill_name: 'demo', evals: [
+      { id: 1, prompt: 'p', expected_output: 'o', expectations: ['e'], filez: ['fixtures/doc.md'] },
+    ] });
+    expect(() => parseEvalSuite(typo)).toThrow(/did you mean.*files/i);
+  });
+
+  it('does NOT flag legitimately distinct adopter keys (name, category, notes) as typos', () => {
+    const customKeys = JSON.stringify({ skill_name: 'demo', notes: 'top-level note', evals: [
+      { id: 1, name: 'happy path', category: 'recognition', prompt: 'p', expected_output: 'o', expectations: ['e'] },
+    ] });
+    expect(() => parseEvalSuite(customKeys)).not.toThrow();
   });
 });
 

@@ -11,22 +11,84 @@ export class EvalInputError extends Error {
   }
 }
 
+/**
+ * String eval ids name a per-eval working directory ({@link stageEvalWorkspaces}),
+ * so they must be safe path segments on every platform. Letters, digits, hyphen,
+ * and underscore only — this rejects `/`, `\`, `:`, spaces, `..`, and other
+ * filesystem-illegal characters that would otherwise fail (or behave
+ * inconsistently) on Windows. Descriptive adopter ids like `dollar-quote-recovery`
+ * pass unchanged; `year:extraction` is rejected at parse with a clear message
+ * instead of failing later as an opaque copy/escape error.
+ */
+const EVAL_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
+
+/** Fields VAT recognizes per eval. Unknown fields are allowed (passthrough); a
+ *  near-miss of one of these is flagged as a likely typo (see superRefine). */
+const RECOGNIZED_EVAL_FIELDS = ['id', 'prompt', 'expected_output', 'files', 'expectations'] as const;
+
+/**
+ * True when `key` is exactly one edit (insert/delete/substitute one char) from
+ * `target`. Used only to catch typos of recognized fields — deliberately a tiny
+ * single-edit check, not a general edit-distance routine, so it stays cheap and
+ * never fires on legitimately distinct adopter keys (`name`, `category`, `notes`).
+ */
+function isSingleEditAway(key: string, target: string): boolean {
+  if (key === target) return false;
+  const lk = key.length;
+  const lt = target.length;
+  if (Math.abs(lk - lt) > 1) return false;
+  let i = 0;
+  while (i < lk && i < lt && key[i] === target[i]) i++;
+  if (lk === lt) return key.slice(i + 1) === target.slice(i + 1); // substitution
+  if (lk > lt) return key.slice(i + 1) === target.slice(i); // deletion from key
+  return key.slice(i) === target.slice(i + 1); // insertion into key
+}
+
 // evals.json is adopter-authored input that VAT *reads* — so per the project's
 // Postel's Law (read the outside world liberally), we validate only the fields
 // VAT actually consumes and pass everything else through untouched. `id` accepts
 // a string OR an int: skill-creator's methodology encourages *descriptive* eval
 // identifiers, and real adopter suites (e.g. dxa) use descriptive string ids plus
 // adopter-owned metadata like `category` / top-level `_category_note`. The
-// load-bearing fields stay required, so a typo in one is still caught.
+// load-bearing fields stay required, so a typo in a REQUIRED field is caught by
+// its absence; a near-miss typo of the OPTIONAL `files` field (which would
+// otherwise be silently swallowed by passthrough) is caught by the superRefine.
 export const EvalEntrySchema = z
   .object({
-    id: z.union([z.number().int(), z.string().min(1)]),
+    id: z.union([
+      z.number().int(),
+      z
+        .string()
+        .min(1)
+        .regex(
+          EVAL_ID_PATTERN,
+          'string eval id must contain only letters, digits, hyphen, or underscore (it names a working directory)',
+        ),
+    ]),
     prompt: z.string().min(1),
-    expected_output: z.string().min(1),
+    // Optional: a human-readable success description. VAT never machine-consumes it
+    // (the grader works entirely off `expectations`), so per Postel's Law we don't
+    // require what we don't read — real adopter suites (e.g. dxa-consumption) grade
+    // with `expectations` alone. Kept here so authors who want a prose description
+    // can include one and have it validated as a non-empty string.
+    expected_output: z.string().min(1).optional(),
     files: z.array(z.string().min(1)).optional(),
     expectations: z.array(z.string().min(1)).min(1),
   })
-  .passthrough();
+  .passthrough()
+  .superRefine((entry, ctx) => {
+    for (const key of Object.keys(entry)) {
+      if ((RECOGNIZED_EVAL_FIELDS as readonly string[]).includes(key)) continue;
+      const near = RECOGNIZED_EVAL_FIELDS.find((field) => isSingleEditAway(key.toLowerCase(), field));
+      if (near !== undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `unknown eval field "${key}" — did you mean "${near}"? (other custom fields are allowed and ignored)`,
+          path: [key],
+        });
+      }
+    }
+  });
 
 export const EvalSuiteSchema = z
   .object({
@@ -51,9 +113,12 @@ export function parseEvalSuite(jsonText: string): EvalSuite {
   if (!result.success) {
     throw new EvalInputError(`evals.json failed schema validation: ${result.error.message}`);
   }
-  const ids = result.data.evals.map((e) => e.id);
+  // Compare ids as strings: each id names a working directory via String(id),
+  // so a numeric `1` and a string `"1"` would collide on disk even though they
+  // are distinct JS values. Dedup on the stringified form to catch that.
+  const ids = result.data.evals.map((e) => String(e.id));
   if (new Set(ids).size !== ids.length) {
-    throw new EvalInputError('eval ids must be unique within a suite');
+    throw new EvalInputError('eval ids must be unique within a suite (ids are compared as strings, so 1 and "1" collide)');
   }
   return result.data;
 }
@@ -78,19 +143,30 @@ export function stageEvalWorkspaces(input: StageEvalWorkspacesInput): string {
     if (entry.files === undefined || entry.files.length === 0) continue;
     const evalWorkspace = safePath.joinUnderRoot(input.workspacesRoot, String(entry.id));
     for (const rel of entry.files) {
+      // Containment first: a `rel` that escapes evalsDir or the workspace is a
+      // genuine "escapes the eval directory" problem and is reported as such.
+      let src: string;
+      let dest: string;
       try {
-        const src = safePath.joinUnderRoot(input.evalsDir, rel);
-        // eslint-disable-next-line security/detect-non-literal-fs-filename -- src is contained under evalsDir via joinUnderRoot; suite is developer-authored
-        if (!existsSync(src)) {
-          throw new EvalInputError(`eval ${entry.id} declares input file "${rel}" but it is absent at ${src}`);
-        }
-        const dest = safePath.joinUnderRoot(evalWorkspace, rel);
+        src = safePath.joinUnderRoot(input.evalsDir, rel);
+        dest = safePath.joinUnderRoot(evalWorkspace, rel);
+      } catch (err) {
+        throw new EvalInputError(
+          `eval ${entry.id} declares input file "${rel}" that escapes the eval directory: ${(err as Error).message}`,
+        );
+      }
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- src is contained under evalsDir via joinUnderRoot; suite is developer-authored
+      if (!existsSync(src)) {
+        throw new EvalInputError(`eval ${entry.id} declares input file "${rel}" but it is absent at ${src}`);
+      }
+      // Copy failures (permissions, illegal filename on the host, disk) are
+      // reported accurately rather than mislabeled as a containment escape.
+      try {
         mkdirSyncReal(safePath.join(dest, '..'), { recursive: true });
         cpSync(src, dest, { recursive: true });
       } catch (err) {
-        if (err instanceof EvalInputError) throw err;
         throw new EvalInputError(
-          `eval ${entry.id} declares input file "${rel}" that escapes the eval directory: ${(err as Error).message}`,
+          `eval ${entry.id} failed to stage input file "${rel}" into the workspace: ${(err as Error).message}`,
         );
       }
     }
