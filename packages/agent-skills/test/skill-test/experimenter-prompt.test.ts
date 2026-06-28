@@ -36,6 +36,13 @@ describe('buildExperimenterPrompt', () => {
     expect(DEFAULT_EXPERIMENTER_PROMPT).toMatch(/`?evals`?\s+array/i);
   });
 
+  it('feeds expected_output to the grader as context (without making it a checklist item)', () => {
+    // expected_output is optional prose; when present it should inform grading but
+    // the pass/fail verdict stays pinned to the `expectations` entries.
+    expect(DEFAULT_EXPERIMENTER_PROMPT).toMatch(/expected_output/);
+    expect(DEFAULT_EXPERIMENTER_PROMPT).toMatch(/context/i);
+  });
+
   it('mentions the baseline A/B only when enabled', () => {
     expect(buildExperimenterPrompt({ ...opts, baseline: true })).toMatch(/baseline|without the skill/i);
     expect(buildExperimenterPrompt(opts)).not.toMatch(/without the skill/i);

@@ -95,7 +95,8 @@ The suite lives at `<skill>/evals/evals.json` (override with `skills.config.<ski
 - `id` — unique identifier; an integer **or** a descriptive string (descriptive ids read better in results).
 - `category` — optional grouping label you choose; VAT carries it through untouched.
 - `files` — optional input paths relative to the `evals.json` directory; each eval's files are staged into its own isolated working directory.
-- `expected_output` and `expectations` are required; `expectations` needs at least one entry.
+- `expectations` is required and needs at least one entry — it is what the grader scores (pass/fail per entry).
+- `expected_output` is optional prose describing a correct result; when present the grader receives it as context informing its judgment, but the verdict is still decided per `expectations` entry.
 
 ### Write blind, realistic prompts
 

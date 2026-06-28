@@ -66,11 +66,11 @@ export const EvalEntrySchema = z
         ),
     ]),
     prompt: z.string().min(1),
-    // Optional: a human-readable success description. VAT never machine-consumes it
-    // (the grader works entirely off `expectations`), so per Postel's Law we don't
-    // require what we don't read — real adopter suites (e.g. dxa-consumption) grade
-    // with `expectations` alone. Kept here so authors who want a prose description
-    // can include one and have it validated as a non-empty string.
+    // Optional: a human-readable success description. The pass/fail verdict is
+    // always decided per `expectations` entry, so this is not load-bearing and
+    // (per Postel's Law) is not required — real adopter suites (e.g. dxa-consumption)
+    // grade with `expectations` alone. When present, the experimenter prompt feeds it
+    // to the grader as prose CONTEXT informing judgment (see experimenter-prompt.ts).
     expected_output: z.string().min(1).optional(),
     files: z.array(z.string().min(1)).optional(),
     expectations: z.array(z.string().min(1)).min(1),
