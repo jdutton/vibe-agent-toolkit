@@ -1,0 +1,69 @@
+{
+  "skill_name": "vat-skill-review",
+  "_category_note": "Three categories. 'catch-violation': given a SKILL.md with known issues, does the reviewer surface the VAT-specific ones a baseline Claude would miss? 'no-false-positive': given a clean skill, does it avoid inventing violations? 'guidance-correctness': when asked directly, does it give the correct VAT rule?",
+  "evals": [
+    {
+      "id": "catch-frontmatter-issues",
+      "category": "catch-violation",
+      "prompt": "I'm about to publish this skill to our internal Claude Code marketplace. Can you give it a once-over and tell me anything that would trip up Claude Code itself or our reviewers before I ship it?",
+      "files": ["fixtures/bad-frontmatter-skill.md"],
+      "expected_output": "Identifies the high-value problems: the name contains the reserved word 'claude' (Claude Code refuses to install non-certified skills whose name contains 'claude'/'anthropic'); the name 'claude-pdf-helper' uses the vague term 'helper'; the description opens with the filler 'This skill helps...', is written in first person ('I can...'), exceeds the ~250-char Claude Code listing limit, and contains time-sensitive phrases ('as of January 2026', 'before August 2025'). Concludes it is NOT ready to ship as-is.",
+      "expectations": [
+        "The review flags that the skill name contains the reserved word 'claude' and that Claude Code will refuse to install a non-certified skill whose name contains 'claude' or 'anthropic'.",
+        "The review flags that the description is too long for the Claude Code listing (the ~250-character truncation limit).",
+        "The review flags at least one of: the filler opener 'This skill helps...', the first-person voice ('I can'), or the vague name term 'helper'.",
+        "The review flags the time-sensitive content (e.g. 'as of January 2026' or 'before August 2025') as something to move into an 'Old patterns' section or remove.",
+        "The review does NOT conclude that the skill is ready to publish as-is; it returns concrete problems to fix."
+      ]
+    },
+    {
+      "id": "catch-nonportable-script-refs",
+      "category": "catch-violation",
+      "prompt": "Here's a skill that bundles a script. Before I add it to our marketplace, does anything about the way it references the script or the shell commands it runs look like it'll break for some users?",
+      "files": ["fixtures/nonportable-cli-skill.md"],
+      "expected_output": "Flags the CLAUDE_PLUGIN_ROOT script reference as non-portable — it is Claude-Code-plugin-only and breaks when the skill is mounted standalone (claude.ai upload / API container); the fix is a skill-relative path like scripts/extract.mjs. Also flags the non-portable shell commands: 'grep -P' (Perl regex, not on macOS/BSD — use grep -E) and bare 'timeout' (absent on macOS by default).",
+      "expectations": [
+        "The review flags the ${CLAUDE_PLUGIN_ROOT} reference as non-portable and explains it breaks when the skill runs outside a Claude Code plugin (e.g. claude.ai upload or API container).",
+        "The review recommends referencing the bundled script by a skill-relative path (e.g. scripts/extract.mjs) instead of CLAUDE_PLUGIN_ROOT or an absolute path.",
+        "The review flags at least one of the non-portable shell commands ('grep -P' or bare 'timeout') and notes it is not available across platforms (e.g. macOS/BSD).",
+        "The review does NOT claim the script references and commands are fully portable as written."
+      ]
+    },
+    {
+      "id": "no-false-positive-on-clean-skill",
+      "category": "no-false-positive",
+      "prompt": "Quick sanity check before I publish this skill — does it look good, or is something off?",
+      "files": ["fixtures/clean-skill.md"],
+      "expected_output": "Reports the skill is broadly publication-ready: gerund-form name, third-person description under the length limit with a clear 'Use when' trigger, no reserved words, no time-sensitive content, portable. Any suggestions are minor; it does not invent blocking violations that are not present.",
+      "expectations": [
+        "The review indicates the skill is broadly in good shape / publication-ready.",
+        "The review does NOT claim the name contains a reserved word, the description is over the length limit, or the description uses a filler opener — none of which are true of this skill.",
+        "Any issues raised are framed as minor/optional rather than blocking fabricated problems."
+      ]
+    },
+    {
+      "id": "guidance-description-length-limit",
+      "category": "guidance-correctness",
+      "prompt": "When I write skill descriptions, how long can they be before Claude Code cuts them off in the /skills list? I want to make sure ours don't get truncated.",
+      "files": [],
+      "expected_output": "States the Claude Code listing truncates skill descriptions at ~250 characters, so descriptions should stay at or under that (aim lower for large skill collections), and the most important trigger keywords should come first so they survive truncation.",
+      "expectations": [
+        "The answer gives the ~250-character Claude Code description limit (the listing truncation threshold).",
+        "The answer advises leading the description with the key trigger words so they are not lost to truncation.",
+        "The answer does NOT claim there is effectively no limit or cite only the 1024-char schema maximum as the practical target."
+      ]
+    },
+    {
+      "id": "guidance-skill-naming-convention",
+      "category": "guidance-correctness",
+      "prompt": "I'm naming a new skill that analyzes spreadsheets. What naming convention should I follow so it fits our standards and installs cleanly?",
+      "files": [],
+      "expected_output": "Recommends gerund form (e.g. analyzing-spreadsheets), lowercase-with-hyphens, specific rather than vague (avoid helper/utils/tools), and warns against putting 'claude' or 'anthropic' in the name because Claude Code rejects non-certified skills named that way.",
+      "expectations": [
+        "The answer recommends a gerund-form, lowercase-hyphenated name (e.g. 'analyzing-spreadsheets') or an acceptable noun/verb-phrase alternative.",
+        "The answer advises avoiding vague names like 'helper', 'utils', or 'tools'.",
+        "The answer warns against including 'claude' or 'anthropic' in the skill name because non-certified skills named that way are rejected at install."
+      ]
+    }
+  ]
+}

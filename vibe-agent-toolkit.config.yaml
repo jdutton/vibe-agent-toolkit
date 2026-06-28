@@ -11,6 +11,10 @@ resources:
     - "**/test/fixtures/**"
     - "**/dist/**"
     - "docs/plans/**"
+    # Skill-test eval suites are TEST INPUT, not project docs. Their fixtures are
+    # deliberately-broken SKILL.md files (used to verify vat-skill-review catches
+    # the violations) and must not be link/portability-validated as real docs.
+    - "**/resources/skills/evals/**"
 
   # Collections group files and apply specific validation rules
   # Note: All **/*.md files are scanned by default (implicit)

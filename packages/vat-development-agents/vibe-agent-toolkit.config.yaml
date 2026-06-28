@@ -70,6 +70,13 @@ skills:
       excludeReferencesFromBundle:
         rules:
           - patterns: ["docs/**"]
+      # Dogfood: VAT tests its own vat-skill-review skill with `vat skill test`.
+      # The eval suite lives in a skill-specific subdir (the dev skills share one
+      # source dir, so each needs its own evals path). Sonnet is pinned for cost +
+      # reproducibility — the model adopters actually run.
+      test:
+        evals: evals/vat-skill-review/evals.json
+        model: claude-sonnet-4-6
     vat-rag:
       # External monorepo docs and package READMEs are intentionally left as text pointers.
       linkFollowDepth: 0
