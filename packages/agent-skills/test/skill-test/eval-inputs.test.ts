@@ -33,9 +33,29 @@ describe('parseEvalSuite', () => {
     expect(() => parseEvalSuite('{not json')).toThrow(EvalInputError);
   });
 
-  it('throws EvalInputError on an unknown field (strict)', () => {
-    const extra = JSON.stringify({ skill_name: 'demo', evals: [{ id: 1, prompt: 'p', expected_output: 'o', expectations: ['e'], bogus: true }] });
-    expect(() => parseEvalSuite(extra)).toThrow(EvalInputError);
+  it('tolerates adopter-owned extra fields (passthrough): per-eval category and top-level _category_note', () => {
+    const extended = JSON.stringify({
+      _category_note: 'three categories: recognition / guidance / recovery',
+      skill_name: 'demo',
+      evals: [{ id: 1, category: 'guidance-correctness', prompt: 'p', expected_output: 'o', expectations: ['e'] }],
+    });
+    const suite = parseEvalSuite(extended);
+    // Unknown fields pass through untouched rather than erroring.
+    expect((suite as Record<string, unknown>)._category_note).toBe('three categories: recognition / guidance / recovery');
+    expect((suite.evals[0] as Record<string, unknown>).category).toBe('guidance-correctness');
+  });
+
+  it('accepts a descriptive string id (skill-creator encourages descriptive eval names)', () => {
+    const stringId = JSON.stringify({ skill_name: 'demo', evals: [
+      { id: 'cast-smell-typed-column', prompt: 'p', expected_output: 'o', expectations: ['e'] },
+    ] });
+    const suite = parseEvalSuite(stringId);
+    expect(suite.evals[0]?.id).toBe('cast-smell-typed-column');
+  });
+
+  it('still errors when a load-bearing field is missing (passthrough only relaxes unknown fields)', () => {
+    const missingExpectations = JSON.stringify({ skill_name: 'demo', evals: [{ id: 1, prompt: 'p', expected_output: 'o' }] });
+    expect(() => parseEvalSuite(missingExpectations)).toThrow(EvalInputError);
   });
 
   it('throws EvalInputError on duplicate eval ids', () => {
@@ -62,17 +82,26 @@ describe('stageEvalWorkspaces', () => {
     const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
     const suite = { skill_name: 'demo', evals: [
       { id: 7, prompt: 'fix', expected_output: 'fixed', files: [FIXTURES_DOC], expectations: ['ok'] },
-    ] } as const;
+    ] };
     const returned = stageEvalWorkspaces({ suite, evalsDir, workspacesRoot });
     expect(returned).toBe(workspacesRoot);
     expect(existsSync(safePath.join(workspacesRoot, '7', FIXTURES_DOC))).toBe(true);
+  });
+
+  it('stages files under a string id directory (filesystem-safe via joinUnderRoot)', () => {
+    const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
+    const suite = { skill_name: 'demo', evals: [
+      { id: 'dollar-quote-recovery', prompt: 'fix', expected_output: 'fixed', files: [FIXTURES_DOC], expectations: ['ok'] },
+    ] };
+    stageEvalWorkspaces({ suite, evalsDir, workspacesRoot });
+    expect(existsSync(safePath.join(workspacesRoot, 'dollar-quote-recovery', FIXTURES_DOC))).toBe(true);
   });
 
   it('skips evals with no files', () => {
     const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
     const suite = { skill_name: 'demo', evals: [
       { id: 1, prompt: 'p', expected_output: 'o', expectations: ['e'] },
-    ] } as const;
+    ] };
     stageEvalWorkspaces({ suite, evalsDir, workspacesRoot });
     expect(existsSync(safePath.join(workspacesRoot, '1'))).toBe(false);
   });
@@ -81,7 +110,7 @@ describe('stageEvalWorkspaces', () => {
     const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
     const suite = { skill_name: 'demo', evals: [
       { id: 2, prompt: 'p', expected_output: 'o', files: [], expectations: ['e'] },
-    ] } as const;
+    ] };
     stageEvalWorkspaces({ suite, evalsDir, workspacesRoot });
     expect(existsSync(safePath.join(workspacesRoot, '2'))).toBe(false);
   });
@@ -90,7 +119,7 @@ describe('stageEvalWorkspaces', () => {
     const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
     const suite = { skill_name: 'demo', evals: [
       { id: 3, prompt: 'p', expected_output: 'o', files: ['fixtures/nope.md'], expectations: ['e'] },
-    ] } as const;
+    ] };
     expect(() => stageEvalWorkspaces({ suite, evalsDir, workspacesRoot })).toThrow(EvalInputError);
   });
 
@@ -98,7 +127,7 @@ describe('stageEvalWorkspaces', () => {
     const { evalsDir, workspacesRoot } = setupEvalWorkspaces();
     const suite = { skill_name: 'demo', evals: [
       { id: 4, prompt: 'p', expected_output: 'o', files: ['../escape.md'], expectations: ['e'] },
-    ] } as const;
+    ] };
     expect(() => stageEvalWorkspaces({ suite, evalsDir, workspacesRoot })).toThrow(EvalInputError);
   });
 });

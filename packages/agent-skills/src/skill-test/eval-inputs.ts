@@ -11,15 +11,22 @@ export class EvalInputError extends Error {
   }
 }
 
+// evals.json is adopter-authored input that VAT *reads* — so per the project's
+// Postel's Law (read the outside world liberally), we validate only the fields
+// VAT actually consumes and pass everything else through untouched. `id` accepts
+// a string OR an int: skill-creator's methodology encourages *descriptive* eval
+// identifiers, and real adopter suites (e.g. dxa) use descriptive string ids plus
+// adopter-owned metadata like `category` / top-level `_category_note`. The
+// load-bearing fields stay required, so a typo in one is still caught.
 export const EvalEntrySchema = z
   .object({
-    id: z.number().int(),
+    id: z.union([z.number().int(), z.string().min(1)]),
     prompt: z.string().min(1),
     expected_output: z.string().min(1),
     files: z.array(z.string().min(1)).optional(),
     expectations: z.array(z.string().min(1)).min(1),
   })
-  .strict();
+  .passthrough();
 
 export const EvalSuiteSchema = z
   .object({
@@ -27,7 +34,7 @@ export const EvalSuiteSchema = z
     skill_name: z.string().min(1),
     evals: z.array(EvalEntrySchema).min(1),
   })
-  .strict();
+  .passthrough();
 
 export type EvalEntry = z.infer<typeof EvalEntrySchema>;
 export type EvalSuite = z.infer<typeof EvalSuiteSchema>;
