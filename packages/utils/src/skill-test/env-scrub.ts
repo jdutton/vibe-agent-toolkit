@@ -18,9 +18,19 @@ export interface ForwardEnvOptions {
  * dir derives from these when CLAUDE_CONFIG_DIR is unset; SystemDrive, windir,
  * PATHEXT, COMSPEC — needed to locate and launch executables). None are
  * secret-bearing; the allowlist stays strict/exact-name.
+ *
+ * USER/LOGNAME (the POSIX username vars) are load-bearing for subscription auth
+ * on macOS: the `claude` CLI resolves the OAuth/subscription token from the login
+ * Keychain, and that lookup needs $USER — strip it and `claude auth status`
+ * reports loggedIn:false even with an active subscription, so `--auth
+ * subscription` (and inherit's subscription fallback) wrongly fail preflight, and
+ * the experimenter child can't authenticate. Neither is secret-bearing (the
+ * username is already derivable from the forwarded HOME), so they fit the policy.
+ * Not needed for api-key auth (key is self-contained) or Linux subscription auth
+ * (token is a HOME-relative file) — which is why this gap went unnoticed.
  */
 const PROCESS_ESSENTIALS = [
-  'PATH', 'Path', 'HOME', 'USERPROFILE', 'SystemRoot', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL',
+  'PATH', 'Path', 'HOME', 'USER', 'LOGNAME', 'USERPROFILE', 'SystemRoot', 'TEMP', 'TMP', 'TMPDIR', 'LANG', 'LC_ALL',
   'APPDATA', 'LOCALAPPDATA', 'SystemDrive', 'windir', 'PATHEXT', 'COMSPEC',
 ] as const;
 

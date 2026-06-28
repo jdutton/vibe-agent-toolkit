@@ -74,6 +74,15 @@ describe('buildForwardedEnv', () => {
     expect(env.ANTHROPIC_MODEL).toBe('claude-x');
   });
 
+  it('forwards POSIX username vars USER/LOGNAME (load-bearing for macOS Keychain subscription auth)', () => {
+    const source = { ...BASE, USER: 'jeff', LOGNAME: 'jeff' } as NodeJS.ProcessEnv;
+    // Even with the inference key scrubbed (the --auth subscription path), USER must survive
+    // or `claude auth status` can't read the login Keychain and reports loggedIn:false.
+    const env = buildForwardedEnv(source, { scrubInferenceKey: true });
+    expect(env.USER).toBe('jeff');
+    expect(env.LOGNAME).toBe('jeff');
+  });
+
   it('forwards Windows process essentials (APPDATA/LOCALAPPDATA/SystemDrive/windir/PATHEXT/COMSPEC)', () => {
     const winSource = {
       ...BASE,
@@ -177,6 +186,8 @@ describe('protectedEnvNames', () => {
   it('includes process essentials, auth, admin, and passed model vars', () => {
     const names = protectedEnvNames(['ANTHROPIC_MODEL']);
     expect(names.has('PATH')).toBe(true);
+    expect(names.has('USER')).toBe(true);
+    expect(names.has('LOGNAME')).toBe(true);
     expect(names.has('ANTHROPIC_API_KEY')).toBe(true);
     expect(names.has('ANTHROPIC_ADMIN_API_KEY')).toBe(true);
     expect(names.has('ANTHROPIC_MODEL')).toBe(true);
