@@ -546,6 +546,7 @@ async function applyTreeCopiedSkillFiles(input: {
   pluginDir: string;
   configDir: string;
   skillsConfig: SkillsConfig | undefined;
+  excludeSkillDirs: Set<string>;
   logger: ReturnType<typeof createLogger>;
 }): Promise<number> {
   // Enumerate via the shared layout helper so build and verify resolve a plugin's
@@ -553,6 +554,13 @@ async function applyTreeCopiedSkillFiles(input: {
   // (via computeTreeCopiedSkillLocations) and this write path can never diverge.
   let copied = 0;
   for (const skillName of listPluginSourceSkillDirs(input.pluginSourceDir)) {
+    // A colliding skill (Fix 1) is pool-sourced now, not tree-copied — its
+    // files: config was already applied by `vat skills build` and is baked
+    // into dist/skills/<name>/, which Phase 3 copies in. Applying it again
+    // here would write into a dir the tree-copy no longer produced and
+    // double-count skillFilesCopied.
+    if (input.excludeSkillDirs.has(skillName)) continue;
+
     const filesConfig = mergeFilesConfig(
       input.skillsConfig?.defaults?.files,
       input.skillsConfig?.config?.[skillName]?.files,
@@ -571,6 +579,21 @@ async function applyTreeCopiedSkillFiles(input: {
     copied += dests.length;
   }
   return copied;
+}
+
+/**
+ * Skill directory names (fs-safe) present in BOTH the plugin's own `skills/`
+ * source tree AND the plugin's resolved pool selector. These collide: the
+ * pool-packaged copy has rewritten links, the raw tree-copy does not. The
+ * tree-copy phase excludes them so the pool copy is the sole source (Fix 1
+ * — collision referee, docs/plans/2026-07-01-plugin-skill-double-production-spec.md §5).
+ */
+function resolveCollidingSkillDirs(
+  pluginSourceDir: string,
+  selectedSkillNames: string[],
+): string[] {
+  const selectedFsNames = new Set(selectedSkillNames.map(skillNameToFsPath));
+  return listPluginSourceSkillDirs(pluginSourceDir).filter((dirName) => selectedFsNames.has(dirName));
 }
 
 interface BuildPluginInput {
@@ -618,21 +641,48 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
   await mkdir(pluginDir, { recursive: true });
 
-  // Phase 2: tree copy (skips .claude-plugin/, respects .gitignore).
+  // Phase 1.5: collision referee. Resolve the plugin's pool selector BEFORE
+  // tree-copy so a skill present in BOTH the plugin's own skills/ tree AND
+  // the resolved pool selector excludes from the verbatim tree-copy — the
+  // pool-packaged copy (Phase 3) becomes the sole source. Without this, both
+  // copies coexist at two depths inside the same skills/<name>/ dir and the
+  // raw copy ships un-rewritten (dead) links.
+  const selectedSkillNames = resolvePluginSkills(pluginDef, marketplaceAvailable);
+  const collidingSkillDirs = pluginSourceExists
+    ? resolveCollidingSkillDirs(pluginSourceDir, selectedSkillNames)
+    : [];
+  for (const dirName of collidingSkillDirs) {
+    logger.info(
+      `warning: skill "${dirName}" is selected from the pool AND present at ` +
+        `${toForwardSlash(safePath.relative(configDir, pluginSourceDir))}/skills/${dirName}/ — ` +
+        `using the pool-packaged copy (dist/skills/${dirName}) and excluding the plugin-local copy from tree-copy.`,
+    );
+  }
+
+  // Phase 2: tree copy (skips .claude-plugin/, colliding pool-selected skill dirs, respects .gitignore).
   const treeResult = pluginSourceExists
     ? await treeCopyPlugin({
         sourceDir: pluginSourceDir,
         destDir: pluginDir,
+        excludeSkillDirs: collidingSkillDirs,
         warn: (m) => logger.info(`warning: ${m}`),
       })
     : { commandsCopied: 0, hooksCopied: 0, agentsCopied: 0, mcpCopied: 0, filesCopied: 0 };
 
-  // Phase 2.5: apply each tree-copied plugin-source skill's skill-level files:
-  // mapping into the distributed skill dir (the tree-copy is verbatim and never
-  // runs the skill-packager). Pool skills (Phase 3) already had files: baked in
-  // by `vat skills build`, so this only touches plugin-source skills.
+  // Phase 2.5: apply each NON-colliding tree-copied plugin-source skill's
+  // skill-level files: mapping into the distributed skill dir (the tree-copy
+  // is verbatim and never runs the skill-packager). Pool skills — including a
+  // colliding skill, now pool-sourced only — already had files: baked in by
+  // `vat skills build`, so this only touches genuinely tree-copied skills.
   const skillFilesCopied = pluginSourceExists
-    ? await applyTreeCopiedSkillFiles({ pluginSourceDir, pluginDir, configDir, skillsConfig, logger })
+    ? await applyTreeCopiedSkillFiles({
+        pluginSourceDir,
+        pluginDir,
+        configDir,
+        skillsConfig,
+        excludeSkillDirs: new Set(collidingSkillDirs),
+        logger,
+      })
     : 0;
 
   // Phase 3: pool-skill copy-in (from dist/skills/ via the plugin's skills: selector).

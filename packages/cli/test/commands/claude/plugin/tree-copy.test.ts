@@ -50,6 +50,18 @@ describe('treeCopyPlugin', () => {
     expect(existsSync(safePath.join(dest, 'skills', 's1', 'SKILL.md'))).toBe(true);
   });
 
+  it('excludes skill dirs named in excludeSkillDirs (collision referee)', async () => {
+    await mkdir(safePath.join(src, 'skills', 's1'), { recursive: true });
+    await writeFile(safePath.join(src, 'skills', 's1', 'SKILL.md'), '# skill one');
+    await mkdir(safePath.join(src, 'skills', 's2'), { recursive: true });
+    await writeFile(safePath.join(src, 'skills', 's2', 'SKILL.md'), '# skill two');
+
+    await treeCopyPlugin({ sourceDir: src, destDir: dest, excludeSkillDirs: ['s1'] });
+
+    expect(existsSync(safePath.join(dest, 'skills', 's1'))).toBe(false);
+    expect(existsSync(safePath.join(dest, 'skills', 's2', 'SKILL.md'))).toBe(true);
+  });
+
   it('excludes .claude-plugin/ subtree (plugin.json is merged separately)', async () => {
     await mkdir(safePath.join(src, '.claude-plugin'), { recursive: true });
     await writeFile(safePath.join(src, '.claude-plugin', 'plugin.json'), '{"foo":1}');
