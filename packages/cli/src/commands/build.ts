@@ -7,7 +7,12 @@
  */
 
 import { spawnSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { readdir } from 'node:fs/promises';
 
+import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { checkBrokenPackagedLinks } from '@vibe-agent-toolkit/agent-skills';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../utils/command-error.js';
@@ -78,6 +83,83 @@ function hasClaudeMarketplacesConfig(cwd: string): boolean {
   }
 }
 
+// Skill directories shipped inside a built plugin tree — every
+// dist/.claude/plugins/marketplaces/{marketplace}/plugins/{plugin}/skills/{skill}
+// directory that contains a SKILL.md, regardless of whether it arrived via
+// pool import or verbatim tree-copy.
+async function collectShippedSkillDirs(marketplacesDir: string): Promise<string[]> {
+  const skillDirs: string[] = [];
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- marketplacesDir is derived from cwd
+  if (!existsSync(marketplacesDir)) {
+    return skillDirs;
+  }
+
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- marketplacesDir is derived from cwd
+  const marketplaceEntries = await readdir(marketplacesDir, { withFileTypes: true });
+  for (const marketplaceEntry of marketplaceEntries) {
+    if (!marketplaceEntry.isDirectory()) continue;
+    const pluginsDir = safePath.join(marketplacesDir, marketplaceEntry.name, 'plugins');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- pluginsDir derived from marketplacesDir listing
+    if (!existsSync(pluginsDir)) continue;
+    skillDirs.push(...await collectPluginSkillDirs(pluginsDir));
+  }
+
+  return skillDirs;
+}
+
+async function collectPluginSkillDirs(pluginsDir: string): Promise<string[]> {
+  const skillDirs: string[] = [];
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- pluginsDir derived from marketplacesDir listing
+  const pluginEntries = await readdir(pluginsDir, { withFileTypes: true });
+  for (const pluginEntry of pluginEntries) {
+    if (!pluginEntry.isDirectory()) continue;
+    const skillsDir = safePath.join(pluginsDir, pluginEntry.name, 'skills');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillsDir derived from pluginsDir listing
+    if (!existsSync(skillsDir)) continue;
+    skillDirs.push(...await collectSkillsInDir(skillsDir));
+  }
+
+  return skillDirs;
+}
+
+async function collectSkillsInDir(skillsDir: string): Promise<string[]> {
+  const skillDirs: string[] = [];
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillsDir derived from pluginsDir listing
+  const skillEntries = await readdir(skillsDir, { withFileTypes: true });
+  for (const skillEntry of skillEntries) {
+    if (!skillEntry.isDirectory()) continue;
+    const skillDir = safePath.join(skillsDir, skillEntry.name);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillDir derived from skillsDir listing
+    if (existsSync(safePath.join(skillDir, 'SKILL.md'))) {
+      skillDirs.push(skillDir);
+    }
+  }
+
+  return skillDirs;
+}
+
+// Run the depth-free packaged-link check (checkBrokenPackagedLinks) against
+// every shipped skill dir inside the built plugin tree(s) at
+// <cwd>/dist/.claude/plugins/marketplaces/. Scoped per skill dir — the skill
+// directory IS the validation boundary. VAT's stance is that a skill is a
+// self-contained, portable unit (it may be mounted standalone — claude.ai
+// upload, API container — where sibling skills do not exist), so a link that
+// escapes the skill's own directory (e.g. `../other-skill/references/foo.md`)
+// is a broken shipped link even when that sibling happens to co-ship in the
+// same plugin. The only correct way for a skill to use another skill's file
+// is to bundle its own copy in and link it as `./foo.md`. This matches how
+// the pool packager already scopes the same check on dist/skills/<name>/.
+export async function validateShippedPluginSkillLinks(cwd: string): Promise<ValidationIssue[]> {
+  const marketplacesDir = safePath.join(cwd, 'dist', '.claude', 'plugins', 'marketplaces');
+  const skillDirs = await collectShippedSkillDirs(marketplacesDir);
+
+  const issues: ValidationIssue[] = [];
+  for (const skillDir of skillDirs) {
+    issues.push(...await checkBrokenPackagedLinks(skillDir));
+  }
+  return issues;
+}
+
 function buildPhaseList(options: BuildCommandOptions, cwd: string): Phase[] {
   const { only } = options;
   const phases: Phase[] = [];
@@ -122,6 +204,22 @@ async function buildTopLevelCommand(options: BuildCommandOptions): Promise<void>
           duration: `${duration}ms`,
         });
         process.exit(result.status ?? 1);
+      }
+
+      if (phase.name === 'claude') {
+        const shippedLinkIssues = await validateShippedPluginSkillLinks(cwd);
+        const brokenLinkErrors = shippedLinkIssues.filter((issue) => issue.severity === 'error');
+        if (brokenLinkErrors.length > 0) {
+          const duration = Date.now() - startTime;
+          writeYamlOutput({
+            status: 'error',
+            error: `Shipped plugin skill tree has ${brokenLinkErrors.length} broken link(s)`,
+            phase: phase.name,
+            issues: brokenLinkErrors,
+            duration: `${duration}ms`,
+          });
+          process.exit(1);
+        }
       }
     }
 

@@ -165,6 +165,8 @@ export {
 
 export * from './skill-test/index.js';
 
+export { checkBrokenPackagedLinks } from './post-build-checks.js';
+
 export {
   computeTreeCopiedSkillLocations,
   findDistributedSkillLocationBySource,
