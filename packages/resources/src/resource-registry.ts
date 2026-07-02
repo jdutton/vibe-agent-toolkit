@@ -94,6 +94,8 @@ export interface ValidateOptions {
   validationMode?: 'strict' | 'permissive';
   /** Check external URLs for validity (default: false) */
   checkExternalUrls?: boolean;
+  /** Strictly validate HTML fragment anchors against element ids (default: false; HTML fragments are often runtime-defined by JS). */
+  checkHtmlAnchors?: boolean;
   /** Disable cache for external URL checks (default: false) */
   noCache?: boolean;
   /**
@@ -528,7 +530,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
    */
   private async validateAllLinks(
     fragmentsByFile: FragmentIndex,
-    skipGitIgnoreCheck: boolean
+    skipGitIgnoreCheck: boolean,
+    checkHtmlAnchors: boolean
   ): Promise<ValidationIssue[]> {
     const issues: ValidationIssue[] = [];
 
@@ -536,10 +539,11 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       for (const link of resource.links) {
         // Only pass options if projectRoot is defined (exactOptionalPropertyTypes requirement)
         const validateOptions = this.baseDir === undefined
-          ? { skipGitIgnoreCheck }
+          ? { skipGitIgnoreCheck, checkHtmlAnchors }
           : {
               projectRoot: this.baseDir,
               skipGitIgnoreCheck,
+              checkHtmlAnchors,
               ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker })
             };
 
@@ -776,7 +780,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     // Validate each link in each resource
     const linkIssues = await this.validateAllLinks(
       fragmentsByFile,
-      options?.skipGitIgnoreCheck ?? false
+      options?.skipGitIgnoreCheck ?? false,
+      options?.checkHtmlAnchors ?? false
     );
     issues.push(...linkIssues);
 

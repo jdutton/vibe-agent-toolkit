@@ -401,6 +401,7 @@ interface ValidateOptions {
   format?: OutputFormat; // Output format
   collection?: string; // Filter by collection ID
   checkExternalUrls?: boolean; // NEW: Validate external URLs
+  checkHtmlAnchors?: boolean; // Strictly validate HTML fragment anchors against element ids
   noCache?: boolean; // NEW: Disable cache for external URL validation
   checkFrontmatterLinks?: boolean; // Commander negates this when --no-check-frontmatter-links is passed; absent = true
 }
@@ -457,6 +458,7 @@ export async function validateCommand(
       ...(frontmatterSchemaObj ? { frontmatterSchema: frontmatterSchemaObj } : {}),
       validationMode,
       checkExternalUrls: options.checkExternalUrls ?? false,
+      checkHtmlAnchors: options.checkHtmlAnchors ?? false,
       noCache: options.noCache ?? false,
       // Thread the project's resources.validation config in. The CLI does NOT
       // resolve severity itself — ResourceRegistry.validate() runs the framework.

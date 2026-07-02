@@ -79,10 +79,13 @@ function makeAnchorHeadingsMap(sourceFile: string): FragmentIndex {
  * Crawl a directory into a fresh ResourceRegistry and run validation.
  * Extracted to eliminate the repeated 3-line setup in cross-format anchor tests.
  */
-async function crawlAndValidate(dir: string): Promise<Awaited<ReturnType<ResourceRegistry['validate']>>> {
+async function crawlAndValidate(
+  dir: string,
+  validateOptions?: { checkHtmlAnchors?: boolean },
+): Promise<Awaited<ReturnType<ResourceRegistry['validate']>>> {
   const reg = new ResourceRegistry({ baseDir: dir });
   await reg.crawl({ baseDir: dir });
-  return reg.validate({ skipGitIgnoreCheck: true });
+  return reg.validate({ skipGitIgnoreCheck: true, ...validateOptions });
 }
 
 /**
@@ -648,8 +651,8 @@ describe('validateLink', () => {
     afterAll(suite.afterAll);
     beforeEach(suite.beforeEach);
 
-    it('validates markdown → HTML anchors and flags missing ones', async () => {
-      // guide.md links to page.html#intro (valid) and page.html#nope (broken)
+    it('skips markdown → HTML anchors by default, flags missing ones only under checkHtmlAnchors', async () => {
+      // guide.md links to page.html#intro (valid id) and page.html#nope (no such id)
       await writeFile(
         safePath.join(suite.tempDir, 'guide.md'),
         '[a](./page.html#intro)\n[b](./page.html#nope)\n',
@@ -661,10 +664,14 @@ describe('validateLink', () => {
         'utf-8',
       );
 
-      const result = await crawlAndValidate(suite.tempDir);
+      // Default: HTML fragment sets are not statically authoritative (ids can be
+      // runtime-defined by JS), so neither anchor is flagged.
+      const byDefault = await crawlAndValidate(suite.tempDir);
+      expect(byDefault.issues.filter((i) => i.code === 'LINK_BROKEN_ANCHOR')).toHaveLength(0);
 
-      const brokenAnchors = result.issues.filter((i) => i.code === 'LINK_BROKEN_ANCHOR');
-      // Only #nope should be flagged; #intro is a valid HTML id
+      // Opt-in strict: #nope has no matching id and is flagged; #intro resolves.
+      const strict = await crawlAndValidate(suite.tempDir, { checkHtmlAnchors: true });
+      const brokenAnchors = strict.issues.filter((i) => i.code === 'LINK_BROKEN_ANCHOR');
       expect(brokenAnchors).toHaveLength(1);
       expect(brokenAnchors[0]?.message).toContain('nope');
     });

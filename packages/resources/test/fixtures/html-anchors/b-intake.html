@@ -1,0 +1,10 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>B intake</title></head>
+<body>
+  <a href="#id=abc123&mode=client">Open intake</a>
+  <script>
+    var params = new URLSearchParams(location.hash.slice(1));
+    var id = params.get('id');
+    var mode = params.get('mode');
+  </script>
+</body></html>

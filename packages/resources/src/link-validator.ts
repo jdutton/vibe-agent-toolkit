@@ -59,6 +59,8 @@ export interface ValidateLinkOptions {
   skipGitIgnoreCheck?: boolean;
   /** Git tracker for efficient git-ignore checking (optional, improves performance) */
   gitTracker?: GitTracker;
+  /** Strictly resolve HTML fragment anchors against element ids/names (default: false). HTML fragments are often runtime-defined by JS, so a static miss is not proof of breakage. */
+  checkHtmlAnchors?: boolean;
 }
 
 /**
@@ -93,7 +95,7 @@ export async function validateLink(
       return await validateLocalFileLink(link, sourceFilePath, fragmentsByFile, options);
 
     case 'anchor':
-      return await validateAnchorLink(link, sourceFilePath, fragmentsByFile, options?.projectRoot);
+      return await validateAnchorLink(link, sourceFilePath, fragmentsByFile, options);
 
     case 'external':
       // External URLs are not validated - don't report them
@@ -251,7 +253,12 @@ async function validateLocalFileLink(
   if (gitIgnoreIssue) return gitIgnoreIssue;
 
   if (resolved.anchor) {
-    const check = checkAnchor(resolved.anchor, fileResult.resolvedPath, fragmentsByFile);
+    const check = checkAnchor(
+      resolved.anchor,
+      fileResult.resolvedPath,
+      fragmentsByFile,
+      options?.checkHtmlAnchors ?? false,
+    );
     if (check === 'broken') {
       return createRegistryIssue(
         'LINK_BROKEN_ANCHOR',
@@ -279,13 +286,13 @@ async function validateAnchorLink(
   link: ResourceLink,
   sourceFilePath: string,
   fragmentsByFile: FragmentIndex,
-  projectRoot?: string,
+  options?: ValidateLinkOptions,
 ): Promise<ValidationIssue | null> {
   // Extract anchor (strip leading #)
   const anchor = link.href.startsWith('#') ? link.href.slice(1) : link.href;
 
   // Validate anchor exists in current file
-  const check = checkAnchor(anchor, sourceFilePath, fragmentsByFile);
+  const check = checkAnchor(anchor, sourceFilePath, fragmentsByFile, options?.checkHtmlAnchors ?? false);
 
   switch (check) {
     case 'skip':
@@ -295,7 +302,7 @@ async function validateAnchorLink(
       return createRegistryIssue(
         'LINK_BROKEN_ANCHOR',
         `Anchor not found: ${link.href}`,
-        linkExtras(link, sourceFilePath, projectRoot, ''),
+        linkExtras(link, sourceFilePath, options?.projectRoot, ''),
       );
     default:
       return assertNever(check);
@@ -384,36 +391,72 @@ export function fragmentIndex(entries: Iterable<readonly [string, Set<string>]> 
 }
 
 /**
+ * Whether an HTML fragment is a structural, non-anchor hash: an SPA route
+ * (`#/route`) or a hash-encoded param string (`#id=1&mode=x`). Neither is
+ * ever a literal element id, regardless of `checkHtmlAnchors`.
+ */
+function isStructuralHtmlFragment(anchor: string): boolean {
+  return anchor.startsWith('/') || anchor.includes('=') || anchor.includes('&');
+}
+
+/**
+ * Resolve an HTML-target anchor. Isolated from {@link checkAnchor} to keep
+ * cognitive complexity down.
+ *
+ * - Empty fragment / `top` (case-insensitive) — always `'valid'` (HTML
+ *   top-navigation rule).
+ * - Structural non-anchor (`#/route`, `#k=v`, `#k=v&j=w`) — always `'skip'`;
+ *   these are never element ids, so there is nothing to resolve.
+ * - `checkHtmlAnchors === false` (default) — `'skip'`: HTML fragments are
+ *   frequently defined at runtime by JS (hash routers, hash query-params),
+ *   so the static id/name set in the source HTML is not authoritative.
+ * - `checkHtmlAnchors === true` — resolve against the indexed ids/names
+ *   (case-sensitive).
+ */
+function checkHtmlAnchor(
+  anchor: string,
+  entry: FragmentIndexEntry,
+  checkHtmlAnchors: boolean,
+): AnchorCheck {
+  if (anchor === '' || anchor.toLowerCase() === 'top') {
+    return 'valid';
+  }
+  if (isStructuralHtmlFragment(anchor)) {
+    return 'skip';
+  }
+  if (!checkHtmlAnchors) {
+    return 'skip';
+  }
+  return entry.fragments.has(anchor) ? 'valid' : 'broken';
+}
+
+/**
  * Check whether a fragment exists in the target file's anchor set.
  *
  * - `'skip'`  — target file is not indexed; we cannot prove the anchor is
  *   broken, so callers must not emit an issue.
- * - Matching follows the entry's `caseSensitive` policy (HTML ids exact,
- *   markdown slugs case-folded). The index carries the policy, so this never
- *   re-derives the folding rule from the file extension.
- * - For HTML targets the empty fragment (`#`) and `top` (ASCII
- *   case-insensitive) are always valid: per the HTML fragment-navigation
- *   algorithm both scroll to the top of the document regardless of whether a
- *   matching element exists, so `href="#"` / `href="#top"` are not broken.
+ * - HTML targets are delegated to {@link checkHtmlAnchor} (top-navigation
+ *   rule, structural non-anchors, and the `checkHtmlAnchors` opt-in gate).
+ * - Markdown targets resolve against the indexed heading slugs, case-folded.
  *
  * @param anchor - Fragment without the leading `#`.
  * @param targetFilePath - Absolute path of the file the fragment lives in.
  * @param fragmentsByFile - Fragment index carrying each file's matching policy.
+ * @param checkHtmlAnchors - Strictly resolve HTML fragments against indexed
+ *   element ids/names (default: false — see {@link checkHtmlAnchor}).
  */
 export function checkAnchor(
   anchor: string,
   targetFilePath: string,
   fragmentsByFile: FragmentIndex,
+  checkHtmlAnchors = false,
 ): AnchorCheck {
   const entry = fragmentsByFile.get(targetFilePath);
   if (!entry) {
     return 'skip';
   }
-  // HTML spec: the empty fragment and "top" (case-insensitive) always navigate
-  // to the top of the document — valid even with no matching id. This is an
-  // HTML-format navigation rule, distinct from the case-folding policy above.
-  if (isHtmlPath(targetFilePath) && (anchor === '' || anchor.toLowerCase() === 'top')) {
-    return 'valid';
+  if (isHtmlPath(targetFilePath)) {
+    return checkHtmlAnchor(anchor, entry, checkHtmlAnchors);
   }
   const found = entry.caseSensitive
     ? entry.fragments.has(anchor)
