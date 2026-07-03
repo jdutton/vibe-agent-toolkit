@@ -61,6 +61,7 @@ import {
 } from '../skill-resolution/packaging-config.js';
 import { handleCommandError } from '../utils/command-error.js';
 import {
+  ConfigLoadError,
   loadConfig,
   resetLoadedConfigCache,
 } from '../utils/config-loader.js';
@@ -233,8 +234,17 @@ async function validateSingleSkill(
   isVATGenerated?: boolean
 ): Promise<ValidationResult> {
   // Try config-aware validation: walk UP to the skill's nearest-ancestor
-  // vibe-agent-toolkit.config.yaml and apply the skill's packaging block.
-  const fullConfig = await resolveSkillPackagingConfig(skillPath);
+  // vibe-agent-toolkit.config.yaml and apply the skill's packaging block. A
+  // broken governing config is tolerated here (audit is a bulk linter): log it
+  // and fall back to config-free validation rather than aborting the scan.
+  let fullConfig: Awaited<ReturnType<typeof resolveSkillPackagingConfig>>;
+  try {
+    fullConfig = await resolveSkillPackagingConfig(skillPath);
+  } catch (err) {
+    if (!(err instanceof ConfigLoadError)) throw err;
+    logger.debug(`  Ignoring broken governing config for ${skillPath}: ${err.message}`);
+    fullConfig = null;
+  }
   const skillConfig = fullConfig === null ? null : stripValidationAllowForDisplay(fullConfig);
   if (skillConfig !== null) {
     logger.debug(`  Using config-aware validation for: ${skillPath}`);

@@ -4,6 +4,7 @@ import { setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 import {
+  ConfigLoadError,
   loadConfig,
   loadConfigCached,
   resetLoadedConfigCache,
@@ -212,16 +213,21 @@ describe('loadConfigCached (Layer 2 cache — spec §8 / §13.5)', () => {
     expect(fresh?.version).toBe(1);
   });
 
-  it('caches parse failures as undefined to avoid re-parse storm', () => {
-    // Invalid yaml — loadConfig throws.
+  it('throws ConfigLoadError for a broken config (not silently undefined) and caches the error', () => {
+    // A present-but-broken config is a hard error, distinct from an absent one:
+    // silently returning undefined here is what regressed `vat skill review` and
+    // would let `vat skill test` stage the wrong subject.
     writeConfigToDir(tempDir, 'version: not-a-number\n');
 
-    const first = loadConfigCached(tempDir);
-    expect(first).toBeUndefined();
+    expect(() => loadConfigCached(tempDir)).toThrow(ConfigLoadError);
 
-    // Even fixing the file should NOT re-parse without reset.
+    // The error is cached: even fixing the file re-throws the SAME error without
+    // re-parsing, until the cache is reset (mirrors the success-cache behavior).
     writeConfigToDir(tempDir, VALID_CONFIG_YAML);
-    const second = loadConfigCached(tempDir);
-    expect(second).toBeUndefined();
+    expect(() => loadConfigCached(tempDir)).toThrow(ConfigLoadError);
+
+    // After a reset, the now-valid file parses cleanly.
+    resetLoadedConfigCache();
+    expect(loadConfigCached(tempDir)?.version).toBe(1);
   });
 });

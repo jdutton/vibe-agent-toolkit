@@ -15,6 +15,25 @@ import * as yaml from 'yaml';
 const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 
 /**
+ * A `vibe-agent-toolkit.config.yaml` exists but failed to parse or validate.
+ *
+ * Distinct from "no config found" (which surfaces as `undefined`): a *broken*
+ * config is a hard error the user must fix, not something to silently treat as
+ * absent. Commands that resolve a skill through a config (`vat skill review`,
+ * `vat skill test`) should surface this; a bulk linter (`vat audit`) may catch
+ * it and fall back to config-free validation.
+ */
+export class ConfigLoadError extends Error {
+  readonly projectRoot: string;
+  constructor(projectRoot: string, cause: unknown) {
+    super(cause instanceof Error ? cause.message : String(cause));
+    this.name = 'ConfigLoadError';
+    this.projectRoot = projectRoot;
+    if (cause instanceof Error) this.cause = cause;
+  }
+}
+
+/**
  * Load and validate project configuration
  *
  * @param projectRoot - Project root directory
@@ -89,6 +108,13 @@ export function getConfigDir(configPath: string): string {
 const loadedConfigCache: Map<string, ProjectConfig | null> = new Map();
 
 /**
+ * Companion cache for {@link loadConfigCached}: a broken config's
+ * {@link ConfigLoadError}, keyed by `projectRoot`, so a broken config re-throws
+ * the same error on every skill in a scan without re-parsing.
+ */
+const loadErrorCache: Map<string, ConfigLoadError> = new Map();
+
+/**
  * Reset the cache used by {@link loadConfigCached}.
  *
  * Call at the start of each independent CLI invocation (e.g. `vat audit`) so
@@ -96,26 +122,38 @@ const loadedConfigCache: Map<string, ProjectConfig | null> = new Map();
  */
 export function resetLoadedConfigCache(): void {
   loadedConfigCache.clear();
+  loadErrorCache.clear();
 }
 
 /**
  * Cached variant of {@link loadConfig} keyed by `projectRoot`.
  *
- * Both successful loads and parse failures are cached (failures as `null`)
- * so a broken config doesn't re-parse on every skill in the same scan. A
- * test that edits a broken config into a good one between calls must invoke
+ * Returns the parsed config, or `undefined` when no config file exists. A config
+ * file that exists but fails to parse/validate throws {@link ConfigLoadError} —
+ * a broken config is a hard error, NOT silently treated as "no config" (that
+ * conflation silently downgraded `vat skill review` and would let `vat skill
+ * test` stage the wrong artifact). Both outcomes are cached (the error too) so a
+ * broken config re-throws without re-parsing on every skill in a scan. A test
+ * that edits a broken config into a good one between calls must invoke
  * {@link resetLoadedConfigCache} (audit's `resetAuditCaches()` does this).
+ *
+ * Callers that intentionally tolerate a broken config (e.g. `vat audit`, a bulk
+ * linter that should still validate the skill itself) catch `ConfigLoadError`.
  */
 export function loadConfigCached(projectRoot: string): ProjectConfig | undefined {
+  const cachedError = loadErrorCache.get(projectRoot);
+  if (cachedError !== undefined) throw cachedError;
   const cached = loadedConfigCache.get(projectRoot);
   if (cached !== undefined) return cached ?? undefined;
   try {
     const config = loadConfig(projectRoot);
     loadedConfigCache.set(projectRoot, config ?? null);
     return config;
-  } catch {
-    // Cache failures as null so a broken config doesn't re-parse per skill.
-    loadedConfigCache.set(projectRoot, null);
-    return undefined;
+  } catch (err) {
+    // loadConfig returns undefined when the file is ABSENT and only throws when
+    // it EXISTS but is broken — so reaching here means a genuinely broken config.
+    const configErr = err instanceof ConfigLoadError ? err : new ConfigLoadError(projectRoot, err);
+    loadErrorCache.set(projectRoot, configErr);
+    throw configErr;
   }
 }

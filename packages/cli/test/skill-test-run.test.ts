@@ -86,7 +86,34 @@ describe('vat skill test run (orchestration)', () => {
     await runSkillTestRun([PATH_SUBJECT], {});
     expect(exit).toHaveBeenCalledWith(1);
   });
+
+  // A bad usage flag is validated BEFORE the async harness work. Without the
+  // preflight guard these surfaced as an unhandled promise rejection (raw stack,
+  // exit 1); they must now exit 2 (preflight) with a clean message and never
+  // reach the harness. process.exit is mocked to throw so control actually stops.
+  it('exits 2 on an unrecognized --auth value (never reaches the harness)', async () => {
+    await expectPreflightExit2({ auth: 'bogus' });
+  });
+
+  it('exits 2 on a non-numeric --max-turns (never reaches the harness)', async () => {
+    await expectPreflightExit2({ maxTurns: 'abc' });
+  });
 });
+
+// Asserts a usage-level flag fails preflight: runSkillTestRun rejects with the
+// preflight exit code (2, via a process.exit mock that throws) and the harness
+// is never invoked.
+async function expectPreflightExit2(
+  options: Parameters<typeof runSkillTestRun>[1],
+): Promise<void> {
+  const harnessSpy = vi.spyOn(harness, 'runSkillTestHarness');
+  vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
+  vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
+    throw new Error(`exit:${String(code)}`);
+  }) as never);
+  await expect(runSkillTestRun([PATH_SUBJECT], options)).rejects.toThrow('exit:2');
+  expect(harnessSpy).not.toHaveBeenCalled();
+}
 
 // Mocks runSkillTestHarness, runs runSkillTestRun, and returns the RunHarnessOptions
 // the mock received so tests can assert env/passEnv plumbing.

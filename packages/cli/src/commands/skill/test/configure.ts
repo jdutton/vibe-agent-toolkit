@@ -17,9 +17,9 @@ import * as yaml from 'yaml';
 import { handleCommandError } from '../../../utils/command-error.js';
 import { createLogger } from '../../../utils/logger.js';
 
-const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
+import { assertValidAuth, type AuthValue } from './auth-flags.js';
 
-const VALID_AUTH_VALUES = ['inherit', 'subscription', 'api-key', 'auto'] as const;
+const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
 
 export interface SkillTestConfigureOptions {
   auth?: string;
@@ -56,12 +56,8 @@ function buildKnobs(
   const knobs: Parameters<typeof upsertTestConfig>[2] = {};
 
   if (options.auth !== undefined) {
-    if (!VALID_AUTH_VALUES.includes(options.auth as (typeof VALID_AUTH_VALUES)[number])) {
-      throw new Error(
-        `--auth must be one of: ${VALID_AUTH_VALUES.join(', ')}. Got: ${options.auth}`,
-      );
-    }
-    knobs.auth = options.auth as (typeof VALID_AUTH_VALUES)[number];
+    assertValidAuth(options.auth);
+    knobs.auth = options.auth as AuthValue;
   }
   if (options.maxTurns !== undefined) {
     knobs.maxTurns = parsePositiveInt(options.maxTurns, '--max-turns');

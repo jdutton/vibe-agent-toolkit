@@ -19,6 +19,7 @@ import {
   runSkillTestHarness,
   SecurityAckError,
   SkillBuildError,
+  SkillTestExitCode,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { SkillSourceDescriptor, TestConfig } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
@@ -28,6 +29,8 @@ import { parseSourceSpec } from '../../../skill-resolution/classify.js';
 import { resolveSkillReference, type BuildableReference } from '../../../skill-resolution/index.js';
 import { loadConfig } from '../../../utils/config-loader.js';
 import { runClaudePluginBuild } from '../../claude/plugin/build.js';
+
+import { assertValidAuth, assertValidRequireAuth } from './auth-flags.js';
 
 /** Extract the trailing path segment (cross-platform) from a path-like string. */
 function lastPathSegment(p: string): string {
@@ -211,12 +214,12 @@ function descriptorsToRecord(
 function loadTestConfig(skills: string[]): TestConfig | undefined {
   const projectRoot = findProjectRoot(process.cwd());
   if (projectRoot === null) return undefined;
-  let config;
-  try {
-    config = loadConfig(projectRoot);
-  } catch {
-    return undefined; // tolerate a broken/absent config → defaults
-  }
+  // loadConfig returns undefined when no config exists and throws only when a
+  // config file is present but broken. We deliberately let that throw propagate:
+  // it is caught by the preflight guard in runSkillTestRun and surfaced as a
+  // clean exit-2 error, rather than silently applying defaults (and potentially
+  // staging the wrong subject) against a config the author clearly intended.
+  const config = loadConfig(projectRoot);
   const perSkill = config?.skills?.config;
   if (perSkill === undefined) return undefined;
   const subject = skills[0] ?? '';
@@ -505,6 +508,26 @@ async function resolveBuildableSubject(
 // ---------------------------------------------------------------------------
 
 /**
+ * Validate usage-level flags (auth values, numeric knobs) and load the subject's
+ * persisted test config. Runs before the async harness work, so a bad flag exits
+ * with a clean message + preflight code (2) instead of surfacing as an unhandled
+ * promise rejection (raw stack trace, exit 1).
+ */
+function preflightKnobsAndConfig(
+  skills: string[],
+  options: SkillTestRunOptions,
+): { knobs: ReturnType<typeof coerceKnobs>; config: TestConfig | undefined } {
+  try {
+    assertValidAuth(options.auth);
+    assertValidRequireAuth(options.requireAuth);
+    return { knobs: coerceKnobs(options), config: loadTestConfig(skills) };
+  } catch (err) {
+    process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
+    process.exit(SkillTestExitCode.Preflight);
+  }
+}
+
+/**
  * The unit-testable action for `vat skill test run`. Exported so tests can
  * call it directly without parsing CLI args. Calls process.exit on completion.
  *
@@ -519,8 +542,7 @@ export async function runSkillTestRun(
 ): Promise<void> {
   printSecurityWarning();
 
-  const knobs = coerceKnobs(options);
-  const config = loadTestConfig(skills);
+  const { knobs, config } = preflightKnobsAndConfig(skills, options);
 
   // Commander stores the `--no-build` negatable flag under `build` (=== false when set);
   // honor an explicit programmatic `noBuild` too.
@@ -650,7 +672,8 @@ Model:
   \`claude --model <id>\` (verbatim -- VAT does not map or validate it). With no
   --model, no flag is passed and claude picks its own default. The selected
   model is echoed to stderr ("Model: <id>") on every run, and the --dry-run
-  output shows the exact assembled command including the --model flag.
+  output shows the model flag that would be passed (not the full argv — budget,
+  turns, and permission flags are added at spawn time).
 
 Exit Codes:
   0 - Harness ran to completion and produced a valid grading.json (check summary/grading.json for pass/fail counts)

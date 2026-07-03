@@ -61,3 +61,24 @@ export function runAuditCli(
 ): CliResult {
   return executeCli(binPath, ['audit', target, ...extraArgs], options);
 }
+
+/**
+ * Initialize a throwaway git repo (main branch, quiet) with a committable
+ * identity, so integration fixtures that rely on a real git root / `git
+ * ls-files` behave deterministically. Shared to keep this boilerplate in one
+ * place across fixture-based integration tests.
+ */
+export function initTestGitRepo(dir: string): void {
+  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for repo init in tests
+  spawnSync('git', ['init', '-b', 'main', '--quiet', dir], { stdio: 'ignore' });
+  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for repo config in tests
+  spawnSync('git', ['-C', dir, 'config', 'user.email', 'test@example.com'], { stdio: 'ignore' });
+  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for repo config in tests
+  spawnSync('git', ['-C', dir, 'config', 'user.name', 'Test'], { stdio: 'ignore' });
+}
+
+/** Stage every file under a fixture git repo (so `git ls-files` walkers see them). */
+export function gitAddAll(dir: string): void {
+  // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for staging files in tests
+  spawnSync('git', ['-C', dir, 'add', '.'], { stdio: 'ignore' });
+}
