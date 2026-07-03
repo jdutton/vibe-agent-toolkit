@@ -1,5 +1,5 @@
 /* eslint-disable security/detect-non-literal-fs-filename, sonarjs/no-duplicate-string */
-import { existsSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
 
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
@@ -138,5 +138,19 @@ describe('vat claude marketplace validate (system)', () => {
     rmSync(safePath.join(tempDir, 'README.md'));
 
     await validateAndExpectIssue(tempDir, 'MARKETPLACE_MISSING_README', 'warning', 0);
+  });
+
+  it('should report LINK_INTEGRITY_BROKEN as error for a skill link that escapes the skill boundary to a missing target (Fix 3)', async () => {
+    const tempDir = createTempDir();
+    createValidMarketplace(tempDir);
+
+    const skillPath = safePath.join(tempDir, 'plugins', 'test-plugin', 'skills', 'test-skill', 'SKILL.md');
+    const skillContent = readFileSync(skillPath, 'utf-8');
+    writeTestFile(
+      skillPath,
+      `${skillContent}\n\nSee [escaped](../nonexistent.md) for details.\n`,
+    );
+
+    await validateAndExpectIssue(tempDir, 'LINK_INTEGRITY_BROKEN', 'error', 1);
   });
 });

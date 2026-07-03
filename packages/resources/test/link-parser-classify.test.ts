@@ -26,6 +26,11 @@ describe('classifyLink (exported)', () => {
     expect(classifyLink('javascript:void(0)')).toBe('unknown');
     expect(classifyLink('tel:+1234567890')).toBe('unknown');
   });
+  it('classifies inline data: and blob: URIs as embedded (self-contained, nothing to validate)', () => {
+    expect(classifyLink('data:image/png;base64,iVBORw0KGgo=')).toBe('embedded');
+    expect(classifyLink('data:image/svg+xml;utf8,%3Csvg%3E')).toBe('embedded');
+    expect(classifyLink('blob:https://example.com/550e8400-uuid')).toBe('embedded');
+  });
 
   describe('local_directory classification', () => {
     it.each<{ href: string; expected: LinkType }>([

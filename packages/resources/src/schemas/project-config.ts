@@ -1,4 +1,5 @@
 import { ValidationConfigSchema } from '@vibe-agent-toolkit/agent-schema';
+import { hasParentTraversalSegment, isAbsoluteAnyPlatform } from '@vibe-agent-toolkit/utils';
 import { z } from 'zod';
 
 import { LinkAuthConfigSchema } from './link-auth.js';
@@ -132,13 +133,95 @@ export const ExcludeReferencesFromBundleSchema = z.object({
  * Used for build artifacts, unlinked files, and routing overrides.
  * - source: path relative to project root (where vibe-agent-toolkit.config.yaml lives)
  * - dest: path relative to the skill's output directory (sibling to SKILL.md)
+ * - integrity (optional): byte-verify the copied set against the matched source set at build time
  */
 export const SkillFileEntrySchema = z.object({
   source: z.string().min(1).describe('Source path relative to project root'),
-  dest: z.string().min(1).describe('Destination path relative to skill output directory'),
+  dest: z.string().min(1)
+    // Containment guard (zip-slip class): dest is OUR config output and is joined
+    // onto the skill output directory at build time, so it must stay inside it.
+    // Reject absolute paths (POSIX `/…`, Windows `C:\…`, UNC) and any `..`
+    // traversal segment. Defense-in-depth: copy sites also route through
+    // safePath.joinUnderRoot().
+    .refine(
+      (d) => !isAbsoluteAnyPlatform(d) && !hasParentTraversalSegment(d),
+      {
+        message:
+          'dest must be a relative path contained in the skill output directory: ' +
+          'no absolute paths (e.g. "/etc/x" or a Windows drive path) and no ".." traversal segments',
+      },
+    )
+    .describe('Destination path relative to skill output directory'),
+  integrity: z.boolean().optional().describe('When true, the build asserts the copied dest set exactly matches the matched source set and each file is byte-identical (a future copy-time check; late-bound)'),
 });
 
 export type SkillFileEntry = z.infer<typeof SkillFileEntrySchema>;
+
+/**
+ * A typed "skill source" descriptor as it appears in vibe-agent-toolkit.config.yaml.
+ *
+ * This is the CONFIG representation. Task 13's staging maps it onto Plan 1's
+ * runtime `SkillSource` union before calling `resolveSkillSource`. Kept here so
+ * `configure`/`run` parse a single strict source of truth.
+ */
+export const SkillSourceDescriptorSchema = z.union([
+  z.object({ workspace: z.string().min(1) }).strict(),
+  z.object({ npm: z.string().min(1) }).strict(),
+  z.object({ url: z.string().min(1), sha256: z.string().min(1).optional() }).strict(),
+  z.object({ path: z.string().min(1) }).strict(),
+  z.object({ vendored: z.literal(true) }).strict(),
+]).describe('Typed skill source: workspace | npm | url(+sha256) | path | vendored');
+
+export type SkillSourceDescriptor = z.infer<typeof SkillSourceDescriptorSchema>;
+
+/**
+ * Per-skill `test:` block for `vat skill test`. Strict — unknown keys are a
+ * config error (Postel: this is vat-produced/validated data, §schema strategy).
+ * Every field is optional; omitted knobs fall back to built-in defaults.
+ */
+export const TestConfigSchema = z.object({
+  model: z.string().min(1).optional()
+    .describe('Pinned model for reproducibility (default: a fixed model, not "whatever the caller has")'),
+  maxTurns: z.number().int().positive().optional()
+    .describe('Cap on experimenter turns'),
+  maxBudgetUsd: z.number().positive().optional()
+    .describe('Hard USD budget cap passed to the CLI'),
+  timeout: z.number().int().positive().optional()
+    .describe('Wall-clock timeout in seconds'),
+  stall: z.number().int().positive().optional()
+    .describe('Stall-watchdog seconds (kill on no stream output)'),
+  evals: z.string().min(1).optional()
+    .describe('Path to evals.json (relative to skill source)'),
+  experimenterPrompt: z.string().min(1).optional()
+    .describe('Path to an override experimenter prompt (must preserve §6c invariants)'),
+  auth: z.enum(['inherit', 'subscription', 'api-key', 'auto']).optional()
+    .describe('Auth-mechanism selection (default: inherit)'),
+  requireAuth: z.enum(['subscription', 'api-key']).optional()
+    .describe('Fail-fast guard: preflight exits 2 if effective mechanism is not this'),
+  baseline: z.boolean().optional()
+    .describe('Run the opt-in with/without A/B baseline (default: false)'),
+  skillCreator: SkillSourceDescriptorSchema.optional()
+    .describe('Source for skill-creator (default: { vendored: true })'),
+  with: z.array(SkillSourceDescriptorSchema).optional()
+    .describe('Declared-dependency skills/plugins to stage'),
+  optional: z.array(SkillSourceDescriptorSchema).optional()
+    .describe('Optional dependencies, absent by default'),
+  /**
+   * Shell command to run once, before staging, to generate build artifacts.
+   * Runs with cwd = config root (directory containing vibe-agent-toolkit.config.yaml).
+   * Useful when a skill references a generated file (e.g. `node scripts/report.mjs`)
+   * that is produced by a bundler step and not committed to source.
+   * A non-zero exit code aborts the run (preflight failure, exit 2).
+   */
+  env: z.record(z.string(), z.string()).optional()
+    .describe('Feature B: explicit env var injections for the experimenter spawn. Values support ${fixturesDir}, ${stagedSkillDir}, ${harnessRoot}, ${resultsDir} interpolation (resolved at stage time). Protected names (PATH, auth, model, admin) cannot be overridden.'),
+  passEnv: z.array(z.string().min(1)).optional()
+    .describe('Feature A: names of host env vars to forward to the experimenter spawn if present. Protected names are ignored with a warning.'),
+  build: z.string().min(1).optional()
+    .describe('Shell command run once, before staging, to generate build artifacts (cwd = config root)'),
+}).strict().describe('Per-skill vat skill test configuration');
+
+export type TestConfig = z.infer<typeof TestConfigSchema>;
 
 /**
  * Skill packaging configuration.
@@ -159,9 +242,13 @@ export const SkillPackagingConfigSchema = z.object({
   targets: z.array(z.enum(['claude-chat', 'claude-cowork', 'claude-code'])).optional()
     .describe('Declared runtime targets for this skill. Suppresses non-applicable compat verdicts.'),
   files: z.array(SkillFileEntrySchema).optional().describe('Explicit source→dest file mappings for build artifacts, unlinked files, or routing overrides'),
+  test: TestConfigSchema.optional()
+    .describe('vat skill test configuration for this skill'),
 }).strict().describe('Skill packaging configuration');
 
 export type SkillPackagingConfig = z.infer<typeof SkillPackagingConfigSchema>;
+
+// NOTE: project-config has no generated JSON Schema generator (unlike packages with generate:schemas script); Zod schema is the tracked source of truth.
 
 /**
  * Skills discovery and packaging configuration.

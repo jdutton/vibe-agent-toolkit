@@ -1,0 +1,7 @@
+# vibe-agent-toolkit.config.yaml
+version: 1
+
+resources:
+  exclude:
+    - "node_modules/**"
+    - "**/dist/**"

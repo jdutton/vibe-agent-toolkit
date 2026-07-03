@@ -22,6 +22,18 @@ describe('renderProvenanceHeader', () => {
     );
   });
 
+  it('truncates a full 40-char commit SHA to the conventional short form for display', () => {
+    const fullSha = 'abc123de'.repeat(5); // 40 hex chars
+    const p: Provenance = {
+      url: GITHUB_URL,
+      ref: 'main',
+      commit: fullSha,
+    };
+    expect(renderProvenanceHeader(p)).toBe(
+      `# Audited: ${GITHUB_URL} @ main (commit abc123de)\n`
+    );
+  });
+
   it('renders subpath as a YAML comment too — keeps `vat audit | yq` parseable', () => {
     const p: Provenance = {
       url: GITHUB_URL,

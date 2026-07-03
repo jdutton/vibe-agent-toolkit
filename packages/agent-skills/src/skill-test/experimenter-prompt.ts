@@ -1,0 +1,120 @@
+export class PromptInvariantError extends Error {
+  constructor(message: string) {
+    super(`Experimenter prompt invariant violated: ${message}`);
+    this.name = 'PromptInvariantError';
+  }
+}
+
+export interface BuildPromptOptions {
+  subjectPath: string;
+  evalsPath: string;
+  gradingOut: string;
+  frictionOut: string;
+  workspacesRoot: string;
+  baseline: boolean;
+}
+
+/**
+ * vat's canned, non-interactive experimenter prompt (spec §6c). Reuses
+ * skill-creator's grader RUBRIC and JSON shapes, NOT its interactive driver.
+ * Invariants: non-interactive procedure then STOP; write exact artifacts;
+ * forbid browser/aggregation/feedback/iteration; emit incrementally.
+ */
+export const DEFAULT_EXPERIMENTER_PROMPT = [
+  'You are running a precise, NON-INTERACTIVE evaluation procedure. Do exactly the steps below, then STOP.',
+  '',
+  'For each eval in {{EVALS_PATH}}:',
+  '  1. Dispatch ONE executor subagent. Tell it ONLY the task prompt and the staged subject path {{SUBJECT_PATH}}.',
+  '     When the eval declares input `files`, ALSO tell the executor its working directory is {{WORKSPACES_ROOT}}/<id>',
+  '     (substitute the eval\'s own id) — the project it should operate on. Never tell the executor it is being tested.',
+  '  2. Grade the executor output against the eval\'s `expectations` using skill-creator\'s grader.md rubric.',
+  '     If the eval includes an `expected_output`, treat it as the author\'s prose description of a',
+  '     correct result and use it as CONTEXT when judging — but the pass/fail verdict is still decided',
+  '     per `expectations` entry; `expected_output` informs your judgment, it is not itself a checklist item.',
+  '  3. Append each graded expectation to the SINGLE top-level `expectations` array in {{GRADING_OUT}} IMMEDIATELY',
+  '     (incremental flush — a mid-run kill must leave partial results).',
+  '  4. Record any packaging-fidelity friction to {{FRICTION_OUT}} using the vat friction.json schema.',
+  '     If a file referenced by the skill is absent from the staged tree, record a `missing-bundled-file` friction entry.',
+  '',
+  '{{GRADING_OUT}} MUST be ONE flat JSON object in skill-creator\'s grading.json shape (references/schemas.md):',
+  'a top-level `expectations` array — one entry {"text","passed","evidence"} per expectation across ALL evals —',
+  'and a top-level `summary` {"passed","total"}. Do NOT wrap results in an `evals` array or any per-eval nesting;',
+  'vat reads the flat top-level shape and rejects anything else. Example:',
+  '  {"expectations":[{"text":"...","passed":true,"evidence":"..."}],"summary":{"passed":1,"total":1}}',
+  '',
+  'When all evals are graded, write the final `summary` to {{GRADING_OUT}} and STOP.',
+  '',
+  'You are FORBIDDEN to: open a browser or viewer; run aggregation/optimizer scripts; wait for human feedback;',
+  'or iterate/improve the skill. This is a downstream packaging check, not an authoring loop.',
+  '{{BASELINE_BLOCK}}',
+].join('\n');
+
+const BASELINE_BLOCK =
+  '\nAlso run the WITH/WITHOUT baseline: repeat each eval once WITHOUT the skill present, recording the A/B in skill-creator\'s shapes.';
+
+export function buildExperimenterPrompt(opts: BuildPromptOptions): string {
+  return DEFAULT_EXPERIMENTER_PROMPT
+    .replace('{{EVALS_PATH}}', opts.evalsPath)
+    .replace('{{SUBJECT_PATH}}', opts.subjectPath)
+    .replaceAll('{{WORKSPACES_ROOT}}', opts.workspacesRoot)
+    .replaceAll('{{GRADING_OUT}}', opts.gradingOut)
+    .replace('{{FRICTION_OUT}}', opts.frictionOut)
+    .replace('{{BASELINE_BLOCK}}', opts.baseline ? BASELINE_BLOCK : '');
+}
+
+/**
+ * Sentinel the persisted (audit) copy of the prompt shows in place of the real
+ * nonce, so the on-disk artifact never leaks the secret to skill code.
+ */
+export const REDACTED_NONCE_PLACEHOLDER = '<run-nonce redacted>';
+
+/**
+ * Append the per-run integrity-nonce directive to the effective prompt. The
+ * experimenter must copy `nonce` verbatim into grading.json's top-level
+ * `runNonce` field; the harness then rejects any grading.json whose nonce is
+ * absent or wrong (see run-harness.ts). This is defense-in-depth against
+ * untrusted skill code forging a passing grading.json in the shared sandbox —
+ * without the secret nonce (delivered only via stdin, never written to disk) a
+ * forged grading cannot be authenticated.
+ *
+ * Appended AFTER assertPromptInvariants and AFTER any user `experimenterPrompt`
+ * override, so the nonce requirement is ALWAYS enforced and a committed config
+ * cannot opt out of it.
+ */
+export function appendIntegrityNonceDirective(prompt: string, nonce: string): string {
+  return [
+    prompt,
+    '',
+    'INTEGRITY (required, do this LAST): the grading.json you write MUST include a',
+    `top-level string field "runNonce" whose value is EXACTLY: ${nonce}`,
+    'Copy it verbatim. vat rejects a grading.json whose runNonce is missing or wrong.',
+  ].join('\n');
+}
+
+/** Redact the per-run nonce from a prompt for the on-disk audit copy. */
+export function redactNonce(prompt: string, nonce: string): string {
+  return prompt.replaceAll(nonce, REDACTED_NONCE_PLACEHOLDER);
+}
+
+const REQUIRED_PATTERNS: { test: RegExp; label: string }[] = [
+  { test: /\bSTOP\b/, label: 'must instruct the experimenter to STOP' },
+  { test: /grading\.json|\{\{GRADING_OUT\}\}/i, label: 'must write grading.json' },
+  { test: /friction\.json|\{\{FRICTION_OUT\}\}/i, label: 'must write friction.json' },
+  { test: /forbidden|do not|never/i, label: 'must forbid browser/aggregation/feedback/iteration' },
+  { test: /browser|viewer/i, label: 'must explicitly forbid opening a browser/viewer' },
+  { test: /increment/i, label: 'must emit incrementally' },
+  {
+    test: /top-level\s+`?expectations`?/i,
+    label: 'must pin grading.json to the flat top-level `expectations`/`summary` shape',
+  },
+  {
+    test: /`?evals`?\s+array|per-eval nesting/i,
+    label: 'must forbid wrapping grading results in an `evals` array',
+  },
+];
+
+export function assertPromptInvariants(prompt: string): void {
+  for (const { test, label } of REQUIRED_PATTERNS) {
+    if (!test.test(prompt)) throw new PromptInvariantError(label);
+  }
+}

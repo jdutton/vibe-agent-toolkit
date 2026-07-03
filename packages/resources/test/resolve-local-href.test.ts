@@ -14,6 +14,12 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { resolveLocalHref } from '../src/utils.js';
 
+// Symlink creation requires admin/Developer Mode on Windows. The realpath escape
+// logic these guard is platform-agnostic (the symmetry case is really a macOS
+// /tmp → /private/tmp concern) and covered on POSIX CI, so skip the symlink
+// fixture + test on Windows rather than gate on privilege.
+const SYMLINKS_SUPPORTED = process.platform !== 'win32';
+
 const SOURCE = '/project/docs/README.md';
 const SOURCE_DIR = '/project/docs';
 const GUIDE_MD = './guide.md';
@@ -134,8 +140,12 @@ describe('resolveLocalHref leading-/ behavior', () => {
       const escapeFile = safePath.join(parentDir, 'escape.md');
       writeFileSync(escapeFile, '# Escape\n');
 
-      // Symlink escape: <projectRoot>/badlink → ../escape.md
-      symlinkSync(escapeFile, safePath.join(projectRoot, 'badlink'));
+      // Symlink escape: <projectRoot>/badlink → ../escape.md. Creating a symlink
+      // needs elevation/Developer Mode on Windows (EPERM otherwise), so only the
+      // symlink-specific test below depends on it; guard creation here.
+      if (SYMLINKS_SUPPORTED) {
+        symlinkSync(escapeFile, safePath.join(projectRoot, 'badlink'));
+      }
     });
 
     afterAll(() => {
@@ -149,7 +159,7 @@ describe('resolveLocalHref leading-/ behavior', () => {
       expect(r.href).toBe('/../escape.md');
     });
 
-    it('symlinked escape returns absolute_escapes_root', () => {
+    it.skipIf(!SYMLINKS_SUPPORTED)('symlinked escape returns absolute_escapes_root', () => {
       const r = resolveLocalHref('/badlink', sourceFile, projectRoot);
       expect(r.kind).toBe('absolute_escapes_root');
     });

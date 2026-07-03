@@ -41,6 +41,7 @@ import {
 } from '@vibe-agent-toolkit/resources';
 import {
   findProjectRoot,
+  isGlob,
   resolveAssetReference,
   toForwardSlash,
   safePath,
@@ -48,9 +49,9 @@ import {
 } from '@vibe-agent-toolkit/utils';
 
 import { getTargetSubdir } from './content-type-routing.js';
-import { computeDeferredPaths, type SkillFileEntry } from './files-config.js';
+import { applyFilesConfig, buildArtifactHint, computeDeferredPaths, type SkillFileEntry } from './files-config.js';
 import { checkBrokenPackagedLinks, checkUnreferencedFiles } from './post-build-checks.js';
-import { validateSkillForPackaging, type PackagingValidationResult } from './validators/packaging-validator.js';
+import { validateSkillForPackaging, type PackagingValidationResult, type SkillPackagingConfig } from './validators/packaging-validator.js';
 import { deferredAssetsToIssues, walkerExclusionsToIssues } from './validators/walker-to-issues.js';
 import { walkLinkGraph, type WalkableRegistry } from './walk-link-graph.js';
 
@@ -187,6 +188,31 @@ export interface PackageSkillOptions {
    * See docs/validation-codes.md for codes and defaults.
    */
   validation?: ValidationConfig | undefined;
+}
+
+/**
+ * Map a merged {@link SkillPackagingConfig} onto {@link PackageSkillOptions}.
+ *
+ * The single canonical conversion used by BOTH `vat skills build` and
+ * `vat skill test` (the pool build), so the dist a test exercises is byte-for-byte
+ * what `vat skills build` would produce. `basePath` defaults to `dirname(skillPath)`.
+ */
+export function packagingConfigToPackageOptions(
+  config: SkillPackagingConfig,
+  anchors: { skillPath: string; outputPath: string },
+): PackageSkillOptions {
+  return {
+    outputPath: anchors.outputPath,
+    formats: ['directory'],
+    rewriteLinks: true,
+    basePath: dirname(anchors.skillPath),
+    ...(config.resourceNaming && { resourceNaming: config.resourceNaming }),
+    ...(config.stripPrefix && { stripPrefix: config.stripPrefix }),
+    ...(config.linkFollowDepth !== undefined && { linkFollowDepth: config.linkFollowDepth }),
+    ...(config.excludeReferencesFromBundle && { excludeReferencesFromBundle: config.excludeReferencesFromBundle }),
+    ...(config.files && { files: config.files }),
+    ...(config.validation && { validation: config.validation }),
+  };
 }
 
 export interface SkillMetadata {
@@ -408,23 +434,9 @@ export async function packageSkill(
   const namingBasePath = projectRoot;
   const pathMap = buildPathMap(skillPath, bundledFiles, outputPath, resourceNaming, namingBasePath, stripPrefix, target);
 
-  // 8b. Apply files config: copy declared files and adjust path map
-  for (const fileEntry of filesConfig) {
-    const absoluteSource = safePath.resolve(safePath.join(projectRoot, fileEntry.source));
-    const absoluteDest = safePath.join(outputPath, fileEntry.dest);
-
-    // Validate source exists at build time
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
-    if (!existsSync(absoluteSource)) {
-      throw new Error(
-        `files entry for skill '${skillMetadata.name}': source '${fileEntry.source}' does not exist. ` +
-        `Has your project's build step run?`
-      );
-    }
-
-    // If this source was auto-discovered, override its destination; otherwise add it
-    pathMap.set(toForwardSlash(absoluteSource), absoluteDest);
-  }
+  // 8b. Apply files config: register single-file entries in path map.
+  // GLOB entries are skipped — late binding via applyFilesConfig owns their expansion.
+  applyNonGlobEntriesToPathMap(filesConfig, projectRoot, outputPath, pathMap, skillMetadata.name);
 
   // 9. Build "to" registry for link rewriting (maps same resource IDs to output paths)
   const outputResources = bundledResources.map(resource => ({
@@ -504,7 +516,7 @@ export async function packageSkill(
   });
 
   // 12b. Copy files config entries that were not auto-discovered via link traversal.
-  await copyFilesConfigEntries(filesConfig, bundledFiles, projectRoot, outputPath);
+  await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir: outputPath, bundledFiles });
 
   // 13. Post-build integrity check: no SKILL.md in subdirectories
   // A SKILL.md is a skill definition marker — it must only exist at the root.
@@ -682,7 +694,7 @@ async function loadCollectionSchemas(
  * to guarantee uniqueness — this id is used only for skill-packager internal
  * lookups (output registry + link rewriting), not for user-facing output.
  */
-function synthesizeAssetId(assetPath: string): string {
+export function synthesizeAssetId(assetPath: string): string {
   return `asset::${toForwardSlash(safePath.resolve(assetPath))}`;
 }
 
@@ -835,6 +847,44 @@ function buildSyntheticAssetResource(
 }
 
 /**
+ * Register single-file (non-glob) files config entries in the path map.
+ *
+ * GLOB entries are skipped — their source contains glob magic, never exists as a
+ * literal path at build time, and would wrongly throw. Late binding via
+ * applyFilesConfig owns their expansion at copy time.
+ *
+ * Called from step 8b of packageSkill to keep the main function under the
+ * cognitive-complexity limit.
+ */
+function applyNonGlobEntriesToPathMap(
+  filesConfig: SkillFileEntry[],
+  projectRoot: string,
+  outputPath: string,
+  pathMap: Map<string, string>,
+  skillName: string,
+): void {
+  for (const fileEntry of filesConfig) {
+    if (isGlob(fileEntry.source)) continue;
+
+    const absoluteSource = safePath.resolve(safePath.join(projectRoot, fileEntry.source));
+    // joinUnderRoot guards against a dest escaping the output dir (zip-slip class),
+    // defense-in-depth beyond the schema refine on SkillFileEntry.dest.
+    const absoluteDest = safePath.joinUnderRoot(outputPath, fileEntry.dest);
+
+    // Validate source exists at build time
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
+    if (!existsSync(absoluteSource)) {
+      throw new Error(
+        `files entry for skill '${skillName}': source '${fileEntry.source}' does not exist.${buildArtifactHint(fileEntry.source)}`,
+      );
+    }
+
+    // If this source was auto-discovered, override its destination; otherwise add it
+    pathMap.set(toForwardSlash(absoluteSource), absoluteDest);
+  }
+}
+
+/**
  * Register `files:` deferred-dest links so the build preserves and rewrites them.
  *
  * A deferred dest (e.g. `dist/bin/cli.mjs → scripts/cli.mjs`) does not exist at
@@ -848,6 +898,10 @@ function buildSyntheticAssetResource(
  * any local_file link that resolves to the dest, and return a synthetic output
  * resource (`buildSyntheticAssetResource`) whose `filePath` is the dest's output
  * path so the output registry computes `relativePath = entry.dest`.
+ *
+ * For GLOB entries, the dest is a DIRECTORY. We scan each unresolved local_file
+ * link across all resources; any link whose resolved target T falls under the dest
+ * dir gets an individual synthetic resource stamped per-file (see registerGlobDestLinks).
  *
  * Scope: dest links only. A SKILL.md link to a deferred *source* path that is
  * copied to a different dest is an exotic case with ambiguous output mapping and
@@ -866,24 +920,115 @@ function registerDeferredDestLinks(
   const syntheticResources: ResourceMetadata[] = [];
   const skillDir = dirname(skillPath);
   for (const entry of filesConfig) {
-    // Where a SKILL.md link `entry.dest` resolves at source time (SKILL.md lives at skillPath).
-    const absDestTarget = safePath.resolve(skillDir, entry.dest);
-    const absDestOutput = safePath.join(outputPath, entry.dest);
-    const id = synthesizeAssetId(absDestTarget);
+    if (isGlob(entry.source)) {
+      // Glob entry: dest is a directory. Synthesize per-linked-file.
+      registerGlobDestLinks(entry, resources, skillDir, outputPath, existingOutputResources, syntheticResources);
+    } else {
+      // Single-file entry: UNCHANGED — exact dest match (resolved against skillDir).
+      const absDestTarget = safePath.resolve(skillDir, entry.dest);
+      // joinUnderRoot keeps the synthesized output path inside the skill output dir.
+      const absDestOutput = safePath.joinUnderRoot(outputPath, entry.dest);
+      const id = synthesizeAssetId(absDestTarget);
 
-    if (!stampDeferredDestResolvedId(resources, absDestTarget, id)) continue;
+      if (!stampDeferredDestResolvedId(resources, absDestTarget, id)) continue;
 
-    // Dedup: skip if an output resource already targets this dest output path.
-    const alreadyPresent =
-      existingOutputResources.some(r => toForwardSlash(r.filePath) === toForwardSlash(absDestOutput)) ||
-      syntheticResources.some(r => toForwardSlash(r.filePath) === toForwardSlash(absDestOutput));
-    if (alreadyPresent) continue;
+      // Dedup: skip if an output resource already targets this dest output path.
+      const alreadyPresent =
+        existingOutputResources.some(r => toForwardSlash(r.filePath) === toForwardSlash(absDestOutput)) ||
+        syntheticResources.some(r => toForwardSlash(r.filePath) === toForwardSlash(absDestOutput));
+      if (alreadyPresent) continue;
 
-    // buildSyntheticAssetResource derives the id via synthesizeAssetId(absDestTarget),
-    // matching the resolvedId stamped above.
-    syntheticResources.push(buildSyntheticAssetResource(absDestTarget, absDestOutput));
+      // buildSyntheticAssetResource derives the id via synthesizeAssetId(absDestTarget),
+      // matching the resolvedId stamped above.
+      syntheticResources.push(buildSyntheticAssetResource(absDestTarget, absDestOutput));
+    }
   }
   return syntheticResources;
+}
+
+/**
+ * For a GLOB files entry whose dest is a DIRECTORY, walk every unresolved
+ * local_file link across `resources`. If a link's resolved target T falls under
+ * the entry's dest dir, synthesize a per-file entry: stamp `resolvedId` on the
+ * link and push a synthetic output resource so the output registry can compute
+ * `relativePath = skillDir-relative(T)`.
+ *
+ * Prefix test (T is "under" absDestDir):
+ *   T === absDestDir  OR  toForwardSlash(T).startsWith(toForwardSlash(absDestDir) + '/')
+ */
+interface GlobDestLinkContext {
+  absDestDir: string;
+  absDestDirFwd: string;
+  skillDir: string;
+  outputPath: string;
+  existingOutputResources: ResourceMetadata[];
+  syntheticResources: ResourceMetadata[];
+}
+
+function registerGlobDestLinks(
+  entry: SkillFileEntry,
+  resources: ResourceMetadata[],
+  skillDir: string,
+  outputPath: string,
+  existingOutputResources: ResourceMetadata[],
+  syntheticResources: ResourceMetadata[],
+): void {
+  const absDestDir = safePath.resolve(skillDir, entry.dest);
+  const ctx: GlobDestLinkContext = {
+    absDestDir,
+    absDestDirFwd: toForwardSlash(absDestDir),
+    skillDir,
+    outputPath,
+    existingOutputResources,
+    syntheticResources,
+  };
+
+  for (const resource of resources) {
+    for (const link of resource.links) {
+      synthesizeGlobLinkResource(link, resource.filePath, ctx);
+    }
+  }
+}
+
+/**
+ * Attempt to synthesize a glob-dest output resource for a single link.
+ *
+ * Stamps `link.resolvedId` and pushes a synthetic resource if the link target
+ * falls under the glob entry's dest dir and has not been synthesized yet.
+ * No-ops for already-resolved links, non-local-file links, and links outside
+ * the dest dir.
+ */
+function synthesizeGlobLinkResource(
+  link: ResourceMetadata['links'][number],
+  resourceFilePath: string,
+  ctx: GlobDestLinkContext,
+): void {
+  if (link.type !== 'local_file' || link.resolvedId !== undefined) return;
+
+  const [hrefPath] = link.href.split('#');
+  if (hrefPath === undefined) return;
+
+  const T = safePath.resolve(dirname(resourceFilePath), hrefPath);
+  const Tfwd = toForwardSlash(T);
+
+  // Prefix test: T must be equal to or under absDestDir
+  if (T !== ctx.absDestDir && !Tfwd.startsWith(ctx.absDestDirFwd + '/')) return;
+
+  // Stamp resolvedId per-linked-file
+  link.resolvedId = synthesizeAssetId(T);
+
+  // absDestOutput: preserve T's path relative to skillDir under outputPath.
+  // joinUnderRoot keeps it inside the output dir (T is verified under absDestDir,
+  // itself under skillDir once the dest schema rejects '..'/absolute).
+  const absDestOutput = safePath.joinUnderRoot(ctx.outputPath, safePath.relative(ctx.skillDir, T));
+
+  // Dedup against existing + already-synthesized
+  const alreadyPresent =
+    ctx.existingOutputResources.some(r => toForwardSlash(r.filePath) === toForwardSlash(absDestOutput)) ||
+    ctx.syntheticResources.some(r => toForwardSlash(r.filePath) === toForwardSlash(absDestOutput));
+  if (!alreadyPresent) {
+    ctx.syntheticResources.push(buildSyntheticAssetResource(T, absDestOutput));
+  }
 }
 
 /**
@@ -924,7 +1069,7 @@ function stampDeferredDestResolvedId(
  * For claude-web target: uses the existing references directory.
  * For claude-code target: uses content-type routing based on file extension.
  */
-function getResourceSubdirForFile(filePath: string, target: PackagingTarget): string {
+export function getResourceSubdirForFile(filePath: string, target: PackagingTarget): string {
   if (target === 'claude-web') {
     return 'references';
   }
@@ -1057,31 +1202,6 @@ interface CopyRewriteContext {
   projectRoot: string;
   /** Sink for non-fatal copy/rewrite diagnostics (verbatim copies, un-appliable rewrites). */
   warn: (message: string) => void;
-}
-
-/**
- * Copy files config entries that were not auto-discovered via link traversal.
- *
- * Build artifacts declared in `files` (e.g. `dist/bin/cli.mjs → scripts/cli.mjs`)
- * are not in the link graph (the linked path points to `dest`, which doesn't exist
- * at source time). This step copies them explicitly to the output directory.
- */
-async function copyFilesConfigEntries(
-  filesConfig: SkillFileEntry[],
-  bundledFiles: string[],
-  projectRoot: string,
-  outputPath: string,
-): Promise<void> {
-  const bundledFileSet = new Set(bundledFiles.map(f => toForwardSlash(f)));
-  for (const fileEntry of filesConfig) {
-    const absoluteSource = safePath.resolve(safePath.join(projectRoot, fileEntry.source));
-    const absoluteDest = safePath.join(outputPath, fileEntry.dest);
-    if (!bundledFileSet.has(toForwardSlash(absoluteSource))) {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- source path from validated config
-      await mkdir(dirname(absoluteDest), { recursive: true });
-      await copyFile(absoluteSource, absoluteDest);
-    }
-  }
 }
 
 /**
@@ -1383,7 +1503,7 @@ export function extractH1Title(content: string): string | undefined {
  * @param filePaths - Array of absolute file paths
  * @returns Common ancestor directory path
  */
-function findCommonAncestor(filePaths: string[]): string {
+export function findCommonAncestor(filePaths: string[]): string {
   if (filePaths.length === 0) {
     return process.cwd();
   }
@@ -1432,7 +1552,7 @@ function findCommonAncestor(filePaths: string[]): string {
  * @param stripPrefix - Path prefix to remove before applying strategy (works for all strategies)
  * @returns Target path (relative) for the packaged resource
  */
-function generateTargetPath(
+export function generateTargetPath(
   filePath: string,
   basePath: string,
   strategy: ResourceNamingStrategy = 'basename',

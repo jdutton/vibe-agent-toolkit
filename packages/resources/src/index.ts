@@ -139,6 +139,10 @@ export {
   SkillFileEntrySchema,
   SkillsConfigSchema,
   SkillPackagingConfigSchema,
+  SkillSourceDescriptorSchema,
+  TestConfigSchema,
+  type SkillSourceDescriptor,
+  type TestConfig,
 } from './schemas/project-config.js';
 
 // linkAuth content-fetch primitive (issue #113 slice 3). Ships standalone;

@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>A app</title></head>
+<body>
+  <a href="#planning">Go to planning</a>
+  <nav><button data-tab="planning">Planning</button></nav>
+  <section class="tab" id="tab-planning">Planning content</section>
+  <script>
+    function navigateFromHash() {
+      var key = (location.hash || '').replace(/^#/, '');
+      var el = document.querySelector('[data-tab="' + key + '"]');
+      if (el) { /* activate the matching tab */ }
+    }
+    globalThis.addEventListener('hashchange', navigateFromHash);
+    navigateFromHash();
+  </script>
+</body></html>

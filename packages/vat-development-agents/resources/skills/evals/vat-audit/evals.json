@@ -1,0 +1,71 @@
+{
+  "skill_name": "vat-audit",
+  "_category_note": "Three categories. 'catch-real-finding': given a plugin with known issues, does the agent surface the RIGHT audit findings (the compat-surface mismatch, the declared-but-missing component, the broken reference link) a baseline Claude would miss? 'no-false-positive': given a clean plugin, does it avoid inventing findings? 'guidance-correctness': when asked directly, does it explain vat audit's advisory exit-code model and the severity-vs-allow suppression rule correctly?",
+  "evals": [
+    {
+      "id": "catch-compat-surface-mismatch",
+      "category": "catch-real-finding",
+      "prompt": "We want to ship this plugin to teammates who use Claude in the browser as well as folks on Claude Code. Before I publish it, can you tell me whether it'll actually work for everyone, or only some of them?",
+      "files": ["fixtures/release-notifier-plugin"],
+      "expected_output": "Recognizes the plugin's release-announce skill depends on executing a bundled local Python script (python3 scripts/notify.py). Concludes it will NOT work on a browser/cloud Claude surface (claude-chat / 'Claude in the browser' / claude-desktop) because that surface cannot run local scripts, but WILL work on Claude Code. Points to `vat audit --compat` as the command that produces the per-surface compatibility breakdown.",
+      "expectations": [
+        "Identifies that the plugin relies on executing a local script — specifically the bundled Python script (scripts/notify.py run via python3) — to do its work.",
+        "Concludes the plugin will NOT work on the browser/cloud Claude surface (e.g. claude-chat / 'Claude in the browser' / claude-desktop) because that surface cannot execute local Python/scripts, while it WILL work on Claude Code.",
+        "Names `vat audit --compat` as the way to get the per-surface compatibility breakdown for the plugin.",
+        "Does NOT claim the plugin is compatible with all Claude surfaces or that it will run fine in the browser as-is."
+      ]
+    },
+    {
+      "id": "catch-structural-findings",
+      "category": "catch-real-finding",
+      "prompt": "Can you give this plugin a once-over and flag anything that'll cause problems when my teammates install it or when an agent tries to use it?",
+      "files": ["fixtures/claims-toolkit-plugin"],
+      "expected_output": "Flags two real problems: (1) the plugin manifest declares a skill component `skills/check-register-parser` that does not exist on disk (a declared-but-missing component — only loss-run-parser is actually present); (2) the loss-run-parser SKILL.md links to references/column-aliases.md, which does not exist (a broken reference link). Does not flag the present loss-run-parser skill as broken and does not declare the plugin clean.",
+      "expectations": [
+        "Flags that the plugin manifest (plugin.json) declares a skill/component — `skills/check-register-parser` — that does not exist on disk (a declared-but-missing component).",
+        "Flags that the loss-run-parser SKILL.md contains a broken markdown link to a reference file that is not present (references/column-aliases.md).",
+        "Does NOT report the present `loss-run-parser` skill itself as missing or broken, and does NOT conclude the plugin is clean / ready to publish as-is.",
+        "Does NOT invent issues that are not present, such as a reserved word in the plugin or skill name, or an over-length description."
+      ]
+    },
+    {
+      "id": "no-false-positive-clean-plugin",
+      "category": "no-false-positive",
+      "prompt": "Quick sanity check before I publish this plugin to our internal marketplace — anything off, or is it good to go?",
+      "files": ["fixtures/expense-categorizer-plugin"],
+      "expected_output": "Reports the plugin is broadly in good shape: a well-formed plugin.json (name, description, author, license), a gerund-named skill whose declared name matches its directory, a third-person description under the listing limit, and a reference link (references/gl-codes.md) that resolves to a file that exists. Any suggestions are minor; it does not invent blocking findings.",
+      "expectations": [
+        "Indicates the plugin is broadly in good shape / has no blocking issues and is essentially ready to publish.",
+        "Does NOT claim there are missing or declared-but-missing components, broken links, or an invalid plugin.json — none of these are present in this plugin.",
+        "Does NOT invent a reserved-word name violation or an over-length description; the plugin and skill names and descriptions are clean.",
+        "Frames any raised points as minor or optional rather than as fabricated blocking problems."
+      ]
+    },
+    {
+      "id": "guidance-audit-exit-code-gating",
+      "category": "guidance-correctness",
+      "prompt": "We want our CI pipeline to fail the build when our plugins have validation errors. Can we just run `vat audit` as a CI step and rely on its exit code to block the merge?",
+      "files": [],
+      "expected_output": "Explains that vat audit is advisory: it always exits 0 when it completes, regardless of how many errors or warnings it reports, so its exit code cannot gate CI on validation findings. The only non-zero exit is 2 for a system error (path not found, permission denied) — not for validation findings. Recommends `vat skills validate` (or `vat skills build`) instead for a gated check that exits 1 on validation errors and honors validation.severity / validation.allow.",
+      "expectations": [
+        "States that `vat audit` is advisory and exits 0 when the audit completes regardless of any errors or warnings it reports, so its exit code will NOT fail CI on validation findings.",
+        "Notes that the only non-zero exit code from vat audit is 2 for a system/setup error (e.g. path not found, permission denied), not for validation findings.",
+        "Recommends `vat skills validate` or `vat skills build` instead for a gated check that exits non-zero (exit 1) on validation errors.",
+        "Does NOT claim that `vat audit` returns a non-zero / exit-1 status when it finds validation errors."
+      ]
+    },
+    {
+      "id": "guidance-suppress-from-audit-severity-vs-allow",
+      "category": "guidance-correctness",
+      "prompt": "One of our skills shows a `LINK_TO_NAVIGATION_FILE` warning in the audit output that we've reviewed and decided is fine. We added a `validation.allow` entry for it in vibe-agent-toolkit.config.yaml but it's still showing up in `vat audit`. How do we actually get audit to stop displaying it?",
+      "files": [],
+      "expected_output": "Explains that vat audit ignores validation.allow by design — it is the read-only report — which is why the allow entry had no effect on audit output. To hide the code from audit, set its validation.severity to ignore (e.g. LINK_TO_NAVIGATION_FILE: ignore), which audit does honor. Notes that validation.allow (per-path suppression with an audit trail) applies under vat skills validate / vat skills build, not vat audit.",
+      "expectations": [
+        "Explains that `vat audit` ignores `validation.allow` by design (it is the read-only report), which is why the allow entry had no effect on the audit output.",
+        "States that audit DOES honor `validation.severity`, so setting the code to `ignore` (e.g. `LINK_TO_NAVIGATION_FILE: ignore`) suppresses it from the audit output.",
+        "Does NOT claim that adding or fixing a `validation.allow` entry will suppress the code from `vat audit` output.",
+        "Correctly notes that `validation.allow` (per-path suppression with an audit trail) is applied by `vat skills validate` / `vat skills build`, not by `vat audit`."
+      ]
+    }
+  ]
+}

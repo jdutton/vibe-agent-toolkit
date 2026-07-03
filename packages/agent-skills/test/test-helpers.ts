@@ -31,6 +31,75 @@ export function setupTempDir(prefix: string): { getTempDir: () => string } {
 }
 
 /**
+ * Create a 0700 target directory and a symlink pointing at it under `baseDir`.
+ * Shared by harness-root safety tests that exercise the symlink-refusal path.
+ * Returns both absolute paths (forward-slash via safePath).
+ */
+export function createSymlinkedDir(baseDir: string): { target: string; link: string } {
+  const target = safePath.join(baseDir, 'target');
+  mkdirSyncReal(target, { mode: 0o700 });
+  const link = safePath.join(baseDir, 'link');
+  fs.symlinkSync(target, link);
+  return { target, link };
+}
+
+/**
+ * Write a staged-subject dir carrying `evals/evals.json` so the harness's Step-4
+ * bootstrap (exit 3) does not fire. Returns the staged subject dir. Shared by the
+ * run-harness ack-gate and grading-nonce tests, which both stub `stageHarness` and
+ * drive the orchestrator to (or past) the experimenter spawn.
+ */
+export function writeStagedSubjectWithEvals(parentDir: string): string {
+  const subjectStagedDir = safePath.join(parentDir, 'staged-subject');
+  mkdirSyncReal(safePath.join(subjectStagedDir, 'evals'), { recursive: true });
+  fs.writeFileSync(
+    safePath.join(subjectStagedDir, 'evals', 'evals.json'),
+    JSON.stringify({ skill_name: 'demo', evals: [{ id: 1, prompt: 'p', expected_output: 'o', expectations: ['e'] }] }) + '\n',
+    'utf8',
+  );
+  return subjectStagedDir;
+}
+
+/**
+ * A minimal successful `stageHarness` result for a single staged subject dir,
+ * returned as `unknown` so callers cast at the `vi.mocked(...).mockResolvedValue`
+ * boundary (the real result carries more fields than these tests exercise).
+ */
+export function stubStageResult(subjectStagedDir: string): unknown {
+  return {
+    manifest: { fingerprint: 'test', entries: [] },
+    pluginDirs: [subjectStagedDir],
+    subjectStagedDir,
+    subjectPluginRoot: null,
+  };
+}
+
+/**
+ * Register the shared `beforeEach`/`afterEach` lifecycle for a run-harness test
+ * that stubs `stageHarness`: create a fresh temp dir, write a staged subject that
+ * carries `evals/evals.json`, point the (already-mocked) `stageHarness` at it, and
+ * clean up afterward. Pass `vi.mocked(stageHarness)` so the wiring lives once here
+ * instead of being copy-pasted into each harness test. Returns getters for the
+ * per-test temp dir and staged subject dir.
+ */
+export function setupStubbedHarnessSubject<T>(
+  prefix: string,
+  stageHarnessMock: { mockResolvedValue: (value: T) => unknown },
+): { getTempDir: () => string; getSubjectStagedDir: () => string } {
+  let tempDir: string;
+  let subjectStagedDir: string;
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), prefix));
+    subjectStagedDir = writeStagedSubjectWithEvals(tempDir);
+    stageHarnessMock.mockResolvedValue(stubStageResult(subjectStagedDir) as T);
+  });
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+  return { getTempDir: () => tempDir, getSubjectStagedDir: () => subjectStagedDir };
+}
+
+/**
  * Create a SKILL.md file with given content and validate it
  */
 export async function createSkillAndValidate(
@@ -202,8 +271,8 @@ export function createSkillContent(
  * Assert that validation result has specific error code
  */
 export function expectError(result: ValidationResult, code: string): void {
-  const issue = result.issues.find((i) => i.code === code);
-  if (!issue) {
+  const found = result.issues.some((i) => i.code === code);
+  if (!found) {
     throw new Error(
       `Expected error code '${code}' but found: ${result.issues.map((i) => i.code).join(', ')}`,
     );
@@ -214,8 +283,8 @@ export function expectError(result: ValidationResult, code: string): void {
  * Assert that validation result has specific warning code
  */
 export function expectWarning(result: ValidationResult, code: string): void {
-  const issue = result.issues.find((i) => i.code === code && i.severity === 'warning');
-  if (!issue) {
+  const found = result.issues.some((i) => i.code === code && i.severity === 'warning');
+  if (!found) {
     throw new Error(
       `Expected warning code '${code}' but found: ${result.issues.filter((i) => i.severity === 'warning').map((i) => i.code).join(', ')}`,
     );

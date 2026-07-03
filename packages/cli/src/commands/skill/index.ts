@@ -9,6 +9,7 @@
 import { Command } from 'commander';
 
 import { createSkillReviewCommand } from './review.js';
+import { createSkillTestCommand } from './test/index.js';
 
 export function createSkillCommand(): Command {
   const command = new Command('skill');
@@ -28,6 +29,7 @@ For detailed command help:
     );
 
   command.addCommand(createSkillReviewCommand());
+  command.addCommand(createSkillTestCommand());
 
   return command;
 }

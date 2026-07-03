@@ -6,7 +6,14 @@ import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { extractH1Title, packageSkill } from '../src/skill-packager.js';
+import {
+  extractH1Title,
+  findCommonAncestor,
+  generateTargetPath,
+  getResourceSubdirForFile,
+  packageSkill,
+  synthesizeAssetId,
+} from '../src/skill-packager.js';
 
 import { createFrontmatter, setupTempDir } from './test-helpers.js';
 
@@ -25,7 +32,9 @@ const DIRECTORY_FORMAT = 'directory' as const;
 const DETAILS_MD = 'details.md';
 const CONFIG_JSON = 'config.json';
 const PRESERVE_PATH = 'preserve-path' as const;
+const RESOURCE_ID = 'resource-id' as const;
 const SIMPLE_SKILL_BODY = '# My Skill\n\nContent.';
+const BUILD_ARTIFACT_FRAGMENT = 'build artifact';
 
 // ============================================================================
 // Helpers - unique to this unit test file
@@ -119,7 +128,7 @@ describe('packageSkill - resource naming: resource-id with stripPrefix', () => {
 
     const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, 'See [topic](./kb/section/topic.md).');
     const result = await packWithOutput(sp, {
-      resourceNaming: 'resource-id',
+      resourceNaming: RESOURCE_ID,
       stripPrefix: 'kb',
     });
 
@@ -627,7 +636,7 @@ describe('packageSkill - stripPrefix edge cases', () => {
 
     const sp = await writeSkillMd(tmp, UNIT_SKILL_NAME, 'See [guide](./docs-v2/guide.md).');
     const result = await packWithOutput(sp, {
-      resourceNaming: 'resource-id',
+      resourceNaming: RESOURCE_ID,
       stripPrefix: 'docs-v2',
     });
 
@@ -888,6 +897,44 @@ describe('files config in packaging', () => {
     ).rejects.toThrow(/does not exist/i);
   });
 
+  it('throws with build-artifact hint when missing files source looks like a build product', async () => {
+    const dir = getTempDir();
+    const skillPath = await writeSkillMd(dir, UNIT_SKILL_NAME, SIMPLE_SKILL_BODY);
+    await expect(
+      packWithOutput(skillPath, {
+        files: [{ source: 'dist/bin/missing.mjs', dest: 'scripts/missing.mjs' }],
+      }),
+    ).rejects.toThrow(new RegExp(BUILD_ARTIFACT_FRAGMENT));
+  });
+
+  it('throws WITHOUT build-artifact hint when missing files source is a plain reference file', async () => {
+    const dir = getTempDir();
+    const skillPath = await writeSkillMd(dir, UNIT_SKILL_NAME, SIMPLE_SKILL_BODY);
+    await expect(
+      packWithOutput(skillPath, {
+        files: [{ source: 'references/data.json', dest: 'data.json' }],
+      }),
+    ).rejects.toThrow(/does not exist/i);
+    await expect(
+      packWithOutput(skillPath, {
+        files: [{ source: 'references/data.json', dest: 'data.json' }],
+      }),
+    ).rejects.not.toThrow(new RegExp(BUILD_ARTIFACT_FRAGMENT));
+  });
+
+  it('should throw when a files entry dest escapes the skill output dir (joinUnderRoot guard)', async () => {
+    const dir = getTempDir();
+    // Source must exist so we reach the dest-join guard rather than the
+    // "does not exist" check.
+    writeFileSync(safePath.join(dir, CONFIG_JSON), '{"key":"value"}');
+    const skillPath = await writeSkillMd(dir, UNIT_SKILL_NAME, SIMPLE_SKILL_BODY);
+    await expect(
+      packWithOutput(skillPath, {
+        files: [{ source: CONFIG_JSON, dest: '../../escape.json' }],
+      }),
+    ).rejects.toThrow(/escapes root|joinUnderRoot/);
+  });
+
   it('should let files entry override auto-discovered routing', async () => {
     const dir = getTempDir();
     // Create a .json file that would normally go to templates/
@@ -978,5 +1025,123 @@ describe('packageSkill - gitignored files: source (build path)', () => {
     // No warning — the files: entry already declares full publish intent.
     const issues = (result.postBuildIssues ?? []).filter(i => i.location === gitIgnoredSource);
     expect(issues).toHaveLength(0);
+  });
+});
+
+// ============================================================================
+// generateTargetPath (pure) — naming strategies + stripPrefix tail-preserve
+// ============================================================================
+
+describe('generateTargetPath', () => {
+  const BASE = '/proj';
+  const NESTED = '/proj/kb/sec/topic.md';
+
+  it('basename returns just the filename, ignoring base and stripPrefix', () => {
+    expect(generateTargetPath(NESTED, BASE, 'basename')).toBe('topic.md');
+    expect(generateTargetPath(NESTED, BASE, 'basename', 'kb')).toBe('topic.md');
+  });
+
+  it('preserve-path keeps the full relative path when no prefix is stripped', () => {
+    expect(generateTargetPath(NESTED, BASE, PRESERVE_PATH)).toBe('kb/sec/topic.md');
+  });
+
+  it('preserve-path strips a matching prefix and preserves the tail', () => {
+    expect(generateTargetPath(NESTED, BASE, PRESERVE_PATH, 'kb')).toBe('sec/topic.md');
+  });
+
+  it('preserve-path normalizes a trailing slash on the prefix', () => {
+    expect(generateTargetPath(NESTED, BASE, PRESERVE_PATH, 'kb/')).toBe('sec/topic.md');
+  });
+
+  it('preserve-path normalizes backslash separators in the prefix', () => {
+    expect(generateTargetPath(NESTED, BASE, PRESERVE_PATH, String.raw`kb\sec`)).toBe('topic.md');
+  });
+
+  it('preserve-path leaves the path unchanged when the prefix is absent', () => {
+    expect(generateTargetPath(NESTED, BASE, PRESERVE_PATH, 'docs')).toBe('kb/sec/topic.md');
+  });
+
+  it('preserve-path strips a partial (non-slash-delimited) prefix match', () => {
+    expect(generateTargetPath('/proj/kbextra/topic.md', BASE, PRESERVE_PATH, 'kb')).toBe('extra/topic.md');
+  });
+
+  it('resource-id flattens the relative path to a kebab-case filename', () => {
+    expect(generateTargetPath(NESTED, BASE, RESOURCE_ID)).toBe('kb-sec-topic.md');
+  });
+
+  it('resource-id flattens after stripping the prefix', () => {
+    expect(generateTargetPath(NESTED, BASE, RESOURCE_ID, 'kb')).toBe('sec-topic.md');
+  });
+
+  it('resource-id lowercases, replaces spaces/underscores, and preserves the extension case', () => {
+    expect(generateTargetPath('/proj/My Folder/Sub_Topic.MD', BASE, RESOURCE_ID)).toBe('my-folder-sub-topic.MD');
+  });
+
+  it('resource-id collapses repeated hyphens and trims leading/trailing hyphens', () => {
+    expect(generateTargetPath('/proj/__weird--name__.md', BASE, RESOURCE_ID)).toBe('weird-name.md');
+  });
+});
+
+// ============================================================================
+// findCommonAncestor (pure) — common-prefix computation + edge cases
+// ============================================================================
+
+describe('findCommonAncestor', () => {
+  const fwd = (p: string) => toForwardSlash(p);
+  // The inputs are POSIX-absolute literals; findCommonAncestor resolves them via
+  // safePath.resolve, which on Windows prepends the current drive letter (D:/proj).
+  // Anchor expectations on the same resolve so the assertions hold on both the
+  // POSIX and windows-latest CI gates. exp() yields the resolved path; ROOT_SEG is
+  // the filesystem-root segment ('' on POSIX, 'D:' on Windows).
+  const exp = (p: string) => fwd(safePath.resolve(p));
+  // Root segment = text before the first '/' of a resolved+normalized path:
+  // '' on POSIX (resolve('/x') === '/x'), 'D:' on Windows (resolve === 'D:/x').
+  const resolvedRoot = fwd(safePath.resolve('/x'));
+  const ROOT_SEG = resolvedRoot.slice(0, resolvedRoot.indexOf('/'));
+
+  it('returns the cwd for an empty input', () => {
+    expect(fwd(findCommonAncestor([]))).toBe(fwd(process.cwd()));
+  });
+
+  it('returns the parent directory for a single file', () => {
+    expect(fwd(findCommonAncestor(['/proj/docs/a.md']))).toBe('/proj/docs');
+  });
+
+  it('returns the shared ancestor for files in sibling directories', () => {
+    expect(findCommonAncestor(['/proj/a/x.md', '/proj/b/y.md'])).toBe(exp('/proj'));
+  });
+
+  it('includes the shared directory when files live in the same directory', () => {
+    expect(findCommonAncestor(['/proj/a/x.md', '/proj/a/y.md'])).toBe(exp('/proj/a'));
+  });
+
+  it('returns the filesystem root when files share no named ancestor', () => {
+    expect(findCommonAncestor(['/aaa/x.md', '/bbb/y.md'])).toBe(ROOT_SEG);
+  });
+});
+
+// ============================================================================
+// getResourceSubdirForFile + synthesizeAssetId (pure)
+// ============================================================================
+
+describe('getResourceSubdirForFile', () => {
+  it('routes by content type for the claude-code target', () => {
+    expect(getResourceSubdirForFile('/x/guide.md', 'claude-code')).toBe('resources');
+    expect(getResourceSubdirForFile('/x/logo.png', 'claude-code')).toBe('assets');
+  });
+
+  it('always routes to references/ for the claude-web target, ignoring extension', () => {
+    expect(getResourceSubdirForFile('/x/logo.png', 'claude-web')).toBe('references');
+    expect(getResourceSubdirForFile('/x/guide.md', 'claude-web')).toBe('references');
+  });
+});
+
+describe('synthesizeAssetId', () => {
+  it('prefixes the forward-slashed absolute path with asset::', () => {
+    const id = synthesizeAssetId('/a/b/c.yaml');
+    expect(id.startsWith('asset::')).toBe(true);
+    // synthesizeAssetId resolves via safePath.resolve, which prepends the current
+    // drive letter on Windows (asset::D:/a/b/c.yaml). Anchor on the same resolve.
+    expect(id).toBe(`asset::${toForwardSlash(safePath.resolve('/a/b/c.yaml'))}`);
   });
 });

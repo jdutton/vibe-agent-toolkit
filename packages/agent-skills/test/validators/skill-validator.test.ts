@@ -124,15 +124,36 @@ describe('transitive link traversal — broken links', () => {
 describe('transitive link traversal — boundary escape', () => {
   const { getTempDir } = setupTempDir('skill-boundary-');
 
-  it('should report LINK_OUTSIDE_PROJECT for link escaping skill directory', async () => {
-    const { result } = await createAndValidateTransitiveSkill(
-      getTempDir(), {}, skillWithLink('../outside.md', 'parent'),
-    );
+  it('should report LINK_OUTSIDE_PROJECT (warning only) for a link escaping the skill directory to an EXISTING target', async () => {
+    const tempDir = getTempDir();
+    const skillDir = safePath.join(tempDir, 'skill');
+    mkdirSyncReal(skillDir, { recursive: true });
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir path
+    writeFileSync(safePath.join(tempDir, 'sibling.md'), '# Sibling\n');
+    const skillPath = safePath.join(skillDir, 'SKILL.md');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp dir path
+    writeFileSync(skillPath, skillWithLink('../sibling.md', 'sibling'));
+
+    const result = await validateSkill({ skillPath, rootDir: skillDir });
 
     const issues = findIssues(result, 'LINK_OUTSIDE_PROJECT');
     expect(issues).toHaveLength(1);
     expect(issues[0]?.severity).toBe('warning');
-    expect(issues[0]?.message).toContain('../outside.md');
+    expect(issues[0]?.message).toContain('../sibling.md');
+    expect(findIssues(result, 'LINK_INTEGRITY_BROKEN')).toHaveLength(0);
+  });
+
+  it('should report LINK_INTEGRITY_BROKEN (error), not a silent boundary warning, when a link escapes the skill directory AND its target does not exist', async () => {
+    const { result } = await createAndValidateTransitiveSkill(
+      getTempDir(), {}, skillWithLink('../missing-outside.md', 'missing'),
+    );
+
+    expect(findIssues(result, 'LINK_OUTSIDE_PROJECT')).toHaveLength(0);
+    const issues = findIssues(result, 'LINK_INTEGRITY_BROKEN');
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.severity).toBe('error');
+    expect(issues[0]?.message).toContain('../missing-outside.md');
+    expect(result.status).toBe('error');
   });
 });
 

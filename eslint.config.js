@@ -141,6 +141,7 @@ export default [
       '**/test-fixtures/**',  // Test fixture data (third-party code)
       '**/test/fixtures/**',  // Test fixture data (emulates user/3p content)
       '**/transformer-fixtures/**',  // Transformer test fixtures (sample code)
+      '**/resources/skills/evals/**',  // Skill-test eval suites + fixtures (test input, often intentionally broken). Mirrored in validate-repo-structure.ts + vibe-agent-toolkit.config.yaml — keep in sync.
     ],
   },
 
@@ -296,6 +297,23 @@ export default [
     ],
     rules: {
       'sonarjs/no-empty-test-file': 'off',
+    },
+  },
+
+  // Scoped: enforce safePath.joinUnderRoot() for security-root path joins
+  // in the skill-test staging code. This catches the Windows drive-letter
+  // escape bug class where a caller-controlled segment can break containment
+  // when joined raw under a harness root.
+  {
+    files: [
+      'packages/agent-skills/src/skill-test/**/*.ts',
+      'packages/utils/src/skill-test/**/*.ts',
+    ],
+    plugins: {
+      local: localRules,
+    },
+    rules: {
+      'local/no-unsafe-root-join': 'error',
     },
   },
 ];

@@ -1,0 +1,8 @@
+{
+  "name": "claims-toolkit",
+  "description": "Helpers for parsing and checking insurance claims files.",
+  "version": "1.2.0",
+  "author": { "name": "Claims Data Team" },
+  "license": "MIT",
+  "skills": ["skills/loss-run-parser", "skills/check-register-parser"]
+}

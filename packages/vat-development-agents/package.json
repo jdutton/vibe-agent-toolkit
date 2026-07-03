@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/vat-development-agents",
-  "version": "0.1.39-rc.7",
+  "version": "0.1.39",
   "description": "VAT development agents - dogfooding the vibe-agent-toolkit",
   "type": "module",
   "keywords": [
@@ -21,7 +21,9 @@
       "vat-audit",
       "vat-rag",
       "vat-skill-review",
-      "vat-enterprise-org"
+      "vat-skill-testing",
+      "vat-enterprise-org",
+      "markdown-rewriting"
     ],
     "replaces": {
       "plugins": ["vat-development-agents"],

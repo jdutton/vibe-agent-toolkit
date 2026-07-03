@@ -180,6 +180,26 @@ interface ExcludeMatcher {
 }
 
 /**
+ * Test whether `rel` is an exact member of `set` OR lies under any entry in
+ * `set` as a directory-prefix child (i.e. `rel.startsWith(p + '/')`).
+ *
+ * This covers both single-file entries (where only exact equality ever fires)
+ * and glob entries (where the registered value is the glob's static base dir
+ * and real link targets are children of that dir).
+ *
+ * Safe for single-file entries: a path like `a/b.mjs` only prefix-matches the
+ * impossible children `a/b.mjs/...`, which can never be real filesystem paths.
+ */
+function matchesDeferredPrefix(rel: string, set: Set<string>): boolean {
+  for (const p of set) {
+    if (rel === p || rel.startsWith(p + '/')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * C2 + C1: Check if a target path is a deferred build artifact, and record
  * it in the deferred set if so. Must run BEFORE any statSync / directory
  * check to avoid blowing up on missing paths.
@@ -192,6 +212,12 @@ interface ExcludeMatcher {
  * distinct because their `rel` values differ (dest is skill-relative, source
  * is project-relative), but they share the same existence guard.
  *
+ * Membership test uses exact-OR-directory-prefix matching (via
+ * {@link matchesDeferredPrefix}) so that links targeting children of a glob
+ * entry's dest dir or source static base are correctly classified as deferred.
+ * Single-file entries are unaffected — a file path `a/b.mjs` only
+ * prefix-matches impossible children `a/b.mjs/...`.
+ *
  * @returns true if the path was classified as deferred
  */
 function checkDeferred(
@@ -202,7 +228,7 @@ function checkDeferred(
 ): boolean {
   const rel = toForwardSlash(safePath.relative(projectRoot, targetPath));
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from parsed markdown
-  if ((deferredPaths.destPaths.has(rel) || deferredPaths.sourcePaths.has(rel)) && !existsSync(targetPath)) {
+  if ((matchesDeferredPrefix(rel, deferredPaths.destPaths) || matchesDeferredPrefix(rel, deferredPaths.sourcePaths)) && !existsSync(targetPath)) {
     deferredAssetSet.add(toForwardSlash(targetPath));
     return true;
   }

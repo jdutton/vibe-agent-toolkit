@@ -16,6 +16,7 @@ import {
   VATAgentSkillFrontmatterSchema
 } from '../src/schemas/agent-skill-frontmatter.js';
 import { MarketplaceManifestSchema } from '../src/schemas/marketplace-manifest.js';
+import { FrictionReportSchema } from '../src/skill-test/friction-schema.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -67,5 +68,6 @@ console.log('🔨 Generating JSON Schemas from Zod...\n');
 writeJsonSchema('skill-frontmatter', AgentSkillFrontmatterSchema);
 writeJsonSchema('vat-skill-frontmatter', VATAgentSkillFrontmatterSchema);
 writeJsonSchema('marketplace-manifest', MarketplaceManifestSchema, addPathTraversalConstraint);
+writeJsonSchema('friction-report', FrictionReportSchema);
 
 console.log('\n✨ JSON Schema generation complete!');

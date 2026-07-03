@@ -179,22 +179,13 @@ function validateLocalLink(
 
   const resolvedPath = resolved.resolvedPath;
   const relativeToBoundary = safePath.relative(skillDir, resolvedPath);
+  const escapesBoundary = relativeToBoundary.startsWith('..');
 
-  // Check boundary escape
-  if (relativeToBoundary.startsWith('..')) {
-    const issue: ValidationIssue = {
-      severity: 'warning',
-      code: 'LINK_OUTSIDE_PROJECT',
-      message: `Link points outside skill directory: ${link.href}`,
-      location: `${currentPath}:${link.line ?? 0}`,
-      fix: 'Keep skills self-contained — move referenced files into the skill directory',
-    };
-    fileIssues.push(issue);
-    issues.push(issue);
-    return { status: 'boundary', resolvedPath };
-  }
-
-  // Check existence
+  // Check existence BEFORE boundary classification — a link that both
+  // escapes the skill directory boundary and is missing must surface as a
+  // broken link (error), not be silently swallowed as a boundary warning.
+  // LINK_OUTSIDE_PROJECT (below) only applies when the target actually
+  // exists outside the boundary.
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolvedPath from parsed markdown
   if (!fs.existsSync(resolvedPath)) {
     const issue: ValidationIssue = {
@@ -207,6 +198,19 @@ function validateLocalLink(
     fileIssues.push(issue);
     issues.push(issue);
     return { status: 'broken', resolvedPath };
+  }
+
+  if (escapesBoundary) {
+    const issue: ValidationIssue = {
+      severity: 'warning',
+      code: 'LINK_OUTSIDE_PROJECT',
+      message: `Link points outside skill directory: ${link.href}`,
+      location: `${currentPath}:${link.line ?? 0}`,
+      fix: 'Keep skills self-contained — move referenced files into the skill directory',
+    };
+    fileIssues.push(issue);
+    issues.push(issue);
+    return { status: 'boundary', resolvedPath };
   }
 
   return { status: 'valid', resolvedPath };

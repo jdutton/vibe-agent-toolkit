@@ -1,0 +1,7 @@
+{
+  "name": "expense-categorizer",
+  "description": "Categorize expense-report line items against the chart of accounts.",
+  "version": "0.4.1",
+  "author": { "name": "Finance Tools" },
+  "license": "MIT"
+}

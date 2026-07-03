@@ -1,0 +1,80 @@
+{
+  "skill_name": "vat-agent-authoring",
+  "_category_note": "Four categories. 'archetype-selection': given a described agent need, does it pick the correct VAT archetype (Pure Function Tool / One-Shot LLM Analyzer / Conversational Assistant / External Event Integrator) instead of a generic answer? 'result-envelope-correctness': does it apply VAT's result-envelope contract (return envelopes, never throw for expected errors; typed literal error unions; check status before data; AgentResult vs StatefulAgentResult)? 'orchestration-correctness': does it compose agents so upstream errors propagate? 'runtime-adapter-portability': does it route production invocation through a VAT runtime adapter rather than calling execute() directly? Each eval targets VAT-specific knowledge a no-skill baseline would miss; --baseline should show lift.",
+  "evals": [
+    {
+      "id": "archetype-conversational-intake",
+      "category": "archetype-selection",
+      "prompt": "I need to build an agent for our HR portal that walks an employee through benefits enrollment. It asks a handful of questions one at a time, and it has to remember the answers they already gave as the conversation goes on, then produce a finished enrollment summary at the end. How should I structure this as a VAT agent?",
+      "expected_output": "Identifies this as the Conversational Assistant archetype: it returns a StatefulAgentResult that carries an 'in-progress' status while still gathering, transitioning to 'success' when the enrollment is complete. Each turn returns a ConversationalAgentOutput-style shape (reply + sessionState + result), and the sessionState is passed forward into the next turn so earlier answers persist. It is NOT a one-shot/stateless call.",
+      "expectations": [
+        "Recommends the Conversational Assistant archetype (multi-turn, stateful) for this use case.",
+        "States the agent should return a StatefulAgentResult that includes an 'in-progress' status during gathering and a 'success' status when enrollment is complete — not only success/error.",
+        "Says each turn returns a reply plus an updated sessionState that is carried forward into the next turn so prior answers persist (conversational output shape).",
+        "Does NOT recommend the One-Shot LLM Analyzer archetype or a single stateless execution for this multi-turn task."
+      ]
+    },
+    {
+      "id": "archetype-external-approval",
+      "category": "archetype-selection",
+      "prompt": "I'm writing a VAT agent that drafts a vendor contract, but before we finalize it a human manager has to approve or reject the draft. The agent basically has to pause until someone acts, and that could take a while. What's the right way to build this, and how do I test it without wiring up a real approver?",
+      "expected_output": "Identifies this as the External Event Integrator archetype: the agent emits an approval request and waits for an external response. It recommends a mock mode (mockable) that returns a canned approval so the agent can be unit-tested offline with no real approver, plus a timeout, and it returns an error envelope (e.g. an ExternalEventError such as event-timeout or event-rejected) rather than throwing or blocking forever. It is NOT a Conversational Assistant.",
+      "expectations": [
+        "Recommends the External Event Integrator archetype for the human-approval wait.",
+        "Recommends a mock mode (mockable) that returns a canned/approved response so the agent can be tested offline without a real approver.",
+        "Recommends timeout handling that returns an error envelope (e.g. an event-timeout / event-rejected style ExternalEventError) instead of throwing or blocking indefinitely.",
+        "Does NOT recommend the Conversational Assistant archetype (this is an external-event wait, not a multi-turn dialogue)."
+      ]
+    },
+    {
+      "id": "envelope-fix-throwing-analyzer",
+      "category": "result-envelope-correctness",
+      "prompt": "Here's the sentiment agent we're about to ship behind our support-ticket router. Can you review the error handling and tell me if anything will bite us in production?",
+      "files": ["fixtures/throwing-analyzer.ts"],
+      "expected_output": "Flags that the agent throws for expected failures (the LLM call failing, and non-JSON / schema-mismatch output) instead of returning a result envelope with status 'error'; recommends returning the failure as data. Recommends a typed literal error union (the standard LLM error literals such as 'llm-timeout', 'llm-invalid-output', 'llm-unavailable') instead of a bare Error/string. Notes that callers should receive an envelope and check result.status === 'success' before using the data, rather than getting raw data that assumes success. Does not bless the throw-based handling as production-ready.",
+      "expectations": [
+        "Flags that the agent throws exceptions for expected errors (LLM call failure and/or malformed/non-JSON model output) and says it should instead return a result envelope with status 'error'.",
+        "Recommends a typed literal error union for the failure cases (e.g. the standard LLM error literals like 'llm-timeout' / 'llm-invalid-output' / 'llm-unavailable') rather than a generic Error or `string` error.",
+        "Notes that the agent should return an envelope whose status is checked (result.status === 'success') before the data is consumed, instead of returning raw data that assumes success.",
+        "Does NOT conclude that throwing exceptions for these expected errors is fine / production-ready as written."
+      ]
+    },
+    {
+      "id": "envelope-pure-function-phone",
+      "category": "result-envelope-correctness",
+      "prompt": "I want a VAT agent that takes a raw US phone number string, normalizes it to E.164, and rejects anything malformed. It runs on every form submission so it needs to be fast. What archetype is this and what should its execute() return on a bad input?",
+      "expected_output": "Identifies this as the Pure Function Tool archetype — deterministic, no LLM call needed. For a bad input it should return a result envelope (status 'error' with a typed error code) rather than throwing; on success it returns status 'success' with the normalized number. The error type should be a literal union (e.g. 'invalid-format') rather than `string`. It should NOT reach for an LLM / the One-Shot LLM Analyzer for this deterministic task.",
+      "expectations": [
+        "Identifies the agent as the Pure Function Tool archetype and states it needs no LLM call (deterministic).",
+        "Says a malformed input should be returned as an error result envelope (status 'error' with a typed error code), not thrown as an exception, with success returning status 'success' and the normalized value.",
+        "Recommends a literal/typed error union (e.g. 'invalid-format') for the error type rather than a generic `string` or Error.",
+        "Does NOT recommend an LLM call or the One-Shot LLM Analyzer archetype for this deterministic validation/normalization task."
+      ]
+    },
+    {
+      "id": "orchestration-unchecked-status",
+      "category": "orchestration-correctness",
+      "prompt": "I'm chaining two of our VAT agents — analyze a document, then summarize the findings. Does this composition look right, or am I missing something on the error path?",
+      "files": ["fixtures/sequential-pipeline.ts"],
+      "expected_output": "Flags that analysisOutput.result.data is read without first checking analysisOutput.result.status, so when the analyzer returns an error envelope the pipeline feeds undefined data into the summarizer instead of stopping. Recommends short-circuiting on the upstream error — checking status === 'success' before continuing, or using the andThen helper so the error propagates. Also notes the final summaryOutput.result.data is returned unchecked (same bug at the end). Does not approve the pipeline as correctly handling errors.",
+      "expectations": [
+        "Flags that the code uses analysisOutput.result.data without checking analysisOutput.result.status first, so it breaks (passes undefined/error data downstream) when the analyzer returns an error.",
+        "Recommends short-circuiting on the upstream error — either an explicit status === 'success' check before calling the summarizer, or using the andThen helper to propagate the error.",
+        "Identifies that the final summaryOutput.result.data is likewise returned without a status check (the same unchecked-envelope bug).",
+        "Does NOT approve the composition as correctly handling the error path."
+      ]
+    },
+    {
+      "id": "runtime-adapter-production-invocation",
+      "category": "runtime-adapter-portability",
+      "prompt": "We've built a VAT agent and now I need to actually call it from our production app. Some services are on the Vercel AI SDK and some are LangChain. Can I just import the agent and call its execute() method directly in the request handlers, or is there a recommended way to wire it in?",
+      "expected_output": "Recommends invoking the agent through a VAT runtime adapter (e.g. the Vercel AI SDK adapter and the LangChain adapter, with OpenAI and Claude Agent SDK adapters also available) rather than importing the agent and calling execute() directly in production app/request-handler code. The adapter is what makes the same agent portable across the different runtimes. It does NOT endorse direct execute() calls as the production integration path.",
+      "expectations": [
+        "Recommends invoking the agent through a VAT runtime adapter rather than calling the agent's execute() method directly in production request-handler code.",
+        "Names at least one of VAT's supported runtime adapters (Vercel AI SDK, LangChain, OpenAI, or Claude Agent SDK) appropriate to the described stack.",
+        "Frames the adapter as what makes the same agent portable across the different runtimes (Vercel and LangChain here).",
+        "Does NOT recommend bypassing the adapter / calling execute() directly as the recommended production integration path."
+      ]
+    }
+  ]
+}

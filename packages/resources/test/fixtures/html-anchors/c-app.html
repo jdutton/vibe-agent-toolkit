@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>C app</title></head>
+<body>
+  <a href="#/pipeline">Pipeline</a>
+  <a href="#/settings">Settings</a>
+  <main id="view"></main>
+  <script>
+    function handleRoute() {
+      var route = (location.hash || '#/pipeline').replace('#/', '');
+      document.title = 'C app: ' + route;
+    }
+    globalThis.addEventListener('hashchange', handleRoute);
+    handleRoute();
+  </script>
+</body></html>

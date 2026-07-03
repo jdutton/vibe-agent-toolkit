@@ -45,8 +45,9 @@ const README_HREF = './docs/README.md';
 // Valid 64-char hex string cast to branded SHA256 type
 const MOCK_CHECKSUM = 'a'.repeat(64) as ResourceMetadata['checksum'];
 
-// Exclude reason literal — avoids string duplication in assertions
+// Exclude reason literals — avoid string duplication in assertions
 const REASON_SKILL_DEFINITION = 'skill-definition';
+const REASON_MISSING_TARGET = 'missing-target';
 
 // Deferred paths constants — used in "deferred files support" tests
 const DEFERRED_DEST_REL = 'scripts/cli.mjs';
@@ -405,7 +406,7 @@ describe('walkLinkGraph', () => {
       expect(result.bundledResources).toHaveLength(0);
       expect(result.bundledAssets).toHaveLength(0);
       expect(result.excludedReferences).toHaveLength(1);
-      expect(result.excludedReferences[0]?.excludeReason).toBe('missing-target');
+      expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_MISSING_TARGET);
       expect(result.excludedReferences[0]?.path).toContain('nonexistent.md');
     });
 
@@ -693,7 +694,55 @@ describe('walkLinkGraph', () => {
 
       expect(result.deferredAssets).toHaveLength(0);
       expect(result.excludedReferences).toHaveLength(1);
-      expect(result.excludedReferences[0]?.excludeReason).toBe('missing-target');
+      expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_MISSING_TARGET);
+    });
+
+    // Glob prefix deferral constants
+    const GLOB_DEST_DIR = 'packs';
+    const GLOB_SRC_BASE = 'dist/packs';
+    // Shared walk options: only the dest dir 'packs' is a deferred (glob) prefix.
+    const DEST_ONLY_DEFERRED: Partial<WalkLinkGraphOptions> = {
+      deferredPaths: { destPaths: new Set([GLOB_DEST_DIR]), sourcePaths: new Set() },
+    };
+
+    // Glob dest-prefix deferral: a link to 'packs/ce/x.json' under a glob entry whose
+    // dest dir is 'packs' must be treated as deferred when the dest doesn't exist on disk.
+    it('glob dest-prefix: link under dest dir → deferred (absent build artifact)', () => {
+      const result = walkSingleSkill(
+        [createLocalLink('pack asset', `./${GLOB_DEST_DIR}/ce/x.json`)],
+        DEST_ONLY_DEFERRED,
+      );
+
+      expect(result.deferredAssets).toHaveLength(1);
+      expect(result.deferredAssets[0]).toContain(GLOB_DEST_DIR);
+      expect(result.excludedReferences).toHaveLength(0);
+    });
+
+    // Glob source-base prefix deferral: a link to 'dist/packs/ce/x.json' under a glob
+    // entry whose source static base is 'dist/packs' must be treated as deferred when
+    // the file doesn't exist on disk.
+    it('glob source-base prefix: link under source static base → deferred (absent build artifact)', () => {
+      const result = walkSingleSkill(
+        [createLocalLink('pack src', `./${GLOB_SRC_BASE}/ce/x.json`)],
+        { deferredPaths: { destPaths: new Set(), sourcePaths: new Set([GLOB_SRC_BASE]) } },
+      );
+
+      expect(result.deferredAssets).toHaveLength(1);
+      expect(result.deferredAssets[0]).toContain(GLOB_SRC_BASE);
+      expect(result.excludedReferences).toHaveLength(0);
+    });
+
+    // The +/ guard: 'packsX/y.json' must NOT match a destPaths entry of 'packs'
+    it('glob prefix +/ guard: sibling dir packsX does NOT match dest packs', () => {
+      const result = walkSingleSkill(
+        [createLocalLink('sibling', './packsX/y.json')],
+        DEST_ONLY_DEFERRED,
+      );
+
+      // Not deferred — falls through to missing-target
+      expect(result.deferredAssets).toHaveLength(0);
+      expect(result.excludedReferences).toHaveLength(1);
+      expect(result.excludedReferences[0]?.excludeReason).toBe(REASON_MISSING_TARGET);
     });
   });
 });

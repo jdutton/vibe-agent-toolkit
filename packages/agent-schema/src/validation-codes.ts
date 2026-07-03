@@ -176,6 +176,18 @@ export const CODE_REGISTRY = {
     'Remove the time qualifier, or move deprecated guidance into a clearly labeled "## Old patterns" section with a <details> block.',
     'skill_time_sensitive_content',
   ),
+  NON_PORTABLE_ASSET_REFERENCE: entry(
+    'warning',
+    'A skill document (SKILL.md or a reachable bundled reference file) references a bundled script/asset via a non-portable anchor (CLAUDE_PLUGIN_ROOT). It is a Claude Code plugin-only variable that points at the plugin, not the skill, so the path breaks when the skill is mounted standalone (claude.ai upload, API container).',
+    'Reference bundled files by a path relative to the skill directory (e.g. `scripts/run.mjs`), never via CLAUDE_PLUGIN_ROOT, an absolute path, or an env-var anchor. See the vibe-agent-toolkit:vat-skill-authoring skill.',
+    'non_portable_asset_reference',
+  ),
+  NON_PORTABLE_COMMAND: entry(
+    'warning',
+    'A skill document (SKILL.md or a reachable bundled reference file) instructs an agent to run a shell command that hard-codes a GNU/Linux-only utility or flag (e.g. `timeout`, `grep -P`, `sed -i` with no suffix, `readlink -f`, `date -d`). These fail on macOS/BSD where the agent may execute them.',
+    'Use a portable equivalent: `grep -E` for PCRE, `sed -i.bak`/an explicit suffix, a temp file instead of bare `-i`, a portable resolve instead of `readlink -f`, and `date -v`/`-j -f` instead of `date -d`. Gate or avoid `timeout` (absent on macOS by default). See the vibe-agent-toolkit:vat-skill-review skill.',
+    'non_portable_command',
+  ),
   SKILL_FRONTMATTER_EXTRA_FIELDS: entry(
     'warning',
     'SKILL.md frontmatter contains a field outside the standard agentskills.io + Claude Code key set.',

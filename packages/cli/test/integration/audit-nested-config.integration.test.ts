@@ -21,14 +21,13 @@
  *       resources/skills/SKILL.md        (no governing pkg-b config)
  */
 
-import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { runAudit } from '../test-helpers.js';
+import { gitAddAll, initTestGitRepo, runAudit } from '../test-helpers.js';
 
 /**
  * Write a SKILL.md that references an external doc via a relative path that
@@ -131,12 +130,7 @@ describe('audit per-skill walk-up to nearest-ancestor config (integration)', () 
 
     // Git init so resolveScanContext returns a real git root and the walker
     // can use git ls-files to find fixtures.
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for repo init in tests
-    spawnSync('git', ['init', '-b', 'main', '--quiet', tempDir], { stdio: 'ignore' });
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for repo init in tests
-    spawnSync('git', ['-C', tempDir, 'config', 'user.email', 'test@example.com'], { stdio: 'ignore' });
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for repo init in tests
-    spawnSync('git', ['-C', tempDir, 'config', 'user.name', 'Test'], { stdio: 'ignore' });
+    initTestGitRepo(tempDir);
 
     // Root config (no skills section)
     writeRootConfig(tempDir);
@@ -162,8 +156,7 @@ describe('audit per-skill walk-up to nearest-ancestor config (integration)', () 
     );
 
     // Track all files so crawlDirectory (git ls-files mode) can find them.
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- git required for staging files in tests
-    spawnSync('git', ['-C', tempDir, 'add', '.'], { stdio: 'ignore' });
+    gitAddAll(tempDir);
   });
 
   afterAll(() => {

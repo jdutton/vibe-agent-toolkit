@@ -414,7 +414,7 @@ resources:
       exclude: [<glob-pattern>, ...]  # Optional: Patterns to exclude
       validation:
         frontmatterSchema: <path>     # Required: Path to JSON Schema file
-        mode: <strict|permissive>     # Optional: Default is 'strict'
+        mode: <strict|permissive>     # Optional: Default is 'permissive'
 ```
 
 ### Include/Exclude Matching

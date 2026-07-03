@@ -211,8 +211,15 @@ export function classifyLink(href: string): LinkType {
   if (href.startsWith('#')) {
     return 'anchor';
   }
+  // Self-contained inline resources: a data: URI embeds its payload and a blob:
+  // URL references an in-memory object. Neither has a target to fetch or an
+  // anchor to resolve, so they are valid-but-nothing-to-validate (skipped), not
+  // "unknown". Common in HTML (inline SVG/PNG/GIF logos).
+  if (href.startsWith('data:') || href.startsWith('blob:')) {
+    return 'embedded';
+  }
   // Any remaining href containing ':' is a protocol-like pattern we don't recognise
-  // (e.g., javascript:, tel:, data:, ftp:) — classify as unknown rather than local file
+  // (e.g., javascript:, tel:, ftp:) — classify as unknown rather than local file
   if (href.includes(':')) {
     return 'unknown';
   }

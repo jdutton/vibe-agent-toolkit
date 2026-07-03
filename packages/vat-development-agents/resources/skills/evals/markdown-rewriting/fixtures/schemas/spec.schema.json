@@ -1,0 +1,16 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["title", "version"],
+  "properties": {
+    "title": { "type": "string" },
+    "version": { "type": "string" },
+    "status": { "type": "string" },
+    "owner": { "type": "string" },
+    "parent_spec": { "type": "string", "format": "uri-reference" },
+    "related-specs": {
+      "type": "array",
+      "items": { "type": "string", "format": "uri-reference" }
+    }
+  }
+}

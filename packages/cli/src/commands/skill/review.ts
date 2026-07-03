@@ -11,27 +11,23 @@
  */
 
 import { existsSync, statSync } from 'node:fs';
-import { dirname } from 'node:path';
 
 import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import {
   validateSkillForPackaging,
   type PackagingValidationResult,
-  type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
-import { gitFindRoot, safePath } from '@vibe-agent-toolkit/utils';
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 import * as yaml from 'yaml';
 
+import { resolveSkillPackagingConfig } from '../../skill-resolution/packaging-config.js';
 import { handleCommandError } from '../../utils/command-error.js';
-import { loadConfig } from '../../utils/config-loader.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { projectRootOrNull } from '../../utils/project-root-policy.js';
-import { mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import { renderSkillQualityFooter } from '../../utils/skill-quality-footer.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
-import { discoverSkillsFromConfig } from '../skills/skill-discovery.js';
 
 import {
   CHECKLIST_SECTIONS,
@@ -89,46 +85,6 @@ export function resolveSkillPath(pathArg: string): string {
   }
 
   throw new Error(`Path is neither a file nor a directory: ${pathArg}`);
-}
-
-/**
- * Build a SkillPackagingConfig for this skill by consulting the VAT config
- * at the git root (if any). Mirrors the lookup audit uses for single-skill
- * validation so review sees the same verdict-applicable config as validate
- * and audit.
- *
- * Returns `undefined` when the skill is not declared in any VAT config — in
- * which case the packaging validator uses its defaults.
- */
-async function resolvePackagingConfig(
-  skillPath: string,
-  logger: Logger,
-): Promise<SkillPackagingConfig | undefined> {
-  const gitRoot = gitFindRoot(dirname(skillPath));
-  const configRoot = gitRoot ?? dirname(skillPath);
-  const config = loadConfig(configRoot);
-  if (config?.skills === undefined) {
-    return undefined;
-  }
-
-  try {
-    const discovered = await discoverSkillsFromConfig(config.skills, configRoot);
-    const match = discovered.find(
-      s => safePath.resolve(s.sourcePath) === safePath.resolve(skillPath),
-    );
-    if (match === undefined) {
-      return undefined;
-    }
-
-    const { defaults, config: perSkillConfig } = config.skills;
-    return mergeSkillPackagingConfig(
-      defaults as Record<string, unknown> | undefined,
-      perSkillConfig?.[match.name] as Record<string, unknown> | undefined,
-    );
-  } catch (err) {
-    logger.debug(`Config lookup failed for review: ${String(err)}`);
-    return undefined;
-  }
 }
 
 /**
@@ -293,15 +249,15 @@ export async function reviewCommand(
     }
 
     // Spec §7: `vat skill review` uses `tolerate null` (single-skill review
-    // operates with or without a governing project). The result is recorded
-    // for future use; today resolvePackagingConfig walks per-skill (will be
-    // consolidated in Phase 5 once the audit walk-up cache lands).
+    // operates with or without a governing project). Per-skill config now flows
+    // through the shared resolveSkillPackagingConfig walk-up (the same one audit
+    // uses), so review, audit, and skill test stay in lockstep.
     projectRootOrNull(process.cwd());
 
     const skillPath = resolveSkillPath(pathArg);
     logger.debug(`Reviewing SKILL.md at: ${skillPath}`);
 
-    const packagingConfig = await resolvePackagingConfig(skillPath, logger);
+    const packagingConfig = (await resolveSkillPackagingConfig(skillPath)) ?? undefined;
     const result = await validateSkillForPackaging(skillPath, packagingConfig);
     applyConfigVerdicts(
       result,

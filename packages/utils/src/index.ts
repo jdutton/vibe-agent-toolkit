@@ -23,6 +23,9 @@ export * from './file-crawler.js';
 // Git ignore checking
 export * from './gitignore-checker.js';
 
+// Git URL parsing (parse/detect git URLs, GitHub shorthand, SSH forms)
+export * from './git-url.js';
+
 // Git utilities (using git commands directly)
 export * from './git-utils.js';
 
@@ -59,3 +62,15 @@ export type { ProviderMatch } from './link-auth/select-provider.js';
 export type { RewriteRule } from './link-auth/rewrite.js';
 export { defaultRunCommand, type TokenSource } from './link-auth/resolve-token.js';
 export { expandMacro, UnknownMacroError } from './link-auth/expand-macro.js';
+
+// Skill testing utilities (environment management for headless agent runs)
+export * from './skill-test/index.js';
+
+// Glob pattern helpers (isGlob, staticGlobBase, globMagicRemainder)
+export * from './glob/glob-pattern.js';
+
+// Filesystem hashing (sha256 of raw file bytes)
+export * from './fs/file-hash.js';
+
+// Byte-surgical YAML value updater (replace/insert without reflowing the doc)
+export * from './yaml/surgical-yaml.js';

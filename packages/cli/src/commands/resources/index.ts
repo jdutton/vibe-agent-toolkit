@@ -72,6 +72,7 @@ Examples:
     .option('--format <format>', 'Output format: yaml (default), json, or text', 'yaml')
     .option('--collection <id>', 'Filter by collection ID')
     .option('--check-external-urls', 'Validate external URLs (default: false, slow operation)')
+    .option('--check-html-anchors', 'Strictly validate HTML fragment anchors against element ids (default: false; HTML fragments are often runtime-defined by JS)')
     .option('--no-cache', 'Disable cache for external URL validation (forces fresh checks)')
     .option('--no-check-frontmatter-links', 'Skip frontmatter URI-reference link validation across all collections (default: enabled)')
     .action(validateCommand)
@@ -138,6 +139,14 @@ External URL Validation:
   Results are cached in system temp directory (24h alive, 1h dead).
   Cache is shared across all projects (URLs are universal).
   Use --no-cache to force fresh checks (ignores cache).
+
+HTML Fragment Anchor Validation:
+  By default, HTML fragment anchors (#id) are NOT validated against the
+  target file's element ids — HTML fragments are frequently defined at
+  runtime by JS (hash routers, hash query-params), so a static miss is not
+  proof of breakage. Use --check-html-anchors to strict-check fully-static
+  HTML against literal id/name attributes. Markdown anchor checking is
+  unaffected — heading slugs are statically authoritative and always checked.
 
 Frontmatter Validation:
   --frontmatter-schema <path>

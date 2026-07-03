@@ -146,9 +146,29 @@ describe('checkAnchor', () => {
     expect(checkAnchor('missing', GUIDE_MD, index)).toBe('broken');
   });
 
-  it('matches HTML ids case-sensitively', () => {
-    expect(checkAnchor('Intro', PAGE_HTML, index)).toBe('valid');
-    expect(checkAnchor('intro', PAGE_HTML, index)).toBe('broken');
+  it('skips HTML fragment anchors by default (runtime-defined ids are not statically authoritative)', () => {
+    expect(checkAnchor('planning', PAGE_HTML, index)).toBe('skip');
+    expect(checkAnchor('planning', PAGE_HTML, index, false)).toBe('skip');
+  });
+
+  it('matches HTML ids case-sensitively when checkHtmlAnchors is true', () => {
+    expect(checkAnchor('Intro', PAGE_HTML, index, true)).toBe('valid');
+    expect(checkAnchor('intro', PAGE_HTML, index, true)).toBe('broken');
+  });
+
+  it('still reports a genuinely missing HTML id as broken when checkHtmlAnchors is true', () => {
+    // Guards against over-correcting the false-positive fix into a blanket skip.
+    expect(checkAnchor('missing', PAGE_HTML, index, true)).toBe('broken');
+  });
+
+  it('treats SPA route fragments as skip even with checkHtmlAnchors=true', () => {
+    // "#/route" is never a literal element id.
+    expect(checkAnchor('/pipeline', PAGE_HTML, index, true)).toBe('skip');
+  });
+
+  it('treats hash-param-string fragments as skip even with checkHtmlAnchors=true', () => {
+    // "#id=abc123&mode=client" is a hash-encoded param string, never an id.
+    expect(checkAnchor('id=abc123&mode=client', PAGE_HTML, index, true)).toBe('skip');
   });
 
   it('treats the empty fragment and "top" (case-insensitive) as valid on HTML targets', () => {
@@ -168,8 +188,11 @@ describe('checkAnchor', () => {
 
   it('applies the HTML matching rules to the .htm extension too', () => {
     // .htm is HTML: case-sensitive ids + empty/top navigation, same as .html.
-    expect(checkAnchor('Section', PAGE_HTM, index)).toBe('valid');
-    expect(checkAnchor('section', PAGE_HTM, index)).toBe('broken');
+    // Fragment resolution is opt-in (checkHtmlAnchors=true); empty/top are
+    // always valid regardless of the flag.
+    expect(checkAnchor('Section', PAGE_HTM, index, true)).toBe('valid');
+    expect(checkAnchor('section', PAGE_HTM, index, true)).toBe('broken');
+    expect(checkAnchor('Section', PAGE_HTM, index)).toBe('skip');
     expect(checkAnchor('', PAGE_HTM, index)).toBe('valid');
     expect(checkAnchor('top', PAGE_HTM, index)).toBe('valid');
   });

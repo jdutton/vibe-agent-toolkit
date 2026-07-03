@@ -1,0 +1,59 @@
+{
+  "$ref": "#/definitions/friction-report",
+  "definitions": {
+    "friction-report": {
+      "type": "object",
+      "properties": {
+        "items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "high",
+                  "medium",
+                  "low"
+                ]
+              },
+              "category": {
+                "type": "string",
+                "enum": [
+                  "path-assumption",
+                  "undeclared-dependency",
+                  "ambient-propping",
+                  "doc-engine-drift",
+                  "missing-bundled-file"
+                ]
+              },
+              "message": {
+                "type": "string",
+                "minLength": 1
+              },
+              "subjectFile": {
+                "type": "string",
+                "minLength": 1
+              },
+              "evidence": {
+                "type": "string",
+                "minLength": 1
+              }
+            },
+            "required": [
+              "severity",
+              "category",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": [
+        "items"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "$schema": "http://json-schema.org/draft-07/schema#"
+}

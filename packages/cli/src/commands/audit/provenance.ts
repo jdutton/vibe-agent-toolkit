@@ -9,7 +9,7 @@ export interface Provenance {
   url: string;
   /** Branch or tag name (the actual ref cloned). */
   ref: string;
-  /** Resolved commit SHA of the cloned ref's HEAD. */
+  /** Resolved full commit SHA of the cloned ref's HEAD (displayed truncated). */
   commit: string;
   /** Subpath within the cloned repo, if specified. */
   subpath?: string;
@@ -22,7 +22,10 @@ export interface Provenance {
  * Always ends with a newline.
  */
 export function renderProvenanceHeader(p: Provenance): string {
-  let header = `# Audited: ${p.url} @ ${p.ref} (commit ${p.commit})\n`;
+  // Display the conventional short SHA; the full SHA is retained on the
+  // Provenance object (and is the unambiguous cache identity upstream).
+  const shortCommit = p.commit.slice(0, 8);
+  let header = `# Audited: ${p.url} @ ${p.ref} (commit ${shortCommit})\n`;
   if (p.subpath) {
     header += `# Subpath: ${p.subpath}\n`;
   }

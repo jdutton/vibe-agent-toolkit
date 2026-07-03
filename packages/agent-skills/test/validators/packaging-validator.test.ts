@@ -520,6 +520,218 @@ describe('validateSkillForPackaging - Time-sensitive content', () => {
 	});
 });
 
+async function findNonPortableAssetIssue(
+	getTempDirFn: () => string,
+	bodyText: string,
+): Promise<ValidationIssue | undefined> {
+	const tempDir = getTempDirFn();
+	const skillContent = createSkillContent(
+		{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+		bodyText,
+	);
+	const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
+	const result = await validateSkillForPackaging(skillPath);
+	const allIssues = [...result.activeErrors, ...result.activeWarnings, ...result.allErrors];
+	return allIssues.find((e) => e.code === 'NON_PORTABLE_ASSET_REFERENCE');
+}
+
+describe('validateSkillForPackaging - Non-portable asset references', () => {
+	it('should emit a warning for a ${CLAUDE_PLUGIN_ROOT}-anchored script path', async () => {
+		const issue = await findNonPortableAssetIssue(
+			getTempDir,
+			'\n# Test Skill\n\nRun: `node "${CLAUDE_PLUGIN_ROOT}/skills/test-skill/scripts/run.mjs" go`',
+		);
+		expect(issue).toBeDefined();
+		expect(issue?.severity).toBe('warning');
+		expect(issue?.location).toMatch(/:\d+$/);
+	});
+
+	it('should also catch the bare $CLAUDE_PLUGIN_ROOT form (no braces)', async () => {
+		const issue = await findNonPortableAssetIssue(
+			getTempDir,
+			'\n# Test Skill\n\nRun: `node $CLAUDE_PLUGIN_ROOT/scripts/run.mjs go`',
+		);
+		expect(issue).toBeDefined();
+		expect(issue?.severity).toBe('warning');
+	});
+
+	it('should NOT emit for a portable skill-relative script path', async () => {
+		const issue = await findNonPortableAssetIssue(
+			getTempDir,
+			'\n# Test Skill\n\nRun: `node scripts/run.mjs go`',
+		);
+		expect(issue).toBeUndefined();
+	});
+
+	it('should NOT emit for a legitimate non-plugin env var (e.g. ${TMPDIR})', async () => {
+		const issue = await findNonPortableAssetIssue(
+			getTempDir,
+			'\n# Test Skill\n\nSet a cache dir: `export CACHE="${TMPDIR:-/tmp}/test-cache"`',
+		);
+		expect(issue).toBeUndefined();
+	});
+
+	it('should flag the CLAUDE_PROJECT_DIR anchor (another Claude-only variable)', async () => {
+		const issue = await findNonPortableAssetIssue(
+			getTempDir,
+			'\n# Test Skill\n\nRun: `node "${CLAUDE_PROJECT_DIR}/skills/x/scripts/run.mjs" go`',
+		);
+		expect(issue).toBeDefined();
+		expect(issue?.severity).toBe('warning');
+	});
+
+	it('should flag an absolute script path passed to a runtime', async () => {
+		const issue = await findNonPortableAssetIssue(
+			getTempDir,
+			'\n# Test Skill\n\nRun: `node /Users/me/skill/scripts/run.mjs go`',
+		);
+		expect(issue).toBeDefined();
+		expect(issue?.severity).toBe('warning');
+	});
+
+	it('names the offending family variant in the message', async () => {
+		const issue = await findNonPortableAssetIssue(
+			getTempDir,
+			'\n# Test Skill\n\nRun: `node "${CLAUDE_PLUGIN_ROOT}/scripts/run.mjs" go`',
+		);
+		expect(issue?.message).toContain('claude-plugin-root');
+	});
+
+	it('should flag CLAUDE_PLUGIN_ROOT in a reachable bundled reference file, not just SKILL.md', async () => {
+		const tempDir = getTempDir();
+		// SKILL.md body is clean; the anti-pattern lives in a linked reference file.
+		const files = {
+			'toolbox.md': '# Toolbox\n\nRun `node "${CLAUDE_PLUGIN_ROOT}/skills/x/scripts/dxa.mjs" go`\n',
+		};
+		const skillContent = createSkillContent(
+			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+			'\n# Test Skill\n\nSee [toolbox](./toolbox.md).',
+		);
+		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
+		const result = await validateSkillForPackaging(skillPath);
+		const allIssues = [...result.activeErrors, ...result.activeWarnings, ...result.allErrors];
+		const issue = allIssues.find((e) => e.code === 'NON_PORTABLE_ASSET_REFERENCE');
+		expect(issue).toBeDefined();
+		expect(issue?.severity).toBe('warning');
+		// Location points at the reference file, not SKILL.md.
+		expect(issue?.location).toContain('toolbox.md');
+	});
+});
+
+async function findNonPortableCommandIssue(
+	getTempDirFn: () => string,
+	bodyText: string,
+): Promise<ValidationIssue | undefined> {
+	const tempDir = getTempDirFn();
+	const skillContent = createSkillContent(
+		{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+		bodyText,
+	);
+	const { skillPath } = createTransitiveSkillStructure(tempDir, {}, skillContent);
+	const result = await validateSkillForPackaging(skillPath);
+	const allIssues = [...result.activeErrors, ...result.activeWarnings, ...result.allErrors];
+	return allIssues.find((e) => e.code === 'NON_PORTABLE_COMMAND');
+}
+
+describe('validateSkillForPackaging - Non-portable commands', () => {
+	it('should flag `timeout` invoked in command position', async () => {
+		const issue = await findNonPortableCommandIssue(
+			getTempDir,
+			'\n# Test Skill\n\nRun: `timeout 30 node scripts/run.mjs`',
+		);
+		expect(issue).toBeDefined();
+		expect(issue?.severity).toBe('warning');
+		expect(issue?.location).toMatch(/:\d+$/);
+		expect(issue?.message).toContain('timeout');
+	});
+
+	it('should flag `grep -P` (PCRE unsupported by BSD/macOS grep)', async () => {
+		const issue = await findNonPortableCommandIssue(
+			getTempDir,
+			'\n# Test Skill\n\nFilter: `grep -P "\\d+" file.txt`',
+		);
+		expect(issue).toBeDefined();
+		expect(issue?.message).toContain('grep-pcre');
+	});
+
+	it('should flag `sed -i` with no backup suffix', async () => {
+		const issue = await findNonPortableCommandIssue(
+			getTempDir,
+			'\n# Test Skill\n\nEdit: `sed -i s/foo/bar/ file.txt`',
+		);
+		expect(issue).toBeDefined();
+		expect(issue?.message).toContain('sed-i-no-backup');
+	});
+
+	it('should flag `readlink -f`', async () => {
+		const issue = await findNonPortableCommandIssue(
+			getTempDir,
+			'\n# Test Skill\n\nResolve: `readlink -f ./path`',
+		);
+		expect(issue).toBeDefined();
+		expect(issue?.message).toContain('readlink-f');
+	});
+
+	it('should flag GNU `date -d`', async () => {
+		const issue = await findNonPortableCommandIssue(
+			getTempDir,
+			'\n# Test Skill\n\nParse: `date -d "2026-01-01" +%s`',
+		);
+		expect(issue).toBeDefined();
+		expect(issue?.message).toContain('date-d');
+	});
+
+	it('should NOT flag a portable command (`grep -E`)', async () => {
+		const issue = await findNonPortableCommandIssue(
+			getTempDir,
+			'\n# Test Skill\n\nFilter: `grep -E "[0-9]+" file.txt`',
+		);
+		expect(issue).toBeUndefined();
+	});
+
+	it('should NOT flag `sed -i.bak` (portable attached suffix)', async () => {
+		const issue = await findNonPortableCommandIssue(
+			getTempDir,
+			'\n# Test Skill\n\nEdit: `sed -i.bak s/foo/bar/ file.txt`',
+		);
+		expect(issue).toBeUndefined();
+	});
+
+	it('should NOT flag a prose mention of "timeout" (not in command position)', async () => {
+		const issue = await findNonPortableCommandIssue(
+			getTempDir,
+			'\n# Test Skill\n\nThe request will timeout if the server is slow.',
+		);
+		expect(issue).toBeUndefined();
+	});
+
+	it('should NOT flag prose use of the word "grep" without the -P flag', async () => {
+		const issue = await findNonPortableCommandIssue(
+			getTempDir,
+			'\n# Test Skill\n\nYou can grep the logs to find the error.',
+		);
+		expect(issue).toBeUndefined();
+	});
+
+	it('should flag a non-portable command in a reachable bundled reference file, not just SKILL.md', async () => {
+		const tempDir = getTempDir();
+		const files = {
+			'toolbox.md': '# Toolbox\n\nRun `grep -P "\\d+" log.txt`\n',
+		};
+		const skillContent = createSkillContent(
+			{ name: TEST_SKILL_NAME, description: VALID_DESCRIPTION },
+			'\n# Test Skill\n\nSee [toolbox](./toolbox.md).',
+		);
+		const { skillPath } = createTransitiveSkillStructure(tempDir, files, skillContent);
+		const result = await validateSkillForPackaging(skillPath);
+		const allIssues = [...result.activeErrors, ...result.activeWarnings, ...result.allErrors];
+		const issue = allIssues.find((e) => e.code === 'NON_PORTABLE_COMMAND');
+		expect(issue).toBeDefined();
+		expect(issue?.severity).toBe('warning');
+		expect(issue?.location).toContain('toolbox.md');
+	});
+});
+
 describe('validateSkillForPackaging - Progressive disclosure validation', () => {
 	it('should pass for large SKILL.md with reference files', async () => {
 		const tempDir = getTempDir();

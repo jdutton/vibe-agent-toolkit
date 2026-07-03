@@ -447,6 +447,36 @@ Best-practice checks about skill shape and content.
 - **Why it matters:** Anthropic's best-practices doc advises against content that will become outdated — time-sensitive prose goes stale and misleads agents. The `info` severity reflects that this is sometimes intentional (historical context); it surfaces the pattern without asserting it is wrong.
 - **Fix:** Remove the time qualifier, or move deprecated guidance into a clearly labeled `## Old patterns` section with a `<details>` block so agents skip it.
 
+### `NON_PORTABLE_ASSET_REFERENCE`
+
+- **Default:** `warning`
+- **What:** A skill document references a bundled script/asset via a non-portable anchor — a path that won't resolve across the surfaces a skill runs on. This is a **family** of sub-checks rolled up under one code; each finding names the variant that fired (`[<label>]`) and carries a tailored fix. Current variants:
+  - `claude-plugin-root` — `$CLAUDE_PLUGIN_ROOT` / `${CLAUDE_PLUGIN_ROOT}`
+  - `claude-project-dir` — `$CLAUDE_PROJECT_DIR` / `${CLAUDE_PROJECT_DIR}`
+  - `absolute-script-path` — an absolute path passed to a runtime (`node /Users/…/run.mjs`, etc.)
+
+  Scans the `SKILL.md` body **and every markdown doc reachable through it** (the bundled link graph), since agents copy invocations from reference files too. One issue fires per matched line, located at the offending file (case-sensitive, so lowercase prose mentions are not flagged).
+- **Why it matters:** These anchors are Claude Code-specific or machine-specific — none are part of the portable Agent Skills contract, and they don't exist when the skill is mounted standalone (a claude.ai upload, an API container, `~/.claude/skills/`). `CLAUDE_PLUGIN_ROOT` in particular resolves to the *plugin* directory, not the skill, so authors append a `skills/<name>/…` segment that only exists under plugin mounting; under a standalone mount that path 404s on the agent's first invocation. Anthropic's [skill authoring best practices](https://platform.claude.com/docs/en/docs/agents-and-tools/agent-skills/best-practices) reference bundled scripts by skill-relative paths exclusively.
+- **Fix:** Reference bundled files by a path relative to the skill directory (e.g. `scripts/run.mjs`), never via an env-var anchor or absolute path. See the `vibe-agent-toolkit:vat-skill-authoring` skill → "Referencing bundled scripts and assets".
+- **Overriding:** because every variant emits this one code, a single `validation.allow` entry (or severity override) silences the **whole family** for a file — adding an esoteric variant never multiplies the override surface. Allow `paths` match the offending file's location, so an intentional mention (e.g. a doc teaching the anti-pattern) can be scoped to that doc.
+- **Extending:** add a variant by appending a `{ label, pattern, fix }` row to `NON_PORTABLE_ASSET_VARIANTS` in `packaging-validator.ts` — no new top-level code. (Absolute Windows paths are covered separately by `PATH_STYLE_WINDOWS`.)
+
+### `NON_PORTABLE_COMMAND`
+
+- **Default:** `warning`
+- **What:** A skill document instructs an agent to run a shell command that hard-codes a GNU/Linux-only utility or flag. This is a **family** of sub-checks rolled up under one code; each finding names the variant that fired (`[<label>]`) and carries a tailored fix. Current variants:
+  - `timeout` — `timeout <arg>` (not installed on macOS by default)
+  - `grep-pcre` — `grep -P` / `grep --perl-regexp` (PCRE unsupported by BSD/macOS grep)
+  - `sed-i-no-backup` — `sed -i` with no attached suffix (GNU `sed -i` vs BSD `sed -i ''` differ; `sed -i.bak` is portable and not flagged)
+  - `readlink-f` — `readlink -f` (not on macOS by default)
+  - `date-d` — GNU `date -d` (BSD uses `-v` / `-j -f`)
+
+  Patterns match commands in **command position** only — start of line, or after a pipe/semicolon/ampersand or a backtick/code fence — so bare prose nouns ("the request will timeout", "grep the logs") are not flagged. Scans the `SKILL.md` body **and every markdown doc reachable through it** (the bundled link graph), since agents copy invocations from reference files too. One issue fires per matched line, located at the offending file.
+- **Why it matters:** Agents copy bundled commands verbatim. A command that only works on GNU/Linux fails the moment the skill runs on macOS/BSD — `timeout` is absent, `grep -P` errors, `sed -i` mangles its arguments, `readlink -f` is unrecognized, and `date -d` is rejected. The skill that "works on my machine" breaks on the user's first invocation elsewhere.
+- **Fix:** Use a portable equivalent: `grep -E` for PCRE; `sed -i.bak`/an explicit suffix (or a temp file) instead of bare `sed -i`; a portable resolve instead of `readlink -f`; `date -v`/`-j -f` instead of `date -d`; gate `timeout` on availability (`command -v timeout`) or drop it. See the `vibe-agent-toolkit:vat-skill-review` skill.
+- **Overriding:** because every variant emits this one code, a single `validation.allow` entry (or severity override) silences the **whole family** for a file — adding an esoteric variant never multiplies the override surface. Allow `paths` match the offending file's location, so an intentional mention (e.g. a doc teaching the anti-pattern) can be scoped to that doc.
+- **Extending:** add a variant by appending a `{ label, pattern, fix }` row to `NON_PORTABLE_COMMAND_VARIANTS` in `packaging-validator.ts` — no new top-level code.
+
 ### `SKILL_FRONTMATTER_EXTRA_FIELDS`
 
 - **Default:** `warning`

@@ -183,6 +183,42 @@ export function isAbsolutePath(p: string): boolean {
 }
 
 /**
+ * True if `p` is absolute on ANY platform — a POSIX root path (`/etc`), a
+ * Windows drive-letter path (`C:\…` or `C:/…`), or a UNC path (`\\host\share`).
+ *
+ * Unlike {@link isAbsolutePath} (host-platform only), this is host-independent,
+ * so config-containment checks reject Windows-absolute paths even when run on
+ * POSIX CI, and vice versa. Used to keep config-supplied relative paths (skill
+ * `files:` dest) from escaping their anchor directory (zip-slip class).
+ *
+ * @example
+ * isAbsoluteAnyPlatform('/etc/passwd')   // true (POSIX)
+ * isAbsoluteAnyPlatform('C:\\Users')      // true (Windows drive)
+ * isAbsoluteAnyPlatform('scripts/cli')    // false (relative)
+ */
+export function isAbsoluteAnyPlatform(p: string): boolean {
+  return path.posix.isAbsolute(p) || path.win32.isAbsolute(p);
+}
+
+/**
+ * True if `p` contains a `..` parent-directory traversal segment.
+ *
+ * Forward-slash-normalized, then inspects each `/`-delimited segment — so a
+ * `..` is caught regardless of the original OS separator. A containment guard
+ * for config-supplied relative paths (skill `files:` dest values, glob magic
+ * remainders) that must never climb above their anchor directory.
+ *
+ * @example
+ * hasParentTraversalSegment('a/../b')      // true
+ * hasParentTraversalSegment('a/b/c')       // false
+ * hasParentTraversalSegment('..\\evil')     // true (backslash normalized)
+ * hasParentTraversalSegment('a..b/c')      // false (".." must be a whole segment)
+ */
+export function hasParentTraversalSegment(p: string): boolean {
+  return toForwardSlash(p).split('/').includes('..');
+}
+
+/**
  * Convert a relative path to absolute
  *
  * If path is already absolute, returns it normalized.
@@ -267,9 +303,11 @@ export function toForwardSlash(p: string): string {
  * import { safePath } from '@vibe-agent-toolkit/utils';
  *
  * // Always forward slashes, even on Windows
- * safePath.join('C:\\Users', 'docs', 'file.md')   // → 'C:/Users/docs/file.md'
- * safePath.resolve('/project', './docs')            // → '/project/docs'
- * safePath.relative('/project/docs', '/project')    // → '..'
+ * safePath.join('C:\\Users', 'docs', 'file.md')          // → 'C:/Users/docs/file.md'
+ * safePath.resolve('/project', './docs')                   // → '/project/docs'
+ * safePath.relative('/project/docs', '/project')           // → '..'
+ * safePath.joinUnderRoot('/harness', 'skill-abc')          // → '/harness/skill-abc'
+ * safePath.joinUnderRoot('/harness', '../escape')          // throws Error
  * ```
  */
 export const safePath = {
@@ -286,6 +324,75 @@ export const safePath = {
   /** Like `path.relative()` but always returns forward slashes. */
   relative(from: string, to: string): string {
     return toForwardSlash(path.relative(from, to));
+  },
+
+  /**
+   * Join path segments under a security root, throwing if the result would escape.
+   *
+   * Resolves `root + segments` and verifies the result is strictly inside `root`
+   * (or equal to it). Throws when any segment would cause the result to escape:
+   *
+   * - A `..` traversal that climbs above root
+   * - An absolute POSIX path segment (e.g. `/etc/passwd`)
+   * - A Windows drive-letter segment (e.g. `C:\Users\evil`)
+   *
+   * On success returns a forward-slash-normalized absolute path (consistent with
+   * the other `safePath` helpers).
+   *
+   * **Use this instead of `safePath.join(root, segment)` whenever `segment` may
+   * contain caller-controlled input** — this is the bug class that the original
+   * skill-test staging code was vulnerable to on Windows.
+   *
+   * @returns Forward-slash absolute path guaranteed to be inside `root`.
+   * @throws {Error} If the resolved path would escape `root`.
+   *
+   * @example
+   * ```typescript
+   * // ✅ Safe — throws if caller passes '../../../etc'
+   * const dest = safePath.joinUnderRoot(harnessRoot, stagedDirName(item.name));
+   *
+   * // ❌ Unsafe — silently escapes on Windows with absolute segment
+   * const dest = safePath.join(harnessRoot, item.name);
+   * ```
+   */
+  joinUnderRoot(root: string, ...segments: string[]): string {
+    // Eagerly reject any segment that is absolute (POSIX or Windows drive-letter)
+    // BEFORE resolving, so the error message can name the offending segment.
+    for (const seg of segments) {
+      if (path.isAbsolute(seg)) {
+        throw new Error(
+          `safePath.joinUnderRoot: segment "${seg}" is absolute and escapes root "${root}".`,
+        );
+      }
+      // Windows drive-letter check for POSIX hosts (path.isAbsolute won't catch
+      // 'C:\...' on POSIX, but node's path.win32.isAbsolute does).
+      if (path.win32.isAbsolute(seg)) {
+        throw new Error(
+          `safePath.joinUnderRoot: segment "${seg}" contains a Windows drive letter and escapes root "${root}".`,
+        );
+      }
+    }
+
+    const resolvedRoot = path.resolve(root);
+    const resolvedResult = segments.length > 0
+      ? path.resolve(resolvedRoot, ...segments)
+      : resolvedRoot;
+
+    // Containment check: normalize both to forward slashes so the comparison
+    // is platform-independent and no path.sep is needed in string operations.
+    const fwdRoot = toForwardSlash(resolvedRoot);
+    const fwdResult = toForwardSlash(resolvedResult);
+    // Result must equal root or start with root + '/' (not just startsWith(root)
+    // which would match '/rootEvil' when root is '/root').
+    const rootPrefix = fwdRoot.endsWith('/') ? fwdRoot : `${fwdRoot}/`;
+
+    if (fwdResult !== fwdRoot && !fwdResult.startsWith(rootPrefix)) {
+      throw new Error(
+        `safePath.joinUnderRoot: result "${fwdResult}" escapes root "${fwdRoot}".`,
+      );
+    }
+
+    return fwdResult;
   },
 } as const;
 

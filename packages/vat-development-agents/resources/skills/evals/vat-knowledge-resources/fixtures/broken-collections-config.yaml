@@ -1,0 +1,16 @@
+# vibe-agent-toolkit.config.yaml
+version: 1
+
+resources:
+  collections:
+    systems:
+      include:
+        - "docs/systems/**/*.md"
+      frontmatterSchema: "schemas/system.schema.json"
+      mode: loose
+
+    adrs:
+      include:
+        - "docs/architecture/adr/**/*.md"
+      frontmatterSchema: "schemas/adr.schema.json"
+      mode: permissive

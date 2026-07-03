@@ -4,8 +4,18 @@
 
 version: 1
 
+resources:
+  # Skill-test eval suites are TEST INPUT, not project docs: their fixtures are
+  # deliberately-broken SKILL.md / .md files (used to verify vat-audit and
+  # vat-skill-review catch the violations), so `vat verify`'s resources phase
+  # (which runs `vat resources validate` here) must not link/portability-validate
+  # them as real docs. Mirrors the same exclusion in the repo-root
+  # vibe-agent-toolkit.config.yaml, eslint.config.js, and validate-repo-structure.ts.
+  exclude:
+    - "**/resources/skills/evals/**"
+
 skills:
-  include: ["resources/skills/SKILL.md", "resources/skills/vat-*.md"]
+  include: ["resources/skills/SKILL.md", "resources/skills/vat-*.md", "resources/skills/markdown-rewriting.md"]
   defaults:
     linkFollowDepth: 2
     excludeNavigationFiles: true
@@ -28,6 +38,22 @@ skills:
               - "../*/README.md"        # sibling packages/<name>/README.md
               - "../../packages/**"      # any sibling-package reference
             reason: "Cross-monorepo text pointers to top-level docs/, CHANGELOG.md, and sibling-package READMEs"
+        # vat-skill-authoring and vat-skill-review deliberately contain
+        # CLAUDE_PLUGIN_ROOT to TEACH the NON_PORTABLE_ASSET_REFERENCE rule
+        # (anti-pattern example + checklist text). Scoped to those two files so
+        # the check still fires for every other skill in this package.
+        NON_PORTABLE_ASSET_REFERENCE:
+          - paths:
+              - "**/vat-skill-authoring.md:*"
+              - "**/vat-skill-review.md:*"
+            reason: "Intentional CLAUDE_PLUGIN_ROOT mentions: these skills document the anti-pattern they enforce"
+        # vat-skill-review's checklist deliberately names `grep -P` (and other
+        # non-portable utilities) to TEACH the NON_PORTABLE_COMMAND rule. Scoped
+        # to that file so the check still fires for every other skill.
+        NON_PORTABLE_COMMAND:
+          - paths:
+              - "**/vat-skill-review.md:*"
+            reason: "Intentional non-portable-command mentions: this skill documents the anti-pattern it enforces"
   config:
     vibe-agent-toolkit:
       linkFollowDepth: 0
@@ -42,30 +68,63 @@ skills:
       excludeReferencesFromBundle:
         rules:
           - patterns: ["docs/**"]
+      test:
+        evals: evals/vat-agent-authoring/evals.json
+        model: claude-sonnet-4-6
     vat-skill-authoring:
       # External monorepo docs are intentionally left as text pointers.
       linkFollowDepth: 0
       excludeReferencesFromBundle:
         rules:
           - patterns: ["docs/**"]
+      test:
+        evals: evals/vat-skill-authoring/evals.json
+        model: claude-sonnet-4-6
     vat-skill-review:
       # External monorepo docs are intentionally left as text pointers.
       linkFollowDepth: 0
       excludeReferencesFromBundle:
         rules:
           - patterns: ["docs/**"]
+      # Dogfood: VAT tests its own vat-skill-review skill with `vat skill test`.
+      # The eval suite lives in a skill-specific subdir (the dev skills share one
+      # source dir, so each needs its own evals path). Sonnet is pinned for cost +
+      # reproducibility — the model adopters actually run.
+      test:
+        evals: evals/vat-skill-review/evals.json
+        model: claude-sonnet-4-6
     vat-rag:
       # External monorepo docs and package READMEs are intentionally left as text pointers.
       linkFollowDepth: 0
       excludeReferencesFromBundle:
         rules:
           - patterns: ["docs/**", "packages/**/README.md"]
+      test:
+        evals: evals/vat-rag/evals.json
+        model: claude-sonnet-4-6
     vat-adoption-and-configuration:
       # External monorepo docs are intentionally left as text pointers.
       linkFollowDepth: 0
       excludeReferencesFromBundle:
         rules:
           - patterns: ["docs/**"]
+    # Dogfood test suites for skills that have no other per-skill config.
+    vat-audit:
+      test:
+        evals: evals/vat-audit/evals.json
+        model: claude-sonnet-4-6
+    vat-knowledge-resources:
+      test:
+        evals: evals/vat-knowledge-resources/evals.json
+        model: claude-sonnet-4-6
+    vat-skill-distribution:
+      test:
+        evals: evals/vat-skill-distribution/evals.json
+        model: claude-sonnet-4-6
+    markdown-rewriting:
+      test:
+        evals: evals/markdown-rewriting/evals.json
+        model: claude-sonnet-4-6
 
 claude:
   marketplaces:

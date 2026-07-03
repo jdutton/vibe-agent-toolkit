@@ -8,8 +8,9 @@
 
 import { readFileSync, existsSync } from 'node:fs';
 
+import { getPluginSourceDir } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig, SkillPackagingConfig } from '@vibe-agent-toolkit/resources';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safeExecResult, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import type { DiscoveredSkill } from './skills/command-helpers.js';
 
@@ -159,12 +160,18 @@ function addMatchingSkills(
 /**
  * Resolve which published skills are assigned to at least one plugin.
  *
- * Returns the set of published skill names that matched at least one
- * plugin skill selector across all marketplaces.
+ * Assignment is additive per plugin:
+ * - **Pool path**: `plugin.skills` glob selectors matched against published skill names.
+ * - **Source tree-copy path**: any discovered published skill whose `sourcePath` lives
+ *   under `<getPluginSourceDir(projectRoot, plugin)>/skills/` is considered assigned,
+ *   matched by physical location rather than name selectors.
+ *
+ * Returns the set of published skill names assigned to at least one plugin.
  */
 export function resolveAssignedSkills(
   config: ProjectConfig,
-  publishedSkillNames: string[]
+  discoveredSkills: DiscoveredSkill[],
+  projectRoot: string
 ): Set<string> {
   const assigned = new Set<string>();
   const marketplaces = config.claude?.marketplaces;
@@ -173,9 +180,28 @@ export function resolveAssignedSkills(
     return assigned;
   }
 
+  // Compute published names once for pool-selector matching
+  const publishedNames = discoveredSkills
+    .filter((s) => isSkillPublished(s.name, config))
+    .map((s) => s.name);
+
   for (const marketplace of Object.values(marketplaces)) {
     for (const plugin of marketplace.plugins) {
-      addMatchingSkills(assigned, plugin.skills, publishedSkillNames);
+      // Pool path: existing glob selector matching (unchanged)
+      addMatchingSkills(assigned, plugin.skills, publishedNames);
+
+      // Source tree-copy path: match by physical location under <pluginSourceDir>/skills/
+      // Use a trailing slash to enforce a path-separator boundary and avoid false matches
+      // against sibling directories with a common prefix (e.g. /skills vs /skills-extra).
+      const srcSkillsDir = safePath.join(getPluginSourceDir(projectRoot, plugin), 'skills');
+      const srcSkillsPrefix = `${srcSkillsDir}/`;
+
+      for (const skill of discoveredSkills) {
+        if (!isSkillPublished(skill.name, config)) continue;
+        if (toForwardSlash(skill.sourcePath).startsWith(srcSkillsPrefix)) {
+          assigned.add(skill.name);
+        }
+      }
     }
   }
 
@@ -375,6 +401,130 @@ function checkSkillUnpublished(
   }));
 }
 
+/**
+ * Read the `files` array from a package's `package.json`.
+ * Returns an empty array when the file is absent, unreadable, or has no `files` field.
+ */
+function readPackageJsonFilesAllowlist(packageDir: string): string[] {
+  const pkgPath = safePath.join(packageDir, 'package.json');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- pkgPath derived from trusted packageDir parameter
+  if (!existsSync(pkgPath)) {
+    return [];
+  }
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- pkgPath derived from trusted packageDir parameter
+    const raw = readFileSync(pkgPath, 'utf-8');
+    const pkg = JSON.parse(raw) as Record<string, unknown>;
+    if (!Array.isArray(pkg['files'])) {
+      return [];
+    }
+    return pkg['files'] as string[];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Check vendored skill-creator licensing artifacts for the agent-skills package.
+ *
+ * When the project root contains `packages/agent-skills/` (i.e., this is the
+ * vibe-agent-toolkit monorepo), assert that:
+ *   - vendor/skill-creator/LICENSE.txt is present
+ *   - vendor/skill-creator/ATTRIBUTION.md is present
+ *   - "vendor/" is in the package.json files allowlist
+ *   - vendor/skill-creator/LICENSE.txt is not gitignored
+ *
+ * Returns an error-severity ConsistencyIssue for each problem found.
+ * Returns an empty array when the agent-skills package is not present (not in this monorepo).
+ */
+function checkVendoredLicensing(projectRoot: string): ConsistencyIssue[] {
+  const agentSkillsDir = safePath.join(projectRoot, 'packages/agent-skills');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- agentSkillsDir derived from trusted projectRoot
+  if (!existsSync(agentSkillsDir)) {
+    return []; // not in this monorepo — skip
+  }
+
+  const filesAllowlist = readPackageJsonFilesAllowlist(agentSkillsDir);
+  const problems = assertVendoredLicensingShipped(agentSkillsDir, filesAllowlist);
+
+  return problems.map((problem) => ({
+    severity: 'error' as const,
+    code: 'VENDORED_LICENSING_MISSING',
+    message: problem,
+    fix: 'Ensure vendor/skill-creator/ contains LICENSE.txt and ATTRIBUTION.md, and that "vendor/" is listed in packages/agent-skills/package.json files array.',
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// Vendored licensing assertions
+// ---------------------------------------------------------------------------
+
+/**
+ * Assert that vendored skill-creator licensing artifacts are present on disk
+ * and declared in the npm `files` allowlist.
+ *
+ * Returns a list of human-readable problem strings (empty array = no problems).
+ *
+ * Checks:
+ *   (1) vendor/skill-creator/LICENSE.txt is present under packageDir
+ *   (2) vendor/skill-creator/ATTRIBUTION.md is present under packageDir
+ *   (3) 'vendor/' or 'vendor/skill-creator/' appears in filesAllowlist
+ *   (4) vendor/skill-creator/LICENSE.txt is NOT gitignored (skipped if git unavailable)
+ */
+export function assertVendoredLicensingShipped(
+  packageDir: string,
+  filesAllowlist: string[],
+): string[] {
+  const problems: string[] = [];
+
+  const licensePath = safePath.join(packageDir, 'vendor/skill-creator/LICENSE.txt');
+  const attributionPath = safePath.join(packageDir, 'vendor/skill-creator/ATTRIBUTION.md');
+
+  // (1) LICENSE.txt present on disk
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- packageDir is a trusted project root parameter
+  if (!existsSync(licensePath)) {
+    problems.push(
+      'vendor/skill-creator/LICENSE.txt is missing — Apache-2.0 requires distributing the license with the code. Add the LICENSE.txt from the upstream skill-creator repository.',
+    );
+  }
+
+  // (2) ATTRIBUTION.md present on disk
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- packageDir is a trusted project root parameter
+  if (!existsSync(attributionPath)) {
+    problems.push(
+      'vendor/skill-creator/ATTRIBUTION.md is missing — attribution file must document the upstream source, pinned commit, and Apache-2.0 §4(b) modifications list.',
+    );
+  }
+
+  // (3) 'vendor/' or 'vendor/skill-creator/' in the npm files allowlist
+  const vendorInAllowlist = filesAllowlist.some(
+    (entry) => entry === 'vendor/' || entry === 'vendor/skill-creator/' || entry === 'vendor',
+  );
+  if (!vendorInAllowlist) {
+    problems.push(
+      '"vendor/" is not listed in the package.json files allowlist — vendored LICENSE.txt and ATTRIBUTION.md will not ship in the npm tarball. Add "vendor/" to the files array in package.json.',
+    );
+  }
+
+  // (4) LICENSE.txt not gitignored (best-effort; skip if git is unavailable)
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- licensePath is derived from trusted packageDir parameter
+  if (existsSync(licensePath)) {
+    const gitResult = safeExecResult(
+      'git',
+      ['check-ignore', '--quiet', licensePath],
+      { cwd: packageDir, encoding: 'utf8' },
+    );
+    // git check-ignore exits 0 if the path IS ignored, 1 if not ignored, error(-1) if git unavailable
+    if (gitResult.success) {
+      problems.push(
+        'vendor/skill-creator/LICENSE.txt is gitignored — the LICENSE.txt must be committed so it ships with the package. Remove the gitignore rule covering this path.',
+      );
+    }
+  }
+
+  return problems;
+}
+
 // ---------------------------------------------------------------------------
 // Main entry point
 // ---------------------------------------------------------------------------
@@ -401,7 +551,7 @@ export function runConsistencyChecks(
   }
 
   const vatSkills = readVatSkillsFromPackageJson(projectRoot);
-  const assignedSkills = resolveAssignedSkills(config, publishedNames);
+  const assignedSkills = resolveAssignedSkills(config, discoveredSkills, projectRoot);
 
   // Run checks in specified order
   const issues: ConsistencyIssue[] = [
@@ -412,6 +562,7 @@ export function runConsistencyChecks(
     ...checkPublishedSkillNotInPlugin(publishedNames, config, assignedSkills),
     ...checkPluginReferencesUnknownSkill(discoveredNames, config),
     ...checkSkillUnpublished(unpublishedNames),
+    ...checkVendoredLicensing(projectRoot),
   ];
 
   return {

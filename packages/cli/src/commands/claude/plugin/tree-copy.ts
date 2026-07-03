@@ -17,6 +17,12 @@ import { crawlDirectory, safePath, toForwardSlash } from '@vibe-agent-toolkit/ut
 export interface TreeCopyOptions {
   sourceDir: string;
   destDir: string;
+  /**
+   * Skill directory names (fs-safe form) to exclude from the verbatim
+   * tree-copy — skills that collide with the plugin's resolved pool
+   * selector. The pool-packaged copy becomes the sole source for these.
+   */
+  excludeSkillDirs?: string[];
   warn?: (message: string) => void;
 }
 
@@ -39,7 +45,7 @@ function classifyRelative(rel: string): keyof Omit<TreeCopyResult, 'filesCopied'
 }
 
 export async function treeCopyPlugin(options: TreeCopyOptions): Promise<TreeCopyResult> {
-  const { sourceDir, destDir, warn } = options;
+  const { sourceDir, destDir, excludeSkillDirs = [], warn } = options;
   const result: TreeCopyResult = {
     commandsCopied: 0,
     hooksCopied: 0,
@@ -62,10 +68,15 @@ export async function treeCopyPlugin(options: TreeCopyOptions): Promise<TreeCopy
     );
   }
 
+  const exclude = [
+    ...EXCLUDE_PATTERNS,
+    ...excludeSkillDirs.map((name) => `skills/${name}/**`),
+  ];
+
   const files = await crawlDirectory({
     baseDir: sourceDir,
     include: ['**/*'],
-    exclude: EXCLUDE_PATTERNS,
+    exclude,
     absolute: true,
     filesOnly: true,
     respectGitignore: true,

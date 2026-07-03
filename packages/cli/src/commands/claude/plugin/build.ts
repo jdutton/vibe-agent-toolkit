@@ -10,11 +10,13 @@
 import { cpSync, existsSync, readFileSync } from 'node:fs';
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 
-import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry } from '@vibe-agent-toolkit/resources';
+import { applyFilesConfig, getPluginOutputDir, getPluginSourceDir, listPluginSourceSkillDirs, mergeFilesConfig, skillNameToFsPath } from '@vibe-agent-toolkit/agent-skills';
+import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../../../utils/command-error.js';
+import { loadConfig } from '../../../utils/config-loader.js';
 import { createLogger } from '../../../utils/logger.js';
 import { writeYamlOutput } from '../../../utils/output.js';
 import { loadClaudeProjectConfig } from '../claude-config.js';
@@ -47,9 +49,10 @@ interface PluginBuildResult {
   mcpCopied: number;
   treeFilesCopied: number;
   explicitFilesCopied: number;
+  skillFilesCopied: number;
 }
 
-interface MarketplaceBuildResult {
+export interface MarketplaceBuildResult {
   name: string;
   status: 'built' | 'error';
   reason?: string;
@@ -119,12 +122,105 @@ async function discoverBuiltSkills(configDir: string): Promise<string[]> {
   return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
 }
 
+/**
+ * Build Claude plugin artifacts for a project — the non-exiting orchestration
+ * core shared by the `vat claude plugin build` CLI action and `vat skill test`
+ * (which builds a declared skill's owning marketplace before staging its dist).
+ *
+ * Throws on any build error; never calls `process.exit` and never emits the YAML
+ * summary — those belong to the CLI wrapper. Returns one result per built
+ * marketplace (empty when no `claude.marketplaces` are configured).
+ *
+ * `configDir` is threaded in (the project root that holds
+ * vibe-agent-toolkit.config.yaml), so callers that already know the root build
+ * against it rather than re-discovering from cwd. `options.marketplace` restricts
+ * the build to a single marketplace by name.
+ */
+export async function runClaudePluginBuild(
+  configDir: string,
+  options: { marketplace?: string; logger?: ReturnType<typeof createLogger> } = {},
+): Promise<MarketplaceBuildResult[]> {
+  const logger = options.logger ?? createLogger({});
+
+  const projectConfig = loadConfig(configDir);
+  const marketplaces = projectConfig?.claude?.marketplaces;
+  if (!marketplaces || Object.keys(marketplaces).length === 0) {
+    return [];
+  }
+
+  // Read version from root package.json — lowest-precedence fallback in the
+  // per-plugin version chain (config > plugin.json > root). Used so Claude
+  // Code caches by version instead of "unknown/" when no per-plugin version
+  // is supplied.
+  let rootVersion: string | undefined;
+  try {
+    const pkgPath = safePath.join(configDir, 'package.json');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- configDir is the project root
+    const pkgRaw = readFileSync(pkgPath, 'utf-8');
+    const pkg = JSON.parse(pkgRaw) as { version?: string };
+    rootVersion = pkg.version;
+  } catch {
+    // No package.json or unreadable — version will be omitted
+  }
+
+  // Discover available skills from dist/skills/ for pool-to-plugin selectors
+  const availableSkills = await discoverBuiltSkills(configDir);
+
+  // Load the project's skills config (defaults + per-skill) so the plugin build
+  // can apply each tree-copied skill's skill-level `files:` mapping — the
+  // verbatim tree-copy never runs the skill-packager, so without this a skill's
+  // build-provided artifacts (a bundled engine, generated data, a catalog)
+  // would be missing from the shipped plugin tree. Undefined when no config.
+  const skillsConfig = projectConfig?.skills;
+
+  logger.info(`Building Claude plugin artifacts`);
+  logger.info(`   Config: ${safePath.join(configDir, 'vibe-agent-toolkit.config.yaml')}`);
+  logger.info(`   Skills available: ${availableSkills.length}`);
+
+  const results: MarketplaceBuildResult[] = [];
+
+  const allPluginNames: string[] = [];
+  for (const mp of Object.values(marketplaces)) {
+    for (const p of mp.plugins) allPluginNames.push(p.name);
+  }
+  verifyNoCaseCollidingPluginNames(allPluginNames);
+
+  for (const name of Object.keys(marketplaces)) {
+    // Skip if --marketplace filter specified and doesn't match
+    if (options.marketplace && options.marketplace !== name) {
+      continue;
+    }
+
+    const mpConfig = marketplaces[name] as ClaudeMarketplaceConfig;
+
+    logger.info(`\n   Building marketplace: ${name}`);
+    const result = await buildMarketplace(
+      name,
+      mpConfig,
+      availableSkills,
+      configDir,
+      skillsConfig,
+      rootVersion,
+      logger,
+    );
+    results.push(result);
+
+    if (result.status === 'error') {
+      throw new Error(
+        `Claude plugin build failed for marketplace '${name}': ${result.reason ?? 'unknown error'}`,
+      );
+    }
+  }
+
+  return results;
+}
+
 async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<void> {
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
 
   try {
-    const { configPath, configDir, claudeConfig } = await loadClaudeProjectConfig();
+    const { configDir, claudeConfig } = await loadClaudeProjectConfig();
 
     if (!claudeConfig?.marketplaces || Object.keys(claudeConfig.marketplaces).length === 0) {
       writeYamlOutput({
@@ -135,68 +231,10 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
       process.exit(0);
     }
 
-    // Read version from root package.json — lowest-precedence fallback in the
-    // per-plugin version chain (config > plugin.json > root). Used so Claude
-    // Code caches by version instead of "unknown/" when no per-plugin version
-    // is supplied.
-    let rootVersion: string | undefined;
-    try {
-      const pkgPath = safePath.join(configDir, 'package.json');
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- configDir from loadClaudeProjectConfig
-      const pkgRaw = readFileSync(pkgPath, 'utf-8');
-      const pkg = JSON.parse(pkgRaw) as { version?: string };
-      rootVersion = pkg.version;
-    } catch {
-      // No package.json or unreadable — version will be omitted
-    }
-
-    // Discover available skills from dist/skills/ for pool-to-plugin selectors
-    const availableSkills = await discoverBuiltSkills(configDir);
-
-    logger.info(`Building Claude plugin artifacts`);
-    logger.info(`   Config: ${configPath}`);
-    logger.info(`   Skills available: ${availableSkills.length}`);
-
-    const results: MarketplaceBuildResult[] = [];
-
-    const marketplaces = claudeConfig.marketplaces;
-    const allPluginNames: string[] = [];
-    for (const mp of Object.values(marketplaces)) {
-      for (const p of mp.plugins) allPluginNames.push(p.name);
-    }
-    verifyNoCaseCollidingPluginNames(allPluginNames);
-
-    for (const name of Object.keys(marketplaces)) {
-      const mpConfig = marketplaces[name] as ClaudeMarketplaceConfig;
-
-      // Skip if --marketplace filter specified and doesn't match
-      if (options.marketplace && options.marketplace !== name) {
-        continue;
-      }
-
-      logger.info(`\n   Building marketplace: ${name}`);
-      const result = await buildMarketplace(
-        name,
-        mpConfig,
-        availableSkills,
-        configDir,
-        rootVersion,
-        logger,
-      );
-      results.push(result);
-
-      if (result.status === 'error') {
-        logger.error(`   Failed: ${result.reason ?? 'unknown error'}`);
-        const duration = Date.now() - startTime;
-        writeYamlOutput({
-          status: 'error',
-          error: result.reason ?? 'Build failed',
-          marketplace: name,
-          duration: `${duration}ms`,
-        });
-        process.exit(1);
-      }
-    }
+    const results = await runClaudePluginBuild(configDir, {
+      ...(options.marketplace ? { marketplace: options.marketplace } : {}),
+      logger,
+    });
 
     const duration = Date.now() - startTime;
     const totalPlugins = results.flatMap((r) => r.plugins).length;
@@ -221,6 +259,7 @@ async function pluginBuildCommand(options: PluginBuildCommandOptions): Promise<v
           mcpCopied: p.mcpCopied,
           treeFilesCopied: p.treeFilesCopied,
           explicitFilesCopied: p.explicitFilesCopied,
+          skillFilesCopied: p.skillFilesCopied,
         })),
       })),
       duration: `${duration}ms`,
@@ -267,6 +306,7 @@ async function buildMarketplace(
   config: ClaudeMarketplaceConfig,
   availableSkills: string[],
   configDir: string,
+  skillsConfig: SkillsConfig | undefined,
   rootVersion: string | undefined,
   logger: ReturnType<typeof createLogger>,
 ): Promise<MarketplaceBuildResult> {
@@ -290,15 +330,16 @@ async function buildMarketplace(
   const marketplaceAvailable = resolveMarketplaceAvailableSkills(config, availableSkills);
 
   for (const pluginDef of config.plugins) {
-    const pluginResult = await buildPlugin(
-      name,
+    const pluginResult = await buildPlugin({
+      marketplaceName: name,
       pluginDef,
       marketplaceAvailable,
       configDir,
-      config.owner,
+      skillsConfig,
+      owner: config.owner,
       rootVersion,
       logger,
-    );
+    });
     plugins.push(pluginResult);
   }
 
@@ -388,15 +429,6 @@ function resolvePluginSkills(
   }
 
   return [...matched];
-}
-
-/**
- * Convert a skill name to a filesystem-safe path segment.
- * Colon-namespaced skill names (e.g. "pkg:sub-skill") are valid VAT identifiers
- * but invalid on Windows; replace with `__`.
- */
-function skillNameToFsPath(name: string): string {
-  return name.replaceAll(':', '__');
 }
 
 /**
@@ -500,23 +532,86 @@ async function copyPoolSkills(
   return copied;
 }
 
-async function buildPlugin(
-  marketplaceName: string,
-  pluginDef: ClaudeMarketplacePluginEntry,
-  marketplaceAvailable: string[],
-  configDir: string,
-  owner: ClaudeMarketplaceConfig['owner'],
-  rootVersion: string | undefined,
-  logger: ReturnType<typeof createLogger>,
-): Promise<PluginBuildResult> {
-  const pluginDir = safePath.join(
-    configDir, 'dist', '.claude', 'plugins', 'marketplaces',
-    marketplaceName, 'plugins', pluginDef.name,
-  );
-  const pluginSourceDir = safePath.join(
-    configDir,
-    pluginDef.source ?? safePath.join('plugins', pluginDef.name),
-  );
+/**
+ * Apply each tree-copied (plugin-source) skill's skill-level `files:` mapping
+ * into the distributed skill dir, mirroring what `vat skills build` does for pool
+ * skills. The plugin tree-copy is verbatim and never runs the skill-packager, so
+ * a skill whose build-provided artifacts live in its own dir would otherwise ship
+ * without them. Pool skills (copied from dist/skills/) already had `files:` baked
+ * in by `vat skills build`, so only plugin-source skills are processed here.
+ * Returns the number of files copied.
+ */
+async function applyTreeCopiedSkillFiles(input: {
+  pluginSourceDir: string;
+  pluginDir: string;
+  configDir: string;
+  skillsConfig: SkillsConfig | undefined;
+  excludeSkillDirs: Set<string>;
+  logger: ReturnType<typeof createLogger>;
+}): Promise<number> {
+  // Enumerate via the shared layout helper so build and verify resolve a plugin's
+  // tree-copied skills through ONE definition — verify's files-config-dests check
+  // (via computeTreeCopiedSkillLocations) and this write path can never diverge.
+  let copied = 0;
+  for (const skillName of listPluginSourceSkillDirs(input.pluginSourceDir)) {
+    // A colliding skill (Fix 1) is pool-sourced now, not tree-copied — its
+    // files: config was already applied by `vat skills build` and is baked
+    // into dist/skills/<name>/, which Phase 3 copies in. Applying it again
+    // here would write into a dir the tree-copy no longer produced and
+    // double-count skillFilesCopied.
+    if (input.excludeSkillDirs.has(skillName)) continue;
+
+    const filesConfig = mergeFilesConfig(
+      input.skillsConfig?.defaults?.files,
+      input.skillsConfig?.config?.[skillName]?.files,
+    );
+    if (filesConfig.length === 0) continue;
+
+    const skillOutputDir = safePath.join(input.pluginDir, 'skills', skillName);
+    const dests = await applyFilesConfig({
+      filesConfig,
+      projectRoot: input.configDir,
+      skillOutputDir,
+    });
+    for (const dest of dests) {
+      input.logger.info(`         ${skillName} files: -> skills/${skillName}/${dest}`);
+    }
+    copied += dests.length;
+  }
+  return copied;
+}
+
+/**
+ * Skill directory names (fs-safe) present in BOTH the plugin's own `skills/`
+ * source tree AND the plugin's resolved pool selector. These collide: the
+ * pool-packaged copy has rewritten links, the raw tree-copy does not. The
+ * tree-copy phase excludes them so the pool copy is the sole source (Fix 1
+ * — collision referee, docs/plans/2026-07-01-plugin-skill-double-production-spec.md §5).
+ */
+function resolveCollidingSkillDirs(
+  pluginSourceDir: string,
+  selectedSkillNames: string[],
+): string[] {
+  const selectedFsNames = new Set(selectedSkillNames.map((name) => skillNameToFsPath(name)));
+  return listPluginSourceSkillDirs(pluginSourceDir).filter((dirName) => selectedFsNames.has(dirName));
+}
+
+interface BuildPluginInput {
+  marketplaceName: string;
+  pluginDef: ClaudeMarketplacePluginEntry;
+  marketplaceAvailable: string[];
+  configDir: string;
+  skillsConfig: SkillsConfig | undefined;
+  owner: ClaudeMarketplaceConfig['owner'];
+  rootVersion: string | undefined;
+  logger: ReturnType<typeof createLogger>;
+}
+
+async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> {
+  const { marketplaceName, pluginDef, marketplaceAvailable, configDir, skillsConfig, owner, rootVersion, logger } =
+    input;
+  const pluginDir = getPluginOutputDir(configDir, marketplaceName, pluginDef.name);
+  const pluginSourceDir = getPluginSourceDir(configDir, pluginDef);
 
   logger.info(`      Building plugin: ${pluginDef.name}`);
 
@@ -546,14 +641,49 @@ async function buildPlugin(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
   await mkdir(pluginDir, { recursive: true });
 
-  // Phase 2: tree copy (skips .claude-plugin/, respects .gitignore).
+  // Phase 1.5: collision referee. Resolve the plugin's pool selector BEFORE
+  // tree-copy so a skill present in BOTH the plugin's own skills/ tree AND
+  // the resolved pool selector excludes from the verbatim tree-copy — the
+  // pool-packaged copy (Phase 3) becomes the sole source. Without this, both
+  // copies coexist at two depths inside the same skills/<name>/ dir and the
+  // raw copy ships un-rewritten (dead) links.
+  const selectedSkillNames = resolvePluginSkills(pluginDef, marketplaceAvailable);
+  const collidingSkillDirs = pluginSourceExists
+    ? resolveCollidingSkillDirs(pluginSourceDir, selectedSkillNames)
+    : [];
+  for (const dirName of collidingSkillDirs) {
+    logger.info(
+      `warning: skill "${dirName}" is selected from the pool AND present at ` +
+        `${toForwardSlash(safePath.relative(configDir, pluginSourceDir))}/skills/${dirName}/ — ` +
+        `using the pool-packaged copy (dist/skills/${dirName}) and excluding the plugin-local copy from tree-copy.`,
+    );
+  }
+
+  // Phase 2: tree copy (skips .claude-plugin/, colliding pool-selected skill dirs, respects .gitignore).
   const treeResult = pluginSourceExists
     ? await treeCopyPlugin({
         sourceDir: pluginSourceDir,
         destDir: pluginDir,
+        excludeSkillDirs: collidingSkillDirs,
         warn: (m) => logger.info(`warning: ${m}`),
       })
     : { commandsCopied: 0, hooksCopied: 0, agentsCopied: 0, mcpCopied: 0, filesCopied: 0 };
+
+  // Phase 2.5: apply each NON-colliding tree-copied plugin-source skill's
+  // skill-level files: mapping into the distributed skill dir (the tree-copy
+  // is verbatim and never runs the skill-packager). Pool skills — including a
+  // colliding skill, now pool-sourced only — already had files: baked in by
+  // `vat skills build`, so this only touches genuinely tree-copied skills.
+  const skillFilesCopied = pluginSourceExists
+    ? await applyTreeCopiedSkillFiles({
+        pluginSourceDir,
+        pluginDir,
+        configDir,
+        skillsConfig,
+        excludeSkillDirs: new Set(collidingSkillDirs),
+        logger,
+      })
+    : 0;
 
   // Phase 3: pool-skill copy-in (from dist/skills/ via the plugin's skills: selector).
   const skillsCopied = await copyPoolSkills(
@@ -617,5 +747,6 @@ async function buildPlugin(
     mcpCopied: treeResult.mcpCopied,
     treeFilesCopied: treeResult.filesCopied,
     explicitFilesCopied,
+    skillFilesCopied,
   };
 }

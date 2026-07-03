@@ -9,9 +9,12 @@ import {
   ClaudeMarketplacePluginEntrySchema,
   ClaudeMarketplaceSchema,
   ProjectConfigSchema,
+  SkillFileEntrySchema,
   SkillPackagingConfigSchema,
   SkillsConfigSchema,
+  TestConfigSchema,
 } from '../../src/schemas/project-config.js';
+import type { SkillFileEntry } from '../../src/schemas/project-config.js';
 
 const SKILL_GLOB_INCLUDE = 'skills/**/SKILL.md';
 
@@ -28,6 +31,72 @@ function expectStrictRejection(schema: ZodSchema, input: unknown): void {
     expect(issue).toBeDefined();
   }
 }
+
+describe('SkillFileEntrySchema', () => {
+  const BASE_SOURCE = 'dist/report.mjs';
+  const BASE_DEST = 'report.mjs';
+
+  it('parses a valid entry with integrity: true', () => {
+    const result = SkillFileEntrySchema.safeParse({
+      source: BASE_SOURCE,
+      dest: BASE_DEST,
+      integrity: true,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.integrity).toBe(true);
+    }
+  });
+
+  it('parses a valid entry with integrity omitted (undefined)', () => {
+    const result = SkillFileEntrySchema.safeParse({
+      source: BASE_SOURCE,
+      dest: BASE_DEST,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.integrity).toBeUndefined();
+    }
+  });
+
+  it('rejects integrity: "yes" (wrong type — must be boolean)', () => {
+    const result = SkillFileEntrySchema.safeParse({
+      source: BASE_SOURCE,
+      dest: BASE_DEST,
+      integrity: 'yes',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('type-level: SkillFileEntry accepts integrity?: boolean', () => {
+    // compile-time check — if the type is wrong this file will not typecheck
+    const entry: SkillFileEntry = { source: 'dist/a.mjs', dest: 'a.mjs', integrity: true };
+    expect(entry.integrity).toBe(true);
+  });
+
+  // H1 — dest must be a contained relative path (zip-slip-class write-anywhere guard).
+  it('accepts a nested relative dest', () => {
+    const result = SkillFileEntrySchema.safeParse({ source: BASE_SOURCE, dest: 'a/b/c.mjs' });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a dest containing a ".." traversal segment', () => {
+    for (const dest of ['../../../etc/x', '../escape.json', 'a/../../b']) {
+      const result = SkillFileEntrySchema.safeParse({ source: BASE_SOURCE, dest });
+      expect(result.success).toBe(false);
+    }
+  });
+
+  it('rejects an absolute POSIX dest', () => {
+    const result = SkillFileEntrySchema.safeParse({ source: BASE_SOURCE, dest: '/etc/passwd' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects a Windows drive-letter dest (host-independent)', () => {
+    const result = SkillFileEntrySchema.safeParse({ source: BASE_SOURCE, dest: String.raw`C:\Users\evil` });
+    expect(result.success).toBe(false);
+  });
+});
 
 describe('SkillPackagingConfigSchema', () => {
   it('parses validation.severity and validation.allow', () => {
@@ -66,6 +135,31 @@ describe('SkillPackagingConfigSchema', () => {
 
   it('rejects unknown keys via strict mode', () => {
     expectStrictRejection(SkillPackagingConfigSchema, { unknownTypo: 123 });
+  });
+});
+
+describe('TestConfigSchema', () => {
+  it('accepts an empty test config (all fields optional)', () => {
+    const result = TestConfigSchema.safeParse({});
+    expect(result.success).toBe(true);
+  });
+
+  it('accepts a build: command string', () => {
+    const result = TestConfigSchema.safeParse({ build: 'pnpm bundle:report' });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.build).toBe('pnpm bundle:report');
+    }
+  });
+
+  it('rejects an empty build: string (min 1 char)', () => {
+    const result = TestConfigSchema.safeParse({ build: '' });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects unknown keys via strict mode', () => {
+    const result = TestConfigSchema.safeParse({ unknownField: true });
+    expect(result.success).toBe(false);
   });
 });
 

@@ -9,6 +9,7 @@ export {
   extractH1Title,
   packageSkill,
   packageSkills,
+  packagingConfigToPackageOptions,
   ZipSizeLimitError,
   type PackageSkillOptions,
   type PackageSkillResult,
@@ -33,9 +34,11 @@ export {
 } from './content-type-routing.js';
 
 export {
+  applyFilesConfig,
   mergeFilesConfig,
   matchLinkToFiles,
   computeDeferredPaths,
+  type ApplyFilesConfigOptions,
   type ComputeDeferredPathsOpts,
   type DeferredPaths,
   type FilesMatchResult,
@@ -101,6 +104,17 @@ export {
   type ImportResult,
 } from './import.js';
 
+// Skill source primitives
+export { cloneGitSource, type GitCloneResult } from './skill-source/git-clone.js';
+
+// Unified skill-source resolution (spec §11c)
+export { resolveSkillSource, type ResolveSkillSourceOptions } from './skill-source/resolve-skill-source.js';
+export type {
+  SkillSource,
+  ResolvedSkillSource,
+  ResolveSkillSourceContext,
+} from './skill-source/types.js';
+
 // Evidence substrate
 export type {
   EvidenceRecord,
@@ -149,3 +163,16 @@ export {
   detectReferenceTargetMissing,
 } from './inventory/index.js';
 
+export * from './skill-test/index.js';
+
+export { checkBrokenPackagedLinks } from './post-build-checks.js';
+
+export {
+  computeTreeCopiedSkillLocations,
+  findDistributedSkillLocationBySource,
+  getPluginOutputDir,
+  getPluginSourceDir,
+  listPluginSourceSkillDirs,
+  skillNameToFsPath,
+  type DistributedSkillLocation,
+} from './plugin-distribution-layout.js';

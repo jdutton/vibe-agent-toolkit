@@ -1,0 +1,23 @@
+{
+  "name": "@acme/claude-skills",
+  "version": "2.0.1",
+  "description": "Acme's internal Claude Code skills",
+  "type": "module",
+  "vat": {
+    "version": "1.0",
+    "skills": ["reviewing-prs", "drafting-runbooks"]
+  },
+  "files": [
+    "README.md"
+  ],
+  "scripts": {
+    "build:vat": "vat build",
+    "postinstall": "vat claude plugin install --npm-postinstall 2>/dev/null || exit 0"
+  },
+  "dependencies": {
+    "vibe-agent-toolkit": "latest"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org"
+  }
+}

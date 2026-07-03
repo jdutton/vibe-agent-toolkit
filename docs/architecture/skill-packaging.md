@@ -86,6 +86,48 @@ The four inventory kinds:
 
 The inventory schema is `vat.inventory/v1alpha`; it evolves freely under pre-1.0. Output is available via `vat inventory <path>` (YAML, JSON, or `--shallow` projection).
 
+## Skill Reference Resolution
+
+The shapes above describe what an artifact *is*. This section describes how a command turns a **skill reference** — the subject you hand to `vat skill test run`, `vat audit`, or `vat skill review` (a bare name like `my-skill`, a path like `./dist/skills/x`, or a source spec like `npm:@scope/s@1.2.3`) — into something testable or auditable.
+
+### The separator: build-vs-as-is
+
+There is exactly one fork:
+
+- **A config-declared skill → build → test the dist.** A bare name that matches a skill declared in the governing `vibe-agent-toolkit.config.yaml` is *buildable*: VAT builds it with the real entry points (`packageSkill` for pool skills, `vat claude plugin build` for plugin-local skills), then tests the **built dist**.
+- **Everything else → test as-is.** Paths, source specs (`workspace:` / `npm:` / `url:` / `path:` / `vendored`), and already-built dist directories are tested exactly as supplied — no build step.
+
+### The load-bearing insight: source ≠ dist for declared skills
+
+For a declared skill, **the authored source tree is not what ships.** `packageSkill` does link-following, reference-rewriting, nav-stripping, and `files:` injection (not `files:` alone) as it produces the dist. Testing the source therefore tests something users never install — the entire reason `buildable` exists. The dist is the only faithful subject.
+
+### `resolveSkillReference` — the single entry point
+
+[`resolveSkillReference(ref, cwd)`](../../packages/cli/src/skill-resolution/) (in `packages/cli/src/skill-resolution/`) is the **single, project-aware entry point** that every skill-reference-taking command routes through: `vat audit`, `vat skill review`, and `vat skill test`. It classifies a reference (the disambiguation ladder) and returns a `SkillReference` whose arm tells the caller what to do — never write a parallel path-only resolver beside it.
+
+The `SkillReference` arms:
+
+- **`buildable`** — a declared skill: build (real entry points), then test the dist.
+- **`source`** — test the tree/spec as-is (already-built dist, external source, or undeclared path).
+- **`name-miss`** — a bare name in a project that declares no such skill (error; lists known skills).
+- **`not-found`** — not a path and no governing config to resolve a name against (error).
+
+### Reference form → result arm
+
+| Reference form | Result arm |
+|---|---|
+| bare name matching a declared skill | `buildable` (build → test dist) |
+| bare name, undeclared, but an existing local dir | `source` (path, as-is) |
+| bare name, undeclared, not a dir, inside a project | `name-miss` |
+| bare name, no governing config, existing dir | `source` (path, as-is) |
+| bare name, no governing config, not a dir | `not-found` |
+| `<path>` (absolute / contains `/` / starts `.`, incl. the `./<name>` escape) | `source` (path, as-is — never name-resolved) |
+| `workspace:<pkg>` | `source` |
+| `npm:<spec>` | `source` |
+| `url:<u>` | `source` |
+| `path:<dir>` | `source` |
+| `vendored` | `source` |
+
 ## Decision Records
 
 ### AC-10d — Plugin-local `files:` deferred paths are out of scope for issue #127 / slice 2 of #129

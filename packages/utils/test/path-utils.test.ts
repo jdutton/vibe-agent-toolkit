@@ -7,6 +7,8 @@ import { describe, expect, it } from 'vitest';
 import {
   dynamicImportPath,
   getRelativePath,
+  hasParentTraversalSegment,
+  isAbsoluteAnyPlatform,
   isAbsolutePath,
   normalizePath,
   resolveFromImportMeta,
@@ -83,6 +85,50 @@ describe('path-utils', () => {
         expect(isAbsolutePath(String.raw`..\parent`)).toBe(false);
       });
     }
+  });
+
+  describe('isAbsoluteAnyPlatform', () => {
+    it('returns true for POSIX absolute paths (host-independent)', () => {
+      expect(isAbsoluteAnyPlatform('/etc/passwd')).toBe(true);
+      expect(isAbsoluteAnyPlatform('/')).toBe(true);
+    });
+
+    it('returns true for Windows drive-letter paths even on POSIX hosts', () => {
+      expect(isAbsoluteAnyPlatform(String.raw`C:\Users\evil`)).toBe(true);
+      expect(isAbsoluteAnyPlatform('C:/Users/evil')).toBe(true);
+    });
+
+    it('returns true for UNC paths', () => {
+      expect(isAbsoluteAnyPlatform(String.raw`\\host\share`)).toBe(true);
+    });
+
+    it('returns false for relative paths', () => {
+      expect(isAbsoluteAnyPlatform('scripts/cli.mjs')).toBe(false);
+      expect(isAbsoluteAnyPlatform('./relative')).toBe(false);
+      expect(isAbsoluteAnyPlatform('../parent')).toBe(false);
+      expect(isAbsoluteAnyPlatform('')).toBe(false);
+    });
+  });
+
+  describe('hasParentTraversalSegment', () => {
+    it('returns true when a ".." segment is present', () => {
+      expect(hasParentTraversalSegment('a/../b')).toBe(true);
+      expect(hasParentTraversalSegment('../escape')).toBe(true);
+      expect(hasParentTraversalSegment('dist/*/../../../etc/*')).toBe(true);
+    });
+
+    it('normalizes backslash separators before checking', () => {
+      expect(hasParentTraversalSegment(String.raw`..\evil`)).toBe(true);
+      expect(hasParentTraversalSegment(String.raw`a\..\b`)).toBe(true);
+    });
+
+    it('returns false when no whole ".." segment is present', () => {
+      expect(hasParentTraversalSegment('a/b/c')).toBe(false);
+      expect(hasParentTraversalSegment('scripts/cli.mjs')).toBe(false);
+      // ".." must be a WHOLE segment — "a..b" is not traversal
+      expect(hasParentTraversalSegment('a..b/c')).toBe(false);
+      expect(hasParentTraversalSegment('...rc')).toBe(false);
+    });
   });
 
   describe('toAbsolutePath', () => {
@@ -258,6 +304,53 @@ describe('path-utils', () => {
       it('should handle same-directory paths', () => {
         const result = safePath.relative('/project/docs', '/project/docs/file.md');
         expect(result).toBe('file.md');
+      });
+    });
+
+    describe('safePath.joinUnderRoot', () => {
+      // POSIX-absolute literal; on Windows path.resolve prepends the current drive
+      // (e.g. D:/project/root). Expected values are derived via safePath.resolve so
+      // the equality assertions hold cross-platform (joinUnderRoot returns exactly
+      // safePath.resolve(root, ...segs) for any non-escaping input).
+      const TEST_ROOT = '/project/root';
+
+      it('joins a normal nested segment under root', () => {
+        const result = safePath.joinUnderRoot(TEST_ROOT, 'subdir', 'file.txt');
+        expect(result).toBe(safePath.resolve(TEST_ROOT, 'subdir', 'file.txt'));
+        expect(result).not.toContain('\\');
+      });
+
+      it('returns root itself when no extra segments given', () => {
+        const result = safePath.joinUnderRoot(TEST_ROOT);
+        expect(result).toBe(safePath.resolve(TEST_ROOT));
+      });
+
+      it('allows a benign internal .. that stays under root', () => {
+        const result = safePath.joinUnderRoot(TEST_ROOT, 'subdir', '..', 'other');
+        expect(result).toBe(safePath.resolve(TEST_ROOT, 'other'));
+      });
+
+      it('throws when .. traversal escapes root', () => {
+        expect(() => safePath.joinUnderRoot(TEST_ROOT, '..')).toThrow();
+      });
+
+      it('throws when deep .. traversal escapes root', () => {
+        expect(() => safePath.joinUnderRoot(TEST_ROOT, 'a', '..', '..', '..', 'etc')).toThrow();
+      });
+
+      it('throws on an absolute POSIX segment', () => {
+        expect(() => safePath.joinUnderRoot(TEST_ROOT, '/etc/passwd')).toThrow();
+      });
+
+      it('throws on a Windows drive-letter segment', () => {
+        // C:\... or C:/... style segments should be caught
+        expect(() => safePath.joinUnderRoot(TEST_ROOT, String.raw`C:\Users\evil`)).toThrow();
+      });
+
+      it('returns forward-slash path', () => {
+        const result = safePath.joinUnderRoot(TEST_ROOT, 'a/b/c');
+        expect(result).not.toContain('\\');
+        expect(result).toBe(safePath.resolve(TEST_ROOT, 'a/b/c'));
       });
     });
   });
