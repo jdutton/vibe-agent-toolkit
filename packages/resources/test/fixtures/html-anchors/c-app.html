@@ -1,16 +1,15 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><title>C app</title></head>
+<html lang="en"><head><meta charset="utf-8"><title>C app</title></head>
 <body>
   <a href="#/pipeline">Pipeline</a>
   <a href="#/settings">Settings</a>
   <main id="view"></main>
   <script>
     function handleRoute() {
-      var hash = location.hash || '#/pipeline';
-      var parts = hash.replace('#/', '').split('/');
-      /* render view for parts[0] */
+      var route = (location.hash || '#/pipeline').replace('#/', '');
+      document.title = 'C app: ' + route;
     }
-    window.addEventListener('hashchange', handleRoute);
+    globalThis.addEventListener('hashchange', handleRoute);
     handleRoute();
   </script>
 </body></html>

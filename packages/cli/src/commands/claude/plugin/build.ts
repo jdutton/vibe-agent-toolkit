@@ -592,7 +592,7 @@ function resolveCollidingSkillDirs(
   pluginSourceDir: string,
   selectedSkillNames: string[],
 ): string[] {
-  const selectedFsNames = new Set(selectedSkillNames.map(skillNameToFsPath));
+  const selectedFsNames = new Set(selectedSkillNames.map((name) => skillNameToFsPath(name)));
   return listPluginSourceSkillDirs(pluginSourceDir).filter((dirName) => selectedFsNames.has(dirName));
 }
 

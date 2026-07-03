@@ -1,5 +1,5 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><title>A app</title></head>
+<html lang="en"><head><meta charset="utf-8"><title>A app</title></head>
 <body>
   <a href="#planning">Go to planning</a>
   <nav><button data-tab="planning">Planning</button></nav>
@@ -10,7 +10,7 @@
       var el = document.querySelector('[data-tab="' + key + '"]');
       if (el) { /* activate the matching tab */ }
     }
-    window.addEventListener('hashchange', navigateFromHash);
+    globalThis.addEventListener('hashchange', navigateFromHash);
     navigateFromHash();
   </script>
 </body></html>
