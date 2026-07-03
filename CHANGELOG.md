@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.39] - 2026-07-03
+
 ### Added
 
 - **Dogfood eval suites for the whole `vat-development-agents` skill set, plus the fixes that dogfooding surfaced.** Every published VAT dev skill now ships a committed `vat skill test` eval suite (`evals/<skill>/`): `vat-audit`, `vat-skill-authoring`, `vat-knowledge-resources`, `vat-skill-distribution`, `vat-rag`, `vat-agent-authoring`, and `markdown-rewriting` (joining the existing `vat-skill-review` suite), wired via `skills.config.<skill>.test`. Final grades: vat-skill-distribution 25/25, vat-agent-authoring 24/24, vat-rag 22/22, vat-knowledge-resources 22/22, markdown-rewriting 18/18, vat-skill-authoring 21/22 (one capability-headroom miss), vat-audit 33/40 baseline A/B (the without-skill failures demonstrate the skill's lift on CI-gating/compat knowledge). Running the suites caught real skill/doc bugs, now fixed:
