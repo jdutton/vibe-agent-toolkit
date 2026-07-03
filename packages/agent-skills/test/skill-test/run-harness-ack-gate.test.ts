@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any -- test stubs use loose casts for partial mock results */
 /**
  * Security-gate test for the §12 acknowledgment in runSkillTestHarness.
  *
@@ -14,14 +13,13 @@
  * barrel) is replaced with a spy; reaching it would be a gate breach.
  */
 
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
-
-import { mkdirSyncReal, normalizedTmpdir, safePath, spawnHeadlessClaude } from '@vibe-agent-toolkit/utils';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { spawnHeadlessClaude } from '@vibe-agent-toolkit/utils';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SkillTestExitCode } from '../../src/skill-test/exit-codes.js';
 import { runSkillTestHarness } from '../../src/skill-test/run-harness.js';
 import { stageHarness } from '../../src/skill-test/staging.js';
+import { setupStubbedHarnessSubject } from '../test-helpers.js';
 
 // Force preflight to PASS without a real `claude` binary. resolvedAuth is null:
 // the ack gate (Step 6) returns before any auth-dependent step, so it is unused.
@@ -48,42 +46,21 @@ vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
 });
 
 describe('runSkillTestHarness — security ack gate', () => {
-  let tempDir: string;
-  let subjectStagedDir: string;
+  // Shared lifecycle: fresh temp dir + staged subject (with evals) so bootstrap
+  // (exit 3) does not fire before the ack gate (exit 2), and stageHarness stubbed.
+  const { getTempDir, getSubjectStagedDir } = setupStubbedHarnessSubject('vat-ack-gate-', vi.mocked(stageHarness));
 
   beforeEach(() => {
     vi.mocked(spawnHeadlessClaude).mockClear();
-    tempDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-ack-gate-'));
-
-    // A staged subject that already carries evals/evals.json so bootstrap (exit 3)
-    // does not fire before the ack gate (exit 2).
-    subjectStagedDir = safePath.join(tempDir, 'staged-subject');
-    mkdirSyncReal(safePath.join(subjectStagedDir, 'evals'), { recursive: true });
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own temp fixture
-    writeFileSync(
-      safePath.join(subjectStagedDir, 'evals', 'evals.json'),
-      JSON.stringify({ skill_name: 'demo', evals: [{ id: 1, prompt: 'p', expected_output: 'o', expectations: ['e'] }] }) + '\n',
-      'utf8',
-    );
-
-    vi.mocked(stageHarness).mockResolvedValue({
-      manifest: { fingerprint: 'test', entries: [] },
-      pluginDirs: [subjectStagedDir],
-      subjectStagedDir,
-      subjectPluginRoot: null,
-    } as any);
-  });
-
-  afterEach(() => {
-    rmSync(tempDir, { recursive: true, force: true });
   });
 
   it('blocks the spawn and returns exit 2 when preflight passes but the ack is absent', async () => {
+    const tempDir = getTempDir();
     const result = await runSkillTestHarness({
       skills: ['my-skill'],
       repoRoot: tempDir,
       workdir: tempDir,
-      subjectSource: { path: subjectStagedDir },
+      subjectSource: { path: getSubjectStagedDir() },
       // acknowledgedRunsSkillCode intentionally absent; dryRun absent.
     });
 

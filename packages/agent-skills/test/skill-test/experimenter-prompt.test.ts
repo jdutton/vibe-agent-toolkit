@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  appendIntegrityNonceDirective,
   assertPromptInvariants,
   buildExperimenterPrompt,
   DEFAULT_EXPERIMENTER_PROMPT,
   PromptInvariantError,
+  redactNonce,
+  REDACTED_NONCE_PLACEHOLDER,
 } from '../../src/skill-test/experimenter-prompt.js';
 
 const opts = {
@@ -79,5 +82,32 @@ describe('buildExperimenterPrompt — workspacesRoot token', () => {
       workspacesRoot: '/w', baseline: true,
     });
     expect(() => assertPromptInvariants(prompt)).not.toThrow();
+  });
+});
+
+describe('integrity nonce directive', () => {
+  const NONCE = 'a1b2c3d4e5f6a7b8';
+
+  it('appends a directive that embeds the nonce and pins the runNonce field', () => {
+    const withNonce = appendIntegrityNonceDirective(DEFAULT_EXPERIMENTER_PROMPT, NONCE);
+    expect(withNonce.startsWith(DEFAULT_EXPERIMENTER_PROMPT)).toBe(true);
+    expect(withNonce).toContain(NONCE);
+    expect(withNonce).toMatch(/runNonce/);
+  });
+
+  it('redactNonce removes every occurrence of the nonce for the on-disk audit copy', () => {
+    const withNonce = appendIntegrityNonceDirective(DEFAULT_EXPERIMENTER_PROMPT, NONCE);
+    const redacted = redactNonce(withNonce, NONCE);
+    expect(redacted).not.toContain(NONCE);
+    expect(redacted).toContain(REDACTED_NONCE_PLACEHOLDER);
+  });
+
+  it('nonce survives even a user prompt override (config cannot opt out)', () => {
+    // The directive is appended to whatever base prompt is passed, including a
+    // custom experimenterPrompt override — so the nonce requirement is universal.
+    const custom = 'A totally custom experimenter prompt with no grading mention.';
+    const withNonce = appendIntegrityNonceDirective(custom, NONCE);
+    expect(withNonce).toContain(NONCE);
+    expect(withNonce).toMatch(/runNonce/);
   });
 });

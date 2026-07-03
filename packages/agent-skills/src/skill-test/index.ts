@@ -18,6 +18,8 @@ export {
   type FrictionReport,
 } from './friction-schema.js';
 export {
+  assertGradingNonce,
+  GradingNonceError,
   GradingSkewError,
   parseGradingJson,
   reconcileGrading,
@@ -76,10 +78,13 @@ export {
   type PreflightResult,
 } from './preflight.js';
 export {
+  appendIntegrityNonceDirective,
   assertPromptInvariants,
   buildExperimenterPrompt,
   DEFAULT_EXPERIMENTER_PROMPT,
   PromptInvariantError,
+  redactNonce,
+  REDACTED_NONCE_PLACEHOLDER,
   type BuildPromptOptions,
 } from './experimenter-prompt.js';
 export { acquireHarnessLock, HarnessLockBusyError, type HarnessLock } from './lock.js';
@@ -99,6 +104,7 @@ export {
   buildDryRunSummary,
   isAcknowledged,
   runSkillTestHarness,
+  SKILL_TEST_BUILTIN_CAPS,
   verdictExitCode,
   type DryRunSummaryInput,
   type RunHarnessOptions,

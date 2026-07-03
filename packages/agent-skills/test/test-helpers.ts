@@ -44,6 +44,62 @@ export function createSymlinkedDir(baseDir: string): { target: string; link: str
 }
 
 /**
+ * Write a staged-subject dir carrying `evals/evals.json` so the harness's Step-4
+ * bootstrap (exit 3) does not fire. Returns the staged subject dir. Shared by the
+ * run-harness ack-gate and grading-nonce tests, which both stub `stageHarness` and
+ * drive the orchestrator to (or past) the experimenter spawn.
+ */
+export function writeStagedSubjectWithEvals(parentDir: string): string {
+  const subjectStagedDir = safePath.join(parentDir, 'staged-subject');
+  mkdirSyncReal(safePath.join(subjectStagedDir, 'evals'), { recursive: true });
+  fs.writeFileSync(
+    safePath.join(subjectStagedDir, 'evals', 'evals.json'),
+    JSON.stringify({ skill_name: 'demo', evals: [{ id: 1, prompt: 'p', expected_output: 'o', expectations: ['e'] }] }) + '\n',
+    'utf8',
+  );
+  return subjectStagedDir;
+}
+
+/**
+ * A minimal successful `stageHarness` result for a single staged subject dir,
+ * returned as `unknown` so callers cast at the `vi.mocked(...).mockResolvedValue`
+ * boundary (the real result carries more fields than these tests exercise).
+ */
+export function stubStageResult(subjectStagedDir: string): unknown {
+  return {
+    manifest: { fingerprint: 'test', entries: [] },
+    pluginDirs: [subjectStagedDir],
+    subjectStagedDir,
+    subjectPluginRoot: null,
+  };
+}
+
+/**
+ * Register the shared `beforeEach`/`afterEach` lifecycle for a run-harness test
+ * that stubs `stageHarness`: create a fresh temp dir, write a staged subject that
+ * carries `evals/evals.json`, point the (already-mocked) `stageHarness` at it, and
+ * clean up afterward. Pass `vi.mocked(stageHarness)` so the wiring lives once here
+ * instead of being copy-pasted into each harness test. Returns getters for the
+ * per-test temp dir and staged subject dir.
+ */
+export function setupStubbedHarnessSubject<T>(
+  prefix: string,
+  stageHarnessMock: { mockResolvedValue: (value: T) => unknown },
+): { getTempDir: () => string; getSubjectStagedDir: () => string } {
+  let tempDir: string;
+  let subjectStagedDir: string;
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), prefix));
+    subjectStagedDir = writeStagedSubjectWithEvals(tempDir);
+    stageHarnessMock.mockResolvedValue(stubStageResult(subjectStagedDir) as T);
+  });
+  afterEach(() => {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+  return { getTempDir: () => tempDir, getSubjectStagedDir: () => subjectStagedDir };
+}
+
+/**
  * Create a SKILL.md file with given content and validate it
  */
 export async function createSkillAndValidate(

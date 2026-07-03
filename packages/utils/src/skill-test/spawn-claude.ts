@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from 'node:child_process';
-import { createReadStream } from 'node:fs';
+import { Readable } from 'node:stream';
 
 import which from 'which';
 
@@ -74,12 +74,16 @@ export function killProcessTree(child: { pid?: number | undefined }): void {
 
 export interface SpawnHeadlessOptions extends ClaudeSpawnArgs {
   /**
-   * Path to the experimenter-prompt file. Its contents are streamed to the
-   * child's stdin (claude 2.x reads the `-p` prompt from stdin; there is no
-   * `--prompt-file` flag). Kept off argv so the prompt is never inlined
-   * (Windows cmd-quoting safety).
+   * The experimenter prompt, held IN MEMORY and streamed to the child's stdin
+   * (claude 2.x reads the `-p` prompt from stdin; there is no `--prompt-file`
+   * flag). Kept off argv so the prompt is never inlined (Windows cmd-quoting
+   * safety) AND, deliberately, off disk: the harness stamps a per-run integrity
+   * nonce into this prompt, and writing it to a file inside (or beside) the
+   * skill-writable sandbox would let untrusted skill code read the nonce back and
+   * forge a passing grading.json. Passing it in memory keeps the nonce out of any
+   * file the skill can read.
    */
-  promptFile: string;
+  prompt: string;
   cwd: string;
   env: NodeJS.ProcessEnv;
   timeoutMs: number;
@@ -97,10 +101,10 @@ export interface SpawnHeadlessOptions extends ClaudeSpawnArgs {
 }
 
 /**
- * Spawn the headless `claude`. The prompt file is streamed to the child's stdin
- * so the session reads its prompt and then sees EOF (it cannot block on input,
- * §16). Wall-clock kill on timeout. If `stallMs` is set, a resettable stall
- * watchdog kills the child when no output is received for that duration
+ * Spawn the headless `claude`. The in-memory prompt is streamed to the child's
+ * stdin so the session reads its prompt and then sees EOF (it cannot block on
+ * input, §16). Wall-clock kill on timeout. If `stallMs` is set, a resettable
+ * stall watchdog kills the child when no output is received for that duration
  * (stalled: true in result).
  */
 export async function spawnHeadlessClaude(opts: SpawnHeadlessOptions): Promise<SpawnResult> {
@@ -123,11 +127,11 @@ export async function spawnHeadlessClaude(opts: SpawnHeadlessOptions): Promise<S
     let stalled = false;
 
     // Feed the prompt to the child via stdin (claude 2.x has no --prompt-file).
-    // Opened here (before the timers) so every kill path can destroy it and
-    // release the prompt-file FD when the child is SIGKILL'd before stdin is
-    // fully consumed.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived prompt path
-    const promptStream = createReadStream(opts.promptFile);
+    // Built from the in-memory string (never a file — the prompt carries a secret
+    // per-run nonce that must not land on the skill-readable filesystem). Created
+    // here (before the timers) so every kill path can destroy it if the child is
+    // SIGKILL'd before stdin is fully consumed.
+    const promptStream = Readable.from([opts.prompt], { objectMode: false });
 
     const wallTimer = setTimeout(() => {
       timedOut = true;
@@ -154,9 +158,9 @@ export async function spawnHeadlessClaude(opts: SpawnHeadlessOptions): Promise<S
     const clearAllTimers = (): void => {
       clearTimeout(wallTimer);
       if (stallTimer !== undefined) clearTimeout(stallTimer);
-      // Destroy the prompt stream so its file descriptor is released on every
-      // terminal path (timeout/stall reach here via 'close'; error paths call
-      // it directly). On a clean run the stream has already ended — no-op.
+      // Destroy the prompt stream on every terminal path (timeout/stall reach
+      // here via 'close'; error paths call it directly) so an unconsumed in-memory
+      // stream is torn down. On a clean run the stream has already ended — no-op.
       promptStream.destroy();
     };
 

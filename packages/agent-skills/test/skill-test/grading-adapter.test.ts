@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { GradingSkewError, parseGradingJson, reconcileGrading } from '../../src/skill-test/grading-adapter.js';
+import {
+  assertGradingNonce,
+  GradingNonceError,
+  GradingSkewError,
+  parseGradingJson,
+  reconcileGrading,
+} from '../../src/skill-test/grading-adapter.js';
 
 const VALID = {
   summary: { passed: 3, total: 3 },
@@ -133,5 +139,32 @@ describe('reconcileGrading', () => {
     expect(() => reconcileGrading({ summary: { passed: 5, total: 5 }, expectations })).toThrow(
       GradingSkewError,
     );
+  });
+});
+
+describe('parseGradingJson — runNonce passthrough', () => {
+  it('carries a top-level runNonce onto the normalized grading', () => {
+    const g = parseGradingJson({ ...VALID, runNonce: 'abc123' });
+    expect(g.runNonce).toBe('abc123');
+  });
+
+  it('leaves runNonce undefined when absent', () => {
+    expect(parseGradingJson(VALID).runNonce).toBeUndefined();
+  });
+});
+
+describe('assertGradingNonce', () => {
+  const NONCE = 'deadbeefcafef00d';
+
+  it('passes when the nonce matches exactly', () => {
+    expect(() => assertGradingNonce(NONCE, NONCE)).not.toThrow();
+  });
+
+  it('throws when the grading has no runNonce (forged/left-behind grading)', () => {
+    expect(() => assertGradingNonce(undefined, NONCE)).toThrow(GradingNonceError);
+  });
+
+  it('throws when the nonce does not match this run', () => {
+    expect(() => assertGradingNonce('not-the-nonce', NONCE)).toThrow(GradingNonceError);
   });
 });

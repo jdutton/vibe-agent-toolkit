@@ -34,15 +34,12 @@ const QUICK_MS = 3000;
 describe.skipIf(process.platform === 'win32')('spawnHeadlessClaude watchdog', () => {
   let tempDir: string;
   let binPath: string;
-  let promptFile: string;
 
   beforeAll(() => {
     tempDir = mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-spawn-watchdog-'));
     binPath = safePath.join(tempDir, 'fake-claude.mjs');
     writeFileSync(binPath, FAKE_CLAUDE, 'utf8');
     chmodSync(binPath, 0o755);
-    promptFile = safePath.join(tempDir, 'prompt.txt');
-    writeFileSync(promptFile, 'hello\n', 'utf8');
   });
 
   afterAll(() => {
@@ -56,7 +53,7 @@ describe.skipIf(process.platform === 'win32')('spawnHeadlessClaude watchdog', ()
     const started = Date.now();
     const result = await spawnHeadlessClaude({
       binPath,
-      promptFile,
+      prompt: 'hello\n',
       pluginDirs: [],
       sandboxDir: tempDir,
       cwd: tempDir,

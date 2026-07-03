@@ -481,44 +481,65 @@ async function copyGlobEntry(
  * @throws if a declared `source` does not exist — a declared build artifact must
  * be present at copy time (callers that defer existence validate it upstream).
  */
+/** Copy + optionally integrity-check one GLOB `files:` entry; returns the copied rel-dests. */
+async function applyGlobFileEntry(
+  fileEntry: SkillFileEntry,
+  opts: ApplyFilesConfigOptions,
+  bundledFileSet: Set<string>,
+): Promise<string[]> {
+  const { copied, pairs, rels } = await copyGlobEntry(
+    fileEntry,
+    opts.projectRoot,
+    opts.skillOutputDir,
+    bundledFileSet,
+  );
+  if (fileEntry.integrity === true) {
+    verifyFilesIntegrity(pairs);
+    // Scoped set check: the glob entry owns its dest subtree and the build wiped
+    // the output dir first, so the on-disk subtree must equal exactly the rels we
+    // copied — catches a misrouted rebase the pair-hash misses.
+    await verifyDestSet(safePath.joinUnderRoot(opts.skillOutputDir, fileEntry.dest), rels, fileEntry.source);
+  }
+  return copied;
+}
+
+/** Copy + optionally integrity-check one NON-GLOB `files:` entry; returns the copied rel-dests. */
+async function applyNonGlobFileEntry(
+  fileEntry: SkillFileEntry,
+  opts: ApplyFilesConfigOptions,
+  bundledFileSet: Set<string>,
+): Promise<string[]> {
+  const absoluteSource = safePath.resolve(safePath.join(opts.projectRoot, fileEntry.source));
+  if (bundledFileSet.has(toForwardSlash(absoluteSource))) {
+    // Already materialized by link traversal (copied to entry.dest via the path
+    // map) — don't copy it a second time. But a requested `integrity` check must
+    // NOT be silently skipped just because the copy was: verify the link-bundled
+    // dest is byte-identical to the source, exactly as the copy path below would.
+    // (The bundled copy lands at entry.dest — see applyNonGlobEntriesToPathMap in
+    // skill-packager.ts.)
+    if (fileEntry.integrity === true) {
+      const absDest = safePath.joinUnderRoot(opts.skillOutputDir, fileEntry.dest);
+      verifyFilesIntegrity([{ absSource: absoluteSource, absDest }]);
+    }
+    return [];
+  }
+
+  const { relDest, absSource, absDest } = await copyNonGlobEntry(fileEntry, absoluteSource, opts.skillOutputDir);
+  if (fileEntry.integrity === true) {
+    verifyFilesIntegrity([{ absSource, absDest }]);
+  }
+  return [relDest];
+}
+
 export async function applyFilesConfig(opts: ApplyFilesConfigOptions): Promise<string[]> {
   const bundledFileSet = new Set((opts.bundledFiles ?? []).map((f) => toForwardSlash(f)));
   const copied: string[] = [];
 
   for (const fileEntry of opts.filesConfig) {
-    if (isGlob(fileEntry.source)) {
-      const { copied: entryCopied, pairs, rels } = await copyGlobEntry(
-        fileEntry,
-        opts.projectRoot,
-        opts.skillOutputDir,
-        bundledFileSet,
-      );
-      if (fileEntry.integrity === true) {
-        verifyFilesIntegrity(pairs);
-        // Scoped set check: the glob entry owns its dest subtree and the build
-        // wiped the output dir first, so the on-disk subtree must equal exactly
-        // the rels we copied — catches a misrouted rebase the pair-hash misses.
-        await verifyDestSet(
-          safePath.joinUnderRoot(opts.skillOutputDir, fileEntry.dest),
-          rels,
-          fileEntry.source,
-        );
-      }
-      copied.push(...entryCopied);
-    } else {
-      const absoluteSource = safePath.resolve(safePath.join(opts.projectRoot, fileEntry.source));
-      if (bundledFileSet.has(toForwardSlash(absoluteSource))) continue;
-
-      const { relDest, absSource, absDest } = await copyNonGlobEntry(
-        fileEntry,
-        absoluteSource,
-        opts.skillOutputDir,
-      );
-      if (fileEntry.integrity === true) {
-        verifyFilesIntegrity([{ absSource, absDest }]);
-      }
-      copied.push(relDest);
-    }
+    const entryCopied = isGlob(fileEntry.source)
+      ? await applyGlobFileEntry(fileEntry, opts, bundledFileSet)
+      : await applyNonGlobFileEntry(fileEntry, opts, bundledFileSet);
+    copied.push(...entryCopied);
   }
 
   return copied;

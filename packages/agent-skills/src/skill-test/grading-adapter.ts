@@ -20,6 +20,41 @@ export class GradingSkewError extends Error {
 export interface NormalizedGrading {
   summary: { passed: number; total: number };
   expectations: { text: string; passed: boolean; evidence?: string }[];
+  /** Per-run integrity nonce the experimenter copied from its prompt (if present). */
+  runNonce?: string;
+}
+
+/**
+ * Thrown when grading.json's per-run integrity nonce is absent or does not match
+ * the nonce the harness stamped into the experimenter prompt for THIS run. A
+ * missing/wrong nonce means the grading was not produced by the experimenter we
+ * prompted — most likely a grading.json forged or left behind by untrusted skill
+ * code in the shared sandbox — so the verdict cannot be trusted.
+ */
+export class GradingNonceError extends Error {
+  constructor(message: string) {
+    super(
+      `grading.json integrity check failed: ${message}. The harness stamps a secret ` +
+        'per-run nonce into the experimenter prompt (never written to disk) and requires ' +
+        'grading.json to echo it; a missing or wrong nonce means the grading was not ' +
+        'produced by the prompted experimenter and is rejected.',
+    );
+    this.name = 'GradingNonceError';
+  }
+}
+
+/**
+ * Assert grading.json carries the exact per-run nonce the harness expected.
+ * Called before the verdict is trusted. Throws {@link GradingNonceError} on a
+ * missing or mismatched nonce.
+ */
+export function assertGradingNonce(actual: string | undefined, expected: string): void {
+  if (actual === undefined) {
+    throw new GradingNonceError('grading.json has no top-level `runNonce`');
+  }
+  if (actual !== expected) {
+    throw new GradingNonceError('grading.json `runNonce` does not match this run');
+  }
 }
 
 /**
@@ -47,7 +82,7 @@ export function parseGradingJson(raw: unknown): NormalizedGrading {
     const path = firstIssue?.path.join('.') ?? '(root)';
     throw new GradingSkewError(`missing/invalid field at "${path}" (${firstIssue?.message ?? 'unknown'})`);
   }
-  const { summary, expectations } = result.data;
+  const { summary, expectations, runNonce } = result.data;
   return {
     summary: { passed: summary.passed, total: summary.total },
     expectations: expectations.map(e => ({
@@ -55,6 +90,7 @@ export function parseGradingJson(raw: unknown): NormalizedGrading {
       passed: e.passed,
       ...(e.evidence === undefined ? {} : { evidence: e.evidence }),
     })),
+    ...(runNonce === undefined ? {} : { runNonce }),
   };
 }
 

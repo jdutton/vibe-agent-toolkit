@@ -12,7 +12,7 @@
 import * as harness from '@vibe-agent-toolkit/agent-skills';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { resolveSubjectForTest, runSkillTestRun } from '../src/commands/skill/test/run.js';
+import { resolveCappedKnob, resolveSubjectForTest, runSkillTestRun } from '../src/commands/skill/test/run.js';
 import { resetSkillDiscoveryCache } from '../src/skill-resolution/index.js';
 
 import { setupReferenceFixture } from './skill-resolution/helpers.js';
@@ -97,6 +97,42 @@ describe('vat skill test run (orchestration)', () => {
 
   it('exits 2 on a non-numeric --max-turns (never reaches the harness)', async () => {
     await expectPreflightExit2({ maxTurns: 'abc' });
+  });
+});
+
+// resolveCappedKnob encodes the security-critical asymmetry: a committed config
+// value may only LOWER a built-in cost/runtime cap, while a CLI flag (explicit
+// operator intent) may raise it. A stderr note is emitted when a config value is
+// clamped — asserted here so the clamp is never silent.
+describe('resolveCappedKnob (config may lower a cap but never raise it)', () => {
+  const CAP = 50;
+  const FLAG = '--max-turns';
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it('lets a CLI flag exceed the built-in cap (explicit operator intent)', () => {
+    expect(resolveCappedKnob(500, undefined, CAP, FLAG)).toBe(500);
+  });
+
+  it('clamps a config value that tries to exceed the cap, and warns', () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
+    expect(resolveCappedKnob(undefined, 999, CAP, FLAG)).toBe(CAP);
+    expect(stderr).toHaveBeenCalledOnce();
+    expect(String(stderr.mock.calls[0]?.[0])).toContain('exceeds the built-in safety cap');
+  });
+
+  it('passes a config value that is at or below the cap through unchanged (no warn)', () => {
+    const stderr = vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
+    expect(resolveCappedKnob(undefined, 10, CAP, FLAG)).toBe(10);
+    expect(stderr).not.toHaveBeenCalled();
+  });
+
+  it('lets a flag win over config even when the config value is higher', () => {
+    expect(resolveCappedKnob(5, 999, CAP, FLAG)).toBe(5);
+  });
+
+  it('returns undefined when neither source set the knob (domain default applies)', () => {
+    expect(resolveCappedKnob(undefined, undefined, CAP, FLAG)).toBeUndefined();
   });
 });
 

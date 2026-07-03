@@ -3,7 +3,7 @@ import { AuthPreflightError } from '@vibe-agent-toolkit/utils';
 import { BuildHookError } from './build-hook.js';
 import { UnknownEnvTokenError } from './declared-env.js';
 import { PromptInvariantError } from './experimenter-prompt.js';
-import { GradingSkewError } from './grading-adapter.js';
+import { GradingNonceError, GradingSkewError } from './grading-adapter.js';
 import { HarnessLocationError } from './harness-location.js';
 
 /** Exit codes for `vat skill test` (spec §6d). */
@@ -87,8 +87,8 @@ export class InternalHarnessError extends Error {
  * is a pre-stage build failure → 2; a SkillBuildError is a declared-skill build
  * failure → 2; a SecurityAckError is a missing security ack before a build → 2;
  * an UnknownEnvTokenError is a bad ${token} in a
- * declared env value → 2; GradingSkewError is a parse failure → 1;
- * everything unknown → 1.
+ * declared env value → 2; GradingSkewError (parse failure) and GradingNonceError
+ * (forged/mismatched grading nonce) are both → 1; everything unknown → 1.
  *
  * Note: SkillTestExitCode.EvalFailure (4) is NOT produced here — it is an
  * outcome of a completed run (an eval failed under `--fail-on-eval-failure`),
@@ -107,6 +107,12 @@ export function mapErrorToExitCode(err: unknown): number {
   ) {
     return SkillTestExitCode.Preflight;
   }
-  if (err instanceof GradingSkewError || err instanceof InternalHarnessError) return SkillTestExitCode.Internal;
+  if (
+    err instanceof GradingNonceError ||
+    err instanceof GradingSkewError ||
+    err instanceof InternalHarnessError
+  ) {
+    return SkillTestExitCode.Internal;
+  }
   return SkillTestExitCode.Internal;
 }

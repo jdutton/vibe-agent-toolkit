@@ -9,6 +9,7 @@
  *   → spawnHeadlessClaude → parseGradingJson → release lock → return result
  */
 
+import { randomBytes } from 'node:crypto';
 import { cpSync, existsSync, lstatSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -40,10 +41,12 @@ import {
   type SkillTestExitCodeValue,
 } from './exit-codes.js';
 import {
+  appendIntegrityNonceDirective,
   assertPromptInvariants,
   buildExperimenterPrompt,
+  redactNonce,
 } from './experimenter-prompt.js';
-import { parseGradingJson, reconcileGrading } from './grading-adapter.js';
+import { assertGradingNonce, parseGradingJson, reconcileGrading } from './grading-adapter.js';
 import { assertSafeHarnessRoot, assertSafeWorkdir, prepareHarnessRoot, resolveHarnessRoot } from './harness-location.js';
 import { acquireHarnessLock, installSignalCleanup } from './lock.js';
 import { detectPluginLayout } from './plugin-layout.js';
@@ -208,6 +211,27 @@ export interface RunHarnessResult {
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const DEFAULT_MAX_TURNS = 50;
 const DEFAULT_MAX_BUDGET_USD = 5;
+
+/**
+ * Built-in cost/runtime safety ceilings for the experimenter spawn. These are the
+ * SAME values the harness applies as defaults, but exported as an explicit cap so
+ * the CLI precedence layer (run.ts) can enforce a critical asymmetry:
+ *
+ *   - a CLI flag (explicit operator intent, typed at the terminal for THIS run)
+ *     may RAISE a knob above the built-in ceiling;
+ *   - a value sourced from a committed `test.*` config (which rides along in an
+ *     untrusted subject repo you may only be testing) may only LOWER a ceiling,
+ *     never raise it — so cloning + testing a hostile skill can't silently
+ *     escalate the $5 / 50-turn / 5-minute budget the run bills against.
+ *
+ * `timeoutSeconds` is expressed in seconds to match the `--timeout`/`test.timeout`
+ * unit (the harness multiplies by 1000 internally; see resolveTimeoutMs).
+ */
+export const SKILL_TEST_BUILTIN_CAPS = {
+  maxTurns: DEFAULT_MAX_TURNS,
+  maxBudgetUsd: DEFAULT_MAX_BUDGET_USD,
+  timeoutSeconds: DEFAULT_TIMEOUT_MS / 1000,
+} as const;
 
 export function resolveTimeoutMs(opts: RunHarnessOptions): number {
   return opts.timeout === undefined ? DEFAULT_TIMEOUT_MS : opts.timeout * 1000;
@@ -872,10 +896,22 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
 
     assertPromptInvariants(effectivePrompt);
 
-    // Step 8: Write the experimenter-prompt.txt.
+    // Integrity nonce (Harness B): stamp a secret per-run nonce the experimenter
+    // must echo into grading.json, and verify it after the run. This is what
+    // distinguishes a grading produced by the experimenter WE prompted from one
+    // forged/left behind by untrusted skill code in the shared sandbox. The nonce
+    // is appended AFTER any user prompt override so a committed config can't opt
+    // out. The full prompt (with the nonce) reaches claude only via stdin (see
+    // spawnHeadlessClaude) and is NEVER written to disk; the persisted audit copy
+    // below is redacted so skill code can't read the nonce back and forge a match.
+    const runNonce = randomBytes(16).toString('hex');
+    const noncedPrompt = appendIntegrityNonceDirective(effectivePrompt, runNonce);
+
+    // Step 8: Write the REDACTED experimenter prompt as the audit artifact. The
+    // real (nonce-bearing) prompt is passed to the spawn in memory, not from here.
     const promptFile = safePath.join(resultsDir, 'experimenter-prompt.txt');
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived path
-    writeFileSync(promptFile, effectivePrompt + '\n', 'utf-8');
+    writeFileSync(promptFile, redactNonce(noncedPrompt, runNonce) + '\n', 'utf-8');
 
     // Step 7.5: Resolve the declared test env (Features A + B). Token resolution
     // can hard-fail (exit 2) on an unknown ${token}; do it before the dry-run
@@ -924,7 +960,9 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
 
     const timeoutMs = resolveTimeoutMs(opts);
     const spawnOpts = {
-      promptFile,
+      // In-memory, nonce-bearing prompt — streamed to stdin, never written to a
+      // file the skill could read (see the integrity-nonce note above).
+      prompt: noncedPrompt + '\n',
       pluginDirs,
       sandboxDir: harnessRoot,
       cwd: harnessRoot,
@@ -960,6 +998,11 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     }
 
     const grading = parseGradingJson(gradingRaw);
+    // Integrity gate (Harness B): reject a grading.json that doesn't echo THIS
+    // run's secret nonce BEFORE trusting any verdict — a missing/wrong nonce means
+    // the grading was not produced by the experimenter we prompted (e.g. forged by
+    // skill code in the sandbox). Thrown GradingNonceError maps to exit 1.
+    assertGradingNonce(grading.runNonce, runNonce);
     // Verdict comes from the authoritative per-expectation `passed` flags, NOT
     // the grader's self-reported summary. reconcileGrading throws GradingSkewError
     // if the grader graded nothing or its summary disagrees with the expectations.

@@ -90,13 +90,17 @@ function stageOneItem(
   }
 
   // Plugin-distributed: recreate the real plugin-root layout so the harness
-  // mirrors a real install. The plugin name (basename of the real plugin dir)
-  // becomes the single sanitized staged segment. `realPluginDir` is a READ source
-  // (the true on-disk plugin), not a write-containment root — hence safePath.join,
-  // not joinUnderRoot; only the staging DESTS below use joinUnderRoot.
+  // mirrors a real install. `realPluginDir` is a READ source (the true on-disk
+  // plugin), not a write-containment root — hence safePath.join, not joinUnderRoot;
+  // only the staging DESTS below use joinUnderRoot.
   const { pluginRoot: realPluginDir, relPathUnderPlugin } = item.pluginLayout;
-  const pluginName = basename(toForwardSlash(realPluginDir));
-  const pluginStageRoot = safePath.joinUnderRoot(harnessRoot, stagedDirName(pluginName));
+  // Key the staged plugin-root segment on the FULL resolved plugin path, not just
+  // its basename: two different `--with` plugins that share a directory basename
+  // (…/a/my-plugin and …/b/my-plugin) must not collide onto ONE staged root and
+  // silently cross-wire CLAUDE_PLUGIN_ROOT / the manifest into a misleading result.
+  // stagedDirName keeps the basename as the readable slug and disambiguates on a
+  // hash of the full path, so equal basenames from distinct dirs stay distinct.
+  const pluginStageRoot = safePath.joinUnderRoot(harnessRoot, stagedDirName(realPluginDir));
 
   if (!preparedPluginRoots.has(pluginStageRoot)) {
     // First item for this plugin root in this stageHarness run: wipe the stale

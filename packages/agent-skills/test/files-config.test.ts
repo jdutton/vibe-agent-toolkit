@@ -27,6 +27,8 @@ const APPLY_TMP_DIRS: string[] = [];
 const DATA_FILE = 'data.json';
 const DATA_DEST = `data/${DATA_FILE}`;
 const DATA_SOURCE = `dist/gen/${DATA_FILE}`;
+/** Canonical bytes written to the build-artifact source (shared across cases). */
+const DATA_BYTES = '{"ok":true}';
 
 /** Create an isolated {projectRoot, skillOutputDir} sandbox with a build artifact source. */
 function makeApplySandbox(): { projectRoot: string; skillOutputDir: string } {
@@ -36,7 +38,7 @@ function makeApplySandbox(): { projectRoot: string; skillOutputDir: string } {
   const skillOutputDir = safePath.join(root, 'out');
   mkdirSyncReal(safePath.join(projectRoot, 'dist', 'gen'), { recursive: true });
   mkdirSyncReal(skillOutputDir, { recursive: true });
-  writeFileSync(safePath.join(projectRoot, 'dist', 'gen', DATA_FILE), '{"ok":true}');
+  writeFileSync(safePath.join(projectRoot, 'dist', 'gen', DATA_FILE), DATA_BYTES);
   return { projectRoot, skillOutputDir };
 }
 
@@ -303,7 +305,7 @@ describe('applyFilesConfig', () => {
     expect(copied).toEqual([DATA_DEST]);
     const destPath = safePath.join(skillOutputDir, 'data', DATA_FILE);
     expect(existsSync(destPath)).toBe(true);
-    expect(readFileSync(destPath, 'utf-8')).toBe('{"ok":true}');
+    expect(readFileSync(destPath, 'utf-8')).toBe(DATA_BYTES);
   });
 
   it('skips entries whose source is already bundled', async () => {
@@ -315,6 +317,37 @@ describe('applyFilesConfig', () => {
 
     expect(copied).toEqual([]);
     expect(existsSync(safePath.join(skillOutputDir, 'data', DATA_FILE))).toBe(false);
+  });
+
+  it('still runs the integrity byte check on a bundled-skip entry (dest matches source → pass)', async () => {
+    const { projectRoot, skillOutputDir } = makeApplySandbox();
+    const filesConfig: SkillFileEntry[] = [{ source: DATA_SOURCE, dest: DATA_DEST, integrity: true }];
+    const bundledFiles = [safePath.resolve(safePath.join(projectRoot, DATA_SOURCE))];
+    // Simulate what link traversal (copyAndRewriteFiles) already did: place the
+    // bundled file at entry.dest, byte-identical to the source.
+    const destPath = safePath.join(skillOutputDir, 'data', DATA_FILE);
+    mkdirSyncReal(safePath.join(skillOutputDir, 'data'), { recursive: true });
+    writeFileSync(destPath, DATA_BYTES);
+
+    const copied = await applyFilesConfig({ filesConfig, projectRoot, skillOutputDir, bundledFiles });
+
+    // The copy is still skipped (bundled), but the requested integrity check ran.
+    expect(copied).toEqual([]);
+    expect(existsSync(destPath)).toBe(true);
+  });
+
+  it('fails the integrity byte check on a bundled-skip entry when dest differs from source', async () => {
+    const { projectRoot, skillOutputDir } = makeApplySandbox();
+    const filesConfig: SkillFileEntry[] = [{ source: DATA_SOURCE, dest: DATA_DEST, integrity: true }];
+    const bundledFiles = [safePath.resolve(safePath.join(projectRoot, DATA_SOURCE))];
+    // A link-bundled dest whose bytes DON'T match the source must not slip past a
+    // requested integrity check just because the copy was skipped.
+    mkdirSyncReal(safePath.join(skillOutputDir, 'data'), { recursive: true });
+    writeFileSync(safePath.join(skillOutputDir, 'data', DATA_FILE), '{"ok":false}');
+
+    await expect(
+      applyFilesConfig({ filesConfig, projectRoot, skillOutputDir, bundledFiles }),
+    ).rejects.toThrow(/content mismatch/);
   });
 
   it('throws when a declared source does not exist', async () => {

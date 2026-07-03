@@ -62,6 +62,40 @@ export function buildExperimenterPrompt(opts: BuildPromptOptions): string {
     .replace('{{BASELINE_BLOCK}}', opts.baseline ? BASELINE_BLOCK : '');
 }
 
+/**
+ * Sentinel the persisted (audit) copy of the prompt shows in place of the real
+ * nonce, so the on-disk artifact never leaks the secret to skill code.
+ */
+export const REDACTED_NONCE_PLACEHOLDER = '<run-nonce redacted>';
+
+/**
+ * Append the per-run integrity-nonce directive to the effective prompt. The
+ * experimenter must copy `nonce` verbatim into grading.json's top-level
+ * `runNonce` field; the harness then rejects any grading.json whose nonce is
+ * absent or wrong (see run-harness.ts). This is defense-in-depth against
+ * untrusted skill code forging a passing grading.json in the shared sandbox —
+ * without the secret nonce (delivered only via stdin, never written to disk) a
+ * forged grading cannot be authenticated.
+ *
+ * Appended AFTER assertPromptInvariants and AFTER any user `experimenterPrompt`
+ * override, so the nonce requirement is ALWAYS enforced and a committed config
+ * cannot opt out of it.
+ */
+export function appendIntegrityNonceDirective(prompt: string, nonce: string): string {
+  return [
+    prompt,
+    '',
+    'INTEGRITY (required, do this LAST): the grading.json you write MUST include a',
+    `top-level string field "runNonce" whose value is EXACTLY: ${nonce}`,
+    'Copy it verbatim. vat rejects a grading.json whose runNonce is missing or wrong.',
+  ].join('\n');
+}
+
+/** Redact the per-run nonce from a prompt for the on-disk audit copy. */
+export function redactNonce(prompt: string, nonce: string): string {
+  return prompt.replaceAll(nonce, REDACTED_NONCE_PLACEHOLDER);
+}
+
 const REQUIRED_PATTERNS: { test: RegExp; label: string }[] = [
   { test: /\bSTOP\b/, label: 'must instruct the experimenter to STOP' },
   { test: /grading\.json|\{\{GRADING_OUT\}\}/i, label: 'must write grading.json' },

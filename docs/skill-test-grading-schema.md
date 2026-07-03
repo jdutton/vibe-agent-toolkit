@@ -65,6 +65,15 @@ emits `execution_metrics`, `timing`, `claims`, `user_notes_summary`, and
 what we depend on, carry the rest). Extra fields are **not** "bad JSON"; a wrong
 top-level *structure* is.
 
+`runNonce` (string) is optional in the schema but **required by the harness at
+run time**: `vat skill test run` stamps a secret per-run nonce into the
+experimenter prompt (delivered only via stdin, never written to disk) and the
+experimenter must copy it verbatim into a top-level `runNonce`. The harness
+rejects a grading.json whose `runNonce` is missing or wrong — this is how a
+forged or left-behind grading written by untrusted skill code in the shared
+sandbox is detected. External tooling validating a grading.json off-line need
+not supply it.
+
 ## What is rejected
 
 A **per-eval nested** shape is the common mistake — the grader (an LLM) reaches

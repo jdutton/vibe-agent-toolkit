@@ -36,6 +36,8 @@ const MANIFEST_FILE = 'staged.manifest.json';
 const SKILL_FILE = 'SKILL.md';
 const SUBJECT_NAME = 'foo';
 const CLAUDE_PLUGIN_DIR = '.claude-plugin';
+const PLUGIN_JSON = 'plugin.json';
+const REL_SKILL_PATH = 'skills/foo';
 
 type StageHarnessResolve = (
   source: SkillSource,
@@ -81,13 +83,18 @@ function buildTree(root: string, files: Record<string, string>): string {
   return root;
 }
 
-/** Build a real plugin dir (with `.claude-plugin/plugin.json`) and return its root. */
-function writePluginRoot(base: string): string {
-  const root = safePath.join(base, 'my-plugin');
+/**
+ * Build a real plugin dir (with `.claude-plugin/plugin.json`) and return its root.
+ * `parent`/`manifestName` let callers create two plugins that share the SAME
+ * directory basename (`my-plugin`) under different parents, with distinct manifest
+ * contents — the setup for the basename-collision regression test.
+ */
+function writePluginRoot(base: string, parent = '.', manifestName = 'my-plugin'): string {
+  const root = safePath.join(base, parent, 'my-plugin');
   mkdirSyncReal(safePath.join(root, CLAUDE_PLUGIN_DIR), { recursive: true });
   writeFileSync(
-    safePath.join(root, CLAUDE_PLUGIN_DIR, 'plugin.json'),
-    JSON.stringify({ name: 'my-plugin' }) + '\n',
+    safePath.join(root, CLAUDE_PLUGIN_DIR, PLUGIN_JSON),
+    JSON.stringify({ name: manifestName }) + '\n',
   );
   return root;
 }
@@ -184,7 +191,7 @@ describe('stageHarness — plugin-layout path', () => {
         name: SUBJECT_NAME,
         source: { path: sourceDir },
         role: 'subject',
-        pluginLayout: { pluginRoot, relPathUnderPlugin: 'skills/foo' },
+        pluginLayout: { pluginRoot, relPathUnderPlugin: REL_SKILL_PATH },
       },
     ];
 
@@ -200,7 +207,7 @@ describe('stageHarness — plugin-layout path', () => {
     const stagedPluginRoot = result.subjectPluginRoot as string;
 
     // The staged plugin root holds `.claude-plugin/`.
-    expect(existsSync(safePath.join(stagedPluginRoot, CLAUDE_PLUGIN_DIR, 'plugin.json'))).toBe(true);
+    expect(existsSync(safePath.join(stagedPluginRoot, CLAUDE_PLUGIN_DIR, PLUGIN_JSON))).toBe(true);
 
     // The skill is copied under the nested slot, and subjectStagedDir points there.
     const nested = safePath.join(stagedPluginRoot, 'skills', 'foo');
@@ -209,6 +216,57 @@ describe('stageHarness — plugin-layout path', () => {
 
     // The pushed plugin dir is the plugin root (not the nested skill dir).
     expect(toForwardSlash(result.pluginDirs[0] as string)).toBe(toForwardSlash(stagedPluginRoot));
+  });
+});
+
+describe('stageHarness — plugin basename collision', () => {
+  const { getTempDir } = setupTempDir('vat-staging-collision-');
+
+  it('stages two plugins sharing a dir basename into DISTINCT roots (no cross-wiring)', async () => {
+    const tmp = getTempDir();
+    // Two DIFFERENT plugins that share the basename `my-plugin` (…/a/my-plugin and
+    // …/b/my-plugin) with distinct manifests. Keyed on basename alone they would
+    // collide onto one staged root; keyed on the full path they must stay separate.
+    const pluginA = writePluginRoot(tmp, 'a', 'plugin-a');
+    const pluginB = writePluginRoot(tmp, 'b', 'plugin-b');
+    const skillA = writeSourceSkill(safePath.join(tmp, 'a'));
+    const skillB = writeSourceSkill(safePath.join(tmp, 'b'));
+    const harnessRoot = makeHarnessRoot();
+
+    const items: StageItem[] = [
+      {
+        name: 'foo-a',
+        source: { path: skillA },
+        role: 'subject',
+        pluginLayout: { pluginRoot: pluginA, relPathUnderPlugin: REL_SKILL_PATH },
+      },
+      {
+        name: 'foo-b',
+        source: { path: skillB },
+        pluginLayout: { pluginRoot: pluginB, relPathUnderPlugin: REL_SKILL_PATH },
+      },
+    ];
+
+    const resolve: StageHarnessResolve = async (source) => {
+      const p = 'path' in source ? source.path : '';
+      if (p === skillA) return { stagedDir: skillA, identity: 'id-a' };
+      if (p === skillB) return { stagedDir: skillB, identity: 'id-b' };
+      throw new Error(`unexpected source: ${p}`);
+    };
+
+    const result = await stageHarness({ harnessRoot, items, resolve, ctx: CTX, currentUid });
+
+    // Two distinct staged plugin roots — no collision.
+    const [rootA, rootB] = result.pluginDirs;
+    expect(toForwardSlash(rootA as string)).not.toBe(toForwardSlash(rootB as string));
+    expect(result.pluginDirs).toHaveLength(2);
+
+    // Each staged manifest carries ITS OWN plugin name — proving neither item's
+    // `.claude-plugin/` clobbered the other's onto a shared root.
+    const nameOf = (root: string): string =>
+      JSON.parse(readFileSync(safePath.join(root, CLAUDE_PLUGIN_DIR, PLUGIN_JSON), 'utf8')).name;
+    expect(nameOf(rootA as string)).toBe('plugin-a');
+    expect(nameOf(rootB as string)).toBe('plugin-b');
   });
 });
 

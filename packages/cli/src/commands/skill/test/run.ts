@@ -18,6 +18,7 @@ import {
   runPreStageBuild,
   runSkillTestHarness,
   SecurityAckError,
+  SKILL_TEST_BUILTIN_CAPS,
   SkillBuildError,
   SkillTestExitCode,
 } from '@vibe-agent-toolkit/agent-skills';
@@ -258,18 +259,56 @@ function applyScalarMerges(opts: HarnessOpts, options: SkillTestRunOptions, conf
   if (config?.experimenterPrompt !== undefined) opts.promptOverride = config.experimenterPrompt;
 }
 
+/**
+ * Resolve one cost/runtime knob with flag > config > default precedence AND a
+ * built-in safety cap, enforcing an asymmetry between the two sources:
+ *
+ *   - a CLI FLAG (explicit operator intent for THIS run) wins and may exceed the
+ *     built-in cap;
+ *   - a value from a COMMITTED config (which rides along in an untrusted subject
+ *     repo) may only LOWER the cap — a config trying to RAISE it above the ceiling
+ *     is clamped to the ceiling, with a one-line stderr note so the clamp isn't
+ *     silent.
+ *
+ * Returns undefined only when neither source set the knob (the domain then applies
+ * its own built-in default). `flagName` is the CLI flag shown in the clamp note.
+ */
+export function resolveCappedKnob(
+  flagValue: number | undefined,
+  configValue: number | undefined,
+  cap: number,
+  flagName: string,
+): number | undefined {
+  if (flagValue !== undefined) return flagValue;
+  if (configValue === undefined) return undefined;
+  if (configValue > cap) {
+    process.stderr.write(
+      `Note: config value ${configValue} for '${flagName}' exceeds the built-in safety cap ${cap}; using ${cap}. ` +
+        `A committed config may only lower this cap, not raise it — pass ${flagName} to override for this run.\n`,
+    );
+    return cap;
+  }
+  return configValue;
+}
+
 /** Apply flag>config merges for numeric knobs (turns/budget/timeout/stall). */
 function applyKnobMerges(
   opts: HarnessOpts,
   knobs: ReturnType<typeof coerceKnobs>,
   config: TestConfig | undefined,
 ): void {
-  const maxTurns = knobs.maxTurns ?? config?.maxTurns;
+  const maxTurns = resolveCappedKnob(knobs.maxTurns, config?.maxTurns, SKILL_TEST_BUILTIN_CAPS.maxTurns, '--max-turns');
   if (maxTurns !== undefined) opts.maxTurns = maxTurns;
-  const maxBudgetUsd = knobs.maxBudgetUsd ?? config?.maxBudgetUsd;
+  const maxBudgetUsd = resolveCappedKnob(
+    knobs.maxBudgetUsd,
+    config?.maxBudgetUsd,
+    SKILL_TEST_BUILTIN_CAPS.maxBudgetUsd,
+    '--max-budget-usd',
+  );
   if (maxBudgetUsd !== undefined) opts.maxBudgetUsd = maxBudgetUsd;
-  const timeout = knobs.timeout ?? config?.timeout;
+  const timeout = resolveCappedKnob(knobs.timeout, config?.timeout, SKILL_TEST_BUILTIN_CAPS.timeoutSeconds, '--timeout');
   if (timeout !== undefined) opts.timeout = timeout;
+  // `stall` is a liveness watchdog, not a cost ceiling — no built-in cap to clamp.
   const stall = knobs.stall ?? config?.stall;
   if (stall !== undefined) opts.stall = stall;
 }
