@@ -353,8 +353,13 @@ See [the docs][docs] for details.
     it('should classify protocol-like hrefs as unknown', async () => {
       await assertAllLinksClassifiedAs(tempDir, 'protocol-like.md', `[JS](javascript:void(0))
 [Tel](tel:+1234567890)
-[Data](data:text/plain;base64,SGVsbG8=)
 `, 'unknown');
+    });
+
+    it('should classify inline data:/blob: URIs as embedded', async () => {
+      await assertAllLinksClassifiedAs(tempDir, 'embedded-uris.md', `[Data](data:text/plain;base64,SGVsbG8=)
+[Blob](blob:https://example.com/550e8400-uuid)
+`, 'embedded');
     });
 
     it('should classify percent-encoded relative paths as local_file', async () => {

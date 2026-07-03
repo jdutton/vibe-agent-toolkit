@@ -714,6 +714,25 @@ describe('validateLink', () => {
       // But no LINK_BROKEN_ANCHOR — target is un-indexed so anchor check is skipped
       expect(brokenAnchors).toHaveLength(0);
     });
+
+    it('does not flag inline data:/blob: resources as LINK_UNKNOWN', async () => {
+      // Inline images (data: URIs) and object URLs (blob:) are self-contained —
+      // there is nothing to fetch or resolve, so they must not surface as
+      // "unknown link type" warnings. Common pattern: inline SVG/PNG/GIF logos.
+      await writeFile(
+        safePath.join(suite.tempDir, 'page.html'),
+        '<html><body>' +
+          '<img src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" alt="">' +
+          '<img src="data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%2F%3E" alt="">' +
+          '<img src="blob:https://example.com/550e8400-uuid" alt="">' +
+          '</body></html>',
+        'utf-8',
+      );
+
+      const result = await crawlAndValidate(suite.tempDir);
+
+      expect(result.issues.filter((i) => i.code === 'LINK_UNKNOWN')).toHaveLength(0);
+    });
   });
 
   describe('leading-/ links (RFC 3986 §4.2 absolute-path reference)', () => {

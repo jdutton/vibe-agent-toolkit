@@ -105,6 +105,11 @@ export async function validateLink(
       // Email links are valid by default
       return null;
 
+    case 'embedded':
+      // Self-contained inline resources (data:/blob:) have no target to
+      // validate — valid by default, don't report them.
+      return null;
+
     case 'unknown':
       return createRegistryIssue(
         'LINK_UNKNOWN',

@@ -10,6 +10,7 @@ import { SHA256Schema } from './checksum.js';
  * - `anchor`: Link to a heading anchor (e.g., #heading-slug)
  * - `external`: HTTP/HTTPS URL to external resource
  * - `email`: Mailto link
+ * - `embedded`: Self-contained inline resource (`data:`/`blob:` URI) — no target to validate
  * - `unknown`: Unclassified link type
  */
 export const LinkTypeSchema = z.enum([
@@ -18,6 +19,7 @@ export const LinkTypeSchema = z.enum([
   'anchor',
   'external',
   'email',
+  'embedded',
   'unknown',
 ]).describe('Type of link found in markdown resources');
 
