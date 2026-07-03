@@ -85,7 +85,10 @@ export function cloneGitSource(parsed: ParsedGitUrl, targetTempdir: string): Git
 function cloneShallow(parsed: ParsedGitUrl, tempdir: string): string {
   const args = ['clone', '--depth', '1', '--single-branch'];
   if (parsed.ref !== undefined) args.push('--branch', parsed.ref);
-  args.push(parsed.cloneUrl, tempdir);
+  // `--` ends option parsing so a cloneUrl/tempdir that begins with `-` can never
+  // be read as a git option (defense in depth — parseGitUrl already rejects such
+  // URLs, but the separator makes the guarantee local to the spawn).
+  args.push('--', parsed.cloneUrl, tempdir);
 
   const result = runGit(args);
   const status = result.status ?? 1;
