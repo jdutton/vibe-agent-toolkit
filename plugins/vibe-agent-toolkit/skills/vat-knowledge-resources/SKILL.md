@@ -48,6 +48,8 @@ resources:
 | `permissive` | Enforced | Allowed | Docs with project-specific extras |
 | `strict` | Enforced | Error | SKILL.md, API specs, tightly controlled schemas |
 
+**`strict` only rejects extras when the JSON Schema sets `"additionalProperties": false`.** `mode: strict` makes VAT *honor* that schema constraint; without it (or with `additionalProperties: true`), extra fields are still allowed even in strict mode. So a tight schema is two parts: `mode: strict` in the collection config **and** `"additionalProperties": false` in the schema file. `permissive` ignores `additionalProperties` and always allows extras. When `mode` is omitted, collection validation defaults to `permissive`.
+
 ## Running Validation
 
 ```bash
@@ -92,6 +94,24 @@ VAT walks four URI-family formats: `uri-reference`, `uri`, `iri-reference`, `iri
 Absolute URLs in URI-reference fields feed into the existing external URL health-check pass when `checkUrlLinks: true` is set on the collection.
 
 Opt-out: `checkFrontmatterLinks: false` per collection, or `--no-check-frontmatter-links` on the CLI.
+
+## Per-code severity and allow (`resources.validation`)
+
+Every resources finding is a registry code (e.g. `LINK_BROKEN_FILE`, `FRONTMATTER_SCHEMA_ERROR`, `EXTERNAL_URL_DEAD`) with a default severity. Tune them per-code under `resources.validation`:
+
+```yaml
+resources:
+  validation:
+    severity:
+      EXTERNAL_URL_DEAD: ignore     # silence dead external links entirely
+      LINK_UNKNOWN: error           # promote unclassified links to build-failing
+    allow:
+      LINK_TO_GITIGNORED:           # keyed by code; value is a list of allow entries
+        - paths: ["docs/internal/**"]
+          reason: "internal-only notes, intentionally gitignored"
+```
+
+`severity` accepts `error | warning | info | ignore`. External-URL findings default to `warning` and never fail the build on their own — promote them to `error` here if you want network checks to gate CI. `allow` is keyed by code; each entry's `paths` (glob list, default `**/*`) and `reason` suppress that code for matching files rather than disabling it globally. Add `expires` (a date string) to flag the allowance for re-review.
 
 ## Annotating Frontmatter Schemas with Zod 4
 

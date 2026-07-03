@@ -37,6 +37,11 @@ Best practices for `description`:
 - Write in third person. First-person ("I can...") and conversational second-person ("You can use...") fire `SKILL_DESCRIPTION_WRONG_PERSON`.
 - Keep under 250 characters so the Claude Code `/skills` listing doesn't truncate the tail (target ≤200 for safety, ≤130 if shipping a large skill collection). The hard schema limit is 1024.
 
+Other frontmatter keys — keep them conservative:
+
+- The standard key set is `name`, `description`, `allowed-tools`, `argument-hint`, `metadata`, `license`, `compatibility`, `model` (plus the Claude Code behavior flags `disable-model-invocation`, `user-invocable`, `context`, `agent`, `hooks`). VAT warns on anything outside it via `SKILL_FRONTMATTER_EXTRA_FIELDS` (one issue per non-standard field) — spec-compliant consumers silently ignore unknown keys, so a bare `version:` or `team:` looks declarative but carries no semantics off your project.
+- Stamp per-skill data — `version`, `team`/owner, status — under the allowed `metadata:` mapping (nest `version:`/`team:` beneath `metadata:`), **not** as bare top-level keys. For VAT packaging/validation config, use `vibe-agent-toolkit.config.yaml` under `skills.config.<name>`, never the frontmatter. (The cross-document reference keys below are the one routine exception — VAT resolves them for link validation; keep other custom data under `metadata:`.)
+
 ## Cross-document references in SKILL.md frontmatter
 
 When SKILL.md frontmatter references other documents (parent specs, ADRs,
@@ -75,6 +80,30 @@ A short `## References` section at the bottom is the canonical place to list lin
 - **Prose references to sibling skills** — write `vibe-agent-toolkit:vat-audit`, not `[vat-audit](./vat-audit.md)`. Markdown links to sibling SKILL.md files cause the packager to transclude the other skill (and fire `LINK_TO_SKILL_DEFINITION`).
 
 Avoid linking to navigation files (`README.md`, `index.md`) — they're excluded from the bundle and the link resolves to nothing (`LINK_TO_NAVIGATION_FILE`).
+
+## Referencing bundled scripts and assets (portability)
+
+When the body tells the agent to run a bundled script or read a bundled asset, **reference it by a relative path rooted at the skill directory** — `scripts/run.mjs`, `assets/template.xlsx` — and nothing else. This is the only form that is portable across the surfaces a skill can run on (Claude Code plugins, claude.ai uploads, the API container, and others).
+
+**Never anchor the path on `CLAUDE_PLUGIN_ROOT`, an absolute path, or any environment variable.** Two reasons:
+
+1. **`CLAUDE_PLUGIN_ROOT` is a Claude-Code-plugin-only construct — it is not part of the portable skill contract.** It does not exist when the same skill is mounted standalone (a claude.ai upload, an API-uploaded skill, `~/.claude/skills/`). A skill that depends on it stops being portable, which defeats the purpose of shipping a skill.
+2. **Even inside Claude Code it points at the wrong root.** It resolves to the *plugin* directory, not the skill, so authors append the plugin-relative segment `skills/<name>/…`. That segment only exists under plugin mounting; under a single-skill mount the skill directory *is* the root, so a `${CLAUDE_PLUGIN_ROOT}/skills/<name>/scripts/run.mjs` path silently 404s — and it 404s on the user's very first invocation, the most expensive place to fail.
+
+**Why relative paths work everywhere:** at runtime the agent reads `SKILL.md` from the skill's own directory, then runs bundled scripts from there. A bundled script is a sibling of `SKILL.md`, so a skill-relative path resolves wherever the skill happens to be mounted. "Relative to the skill root" is the one anchor guaranteed to exist on every surface. (See Anthropic's [skill authoring best practices](https://platform.claude.com/docs/en/docs/agents-and-tools/agent-skills/best-practices) — every script example there is a skill-relative path; `CLAUDE_PLUGIN_ROOT` appears nowhere.)
+
+**The one gotcha — working directory.** The agent's cwd when it runs a command is not guaranteed to be the skill directory (it is often the user's project). So either state plainly that paths are *relative to this skill's directory (the folder containing SKILL.md)*, or have the skill `cd` into its own directory first.
+
+```bash
+# ✅ Portable — relative to the skill directory
+node scripts/run.mjs <verb> ...
+
+# ❌ Non-portable — Claude-Code-plugin-only, and the skills/<name>/ segment
+#    breaks under a standalone skill mount
+node "${CLAUDE_PLUGIN_ROOT}/skills/my-skill/scripts/run.mjs" <verb> ...
+```
+
+A script bundled via the `files:` config lands at a skill-relative `dest` (e.g. `scripts/run.mjs`) — reference it in the body by that same relative path, so the documented invocation and the packaged layout are the same string. `files:` is also what lets `vat verify` confirm the artifact actually ships at that path (see `vibe-agent-toolkit:vat-skill-distribution`); a script injected by an external build step VAT can't see has no such guarantee.
 
 ## packagingOptions Reference
 

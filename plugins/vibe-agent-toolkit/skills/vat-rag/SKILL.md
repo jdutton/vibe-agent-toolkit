@@ -45,9 +45,10 @@ VAT's `@vibe-agent-toolkit/rag` package provides the core interfaces and a small
 | Provider | Model | Where it runs |
 |---|---|---|
 | `TransformersEmbeddingProvider` | `Xenova/all-MiniLM-L6-v2` (default) | Local, via `transformers.js` — no API key, CPU inference |
+| `OnnxEmbeddingProvider` | `sentence-transformers/all-MiniLM-L6-v2` (default, 384-dim) | Local, native ONNX Runtime (C++, hardware-accelerated) — no API key; needs `npm install onnxruntime-node` |
 | `OpenAIEmbeddingProvider` | `text-embedding-3-small` (default) | OpenAI API — requires `OPENAI_API_KEY` |
 
-Both implement the `EmbeddingProvider` interface (`name`, `model`, `dimensions`, `embed(text)`, `embedBatch(texts)`), so the rest of the RAG pipeline doesn't care which one is wired in.
+All implement the `EmbeddingProvider` interface (`name`, `model`, `dimensions`, `embed(text)`, `embedBatch(texts)`), so the rest of the RAG pipeline doesn't care which one is wired in.
 
 ### Vector store
 
@@ -97,7 +98,7 @@ Per-store configuration keeps multi-corpus projects (multilingual docs, product-
 
 - `vat rag query` returns empty: confirm `vat rag stats` shows non-zero chunks; re-run `vat rag index` after adding content.
 - Slow first index with `transformers-js`: the model downloads on first use and caches under `~/.cache/transformers`.
-- Drift between indexed content and live docs: re-index. LanceDB supports delete-by-filter, so `vat rag index --rebuild` for the specific store is safe.
+- Drift between indexed content and live docs: just re-run `vat rag index` — indexing is incremental (unchanged files are skipped by content hash, changed files have their stale chunks replaced; see `resourcesSkipped`/`chunksDeleted` in the output). For a full rebuild from scratch, run `vat rag clear` then `vat rag index`. There is no `--rebuild` flag.
 
 ## References
 

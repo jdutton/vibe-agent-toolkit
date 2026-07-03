@@ -40,6 +40,7 @@ Poor fits:
 | `vat build`, `vat verify`, plugin/marketplace layout, npm publishing, postinstall | `vibe-agent-toolkit:vat-skill-distribution` |
 | `vat rag index` / `vat rag query`, embedding providers, vector stores, chunking | `vibe-agent-toolkit:vat-rag` |
 | Pre-publication quality review, `vat skill review`, validation-code triage | `vibe-agent-toolkit:vat-skill-review` |
+| Behaviorally testing a packaged skill in isolation — `vat skill test run`/`configure`, friction triage, auth modes, security caveats | `vibe-agent-toolkit:vat-skill-testing` |
 | Anthropic Admin API: org users, cost/usage, workspace skills, `ANTHROPIC_ADMIN_API_KEY` | `vibe-agent-toolkit:vat-enterprise-org` |
 | Programmatic markdown/frontmatter edits — moving files, updating references, schema-evolution migrations; comment-preserving FrontmatterEditor + rewriteBodyLinks | `vibe-agent-toolkit:markdown-rewriting` |
 
