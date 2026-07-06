@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`VAT_LINKAUTH_ALLOW_COMMAND=0` opt-out for token command sources (issue #113 §6.2).** Set `VAT_LINKAUTH_ALLOW_COMMAND=0` in your environment to skip all `{ command: ... }` token sources at runtime — only `{ env: ... }` sources are tried. Useful in security-sensitive CI environments or policies that prohibit arbitrary child-process execution from the link validator. The opt-out can also be set programmatically via `allowCommand: false` in the injected `TokenResolutionDeps`.
+- **Contributor guide for the linkAuth engine** at [`docs/contributing/vat-linkauth-contributing.md`](docs/contributing/vat-linkauth-contributing.md): engine vocabulary, how to add a new provider macro, token resolution mechanics, the GIT_* scrubbing rationale, testing requirements, and code style notes.
+
+### Fixed
+
+- **`gh auth token` (and other token commands) no longer fail when `vat resources validate` runs from a git pre-commit hook (issue #113 §6.1).** Git sets `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, and related vars before invoking hooks; these poison any tool that internally shells out to git, including `gh auth token`. The default token-command runner now strips all `GIT_*` vars from the environment before spawning, so authenticated link checking works correctly in both hook and non-hook contexts.
+
 ## [0.1.39] - 2026-07-03
 
 ### Added

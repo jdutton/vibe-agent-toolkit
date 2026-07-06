@@ -12,6 +12,7 @@ function makeDeps(overrides?: Partial<TokenResolutionDeps>): TokenResolutionDeps
   return {
     env: overrides?.env ?? {},
     runCommand: overrides?.runCommand ?? (() => ({ success: false, stdout: '' })),
+    allowCommand: overrides?.allowCommand ?? true,
   };
 }
 
@@ -187,4 +188,45 @@ describe('resolveToken — no token leakage in serialized errors', () => {
     // DOES propagate the throw (no swallowing of operator errors). If you want
     // graceful handling, wrap at the call site.
   });
+});
+
+describe('resolveToken — allowCommand opt-out', () => {
+  it('skips command sources when allowCommand is false', () => {
+    const runCommand = vi.fn(() => ({ success: true, stdout: 'should-not-run' }));
+    const deps = makeDeps({ allowCommand: false, runCommand });
+    expect(resolveToken([{ command: ['gh', 'auth', 'token'] }], deps)).toBeUndefined();
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  it('still resolves env sources when allowCommand is false', () => {
+    const deps = makeDeps({ allowCommand: false, env: { MY_TOKEN: 'env-wins' } });
+    expect(resolveToken([{ command: ['gh', 'auth', 'token'] }, { env: 'MY_TOKEN' }], deps)).toBe('env-wins');
+  });
+
+  it('allows command sources when allowCommand is true (default)', () => {
+    const runCommand = vi.fn(() => ({ success: true, stdout: 'cmd-token' }));
+    const deps = makeDeps({ allowCommand: true, runCommand });
+    expect(resolveToken([{ command: ['gh', 'auth', 'token'] }], deps)).toBe('cmd-token');
+    expect(runCommand).toHaveBeenCalledWith(['gh', 'auth', 'token']);
+  });
+
+  it('skips all command sources in a mixed list when allowCommand is false', () => {
+    const runCommand = vi.fn(() => ({ success: true, stdout: 'cmd-token' }));
+    const deps = makeDeps({
+      allowCommand: false,
+      runCommand,
+      env: { FALLBACK_TOKEN: 'fallback' },
+    });
+    const result = resolveToken(
+      [{ command: ['gh', 'auth', 'token'] }, { command: ['az', 'account', 'get-access-token'] }, { env: 'FALLBACK_TOKEN' }],
+      deps,
+    );
+    expect(result).toBe('fallback');
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  // Note: the `VAT_LINKAUTH_ALLOW_COMMAND` env-var-at-call-time behaviour is
+  // covered by the system test (link-auth-token-dispatch.system.test.ts), where
+  // real process.env interaction is safe. Unit tests here inject `allowCommand`
+  // directly to avoid ambient-state pollution.
 });
