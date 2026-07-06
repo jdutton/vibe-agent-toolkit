@@ -9,6 +9,10 @@
  *     argv. **Not** passed through a shell — operators (`|`, `&&`, `$(...)`)
  *     become literal argv elements, per the design's §6.1 sharp-edge note.
  *
+ * Command sources can be disabled at runtime with `VAT_LINKAUTH_ALLOW_COMMAND=0`
+ * (or by passing `allowCommand: false` in deps). Useful in security-sensitive
+ * environments where arbitrary command execution is undesirable.
+ *
  * Returns `undefined` if every source fails or yields an empty/whitespace
  * value — the caller's `resolveAuthenticatedUrl` translates that to the
  * `unverified` outcome (surfaced as `LINK_AUTH_UNVERIFIED` by the validator).
@@ -35,18 +39,46 @@ export interface TokenResolutionDeps {
    * propagated by `resolveToken` — they indicate operator-level bugs.
    */
   readonly runCommand: (argv: readonly string[]) => { success: boolean; stdout: string };
+
+  /**
+   * Whether `{ command: ... }` sources are allowed. Defaults to
+   * `process.env['VAT_LINKAUTH_ALLOW_COMMAND'] !== '0'`. Set to `false` (or
+   * export `VAT_LINKAUTH_ALLOW_COMMAND=0`) to skip all command sources and rely
+   * solely on env-var sources — useful in locked-down CI or security reviews.
+   */
+  readonly allowCommand: boolean;
+}
+
+/**
+ * Return a copy of the given env with all `GIT_*` keys removed. Case-insensitive
+ * on the key so Windows env vars (which are case-insensitive at the OS level,
+ * though `process.env` preserves original case) can't sneak through as e.g.
+ * `Git_Dir`.
+ *
+ * Exported for unit testing and for callers assembling their own `runCommand`
+ * who want the exact same scrub `defaultRunCommand` applies.
+ *
+ * Rationale: `vat resources validate` is often invoked from git pre-commit
+ * hooks, which pre-set `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE`. These
+ * poison any nested tool that shells out to git, notably `gh auth token`.
+ */
+export function scrubGitEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(source).filter(([k]) => !k.toUpperCase().startsWith('GIT_')),
+  ) as NodeJS.ProcessEnv;
 }
 
 /**
  * Default `runCommand` implementation — exported so callers that want to
  * memoize per-validate-run can wrap it without duplicating the spawn logic.
- * Forwards to `safeExecResult` (no shell, argv-based).
+ * Forwards to `safeExecResult` (no shell, argv-based), with `GIT_*` vars
+ * stripped from the child env — see {@link scrubGitEnv}.
  */
 export const defaultRunCommand: TokenResolutionDeps['runCommand'] = (argv) => {
   if (argv.length === 0) return { success: false, stdout: '' };
   const [bin, ...args] = argv;
   if (bin === undefined) return { success: false, stdout: '' };
-  const result = safeExecResult(bin, [...args], { encoding: 'utf8' });
+  const result = safeExecResult(bin, [...args], { encoding: 'utf8', env: scrubGitEnv(process.env) });
   const stdout = typeof result.stdout === 'string' ? result.stdout : result.stdout.toString('utf8');
   return { success: result.success, stdout };
 };
@@ -64,8 +96,10 @@ export function resolveToken(
 ): string | undefined {
   const env = deps?.env ?? process.env;
   const runCommand = deps?.runCommand ?? defaultRunCommand;
+  const allowCommand = deps?.allowCommand ?? (process.env['VAT_LINKAUTH_ALLOW_COMMAND'] !== '0');
 
   for (const source of sources) {
+    if (!allowCommand && 'command' in source) continue;
     const value = tryResolveSource(source, env, runCommand);
     if (value !== undefined && value.length > 0) return value;
   }

@@ -1,9 +1,22 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  defaultRunCommand,
   resolveToken,
+  scrubGitEnv,
   type TokenResolutionDeps,
 } from '../../src/link-auth/resolve-token.js';
+import { safeExecResult } from '../../src/safe-exec.js';
+
+// Mock safeExecResult so we can unit-test defaultRunCommand without spawning.
+// Existing tests below inject their own `runCommand` via makeDeps, so they never
+// reach the mocked module — this mock only affects the `defaultRunCommand`
+// describe block at the bottom.
+vi.mock('../../src/safe-exec.js', () => ({
+  safeExecResult: vi.fn(),
+}));
+
+const mockedSafeExecResult = vi.mocked(safeExecResult);
 
 const FALLBACK_ENV = 'FALLBACK';
 const FALLBACK_VALUE = 'fallback-value';
@@ -12,6 +25,7 @@ function makeDeps(overrides?: Partial<TokenResolutionDeps>): TokenResolutionDeps
   return {
     env: overrides?.env ?? {},
     runCommand: overrides?.runCommand ?? (() => ({ success: false, stdout: '' })),
+    allowCommand: overrides?.allowCommand ?? true,
   };
 }
 
@@ -186,5 +200,128 @@ describe('resolveToken — no token leakage in serialized errors', () => {
     // as a config bug, not a runtime concern. This test pins that the function
     // DOES propagate the throw (no swallowing of operator errors). If you want
     // graceful handling, wrap at the call site.
+  });
+});
+
+describe('resolveToken — allowCommand opt-out', () => {
+  it('skips command sources when allowCommand is false', () => {
+    const runCommand = vi.fn(() => ({ success: true, stdout: 'should-not-run' }));
+    const deps = makeDeps({ allowCommand: false, runCommand });
+    expect(resolveToken([{ command: ['gh', 'auth', 'token'] }], deps)).toBeUndefined();
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  it('still resolves env sources when allowCommand is false', () => {
+    const deps = makeDeps({ allowCommand: false, env: { MY_TOKEN: 'env-wins' } });
+    expect(resolveToken([{ command: ['gh', 'auth', 'token'] }, { env: 'MY_TOKEN' }], deps)).toBe('env-wins');
+  });
+
+  // Note: `allowCommand: true` is `makeDeps`'s default, so every command-source
+  // test above already exercises the allow-true path. No dedicated test needed.
+
+  it('skips all command sources in a mixed list when allowCommand is false', () => {
+    const runCommand = vi.fn(() => ({ success: true, stdout: 'cmd-token' }));
+    const deps = makeDeps({
+      allowCommand: false,
+      runCommand,
+      env: { FALLBACK_TOKEN: 'fallback' },
+    });
+    const result = resolveToken(
+      [{ command: ['gh', 'auth', 'token'] }, { command: ['az', 'account', 'get-access-token'] }, { env: 'FALLBACK_TOKEN' }],
+      deps,
+    );
+    expect(result).toBe('fallback');
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  // Note: the `VAT_LINKAUTH_ALLOW_COMMAND` env-var-at-call-time behaviour is
+  // covered by the system test (link-auth-token-dispatch.system.test.ts), where
+  // real process.env interaction is safe. Unit tests here inject `allowCommand`
+  // directly to avoid ambient-state pollution.
+});
+
+describe('scrubGitEnv', () => {
+  it('strips uppercase GIT_* keys', () => {
+    expect(scrubGitEnv({ GIT_DIR: 'x', PATH: '/bin' })).toEqual({ PATH: '/bin' });
+  });
+
+  it('strips mixed-case GIT_* keys (Windows case-insensitivity defense)', () => {
+    // Windows treats env-var names case-insensitively at the OS level. Even
+    // though Node's `process.env` preserves the original case, a shell or user
+    // could set `Git_Dir` and reasonably expect it to behave the same as
+    // `GIT_DIR`. Scrub must match all case variants.
+    expect(scrubGitEnv({ Git_Dir: 'x', git_index_file: 'y', HOME: '/h' })).toEqual({ HOME: '/h' });
+  });
+
+  it('preserves non-GIT vars', () => {
+    expect(scrubGitEnv({ PATH: '/bin', NODE_ENV: 'test', HOME: '/h' })).toEqual({
+      PATH: '/bin',
+      NODE_ENV: 'test',
+      HOME: '/h',
+    });
+  });
+
+  it('only strips keys that START with GIT_ — MY_GIT_TOKEN survives', () => {
+    // Guards against sweeping too broadly. A user var like MY_GIT_TOKEN must
+    // NOT be scrubbed just because "GIT_" appears in the middle of its name.
+    expect(scrubGitEnv({ MY_GIT_TOKEN: 'keep', GIT_TOKEN: 'strip' })).toEqual({
+      MY_GIT_TOKEN: 'keep',
+    });
+  });
+
+  it('returns an empty object for empty input', () => {
+    expect(scrubGitEnv({})).toEqual({});
+  });
+});
+
+describe('defaultRunCommand', () => {
+  beforeEach(() => {
+    mockedSafeExecResult.mockReset();
+  });
+
+  it('returns { success: false, stdout: "" } for empty argv (no spawn attempted)', () => {
+    const result = defaultRunCommand([]);
+    expect(result).toEqual({ success: false, stdout: '' });
+    expect(mockedSafeExecResult).not.toHaveBeenCalled();
+  });
+
+  it('spawns via safeExecResult, forwards GIT_*-scrubbed env, and returns spawn result', () => {
+    mockedSafeExecResult.mockReturnValue({
+      success: true,
+      stdout: 'output-value',
+    } as unknown as ReturnType<typeof safeExecResult>);
+
+    process.env['__TEST_FORWARD_VAR__'] = 'reached';
+    process.env['GIT_DIR'] = 'should-be-stripped';
+    try {
+      const result = defaultRunCommand(['echo', 'x', 'y']);
+      expect(result).toEqual({ success: true, stdout: 'output-value' });
+
+      expect(mockedSafeExecResult).toHaveBeenCalledTimes(1);
+      const [bin, args, opts] = mockedSafeExecResult.mock.calls[0] as [
+        string,
+        string[],
+        { env?: NodeJS.ProcessEnv; encoding?: string },
+      ];
+      expect(bin).toBe('echo');
+      expect(args).toEqual(['x', 'y']);
+      expect(opts.encoding).toBe('utf8');
+      expect(opts.env?.['__TEST_FORWARD_VAR__']).toBe('reached');
+      expect(opts.env?.['GIT_DIR']).toBeUndefined();
+    } finally {
+      delete process.env['__TEST_FORWARD_VAR__'];
+      delete process.env['GIT_DIR'];
+    }
+  });
+
+  it('coerces Buffer stdout from safeExecResult to a utf8 string', () => {
+    // When encoding isn't set to 'utf8' by the caller, safeExecResult may
+    // return a Buffer. defaultRunCommand normalizes to string.
+    mockedSafeExecResult.mockReturnValue({
+      success: true,
+      stdout: Buffer.from('buffered-value\n'),
+    } as unknown as ReturnType<typeof safeExecResult>);
+    const result = defaultRunCommand(['some-bin']);
+    expect(result.stdout).toBe('buffered-value\n');
   });
 });
