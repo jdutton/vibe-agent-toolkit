@@ -50,28 +50,35 @@ export interface TokenResolutionDeps {
 }
 
 /**
+ * Return a copy of the given env with all `GIT_*` keys removed. Case-insensitive
+ * on the key so Windows env vars (which are case-insensitive at the OS level,
+ * though `process.env` preserves original case) can't sneak through as e.g.
+ * `Git_Dir`.
+ *
+ * Exported for unit testing and for callers assembling their own `runCommand`
+ * who want the exact same scrub `defaultRunCommand` applies.
+ *
+ * Rationale: `vat resources validate` is often invoked from git pre-commit
+ * hooks, which pre-set `GIT_DIR` / `GIT_WORK_TREE` / `GIT_INDEX_FILE`. These
+ * poison any nested tool that shells out to git, notably `gh auth token`.
+ */
+export function scrubGitEnv(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(source).filter(([k]) => !k.toUpperCase().startsWith('GIT_')),
+  ) as NodeJS.ProcessEnv;
+}
+
+/**
  * Default `runCommand` implementation — exported so callers that want to
  * memoize per-validate-run can wrap it without duplicating the spawn logic.
- * Forwards to `safeExecResult` (no shell, argv-based).
- *
- * Strips `GIT_*` env vars before spawning so token commands like `gh auth token`
- * work correctly from inside git pre-commit hooks, where git sets `GIT_DIR`,
- * `GIT_WORK_TREE`, and similar vars that confuse nested git calls.
+ * Forwards to `safeExecResult` (no shell, argv-based), with `GIT_*` vars
+ * stripped from the child env — see {@link scrubGitEnv}.
  */
 export const defaultRunCommand: TokenResolutionDeps['runCommand'] = (argv) => {
   if (argv.length === 0) return { success: false, stdout: '' };
   const [bin, ...args] = argv;
   if (bin === undefined) return { success: false, stdout: '' };
-  // Case-insensitive on the key so Windows env vars (which are case-insensitive
-  // at the OS level, though `process.env` preserves original case) can't sneak
-  // through as e.g. `Git_Dir`.
-  // Case-insensitive on the key so Windows env vars (which are case-insensitive
-  // at the OS level, though `process.env` preserves original case) can't sneak
-  // through as e.g. `Git_Dir`.
-  const env = Object.fromEntries(
-    Object.entries(process.env).filter(([k]) => !k.toUpperCase().startsWith('GIT_')),
-  ) as NodeJS.ProcessEnv;
-  const result = safeExecResult(bin, [...args], { encoding: 'utf8', env });
+  const result = safeExecResult(bin, [...args], { encoding: 'utf8', env: scrubGitEnv(process.env) });
   const stdout = typeof result.stdout === 'string' ? result.stdout : result.stdout.toString('utf8');
   return { success: result.success, stdout };
 };
