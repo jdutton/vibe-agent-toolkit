@@ -159,9 +159,10 @@ containing `}` or other special characters does not escape the template.
 
 ### Integration tests
 
-`packages/utils/test/integration/` — test that the engine wires together correctly with
-the real Zod schema and the real macro expansions. No real network calls; inject a mock
-transport.
+`packages/resources/test/integration/linkauth-cross-slice.integration.test.ts` — verifies
+the engine wires together with the real Zod schema, real macro expansions, and the
+resources-side validator layer. No real network calls; inject a mock transport when
+adding new cases.
 
 ### System tests
 

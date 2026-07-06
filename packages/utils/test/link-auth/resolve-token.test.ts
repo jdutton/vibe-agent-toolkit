@@ -203,12 +203,8 @@ describe('resolveToken — allowCommand opt-out', () => {
     expect(resolveToken([{ command: ['gh', 'auth', 'token'] }, { env: 'MY_TOKEN' }], deps)).toBe('env-wins');
   });
 
-  it('allows command sources when allowCommand is true (default)', () => {
-    const runCommand = vi.fn(() => ({ success: true, stdout: 'cmd-token' }));
-    const deps = makeDeps({ allowCommand: true, runCommand });
-    expect(resolveToken([{ command: ['gh', 'auth', 'token'] }], deps)).toBe('cmd-token');
-    expect(runCommand).toHaveBeenCalledWith(['gh', 'auth', 'token']);
-  });
+  // Note: `allowCommand: true` is `makeDeps`'s default, so every command-source
+  // test above already exercises the allow-true path. No dedicated test needed.
 
   it('skips all command sources in a mixed list when allowCommand is false', () => {
     const runCommand = vi.fn(() => ({ success: true, stdout: 'cmd-token' }));

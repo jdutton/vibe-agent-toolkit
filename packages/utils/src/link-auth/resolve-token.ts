@@ -65,6 +65,9 @@ export const defaultRunCommand: TokenResolutionDeps['runCommand'] = (argv) => {
   // Case-insensitive on the key so Windows env vars (which are case-insensitive
   // at the OS level, though `process.env` preserves original case) can't sneak
   // through as e.g. `Git_Dir`.
+  // Case-insensitive on the key so Windows env vars (which are case-insensitive
+  // at the OS level, though `process.env` preserves original case) can't sneak
+  // through as e.g. `Git_Dir`.
   const env = Object.fromEntries(
     Object.entries(process.env).filter(([k]) => !k.toUpperCase().startsWith('GIT_')),
   ) as NodeJS.ProcessEnv;

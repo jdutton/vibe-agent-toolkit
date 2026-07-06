@@ -17,40 +17,64 @@ import { resolveToken } from '../../src/link-auth/resolve-token.js';
 import { isToolAvailable } from '../../src/safe-exec.js';
 
 describe('System Test: linkAuth token command dispatch', () => {
-  it('resolves a token via real git binary (git --version)', () => {
-    // git is required in CI — if it's absent the test harness cannot even clone
-    // the repo, so a hard assertion is correct here.
+  it('dispatches to real git binary and returns trimmed stdout (cross-platform smoke)', () => {
+    // `git --version` returns a version string, not a token, but it exercises
+    // the full spawn → trim → return path against a real binary. On Windows,
+    // `git` is a `.cmd` shim so this covers the `shouldUseShell` path in
+    // safe-exec.ts. git is required in CI (harness cloning depends on it), so
+    // a hard assertion is correct here.
     const result = resolveToken([{ command: ['git', '--version'] }]);
     expect(result).toBeDefined();
     expect(result).toMatch(/^git version /);
   });
 
-  it.skipIf(!isToolAvailable('gh'))('resolves a token via real gh binary (gh --version)', () => {
+  it.skipIf(!isToolAvailable('gh'))('dispatches to real gh binary and returns trimmed stdout (cross-platform smoke)', () => {
     const result = resolveToken([{ command: ['gh', '--version'] }]);
     expect(result).toBeDefined();
     // gh version output: "gh version X.Y.Z (YYYY-MM-DD)\n..."
     expect(result).toMatch(/^gh version /);
   });
 
-  it('GIT_* env vars are stripped before spawning — child process cannot see them', () => {
-    // Whitebox check: spawn a node child that echoes GIT_DIR back via
-    // stdout.write (no color codes, unlike `node -p` which colorizes undefined).
-    // If scrubbing regressed, the child prints the poison; scrubbing means it
-    // prints the sentinel. This is what unblocks `gh auth token` inside a
-    // pre-commit hook, where git pre-sets GIT_DIR / GIT_WORK_TREE / etc.
+  it('GIT_* env vars are stripped before spawning — child process cannot see them (case-insensitive)', () => {
+    // Whitebox check: spawn a node child that echoes both an uppercase and a
+    // mixed-case GIT_* var back via stdout.write. If scrubbing regressed, the
+    // child prints the poison; scrubbing means it prints the sentinels. Two
+    // vars in one test to exercise both the canonical `GIT_DIR` and the
+    // case-insensitive branch (`Git_Index_File` — matters on Windows where env
+    // names are case-insensitive at the OS level).
     const savedGitDir = process.env['GIT_DIR'];
+    const savedMixed = process.env['Git_Index_File'];
     process.env['GIT_DIR'] = 'POISONED_GIT_DIR_VALUE';
+    process.env['Git_Index_File'] = 'POISONED_MIXED_CASE_VALUE';
     try {
-      const result = resolveToken([
-        { command: ['node', '-e', "process.stdout.write(process.env.GIT_DIR ?? 'GIT_DIR_NOT_SET')"] },
-      ]);
-      expect(result).toBe('GIT_DIR_NOT_SET');
+      const script =
+        "process.stdout.write((process.env.GIT_DIR ?? 'UNSET') + '|' + (process.env.Git_Index_File ?? 'UNSET'))";
+      const result = resolveToken([{ command: ['node', '-e', script] }]);
+      expect(result).toBe('UNSET|UNSET');
     } finally {
-      if (savedGitDir === undefined) {
-        delete process.env['GIT_DIR'];
-      } else {
-        process.env['GIT_DIR'] = savedGitDir;
-      }
+      if (savedGitDir === undefined) delete process.env['GIT_DIR'];
+      else process.env['GIT_DIR'] = savedGitDir;
+      if (savedMixed === undefined) delete process.env['Git_Index_File'];
+      else process.env['Git_Index_File'] = savedMixed;
+    }
+  });
+
+  it('non-GIT_* env vars ARE forwarded to the child — scrub is scoped, not indiscriminate', () => {
+    // Positive-case complement of the scrub test: if a future regression
+    // over-scrubbed (e.g. stripped everything, or every var starting with any
+    // uppercase letter), the previous test would still pass but real-world
+    // tools that need PATH / HOME / auth-provider vars would break silently.
+    // Assert a synthetic non-GIT_* var reaches the child.
+    const sentinel = '__VAT_LINKAUTH_ENV_FORWARD_PROBE__';
+    const savedProbe = process.env[sentinel];
+    process.env[sentinel] = 'reached-child';
+    try {
+      const script = `process.stdout.write(process.env['${sentinel}'] ?? 'MISSING')`;
+      const result = resolveToken([{ command: ['node', '-e', script] }]);
+      expect(result).toBe('reached-child');
+    } finally {
+      if (savedProbe === undefined) delete process.env[sentinel];
+      else process.env[sentinel] = savedProbe;
     }
   });
 
