@@ -2,7 +2,8 @@
   "name": "@vibe-agent-toolkit/utils",
   "version": "0.1.40-rc.1",
   "type": "module",
-  "description": "Core utility functions with no external dependencies",
+  "description": "Core utility functions shared across the vibe-agent-toolkit packages",
+  "sideEffects": false,
   "keywords": [
     "typescript",
     "utilities",
@@ -16,6 +17,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./process": {
+      "types": "./dist/process.d.ts",
+      "import": "./dist/process.js"
+    },
+    "./fs": {
+      "types": "./dist/fs.d.ts",
+      "import": "./dist/fs.js"
     }
   },
   "files": [

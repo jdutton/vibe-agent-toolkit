@@ -234,10 +234,25 @@ describe('resolveToken — allowCommand opt-out', () => {
     expect(runCommand).not.toHaveBeenCalled();
   });
 
-  // Note: the `VAT_LINKAUTH_ALLOW_COMMAND` env-var-at-call-time behaviour is
-  // covered by the system test (link-auth-token-dispatch.system.test.ts), where
-  // real process.env interaction is safe. Unit tests here inject `allowCommand`
-  // directly to avoid ambient-state pollution.
+  it('reads VAT_LINKAUTH_ALLOW_COMMAND from deps.env, not ambient process.env', () => {
+    // Bug fix: the opt-out flag must come from the resolved env map so callers
+    // that supply a curated deps.env (e.g. a sandboxed env) can control it
+    // without touching real process.env. Pass deps as a Partial so allowCommand
+    // is absent and resolveToken must derive it from the env map.
+    const runCommand = vi.fn(() => ({ success: true, stdout: 'should-not-run' }));
+    const partialDeps: Partial<TokenResolutionDeps> = {
+      env: { VAT_LINKAUTH_ALLOW_COMMAND: '0' },
+      runCommand,
+      // allowCommand intentionally omitted — resolveToken derives it from env
+    };
+    expect(resolveToken([{ command: ['gh', 'auth', 'token'] }], partialDeps)).toBeUndefined();
+    expect(runCommand).not.toHaveBeenCalled();
+  });
+
+  // Note: the `VAT_LINKAUTH_ALLOW_COMMAND` env-var-at-call-time behaviour via
+  // real process.env is covered by the system test
+  // (link-auth-token-dispatch.system.test.ts). Unit tests here inject via
+  // deps.env to avoid ambient-state pollution.
 });
 
 describe('scrubGitEnv', () => {
@@ -271,6 +286,16 @@ describe('scrubGitEnv', () => {
 
   it('returns an empty object for empty input', () => {
     expect(scrubGitEnv({})).toEqual({});
+  });
+
+  it('GITHUB_TOKEN and GH_TOKEN survive the scrub — gh auth token depends on them', () => {
+    // Neither name starts with "GIT_", so both must pass through untouched.
+    // Explicit assertion guards against a future refactor of the prefix-match
+    // logic accidentally over-scrubbing the exact vars `gh auth token` needs.
+    expect(scrubGitEnv({ GITHUB_TOKEN: 'ghp_abc', GH_TOKEN: 'gho_xyz', GIT_DIR: 'strip' })).toEqual({
+      GITHUB_TOKEN: 'ghp_abc',
+      GH_TOKEN: 'gho_xyz',
+    });
   });
 });
 

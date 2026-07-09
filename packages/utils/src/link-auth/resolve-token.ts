@@ -41,10 +41,12 @@ export interface TokenResolutionDeps {
   readonly runCommand: (argv: readonly string[]) => { success: boolean; stdout: string };
 
   /**
-   * Whether `{ command: ... }` sources are allowed. Defaults to
-   * `process.env['VAT_LINKAUTH_ALLOW_COMMAND'] !== '0'`. Set to `false` (or
-   * export `VAT_LINKAUTH_ALLOW_COMMAND=0`) to skip all command sources and rely
-   * solely on env-var sources — useful in locked-down CI or security reviews.
+   * Whether `{ command: ... }` sources are allowed. Defaults to reading
+   * `VAT_LINKAUTH_ALLOW_COMMAND` from the resolved `env` map (not ambient
+   * `process.env`), so a caller supplying a curated `deps.env` can control the
+   * flag without touching real process state. Set to `false` (or set
+   * `VAT_LINKAUTH_ALLOW_COMMAND=0` in the env) to skip all command sources and
+   * rely solely on env-var sources — useful in locked-down CI or security reviews.
    */
   readonly allowCommand: boolean;
 }
@@ -96,7 +98,7 @@ export function resolveToken(
 ): string | undefined {
   const env = deps?.env ?? process.env;
   const runCommand = deps?.runCommand ?? defaultRunCommand;
-  const allowCommand = deps?.allowCommand ?? (process.env['VAT_LINKAUTH_ALLOW_COMMAND'] !== '0');
+  const allowCommand = deps?.allowCommand ?? (env['VAT_LINKAUTH_ALLOW_COMMAND'] !== '0');
 
   for (const source of sources) {
     if (!allowCommand && 'command' in source) continue;
