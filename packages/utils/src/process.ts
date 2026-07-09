@@ -1,4 +1,3 @@
-/* c8 ignore file — pure re-export barrel, no logic to cover */
 /**
  * @vibe-agent-toolkit/utils/process
  *

@@ -34,6 +34,8 @@ export default defineConfig({
         '**/*.test.ts',
         '**/*.spec.ts',
         '**/index.ts', // Re-exports
+        'packages/utils/src/fs.ts', // Re-export barrel (no logic)
+        'packages/utils/src/process.ts', // Re-export barrel (no logic)
         '**/types.ts', // Type definitions
         '**/schemas/**', // Zod schema definitions (type definitions, not logic)
         'packages/dev-tools/**', // Exclude dev-tools (infrastructure)
