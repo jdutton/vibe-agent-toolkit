@@ -19,8 +19,6 @@ import { fileURLToPath } from 'node:url';
 
 import { parse as parseYaml } from 'yaml';
 
-const macrosPath = fileURLToPath(new URL('./macros.yaml', import.meta.url));
-
 let macrosCache: Record<string, Record<string, unknown>> | undefined;
 
 /**
@@ -33,13 +31,16 @@ let macrosCache: Record<string, Record<string, unknown>> | undefined;
  * unconditionally, before the mock-setup intent reaches our file.
  *
  * Lazy load makes module import side-effect-free; only callers of
- * `expandMacro` pay the fs cost.
+ * `expandMacro` pay the fs cost. `macrosPath` is also computed here (not at
+ * module top level) so that merely importing this module leaves no `new URL()`
+ * reference for bundler static analysis to trip over.
  */
 function getMacros(): Record<string, Record<string, unknown>> {
   if (macrosCache !== undefined) return macrosCache;
 
   // Path is derived from `import.meta.url`, not user input — points at the
   // shipped macros.yaml asset next to this module in both src and dist trees.
+  const macrosPath = fileURLToPath(new URL('./macros.yaml', import.meta.url));
   // eslint-disable-next-line security/detect-non-literal-fs-filename
   const macrosFileContent = readFileSync(macrosPath, 'utf8');
   const parsed = parseYaml(macrosFileContent) as unknown;
