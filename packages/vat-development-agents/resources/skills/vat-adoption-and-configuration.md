@@ -156,6 +156,11 @@ If the project uses vibe-validate (recommended), wire VAT into the validation co
 ```yaml
 # vibe-validate.config.yaml (or relevant section)
 phases:
+  - name: vat-validate
+    parallel: false
+    commands:
+      - name: vat validate
+        run: vat validate
   - name: vat-build-and-verify
     parallel: false
     commands:
@@ -165,7 +170,7 @@ phases:
         run: vat verify
 ```
 
-`vat verify` runs the full artifact check (resources → skills → marketplace → consistency) against the built `dist/` tree; it's the authoritative gate before `npm publish`, so it runs after `vat build`. For source-only checks that need no build — links and SKILL.md frontmatter, ideal for pre-commit and CI-before-build — use `vat validate` (resources + skills). In this repo's own config, `bun run validate` already does this — adopters typically mirror the pattern.
+`vat validate` runs the source-only checks — links and SKILL.md frontmatter — that need no build; it's cheap enough to run on every pre-commit or as the first CI-before-build gate. `vat verify` runs the full artifact check (resources → skills → marketplace → consistency) against the built `dist/` tree; it's the authoritative gate before `npm publish`, so it runs after `vat build`. In this repo's own config, `bun run validate` already does this — adopters typically mirror the pattern.
 
 ## First-Time Setup Checklist
 

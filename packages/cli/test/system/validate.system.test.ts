@@ -100,7 +100,11 @@ describe('vat validate command (system test)', () => {
     expect(result.stdout).not.toContain('No configured validators');
   });
 
-  it('reports a no-op note when no surface is configured', async () => {
+  it('reports a no-op note and a stderr warning when no surface is configured', async () => {
+    // Exit 0 is correct here (nothing configured is not an error per #128), but
+    // a bare exit-code check can't distinguish this from "everything passed" —
+    // the stderr warning is what makes a config typo (e.g. `recources:`)
+    // discoverable to anyone not reading the YAML note on stdout.
     const tempDir = suite.createTempDir();
     suite.writeConfig(tempDir, 'version: 1\n');
 
@@ -109,26 +113,31 @@ describe('vat validate command (system test)', () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(SUCCESS_MARKER);
     expect(result.stdout).toContain('No configured validators');
+    expect(result.stderr).toContain('nothing to validate');
   });
 
-  it('fails when --only names a valid surface that is not configured', async () => {
+  it('fails with exit code 1 when --only names a valid surface that is not configured', async () => {
     const tempDir = suite.createTempDir();
     suite.writeConfig(tempDir, RESOURCES_CONFIG);
 
     const result = await suite.runValidate(tempDir, ['--only', 'skills']);
 
-    // Explicit request for an unconfigured surface must not pass silently
-    expect(result.status).not.toBe(0);
+    // Explicit request for an unconfigured surface must not pass silently, and
+    // must land on the same exit code as an unrecognized --only value (below) —
+    // both are "you asked for a surface that can't run," not a system error.
+    expect(result.status).toBe(1);
     expect(`${result.stdout}${result.stderr}`).toContain("Surface 'skills' is not configured");
   });
 
-  it('fails with exit code for an unknown --only surface', async () => {
+  it('fails with exit code 1 for an unknown --only surface', async () => {
     const tempDir = suite.createTempDir();
     suite.writeConfig(tempDir, RESOURCES_CONFIG);
 
     const result = await suite.runValidate(tempDir, ['--only', 'bogus']);
 
-    expect(result.status).not.toBe(0);
+    // Same exit code as a recognized-but-unconfigured surface (above) — both
+    // are usage-level "--only" failures, not exit-2 system errors.
+    expect(result.status).toBe(1);
     expect(result.stderr).toContain('Unknown surface');
   });
 

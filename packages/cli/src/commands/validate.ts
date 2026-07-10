@@ -45,7 +45,7 @@ export function createValidateTopLevelCommand(): Command {
   const command = new Command('validate');
 
   command
-    .description('Validate every configured surface (resources, skills, …) discovered from config')
+    .description('Validate configured surfaces from source (resources + skills) — no build required')
     .option('--only <surface>', 'Validate only a specific surface: resources, skills')
     .option('--debug', 'Enable debug logging')
     .action(validateTopLevelCommand)
@@ -56,8 +56,9 @@ Description:
   Runs the source-level validators (resources, skills) the project's config
   declares — and only those. A surface whose config block is absent is skipped
   (a project with no skills block does not run skill validation; no error, no
-  noise). An explicit '--only <surface>' for an unconfigured surface fails, so
-  a CI gate cannot silently lose coverage.
+  noise, but a stderr warning if nothing at all is configured). An explicit
+  '--only <surface>' fails for a surface that is unrecognized or unconfigured,
+  so a CI gate cannot silently lose coverage.
 
   Source-level only. Unlike 'vat verify', this never inspects built dist
   artifacts and never requires a build.
@@ -72,7 +73,7 @@ Output:
 
 Exit Codes:
   0 - All configured validators passed (or nothing configured to validate)
-  1 - Validation errors found
+  1 - Validation errors found, or --only named a surface that is unrecognized or unconfigured
   2 - System error
 
 Requirements:
@@ -83,6 +84,7 @@ Requirements:
 
 Example:
   $ vat validate                       # Validate every configured surface
+  $ vat validate --only skills         # Validate skills only
 `
     );
 
@@ -119,9 +121,25 @@ async function validateTopLevelCommand(options: ValidateCommandOptions): Promise
   const logger = createLogger(options.debug ? { debug: true } : {});
   const startTime = Date.now();
 
+  // `--only` failures — an unrecognized surface name, or a recognized name
+  // that just isn't configured — are both "you asked for a surface that
+  // can't run." Both must exit 1 (not fall through to the generic exit-2
+  // system-error path), so a CI gate differentiating "validation failed"
+  // from "system error" doesn't miss one of the two.
+  const failOnly = (message: string): never => {
+    logger.error(message);
+    writeYamlOutput({
+      status: 'error',
+      phases: [],
+      error: message,
+      duration: `${Date.now() - startTime}ms`,
+    });
+    return process.exit(1);
+  };
+
   try {
     if (options.only && !VALID_SURFACES.includes(options.only as (typeof VALID_SURFACES)[number])) {
-      throw new Error(`Unknown surface: ${options.only}. Valid surfaces: ${VALID_SURFACES.join(', ')}`);
+      failOnly(`Unknown surface: ${options.only}. Valid surfaces: ${VALID_SURFACES.join(', ')}`);
     }
 
     const phases = buildPhaseList(options.only, projectRoot);
@@ -129,18 +147,20 @@ async function validateTopLevelCommand(options: ValidateCommandOptions): Promise
     if (phases.length === 0) {
       // An explicit `--only <surface>` that isn't configured is a failure: the
       // caller asked for a specific validator that can't run, so a CI gate must
-      // not stay green. A bare run with nothing configured is a clean no-op.
+      // not stay green.
       if (options.only) {
-        logger.error(`Surface '${options.only}' is not configured in vibe-agent-toolkit.config.yaml — nothing to validate.`);
-        writeYamlOutput({
-          status: 'error',
-          phases: [],
-          error: `Surface '${options.only}' is not configured in vibe-agent-toolkit.config.yaml`,
-          duration: `${Date.now() - startTime}ms`,
-        });
-        process.exit(1);
+        failOnly(`Surface '${options.only}' is not configured in vibe-agent-toolkit.config.yaml — nothing to validate.`);
       }
 
+      // A bare run with nothing configured is a clean no-op (exit 0, per
+      // issue #128's "doesn't check what it doesn't know about") — but silent
+      // success on stdout alone is indistinguishable, to anyone watching only
+      // the exit code, from a run that actually validated something. Warn on
+      // stderr so a config typo (e.g. `recources:`) doesn't masquerade as
+      // "all good."
+      logger.warn(
+        'No resources: or skills: block found in vibe-agent-toolkit.config.yaml — nothing to validate. If this is unexpected, check your config.',
+      );
       writeYamlOutput({
         status: 'success',
         phases: [],
