@@ -20,7 +20,7 @@
   "scripts": {
     "build": "tsc && bun run generate:schemas",
     "generate:schemas": "tsx scripts/generate-json-schemas.ts",
-    "test": "vitest run",
+    "test:unit": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist *.tsbuildinfo schemas/"

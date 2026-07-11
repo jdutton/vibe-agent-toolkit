@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Internal
 
 - **Contributor guide for the linkAuth engine** at [`docs/contributing/vat-linkauth-contributing.md`](docs/contributing/vat-linkauth-contributing.md): engine vocabulary, how to add a new provider macro, token resolution mechanics, the GIT_* scrubbing rationale, testing requirements, and code style notes.
+- **`turbo run` now actually caches `test:unit`/`test:integration`/`test:system` per package**, instead of one flat monorepo-wide vitest invocation. Every package has its own vitest config built from shared factories in `vitest.shared.ts`, so `vv validate` skips re-running tests for packages that haven't changed. Also closes two real hash-input gaps that would otherwise have caused false cache hits (`vitest.shared.ts`/`vitest.setup.js` and the `CI`/`NET_AVAILABLE` env vars weren't part of turbo's hash) and a pre-existing bug where `cli`'s dev-tools-shelled-out build script wasn't tracked by turbo's dependency graph. Unifies a repo-wide vitest version drift (several packages were pinned to vitest 1.x/2.x while root pinned 3.2.4) discovered along the way.
 
 ## [0.1.39] - 2026-07-03
 

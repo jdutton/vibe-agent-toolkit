@@ -6,17 +6,18 @@
 
 import { spawnSync } from 'node:child_process';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
-import { getBinPath } from './test-common.js';
+import { getBinPath, getFixturePath } from './test-common.js';
 import { executeSkillsCommandAndExpectYaml } from './test-helpers/index.js';
 
 describe('skills list command - fixture tests (system test)', () => {
   const binPath = getBinPath(import.meta.url);
-  // Use committed fixture instead of creating files at runtime (faster on Windows)
-  const fixtureDir = safePath.join(process.cwd(), 'packages/cli/test/fixtures/skills-minimal');
+  // Use committed fixture instead of creating files at runtime (faster on Windows).
+  // Resolved relative to this test file (not process.cwd()) so it works whether
+  // vitest is invoked from the monorepo root or from packages/cli directly.
+  const fixtureDir = getFixturePath(import.meta.url, 'skills-minimal');
 
   it('should list skills in fixture directory', () => {
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
