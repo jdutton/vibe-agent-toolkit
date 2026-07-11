@@ -533,8 +533,11 @@ export function formatFrictionReport(items: readonly FrictionItem[]): string {
  * STDERR so users don't miss packaging-fidelity friction the experimenter surfaced
  * (it is otherwise only written to disk). Best-effort: a missing, unparseable, or
  * empty report emits nothing. Never touches stdout (which stays machine-readable).
+ * Accepts `undefined` (a no-op) so the harness `finally` can call it unconditionally
+ * even when a throw preempted assignment of the friction path.
  */
-function emitFrictionReport(frictionPath: string): void {
+function emitFrictionReport(frictionPath: string | undefined): void {
+  if (frictionPath === undefined) return;
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
   if (!existsSync(frictionPath)) return;
   let raw: unknown;
@@ -887,6 +890,12 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
   };
   const removeSignalCleanup = installSignalCleanup({ onSignal: cleanup });
 
+  // Hoisted so the finally can surface packaging friction even when a throw
+  // (missing/invalid grading.json, nonce/skew guard, timeout) preempts the
+  // normal verdict path. friction.json is written at STAGING time (pre-spawn),
+  // so it is present and meaningful on exactly those broken-run paths.
+  let frictionOut: string | undefined;
+
   try {
     // Step 3: Stage the harness FIRST — the subject's own evals/evals.json lands
     // inside its staged dir, so we must stage before we can locate it. The subject's
@@ -975,7 +984,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     process.stderr.write(`Provenance: ${provenance.fingerprint}\n`);
 
     const gradingOut = safePath.join(resultsDir, 'grading.json');
-    const frictionOut = safePath.join(resultsDir, 'friction.json');
+    frictionOut = safePath.join(resultsDir, 'friction.json');
 
     const effectivePrompt =
       opts.promptOverride ??
@@ -1106,11 +1115,6 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     const { passed, total, allPassed } = reconcileGrading(grading);
     const summary = `${allPassed ? 'PASS' : 'FAIL'} ${passed}/${total}`;
 
-    // Surface any packaging-fidelity friction the experimenter recorded to STDERR —
-    // it is otherwise only written to friction.json and easily missed. Best-effort,
-    // stderr-only (stdout stays machine-readable). Runs only after a successful spawn.
-    emitFrictionReport(frictionOut);
-
     // Default (fail-closed): a failing verdict returns EvalFailure (4), distinct
     // from the harness-broke codes (1/2/3) so CI can gate on regressions. Opt-out:
     // with tolerateEvalFailure, a failing verdict is downgraded to Ok (0) and the
@@ -1121,6 +1125,15 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       summary,
     };
   } finally {
+    // Surface any packaging-fidelity friction the experimenter recorded to STDERR
+    // BEFORE cleanup removes the harness dir. Placed in finally (not the happy path)
+    // so friction still surfaces when a throw — missing/invalid grading.json, the
+    // nonce/skew guard, or a timeout — preempts the verdict; on exactly those broken
+    // runs the friction ("your bundle is missing") is the key diagnostic and would
+    // otherwise be masked by the error. Best-effort + stderr-only (stdout stays
+    // machine-readable); a no-op when the path is unassigned, or friction.json
+    // is absent or empty.
+    emitFrictionReport(frictionOut);
     // Remove the signal handlers first (no listener leak across runs), then run
     // the same cleanup: release the lock, then remove the harness dir.
     removeSignalCleanup();
