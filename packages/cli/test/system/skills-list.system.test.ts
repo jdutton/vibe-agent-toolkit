@@ -14,7 +14,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { beforeAll, describe, expect, it } from 'vitest';
 import * as yaml from 'yaml';
 
-import { getBinPath } from './test-common.js';
+import { getBinPath, getMonorepoRoot } from './test-common.js';
 
 interface SkillEntry {
   name: string;
@@ -115,7 +115,9 @@ describe('skills list command (system test)', () => {
   });
 
   it('should list skills at specific path', () => {
-    const catAgentsPath = safePath.join(process.cwd(), 'packages/vat-example-cat-agents');
+    // Resolved relative to this test file (not process.cwd()) so it works whether
+    // vitest is invoked from the monorepo root or from packages/cli directly.
+    const catAgentsPath = safePath.join(getMonorepoRoot(import.meta.url), 'packages/vat-example-cat-agents');
     // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
     const result = spawnSync('node', [binPath, 'skills', 'list', catAgentsPath], {
       encoding: 'utf-8',

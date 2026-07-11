@@ -48,6 +48,10 @@ const config: KnipConfig = {
       ignoreDependencies: [
         // Installed as dep so vat-development-agents skill is available at runtime
         '@vibe-agent-toolkit/vat-development-agents',
+        // build script shells out to dev-tools/src/prepare-bin.ts via tsx (not a
+        // static import) — declared so turbo's dependency graph knows cli#build
+        // depends on dev-tools#build
+        '@vibe-agent-toolkit/dev-tools',
       ],
     },
 

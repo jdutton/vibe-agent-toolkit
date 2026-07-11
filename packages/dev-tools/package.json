@@ -15,6 +15,8 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
+    "test:unit": "vitest run",
+    "test:integration": "vitest run",
     "clean": "rimraf dist *.tsbuildinfo",
     "prepare-bin": "tsx src/prepare-bin.ts",
     "generate-cli-docs": "tsx src/generate-cli-docs.ts",

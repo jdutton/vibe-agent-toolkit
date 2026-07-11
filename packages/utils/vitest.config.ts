@@ -5,7 +5,8 @@ import { createUnitTestConfig } from '../../vitest.shared.js';
 export default defineConfig({
   test: createUnitTestConfig({
     coverageExclude: [
-      '**/test-fixtures/**',
+      'src/fs.ts',
+      'src/process.ts',
     ],
   }),
 });

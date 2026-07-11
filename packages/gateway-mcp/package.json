@@ -17,7 +17,8 @@
   ],
   "scripts": {
     "build": "tsc",
-    "test": "vitest run",
+    "test:unit": "vitest run",
+    "test:integration": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
   },
@@ -28,9 +29,9 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.5",
-    "@vitest/coverage-v8": "^3.0.5",
+    "@vitest/coverage-v8": "^3.2.4",
     "typescript": "^5.7.3",
-    "vitest": "^3.0.5",
+    "vitest": "^3.2.4",
     "@vibe-agent-toolkit/vat-example-cat-agents": "workspace:*"
   },
   "keywords": [

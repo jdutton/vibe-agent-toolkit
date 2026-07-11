@@ -18,7 +18,9 @@
   ],
   "scripts": {
     "build": "tsc",
-    "test": "vitest run",
+    "test:unit": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:system": "vitest run --config vitest.system.config.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "clean": "rimraf dist *.tsbuildinfo"
@@ -57,7 +59,7 @@
     "@types/semver": "^7.7.1",
     "rimraf": "^6.0.1",
     "typescript": "^5.7.3",
-    "vitest": "^2.1.8"
+    "vitest": "^3.2.4"
   },
   "publishConfig": {
     "access": "public"
