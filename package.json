@@ -47,6 +47,7 @@
     "dependency-check": "bunx knip --config packages/dev-tools/knip.config.ts",
     "duplication-check": "tsx packages/dev-tools/src/duplication-check.ts",
     "duplication-update-baseline": "tsx packages/dev-tools/src/jscpd-update-baseline.ts",
+    "guard:test-heap": "tsx packages/dev-tools/src/check-test-heap-budget.ts",
     "validate": "vibe-validate validate",
     "validate-structure": "tsx packages/dev-tools/src/validate-repo-structure.ts",
     "validate-version": "tsx packages/dev-tools/src/validate-version.ts",

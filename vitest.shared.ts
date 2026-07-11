@@ -32,7 +32,19 @@ export const unitPoolOptions = {
 
 export const integrationPool = 'forks' as const;
 export const integrationPoolOptions = {
-  forks: { singleFork: false, maxForks: 2 },
+  forks: {
+    singleFork: false,
+    maxForks: 2,
+    // V8 old-space cap — bounds JS-HEAP blowups only. This does NOT bound the
+    // native-memory risk (LanceDB's Arrow engine, onnxruntime models each
+    // ~1-3GB resident OUTSIDE V8's heap) that maxForks above already guards
+    // via concurrency. 1024MB gives ~2.5x headroom over the heaviest measured
+    // integration file (resource-compiler's language-service/transformer
+    // suites, 231-382MB across repeated runs) while staying tight enough to
+    // actually terminate a future JS-heap regression — unlike Node's default,
+    // which scales with host RAM and never binds.
+    execArgv: ['--max-old-space-size=1024'],
+  },
 };
 
 export interface UnitTestConfigOverrides {
@@ -126,6 +138,9 @@ export function createSystemTestConfig(overrides: SystemTestConfigOverrides = {}
         // Windows: one worker at a time (serial) for reliability on constrained
         // VMs. Unix: 2 workers for ~2x speedup; system tests are fully isolated.
         maxForks: process.platform === 'win32' ? 1 : 2,
+        // Same V8 old-space cap as integrationPoolOptions — see its comment.
+        // Heaviest measured system-test file: cli/inventory-parity.system.test.ts, ~196MB.
+        execArgv: ['--max-old-space-size=1024'],
       },
     },
   };
