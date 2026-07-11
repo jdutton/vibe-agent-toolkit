@@ -51,7 +51,11 @@ IPC between driver, experimenter, and executors is purely filesystem — no sock
 | `0` | Harness ran to completion and produced a valid `grading.json`. Read the printed summary (`PASS N/N` or `FAIL N/M`) and `results/grading.json` for eval outcomes — exit 0 does **not** mean all evals passed. |
 | `3` | Bootstrap: no `evals.json` found — VAT wrote a template. **Not a failure.** Fill in the template and re-run. |
 | `2` | Preflight / env failure: missing `claude` binary, auth error, declared inputs or deps absent, unsafe `--workdir`, `--require-auth` mismatch, or the `--i-understand-this-runs-skill-code` acknowledgment was not given. |
-| `1` | Internal failure, including the experimenter exiting without producing a valid `grading.json`. |
+| `1` | Internal failure, including the experimenter exiting without producing a valid `grading.json`. A **stall, timeout, or non-zero experimenter exit is authoritative and always exit 1** — it is never laundered into a PASS even if a `grading.json` is present on disk (a hardening against skill code that writes a fake grade then hangs). |
+
+> **A timed-out run may leave `grading.json` truncated and unparseable** (the experimenter is told to flush incrementally, so a mid-run kill can cut a partial file). Any consumer reading `grading.json` must treat an unparseable file as a **failure**, not crash on it. The exit code (1) already tells you the run did not complete; do not trust a partial artifact.
+>
+> **The default `--timeout` scales with the suite's declared eval count** (roughly `2min + 2min/eval`, floored at 5min, capped at 1h) so a correctly-configured multi-eval suite is not truncated by a flat budget. An explicit `--timeout` always overrides. If a run times out, the message names the declared eval count — raise `--timeout` (and `--stall`) for large suites.
 
 ## Bootstrap Flow (Exit 3)
 
@@ -196,7 +200,7 @@ Most knobs exist both as a CLI flag (one-off) and a `test:` config key (persiste
 | `--with-optional name=<src>` | `optional` | Stage an optional dependency (absent by default). |
 | `--env KEY=VALUE` | `env` | Inject an env var into the experimenter spawn (`${fixturesDir}`, `${stagedSkillDir}`, `${harnessRoot}`, `${resultsDir}` interpolate). Protected names (PATH, auth, model) cannot be overridden. |
 | `--pass-env KEY` | `passEnv` | Forward a host env var by name if present. |
-| `--max-turns` / `--max-budget-usd` / `--timeout` / `--stall` | same | Turn cap / USD cap / wall-clock seconds / no-output watchdog seconds. |
+| `--max-turns` / `--max-budget-usd` / `--timeout` / `--stall` | same | Turn cap / USD cap / wall-clock seconds / no-output watchdog seconds. **`--timeout` default scales with the declared eval count** (~`2min + 2min/eval`, floored 5min, capped 1h); an explicit value overrides. |
 | `--evals <path>` (via config) | `evals` | Path to `evals.json` relative to the skill source. |
 | — | `build` | Shell command run once before staging to generate build artifacts (cwd = config root). |
 | `--no-build` / `--refresh` / `--keep` / `--out` / `--workdir` | — | Skip building a declared skill / force re-stage / keep the harness dir / override output dir / override working dir. |

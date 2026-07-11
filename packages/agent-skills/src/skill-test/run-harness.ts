@@ -46,6 +46,7 @@ import {
   buildExperimenterPrompt,
   redactNonce,
 } from './experimenter-prompt.js';
+import { FrictionReportSchema, type FrictionItem } from './friction-schema.js';
 import { assertGradingNonce, parseGradingJson, reconcileGrading } from './grading-adapter.js';
 import { assertSafeHarnessRoot, assertSafeWorkdir, prepareHarnessRoot, resolveHarnessRoot } from './harness-location.js';
 import { acquireHarnessLock, installSignalCleanup } from './lock.js';
@@ -233,8 +234,27 @@ export const SKILL_TEST_BUILTIN_CAPS = {
   timeoutSeconds: DEFAULT_TIMEOUT_MS / 1000,
 } as const;
 
-export function resolveTimeoutMs(opts: RunHarnessOptions): number {
-  return opts.timeout === undefined ? DEFAULT_TIMEOUT_MS : opts.timeout * 1000;
+/**
+ * Compute the DEFAULT wall-clock budget (ms) when the operator gave no explicit
+ * `--timeout`. It scales with the number of declared evals so a large suite isn't
+ * killed at the flat 5-minute default before it can finish: a 120s base plus 120s
+ * per declared eval, floored at the historical 300s default (so we never shrink
+ * below today's budget) and capped at 1h (so a runaway/huge suite can't request an
+ * unbounded budget). An EXPLICIT `--timeout` always bypasses this (see resolveTimeoutMs).
+ */
+export function computeDefaultTimeoutMs(declaredEvalCount: number): number {
+  return Math.max(300_000, Math.min(3_600_000, 120_000 + declaredEvalCount * 120_000));
+}
+
+/**
+ * Resolve the effective wall-clock timeout (ms). An explicit `--timeout` (seconds)
+ * ALWAYS wins, unchanged. Otherwise the default scales with the declared eval count
+ * via {@link computeDefaultTimeoutMs}; when that count is unknown/unparseable at the
+ * call site, fall back to the flat 300s default.
+ */
+export function resolveTimeoutMs(opts: RunHarnessOptions, declaredEvalCount?: number): number {
+  if (opts.timeout !== undefined) return opts.timeout * 1000;
+  return declaredEvalCount === undefined ? DEFAULT_TIMEOUT_MS : computeDefaultTimeoutMs(declaredEvalCount);
 }
 
 /**
@@ -442,6 +462,38 @@ export function isAcknowledged(
   return opts.dryRun === true || opts.acknowledgedRunsSkillCode === true;
 }
 
+/** Optional context for the timeout message (surfaced only when available). */
+export interface TimeoutMessageContext {
+  /** Number of evals the suite DECLARED (parsed suite length), if known. */
+  declaredEvalCount?: number;
+  /** Best-effort count of evals that completed before the timeout, if cheaply known. */
+  completedEvalCount?: number;
+}
+
+/**
+ * Format the experimenter-timeout message. Pure so it can be unit-tested. Always
+ * reports the raw budget (ms + a minute label). When the declared eval count is
+ * known it appends the count and a hint that the default budget scales with eval
+ * count (raise `--timeout`/`--stall` for larger suites); when a best-effort
+ * completed count is also available it notes `completed ~N/declared`. With no
+ * declared count it stays honest and omits those clauses.
+ */
+export function formatTimeoutMessage(input: { timeoutMs: number } & TimeoutMessageContext): string {
+  const minutes = input.timeoutMs / 60_000;
+  const minutesLabel = Number.isInteger(minutes) ? `${minutes}m` : `${minutes.toFixed(1)}m`;
+  let msg = `Experimenter timed out after ${input.timeoutMs}ms (${minutesLabel}).`;
+  if (input.declaredEvalCount !== undefined) {
+    const completed =
+      input.completedEvalCount === undefined
+        ? ''
+        : ` (completed ~${input.completedEvalCount}/${input.declaredEvalCount})`;
+    msg +=
+      ` Declared evals: ${input.declaredEvalCount}${completed}; the default budget scales with eval count` +
+      ' — raise --timeout (and --stall) for larger suites.';
+  }
+  return msg;
+}
+
 /**
  * Translate a non-success spawn outcome into an InternalHarnessError (exit 1).
  * A stall, a timeout, OR a non-zero exit are each authoritative — a non-zero exit
@@ -451,16 +503,48 @@ export function assertExperimenterSucceeded(
   spawnResult: { stalled: boolean; timedOut: boolean; status: number },
   stallMs: number | undefined,
   timeoutMs: number,
+  timeoutContext?: TimeoutMessageContext,
 ): void {
   if (spawnResult.stalled) {
     throw new InternalHarnessError(`Experimenter stalled (no output for ${stallMs ?? 0}ms).`);
   }
   if (spawnResult.timedOut) {
-    throw new InternalHarnessError(`Experimenter timed out after ${timeoutMs}ms.`);
+    throw new InternalHarnessError(formatTimeoutMessage({ timeoutMs, ...timeoutContext }));
   }
   if (spawnResult.status !== 0) {
     throw new InternalHarnessError(`Experimenter exited non-zero (status ${spawnResult.status}).`);
   }
+}
+
+/**
+ * Format a friction report for human consumption — one line per entry as
+ * `[<severity>] <category>: <message>`. Pure; returns the empty string for no
+ * entries so the caller can skip emitting anything.
+ */
+export function formatFrictionReport(items: readonly FrictionItem[]): string {
+  return items.map(i => `[${i.severity}] ${i.category}: ${i.message}`).join('\n');
+}
+
+/**
+ * Read the run's friction.json (if present + valid) and echo a concise report to
+ * STDERR so users don't miss packaging-fidelity friction the experimenter surfaced
+ * (it is otherwise only written to disk). Best-effort: a missing, unparseable, or
+ * empty report emits nothing. Never touches stdout (which stays machine-readable).
+ */
+function emitFrictionReport(frictionPath: string): void {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
+  if (!existsSync(frictionPath)) return;
+  let raw: unknown;
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
+    raw = JSON.parse(readFileSync(frictionPath, 'utf-8'));
+  } catch {
+    return;
+  }
+  const parsed = FrictionReportSchema.safeParse(raw);
+  if (!parsed.success || parsed.data.items.length === 0) return;
+  process.stderr.write(`\nPackaging friction (${parsed.data.items.length}):\n`);
+  process.stderr.write(formatFrictionReport(parsed.data.items) + '\n');
 }
 
 /**
@@ -540,17 +624,24 @@ function overlayAuthoredEvalSuite(
 }
 
 /** Parse the staged eval suite and materialize each eval's input `files` into
- * `<harnessRoot>/workspaces/<id>/`. Returns the workspaces root. The dir is wiped
- * first so a reused harness root cannot leak a prior run's inputs. Throws
- * {@link EvalInputError} (mapped by the caller to exit 2) on a bad suite or a
- * missing input file. */
-export function stageWorkspacesForRun(evalsPath: string, harnessRoot: string): string {
+ * `<harnessRoot>/workspaces/<id>/`. Returns the workspaces root AND the number of
+ * evals the suite declared (so the caller can scale the default timeout without
+ * re-reading the suite). The dir is wiped first so a reused harness root cannot
+ * leak a prior run's inputs. Throws {@link EvalInputError} (mapped by the caller to
+ * exit 2) on a bad suite or a missing input file. */
+export function stageWorkspacesForRun(
+  evalsPath: string,
+  harnessRoot: string,
+): { workspacesRoot: string; declaredEvalCount: number } {
   const workspacesRoot = safePath.joinUnderRoot(harnessRoot, 'workspaces');
   rmSync(workspacesRoot, { recursive: true, force: true });
   mkdirSyncReal(workspacesRoot, { recursive: true });
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- evalsPath is our staged-subject path
   const suite = parseEvalSuite(readFileSync(evalsPath, 'utf-8'));
-  return stageEvalWorkspaces({ suite, evalsDir: dirname(evalsPath), workspacesRoot });
+  return {
+    workspacesRoot: stageEvalWorkspaces({ suite, evalsDir: dirname(evalsPath), workspacesRoot }),
+    declaredEvalCount: suite.evals.length,
+  };
 }
 
 /** Format the model flag string for logging and dry-run summary output. */
@@ -569,9 +660,9 @@ function buildModelFlag(model: string | undefined): string {
 function attemptStageWorkspaces(
   evalsPath: string,
   harnessRoot: string,
-): { workspacesRoot: string } | RunHarnessResult {
+): { workspacesRoot: string; declaredEvalCount: number } | RunHarnessResult {
   try {
-    return { workspacesRoot: stageWorkspacesForRun(evalsPath, harnessRoot) };
+    return stageWorkspacesForRun(evalsPath, harnessRoot);
   } catch (e) {
     if (e instanceof EvalInputError) {
       return {
@@ -845,7 +936,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // Step 5.5: Parse the eval suite and stage per-eval input workspaces.
     const workspaceStageResult = attemptStageWorkspaces(evalsPath, harnessRoot);
     if ('exitCode' in workspaceStageResult) return workspaceStageResult;
-    const { workspacesRoot } = workspaceStageResult;
+    const { workspacesRoot, declaredEvalCount } = workspaceStageResult;
 
     // Step 6: Enforce the §12 security ack (must pass --i-understand-this-runs-skill-code).
     // Only enforced when not a dry-run and not already acknowledged.
@@ -958,7 +1049,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     rmSync(gradingOut, { force: true });
     rmSync(frictionOut, { force: true });
 
-    const timeoutMs = resolveTimeoutMs(opts);
+    const timeoutMs = resolveTimeoutMs(opts, declaredEvalCount);
     const spawnOpts = {
       // In-memory, nonce-bearing prompt — streamed to stdin, never written to a
       // file the skill could read (see the integrity-nonce note above).
@@ -979,7 +1070,10 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     };
 
     const spawnResult = await spawnHeadlessClaude(spawnOpts);
-    assertExperimenterSucceeded(spawnResult, knobs.stallMs, timeoutMs);
+    // Thread the declared eval count so a timeout message can explain WHY the budget
+    // may be too small for a large suite (no completed count: it isn't cheaply/safely
+    // available here — all workspaces are staged up front, so subdir count ≠ progress).
+    assertExperimenterSucceeded(spawnResult, knobs.stallMs, timeoutMs, { declaredEvalCount });
 
     // Step 11: Parse grading.json — must be present and valid.
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived path
@@ -1008,6 +1102,11 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // if the grader graded nothing or its summary disagrees with the expectations.
     const { passed, total, allPassed } = reconcileGrading(grading);
     const summary = `${allPassed ? 'PASS' : 'FAIL'} ${passed}/${total}`;
+
+    // Surface any packaging-fidelity friction the experimenter recorded to STDERR —
+    // it is otherwise only written to friction.json and easily missed. Best-effort,
+    // stderr-only (stdout stays machine-readable). Runs only after a successful spawn.
+    emitFrictionReport(frictionOut);
 
     // Default: exit Ok whenever the harness ran to completion and produced a
     // valid grading.json — pass/fail lives in the summary string and grading.json,

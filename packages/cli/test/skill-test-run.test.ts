@@ -12,7 +12,12 @@
 import * as harness from '@vibe-agent-toolkit/agent-skills';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { resolveCappedKnob, resolveSubjectForTest, runSkillTestRun } from '../src/commands/skill/test/run.js';
+import {
+  isPathSourceTarget,
+  resolveCappedKnob,
+  resolveSubjectForTest,
+  runSkillTestRun,
+} from '../src/commands/skill/test/run.js';
 import { resetSkillDiscoveryCache } from '../src/skill-resolution/index.js';
 
 import { setupReferenceFixture } from './skill-resolution/helpers.js';
@@ -246,6 +251,38 @@ describe('vat skill test run (output routing)', () => {
 
     expect(stdoutCalls.some((s) => s.includes('Summary:'))).toBe(true);
     expect(stderrCalls.some((s) => s.includes('Summary:'))).toBe(false);
+  });
+});
+
+// isPathSourceTarget distinguishes a path/source subject (staged as-is, bypassing
+// the project's `test:` config) from a config-declared NAME target (buildable). A
+// warning fires only for the former.
+describe('isPathSourceTarget', () => {
+  it('is true for a plain {path} source that would NOT be built', () => {
+    expect(isPathSourceTarget({ wouldBuild: false, subjectSource: { path: './my-skill' } })).toBe(true);
+  });
+
+  it('is false for a config-declared (buildable) NAME target', () => {
+    expect(isPathSourceTarget({ wouldBuild: true, subjectSource: { path: '/built/dist/my-skill' } })).toBe(false);
+  });
+
+  it('is false for a non-path source (e.g. npm) even when not built', () => {
+    expect(isPathSourceTarget({ wouldBuild: false, subjectSource: { npm: '@scope/s@1.0.0' } })).toBe(false);
+  });
+});
+
+describe('vat skill test run (path-target config-blind warning — #7)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('warns on stderr that a path target bypasses the test: config', async () => {
+    const { stderrCalls } = await runAndCaptureStreams({
+      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
+      harnessPath: '/tmp/h',
+      exitCode: 0,
+      summary: 'PASS 1/1',
+    });
+    expect(stderrCalls.some((s) => s.includes('path target bypasses'))).toBe(true);
+    expect(stderrCalls.some((s) => s.includes('pass the skill NAME'))).toBe(true);
   });
 });
 

@@ -542,6 +542,31 @@ async function resolveBuildableSubject(
   return { subjectSource: { path: ref.expectedDistDir }, subjectScaffoldDir: scaffoldDir, rebuilt: true, wouldBuild: true };
 }
 
+/**
+ * True when the resolved subject is a path/source target (a `{ path }` source that
+ * is staged AS-IS, not built), as opposed to a config-declared NAME target
+ * (`wouldBuild` — resolved + built through the project config). Only a path target
+ * bypasses the project's `test:` config block, so this gates the #7 warning below.
+ * Pure + exported for unit testing.
+ */
+export function isPathSourceTarget(subject: { wouldBuild: boolean; subjectSource: SkillSourceSpec }): boolean {
+  return !subject.wouldBuild && 'path' in subject.subjectSource;
+}
+
+/**
+ * Warn (stderr) when the subject is a path target: the project's `test:` config
+ * (model / evals / timeout) is keyed by skill NAME and is NOT honored for a path
+ * target staged as-is. We deliberately do NOT try to make path targets honor config
+ * (out of scope) — we just tell the user to pass the NAME to get that behavior.
+ */
+function warnIfPathTargetBypassesConfig(subject: ResolvedSubject): void {
+  if (!isPathSourceTarget(subject)) return;
+  process.stderr.write(
+    'Note: a path target bypasses the project\'s test: config (model/evals/timeout). ' +
+      'To honor it, pass the skill NAME instead (e.g. vat skill test run <name>).\n',
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Testable action
 // ---------------------------------------------------------------------------
@@ -606,6 +631,8 @@ export async function runSkillTestRun(
     process.exit(exitCode);
     return;
   }
+
+  warnIfPathTargetBypassesConfig(subject);
 
   const harnessOpts = buildHarnessOpts(skills, options, knobs, config);
   harnessOpts.subjectSource = subject.subjectSource;
