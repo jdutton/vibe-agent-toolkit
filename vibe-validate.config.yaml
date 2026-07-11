@@ -76,7 +76,3 @@ validation:
         - name: 'End-to-end system tests'
           command: 'bun run test:system'
           description: 'Runs complete end-to-end workflows testing the entire system'
-
-        - name: 'Vitest heap-budget guard'
-          command: 'bun run guard:test-heap'
-          description: 'Fails loud and named if a resource-compiler or cli integration/system test file exceeds its per-file heap budget — defense-in-depth alongside the maxForks concurrency cap (which bounds native-memory risk in rag-lancedb; this guard bounds JS-heap risk elsewhere)'

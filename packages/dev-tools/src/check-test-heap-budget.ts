@@ -1,11 +1,19 @@
 #!/usr/bin/env tsx
 /**
- * check-test-heap-budget — fails fast & NAMED, locally, when a vitest spec
- * FILE's peak heap balloons, instead of letting it surface as a silent CI
- * OOM weeks later. Re-runs `vitest --logHeapUsage` for a small, explicit set
- * of currently-heavy package/suite pairs (NOT a repo-wide re-run — that would
+ * check-test-heap-budget — fails loud & NAMED when a vitest spec FILE's peak
+ * heap balloons, instead of letting it surface as a silent CI OOM weeks
+ * later. Re-runs `vitest --logHeapUsage` for a small, explicit set of
+ * currently-heavy package/suite pairs (NOT a repo-wide re-run — that would
  * duplicate the turbo-cached test:integration/test:system work and double CI
  * time for no benefit; see docs/superpowers/specs/2026-07-11-vitest-heap-budget-guard-design.md).
+ *
+ * Runs as its own standalone CI job (.github/workflows/test-heap-guard.yml,
+ * Linux only), NOT as part of `bun run validate` / the pre-commit hook —
+ * it re-executes vitest directly rather than through turbo, so it can't
+ * cache-hit even when the target packages are unchanged, and paying that
+ * cost on every local commit was a bigger tax than the local-feedback value
+ * (see PR #144 discussion). CI-only is an acceptable delay for this check:
+ * it fails the PR, not silently ships.
  *
  * Scoped deliberately: rag-lancedb's real memory risk (LanceDB's Arrow
  * engine, onnxruntime models) lives in native addon memory, entirely
