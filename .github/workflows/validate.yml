@@ -51,7 +51,7 @@ jobs:
       - name: Check all validation jobs
         run: |-
           if [ "${{ needs.validate.result }}" != "success" ]; then
-                      echo "❌ Some validation checks failed"
-                      exit 1
-                    fi
-                    echo "✅ All validation checks passed!"
+            echo "❌ Some validation checks failed"
+            exit 1
+          fi
+          echo "✅ All validation checks passed!"

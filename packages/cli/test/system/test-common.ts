@@ -50,6 +50,18 @@ export function getFixturePath(testFileUrl: string, fixtureName: string): string
 }
 
 /**
+ * Get the monorepo root from current test file location (test files live at
+ * packages/cli/test/system/, so the root is 4 levels up). Resolving relative to
+ * the test file — not process.cwd() — keeps this correct whether vitest is
+ * invoked from the monorepo root or from packages/cli directly.
+ * @param testFileUrl - import.meta.url from the test file
+ */
+export function getMonorepoRoot(testFileUrl: string): string {
+  const testDir = pathDirname(urlFileURLToPath(testFileUrl));
+  return pathResolve(testDir, '../../../..');
+}
+
+/**
  * Create a temporary directory for testing
  * Automatically generates a unique directory name
  */
@@ -312,12 +324,8 @@ export async function executeBunVat(
   args: string[],
   options?: { cwd?: string }
 ): Promise<SpawnSyncReturns<string>> {
-  // Find the monorepo root relative to test file location (like getBinPath does)
-  const testDir = pathDirname(urlFileURLToPath(testFileUrl));
-  const monorepoRoot = pathResolve(testDir, '../../../..');
-
   return spawnAndCollect('bun', ['run', 'vat', ...args], {
-    cwd: options?.cwd ?? monorepoRoot,
+    cwd: options?.cwd ?? getMonorepoRoot(testFileUrl),
   });
 }
 

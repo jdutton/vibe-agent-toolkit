@@ -12,6 +12,8 @@ import * as fs from 'node:fs';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
+import { getBinPath } from '../test-common.js';
+
 import type { CliResult } from './cli-runner.js';
 import { createTestTempDir } from './project-setup.js';
 
@@ -20,9 +22,12 @@ import { createTestTempDir } from './project-setup.js';
  * Creates temp directories and provides consistent setup/cleanup
  *
  * @param testPrefix - Prefix for temp directory name
+ * @param testFileUrl - import.meta.url from the calling test file, used to resolve
+ *   binPath relative to the test file's location (not process.cwd(), which varies
+ *   depending on whether vitest is invoked from the monorepo root or the package dir)
  * @returns Suite object with tempDir, projectDir, skillsDir, binPath, and lifecycle methods
  */
-export function setupInstallTestSuite(testPrefix: string): {
+export function setupInstallTestSuite(testPrefix: string, testFileUrl: string): {
   tempDir: string;
   projectDir: string;
   skillsDir: string;
@@ -34,7 +39,7 @@ export function setupInstallTestSuite(testPrefix: string): {
     tempDir: '',
     projectDir: '',
     skillsDir: '',
-    binPath: safePath.join(process.cwd(), 'packages', 'cli', 'dist', 'bin.js'),
+    binPath: getBinPath(testFileUrl),
     beforeEach: () => {
       suite.tempDir = createTestTempDir(testPrefix);
       suite.projectDir = safePath.join(suite.tempDir, 'project');

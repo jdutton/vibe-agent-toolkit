@@ -33,14 +33,9 @@
       "outputs": [],
       "cache": true
     },
-    "test": {
-      "dependsOn": ["^build"],
-      "outputs": ["coverage/**"],
-      "cache": true
-    },
     "test:unit": {
       "dependsOn": ["^build"],
-      "outputs": ["coverage/**"],
+      "outputs": [],
       "cache": true
     },
     "test:integration": {
@@ -75,6 +70,10 @@
     "tsconfig.*.json",
     "eslint.config.js",
     "vitest.config.ts",
-    "vitest.*.config.ts"
-  ]
+    "vitest.*.config.ts",
+    "vitest.shared.ts",
+    "vitest.setup.js",
+    "packages/dev-tools/src/copy-yaml-assets.ts"
+  ],
+  "globalEnv": ["CI", "NET_AVAILABLE"]
 }

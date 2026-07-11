@@ -1,0 +1,37 @@
+name: Vitest Heap-Budget Guard
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  guard-test-heap:
+    name: Vitest heap-budget guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: latest
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Build packages
+        run: bun run build
+
+      - name: Run heap-budget guard
+        run: bun run guard:test-heap

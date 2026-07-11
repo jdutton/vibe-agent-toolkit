@@ -16,7 +16,7 @@ import {
   setupInstallTestSuite,
 } from './test-helpers/index.js';
 
-const suite = setupInstallTestSuite('vat-skills-install-test-');
+const suite = setupInstallTestSuite('vat-skills-install-test-', import.meta.url);
 
 /**
  * Helper: Create a simple skill directory with SKILL.md

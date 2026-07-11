@@ -19,7 +19,9 @@
     "build": "tsc --build",
     "build:watch": "tsc --build --watch",
     "clean": "rm -rf dist *.tsbuildinfo",
-    "test": "vitest run",
+    "test:unit": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
+    "test:system": "vitest run --config vitest.system.config.ts",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit"
@@ -36,7 +38,7 @@
   "devDependencies": {
     "@types/node": "^22.0.0",
     "typescript": "~5.7.2",
-    "vitest": "^3.0.3"
+    "vitest": "^3.2.4"
   },
   "keywords": [
     "claude",

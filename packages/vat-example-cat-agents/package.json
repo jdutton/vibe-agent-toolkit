@@ -25,11 +25,10 @@
     "duplication-check": "echo 'Duplication check not applicable to example packages'",
     "validate-structure": "echo 'Structure validation not applicable to example packages'",
     "pre-publish": "echo 'Pre-publish checks not applicable to example packages'",
-    "test": "vitest run",
+    "test:unit": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
-    "test:integration": "echo 'No integration tests in example package'",
-    "test:system": "echo 'No system tests in example package'",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "typecheck": "tsc --noEmit",
     "demo:photos": "bun examples/photo-analysis-demo.ts",
     "demo:conversation": "bun examples/conversational-demo.ts",
@@ -52,11 +51,11 @@
     "@vibe-agent-toolkit/runtime-claude-agent-sdk": "workspace:*",
     "@vibe-agent-toolkit/runtime-langchain": "workspace:*",
     "@vibe-agent-toolkit/runtime-openai": "workspace:*",
-    "@vitest/coverage-v8": "2.1.8",
+    "@vitest/coverage-v8": "^3.2.4",
     "ai": "^6.0.48",
     "openai": "^4.77.3",
     "typescript": "^5.7.3",
-    "vitest": "^2.1.8"
+    "vitest": "^3.2.4"
   },
   "vat": {
     "version": "1.0",
