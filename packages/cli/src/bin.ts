@@ -21,6 +21,7 @@ import { createRagCommand, showRagVerboseHelp } from './commands/rag/index.js';
 import { createResourcesCommand, showResourcesVerboseHelp } from './commands/resources/index.js';
 import { createSkillCommand } from './commands/skill/index.js';
 import { createSkillsCommand } from './commands/skills/index.js';
+import { createValidateTopLevelCommand } from './commands/validate.js';
 import { createVerifyTopLevelCommand } from './commands/verify.js';
 import { loadVerboseHelp } from './utils/help-loader.js';
 import { createLogger } from './utils/logger.js';
@@ -141,6 +142,7 @@ program.addCommand(createClaudeCommand());
 
 // Add top-level orchestration commands
 program.addCommand(createBuildTopLevelCommand());
+program.addCommand(createValidateTopLevelCommand());
 program.addCommand(createVerifyTopLevelCommand());
 
 // Add standalone commands
