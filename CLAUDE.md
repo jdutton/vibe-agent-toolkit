@@ -639,6 +639,16 @@ bun run vat skills audit ~/.claude/plugins
 
 **Note**: End users who self-host VAT in their own projects can use standard commands like `vat skills build` or `npx vat skills build`.
 
+**Three "validate"-flavored commands — don't conflate them:**
+
+| Command | What it is | When to run |
+|---|---|---|
+| `bun run validate` | This repo's **vibe-validate orchestrator** — lint, typecheck, unit/integration/system tests, duplication. The full local CI gate. **Not** a vat subcommand. | Before every commit (the pre-commit hook runs it too). |
+| `vat validate` | A **vat CLI command** — runs the *source-level* validators the project's config declares (resources + skills). Never builds. | Pre-commit / CI-before-build on a project that adopts vat. |
+| `vat verify` | A **vat CLI command** — validates the *built* `dist/` artifacts (adds marketplace + consistency). | After `vat build`, before publish. |
+
+So when this repo's docs say "run `bun run validate`," that's the orchestrator, not the `vat validate` CLI subcommand. `vat validate` ⊂ `vat verify` in scope; both are vat product commands, distinct from the repo's own `bun run validate` gate.
+
 See [packages/cli/CLAUDE.md](packages/cli/CLAUDE.md) for more CLI development guidance.
 
 ### Adding New Packages

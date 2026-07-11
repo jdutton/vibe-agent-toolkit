@@ -10,9 +10,9 @@ A Claude plugin marketplace is a Git repository containing `.claude-plugin/marke
 
 | Mode | Description | VAT commands |
 |------|-------------|-------------|
-| **Built** | Source repo with skills → `vat build` → publish to `claude-marketplace` branch | `vat build`, `vat validate`, `vat claude marketplace publish` |
+| **Built** | Source repo with skills → `vat build` → publish to `claude-marketplace` branch | `vat validate` (source), `vat build`, `vat verify` (built artifacts), `vat claude marketplace publish` |
 | **Separate repo** | Source repo → `vat build` → publish to a different Git repo | Same as Built (remote configured in YAML) |
-| **Manual/native** | The repo IS the marketplace — no build step | `vat validate` (with config) or `vat claude marketplace validate` (without config) |
+| **Manual/native** | The repo IS the marketplace — no build step | `vat validate` (source) + `vat claude marketplace validate` (marketplace manifest) |
 
 ## Distribution Surfaces
 
@@ -142,13 +142,16 @@ Categories: `Added`, `Changed`, `Removed`, `Fixed`, `Security`.
 ## Publish Flow
 
 ```bash
-# 1. Build marketplace artifacts
-vat build
-
-# 2. Validate everything
+# 1. Validate sources (no build needed)
 vat validate
 
-# 3. Publish to claude-marketplace branch
+# 2. Build marketplace artifacts
+vat build
+
+# 3. Verify the built artifacts (adds marketplace + consistency checks)
+vat verify
+
+# 4. Publish to claude-marketplace branch
 vat claude marketplace publish
 
 # Or dry-run first
@@ -194,15 +197,22 @@ When publishing to a **separate repository** (via `publish.remote`), the default
 
 ## Validation
 
-### With config (`vat validate`)
+There are two layers: **source** validation (no build required) and **built-artifact** validation (after `vat build`).
 
-When marketplace config exists, `vat validate` orchestrates in dependency order:
+### Source-level (`vat validate`)
 
-1. `resources validate` — links, frontmatter, schemas
-2. `skills validate` — SKILL.md structure, frontmatter
-3. `marketplace validate` — marketplace.json, plugin.json, structure
+`vat validate` runs every source validator the config declares — and only those — discovered from `vibe-agent-toolkit.config.yaml`:
 
-Each layer fails fast — bad links block skill validation, bad skills block marketplace validation.
+1. `resources validate` — links, frontmatter, schemas (when `resources:` configured)
+2. `skills validate` — SKILL.md structure, frontmatter (when `skills:` configured)
+
+It is source-level only and **never requires a build**, so it is safe for pre-commit and CI-before-build. A surface with no config block is simply skipped (no error, no noise).
+
+> **Decision (revisitable):** `vat validate` deliberately excludes marketplace-artifact validation. The marketplace check runs against the built `dist/` tree, which would couple `vat validate` to a prior `vat build` and overlap `vat verify`. Marketplace validation lives in `vat verify` (built mode) and `vat claude marketplace validate` (standalone). See issue #128.
+
+### Built-artifact (`vat verify`)
+
+After `vat build`, run `vat verify` to validate the assembled distribution — it adds `marketplace validate` (marketplace.json, plugin.json, LICENSE, structure) plus distribution-consistency checks on top of the resources/skills validators.
 
 ### Without config (`vat claude marketplace validate`)
 
@@ -245,7 +255,7 @@ claude:
 ```
 
 ```bash
-vat build && vat validate && vat claude marketplace publish
+vat validate && vat build && vat verify && vat claude marketplace publish
 ```
 
 Consumers install via:
@@ -278,10 +288,11 @@ claude:
 No `vat build`, no publish. Author maintains `marketplace.json` and plugin directories directly. Validate with:
 
 ```bash
-# With vibe-agent-toolkit.config.yaml
+# Source validation (links, SKILL.md) — with vibe-agent-toolkit.config.yaml
 vat validate
 
-# Without config
+# Marketplace manifest validation (marketplace.json, plugin.json, LICENSE)
+# Required here too: vat validate does not check the manifest (see Validation above)
 vat claude marketplace validate .
 ```
 
