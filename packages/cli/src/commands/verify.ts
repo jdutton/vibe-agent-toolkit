@@ -33,7 +33,7 @@ export function createVerifyTopLevelCommand(): Command {
   const command = new Command('verify');
 
   command
-    .description('Verify all project artifacts in dependency order (resources → skills → marketplace → consistency)')
+    .description('Verify built artifacts (resources + skills + marketplace + consistency); marketplace/consistency read dist/ — run after vat build')
     .option('--only <phase>', 'Verify only a specific phase: resources, skills, marketplace, consistency')
     .option('--debug', 'Enable debug logging')
     .action(verifyTopLevelCommand)
@@ -41,8 +41,11 @@ export function createVerifyTopLevelCommand(): Command {
       'after',
       `
 Description:
-  Validates all project artifacts without building anything. Each phase
-  validates different aspects of the project.
+  Verifies all project artifacts. The marketplace and consistency phases
+  read the built dist/ tree, so run this after 'vat build'.
+
+  For source-only validation that needs no build (resources + skills,
+  suitable for pre-commit and CI-before-build), use 'vat validate'.
 
   Phases:
     resources    → link integrity, collection frontmatter schemas
