@@ -108,9 +108,15 @@ For a declared skill, **the authored source tree is not what ships.** `packageSk
 The `SkillReference` arms:
 
 - **`buildable`** — a declared skill: build (real entry points), then test the dist.
-- **`source`** — test the tree/spec as-is (already-built dist, external source, or undeclared path).
+- **`source`** — test the tree/spec as-is (already-built dist, external source, or undeclared path). Carries an optional `declaredSkill` back-link (see below).
 - **`name-miss`** — a bare name in a project that declares no such skill (error; lists known skills).
 - **`not-found`** — not a path and no governing config to resolve a name against (error).
+
+#### Path → declared-skill back-link (`declaredSkill`)
+
+A `<path>` is always staged **as-is** (never rebuilt) — but if it points at a declared skill's built `expectedDistDir`, the resolver attaches a `declaredSkill` link (name, `configRoot`, authored `sourcePath`) via `findDeclaredSkillForPath`. This is the *reverse* of `buildable`: it walks up from the path (config-first, so a monorepo package config beats the repo `.git`) and matches the path against each declared skill's forward-computed dist dir (both use the shared `computeSkillDistribution`).
+
+The link lets `vat skill test` honor that skill's persisted `test:` config (model / evals / timeout) and resolve the authored eval suite relative to the **source** dir — so `vat skill test run ./dist/skills/x` behaves the same as the name `x`, minus the rebuild. A path that maps to no declared skill is *config-blind*: it is tested as-is with no `test:` config, and the command warns (pointing at the name form). This keeps `resolveSkillReference` the single home for the name↔path mapping — no command re-derives it.
 
 ### Reference form → result arm
 
@@ -121,7 +127,8 @@ The `SkillReference` arms:
 | bare name, undeclared, not a dir, inside a project | `name-miss` |
 | bare name, no governing config, existing dir | `source` (path, as-is) |
 | bare name, no governing config, not a dir | `not-found` |
-| `<path>` (absolute / contains `/` / starts `.`, incl. the `./<name>` escape) | `source` (path, as-is — never name-resolved) |
+| `<path>` at a declared skill's built dist | `source` (path, as-is) + `declaredSkill` back-link (honors its `test:` config) |
+| `<path>` mapping to no declared skill (incl. the `./<name>` escape) | `source` (path, as-is — config-blind, never name-resolved) |
 | `workspace:<pkg>` | `source` |
 | `npm:<spec>` | `source` |
 | `url:<u>` | `source` |

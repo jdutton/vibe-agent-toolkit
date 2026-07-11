@@ -1,4 +1,4 @@
-export { resolveSkillReference } from './resolve-skill-reference.js';
+export { findDeclaredSkillForPath, resolveSkillReference } from './resolve-skill-reference.js';
 export { classifyToken, parseSourceSpec } from './classify.js';
 export {
   getDiscoveredSkillsByPath,
@@ -6,4 +6,4 @@ export {
   resolveSkillPackagingConfig,
   stripValidationAllowForDisplay,
 } from './packaging-config.js';
-export type { BuildableReference, SkillDistribution, SkillReference } from './types.js';
+export type { BuildableReference, DeclaredSkillLink, SkillDistribution, SkillReference } from './types.js';

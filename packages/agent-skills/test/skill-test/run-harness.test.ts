@@ -527,7 +527,7 @@ function makeDryRunInput(overrides: Partial<DryRunSummaryInput> = {}): DryRunSum
     provenancePath: '/harness/results/provenance.json',
     provenanceFingerprint: 'abc123',
     provenanceEntryCount: 3,
-    modelFlag: '--model claude-sonnet-4-6',
+    modelFlag: '--model claude-sonnet-5',
     ...overrides,
   };
 }
@@ -668,17 +668,17 @@ describe('cleanupHarness', () => {
 });
 
 describe('verdictExitCode', () => {
-  it('returns Ok when all expectations passed (regardless of the flag)', () => {
+  it('returns Ok when all expectations passed (regardless of tolerance)', () => {
     expect(verdictExitCode(true, false)).toBe(SkillTestExitCode.Ok);
     expect(verdictExitCode(true, true)).toBe(SkillTestExitCode.Ok);
   });
 
-  it('returns Ok on a failing verdict when fail-on-eval-failure is NOT set (default behavior)', () => {
-    expect(verdictExitCode(false, false)).toBe(SkillTestExitCode.Ok);
+  it('escalates a failing verdict to EvalFailure by DEFAULT (fail-closed)', () => {
+    expect(verdictExitCode(false, false)).toBe(SkillTestExitCode.EvalFailure);
   });
 
-  it('escalates a failing verdict to EvalFailure when fail-on-eval-failure is set', () => {
-    expect(verdictExitCode(false, true)).toBe(SkillTestExitCode.EvalFailure);
+  it('downgrades a failing verdict to Ok when eval failure is tolerated (opt-out)', () => {
+    expect(verdictExitCode(false, true)).toBe(SkillTestExitCode.Ok);
   });
 });
 

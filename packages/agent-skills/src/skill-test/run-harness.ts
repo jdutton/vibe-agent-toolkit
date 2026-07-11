@@ -192,11 +192,13 @@ export interface RunHarnessOptions {
   passEnv?: readonly string[];
 
   /**
-   * Opt-in eval gating. When true and any eval fails, the run returns exit
-   * EvalFailure (4) instead of Ok. Default (false/absent): a completed run
-   * always returns Ok and the pass/fail count lives only in the summary.
+   * Opt-OUT of eval gating (for interactive use). By DEFAULT (false/absent) a
+   * failing verdict returns exit EvalFailure (4) — fail-closed, so CI catches a
+   * regression without an extra flag. When true, a failing verdict is downgraded
+   * to Ok (0) and the pass/fail count lives only in the summary/grading.json.
+   * Harness-broke codes (1/2/3) are unaffected either way.
    */
-  failOnEvalFailure?: boolean;
+  tolerateEvalFailure?: boolean;
 }
 
 export interface RunHarnessResult {
@@ -258,13 +260,14 @@ export function resolveTimeoutMs(opts: RunHarnessOptions, declaredEvalCount?: nu
 }
 
 /**
- * Map an eval verdict to a process exit code. Default behavior: a completed run
- * exits Ok regardless of pass/fail (the count lives in the summary). When
- * `failOnEvalFailure` is set, a failing verdict escalates to EvalFailure (4) so
- * CI can gate on eval outcomes without conflating them with harness breakage.
+ * Map an eval verdict to a process exit code. Default behavior (fail-closed): a
+ * failing verdict escalates to EvalFailure (4) — distinct from the harness-broke
+ * codes (1/2/3) so a CI consumer can `case $? in 0);; 4) tolerate;; *) hard fail;; esac`.
+ * When `tolerateEvalFailure` is set (interactive opt-out), a failing verdict is
+ * downgraded to Ok (0) and the count lives only in the summary/grading.json.
  */
-export function verdictExitCode(allPassed: boolean, failOnEvalFailure: boolean): SkillTestExitCodeValue {
-  return failOnEvalFailure && !allPassed ? SkillTestExitCode.EvalFailure : SkillTestExitCode.Ok;
+export function verdictExitCode(allPassed: boolean, tolerateEvalFailure: boolean): SkillTestExitCodeValue {
+  return !allPassed && !tolerateEvalFailure ? SkillTestExitCode.EvalFailure : SkillTestExitCode.Ok;
 }
 
 export function resolveStallMs(opts: RunHarnessOptions): number | undefined {
@@ -1108,13 +1111,13 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // stderr-only (stdout stays machine-readable). Runs only after a successful spawn.
     emitFrictionReport(frictionOut);
 
-    // Default: exit Ok whenever the harness ran to completion and produced a
-    // valid grading.json — pass/fail lives in the summary string and grading.json,
-    // and callers should not read the exit code to distinguish eval pass from fail.
-    // Opt-in: with failOnEvalFailure, a failing verdict escalates to EvalFailure (4).
+    // Default (fail-closed): a failing verdict returns EvalFailure (4), distinct
+    // from the harness-broke codes (1/2/3) so CI can gate on regressions. Opt-out:
+    // with tolerateEvalFailure, a failing verdict is downgraded to Ok (0) and the
+    // pass/fail count lives only in the summary string and grading.json.
     return {
       harnessPath: harnessRoot,
-      exitCode: verdictExitCode(allPassed, opts.failOnEvalFailure === true),
+      exitCode: verdictExitCode(allPassed, opts.tolerateEvalFailure === true),
       summary,
     };
   } finally {

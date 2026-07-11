@@ -39,15 +39,36 @@ export interface BuildableReference {
 }
 
 /**
+ * Linkage from a PATH target back to the declared skill it materializes. Set on a
+ * `source` result when the path resolves to a declared skill's built `expectedDistDir`
+ * (reverse of {@link BuildableReference}). Lets `vat skill test` honor that skill's
+ * persisted `test:` config (model / evals / timeout) and resolve the authored eval
+ * suite relative to `sourcePath`'s dir — even though the subject is staged as-is,
+ * never rebuilt. Absent when the path maps to no declared skill (config-blind target).
+ */
+export interface DeclaredSkillLink {
+  /** The declared skill name whose dist this path is. */
+  name: string;
+  /** Absolute governing-config root (holds vibe-agent-toolkit.config.yaml). */
+  configRoot: string;
+  /** Absolute path to the skill's authored SKILL.md (its `evals/` sit beside it). */
+  sourcePath: string;
+  /** Absolute dir the declared skill builds to — the matched path. */
+  expectedDistDir: string;
+}
+
+/**
  * The full result union of {@link resolveSkillReference}.
  *
  * - `buildable`  → build (real entry points), then test the dist.
  * - `source`     → test the tree as-is (already-built dist, external, or undeclared).
+ *                  `declaredSkill` is set when a path target maps back to a declared
+ *                  skill's dist (so its `test:` config is still honored).
  * - `name-miss`  → a bare name in a project that declares no such skill (error).
  * - `not-found`  → not a path and no governing config to resolve a name (error).
  */
 export type SkillReference =
   | BuildableReference
-  | { kind: 'source'; source: SkillSource }
+  | { kind: 'source'; source: SkillSource; declaredSkill?: DeclaredSkillLink }
   | { kind: 'name-miss'; name: string; configRoot: string; knownSkills: string[] }
   | { kind: 'not-found'; ref: string };
