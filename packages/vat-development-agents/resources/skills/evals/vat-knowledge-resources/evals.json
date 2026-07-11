@@ -25,12 +25,12 @@
       "category": "collections-config-correctness",
       "prompt": "Two things I need the collections config to handle. First, every docs folder has a hand-maintained README.md table-of-contents file with no frontmatter, and I don't want those flagged by any schema. Second, our SKILL.md files should be locked down — no stray frontmatter fields beyond the official spec. How should the config be set up for both?",
       "files": ["fixtures/starter-config.yaml"],
-      "expected_output": "For the README ToCs, scope them out with the collection's exclude: glob key (e.g. exclude: [\"docs/**/README.md\"]) so the schema never applies to them. For SKILL.md, define a collection with mode: strict so any frontmatter field not in the schema is an error — and notes that strict only rejects extra fields when the JSON Schema itself sets additionalProperties: false.",
+      "expected_output": "For the README ToCs, scope them out with a glob so no schema applies — either the collection's own exclude: key (e.g. exclude: [\"docs/**/README.md\"]) or a top-level resources.exclude (which drops them from discovery entirely, so no collection schema can flag them). For SKILL.md, define a collection with mode: strict so any frontmatter field not in the schema is an error — and notes that strict only rejects extra fields when the JSON Schema itself sets additionalProperties: false.",
       "expectations": [
-        "Recommends excluding the README ToC files via the collection's `exclude:` glob key (e.g. `exclude: [\"docs/**/README.md\"]`) rather than adding frontmatter to them.",
+        "Recommends excluding the README ToC files by a glob rather than by adding frontmatter to them — accept EITHER the collection's own `exclude:` key OR a top-level `resources.exclude` (e.g. `[\"docs/**/README.md\"]`); both keep every schema from applying to READMEs (a top-level exclude drops them from discovery entirely).",
         "Uses `mode: strict` for the SKILL.md collection so unknown/extra frontmatter fields are treated as errors.",
         "Notes that strict mode only rejects extra fields when the JSON Schema sets `additionalProperties: false` (otherwise extras are still allowed even in strict mode).",
-        "The answer does NOT recommend `mode: permissive` for the locked-down SKILL.md collection, and does NOT solve the README problem by disabling resource validation globally — the fix is a scoped per-collection `exclude`."
+        "The answer does NOT recommend `mode: permissive` for the locked-down SKILL.md collection, and does NOT solve the README problem by deleting the schemas or turning resource validation off entirely — the fix is a glob-based exclude (per-collection `exclude:` or top-level `resources.exclude`), not abandoning validation."
       ]
     },
     {
