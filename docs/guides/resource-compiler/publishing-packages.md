@@ -252,7 +252,7 @@ title: System Prompts
 version: 1.0
 purpose: Core system instructions for AI agents
 modelHints:
-  - claude-3
+  - claude-sonnet-5
   - gpt-4
 lastUpdated: 2024-02-15
 ---

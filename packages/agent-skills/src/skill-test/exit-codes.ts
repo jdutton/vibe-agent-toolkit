@@ -13,12 +13,17 @@ export const SkillTestExitCode = {
   Preflight: 2,
   Bootstrap: 3,
   /**
-   * At least one eval FAILED and the caller opted into eval-gating via
-   * `--fail-on-eval-failure`. Distinct from the harness-broke codes (1/2):
-   * the harness ran to completion and produced a valid grading.json — the
-   * skill's expectations simply did not all pass. Returned DIRECTLY by the
-   * harness verdict (see verdictExitCode in run-harness.ts), not via
-   * mapErrorToExitCode, because it is an outcome, not a thrown error.
+   * At least one eval FAILED. This is the DEFAULT verdict for a completed run
+   * whose expectations did not all pass (fail-closed) — suppress it with the
+   * interactive opt-out `--allow-eval-failure`. Distinct from the harness-broke
+   * codes (1/2/3): the harness ran to completion and produced a valid
+   * grading.json — the skill's expectations simply did not all pass. This
+   * differentiation lets a CI consumer treat 4 as tolerable while still failing
+   * closed on every other non-zero code:
+   *   `case $? in 0) ;; 4) tolerate/warn ;; *) hard fail ;; esac`
+   * Returned DIRECTLY by the harness verdict (see verdictExitCode in
+   * run-harness.ts), not via mapErrorToExitCode, because it is an outcome, not a
+   * thrown error.
    */
   EvalFailure: 4,
 } as const;
@@ -91,8 +96,9 @@ export class InternalHarnessError extends Error {
  * (forged/mismatched grading nonce) are both → 1; everything unknown → 1.
  *
  * Note: SkillTestExitCode.EvalFailure (4) is NOT produced here — it is an
- * outcome of a completed run (an eval failed under `--fail-on-eval-failure`),
- * not a thrown error, so the harness returns it directly (see verdictExitCode).
+ * outcome of a completed run (an eval failed, the fail-closed default unless
+ * `--allow-eval-failure`), not a thrown error, so the harness returns it
+ * directly (see verdictExitCode).
  */
 export function mapErrorToExitCode(err: unknown): number {
   if (err instanceof BootstrapNeededError) return SkillTestExitCode.Bootstrap;

@@ -226,9 +226,9 @@ Ran `validate-agent.ts` script against agent.yaml using `AgentManifestSchema.saf
 
 **Missing `version` field:**
 - **Error:** Unrecognized key `version` in spec.llm
-- **Current Design:** Documents exact model version (claude-sonnet-4-5-20251101)
+- **Current Design:** Documents a specific current model alias (claude-sonnet-5)
 - **Schema Impact:** Should add optional `version: string` to LLM config
-- **Rationale:** Model versions change behavior; explicit version prevents surprises
+- **Rationale:** A bare family name is ambiguous; a specific current alias keeps behavior well-defined without pinning a dated snapshot
 
 #### 7-8. Tool Definition Issues
 

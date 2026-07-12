@@ -11,9 +11,9 @@ import { mergeSettingsLayers } from '../src/settings/settings-merger.js';
 // String constants to avoid sonarjs/no-duplicate-string
 const MANAGED_FILE = '/managed.json';
 const USER_FILE = '/user.json';
-const OPUS_MODEL = 'claude-opus-4-6';
+const OPUS_MODEL = 'claude-opus-4-8';
 const HAIKU_MODEL = 'claude-haiku-4-5';
-const SONNET_MODEL = 'claude-sonnet-4-6';
+const SONNET_MODEL = 'claude-sonnet-5';
 
 function layer(
   level: SettingsLayer['level'],

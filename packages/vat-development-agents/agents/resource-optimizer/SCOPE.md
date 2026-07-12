@@ -781,7 +781,7 @@ resource-optimizer/
 
 ### LLM Selection
 
-**Primary LLM**: Claude 3.5 Sonnet (claude-3-5-sonnet-20241022)
+**Primary LLM**: Claude Sonnet 5 (claude-sonnet-5)
 
 **Rationale**:
 - Strong semantic understanding for redundancy detection

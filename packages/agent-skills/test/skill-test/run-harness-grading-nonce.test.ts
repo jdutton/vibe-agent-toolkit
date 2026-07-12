@@ -66,32 +66,55 @@ function nonceForMode(mode: NonceMode, realNonce: string): string | undefined {
 }
 
 /**
- * Make the spy experimenter write grading.json into the harness results dir.
- * `nonceMode` controls the integrity field: echo the real nonce, omit it, or
- * write a wrong one.
+ * Install a spy experimenter that writes the grading.json produced by `makeGrading`
+ * (handed the real per-run nonce) into the harness results dir, then exits clean.
+ * Shared by the nonce-integrity and verdict-exit-code stubs below.
  */
-function stubExperimenter(nonceMode: NonceMode): void {
+function stubSpawn(makeGrading: (nonce: string) => unknown): void {
   vi.mocked(spawnHeadlessClaude).mockImplementation(async (opts: any) => {
-    const runNonce = nonceForMode(nonceMode, nonceFromPrompt(String(opts.prompt)));
-    const grading = {
-      expectations: [{ text: 'e', passed: true }],
-      summary: { passed: 1, total: 1 },
-      ...(runNonce === undefined ? {} : { runNonce }),
-    };
     const gradingPath = safePath.join(String(opts.cwd), 'results', 'grading.json');
-    writeFileSync(gradingPath, JSON.stringify(grading) + '\n', 'utf8');
+    writeFileSync(gradingPath, JSON.stringify(makeGrading(nonceFromPrompt(String(opts.prompt)))) + '\n', 'utf8');
     return { status: 0, timedOut: false, stalled: false };
   });
 }
 
+/**
+ * Make the spy experimenter write an all-pass grading.json. `nonceMode` controls
+ * the integrity field: echo the real nonce, omit it, or write a wrong one.
+ */
+function stubExperimenter(nonceMode: NonceMode): void {
+  stubSpawn((realNonce) => {
+    const runNonce = nonceForMode(nonceMode, realNonce);
+    return {
+      expectations: [{ text: 'e', passed: true }],
+      summary: { passed: 1, total: 1 },
+      ...(runNonce === undefined ? {} : { runNonce }),
+    };
+  });
+}
+
+/** Make the spy experimenter write a FAILING (nonce-valid) grading: 1 of 2 passed. */
+function stubFailingExperimenter(): void {
+  stubSpawn((runNonce) => ({
+    expectations: [{ text: 'a', passed: true }, { text: 'b', passed: false }],
+    summary: { passed: 1, total: 2 },
+    runNonce,
+  }));
+}
+
 /** Run the acknowledged harness against a fixed harness output dir under `tempDir`. */
-async function runHarness(tempDir: string, subjectStagedDir: string): ReturnType<typeof runSkillTestHarness> {
+async function runHarness(
+  tempDir: string,
+  subjectStagedDir: string,
+  extra?: { tolerateEvalFailure?: boolean },
+): ReturnType<typeof runSkillTestHarness> {
   return runSkillTestHarness({
     skills: ['my-skill'],
     repoRoot: tempDir,
     out: safePath.join(tempDir, 'harness'),
     subjectSource: { path: subjectStagedDir },
     acknowledgedRunsSkillCode: true,
+    ...(extra?.tolerateEvalFailure === undefined ? {} : { tolerateEvalFailure: extra.tolerateEvalFailure }),
   });
 }
 
@@ -128,5 +151,30 @@ describe('runSkillTestHarness — grading integrity nonce (Harness B)', () => {
     const realNonce = nonceFromPrompt(String(vi.mocked(spawnHeadlessClaude).mock.calls[0]?.[0]?.prompt));
     expect(persisted).not.toContain(realNonce);
     expect(persisted).toContain(REDACTED_NONCE_PLACEHOLDER);
+  });
+});
+
+// End-to-end verdict → exit code (the fail-closed default of B). Reuses the same
+// full-wiring stub, but the experimenter writes a nonce-valid FAILING grade — so the
+// run reaches verdictExitCode only after every integrity gate has passed.
+describe('runSkillTestHarness — eval verdict exit code (fail-closed default)', () => {
+  const { getTempDir, getSubjectStagedDir } = setupStubbedHarnessSubject('vat-verdict-', vi.mocked(stageHarness));
+
+  beforeEach(() => {
+    vi.mocked(spawnHeadlessClaude).mockReset();
+  });
+
+  it('a completed run with a failing verdict exits EvalFailure (4) by DEFAULT (fail-closed)', async () => {
+    stubFailingExperimenter();
+    const result = await runHarness(getTempDir(), getSubjectStagedDir());
+    expect(result.summary).toBe('FAIL 1/2');
+    expect(result.exitCode).toBe(4); // SkillTestExitCode.EvalFailure
+  });
+
+  it('the tolerate-eval-failure opt-out downgrades a failing verdict to Ok (0)', async () => {
+    stubFailingExperimenter();
+    const result = await runHarness(getTempDir(), getSubjectStagedDir(), { tolerateEvalFailure: true });
+    expect(result.summary).toBe('FAIL 1/2');
+    expect(result.exitCode).toBe(0); // SkillTestExitCode.Ok
   });
 });

@@ -90,7 +90,7 @@ export function createSentimentAgentConfig(): {
     outputSchema: z.object({
       sentiment: z.enum(['positive', 'negative', 'neutral'] as const),
     }),
-    model: 'claude-3-haiku',
+    model: 'claude-haiku-4-5',
     temperature: 0.7,
   };
 }

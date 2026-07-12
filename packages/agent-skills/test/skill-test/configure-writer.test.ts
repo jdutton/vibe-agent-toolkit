@@ -85,7 +85,7 @@ describe('upsertTestConfig', () => {
 describe('upsertTestConfig — byte-surgical regression', () => {
   it('1-knob insert into existing test block leaves every other line byte-identical', () => {
     // Fixture: report-tool has test block (auth + maxTurns), but no model.
-    const model = 'claude-3-5-haiku-20241022';
+    const model = 'claude-haiku-4-5';
     const out = upsertTestConfig(RICH_FIXTURE, 'report-tool', { model });
     // The model line did not exist in the fixture — after upsert it must appear exactly once.
     expect(out).toContain(`model: ${model}`);
@@ -102,7 +102,7 @@ describe('upsertTestConfig — byte-surgical regression', () => {
 
   it('init-case insert splices only the new test block; post-block content is byte-identical', () => {
     // acme-skill has no test block; report-tool follows it and must be untouched.
-    const model = 'claude-opus-4-5';
+    const model = 'claude-opus-4-8';
     const out = upsertTestConfig(RICH_FIXTURE, 'acme-skill', { model });
     // Everything from report-tool onwards must be byte-identical to input.
     const anchor = '\n    report-tool:';

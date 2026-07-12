@@ -7,7 +7,7 @@ import type {
   RunMetadata,
 } from '../../src/compat-empirical/types.js';
 
-const JUDGE_MODEL = 'claude-sonnet-4-6';
+const JUDGE_MODEL = 'claude-sonnet-5';
 const TARGET_CODE = 'claude-code' as const;
 const TARGET_CHAT = 'claude-chat' as const;
 const SKILL_SKIPPED = 's-skipped';

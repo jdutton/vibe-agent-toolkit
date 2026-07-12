@@ -10,9 +10,15 @@
  */
 
 import * as harness from '@vibe-agent-toolkit/agent-skills';
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { resolveCappedKnob, resolveSubjectForTest, runSkillTestRun } from '../src/commands/skill/test/run.js';
+import {
+  isPathSourceTarget,
+  resolveCappedKnob,
+  resolveSubjectForTest,
+  runSkillTestRun,
+} from '../src/commands/skill/test/run.js';
 import { resetSkillDiscoveryCache } from '../src/skill-resolution/index.js';
 
 import { setupReferenceFixture } from './skill-resolution/helpers.js';
@@ -22,6 +28,9 @@ const PATH_SUBJECT = './my-skill';
 
 /** Name of the config-declared (buildable) pool skill used across resolution tests. */
 const DECLARED_POOL = 'declared-pool';
+
+/** Pinned model string used across the #7 path-honors-config tests. */
+const SONNET_MODEL = 'claude-sonnet-5';
 
 // Mocks runSkillTestHarness with the given result, captures stdout/stderr writes
 // while runSkillTestRun executes, and returns the captured write payloads.
@@ -85,6 +94,17 @@ describe('vat skill test run (orchestration)', () => {
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
     await runSkillTestRun([PATH_SUBJECT], {});
     expect(exit).toHaveBeenCalledWith(1);
+  });
+
+  it('surfaces the harness EvalFailure exit code (4) unchanged — not remapped or swallowed', async () => {
+    vi.spyOn(harness, 'runSkillTestHarness').mockResolvedValue({
+      harnessPath: '/h',
+      exitCode: 4,
+      summary: 'FAIL 1/2',
+    });
+    const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
+    await runSkillTestRun([PATH_SUBJECT], {});
+    expect(exit).toHaveBeenCalledWith(4);
   });
 
   // A bad usage flag is validated BEFORE the async harness work. Without the
@@ -204,19 +224,19 @@ describe('vat skill test run (env plumbing)', () => {
     expect(opts.passEnv).toBeUndefined();
   });
 
-  it('threads --fail-on-eval-failure through to the harness opts', async () => {
+  it('threads --allow-eval-failure through to the harness opts as tolerateEvalFailure', async () => {
     const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
-      failOnEvalFailure: true,
+      allowEvalFailure: true,
       iUnderstandThisRunsSkillCode: true,
     });
-    expect(opts.failOnEvalFailure).toBe(true);
+    expect(opts.tolerateEvalFailure).toBe(true);
   });
 
-  it('leaves failOnEvalFailure undefined by default (opt-in)', async () => {
+  it('leaves tolerateEvalFailure undefined by default (fail-closed on eval failure)', async () => {
     const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
       iUnderstandThisRunsSkillCode: true,
     });
-    expect(opts.failOnEvalFailure).toBeUndefined();
+    expect(opts.tolerateEvalFailure).toBeUndefined();
   });
 });
 
@@ -249,6 +269,86 @@ describe('vat skill test run (output routing)', () => {
   });
 });
 
+// isPathSourceTarget flags a CONFIG-BLIND path target (staged as-is, mapping to no
+// declared skill) — distinct from a NAME target (buildable) and from a path that DOES
+// map to a declared skill (linkedToDeclaredSkill). The warning fires only for the blind case.
+describe('isPathSourceTarget', () => {
+  it('is true for a plain {path} source that would NOT be built and maps to no declared skill', () => {
+    expect(isPathSourceTarget({ wouldBuild: false, subjectSource: { path: './my-skill' } })).toBe(true);
+  });
+
+  it('is false for a config-declared (buildable) NAME target', () => {
+    expect(isPathSourceTarget({ wouldBuild: true, subjectSource: { path: '/built/dist/my-skill' } })).toBe(false);
+  });
+
+  it('is false for a path that maps back to a declared skill (config IS honored)', () => {
+    expect(
+      isPathSourceTarget({ wouldBuild: false, subjectSource: { path: '/p/dist/skills/x' }, linkedToDeclaredSkill: true }),
+    ).toBe(false);
+  });
+
+  it('is false for a non-path source (e.g. npm) even when not built', () => {
+    expect(isPathSourceTarget({ wouldBuild: false, subjectSource: { npm: '@scope/s@1.0.0' } })).toBe(false);
+  });
+});
+
+describe('vat skill test run (path-target config-blind warning — #7)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('warns on stderr that a config-blind path maps to no declared skill', async () => {
+    const { stderrCalls } = await runAndCaptureStreams({
+      // eslint-disable-next-line sonarjs/publicly-writable-directories -- test fixture path, not production code
+      harnessPath: '/tmp/h',
+      exitCode: 0,
+      summary: 'PASS 1/1',
+    });
+    expect(stderrCalls.some((s) => s.includes('maps to no declared skill'))).toBe(true);
+    expect(stderrCalls.some((s) => s.includes('Pass the skill NAME'))).toBe(true);
+  });
+});
+
+describe('vat skill test run (path target honors declared test: config — #7)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  const CONFIGURED = 'configured-skill';
+
+  it('a path at a declared skill\'s dist honors its model/evals/timeout and anchors evals at the source', async () => {
+    const fx = setupReferenceFixture({
+      // timeout stays UNDER the 300s built-in cap: a committed config may only lower it,
+      // so a sub-cap value passes through unclamped and proves the knob is honored.
+      pool: [CONFIGURED],
+      poolTest: { [CONFIGURED]: { evals: 'evals/suite.json', model: SONNET_MODEL, timeout: 240 } },
+    });
+    resetSkillDiscoveryCache();
+    // An ABSOLUTE dist path keys entirely off itself (the reverse-lookup walks up from
+    // the path, config-first), so it honors config regardless of the process cwd.
+    const opts = await runAndCaptureOpts([fx.poolDistDir(CONFIGURED)], { iUnderstandThisRunsSkillCode: true });
+    expect(opts.model).toBe(SONNET_MODEL);
+    expect(opts.evalsSubpath).toBe('evals/suite.json');
+    expect(opts.timeout).toBe(240);
+    expect(toForwardSlash(String(opts.subjectScaffoldDir))).toBe(safePath.join(fx.root, 'skills', CONFIGURED));
+  });
+
+  it('a path at a declared PLUGIN-LOCAL skill\'s dist also honors its test config', async () => {
+    const PL = 'pl-configured';
+    const fx = setupReferenceFixture({ pluginLocal: [PL], poolTest: { [PL]: { model: SONNET_MODEL } } });
+    resetSkillDiscoveryCache();
+    const opts = await runAndCaptureOpts([fx.pluginDistDir(PL)], { iUnderstandThisRunsSkillCode: true });
+    expect(opts.model).toBe(SONNET_MODEL);
+    expect(opts.subjectScaffoldDir).toBeDefined(); // anchored at the plugin skill's source
+  });
+
+  it('a config-blind path (matches no declared skill) applies NO test config', async () => {
+    const fx = setupReferenceFixture({ pool: [CONFIGURED], poolTest: { [CONFIGURED]: { model: SONNET_MODEL } } });
+    resetSkillDiscoveryCache();
+    // Absolute path under the same config but NOT any declared skill's dist → config-blind.
+    const ghost = safePath.join(fx.root, 'dist', 'skills', 'ghost-not-declared');
+    const opts = await runAndCaptureOpts([ghost], { iUnderstandThisRunsSkillCode: true });
+    expect(opts.model).toBeUndefined();
+    expect(opts.evalsSubpath).toBeUndefined();
+  });
+});
+
 describe('resolveSubjectForTest (run.ts subject resolution)', () => {
   afterEach(() => vi.restoreAllMocks());
 
@@ -276,6 +376,21 @@ describe('resolveSubjectForTest (run.ts subject resolution)', () => {
     });
     expect(out.subjectSource).toEqual({ path: './some/dist' });
     expect(out.rebuilt).toBe(false);
+  });
+
+  it('path AT a declared skill\'s dist → linked, scaffold anchored at the AUTHORED source (#7)', async () => {
+    const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
+    resetSkillDiscoveryCache();
+    const out = await resolveSubjectForTest(fx.poolDistDir(DECLARED_POOL), fx.root, {
+      noBuild: false,
+      dryRun: false,
+      acknowledged: false,
+    });
+    expect(out.wouldBuild).toBe(false); // staged as-is, never rebuilt
+    expect(out.linkedToDeclaredSkill).toBe(true);
+    // Scaffold dir is the skill's source dir (dirname of SKILL.md), NOT the dist path,
+    // so the authored eval suite resolves + overlays from there.
+    expect(toForwardSlash(String(out.subjectScaffoldDir))).toBe(safePath.join(fx.root, 'skills', DECLARED_POOL));
   });
 });
 

@@ -5,7 +5,7 @@ import type { z } from 'zod';
 
 import type { ClaudeAgentLLMConfig, ClaudeAgentMcpServer } from '../types.js';
 
-const DEFAULT_MODEL = 'claude-3-5-haiku-20241022';
+const DEFAULT_MODEL = 'claude-haiku-4-5';
 
 /**
  * Creates metadata object for a single agent conversion

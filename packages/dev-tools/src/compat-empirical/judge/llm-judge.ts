@@ -25,7 +25,7 @@ import {
 
 import { parseVerdictFromEnvelope } from './parse-verdict.js';
 
-const DEFAULT_JUDGE_MODEL = 'claude-sonnet-4-6';
+const DEFAULT_JUDGE_MODEL = 'claude-sonnet-5';
 const JUDGE_TIMEOUT_MS = 120_000;
 
 const SYSTEM_PROMPT_PATH = safePath.join(

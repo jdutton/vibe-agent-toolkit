@@ -290,7 +290,7 @@ metadata:
 spec:
   llm:
     provider: anthropic
-    model: claude-sonnet-4-20250514
+    model: claude-sonnet-5
 
   prompts:
     system:

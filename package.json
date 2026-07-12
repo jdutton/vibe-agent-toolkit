@@ -1,6 +1,6 @@
 {
   "name": "vibe-agent-toolkit",
-  "version": "0.1.40-rc.2",
+  "version": "0.1.40",
   "type": "module",
   "private": true,
   "description": "Toolkit for testing and packaging portable AI agents across various LLMs, frameworks, and deployment targets",
@@ -38,8 +38,8 @@
     "test:cli": "bun --filter @vibe-agent-toolkit/cli run test:unit",
     "test:watch": "vitest",
     "test:coverage": "vibe-validate run \"vitest run --coverage --no-file-parallelism\"",
-    "test:integration": "vibe-validate run \"turbo run test:integration\"",
-    "test:system": "vibe-validate run \"turbo run test:system\"",
+    "test:integration": "vibe-validate run \"turbo run test:integration --concurrency=1\"",
+    "test:system": "vibe-validate run \"turbo run test:system --concurrency=1\"",
     "validate-links": "vibe-validate run \"vitest run --config vitest.system.config.ts\"",
     "lint": "eslint . --cache --cache-location .eslintcache --ignore-pattern '**/dist/**' --ignore-pattern '**/*.config.ts' --max-warnings=0",
     "lint:fix": "eslint . --cache --cache-location .eslintcache --ignore-pattern '**/dist/**' --ignore-pattern '**/*.config.ts' --fix",

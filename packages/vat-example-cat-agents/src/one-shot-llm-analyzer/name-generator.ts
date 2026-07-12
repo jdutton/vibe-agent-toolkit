@@ -123,7 +123,7 @@ export const nameGeneratorAgent: Agent<
       author: 'Creative AI (Somewhat Rebellious)',
       personality: "Creative but doesn't always respect nobility conventions",
       rejectionRate: '60-70%',
-      model: 'claude-3-haiku',
+      model: 'claude-haiku-4-5',
       temperature: 0.9,
     },
   },

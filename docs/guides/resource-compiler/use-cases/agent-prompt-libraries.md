@@ -48,7 +48,7 @@ async function createAgent(role: keyof typeof SystemPrompts.fragments) {
 
   return async (userMessage: string) => {
     const response = await client.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
+      model: 'claude-sonnet-5',
       max_tokens: 1024,
       system: systemPrompt,
       messages: [{ role: 'user', content: userMessage }],
@@ -84,7 +84,7 @@ class Agent {
     this.history.push({ role: 'user', content: userMessage });
 
     const response = await client.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
+      model: 'claude-sonnet-5',
       max_tokens: 2048,
       system: this.systemPrompt,
       messages: this.history,
@@ -363,7 +363,7 @@ class StatefulAgent {
 
     // Generate response with selected role
     const response = await client.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
+      model: 'claude-sonnet-5',
       max_tokens: 1024,
       system: systemPrompt,
       messages: [
@@ -440,7 +440,7 @@ function getModelConfig(task: string): ModelConfig {
   const configs: Record<ModelProvider, ModelConfig> = {
     anthropic: {
       provider: 'anthropic',
-      model: 'claude-3-5-sonnet-20241022',
+      model: 'claude-sonnet-5',
       systemPrompt: Prompts.fragments.claudeSystemPrompt.body,
     },
     openai: {
@@ -543,7 +543,7 @@ function add(a, b) {
     `;
 
     const response = await client.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
+      model: 'claude-sonnet-5',
       max_tokens: 1024,
       system: Prompts.fragments.codeReviewer.body,
       messages: [{ role: 'user', content: testCode }],
@@ -558,7 +558,7 @@ function add(a, b) {
 
   it('technical assistant answers questions accurately', async () => {
     const response = await client.messages.create({
-      model: 'claude-3-5-sonnet-20241022',
+      model: 'claude-sonnet-5',
       max_tokens: 512,
       system: Prompts.fragments.technicalAssistant.body,
       messages: [{ role: 'user', content: 'What is TypeScript?' }],
@@ -639,7 +639,7 @@ resources/prompts/
 ---
 role: technical-assistant
 capabilities: [coding, debugging, architecture]
-modelHints: [claude-3, gpt-4]
+modelHints: [claude-sonnet-5, gpt-4]
 complexity: intermediate
 lastReviewed: 2024-02-15
 ---

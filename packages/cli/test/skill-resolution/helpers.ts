@@ -11,17 +11,27 @@ import { writeFileSync } from 'node:fs';
 
 import { computeTreeCopiedSkillLocations } from '@vibe-agent-toolkit/agent-skills';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import * as yaml from 'yaml';
 
 import { createTestTempDir } from '../system/test-common.js';
 
 const MARKETPLACE_NAME = 'fixture-mp';
 const PLUGIN_NAME = 'fixture-plug';
 
+/** A persisted `skills.config.<name>.test` block (subset used by fixtures). */
+export interface PoolTestBlock {
+  evals?: string;
+  model?: string;
+  timeout?: number;
+}
+
 export interface ReferenceFixtureSpec {
   /** Pool skills declared via `skills.include`, built to `dist/skills/<name>`. */
   pool?: string[];
   /** Plugin-local tree-copy skills under `plugins/<plug>/skills/<name>`. */
   pluginLocal?: string[];
+  /** Optional per-skill `skills.config.<name>.test` blocks (for test-config resolution tests). */
+  poolTest?: Record<string, PoolTestBlock>;
 }
 
 export interface ReferenceFixture {
@@ -46,26 +56,34 @@ function buildConfigYaml(spec: ReferenceFixtureSpec): string {
     include.push(`plugins/${PLUGIN_NAME}/skills/*/SKILL.md`);
   }
 
-  const lines = ['version: 1'];
+  const config: Record<string, unknown> = { version: 1 };
   if (include.length > 0) {
-    lines.push('skills:', '  include:');
-    for (const pattern of include) lines.push(`    - "${pattern}"`);
+    const skills: Record<string, unknown> = { include };
+    if (spec.poolTest !== undefined) {
+      skills.config = Object.fromEntries(
+        Object.entries(spec.poolTest).map(([name, test]) => [name, { test }]),
+      );
+    }
+    config.skills = skills;
   }
   if (spec.pluginLocal && spec.pluginLocal.length > 0) {
-    lines.push(
-      'claude:',
-      '  marketplaces:',
-      `    ${MARKETPLACE_NAME}:`,
-      '      owner:',
-      '        name: Fixture Owner',
-      '      plugins:',
-      `        - name: ${PLUGIN_NAME}`,
-      '          description: Synthetic plugin for reference-resolution tests.',
-      `          source: plugins/${PLUGIN_NAME}`,
-      '          skills: []',
-    );
+    config.claude = {
+      marketplaces: {
+        [MARKETPLACE_NAME]: {
+          owner: { name: 'Fixture Owner' },
+          plugins: [
+            {
+              name: PLUGIN_NAME,
+              description: 'Synthetic plugin for reference-resolution tests.',
+              source: `plugins/${PLUGIN_NAME}`,
+              skills: [],
+            },
+          ],
+        },
+      },
+    };
   }
-  return `${lines.join('\n')}\n`;
+  return yaml.stringify(config);
 }
 
 export function setupReferenceFixture(spec: ReferenceFixtureSpec): ReferenceFixture {

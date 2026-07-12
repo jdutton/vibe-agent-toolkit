@@ -8,7 +8,7 @@ const BaseLLMConfigSchema = z.object({
     .describe('LLM provider (e.g., anthropic, openai, google)'),
 
   model: z.string()
-    .describe('Model identifier (e.g., claude-sonnet-4.5, gpt-4o)'),
+    .describe('Model identifier (e.g., claude-sonnet-5, gpt-4o)'),
 
   temperature: z.number()
     .min(0)

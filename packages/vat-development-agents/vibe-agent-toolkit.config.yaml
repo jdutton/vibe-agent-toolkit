@@ -70,7 +70,7 @@ skills:
           - patterns: ["docs/**"]
       test:
         evals: evals/vat-agent-authoring/evals.json
-        model: claude-sonnet-4-6
+        model: claude-sonnet-5
     vat-skill-authoring:
       # External monorepo docs are intentionally left as text pointers.
       linkFollowDepth: 0
@@ -79,7 +79,7 @@ skills:
           - patterns: ["docs/**"]
       test:
         evals: evals/vat-skill-authoring/evals.json
-        model: claude-sonnet-4-6
+        model: claude-sonnet-5
     vat-skill-review:
       # External monorepo docs are intentionally left as text pointers.
       linkFollowDepth: 0
@@ -92,7 +92,7 @@ skills:
       # reproducibility — the model adopters actually run.
       test:
         evals: evals/vat-skill-review/evals.json
-        model: claude-sonnet-4-6
+        model: claude-sonnet-5
     vat-rag:
       # External monorepo docs and package READMEs are intentionally left as text pointers.
       linkFollowDepth: 0
@@ -101,7 +101,7 @@ skills:
           - patterns: ["docs/**", "packages/**/README.md"]
       test:
         evals: evals/vat-rag/evals.json
-        model: claude-sonnet-4-6
+        model: claude-sonnet-5
     vat-adoption-and-configuration:
       # External monorepo docs are intentionally left as text pointers.
       linkFollowDepth: 0
@@ -112,19 +112,19 @@ skills:
     vat-audit:
       test:
         evals: evals/vat-audit/evals.json
-        model: claude-sonnet-4-6
+        model: claude-sonnet-5
     vat-knowledge-resources:
       test:
         evals: evals/vat-knowledge-resources/evals.json
-        model: claude-sonnet-4-6
+        model: claude-sonnet-5
     vat-skill-distribution:
       test:
         evals: evals/vat-skill-distribution/evals.json
-        model: claude-sonnet-4-6
+        model: claude-sonnet-5
     markdown-rewriting:
       test:
         evals: evals/markdown-rewriting/evals.json
-        model: claude-sonnet-4-6
+        model: claude-sonnet-5
 
 claude:
   marketplaces:

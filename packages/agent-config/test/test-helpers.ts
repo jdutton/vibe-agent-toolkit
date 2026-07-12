@@ -45,7 +45,7 @@ const AGENT_YAML = 'agent.yaml';
 const LLM_SPEC = `spec:
   llm:
     provider: anthropic
-    model: claude-sonnet-4.5`;
+    model: claude-sonnet-5`;
 
 interface AgentManifestOptions {
   name: string;

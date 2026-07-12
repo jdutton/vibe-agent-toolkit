@@ -177,7 +177,7 @@ describe('judgeCompletion + reJudgeCompletion round-trip', () => {
       confidence: 'high',
     });
 
-    const swappedModel = 'claude-haiku-4-5-20251001';
+    const swappedModel = 'claude-haiku-4-5';
     const { runClaude: reRunner, calls: reCalls } = makeStubRunner([
       { verdict: 'partial', rationale: 'second pass disagrees', confidence: 'low' },
     ]);

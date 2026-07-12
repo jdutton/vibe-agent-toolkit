@@ -243,7 +243,7 @@ export const BaseMetadataSchema = z.object({
 
 export const PromptMetadataSchema = BaseMetadataSchema.extend({
   category: z.enum(['system', 'user', 'assistant']),
-  modelHints: z.array(z.enum(['claude-3', 'gpt-4', 'gemini'])).optional(),
+  modelHints: z.array(z.enum(['claude-sonnet-5', 'gpt-4', 'gemini'])).optional(),
   complexity: z.enum(['beginner', 'intermediate', 'advanced']).optional(),
 });
 

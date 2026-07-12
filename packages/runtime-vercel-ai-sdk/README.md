@@ -254,7 +254,7 @@ import { google } from '@ai-sdk/google';
 const llmConfig = { model: openai('gpt-4'), temperature: 0.7 };
 
 // Anthropic Claude
-const llmConfig = { model: anthropic('claude-3-5-sonnet-20241022'), temperature: 0.8 };
+const llmConfig = { model: anthropic('claude-sonnet-5'), temperature: 0.8 };
 
 // Google Gemini
 const llmConfig = { model: google('gemini-2.0-flash-001'), temperature: 0.9 };

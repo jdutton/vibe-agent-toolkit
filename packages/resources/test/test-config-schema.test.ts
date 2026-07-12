@@ -8,7 +8,7 @@ import {
 describe('TestConfigSchema', () => {
   it('accepts a full valid test block', () => {
     const parsed = TestConfigSchema.parse({
-      model: 'claude-sonnet-4-5',
+      model: 'claude-sonnet-5',
       maxTurns: 30,
       maxBudgetUsd: 2.5,
       timeout: 600,

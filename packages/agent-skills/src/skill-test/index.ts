@@ -102,6 +102,9 @@ export { upsertTestConfig } from './configure-writer.js';
 export { buildEvalsTemplate, writeEvalsTemplate } from './evals-template.js';
 export {
   buildDryRunSummary,
+  computeDefaultTimeoutMs,
+  formatFrictionReport,
+  formatTimeoutMessage,
   isAcknowledged,
   runSkillTestHarness,
   SKILL_TEST_BUILTIN_CAPS,
@@ -109,4 +112,5 @@ export {
   type DryRunSummaryInput,
   type RunHarnessOptions,
   type RunHarnessResult,
+  type TimeoutMessageContext,
 } from './run-harness.js';

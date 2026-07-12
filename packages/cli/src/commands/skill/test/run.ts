@@ -27,8 +27,13 @@ import { findProjectRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/u
 import { Command } from 'commander';
 
 import { parseSourceSpec } from '../../../skill-resolution/classify.js';
-import { resolveSkillReference, type BuildableReference } from '../../../skill-resolution/index.js';
-import { loadConfig } from '../../../utils/config-loader.js';
+import {
+  findDeclaredSkillForPath,
+  resolveSkillReference,
+  type BuildableReference,
+  type DeclaredSkillLink,
+} from '../../../skill-resolution/index.js';
+import { ConfigLoadError, loadConfig } from '../../../utils/config-loader.js';
 import { runClaudePluginBuild } from '../../claude/plugin/build.js';
 
 import { assertValidAuth, assertValidRequireAuth } from './auth-flags.js';
@@ -89,8 +94,8 @@ export interface SkillTestRunOptions {
   passEnv?: string[];
   /** Skip building a declared subject and stage its existing dist instead. */
   noBuild?: boolean;
-  /** Exit non-zero (EvalFailure) when any eval fails, instead of the default Ok. */
-  failOnEvalFailure?: boolean;
+  /** Opt out of the fail-closed default: exit Ok (0) even when an eval fails. */
+  allowEvalFailure?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -207,23 +212,32 @@ function descriptorsToRecord(
 // ---------------------------------------------------------------------------
 
 /**
- * Load the persisted `skills.config.<skill>.test` block for the subject skill.
- * The subject is the first positional skill name (a path or skill key). We key
- * the config by its basename so `./dist/skills/my-skill/` matches `my-skill`.
- * Missing config / missing file → undefined (defaults apply).
+ * Load the persisted `skills.config.<skill>.test` block for the subject skill,
+ * PROJECT-AWARE (mirrors the resolver — not a parallel cwd+basename resolver).
+ *
+ * A PATH target (`./dist/skills/my-skill/`) is mapped back to its declared skill
+ * via {@link findDeclaredSkillForPath} (walks up from the path, config-first) and
+ * keyed by the DECLARED name against the GOVERNING config — so a path target honors
+ * the same model/evals/timeout as its name, regardless of cwd. A NAME target (or a
+ * path that maps to no declared skill) falls back to the cwd-anchored governing
+ * config keyed by basename. Missing config / missing file → undefined (defaults apply).
+ *
+ * A broken config throws {@link ConfigLoadError}; we let it propagate to the preflight
+ * guard in runSkillTestRun, which surfaces it as a clean exit-2 error rather than
+ * silently applying defaults against a config the author clearly intended.
  */
-function loadTestConfig(skills: string[]): TestConfig | undefined {
-  const projectRoot = findProjectRoot(process.cwd());
-  if (projectRoot === null) return undefined;
-  // loadConfig returns undefined when no config exists and throws only when a
-  // config file is present but broken. We deliberately let that throw propagate:
-  // it is caught by the preflight guard in runSkillTestRun and surfaced as a
-  // clean exit-2 error, rather than silently applying defaults (and potentially
-  // staging the wrong subject) against a config the author clearly intended.
-  const config = loadConfig(projectRoot);
-  const perSkill = config?.skills?.config;
-  if (perSkill === undefined) return undefined;
+async function loadTestConfig(skills: string[], cwd: string): Promise<TestConfig | undefined> {
   const subject = skills[0] ?? '';
+  // Path target → resolve the declared skill it materializes, and read its test
+  // block from that skill's own governing config root (cwd-independent).
+  const link = await findDeclaredSkillForPath(subject, cwd);
+  if (link !== undefined) {
+    return loadConfig(link.configRoot)?.skills?.config?.[link.name]?.test;
+  }
+  const projectRoot = findProjectRoot(cwd);
+  if (projectRoot === null) return undefined;
+  const perSkill = loadConfig(projectRoot)?.skills?.config;
+  if (perSkill === undefined) return undefined;
   const base = lastPathSegment(subject) || subject;
   return perSkill[subject]?.test ?? perSkill[base]?.test;
 }
@@ -242,7 +256,7 @@ function applyFlagOnlyOptions(opts: HarnessOpts, options: SkillTestRunOptions): 
   if (options.dryRun !== undefined) opts.dryRun = options.dryRun;
   if (options.allowUnverifiedSkillSource !== undefined) opts.allowUnverifiedSkillSource = options.allowUnverifiedSkillSource;
   if (options.iUnderstandThisRunsSkillCode !== undefined) opts.acknowledgedRunsSkillCode = options.iUnderstandThisRunsSkillCode;
-  if (options.failOnEvalFailure !== undefined) opts.failOnEvalFailure = options.failOnEvalFailure;
+  if (options.allowEvalFailure !== undefined) opts.tolerateEvalFailure = options.allowEvalFailure;
 }
 
 /** Apply flag>config merges for scalar knobs (auth, model, baseline, eval/prompt). */
@@ -416,6 +430,33 @@ export interface ResolvedSubject {
    * or when the subject is a plain source.
    */
   dryRunStagedExistingDist?: boolean;
+  /**
+   * True when a PATH target mapped back to a declared skill (its `test:` config is
+   * honored and its scaffold dir points at the authored source). Gates the
+   * config-bypass warning: only a path with NO declared linkage is config-blind.
+   */
+  linkedToDeclaredSkill?: boolean;
+}
+
+/**
+ * Scaffold-dir fields for a `source` subject. A path that maps back to a declared
+ * skill anchors at the AUTHORED source (dirname of its SKILL.md) so `config.evals`
+ * resolves + overlays from there — the built dist it points at does not carry the
+ * eval suite. An UNLINKED path anchors at the resolved path itself (legacy behavior;
+ * the path IS the skill dir). A nameless source (npm/url/vendored) has no scaffold dir.
+ */
+function sourceScaffoldFields(
+  source: SkillSourceSpec,
+  declaredSkill: DeclaredSkillLink | undefined,
+  cwd: string,
+): { subjectScaffoldDir?: string; linkedToDeclaredSkill?: boolean } {
+  if (declaredSkill !== undefined) {
+    return { subjectScaffoldDir: dirname(declaredSkill.sourcePath), linkedToDeclaredSkill: true };
+  }
+  if ('path' in source) {
+    return { subjectScaffoldDir: safePath.resolve(cwd, source.path) };
+  }
+  return {};
 }
 
 /**
@@ -436,12 +477,7 @@ export async function resolveSubjectForTest(
         subjectSource: resolved.source,
         rebuilt: false,
         wouldBuild: false,
-        // A path subject points at the skill DIR itself (not its SKILL.md), so the
-        // authored scaffold dir is the resolved path — not its parent. Mirrors the
-        // legacy positional-path behavior in resolveScaffoldEvalsPath.
-        ...('path' in resolved.source
-          ? { subjectScaffoldDir: safePath.resolve(cwd, resolved.source.path) }
-          : {}),
+        ...sourceScaffoldFields(resolved.source, resolved.declaredSkill, cwd),
       };
     case 'name-miss':
       throw new SkillBuildError(
@@ -542,6 +578,37 @@ async function resolveBuildableSubject(
   return { subjectSource: { path: ref.expectedDistDir }, subjectScaffoldDir: scaffoldDir, rebuilt: true, wouldBuild: true };
 }
 
+/**
+ * True when the resolved subject is a CONFIG-BLIND path target: a `{ path }` source
+ * staged AS-IS (not built) that does NOT map back to a declared skill, so the project's
+ * `test:` config cannot be applied to it. A path that DOES map to a declared skill
+ * (`linkedToDeclaredSkill`) honors config and is NOT blind. A config-declared NAME
+ * target (`wouldBuild`) is never blind. Gates the #7 warning. Pure + exported for tests.
+ */
+export function isPathSourceTarget(subject: {
+  wouldBuild: boolean;
+  subjectSource: SkillSourceSpec;
+  linkedToDeclaredSkill?: boolean;
+}): boolean {
+  return !subject.wouldBuild && 'path' in subject.subjectSource && subject.linkedToDeclaredSkill !== true;
+}
+
+/**
+ * Warn (stderr) when the subject is a CONFIG-BLIND path target: its `test:` config
+ * (model / evals / timeout) cannot be resolved because the path maps to no declared
+ * skill. A path pointing at a declared skill's built dist DOES honor config (mapped
+ * back by {@link findDeclaredSkillForPath}) and is silent — only a truly unmapped
+ * path is warned, pointing the user at the NAME form.
+ */
+function warnIfPathTargetBypassesConfig(subject: ResolvedSubject): void {
+  if (!isPathSourceTarget(subject)) return;
+  process.stderr.write(
+    'Note: this path maps to no declared skill, so the project\'s test: config ' +
+      '(model/evals/timeout) is not applied. Pass the skill NAME (or point at the skill\'s ' +
+      'built dist directory) to honor it.\n',
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Testable action
 // ---------------------------------------------------------------------------
@@ -552,14 +619,15 @@ async function resolveBuildableSubject(
  * with a clean message + preflight code (2) instead of surfacing as an unhandled
  * promise rejection (raw stack trace, exit 1).
  */
-function preflightKnobsAndConfig(
+async function preflightKnobsAndConfig(
   skills: string[],
   options: SkillTestRunOptions,
-): { knobs: ReturnType<typeof coerceKnobs>; config: TestConfig | undefined } {
+  cwd: string,
+): Promise<{ knobs: ReturnType<typeof coerceKnobs>; config: TestConfig | undefined }> {
   try {
     assertValidAuth(options.auth);
     assertValidRequireAuth(options.requireAuth);
-    return { knobs: coerceKnobs(options), config: loadTestConfig(skills) };
+    return { knobs: coerceKnobs(options), config: await loadTestConfig(skills, cwd) };
   } catch (err) {
     process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
     process.exit(SkillTestExitCode.Preflight);
@@ -581,7 +649,7 @@ export async function runSkillTestRun(
 ): Promise<void> {
   printSecurityWarning();
 
-  const { knobs, config } = preflightKnobsAndConfig(skills, options);
+  const { knobs, config } = await preflightKnobsAndConfig(skills, options, process.cwd());
 
   // Commander stores the `--no-build` negatable flag under `build` (=== false when set);
   // honor an explicit programmatic `noBuild` too.
@@ -601,11 +669,15 @@ export async function runSkillTestRun(
       ...(config?.build === undefined ? {} : { build: config.build }),
     });
   } catch (err) {
-    const exitCode = mapErrorToExitCode(err);
+    // A broken governing config surfacing during subject resolution is a preflight
+    // problem the user must fix (exit 2), not an internal harness failure (exit 1).
+    const exitCode = err instanceof ConfigLoadError ? SkillTestExitCode.Preflight : mapErrorToExitCode(err);
     process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
     process.exit(exitCode);
     return;
   }
+
+  warnIfPathTargetBypassesConfig(subject);
 
   const harnessOpts = buildHarnessOpts(skills, options, knobs, config);
   harnessOpts.subjectSource = subject.subjectSource;
@@ -675,8 +747,8 @@ export function createSkillTestRunCommand(): Command {
     .option('--require-auth <mech>', 'Require a specific auth mechanism: subscription | api-key')
     .option('--baseline', 'Enable A/B baseline run (with/without skill)')
     .option(
-      '--fail-on-eval-failure',
-      'Exit non-zero when any eval fails (default: the run exits 0 if the harness completed and produced grading.json; eval pass/fail is in the summary).',
+      '--allow-eval-failure',
+      'Opt out of the fail-closed default: exit 0 even when an eval fails (for interactive use). By DEFAULT a failing eval exits 4, distinct from the harness-broke codes (1/2/3) so CI can gate on it.',
     )
     .option('--allow-unverified-skill-source', 'Skip the vendored manifest integrity check')
     .option('--i-understand-this-runs-skill-code', 'Acknowledge this command executes skill code (required)')
@@ -715,15 +787,24 @@ Model:
   turns, and permission flags are added at spawn time).
 
 Exit Codes:
-  0 - Harness ran to completion and produced a valid grading.json (check summary/grading.json for pass/fail counts)
+  0 - Harness ran to completion and every eval passed (or --allow-eval-failure suppressed a failing verdict)
   1 - Internal error (grading.json absent/invalid, summary/expectations skew, experimenter crash, stall/timeout)
   2 - Preflight failed (missing binary, auth error, eval inputs absent, unsafe workdir, ack missing, skill build failed, or --no-build with no existing dist)
   3 - Bootstrap needed: evals.json was absent, so VAT wrote a starter template next to the skill source. Fill it in and re-run.
-  4 - An eval FAILED and --fail-on-eval-failure was passed (the harness completed; expectations did not all pass). Without the flag this is exit 0.
+  4 - An eval FAILED (the harness completed and produced a valid grading.json; expectations did not all pass). This is the fail-closed DEFAULT -- suppress with --allow-eval-failure.
 
-  Note: by DEFAULT, eval pass/fail is NOT reflected in the exit code -- read the
-  printed summary ("PASS N/N" or "FAIL N/N") or grading.json. Pass
-  --fail-on-eval-failure to make a failing eval exit 4 (e.g. to gate CI).
+  The taxonomy is designed so a CI consumer can tolerate eval failures while
+  failing closed on every other (harness-broke) outcome:
+
+    vat skill test run my-skill --i-understand-this-runs-skill-code
+    case $? in
+      0) ;;              # all evals passed
+      4) ;;              # evals failed but the harness is healthy -- tolerate/warn
+      *) exit 1 ;;       # 1/2/3/unknown -- harness broke, fail the build
+    esac
+
+  Which specific evals failed lives in grading.json, never in the exit code.
+  For interactive iteration, --allow-eval-failure downgrades 4 to 0.
 
 Example:
   $ vat skill test run my-skill --i-understand-this-runs-skill-code

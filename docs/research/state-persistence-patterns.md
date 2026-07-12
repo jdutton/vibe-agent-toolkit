@@ -51,7 +51,7 @@ const State = new StateSchema({
 });
 
 // Initialize model
-const model = new ChatAnthropic({ model: "claude-haiku-4-5-20251001" });
+const model = new ChatAnthropic({ model: "claude-haiku-4-5" });
 
 // Production checkpointer
 const DB_URI = "postgresql://postgres:postgres@localhost:5442/postgres?sslmode=disable";
@@ -606,7 +606,7 @@ const client = new Anthropic({
 
 // Start new session
 const response1 = await client.messages.create({
-  model: "claude-3-5-sonnet-20250129",
+  model: "claude-sonnet-5",
   max_tokens: 1024,
   messages: [
     { role: "user", content: "Hello, I'm working on a TypeScript project" }
@@ -619,7 +619,7 @@ console.log("Session ID:", sessionId);
 
 // Continue conversation - SDK automatically loads history
 const response2 = await client.messages.create({
-  model: "claude-3-5-sonnet-20250129",
+  model: "claude-sonnet-5",
   max_tokens: 1024,
   messages: [
     { role: "user", content: "Can you help me debug the auth module?" }
@@ -629,7 +629,7 @@ const response2 = await client.messages.create({
 
 // Fork session to create new branch
 const response3 = await client.messages.create({
-  model: "claude-3-5-sonnet-20250129",
+  model: "claude-sonnet-5",
   max_tokens: 1024,
   messages: [
     { role: "user", content: "Actually, let's try a different approach" }

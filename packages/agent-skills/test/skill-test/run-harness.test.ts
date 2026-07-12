@@ -21,6 +21,7 @@ import { describe, expect, it } from 'vitest';
 
 import { EvalInputError } from '../../src/skill-test/eval-inputs.js';
 import { InternalHarnessError, SkillTestExitCode } from '../../src/skill-test/exit-codes.js';
+import type { FrictionItem } from '../../src/skill-test/friction-schema.js';
 import {
   assertExperimenterSucceeded,
   buildDryRunSummary,
@@ -28,8 +29,11 @@ import {
   buildResolveCtx,
   buildStageItems,
   cleanupHarness,
+  computeDefaultTimeoutMs,
   detectItemPluginLayout,
   flagDummyValueFor,
+  formatFrictionReport,
+  formatTimeoutMessage,
   isAcknowledged,
   makeStageItem,
   renderPreflightSummary,
@@ -125,12 +129,36 @@ function makePluginSkillDir(tempDir: string, pluginName: string, relSkill: strin
 // ---------------------------------------------------------------------------
 
 describe('resolveTimeoutMs', () => {
-  it('returns the default when timeout is undefined', () => {
+  it('returns the flat default when timeout is undefined and no eval count is threaded', () => {
     expect(resolveTimeoutMs(makeOpts())).toBe(DEFAULT_TIMEOUT_MS);
   });
 
   it('converts seconds to milliseconds', () => {
     expect(resolveTimeoutMs(makeOpts({ timeout: 30 }))).toBe(30_000);
+  });
+
+  it('scales the default with the declared eval count when no explicit timeout', () => {
+    expect(resolveTimeoutMs(makeOpts(), 5)).toBe(720_000);
+  });
+
+  it('an explicit --timeout always wins over the scaled default', () => {
+    expect(resolveTimeoutMs(makeOpts({ timeout: 30 }), 19)).toBe(30_000);
+  });
+});
+
+describe('computeDefaultTimeoutMs', () => {
+  it('floors at the flat 300s default for 0 and 1 evals', () => {
+    expect(computeDefaultTimeoutMs(0)).toBe(300_000);
+    expect(computeDefaultTimeoutMs(1)).toBe(300_000);
+  });
+
+  it('scales at 120s per declared eval above the floor', () => {
+    expect(computeDefaultTimeoutMs(5)).toBe(720_000);
+    expect(computeDefaultTimeoutMs(19)).toBe(2_400_000);
+  });
+
+  it('caps at one hour for a huge suite', () => {
+    expect(computeDefaultTimeoutMs(10_000)).toBe(3_600_000);
   });
 });
 
@@ -244,6 +272,81 @@ describe('assertExperimenterSucceeded', () => {
 
   it('throws InternalHarnessError mentioning the non-zero status', () => {
     expectExperimenterThrows(spawnOutcome({ status: 137 }), undefined, 1000, '137');
+  });
+
+  it('surfaces the declared eval count in the timeout message when threaded', () => {
+    let thrown: unknown;
+    try {
+      assertExperimenterSucceeded(spawnOutcome({ timedOut: true }), undefined, 900_000, {
+        declaredEvalCount: 5,
+      });
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(InternalHarnessError);
+    expect((thrown as Error).message).toContain('Declared evals: 5');
+    expect((thrown as Error).message).toContain('--timeout');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Timeout message formatter
+// ---------------------------------------------------------------------------
+
+describe('formatTimeoutMessage', () => {
+  it('includes the raw ms, a minute label, and the scaling hint', () => {
+    const msg = formatTimeoutMessage({ timeoutMs: 900_000, declaredEvalCount: 5 });
+    expect(msg).toContain('900000ms');
+    expect(msg).toContain('(15m)');
+    expect(msg).toContain('Declared evals: 5');
+    expect(msg).toContain('--timeout');
+    expect(msg).toContain('--stall');
+    expect(msg).not.toContain('completed');
+  });
+
+  it('includes a completed ~N/declared clause when a completed count is available', () => {
+    const msg = formatTimeoutMessage({
+      timeoutMs: 900_000,
+      declaredEvalCount: 5,
+      completedEvalCount: 2,
+    });
+    expect(msg).toContain('completed ~2/5');
+  });
+
+  it('omits the declared-evals clause honestly when the count is unknown', () => {
+    const msg = formatTimeoutMessage({ timeoutMs: 300_000 });
+    expect(msg).toContain('300000ms');
+    expect(msg).not.toContain('Declared evals');
+    expect(msg).not.toContain('completed');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Friction report formatter
+// ---------------------------------------------------------------------------
+
+describe('formatFrictionReport', () => {
+  const highItem: FrictionItem = {
+    severity: 'high',
+    category: 'path-assumption',
+    message: 'Skill hardcodes /Users/me/data',
+  };
+  const lowItem: FrictionItem = {
+    severity: 'low',
+    category: 'doc-engine-drift',
+    message: 'README references a removed flag',
+  };
+
+  it('returns the empty string for no entries (no output)', () => {
+    expect(formatFrictionReport([])).toBe('');
+  });
+
+  it('formats one line per entry as [severity] category: message', () => {
+    const out = formatFrictionReport([highItem, lowItem]);
+    expect(out).toBe(
+      '[high] path-assumption: Skill hardcodes /Users/me/data\n' +
+        '[low] doc-engine-drift: README references a removed flag',
+    );
   });
 });
 
@@ -424,7 +527,7 @@ function makeDryRunInput(overrides: Partial<DryRunSummaryInput> = {}): DryRunSum
     provenancePath: '/harness/results/provenance.json',
     provenanceFingerprint: 'abc123',
     provenanceEntryCount: 3,
-    modelFlag: '--model claude-sonnet-4-6',
+    modelFlag: '--model claude-sonnet-5',
     ...overrides,
   };
 }
@@ -565,17 +668,17 @@ describe('cleanupHarness', () => {
 });
 
 describe('verdictExitCode', () => {
-  it('returns Ok when all expectations passed (regardless of the flag)', () => {
+  it('returns Ok when all expectations passed (regardless of tolerance)', () => {
     expect(verdictExitCode(true, false)).toBe(SkillTestExitCode.Ok);
     expect(verdictExitCode(true, true)).toBe(SkillTestExitCode.Ok);
   });
 
-  it('returns Ok on a failing verdict when fail-on-eval-failure is NOT set (default behavior)', () => {
-    expect(verdictExitCode(false, false)).toBe(SkillTestExitCode.Ok);
+  it('escalates a failing verdict to EvalFailure by DEFAULT (fail-closed)', () => {
+    expect(verdictExitCode(false, false)).toBe(SkillTestExitCode.EvalFailure);
   });
 
-  it('escalates a failing verdict to EvalFailure when fail-on-eval-failure is set', () => {
-    expect(verdictExitCode(false, true)).toBe(SkillTestExitCode.EvalFailure);
+  it('downgrades a failing verdict to Ok when eval failure is tolerated (opt-out)', () => {
+    expect(verdictExitCode(false, true)).toBe(SkillTestExitCode.Ok);
   });
 });
 
@@ -597,8 +700,12 @@ describe('stageWorkspacesForRun', () => {
     }), 'utf-8');
     const harnessRoot = safePath.join(root, 'harness');
     mkdirSyncReal(harnessRoot, { recursive: true });
-    const wsRoot = stageWorkspacesForRun(safePath.join(evalsDir, EVALS_JSON), harnessRoot);
-    expect(existsSync(safePath.join(wsRoot, '5', 'fixtures', 'doc.md'))).toBe(true);
+    const { workspacesRoot, declaredEvalCount } = stageWorkspacesForRun(
+      safePath.join(evalsDir, EVALS_JSON),
+      harnessRoot,
+    );
+    expect(existsSync(safePath.join(workspacesRoot, '5', 'fixtures', 'doc.md'))).toBe(true);
+    expect(declaredEvalCount).toBe(1);
   });
 
   it('throws EvalInputError when a declared eval file is absent', () => {

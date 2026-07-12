@@ -247,7 +247,7 @@ This is a test skill.
 spec:
   llm:
     provider: anthropic
-    model: claude-sonnet-4.5
+    model: claude-sonnet-5
 `
       );
 

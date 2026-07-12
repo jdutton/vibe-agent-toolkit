@@ -1,3 +1,4 @@
+import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { resetSkillDiscoveryCache } from '../../src/skill-resolution/packaging-config.js';
@@ -54,5 +55,41 @@ describe('resolveSkillReference', () => {
     expect(r.kind).toBe('name-miss');
     if (r.kind !== 'name-miss') throw new Error(UNREACHABLE);
     expect(r.knownSkills).toContain('declared');
+  });
+
+  it('definite path AT a declared pool skill\'s dist → source WITH declaredSkill link', async () => {
+    const fx = setupReferenceFixture({ pool: [POOL_SKILL] });
+    resetSkillDiscoveryCache();
+    const distPath = fx.poolDistDir(POOL_SKILL);
+    const r = await resolveSkillReference(distPath, fx.root);
+    expect(r.kind).toBe('source');
+    if (r.kind !== 'source') throw new Error(UNREACHABLE);
+    expect(r.source).toEqual({ path: distPath });
+    expect(r.declaredSkill).toEqual({
+      name: POOL_SKILL,
+      configRoot: fx.root,
+      sourcePath: fx.poolSkillMd(POOL_SKILL),
+      expectedDistDir: distPath,
+    });
+  });
+
+  it('definite path AT a declared plugin-local skill\'s dist → declaredSkill link', async () => {
+    const fx = setupReferenceFixture({ pluginLocal: [PLUGIN_SKILL] });
+    resetSkillDiscoveryCache();
+    const distPath = fx.pluginDistDir(PLUGIN_SKILL);
+    const r = await resolveSkillReference(distPath, fx.root);
+    expect(r.kind).toBe('source');
+    if (r.kind !== 'source') throw new Error(UNREACHABLE);
+    expect(r.declaredSkill?.name).toBe(PLUGIN_SKILL);
+    expect(r.declaredSkill?.expectedDistDir).toBe(distPath);
+  });
+
+  it('definite path NOT matching any declared dist → source, no declaredSkill link', async () => {
+    const fx = setupReferenceFixture({ pool: [POOL_SKILL] });
+    resetSkillDiscoveryCache();
+    const r = await resolveSkillReference(safePath.join(fx.root, 'dist', 'skills', 'not-a-skill'), fx.root);
+    expect(r.kind).toBe('source');
+    if (r.kind !== 'source') throw new Error(UNREACHABLE);
+    expect(r.declaredSkill).toBeUndefined();
   });
 });

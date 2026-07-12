@@ -26,7 +26,7 @@ describe('defineLLMAnalyzer', () => {
     expect(sentimentAgent.manifest.outputSchema).toBeDefined();
     expect(sentimentAgent.manifest.metadata).toEqual({
       mockable: true,
-      model: 'claude-3-haiku',
+      model: 'claude-haiku-4-5',
       temperature: 0.7,
     });
   });
@@ -74,12 +74,12 @@ describe('defineLLMAnalyzer', () => {
         version: '1.0.0',
         inputSchema: z.string(),
         outputSchema: z.string(),
-        model: 'claude-3-opus',
+        model: 'claude-opus-4-8',
         temperature: 0.5,
         mockable: false,
       },
       async (input, ctx) => {
-        expect(ctx.model).toBe('claude-3-opus');
+        expect(ctx.model).toBe('claude-opus-4-8');
         expect(ctx.temperature).toBe(0.5);
         expect(ctx.mockable).toBe(false);
         return input;

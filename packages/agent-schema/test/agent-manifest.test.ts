@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { AgentManifestSchema } from '../src/agent-manifest';
 
 const ANTHROPIC_PROVIDER = 'anthropic';
-const CLAUDE_MODEL = 'claude-sonnet-4.5';
+const CLAUDE_MODEL = 'claude-sonnet-5';
 
 describe('AgentManifestSchema', () => {
   it('should validate minimal agent manifest', () => {

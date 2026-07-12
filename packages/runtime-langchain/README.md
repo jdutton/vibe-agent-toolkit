@@ -176,7 +176,7 @@ const generateNameAnthropic = convertLLMAnalyzerToFunction(
   nameGeneratorAgent,
   NameGeneratorInputSchema,
   NameSuggestionSchema,
-  { model: new ChatAnthropic({ model: 'claude-sonnet-4-5-20250929' }) }
+  { model: new ChatAnthropic({ model: 'claude-sonnet-5' }) }
 );
 
 // Same agent, different providers
