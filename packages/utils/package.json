@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/utils",
-  "version": "0.1.40-rc.2",
+  "version": "0.1.40",
   "type": "module",
   "description": "Core utility functions shared across the vibe-agent-toolkit packages",
   "sideEffects": false,
