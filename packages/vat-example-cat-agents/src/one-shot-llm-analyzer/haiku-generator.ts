@@ -61,7 +61,7 @@ export const haikuGeneratorAgent: Agent<
       author: 'Ms. Haiku',
       personality: 'Zen cat poet, sometimes ignores syllable rules for artistic expression',
       validRate: '60%',
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-haiku-4-5',
       temperature: 0.8,
     },
   },

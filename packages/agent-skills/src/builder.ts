@@ -422,7 +422,7 @@ spec:
     model: claude-sonnet-5
     alternatives:
       - provider: anthropic
-        model: claude-haiku-4-5-20251001  # Faster/cheaper fallback
+        model: claude-haiku-4-5  # Faster/cheaper fallback
       - provider: openai
         model: gpt-4o  # Cross-provider fallback
 \`\`\`
@@ -518,17 +518,17 @@ spec:
 \`\`\`yaml
 spec:
   llm:
-    model: claude-sonnet  # BAD: which version?
+    model: claude-sonnet  # BAD: which family member?
 \`\`\`
 
-**Why**: Model versions change capabilities and pricing. Be specific.
+**Why**: A bare family name is ambiguous. Pin a specific, current model alias so capabilities and pricing are well-defined.
 
-✅ **Do**: Use full version identifiers
+✅ **Do**: Use a specific model alias
 
 \`\`\`yaml
 spec:
   llm:
-    model: claude-sonnet-5  # Explicit version
+    model: claude-sonnet-5  # Specific current alias
 \`\`\`
 
 ### ❌ Don't: Duplicate Information

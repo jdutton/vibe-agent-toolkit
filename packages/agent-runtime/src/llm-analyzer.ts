@@ -56,7 +56,7 @@ export interface LLMAnalyzerConfig<TInput, TOutput> {
  *     version: '1.0.0',
  *     inputSchema: z.object({ text: z.string() }),
  *     outputSchema: z.object({ sentiment: z.enum(['positive', 'negative', 'neutral']) }),
- *     model: 'claude-haiku-4-5-20251001',
+ *     model: 'claude-haiku-4-5',
  *     mockable: true,
  *   },
  *   async (input, ctx) => {

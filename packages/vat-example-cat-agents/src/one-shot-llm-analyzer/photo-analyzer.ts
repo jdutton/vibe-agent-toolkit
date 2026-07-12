@@ -315,7 +315,7 @@ export const photoAnalyzerAgent: Agent<
       author: 'Pixel',
       personality: 'Tech-savvy cat who speaks in computer vision terminology',
       requiresVision: true,
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-haiku-4-5',
     },
   },
   execute: async (input: PhotoAnalyzerInput) => {

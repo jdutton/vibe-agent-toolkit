@@ -381,7 +381,7 @@ export const descriptionParserAgent: Agent<
       author: 'Captain Obvious',
       personality: 'States the obvious, extracts characteristics literally',
       handlesUnstructured: true,
-      model: 'claude-haiku-4-5-20251001',
+      model: 'claude-haiku-4-5',
     },
   },
   execute: async (input: DescriptionParserInput) => {

@@ -542,7 +542,7 @@ async function expandQuery(userQuery: string): Promise<string[]> {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
   const response = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001',  // Fast model for query expansion
+    model: 'claude-haiku-4-5',  // Fast model for query expansion
     max_tokens: 200,
     messages: [{
       role: 'user',
@@ -588,7 +588,7 @@ async function hydeSearch(query: string, topK = 3) {
 
   // Generate hypothetical answer
   const response = await client.messages.create({
-    model: 'claude-haiku-4-5-20251001',
+    model: 'claude-haiku-4-5',
     max_tokens: 300,
     messages: [{
       role: 'user',

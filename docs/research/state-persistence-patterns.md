@@ -51,7 +51,7 @@ const State = new StateSchema({
 });
 
 // Initialize model
-const model = new ChatAnthropic({ model: "claude-haiku-4-5-20251001" });
+const model = new ChatAnthropic({ model: "claude-haiku-4-5" });
 
 // Production checkpointer
 const DB_URI = "postgresql://postgres:postgres@localhost:5442/postgres?sslmode=disable";
