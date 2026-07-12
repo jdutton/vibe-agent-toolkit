@@ -304,7 +304,7 @@ async function commandReport(opts: CommonOpts): Promise<void> {
     runDate: new Date().toISOString(),
     vatVersion: readVatVersion(),
     nodeVersion: process.version,
-    judgeModel: judgments[0]?.judgeModel ?? 'claude-sonnet-4-6',
+    judgeModel: judgments[0]?.judgeModel ?? 'claude-sonnet-5',
     authMode: 'subscription',
     judgePromptSha: judgePromptShaFor(),
     triggerPromptsSha: sha256OfFile(opts.prompts),

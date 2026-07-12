@@ -126,7 +126,7 @@ describeIfLLMTests('LLM Regression Tests', () => {
         SimpleNameInputSchema,
         SimpleNameOutputSchema,
         {
-          model: anthropic('claude-sonnet-4-5-20250929'),
+          model: anthropic('claude-sonnet-5'),
           temperature: 0.9,
         },
       );
@@ -155,7 +155,7 @@ describeIfLLMTests('LLM Regression Tests', () => {
         simpleNameGeneratorAgent,
         SimpleNameInputSchema,
         SimpleNameOutputSchema,
-        { model: anthropic('claude-sonnet-4-5-20250929'), temperature: 0.9 },
+        { model: anthropic('claude-sonnet-5'), temperature: 0.9 },
       );
 
       // Call both providers in parallel with same input

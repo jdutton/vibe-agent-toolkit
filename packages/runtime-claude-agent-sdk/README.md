@@ -64,7 +64,7 @@ const { server, metadata } = convertLLMAnalyzerToTool(
   NameSuggestionSchema,
   {
     apiKey: process.env.ANTHROPIC_API_KEY,
-    model: 'claude-3-5-haiku-20241022',
+    model: 'claude-haiku-4-5-20251001',
     temperature: 0.9
   }
 );
@@ -98,7 +98,7 @@ const { server, metadata } = convertConversationalAssistantToTool(
   BreedAdvisorOutputSchema,
   {
     apiKey: process.env.ANTHROPIC_API_KEY,
-    model: 'claude-3-5-haiku-20241022',
+    model: 'claude-haiku-4-5-20251001',
     temperature: 0.7
   }
 );
@@ -145,7 +145,7 @@ const { server, metadata } = convertLLMAnalyzersToTools({
   },
 }, {
   apiKey: process.env.ANTHROPIC_API_KEY,
-  model: 'claude-3-5-haiku-20241022',
+  model: 'claude-haiku-4-5',
   temperature: 0.8,
 });
 
@@ -283,7 +283,7 @@ interface BatchConversionResult {
 ```typescript
 interface ClaudeAgentLLMConfig {
   apiKey?: string;        // Defaults to ANTHROPIC_API_KEY env var
-  model?: string;         // Defaults to 'claude-3-5-haiku-20241022'
+  model?: string;         // Defaults to 'claude-haiku-4-5-20251001'
   temperature?: number;   // Defaults to 0.7
   maxTokens?: number;     // Defaults to 4096
 }

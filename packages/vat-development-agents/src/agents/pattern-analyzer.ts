@@ -83,7 +83,7 @@ Output JSON matching this schema:
         recommendedArchetype: 'conversational-assistant',
         confidence: 'high',
         reasoning: 'Multi-turn dialogue with context accumulation',
-        recommendedLLM: 'claude-3-5-sonnet-20241022',
+        recommendedLLM: 'claude-sonnet-5',
         alternativePatterns: ['llm-analyzer'],
       };
     },

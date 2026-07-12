@@ -43,7 +43,7 @@ vi.mock('@vibe-agent-toolkit/agent-config', () => ({
 // Test constants - defined after mocks due to hoisting
 const TEST_AGENT_NAME = 'test-agent';
 const TEST_AGENT_VERSION = '0.1.0';
-const TEST_MODEL = 'claude-sonnet-4.5';
+const TEST_MODEL = 'claude-sonnet-5';
 const TEST_PROVIDER = 'anthropic';
 const SYSTEM_PROMPT_REF = './prompts/system.md';
 const USER_PROMPT_REF = './prompts/user.md';

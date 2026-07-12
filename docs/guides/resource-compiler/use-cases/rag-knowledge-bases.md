@@ -518,7 +518,7 @@ Return only the ranked indices as a JSON array, e.g., [2, 0, 3, 1]
 `;
 
   const response = await client.messages.create({
-    model: 'claude-3-5-sonnet-20241022',
+    model: 'claude-sonnet-5',
     max_tokens: 100,
     messages: [{ role: 'user', content: prompt }],
   });
@@ -542,7 +542,7 @@ async function expandQuery(userQuery: string): Promise<string[]> {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
   const response = await client.messages.create({
-    model: 'claude-3-haiku-20240307',  // Fast model for query expansion
+    model: 'claude-haiku-4-5-20251001',  // Fast model for query expansion
     max_tokens: 200,
     messages: [{
       role: 'user',
@@ -588,7 +588,7 @@ async function hydeSearch(query: string, topK = 3) {
 
   // Generate hypothetical answer
   const response = await client.messages.create({
-    model: 'claude-3-haiku-20240307',
+    model: 'claude-haiku-4-5-20251001',
     max_tokens: 300,
     messages: [{
       role: 'user',
@@ -623,7 +623,7 @@ async function ragQuery(userQuestion: string) {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
   const response = await client.messages.create({
-    model: 'claude-3-5-sonnet-20241022',
+    model: 'claude-sonnet-5',
     max_tokens: 1024,
     messages: [{
       role: 'user',
@@ -675,7 +675,7 @@ async function ragQueryWithCitations(userQuestion: string): Promise<RagResult> {
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
   const response = await client.messages.create({
-    model: 'claude-3-5-sonnet-20241022',
+    model: 'claude-sonnet-5',
     max_tokens: 1024,
     messages: [{
       role: 'user',

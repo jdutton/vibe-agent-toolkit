@@ -57,7 +57,7 @@ describe('buildAgentSkill', () => {
 spec:
   llm:
     provider: anthropic
-    model: claude-sonnet-4-20250514
+    model: claude-sonnet-5
   prompts:
     system:
       $ref: ./prompts/system.md
@@ -118,7 +118,7 @@ spec:
 spec:
   llm:
     provider: anthropic
-    model: claude-sonnet-4-20250514
+    model: claude-sonnet-5
   prompts:
     system:
       $ref: ./prompts/system.md
@@ -169,7 +169,7 @@ spec:
 spec:
   llm:
     provider: anthropic
-    model: claude-sonnet-4-20250514
+    model: claude-sonnet-5
   prompts:
     system:
       $ref: ./prompts/system.md
@@ -220,7 +220,7 @@ spec:
 spec:
   llm:
     provider: anthropic
-    model: claude-sonnet-4-20250514
+    model: claude-sonnet-5
   prompts:
     system:
       $ref: ./prompts/system.md
@@ -255,7 +255,7 @@ spec:
 spec:
   llm:
     provider: anthropic
-    model: claude-sonnet-4-20250514
+    model: claude-sonnet-5
 `;
     const manifestPath = safePath.join(agentDir, AGENT_YAML);
     await fs.writeFile(manifestPath, manifestContent);

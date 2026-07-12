@@ -271,7 +271,7 @@ const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 async function chat(userMessage: string) {
   const response = await client.messages.create({
-    model: 'claude-3-5-sonnet-20241022',
+    model: 'claude-sonnet-5',
     max_tokens: 1024,
     system: Prompts.fragments.technicalAssistant.body,
     messages: [{ role: 'user', content: userMessage }],
@@ -291,7 +291,7 @@ export const agentConfig = {
   technical: {
     name: 'Technical Assistant',
     systemPrompt: Prompts.fragments.technicalAssistant.body,
-    model: 'claude-3-5-sonnet-20241022',
+    model: 'claude-sonnet-5',
     maxTokens: 2048,
   },
   reviewer: {
@@ -360,7 +360,7 @@ if (Prompts.meta.version >= 2.0) {
 }
 
 // Use model hints from metadata
-const preferredModel = Prompts.meta.modelHints?.[0] || 'claude-3-sonnet';
+const preferredModel = Prompts.meta.modelHints?.[0] || 'claude-sonnet-5';
 ```
 
 ### 4. Combining Multiple Resources
@@ -439,7 +439,7 @@ export function createAgentPrompt(
   return {
     name,
     fragment: Prompts.fragments[name],
-    modelHint: Prompts.meta.modelHints?.[0] || 'claude-3',
+    modelHint: Prompts.meta.modelHints?.[0] || 'claude-sonnet-5',
   };
 }
 ```

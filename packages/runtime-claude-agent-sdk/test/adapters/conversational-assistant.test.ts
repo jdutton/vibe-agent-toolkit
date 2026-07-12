@@ -174,7 +174,7 @@ describe('convertConversationalAssistantToTool', () => {
       BreedAdvisorOutputSchema,
       {
         apiKey: TEST_API_KEY,
-        model: 'claude-3-5-sonnet-20241022',
+        model: 'claude-sonnet-5',
         temperature: 0.9,
         maxTokens: 2048,
       },
@@ -295,7 +295,7 @@ describe('convertConversationalAssistantsToTools', () => {
       },
       {
         apiKey: TEST_API_KEY,
-        model: 'claude-3-5-sonnet-20241022',
+        model: 'claude-sonnet-5',
         temperature: 0.8,
         maxTokens: 3000,
       },

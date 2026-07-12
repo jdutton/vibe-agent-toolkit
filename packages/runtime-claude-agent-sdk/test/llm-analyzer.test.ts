@@ -27,6 +27,6 @@ createLLMAnalyzerTestSuite({
   outputSchema: SimpleNameOutputSchema,
   llmConfig: {
     apiKey: 'test-key',
-    model: 'claude-sonnet-4-5',
+    model: 'claude-sonnet-5',
   },
 });

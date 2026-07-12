@@ -209,7 +209,7 @@ metadata:
 spec:
   llm:
     provider: anthropic
-    model: claude-sonnet-4-20250514
+    model: claude-sonnet-5
 
   prompts:
     system:
@@ -269,7 +269,7 @@ metadata:
 spec:
   llm:                         # LLM configuration (required)
     provider: anthropic        # anthropic, openai, google
-    model: claude-sonnet-4-20250514
+    model: claude-sonnet-5
     temperature: 0.7           # 0.0-2.0 (default varies by provider)
     maxTokens: 16000           # optional
     topP: 0.9                  # optional nucleus sampling
@@ -320,7 +320,7 @@ metadata:
 spec:
   llm:
     provider: anthropic
-    model: claude-sonnet-4-20250514
+    model: claude-sonnet-5
   prompts:
     system:
       $ref: ./prompts/system.md
@@ -348,12 +348,12 @@ spec:
 
   llm:
     provider: anthropic
-    model: claude-sonnet-4-20250514
+    model: claude-sonnet-5
     temperature: 0.3
     maxTokens: 16000
     alternatives:
       - provider: anthropic
-        model: claude-opus-4-20250514
+        model: claude-opus-4-8
       - provider: openai
         model: gpt-4o
 
@@ -419,10 +419,10 @@ Specify fallback models for cost optimization or availability:
 spec:
   llm:
     provider: anthropic
-    model: claude-sonnet-4-20250514
+    model: claude-sonnet-5
     alternatives:
       - provider: anthropic
-        model: claude-3-5-haiku-20241022  # Faster/cheaper fallback
+        model: claude-haiku-4-5-20251001  # Faster/cheaper fallback
       - provider: openai
         model: gpt-4o  # Cross-provider fallback
 \`\`\`
@@ -528,7 +528,7 @@ spec:
 \`\`\`yaml
 spec:
   llm:
-    model: claude-sonnet-4-20250514  # Explicit version
+    model: claude-sonnet-5  # Explicit version
 \`\`\`
 
 ### ❌ Don't: Duplicate Information

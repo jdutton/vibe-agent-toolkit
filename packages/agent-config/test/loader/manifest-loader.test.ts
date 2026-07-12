@@ -78,7 +78,7 @@ metadata:
 spec:
   llm:
     provider: anthropic
-    model: claude-sonnet-4.5
+    model: claude-sonnet-5
 `
       );
 
@@ -108,7 +108,7 @@ metadata:
 spec:
   llm:
     provider: anthropic
-    model: claude-sonnet-4.5
+    model: claude-sonnet-5
 `
       );
 
@@ -129,7 +129,7 @@ metadata:
 spec:
   llm:
     provider: anthropic
-    model: claude-sonnet-4.5
+    model: claude-sonnet-5
 `
       );
 
