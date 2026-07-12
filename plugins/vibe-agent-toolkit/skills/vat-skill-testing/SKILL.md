@@ -50,10 +50,28 @@ IPC between driver, experimenter, and executors is purely filesystem — no sock
 
 | Code | Meaning |
 |---|---|
-| `0` | Harness ran to completion and produced a valid `grading.json`. Read the printed summary (`PASS N/N` or `FAIL N/M`) and `results/grading.json` for eval outcomes — exit 0 does **not** mean all evals passed. |
+| `0` | Harness ran to completion and **every eval passed** (`PASS N/N`) — or a failing verdict was suppressed with `--allow-eval-failure`. Read the printed summary and `results/grading.json` for detail. |
+| `4` | An eval **FAILED** (`FAIL N/M`): the harness completed and produced a valid `grading.json`, but the skill's expectations did not all pass. This is the **fail-closed default** — suppress with `--allow-eval-failure` for interactive iteration. |
 | `3` | Bootstrap: no `evals.json` found — VAT wrote a template. **Not a failure.** Fill in the template and re-run. |
 | `2` | Preflight / env failure: missing `claude` binary, auth error, declared inputs or deps absent, unsafe `--workdir`, `--require-auth` mismatch, or the `--i-understand-this-runs-skill-code` acknowledgment was not given. |
-| `1` | Internal failure, including the experimenter exiting without producing a valid `grading.json`. |
+| `1` | Internal failure, including the experimenter exiting without producing a valid `grading.json`. A **stall, timeout, or non-zero experimenter exit is authoritative and always exit 1** — it is never laundered into a PASS even if a `grading.json` is present on disk (a hardening against skill code that writes a fake grade then hangs). |
+
+The taxonomy separates "evals failed" (`4`) from "the harness broke" (`1`/`2`/`3`) so a CI consumer can tolerate the former while failing closed on the latter:
+
+```bash
+vat skill test run my-skill --i-understand-this-runs-skill-code
+case $? in
+  0) ;;              # all evals passed
+  4) ;;              # evals failed but the harness is healthy — tolerate/warn
+  *) exit 1 ;;       # 1/2/3/unknown — harness broke, fail the build
+esac
+```
+
+Which specific evals failed lives in `results/grading.json`, never in the exit code.
+
+> **A timed-out run may leave `grading.json` truncated and unparseable** (the experimenter is told to flush incrementally, so a mid-run kill can cut a partial file). Any consumer reading `grading.json` must treat an unparseable file as a **failure**, not crash on it. The exit code (1) already tells you the run did not complete; do not trust a partial artifact.
+>
+> **The default `--timeout` scales with the suite's declared eval count** (roughly `2min + 2min/eval`, floored at 5min, capped at 1h) so a correctly-configured multi-eval suite is not truncated by a flat budget. An explicit `--timeout` always overrides. If a run times out, the message names the declared eval count — raise `--timeout` (and `--stall`) for large suites.
 
 ## Bootstrap Flow (Exit 3)
 
@@ -193,17 +211,19 @@ Most knobs exist both as a CLI flag (one-off) and a `test:` config key (persiste
 |---|---|---|
 | `--model <id>` | `model` | Model passed **verbatim** to `claude --model` (no mapping). Pin it for reproducible, cost-controlled runs. |
 | `--baseline` | `baseline` | Run the with/without A/B skill-lift comparison. |
-| `--fail-on-eval-failure` | — | Exit `4` when any eval fails (CI gate). Default: exit `0` if the harness completed; eval outcomes are in the summary. |
+| `--allow-eval-failure` | — | Opt out of the fail-closed default so a failing eval exits `0` (interactive use). By **default** a failing eval exits `4` — distinct from the harness-broke codes so CI can gate on it. |
 | `--with name=<src>` | `with` | Stage a declared-dependency skill (`workspace:`/`npm:`/`url:`/`path:`/`vendored`). |
 | `--with-optional name=<src>` | `optional` | Stage an optional dependency (absent by default). |
 | `--env KEY=VALUE` | `env` | Inject an env var into the experimenter spawn (`${fixturesDir}`, `${stagedSkillDir}`, `${harnessRoot}`, `${resultsDir}` interpolate). Protected names (PATH, auth, model) cannot be overridden. |
 | `--pass-env KEY` | `passEnv` | Forward a host env var by name if present. |
-| `--max-turns` / `--max-budget-usd` / `--timeout` / `--stall` | same | Turn cap / USD cap / wall-clock seconds / no-output watchdog seconds. |
+| `--max-turns` / `--max-budget-usd` / `--timeout` / `--stall` | same | Turn cap / USD cap / wall-clock seconds / no-output watchdog seconds. **`--timeout` default scales with the declared eval count** (~`2min + 2min/eval`, floored 5min, capped 1h); an explicit value overrides. |
 | `--evals <path>` (via config) | `evals` | Path to `evals.json` relative to the skill source. |
 | — | `build` | Shell command run once before staging to generate build artifacts (cwd = config root). |
 | `--no-build` / `--refresh` / `--keep` / `--out` / `--workdir` | — | Skip building a declared skill / force re-stage / keep the harness dir / override output dir / override working dir. |
 
 The `test:` block is validated under a **strict** schema (it's VAT-produced config) — unknown keys are a config error. This is the deliberate inverse of `evals.json`, which VAT reads **liberally** (adopter-authored data): there, unknown fields like `category` pass through untouched.
+
+**Name vs path subject — both honor `test:` config.** A **name** (`vat skill test run my-skill`) is built from source, then the dist is tested. A **path** at that skill's built dist (`vat skill test run ./dist/skills/my-skill/`) is tested **as-is** (no rebuild) but still honors the same `test:` config — VAT maps the path back to its declared skill (project-aware, so it works from any directory) and resolves the eval suite from the skill's source. Only a path that maps to **no** declared skill is config-blind; the command prints a one-line note in that case pointing you at the name form.
 
 ## Friction Triage via `friction.json`
 
@@ -239,8 +259,9 @@ vat skill test run ./dist/skills/my-skill/ --i-understand-this-runs-skill-code
 # A/B skill-lift: run each eval with AND without the skill, report the delta
 vat skill test run ./dist/skills/my-skill/ --baseline --i-understand-this-runs-skill-code
 
-# CI gate: exit non-zero (4) if any eval fails
-vat skill test run ./dist/skills/my-skill/ --fail-on-eval-failure --i-understand-this-runs-skill-code
+# CI gate: a failing eval exits 4 by default (no flag needed). For interactive
+# iteration, --allow-eval-failure downgrades that 4 to 0.
+vat skill test run ./dist/skills/my-skill/ --allow-eval-failure --i-understand-this-runs-skill-code
 
 # Force subscription auth, fail fast if none logged in
 vat skill test run ./dist/skills/my-skill/ \

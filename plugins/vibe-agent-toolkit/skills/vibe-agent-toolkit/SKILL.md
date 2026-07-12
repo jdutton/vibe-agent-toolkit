@@ -48,8 +48,9 @@ Poor fits:
 
 ```bash
 vat --help                 # top-level help
+vat validate               # validate sources: links + skills (no build needed)
 vat build                  # build all artifacts (skills → claude plugins)
-vat verify                 # validate all artifacts
+vat verify                 # verify built artifacts (after vat build)
 vat skills validate        # validate skill quality
 vat resources validate     # validate markdown collections
 vat audit                  # audit plugins/skills/marketplaces/settings
