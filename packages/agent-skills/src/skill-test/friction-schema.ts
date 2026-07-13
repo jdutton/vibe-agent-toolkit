@@ -6,7 +6,7 @@ export const FrictionSeveritySchema = z.enum(['high', 'medium', 'low']);
 
 /**
  * Closed set of packaging-fidelity friction categories (spec §18). vat owns
- * this enum; the experimenter must emit one of these.
+ * this enum; the grader must emit one of these.
  */
 export const FrictionCategorySchema = z.enum([
   'path-assumption',

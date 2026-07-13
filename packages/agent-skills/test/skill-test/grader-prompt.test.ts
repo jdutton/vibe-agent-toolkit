@@ -71,6 +71,20 @@ describe('buildGraderPrompt', () => {
   it('prefers structured tool_use/tool_result signal over free text', () => {
     expect(buildGraderPrompt(opts)).toMatch(/tool_use|tool_result/);
   });
+
+  it('spells out the friction ITEM object shape so the grader does not emit bare strings (PR #147)', () => {
+    const prompt = buildGraderPrompt(opts);
+    expect(prompt).toContain('"friction" item MUST be a JSON object');
+    expect(prompt).toMatch(/NEVER a bare string/);
+    // the closed category enum must be named so the grader picks a valid one
+    expect(prompt).toContain('missing-bundled-file');
+  });
+
+  it('scopes friction to packaging only — no restating expectations or auditing the transcript format', () => {
+    const prompt = buildGraderPrompt(opts);
+    expect(prompt).toMatch(/Do NOT restate a graded expectation as friction/);
+    expect(prompt).toMatch(/transcript\s+format or this grading harness/);
+  });
 });
 
 describe('buildGraderPrompt — toolExpectations (issue #145 Phase T)', () => {

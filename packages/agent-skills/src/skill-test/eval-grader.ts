@@ -70,6 +70,19 @@ export interface RunGraderInput {
  * both distinct from harness breakage because the grader DID run and produce
  * *something*, just not something we can trust.
  */
+/**
+ * Adapt the grader's stdout `onProgress` sink into the `onWarn` callback
+ * {@link parseEvalFragment} expects (used only when it drops malformed friction
+ * items). Extracted so the ternary does not add a branch to `runGraderForEval`'s
+ * cognitive complexity budget.
+ */
+function fragmentWarnRouter(
+  onProgress: RunGraderInput['onProgress'],
+): ((message: string) => void) | undefined {
+  if (onProgress === undefined) return undefined;
+  return (message) => onProgress(`[skill-test] ${message}\n`);
+}
+
 export async function runGraderForEval(input: RunGraderInput): Promise<EvalFragment> {
   mkdirSyncReal(input.graderOutDir, { recursive: true });
 
@@ -162,7 +175,7 @@ export async function runGraderForEval(input: RunGraderInput): Promise<EvalFragm
     );
   }
 
-  const fragment = parseEvalFragment(raw);
+  const fragment = parseEvalFragment(raw, fragmentWarnRouter(input.onProgress));
 
   // Integrity gate: a missing/wrong nonce means this fragment was not produced
   // by the grader we prompted for THIS run — most likely forged or left behind

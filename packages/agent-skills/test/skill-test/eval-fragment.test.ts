@@ -138,3 +138,63 @@ describe('parseEvalFragment', () => {
     expect(() => parseEvalFragment(withoutEvalId)).toThrow(/grader fragment for eval \(unknown\) has an invalid shape/);
   });
 });
+
+describe('parseEvalFragment — lenient friction (PR #147 defense-in-depth)', () => {
+  // The adopter repro: a grader emitted `friction` as an array of BARE STRINGS.
+  // FrictionItemSchema.strict() rejects those, and the whole-fragment strict parse
+  // used to abort the ENTIRE run (exit 1, zero grading.json). Friction is auxiliary
+  // (non-verdict-bearing), so a friction shape wobble must never discard grading.
+  const fragmentWithStringFriction = {
+    runNonce: 'a1b2c3d4',
+    evalId: 'eval-1',
+    expectations: [{ text: 'does the thing', passed: true, evidence: 'saw it' }],
+    friction: ['answered from SKILL.md prose without ever running dxa'],
+  };
+
+  it('drops bare-string friction items and STILL returns the graded fragment (adopter repro)', () => {
+    const fragment = parseEvalFragment(fragmentWithStringFriction);
+    expect(fragment.evalId).toBe('eval-1');
+    expect(fragment.expectations).toHaveLength(1);
+    expect(fragment.friction).toEqual([]); // the malformed item was dropped, not fatal
+  });
+
+  it('keeps well-shaped friction items and drops only the malformed ones', () => {
+    const good = { severity: 'high', category: 'path-assumption', message: 'assumed /tmp exists' };
+    const fragment = parseEvalFragment({
+      ...fragmentWithStringFriction,
+      friction: [good, 'a bare string', { severity: 'nope', category: 'x', message: '' }],
+    });
+    expect(fragment.friction).toEqual([good]);
+  });
+
+  it('drops a `friction` that is not an array at all (e.g. a bare string) without failing the run', () => {
+    const fragment = parseEvalFragment({ ...fragmentWithStringFriction, friction: 'a single prose blob' });
+    expect(fragment.evalId).toBe('eval-1');
+    expect(fragment.friction).toBeUndefined();
+  });
+
+  it('calls onWarn with the dropped count when friction items are dropped', () => {
+    const warnings: string[] = [];
+    parseEvalFragment(fragmentWithStringFriction, (m) => warnings.push(m));
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/1 malformed friction item/);
+    expect(warnings[0]).toMatch(/grading is unaffected/);
+  });
+
+  it('does NOT warn or alter a fragment whose friction is already well-shaped', () => {
+    const warnings: string[] = [];
+    const fragment = parseEvalFragment(validFragment, (m) => warnings.push(m));
+    expect(warnings).toHaveLength(0);
+    expect(fragment).toEqual(validFragment);
+  });
+
+  it('keeps the VERDICT channels strict — a bad expectation still throws despite lenient friction', () => {
+    expect(() =>
+      parseEvalFragment({ ...fragmentWithStringFriction, expectations: [{ text: 'x', passed: 'yes' }] }),
+    ).toThrow(EvalFragmentError);
+  });
+
+  it('keeps the fragment strict for unknown top-level keys despite lenient friction', () => {
+    expect(() => parseEvalFragment({ ...fragmentWithStringFriction, bogus: 'nope' })).toThrow(EvalFragmentError);
+  });
+});

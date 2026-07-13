@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The `--allow-eval-failure` opt-out (from 0.1.40) also downgrades a **fail-fast-gated** run to exit **0** — consistent with how it downgrades any eval failure, but worth knowing if you gate CI on tiered runs.
 - A skill's `declaredExecutables[].howInvoked` string flows into the grader prompt **unfenced** (it is authored config, same trust tier as `SKILL.md`) — treat it as trusted authoring input, not adversarial.
+- **`mustRun` asserts a tool was *invoked*, not that it *succeeded*.** The verdict is judged from the transcript, which can't see a script's exit code through a shell wrapper — a skill that runs a broken executable and works around it still satisfies `mustRun`. Assert "ran and succeeded" via a prose `expectations` entry for now; a deterministic `mustSucceed` is a planned follow-up ([#148](https://github.com/jdutton/vibe-agent-toolkit/issues/148)).
+- **`tool-eval.json` is always written** (`{"evals": []}` when no eval declares `toolExpectations`) so the fail-closed artifact check has something to read — consumers should check `.evals.length`, not file existence.
+- A malformed **friction** item from the grader (e.g. a bare string instead of the object shape) is now **dropped with a warning** rather than aborting the run — friction is advisory, so it never discards the verdict-bearing grading. The grader prompt also spells out the friction object shape and scopes friction to packaging fidelity. *(Hardening from real-adopter beta testing of this feature.)*
 
 ## [0.1.40] - 2026-07-12
 

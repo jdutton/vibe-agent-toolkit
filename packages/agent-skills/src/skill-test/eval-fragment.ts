@@ -72,12 +72,60 @@ function extractRawEvalId(raw: unknown): string {
 }
 
 /**
+ * Sanitize ONLY the (non-verdict-bearing) `friction` field before the strict
+ * fragment parse. Friction is auxiliary advisory data, not a verdict channel —
+ * so a grader that wobbles on the friction shape (e.g. emits bare strings, the
+ * common failure mode — PR #147) must NOT be allowed to discard the
+ * verdict-bearing grading for the whole run. We drop friction items that don't
+ * match {@link FrictionItemSchema} (and a `friction` that isn't an array at
+ * all), then hand the rest to the STRICT fragment parse — so the verdict
+ * channels (`runNonce`/`evalId`/`expectations`/`tool`) stay fully fail-closed
+ * and an unknown field elsewhere still surfaces as a grader bug.
+ *
+ * Returns the possibly-rewritten raw value and how many friction items were
+ * dropped (0 when friction is absent or already well-shaped — the input is then
+ * returned untouched).
+ */
+function sanitizeFrictionField(raw: unknown): { value: unknown; dropped: number } {
+  if (typeof raw !== 'object' || raw === null || !('friction' in raw)) {
+    return { value: raw, dropped: 0 };
+  }
+  const obj = raw as Record<string, unknown>;
+  const friction = obj['friction'];
+  if (friction === undefined) return { value: raw, dropped: 0 };
+  if (!Array.isArray(friction)) {
+    // A non-array `friction` (e.g. a bare string) is unusable auxiliary noise —
+    // drop the whole field rather than fail the run over it.
+    const rest: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(obj)) {
+      if (key !== 'friction') rest[key] = val;
+    }
+    return { value: rest, dropped: 1 };
+  }
+  const kept = friction.filter((item) => FrictionItemSchema.safeParse(item).success);
+  if (kept.length === friction.length) return { value: raw, dropped: 0 };
+  return { value: { ...obj, friction: kept }, dropped: friction.length - kept.length };
+}
+
+/**
  * Parse + validate one grader's fragment output. Throws {@link EvalFragmentError}
  * — never {@link GradingSkewError} — because this is a per-eval fragment, not
  * the assembled aggregate `grading.json`.
+ *
+ * The verdict channels are strict. The auxiliary `friction` field is sanitized
+ * leniently first (see {@link sanitizeFrictionField}); when items are dropped,
+ * `onWarn` (if given) is called so the operator sees that friction was partial —
+ * grading itself is never affected.
  */
-export function parseEvalFragment(raw: unknown): EvalFragment {
-  const result = EvalFragmentSchema.safeParse(raw);
+export function parseEvalFragment(raw: unknown, onWarn?: (message: string) => void): EvalFragment {
+  const { value, dropped } = sanitizeFrictionField(raw);
+  if (dropped > 0) {
+    onWarn?.(
+      `grader fragment for eval ${extractRawEvalId(raw)} had ${dropped} malformed friction item(s) — ` +
+        `dropped them (friction is advisory; grading is unaffected).`,
+    );
+  }
+  const result = EvalFragmentSchema.safeParse(value);
   if (!result.success) {
     const firstIssue = result.error.issues[0];
     const path = firstIssue?.path.join('.') ?? '(root)';

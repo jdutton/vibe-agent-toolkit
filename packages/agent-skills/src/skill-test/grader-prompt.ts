@@ -168,6 +168,22 @@ export function buildGraderPrompt(opts: BuildGraderPromptOptions): string {
     ...(hasToolExpectations
       ? ['instructions above) a "tool" object with the mustRun/mustNotRun/sequence/passed fields.']
       : []),
+    // Spell out the friction ITEM shape (mirrors the expectations/tool shape
+    // spec above). Without it the grader emitted `friction` as bare strings,
+    // which FrictionItemSchema.strict() rejects — and a malformed fragment used
+    // to abort the WHOLE run (adopter finding, PR #147). parseEvalFragment now
+    // also drops malformed friction leniently, but a well-shaped prompt is the
+    // primary fix. The scoping sentence keeps friction to PACKAGING fidelity so
+    // the grader stops restating graded expectations or auditing the harness's
+    // own transcript format as "friction".
+    'Each "friction" item MUST be a JSON object: {"severity":"high"|"medium"|"low", ' +
+      '"category":"path-assumption"|"undeclared-dependency"|"ambient-propping"|"doc-engine-drift"|' +
+      '"missing-bundled-file"|"tool-expectation", "message":"<text>"} with optional ' +
+      '"subjectFile"/"evidence" — NEVER a bare string. If nothing is worth reporting, omit "friction" or use [].',
+    'Report friction ONLY about how the SKILL PACKAGE behaves in isolation (missing or mislocated bundled ' +
+      'files, undeclared dependencies, ambient assumptions, doc-vs-engine drift, an unmet tool expectation). ' +
+      'Do NOT restate a graded expectation as friction, and do NOT report friction about the transcript ' +
+      'format or this grading harness — only about the skill package.',
     '',
     `The fragment's "evalId" MUST be exactly: ${opts.evalId}`,
     '',
@@ -187,6 +203,9 @@ const REQUIRED_PATTERNS: { test: RegExp; label: string }[] = [
   { test: /browser|viewer/i, label: 'must explicitly forbid opening a browser/viewer' },
   { test: /iterat/i, label: 'must forbid iterating on / improving the skill' },
   { test: /runNonce/i, label: 'must carry the nonce directive (runNonce)' },
+  // A grader that emits `friction` as bare strings aborted the whole run (PR #147);
+  // the prompt MUST always spell out the friction object shape to prevent that.
+  { test: /"friction" item MUST be a JSON object/, label: 'must spell out the friction item object shape' },
 ];
 
 /**

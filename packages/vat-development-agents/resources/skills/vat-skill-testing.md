@@ -42,7 +42,7 @@ Artifacts produced under `<harnessRoot>/results/`:
 |---|---|
 | `grading.json` | Flat per-expectation grades + pass/fail summary (VAT-merged) |
 | `friction.json` | Packaging friction items (categories, severities, messages) |
-| `tool-eval.json` | Per-eval tool verdicts (only when an eval declares `toolExpectations`) |
+| `tool-eval.json` | Per-eval tool verdicts — always written (`{"evals": []}` when no eval declares `toolExpectations`) |
 | `transcripts/` | Per-eval executor conversation logs |
 
 **Anti-forgery model.** The executor and grader are separate roles; the transcript never touches the skill's sandbox; the grader runs in a directory outside the harness root; and every grader fragment carries a secret per-run nonce (delivered only via the grader's stdin — never on disk or an argv) that VAT re-verifies before merging. So untrusted skill code running in the sandbox cannot forge its own passing grade, tamper with the transcript, or write a result VAT will accept. Full contract: `docs/skill-test-grading-schema.md`.
@@ -197,6 +197,8 @@ Output correctness is not the whole story: a skill can produce the right answer 
 
 Names are matched leniently — the grader recognizes varied launch forms of the *same* executable (`uv run dxa.py`, `python3 dxa.py`, `./dxa`, `node dist/dxa.mjs`) as all "running `dxa`", so you assert the tool, not an exact command string.
 
+> **`mustRun` means *invoked*, not *succeeded*.** The verdict is judged from the transcript, which records that a tool was *called* and how — it cannot see a script's exit code through a shell wrapper (a Bash `tool_result.is_error` is `false` even for a command that exits non-zero). So a skill that invokes a **broken** executable and works around the failure still satisfies `mustRun`. If you need "the tool ran *and succeeded*", assert it in a prose `expectations` entry for now (e.g. *"the output reflects a successful dxa run, not an error fallback"*); a deterministic, shim-backed `mustSucceed` is a planned follow-up (issue #148).
+
 **Declare your executables so the grader knows their names.** A `mustRun: ["dxa"]` resolves against the skill's declared executables in `skills.config.<skill>.executables` — each entry is `{ path, kind, howInvoked }` (`kind` ∈ `node|python|shell|pwsh|binary`). The referenced name matches the `path` basename with its extension stripped (`scripts/dxa.py` → `dxa`) or the exact `path`. These flow into the grader prompt as recognition hints:
 
 ```yaml
@@ -210,6 +212,8 @@ skills:
 ```
 
 Tool verdicts land in their own **`tool-eval.json`** channel and never leak into `grading.json`. They ride the **WITH-arm only** in a `--baseline` run (the skill-absent arm has no tools to judge). `toolExpectations` is only meaningful for a **declared** skill subject (name, or a path that maps back to a declared skill) — a plain path/source subject has no `executables` manifest to resolve names against.
+
+> **Only committed (or `files:`-injected) files stage.** A name-target build stages the skill via a **tracked-files** tree-copy, so an **untracked** script (a scratch `probe.mjs` you never `git add`-ed) silently won't be in the harness — a `mustRun` against it then fails because the file is *absent*, not because it ran. Commit test scripts, or inject non-artifact files through a `files:` entry (the same mechanism skills use to bundle a built CLI).
 
 ### Cost tiers — fail fast before you spend
 
@@ -362,7 +366,7 @@ After a run, check:
 
 1. **Printed summary** — `PASS N/N`, `FAIL N/M`, a `(K tool)` suffix for tool-verdict failures, and any `SKIPPED (fail-fast)` tier line.
 2. **`results/grading.json`** — per-expectation verdicts, evidence, and the pass/fail summary.
-3. **`results/tool-eval.json`** — per-eval tool verdicts (present only when an eval declared `toolExpectations`).
+3. **`results/tool-eval.json`** — per-eval tool verdicts. **Always written** (`{"evals": []}` when no eval declared `toolExpectations`), so check `.evals.length`, not file existence.
 4. **`results/friction.json`** — packaging friction items; triage by severity and category (see above).
 5. **`results/transcripts/`** — executor conversation logs for failed evals; the most useful debugging artifact when an eval fails unexpectedly.
 
