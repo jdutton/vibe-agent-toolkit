@@ -76,8 +76,15 @@ describe('active-children registry (spawn-claude)', () => {
 
     killAllActiveClaudeChildren();
 
-    // POSIX kill path: SIGKILL the negated pid (whole process group).
-    expect(killSpy).toHaveBeenCalledWith(-4321, 'SIGKILL');
+    // The reap mechanism is platform-specific (killProcessTree): POSIX SIGKILLs
+    // the negated pid (whole process group); Windows has no process groups, so it
+    // shells out to `taskkill /T /F` over the tree. Assert whichever this host uses
+    // so the registry behavior is verified on every platform (not skipped on Windows).
+    if (process.platform === 'win32') {
+      expect(spawnSync).toHaveBeenCalledWith('taskkill', ['/pid', '4321', '/T', '/F']);
+    } else {
+      expect(killSpy).toHaveBeenCalledWith(-4321, 'SIGKILL');
+    }
 
     // Idempotent: a second call with an already-empty registry does nothing more.
     killSpy.mockClear();
