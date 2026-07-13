@@ -7,9 +7,10 @@
  * back to API billing regardless of its internal auth-precedence order.
  */
 
-import { spawn } from 'node:child_process';
+import { type ChildProcessByStdio } from 'node:child_process';
+import { type Readable } from 'node:stream';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safePath, spawnHardened } from '@vibe-agent-toolkit/utils';
 
 import { promptUser } from '../../cli/prompt-user.js';
 
@@ -92,8 +93,12 @@ export function runClaudeSubscription(
   });
 
   return new Promise((resolve) => {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- claude is the runtime we are explicitly testing; PATH is the standard install location
-    const child = spawn('claude', args, { env, stdio: ['ignore', 'pipe', 'pipe'] });
+    // spawnHardened (not a bare spawn) so a Windows `claude.cmd` shim launches
+    // instead of throwing EINVAL. stdio ['ignore','pipe','pipe'] → non-null out/err.
+    const child = spawnHardened('claude', args, {
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }) as ChildProcessByStdio<null, Readable, Readable>;
 
     const stdoutChunks: Buffer[] = [];
     const stderrChunks: Buffer[] = [];

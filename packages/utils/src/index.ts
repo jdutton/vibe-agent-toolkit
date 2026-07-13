@@ -8,6 +8,12 @@
 // Safe command execution (cross-platform, no shell injection)
 export * from './safe-exec.js';
 
+// Windows shell-invocation helpers (.cmd/.bat/.ps1 handling), shared by every spawn wrapper
+export * from './windows-shell.js';
+
+// Hardened async spawn (streaming stdio + correct Windows .cmd/.bat launching)
+export * from './spawn-hardened.js';
+
 // Cross-platform path utilities
 export * from './path-utils.js';
 
