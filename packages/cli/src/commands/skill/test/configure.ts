@@ -136,7 +136,7 @@ export function createSkillTestConfigureCommand(): Command {
     .description('Upsert the test block for a skill in vibe-agent-toolkit.config.yaml')
     .argument('<skill>', 'Skill name (key under skills.config)')
     .option('--auth <mode>', 'Auth mechanism: inherit | subscription | api-key | auto')
-    .option('--max-turns <n>', 'Cap on experimenter turns (positive integer)')
+    .option('--max-turns <n>', 'Per-spawn cap on executor/grader turns (positive integer)')
     .option('--max-budget-usd <n>', 'Hard USD budget cap (positive number)')
     .option('--timeout <s>', 'Wall-clock timeout in seconds (positive integer)')
     .option('--stall <s>', 'Stall-watchdog seconds (positive integer)')

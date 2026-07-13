@@ -206,7 +206,7 @@ export const TestConfigSchema = z.object({
   model: z.string().min(1).optional()
     .describe('Pinned model for reproducibility (default: a fixed model, not "whatever the caller has")'),
   maxTurns: z.number().int().positive().optional()
-    .describe('Cap on experimenter turns'),
+    .describe('Per-spawn cap on executor/grader turns'),
   maxBudgetUsd: z.number().positive().optional()
     .describe('Hard USD budget cap passed to the CLI'),
   timeout: z.number().int().positive().optional()
@@ -235,9 +235,9 @@ export const TestConfigSchema = z.object({
    * A non-zero exit code aborts the run (preflight failure, exit 2).
    */
   env: z.record(z.string(), z.string()).optional()
-    .describe('Feature B: explicit env var injections for the experimenter spawn. Values support ${fixturesDir}, ${stagedSkillDir}, ${harnessRoot}, ${resultsDir} interpolation (resolved at stage time). Protected names (PATH, auth, model, admin) cannot be overridden.'),
+    .describe('Feature B: explicit env var injections for the executor spawn. Values support ${fixturesDir}, ${stagedSkillDir}, ${harnessRoot}, ${resultsDir} interpolation (resolved at stage time). Protected names (PATH, auth, model, admin) cannot be overridden.'),
   passEnv: z.array(z.string().min(1)).optional()
-    .describe('Feature A: names of host env vars to forward to the experimenter spawn if present. Protected names are ignored with a warning.'),
+    .describe('Feature A: names of host env vars to forward to the executor spawn if present. Protected names are ignored with a warning.'),
   build: z.string().min(1).optional()
     .describe('Shell command run once, before staging, to generate build artifacts (cwd = config root)'),
 }).strict().describe('Per-skill vat skill test configuration');
