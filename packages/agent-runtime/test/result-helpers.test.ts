@@ -337,8 +337,13 @@ describe('withTiming', () => {
 
     const output = await withTiming(agentFn);
 
-    // Allow some tolerance for timing (90-110ms range)
+    // The load-bearing check is the lower bound: `withTiming` must have captured
+    // the ~100ms sleep (not report ~0). The upper bound is only a sanity ceiling
+    // against an order-of-magnitude measurement bug — keep it generous, because a
+    // 100ms sleep can stretch well past 150ms on a slow/loaded CI runner (Windows
+    // especially, with coarse ~15ms timer granularity). A tight ceiling here flakes
+    // without catching any real regression the lower bound doesn't already cover.
     expect(output.result.execution?.durationMs).toBeGreaterThanOrEqual(90);
-    expect(output.result.execution?.durationMs).toBeLessThan(150);
+    expect(output.result.execution?.durationMs).toBeLessThan(1000);
   });
 });
