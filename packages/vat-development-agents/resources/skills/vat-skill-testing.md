@@ -18,6 +18,21 @@ description: Use when running `vat skill test run`/`configure`, triaging frictio
 
 `vat skill test` reuses skill-creator's grading rubric and JSON shapes for grading output, but not its interactive driver. It is a post-packaging validation step, not a skill-authoring aid.
 
+## Cost & Cadence — Where This Fits in Your Workflow
+
+A full run is **not cheap**: on the order of ~38 headless `claude` sessions (an executor and a grader spawned per eval), ~8–13 minutes wall-clock, and real token spend. Treat `vat skill test` as a **pre-release / nightly / on-demand** check — **not** a gate on every push or commit. Keep the per-commit loop on fast static checks (lint, typecheck, unit tests); reach for `vat skill test` before a release, on a schedule, or when you've changed the skill's behavior and want a behavioral signal.
+
+**Cost-tier fail-fast (see below) helps at the margin, not the order of magnitude.** Gating expensive tiers behind cheap ones stops a broken foundation from burning tokens on hard cases, but a full green run through every declared tier is still tens of sessions and minutes — tiering changes *when you stop spending on a bad run*, not how much a good run costs.
+
+**`--dry-run` is the underused, zero-token way to validate plumbing.** It assembles the executor command — staging, model resolution, `evals.json` parsing, `toolExpectations`/`declaredExecutables` resolution — **without spawning `claude`**, so it catches config typos and broken wiring before you spend anything:
+
+```bash
+# No --i-understand-this-runs-skill-code needed — a dry-run never executes skill code
+vat skill test run my-skill --dry-run
+```
+
+Run `--dry-run` first any time you touch `evals.json`, `skills.config.<skill>.test`, or `executables`.
+
 ## The Execution Loop
 
 VAT owns the loop directly — there is no single "experimenter" agent. For **each eval**, VAT spawns a blind **executor** (the skill under test), captures its transcript **in memory**, then spawns a separate **grader** over that transcript. VAT — never the model — writes the results.
@@ -165,6 +180,23 @@ The executor is never told it's being tested — and it shouldn't be able to tel
 
 Every expectation must **fail for a wrong output**. The classic trap — which the grader is explicitly told to flag — is checking mere presence: `"the output mentions John Smith"` also passes for a hallucinated document. Check *correctness*, tied to the input, not presence. And pair positive assertions with **negative** ones (`"does NOT claim every row reconciles"`): one-sided evals create one-sided optimization. If an assertion would pass for an obviously broken result, it's not pulling its weight.
 
+The harness itself is only as sharp as the evals you write — a passing `toolExpectations`/`expectations` grade tells you nothing if the assertion couldn't have failed. **Antipattern: a presence-only check with no negative counterpart.** `"the output mentions the claim number"` or `"the output includes a reconciliation summary"`, on its own, passes for a hallucinated claim number or a summary that reaches the wrong conclusion — it can't distinguish "did the right thing" from "said the right *words*." `vat skill test` emits an advisory lint warning when **every** expectation in an eval is presence-only ("mentions/includes/contains/references/appears/states…") with no discriminating or negative cue and no `toolExpectations` declared. It's a nudge, not a gate — it never blocks a run or changes the exit code — so treat it as a prompt to strengthen the eval, not a substitute for writing discriminating expectations in the first place.
+
+Before/after, same eval:
+
+```json
+// Before — antipattern: also passes for a hallucinated claimant
+"expectations": [
+  "The output mentions John Smith as the claimant."
+]
+
+// After — discriminating: fails a wrong or invented result
+"expectations": [
+  "The output identifies John Smith as the claimant, matching claimant_name in the input file.",
+  "The output does NOT invent a claimant not present in the input file."
+]
+```
+
 ### Cover real scenarios; aim for ≥3 evals
 
 Anthropic's bar is *at least three evaluations, drawn from real usage and past failures, tested across models*. Group evals by what they exercise — dxa, the reference adopter, uses three categories:
@@ -193,11 +225,22 @@ Output correctness is not the whole story: a skill can produce the right answer 
 |---|---|
 | `mustRun` | each named executable was invoked at least once |
 | `mustNotRun` | each named executable was **never** invoked (e.g. `rm`, a network CLI) |
+| `mustSucceed` | each named executable was invoked **and** did not fail (its invoking `tool_result` was not an error) |
 | `sequence` | the described steps happened in order |
 
 Names are matched leniently — the grader recognizes varied launch forms of the *same* executable (`uv run dxa.py`, `python3 dxa.py`, `./dxa`, `node dist/dxa.mjs`) as all "running `dxa`", so you assert the tool, not an exact command string.
 
-> **`mustRun` means *invoked*, not *succeeded*.** The verdict is judged from the transcript, which records that a tool was *called* and how — it cannot see a script's exit code through a shell wrapper (a Bash `tool_result.is_error` is `false` even for a command that exits non-zero). So a skill that invokes a **broken** executable and works around the failure still satisfies `mustRun`. If you need "the tool ran *and succeeded*", assert it in a prose `expectations` entry for now (e.g. *"the output reflects a successful dxa run, not an error fallback"*); a deterministic, shim-backed `mustSucceed` is a planned follow-up (issue #148).
+> **`mustRun` means *invoked*, not *succeeded*.** The verdict is judged from the transcript, which records that a tool was *called* and how — it cannot see a script's exit code through a shell wrapper (a Bash `tool_result.is_error` is `false` even for a command that exits non-zero). So a skill that invokes a **broken** executable and works around the failure still satisfies `mustRun`. Use `mustSucceed` (below) when you need "ran *and* succeeded."
+
+**`mustSucceed`** closes most of that gap — it asserts the tool ran and its invoking `tool_result` was not an error — but it is still **transcript-judged**, not a captured real exit code. Be honest with yourself about the limit: a skill that swallows a non-zero exit (`cmd || true`, catching and silently ignoring a subprocess failure) can still read as succeeded, because the grader is judging what the transcript shows, not re-executing anything. For a hard guarantee, pair `mustSucceed` with a discriminating output `expectations` entry (e.g. *"the output reflects a successful dxa run, not an error fallback"*). Where it applies, prefer `mustSucceed` over the older workaround of asserting "ran and succeeded" purely in prose — it gives you a structured verdict in `tool-eval.json` instead of one entangled with the output grade:
+
+```json
+"toolExpectations": {
+  "mustRun": ["dxa"],
+  "mustSucceed": ["dxa"],
+  "mustNotRun": ["rm"]
+}
+```
 
 **Declare your executables so the grader knows their names.** A `mustRun: ["dxa"]` resolves against the skill's declared executables in `skills.config.<skill>.executables` — each entry is `{ path, kind, howInvoked }` (`kind` ∈ `node|python|shell|pwsh|binary`). The referenced name matches the `path` basename with its extension stripped (`scripts/dxa.py` → `dxa`) or the exact `path`. These flow into the grader prompt as recognition hints:
 
@@ -222,6 +265,8 @@ Give an eval a numeric `tier` to order the run by cost. VAT runs **ascending tie
 ### How grading works (so you can trust the verdict)
 
 For each eval a separate headless **grader** judges the executor's transcript and output files against the `expectations`, requiring **evidence** per verdict, with **no partial credit** and the burden of proof on the expectation. It grades the *artifact*, not the agent's self-reported success — and it is a different agent and (by default) a different model from the executor, so a skill cannot grade itself. VAT then **recomputes** the pass/fail counts from the per-expectation flags rather than trusting any self-reported summary (a mismatch is a loud `GradingSkewError`, not a silent pass). The reported verdict is **composite**: output expectations AND every declared tool verdict must pass, and the run fails closed (exit `4`) if any of `grading.json`/`friction.json`/`tool-eval.json` is missing or invalid after the merge. Full contract: `docs/skill-test-grading-schema.md`.
+
+**A single red eval is a signal to investigate, not proof of a regression.** The grader is a model judging free-form transcript evidence, and verdicts wobble — the same eval, same skill, same code, can flip pass/fail between two runs. Do **not** wire `vat skill test` as a hard 100%-pass CI gate; leave headroom (see **Cover real scenarios** above) and treat one failing eval in an otherwise-green suite as "read `results/grading.json` and the transcript," not "the build is broken." This is exactly why the design above leans the way it does: evidence-required, no-partial-credit grading with the burden of proof on the expectation, and a self-contradictory or missing grade **fails closed** (`GradingSkewError` / exit `4`) instead of being silently waved through as a pass. The strictness is there so that when a FAIL shows up, it's telling you something real to look at — not so that every run should be expected to come back all-green.
 
 ## Security Caveat and Required Acknowledgment
 

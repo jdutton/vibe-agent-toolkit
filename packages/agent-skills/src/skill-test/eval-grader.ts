@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath, spawnHeadlessClaude } from '@vibe-agent-toolkit/utils';
 
@@ -7,6 +7,7 @@ import type { ToolExpectations } from './eval-inputs.js';
 import { InternalHarnessError } from './exit-codes.js';
 import { assertGraderPromptInvariants, buildGraderPrompt } from './grader-prompt.js';
 import { GradingNonceError } from './grading-adapter.js';
+import { computeToolPassed } from './tool-eval-schema.js';
 
 export interface RunGraderInput {
   evalId: string;
@@ -158,23 +159,7 @@ export async function runGraderForEval(input: RunGraderInput): Promise<EvalFragm
     );
   }
 
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fragmentOut is our own derived path (joinUnderRoot-guarded)
-  if (!existsSync(fragmentOut)) {
-    throw new InternalHarnessError(
-      `Grader exited (status ${spawnResult.status}) without writing a fragment at ${fragmentOut} for eval "${input.evalId}".`,
-    );
-  }
-
-  let raw: unknown;
-  try {
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fragmentOut is our own derived path (joinUnderRoot-guarded)
-    raw = JSON.parse(readFileSync(fragmentOut, 'utf-8'));
-  } catch (err) {
-    throw new EvalFragmentError(
-      `grader fragment for eval "${input.evalId}" at ${fragmentOut} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
-    );
-  }
-
+  const raw = readAndConsumeFragmentFile(fragmentOut, input.evalId, spawnResult.status);
   const fragment = parseEvalFragment(raw, fragmentWarnRouter(input.onProgress));
 
   // Integrity gate: a missing/wrong nonce means this fragment was not produced
@@ -186,5 +171,80 @@ export async function runGraderForEval(input: RunGraderInput): Promise<EvalFragm
     );
   }
 
+  assertToolVerdictConsistent(input.evalId, input.toolExpectations, fragment.tool);
+
   return fragment;
+}
+
+/**
+ * Read the grader's fragment JSON into memory and unlink it immediately —
+ * consume-on-read. Split out of {@link runGraderForEval} to keep its cognitive
+ * complexity within budget. Throws {@link InternalHarnessError} if the grader
+ * wrote no fragment, {@link EvalFragmentError} if it is not valid JSON.
+ *
+ * The unlink is the security-relevant half: the grader dir is same-uid (see
+ * `resolveGraderOutDir`), so a fragment left on disk lets skill code that
+ * survived the process-group kill read the echoed nonce at leisure and forge
+ * LATER fragments. Consuming it on read leaves no persisted copy — exposure
+ * shrinks to each fragment's own read window (no cross-eval harvest). The read
+ * here is the ONLY read of the file; all downstream logic runs off the returned
+ * value. Best-effort: a failed unlink is not a run failure (end-of-run cleanup
+ * removes the whole dir), and true isolation from same-uid code is issue #149.
+ */
+function readAndConsumeFragmentFile(fragmentOut: string, evalId: string, status: number): unknown {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- fragmentOut is our own derived path (joinUnderRoot-guarded)
+  if (!existsSync(fragmentOut)) {
+    throw new InternalHarnessError(
+      `Grader exited (status ${status}) without writing a fragment at ${fragmentOut} for eval "${evalId}".`,
+    );
+  }
+  let raw: unknown;
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fragmentOut is our own derived path (joinUnderRoot-guarded)
+    raw = JSON.parse(readFileSync(fragmentOut, 'utf-8'));
+  } catch (err) {
+    throw new EvalFragmentError(
+      `grader fragment for eval "${evalId}" at ${fragmentOut} is not valid JSON: ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- fragmentOut is our own derived path (joinUnderRoot-guarded)
+    unlinkSync(fragmentOut);
+  } catch {
+    // Swallow: cleanup removes the grader dir regardless.
+  }
+  return raw;
+}
+
+/**
+ * Fail-open guards on the grader's tool verdict, split out of
+ * {@link runGraderForEval} to keep its cognitive complexity within budget:
+ *
+ * - Fix #1: the eval DECLARED tool expectations, so the grader was asked to
+ *   judge them and emit a `tool` verdict — a fragment WITHOUT one means the
+ *   grader silently skipped half its job. That is grader breakage (exit 1),
+ *   never a laundered pass: an absent tool block must not merge as "there were
+ *   no tool expectations to check".
+ * - Fix #3: the grader self-reports `tool.passed`, but we never trust it —
+ *   recompute from the sub-checks via {@link computeToolPassed}. A `passed`
+ *   that disagrees with its own sub-checks is grader malfunction (a false green
+ *   or a false red), surfaced loudly rather than merged. Mirrors
+ *   `reconcileGrading`'s summary/expectations reconciliation (grading-adapter.ts).
+ */
+function assertToolVerdictConsistent(
+  evalId: string,
+  toolExpectations: RunGraderInput['toolExpectations'],
+  tool: EvalFragment['tool'],
+): void {
+  if (toolExpectations !== undefined && tool === undefined) {
+    throw new InternalHarnessError(
+      `Grader for eval "${evalId}" was asked to judge declared tool expectations but returned no \`tool\` verdict in its fragment.`,
+    );
+  }
+  if (tool !== undefined && computeToolPassed(tool) !== tool.passed) {
+    throw new InternalHarnessError(
+      `Grader for eval "${evalId}" emitted a tool verdict whose \`passed\` (${tool.passed}) ` +
+        `disagrees with its own sub-checks (recomputed ${computeToolPassed(tool)}).`,
+    );
+  }
 }

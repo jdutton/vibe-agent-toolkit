@@ -93,6 +93,10 @@ export const EvalEntrySchema = z
       .object({
         mustRun: z.array(z.string().min(1)).optional(),
         mustNotRun: z.array(z.string().min(1)).optional(),
+        // Each named executable must have RUN and its invoking tool_result must
+        // NOT be an error (feature #148). Judged from the transcript by the
+        // grader — see tool-eval-schema.ts's ToolSucceedCheckSchema.
+        mustSucceed: z.array(z.string().min(1)).optional(),
         sequence: z.array(z.string().min(1)).optional(),
       })
       .strict()

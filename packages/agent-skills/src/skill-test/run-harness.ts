@@ -19,6 +19,7 @@ import { fileURLToPath } from 'node:url';
 import type { SkillSourceDescriptor } from '@vibe-agent-toolkit/resources';
 import {
   getToolVersion,
+  killAllActiveClaudeChildren,
   mkdirSyncReal,
   normalizedTmpdir,
   probeAuthStatus,
@@ -38,6 +39,7 @@ import { runExecutorForEval } from './eval-executor.js';
 import type { EvalFragment } from './eval-fragment.js';
 import { runGraderForEval } from './eval-grader.js';
 import { EvalInputError, parseEvalSuite, stageEvalWorkspaces, type EvalEntry, type EvalSuite } from './eval-inputs.js';
+import { lintEvalExpectations } from './eval-lint.js';
 import { writeEvalsTemplate } from './evals-template.js';
 import {
   BootstrapNeededError,
@@ -661,6 +663,20 @@ function attemptStageWorkspaces(
   }
 }
 
+/**
+ * Advisory (never-fatal) lint pass over the parsed suite: nudges authors away
+ * from presence-only expectations ("mentions/includes …") that a hallucinated
+ * or wrong-for-the-right-reason answer could still satisfy (issue #145
+ * follow-up). Purely additive stderr noise, emitted before any spawn — never
+ * affects exitCode. Extracted so the Step 5.5 call site stays a single line
+ * (keeps the orchestrator's cognitive complexity budget).
+ */
+function emitEvalLintWarnings(evals: EvalEntry[]): void {
+  for (const lintWarning of lintEvalExpectations(evals)) {
+    process.stderr.write(`warning: ${lintWarning.message}\n`);
+  }
+}
+
 interface ResolveDeclaredChildEnvInput {
   opts: RunHarnessOptions;
   resolvedAuth: ResolvedAuth;
@@ -867,15 +883,23 @@ export function partitionFragmentsByArm(fragments: EvalFragment[]): {
 
 /**
  * The vat-only grader dir for a run: `<tmp>/vat-skill-grade-<dirToken>/`. It is
- * deliberately OUTSIDE the harness root (the skill's `--add-dir` sandbox), so
- * untrusted skill code that ran in the executor's sandbox cannot forge, delete,
- * or read the grader fragments the verdict relies on. Pure (derives a path only).
+ * deliberately OUTSIDE the harness root (the skill's `--add-dir` sandbox) and
+ * created 0700, so it is invisible to Claude's own permission model and to any
+ * OTHER OS user. Pure (derives a path only).
  *
- * `dirToken` is a random directory-naming token that is DISTINCT from the run's
- * integrity nonce. The directory name (and the grader's `--add-dir` argv) is
- * world-listable in the shared OS temp dir, so it must NEVER encode the secret
- * nonce — the nonce travels only via the grader's stdin prompt. Conflating the
- * two would let same-user skill code read the nonce straight off `ls <tmp>`.
+ * SCOPE OF THE GUARANTEE — read honestly. `--add-dir`/`bypassPermissions` is
+ * Claude's permission model, NOT an OS sandbox: the executor's skill code runs
+ * as the SAME OS uid as vat, so it CAN read a 0700 dir this process owns. The
+ * layered defenses here — dir outside the sandbox, named by an unpredictable
+ * `dirToken` (distinct from the integrity nonce, which never touches the dir
+ * name or any argv and travels only via grader stdin), the nonce echoed back
+ * per fragment, and each fragment file unlinked the instant vat reads it — RAISE
+ * THE BAR against same-uid forgery (a forger must now win a per-fragment
+ * read→overwrite race against a secret it cannot predict, with no persisted copy
+ * to harvest at leisure). They do NOT amount to true isolation from same-uid
+ * code. The complete fix is running the grader under a SEPARATE OS uid /
+ * container; that is tracked as a follow-up (see CHANGELOG "Security" notes) and
+ * is the only thing that closes the residual race outright.
  */
 export function resolveGraderOutDir(dirToken: string): string {
   return safePath.join(normalizedTmpdir(), `vat-skill-grade-${dirToken}`);
@@ -1273,6 +1297,15 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
   // fires mid-pipeline reaps it too, not just the normal finally.
   let graderOutDir: string | undefined;
   const cleanup = (): void => {
+    // Reap any still-in-flight executor/grader children FIRST. On the concurrent
+    // error path `Promise.all` rejects without cancelling its siblings, and a
+    // `process.exit` tears down their in-process watchdog timers — so without
+    // this, up to `concurrency-1` detached `claude` sessions would be orphaned
+    // and keep billing tokens. Kill them before removing the dirs they write to.
+    // NOTE: the registry is a module-level singleton, so this assumes one run per
+    // process (true for the CLI). A library embedding two concurrent runs in one
+    // process would need per-run child scoping instead.
+    killAllActiveClaudeChildren();
     lock.release();
     cleanupHarness(harnessRoot, { keep: opts.keep === true, created: harnessCreated });
     removeGraderOutDir(graderOutDir);
@@ -1342,6 +1375,8 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     const workspaceStageResult = attemptStageWorkspaces(evalsPath, harnessRoot);
     if ('exitCode' in workspaceStageResult) return workspaceStageResult;
     const { workspacesRoot, declaredEvalCount, suite } = workspaceStageResult;
+
+    emitEvalLintWarnings(suite.evals);
 
     // Step 6: Enforce the §12 security ack (must pass --i-understand-this-runs-skill-code).
     // Only enforced when not a dry-run and not already acknowledged.

@@ -1,4 +1,4 @@
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { Readable } from 'node:stream';
 
 import which from 'which';
@@ -72,6 +72,37 @@ export function killProcessTree(child: { pid?: number | undefined }): void {
   }
 }
 
+/**
+ * Registry of currently in-flight `claude` child processes, keyed by the
+ * `ChildProcess` object itself. A child is registered immediately after
+ * spawn and unregistered wherever it settles (normal 'close', child-process
+ * 'error', or the prompt-stream error path) — a normal completed run always
+ * leaves this Set empty.
+ *
+ * This exists for the concurrent pipeline's error path (spec §orphan-reap):
+ * when one worker in a bounded pool throws, `Promise.all` rejects without
+ * cancelling its siblings, and the top-level handler calls `process.exit(1)`
+ * — tearing down the in-process wall/stall watchdog timers before they fire.
+ * Without this registry, up to `concurrency - 1` in-flight `claude` sessions
+ * would be orphaned (detached process groups) and keep billing tokens until
+ * they self-terminate. The orchestrator's error handler calls
+ * {@link killAllActiveClaudeChildren} before exiting to reap them.
+ */
+const activeClaudeChildren = new Set<ChildProcess>();
+
+/**
+ * SIGKILL every currently in-flight `claude` child (and its process tree, via
+ * {@link killProcessTree}) and clear the registry. Idempotent — safe to call
+ * when the registry is already empty (e.g. every child has already settled,
+ * or this has already been called once on the current error path).
+ */
+export function killAllActiveClaudeChildren(): void {
+  for (const child of activeClaudeChildren) {
+    killProcessTree(child);
+  }
+  activeClaudeChildren.clear();
+}
+
 export interface SpawnHeadlessOptions extends ClaudeSpawnArgs {
   /**
    * The experimenter prompt, held IN MEMORY and streamed to the child's stdin
@@ -123,6 +154,9 @@ export async function spawnHeadlessClaude(opts: SpawnHeadlessOptions): Promise<S
       // direct child. Windows has no process groups (taskkill handles the tree).
       detached: process.platform !== 'win32',
     });
+    // Register immediately after spawn so the child is reapable by
+    // killAllActiveClaudeChildren() for the entire time it can be in flight.
+    activeClaudeChildren.add(child);
     let timedOut = false;
     let stalled = false;
 
@@ -162,6 +196,10 @@ export async function spawnHeadlessClaude(opts: SpawnHeadlessOptions): Promise<S
       // here via 'close'; error paths call it directly) so an unconsumed in-memory
       // stream is torn down. On a clean run the stream has already ended — no-op.
       promptStream.destroy();
+      // This is the single choke point every settle path (close/error) runs
+      // through, so unregistering here guarantees a normally-completed run
+      // leaves the registry empty — no reference leak.
+      activeClaudeChildren.delete(child);
     };
 
     promptStream.on('error', err => {

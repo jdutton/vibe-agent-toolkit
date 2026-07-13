@@ -142,6 +142,26 @@ describe('parseEvalSuite', () => {
     });
   });
 
+  it('parses a mustSucceed tool-expectation (feature #148) and surfaces it on EvalEntry', () => {
+    const withMustSucceed = JSON.stringify({ skill_name: 'demo', evals: [
+      {
+        id: 1,
+        prompt: 'p',
+        expectations: ['e'],
+        toolExpectations: { mustRun: ['dxa'], mustSucceed: ['dxa'] },
+      },
+    ] });
+    const suite = parseEvalSuite(withMustSucceed);
+    expect(suite.evals[0]?.toolExpectations).toEqual({ mustRun: ['dxa'], mustSucceed: ['dxa'] });
+  });
+
+  it('rejects an empty mustSucceed executable name (each must be a non-empty name)', () => {
+    const badName = JSON.stringify({ skill_name: 'demo', evals: [
+      { id: 1, prompt: 'p', expectations: ['e'], toolExpectations: { mustSucceed: [''] } },
+    ] });
+    expect(() => parseEvalSuite(badName)).toThrow(EvalInputError);
+  });
+
   it('rejects an unknown key inside toolExpectations (the sub-object is VAT-defined, so it is strict)', () => {
     const badSubKey = JSON.stringify({ skill_name: 'demo', evals: [
       {

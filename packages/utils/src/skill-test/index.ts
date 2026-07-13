@@ -20,6 +20,7 @@ export {
 } from './auth-resolver.js';
 export {
   assembleClaudeArgs,
+  killAllActiveClaudeChildren,
   spawnHeadlessClaude,
   type ClaudeSpawnArgs,
   type SpawnHeadlessOptions,

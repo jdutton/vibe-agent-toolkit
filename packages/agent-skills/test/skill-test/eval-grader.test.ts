@@ -174,7 +174,18 @@ describe('runGraderForEval', () => {
 
   describe('toolExpectations / declaredExecutables thread-through (issue #145 Phase T)', () => {
     it('reaches buildGraderPrompt when provided', async () => {
-      const { spawn, calls } = stubWritingFragment(graderOutDir, validFragmentFor(EVAL_ID, NONCE));
+      // The eval declares toolExpectations, so the fragment must carry a `tool`
+      // verdict whose `passed` agrees with its sub-checks (fixes #1/#3).
+      const fragment = {
+        ...validFragmentFor(EVAL_ID, NONCE),
+        tool: {
+          mustRun: [{ name: 'dxa', ran: true }],
+          mustNotRun: [{ name: 'rm', ran: false }],
+          sequence: [{ steps: ['parse', 'report'], satisfied: true }],
+          passed: true,
+        },
+      };
+      const { spawn, calls } = stubWritingFragment(graderOutDir, fragment);
 
       await runGraderForEval(
         baseInput(graderOutDir, {
@@ -217,6 +228,43 @@ describe('runGraderForEval', () => {
       await runGraderForEval(baseInput(graderOutDir, { spawn }));
 
       expect(calls[0]?.prompt).not.toMatch(/"tool"/);
+    });
+
+    it('toolExpectations declared but fragment omits `tool`: throws InternalHarnessError (fail-open fix #1)', async () => {
+      // The grader was asked to judge tool expectations but returned no tool verdict —
+      // an absent block must NOT launder into a silent pass.
+      const { spawn } = stubWritingFragment(graderOutDir, validFragmentFor(EVAL_ID, NONCE));
+
+      await expectInternalHarnessError(() =>
+        runGraderForEval(baseInput(graderOutDir, { spawn, toolExpectations: { mustRun: ['dxa'] } })),
+      );
+    });
+
+    it('tool.passed disagrees with its own sub-checks: throws InternalHarnessError (fail-open fix #3)', async () => {
+      // mustRun.ran=false recomputes to passed=false, but the grader claimed passed=true.
+      const fragment = {
+        ...validFragmentFor(EVAL_ID, NONCE),
+        tool: { mustRun: [{ name: 'dxa', ran: false }], passed: true },
+      };
+      const { spawn } = stubWritingFragment(graderOutDir, fragment);
+
+      await expectInternalHarnessError(() =>
+        runGraderForEval(baseInput(graderOutDir, { spawn, toolExpectations: { mustRun: ['dxa'] } })),
+      );
+    });
+
+    it('a mustSucceed tool verdict whose `passed` agrees with its sub-checks parses through', async () => {
+      const fragment = {
+        ...validFragmentFor(EVAL_ID, NONCE),
+        tool: { mustSucceed: [{ name: 'dxa', succeeded: true, evidence: 'no is_error' }], passed: true },
+      };
+      const { spawn } = stubWritingFragment(graderOutDir, fragment);
+
+      const result = await runGraderForEval(
+        baseInput(graderOutDir, { spawn, toolExpectations: { mustSucceed: ['dxa'] } }),
+      );
+
+      expect(result).toEqual(fragment);
     });
   });
 });

@@ -146,6 +146,34 @@ describe('buildGraderPrompt — toolExpectations (issue #145 Phase T)', () => {
     expect(prompt).not.toMatch(/mustNotRun/);
     expect(prompt).not.toMatch(/tool expectations/i);
   });
+
+  it('emits a mustSucceed section naming each executable and the tool_result is_error basis (feature #148)', () => {
+    const prompt = buildGraderPrompt({
+      ...opts,
+      toolExpectations: { mustRun: ['dxa'], mustSucceed: ['dxa', 'ruff'] },
+    });
+    expect(prompt).toMatch(/MUST have run AND succeeded/);
+    expect(prompt).toMatch(/is_error/);
+    expect(prompt).toContain('ruff');
+    // The tool-object shape spec must name mustSucceed so the grader emits it.
+    expect(prompt).toMatch(/"mustSucceed"/);
+    // Honest caveat that transcript-judged success can miss a swallowed non-zero exit.
+    expect(prompt).toMatch(/\|\| true/);
+  });
+
+  it('nonce-fences the untrusted subject manifest when declaredExecutables are present (injection fix #4)', () => {
+    const prompt = buildGraderPrompt(toolOpts);
+    expect(prompt).toContain(`BEGIN SUBJECT MANIFEST ${toolOpts.nonce}`);
+    expect(prompt).toContain(`END SUBJECT MANIFEST ${toolOpts.nonce}`);
+    expect(prompt).toMatch(/untrusted/i);
+    // A generic (non-nonced) close delimiter an injected manifest could emit is NOT present.
+    expect(prompt).not.toContain('END SUBJECT MANIFEST===');
+  });
+
+  it('omits the manifest fence when no declaredExecutables are supplied', () => {
+    const prompt = buildGraderPrompt({ ...opts, toolExpectations: { mustRun: ['dxa'] } });
+    expect(prompt).not.toMatch(/SUBJECT MANIFEST/);
+  });
 });
 
 describe('assertGraderPromptInvariants', () => {
@@ -192,5 +220,22 @@ describe('assertGraderPromptInvariants', () => {
 
   it('a normally-built prompt still satisfies the invariants once its transcript is excised', () => {
     expect(() => assertGraderPromptInvariants(buildGraderPrompt(opts), opts.transcript)).not.toThrow();
+  });
+
+  it('throws when a subject-manifest block is present but NOT nonce-fenced (injection fix #4)', () => {
+    // A regressed builder that interpolated the manifest RAW: the intro line is
+    // present but neither fence marker is — the invariant must fire.
+    const unfenced =
+      'Grade the eval, write the fragment, then STOP. Never open a browser or viewer. Do not iterate. runNonce: x. ' +
+      'Declared executables and how they are typically invoked (a recognition HINT):\n  - evil (python): typically invoked as `x`';
+    expect(() => assertGraderPromptInvariants(unfenced)).toThrow(PromptInvariantError);
+  });
+
+  it('does NOT fire the manifest invariant when no manifest block is present (toolExpectations, no declaredExecutables)', () => {
+    // A real prompt with tool expectations but NO declaredExecutables has no
+    // manifest block, so the conditional fence invariant must not fire.
+    const noManifest = buildGraderPrompt({ ...opts, toolExpectations: { mustRun: ['dxa'] } });
+    expect(noManifest).not.toMatch(/SUBJECT MANIFEST/);
+    expect(() => assertGraderPromptInvariants(noManifest, opts.transcript)).not.toThrow();
   });
 });
