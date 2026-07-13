@@ -9,7 +9,13 @@
 
 import { cpSync, existsSync, rmSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import {
+  detectInvocationFromTranscript,
+  mkdirSyncReal,
+  normalizedTmpdir,
+  safePath,
+  toForwardSlash,
+} from '@vibe-agent-toolkit/utils';
 
 import { promptForManualOutcome } from '../../cli/prompt-user.js';
 import type { StagedSkill } from '../../corpus/fetch-sources.js';
@@ -19,8 +25,6 @@ import type {
   Target,
 } from '../../types.js';
 import type { InvokeOpts, RuntimeDriver } from '../driver.js';
-
-import { detectInvocationFromTranscript } from './transcript.js';
 
 export interface ManualDriverConfig {
   target: Target;
@@ -126,7 +130,15 @@ export class ManualDriverBase implements RuntimeDriver {
     // no tool_use events, so detection falls through to substring matching
     // against opts.expected.invocationSignals.
     const invocationDetected = detectInvocationFromTranscript(
-      { text: outcome.outputText, toolUseEvents: [], errors: [], raw: [] },
+      {
+        text: outcome.outputText,
+        toolUseEvents: [],
+        errors: [],
+        raw: [],
+        toolUses: [],
+        toolResults: [],
+        rateLimited: false,
+      },
       opts.expected.invocationSignals,
     );
 

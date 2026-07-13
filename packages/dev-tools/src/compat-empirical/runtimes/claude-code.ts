@@ -25,7 +25,13 @@
 
 import { writeFileSync } from 'node:fs';
 
-import { isToolAvailable, safePath, safeExecResult } from '@vibe-agent-toolkit/utils';
+import {
+  detectInvocationFromTranscript,
+  isToolAvailable,
+  parseStreamJsonTranscript,
+  safePath,
+  safeExecResult,
+} from '@vibe-agent-toolkit/utils';
 
 import type { StagedSkill } from '../corpus/fetch-sources.js';
 import type {
@@ -38,7 +44,6 @@ import type {
 import type { InvokeOpts, RuntimeDriver } from './driver.js';
 import { runClaudeSubscription, type ClaudeSpawnResult } from './shared/claude-cli.js';
 import { createTempProfile, installSkillIntoProfile, teardownTempProfile } from './shared/temp-profile.js';
-import { detectInvocationFromTranscript, parseStreamJsonTranscript } from './shared/transcript.js';
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 

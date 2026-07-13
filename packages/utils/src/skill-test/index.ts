@@ -25,3 +25,8 @@ export {
   type SpawnHeadlessOptions,
   type SpawnResult,
 } from './spawn-claude.js';
+export {
+  detectInvocationFromTranscript,
+  parseStreamJsonTranscript,
+  type ParsedTranscript,
+} from './transcript.js';
