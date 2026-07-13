@@ -1,9 +1,15 @@
 # grading.json — the skill-test grading contract
 
-`vat skill test run` spawns a headless Claude "experimenter" that, for each eval,
-dispatches an executor, grades the executor's output with skill-creator's
-`grader.md` rubric, and writes the result to **`grading.json`** in the harness
-`results/` directory. vat then reads that file to report pass/fail.
+For each eval, `vat skill test run` spawns a blind **executor** (a headless Claude
+running the skill under test), captures its transcript **in memory**, then spawns
+a separate **grader** that judges that transcript against skill-creator's
+`grader.md` rubric and writes a per-eval **fragment**. vat — the sole writer of
+`results/` — merges the WITH-arm fragments into **`grading.json`** in the harness
+`results/` directory, then reads that file to report pass/fail. (Splitting the
+executor from the grader, and keeping vat the sole writer, is what stops an
+untrusted skill from grading itself; see [issue #145].)
+
+[issue #145]: https://github.com/jdutton/vibe-agent-toolkit/issues/145
 
 This document is the canonical, machine-checkable definition of that file's
 shape. **vat does not tolerate a malformed `grading.json`** — a wrong top-level
@@ -66,13 +72,14 @@ what we depend on, carry the rest). Extra fields are **not** "bad JSON"; a wrong
 top-level *structure* is.
 
 `runNonce` (string) is optional in the schema but **required by the harness at
-run time**: `vat skill test run` stamps a secret per-run nonce into the
-experimenter prompt (delivered only via stdin, never written to disk) and the
-experimenter must copy it verbatim into a top-level `runNonce`. The harness
-rejects a grading.json whose `runNonce` is missing or wrong — this is how a
-forged or left-behind grading written by untrusted skill code in the shared
-sandbox is detected. External tooling validating a grading.json off-line need
-not supply it.
+run time**: `vat skill test run` stamps a secret per-run nonce into every
+**grader** prompt (delivered only via stdin, never written to disk or an argv)
+and each grader must copy it verbatim into its fragment's top-level `runNonce`.
+vat re-verifies the nonce on every fragment as it merges — a missing or wrong
+nonce aborts the run. This is how a forged or left-behind result written by
+untrusted skill code in the shared sandbox is detected: that code never receives
+the nonce, so it cannot mint a fragment vat will accept. External tooling
+validating a grading.json off-line need not supply it.
 
 ## What is rejected
 
@@ -95,11 +102,15 @@ an `evals` array.
 
 ## How the flat shape is enforced
 
-1. **Producer side:** the experimenter prompt
-   (`DEFAULT_EXPERIMENTER_PROMPT` in
-   [`experimenter-prompt.ts`](../packages/agent-skills/src/skill-test/experimenter-prompt.ts))
-   pins the shape with an explicit instruction and example, and
-   `assertPromptInvariants` fails any prompt override that drops the pin.
+1. **Producer side:** vat itself is the sole producer of `grading.json` —
+   `mergeFragmentsToGrading`
+   ([`fragment-merge.ts`](../packages/agent-skills/src/skill-test/fragment-merge.ts))
+   collects every WITH-arm grader fragment and flattens their per-eval
+   `expectations` into the single top-level `expectations` array above. Each
+   grader fragment's shape is pinned by the grader prompt (`buildGraderPrompt` in
+   [`grader-prompt.ts`](../packages/agent-skills/src/skill-test/grader-prompt.ts)),
+   and `assertGraderPromptInvariants` fails a built prompt that drops a required
+   directive.
 2. **Consumer side:** `parseGradingJson`
    ([`grading-adapter.ts`](../packages/agent-skills/src/skill-test/grading-adapter.ts))
    validates against `GradingReportSchema` and throws `GradingSkewError` on any

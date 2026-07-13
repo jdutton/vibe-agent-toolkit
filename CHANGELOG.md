@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`vat skill test` — transcript-grounded evaluation with a separate executor and grader (issue #145).** Each eval now runs in two roles instead of one self-grading agent: a blind **executor** (the skill under test) performs the eval task and its transcript is captured **in memory**, then a separate **grader** judges that transcript against skill-creator's rubric and emits a per-eval fragment. **vat is the sole writer** of `results/` — it merges the grader fragments into `grading.json`/`friction.json`/`tool-eval.json` after re-verifying a secret per-run nonce carried in each fragment. This is the anti-forgery model: the executor never receives the nonce (it is delivered only via the grader's stdin, never written to disk or an argv), so untrusted skill code running in the shared sandbox cannot mint a result vat will accept, forge its own passing grade, or tamper with the transcript. A grader-side internal failure or a missing/forged nonce aborts the run with the harness-broke exit **1** and is never laundered into a pass/fail verdict.
+- **Separate grader model — new `graderModel` config and `--grader-model` flag.** The existing `model` config (and `--model`) now selects the **executor** model; a new `graderModel` (and `--grader-model <id>`, default `claude-sonnet-5`) independently selects the **grader** model, so you can run the skill under one model and grade under a stronger/cheaper one. `--concurrency <n>` bounds how many evals run in parallel (each retrying a rate-limit with backoff).
+- **Declared tool-expectations — assert which tools/executables a skill should (and shouldn't) invoke.** An eval may declare a `toolExpectations` block (`mustRun` / `mustNotRun` / `sequence`) in `evals.json`; the grader judges it **from the transcript** (preferring the structured `tool_use`/`tool_result` entries, and recognizing varied launch forms of the same executable — `uv run dxa.py`, `python3 dxa.py`, `./dxa`, `node dist/dxa.mjs` — as the same tool) and emits a tool verdict. vat writes these to a new **`tool-eval.json`** (kept in its own channel — tool verdicts never leak into `grading.json`). To help the grader recognize a skill's own executables, the skill packaging config accepts a `declaredExecutables` manifest (`{ path, kind, howInvoked }`); those flow into the grader prompt as recognition hints.
+- **Composite verdict — output + tool expectations, fail-closed.** The reported pass/fail now ANDs the per-expectation output grade with every tool verdict, and the run fails closed (exit **4**) if any of `grading.json`/`friction.json`/`tool-eval.json` is missing, unparseable, or invalid after the merge. The summary suffix names tool failures (e.g. `FAIL 1/1 (1 tool)`).
+- **Cost-tiered fail-fast — spend on cheap evals first.** Evals may declare a numeric `tier`; the harness runs ascending tiers (cheapest first), bounded-parallel within a tier, and **gates between tiers** — once a cheaper tier fails a gating expectation the higher (more expensive) tiers are **SKIPPED**, never graded and never counted as passed. A fail-fast-gated run is an eval failure (exit **4**), and the summary names the skipped tier and eval count.
+
+### Changed
+
+- **`model` in a skill's `test:` config now selects the executor, not a single self-grading agent.** With the executor/grader split above, a `test.model` value drives the skill-under-test run; grading defaults to `graderModel` (`claude-sonnet-5`) unless you set it. Existing single-`model` configs keep working — they just no longer also determine the grader.
+
+### Security
+
+- **The per-run grader nonce is kept off disk and off argv.** The vat-only grader directory is named by an independent random token (not the integrity nonce), and the nonce travels only through the grader's stdin prompt. This closes a window where same-user skill code running with bypassed permissions could read the nonce from the world-listable OS temp-dir name (or a child process's argv) and forge a valid-nonce fragment.
+- **The grader's transcript fence is bound to the secret nonce.** The untrusted transcript is fenced between `===BEGIN/END TRANSCRIPT DATA <nonce>===` markers; because the executor never sees the nonce, a prompt-injected skill cannot emit a matching closing delimiter to break out of the fence and have its trailing text read as grader instructions.
+
+### Notes for adopters
+
+- The `--allow-eval-failure` opt-out (from 0.1.40) also downgrades a **fail-fast-gated** run to exit **0** — consistent with how it downgrades any eval failure, but worth knowing if you gate CI on tiered runs.
+- A skill's `declaredExecutables[].howInvoked` string flows into the grader prompt **unfenced** (it is authored config, same trust tier as `SKILL.md`) — treat it as trusted authoring input, not adversarial.
+
 ## [0.1.40] - 2026-07-12
 
 ### Changed
