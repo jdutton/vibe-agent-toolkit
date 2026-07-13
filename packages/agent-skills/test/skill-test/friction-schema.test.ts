@@ -19,6 +19,13 @@ describe('FrictionReportSchema', () => {
     expect(r.items).toHaveLength(2);
   });
 
+  it('accepts the tool-expectation category (Phase T)', () => {
+    const r = FrictionReportSchema.parse({
+      items: [{ severity: 'medium', category: 'tool-expectation', message: 'declared mustRun `dxa` never ran' }],
+    });
+    expect(r.items[0]?.category).toBe('tool-expectation');
+  });
+
   it('rejects an unknown category', () => {
     expect(() =>
       FrictionReportSchema.parse({ items: [{ severity: 'high', category: 'bogus', message: 'x' }] }),

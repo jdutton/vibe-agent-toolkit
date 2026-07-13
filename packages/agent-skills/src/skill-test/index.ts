@@ -9,6 +9,14 @@ export {
   type StageEvalWorkspacesInput,
 } from './eval-inputs.js';
 export {
+  EvalFragmentError,
+  EvalFragmentExpectationSchema,
+  EvalFragmentSchema,
+  parseEvalFragment,
+  type EvalFragment,
+  type EvalFragmentExpectation,
+} from './eval-fragment.js';
+export {
   FrictionCategorySchema,
   FrictionItemSchema,
   FrictionReportJsonSchema,
@@ -18,7 +26,20 @@ export {
   type FrictionReport,
 } from './friction-schema.js';
 export {
-  assertGradingNonce,
+  mergeFragmentsToFriction,
+  mergeFragmentsToGrading,
+  mergeFragmentsToToolEval,
+} from './fragment-merge.js';
+export {
+  ToolEvalReportJsonSchema,
+  ToolEvalReportSchema,
+  ToolVerdictBodySchema,
+  ToolVerdictSchema,
+  type ToolEvalReport,
+  type ToolVerdict,
+  type ToolVerdictBody,
+} from './tool-eval-schema.js';
+export {
   GradingNonceError,
   GradingSkewError,
   parseGradingJson,
@@ -71,6 +92,8 @@ export {
   type SkillTestExitCodeValue,
 } from './exit-codes.js';
 export { BuildHookError, runPreStageBuild } from './build-hook.js';
+export { DEFAULT_CONCURRENCY, DEFAULT_GRADER_MODEL } from './grader-model.js';
+export { RateLimitSignal, runPipeline, type RunPipelineOptions } from './pipeline.js';
 export {
   runPreflight,
   type PreflightCheck,
@@ -78,15 +101,25 @@ export {
   type PreflightResult,
 } from './preflight.js';
 export {
-  appendIntegrityNonceDirective,
-  assertPromptInvariants,
-  buildExperimenterPrompt,
-  DEFAULT_EXPERIMENTER_PROMPT,
-  PromptInvariantError,
-  redactNonce,
-  REDACTED_NONCE_PLACEHOLDER,
-  type BuildPromptOptions,
-} from './experimenter-prompt.js';
+  runExecutorForEval,
+  type ExecutorOutcome,
+  type RunExecutorInput,
+} from './eval-executor.js';
+export {
+  runGraderForEval,
+  type RunGraderInput,
+} from './eval-grader.js';
+export {
+  assertExecutorPromptInvariants,
+  buildExecutorPrompt,
+  type BuildExecutorPromptOptions,
+} from './executor-prompt.js';
+export {
+  assertGraderPromptInvariants,
+  buildGraderPrompt,
+  type BuildGraderPromptOptions,
+} from './grader-prompt.js';
+export { appendIntegrityNonceDirective, PromptInvariantError } from './prompt-invariants.js';
 export { acquireHarnessLock, HarnessLockBusyError, type HarnessLock } from './lock.js';
 export {
   computeDirContentHash,
@@ -102,9 +135,7 @@ export { upsertTestConfig } from './configure-writer.js';
 export { buildEvalsTemplate, writeEvalsTemplate } from './evals-template.js';
 export {
   buildDryRunSummary,
-  computeDefaultTimeoutMs,
   formatFrictionReport,
-  formatTimeoutMessage,
   isAcknowledged,
   runSkillTestHarness,
   SKILL_TEST_BUILTIN_CAPS,
@@ -112,5 +143,4 @@ export {
   type DryRunSummaryInput,
   type RunHarnessOptions,
   type RunHarnessResult,
-  type TimeoutMessageContext,
 } from './run-harness.js';

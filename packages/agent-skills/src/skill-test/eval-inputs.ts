@@ -24,7 +24,15 @@ const EVAL_ID_PATTERN = /^[A-Za-z0-9_-]+$/;
 
 /** Fields VAT recognizes per eval. Unknown fields are allowed (passthrough); a
  *  near-miss of one of these is flagged as a likely typo (see superRefine). */
-const RECOGNIZED_EVAL_FIELDS = ['id', 'prompt', 'expected_output', 'files', 'expectations'] as const;
+const RECOGNIZED_EVAL_FIELDS = [
+  'id',
+  'prompt',
+  'expected_output',
+  'files',
+  'expectations',
+  'tier',
+  'toolExpectations',
+] as const;
 
 /**
  * True when `key` is exactly one edit (insert/delete/substitute one char) from
@@ -69,17 +77,32 @@ export const EvalEntrySchema = z
     // Optional: a human-readable success description. The pass/fail verdict is
     // always decided per `expectations` entry, so this is not load-bearing and
     // (per Postel's Law) is not required — real adopter suites (e.g. dxa-consumption)
-    // grade with `expectations` alone. When present, the experimenter prompt feeds it
-    // to the grader as prose CONTEXT informing judgment (see experimenter-prompt.ts).
+    // grade with `expectations` alone. When present, the grader prompt feeds it
+    // to the grader as prose CONTEXT informing judgment (see grader-prompt.ts).
     expected_output: z.string().min(1).optional(),
     files: z.array(z.string().min(1)).optional(),
     expectations: z.array(z.string().min(1)).min(1),
+    // Cost/foundational tier for fail-fast gating (Phase G): ascending, 0 = cheapest/first.
+    // Optional — adopters who don't opt into tiered execution omit it.
+    tier: z.number().int().nonnegative().optional(),
+    // Which tools SHOULD/SHOULD-NOT run, judged later by the grader against the
+    // transcript (Phase T). This sub-object's keys are VAT-defined (not adopter-owned
+    // like the entry itself), so it is `.strict()` — a typo here is a hard schema error,
+    // not silently passed through.
+    toolExpectations: z
+      .object({
+        mustRun: z.array(z.string().min(1)).optional(),
+        mustNotRun: z.array(z.string().min(1)).optional(),
+        sequence: z.array(z.string().min(1)).optional(),
+      })
+      .strict()
+      .optional(),
   })
   .passthrough()
   .superRefine((entry, ctx) => {
     for (const key of Object.keys(entry)) {
       if ((RECOGNIZED_EVAL_FIELDS as readonly string[]).includes(key)) continue;
-      const near = RECOGNIZED_EVAL_FIELDS.find((field) => isSingleEditAway(key.toLowerCase(), field));
+      const near = RECOGNIZED_EVAL_FIELDS.find((field) => isSingleEditAway(key.toLowerCase(), field.toLowerCase()));
       if (near !== undefined) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -100,6 +123,14 @@ export const EvalSuiteSchema = z
 
 export type EvalEntry = z.infer<typeof EvalEntrySchema>;
 export type EvalSuite = z.infer<typeof EvalSuiteSchema>;
+
+/**
+ * The declared tool expectations of ONE eval (issue #145 Phase T). Derived from
+ * {@link EvalEntry} so the grader input + prompt builder share the EXACT shape the
+ * parser produces — no drift, and no duplicated inline `{ mustRun?; mustNotRun?;
+ * sequence? }` literal across those consumers.
+ */
+export type ToolExpectations = NonNullable<EvalEntry['toolExpectations']>;
 
 /** Parse + validate a skill-test eval suite. Throws {@link EvalInputError} on any problem. */
 export function parseEvalSuite(jsonText: string): EvalSuite {

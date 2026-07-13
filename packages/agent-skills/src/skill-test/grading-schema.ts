@@ -69,11 +69,12 @@ export const GradingReportSchema = z
     expectations: z.array(GradedExpectationSchema),
     summary: GradingSummarySchema,
     /**
-     * Per-run integrity nonce the experimenter is told to copy verbatim from its
-     * prompt (see experimenter-prompt.ts). Optional in the schema (a grading.json
-     * validated by external tooling need not carry it), but the harness REQUIRES
-     * it to match the run's secret nonce before trusting the verdict — this is how
-     * a forged grading.json written by untrusted skill code is rejected.
+     * Per-run integrity nonce each grader is told to copy verbatim from its
+     * prompt into its fragment (see grader-prompt.ts). Optional in the schema (a
+     * grading.json validated by external tooling need not carry it), but the
+     * harness REQUIRES every merged fragment's nonce to match the run's secret
+     * nonce before trusting the verdict — this is how a forged fragment written
+     * by untrusted skill code is rejected.
      */
     runNonce: z.string().optional(),
   })

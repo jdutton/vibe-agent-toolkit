@@ -1,6 +1,7 @@
 import { AuthPreflightError } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
+import { EvalFragmentError } from '../../src/skill-test/eval-fragment.js';
 import {
   BootstrapNeededError,
   InternalHarnessError,
@@ -9,9 +10,9 @@ import {
   SkillBuildError,
   SkillTestExitCode,
 } from '../../src/skill-test/exit-codes.js';
-import { PromptInvariantError } from '../../src/skill-test/experimenter-prompt.js';
 import { GradingSkewError } from '../../src/skill-test/grading-adapter.js';
 import { HarnessLocationError } from '../../src/skill-test/harness-location.js';
+import { PromptInvariantError } from '../../src/skill-test/prompt-invariants.js';
 
 describe('mapErrorToExitCode', () => {
   it('BootstrapNeededError → 3', () => {
@@ -37,6 +38,9 @@ describe('mapErrorToExitCode', () => {
   });
   it('GradingSkewError → 1 (parse failure surfaced, never success)', () => {
     expect(mapErrorToExitCode(new GradingSkewError('x'))).toBe(SkillTestExitCode.Internal);
+  });
+  it('EvalFragmentError → 1 (per-eval fragment shape skew, same class as GradingSkewError)', () => {
+    expect(mapErrorToExitCode(new EvalFragmentError('x'))).toBe(SkillTestExitCode.Internal);
   });
   it('InternalHarnessError → 1', () => {
     expect(mapErrorToExitCode(new InternalHarnessError('x'))).toBe(SkillTestExitCode.Internal);

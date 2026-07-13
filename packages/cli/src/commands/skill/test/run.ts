@@ -7,7 +7,7 @@
  */
 
 import { existsSync } from 'node:fs';
-import { basename, dirname } from 'node:path';
+import { basename, dirname, extname } from 'node:path';
 
 import {
   BootstrapNeededError,
@@ -21,8 +21,9 @@ import {
   SKILL_TEST_BUILTIN_CAPS,
   SkillBuildError,
   SkillTestExitCode,
+  type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
-import type { SkillSourceDescriptor, TestConfig } from '@vibe-agent-toolkit/resources';
+import type { ProjectConfig, SkillSourceDescriptor, TestConfig } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
@@ -50,8 +51,8 @@ function lastPathSegment(p: string): string {
 const SECURITY_WARNING = `
 WARNING: 'vat skill test run' EXECUTES the skill's code on your machine.
 
-It spawns a headless Claude session with --permission-mode bypassPermissions,
-so the staged skill files and experimenter prompt run with YOUR user account's
+It spawns headless Claude sessions with --permission-mode bypassPermissions,
+so the staged skill files run with YOUR user account's
 full privileges: they can read and write your files (including credentials under
 ~/.claude, SSH keys, cloud configs), run shell commands, and make network
 requests. The auth credential used to bill the run is reachable by that code.
@@ -85,10 +86,14 @@ export interface SkillTestRunOptions {
   allowUnverifiedSkillSource?: boolean;
   iUnderstandThisRunsSkillCode?: boolean;
   model?: string;
+  /** Model for the fixed grader/judge (GLOBAL, independent of `model` — the model UNDER TEST). */
+  graderModel?: string;
   maxTurns?: string;
   maxBudgetUsd?: string;
   timeout?: string;
   stall?: string;
+  /** Max evals graded in parallel (GLOBAL — the executor→grader pipeline width). */
+  concurrency?: string;
   debug?: boolean;
   env?: string[];
   passEnv?: string[];
@@ -125,12 +130,14 @@ function coerceKnobs(options: SkillTestRunOptions): {
   maxBudgetUsd?: number;
   timeout?: number;
   stall?: number;
+  concurrency?: number;
 } {
   const result: {
     maxTurns?: number;
     maxBudgetUsd?: number;
     timeout?: number;
     stall?: number;
+    concurrency?: number;
   } = {};
 
   const maxTurns = coercePositiveInt(options.maxTurns, '--max-turns');
@@ -145,6 +152,9 @@ function coerceKnobs(options: SkillTestRunOptions): {
   const stall = coercePositiveInt(options.stall, '--stall');
   if (stall !== undefined) result.stall = stall;
 
+  const concurrency = coercePositiveInt(options.concurrency, '--concurrency');
+  if (concurrency !== undefined) result.concurrency = concurrency;
+
   return result;
 }
 
@@ -154,6 +164,29 @@ function coerceKnobs(options: SkillTestRunOptions): {
 
 type HarnessOpts = Parameters<typeof runSkillTestHarness>[0];
 type SkillSourceSpec = NonNullable<HarnessOpts['withSources']>[string];
+
+/** The declared-executable recognition aid the harness forwards to the WITH-arm grader. */
+type DeclaredExecutable = NonNullable<HarnessOpts['declaredExecutables']>[number];
+
+/**
+ * Map a resolved skill's packaging-config `executables` (SkillExecutableEntry[]) to
+ * the grader's recognition-aid shape (issue #145 Phase T): each entry's stable NAME
+ * is its `path` basename with the extension stripped (`scripts/dxa.py` → `dxa`),
+ * carried alongside its `howInvoked` + `kind`. Returns undefined for absent/empty
+ * input so the harness omits the aid entirely (the grader still matches tools by the
+ * commands in the transcript). Pure + unit-testable.
+ */
+export function deriveDeclaredExecutableNames(
+  executables: SkillPackagingConfig['executables'],
+): DeclaredExecutable[] | undefined {
+  if (executables === undefined || executables.length === 0) return undefined;
+  return executables.map((e) => {
+    const base = basename(toForwardSlash(e.path));
+    const ext = extname(base);
+    const name = ext === '' ? base : base.slice(0, -ext.length);
+    return { name, howInvoked: e.howInvoked, kind: e.kind };
+  });
+}
 
 /**
  * Parse a single `name=src` pair into a [name, SkillSourceSpec] tuple. The
@@ -247,6 +280,27 @@ function resolveRepoRoot(): string {
   return findProjectRoot(process.cwd()) ?? process.cwd();
 }
 
+/** The top-level `test:` config node (graderModel, concurrency) — GLOBAL settings. */
+type SkillTestGlobalConfig = ProjectConfig['test'];
+
+/**
+ * Load the persisted TOP-LEVEL `test:` config node (`graderModel`, `concurrency`)
+ * from the GOVERNING project config. Deliberately distinct from
+ * {@link loadTestConfig}, which reads the PER-SKILL `skills.config.<skill>.test`
+ * block: graderModel/concurrency are global judge/pipeline settings that apply
+ * across every skill's test run, not something a single skill's config should
+ * override (issue #145).
+ *
+ * Undefined when there's no project root or no `test:` node. A broken config
+ * throws {@link ConfigLoadError}, propagated the same way as loadTestConfig's
+ * errors (surfaced by the caller's preflight guard as a clean exit-2).
+ */
+function loadGlobalTestConfig(cwd: string): SkillTestGlobalConfig {
+  const projectRoot = findProjectRoot(cwd);
+  if (projectRoot === null) return undefined;
+  return loadConfig(projectRoot)?.test;
+}
+
 /** Copy flag-only passthrough options (no config counterpart) onto opts. */
 function applyFlagOnlyOptions(opts: HarnessOpts, options: SkillTestRunOptions): void {
   if (options.refresh !== undefined) opts.refresh = options.refresh;
@@ -270,7 +324,6 @@ function applyScalarMerges(opts: HarnessOpts, options: SkillTestRunOptions, conf
   const model = options.model ?? config?.model;
   if (model !== undefined) opts.model = model;
   if (config?.evals !== undefined) opts.evalsSubpath = config.evals;
-  if (config?.experimenterPrompt !== undefined) opts.promptOverride = config.experimenterPrompt;
 }
 
 /**
@@ -387,6 +440,25 @@ function applyDepMerges(opts: HarnessOpts, options: SkillTestRunOptions, config:
 }
 
 /**
+ * Apply flag>config merges for the GLOBAL grader/concurrency knobs — the
+ * top-level `test:` config node (see {@link loadGlobalTestConfig}), NOT the
+ * per-skill `skills.config.<skill>.test` block. Precedence: flag > top-level
+ * config > default(undefined) — left undefined here so the domain applies
+ * DEFAULT_GRADER_MODEL / DEFAULT_CONCURRENCY.
+ */
+function applyGraderMerges(
+  opts: HarnessOpts,
+  options: SkillTestRunOptions,
+  knobs: ReturnType<typeof coerceKnobs>,
+  globalTest: SkillTestGlobalConfig,
+): void {
+  const graderModel = options.graderModel ?? globalTest?.graderModel;
+  if (graderModel !== undefined) opts.graderModel = graderModel;
+  const concurrency = knobs.concurrency ?? globalTest?.concurrency;
+  if (concurrency !== undefined) opts.concurrency = concurrency;
+}
+
+/**
  * Resolve CLI flags → RunHarnessOptions, applying flag > config > default
  * precedence. CLI flags win; config (`skills.config.<skill>.test`) fills gaps;
  * built-in defaults (inside the domain) are the final fallback.
@@ -396,6 +468,7 @@ function buildHarnessOpts(
   options: SkillTestRunOptions,
   knobs: ReturnType<typeof coerceKnobs>,
   config: TestConfig | undefined,
+  globalTest: SkillTestGlobalConfig,
 ): HarnessOpts {
   const repoRoot = resolveRepoRoot();
   const opts: HarnessOpts = { skills, repoRoot };
@@ -404,6 +477,7 @@ function buildHarnessOpts(
   applyKnobMerges(opts, knobs, config);
   applyDepMerges(opts, options, config);
   applyEnvMerges(opts, options, config);
+  applyGraderMerges(opts, options, knobs, globalTest);
   return opts;
 }
 
@@ -436,6 +510,13 @@ export interface ResolvedSubject {
    * config-bypass warning: only a path with NO declared linkage is config-blind.
    */
   linkedToDeclaredSkill?: boolean;
+  /**
+   * Declared executables (name + kind + howInvoked) derived from the subject's
+   * packaging config, forwarded to the WITH-arm grader as a tool recognition aid
+   * (issue #145 Phase T). Populated ONLY for a `buildable` subject (which carries
+   * `packagingConfig`); a plain path/source subject leaves it undefined.
+   */
+  declaredExecutables?: DeclaredExecutable[];
 }
 
 /**
@@ -487,8 +568,14 @@ export async function resolveSubjectForTest(
       throw new SkillBuildError(
         `no path '${resolved.ref}' and no governing config to resolve a name; pass a path or run inside a VAT project.`,
       );
-    case 'buildable':
-      return resolveBuildableSubject(resolved, flags);
+    case 'buildable': {
+      // A buildable ref carries `packagingConfig` — the ONE cleanly-reachable place
+      // the subject's declared executables live — so attach the grader recognition
+      // aid here (a plain source has no packaging config and leaves it undefined).
+      const subject = await resolveBuildableSubject(resolved, flags);
+      const declaredExecutables = deriveDeclaredExecutableNames(resolved.packagingConfig.executables);
+      return declaredExecutables === undefined ? subject : { ...subject, declaredExecutables };
+    }
   }
 }
 
@@ -623,14 +710,42 @@ async function preflightKnobsAndConfig(
   skills: string[],
   options: SkillTestRunOptions,
   cwd: string,
-): Promise<{ knobs: ReturnType<typeof coerceKnobs>; config: TestConfig | undefined }> {
+): Promise<{
+  knobs: ReturnType<typeof coerceKnobs>;
+  config: TestConfig | undefined;
+  globalTest: SkillTestGlobalConfig;
+}> {
   try {
     assertValidAuth(options.auth);
     assertValidRequireAuth(options.requireAuth);
-    return { knobs: coerceKnobs(options), config: await loadTestConfig(skills, cwd) };
+    return {
+      knobs: coerceKnobs(options),
+      config: await loadTestConfig(skills, cwd),
+      globalTest: loadGlobalTestConfig(cwd),
+    };
   } catch (err) {
     process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
     process.exit(SkillTestExitCode.Preflight);
+  }
+}
+
+/**
+ * Copy the resolved-subject fields onto the harness options. Optional fields are
+ * only assigned when present (exactOptionalPropertyTypes). Extracted so
+ * {@link runSkillTestRun} stays within its cognitive-complexity budget.
+ */
+function applyResolvedSubject(harnessOpts: HarnessOpts, subject: ResolvedSubject): void {
+  harnessOpts.subjectSource = subject.subjectSource;
+  harnessOpts.rebuilt = subject.rebuilt;
+  harnessOpts.wouldBuild = subject.wouldBuild;
+  if (subject.subjectScaffoldDir !== undefined) {
+    harnessOpts.subjectScaffoldDir = subject.subjectScaffoldDir;
+  }
+  if (subject.dryRunStagedExistingDist !== undefined) {
+    harnessOpts.dryRunStagedExistingDist = subject.dryRunStagedExistingDist;
+  }
+  if (subject.declaredExecutables !== undefined) {
+    harnessOpts.declaredExecutables = subject.declaredExecutables;
   }
 }
 
@@ -649,7 +764,7 @@ export async function runSkillTestRun(
 ): Promise<void> {
   printSecurityWarning();
 
-  const { knobs, config } = await preflightKnobsAndConfig(skills, options, process.cwd());
+  const { knobs, config, globalTest } = await preflightKnobsAndConfig(skills, options, process.cwd());
 
   // Commander stores the `--no-build` negatable flag under `build` (=== false when set);
   // honor an explicit programmatic `noBuild` too.
@@ -679,16 +794,8 @@ export async function runSkillTestRun(
 
   warnIfPathTargetBypassesConfig(subject);
 
-  const harnessOpts = buildHarnessOpts(skills, options, knobs, config);
-  harnessOpts.subjectSource = subject.subjectSource;
-  harnessOpts.rebuilt = subject.rebuilt;
-  harnessOpts.wouldBuild = subject.wouldBuild;
-  if (subject.subjectScaffoldDir !== undefined) {
-    harnessOpts.subjectScaffoldDir = subject.subjectScaffoldDir;
-  }
-  if (subject.dryRunStagedExistingDist !== undefined) {
-    harnessOpts.dryRunStagedExistingDist = subject.dryRunStagedExistingDist;
-  }
+  const harnessOpts = buildHarnessOpts(skills, options, knobs, config, globalTest);
+  applyResolvedSubject(harnessOpts, subject);
 
   try {
     const result = await runSkillTestHarness(harnessOpts);
@@ -731,11 +838,11 @@ export function createSkillTestRunCommand(): Command {
     )
     .option(
       '--env <pair...>',
-      'Inject an env var into the experimenter spawn as KEY=VALUE (repeatable). Values support ${fixturesDir}, ${stagedSkillDir}, ${harnessRoot}, ${resultsDir}. CLI overrides config for the same key.',
+      'Inject an env var into the executor spawn as KEY=VALUE (repeatable). Values support ${fixturesDir}, ${stagedSkillDir}, ${harnessRoot}, ${resultsDir}. CLI overrides config for the same key.',
     )
     .option(
       '--pass-env <key...>',
-      'Forward a host env var by NAME to the experimenter spawn if present (repeatable). Protected names (PATH, auth, model) are ignored.',
+      'Forward a host env var by NAME to the executor spawn if present (repeatable). Protected names (PATH, auth, model) are ignored.',
     )
     .option('--refresh', 'Force a full re-stage (ignore existing staged content)')
     .option('--no-build', 'Skip building a declared skill; stage its existing dist instead (errors if absent)')
@@ -754,12 +861,17 @@ export function createSkillTestRunCommand(): Command {
     .option('--i-understand-this-runs-skill-code', 'Acknowledge this command executes skill code (required)')
     .option(
       '--model <id>',
-      "Model ID passed VERBATIM to `claude --model <id>` (VAT does no mapping/validation; e.g. opus, sonnet, claude-opus-4-8). Omit to use claude's own default model.",
+      "Model ID passed VERBATIM to `claude --model <id>` for the model UNDER TEST (the executor). VAT does no mapping/validation (e.g. opus, sonnet, claude-opus-4-8). Omit to use claude's own default model. Independent of --grader-model.",
     )
-    .option('--max-turns <n>', 'Cap on experimenter turns (positive integer)')
+    .option(
+      '--grader-model <id>',
+      'Model for the fixed grader/judge, passed VERBATIM to `claude --model` (default claude-sonnet-5). GLOBAL (top-level `test:` config), independent of --model (the model UNDER TEST).',
+    )
+    .option('--max-turns <n>', 'Per-spawn cap on executor/grader turns (positive integer)')
     .option('--max-budget-usd <n>', 'Hard USD budget cap (positive number)')
     .option('--timeout <s>', 'Wall-clock timeout in seconds (positive integer)')
     .option('--stall <s>', 'Stall-watchdog in seconds (positive integer)')
+    .option('--concurrency <n>', 'Max evals graded in parallel (positive integer; default 4)')
     .option('--debug', 'Enable debug logging')
     .action(runSkillTestRun)
     .addHelpText(
@@ -769,9 +881,10 @@ Description:
   Stages the named skill(s) into a fresh temp harness (context isolation: a
   scrubbed env allowlist and no user/project settings -- NOT an OS security
   sandbox), runs preflight checks (claude binary, auth, eval inputs, budget),
-  then spawns a headless Claude session with a non-interactive experimenter
-  prompt. The experimenter grades each eval against the skill's expectations
-  and writes grading.json.
+  then runs a vat-owned executor->grader pipeline: per eval, a blind executor
+  Claude session performs the task and a separate grader session judges its
+  transcript against the skill's expectations. VAT merges the grader results and
+  writes grading.json.
 
   IMPORTANT: This command EXECUTES the skill's code with your user account's
   full privileges (filesystem, network, shell) and a reachable auth credential.
@@ -779,16 +892,24 @@ Description:
   to acknowledge this and proceed.
 
 Model:
-  --model <id> is passed straight through to the experimenter spawn as
-  \`claude --model <id>\` (verbatim -- VAT does not map or validate it). With no
-  --model, no flag is passed and claude picks its own default. The selected
-  model is echoed to stderr ("Model: <id>") on every run, and the --dry-run
-  output shows the model flag that would be passed (not the full argv — budget,
-  turns, and permission flags are added at spawn time).
+  --model <id> selects the model UNDER TEST (the executor spawn): passed
+  straight through as \`claude --model <id>\` (verbatim -- VAT does not map or
+  validate it). With no --model, no flag is passed and claude picks its own
+  default. The selected model is echoed to stderr ("Model: <id>") on every run,
+  and the --dry-run output shows the model flag that would be passed (not the
+  full argv — budget, turns, and permission flags are added at spawn time).
+
+  --grader-model <id> is INDEPENDENT of --model: it selects the fixed judge
+  that grades every eval's transcript (default claude-sonnet-5), so grading
+  stays comparable across runs even as the model under test changes. This is a
+  GLOBAL setting (top-level \`test:\` config node), not per-skill. Precedence:
+  --grader-model flag > top-level config \`test.graderModel\` > built-in default.
+  --concurrency follows the same GLOBAL precedence for the executor->grader
+  pipeline width (default 4).
 
 Exit Codes:
   0 - Harness ran to completion and every eval passed (or --allow-eval-failure suppressed a failing verdict)
-  1 - Internal error (grading.json absent/invalid, summary/expectations skew, experimenter crash, stall/timeout)
+  1 - Internal error (grader fragment absent/invalid, summary/expectations skew, executor/grader crash, stall/timeout)
   2 - Preflight failed (missing binary, auth error, eval inputs absent, unsafe workdir, ack missing, skill build failed, or --no-build with no existing dist)
   3 - Bootstrap needed: evals.json was absent, so VAT wrote a starter template next to the skill source. Fill it in and re-run.
   4 - An eval FAILED (the harness completed and produced a valid grading.json; expectations did not all pass). This is the fail-closed DEFAULT -- suppress with --allow-eval-failure.

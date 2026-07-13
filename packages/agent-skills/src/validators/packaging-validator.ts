@@ -25,7 +25,7 @@ import {
   type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/agent-schema';
-import { parseMarkdown, ResourceRegistry } from '@vibe-agent-toolkit/resources';
+import { parseMarkdown, ResourceRegistry, type SkillExecutableEntry } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, normalizedTmpdir, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
@@ -71,6 +71,13 @@ export interface SkillPackagingConfig {
    * CLI (which can also bring in plugin / marketplace target layers).
    */
   targets?: ReadonlyArray<'claude-chat' | 'claude-cowork' | 'claude-code'>;
+  /**
+   * Declared executables the skill ships (name-stable references for eval
+   * `toolExpectations` + launch-guidance linting — issue #145 Phase T/L). The
+   * config merge (`mergeSkillPackagingConfig`) copies this through generically;
+   * declaring it here lets consumers (e.g. `vat skill test run`) read it typed.
+   */
+  executables?: SkillExecutableEntry[];
 }
 
 /** Excluded reference detail for verbose output */

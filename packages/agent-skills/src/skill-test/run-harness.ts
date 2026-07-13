@@ -5,8 +5,10 @@
  *   lock → assert safe workdir + harness root → stage → resolve staged-subject
  *   eval path → bootstrap-check (scaffold template + exit 3 if absent)
  *   → preflight (return early exitCode 2 on failure) → ack enforcement
- *   → build effective prompt + assertPromptInvariants → dry-run short-circuit
- *   → spawnHeadlessClaude → parseGradingJson → release lock → return result
+ *   → dry-run short-circuit → build per-eval work items → run the vat-owned
+ *   executor→grader pipeline (bounded-parallel) → merge grader fragments →
+ *   write grading.json/friction.json (vat is SOLE writer) → reconcile verdict
+ *   → release lock → return result
  */
 
 import { randomBytes } from 'node:crypto';
@@ -23,7 +25,7 @@ import {
   resolveAssetReference,
   safeExecResult,
   safePath,
-  spawnHeadlessClaude,
+  type spawnHeadlessClaude,
   toForwardSlash,
   type ResolvedAuth,
 } from '@vibe-agent-toolkit/utils';
@@ -32,7 +34,10 @@ import { resolveSkillSource } from '../skill-source/resolve-skill-source.js';
 import type { ResolvedSkillSource, ResolveSkillSourceContext, SkillSource } from '../skill-source/types.js';
 
 import { assembleChildEnv, computeEnvTokens, resolveInjectEnv } from './declared-env.js';
-import { EvalInputError, parseEvalSuite, stageEvalWorkspaces } from './eval-inputs.js';
+import { runExecutorForEval } from './eval-executor.js';
+import type { EvalFragment } from './eval-fragment.js';
+import { runGraderForEval } from './eval-grader.js';
+import { EvalInputError, parseEvalSuite, stageEvalWorkspaces, type EvalEntry, type EvalSuite } from './eval-inputs.js';
 import { writeEvalsTemplate } from './evals-template.js';
 import {
   BootstrapNeededError,
@@ -40,19 +45,25 @@ import {
   SkillTestExitCode,
   type SkillTestExitCodeValue,
 } from './exit-codes.js';
-import {
-  appendIntegrityNonceDirective,
-  assertPromptInvariants,
-  buildExperimenterPrompt,
-  redactNonce,
-} from './experimenter-prompt.js';
+import { mergeFragmentsToFriction, mergeFragmentsToGrading, mergeFragmentsToToolEval } from './fragment-merge.js';
 import { FrictionReportSchema, type FrictionItem } from './friction-schema.js';
-import { assertGradingNonce, parseGradingJson, reconcileGrading } from './grading-adapter.js';
+import { DEFAULT_CONCURRENCY, DEFAULT_GRADER_MODEL } from './grader-model.js';
+import { reconcileGrading, type GradingVerdict } from './grading-adapter.js';
+import { GradingReportSchema } from './grading-schema.js';
 import { assertSafeHarnessRoot, assertSafeWorkdir, prepareHarnessRoot, resolveHarnessRoot } from './harness-location.js';
 import { acquireHarnessLock, installSignalCleanup } from './lock.js';
+import { runPipeline } from './pipeline.js';
 import { detectPluginLayout } from './plugin-layout.js';
 import { runPreflight, type PreflightInput } from './preflight.js';
 import { descriptorToSource, stageHarness, type StageItem } from './staging.js';
+import {
+  buildSkippedSummary,
+  formatSkippedTiersSummary,
+  groupEvalsByTier,
+  shouldGateAfterTier,
+  type SkippedEvalsSummary,
+} from './tier-plan.js';
+import { ToolEvalReportSchema, type ToolEvalReport } from './tool-eval-schema.js';
 import { verifyVendoredManifest } from './vendor-manifest.js';
 
 /** Default subpath of the subject's eval suite, relative to its source dir. */
@@ -69,6 +80,14 @@ const VENDORED_SKILL_CREATOR_DIR = safePath.resolve(
   dirname(fileURLToPath(import.meta.url)),
   '../../vendor/skill-creator',
 );
+
+/**
+ * Absolute path to the vendored skill-creator grader rubric each per-eval grader
+ * spawn is told to judge against (issue #145). Lives inside
+ * {@link VENDORED_SKILL_CREATOR_DIR}, whose hash manifest is verified during
+ * preflight — so the rubric the grader uses is the pinned, integrity-checked copy.
+ */
+const GRADER_RUBRIC_PATH = safePath.join(VENDORED_SKILL_CREATOR_DIR, 'agents/grader.md');
 
 // ---------------------------------------------------------------------------
 // Types
@@ -125,8 +144,24 @@ export interface RunHarnessOptions {
   /** Required auth mechanism. */
   requireAuth?: HarnessAuthMechanism;
 
-  /** Override the experimenter prompt. */
-  promptOverride?: string;
+  /**
+   * Pinned grader/judge model for the per-eval grader spawns. Defaults to
+   * {@link DEFAULT_GRADER_MODEL}. Deliberately distinct from `model` (which is
+   * the model under test in the executor spawns) so the judge stays comparable
+   * across runs regardless of the subject model.
+   */
+  graderModel?: string;
+
+  /** Bounded-parallel executor→grader pipeline width. Defaults to {@link DEFAULT_CONCURRENCY}. */
+  concurrency?: number;
+
+  /**
+   * Injectable spawn seam (tests only). When set, it replaces the real
+   * {@link spawnHeadlessClaude} in BOTH the executor and grader per-eval spawns,
+   * so a test can drive the full harness with a fake `claude` and no real
+   * install. Production callers leave it undefined (the real spawn is used).
+   */
+  spawn?: typeof spawnHeadlessClaude;
 
   /** Enable A/B baseline run (with/without skill). */
   baseline?: boolean;
@@ -188,8 +223,18 @@ export interface RunHarnessOptions {
 
   /** Feature B: explicit env var injections (interpolated at stage time). */
   env?: Record<string, string>;
-  /** Feature A: host env var names to forward to the experimenter if present. */
+  /** Feature A: host env var names to forward to the executor spawn if present. */
   passEnv?: readonly string[];
+
+  /**
+   * Declared executables the subject skill ships (name + kind + howInvoked),
+   * populated by run.ts from the resolved subject's packaging config WHEN cleanly
+   * reachable (a `buildable` ref carries `packagingConfig`; a plain path source
+   * does not — issue #145 Phase T). Passed to the grader on the WITH arm ONLY as
+   * a recognition aid alongside each eval's `toolExpectations`. Absent → the
+   * grader still matches tools by the commands it sees in the transcript.
+   */
+  declaredExecutables?: Array<{ name: string; howInvoked: string; kind: string }>;
 
   /**
    * Opt-OUT of eval gating (for interactive use). By DEFAULT (false/absent) a
@@ -216,8 +261,8 @@ const DEFAULT_MAX_TURNS = 50;
 const DEFAULT_MAX_BUDGET_USD = 5;
 
 /**
- * Built-in cost/runtime safety ceilings for the experimenter spawn. These are the
- * SAME values the harness applies as defaults, but exported as an explicit cap so
+ * Built-in cost/runtime safety ceilings applied PER executor/grader spawn. These
+ * are the SAME values the harness applies as defaults, but exported as an explicit cap so
  * the CLI precedence layer (run.ts) can enforce a critical asymmetry:
  *
  *   - a CLI flag (explicit operator intent, typed at the terminal for THIS run)
@@ -237,26 +282,14 @@ export const SKILL_TEST_BUILTIN_CAPS = {
 } as const;
 
 /**
- * Compute the DEFAULT wall-clock budget (ms) when the operator gave no explicit
- * `--timeout`. It scales with the number of declared evals so a large suite isn't
- * killed at the flat 5-minute default before it can finish: a 120s base plus 120s
- * per declared eval, floored at the historical 300s default (so we never shrink
- * below today's budget) and capped at 1h (so a runaway/huge suite can't request an
- * unbounded budget). An EXPLICIT `--timeout` always bypasses this (see resolveTimeoutMs).
+ * Resolve the effective PER-EVAL wall-clock timeout (ms). Each executor and
+ * grader spawn is an independent, bounded-parallel unit (issue #145), so the
+ * budget is a flat per-spawn ceiling — NOT scaled by the suite size the way the
+ * old single serial run's budget was. An explicit `--timeout` (seconds)
+ * wins; otherwise the flat {@link DEFAULT_TIMEOUT_MS} default applies.
  */
-export function computeDefaultTimeoutMs(declaredEvalCount: number): number {
-  return Math.max(300_000, Math.min(3_600_000, 120_000 + declaredEvalCount * 120_000));
-}
-
-/**
- * Resolve the effective wall-clock timeout (ms). An explicit `--timeout` (seconds)
- * ALWAYS wins, unchanged. Otherwise the default scales with the declared eval count
- * via {@link computeDefaultTimeoutMs}; when that count is unknown/unparseable at the
- * call site, fall back to the flat 300s default.
- */
-export function resolveTimeoutMs(opts: RunHarnessOptions, declaredEvalCount?: number): number {
-  if (opts.timeout !== undefined) return opts.timeout * 1000;
-  return declaredEvalCount === undefined ? DEFAULT_TIMEOUT_MS : computeDefaultTimeoutMs(declaredEvalCount);
+export function resolveTimeoutMs(opts: RunHarnessOptions): number {
+  return opts.timeout === undefined ? DEFAULT_TIMEOUT_MS : opts.timeout * 1000;
 }
 
 /**
@@ -431,8 +464,8 @@ export function buildPreflightInput(
     integrityOk: () => {
       if (opts.allowUnverifiedSkillSource === true) return true;
       // Verify the committed, pinned vendored skill-creator copy that ships with
-      // this package — the grading rubric / schema source the experimenter is told
-      // to reuse. A missing, unparseable, or mutated manifest fails preflight (exit 2).
+      // this package — the grader rubric (agents/grader.md) each grader spawn is
+      // told to judge against. A missing, unparseable, or mutated manifest fails preflight (exit 2).
       return verifyVendoredManifest(VENDORED_SKILL_CREATOR_DIR);
     },
     costEstimate,
@@ -465,60 +498,6 @@ export function isAcknowledged(
   return opts.dryRun === true || opts.acknowledgedRunsSkillCode === true;
 }
 
-/** Optional context for the timeout message (surfaced only when available). */
-export interface TimeoutMessageContext {
-  /** Number of evals the suite DECLARED (parsed suite length), if known. */
-  declaredEvalCount?: number;
-  /** Best-effort count of evals that completed before the timeout, if cheaply known. */
-  completedEvalCount?: number;
-}
-
-/**
- * Format the experimenter-timeout message. Pure so it can be unit-tested. Always
- * reports the raw budget (ms + a minute label). When the declared eval count is
- * known it appends the count and a hint that the default budget scales with eval
- * count (raise `--timeout`/`--stall` for larger suites); when a best-effort
- * completed count is also available it notes `completed ~N/declared`. With no
- * declared count it stays honest and omits those clauses.
- */
-export function formatTimeoutMessage(input: { timeoutMs: number } & TimeoutMessageContext): string {
-  const minutes = input.timeoutMs / 60_000;
-  const minutesLabel = Number.isInteger(minutes) ? `${minutes}m` : `${minutes.toFixed(1)}m`;
-  let msg = `Experimenter timed out after ${input.timeoutMs}ms (${minutesLabel}).`;
-  if (input.declaredEvalCount !== undefined) {
-    const completed =
-      input.completedEvalCount === undefined
-        ? ''
-        : ` (completed ~${input.completedEvalCount}/${input.declaredEvalCount})`;
-    msg +=
-      ` Declared evals: ${input.declaredEvalCount}${completed}; the default budget scales with eval count` +
-      ' — raise --timeout (and --stall) for larger suites.';
-  }
-  return msg;
-}
-
-/**
- * Translate a non-success spawn outcome into an InternalHarnessError (exit 1).
- * A stall, a timeout, OR a non-zero exit are each authoritative — a non-zero exit
- * is never laundered into a PASS even if a grading.json happens to be on disk.
- */
-export function assertExperimenterSucceeded(
-  spawnResult: { stalled: boolean; timedOut: boolean; status: number },
-  stallMs: number | undefined,
-  timeoutMs: number,
-  timeoutContext?: TimeoutMessageContext,
-): void {
-  if (spawnResult.stalled) {
-    throw new InternalHarnessError(`Experimenter stalled (no output for ${stallMs ?? 0}ms).`);
-  }
-  if (spawnResult.timedOut) {
-    throw new InternalHarnessError(formatTimeoutMessage({ timeoutMs, ...timeoutContext }));
-  }
-  if (spawnResult.status !== 0) {
-    throw new InternalHarnessError(`Experimenter exited non-zero (status ${spawnResult.status}).`);
-  }
-}
-
 /**
  * Format a friction report for human consumption — one line per entry as
  * `[<severity>] <category>: <message>`. Pure; returns the empty string for no
@@ -530,8 +509,8 @@ export function formatFrictionReport(items: readonly FrictionItem[]): string {
 
 /**
  * Read the run's friction.json (if present + valid) and echo a concise report to
- * STDERR so users don't miss packaging-fidelity friction the experimenter surfaced
- * (it is otherwise only written to disk). Best-effort: a missing, unparseable, or
+ * STDERR so users don't miss packaging-fidelity friction VAT merged from the grader
+ * fragments (it is otherwise only written to disk). Best-effort: a missing, unparseable, or
  * empty report emits nothing. Never touches stdout (which stays machine-readable).
  * Accepts `undefined` (a no-op) so the harness `finally` can call it unconditionally
  * even when a throw preempted assignment of the friction path.
@@ -630,15 +609,15 @@ function overlayAuthoredEvalSuite(
 }
 
 /** Parse the staged eval suite and materialize each eval's input `files` into
- * `<harnessRoot>/workspaces/<id>/`. Returns the workspaces root AND the number of
- * evals the suite declared (so the caller can scale the default timeout without
- * re-reading the suite). The dir is wiped first so a reused harness root cannot
- * leak a prior run's inputs. Throws {@link EvalInputError} (mapped by the caller to
- * exit 2) on a bad suite or a missing input file. */
+ * `<harnessRoot>/workspaces/<id>/`. Returns the workspaces root, the parsed
+ * {@link EvalSuite} (so the eval loop has the entries without re-reading), and the
+ * declared eval count (derived from the suite). The dir is wiped first so a reused
+ * harness root cannot leak a prior run's inputs. Throws {@link EvalInputError}
+ * (mapped by the caller to exit 2) on a bad suite or a missing input file. */
 export function stageWorkspacesForRun(
   evalsPath: string,
   harnessRoot: string,
-): { workspacesRoot: string; declaredEvalCount: number } {
+): { workspacesRoot: string; declaredEvalCount: number; suite: EvalSuite } {
   const workspacesRoot = safePath.joinUnderRoot(harnessRoot, 'workspaces');
   rmSync(workspacesRoot, { recursive: true, force: true });
   mkdirSyncReal(workspacesRoot, { recursive: true });
@@ -647,6 +626,7 @@ export function stageWorkspacesForRun(
   return {
     workspacesRoot: stageEvalWorkspaces({ suite, evalsDir: dirname(evalsPath), workspacesRoot }),
     declaredEvalCount: suite.evals.length,
+    suite,
   };
 }
 
@@ -666,7 +646,7 @@ function buildModelFlag(model: string | undefined): string {
 function attemptStageWorkspaces(
   evalsPath: string,
   harnessRoot: string,
-): { workspacesRoot: string; declaredEvalCount: number } | RunHarnessResult {
+): { workspacesRoot: string; declaredEvalCount: number; suite: EvalSuite } | RunHarnessResult {
   try {
     return stageWorkspacesForRun(evalsPath, harnessRoot);
   } catch (e) {
@@ -683,7 +663,7 @@ function attemptStageWorkspaces(
 
 interface ResolveDeclaredChildEnvInput {
   opts: RunHarnessOptions;
-  resolvedAuth: ResolvedAuth | null;
+  resolvedAuth: ResolvedAuth;
   subjectStagedDir: string;
   harnessRoot: string;
   resultsDir: string;
@@ -692,20 +672,14 @@ interface ResolveDeclaredChildEnvInput {
 }
 
 /**
- * Assemble the experimenter's child env: the scrubbed forwarded env unioned with
- * the declared test env (Features A + B) and CLAUDE_PLUGIN_ROOT, then emit the
- * transparency line and any protected-key collision warnings to stderr.
- *
- * Refuses to assemble without a resolved auth — a null here is an internal
- * invariant violation (preflight passed), never a reason to fall back to
- * process.env, which would hand untrusted skill code every secret it contains.
+ * Assemble the EXECUTOR's child env: the scrubbed forwarded env unioned with the
+ * declared test env (Features A + B) and CLAUDE_PLUGIN_ROOT, then emit the
+ * transparency line and any protected-key collision warnings to stderr. The
+ * caller guards `resolvedAuth` non-null (a null after a passed preflight is an
+ * internal invariant violation), never falling back to process.env — which would
+ * hand untrusted skill code every secret it contains.
  */
 function resolveDeclaredChildEnv(input: ResolveDeclaredChildEnvInput): ReturnType<typeof assembleChildEnv> {
-  if (input.resolvedAuth === null) {
-    throw new InternalHarnessError(
-      'Internal: preflight passed but resolvedAuth is null — refusing to spawn with an unscrubbed environment.',
-    );
-  }
   const envTokens = computeEnvTokens({
     subjectStagedDir: input.subjectStagedDir,
     harnessRoot: input.harnessRoot,
@@ -744,8 +718,14 @@ export interface DryRunSummaryInput {
   provenanceFingerprint: string;
   /** Number of entries in the staged manifest. */
   provenanceEntryCount: number;
-  /** The assembled model flag string (e.g. `--model claude-opus-4-8`). */
+  /** The assembled model flag string for the executor (e.g. `--model claude-opus-4-8`). */
   modelFlag: string;
+  /** Number of declared evals a real run would execute. */
+  evalCount: number;
+  /** Bounded-parallel executor→grader pipeline width a real run would use. */
+  concurrency: number;
+  /** Pinned grader/judge model a real run would grade with. */
+  graderModel: string;
 }
 
 /**
@@ -786,7 +766,9 @@ export function buildDryRunSummary(input: DryRunSummaryInput): string {
 
   const count = input.provenanceEntryCount;
   lines.push(
-    `[dry-run] Would spawn: claude -p ${input.modelFlag} (prompt via stdin)`,
+    `[dry-run] Would run ${input.evalCount} eval${input.evalCount === 1 ? '' : 's'} as executor→grader spawn ` +
+      `pair${input.evalCount === 1 ? '' : 's'} at concurrency ${input.concurrency}.`,
+    `[dry-run] Executor ${input.modelFlag}; grader model ${input.graderModel} (prompt via stdin).`,
     `[dry-run] Staged manifest: ${count} entr${count === 1 ? 'y' : 'ies'} | fingerprint: ${input.provenanceFingerprint}`,
     `[dry-run] Provenance: ${input.provenancePath}`,
   );
@@ -838,6 +820,406 @@ export function cleanupHarness(harnessRoot: string, opts: CleanupHarnessOptions)
 }
 
 // ---------------------------------------------------------------------------
+// Per-eval pipeline (vat-owned executor → grader)
+// ---------------------------------------------------------------------------
+
+/** One unit of executor→grader work: an eval + which arm (with/without skill). */
+export interface EvalWorkItem {
+  entry: EvalEntry;
+  arm: 'with' | 'without';
+}
+
+/**
+ * Build the per-eval work items for a set of evals (one tier's worth, or a whole
+ * suite). Every eval gets a WITH arm (skill present). When `baseline` is set,
+ * every eval ALSO gets a WITHOUT arm (skill absent) so vat can record an
+ * informational A/B — the WITHOUT arm never contributes to the pass/fail verdict
+ * (see {@link partitionFragmentsByArm}) and never drives tier gating. Pure +
+ * unit-testable.
+ */
+export function buildEvalWorkItems(evals: readonly EvalEntry[], baseline: boolean): EvalWorkItem[] {
+  const items: EvalWorkItem[] = [];
+  for (const entry of evals) {
+    items.push({ entry, arm: 'with' });
+    if (baseline) items.push({ entry, arm: 'without' });
+  }
+  return items;
+}
+
+/**
+ * Partition graded fragments into the WITH arm (the authoritative verdict +
+ * grading.json) and the WITHOUT arm (baseline.json, informational only). A
+ * fragment with no `arm` (or `arm: 'with'`) is a WITH-arm fragment. Pure +
+ * unit-testable.
+ */
+export function partitionFragmentsByArm(fragments: EvalFragment[]): {
+  withArm: EvalFragment[];
+  withoutArm: EvalFragment[];
+} {
+  const withArm: EvalFragment[] = [];
+  const withoutArm: EvalFragment[] = [];
+  for (const fragment of fragments) {
+    if (fragment.arm === 'without') withoutArm.push(fragment);
+    else withArm.push(fragment);
+  }
+  return { withArm, withoutArm };
+}
+
+/**
+ * The vat-only grader dir for a run: `<tmp>/vat-skill-grade-<dirToken>/`. It is
+ * deliberately OUTSIDE the harness root (the skill's `--add-dir` sandbox), so
+ * untrusted skill code that ran in the executor's sandbox cannot forge, delete,
+ * or read the grader fragments the verdict relies on. Pure (derives a path only).
+ *
+ * `dirToken` is a random directory-naming token that is DISTINCT from the run's
+ * integrity nonce. The directory name (and the grader's `--add-dir` argv) is
+ * world-listable in the shared OS temp dir, so it must NEVER encode the secret
+ * nonce — the nonce travels only via the grader's stdin prompt. Conflating the
+ * two would let same-user skill code read the nonce straight off `ls <tmp>`.
+ */
+export function resolveGraderOutDir(dirToken: string): string {
+  return safePath.join(normalizedTmpdir(), `vat-skill-grade-${dirToken}`);
+}
+
+/**
+ * The executor working directory for one eval: its staged input workspace
+ * `<workspacesRoot>/<id>` when the eval declares input `files`, else undefined
+ * (the executor then defaults to the staged subject dir). Pure + unit-testable.
+ */
+export function resolvePerEvalWorkspaceDir(entry: EvalEntry, workspacesRoot: string): string | undefined {
+  if (entry.files === undefined || entry.files.length === 0) return undefined;
+  return safePath.joinUnderRoot(workspacesRoot, String(entry.id));
+}
+
+/** Best-effort removal of the vat-only grader dir (never throws — runs from cleanup). */
+export function removeGraderOutDir(graderOutDir: string | undefined): void {
+  if (graderOutDir === undefined) return;
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived tmp grader dir
+    if (!existsSync(graderOutDir)) return;
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived tmp grader dir
+    if (lstatSync(graderOutDir).isSymbolicLink()) return;
+    rmSync(graderOutDir, { recursive: true, force: true });
+  } catch {
+    // Swallow: a failed grader-dir cleanup is not a run failure.
+  }
+}
+
+/** Everything one executor→grader pipeline worker needs, built once per run. */
+interface EvalRunContext {
+  subjectStagedDir: string;
+  workspacesRoot: string;
+  pluginDirs: string[];
+  graderOutDir: string;
+  runNonce: string;
+  graderModel: string;
+  model?: string;
+  maxTurns: number;
+  maxBudgetUsd: number;
+  timeoutMs: number;
+  stallMs?: number;
+  /** Full assembled env (skill secrets included) for the executor spawn. */
+  executorEnv: NodeJS.ProcessEnv;
+  /** AUTH-ONLY env for the grader spawn (trusted vat infra loads no skill). */
+  graderEnv: NodeJS.ProcessEnv;
+  /** Declared executables (WITH-arm grader recognition aid); absent when unreachable. */
+  declaredExecutables?: Array<{ name: string; howInvoked: string; kind: string }>;
+  spawn?: typeof spawnHeadlessClaude;
+}
+
+/**
+ * Run ONE work item: the blind executor spawn, then the grader spawn over its
+ * captured transcript (issue #145). Returns the grader fragment tagged with the
+ * item's arm. The WITHOUT arm runs the executor with `pluginDirs: []` (skill
+ * absent). Grader fragments are written under a PER-ARM subdir of the vat-only
+ * grader dir so a WITH and WITHOUT run of the same eval id cannot collide.
+ *
+ * Throws propagate: an executor/grader {@link InternalHarnessError} (timeout,
+ * stall, spawn error, grader failure/missing-fragment) fails the whole run
+ * (exit 1); a RateLimitSignal is retried by the pipeline. An executor CLEAN
+ * failure is NOT thrown — its transcript flows into the grader, whose failing
+ * fragment surfaces as an eval failure (exit 4 via the verdict), never exit 1.
+ */
+async function runEvalWorker(item: EvalWorkItem, ctx: EvalRunContext): Promise<EvalFragment> {
+  const evalId = String(item.entry.id);
+  const workspaceDir = resolvePerEvalWorkspaceDir(item.entry, ctx.workspacesRoot);
+  const onProgress = (chunk: string): void => { process.stderr.write(chunk); };
+
+  const outcome = await runExecutorForEval({
+    evalId,
+    task: item.entry.prompt,
+    subjectStagedDir: ctx.subjectStagedDir,
+    ...(workspaceDir === undefined ? {} : { workspaceDir }),
+    pluginDirs: item.arm === 'without' ? [] : ctx.pluginDirs,
+    env: ctx.executorEnv,
+    ...(ctx.model === undefined ? {} : { model: ctx.model }),
+    maxTurns: ctx.maxTurns,
+    maxBudgetUsd: ctx.maxBudgetUsd,
+    timeoutMs: ctx.timeoutMs,
+    ...(ctx.stallMs === undefined ? {} : { stallMs: ctx.stallMs }),
+    ...(ctx.spawn === undefined ? {} : { spawn: ctx.spawn }),
+    onProgress,
+  });
+
+  // Tool expectations are about the SKILL's tools, so they ride the WITH arm ONLY —
+  // the WITHOUT (skill-absent) arm has no skill, hence nothing to judge tools against.
+  const isWithArm = item.arm === 'with';
+  const fragment = await runGraderForEval({
+    evalId,
+    transcript: outcome.transcript,
+    expectations: item.entry.expectations,
+    ...(item.entry.expected_output === undefined ? {} : { expectedOutput: item.entry.expected_output }),
+    ...(isWithArm && item.entry.toolExpectations !== undefined
+      ? { toolExpectations: item.entry.toolExpectations }
+      : {}),
+    ...(isWithArm && ctx.declaredExecutables !== undefined
+      ? { declaredExecutables: ctx.declaredExecutables }
+      : {}),
+    rubricPath: GRADER_RUBRIC_PATH,
+    graderOutDir: safePath.joinUnderRoot(ctx.graderOutDir, item.arm),
+    graderModel: ctx.graderModel,
+    nonce: ctx.runNonce,
+    maxTurns: ctx.maxTurns,
+    maxBudgetUsd: ctx.maxBudgetUsd,
+    timeoutMs: ctx.timeoutMs,
+    ...(ctx.stallMs === undefined ? {} : { stallMs: ctx.stallMs }),
+    env: ctx.graderEnv,
+    ...(ctx.spawn === undefined ? {} : { spawn: ctx.spawn }),
+    onProgress,
+  });
+
+  return { ...fragment, arm: item.arm };
+}
+
+/** Outcome of a tier-ordered eval run: the fragments that RAN, plus (when the
+ *  fail-fast gate fired with higher tiers pending) which tiers were SKIPPED. */
+interface TieredEvalRun {
+  fragments: EvalFragment[];
+  skipped?: SkippedEvalsSummary;
+}
+
+interface RunEvalsTieredInput {
+  /** All evals in the suite (grouped by tier internally). */
+  evals: readonly EvalEntry[];
+  /** Whether to also run each eval's WITHOUT (baseline) arm. */
+  baseline: boolean;
+  /** Run one tier's work items bounded-parallel and return their graded fragments. */
+  runTier: (items: EvalWorkItem[]) => Promise<EvalFragment[]>;
+}
+
+/**
+ * Run evals TIER by TIER (ascending), bounded-parallel WITHIN each tier, with a
+ * GATE between tiers (issue #145 Phase G). After a tier completes, apply the
+ * default gate policy ({@link shouldGateAfterTier}) over that tier's WITH-arm
+ * fragments: if any eval in the tier did not fully pass, do NOT launch the higher
+ * (more expensive) tiers — their evals are recorded as SKIPPED (a distinct state,
+ * never counted as passed) so the run stops spending once a cheaper tier already
+ * failed. In-flight policy: the tier's own running evals finish (awaited by
+ * `runTier`) BEFORE the gate is checked, so we never launch the next tier once we
+ * decide to stop. The WITHOUT (baseline) arm rides alongside its WITH arm but does
+ * not drive the gate — gating is about the WITH-arm skill behavior only.
+ */
+async function runEvalsTiered(input: RunEvalsTieredInput): Promise<TieredEvalRun> {
+  const groups = groupEvalsByTier(input.evals);
+  const fragments: EvalFragment[] = [];
+  for (const [index, group] of groups.entries()) {
+    const tierFragments = await input.runTier(buildEvalWorkItems(group.evals, input.baseline));
+    fragments.push(...tierFragments);
+    const withArm = tierFragments.filter((f) => f.arm !== 'without');
+    if (!shouldGateAfterTier(withArm)) continue;
+    const remaining = groups.slice(index + 1);
+    if (remaining.length === 0) break;
+    const skipped = buildSkippedSummary(group.tier, remaining);
+    // Legibility (required): name the skipped tiers on stderr so a fail-fast run is
+    // never mistaken for a smaller passing suite. stdout stays machine-readable.
+    process.stderr.write(formatSkippedTiersSummary(skipped) + '\n');
+    return { fragments, skipped };
+  }
+  return { fragments };
+}
+
+/** The results/ artifacts vat is the SOLE writer of, resolved for one run. */
+export interface ArtifactPaths {
+  gradingOut: string;
+  frictionOut: string;
+  baselineOut: string;
+  toolEvalOut: string;
+}
+
+/** Resolve the run's grading/friction/baseline/tool-eval artifact paths under
+ *  `resultsDir`. Single source of truth for the filenames (used by the
+ *  pre-pipeline stale wipe AND the post-merge writer). */
+export function resolveArtifactPaths(resultsDir: string): ArtifactPaths {
+  return {
+    gradingOut: safePath.join(resultsDir, 'grading.json'),
+    frictionOut: safePath.join(resultsDir, 'friction.json'),
+    baselineOut: safePath.join(resultsDir, 'baseline.json'),
+    toolEvalOut: safePath.join(resultsDir, 'tool-eval.json'),
+  };
+}
+
+/**
+ * Remove any PRIOR run's artifacts before this run writes its own. The harness
+ * root is deterministic per skill-set and reused across runs (`--keep`/`--out`, or
+ * after a crash/SIGKILL that preempted cleanup), so a stale grading/friction/
+ * baseline/tool-eval.json can otherwise survive into a run that throws BEFORE the merge —
+ * where the `finally` would then echo the PRIOR run's friction as if it were this
+ * run's. Wiping all three up front closes that cross-run leak. Best-effort
+ * (`force: true`) — a missing file is fine.
+ */
+export function wipeStaleArtifacts(paths: ArtifactPaths): void {
+  rmSync(paths.gradingOut, { force: true });
+  rmSync(paths.frictionOut, { force: true });
+  rmSync(paths.baselineOut, { force: true });
+  rmSync(paths.toolEvalOut, { force: true });
+}
+
+/**
+ * Merge the run's grader fragments and WRITE the run artifacts (vat is the SOLE
+ * writer): grading.json from the WITH-arm fragments, friction.json from ALL
+ * fragments, tool-eval.json from the WITH-arm fragments' `tool` verdicts (a
+ * SEPARATE channel — C2; the WITHOUT arm carries no toolExpectations), and — only
+ * when a WITHOUT arm ran (baseline) — baseline.json from the WITHOUT-arm fragments
+ * (informational A/B, never part of the verdict). Stale copies from a reused harness
+ * were already removed by {@link wipeStaleArtifacts} pre-pipeline. Returns the
+ * reconciled prose-expectation verdict AND the merged tool-eval report so the caller
+ * can compute the COMPOSITE verdict. Every fragment's per-run nonce is re-verified
+ * inside {@link mergeFragmentsToGrading}.
+ */
+function writeRunArtifactsAndReconcile(
+  fragments: EvalFragment[],
+  runNonce: string,
+  paths: ArtifactPaths,
+): { verdict: GradingVerdict; toolEval: ToolEvalReport } {
+  const { withArm, withoutArm } = partitionFragmentsByArm(fragments);
+
+  const grading = mergeFragmentsToGrading(withArm, runNonce);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
+  writeFileSync(paths.gradingOut, JSON.stringify(grading, null, 2) + '\n', 'utf-8');
+
+  const friction = mergeFragmentsToFriction(fragments);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
+  writeFileSync(paths.frictionOut, JSON.stringify(friction, null, 2) + '\n', 'utf-8');
+
+  // Tool verdicts come from the WITH arm ONLY — the WITHOUT/skill-absent arm never
+  // carries toolExpectations, so its fragments have no `tool` body to merge.
+  const toolEval = mergeFragmentsToToolEval(withArm);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
+  writeFileSync(paths.toolEvalOut, JSON.stringify(toolEval, null, 2) + '\n', 'utf-8');
+
+  if (withoutArm.length > 0) {
+    const baseline = mergeFragmentsToGrading(withoutArm, runNonce);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
+    writeFileSync(paths.baselineOut, JSON.stringify(baseline, null, 2) + '\n', 'utf-8');
+  }
+
+  return { verdict: reconcileGrading(grading), toolEval };
+}
+
+/**
+ * The COMPOSITE run verdict (issue #145 Phase T): the run passes only when BOTH
+ * the prose-expectation grading passed AND every tool-expectation verdict passed.
+ * Tool verdicts live in tool-eval.json (a SEPARATE channel — C2); this combines
+ * the two at the exit-code layer WITHOUT mixing the channels' data. When no eval
+ * declared `toolExpectations`, `toolEval.evals` is empty and this equals
+ * `outputAllPassed`. Pure + unit-testable.
+ */
+export function computeCompositeVerdict(outputAllPassed: boolean, toolEval: ToolEvalReport): boolean {
+  return outputAllPassed && toolEval.evals.every((v) => v.passed);
+}
+
+/**
+ * The run's final pass/fail after cost-tiered fail-fast: the {@link
+ * computeCompositeVerdict} of the tiers that RAN, AND no tiers were skipped. A
+ * fail-fast run that gated higher tiers is NEVER a pass (skipped ≠ passed) — this
+ * forces `false` so the exit code is EvalFailure (4), never downgraded to 0 by the
+ * composite path alone. Pure + unit-testable.
+ */
+export function resolveCompositeAllPassed(
+  outputAllPassed: boolean,
+  toolEval: ToolEvalReport,
+  skipped: SkippedEvalsSummary | undefined,
+): boolean {
+  return computeCompositeVerdict(outputAllPassed, toolEval) && skipped === undefined;
+}
+
+/**
+ * The run's human summary line, computed from the COMPOSITE verdict so an
+ * output-pass with a failing tool verdict still reads FAIL. The prose-expectation
+ * counts (`passed/total`) come from the grading verdict; when any tool-expectation
+ * verdict failed, a `(N tool)` suffix names how many — so a composite FAIL whose
+ * OUTPUT counts look all-green (e.g. `FAIL 3/3 (1 tool)`) is self-explaining. Pure.
+ */
+export function buildRunSummary(
+  verdict: GradingVerdict,
+  toolEval: ToolEvalReport,
+  compositeAllPassed: boolean,
+): string {
+  const base = `${compositeAllPassed ? 'PASS' : 'FAIL'} ${verdict.passed}/${verdict.total}`;
+  const toolFailures = toolEval.evals.filter((v) => !v.passed).length;
+  return toolFailures > 0 ? `${base} (${toolFailures} tool)` : base;
+}
+
+/**
+ * The run summary line, appending the fail-fast SKIPPED note when the tier gate
+ * stopped higher tiers. Legibility is required — the skipped tiers are named on
+ * their own line, never silently dropped. Pure. Note that a run with skipped
+ * tiers ALWAYS reads FAIL (skipped ≠ passed forces `compositeAllPassed` false at
+ * the call site), so the base line is already FAIL when the note is present.
+ */
+export function buildRunSummaryWithSkips(
+  verdict: GradingVerdict,
+  toolEval: ToolEvalReport,
+  compositeAllPassed: boolean,
+  skipped: SkippedEvalsSummary | undefined,
+): string {
+  const base = buildRunSummary(verdict, toolEval, compositeAllPassed);
+  return skipped === undefined ? base : `${base}\n${formatSkippedTiersSummary(skipped)}`;
+}
+
+/**
+ * D2 fail-closed gate: re-read ONE vat-written results artifact and assert it
+ * exists, parses as JSON, and validates against its schema. vat is the SOLE writer
+ * of everything under results/, so a missing/unparseable/invalid file here is a
+ * HARNESS bug ({@link InternalHarnessError} → exit 1), never a skill fault. This is
+ * safe precisely because vat always writes these after the merge succeeds.
+ */
+function assertVatWroteArtifact(path: string, validate: (raw: unknown) => void, label: string): void {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
+  if (!existsSync(path)) {
+    throw new InternalHarnessError(`vat did not write ${label} at ${path} after the merge — harness bug.`);
+  }
+  let raw: unknown;
+  try {
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived results path
+    raw = JSON.parse(readFileSync(path, 'utf-8'));
+  } catch (err) {
+    throw new InternalHarnessError(
+      `vat-written ${label} at ${path} is not valid JSON (harness bug): ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+  try {
+    validate(raw);
+  } catch (err) {
+    throw new InternalHarnessError(
+      `vat-written ${label} at ${path} failed its schema (harness bug): ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
+}
+
+/**
+ * Post-merge D2 gate over the vat-written results artifacts (vat is SOLE writer):
+ * grading.json, friction.json, and tool-eval.json must each exist + parse + validate.
+ * A separate, explicit check (NOT folded into any prompt-invariant linter) — fail-closed
+ * and safe because vat wrote every one of these itself just above.
+ */
+function assertVatWroteArtifacts(paths: ArtifactPaths): void {
+  assertVatWroteArtifact(paths.gradingOut, (raw) => { GradingReportSchema.parse(raw); }, 'grading.json');
+  assertVatWroteArtifact(paths.frictionOut, (raw) => { FrictionReportSchema.parse(raw); }, 'friction.json');
+  assertVatWroteArtifact(paths.toolEvalOut, (raw) => { ToolEvalReportSchema.parse(raw); }, 'tool-eval.json');
+}
+
+// ---------------------------------------------------------------------------
 // Main orchestrator
 // ---------------------------------------------------------------------------
 
@@ -884,16 +1266,25 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
   // Release the lock and remove the harness dir if the run is interrupted by
   // SIGINT/SIGTERM — a try/finally alone does not run on a signal, so without
   // this the lockfile (and staged bytes) would leak and break the next run.
+  //
+  // The vat-only grader dir lives OUTSIDE harnessRoot (forgery-proofing, see
+  // resolveGraderOutDir) so cleanupHarness does not reach it — cleanup removes it
+  // separately. Referenced via the mutable `graderOutDir` below so a signal that
+  // fires mid-pipeline reaps it too, not just the normal finally.
+  let graderOutDir: string | undefined;
   const cleanup = (): void => {
     lock.release();
     cleanupHarness(harnessRoot, { keep: opts.keep === true, created: harnessCreated });
+    removeGraderOutDir(graderOutDir);
   };
   const removeSignalCleanup = installSignalCleanup({ onSignal: cleanup });
 
   // Hoisted so the finally can surface packaging friction even when a throw
-  // (missing/invalid grading.json, nonce/skew guard, timeout) preempts the
-  // normal verdict path. friction.json is written at STAGING time (pre-spawn),
-  // so it is present and meaningful on exactly those broken-run paths.
+  // (a grader/executor failure, the per-fragment nonce guard, a spawn timeout)
+  // preempts the normal verdict path. friction.json is written by VAT AFTER the
+  // executor→grader pipeline merges the grader fragments — so it is present only
+  // once merging succeeded; on a pre-merge throw the finally simply finds no
+  // friction.json and emits nothing (a no-op).
   let frictionOut: string | undefined;
 
   try {
@@ -945,10 +1336,12 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       };
     }
 
-    // Step 5.5: Parse the eval suite and stage per-eval input workspaces.
+    // Step 5.5: Parse the eval suite and stage per-eval input workspaces. The
+    // parsed suite is threaded on so the eval loop has the entries without
+    // re-reading; declaredEvalCount is derived from it (suite.evals.length).
     const workspaceStageResult = attemptStageWorkspaces(evalsPath, harnessRoot);
     if ('exitCode' in workspaceStageResult) return workspaceStageResult;
-    const { workspacesRoot, declaredEvalCount } = workspaceStageResult;
+    const { workspacesRoot, declaredEvalCount, suite } = workspaceStageResult;
 
     // Step 6: Enforce the §12 security ack (must pass --i-understand-this-runs-skill-code).
     // Only enforced when not a dry-run and not already acknowledged.
@@ -961,7 +1354,9 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       };
     }
 
-    // Step 7: Build effective experimenter prompt and validate invariants.
+    // Step 7: Results dir + provenance. vat is the SOLE writer of everything under
+    // results/ — grading.json/friction.json/baseline.json come from the merged
+    // grader fragments below, never from the (untrusted) model.
     const resultsDir = safePath.joinUnderRoot(harnessRoot, 'results');
     mkdirSyncReal(resultsDir, { recursive: true });
 
@@ -983,45 +1378,29 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     );
     process.stderr.write(`Provenance: ${provenance.fingerprint}\n`);
 
-    const gradingOut = safePath.join(resultsDir, 'grading.json');
-    frictionOut = safePath.join(resultsDir, 'friction.json');
+    // Resolve the results/ artifact paths and WIPE any prior run's artifacts up
+    // front: harnessRoot is deterministic and may be reused (--keep/--out, or after
+    // a crash before cleanup), so a stale grading/friction/baseline.json must never
+    // leak into — or be echoed by the finally on — this run. `frictionOut` is
+    // hoisted so the finally can echo THIS run's friction (and only after the wipe).
+    const artifacts = resolveArtifactPaths(resultsDir);
+    wipeStaleArtifacts(artifacts);
+    frictionOut = artifacts.frictionOut;
 
-    const effectivePrompt =
-      opts.promptOverride ??
-      buildExperimenterPrompt({
-        subjectPath: subjectStagedDir,
-        evalsPath,
-        gradingOut,
-        frictionOut,
-        workspacesRoot,
-        baseline: opts.baseline ?? false,
-      });
-
-    assertPromptInvariants(effectivePrompt);
-
-    // Integrity nonce (Harness B): stamp a secret per-run nonce the experimenter
-    // must echo into grading.json, and verify it after the run. This is what
-    // distinguishes a grading produced by the experimenter WE prompted from one
-    // forged/left behind by untrusted skill code in the shared sandbox. The nonce
-    // is appended AFTER any user prompt override so a committed config can't opt
-    // out. The full prompt (with the nonce) reaches claude only via stdin (see
-    // spawnHeadlessClaude) and is NEVER written to disk; the persisted audit copy
-    // below is redacted so skill code can't read the nonce back and forge a match.
-    const runNonce = randomBytes(16).toString('hex');
-    const noncedPrompt = appendIntegrityNonceDirective(effectivePrompt, runNonce);
-
-    // Step 8: Write the REDACTED experimenter prompt as the audit artifact. The
-    // real (nonce-bearing) prompt is passed to the spawn in memory, not from here.
-    const promptFile = safePath.join(resultsDir, 'experimenter-prompt.txt');
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived path
-    writeFileSync(promptFile, redactNonce(noncedPrompt, runNonce) + '\n', 'utf-8');
-
-    // Step 7.5: Resolve the declared test env (Features A + B). Token resolution
-    // can hard-fail (exit 2) on an unknown ${token}; do it before the dry-run
-    // short-circuit so a dry run validates interpolation too.
+    // Step 7.5: Resolve the executor's declared test env (Features A + B). Token
+    // resolution can hard-fail (exit 2) on an unknown ${token}; do it before the
+    // dry-run short-circuit so a dry run validates interpolation too. resolvedAuth
+    // must be non-null once preflight passed — a null would mean spawning with an
+    // unscrubbed env, which we refuse (it would hand skill code every secret).
+    const { resolvedAuth } = preflightResult;
+    if (resolvedAuth === null) {
+      throw new InternalHarnessError(
+        'Internal: preflight passed but resolvedAuth is null — refusing to spawn with an unscrubbed environment.',
+      );
+    }
     const assembledEnv = resolveDeclaredChildEnv({
       opts,
-      resolvedAuth: preflightResult.resolvedAuth,
+      resolvedAuth,
       subjectStagedDir,
       harnessRoot,
       resultsDir,
@@ -1029,14 +1408,15 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       subjectPluginRoot,
     });
 
-    // Echo the selected model on EVERY run (regular + dry-run) so it is
-    // unambiguous which model the experimenter spawn uses. The id is forwarded
-    // verbatim to `claude --model`; with none set, no flag is passed and claude
-    // uses its own default.
+    // Resolve the run knobs: executor (subject) model, pinned grader model, and
+    // pipeline width. graderModel is deliberately distinct from the subject model
+    // so the judge stays comparable across runs.
+    const graderModel = opts.graderModel ?? DEFAULT_GRADER_MODEL;
+    const concurrency = opts.concurrency ?? DEFAULT_CONCURRENCY;
     const modelFlag = buildModelFlag(knobs.model);
-    process.stderr.write(`Model: ${knobs.model ?? '(claude default)'}\n`);
+    process.stderr.write(`Model: ${knobs.model ?? '(claude default)'} | grader: ${graderModel}\n`);
 
-    // Step 9: Dry-run short-circuit — return assembled info without spawning.
+    // Step 8: Dry-run short-circuit — return assembled info without spawning.
     if (opts.dryRun === true) {
       return {
         harnessPath: harnessRoot,
@@ -1050,92 +1430,107 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
           provenanceFingerprint: provenance.fingerprint,
           provenanceEntryCount: provenance.entries.length,
           modelFlag,
+          evalCount: declaredEvalCount,
+          concurrency,
+          graderModel,
         }),
       };
     }
 
-    // Step 10: Spawn headless Claude.
-    // A reused harness root (--out / --keep) may carry a grading.json OR a
-    // friction.json from an earlier run. Remove both so a post-spawn read can
-    // only reflect THIS run (a stale friction.json must not leak across runs).
-    rmSync(gradingOut, { force: true });
-    rmSync(frictionOut, { force: true });
+    // Step 9: Run the vat-owned executor→grader pipeline. ONE secret per-run nonce
+    // is stamped into every grader prompt (via stdin) and re-verified per fragment
+    // on merge — this is what distinguishes a fragment produced by a grader WE
+    // prompted from one forged/left behind by untrusted skill code in the executor's
+    // sandbox. The grader dir is created OUTSIDE harnessRoot (forgery-proof; see
+    // resolveGraderOutDir) at 0700, and removed in the finally / on signal.
+    //
+    // The dir is named by an INDEPENDENT random token (graderDirToken), NOT the
+    // nonce: the dir name and the grader's --add-dir argv are world-listable in the
+    // shared OS temp dir, so encoding the secret nonce there would let same-user
+    // skill code read it off `ls <tmp>` and forge a valid-nonce fragment. The nonce
+    // is kept off disk / off argv — delivered to the grader only via its stdin prompt.
+    const runNonce = randomBytes(16).toString('hex');
+    const graderDirToken = randomBytes(16).toString('hex');
+    graderOutDir = resolveGraderOutDir(graderDirToken);
+    mkdirSyncReal(graderOutDir, { recursive: true, mode: 0o700 });
 
-    const timeoutMs = resolveTimeoutMs(opts, declaredEvalCount);
-    const spawnOpts = {
-      // In-memory, nonce-bearing prompt — streamed to stdin, never written to a
-      // file the skill could read (see the integrity-nonce note above).
-      prompt: noncedPrompt + '\n',
+    const evalCtx: EvalRunContext = {
+      subjectStagedDir,
+      workspacesRoot,
       pluginDirs,
-      sandboxDir: harnessRoot,
-      cwd: harnessRoot,
-      // The scrubbed forwarded env, unioned with the declared test env (Features
-      // A + B) and CLAUDE_PLUGIN_ROOT when the subject is plugin-distributed.
-      env: assembledEnv.env,
-      timeoutMs,
-      onStdout: (chunk: string) => { process.stderr.write(chunk); },
-      onStderr: (chunk: string) => { process.stderr.write(chunk); },
+      graderOutDir,
+      runNonce,
+      graderModel,
+      ...(knobs.model === undefined ? {} : { model: knobs.model }),
       maxTurns: knobs.maxTurns,
       maxBudgetUsd: knobs.maxBudgetUsd,
-      ...(knobs.model === undefined ? {} : { model: knobs.model }),
+      timeoutMs: resolveTimeoutMs(opts),
       ...(knobs.stallMs === undefined ? {} : { stallMs: knobs.stallMs }),
+      // Executor gets the full assembled env (the skill needs its injected
+      // secrets); the grader is trusted vat infra loading no skill, so it gets
+      // AUTH-ONLY env — never the skill's injected secrets.
+      executorEnv: assembledEnv.env,
+      graderEnv: resolvedAuth.forwardedEnv,
+      ...(opts.declaredExecutables === undefined ? {} : { declaredExecutables: opts.declaredExecutables }),
+      ...(opts.spawn === undefined ? {} : { spawn: opts.spawn }),
     };
 
-    const spawnResult = await spawnHeadlessClaude(spawnOpts);
-    // Thread the declared eval count so a timeout message can explain WHY the budget
-    // may be too small for a large suite (no completed count: it isn't cheaply/safely
-    // available here — all workspaces are staged up front, so subdir count ≠ progress).
-    assertExperimenterSucceeded(spawnResult, knobs.stallMs, timeoutMs, { declaredEvalCount });
+    // Tier-ordered, cost-tiered fail-fast (issue #145 Phase G): run evals tier by
+    // tier (ascending / cheapest first), bounded-parallel WITHIN each tier, and
+    // gate BETWEEN tiers — once a cheaper tier fails a gating expectation, the
+    // higher (more expensive) tiers are SKIPPED (never graded, never passed), so a
+    // broken foundational expectation stops the run from spending on hard tiers.
+    // Each tier is one runPipeline: bounded-parallel, retrying a RateLimitSignal
+    // per item. An InternalHarnessError thrown by any executor/grader (timeout/
+    // stall/spawn-error, grader failure, missing fragment, nonce mismatch)
+    // propagates OUT unhandled → mapErrorToExitCode → exit 1; a spawn or grader
+    // break is never laundered into a pass/fail verdict (R1 no-laundering).
+    const { fragments, skipped } = await runEvalsTiered({
+      evals: suite.evals,
+      baseline: opts.baseline === true,
+      runTier: (items) =>
+        runPipeline<EvalWorkItem, EvalFragment>({
+          items,
+          concurrency,
+          worker: (item) => runEvalWorker(item, evalCtx),
+        }),
+    });
 
-    // Step 11: Parse grading.json — must be present and valid.
-    // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived path
-    if (!existsSync(gradingOut)) {
-      throw new InternalHarnessError(
-        `Experimenter exited (status ${spawnResult.status}) without writing grading.json at ${gradingOut}.`,
-      );
-    }
+    // Step 10: vat merges the grader fragments and writes grading.json/friction.json/
+    // tool-eval.json (and baseline.json for a baseline run), then reconciles the
+    // authoritative prose-expectation verdict from the WITH-arm per-expectation
+    // `passed` flags — NOT any self-reported summary. An executor CLEAN failure
+    // reaches here as a FAILing fragment → composite verdict → exit 4.
+    const { verdict, toolEval } = writeRunArtifactsAndReconcile(fragments, runNonce, artifacts);
 
-    let gradingRaw: unknown;
-    try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- our own derived path
-      gradingRaw = JSON.parse(readFileSync(gradingOut, 'utf-8'));
-    } catch (e) {
-      throw new InternalHarnessError(`grading.json is not valid JSON: ${String(e)}`);
-    }
+    // D2 fail-closed gate: vat is the SOLE writer of results/, so a missing/unparseable/
+    // invalid grading.json, friction.json, or tool-eval.json after the merge is a HARNESS
+    // bug (exit 1), never a skill fault. A SEPARATE explicit check, not a prompt invariant.
+    assertVatWroteArtifacts(artifacts);
 
-    const grading = parseGradingJson(gradingRaw);
-    // Integrity gate (Harness B): reject a grading.json that doesn't echo THIS
-    // run's secret nonce BEFORE trusting any verdict — a missing/wrong nonce means
-    // the grading was not produced by the experimenter we prompted (e.g. forged by
-    // skill code in the sandbox). Thrown GradingNonceError maps to exit 1.
-    assertGradingNonce(grading.runNonce, runNonce);
-    // Verdict comes from the authoritative per-expectation `passed` flags, NOT
-    // the grader's self-reported summary. reconcileGrading throws GradingSkewError
-    // if the grader graded nothing or its summary disagrees with the expectations.
-    const { passed, total, allPassed } = reconcileGrading(grading);
-    const summary = `${allPassed ? 'PASS' : 'FAIL'} ${passed}/${total}`;
+    // Composite verdict: the run passes only when BOTH output expectations AND every
+    // tool-expectation verdict passed — so an output all-pass where a `mustRun` never
+    // ran yields FAIL → exit 4. Tool verdicts stay in tool-eval.json (C2); the composite
+    // combines the two channels only here, at the exit-code layer. A fail-fast run
+    // that SKIPPED higher tiers is never a pass: skipped ≠ passed forces allPassed
+    // false → exit 4 (never downgraded to 0 by the composite path).
+    const allPassed = resolveCompositeAllPassed(verdict.allPassed, toolEval, skipped);
+    const summary = buildRunSummaryWithSkips(verdict, toolEval, allPassed, skipped);
 
-    // Default (fail-closed): a failing verdict returns EvalFailure (4), distinct
-    // from the harness-broke codes (1/2/3) so CI can gate on regressions. Opt-out:
-    // with tolerateEvalFailure, a failing verdict is downgraded to Ok (0) and the
-    // pass/fail count lives only in the summary string and grading.json.
     return {
       harnessPath: harnessRoot,
       exitCode: verdictExitCode(allPassed, opts.tolerateEvalFailure === true),
       summary,
     };
   } finally {
-    // Surface any packaging-fidelity friction the experimenter recorded to STDERR
-    // BEFORE cleanup removes the harness dir. Placed in finally (not the happy path)
-    // so friction still surfaces when a throw — missing/invalid grading.json, the
-    // nonce/skew guard, or a timeout — preempts the verdict; on exactly those broken
-    // runs the friction ("your bundle is missing") is the key diagnostic and would
-    // otherwise be masked by the error. Best-effort + stderr-only (stdout stays
-    // machine-readable); a no-op when the path is unassigned, or friction.json
-    // is absent or empty.
+    // Surface any packaging-fidelity friction VAT merged into friction.json to
+    // STDERR BEFORE cleanup removes the harness dir. Best-effort + stderr-only
+    // (stdout stays machine-readable); a no-op when the path is unassigned (a
+    // pre-merge throw) or friction.json is absent or empty.
     emitFrictionReport(frictionOut);
     // Remove the signal handlers first (no listener leak across runs), then run
-    // the same cleanup: release the lock, then remove the harness dir.
+    // the same cleanup: release the lock, remove the harness dir, and remove the
+    // vat-only grader dir (which lives outside harnessRoot).
     removeSignalCleanup();
     cleanup();
   }

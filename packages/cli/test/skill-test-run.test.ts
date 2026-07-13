@@ -9,11 +9,15 @@
  *   - exit 1  when an internal/parse-failure error is thrown (InternalHarnessError)
  */
 
+import { writeFileSync } from 'node:fs';
+
 import * as harness from '@vibe-agent-toolkit/agent-skills';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import * as yaml from 'yaml';
 
 import {
+  deriveDeclaredExecutableNames,
   isPathSourceTarget,
   resolveCappedKnob,
   resolveSubjectForTest,
@@ -22,6 +26,7 @@ import {
 import { resetSkillDiscoveryCache } from '../src/skill-resolution/index.js';
 
 import { setupReferenceFixture } from './skill-resolution/helpers.js';
+import { createTestTempDir } from './system/test-common.js';
 
 /** Path-form subject so resolution returns `source` without a declared skill. */
 const PATH_SUBJECT = './my-skill';
@@ -118,6 +123,14 @@ describe('vat skill test run (orchestration)', () => {
   it('exits 2 on a non-numeric --max-turns (never reaches the harness)', async () => {
     await expectPreflightExit2({ maxTurns: 'abc' });
   });
+
+  it('exits 2 on a non-numeric --concurrency (never reaches the harness)', async () => {
+    await expectPreflightExit2({ concurrency: 'abc' });
+  });
+
+  it('exits 2 on a non-positive --concurrency (never reaches the harness)', async () => {
+    await expectPreflightExit2({ concurrency: '0' });
+  });
 });
 
 // resolveCappedKnob encodes the security-critical asymmetry: a committed config
@@ -188,6 +201,19 @@ async function runAndCaptureOpts(
 }
 
 const ENV_TEST_SKILL = './acme-skill';
+
+/** Grader model values used across the top-level `test:` config precedence tests. */
+const CONFIG_GRADER_MODEL = 'config-grader';
+const FLAG_GRADER_MODEL = 'flag-grader';
+
+/** Write a throwaway project config with a top-level `test:` node and point VAT_TEST_CONFIG at it. */
+function stubGlobalTestConfig(testNode: Record<string, unknown>): void {
+  const dir = createTestTempDir('vat-global-test-config-');
+  const configPath = safePath.join(dir, 'vibe-agent-toolkit.config.yaml');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only temp path from createTestTempDir
+  writeFileSync(configPath, yaml.stringify({ version: 1, test: testNode }));
+  process.env['VAT_TEST_CONFIG'] = configPath;
+}
 
 describe('vat skill test run (env plumbing)', () => {
   afterEach(() => vi.restoreAllMocks());
@@ -272,6 +298,26 @@ describe('vat skill test run (output routing)', () => {
 // isPathSourceTarget flags a CONFIG-BLIND path target (staged as-is, mapping to no
 // declared skill) — distinct from a NAME target (buildable) and from a path that DOES
 // map to a declared skill (linkedToDeclaredSkill). The warning fires only for the blind case.
+describe('deriveDeclaredExecutableNames (Phase T grader recognition aid)', () => {
+  it('returns undefined for absent or empty executables', () => {
+    expect(deriveDeclaredExecutableNames(undefined)).toBeUndefined();
+    expect(deriveDeclaredExecutableNames([])).toBeUndefined();
+  });
+
+  it('maps each executable to { name: basename-without-ext, howInvoked, kind }', () => {
+    const out = deriveDeclaredExecutableNames([
+      { path: 'scripts/dxa.py', kind: 'python', howInvoked: 'uv run dxa.py' },
+      { path: 'dist/dxa.mjs', kind: 'node', howInvoked: 'node dist/dxa.mjs' },
+      { path: 'bin/dxa', kind: 'binary', howInvoked: './dxa' },
+    ]);
+    expect(out).toEqual([
+      { name: 'dxa', howInvoked: 'uv run dxa.py', kind: 'python' },
+      { name: 'dxa', howInvoked: 'node dist/dxa.mjs', kind: 'node' },
+      { name: 'dxa', howInvoked: './dxa', kind: 'binary' },
+    ]);
+  });
+});
+
 describe('isPathSourceTarget', () => {
   it('is true for a plain {path} source that would NOT be built and maps to no declared skill', () => {
     expect(isPathSourceTarget({ wouldBuild: false, subjectSource: { path: './my-skill' } })).toBe(true);
@@ -464,5 +510,60 @@ describe('runSkillTestRun (security ack gates the build end-to-end — M2)', () 
     expect(exit).toHaveBeenCalledWith(2);
     expect(pkg).not.toHaveBeenCalled();
     expect(harnessSpy).not.toHaveBeenCalled();
+  });
+});
+
+// --grader-model / --concurrency (issue #145): GLOBAL knobs resolved from the
+// TOP-LEVEL `test:` config node (SkillTestGlobalConfigSchema), never the
+// per-skill `skills.config.<skill>.test` block. Precedence: flag > top-level
+// config > built-in default (left undefined so the harness applies
+// DEFAULT_GRADER_MODEL / DEFAULT_CONCURRENCY). VAT_TEST_CONFIG overrides the
+// config file `loadConfig` reads, independent of the resolved project root.
+describe('vat skill test run (--grader-model / --concurrency — global test: config, issue #145)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    delete process.env['VAT_TEST_CONFIG'];
+  });
+
+  it('a --grader-model flag wins over top-level config', async () => {
+    stubGlobalTestConfig({ graderModel: CONFIG_GRADER_MODEL });
+    const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
+      graderModel: FLAG_GRADER_MODEL,
+      iUnderstandThisRunsSkillCode: true,
+    });
+    expect(opts.graderModel).toBe(FLAG_GRADER_MODEL);
+  });
+
+  it('reads graderModel from the top-level test: config when no flag is set', async () => {
+    stubGlobalTestConfig({ graderModel: CONFIG_GRADER_MODEL });
+    const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
+      iUnderstandThisRunsSkillCode: true,
+    });
+    expect(opts.graderModel).toBe(CONFIG_GRADER_MODEL);
+  });
+
+  it('a --concurrency flag wins over top-level config', async () => {
+    stubGlobalTestConfig({ concurrency: 2 });
+    const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
+      concurrency: '9',
+      iUnderstandThisRunsSkillCode: true,
+    });
+    expect(opts.concurrency).toBe(9);
+  });
+
+  it('reads concurrency from the top-level test: config when no flag is set', async () => {
+    stubGlobalTestConfig({ concurrency: 7 });
+    const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
+      iUnderstandThisRunsSkillCode: true,
+    });
+    expect(opts.concurrency).toBe(7);
+  });
+
+  it('leaves graderModel and concurrency undefined when neither flag nor top-level config sets them', async () => {
+    const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
+      iUnderstandThisRunsSkillCode: true,
+    });
+    expect(opts.graderModel).toBeUndefined();
+    expect(opts.concurrency).toBeUndefined();
   });
 });

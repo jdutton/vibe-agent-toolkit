@@ -24,7 +24,8 @@
                   "undeclared-dependency",
                   "ambient-propping",
                   "doc-engine-drift",
-                  "missing-bundled-file"
+                  "missing-bundled-file",
+                  "tool-expectation"
                 ]
               },
               "message": {

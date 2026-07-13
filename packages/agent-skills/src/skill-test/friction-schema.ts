@@ -14,6 +14,11 @@ export const FrictionCategorySchema = z.enum([
   'ambient-propping',
   'doc-engine-drift',
   'missing-bundled-file',
+  // A declared tool-expectation was not met (e.g. a `mustRun` executable never
+  // ran, or a `mustNotRun` one did). The pass/fail verdict lives in
+  // tool-eval.json (a separate channel — C2); this category lets the grader
+  // ALSO surface the shortfall as human-facing packaging friction when useful.
+  'tool-expectation',
 ]);
 
 export const FrictionItemSchema = z.object({

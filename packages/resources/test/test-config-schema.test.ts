@@ -14,7 +14,6 @@ describe('TestConfigSchema', () => {
       timeout: 600,
       stall: 60,
       evals: 'evals/evals.json',
-      experimenterPrompt: 'prompts/experimenter.txt',
       auth: 'inherit',
       requireAuth: 'subscription',
       baseline: false,
