@@ -16,7 +16,7 @@ export {
   type EvalFragment,
   type EvalFragmentExpectation,
 } from './eval-fragment.js';
-export { lintEvalExpectations, type EvalLintWarning } from './eval-lint.js';
+export { lintEvalExpectations, lintToolExpectationExecutables, type EvalLintWarning } from './eval-lint.js';
 export {
   FrictionCategorySchema,
   FrictionItemSchema,

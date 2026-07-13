@@ -36,11 +36,12 @@ const RECOGNIZED_EVAL_FIELDS = [
 
 /**
  * True when `key` is exactly one edit (insert/delete/substitute one char) from
- * `target`. Used only to catch typos of recognized fields — deliberately a tiny
- * single-edit check, not a general edit-distance routine, so it stays cheap and
- * never fires on legitimately distinct adopter keys (`name`, `category`, `notes`).
+ * `target`. Used to catch typos of recognized fields (here) and of declared
+ * executable names ({@link ./eval-lint.ts}) — deliberately a tiny single-edit
+ * check, not a general edit-distance routine, so it stays cheap and never fires
+ * on legitimately distinct adopter strings (`name`, `category`, `notes`).
  */
-function isSingleEditAway(key: string, target: string): boolean {
+export function isSingleEditAway(key: string, target: string): boolean {
   if (key === target) return false;
   const lk = key.length;
   const lt = target.length;

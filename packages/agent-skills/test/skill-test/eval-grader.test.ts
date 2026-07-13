@@ -172,6 +172,29 @@ describe('runGraderForEval', () => {
     await expect(runGraderForEval(baseInput(graderOutDir, { spawn }))).rejects.toBeInstanceOf(EvalFragmentError);
   });
 
+  describe('costSink (spend aggregation, adopter follow-up)', () => {
+    it('reports the grader session cost parsed from its transcript', async () => {
+      const costs: (number | undefined)[] = [];
+      const { spawn } = makeSpawnStub({
+        stdoutLines: ['{"type":"result","subtype":"success","total_cost_usd":0.42}'],
+        beforeReturn: () => { writeFragment(graderOutDir, validFragmentFor(EVAL_ID, NONCE)); },
+      });
+
+      await runGraderForEval(baseInput(graderOutDir, { spawn, costSink: (usd) => costs.push(usd) }));
+
+      expect(costs).toEqual([0.42]);
+    });
+
+    it('reports undefined when the transcript carries no result cost', async () => {
+      const costs: (number | undefined)[] = [];
+      const { spawn } = stubWritingFragment(graderOutDir, validFragmentFor(EVAL_ID, NONCE));
+
+      await runGraderForEval(baseInput(graderOutDir, { spawn, costSink: (usd) => costs.push(usd) }));
+
+      expect(costs).toEqual([undefined]);
+    });
+  });
+
   describe('toolExpectations / declaredExecutables thread-through (issue #145 Phase T)', () => {
     it('reaches buildGraderPrompt when provided', async () => {
       // The eval declares toolExpectations, so the fragment must carry a `tool`

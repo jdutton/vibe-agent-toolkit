@@ -37,10 +37,12 @@ import {
   detectItemPluginLayout,
   flagDummyValueFor,
   formatFrictionReport,
+  formatRunCostSuffix,
   isAcknowledged,
   makeStageItem,
   partitionFragmentsByArm,
   renderPreflightSummary,
+  recordSessionCost,
   resolveArtifactPaths,
   resolveCompositeAllPassed,
   resolveGraderOutDir,
@@ -738,18 +740,69 @@ describe('buildRunSummary', () => {
 });
 
 describe('buildRunSummaryWithSkips', () => {
+  const FAIL_1_OF_2: GradingVerdict = { passed: 1, total: 2, allPassed: false };
+  /** A fail-fast gate that skipped `evalIds` in tier 1, gated by a tier-0 failure. */
+  const gatedSkip = (evalIds: string[]): SkippedEvalsSummary => ({
+    gatedByTier: 0,
+    firstSkippedTier: 1,
+    tiers: [{ tier: 1, evalIds }],
+    totalSkipped: evalIds.length,
+  });
+
   it('returns the base summary unchanged when no tiers were skipped', () => {
     expect(buildRunSummaryWithSkips(VERDICT_3_OF_3, makeToolEval([true]), true, undefined)).toBe('PASS 3/3');
   });
 
   it('appends a legible SKIPPED note on its own line when the gate fired', () => {
-    const summary = buildRunSummaryWithSkips(
-      { passed: 1, total: 2, allPassed: false },
-      makeToolEval([]),
-      false,
-      { gatedByTier: 0, firstSkippedTier: 1, tiers: [{ tier: 1, evalIds: ['x', 'y'] }], totalSkipped: 2 },
-    );
+    const summary = buildRunSummaryWithSkips(FAIL_1_OF_2, makeToolEval([]), false, gatedSkip(['x', 'y']));
     expect(summary).toBe('FAIL 1/2\nSKIPPED (fail-fast): tier 1 and above (2 evals) — gated by tier 0 failure');
+  });
+
+  it('appends the spend suffix on the verdict line, before any skipped note', () => {
+    const summary = buildRunSummaryWithSkips(FAIL_1_OF_2, makeToolEval([]), false, gatedSkip(['x']), {
+      totalUsd: 0.5,
+      sessions: 2,
+    });
+    expect(summary).toBe(
+      'FAIL 1/2 | ≈$0.50 across 2 sessions\nSKIPPED (fail-fast): tier 1 and above (1 eval) — gated by tier 0 failure',
+    );
+  });
+
+  it('omits the spend suffix when no session reported a cost', () => {
+    expect(buildRunSummaryWithSkips(VERDICT_3_OF_3, makeToolEval([true]), true, undefined, { totalUsd: 0, sessions: 0 })).toBe(
+      'PASS 3/3',
+    );
+  });
+});
+
+describe('recordSessionCost', () => {
+  it('folds a numeric cost into the accumulator and counts the session', () => {
+    const acc = { totalUsd: 0, sessions: 0 };
+    recordSessionCost(acc, 0.25);
+    recordSessionCost(acc, 0.1);
+    expect(acc).toEqual({ totalUsd: 0.35, sessions: 2 });
+  });
+
+  it('ignores an undefined or non-finite cost (mock spawn / missing result)', () => {
+    const acc = { totalUsd: 1, sessions: 1 };
+    recordSessionCost(acc, undefined);
+    recordSessionCost(acc, Number.NaN);
+    expect(acc).toEqual({ totalUsd: 1, sessions: 1 });
+  });
+});
+
+describe('formatRunCostSuffix', () => {
+  it('formats a cost + session count with two-decimal dollars', () => {
+    expect(formatRunCostSuffix({ totalUsd: 1.234, sessions: 6 })).toBe(' | ≈$1.23 across 6 sessions');
+  });
+
+  it('uses the singular "session" for exactly one', () => {
+    expect(formatRunCostSuffix({ totalUsd: 0.4, sessions: 1 })).toBe(' | ≈$0.40 across 1 session');
+  });
+
+  it('returns an empty string when no session reported a cost', () => {
+    expect(formatRunCostSuffix({ totalUsd: 0, sessions: 0 })).toBe('');
+    expect(formatRunCostSuffix(undefined)).toBe('');
   });
 });
 

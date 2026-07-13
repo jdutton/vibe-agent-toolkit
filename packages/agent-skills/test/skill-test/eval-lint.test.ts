@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { EvalEntry } from '../../src/skill-test/eval-inputs.js';
-import { lintEvalExpectations } from '../../src/skill-test/eval-lint.js';
+import { lintEvalExpectations, lintToolExpectationExecutables } from '../../src/skill-test/eval-lint.js';
 
 const MENTIONS_WIDGET_COUNT = 'mentions the widget count';
 const PRESENCE_ONLY_ID = 'presence-only';
@@ -81,5 +81,81 @@ describe('lintEvalExpectations', () => {
       makeEval({ id: 'weak-2', expectations: ['references the customer name'] }),
     ]);
     expect(warnings.map((w) => w.evalId)).toEqual(['weak-1', 'weak-2']);
+  });
+});
+
+describe('lintToolExpectationExecutables', () => {
+  const DECLARED = ['dxa'];
+
+  it('flags a separator-decorated typo of a declared executable and suggests it', () => {
+    const warnings = lintToolExpectationExecutables(
+      [makeEval({ id: 'typo', toolExpectations: { mustRun: ['dxa-py'] } })],
+      DECLARED,
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.evalId).toBe('typo');
+    expect(warnings[0]?.message).toContain('dxa-py');
+    expect(warnings[0]?.message).toContain('did you mean "dxa"');
+  });
+
+  it('flags a single-edit typo of a declared executable', () => {
+    const warnings = lintToolExpectationExecutables(
+      [makeEval({ id: 'edit', toolExpectations: { mustSucceed: ['dxaa'] } })],
+      DECLARED,
+    );
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]?.message).toContain('did you mean "dxa"');
+  });
+
+  it('does not flag an exact declared name or a recognized launch form', () => {
+    const warnings = lintToolExpectationExecutables(
+      [
+        makeEval({ id: 'exact', toolExpectations: { mustRun: ['dxa'] } }),
+        makeEval({ id: 'ext', toolExpectations: { mustRun: ['dxa.py'] } }),
+        makeEval({ id: 'dotslash', toolExpectations: { mustNotRun: ['./dxa'] } }),
+      ],
+      DECLARED,
+    );
+    expect(warnings).toHaveLength(0);
+  });
+
+  it('does not flag a deliberate built-in/system tool that is unlike any declared name', () => {
+    const warnings = lintToolExpectationExecutables(
+      [makeEval({ id: 'builtin', toolExpectations: { mustRun: ['Bash', 'git'] } })],
+      DECLARED,
+    );
+    expect(warnings).toHaveLength(0);
+  });
+
+  it('does not flag a prefix-sharing but distinct word (github vs git)', () => {
+    const warnings = lintToolExpectationExecutables(
+      [makeEval({ id: 'distinct', toolExpectations: { mustRun: ['github'] } })],
+      ['git'],
+    );
+    expect(warnings).toHaveLength(0);
+  });
+
+  it('returns no warnings when the skill declares no executables', () => {
+    const warnings = lintToolExpectationExecutables(
+      [makeEval({ id: 'no-manifest', toolExpectations: { mustRun: ['dxa-py'] } })],
+      [],
+    );
+    expect(warnings).toHaveLength(0);
+  });
+
+  it('flags a typo across any toolExpectations channel and dedupes repeats', () => {
+    const warnings = lintToolExpectationExecutables(
+      [makeEval({ id: 'seq', toolExpectations: { mustRun: ['dxa-py'], sequence: ['dxa-py'] } })],
+      DECLARED,
+    );
+    expect(warnings).toHaveLength(1);
+  });
+
+  it('ignores evals with no toolExpectations', () => {
+    const warnings = lintToolExpectationExecutables(
+      [makeEval({ id: 'plain' })],
+      DECLARED,
+    );
+    expect(warnings).toHaveLength(0);
   });
 });

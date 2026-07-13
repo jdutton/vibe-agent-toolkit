@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, unlinkSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath, spawnHeadlessClaude } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, parseStreamJsonTranscript, safePath, spawnHeadlessClaude } from '@vibe-agent-toolkit/utils';
 
 import { EvalFragmentError, parseEvalFragment, type EvalFragment } from './eval-fragment.js';
 import type { ToolExpectations } from './eval-inputs.js';
@@ -46,6 +46,13 @@ export interface RunGraderInput {
   spawn?: typeof spawnHeadlessClaude;
   /** Called with each stdout chunk as it streams (for progress echo). */
   onProgress?: (chunk: string) => void;
+  /**
+   * Reports this grader session's `total_cost_usd` (parsed from its stream-json
+   * transcript's terminal result; `undefined` when the transcript carried none,
+   * e.g. a mock spawn). Called once after a successful grader spawn so the run can
+   * aggregate total spend across all executor+grader sessions (adopter follow-up).
+   */
+  costSink?: (totalCostUsd: number | undefined) => void;
 }
 
 /**
@@ -112,7 +119,12 @@ export async function runGraderForEval(input: RunGraderInput): Promise<EvalFragm
 
   const spawn = input.spawn ?? spawnHeadlessClaude;
 
+  // Accumulate the grader's stream-json stdout so we can read its terminal
+  // `total_cost_usd` for run-wide spend aggregation (adopter follow-up). Held in
+  // memory only, like the executor's transcript — never written to disk.
+  let graderTranscript = '';
   const onStdout = (chunk: string): void => {
+    graderTranscript += chunk;
     input.onProgress?.(chunk);
   };
 
@@ -158,6 +170,11 @@ export async function runGraderForEval(input: RunGraderInput): Promise<EvalFragm
       `Grader exited non-zero (status ${spawnResult.status}) for eval "${input.evalId}".`,
     );
   }
+
+  // Report the grader session's cost for run-wide spend aggregation. Parsed from
+  // the in-memory transcript (not the fragment) so it reflects real API spend even
+  // under subscription auth; `undefined` when the transcript carried no result.
+  input.costSink?.(parseStreamJsonTranscript(graderTranscript).result?.totalCostUsd);
 
   const raw = readAndConsumeFragmentFile(fragmentOut, input.evalId, spawnResult.status);
   const fragment = parseEvalFragment(raw, fragmentWarnRouter(input.onProgress));

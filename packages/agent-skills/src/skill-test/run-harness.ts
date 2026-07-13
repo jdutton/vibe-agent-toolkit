@@ -39,7 +39,7 @@ import { runExecutorForEval } from './eval-executor.js';
 import type { EvalFragment } from './eval-fragment.js';
 import { runGraderForEval } from './eval-grader.js';
 import { EvalInputError, parseEvalSuite, stageEvalWorkspaces, type EvalEntry, type EvalSuite } from './eval-inputs.js';
-import { lintEvalExpectations } from './eval-lint.js';
+import { lintEvalExpectations, lintToolExpectationExecutables } from './eval-lint.js';
 import { writeEvalsTemplate } from './evals-template.js';
 import {
   BootstrapNeededError,
@@ -671,8 +671,13 @@ function attemptStageWorkspaces(
  * affects exitCode. Extracted so the Step 5.5 call site stays a single line
  * (keeps the orchestrator's cognitive complexity budget).
  */
-function emitEvalLintWarnings(evals: EvalEntry[]): void {
+function emitEvalLintWarnings(evals: EvalEntry[], declaredExecutableNames: string[]): void {
   for (const lintWarning of lintEvalExpectations(evals)) {
+    process.stderr.write(`warning: ${lintWarning.message}\n`);
+  }
+  // Undeclared-executable lint (adopter follow-up): a toolExpectation naming a
+  // typo of a declared executable would silently never match — flag it before spend.
+  for (const lintWarning of lintToolExpectationExecutables(evals, declaredExecutableNames)) {
     process.stderr.write(`warning: ${lintWarning.message}\n`);
   }
 }
@@ -949,6 +954,8 @@ interface EvalRunContext {
   /** Declared executables (WITH-arm grader recognition aid); absent when unreachable. */
   declaredExecutables?: Array<{ name: string; howInvoked: string; kind: string }>;
   spawn?: typeof spawnHeadlessClaude;
+  /** Shared spend accumulator — each worker folds in its executor + grader session cost. */
+  costAccumulator: RunCostSummary;
 }
 
 /**
@@ -984,6 +991,7 @@ async function runEvalWorker(item: EvalWorkItem, ctx: EvalRunContext): Promise<E
     ...(ctx.spawn === undefined ? {} : { spawn: ctx.spawn }),
     onProgress,
   });
+  recordSessionCost(ctx.costAccumulator, outcome.parsed.result?.totalCostUsd);
 
   // Tool expectations are about the SKILL's tools, so they ride the WITH arm ONLY —
   // the WITHOUT (skill-absent) arm has no skill, hence nothing to judge tools against.
@@ -1010,6 +1018,7 @@ async function runEvalWorker(item: EvalWorkItem, ctx: EvalRunContext): Promise<E
     env: ctx.graderEnv,
     ...(ctx.spawn === undefined ? {} : { spawn: ctx.spawn }),
     onProgress,
+    costSink: (usd) => recordSessionCost(ctx.costAccumulator, usd),
   });
 
   return { ...fragment, arm: item.arm };
@@ -1168,6 +1177,35 @@ export function resolveCompositeAllPassed(
 }
 
 /**
+ * Running total of spend across every executor+grader session in a run (adopter
+ * follow-up). `sessions` counts only sessions that REPORTED a `total_cost_usd`, so
+ * `≈$${totalUsd} across ${sessions} sessions` is always internally consistent (the
+ * sum is over exactly those sessions). Mutated in place by {@link recordSessionCost}
+ * — safe under the cooperative (single-threaded) pipeline concurrency.
+ */
+export interface RunCostSummary {
+  totalUsd: number;
+  sessions: number;
+}
+
+/** Fold one session's `total_cost_usd` into the accumulator; a non-number (mock spawn / missing result) is ignored. */
+export function recordSessionCost(acc: RunCostSummary, totalCostUsd: number | undefined): void {
+  if (typeof totalCostUsd !== 'number' || !Number.isFinite(totalCostUsd)) return;
+  acc.totalUsd += totalCostUsd;
+  acc.sessions += 1;
+}
+
+/**
+ * The ` | ≈$0.42 across 6 sessions` spend suffix for the summary line, or `''`
+ * when no session reported a cost (e.g. every spawn was a test mock) so the suffix
+ * never adds noise to a run with no cost signal. Pure + unit-testable.
+ */
+export function formatRunCostSuffix(cost: RunCostSummary | undefined): string {
+  if (cost === undefined || cost.sessions === 0) return '';
+  return ` | ≈$${cost.totalUsd.toFixed(2)} across ${cost.sessions} session${cost.sessions === 1 ? '' : 's'}`;
+}
+
+/**
  * The run's human summary line, computed from the COMPOSITE verdict so an
  * output-pass with a failing tool verdict still reads FAIL. The prose-expectation
  * counts (`passed/total`) come from the grading verdict; when any tool-expectation
@@ -1196,8 +1234,11 @@ export function buildRunSummaryWithSkips(
   toolEval: ToolEvalReport,
   compositeAllPassed: boolean,
   skipped: SkippedEvalsSummary | undefined,
+  cost?: RunCostSummary,
 ): string {
-  const base = buildRunSummary(verdict, toolEval, compositeAllPassed);
+  // The spend suffix rides the verdict line (like `(N tool)`); the skipped-tiers
+  // note stays on its own following line.
+  const base = buildRunSummary(verdict, toolEval, compositeAllPassed) + formatRunCostSuffix(cost);
   return skipped === undefined ? base : `${base}\n${formatSkippedTiersSummary(skipped)}`;
 }
 
@@ -1376,7 +1417,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     if ('exitCode' in workspaceStageResult) return workspaceStageResult;
     const { workspacesRoot, declaredEvalCount, suite } = workspaceStageResult;
 
-    emitEvalLintWarnings(suite.evals);
+    emitEvalLintWarnings(suite.evals, (opts.declaredExecutables ?? []).map((e) => e.name));
 
     // Step 6: Enforce the §12 security ack (must pass --i-understand-this-runs-skill-code).
     // Only enforced when not a dry-run and not already acknowledged.
@@ -1489,6 +1530,10 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     graderOutDir = resolveGraderOutDir(graderDirToken);
     mkdirSyncReal(graderOutDir, { recursive: true, mode: 0o700 });
 
+    // Run-wide spend accumulator: each worker folds in its executor + grader
+    // session cost, surfaced as a `≈$X across N sessions` suffix on the summary.
+    const costAccumulator: RunCostSummary = { totalUsd: 0, sessions: 0 };
+
     const evalCtx: EvalRunContext = {
       subjectStagedDir,
       workspacesRoot,
@@ -1496,6 +1541,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       graderOutDir,
       runNonce,
       graderModel,
+      costAccumulator,
       ...(knobs.model === undefined ? {} : { model: knobs.model }),
       maxTurns: knobs.maxTurns,
       maxBudgetUsd: knobs.maxBudgetUsd,
@@ -1550,7 +1596,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // that SKIPPED higher tiers is never a pass: skipped ≠ passed forces allPassed
     // false → exit 4 (never downgraded to 0 by the composite path).
     const allPassed = resolveCompositeAllPassed(verdict.allPassed, toolEval, skipped);
-    const summary = buildRunSummaryWithSkips(verdict, toolEval, allPassed, skipped);
+    const summary = buildRunSummaryWithSkips(verdict, toolEval, allPassed, skipped, costAccumulator);
 
     return {
       harnessPath: harnessRoot,
