@@ -87,6 +87,7 @@ tmp/
 /*.md
 docs/plans/
 docs/superpowers/
+.superpowers/
 
 # Explicitly include critical documentation (negation patterns MUST come after the ignore)
 !README.md

@@ -9,14 +9,19 @@ import {
   ClaudeMarketplacePluginEntrySchema,
   ClaudeMarketplaceSchema,
   ProjectConfigSchema,
+  SkillExecutableEntrySchema,
   SkillFileEntrySchema,
   SkillPackagingConfigSchema,
   SkillsConfigSchema,
+  SkillTestGlobalConfigSchema,
   TestConfigSchema,
 } from '../../src/schemas/project-config.js';
-import type { SkillFileEntry } from '../../src/schemas/project-config.js';
+import type { SkillExecutableEntry, SkillFileEntry } from '../../src/schemas/project-config.js';
 
 const SKILL_GLOB_INCLUDE = 'skills/**/SKILL.md';
+const GRADER_MODEL = 'claude-sonnet-5';
+const DXA_PATH = 'scripts/dxa.py';
+const DXA_HOW_INVOKED = 'uv run dxa.py';
 
 const VAT_DEV_AGENTS_CONFIG = fileURLToPath(
   new URL('../../../vat-development-agents/vibe-agent-toolkit.config.yaml', import.meta.url),
@@ -136,6 +141,98 @@ describe('SkillPackagingConfigSchema', () => {
   it('rejects unknown keys via strict mode', () => {
     expectStrictRejection(SkillPackagingConfigSchema, { unknownTypo: 123 });
   });
+
+  it('parses executables[] with path, kind, and howInvoked', () => {
+    const result = SkillPackagingConfigSchema.safeParse({
+      executables: [
+        { path: DXA_PATH, kind: 'python', howInvoked: DXA_HOW_INVOKED },
+      ],
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.executables?.[0]).toEqual({
+        path: DXA_PATH,
+        kind: 'python',
+        howInvoked: DXA_HOW_INVOKED,
+      });
+    }
+  });
+
+  it('parses a config without executables (optional)', () => {
+    const result = SkillPackagingConfigSchema.safeParse({});
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.executables).toBeUndefined();
+    }
+  });
+
+  it('rejects an executables entry with an unknown key (strict)', () => {
+    const result = SkillPackagingConfigSchema.safeParse({
+      executables: [
+        { path: DXA_PATH, kind: 'python', howInvoked: DXA_HOW_INVOKED, bogus: true },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an executables entry with a bad kind enum value', () => {
+    const result = SkillPackagingConfigSchema.safeParse({
+      executables: [
+        { path: DXA_PATH, kind: 'ruby', howInvoked: 'ruby dxa.rb' },
+      ],
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('SkillExecutableEntrySchema', () => {
+  it('parses each supported kind', () => {
+    for (const kind of ['node', 'python', 'shell', 'pwsh', 'binary'] as const) {
+      const result = SkillExecutableEntrySchema.safeParse({
+        path: 'bin/tool',
+        kind,
+        howInvoked: 'run it',
+      });
+      expect(result.success).toBe(true);
+    }
+  });
+
+  it('rejects an empty path', () => {
+    const result = SkillExecutableEntrySchema.safeParse({
+      path: '',
+      kind: 'node',
+      howInvoked: 'node dist/tool.mjs',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an empty howInvoked', () => {
+    const result = SkillExecutableEntrySchema.safeParse({
+      path: 'dist/tool.mjs',
+      kind: 'node',
+      howInvoked: '',
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects an unknown key via strict mode', () => {
+    expectStrictRejection(SkillExecutableEntrySchema, {
+      path: 'dist/tool.mjs',
+      kind: 'node',
+      howInvoked: 'node dist/tool.mjs',
+      extra: 'nope',
+    });
+  });
+
+  it('type-level: SkillExecutableEntry has path/kind/howInvoked', () => {
+    // compile-time check — if the type is wrong this file will not typecheck
+    const entry: SkillExecutableEntry = {
+      path: 'scripts/dxa.py',
+      kind: 'python',
+      howInvoked: 'uv run dxa.py',
+    };
+    expect(entry.kind).toBe('python');
+  });
 });
 
 describe('TestConfigSchema', () => {
@@ -159,6 +256,39 @@ describe('TestConfigSchema', () => {
 
   it('rejects unknown keys via strict mode', () => {
     const result = TestConfigSchema.safeParse({ unknownField: true });
+    expect(result.success).toBe(false);
+  });
+
+  it('rejects graderModel — the global grader is deliberately kept out of the per-skill schema (issue #145)', () => {
+    const result = TestConfigSchema.safeParse({ graderModel: GRADER_MODEL });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('SkillTestGlobalConfigSchema', () => {
+  it('accepts an empty global test config (all fields optional)', () => {
+    const result = SkillTestGlobalConfigSchema.safeParse({});
+    expect(result.success).toBe(true);
+  });
+
+  it('parses graderModel + concurrency', () => {
+    const result = SkillTestGlobalConfigSchema.safeParse({
+      graderModel: GRADER_MODEL,
+      concurrency: 4,
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.graderModel).toBe(GRADER_MODEL);
+      expect(result.data.concurrency).toBe(4);
+    }
+  });
+
+  it('rejects an unknown key via strict mode', () => {
+    expectStrictRejection(SkillTestGlobalConfigSchema, { bogus: true });
+  });
+
+  it('rejects a non-positive concurrency', () => {
+    const result = SkillTestGlobalConfigSchema.safeParse({ concurrency: 0 });
     expect(result.success).toBe(false);
   });
 });
@@ -204,6 +334,24 @@ describe('ProjectConfigSchema', () => {
       bogusRoot: 'nope',
     });
     expect(result.success).toBe(false);
+  });
+
+  it('parses a top-level test: { graderModel, concurrency } node', () => {
+    const result = ProjectConfigSchema.safeParse({
+      version: 1,
+      test: { graderModel: GRADER_MODEL, concurrency: 4 },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data.test).toEqual({ graderModel: GRADER_MODEL, concurrency: 4 });
+    }
+  });
+
+  it('rejects an unknown key under the top-level test node (strict)', () => {
+    expectStrictRejection(ProjectConfigSchema, {
+      version: 1,
+      test: { graderModel: GRADER_MODEL, bogus: true },
+    });
   });
 
   it('parses the vat-development-agents config from disk', async () => {

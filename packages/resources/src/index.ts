@@ -136,11 +136,13 @@ export {
 
 export {
   ProjectConfigSchema,
+  SkillExecutableEntrySchema,
   SkillFileEntrySchema,
   SkillsConfigSchema,
   SkillPackagingConfigSchema,
   SkillSourceDescriptorSchema,
   TestConfigSchema,
+  type SkillExecutableEntry,
   type SkillSourceDescriptor,
   type TestConfig,
 } from './schemas/project-config.js';

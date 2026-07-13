@@ -158,6 +158,29 @@ export const SkillFileEntrySchema = z.object({
 export type SkillFileEntry = z.infer<typeof SkillFileEntrySchema>;
 
 /**
+ * A single declared executable a skill ships.
+ *
+ * Populates two downstream consumers (issue #145 Phase T/L):
+ * - `toolExpectations.mustRun: ["dxa"]` (eval grading) references an executable
+ *   by a stable NAME. Name resolution (defined here, implemented in a later
+ *   task): the referenced name matches either (a) this entry's `path` basename
+ *   with its extension stripped (e.g. `path: "scripts/dxa.py"` → name `"dxa"`),
+ *   or (b) the exact `path` string. Callers should try (a) then fall back to (b).
+ * - Phase L launch-guidance linting uses `kind` + `howInvoked` to statically
+ *   check that a skill's documented invocation matches its declared executable
+ *   kind (e.g. flagging a `python` executable documented as run via `node`).
+ */
+export const SkillExecutableEntrySchema = z.object({
+  path: z.string().min(1).describe('Path to the executable, relative to the skill root'),
+  kind: z.enum(['node', 'python', 'shell', 'pwsh', 'binary'])
+    .describe('Executable kind (informs launch-guidance linting)'),
+  howInvoked: z.string().min(1)
+    .describe('Canonical human invocation, e.g. "uv run dxa.py" or "node dist/dxa.mjs"'),
+}).strict();
+
+export type SkillExecutableEntry = z.infer<typeof SkillExecutableEntrySchema>;
+
+/**
  * A typed "skill source" descriptor as it appears in vibe-agent-toolkit.config.yaml.
  *
  * This is the CONFIG representation. Task 13's staging maps it onto Plan 1's
@@ -183,7 +206,7 @@ export const TestConfigSchema = z.object({
   model: z.string().min(1).optional()
     .describe('Pinned model for reproducibility (default: a fixed model, not "whatever the caller has")'),
   maxTurns: z.number().int().positive().optional()
-    .describe('Cap on experimenter turns'),
+    .describe('Per-spawn cap on executor/grader turns'),
   maxBudgetUsd: z.number().positive().optional()
     .describe('Hard USD budget cap passed to the CLI'),
   timeout: z.number().int().positive().optional()
@@ -192,8 +215,6 @@ export const TestConfigSchema = z.object({
     .describe('Stall-watchdog seconds (kill on no stream output)'),
   evals: z.string().min(1).optional()
     .describe('Path to evals.json (relative to skill source)'),
-  experimenterPrompt: z.string().min(1).optional()
-    .describe('Path to an override experimenter prompt (must preserve §6c invariants)'),
   auth: z.enum(['inherit', 'subscription', 'api-key', 'auto']).optional()
     .describe('Auth-mechanism selection (default: inherit)'),
   requireAuth: z.enum(['subscription', 'api-key']).optional()
@@ -214,9 +235,9 @@ export const TestConfigSchema = z.object({
    * A non-zero exit code aborts the run (preflight failure, exit 2).
    */
   env: z.record(z.string(), z.string()).optional()
-    .describe('Feature B: explicit env var injections for the experimenter spawn. Values support ${fixturesDir}, ${stagedSkillDir}, ${harnessRoot}, ${resultsDir} interpolation (resolved at stage time). Protected names (PATH, auth, model, admin) cannot be overridden.'),
+    .describe('Feature B: explicit env var injections for the executor spawn. Values support ${fixturesDir}, ${stagedSkillDir}, ${harnessRoot}, ${resultsDir} interpolation (resolved at stage time). Protected names (PATH, auth, model, admin) cannot be overridden.'),
   passEnv: z.array(z.string().min(1)).optional()
-    .describe('Feature A: names of host env vars to forward to the experimenter spawn if present. Protected names are ignored with a warning.'),
+    .describe('Feature A: names of host env vars to forward to the executor spawn if present. Protected names are ignored with a warning.'),
   build: z.string().min(1).optional()
     .describe('Shell command run once, before staging, to generate build artifacts (cwd = config root)'),
 }).strict().describe('Per-skill vat skill test configuration');
@@ -244,6 +265,8 @@ export const SkillPackagingConfigSchema = z.object({
   files: z.array(SkillFileEntrySchema).optional().describe('Explicit source→dest file mappings for build artifacts, unlinked files, or routing overrides'),
   test: TestConfigSchema.optional()
     .describe('vat skill test configuration for this skill'),
+  executables: z.array(SkillExecutableEntrySchema).optional()
+    .describe('Declared executables the skill ships — stable names for eval toolExpectations + launch-guidance linting'),
 }).strict().describe('Skill packaging configuration');
 
 export type SkillPackagingConfig = z.infer<typeof SkillPackagingConfigSchema>;
@@ -354,6 +377,24 @@ export const ClaudeConfigSchema = z.object({
 export type ClaudeConfig = z.infer<typeof ClaudeConfigSchema>;
 
 /**
+ * Global `vat skill test` configuration (top-level, NOT per-skill).
+ *
+ * Deliberately separate from the per-skill {@link TestConfigSchema}: `graderModel`
+ * is a global grader/judge selection that applies across all skills' test runs,
+ * whereas `TestConfigSchema` configures the model/harness under test for a single
+ * skill. Mixing the two would let a per-skill override silently change the judge,
+ * undermining cross-skill eval comparability (issue #145).
+ */
+export const SkillTestGlobalConfigSchema = z.object({
+  graderModel: z.string().min(1).optional()
+    .describe('Pinned grader/judge model for `vat skill test` grading (default: DEFAULT_GRADER_MODEL)'),
+  concurrency: z.number().int().positive().optional()
+    .describe('Bounded-parallel executor→grader pipeline width (default: DEFAULT_CONCURRENCY)'),
+}).strict().describe('Global vat skill test configuration (graderModel, concurrency)');
+
+export type SkillTestGlobalConfig = z.infer<typeof SkillTestGlobalConfigSchema>;
+
+/**
  * Complete project configuration schema.
  */
 export const ProjectConfigSchema = z.object({
@@ -365,6 +406,8 @@ export const ProjectConfigSchema = z.object({
     .describe('Resources configuration'),
   claude: ClaudeConfigSchema.optional()
     .describe('Claude-specific configuration (marketplaces, managed-settings)'),
+  test: SkillTestGlobalConfigSchema.optional()
+    .describe('Global vat skill test configuration (graderModel, concurrency)'),
 }).strict().describe('vibe-agent-toolkit project configuration');
 
 export type ProjectConfig = z.infer<typeof ProjectConfigSchema>;

@@ -25,35 +25,21 @@ export interface NormalizedGrading {
 }
 
 /**
- * Thrown when grading.json's per-run integrity nonce is absent or does not match
- * the nonce the harness stamped into the experimenter prompt for THIS run. A
- * missing/wrong nonce means the grading was not produced by the experimenter we
- * prompted — most likely a grading.json forged or left behind by untrusted skill
- * code in the shared sandbox — so the verdict cannot be trusted.
+ * Thrown when a per-eval grader fragment's integrity nonce is absent or does not
+ * match the secret nonce the harness stamped into that grader's prompt for THIS
+ * run. A missing/wrong nonce means the fragment was not produced by a grader we
+ * prompted — most likely forged or left behind by untrusted skill code in the
+ * shared sandbox — so the verdict merged from it cannot be trusted.
  */
 export class GradingNonceError extends Error {
   constructor(message: string) {
     super(
-      `grading.json integrity check failed: ${message}. The harness stamps a secret ` +
-        'per-run nonce into the experimenter prompt (never written to disk) and requires ' +
-        'grading.json to echo it; a missing or wrong nonce means the grading was not ' +
-        'produced by the prompted experimenter and is rejected.',
+      `grader integrity check failed: ${message}. The harness stamps a secret per-run ` +
+        'nonce into each grader prompt (delivered only via stdin, never written to disk) ' +
+        'and requires every per-eval grader fragment to echo it; a missing or wrong nonce ' +
+        'means the fragment was not produced by the grader we prompted and is rejected.',
     );
     this.name = 'GradingNonceError';
-  }
-}
-
-/**
- * Assert grading.json carries the exact per-run nonce the harness expected.
- * Called before the verdict is trusted. Throws {@link GradingNonceError} on a
- * missing or mismatched nonce.
- */
-export function assertGradingNonce(actual: string | undefined, expected: string): void {
-  if (actual === undefined) {
-    throw new GradingNonceError('grading.json has no top-level `runNonce`');
-  }
-  if (actual !== expected) {
-    throw new GradingNonceError('grading.json `runNonce` does not match this run');
   }
 }
 

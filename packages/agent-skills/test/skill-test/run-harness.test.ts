@@ -16,37 +16,50 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- tests use controlled temp directories */
 import { existsSync, symlinkSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
-import { EvalInputError } from '../../src/skill-test/eval-inputs.js';
-import { InternalHarnessError, SkillTestExitCode } from '../../src/skill-test/exit-codes.js';
+import type { EvalFragment } from '../../src/skill-test/eval-fragment.js';
+import { EvalInputError, type EvalEntry } from '../../src/skill-test/eval-inputs.js';
+import { SkillTestExitCode } from '../../src/skill-test/exit-codes.js';
 import type { FrictionItem } from '../../src/skill-test/friction-schema.js';
+import type { GradingVerdict } from '../../src/skill-test/grading-adapter.js';
 import {
-  assertExperimenterSucceeded,
   buildDryRunSummary,
+  buildEvalWorkItems,
   buildPreflightInput,
   buildResolveCtx,
+  buildRunSummary,
+  buildRunSummaryWithSkips,
   buildStageItems,
   cleanupHarness,
-  computeDefaultTimeoutMs,
+  computeCompositeVerdict,
   detectItemPluginLayout,
   flagDummyValueFor,
   formatFrictionReport,
-  formatTimeoutMessage,
+  formatRunCostSuffix,
   isAcknowledged,
   makeStageItem,
+  partitionFragmentsByArm,
   renderPreflightSummary,
+  recordSessionCost,
+  resolveArtifactPaths,
+  resolveCompositeAllPassed,
+  resolveGraderOutDir,
   resolveKnobs,
+  resolvePerEvalWorkspaceDir,
   resolveScaffoldEvalsPath,
   resolveStallMs,
   resolveTimeoutMs,
   stageWorkspacesForRun,
   subjectSkillName,
   verdictExitCode,
+  wipeStaleArtifacts,
   type DryRunSummaryInput,
   type RunHarnessOptions,
 } from '../../src/skill-test/run-harness.js';
+import type { SkippedEvalsSummary } from '../../src/skill-test/tier-plan.js';
+import type { ToolEvalReport } from '../../src/skill-test/tool-eval-schema.js';
 import { createTestPlugin, setupTempDir } from '../test-helpers.js';
 
 // ---------------------------------------------------------------------------
@@ -69,33 +82,6 @@ function makeOpts(overrides: Partial<RunHarnessOptions> = {}): RunHarnessOptions
 /** Build a preflight check entry. */
 function check(name: string, passed: boolean, message: string): { name: string; passed: boolean; message: string } {
   return { name, passed, message };
-}
-
-/** Build a spawn outcome for assertExperimenterSucceeded. */
-function spawnOutcome(
-  over: Partial<{ stalled: boolean; timedOut: boolean; status: number }> = {},
-): { stalled: boolean; timedOut: boolean; status: number } {
-  return { stalled: false, timedOut: false, status: 0, ...over };
-}
-
-/**
- * Assert that assertExperimenterSucceeded throws an InternalHarnessError whose
- * message contains the expected figure for a given non-success outcome.
- */
-function expectExperimenterThrows(
-  outcome: { stalled: boolean; timedOut: boolean; status: number },
-  stallMs: number | undefined,
-  timeoutMs: number,
-  expectedFigure: string,
-): void {
-  let thrown: unknown;
-  try {
-    assertExperimenterSucceeded(outcome, stallMs, timeoutMs);
-  } catch (e) {
-    thrown = e;
-  }
-  expect(thrown).toBeInstanceOf(InternalHarnessError);
-  expect((thrown as Error).message).toContain(expectedFigure);
 }
 
 /** Create a plain (non-plugin) directory under the temp root and return its path. */
@@ -129,36 +115,12 @@ function makePluginSkillDir(tempDir: string, pluginName: string, relSkill: strin
 // ---------------------------------------------------------------------------
 
 describe('resolveTimeoutMs', () => {
-  it('returns the flat default when timeout is undefined and no eval count is threaded', () => {
+  it('returns the flat per-eval default when timeout is undefined', () => {
     expect(resolveTimeoutMs(makeOpts())).toBe(DEFAULT_TIMEOUT_MS);
   });
 
-  it('converts seconds to milliseconds', () => {
+  it('converts an explicit --timeout from seconds to milliseconds', () => {
     expect(resolveTimeoutMs(makeOpts({ timeout: 30 }))).toBe(30_000);
-  });
-
-  it('scales the default with the declared eval count when no explicit timeout', () => {
-    expect(resolveTimeoutMs(makeOpts(), 5)).toBe(720_000);
-  });
-
-  it('an explicit --timeout always wins over the scaled default', () => {
-    expect(resolveTimeoutMs(makeOpts({ timeout: 30 }), 19)).toBe(30_000);
-  });
-});
-
-describe('computeDefaultTimeoutMs', () => {
-  it('floors at the flat 300s default for 0 and 1 evals', () => {
-    expect(computeDefaultTimeoutMs(0)).toBe(300_000);
-    expect(computeDefaultTimeoutMs(1)).toBe(300_000);
-  });
-
-  it('scales at 120s per declared eval above the floor', () => {
-    expect(computeDefaultTimeoutMs(5)).toBe(720_000);
-    expect(computeDefaultTimeoutMs(19)).toBe(2_400_000);
-  });
-
-  it('caps at one hour for a huge suite', () => {
-    expect(computeDefaultTimeoutMs(10_000)).toBe(3_600_000);
   });
 });
 
@@ -254,70 +216,94 @@ describe('isAcknowledged', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Experimenter success guard
+// Per-eval pipeline helpers
 // ---------------------------------------------------------------------------
 
-describe('assertExperimenterSucceeded', () => {
-  it('does not throw on a clean exit', () => {
-    expect(() => assertExperimenterSucceeded(spawnOutcome(), undefined, 1000)).not.toThrow();
+/** Build a minimal EvalEntry with the given overrides. */
+function makeEvalEntry(over: Partial<EvalEntry> = {}): EvalEntry {
+  return { id: 'e1', prompt: 'do the thing', expectations: ['works'], ...over } as EvalEntry;
+}
+
+/** Build a minimal graded fragment with the given arm. */
+function makeFragment(evalId: string, arm?: 'with' | 'without'): EvalFragment {
+  return {
+    runNonce: 'n',
+    evalId,
+    ...(arm === undefined ? {} : { arm }),
+    expectations: [{ text: 'e', passed: true }],
+  };
+}
+
+describe('buildEvalWorkItems', () => {
+  it('emits one WITH-arm item per eval when baseline is off', () => {
+    const items = buildEvalWorkItems([makeEvalEntry({ id: 'a' }), makeEvalEntry({ id: 'b' })], false);
+    expect(items).toHaveLength(2);
+    expect(items.every((i) => i.arm === 'with')).toBe(true);
+    expect(items.map((i) => i.entry.id)).toEqual(['a', 'b']);
   });
 
-  it('throws InternalHarnessError mentioning the stall figure', () => {
-    expectExperimenterThrows(spawnOutcome({ stalled: true }), 250, 1000, '250');
-  });
-
-  it('throws InternalHarnessError mentioning the timeout figure', () => {
-    expectExperimenterThrows(spawnOutcome({ timedOut: true }), undefined, 9000, '9000');
-  });
-
-  it('throws InternalHarnessError mentioning the non-zero status', () => {
-    expectExperimenterThrows(spawnOutcome({ status: 137 }), undefined, 1000, '137');
-  });
-
-  it('surfaces the declared eval count in the timeout message when threaded', () => {
-    let thrown: unknown;
-    try {
-      assertExperimenterSucceeded(spawnOutcome({ timedOut: true }), undefined, 900_000, {
-        declaredEvalCount: 5,
-      });
-    } catch (e) {
-      thrown = e;
-    }
-    expect(thrown).toBeInstanceOf(InternalHarnessError);
-    expect((thrown as Error).message).toContain('Declared evals: 5');
-    expect((thrown as Error).message).toContain('--timeout');
+  it('emits a WITH and a WITHOUT arm per eval when baseline is on', () => {
+    const items = buildEvalWorkItems([makeEvalEntry({ id: 'a' })], true);
+    expect(items).toHaveLength(2);
+    expect(items.map((i) => i.arm)).toEqual(['with', 'without']);
   });
 });
 
-// ---------------------------------------------------------------------------
-// Timeout message formatter
-// ---------------------------------------------------------------------------
+describe('partitionFragmentsByArm', () => {
+  it('routes undefined/with arms to withArm and without to withoutArm', () => {
+    const { withArm, withoutArm } = partitionFragmentsByArm([
+      makeFragment('a'),
+      makeFragment('b', 'with'),
+      makeFragment('a', 'without'),
+    ]);
+    expect(withArm.map((f) => f.evalId)).toEqual(['a', 'b']);
+    expect(withoutArm.map((f) => f.evalId)).toEqual(['a']);
+  });
+});
 
-describe('formatTimeoutMessage', () => {
-  it('includes the raw ms, a minute label, and the scaling hint', () => {
-    const msg = formatTimeoutMessage({ timeoutMs: 900_000, declaredEvalCount: 5 });
-    expect(msg).toContain('900000ms');
-    expect(msg).toContain('(15m)');
-    expect(msg).toContain('Declared evals: 5');
-    expect(msg).toContain('--timeout');
-    expect(msg).toContain('--stall');
-    expect(msg).not.toContain('completed');
+describe('resolveGraderOutDir', () => {
+  it('derives a nonce-named dir directly UNDER the OS tmp dir (outside any harness root)', () => {
+    // relative(tmp, graderDir) === the nonce dir name proves it sits directly
+    // under tmp with no `..` escape — i.e. outside any harness root under a workdir.
+    expect(safePath.relative(normalizedTmpdir(), resolveGraderOutDir('deadbeef'))).toBe('vat-skill-grade-deadbeef');
+  });
+});
+
+describe('resolvePerEvalWorkspaceDir', () => {
+  const workspacesRoot = '/harness/workspaces';
+
+  it('returns undefined when the eval declares no files', () => {
+    expect(resolvePerEvalWorkspaceDir(makeEvalEntry({ id: '1' }), workspacesRoot)).toBeUndefined();
   });
 
-  it('includes a completed ~N/declared clause when a completed count is available', () => {
-    const msg = formatTimeoutMessage({
-      timeoutMs: 900_000,
-      declaredEvalCount: 5,
-      completedEvalCount: 2,
-    });
-    expect(msg).toContain('completed ~2/5');
+  it('routes to <workspacesRoot>/<id> when the eval declares files', () => {
+    const dir = resolvePerEvalWorkspaceDir(makeEvalEntry({ id: '7', files: ['a.md'] }), workspacesRoot);
+    expect(toForwardSlash(dir ?? '').endsWith('/workspaces/7')).toBe(true);
+  });
+});
+
+describe('resolveArtifactPaths + wipeStaleArtifacts', () => {
+  const { getTempDir } = setupTempDir('vat-wipe-');
+
+  it('resolves the three results/ artifact paths', () => {
+    const paths = resolveArtifactPaths('/harness/results');
+    expect(toForwardSlash(paths.gradingOut).endsWith('/results/grading.json')).toBe(true);
+    expect(toForwardSlash(paths.frictionOut).endsWith('/results/friction.json')).toBe(true);
+    expect(toForwardSlash(paths.baselineOut).endsWith('/results/baseline.json')).toBe(true);
   });
 
-  it('omits the declared-evals clause honestly when the count is unknown', () => {
-    const msg = formatTimeoutMessage({ timeoutMs: 300_000 });
-    expect(msg).toContain('300000ms');
-    expect(msg).not.toContain('Declared evals');
-    expect(msg).not.toContain('completed');
+  it('removes a prior run\'s grading/friction/baseline artifacts and is a no-op when absent', () => {
+    const resultsDir = getTempDir();
+    const paths = resolveArtifactPaths(resultsDir);
+    for (const p of [paths.gradingOut, paths.frictionOut, paths.baselineOut]) {
+      writeFileSync(p, 'STALE', 'utf-8');
+    }
+    wipeStaleArtifacts(paths);
+    expect(existsSync(paths.gradingOut)).toBe(false);
+    expect(existsSync(paths.frictionOut)).toBe(false);
+    expect(existsSync(paths.baselineOut)).toBe(false);
+    // Idempotent: wiping already-absent artifacts must not throw.
+    expect(() => wipeStaleArtifacts(paths)).not.toThrow();
   });
 });
 
@@ -528,6 +514,9 @@ function makeDryRunInput(overrides: Partial<DryRunSummaryInput> = {}): DryRunSum
     provenanceFingerprint: 'abc123',
     provenanceEntryCount: 3,
     modelFlag: '--model claude-sonnet-5',
+    evalCount: 2,
+    concurrency: 4,
+    graderModel: 'claude-sonnet-5',
     ...overrides,
   };
 }
@@ -567,9 +556,17 @@ describe('buildDryRunSummary', () => {
     expect(summary).not.toContain(DRY_RUN_FALLBACK_PHRASE);
   });
 
-  it('always includes the spawn command with the model flag', () => {
-    const summary = buildDryRunSummary(makeDryRunInput({ modelFlag: '--model opus' }));
-    expect(summary).toContain('Would spawn: claude -p --model opus');
+  it('describes the executor→grader pipeline with eval count, concurrency, and models', () => {
+    const summary = buildDryRunSummary(
+      makeDryRunInput({ modelFlag: '--model opus', evalCount: 3, concurrency: 6, graderModel: 'claude-sonnet-5' }),
+    );
+    expect(summary).toContain('Would run 3 evals as executor→grader spawn pairs at concurrency 6.');
+    expect(summary).toContain('Executor --model opus; grader model claude-sonnet-5');
+  });
+
+  it('uses singular phrasing for a single eval', () => {
+    const summary = buildDryRunSummary(makeDryRunInput({ evalCount: 1 }));
+    expect(summary).toContain('Would run 1 eval as executor→grader spawn pair at concurrency');
   });
 
   it('includes entry count and fingerprint in the manifest line', () => {
@@ -679,6 +676,133 @@ describe('verdictExitCode', () => {
 
   it('downgrades a failing verdict to Ok when eval failure is tolerated (opt-out)', () => {
     expect(verdictExitCode(false, true)).toBe(SkillTestExitCode.Ok);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Composite verdict + summary (Phase T)
+// ---------------------------------------------------------------------------
+
+/** Build a ToolEvalReport whose eval verdicts carry the given `passed` flags. */
+function makeToolEval(passedFlags: boolean[]): ToolEvalReport {
+  return { evals: passedFlags.map((passed, i) => ({ evalId: `e${i}`, passed })) };
+}
+
+const VERDICT_3_OF_3: GradingVerdict = { passed: 3, total: 3, allPassed: true };
+
+describe('computeCompositeVerdict', () => {
+  it('no tool verdicts → equals the output verdict', () => {
+    const empty = makeToolEval([]);
+    expect(computeCompositeVerdict(true, empty)).toBe(true);
+    expect(computeCompositeVerdict(false, empty)).toBe(false);
+  });
+
+  it('output-pass AND every tool verdict passes → true', () => {
+    expect(computeCompositeVerdict(true, makeToolEval([true, true]))).toBe(true);
+  });
+
+  it('output-pass but a tool verdict fails → false (composite FAIL)', () => {
+    expect(computeCompositeVerdict(true, makeToolEval([true, false]))).toBe(false);
+  });
+
+  it('output-fail short-circuits to false regardless of tool verdicts', () => {
+    expect(computeCompositeVerdict(false, makeToolEval([true, true]))).toBe(false);
+  });
+});
+
+describe('resolveCompositeAllPassed', () => {
+  const skip: SkippedEvalsSummary = { gatedByTier: 0, firstSkippedTier: 1, tiers: [], totalSkipped: 1 };
+
+  it('equals the composite verdict when no tiers were skipped', () => {
+    expect(resolveCompositeAllPassed(true, makeToolEval([true]), undefined)).toBe(true);
+    expect(resolveCompositeAllPassed(false, makeToolEval([]), undefined)).toBe(false);
+  });
+
+  it('forces false when tiers were skipped even if every ran eval passed (skipped ≠ passed)', () => {
+    expect(resolveCompositeAllPassed(true, makeToolEval([true]), skip)).toBe(false);
+  });
+});
+
+describe('buildRunSummary', () => {
+  it('reads PASS with counts and no suffix when everything passed', () => {
+    expect(buildRunSummary(VERDICT_3_OF_3, makeToolEval([true]), true)).toBe('PASS 3/3');
+  });
+
+  it('appends a (N tool) suffix when tool verdicts failed though output looks all-green', () => {
+    // Output counts are 3/3 (all prose expectations passed) but a tool verdict failed,
+    // so the COMPOSITE reads FAIL and the suffix explains why the counts look green.
+    expect(buildRunSummary(VERDICT_3_OF_3, makeToolEval([true, false]), false)).toBe('FAIL 3/3 (1 tool)');
+  });
+
+  it('omits the tool suffix for a plain output FAIL with no tool failures', () => {
+    expect(buildRunSummary({ passed: 1, total: 2, allPassed: false }, makeToolEval([]), false)).toBe('FAIL 1/2');
+  });
+});
+
+describe('buildRunSummaryWithSkips', () => {
+  const FAIL_1_OF_2: GradingVerdict = { passed: 1, total: 2, allPassed: false };
+  /** A fail-fast gate that skipped `evalIds` in tier 1, gated by a tier-0 failure. */
+  const gatedSkip = (evalIds: string[]): SkippedEvalsSummary => ({
+    gatedByTier: 0,
+    firstSkippedTier: 1,
+    tiers: [{ tier: 1, evalIds }],
+    totalSkipped: evalIds.length,
+  });
+
+  it('returns the base summary unchanged when no tiers were skipped', () => {
+    expect(buildRunSummaryWithSkips(VERDICT_3_OF_3, makeToolEval([true]), true, undefined)).toBe('PASS 3/3');
+  });
+
+  it('appends a legible SKIPPED note on its own line when the gate fired', () => {
+    const summary = buildRunSummaryWithSkips(FAIL_1_OF_2, makeToolEval([]), false, gatedSkip(['x', 'y']));
+    expect(summary).toBe('FAIL 1/2\nSKIPPED (fail-fast): tier 1 and above (2 evals) — gated by tier 0 failure');
+  });
+
+  it('appends the spend suffix on the verdict line, before any skipped note', () => {
+    const summary = buildRunSummaryWithSkips(FAIL_1_OF_2, makeToolEval([]), false, gatedSkip(['x']), {
+      totalUsd: 0.5,
+      sessions: 2,
+    });
+    expect(summary).toBe(
+      'FAIL 1/2 | ≈$0.50 across 2 sessions\nSKIPPED (fail-fast): tier 1 and above (1 eval) — gated by tier 0 failure',
+    );
+  });
+
+  it('omits the spend suffix when no session reported a cost', () => {
+    expect(buildRunSummaryWithSkips(VERDICT_3_OF_3, makeToolEval([true]), true, undefined, { totalUsd: 0, sessions: 0 })).toBe(
+      'PASS 3/3',
+    );
+  });
+});
+
+describe('recordSessionCost', () => {
+  it('folds a numeric cost into the accumulator and counts the session', () => {
+    const acc = { totalUsd: 0, sessions: 0 };
+    recordSessionCost(acc, 0.25);
+    recordSessionCost(acc, 0.1);
+    expect(acc).toEqual({ totalUsd: 0.35, sessions: 2 });
+  });
+
+  it('ignores an undefined or non-finite cost (mock spawn / missing result)', () => {
+    const acc = { totalUsd: 1, sessions: 1 };
+    recordSessionCost(acc, undefined);
+    recordSessionCost(acc, Number.NaN);
+    expect(acc).toEqual({ totalUsd: 1, sessions: 1 });
+  });
+});
+
+describe('formatRunCostSuffix', () => {
+  it('formats a cost + session count with two-decimal dollars', () => {
+    expect(formatRunCostSuffix({ totalUsd: 1.234, sessions: 6 })).toBe(' | ≈$1.23 across 6 sessions');
+  });
+
+  it('uses the singular "session" for exactly one', () => {
+    expect(formatRunCostSuffix({ totalUsd: 0.4, sessions: 1 })).toBe(' | ≈$0.40 across 1 session');
+  });
+
+  it('returns an empty string when no session reported a cost', () => {
+    expect(formatRunCostSuffix({ totalUsd: 0, sessions: 0 })).toBe('');
+    expect(formatRunCostSuffix(undefined)).toBe('');
   });
 });
 

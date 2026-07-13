@@ -2,9 +2,10 @@ import { AuthPreflightError } from '@vibe-agent-toolkit/utils';
 
 import { BuildHookError } from './build-hook.js';
 import { UnknownEnvTokenError } from './declared-env.js';
-import { PromptInvariantError } from './experimenter-prompt.js';
+import { EvalFragmentError } from './eval-fragment.js';
 import { GradingNonceError, GradingSkewError } from './grading-adapter.js';
 import { HarnessLocationError } from './harness-location.js';
+import { PromptInvariantError } from './prompt-invariants.js';
 
 /** Exit codes for `vat skill test` (spec §6d). */
 export const SkillTestExitCode = {
@@ -75,7 +76,7 @@ export class SecurityAckError extends Error {
   }
 }
 
-/** Internal harness failure (incl. experimenter exiting without valid grading.json). Exit 1. */
+/** Internal harness failure (an executor/grader spawn error, watchdog timeout/stall, or a missing grader fragment). Exit 1. */
 export class InternalHarnessError extends Error {
   readonly exitCode = 1 as const;
   constructor(message: string) {
@@ -87,13 +88,16 @@ export class InternalHarnessError extends Error {
 /**
  * Map any thrown error to the process exit code. Errors that carry their own
  * `exitCode` (Bootstrap/Auth/HarnessLocation/Internal) are authoritative;
- * a PromptInvariantError is a user-correctable preflight problem (a supplied
- * prompt override is missing a required safety instruction) → 2; a BuildHookError
+ * a PromptInvariantError is a defense-in-depth failure over VAT's OWN generated
+ * executor/grader prompts (a required safety directive missing from a prompt VAT
+ * built) — surfaced as a user-visible preflight-class problem → 2; a BuildHookError
  * is a pre-stage build failure → 2; a SkillBuildError is a declared-skill build
  * failure → 2; a SecurityAckError is a missing security ack before a build → 2;
  * an UnknownEnvTokenError is a bad ${token} in a
- * declared env value → 2; GradingSkewError (parse failure) and GradingNonceError
- * (forged/mismatched grading nonce) are both → 1; everything unknown → 1.
+ * declared env value → 2; GradingSkewError (aggregate grading.json shape skew),
+ * EvalFragmentError (per-eval grader fragment parse failure), and
+ * GradingNonceError (forged/mismatched per-fragment grader nonce) are all → 1;
+ * everything unknown → 1.
  *
  * Note: SkillTestExitCode.EvalFailure (4) is NOT produced here — it is an
  * outcome of a completed run (an eval failed, the fail-closed default unless
@@ -114,6 +118,7 @@ export function mapErrorToExitCode(err: unknown): number {
     return SkillTestExitCode.Preflight;
   }
   if (
+    err instanceof EvalFragmentError ||
     err instanceof GradingNonceError ||
     err instanceof GradingSkewError ||
     err instanceof InternalHarnessError

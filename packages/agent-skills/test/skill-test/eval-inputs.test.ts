@@ -117,6 +117,83 @@ describe('parseEvalSuite', () => {
     ] });
     expect(() => parseEvalSuite(customKeys)).not.toThrow();
   });
+
+  it('parses tier + toolExpectations (mustRun/mustNotRun/sequence) and surfaces them on EvalEntry', () => {
+    const withToolExpectations = JSON.stringify({ skill_name: 'demo', evals: [
+      {
+        id: 1,
+        prompt: 'p',
+        expected_output: 'o',
+        expectations: ['e'],
+        tier: 2,
+        toolExpectations: {
+          mustRun: ['Read', 'Grep'],
+          mustNotRun: ['Bash'],
+          sequence: ['Read', 'Grep'],
+        },
+      },
+    ] });
+    const suite = parseEvalSuite(withToolExpectations);
+    expect(suite.evals[0]?.tier).toBe(2);
+    expect(suite.evals[0]?.toolExpectations).toEqual({
+      mustRun: ['Read', 'Grep'],
+      mustNotRun: ['Bash'],
+      sequence: ['Read', 'Grep'],
+    });
+  });
+
+  it('parses a mustSucceed tool-expectation (feature #148) and surfaces it on EvalEntry', () => {
+    const withMustSucceed = JSON.stringify({ skill_name: 'demo', evals: [
+      {
+        id: 1,
+        prompt: 'p',
+        expectations: ['e'],
+        toolExpectations: { mustRun: ['dxa'], mustSucceed: ['dxa'] },
+      },
+    ] });
+    const suite = parseEvalSuite(withMustSucceed);
+    expect(suite.evals[0]?.toolExpectations).toEqual({ mustRun: ['dxa'], mustSucceed: ['dxa'] });
+  });
+
+  it('rejects an empty mustSucceed executable name (each must be a non-empty name)', () => {
+    const badName = JSON.stringify({ skill_name: 'demo', evals: [
+      { id: 1, prompt: 'p', expectations: ['e'], toolExpectations: { mustSucceed: [''] } },
+    ] });
+    expect(() => parseEvalSuite(badName)).toThrow(EvalInputError);
+  });
+
+  it('rejects an unknown key inside toolExpectations (the sub-object is VAT-defined, so it is strict)', () => {
+    const badSubKey = JSON.stringify({ skill_name: 'demo', evals: [
+      {
+        id: 1,
+        prompt: 'p',
+        expected_output: 'o',
+        expectations: ['e'],
+        toolExpectations: { mustRun: ['Read'], mustRunTypo: ['Grep'] },
+      },
+    ] });
+    expect(() => parseEvalSuite(badSubKey)).toThrow(EvalInputError);
+  });
+
+  it('flags a near-miss typo of `toolExpectations` at the entry level', () => {
+    const typo = JSON.stringify({ skill_name: 'demo', evals: [
+      { id: 1, prompt: 'p', expected_output: 'o', expectations: ['e'], toolExpectation: { mustRun: ['Read'] } },
+    ] });
+    expect(() => parseEvalSuite(typo)).toThrow(/did you mean.*toolExpectations/i);
+  });
+
+  it('flags a near-miss typo of `tier` at the entry level', () => {
+    const typo = JSON.stringify({ skill_name: 'demo', evals: [
+      { id: 1, prompt: 'p', expected_output: 'o', expectations: ['e'], tiers: 1 },
+    ] });
+    expect(() => parseEvalSuite(typo)).toThrow(/did you mean.*tier/i);
+  });
+
+  it('still parses a normal suite without tier/toolExpectations (both remain optional)', () => {
+    const suite = parseEvalSuite(VALID);
+    expect(suite.evals[0]?.tier).toBeUndefined();
+    expect(suite.evals[0]?.toolExpectations).toBeUndefined();
+  });
 });
 
 function setupEvalWorkspaces(): { evalsDir: string; workspacesRoot: string } {

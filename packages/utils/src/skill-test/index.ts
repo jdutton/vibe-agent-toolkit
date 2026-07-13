@@ -20,8 +20,14 @@ export {
 } from './auth-resolver.js';
 export {
   assembleClaudeArgs,
+  killAllActiveClaudeChildren,
   spawnHeadlessClaude,
   type ClaudeSpawnArgs,
   type SpawnHeadlessOptions,
   type SpawnResult,
 } from './spawn-claude.js';
+export {
+  detectInvocationFromTranscript,
+  parseStreamJsonTranscript,
+  type ParsedTranscript,
+} from './transcript.js';
