@@ -27,6 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Tool checks no longer silently pass.** If an eval declared `toolExpectations` but the grader returned no tool verdict, it used to count as a pass; now it's a hard error (exit **1**). Same for a grader tool verdict whose `passed` disagrees with its own sub-checks.
 - **No more orphaned `claude` processes on failure.** When one parallel eval failed, in-flight grader/executor children were left running and billing tokens; they're now killed before the harness exits.
+- **`vat skill test run` no longer crashes on Windows with `spawn EINVAL`.** On Windows, `claude` resolves to an npm `claude.cmd` shim, and since the Node CVE-2024-27980 fix a bare `child_process.spawn` of a `.cmd` throws `EINVAL` synchronously — so the harness died the instant it tried to launch the headless session (reported by an adopter across cmd.exe, PowerShell, and Git Bash). The `claude` spawn now routes through a new hardened `spawnHardened` helper (exported from `@vibe-agent-toolkit/utils`) that detects `.cmd`/`.bat`/`.ps1` shims and launches them through the shell with per-arg quoting (no injection), reusing the Windows handling `safeExecSync` already had. A Windows-only integration test spawns a real `.cmd` shim (`npm`) to guard against regression. The same latent defect in the internal compat-empirical harness is fixed too.
+- **`spawnHeadlessClaude` reaps the child on a spawn `'error'` event.** The `'error'` handler unregistered the child from the orphan-reap set without killing it; it now kills the process tree first, closing a narrow orphan-leak window (no-ops when the child never spawned).
 
 ### Security
 

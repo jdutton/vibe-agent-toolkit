@@ -1,7 +1,7 @@
-import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { Readable } from 'node:stream';
+import { spawnSync, type ChildProcess, type ChildProcessByStdio } from 'node:child_process';
+import { Readable, type Writable } from 'node:stream';
 
-import which from 'which';
+import { spawnHardened } from '../spawn-hardened.js';
 
 export interface ClaudeSpawnArgs {
   pluginDirs: string[];
@@ -105,7 +105,7 @@ export function killAllActiveClaudeChildren(): void {
 
 export interface SpawnHeadlessOptions extends ClaudeSpawnArgs {
   /**
-   * The experimenter prompt, held IN MEMORY and streamed to the child's stdin
+   * The executor prompt, held IN MEMORY and streamed to the child's stdin
    * (claude 2.x reads the `-p` prompt from stdin; there is no `--prompt-file`
    * flag). Kept off argv so the prompt is never inlined (Windows cmd-quoting
    * safety) AND, deliberately, off disk: the harness stamps a per-run integrity
@@ -140,12 +140,17 @@ export interface SpawnHeadlessOptions extends ClaudeSpawnArgs {
  */
 export async function spawnHeadlessClaude(opts: SpawnHeadlessOptions): Promise<SpawnResult> {
   // opts.binPath is an internal test seam (see SpawnHeadlessOptions); production
-  // callers leave it unset and `claude` is resolved on PATH.
-  const bin = opts.binPath ?? which.sync('claude');
+  // callers leave it unset and the bare `claude` name is resolved on PATH by
+  // spawnHardened. spawnHardened is REQUIRED here (not a bare spawn): on Windows
+  // `claude` resolves to a `claude.cmd` shim, and since CVE-2024-27980 a bare
+  // spawn of a `.cmd` throws EINVAL — spawnHardened routes it through the shell.
   const args = assembleClaudeArgs(opts);
 
   return await new Promise<SpawnResult>((resolve, reject) => {
-    const child = spawn(bin, args, {
+    // `stdio: ['pipe','pipe','pipe']` guarantees all three streams are non-null;
+    // spawnHardened is typed to return the generic (nullable-stream) ChildProcess,
+    // so narrow to the piped shape here (mirrors Node's own stdio-tuple overload).
+    const child = spawnHardened(opts.binPath ?? 'claude', args, {
       cwd: opts.cwd,
       env: opts.env,
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -153,7 +158,7 @@ export async function spawnHeadlessClaude(opts: SpawnHeadlessOptions): Promise<S
       // group (backgrounded grandchildren + MCP subprocesses), not just the
       // direct child. Windows has no process groups (taskkill handles the tree).
       detached: process.platform !== 'win32',
-    });
+    }) as ChildProcessByStdio<Writable, Readable, Readable>;
     // Register immediately after spawn so the child is reapable by
     // killAllActiveClaudeChildren() for the entire time it can be in flight.
     activeClaudeChildren.add(child);
@@ -214,7 +219,11 @@ export async function spawnHeadlessClaude(opts: SpawnHeadlessOptions): Promise<S
     promptStream.pipe(child.stdin);
     child.stdout.on('data', (d: Buffer) => { opts.onStdout?.(d.toString()); });
     child.stderr.on('data', (d: Buffer) => { opts.onStderr?.(d.toString()); });
-    child.on('error', err => { clearAllTimers(); reject(err); });
+    // Reap on 'error' too: clearAllTimers() unregisters the child, so if 'error'
+    // ever fires while the process is actually alive we would otherwise drop it
+    // from the reap set without killing it (the exact orphan this file guards
+    // against). killProcessTree no-ops on an undefined pid (never-spawned case).
+    child.on('error', err => { clearAllTimers(); killProcessTree(child); reject(err); });
     child.on('close', code => { clearAllTimers(); resolve({ status: code ?? -1, timedOut, stalled }); });
   });
 }

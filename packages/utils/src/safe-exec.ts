@@ -2,6 +2,8 @@ import { spawnSync, type SpawnSyncOptions } from 'node:child_process';
 
 import which from 'which';
 
+import { buildWindowsShellLine, shouldUseShell } from './windows-shell.js';
+
 /**
  * Options for safe command execution
  */
@@ -59,84 +61,6 @@ export class CommandExecutionError extends Error {
 }
 
 /**
- * Determine if shell should be used for command execution on Windows
- *
- * ## Security Context
- *
- * This package's primary security model is `shell: false` to prevent command injection.
- * Windows requires `shell: true` only for shell scripts (.cmd/.bat/.ps1) which require
- * a shell interpreter by design (not executable binaries).
- *
- * ## Node.js on Windows - NO SHELL REQUIRED
- *
- * **Previous behavior (REMOVED):** Used shell:true for 'node' command
- * **Problem discovered:** Node.js DEP0190 deprecation warning - passing args array with
- * shell:true leads to incorrect command execution. Exit codes are ignored (always returns 0).
- *
- * **Testing shows:**
- * - ✅ `shell: false` + absolute path from `which.sync('node')` → Works correctly
- * - ❌ `shell: true` + args array → Exit codes ignored, security warning
- *
- * **Root Cause of Previous ENOENT Issues:** Likely resolved in newer Node.js versions.
- * Current testing (Node 20+) shows shell:false works correctly with absolute path.
- *
- * ## Why This Is Secure
- *
- * 1. **Minimal Shell Usage:** Shell only used for .cmd/.bat/.ps1 files (required)
- * 2. **Path Validation:** Command paths resolved via `which.sync()` before execution
- * 3. **Array-Based Arguments:** Arguments passed as array, preventing injection
- * 4. **Controlled Environment:** Commands from trusted configuration, not user input
- * 5. **No String Interpolation:** Never concatenate user input into command strings
- *
- * ## References
- *
- * - Node.js deprecation: https://nodejs.org/api/deprecations.html#DEP0190
- * - Security tests: `packages/utils/test/safe-exec.test.ts`
- * - Windows fix: PR #94 (fix/windows-shell-independence-v2)
- *
- * @param commandPath - Resolved absolute path to command
- * @returns true if shell should be used, false otherwise
- */
-function shouldUseShell(commandPath: string): boolean {
-  if (process.platform !== 'win32') {
-    return false;
-  }
-
-  // Node.js deprecation warning (DEP0190): Passing args with shell:true leads to incorrect
-  // command execution and security vulnerabilities. Testing shows shell:false works correctly
-  // with absolute path from which.sync('node') on Windows.
-  // Previous ENOENT issues may have been resolved in newer Node.js versions.
-  //
-  // REMOVED: if (command === 'node') return true;
-  // Reason: shell:true causes exit codes to be ignored (always returns 0)
-  // Fix: Use shell:false with absolute path - works correctly
-
-  // Windows shell scripts require shell by design (case-insensitive check)
-  const lowerPath = commandPath.toLowerCase();
-  return lowerPath.endsWith('.cmd') || lowerPath.endsWith('.bat') || lowerPath.endsWith('.ps1');
-}
-
-/**
- * Quote a single argument for a Windows `cmd.exe` command line.
- *
- * Rules:
- *   - An arg that's empty, or contains whitespace, quotes, or any of `& | < > ^ ( ) % !`,
- *     gets wrapped in double quotes.
- *   - Embedded double quotes become `""` (cmd.exe's escape form inside quoted strings).
- *
- * This is narrow on purpose: it's only used when we're forced to assemble a shell string
- * for `.cmd` / `.bat` wrappers on Windows (DEP0190 path). Callers still control what's
- * in `args`, but this keeps a stray space, glob metachar, or paren from getting
- * re-interpreted by the shell.
- */
-function windowsShellQuote(arg: string): string {
-  if (arg === '' || /["\s&|<>^()%!]/.test(arg)) {
-    return `"${arg.replaceAll('"', '""')}"`;
-  }
-  return arg;
-}
-
-/**
  * Resolve command, build spawn options, and execute via spawnSync.
  *
  * Handles Windows shell requirements: `.cmd`/`.bat`/`.ps1` files need `shell:true`.
@@ -168,7 +92,7 @@ function resolveAndSpawn(
     return spawnSync(execCommand, args, spawnOptions);
   }
 
-  const shellLine = `${execCommand} ${args.map(windowsShellQuote).join(' ')}`;
+  const shellLine = buildWindowsShellLine(execCommand, args);
   // eslint-disable-next-line sonarjs/os-command -- Windows DEP0190 workaround: command resolved via which.sync(); args are per-arg shell-quoted via windowsShellQuote()
   return spawnSync(shellLine, { ...spawnOptions, shell: true });
 }
