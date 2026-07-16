@@ -29,6 +29,14 @@ export interface StageItem {
    * paths in the skill's own code resolve. Absent → flat staging (standalone skill).
    */
   pluginLayout?: PluginLayout;
+  /**
+   * Marks a `--with-optional` companion: when this item's `resolve` (or the
+   * subsequent staging of its resolved contents) throws, `stageHarness` SKIPS it
+   * — with the name recorded in {@link StageHarnessResult.skippedOptional} — rather
+   * than failing the whole run. Absent (required, including the subject and every
+   * `--with` companion) means a throw propagates and fails the run.
+   */
+  optional?: true;
 }
 
 export interface StageHarnessOptions {
@@ -57,6 +65,14 @@ export interface StageHarnessResult {
    * when the subject is standalone (no plugin layout) or absent.
    */
   subjectPluginRoot: string | null;
+  /**
+   * Names of `--with-optional` items that were SKIPPED because resolving or
+   * staging them threw (unresolvable source, build failure, etc.). Empty when
+   * every optional item staged cleanly, or when there were none. A required item
+   * (subject or `--with`) that throws is never recorded here — it propagates and
+   * fails the whole run instead.
+   */
+  skippedOptional: string[];
 }
 
 /**
@@ -199,12 +215,34 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
 
   const entries: StagedEntry[] = [];
   const pluginDirs: string[] = [];
+  const skippedOptional: string[] = [];
   let subjectStagedDir: string | null = null;
   let subjectPluginRoot: string | null = null;
   // Track which staged plugin roots have been prepared (wiped + manifest copied) this
   // run so that sibling skills sharing the same plugin don't clobber each other.
   const preparedPluginRoots = new Set<string>();
   for (const item of opts.items) {
+    // A `--with-optional` companion degrades to skip-with-warning on ANY failure
+    // resolving or staging it (unresolvable source, build failure, etc.) — it must
+    // never take down a run whose subject and required `--with` companions are
+    // otherwise fine. A required item (subject or `--with`) still fails closed:
+    // its throw propagates unchanged.
+    if (item.optional === true) {
+      try {
+        const resolved = await opts.resolve(item.source, opts.ctx);
+        // An optional item is never the subject, so only `pluginDir` (pushed to
+        // --plugin-dir) is needed here — skillDir/pluginRoot only matter for the
+        // subject's own dir, tracked below.
+        const { pluginDir } = stageOneItem(opts.harnessRoot, item, resolved.stagedDir, preparedPluginRoots);
+        const contentHash = computeDirContentHash(pluginDir);
+        entries.push({ name: item.name, identity: resolved.identity, contentHash });
+        pluginDirs.push(pluginDir);
+      } catch {
+        skippedOptional.push(item.name);
+      }
+      continue;
+    }
+
     const resolved = await opts.resolve(item.source, opts.ctx);
     // Stage flat (standalone) or under the real plugin-root layout (plugin skill).
     const { pluginDir, skillDir, pluginRoot } = stageOneItem(opts.harnessRoot, item, resolved.stagedDir, preparedPluginRoots);
@@ -230,5 +268,5 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
     'utf8',
   );
 
-  return { manifest, pluginDirs, subjectStagedDir, subjectPluginRoot };
+  return { manifest, pluginDirs, subjectStagedDir, subjectPluginRoot, skippedOptional };
 }

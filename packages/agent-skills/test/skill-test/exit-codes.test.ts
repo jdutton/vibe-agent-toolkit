@@ -4,12 +4,12 @@ import { describe, expect, it } from 'vitest';
 import { EvalFragmentError } from '../../src/skill-test/eval-fragment.js';
 import {
   BootstrapNeededError,
+  DuplicateStagedSkillError,
   InternalHarnessError,
   mapErrorToExitCode,
   SecurityAckError,
   SkillBuildError,
   SkillTestExitCode,
-  UnmatchedInjectedSkillError,
 } from '../../src/skill-test/exit-codes.js';
 import { GradingSkewError } from '../../src/skill-test/grading-adapter.js';
 import { HarnessLocationError } from '../../src/skill-test/harness-location.js';
@@ -37,8 +37,8 @@ describe('mapErrorToExitCode', () => {
     expect(err.exitCode).toBe(2);
     expect(err.message).toContain('--i-understand-this-runs-skill-code');
   });
-  it('UnmatchedInjectedSkillError → 2 (user-correctable --with name)', () => {
-    const err = new UnmatchedInjectedSkillError(['helper-skill'], 'subject');
+  it('DuplicateStagedSkillError → 2 (a staged name collides across subject/with/optional)', () => {
+    const err = new DuplicateStagedSkillError('helper');
     expect(mapErrorToExitCode(err)).toBe(SkillTestExitCode.Preflight);
     expect(err.exitCode).toBe(2);
   });

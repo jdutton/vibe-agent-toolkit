@@ -85,6 +85,7 @@ export {
 } from './declared-env.js';
 export {
   BootstrapNeededError,
+  DuplicateStagedSkillError,
   InternalHarnessError,
   mapErrorToExitCode,
   SecurityAckError,

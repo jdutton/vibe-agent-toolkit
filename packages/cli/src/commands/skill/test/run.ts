@@ -1,5 +1,5 @@
 /**
- * `vat skill test run <skill...>` — execute a packaged skill's eval suite in isolation.
+ * `vat skill test run <skill>` — execute a packaged skill's eval suite in isolation.
  *
  * Thin orchestration layer: parse flags, resolve precedence (flag > config > default),
  * print the §12 security warning, call runSkillTestHarness, map result/error to exit code.
@@ -11,6 +11,7 @@ import { basename, dirname, extname } from 'node:path';
 
 import {
   BootstrapNeededError,
+  DuplicateStagedSkillError,
   isAcknowledged,
   mapErrorToExitCode,
   packageSkill,
@@ -192,7 +193,7 @@ export function deriveDeclaredExecutableNames(
  * Parse a single `name=src` pair into a [name, SkillSourceSpec] tuple. The
  * source half uses a `kind:value` prefix:
  *   workspace:foo · npm:@scope/s@1.2.3 · url:https://… · path:../baz · vendored
- * A bare value without `name=` is rejected — every injected dep needs a name so
+ * A bare value without `name=` is rejected — every companion needs a name so
  * the domain can key it (and so the skill resolves under that name in staging).
  */
 function parseWithPair(pair: string): [string, SkillSourceSpec] {
@@ -211,11 +212,14 @@ function parseWithPair(pair: string): [string, SkillSourceSpec] {
 }
 
 /** Parse an array of `name=src` flag values into a name→spec record. */
-function parseWithFlags(pairs: string[] | undefined): Record<string, SkillSourceSpec> | undefined {
+export function parseWithFlags(pairs: string[] | undefined): Record<string, SkillSourceSpec> | undefined {
   if (pairs === undefined || pairs.length === 0) return undefined;
   const record: Record<string, SkillSourceSpec> = {};
   for (const pair of pairs) {
     const [name, spec] = parseWithPair(pair);
+    // Fail closed on a repeated companion name rather than silently overwriting
+    // (last-wins would drop a companion the user asked for — the #153 no-op class).
+    if (Object.hasOwn(record, name)) throw new DuplicateStagedSkillError(name);
     record[name] = spec;
   }
   return record;
@@ -231,12 +235,19 @@ function descriptorName(d: SkillSourceDescriptor): string {
 }
 
 /** Map a config descriptor array (with/optional) into a name→spec record. */
-function descriptorsToRecord(
+export function descriptorsToRecord(
   list: SkillSourceDescriptor[] | undefined,
 ): Record<string, SkillSourceSpec> | undefined {
   if (list === undefined || list.length === 0) return undefined;
   const record: Record<string, SkillSourceSpec> = {};
-  for (const d of list) record[descriptorName(d)] = d;
+  for (const d of list) {
+    const name = descriptorName(d);
+    // Two config descriptors deriving the same name (e.g. two `path:` entries with
+    // the same basename) would silently overwrite — the exact silent-drop #153
+    // targets, one layer above buildStageItems. Fail closed here instead.
+    if (Object.hasOwn(record, name)) throw new DuplicateStagedSkillError(name);
+    record[name] = d;
+  }
   return record;
 }
 
@@ -259,8 +270,7 @@ function descriptorsToRecord(
  * guard in runSkillTestRun, which surfaces it as a clean exit-2 error rather than
  * silently applying defaults against a config the author clearly intended.
  */
-async function loadTestConfig(skills: string[], cwd: string): Promise<TestConfig | undefined> {
-  const subject = skills[0] ?? '';
+async function loadTestConfig(subject: string, cwd: string): Promise<TestConfig | undefined> {
   // Path target → resolve the declared skill it materializes, and read its test
   // block from that skill's own governing config root (cwd-independent).
   const link = await findDeclaredSkillForPath(subject, cwd);
@@ -431,7 +441,7 @@ function applyEnvMerges(opts: HarnessOpts, options: SkillTestRunOptions, config:
   if (passEnv !== undefined) opts.passEnv = passEnv;
 }
 
-/** Apply flag>config merges for injected-dependency records. */
+/** Apply flag>config merges for the companion-skill records (with/optional). */
 function applyDepMerges(opts: HarnessOpts, options: SkillTestRunOptions, config: TestConfig | undefined): void {
   const withSources = parseWithFlags(options.with) ?? descriptorsToRecord(config?.with);
   if (withSources !== undefined) opts.withSources = withSources;
@@ -464,14 +474,14 @@ function applyGraderMerges(
  * built-in defaults (inside the domain) are the final fallback.
  */
 function buildHarnessOpts(
-  skills: string[],
+  subject: string,
   options: SkillTestRunOptions,
   knobs: ReturnType<typeof coerceKnobs>,
   config: TestConfig | undefined,
   globalTest: SkillTestGlobalConfig,
 ): HarnessOpts {
   const repoRoot = resolveRepoRoot();
-  const opts: HarnessOpts = { skills, repoRoot };
+  const opts: HarnessOpts = { subject, repoRoot };
   applyFlagOnlyOptions(opts, options);
   applyScalarMerges(opts, options, config);
   applyKnobMerges(opts, knobs, config);
@@ -707,7 +717,7 @@ function warnIfPathTargetBypassesConfig(subject: ResolvedSubject): void {
  * promise rejection (raw stack trace, exit 1).
  */
 async function preflightKnobsAndConfig(
-  skills: string[],
+  subject: string,
   options: SkillTestRunOptions,
   cwd: string,
 ): Promise<{
@@ -720,7 +730,7 @@ async function preflightKnobsAndConfig(
     assertValidRequireAuth(options.requireAuth);
     return {
       knobs: coerceKnobs(options),
-      config: await loadTestConfig(skills, cwd),
+      config: await loadTestConfig(subject, cwd),
       globalTest: loadGlobalTestConfig(cwd),
     };
   } catch (err) {
@@ -759,12 +769,12 @@ function applyResolvedSubject(harnessOpts: HarnessOpts, subject: ResolvedSubject
  * (2) inside runSkillTestHarness (Step 6) as defense-in-depth before spawning.
  */
 export async function runSkillTestRun(
-  skills: string[],
+  subject: string,
   options: SkillTestRunOptions,
 ): Promise<void> {
   printSecurityWarning();
 
-  const { knobs, config, globalTest } = await preflightKnobsAndConfig(skills, options, process.cwd());
+  const { knobs, config, globalTest } = await preflightKnobsAndConfig(subject, options, process.cwd());
 
   // Commander stores the `--no-build` negatable flag under `build` (=== false when set);
   // honor an explicit programmatic `noBuild` too.
@@ -775,9 +785,9 @@ export async function runSkillTestRun(
     dryRun: options.dryRun === true,
     acknowledgedRunsSkillCode: options.iUnderstandThisRunsSkillCode === true,
   });
-  let subject: ResolvedSubject;
+  let resolvedSubject: ResolvedSubject;
   try {
-    subject = await resolveSubjectForTest(skills[0] ?? '', process.cwd(), {
+    resolvedSubject = await resolveSubjectForTest(subject, process.cwd(), {
       noBuild,
       dryRun: options.dryRun === true,
       acknowledged,
@@ -792,12 +802,14 @@ export async function runSkillTestRun(
     return;
   }
 
-  warnIfPathTargetBypassesConfig(subject);
-
-  const harnessOpts = buildHarnessOpts(skills, options, knobs, config, globalTest);
-  applyResolvedSubject(harnessOpts, subject);
+  warnIfPathTargetBypassesConfig(resolvedSubject);
 
   try {
+    // buildHarnessOpts assembles the companion records (--with/--with-optional and
+    // config with:/optional:) and can throw DuplicateStagedSkillError on a repeated
+    // name — inside the try so it maps to exit 2 like every other preflight error.
+    const harnessOpts = buildHarnessOpts(subject, options, knobs, config, globalTest);
+    applyResolvedSubject(harnessOpts, resolvedSubject);
     const result = await runSkillTestHarness(harnessOpts);
 
     process.stderr.write(`Harness: ${result.harnessPath}\n`);
@@ -827,14 +839,14 @@ export function createSkillTestRunCommand(): Command {
 
   command
     .description('Execute a packaged skill\'s eval suite in a headless, context-isolated Claude session (runs the skill\'s code; not an OS sandbox)')
-    .argument('<skill...>', 'Skill name(s) to test (primary subject set)')
+    .argument('<skill>', 'The skill to test')
     .option(
       '--with <pair...>',
-      'Override where a positional <skill> is staged from, as name=<src> — <name> MUST match one of the <skill...> args (an unmatched name is an error, not a silent no-op). <src> is workspace:<pkg> | npm:<spec> | url:<u> | path:<dir> | vendored (e.g. mydep=npm:@scope/s@1.2.3). To stage a skill that is NOT in the <skill...> set, use --with-optional.',
+      'Stage a REQUIRED companion skill the subject can invoke, as name=<src> (repeatable). <src> is workspace:<pkg> | npm:<spec> | url:<u> | path:<dir> | vendored (e.g. helper=npm:@scope/s@1.2.3). The run fails if a source cannot be resolved.',
     )
     .option(
       '--with-optional <pair...>',
-      'Stage an additional skill as name=<src> (same <src> syntax as --with). Unlike --with, this does NOT need to match a positional <skill> — every entry is staged unconditionally.',
+      'Stage an OPTIONAL companion skill, as name=<src> (same syntax, repeatable). Skipped with a warning if its source cannot be resolved; the run continues.',
     )
     .option(
       '--env <pair...>',
@@ -878,9 +890,10 @@ export function createSkillTestRunCommand(): Command {
       'after',
       `
 Description:
-  Stages the named skill(s) into a fresh temp harness (context isolation: a
-  scrubbed env allowlist and no user/project settings -- NOT an OS security
-  sandbox), runs preflight checks (claude binary, auth, eval inputs, budget),
+  Stages the named subject skill (plus any --with/--with-optional companion
+  skills) into a fresh temp harness (context isolation: a scrubbed env
+  allowlist and no user/project settings -- NOT an OS security sandbox), runs
+  preflight checks (claude binary, auth, eval inputs, budget),
   then runs a vat-owned executor->grader pipeline: per eval, a blind executor
   Claude session performs the task and a separate grader session judges its
   transcript against the skill's expectations. VAT merges the grader results and

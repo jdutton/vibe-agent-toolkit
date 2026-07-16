@@ -58,7 +58,7 @@ describe('runSkillTestHarness — security ack gate', () => {
   it('blocks the spawn and returns exit 2 when preflight passes but the ack is absent', async () => {
     const tempDir = getTempDir();
     const result = await runSkillTestHarness({
-      skills: ['my-skill'],
+      subject: 'my-skill',
       repoRoot: tempDir,
       workdir: tempDir,
       subjectSource: { path: getSubjectStagedDir() },

@@ -21,7 +21,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { EvalFragment } from '../../src/skill-test/eval-fragment.js';
 import { EvalInputError, type EvalEntry } from '../../src/skill-test/eval-inputs.js';
-import { SkillTestExitCode, UnmatchedInjectedSkillError } from '../../src/skill-test/exit-codes.js';
+import { DuplicateStagedSkillError, SkillTestExitCode } from '../../src/skill-test/exit-codes.js';
 import type { FrictionItem } from '../../src/skill-test/friction-schema.js';
 import type { GradingVerdict } from '../../src/skill-test/grading-adapter.js';
 import {
@@ -74,9 +74,9 @@ const PLUGIN_NAME = 'my-plugin';
 const PLUGIN_SKILL_REL = 'skills/report-tools';
 const OVERRIDE_LOC = 'override-loc';
 
-/** Build a minimal RunHarnessOptions with the given skills and overrides. */
+/** Build a minimal RunHarnessOptions with the given subject and overrides. */
 function makeOpts(overrides: Partial<RunHarnessOptions> = {}): RunHarnessOptions {
-  return { skills: ['my-skill'], ...overrides };
+  return { subject: 'my-skill', ...overrides };
 }
 
 /** Build a preflight check entry. */
@@ -341,16 +341,12 @@ describe('formatFrictionReport', () => {
 // ---------------------------------------------------------------------------
 
 describe('subjectSkillName', () => {
-  it('returns the trailing segment of a path-like skill arg', () => {
-    expect(subjectSkillName(makeOpts({ skills: [`some/dir/${SUBJECT_NAME}`] }))).toBe(SUBJECT_NAME);
+  it('returns the trailing segment of a path-like subject arg', () => {
+    expect(subjectSkillName(makeOpts({ subject: `some/dir/${SUBJECT_NAME}` }))).toBe(SUBJECT_NAME);
   });
 
   it('returns a plain name unchanged', () => {
-    expect(subjectSkillName(makeOpts({ skills: [SUBJECT_NAME] }))).toBe(SUBJECT_NAME);
-  });
-
-  it("falls back to 'skill' when there are no skills", () => {
-    expect(subjectSkillName(makeOpts({ skills: [] }))).toBe('skill');
+    expect(subjectSkillName(makeOpts({ subject: SUBJECT_NAME }))).toBe(SUBJECT_NAME);
   });
 });
 
@@ -367,8 +363,8 @@ describe('resolveScaffoldEvalsPath', () => {
   // rather than a hardcoded literal (the Windows CI gate).
   const resolvedRepoRoot = toForwardSlash(safePath.resolve(repoRoot));
 
-  it('resolves against repoRoot + the positional name when no override', () => {
-    const out = toForwardSlash(resolveScaffoldEvalsPath(makeOpts({ skills: ['skills/foo'] }), repoRoot, evalsSubpath));
+  it('resolves against repoRoot + the subject name when no override', () => {
+    const out = toForwardSlash(resolveScaffoldEvalsPath(makeOpts({ subject: 'skills/foo' }), repoRoot, evalsSubpath));
     expect(out.startsWith(resolvedRepoRoot)).toBe(true);
     expect(out.endsWith('/skills/foo/evals/evals.json')).toBe(true);
   });
@@ -376,7 +372,7 @@ describe('resolveScaffoldEvalsPath', () => {
   it('honors a withSources[name].path override', () => {
     const out = toForwardSlash(
       resolveScaffoldEvalsPath(
-        makeOpts({ skills: ['foo'], withSources: { foo: { path: 'custom/loc' } } }),
+        makeOpts({ subject: 'foo', withSources: { foo: { path: 'custom/loc' } } }),
         repoRoot,
         evalsSubpath,
       ),
@@ -452,27 +448,9 @@ describe('stage item construction', () => {
     expect('role' in item).toBe(false);
   });
 
-  it('buildStageItems tags the first skill subject and appends optional with no role', () => {
-    const tempDir = getTempDir();
-    makePlainDir(tempDir, 'first');
-    makePlainDir(tempDir, 'second');
-    makePlainDir(tempDir, 'opt');
-
-    const items = buildStageItems(
-      makeOpts({ skills: ['first', 'second'], withOptional: { opt: { path: 'opt' } } }),
-      tempDir,
-    );
-
-    expect(items).toHaveLength(3);
-    expect(items[0]?.role).toBe('subject');
-    expect('role' in (items[1] ?? {})).toBe(false);
-    expect(items[2]?.name).toBe('opt');
-    expect('role' in (items[2] ?? {})).toBe(false);
-  });
-
   it('uses subjectSource for the subject item when provided', () => {
     const items = buildStageItems(
-      { skills: ['my-skill'], subjectSource: { path: '/built/dist/skills/my-skill' } } as never,
+      { subject: 'my-skill', subjectSource: { path: '/built/dist/skills/my-skill' } } as never,
       '/repo',
     );
     const subject = items.find((i) => i.role === 'subject');
@@ -480,75 +458,101 @@ describe('stage item construction', () => {
   });
 
   it('falls back to {path: name} when subjectSource absent', () => {
-    const items = buildStageItems({ skills: ['my-skill'] } as never, '/repo');
+    const items = buildStageItems({ subject: 'my-skill' } as never, '/repo');
     expect(items.find((i) => i.role === 'subject')?.source).toEqual({ path: 'my-skill' });
   });
 
-  it('buildStageItems uses the withSources override for a primary skill', () => {
+  it('stages the subject plus every --with companion, each invocable with no role', () => {
     const tempDir = getTempDir();
-    makePlainDir(tempDir, OVERRIDE_LOC);
+    const helperOne = 'helper-one';
+    const helperTwo = 'helper-two';
+    makePlainDir(tempDir, 'subject');
+    makePlainDir(tempDir, helperOne);
+    makePlainDir(tempDir, helperTwo);
+
     const items = buildStageItems(
-      makeOpts({ skills: ['first'], withSources: { first: { path: OVERRIDE_LOC } } }),
+      makeOpts({
+        subject: 'subject',
+        withSources: { [helperOne]: { path: helperOne }, [helperTwo]: { path: helperTwo } },
+      }),
       tempDir,
     );
 
-    expect(items).toHaveLength(1);
-    expect(items[0]?.source).toEqual({ path: OVERRIDE_LOC });
-    expect(items[0]?.role).toBe('subject');
+    expect(items).toHaveLength(3);
+    const subject = items.find((i) => i.role === 'subject');
+    expect(subject?.name).toBe('subject');
+    const companionNames = items
+      .filter((i) => i.role !== 'subject')
+      .map((i) => i.name)
+      .sort((a, b) => a.localeCompare(b));
+    expect(companionNames).toEqual([helperOne, helperTwo]);
+    for (const item of items) {
+      if (item.role === 'subject') continue;
+      expect('role' in item).toBe(false);
+      expect('optional' in item).toBe(false);
+    }
+    expect(items.find((i) => i.name === helperOne)?.source).toEqual({ path: helperOne });
+    expect(items.find((i) => i.name === helperTwo)?.source).toEqual({ path: helperTwo });
   });
 
-  it('buildStageItems throws when a --with name matches no positional skill (fail-closed, not silent)', () => {
+  it('stages every --with-optional companion carrying optional: true', () => {
+    const tempDir = getTempDir();
+    makePlainDir(tempDir, 'subject');
+    makePlainDir(tempDir, 'opt-one');
+    makePlainDir(tempDir, 'opt-two');
+
+    const items = buildStageItems(
+      makeOpts({
+        subject: 'subject',
+        withOptional: { 'opt-one': { path: 'opt-one' }, 'opt-two': { path: 'opt-two' } },
+      }),
+      tempDir,
+    );
+
+    expect(items).toHaveLength(3);
+    const optionalItems = items.filter((i) => i.name !== 'subject');
+    expect(optionalItems).toHaveLength(2);
+    for (const item of optionalItems) {
+      expect(item.optional).toBe(true);
+      expect('role' in item).toBe(false);
+    }
+  });
+
+  it('throws DuplicateStagedSkillError when a --with name collides with the subject name', () => {
     const tempDir = getTempDir();
     makePlainDir(tempDir, 'subject');
     let thrown: unknown;
     try {
       buildStageItems(
-        makeOpts({ skills: ['subject'], withSources: { 'helper-skill': { path: OVERRIDE_LOC } } }),
+        makeOpts({ subject: 'subject', withSources: { subject: { path: OVERRIDE_LOC } } }),
         tempDir,
       );
     } catch (e) {
       thrown = e;
     }
-    expect(thrown).toBeInstanceOf(UnmatchedInjectedSkillError);
-    const message = (thrown as Error).message;
-    // Names the offending key, the subject, and the three remediations.
-    expect(message).toContain('helper-skill');
-    expect(message).toContain('subject');
-    expect(message).toContain('--with-optional');
-    expect(message).toContain('skills.config.subject.test.with');
+    expect(thrown).toBeInstanceOf(DuplicateStagedSkillError);
+    expect((thrown as DuplicateStagedSkillError).name === 'DuplicateStagedSkillError').toBe(true);
+    expect((thrown as Error).message).toContain('subject');
   });
 
-  it('buildStageItems lists every unmatched --with name in one error', () => {
+  it('throws DuplicateStagedSkillError when the same name is used in --with and --with-optional', () => {
     const tempDir = getTempDir();
     makePlainDir(tempDir, 'subject');
     let thrown: unknown;
     try {
       buildStageItems(
         makeOpts({
-          skills: ['subject'],
-          withSources: { alpha: { path: OVERRIDE_LOC }, beta: { path: OVERRIDE_LOC } },
+          subject: 'subject',
+          withSources: { helper: { path: OVERRIDE_LOC } },
+          withOptional: { helper: { path: OVERRIDE_LOC } },
         }),
         tempDir,
       );
     } catch (e) {
       thrown = e;
     }
-    expect(thrown).toBeInstanceOf(UnmatchedInjectedSkillError);
-    expect((thrown as Error).message).toContain('alpha');
-    expect((thrown as Error).message).toContain('beta');
-  });
-
-  it('buildStageItems does NOT throw when every --with name matches a positional skill', () => {
-    const tempDir = getTempDir();
-    makePlainDir(tempDir, 'first');
-    makePlainDir(tempDir, OVERRIDE_LOC);
-    const items = buildStageItems(
-      makeOpts({ skills: ['first', 'helper'], withSources: { helper: { path: OVERRIDE_LOC } } }),
-      tempDir,
-    );
-    expect(items).toHaveLength(2);
-    expect(items[1]?.name).toBe('helper');
-    expect(items[1]?.source).toEqual({ path: OVERRIDE_LOC });
+    expect(thrown).toBeInstanceOf(DuplicateStagedSkillError);
+    expect((thrown as Error).message).toContain('helper');
   });
 });
 

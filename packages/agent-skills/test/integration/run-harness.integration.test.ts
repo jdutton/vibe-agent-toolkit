@@ -65,7 +65,7 @@ function writeFixtureSkillWithEvals(evals: unknown[]): string {
 /** Base harness options: real staging of the fixture skill into a real `out` dir. */
 function harnessOpts(skillDir: string, spawn: RunHarnessOptions['spawn']): RunHarnessOptions {
   return {
-    skills: [FIXTURE_SKILL],
+    subject: FIXTURE_SKILL,
     repoRoot: tempDir,
     out: safePath.join(tempDir, 'harness'),
     subjectSource: { path: skillDir },

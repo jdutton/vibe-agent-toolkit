@@ -38,6 +38,7 @@ const SUBJECT_NAME = 'foo';
 const CLAUDE_PLUGIN_DIR = '.claude-plugin';
 const PLUGIN_JSON = 'plugin.json';
 const REL_SKILL_PATH = 'skills/foo';
+const FAKE_IDENTITY = 'fake-identity';
 
 type StageHarnessResolve = (
   source: SkillSource,
@@ -103,7 +104,7 @@ function writePluginRoot(base: string, parent = '.', manifestName = 'my-plugin')
 async function stageFlat(
   harnessRoot: string,
   sourceDir: string,
-  identity = 'fake-identity',
+  identity = FAKE_IDENTITY,
 ): Promise<ResolvedHarness> {
   const items: StageItem[] = [{ name: SUBJECT_NAME, source: { path: sourceDir }, role: 'subject' }];
   return stageHarness({ harnessRoot, items, resolve: fakeResolve(sourceDir, identity), ctx: CTX, currentUid });
@@ -174,7 +175,7 @@ describe('stageHarness — flat (standalone) path', () => {
     expect(result.manifest.fingerprint.length).toBeGreaterThan(0);
     expect(result.manifest.entries).toHaveLength(1);
     expect(result.manifest.entries[0]?.name).toBe(SUBJECT_NAME);
-    expect(result.manifest.entries[0]?.identity).toBe('fake-identity');
+    expect(result.manifest.entries[0]?.identity).toBe(FAKE_IDENTITY);
   });
 });
 
@@ -267,6 +268,89 @@ describe('stageHarness — plugin basename collision', () => {
       JSON.parse(readFileSync(safePath.join(root, CLAUDE_PLUGIN_DIR, PLUGIN_JSON), 'utf8')).name;
     expect(nameOf(rootA as string)).toBe('plugin-a');
     expect(nameOf(rootB as string)).toBe('plugin-b');
+  });
+});
+
+/**
+ * A `resolve` that succeeds ONLY for `okSource` (returning `okStagedDir` under
+ * `okIdentity`) and throws `cannot resolve: <path>` for anything else — the
+ * shared stub for the optional-vs-required resolve-failure tests below.
+ */
+function resolveOnlyKnown(okSource: string, okStagedDir: string, okIdentity: string): StageHarnessResolve {
+  return async (source) => {
+    const p = 'path' in source ? source.path : '';
+    if (p === okSource) return { stagedDir: okStagedDir, identity: okIdentity };
+    throw new Error(`cannot resolve: ${p}`);
+  };
+}
+
+/**
+ * Build a subject + one `companion` staging setup whose `resolve` succeeds only
+ * for the subject — so the companion's source (`UNRESOLVABLE_SOURCE`) always
+ * throws. Shared by the optional-skip vs required-propagate tests below.
+ */
+function stagingWithFailingCompanion(
+  getTempDir: () => string,
+  companion: StageItem,
+): { harnessRoot: string; items: StageItem[]; resolve: StageHarnessResolve } {
+  const sourceDir = writeSourceSkill(getTempDir());
+  const items: StageItem[] = [
+    { name: SUBJECT_NAME, source: { path: sourceDir }, role: 'subject' },
+    companion,
+  ];
+  return { harnessRoot: makeHarnessRoot(), items, resolve: resolveOnlyKnown(sourceDir, sourceDir, FAKE_IDENTITY) };
+}
+
+describe('stageHarness — optional item resolve failure (skip-with-warning)', () => {
+  const { getTempDir } = setupTempDir('vat-staging-optional-');
+  const UNRESOLVABLE_SOURCE = '/does/not/matter';
+
+  it('skips an optional item whose resolve throws: name in skippedOptional, absent from pluginDirs, staging completes', async () => {
+    const { harnessRoot, items, resolve } = stagingWithFailingCompanion(getTempDir, {
+      name: 'flaky-optional',
+      source: { path: UNRESOLVABLE_SOURCE },
+      optional: true,
+    });
+
+    const result = await stageHarness({ harnessRoot, items, resolve, ctx: CTX, currentUid });
+
+    expect(result.skippedOptional).toEqual(['flaky-optional']);
+    expect(result.pluginDirs).toHaveLength(1);
+    expect(result.manifest.entries).toHaveLength(1);
+    expect(result.manifest.entries[0]?.name).toBe(SUBJECT_NAME);
+    expect(result.subjectStagedDir).not.toBeNull();
+  });
+
+  it('propagates a resolve throw for a REQUIRED (non-optional) item', async () => {
+    const { harnessRoot, items, resolve } = stagingWithFailingCompanion(getTempDir, {
+      name: 'required-companion',
+      source: { path: UNRESOLVABLE_SOURCE },
+    });
+
+    await expect(stageHarness({ harnessRoot, items, resolve, ctx: CTX, currentUid })).rejects.toThrow(
+      'cannot resolve',
+    );
+  });
+
+  it('stages a RESOLVABLE optional companion: present in pluginDirs + entries, nothing skipped', async () => {
+    const subjectDir = writeSourceSkill(getTempDir());
+    const optionalDir = writeSourceSkill(safePath.join(getTempDir(), 'opt'));
+    const items: StageItem[] = [
+      { name: SUBJECT_NAME, source: { path: subjectDir }, role: 'subject' },
+      { name: 'good-optional', source: { path: optionalDir }, optional: true },
+    ];
+    const resolve: StageHarnessResolve = async (source) => {
+      const p = 'path' in source ? source.path : '';
+      if (p === subjectDir) return { stagedDir: subjectDir, identity: FAKE_IDENTITY };
+      if (p === optionalDir) return { stagedDir: optionalDir, identity: 'opt-identity' };
+      throw new Error(`cannot resolve: ${p}`);
+    };
+
+    const result = await stageHarness({ harnessRoot: makeHarnessRoot(), items, resolve, ctx: CTX, currentUid });
+
+    expect(result.skippedOptional).toEqual([]);
+    expect(result.pluginDirs).toHaveLength(2);
+    expect(result.manifest.entries.map((e) => e.name)).toEqual([SUBJECT_NAME, 'good-optional']);
   });
 });
 

@@ -77,25 +77,24 @@ export class SecurityAckError extends Error {
 }
 
 /**
- * A `--with <name>=<src>` (or config `with:`) entry names no positional `<skill>`
- * argument, so it would never be staged. Historically such a pair was silently
- * dropped — no error, no warning, no manifest trace — which makes routing/deferral
- * evals look correct while testing something different (issue #153). We now
- * fail-closed. Exit 2 (preflight class): user-correctable input, like a bad env
- * token or missing security ack. `--with-optional` is unaffected (it stages every
- * entry unconditionally), so it is offered as one of the remediations.
+ * A skill name is staged more than once in a single run — the subject, a
+ * `--with` companion, and a `--with-optional` companion must all have distinct
+ * names. Both `--with` and `--with-optional` STAGE the named companion and make
+ * it invocable (issue #153: they differ only in required-vs-optional resolution,
+ * not in whether they are staged), so a colliding name would silently overwrite
+ * an earlier staged copy under the same slot — never an error, never a manifest
+ * trace — which makes a routing/deferral eval look correct while testing
+ * something else. Exit 2 (preflight class): user-correctable input, like a bad
+ * env token or missing security ack.
  */
-export class UnmatchedInjectedSkillError extends Error {
+export class DuplicateStagedSkillError extends Error {
   readonly exitCode = 2 as const;
-  constructor(public readonly names: string[], public readonly subject: string) {
-    const label = names.length === 1 ? 'name did' : 'names did';
+  constructor(public readonly skillName: string) {
     super(
-      `--with ${names.join(', ')}: not stageable for this run (${label} not match any ` +
-        `positional <skill> argument and no config-declared dependency of "${subject}"). ` +
-        `Declare it in skills.config.${subject}.test.with, pass it as a positional <skill>, ` +
-        `or use --with-optional to inject it unconditionally.`,
+      `Skill name "${skillName}" is staged more than once (subject / --with / --with-optional). ` +
+        `Each staged skill must have a unique name.`,
     );
-    this.name = 'UnmatchedInjectedSkillError';
+    this.name = 'DuplicateStagedSkillError';
   }
 }
 
@@ -117,8 +116,8 @@ export class InternalHarnessError extends Error {
  * is a pre-stage build failure → 2; a SkillBuildError is a declared-skill build
  * failure → 2; a SecurityAckError is a missing security ack before a build → 2;
  * an UnknownEnvTokenError is a bad ${token} in a
- * declared env value → 2; an UnmatchedInjectedSkillError is a `--with` name that
- * matches no positional skill → 2; GradingSkewError (aggregate grading.json shape skew),
+ * declared env value → 2; a DuplicateStagedSkillError is a staged-name collision
+ * across subject/--with/--with-optional → 2; GradingSkewError (aggregate grading.json shape skew),
  * EvalFragmentError (per-eval grader fragment parse failure), and
  * GradingNonceError (forged/mismatched per-fragment grader nonce) are all → 1;
  * everything unknown → 1.
@@ -138,7 +137,7 @@ export function mapErrorToExitCode(err: unknown): number {
     err instanceof SecurityAckError ||
     err instanceof SkillBuildError ||
     err instanceof UnknownEnvTokenError ||
-    err instanceof UnmatchedInjectedSkillError
+    err instanceof DuplicateStagedSkillError
   ) {
     return SkillTestExitCode.Preflight;
   }

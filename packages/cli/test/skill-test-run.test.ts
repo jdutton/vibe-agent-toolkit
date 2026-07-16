@@ -17,8 +17,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import * as yaml from 'yaml';
 
 import {
+  createSkillTestRunCommand,
   deriveDeclaredExecutableNames,
+  descriptorsToRecord,
   isPathSourceTarget,
+  parseWithFlags,
   resolveCappedKnob,
   resolveSubjectForTest,
   runSkillTestRun,
@@ -49,7 +52,7 @@ async function runAndCaptureStreams(result: {
   const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);
   const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
 
-  await runSkillTestRun([PATH_SUBJECT], {});
+  await runSkillTestRun(PATH_SUBJECT, {});
 
   return {
     stdoutCalls: stdoutSpy.mock.calls.map((c) => String(c[0])),
@@ -67,7 +70,7 @@ describe('vat skill test run (orchestration)', () => {
       summary: 'PASS 3/3',
     });
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
-    await runSkillTestRun([PATH_SUBJECT], {});
+    await runSkillTestRun(PATH_SUBJECT, {});
     expect(exit).toHaveBeenCalledWith(0);
   });
 
@@ -77,7 +80,7 @@ describe('vat skill test run (orchestration)', () => {
       new BootstrapNeededError('/h/evals/evals.json'),
     );
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
-    await runSkillTestRun([PATH_SUBJECT], {});
+    await runSkillTestRun(PATH_SUBJECT, {});
     expect(exit).toHaveBeenCalledWith(3);
   });
 
@@ -87,7 +90,7 @@ describe('vat skill test run (orchestration)', () => {
       new HarnessLocationError('harness root is unsafe'),
     );
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
-    await runSkillTestRun([PATH_SUBJECT], {});
+    await runSkillTestRun(PATH_SUBJECT, {});
     expect(exit).toHaveBeenCalledWith(2);
   });
 
@@ -97,7 +100,7 @@ describe('vat skill test run (orchestration)', () => {
       new InternalHarnessError('grading.json missing'),
     );
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
-    await runSkillTestRun([PATH_SUBJECT], {});
+    await runSkillTestRun(PATH_SUBJECT, {});
     expect(exit).toHaveBeenCalledWith(1);
   });
 
@@ -108,7 +111,7 @@ describe('vat skill test run (orchestration)', () => {
       summary: 'FAIL 1/2',
     });
     const exit = vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
-    await runSkillTestRun([PATH_SUBJECT], {});
+    await runSkillTestRun(PATH_SUBJECT, {});
     expect(exit).toHaveBeenCalledWith(4);
   });
 
@@ -180,14 +183,14 @@ async function expectPreflightExit2(
   vi.spyOn(process, 'exit').mockImplementation(((code?: number) => {
     throw new Error(`exit:${String(code)}`);
   }) as never);
-  await expect(runSkillTestRun([PATH_SUBJECT], options)).rejects.toThrow('exit:2');
+  await expect(runSkillTestRun(PATH_SUBJECT, options)).rejects.toThrow('exit:2');
   expect(harnessSpy).not.toHaveBeenCalled();
 }
 
 // Mocks runSkillTestHarness, runs runSkillTestRun, and returns the RunHarnessOptions
 // the mock received so tests can assert env/passEnv plumbing.
 async function runAndCaptureOpts(
-  skills: string[],
+  subject: string,
   options: Parameters<typeof runSkillTestRun>[1],
 ): Promise<Record<string, unknown>> {
   const spy = vi
@@ -196,7 +199,7 @@ async function runAndCaptureOpts(
   vi.spyOn(process, 'exit').mockImplementation((() => undefined) as never);
   vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);
   vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
-  await runSkillTestRun(skills, options);
+  await runSkillTestRun(subject, options);
   return spy.mock.calls[0]?.[0] as unknown as Record<string, unknown>;
 }
 
@@ -219,7 +222,7 @@ describe('vat skill test run (env plumbing)', () => {
   afterEach(() => vi.restoreAllMocks());
 
   it('parses --env KEY=VALUE into an env record (literal ${...} preserved)', async () => {
-    const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
+    const opts = await runAndCaptureOpts(ENV_TEST_SKILL, {
       env: ['CUSTOMER_SNAPSHOT_PATH=${fixturesDir}/snap.json'],
       iUnderstandThisRunsSkillCode: true,
     });
@@ -227,7 +230,7 @@ describe('vat skill test run (env plumbing)', () => {
   });
 
   it('splits an --env value on the first = only', async () => {
-    const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
+    const opts = await runAndCaptureOpts(ENV_TEST_SKILL, {
       env: ['FOO=a=b'],
       iUnderstandThisRunsSkillCode: true,
     });
@@ -235,7 +238,7 @@ describe('vat skill test run (env plumbing)', () => {
   });
 
   it('unions and de-duplicates --pass-env names', async () => {
-    const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
+    const opts = await runAndCaptureOpts(ENV_TEST_SKILL, {
       passEnv: ['VENDOR_LICENSE_KEY', 'VENDOR_LICENSE_KEY', 'OTHER'],
       iUnderstandThisRunsSkillCode: true,
     });
@@ -243,7 +246,7 @@ describe('vat skill test run (env plumbing)', () => {
   });
 
   it('leaves env and passEnv undefined when no env flags are given', async () => {
-    const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
+    const opts = await runAndCaptureOpts(ENV_TEST_SKILL, {
       iUnderstandThisRunsSkillCode: true,
     });
     expect(opts.env).toBeUndefined();
@@ -251,7 +254,7 @@ describe('vat skill test run (env plumbing)', () => {
   });
 
   it('threads --allow-eval-failure through to the harness opts as tolerateEvalFailure', async () => {
-    const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
+    const opts = await runAndCaptureOpts(ENV_TEST_SKILL, {
       allowEvalFailure: true,
       iUnderstandThisRunsSkillCode: true,
     });
@@ -259,7 +262,7 @@ describe('vat skill test run (env plumbing)', () => {
   });
 
   it('leaves tolerateEvalFailure undefined by default (fail-closed on eval failure)', async () => {
-    const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
+    const opts = await runAndCaptureOpts(ENV_TEST_SKILL, {
       iUnderstandThisRunsSkillCode: true,
     });
     expect(opts.tolerateEvalFailure).toBeUndefined();
@@ -368,7 +371,7 @@ describe('vat skill test run (path target honors declared test: config — #7)',
     resetSkillDiscoveryCache();
     // An ABSOLUTE dist path keys entirely off itself (the reverse-lookup walks up from
     // the path, config-first), so it honors config regardless of the process cwd.
-    const opts = await runAndCaptureOpts([fx.poolDistDir(CONFIGURED)], { iUnderstandThisRunsSkillCode: true });
+    const opts = await runAndCaptureOpts(fx.poolDistDir(CONFIGURED), { iUnderstandThisRunsSkillCode: true });
     expect(opts.model).toBe(SONNET_MODEL);
     expect(opts.evalsSubpath).toBe('evals/suite.json');
     expect(opts.timeout).toBe(240);
@@ -379,7 +382,7 @@ describe('vat skill test run (path target honors declared test: config — #7)',
     const PL = 'pl-configured';
     const fx = setupReferenceFixture({ pluginLocal: [PL], poolTest: { [PL]: { model: SONNET_MODEL } } });
     resetSkillDiscoveryCache();
-    const opts = await runAndCaptureOpts([fx.pluginDistDir(PL)], { iUnderstandThisRunsSkillCode: true });
+    const opts = await runAndCaptureOpts(fx.pluginDistDir(PL), { iUnderstandThisRunsSkillCode: true });
     expect(opts.model).toBe(SONNET_MODEL);
     expect(opts.subjectScaffoldDir).toBeDefined(); // anchored at the plugin skill's source
   });
@@ -389,7 +392,7 @@ describe('vat skill test run (path target honors declared test: config — #7)',
     resetSkillDiscoveryCache();
     // Absolute path under the same config but NOT any declared skill's dist → config-blind.
     const ghost = safePath.join(fx.root, 'dist', 'skills', 'ghost-not-declared');
-    const opts = await runAndCaptureOpts([ghost], { iUnderstandThisRunsSkillCode: true });
+    const opts = await runAndCaptureOpts(ghost, { iUnderstandThisRunsSkillCode: true });
     expect(opts.model).toBeUndefined();
     expect(opts.evalsSubpath).toBeUndefined();
   });
@@ -505,7 +508,7 @@ describe('runSkillTestRun (security ack gates the build end-to-end — M2)', () 
     vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);
     vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
 
-    await runSkillTestRun([DECLARED_POOL], {});
+    await runSkillTestRun(DECLARED_POOL, {});
 
     expect(exit).toHaveBeenCalledWith(2);
     expect(pkg).not.toHaveBeenCalled();
@@ -527,7 +530,7 @@ describe('vat skill test run (--grader-model / --concurrency — global test: co
 
   it('a --grader-model flag wins over top-level config', async () => {
     stubGlobalTestConfig({ graderModel: CONFIG_GRADER_MODEL });
-    const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
+    const opts = await runAndCaptureOpts(ENV_TEST_SKILL, {
       graderModel: FLAG_GRADER_MODEL,
       iUnderstandThisRunsSkillCode: true,
     });
@@ -536,7 +539,7 @@ describe('vat skill test run (--grader-model / --concurrency — global test: co
 
   it('reads graderModel from the top-level test: config when no flag is set', async () => {
     stubGlobalTestConfig({ graderModel: CONFIG_GRADER_MODEL });
-    const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
+    const opts = await runAndCaptureOpts(ENV_TEST_SKILL, {
       iUnderstandThisRunsSkillCode: true,
     });
     expect(opts.graderModel).toBe(CONFIG_GRADER_MODEL);
@@ -544,7 +547,7 @@ describe('vat skill test run (--grader-model / --concurrency — global test: co
 
   it('a --concurrency flag wins over top-level config', async () => {
     stubGlobalTestConfig({ concurrency: 2 });
-    const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
+    const opts = await runAndCaptureOpts(ENV_TEST_SKILL, {
       concurrency: '9',
       iUnderstandThisRunsSkillCode: true,
     });
@@ -553,17 +556,67 @@ describe('vat skill test run (--grader-model / --concurrency — global test: co
 
   it('reads concurrency from the top-level test: config when no flag is set', async () => {
     stubGlobalTestConfig({ concurrency: 7 });
-    const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
+    const opts = await runAndCaptureOpts(ENV_TEST_SKILL, {
       iUnderstandThisRunsSkillCode: true,
     });
     expect(opts.concurrency).toBe(7);
   });
 
   it('leaves graderModel and concurrency undefined when neither flag nor top-level config sets them', async () => {
-    const opts = await runAndCaptureOpts([ENV_TEST_SKILL], {
+    const opts = await runAndCaptureOpts(ENV_TEST_SKILL, {
       iUnderstandThisRunsSkillCode: true,
     });
     expect(opts.graderModel).toBeUndefined();
     expect(opts.concurrency).toBeUndefined();
+  });
+});
+
+// The command takes a SINGLE subject skill (companions are staged separately via
+// --with/--with-optional) — asserted directly against the Commander option/argument
+// metadata so a regression to the old multi-subject phrasing fails a fast unit test.
+describe('createSkillTestRunCommand (single-subject argument + companion help text)', () => {
+  it('declares a single (non-variadic) <skill> argument', () => {
+    const command = createSkillTestRunCommand();
+    expect(command.registeredArguments).toHaveLength(1);
+    expect(command.registeredArguments[0]?.variadic).toBe(false);
+    expect(command.registeredArguments[0]?.name()).toBe('skill');
+  });
+
+  it('describes --with as staging a REQUIRED companion (fails if unresolved)', () => {
+    const command = createSkillTestRunCommand();
+    const withOption = command.options.find((o) => o.long === '--with');
+    expect(withOption?.description).toContain('REQUIRED companion skill');
+    expect(withOption?.description).toContain('fails if a source cannot be resolved');
+  });
+
+  it('describes --with-optional as staging an OPTIONAL companion (skipped with a warning)', () => {
+    const command = createSkillTestRunCommand();
+    const withOptionalOption = command.options.find((o) => o.long === '--with-optional');
+    expect(withOptionalOption?.description).toContain('OPTIONAL companion skill');
+    expect(withOptionalOption?.description).toContain('Skipped with a warning');
+  });
+});
+
+describe('companion-name deduplication (fail-closed, not last-wins)', () => {
+  it('parseWithFlags throws DuplicateStagedSkillError on a repeated --with name', () => {
+    expect(() => parseWithFlags(['dup=path:one', 'dup=path:two'])).toThrow(harness.DuplicateStagedSkillError);
+  });
+
+  it('parseWithFlags accepts distinct --with names', () => {
+    const record = parseWithFlags(['a=path:one', 'b=path:two']);
+    expect(Object.keys(record ?? {})).toEqual(['a', 'b']);
+  });
+
+  it('descriptorsToRecord throws when two config descriptors derive the same name', () => {
+    // Both `path:` basenames derive the name "router" — a silent overwrite before
+    // buildStageItems ever saw it (the #153 no-op class, one layer up).
+    expect(() => descriptorsToRecord([{ path: 'helpers/foo/router' }, { path: 'helpers/bar/router' }])).toThrow(
+      harness.DuplicateStagedSkillError,
+    );
+  });
+
+  it('descriptorsToRecord accepts descriptors with distinct derived names', () => {
+    const record = descriptorsToRecord([{ workspace: 'alpha' }, { workspace: 'beta' }]);
+    expect(Object.keys(record ?? {})).toEqual(['alpha', 'beta']);
   });
 });

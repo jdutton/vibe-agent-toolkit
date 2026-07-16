@@ -50,7 +50,7 @@ function runHarness(
   extra?: { tolerateEvalFailure?: boolean },
 ): ReturnType<typeof runSkillTestHarness> {
   return runSkillTestHarness({
-    skills: ['my-skill'],
+    subject: 'my-skill',
     repoRoot: tempDir,
     out: safePath.join(tempDir, 'harness'),
     subjectSource: { path: subjectStagedDir },

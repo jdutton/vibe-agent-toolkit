@@ -224,9 +224,9 @@ export const TestConfigSchema = z.object({
   skillCreator: SkillSourceDescriptorSchema.optional()
     .describe('Source for skill-creator (default: { vendored: true })'),
   with: z.array(SkillSourceDescriptorSchema).optional()
-    .describe('Declared-dependency skills/plugins to stage'),
+    .describe('Required companion skills to stage alongside the subject (invocable by it); the run fails if a source cannot be resolved.'),
   optional: z.array(SkillSourceDescriptorSchema).optional()
-    .describe('Optional dependencies, absent by default'),
+    .describe('Optional companion skills; staged if resolvable, skipped with a warning otherwise.'),
   /**
    * Shell command to run once, before staging, to generate build artifacts.
    * Runs with cwd = config root (directory containing vibe-agent-toolkit.config.yaml).
