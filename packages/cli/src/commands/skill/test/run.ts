@@ -830,11 +830,11 @@ export function createSkillTestRunCommand(): Command {
     .argument('<skill...>', 'Skill name(s) to test (primary subject set)')
     .option(
       '--with <pair...>',
-      'Inject a declared-dependency skill as name=<src>, where <src> is workspace:<pkg> | npm:<spec> | url:<u> | path:<dir> | vendored (e.g. mydep=npm:@scope/s@1.2.3)',
+      'Override where a positional <skill> is staged from, as name=<src> — <name> MUST match one of the <skill...> args (an unmatched name is an error, not a silent no-op). <src> is workspace:<pkg> | npm:<spec> | url:<u> | path:<dir> | vendored (e.g. mydep=npm:@scope/s@1.2.3). To stage a skill that is NOT in the <skill...> set, use --with-optional.',
     )
     .option(
       '--with-optional <pair...>',
-      'Inject an optional skill as name=<src> (same syntax as --with)',
+      'Stage an additional skill as name=<src> (same <src> syntax as --with). Unlike --with, this does NOT need to match a positional <skill> — every entry is staged unconditionally.',
     )
     .option(
       '--env <pair...>',

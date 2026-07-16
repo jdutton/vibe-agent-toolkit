@@ -9,6 +9,7 @@ import {
   SecurityAckError,
   SkillBuildError,
   SkillTestExitCode,
+  UnmatchedInjectedSkillError,
 } from '../../src/skill-test/exit-codes.js';
 import { GradingSkewError } from '../../src/skill-test/grading-adapter.js';
 import { HarnessLocationError } from '../../src/skill-test/harness-location.js';
@@ -35,6 +36,11 @@ describe('mapErrorToExitCode', () => {
     expect(mapErrorToExitCode(err)).toBe(SkillTestExitCode.Preflight);
     expect(err.exitCode).toBe(2);
     expect(err.message).toContain('--i-understand-this-runs-skill-code');
+  });
+  it('UnmatchedInjectedSkillError → 2 (user-correctable --with name)', () => {
+    const err = new UnmatchedInjectedSkillError(['helper-skill'], 'subject');
+    expect(mapErrorToExitCode(err)).toBe(SkillTestExitCode.Preflight);
+    expect(err.exitCode).toBe(2);
   });
   it('GradingSkewError → 1 (parse failure surfaced, never success)', () => {
     expect(mapErrorToExitCode(new GradingSkewError('x'))).toBe(SkillTestExitCode.Internal);

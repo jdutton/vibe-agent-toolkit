@@ -45,6 +45,7 @@ import {
   BootstrapNeededError,
   InternalHarnessError,
   SkillTestExitCode,
+  UnmatchedInjectedSkillError,
   type SkillTestExitCodeValue,
 } from './exit-codes.js';
 import { mergeFragmentsToFriction, mergeFragmentsToGrading, mergeFragmentsToToolEval } from './fragment-merge.js';
@@ -363,6 +364,21 @@ export function buildStageItems(opts: RunHarnessOptions, repoRoot: string): Stag
   // The FIRST positional skill is the subject under test; the rest of the
   // primary set and any `--with`/`--with-optional` deps are supporting context.
   const subjectName = opts.skills[0];
+
+  // Fail-closed on an unmatched `--with` (issue #153): a `withSources` key only
+  // takes effect as a source override for a positional `<skill>` (the keyed
+  // lookup below). A key naming no positional skill would otherwise be dropped
+  // silently — never staged, no manifest trace, no diagnostic — so a routing eval
+  // "passes" against a skill set that never contained the companion. `--with-optional`
+  // is unaffected: it is enumerated below and staged unconditionally.
+  if (opts.withSources !== undefined) {
+    const positional = new Set(opts.skills);
+    const unmatched = Object.keys(opts.withSources).filter((name) => !positional.has(name));
+    if (unmatched.length > 0) {
+      throw new UnmatchedInjectedSkillError(unmatched, subjectName ?? '');
+    }
+  }
+
   for (const name of opts.skills) {
     const override = opts.withSources?.[name];
     let source: SkillSource;

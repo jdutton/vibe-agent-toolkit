@@ -21,7 +21,7 @@ import { describe, expect, it } from 'vitest';
 
 import type { EvalFragment } from '../../src/skill-test/eval-fragment.js';
 import { EvalInputError, type EvalEntry } from '../../src/skill-test/eval-inputs.js';
-import { SkillTestExitCode } from '../../src/skill-test/exit-codes.js';
+import { SkillTestExitCode, UnmatchedInjectedSkillError } from '../../src/skill-test/exit-codes.js';
 import type { FrictionItem } from '../../src/skill-test/friction-schema.js';
 import type { GradingVerdict } from '../../src/skill-test/grading-adapter.js';
 import {
@@ -495,6 +495,60 @@ describe('stage item construction', () => {
     expect(items).toHaveLength(1);
     expect(items[0]?.source).toEqual({ path: OVERRIDE_LOC });
     expect(items[0]?.role).toBe('subject');
+  });
+
+  it('buildStageItems throws when a --with name matches no positional skill (fail-closed, not silent)', () => {
+    const tempDir = getTempDir();
+    makePlainDir(tempDir, 'subject');
+    let thrown: unknown;
+    try {
+      buildStageItems(
+        makeOpts({ skills: ['subject'], withSources: { 'helper-skill': { path: OVERRIDE_LOC } } }),
+        tempDir,
+      );
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(UnmatchedInjectedSkillError);
+    const message = (thrown as Error).message;
+    // Names the offending key, the subject, and the three remediations.
+    expect(message).toContain('helper-skill');
+    expect(message).toContain('subject');
+    expect(message).toContain('--with-optional');
+    expect(message).toContain('skills.config.subject.test.with');
+  });
+
+  it('buildStageItems lists every unmatched --with name in one error', () => {
+    const tempDir = getTempDir();
+    makePlainDir(tempDir, 'subject');
+    let thrown: unknown;
+    try {
+      buildStageItems(
+        makeOpts({
+          skills: ['subject'],
+          withSources: { alpha: { path: OVERRIDE_LOC }, beta: { path: OVERRIDE_LOC } },
+        }),
+        tempDir,
+      );
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(UnmatchedInjectedSkillError);
+    expect((thrown as Error).message).toContain('alpha');
+    expect((thrown as Error).message).toContain('beta');
+  });
+
+  it('buildStageItems does NOT throw when every --with name matches a positional skill', () => {
+    const tempDir = getTempDir();
+    makePlainDir(tempDir, 'first');
+    makePlainDir(tempDir, OVERRIDE_LOC);
+    const items = buildStageItems(
+      makeOpts({ skills: ['first', 'helper'], withSources: { helper: { path: OVERRIDE_LOC } } }),
+      tempDir,
+    );
+    expect(items).toHaveLength(2);
+    expect(items[1]?.name).toBe('helper');
+    expect(items[1]?.source).toEqual({ path: OVERRIDE_LOC });
   });
 });
 

@@ -76,6 +76,29 @@ export class SecurityAckError extends Error {
   }
 }
 
+/**
+ * A `--with <name>=<src>` (or config `with:`) entry names no positional `<skill>`
+ * argument, so it would never be staged. Historically such a pair was silently
+ * dropped — no error, no warning, no manifest trace — which makes routing/deferral
+ * evals look correct while testing something different (issue #153). We now
+ * fail-closed. Exit 2 (preflight class): user-correctable input, like a bad env
+ * token or missing security ack. `--with-optional` is unaffected (it stages every
+ * entry unconditionally), so it is offered as one of the remediations.
+ */
+export class UnmatchedInjectedSkillError extends Error {
+  readonly exitCode = 2 as const;
+  constructor(public readonly names: string[], public readonly subject: string) {
+    const label = names.length === 1 ? 'name did' : 'names did';
+    super(
+      `--with ${names.join(', ')}: not stageable for this run (${label} not match any ` +
+        `positional <skill> argument and no config-declared dependency of "${subject}"). ` +
+        `Declare it in skills.config.${subject}.test.with, pass it as a positional <skill>, ` +
+        `or use --with-optional to inject it unconditionally.`,
+    );
+    this.name = 'UnmatchedInjectedSkillError';
+  }
+}
+
 /** Internal harness failure (an executor/grader spawn error, watchdog timeout/stall, or a missing grader fragment). Exit 1. */
 export class InternalHarnessError extends Error {
   readonly exitCode = 1 as const;
@@ -94,7 +117,8 @@ export class InternalHarnessError extends Error {
  * is a pre-stage build failure → 2; a SkillBuildError is a declared-skill build
  * failure → 2; a SecurityAckError is a missing security ack before a build → 2;
  * an UnknownEnvTokenError is a bad ${token} in a
- * declared env value → 2; GradingSkewError (aggregate grading.json shape skew),
+ * declared env value → 2; an UnmatchedInjectedSkillError is a `--with` name that
+ * matches no positional skill → 2; GradingSkewError (aggregate grading.json shape skew),
  * EvalFragmentError (per-eval grader fragment parse failure), and
  * GradingNonceError (forged/mismatched per-fragment grader nonce) are all → 1;
  * everything unknown → 1.
@@ -113,7 +137,8 @@ export function mapErrorToExitCode(err: unknown): number {
     err instanceof PromptInvariantError ||
     err instanceof SecurityAckError ||
     err instanceof SkillBuildError ||
-    err instanceof UnknownEnvTokenError
+    err instanceof UnknownEnvTokenError ||
+    err instanceof UnmatchedInjectedSkillError
   ) {
     return SkillTestExitCode.Preflight;
   }
