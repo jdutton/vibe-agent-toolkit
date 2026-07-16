@@ -28,20 +28,20 @@
     "@vibe-agent-toolkit/agent-skills": "workspace:*",
     "@vibe-agent-toolkit/claude-marketplace": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
-    "commander": "^12.1.0",
+    "commander": "^15.0.0",
     "semver": "^7.7.3",
-    "yaml": "^2.8.2",
-    "zod": "^3.24.1"
+    "yaml": "^2.9.0",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/node": "^22.0.0",
+    "@types/node": "^26.1.1",
     "@types/semver": "^7.5.0",
     "@types/which": "^3.0.4",
-    "eslint": "^9.39.2",
+    "eslint": "^10.7.0",
     "rimraf": "^6.0.1",
-    "sharp": "^0.34.5",
-    "typescript": "^5.9.3",
-    "vitest": "^3.2.4"
+    "sharp": "^0.35.3",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   },
   "repository": {
     "type": "git",

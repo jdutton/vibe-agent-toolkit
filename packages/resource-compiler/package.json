@@ -43,16 +43,16 @@
   "dependencies": {
     "@vibe-agent-toolkit/resources": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
-    "chokidar": "^3.6.0",
-    "commander": "^11.1.0",
+    "chokidar": "^5.0.0",
+    "commander": "^15.0.0",
     "github-slugger": "^2.0.0",
-    "glob": "^10.3.10"
+    "glob": "^13.0.6"
   },
   "devDependencies": {
-    "@types/node": "^20.11.5",
-    "typescript": "^5.3.3",
-    "vitest": "^3.2.4",
-    "eslint": "^8.56.0"
+    "@types/node": "^26.1.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10",
+    "eslint": "^10.7.0"
   },
   "files": [
     "dist",

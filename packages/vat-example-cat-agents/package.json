@@ -40,22 +40,22 @@
     "@vibe-agent-toolkit/agent-schema": "workspace:*",
     "@vibe-agent-toolkit/transports": "workspace:*",
     "syllable": "^5.0.1",
-    "zod": "^3.24.1"
+    "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@ai-sdk/openai": "^3.0.18",
-    "@anthropic-ai/sdk": "^0.36.0",
-    "@langchain/openai": "^0.3.16",
-    "@types/node": "^22.10.5",
+    "@ai-sdk/openai": "^4.0.15",
+    "@anthropic-ai/sdk": "^0.111.0",
+    "@langchain/openai": "^1.5.5",
+    "@types/node": "^26.1.1",
     "@vibe-agent-toolkit/resource-compiler": "workspace:*",
     "@vibe-agent-toolkit/runtime-claude-agent-sdk": "workspace:*",
     "@vibe-agent-toolkit/runtime-langchain": "workspace:*",
     "@vibe-agent-toolkit/runtime-openai": "workspace:*",
-    "@vitest/coverage-v8": "^3.2.4",
-    "ai": "^6.0.48",
-    "openai": "^4.77.3",
-    "typescript": "^5.7.3",
-    "vitest": "^3.2.4"
+    "@vitest/coverage-v8": "^4.1.10",
+    "ai": "^7.0.29",
+    "openai": "^6.47.0",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.10"
   },
   "vat": {
     "version": "1.0",
