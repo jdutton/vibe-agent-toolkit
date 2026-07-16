@@ -251,7 +251,7 @@ agents:
 rag:
   defaults:
     embedding:
-      provider: transformers-js
+      provider: onnx
       model: Xenova/all-MiniLM-L6-v2
     chunking:
       targetSize: 512

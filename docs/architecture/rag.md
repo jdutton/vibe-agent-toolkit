@@ -49,7 +49,7 @@ The VAT RAG system enables semantic search over markdown documentation using vec
   ├── interfaces/                    # Provider contracts
   ├── schemas/                       # Zod schemas for validation
   ├── token-counters/                # Fast and approximate token counting
-  ├── embedding-providers/           # Transformers.js and OpenAI
+  ├── embedding-providers/           # ONNX (onnxruntime-web/WASM) and OpenAI
   └── chunking/                      # Markdown-aware chunking logic
 
 @vibe-agent-toolkit/rag-lancedb      # LanceDB implementation
@@ -136,12 +136,13 @@ interface RAGAdminProvider {
 
 ### 3. Embedding Providers
 
-#### `TransformersEmbeddingProvider` (Default)
+#### `OnnxEmbeddingProvider` (Default)
 
 - **Model**: `Xenova/all-MiniLM-L6-v2` (384 dimensions)
+- **Runtime**: `onnxruntime-web` (WASM) — batteries-included, no extra install
 - **Speed**: ~100 chunks/sec on M1 Mac
-- **Size**: ~90MB model download (cached locally)
-- **Pro**: No API costs, works offline
+- **Size**: ~23MB int8-quantized model download (cached locally)
+- **Pro**: No API costs, works offline, no native addon
 - **Con**: Lower quality than OpenAI
 
 #### `OpenAIEmbeddingProvider`
@@ -374,7 +375,7 @@ resources:
 rag:
   defaults:
     embedding:
-      provider: transformers-js
+      provider: onnx
       model: Xenova/all-MiniLM-L6-v2
     chunking:
       targetSize: 512
@@ -423,11 +424,11 @@ All RAG commands support:
 
 | Provider | When to Use |
 |----------|-------------|
-| transformers-js | Default, offline-first, cost-free |
+| onnx | Default, offline-first, cost-free |
 | openai | Higher accuracy required, API key available |
 
 **Cost Comparison** (1000 markdown files, 500 chunks each):
-- transformers-js: $0 (one-time 90MB download)
+- onnx: $0 (one-time ~23MB download)
 - openai: ~$5 (500k chunks × $0.02 / 1M tokens)
 
 ### Index Update Strategy
@@ -446,7 +447,7 @@ vat rag index docs/
 ### Performance Optimization
 
 1. **Batch Indexing**: Index all docs at once, not one-by-one
-2. **Cache Models**: Transformers.js caches models in `~/.cache/`
+2. **Cache Models**: ONNX models cache in `~/.cache/vat-onnx-models/`
 3. **Separate Stores**: Multiple stores > one large store for unrelated content
 4. **Prune Old Content**: Run `vat rag clear` when docs are restructured
 
@@ -470,7 +471,7 @@ vat rag index docs/
 
 **Solutions**:
 1. Switch to `FastTokenCounter` (default)
-2. Use transformers-js (faster than OpenAI for large batches)
+2. Use the ONNX provider (faster than OpenAI for large batches)
 3. Reduce `targetSize` (fewer chunks = faster indexing)
 4. Check disk I/O (SSD vs HDD)
 
@@ -482,7 +483,7 @@ vat rag index docs/
 1. Check internet connection
 2. Verify Hugging Face Hub is accessible
 3. Set HF cache directory: `export HF_HOME=/path/to/cache`
-4. Use OpenAI provider if transformers.js unavailable
+4. Use the OpenAI provider if network access to Hugging Face is unavailable
 
 ### Problem: Out of memory during indexing
 

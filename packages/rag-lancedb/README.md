@@ -150,7 +150,7 @@ Array fields use substring matching (SQL `LIKE`). Other fields use exact matchin
 
 ```typescript
 import { LanceDBRAGProvider } from '@vibe-agent-toolkit/rag-lancedb';
-import { TransformersEmbeddingProvider } from '@vibe-agent-toolkit/rag';
+import { OnnxEmbeddingProvider } from '@vibe-agent-toolkit/rag';
 import { ResourceRegistry } from '@vibe-agent-toolkit/resources';
 
 // 1. Scan resources
@@ -160,7 +160,7 @@ await registry.crawl({ baseDir: './docs' });
 // 2. Create admin provider
 const admin = await LanceDBRAGProvider.create({
   dbPath: './rag-db',
-  embeddingProvider: new TransformersEmbeddingProvider(),
+  embeddingProvider: new OnnxEmbeddingProvider(),
 });
 
 // 3. Index resources

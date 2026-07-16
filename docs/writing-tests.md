@@ -43,7 +43,7 @@ Misclassified tests are the #1 cause of flaky CI and slow unit test suites. If y
 | If your test... | It belongs in... | Why |
 |----------------|-----------------|-----|
 | Makes real HTTP requests | **Integration** | Network flakiness breaks CI; 2-15s per request |
-| Loads ML models (Transformers.js, ONNX) | **Integration** | Model loading costs 2-5s; native bindings crash threads pool |
+| Loads ML models (ONNX) | **Integration** | Model loading + first-run download costs 2-5s |
 | Spawns child processes (`spawnSync`, `exec`) | **System** | Node startup overhead ~1-2s per spawn |
 | Connects to a real database | **Integration** | Requires external service |
 | Reads/writes real files (not mocked) | **Integration** | I/O-dependent, slower |

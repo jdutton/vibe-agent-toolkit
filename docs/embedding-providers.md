@@ -34,7 +34,7 @@ All embedding providers implement this interface:
  * Converts text to vector embeddings for semantic search.
  */
 export interface EmbeddingProvider {
-  /** Provider name: "openai", "transformers-js", etc. */
+  /** Provider name: "openai", "onnx", etc. */
   name: string;
 
   /** Model name: "text-embedding-3-small", "all-MiniLM-L6-v2", etc. */
@@ -70,67 +70,29 @@ export interface EmbeddingProvider {
 
 ### Comparison Table
 
-| Provider | Speed | Quality | Cost | API Key | Dimensions | Hardware Accel | Install |
-|----------|-------|---------|------|---------|------------|----------------|---------|
-| **Transformers** | Fast | Good | Free | No | 384 | CPU/WASM | `npm install @xenova/transformers` |
-| **ONNX** | Very Fast | Good | Free | No | 384 | CoreML/CUDA/DirectML | `npm install onnxruntime-node` |
-| **OpenAI** | Medium | Excellent | $$ | Yes | 1536/3072 | N/A | `npm install openai` |
+| Provider | Speed | Quality | Cost | API Key | Dimensions | Runtime | Install |
+|----------|-------|---------|------|---------|------------|---------|---------|
+| **ONNX** | Fast | Good | Free | No | 384 | WASM (`onnxruntime-web`) | Batteries-included — no extra install |
+| **OpenAI** | Medium | Excellent | $$ | Yes | 1536/3072 | Cloud API | `npm install openai` |
 
 **When to use each:**
 
-- **Transformers**: Prototyping, quick local development, privacy-sensitive data, no API budget
-- **ONNX**: Production local embeddings, hardware acceleration (GPU/Neural Engine), high throughput
+- **ONNX**: Default choice — prototyping, production local embeddings, privacy-sensitive data, no API budget
 - **OpenAI**: Highest quality needed, budget available, network access OK
-
-### TransformersEmbeddingProvider
-
-**Local, free, WASM-powered embeddings.**
-
-```typescript
-import { TransformersEmbeddingProvider } from '@vibe-agent-toolkit/rag';
-
-// Install first: npm install @xenova/transformers
-
-const provider = new TransformersEmbeddingProvider({
-  model: 'Xenova/all-MiniLM-L6-v2',  // Default
-  dimensions: 384,                     // Default
-});
-
-// Single text
-const vector = await provider.embed('What is RAG?');
-console.log(vector.length); // 384
-
-// Batch (parallel processing)
-const vectors = await provider.embedBatch([
-  'Chunk 1 text',
-  'Chunk 2 text',
-  'Chunk 3 text',
-]);
-console.log(vectors.length); // 3
-```
-
-**Details:**
-- **Model**: `Xenova/all-MiniLM-L6-v2` (default) - 20MB download on first run
-- **Dimensions**: 384 (default)
-- **No API key required**
-- **Runs in Node.js via WASM** - No Python/GPU needed
-- **Good quality** - Sentence-transformers model, widely used
-- **Fast inference** - Quantized model
-- **Network**: Downloads model once, then fully offline
 
 ### OnnxEmbeddingProvider
 
-**Local, hardware-accelerated embeddings via native ONNX Runtime.**
+**Local, batteries-included embeddings via `onnxruntime-web` (WASM).**
 
 ```typescript
 import { OnnxEmbeddingProvider } from '@vibe-agent-toolkit/rag';
 
-// Install first: npm install onnxruntime-node
+// No install step — onnxruntime-web ships as a regular dependency of @vibe-agent-toolkit/rag
 
-// Auto-downloads model on first run, uses hardware acceleration
+// Auto-downloads model on first run
 const provider = new OnnxEmbeddingProvider({
-  model: 'sentence-transformers/all-MiniLM-L6-v2',  // Default
-  dimensions: 384,                                     // Default
+  model: 'Xenova/all-MiniLM-L6-v2',  // Default
+  dimensions: 384,                     // Default
 });
 
 // Single text
@@ -146,26 +108,21 @@ const vectors = await provider.embedBatch([
 ```
 
 **Details:**
-- **Model**: `sentence-transformers/all-MiniLM-L6-v2` (default) - ~90MB download on first run
+- **Model**: `Xenova/all-MiniLM-L6-v2` (default) - ~23MB int8-quantized download on first run
 - **Dimensions**: 384 (default)
 - **No API key required**
-- **Native C++ ONNX Runtime** - Not WASM, significantly faster than Transformers provider
-- **Hardware acceleration**: Auto-detects available hardware:
-  - macOS Apple Silicon: CoreML (GPU + Neural Engine)
-  - Linux with NVIDIA: CUDA
-  - Windows: DirectML (any DirectX 12 GPU)
-  - All platforms: CPU fallback
-- **True batch inference** - Single model call for multiple texts (not Promise.all)
-- **Pure TypeScript tokenizer** - No additional native dependencies beyond onnxruntime-node
+- **Pure WASM (`onnxruntime-web`)** - No native addon, no build step, no platform-specific binaries. Runs identically everywhere Node.js runs, and safe to co-load with other native addons (e.g. LanceDB) in the same process.
+- **Pure TypeScript tokenizer** - No additional native dependencies
 - **Network**: Downloads model + vocab once to `~/.cache/vat-onnx-models/`, then fully offline
 
 **Custom configuration:**
 ```typescript
 const provider = new OnnxEmbeddingProvider({
   modelPath: '/path/to/pre-downloaded/model',  // Skip auto-download
-  executionProviders: ['coreml', 'cpu'],         // Explicit EP selection
+  quantized: false,                              // Use full fp32 weights instead of int8
   maxSequenceLength: 512,                         // Override max tokens
   cacheDir: '/custom/cache/dir',                  // Override cache location
+  numThreads: 1,                                  // WASM threads (default: 1)
 });
 ```
 
@@ -210,15 +167,11 @@ const vectors = await provider.embedBatch([
 
 ## Installing Provider Dependencies
 
-**All embedding providers are optional dependencies.** Install only what you need:
+**`OnnxEmbeddingProvider` is batteries-included** — `onnxruntime-web` ships as a regular dependency of `@vibe-agent-toolkit/rag`, so local embeddings work with no extra install.
+
+**OpenAI is an optional peer dependency** — install only if you want it:
 
 ```bash
-# Transformers (local, WASM, free)
-npm install @xenova/transformers
-
-# ONNX (local, native, hardware-accelerated, free)
-npm install onnxruntime-node
-
 # OpenAI (cloud, API key required)
 npm install openai
 ```
@@ -229,11 +182,6 @@ npm install openai
 // Without 'openai' installed:
 const provider = new OpenAIEmbeddingProvider({ apiKey: 'sk-...' });
 // Error: OpenAI SDK not installed. Install with: bun add openai
-
-// Without '@xenova/transformers' installed:
-const provider = new TransformersEmbeddingProvider();
-await provider.embed('test');
-// Error: @xenova/transformers is not installed. Install with: npm install @xenova/transformers
 ```
 
 ## Creating a Custom Provider
@@ -444,11 +392,8 @@ const results = await ragProvider.query({
 
 ```
 Need embeddings?
-├─ Quick prototyping / Simplest setup?
-│  └─ Use TransformersEmbeddingProvider (WASM, no native deps)
-│
-├─ Local embeddings / High throughput / Hardware acceleration?
-│  └─ Use OnnxEmbeddingProvider (native C++, GPU/Neural Engine)
+├─ Local, free, no API key?
+│  └─ Use OnnxEmbeddingProvider (batteries-included, no extra install)
 │
 ├─ Production cloud / Highest quality?
 │  ├─ Need best accuracy?
@@ -465,15 +410,14 @@ Need embeddings?
 **Quality (best to good):**
 1. OpenAI text-embedding-3-large (3072 dims) - Highest quality
 2. OpenAI text-embedding-3-small (1536 dims) - Excellent quality
-3. ONNX / Transformers all-MiniLM-L6-v2 (384 dims) - Good quality (same model, different runtime)
+3. ONNX all-MiniLM-L6-v2 (384 dims) - Good quality
 
 **Speed (fastest to slowest):**
-1. ONNX - Native C++ with hardware acceleration (CoreML/CUDA/DirectML)
-2. Transformers - WASM single-threaded
-3. OpenAI - Network round-trip per batch
+1. ONNX - Local WASM inference, no network round-trip
+2. OpenAI - Network round-trip per batch
 
 **Cost (cheapest to most expensive):**
-1. ONNX / Transformers - Free (compute cost only)
+1. ONNX - Free (compute cost only)
 2. OpenAI text-embedding-3-small - ~$0.0001/1K tokens
 3. OpenAI text-embedding-3-large - ~$0.0003/1K tokens
 
@@ -485,7 +429,7 @@ Need embeddings?
 - Higher API costs (for cloud providers)
 
 **Recommendations:**
-- **384 dims** (Transformers) - Sufficient for most use cases
+- **384 dims** (ONNX) - Sufficient for most use cases
 - **1536 dims** (OpenAI small) - Better for complex domains (legal, medical, technical)
 - **3072 dims** (OpenAI large) - Highest accuracy needed (enterprise search, research)
 
@@ -495,7 +439,7 @@ Need embeddings?
 
 ```typescript
 // WRONG - Different providers for indexing vs querying
-const indexProvider = new TransformersEmbeddingProvider(); // 384 dims
+const indexProvider = new OnnxEmbeddingProvider(); // 384 dims
 await ragProvider.indexResources(resources);
 
 const queryProvider = new OpenAIEmbeddingProvider({ apiKey }); // 1536 dims
@@ -615,14 +559,14 @@ const provider = new OpenAIEmbeddingProvider({
 });
 ```
 
-### Model download hangs (Transformers)
+### Model download hangs (ONNX)
 
 **Problem:** First run hangs downloading model.
 
 **Solution:**
 - **Check network** - Model downloads from Hugging Face
-- **Wait** - all-MiniLM-L6-v2 is ~20MB, takes 30-60s on slow connections
-- **Use cache** - Models cache to `~/.cache/huggingface/`, subsequent runs are instant
+- **Wait** - all-MiniLM-L6-v2 (quantized) is ~23MB, takes 30-60s on slow connections
+- **Use cache** - Models cache to `~/.cache/vat-onnx-models/`, subsequent runs are instant
 
 ## Related Documentation
 

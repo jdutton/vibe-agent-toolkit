@@ -1,0 +1,33 @@
+# Dependabot — grouped, weekly updates (one batched PR per ecosystem, not one
+# PR per dependency). Keeps the transitive-vuln surface fresh without flooding
+# the queue. New advisories are still gated by the Dependency Audit workflow.
+version: 2
+updates:
+  # npm / Bun workspace (package.json + bun.lock across the monorepo).
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    groups:
+      npm-dependencies:
+        # Batch every dependency bump (prod + dev) into a single weekly PR.
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+
+  # GitHub Actions used by the workflows in .github/workflows.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+    commit-message:
+      prefix: "chore(ci)"

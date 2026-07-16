@@ -407,30 +407,34 @@ async function downloadFile(url: string, destination: string): Promise<void> {
 }
 
 /**
- * Ensure that model.onnx and vocab.txt files are available locally.
+ * Ensure that the ONNX weights and vocab.txt files are available locally.
  *
  * Downloads from HuggingFace CDN if the files are not already cached.
  * Uses the pattern:
- *   https://huggingface.co/{modelId}/resolve/main/onnx/model.onnx
+ *   https://huggingface.co/{modelId}/resolve/main/onnx/{model.onnx|model_quantized.onnx}
  *   https://huggingface.co/{modelId}/resolve/main/vocab.txt
  *
- * @param modelId - HuggingFace model ID (e.g. 'sentence-transformers/all-MiniLM-L6-v2')
+ * @param modelId - HuggingFace model ID (e.g. 'Xenova/all-MiniLM-L6-v2')
  * @param cacheDir - Local directory for cached model files
+ * @param quantized - Fetch the int8-quantized weights (`model_quantized.onnx`, ~23MB)
+ *   instead of the full fp32 `model.onnx` (~90MB). Default: true.
  * @returns Paths to the model and vocab files
  */
 export async function ensureModelFiles(
   modelId: string,
   cacheDir: string,
+  quantized = true,
 ): Promise<{ modelPath: string; vocabPath: string }> {
+  const onnxFileName = quantized ? 'model_quantized.onnx' : 'model.onnx';
   const modelDir = safePath.join(cacheDir, modelId.replaceAll('/', '_'));
-  const modelPath = safePath.join(modelDir, 'model.onnx');
+  const modelPath = safePath.join(modelDir, onnxFileName);
   const vocabPath = safePath.join(modelDir, 'vocab.txt');
 
   const baseUrl = `https://huggingface.co/${modelId}/resolve/main`;
 
   const modelExists = await fileExists(modelPath);
   if (!modelExists) {
-    const modelUrl = `${baseUrl}/onnx/model.onnx`;
+    const modelUrl = `${baseUrl}/onnx/${onnxFileName}`;
     console.log(`[vat-onnx] Downloading model: ${modelUrl}`);
     console.log(`[vat-onnx] Destination: ${modelPath}`);
     await downloadFile(modelUrl, modelPath);

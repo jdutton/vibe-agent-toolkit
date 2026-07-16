@@ -1,7 +1,7 @@
 /**
  * Embedding Provider interface
  *
- * Defines the contract for embedding providers (transformers.js, OpenAI, etc.)
+ * Defines the contract for embedding providers (onnx, OpenAI, etc.)
  */
 
 /**
@@ -10,7 +10,7 @@
  * Converts text to vector embeddings for semantic search.
  */
 export interface EmbeddingProvider {
-  /** Provider name: "openai", "transformers-js", etc. */
+  /** Provider name: "openai", "onnx", etc. */
   name: string;
 
   /** Model name: "text-embedding-3-small", "all-MiniLM-L6-v2", etc. */
@@ -34,4 +34,13 @@ export interface EmbeddingProvider {
    * @returns Array of vector embeddings
    */
   embedBatch(texts: string[]): Promise<number[][]>;
+
+  /**
+   * Release any resources held by the provider (optional).
+   *
+   * Extension point for providers that hold onto a native or long-lived
+   * resource (an inference session, a socket) and need explicit teardown.
+   * No-op for pure-JS/HTTP providers.
+   */
+  dispose?(): Promise<void>;
 }

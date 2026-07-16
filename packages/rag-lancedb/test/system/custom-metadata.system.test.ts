@@ -10,7 +10,7 @@
 import { rm } from 'node:fs/promises';
 
 
-import { TransformersEmbeddingProvider } from '@vibe-agent-toolkit/rag';
+import { OnnxEmbeddingProvider } from '@vibe-agent-toolkit/rag';
 import type { ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -22,7 +22,7 @@ import { createTempDir, createTestMarkdownFile } from '../test-helpers.js';
 describe('Custom metadata system tests', () => {
   let tempDir: string;
   let dbPath: string;
-  const embeddingProvider = new TransformersEmbeddingProvider();
+  const embeddingProvider = new OnnxEmbeddingProvider();
 
   // Test constants
   const DOCUMENTATION_CATEGORY = 'documentation';

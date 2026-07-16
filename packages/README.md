@@ -160,7 +160,7 @@ Markdown resource parsing, validation, and link integrity checking. Parses markd
 Abstract RAG (Retrieval-Augmented Generation) interfaces and shared implementations. Provides chunking strategies, embedding providers (local and OpenAI), and abstract RAG provider interface.
 
 **Dependencies**:
-- External: `@xenova/transformers`, `gpt-tokenizer`, `zod`, `zod-to-json-schema`
+- External: `onnxruntime-web`, `gpt-tokenizer`, `zod`, `zod-to-json-schema`
 - External (optional): `openai`
 - Internal: `resources`, `utils`
 

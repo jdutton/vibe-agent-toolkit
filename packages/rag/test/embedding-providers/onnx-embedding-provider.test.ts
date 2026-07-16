@@ -2,7 +2,7 @@
  * Unit Tests for OnnxEmbeddingProvider
  *
  * These tests verify configuration, metadata, and edge cases
- * without requiring onnxruntime-node or model downloads.
+ * without requiring model downloads.
  */
 
 import { homedir } from 'node:os';
@@ -20,7 +20,7 @@ describe('OnnxEmbeddingProvider - Unit Tests', () => {
     const provider = new OnnxEmbeddingProvider();
 
     expect(provider.name).toBe('onnx');
-    expect(provider.model).toBe('sentence-transformers/all-MiniLM-L6-v2');
+    expect(provider.model).toBe('Xenova/all-MiniLM-L6-v2');
     expect(provider.dimensions).toBe(384);
   });
 
@@ -61,9 +61,9 @@ describe('OnnxEmbeddingProvider - Unit Tests', () => {
     expect(provider.name).toBe('onnx');
   });
 
-  it('should accept executionProviders configuration', () => {
+  it('should accept quantized configuration', () => {
     const provider = new OnnxEmbeddingProvider({
-      executionProviders: ['cpu'],
+      quantized: false,
     });
 
     expect(provider).toBeDefined();
@@ -85,8 +85,9 @@ describe('OnnxEmbeddingProvider - Unit Tests', () => {
       dimensions: 512,
       modelPath: safePath.join(TEST_PATH_BASE, 'models'),
       cacheDir: safePath.join(TEST_PATH_BASE, 'cache'),
-      executionProviders: ['cpu'],
+      quantized: false,
       maxSequenceLength: 512,
+      numThreads: 2,
     });
 
     expect(provider.name).toBe('onnx');

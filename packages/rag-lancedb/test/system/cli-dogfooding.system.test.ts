@@ -60,6 +60,11 @@ function executeCliCommand(
   return parseYamlOutput(result);
 }
 
+// Runs on all platforms including macOS. The RAG CLI's default embedding backend
+// is onnxruntime-web (WASM), which has no native static destructors, so it no
+// longer races LanceDB's native runtime at process teardown — the SIGABRT / exit
+// 134 abort that previously forced this end-to-end spawn to be skipped on macOS
+// is gone.
 describe('RAG CLI (Node.js dogfooding)', () => {
   const projectRoot = safePath.resolve(__dirname, '../../../..');
   const binPath = safePath.join(projectRoot, 'packages/cli/dist/bin.js');
