@@ -117,11 +117,11 @@
     "secretlint": "^11.2.5",
     "semver": "^7.7.3",
     "tsx": "^4.21.0",
-    "turbo": "^2.8.3",
+    "turbo": "2.10.5",
     "typescript": "^5.9.3",
     "vibe-validate": "0.19.6",
-    "vitest": "^3.2.4",
-    "yaml": "^2.8.2"
+    "vitest": "3.2.6",
+    "yaml": "2.8.3"
   },
   "dependencies": {
     "@lancedb/lancedb": "0.22.3",
