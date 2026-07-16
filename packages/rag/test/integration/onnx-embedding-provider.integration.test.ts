@@ -2,7 +2,7 @@
  * Integration Tests for OnnxEmbeddingProvider
  *
  * These tests use real ONNX Runtime (onnxruntime-web WASM) inference with the
- * all-MiniLM-L6-v2 model. First run downloads model files (~80MB).
+ * all-MiniLM-L6-v2 model. First run downloads model files (~23MB, int8-quantized).
  */
 
 import { describe, expect, it } from 'vitest';

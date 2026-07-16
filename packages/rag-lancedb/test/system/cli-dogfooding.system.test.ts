@@ -62,9 +62,10 @@ function executeCliCommand(
 
 // Runs on all platforms including macOS. The RAG CLI's default embedding backend
 // is onnxruntime-web (WASM), which has no native static destructors, so it no
-// longer races LanceDB's native runtime at process teardown — the SIGABRT / exit
-// 134 abort that previously forced this end-to-end spawn to be skipped on macOS
-// is gone.
+// longer races LanceDB's native runtime at process teardown. (This repo's CI
+// matrix has no macOS runner, so this specific SIGABRT / exit 134 abort was
+// never caught by CI — it only affected local development on a Mac. There was
+// no skip guard here to remove; the fix is that the abort no longer happens.)
 describe('RAG CLI (Node.js dogfooding)', () => {
   const projectRoot = safePath.resolve(__dirname, '../../../..');
   const binPath = safePath.join(projectRoot, 'packages/cli/dist/bin.js');

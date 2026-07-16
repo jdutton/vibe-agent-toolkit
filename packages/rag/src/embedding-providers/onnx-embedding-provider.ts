@@ -85,6 +85,8 @@ interface OrtTensor {
 /** Minimal ONNX session interface */
 interface OrtSession {
   run: (feeds: Record<string, OrtTensor>) => Promise<Record<string, OrtTensor>>;
+  /** Frees the session's WASM-heap resources. Must be called explicitly — the WASM backend has no finalizer. */
+  release: () => Promise<void>;
 }
 
 /** Loaded model resources */
@@ -247,6 +249,35 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
       throw new Error(`Failed to load ONNX model '${this.model}': ${String(cause)}`, {
         cause,
       });
+    }
+  }
+
+  /**
+   * Release the WASM inference session's heap resources.
+   *
+   * The WASM backend has no finalizer, so a session that is never released
+   * leaks for the lifetime of the process. Safe to call when the provider was
+   * never initialized (no-op) or failed to initialize (nothing to release).
+   *
+   * Resets internal state so the provider transparently reloads the model on
+   * the next embed()/embedBatch() call, rather than becoming permanently
+   * unusable. This matters because a single embeddingProvider instance may be
+   * shared across multiple LanceDBRAGProvider instances (e.g. one shared
+   * local model amortized across several vector-DB stores) — closing one of
+   * them must not break the others still holding a reference to this provider.
+   */
+  async dispose(): Promise<void> {
+    if (!this.initPromise) {
+      return;
+    }
+    const pending = this.initPromise;
+    this.initPromise = null;
+    try {
+      const { session } = await pending;
+      await session.release();
+    } catch {
+      // Never successfully initialized — no session to release. The original
+      // initialization failure already surfaced to whoever awaited embed()/embedBatch().
     }
   }
 

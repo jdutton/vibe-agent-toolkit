@@ -7,7 +7,7 @@
 
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { CommandExecutionError, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { buildJscpdArgs, JSCPD_CONFIG, safeExecSync } from './common.js';
 
@@ -60,7 +60,18 @@ function runJscpd() {
     if (error instanceof Error && error.message.includes('ENOENT')) {
       throw new Error('jscpd executable not found. Install with: npm install -g jscpd');
     }
-    // Otherwise continue - duplications found, but report still generated
+    // Otherwise continue - duplications found, but report still generated below.
+    // Surface jscpd's own stdout/stderr so a genuine crash (as opposed to the
+    // expected "duplications found" non-zero exit) is diagnosable from CI logs
+    // instead of only showing up as "report not found" further down.
+    if (error instanceof CommandExecutionError) {
+      const stdout = error.stdout.toString().trim();
+      const stderr = error.stderr.toString().trim();
+      if (stdout) console.error(`jscpd stdout:\n${stdout}`);
+      if (stderr) console.error(`jscpd stderr:\n${stderr}`);
+    } else if (error instanceof Error) {
+      console.error(`jscpd invocation error: ${error.message}`);
+    }
   }
 
   const reportPath = safePath.join(JSCPD_CONFIG.OUTPUT_DIR, 'jscpd-report.json');

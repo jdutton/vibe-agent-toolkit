@@ -662,22 +662,27 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    * Close database connection
    */
   async close(): Promise<void> {
-    // Release the embedding provider first (a no-op for the default WASM
-    // provider, which holds no native session), then the LanceDB table and
-    // connection — both expose `close()` for exactly this; the docs note they
-    // are otherwise only freed on GC. The default embedding backend is
-    // onnxruntime-web (WASM), which has no native static destructors, so there
-    // is no process-teardown abort when co-loaded with LanceDB's native runtime.
+    // Release the embedding provider first (frees the WASM inference session's
+    // heap for the default OnnxEmbeddingProvider; a no-op for providers that
+    // don't implement dispose(), like OpenAIEmbeddingProvider), then the
+    // LanceDB table and connection — both expose `close()` for exactly this;
+    // the docs note they are otherwise only freed on GC. The default embedding
+    // backend is onnxruntime-web (WASM), which has no native static
+    // destructors, so there is no process-teardown abort when co-loaded with
+    // LanceDB's native runtime.
     await this.config.embeddingProvider.dispose?.();
     try {
       this.table?.close();
-    } catch {
-      // Already closed — ignore.
+    } catch (error) {
+      // close() is expected to be idempotent (safe to call from a `finally`
+      // block even if already closed), so we don't rethrow — but a genuine
+      // close failure (e.g. a flush error) should still be visible, not silent.
+      console.error('LanceDBRAGProvider.close(): failed to close table:', error);
     }
     try {
       this.connection?.close();
-    } catch {
-      // Already closed — ignore.
+    } catch (error) {
+      console.error('LanceDBRAGProvider.close(): failed to close connection:', error);
     }
     this.connection = null;
     this.table = null;
