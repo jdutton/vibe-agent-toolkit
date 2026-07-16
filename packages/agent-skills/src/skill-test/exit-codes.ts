@@ -76,6 +76,28 @@ export class SecurityAckError extends Error {
   }
 }
 
+/**
+ * A skill name is staged more than once in a single run — the subject, a
+ * `--with` companion, and a `--with-optional` companion must all have distinct
+ * names. Both `--with` and `--with-optional` STAGE the named companion and make
+ * it invocable (issue #153: they differ only in required-vs-optional resolution,
+ * not in whether they are staged), so a colliding name would silently overwrite
+ * an earlier staged copy under the same slot — never an error, never a manifest
+ * trace — which makes a routing/deferral eval look correct while testing
+ * something else. Exit 2 (preflight class): user-correctable input, like a bad
+ * env token or missing security ack.
+ */
+export class DuplicateStagedSkillError extends Error {
+  readonly exitCode = 2 as const;
+  constructor(public readonly skillName: string) {
+    super(
+      `Skill name "${skillName}" is staged more than once (subject / --with / --with-optional). ` +
+        `Each staged skill must have a unique name.`,
+    );
+    this.name = 'DuplicateStagedSkillError';
+  }
+}
+
 /** Internal harness failure (an executor/grader spawn error, watchdog timeout/stall, or a missing grader fragment). Exit 1. */
 export class InternalHarnessError extends Error {
   readonly exitCode = 1 as const;
@@ -94,7 +116,8 @@ export class InternalHarnessError extends Error {
  * is a pre-stage build failure → 2; a SkillBuildError is a declared-skill build
  * failure → 2; a SecurityAckError is a missing security ack before a build → 2;
  * an UnknownEnvTokenError is a bad ${token} in a
- * declared env value → 2; GradingSkewError (aggregate grading.json shape skew),
+ * declared env value → 2; a DuplicateStagedSkillError is a staged-name collision
+ * across subject/--with/--with-optional → 2; GradingSkewError (aggregate grading.json shape skew),
  * EvalFragmentError (per-eval grader fragment parse failure), and
  * GradingNonceError (forged/mismatched per-fragment grader nonce) are all → 1;
  * everything unknown → 1.
@@ -113,7 +136,8 @@ export function mapErrorToExitCode(err: unknown): number {
     err instanceof PromptInvariantError ||
     err instanceof SecurityAckError ||
     err instanceof SkillBuildError ||
-    err instanceof UnknownEnvTokenError
+    err instanceof UnknownEnvTokenError ||
+    err instanceof DuplicateStagedSkillError
   ) {
     return SkillTestExitCode.Preflight;
   }

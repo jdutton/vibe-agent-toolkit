@@ -71,6 +71,7 @@ export function stubStageResult(subjectStagedDir: string): unknown {
     pluginDirs: [subjectStagedDir],
     subjectStagedDir,
     subjectPluginRoot: null,
+    skippedOptional: [],
   };
 }
 

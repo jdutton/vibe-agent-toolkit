@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { EvalFragmentError } from '../../src/skill-test/eval-fragment.js';
 import {
   BootstrapNeededError,
+  DuplicateStagedSkillError,
   InternalHarnessError,
   mapErrorToExitCode,
   SecurityAckError,
@@ -35,6 +36,11 @@ describe('mapErrorToExitCode', () => {
     expect(mapErrorToExitCode(err)).toBe(SkillTestExitCode.Preflight);
     expect(err.exitCode).toBe(2);
     expect(err.message).toContain('--i-understand-this-runs-skill-code');
+  });
+  it('DuplicateStagedSkillError → 2 (a staged name collides across subject/with/optional)', () => {
+    const err = new DuplicateStagedSkillError('helper');
+    expect(mapErrorToExitCode(err)).toBe(SkillTestExitCode.Preflight);
+    expect(err.exitCode).toBe(2);
   });
   it('GradingSkewError → 1 (parse failure surfaced, never success)', () => {
     expect(mapErrorToExitCode(new GradingSkewError('x'))).toBe(SkillTestExitCode.Internal);

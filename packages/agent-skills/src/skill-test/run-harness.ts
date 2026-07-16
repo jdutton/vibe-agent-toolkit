@@ -43,6 +43,7 @@ import { lintEvalExpectations, lintToolExpectationExecutables } from './eval-lin
 import { writeEvalsTemplate } from './evals-template.js';
 import {
   BootstrapNeededError,
+  DuplicateStagedSkillError,
   InternalHarnessError,
   SkillTestExitCode,
   type SkillTestExitCodeValue,
@@ -102,8 +103,8 @@ export type HarnessAuthMode = 'inherit' | 'subscription' | 'api-key' | 'auto';
 export type HarnessAuthMechanism = 'subscription' | 'api-key';
 
 export interface RunHarnessOptions {
-  /** Primary skill names (subject set, required). */
-  skills: string[];
+  /** The single skill under test (required). */
+  subject: string;
 
   /**
    * Absolute path to the project/repo root. Used as the resolution anchor for
@@ -120,12 +121,22 @@ export interface RunHarnessOptions {
   evalsSubpath?: string;
 
   /**
-   * Optional additional skill sources mapped by name. If provided, overrides
-   * the default path-based resolution for that skill name.
+   * REQUIRED companion skills to stage alongside the subject (`--with`/config
+   * `with:`), keyed by name. Each is staged and made invocable exactly like the
+   * subject; unlike {@link withOptional}, a companion here that fails to resolve
+   * fails the whole run (see {@link DuplicateStagedSkillError} for the one
+   * cross-cutting constraint: every staged name — subject, `with`, and
+   * `withOptional` — must be unique).
    */
   withSources?: Record<string, SkillSourceDescriptor>;
 
-  /** Additional optional skills to inject (with-optional). */
+  /**
+   * OPTIONAL companion skills to stage alongside the subject (`--with-optional`/
+   * config `optional:`), keyed by name. Staged and made invocable exactly like a
+   * `withSources` entry, EXCEPT a companion here that fails to resolve is
+   * skipped-with-warning (recorded in the staging result's `skippedOptional`)
+   * instead of failing the run.
+   */
   withOptional?: Record<string, SkillSourceDescriptor>;
 
   /** Override the harness working directory (base for harnessKey derivation). */
@@ -187,9 +198,9 @@ export interface RunHarnessOptions {
   stall?: number;
 
   /**
-   * Pre-resolved source for the subject (skills[0]); set by run.ts after
-   * project-aware resolution + build. A built dist dir for a declared skill, or
-   * the resolved as-is source. Absent → legacy { path: skills[0] }.
+   * Pre-resolved source for the subject; set by run.ts after project-aware
+   * resolution + build. A built dist dir for a declared skill, or the resolved
+   * as-is source. Absent → legacy { path: subject }.
    */
   subjectSource?: SkillSource;
 
@@ -198,7 +209,7 @@ export interface RunHarnessOptions {
    * `fixtures/`) is maintained. Used to (a) overlay that suite onto a built/dist
    * subject that doesn't carry it, and (b) write the bootstrap template when no
    * suite exists yet. For a built declared skill this is the SOURCE skill dir,
-   * not the dist. Absent → derived from skills[0] (legacy).
+   * not the dist. Absent → derived from subject (legacy).
    */
   subjectScaffoldDir?: string;
 
@@ -347,6 +358,7 @@ export function makeStageItem(
   source: SkillSource,
   repoRoot: string,
   role: 'subject' | undefined,
+  optional?: true,
 ): StageItem {
   const pluginLayout = detectItemPluginLayout(source, repoRoot);
   return {
@@ -354,32 +366,44 @@ export function makeStageItem(
     source,
     ...(role === undefined ? {} : { role }),
     ...(pluginLayout === undefined ? {} : { pluginLayout }),
+    ...(optional === undefined ? {} : { optional }),
   };
 }
 
+/**
+ * Build the full set of items `stageHarness` will stage: the subject, every
+ * REQUIRED `--with` companion, and every OPTIONAL `--with-optional` companion.
+ * Both `with` and `optional` STAGE the named companion and make it invocable —
+ * they differ only in required-vs-optional resolution (issue #153; a `--with`
+ * name that named no positional skill used to be silently dropped, never staged,
+ * no manifest trace). Fail-closed on a DUPLICATE staged name (subject / `with` /
+ * `optional` all share one namespace): the first repeat throws
+ * {@link DuplicateStagedSkillError} rather than silently letting a later item
+ * clobber an earlier one under the same staged slot.
+ */
 export function buildStageItems(opts: RunHarnessOptions, repoRoot: string): StageItem[] {
   const items: StageItem[] = [];
+  const seen = new Set<string>();
 
-  // The FIRST positional skill is the subject under test; the rest of the
-  // primary set and any `--with`/`--with-optional` deps are supporting context.
-  const subjectName = opts.skills[0];
-  for (const name of opts.skills) {
-    const override = opts.withSources?.[name];
-    let source: SkillSource;
-    if (name === subjectName && opts.subjectSource !== undefined) {
-      source = opts.subjectSource;
-    } else if (override) {
-      source = descriptorToSource(override);
-    } else {
-      source = { path: name };
+  const pushItem = (item: StageItem): void => {
+    if (seen.has(item.name)) {
+      throw new DuplicateStagedSkillError(item.name);
     }
-    items.push(makeStageItem(name, source, repoRoot, name === subjectName ? 'subject' : undefined));
+    seen.add(item.name);
+    items.push(item);
+  };
+
+  pushItem(makeStageItem(opts.subject, opts.subjectSource ?? { path: opts.subject }, repoRoot, 'subject'));
+
+  if (opts.withSources !== undefined) {
+    for (const [name, spec] of Object.entries(opts.withSources)) {
+      pushItem(makeStageItem(name, descriptorToSource(spec), repoRoot, undefined));
+    }
   }
 
   if (opts.withOptional !== undefined) {
     for (const [name, spec] of Object.entries(opts.withOptional)) {
-      const source = descriptorToSource(spec);
-      items.push(makeStageItem(name, source, repoRoot, undefined));
+      pushItem(makeStageItem(name, descriptorToSource(spec), repoRoot, undefined, true));
     }
   }
 
@@ -535,15 +559,27 @@ function emitFrictionReport(frictionPath: string | undefined): void {
 }
 
 /**
+ * Name any optional companions (`--with-optional`/config `optional:`) that were
+ * skipped because their source could not be resolved — never silently, so the
+ * run's staged skill set stays legible. No-op when none were skipped. (Required
+ * `--with` companions instead propagate a fatal resolve error from stageHarness.)
+ */
+function emitSkippedOptionalWarning(skippedOptional: string[]): void {
+  if (skippedOptional.length === 0) return;
+  process.stderr.write(
+    `warning: optional companion skill(s) not staged (source unresolvable): ${skippedOptional.join(', ')}\n`,
+  );
+}
+
+/**
  * Resolve the PERSISTENT location where a bootstrap scaffold should be written
  * so "fill it in and re-run" actually works for the user (the staged copy is
  * ephemeral). When the subject is a local `{path}` source we scaffold next to
  * that real source dir; otherwise we anchor under the repo root by skill name.
  */
-/** The subject skill's display name (trailing segment of the positional skill arg). */
+/** The subject skill's display name (trailing segment of the subject arg). */
 export function subjectSkillName(opts: RunHarnessOptions): string {
-  const subject = opts.skills[0] ?? 'skill';
-  return basename(toForwardSlash(subject)) || subject;
+  return basename(toForwardSlash(opts.subject)) || opts.subject;
 }
 
 export function resolveScaffoldEvalsPath(opts: RunHarnessOptions, repoRoot: string, evalsSubpath: string): string {
@@ -552,7 +588,7 @@ export function resolveScaffoldEvalsPath(opts: RunHarnessOptions, repoRoot: stri
   if (opts.subjectScaffoldDir !== undefined) {
     return safePath.join(opts.subjectScaffoldDir, evalsSubpath);
   }
-  const subjectName = opts.skills[0] ?? '';
+  const subjectName = opts.subject;
   const override = opts.withSources?.[subjectName];
   const overridePath = override && 'path' in override ? override.path : undefined;
   // Default (no override) resolution treats the positional name as a path.
@@ -1299,7 +1335,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     assertSafeWorkdir(opts.workdir);
   }
 
-  const harnessRoot = opts.out ?? resolveHarnessRoot(opts.skills, opts.workdir);
+  const harnessRoot = opts.out ?? resolveHarnessRoot([opts.subject], opts.workdir);
   // Only auto-remove the dir the harness itself created under OS tmp. An explicit
   // --out (exact dir) or --workdir (user-chosen base) is a location the user owns;
   // treat it like --keep and never delete it.
@@ -1378,7 +1414,8 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       currentUid,
     });
 
-    const { pluginDirs, subjectStagedDir, subjectPluginRoot } = stageResult;
+    const { pluginDirs, subjectStagedDir, subjectPluginRoot, skippedOptional } = stageResult;
+    emitSkippedOptionalWarning(skippedOptional);
 
     if (subjectStagedDir === null) {
       throw new InternalHarnessError('Staging did not yield a subject directory (no item tagged role:subject).');

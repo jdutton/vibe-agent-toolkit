@@ -338,8 +338,8 @@ Two config homes: **per-skill** knobs live in `skills.config.<skill>.test`; the 
 | `--concurrency <n>` | `concurrency` | **global** | Max evals run in parallel (default 4). |
 | `--baseline` | `baseline` | per-skill | Run the with/without A/B skill-lift comparison. |
 | `--allow-eval-failure` | — | — | Opt out of the fail-closed default so a failing (or fail-fast-gated) eval exits `0` (interactive use). By **default** a failing eval exits `4`. |
-| `--with name=<src>` | `with` | per-skill | Stage a declared-dependency skill (`workspace:`/`npm:`/`url:`/`path:`/`vendored`). |
-| `--with-optional name=<src>` | `optional` | per-skill | Stage an optional dependency (absent by default). |
+| `--with name=<src>` | `with` | per-skill | Stage a **required** companion skill the subject can invoke (`workspace:`/`npm:`/`url:`/`path:`/`vendored`); the run fails if a source can't be resolved. |
+| `--with-optional name=<src>` | `optional` | per-skill | Stage an **optional** companion skill; skipped with a warning if its source can't be resolved. |
 | `--env KEY=VALUE` | `env` | per-skill | Inject an env var into the **executor** spawn (`${fixturesDir}`, `${stagedSkillDir}`, `${harnessRoot}`, `${resultsDir}` interpolate). Protected names (PATH, auth, model) cannot be overridden. |
 | `--pass-env KEY` | `passEnv` | per-skill | Forward a host env var by name if present. |
 | `--max-turns` / `--max-budget-usd` / `--timeout` / `--stall` | same | per-skill | Per-spawn turn cap / USD cap / wall-clock seconds / no-output watchdog seconds. **`--timeout` default scales with the declared eval count** (~`2min + 2min/eval`, floored 5min, capped 1h); an explicit value overrides. |
