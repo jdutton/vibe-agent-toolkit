@@ -50,10 +50,8 @@ export { ApproximateTokenCounter, FastTokenCounter } from './token-counters/inde
 // Embedding Providers
 export {
   OpenAIEmbeddingProvider,
-  TransformersEmbeddingProvider,
   OnnxEmbeddingProvider,
   type OpenAIEmbeddingConfig,
-  type TransformersEmbeddingConfig,
   type OnnxEmbeddingConfig,
 } from './embedding-providers/index.js';
 

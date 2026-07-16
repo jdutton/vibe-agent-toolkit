@@ -1,0 +1,107 @@
+# OSV-Scanner accepted-risk register
+# ---------------------------------------------------------------------------
+# Every advisory listed here is a KNOWN, TRIAGED, and ACCEPTED risk. The
+# dependency-audit CI job (.github/workflows/dependency-audit.yml) runs
+# `osv-scanner scan source --lockfile=bun.lock` and FAILS on any advisory that
+# is NOT in this register. So: a green audit means "zero un-triaged vulns",
+# not "zero vulns".
+#
+# Rules for adding an entry (keep this register honest):
+#   1. Prefer a real fix first — bump the declared dependency, or pin a patched
+#      version in the root `overrides` block of package.json. Only fall back to
+#      an IgnoredVulns entry when a fix is genuinely unavailable or unsafe.
+#   2. Every entry MUST have a `reason` explaining WHY it is safe to defer.
+#   3. Re-evaluate on each Dependabot bump; delete entries once a fix lands.
+#
+# Snapshot when this register was last reconciled: the transitive protobufjs@6
+# chain (previously via the native onnxruntime-node backend, loaded through
+# @xenova/transformers@2 / @huggingface/transformers@3 → onnxruntime-web@1.14
+# → onnx-proto) was eliminated by replacing the native embedding backend with
+# onnxruntime-web (WASM) directly — no onnx-proto in the resolution path, so
+# onnxruntime-web resolves the patched protobufjs@7 line unconditionally. 20+
+# other transitive advisories were pinned to patched versions in package.json
+# `overrides`. The advisories below are what remains — all low-severity ReDoS
+# in build/glob tooling, or fixes that require an unsafe global major-version
+# pin, or dev/test-only packages that are not in the published consumer graph.
+# ---------------------------------------------------------------------------
+
+# --- minimatch (ReDoS) --------------------------------------------------------
+# The tree carries minimatch 3.x, 9.x, AND 10.x simultaneously (3.x under dev
+# tooling, 9.x under glob@10 in agent-skills). A global `overrides` pin can only
+# force ONE version and would break the older-major consumers, so it is unsafe.
+# All three advisories are ReDoS in glob-pattern matching against attacker-
+# controlled globs — VAT only ever matches globs it authors. Consumers of the
+# published packages re-resolve VAT's floating ranges and pick up patched
+# minimatch independently of this lockfile.
+[[IgnoredVulns]]
+id = "GHSA-23c5-xmqv-rm74"
+reason = "minimatch ReDoS; 3.x/9.x/10.x coexist so a single global pin is unsafe. Low severity, VAT-authored globs only. Re-evaluate when glob majors converge."
+[[IgnoredVulns]]
+id = "GHSA-3ppc-4f35-3m26"
+reason = "minimatch ReDoS; 3.x/9.x/10.x coexist so a single global pin is unsafe. Low severity, VAT-authored globs only. Re-evaluate when glob majors converge."
+[[IgnoredVulns]]
+id = "GHSA-7r86-cg39-jmmj"
+reason = "minimatch ReDoS; 3.x/9.x/10.x coexist so a single global pin is unsafe. Low severity, VAT-authored globs only. Re-evaluate when glob majors converge."
+
+# --- picomatch (ReDoS / method injection) ------------------------------------
+# picomatch 2.x and 4.x both present (2.x transitively under chokidar/micromatch,
+# 4.x declared directly). v2→v4 is a breaking major, so a global pin would
+# regress the v2 consumers. Same threat model as minimatch (VAT-authored globs).
+[[IgnoredVulns]]
+id = "GHSA-3v7f-55p6-f55p"
+reason = "picomatch glob-matching issue; 2.x and 4.x coexist across a breaking major, unsafe to globally pin. VAT-authored globs only."
+[[IgnoredVulns]]
+id = "GHSA-c2c7-rcm5-vvqj"
+reason = "picomatch ReDoS via extglob quantifiers; 2.x and 4.x coexist across a breaking major, unsafe to globally pin. VAT-authored globs only."
+
+# --- ajv (ReDoS via $data) ---------------------------------------------------
+# ajv 6.x (transitive dev tooling) and 8.x (declared in resources) coexist; a
+# global pin cannot satisfy both majors. VAT never enables the `$data` option
+# (the sole vector) in any of its AJV usages.
+[[IgnoredVulns]]
+id = "GHSA-2g4f-4pwh-qvx6"
+reason = "ajv ReDoS only reachable with the $data option, which VAT never enables. 6.x/8.x coexist so a single global pin is unsafe."
+
+# --- brace-expansion (ReDoS) -------------------------------------------------
+# 1.x and 2.x coexist (pulled by minimatch 3.x and 9.x respectively). Global
+# pin unsafe across the major boundary. Low-severity ReDoS on VAT-authored globs.
+[[IgnoredVulns]]
+id = "GHSA-f886-m6hf-6m8v"
+reason = "brace-expansion ReDoS; 1.x and 2.x coexist under different minimatch majors, unsafe to globally pin. VAT-authored globs only."
+
+# --- esbuild (dev-server file read) ------------------------------------------
+# The advisory affects `esbuild serve` (the dev server). VAT never runs the
+# esbuild dev server; esbuild is build-time-only tooling (via vite/tsx) and is
+# not present in any published package. Fix requires an esbuild 0.x major bump
+# that would force a Vite upgrade.
+[[IgnoredVulns]]
+id = "GHSA-g7r4-m6w7-qqqr"
+reason = "esbuild advisory affects the `esbuild serve` dev server, which VAT never runs. Build-time-only, not shipped. Fix needs a breaking esbuild/vite bump."
+
+# --- uuid (missing buffer bounds check) --------------------------------------
+# uuid@10 is dev/test-only (reached via langsmith/@langchain/core). The fix is
+# a breaking major bump to uuid@11; not worth destabilizing the langchain
+# adapter's tooling for a dev-only, buf-parameter-only issue VAT never triggers.
+[[IgnoredVulns]]
+id = "GHSA-w5hq-g745-h8pq"
+reason = "uuid bounds check only affects the optional `buf` argument, which VAT never passes. Dev/test-only (langsmith path). Fix requires breaking uuid@11 major bump."
+
+# --- langsmith (SSRF / prototype pollution / deserialization) ----------------
+# langsmith is ONLY reachable through @vibe-agent-toolkit/runtime-langchain,
+# which is an opt-in runtime adapter and is NOT in the dependency closure of the
+# `vibe-agent-toolkit` package that end consumers install. The vulnerable copy
+# (0.3.87) is pinned transitively by @langchain/core@0.3.x; forcing a patched
+# langsmith major risks breaking @langchain/core. These do not reach the CLI /
+# resources / skills surface that adopters actually consume.
+[[IgnoredVulns]]
+id = "GHSA-3644-q5cj-c5c7"
+reason = "langsmith reachable only via the opt-in runtime-langchain adapter, not in the consumer `vibe-agent-toolkit` install closure. Pinned by @langchain/core@0.3.x."
+[[IgnoredVulns]]
+id = "GHSA-fw9q-39r9-c252"
+reason = "langsmith reachable only via the opt-in runtime-langchain adapter, not in the consumer `vibe-agent-toolkit` install closure. Pinned by @langchain/core@0.3.x."
+[[IgnoredVulns]]
+id = "GHSA-rr7j-v2q5-chgv"
+reason = "langsmith reachable only via the opt-in runtime-langchain adapter, not in the consumer `vibe-agent-toolkit` install closure. Pinned by @langchain/core@0.3.x."
+[[IgnoredVulns]]
+id = "GHSA-v34v-rq6j-cj6p"
+reason = "langsmith reachable only via the opt-in runtime-langchain adapter, not in the consumer `vibe-agent-toolkit` install closure. Pinned by @langchain/core@0.3.x."

@@ -1,0 +1,45 @@
+# Dependency Audit — fails on any advisory not in the osv-scanner.toml register.
+#
+# Complements the main Validation Pipeline (validate.yml). This job scans the
+# committed bun.lock with OSV-Scanner and enforces the accepted-risk register at
+# ./osv-scanner.toml: a green run means "zero un-triaged vulnerabilities". To
+# accept a new advisory, add a documented `[[IgnoredVulns]]` entry to that file;
+# to fix one, bump the dependency or pin it in the root package.json `overrides`.
+#
+# osv-scanner is installed via `go install` (deterministic module path + pinned
+# version) rather than a marketplace action, to avoid action-ref drift.
+name: Dependency Audit
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  schedule:
+    # Weekly, Monday 06:00 UTC — catches newly-disclosed advisories against the
+    # existing lockfile even when no code changes land.
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  osv-scan:
+    name: OSV-Scanner (bun.lock)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Install OSV-Scanner
+        run: go install github.com/google/osv-scanner/v2/cmd/osv-scanner@v2.4.0
+
+      - name: Scan lockfile against accepted-risk register
+        run: osv-scanner scan source --lockfile=bun.lock --config=osv-scanner.toml

@@ -1,7 +1,7 @@
 /**
  * Integration tests for LanceDB RAG provider
  *
- * These tests use real LanceDB and TransformersEmbeddingProvider to verify:
+ * These tests use real LanceDB and OnnxEmbeddingProvider to verify:
  * - Admin operations (indexing, deletion, clearing)
  * - Query operations (semantic search, filtering)
  * - Statistics and database management

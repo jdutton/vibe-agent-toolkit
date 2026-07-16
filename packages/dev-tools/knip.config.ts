@@ -25,8 +25,6 @@ const config: KnipConfig = {
         // Root deps to fix transitive dependency resolution
         '@lancedb/lancedb',
         'apache-arrow',
-        // onnxruntime loaded dynamically by rag-lancedb
-        'onnxruntime-node',
         // Used by dev-tools scripts (invoked via tsx, not direct imports from root)
         'adm-zip',
         'semver',
@@ -58,6 +56,13 @@ const config: KnipConfig = {
     // dev-tools: scripts are invoked via tsx from root, not from src/index.ts
     'packages/dev-tools': {
       entry: ['src/**/*.ts'],
+    },
+
+    // rag: OpenAI is an opt-in optional peerDependency loaded via dynamic
+    // import() (bring-your-own-backend), so knip sees it as a "referenced
+    // optional peer". Intentional — not auto-installed for consumers.
+    'packages/rag': {
+      ignoreDependencies: ['openai'],
     },
 
     // resource-compiler has CLI entry points beyond index.ts

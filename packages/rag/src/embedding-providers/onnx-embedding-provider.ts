@@ -1,16 +1,21 @@
 /**
- * ONNX Embedding Provider
+ * ONNX Embedding Provider (WebAssembly backend)
  *
- * Uses onnxruntime-node for native ONNX inference of embedding models.
- * No API key required, runs entirely in Node.js with native performance.
+ * Local embedding generation using onnxruntime-web's WASM backend plus a pure
+ * TypeScript WordPiece tokenizer. No API key required, runs entirely in Node.js.
  *
- * Requires optional dependency: npm install onnxruntime-node
+ * Why WASM (onnxruntime-web) and not the native onnxruntime-node addon:
+ * - No native build step and no platform-specific binaries to download.
+ * - No native static-destructor teardown race. The native runtime aborts the
+ *   process (`libc++abi: mutex lock failed`, SIGABRT / exit 134) at teardown
+ *   when co-loaded with another native addon (LanceDB) in one process — the
+ *   WASM backend has no such destructors, so `vat rag index/query` exits 0.
+ * - Pulls the patched `protobufjs@7` line, not the vulnerable `protobufjs@6`
+ *   chain the old `@xenova/transformers@2` → `onnx-proto` path dragged in.
  *
- * Features:
- * - Pure TypeScript WordPiece tokenizer (no native tokenizer dependency)
- * - Auto-downloads models from HuggingFace CDN
- * - Batched inference for efficient multi-text embedding
- * - L2-normalized output for cosine similarity
+ * Ships batteries-included: `onnxruntime-web` is a regular dependency, so local
+ * RAG works with no extra install. Model weights are fetched from HuggingFace on
+ * first use and cached under `~/.cache/vat-onnx-models`.
  */
 
 import { homedir } from 'node:os';
@@ -30,21 +35,35 @@ import {
  * Configuration for OnnxEmbeddingProvider
  */
 export interface OnnxEmbeddingConfig {
-  /** HuggingFace model ID (default: 'sentence-transformers/all-MiniLM-L6-v2') */
+  /** HuggingFace model ID (default: 'Xenova/all-MiniLM-L6-v2') */
   model?: string;
   /** Embedding dimensions (default: 384) */
   dimensions?: number;
-  /** Path to pre-downloaded model directory containing model.onnx and vocab.txt (optional) */
+  /** Path to a pre-downloaded model directory containing the .onnx file and vocab.txt (optional) */
   modelPath?: string;
   /** Cache directory for auto-downloaded models (default: ~/.cache/vat-onnx-models) */
   cacheDir?: string;
-  /** ONNX Runtime execution providers to try (default: let onnxruntime-node auto-detect) */
-  executionProviders?: string[];
+  /**
+   * Use the int8-quantized ONNX weights (`model_quantized.onnx`, ~23MB) instead
+   * of the full fp32 weights (`model.onnx`, ~90MB). Default: true — matches the
+   * quantized download the previous transformers.js backend used.
+   */
+  quantized?: boolean;
   /** Max sequence length for tokenization (default: 256) */
   maxSequenceLength?: number;
+  /**
+   * Number of WASM threads (default: 1). Single-threaded avoids spawning worker
+   * threads, which keeps inference deterministic and teardown clean.
+   */
+  numThreads?: number;
 }
 
-/** Shape of the ONNX Runtime Tensor constructor and InferenceSession we need */
+/** WASM runtime environment knobs we set (subset of onnxruntime-web's `env`). */
+interface OrtEnv {
+  wasm: { numThreads: number };
+}
+
+/** Shape of the onnxruntime-web module surface we use */
 interface OrtModule {
   Tensor: new (
     type: string,
@@ -52,11 +71,9 @@ interface OrtModule {
     dims: readonly number[],
   ) => OrtTensor;
   InferenceSession: {
-    create: (
-      path: string,
-      options?: { executionProviders?: string[] },
-    ) => Promise<OrtSession>;
+    create: (path: string) => Promise<OrtSession>;
   };
+  env: OrtEnv;
 }
 
 /** Minimal ONNX tensor interface */
@@ -68,6 +85,8 @@ interface OrtTensor {
 /** Minimal ONNX session interface */
 interface OrtSession {
   run: (feeds: Record<string, OrtTensor>) => Promise<Record<string, OrtTensor>>;
+  /** Frees the session's WASM-heap resources. Must be called explicitly — the WASM backend has no finalizer. */
+  release: () => Promise<void>;
 }
 
 /** Loaded model resources */
@@ -77,15 +96,16 @@ interface LoadedModel {
 }
 
 /**
- * Lazily import onnxruntime-node with a clear error message.
+ * Lazily import onnxruntime-web with a clear error message.
  */
 async function loadOnnxRuntime(): Promise<OrtModule> {
   try {
-    const ort = await import('onnxruntime-node');
+    const ort = await import('onnxruntime-web');
     return ort as unknown as OrtModule;
-  } catch {
+  } catch (cause) {
     throw new Error(
-      'onnxruntime-node is not installed. Install with: npm install onnxruntime-node',
+      'onnxruntime-web is not installed. Reinstall dependencies: npm install',
+      { cause },
     );
   }
 }
@@ -136,18 +156,18 @@ function createBatchTensors(
 /**
  * OnnxEmbeddingProvider
  *
- * Local embedding generation using ONNX Runtime for native inference.
- * Default model: sentence-transformers/all-MiniLM-L6-v2 (384 dimensions)
+ * Local embedding generation using onnxruntime-web (WASM) for inference.
+ * Default model: Xenova/all-MiniLM-L6-v2 (384 dimensions, int8-quantized).
  *
  * Benefits:
  * - No API key required
- * - Native C++ inference performance via onnxruntime-node
- * - Pure TypeScript tokenizer (no native tokenizer dependency)
- * - Auto-downloads models from HuggingFace
+ * - Pure WASM + TypeScript — no native addon, no build step
+ * - No native teardown race (safe to co-load with LanceDB in one process)
+ * - Pure TypeScript WordPiece tokenizer (no native tokenizer dependency)
+ * - Auto-downloads and caches models from HuggingFace
  * - Batched inference support
- * - Platform-aware execution provider selection
  *
- * Note: First run downloads model files (~80MB for all-MiniLM-L6-v2 ONNX)
+ * Note: First run downloads model files (~23MB quantized for all-MiniLM-L6-v2).
  */
 export class OnnxEmbeddingProvider implements EmbeddingProvider {
   readonly name = 'onnx';
@@ -156,8 +176,9 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
 
   private readonly configModelPath: string | undefined;
   private readonly cacheDir: string;
-  private readonly executionProviders: string[] | undefined;
+  private readonly quantized: boolean;
   private readonly maxSequenceLength: number;
+  private readonly numThreads: number;
 
   private initPromise: Promise<LoadedModel> | null = null;
 
@@ -167,12 +188,13 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
    * @param config - Optional configuration
    */
   constructor(config: OnnxEmbeddingConfig = {}) {
-    this.model = config.model ?? 'sentence-transformers/all-MiniLM-L6-v2';
+    this.model = config.model ?? 'Xenova/all-MiniLM-L6-v2';
     this.dimensions = config.dimensions ?? 384;
     this.configModelPath = config.modelPath;
     this.cacheDir = config.cacheDir ?? safePath.join(homedir(), '.cache', 'vat-onnx-models');
-    this.executionProviders = config.executionProviders;
+    this.quantized = config.quantized ?? true;
     this.maxSequenceLength = config.maxSequenceLength ?? 256;
+    this.numThreads = config.numThreads ?? 1;
   }
 
   /**
@@ -195,15 +217,20 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
   private async loadModel(): Promise<LoadedModel> {
     const ort = await loadOnnxRuntime();
 
+    // Single-threaded WASM: no worker threads spawned, deterministic, clean teardown.
+    ort.env.wasm.numThreads = this.numThreads;
+
+    const onnxFileName = this.quantized ? 'model_quantized.onnx' : 'model.onnx';
+
     let modelPath: string;
     let vocabPath: string;
 
     if (this.configModelPath) {
-      modelPath = safePath.join(this.configModelPath, 'model.onnx');
+      modelPath = safePath.join(this.configModelPath, onnxFileName);
       vocabPath = safePath.join(this.configModelPath, 'vocab.txt');
     } else {
       try {
-        const files = await ensureModelFiles(this.model, this.cacheDir);
+        const files = await ensureModelFiles(this.model, this.cacheDir, this.quantized);
         modelPath = files.modelPath;
         vocabPath = files.vocabPath;
       } catch (cause) {
@@ -213,12 +240,8 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
       }
     }
 
-    const sessionOptions = this.executionProviders
-      ? { executionProviders: this.executionProviders }
-      : undefined;
-
     try {
-      const session = await ort.InferenceSession.create(modelPath, sessionOptions);
+      const session = await ort.InferenceSession.create(modelPath);
       const tokenizer = await BertTokenizer.fromVocabFile(vocabPath);
 
       return { session, tokenizer };
@@ -226,6 +249,35 @@ export class OnnxEmbeddingProvider implements EmbeddingProvider {
       throw new Error(`Failed to load ONNX model '${this.model}': ${String(cause)}`, {
         cause,
       });
+    }
+  }
+
+  /**
+   * Release the WASM inference session's heap resources.
+   *
+   * The WASM backend has no finalizer, so a session that is never released
+   * leaks for the lifetime of the process. Safe to call when the provider was
+   * never initialized (no-op) or failed to initialize (nothing to release).
+   *
+   * Resets internal state so the provider transparently reloads the model on
+   * the next embed()/embedBatch() call, rather than becoming permanently
+   * unusable. This matters because a single embeddingProvider instance may be
+   * shared across multiple LanceDBRAGProvider instances (e.g. one shared
+   * local model amortized across several vector-DB stores) — closing one of
+   * them must not break the others still holding a reference to this provider.
+   */
+  async dispose(): Promise<void> {
+    if (!this.initPromise) {
+      return;
+    }
+    const pending = this.initPromise;
+    this.initPromise = null;
+    try {
+      const { session } = await pending;
+      await session.release();
+    } catch {
+      // Never successfully initialized — no session to release. The original
+      // initialization failure already surfaced to whoever awaited embed()/embedBatch().
     }
   }
 

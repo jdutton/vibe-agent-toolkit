@@ -25,7 +25,7 @@ import {
   DefaultRAGMetadataSchema,
   enrichChunks,
   generateContentHash,
-  TransformersEmbeddingProvider,
+  OnnxEmbeddingProvider,
 } from '@vibe-agent-toolkit/rag';
 import {
   parseMarkdown,
@@ -54,7 +54,7 @@ export interface LanceDBConfig<_TMetadata extends Record<string, unknown> = Defa
   /** Readonly mode (query only) */
   readonly?: boolean;
 
-  /** Embedding provider (default: TransformersEmbeddingProvider) */
+  /** Embedding provider (default: OnnxEmbeddingProvider — local WASM embeddings) */
   embeddingProvider?: EmbeddingProvider;
 
   /** Target chunk size in tokens (default: 512) */
@@ -158,7 +158,7 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
   private constructor(config: LanceDBConfig<TMetadata>) {
     this.config = {
       readonly: false,
-      embeddingProvider: new TransformersEmbeddingProvider(),
+      embeddingProvider: new OnnxEmbeddingProvider(),
       targetChunkSize: 512,
       paddingFactor: 0.9,
       metadataSchema: DefaultRAGMetadataSchema,
@@ -208,7 +208,9 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
   }
 
   /**
-   * Reconnect and open table (workaround for vectordb@0.4.20 + Bun Arrow buffer lifecycle bug)
+   * Reconnect and open table (workaround for a @lancedb/lancedb + Bun Arrow
+   * buffer lifecycle bug: a stale connection's buffers can detach after table
+   * modifications, so we re-open the connection before reading).
    */
   private async reconnectAndOpenTable(): Promise<void> {
     this.connection = await lancedb.connect(this.config.dbPath);
@@ -228,8 +230,8 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    * Query the RAG database
    */
   async query(query: RAGQuery<TMetadata>): Promise<RAGResult<TMetadata>> {
-    // Workaround for vectordb@0.4.20 + Bun Arrow buffer lifecycle bug
-    // After table modifications, we need to recreate the connection entirely
+    // Workaround for the @lancedb/lancedb + Bun Arrow buffer lifecycle bug:
+    // after table modifications we recreate the connection entirely before reading.
     await this.reconnectAndOpenTable();
 
     if (!this.table) {
@@ -660,7 +662,28 @@ export class LanceDBRAGProvider<TMetadata extends Record<string, unknown> = Defa
    * Close database connection
    */
   async close(): Promise<void> {
-    // LanceDB connections are automatically managed
+    // Release the embedding provider first (frees the WASM inference session's
+    // heap for the default OnnxEmbeddingProvider; a no-op for providers that
+    // don't implement dispose(), like OpenAIEmbeddingProvider), then the
+    // LanceDB table and connection — both expose `close()` for exactly this;
+    // the docs note they are otherwise only freed on GC. The default embedding
+    // backend is onnxruntime-web (WASM), which has no native static
+    // destructors, so there is no process-teardown abort when co-loaded with
+    // LanceDB's native runtime.
+    await this.config.embeddingProvider.dispose?.();
+    try {
+      this.table?.close();
+    } catch (error) {
+      // close() is expected to be idempotent (safe to call from a `finally`
+      // block even if already closed), so we don't rethrow — but a genuine
+      // close failure (e.g. a flush error) should still be visible, not silent.
+      console.error('LanceDBRAGProvider.close(): failed to close table:', error);
+    }
+    try {
+      this.connection?.close();
+    } catch (error) {
+      console.error('LanceDBRAGProvider.close(): failed to close connection:', error);
+    }
     this.connection = null;
     this.table = null;
   }

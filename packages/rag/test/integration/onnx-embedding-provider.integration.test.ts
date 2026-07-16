@@ -1,12 +1,8 @@
 /**
  * Integration Tests for OnnxEmbeddingProvider
  *
- * These tests use real ONNX Runtime inference with the all-MiniLM-L6-v2 model.
- * First run downloads model files (~80MB).
- *
- * Skipped when:
- * - onnxruntime-node is not installed
- * - Running on Windows (avoid downloading native binaries in CI)
+ * These tests use real ONNX Runtime (onnxruntime-web WASM) inference with the
+ * all-MiniLM-L6-v2 model. First run downloads model files (~23MB, int8-quantized).
  */
 
 import { describe, expect, it } from 'vitest';
@@ -14,18 +10,6 @@ import { describe, expect, it } from 'vitest';
 import { OnnxEmbeddingProvider } from '../../src/embedding-providers/onnx-embedding-provider.js';
 
 import { assertBatchEmbedding } from './embedding-test-helpers.js';
-
-// Detect runtime availability
-let onnxAvailable = false;
-try {
-  await import('onnxruntime-node');
-  onnxAvailable = true;
-} catch {
-  // onnxruntime-node not installed
-}
-
-const isWindows = process.platform === 'win32';
-const skipOnnx = !onnxAvailable || isWindows;
 
 /**
  * Cosine similarity between two normalized vectors.
@@ -35,7 +19,7 @@ function cosineSimilarity(a: number[], b: number[]): number {
   return a.reduce((sum, value, index) => sum + value * (b[index] ?? 0), 0);
 }
 
-describe.skipIf(skipOnnx)('OnnxEmbeddingProvider - Integration Tests', () => {
+describe('OnnxEmbeddingProvider - Integration Tests', () => {
   // Model download can take a while on first run
   const provider = new OnnxEmbeddingProvider();
 

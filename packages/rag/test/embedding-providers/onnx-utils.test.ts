@@ -2,7 +2,7 @@
  * Unit Tests for ONNX Embedding Utilities
  *
  * Tests the pure TypeScript utilities (tokenizer, pooling, normalization)
- * without requiring onnxruntime-node or model downloads.
+ * without requiring model downloads.
  */
 
 import { mkdir, rm, writeFile } from 'node:fs/promises';
