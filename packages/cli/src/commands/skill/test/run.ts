@@ -31,6 +31,7 @@ import { Command } from 'commander';
 import { parseSourceSpec } from '../../../skill-resolution/classify.js';
 import {
   findDeclaredSkillForPath,
+  findDeclaredSkillForSourceDir,
   resolveSkillReference,
   type BuildableReference,
   type DeclaredSkillLink,
@@ -589,56 +590,65 @@ export async function resolveSubjectForTest(
   }
 }
 
+/** Result of {@link buildDeclaredSkill}: where the built (or reused) dist landed. */
+interface BuildDeclaredSkillResult {
+  distDir: string;
+  rebuilt: boolean;
+  /**
+   * Set only under --dry-run: true = an existing dist was staged WITHOUT
+   * rebuilding (may be stale); false = no dist existed yet so the preview fell
+   * back to the source dir. Absent for a real (non-dry-run) build.
+   */
+  dryRunStagedExistingDist?: boolean;
+}
+
 /**
- * Resolve a buildable subject under --no-build or --dry-run (no build step). Stage
+ * --no-build / --dry-run branch of {@link buildDeclaredSkill}: never builds. Stage
  * the existing dist if present; for a dry-run with no dist yet, fall back to the
- * source dir so the preview still assembles without triggering a build. Throws when
- * --no-build is set but no dist exists.
+ * source dir so the preview still assembles without triggering a build. Throws
+ * when --no-build is set but no dist exists.
  */
-function resolveNoBuildDryRunBranch(
+function resolveExistingDistOrThrow(
   ref: BuildableReference,
-  scaffoldDir: string,
   flags: { noBuild: boolean; dryRun: boolean },
-): ResolvedSubject {
+): BuildDeclaredSkillResult {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- expectedDistDir derived from project config
   if (existsSync(ref.expectedDistDir)) {
     if (flags.noBuild) {
       process.stderr.write(`Using existing dist (NOT rebuilt): ${ref.expectedDistDir}\n`);
     }
     return {
-      subjectSource: { path: ref.expectedDistDir },
-      subjectScaffoldDir: scaffoldDir,
+      distDir: ref.expectedDistDir,
       rebuilt: false,
-      wouldBuild: true,
       // For a dry-run that staged an existing (unbuilt) dist, flag it as
       // potentially stale so the summary can warn the user.
       ...(flags.dryRun ? { dryRunStagedExistingDist: true } : {}),
     };
   }
   if (flags.dryRun) {
-    return {
-      subjectSource: { path: scaffoldDir },
-      subjectScaffoldDir: scaffoldDir,
-      rebuilt: false,
-      wouldBuild: true,
-      dryRunStagedExistingDist: false,
-    };
+    return { distDir: dirname(ref.sourcePath), rebuilt: false, dryRunStagedExistingDist: false };
   }
   throw new SkillBuildError(
-    `--no-build: no built dist at ${ref.expectedDistDir}. Run \`vat build\` first, or point at a built path.`,
+    `--no-build: no built dist at ${ref.expectedDistDir} for '${ref.name}'. Run \`vat build\` first, or point at a built path.`,
   );
 }
 
-/** Build a declared skill (or stage its existing dist under --no-build/--dry-run), then return the dist to stage. */
-async function resolveBuildableSubject(
+/**
+ * Build a declared skill (BuildableReference) into its `expectedDistDir`, or reuse
+ * the existing dist under --no-build/--dry-run. Shared by SUBJECT resolution
+ * ({@link resolveBuildableSubject}) and `--with`/`--with-optional` COMPANION
+ * resolution ({@link resolveCompanionSpec}) so a companion that maps to a declared
+ * skill gets the exact same build treatment as the subject (issue #158) — its
+ * `files:` injection runs before staging, instead of a raw, possibly
+ * build-artifact-incomplete, source-tree copy.
+ */
+async function buildDeclaredSkill(
   ref: BuildableReference,
   flags: { noBuild: boolean; dryRun: boolean; acknowledged: boolean; build?: string },
-): Promise<ResolvedSubject> {
-  const scaffoldDir = dirname(ref.sourcePath);
-
+): Promise<BuildDeclaredSkillResult> {
   // --no-build and --dry-run never build — delegate to the dedicated branch helper.
   if (flags.noBuild || flags.dryRun) {
-    return resolveNoBuildDryRunBranch(ref, scaffoldDir, flags);
+    return resolveExistingDistOrThrow(ref, flags);
   }
 
   // SECURITY (§12): reaching here means a real build WOULD run — runPreStageBuild
@@ -672,7 +682,77 @@ async function resolveBuildableSubject(
       `Skill build failed for '${ref.name}': ${e instanceof Error ? e.message : String(e)}`,
     );
   }
-  return { subjectSource: { path: ref.expectedDistDir }, subjectScaffoldDir: scaffoldDir, rebuilt: true, wouldBuild: true };
+  return { distDir: ref.expectedDistDir, rebuilt: true };
+}
+
+/** Build a declared skill (or stage its existing dist under --no-build/--dry-run), then return the dist to stage. */
+async function resolveBuildableSubject(
+  ref: BuildableReference,
+  flags: { noBuild: boolean; dryRun: boolean; acknowledged: boolean; build?: string },
+): Promise<ResolvedSubject> {
+  const scaffoldDir = dirname(ref.sourcePath);
+  const build = await buildDeclaredSkill(ref, flags);
+  return {
+    subjectSource: { path: build.distDir },
+    subjectScaffoldDir: scaffoldDir,
+    rebuilt: build.rebuilt,
+    wouldBuild: true,
+    ...(build.dryRunStagedExistingDist === undefined
+      ? {}
+      : { dryRunStagedExistingDist: build.dryRunStagedExistingDist }),
+  };
+}
+
+/**
+ * Companion analog of {@link resolveBuildableSubject} (issue #158): resolve every
+ * `--with`/`--with-optional` companion whose spec is a `{ path }` pointing at a
+ * declared skill's SOURCE directory to that skill's BUILT dist, via the exact same
+ * {@link buildDeclaredSkill} the subject uses. Anything else — workspace:/npm:/
+ * url:/vendored specs, or a path outside this project's config — is "a different
+ * story" (per the issue's own framing): left untouched, staged as today.
+ *
+ * A REQUIRED companion's build failure propagates (matches the existing "--with
+ * fails if a source cannot be resolved" contract, extended to "cannot be built").
+ * An OPTIONAL companion's build failure falls back to the ORIGINAL (unbuilt) path
+ * spec — this fix must never make an already-degraded optional companion WORSE;
+ * staging's existing skip-with-warning fallback still applies if that raw copy
+ * also fails to stage.
+ */
+export async function resolveCompanionSpec(
+  name: string,
+  spec: SkillSourceSpec,
+  repoRoot: string,
+  flags: { noBuild: boolean; dryRun: boolean; acknowledged: boolean; build?: string },
+  optional: boolean,
+): Promise<SkillSourceSpec> {
+  if (!('path' in spec)) return spec;
+  const declared = await findDeclaredSkillForSourceDir(spec.path, repoRoot);
+  if (declared === undefined) return spec;
+  try {
+    const build = await buildDeclaredSkill(declared, flags);
+    return { path: build.distDir };
+  } catch (e) {
+    if (!optional) throw e;
+    process.stderr.write(
+      `Note: companion '${name}' (declared skill '${declared.name}') failed to build; staging its raw source instead: ${e instanceof Error ? e.message : String(e)}\n`,
+    );
+    return spec;
+  }
+}
+
+/** Resolve every entry of a `--with`/`--with-optional` companion record (see {@link resolveCompanionSpec}). */
+export async function resolveCompanionSources(
+  sources: Record<string, SkillSourceSpec> | undefined,
+  repoRoot: string,
+  flags: { noBuild: boolean; dryRun: boolean; acknowledged: boolean; build?: string },
+  optional: boolean,
+): Promise<Record<string, SkillSourceSpec> | undefined> {
+  if (sources === undefined) return undefined;
+  const resolved: Record<string, SkillSourceSpec> = {};
+  for (const [name, spec] of Object.entries(sources)) {
+    resolved[name] = await resolveCompanionSpec(name, spec, repoRoot, flags, optional);
+  }
+  return resolved;
 }
 
 /**
@@ -785,14 +865,18 @@ export async function runSkillTestRun(
     dryRun: options.dryRun === true,
     acknowledgedRunsSkillCode: options.iUnderstandThisRunsSkillCode === true,
   });
+  // Shared by subject AND companion resolution (issue #158) so a --with/--with-optional
+  // companion that maps to a declared skill gets the exact same build gating (no-build/
+  // dry-run/security-ack) as the subject.
+  const buildFlags = {
+    noBuild,
+    dryRun: options.dryRun === true,
+    acknowledged,
+    ...(config?.build === undefined ? {} : { build: config.build }),
+  };
   let resolvedSubject: ResolvedSubject;
   try {
-    resolvedSubject = await resolveSubjectForTest(subject, process.cwd(), {
-      noBuild,
-      dryRun: options.dryRun === true,
-      acknowledged,
-      ...(config?.build === undefined ? {} : { build: config.build }),
-    });
+    resolvedSubject = await resolveSubjectForTest(subject, process.cwd(), buildFlags);
   } catch (err) {
     // A broken governing config surfacing during subject resolution is a preflight
     // problem the user must fix (exit 2), not an internal harness failure (exit 1).
@@ -810,6 +894,14 @@ export async function runSkillTestRun(
     // name — inside the try so it maps to exit 2 like every other preflight error.
     const harnessOpts = buildHarnessOpts(subject, options, knobs, config, globalTest);
     applyResolvedSubject(harnessOpts, resolvedSubject);
+    // Companion build resolution (issue #158): a --with/--with-optional companion
+    // whose source is a path into a declared skill gets built (its `files:`
+    // injection runs) exactly like the subject, instead of a raw source-tree copy.
+    const repoRoot = resolveRepoRoot();
+    const withSources = await resolveCompanionSources(harnessOpts.withSources, repoRoot, buildFlags, false);
+    if (withSources !== undefined) harnessOpts.withSources = withSources;
+    const withOptional = await resolveCompanionSources(harnessOpts.withOptional, repoRoot, buildFlags, true);
+    if (withOptional !== undefined) harnessOpts.withOptional = withOptional;
     const result = await runSkillTestHarness(harnessOpts);
 
     process.stderr.write(`Harness: ${result.harnessPath}\n`);

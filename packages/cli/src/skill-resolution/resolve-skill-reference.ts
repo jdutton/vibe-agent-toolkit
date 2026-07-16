@@ -29,6 +29,7 @@
  * PURE LOOKUP/CLASSIFICATION — no side effects, no build. Build is the caller's job.
  */
 import { existsSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 import {
   findDistributedSkillLocationBySource,
@@ -79,30 +80,81 @@ function computeSkillDistribution(
 }
 
 /**
- * Reverse-lookup: does this PATH target point at a declared skill's built dist? Walks
- * up from the path (config-first, so a monorepo package config beats the repo `.git`)
- * to the governing config, then matches the resolved path against each declared skill's
- * `expectedDistDir`. Returns the linkage on a match, else undefined (a config-blind
- * path). Pure classification — no build, no side effects. Exported for reuse + tests.
+ * Shared config+discovery lookup for both the reverse (dist-path) and forward
+ * (source-path) declared-skill matchers below: walk up from `absPath` (config-first,
+ * so a monorepo package config beats the repo `.git`) to the governing config, then
+ * return its declared-skills-by-path map. Undefined when there's no governing
+ * config, or no `skills` section declared.
+ */
+/**
+ * Shared engine for both the reverse (dist-path) and forward (source-path)
+ * declared-skill matchers below: walk up from `absPath` (config-first, so a
+ * monorepo package config beats the repo `.git`) to the governing config, then
+ * scan its declared skills for the first one `matches` accepts. `matches` returns
+ * the caller's result shape (or undefined to keep scanning) — the two matchers
+ * differ only in WHICH path each declared skill is compared against and WHAT they
+ * build from a hit, not in the walk-up/scan itself.
+ */
+async function findFirstDeclaredSkillEntry<T>(
+  absPath: string,
+  matches: (
+    sourcePath: string,
+    name: string,
+    configRoot: string,
+    config: NonNullable<ReturnType<typeof loadConfigCached>>,
+  ) => T | undefined | Promise<T | undefined>,
+): Promise<T | undefined> {
+  const configRoot = findProjectRoot(absPath);
+  if (configRoot === null) return undefined;
+  const config = loadConfigCached(configRoot);
+  if (config?.skills === undefined) return undefined;
+  const byPath = await getDiscoveredSkillsByPath(config.skills, configRoot);
+  for (const [sourcePath, name] of byPath.entries()) {
+    const result = await matches(sourcePath, name, configRoot, config);
+    if (result !== undefined) return result;
+  }
+  return undefined;
+}
+
+/**
+ * Reverse-lookup: does this PATH target point at a declared skill's built dist?
+ * Matches the resolved path against each declared skill's `expectedDistDir`.
+ * Returns the linkage on a match, else undefined (a config-blind path). Pure
+ * classification — no build, no side effects. Exported for reuse + tests.
  */
 export async function findDeclaredSkillForPath(
   pathRef: string,
   cwd: string,
 ): Promise<DeclaredSkillLink | undefined> {
   const absPath = safePath.resolve(cwd, pathRef);
-  const configRoot = findProjectRoot(absPath);
-  if (configRoot === null) return undefined;
-  const config = loadConfigCached(configRoot);
-  if (config?.skills === undefined) return undefined;
-
-  const byPath = await getDiscoveredSkillsByPath(config.skills, configRoot);
-  for (const [sourcePath, name] of byPath.entries()) {
+  return findFirstDeclaredSkillEntry(absPath, (sourcePath, name, configRoot, config) => {
     const { expectedDistDir } = computeSkillDistribution(name, sourcePath, configRoot, config);
-    if (safePath.resolve(expectedDistDir) === absPath) {
-      return { name, configRoot, sourcePath, expectedDistDir };
-    }
-  }
-  return undefined;
+    return safePath.resolve(expectedDistDir) === absPath
+      ? { name, configRoot, sourcePath, expectedDistDir }
+      : undefined;
+  });
+}
+
+/**
+ * Forward-lookup companion of {@link findDeclaredSkillForPath} (which matches a
+ * DIST path): does this SOURCE path point at a declared skill's authored directory
+ * (dirname of its SKILL.md)? A `--with`/`--with-optional` companion given as
+ * `path:<source-dir>` has no bare-name grammar to trigger the `buildable` rung of
+ * the disambiguation ladder — this is the reverse mapping that lets a companion
+ * get the SAME build treatment as the subject (its `files:` injection runs before
+ * staging) without inventing new `--with` syntax. Pure classification; no build.
+ * Returns undefined when the path matches no declared skill (a companion outside
+ * this project's config — npm-packaged, workspace, or an undeclared local dir —
+ * is unaffected and stays a plain source).
+ */
+export async function findDeclaredSkillForSourceDir(
+  pathRef: string,
+  cwd: string,
+): Promise<BuildableReference | undefined> {
+  const absPath = safePath.resolve(cwd, pathRef);
+  return findFirstDeclaredSkillEntry(absPath, (sourcePath, name, configRoot, config) =>
+    safePath.resolve(dirname(sourcePath)) === absPath ? buildBuildable(name, sourcePath, configRoot, config) : undefined,
+  );
 }
 
 export async function resolveSkillReference(ref: string, cwd: string): Promise<SkillReference> {

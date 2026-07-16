@@ -1,4 +1,8 @@
-export { findDeclaredSkillForPath, resolveSkillReference } from './resolve-skill-reference.js';
+export {
+  findDeclaredSkillForPath,
+  findDeclaredSkillForSourceDir,
+  resolveSkillReference,
+} from './resolve-skill-reference.js';
 export { classifyToken, parseSourceSpec } from './classify.js';
 export {
   getDiscoveredSkillsByPath,

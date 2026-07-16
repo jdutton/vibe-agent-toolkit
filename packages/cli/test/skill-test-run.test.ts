@@ -10,6 +10,7 @@
  */
 
 import { writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 import * as harness from '@vibe-agent-toolkit/agent-skills';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
@@ -23,6 +24,8 @@ import {
   isPathSourceTarget,
   parseWithFlags,
   resolveCappedKnob,
+  resolveCompanionSources,
+  resolveCompanionSpec,
   resolveSubjectForTest,
   runSkillTestRun,
 } from '../src/commands/skill/test/run.js';
@@ -39,6 +42,17 @@ const DECLARED_POOL = 'declared-pool';
 
 /** Pinned model string used across the #7 path-honors-config tests. */
 const SONNET_MODEL = 'claude-sonnet-5';
+
+// Fixture + spies shared by the M2 (security ack) and issue #158 (companion build)
+// end-to-end tests: a DECLARED_POOL project with process.cwd() mocked to its root
+// and packageSkill spied so the tests can assert whether a build actually ran.
+function setupDeclaredPoolFixtureWithPkgSpy() {
+  const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
+  resetSkillDiscoveryCache();
+  vi.spyOn(process, 'cwd').mockReturnValue(fx.root);
+  const pkg = vi.spyOn(harness, 'packageSkill').mockResolvedValue(undefined as never);
+  return { fx, pkg };
+}
 
 // Mocks runSkillTestHarness with the given result, captures stdout/stderr writes
 // while runSkillTestRun executes, and returns the captured write payloads.
@@ -497,10 +511,7 @@ describe('runSkillTestRun (security ack gates the build end-to-end — M2)', () 
   afterEach(() => vi.restoreAllMocks());
 
   it('buildable subject + ack ABSENT + non-dry-run → exit 2 and neither build nor harness runs', async () => {
-    const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
-    resetSkillDiscoveryCache();
-    vi.spyOn(process, 'cwd').mockReturnValue(fx.root);
-    const pkg = vi.spyOn(harness, 'packageSkill').mockResolvedValue(undefined as never);
+    const { pkg } = setupDeclaredPoolFixtureWithPkgSpy();
     const harnessSpy = vi
       .spyOn(harness, 'runSkillTestHarness')
       .mockResolvedValue({ harnessPath: '/h', exitCode: 0, summary: '' });
@@ -513,6 +524,163 @@ describe('runSkillTestRun (security ack gates the build end-to-end — M2)', () 
     expect(exit).toHaveBeenCalledWith(2);
     expect(pkg).not.toHaveBeenCalled();
     expect(harnessSpy).not.toHaveBeenCalled();
+  });
+});
+
+// Issue #158: a --with/--with-optional companion given as `path:<source-dir>` was
+// staged as a raw tree-copy, silently skipping the declared skill's `files:`
+// injection (e.g. a build-artifact executable) that the SUBJECT always gets.
+// resolveCompanionSpec/resolveCompanionSources give a companion the SAME
+// buildable treatment as resolveSubjectForTest, gated by the same flags.
+describe('resolveCompanionSpec (companion build resolution — issue #158)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('a path AT a declared skill\'s source dir + ack PRESENT → builds and rewrites to the dist path', async () => {
+    const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
+    resetSkillDiscoveryCache();
+    const pkg = vi.spyOn(harness, 'packageSkill').mockResolvedValue(undefined as never);
+
+    const spec = await resolveCompanionSpec(
+      'companion',
+      { path: dirname(fx.poolSkillMd(DECLARED_POOL)) },
+      fx.root,
+      { noBuild: false, dryRun: false, acknowledged: true },
+      false,
+    );
+
+    expect(pkg).toHaveBeenCalledTimes(1);
+    expect(spec).toEqual({ path: fx.poolDistDir(DECLARED_POOL) });
+  });
+
+  it('a path AT a declared skill\'s source dir + ack ABSENT + REQUIRED → throws SecurityAckError, no build', async () => {
+    const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
+    resetSkillDiscoveryCache();
+    const pkg = vi.spyOn(harness, 'packageSkill').mockResolvedValue(undefined as never);
+    const { SecurityAckError } = await import('@vibe-agent-toolkit/agent-skills');
+
+    await expect(
+      resolveCompanionSpec(
+        'companion',
+        { path: dirname(fx.poolSkillMd(DECLARED_POOL)) },
+        fx.root,
+        { noBuild: false, dryRun: false, acknowledged: false },
+        false,
+      ),
+    ).rejects.toBeInstanceOf(SecurityAckError);
+    expect(pkg).not.toHaveBeenCalled();
+  });
+
+  it('a path matching NO declared skill → returned unchanged, no build attempted', async () => {
+    const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
+    resetSkillDiscoveryCache();
+    const pkg = vi.spyOn(harness, 'packageSkill').mockResolvedValue(undefined as never);
+    const outsidePath = safePath.join(fx.root, 'not-a-skill-dir');
+
+    const spec = await resolveCompanionSpec(
+      'companion',
+      { path: outsidePath },
+      fx.root,
+      { noBuild: false, dryRun: false, acknowledged: true },
+      false,
+    );
+
+    expect(pkg).not.toHaveBeenCalled();
+    expect(spec).toEqual({ path: outsidePath });
+  });
+
+  it('a non-path spec (npm:) is left untouched, no lookup performed', async () => {
+    const spec = await resolveCompanionSpec(
+      'companion',
+      { npm: '@scope/s@1.2.3' },
+      process.cwd(),
+      { noBuild: false, dryRun: false, acknowledged: true },
+      false,
+    );
+    expect(spec).toEqual({ npm: '@scope/s@1.2.3' });
+  });
+
+  it('--no-build with no existing dist + REQUIRED → throws SkillBuildError', async () => {
+    const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
+    resetSkillDiscoveryCache();
+
+    await expect(
+      resolveCompanionSpec(
+        'companion',
+        { path: dirname(fx.poolSkillMd(DECLARED_POOL)) },
+        fx.root,
+        { noBuild: true, dryRun: false, acknowledged: false },
+        false,
+      ),
+    ).rejects.toThrow(/no built dist/);
+  });
+
+  it.each([
+    ['ack ABSENT (SecurityAckError)', { noBuild: false, dryRun: false, acknowledged: false }],
+    ['--no-build with no existing dist (SkillBuildError)', { noBuild: true, dryRun: false, acknowledged: false }],
+  ])('OPTIONAL companion: a build failure (%s) falls back to the raw spec (no throw)', async (_label, flags) => {
+    const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
+    resetSkillDiscoveryCache();
+    vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
+    const sourceDir = dirname(fx.poolSkillMd(DECLARED_POOL));
+
+    const spec = await resolveCompanionSpec('companion', { path: sourceDir }, fx.root, flags, true);
+
+    expect(spec).toEqual({ path: sourceDir });
+  });
+});
+
+describe('resolveCompanionSources', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('undefined sources → undefined (no-op)', async () => {
+    const out = await resolveCompanionSources(undefined, process.cwd(), {
+      noBuild: false,
+      dryRun: false,
+      acknowledged: true,
+    }, false);
+    expect(out).toBeUndefined();
+  });
+
+  it('resolves each entry independently: a declared-skill path builds, an unrelated one passes through', async () => {
+    const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
+    resetSkillDiscoveryCache();
+    vi.spyOn(harness, 'packageSkill').mockResolvedValue(undefined as never);
+
+    const out = await resolveCompanionSources(
+      {
+        builds: { path: dirname(fx.poolSkillMd(DECLARED_POOL)) },
+        passthrough: { npm: '@scope/other@2.0.0' },
+      },
+      fx.root,
+      { noBuild: false, dryRun: false, acknowledged: true },
+      false,
+    );
+
+    expect(out).toEqual({
+      builds: { path: fx.poolDistDir(DECLARED_POOL) },
+      passthrough: { npm: '@scope/other@2.0.0' },
+    });
+  });
+});
+
+// End-to-end: runSkillTestRun actually rewrites --with's path spec to the built
+// dist before calling runSkillTestHarness (not just the unit-level helpers above).
+describe('runSkillTestRun (--with companion build resolution end-to-end — issue #158)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('a --with path pointing at a declared skill\'s source dir is staged from its BUILT dist', async () => {
+    const { fx, pkg } = setupDeclaredPoolFixtureWithPkgSpy();
+
+    const sourceDir = dirname(fx.poolSkillMd(DECLARED_POOL));
+    const opts = await runAndCaptureOpts(PATH_SUBJECT, {
+      with: [`companion=path:${sourceDir}`],
+      iUnderstandThisRunsSkillCode: true,
+    });
+
+    // Once for the companion (the subject here is a plain source, never built).
+    expect(pkg).toHaveBeenCalledTimes(1);
+    const withSources = opts.withSources as Record<string, { path?: string }>;
+    expect(withSources['companion']).toEqual({ path: fx.poolDistDir(DECLARED_POOL) });
   });
 });
 
