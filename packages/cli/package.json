@@ -51,7 +51,7 @@
     "@vibe-agent-toolkit/rag-lancedb": "workspace:*",
     "@vibe-agent-toolkit/resources": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
-    "adm-zip": "^0.5.16",
+    "adm-zip": "^0.6.0",
     "commander": "^12.1.0",
     "picomatch": "^4.0.3",
     "semver": "^7.7.3",
