@@ -65,6 +65,11 @@ export function createUnitTestConfig(overrides: UnitTestConfigOverrides = {}) {
       '**/*.system.test.ts',
     ],
     testTimeout: platformTestTimeout,
+    // Some "unit" tests spawn real git subprocesses in beforeEach (e.g.
+    // fetch-sources.test.ts). vitest's default 10s hook timeout doesn't
+    // account for slow Windows CI runners the way testTimeout above already
+    // does — align it with the same platform-aware ceiling.
+    hookTimeout: platformTestTimeout,
     pool: unitPool,
     poolOptions: unitPoolOptions,
     coverage: {
