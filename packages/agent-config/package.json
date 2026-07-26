@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/agent-config",
-  "version": "0.1.41-rc.3",
+  "version": "0.1.41-rc.4",
   "description": "Agent manifest loading and validation",
   "type": "module",
   "main": "./dist/index.js",
@@ -20,7 +20,7 @@
     "build:watch": "tsc --build --watch",
     "clean": "rm -rf dist",
     "test:unit": "vitest run",
-    "test:integration": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit"

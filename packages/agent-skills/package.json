@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/agent-skills",
-  "version": "0.1.41-rc.3",
+  "version": "0.1.41-rc.4",
   "description": "Build, validate, and package agent skills in the Agent Skills format",
   "type": "module",
   "main": "./dist/index.js",
@@ -24,7 +24,7 @@
     "clean": "rm -rf dist *.tsbuildinfo schemas/",
     "generate:schemas": "tsx scripts/generate-json-schemas.ts",
     "test:unit": "vitest run",
-    "test:integration": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest watch",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc --noEmit"
@@ -34,7 +34,7 @@
     "@vibe-agent-toolkit/agent-schema": "workspace:*",
     "@vibe-agent-toolkit/resources": "workspace:*",
     "@vibe-agent-toolkit/utils": "workspace:*",
-    "adm-zip": "^0.5.16",
+    "adm-zip": "^0.6.0",
     "glob": "^10.3.10",
     "picomatch": "^4.0.3",
     "yaml": "^2.6.1",

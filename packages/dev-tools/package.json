@@ -1,6 +1,6 @@
 {
   "name": "@vibe-agent-toolkit/dev-tools",
-  "version": "0.1.41-rc.3",
+  "version": "0.1.41-rc.4",
   "private": true,
   "type": "module",
   "description": "Development tools for the monorepo",
@@ -16,7 +16,7 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test:unit": "vitest run",
-    "test:integration": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "clean": "rimraf dist *.tsbuildinfo",
     "prepare-bin": "tsx src/prepare-bin.ts",
     "generate-cli-docs": "tsx src/generate-cli-docs.ts",
@@ -39,7 +39,7 @@
     "@types/which": "^3.0.4",
     "eslint": "^9.39.2",
     "rimraf": "^6.0.1",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.3",
     "typescript": "^5.9.3",
     "vitest": "^3.2.4"
   },

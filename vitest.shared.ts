@@ -65,6 +65,9 @@ export function createUnitTestConfig(overrides: UnitTestConfigOverrides = {}) {
       '**/*.system.test.ts',
     ],
     testTimeout: platformTestTimeout,
+    // NOTE: no hookTimeout override here on purpose. Unit hooks should fail
+    // fast at vitest's 10s default — a unit hook that needs longer is doing
+    // real I/O and belongs in the integration or system tier instead.
     pool: unitPool,
     poolOptions: unitPoolOptions,
     coverage: {
@@ -99,6 +102,11 @@ export function createIntegrationTestConfig(overrides: IntegrationTestConfigOver
     include: ['test/**/*.integration.test.ts', 'src/**/*.integration.test.ts'],
     exclude: ['**/node_modules/**', '**/dist/**', ...(overrides.exclude ?? [])],
     testTimeout: platformTestTimeout,
+    // Integration hooks legitimately do real I/O (git subprocesses, fixture
+    // hydration, temp-tree setup), so vitest's 10s default is too tight —
+    // especially on slow Windows CI runners. Share the same platform-aware
+    // ceiling testTimeout already uses.
+    hookTimeout: platformTestTimeout,
     passWithNoTests: true,
     pool: integrationPool,
     poolOptions: integrationPoolOptions,

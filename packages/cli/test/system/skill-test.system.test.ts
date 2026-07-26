@@ -26,6 +26,7 @@
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 
+import { stagedDirName } from '@vibe-agent-toolkit/agent-skills';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 
@@ -129,6 +130,51 @@ function prepareOutDir(outDir: string): void {
   mkdirSyncReal(outDir, { recursive: true, mode: 0o700 });
 }
 
+/** One `files:` entry: a repo-relative source injected at `dest` inside the built dist. */
+interface InjectedFile {
+  source: string;
+  dest: string;
+}
+
+/**
+ * YAML lines for one `skills.config.<name>` entry that injects `files:` into the
+ * skill's built dist. Injected files are not link-walked from markdown, so the
+ * block also allows PACKAGED_UNREFERENCED_FILE (otherwise an error).
+ */
+function skillFilesConfigLines(
+  skillName: string,
+  files: InjectedFile[],
+  reason: string,
+): string[] {
+  return [
+    `    ${skillName}:`,
+    '      files:',
+    ...files.flatMap(f => [`        - source: ${f.source}`, `          dest: ${f.dest}`]),
+    '      validation:',
+    '        allow:',
+    '          PACKAGED_UNREFERENCED_FILE:',
+    '            - paths: ["**"]',
+    `              reason: ${reason}`,
+  ];
+}
+
+/**
+ * Write the synthetic project's vibe-agent-toolkit.config.yaml: every skill under
+ * `skills/**` is declared, plus whatever per-skill `skills.config` lines the caller
+ * supplies (see {@link skillFilesConfigLines}).
+ */
+function writeDeclaredProjectConfig(projectRoot: string, perSkillLines: string[]): void {
+  const lines = [
+    'version: 1',
+    'skills:',
+    '  include:',
+    '    - "skills/**/SKILL.md"',
+    ...perSkillLines,
+    '',
+  ];
+  writeTestFile(safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'), lines.join('\n'));
+}
+
 /**
  * Build a synthetic VAT project that DECLARES a single pool skill via
  * vibe-agent-toolkit.config.yaml (`skills.include`). Returns the project root
@@ -140,10 +186,9 @@ function prepareOutDir(outDir: string): void {
  * inside). A declared pool skill builds to `<root>/dist/skills/<name>`.
  *
  * When `injectEvals` is true the config also injects the skill's evals/evals.json
- * INTO the built dist via a `files:` mapping (allowing PACKAGED_UNREFERENCED_FILE,
- * which is otherwise an error) — because `packageSkill` copies only link-walked
- * resources, not the whole source tree, so the harness-staged dist would lack
- * evals/ without this. Needed for a full build -> stage -> grade run.
+ * INTO the built dist via a `files:` mapping — because `packageSkill` copies only
+ * link-walked resources, not the whole source tree, so the harness-staged dist
+ * would lack evals/ without this. Needed for a full build -> stage -> grade run.
  */
 function buildDeclaredPoolProject(
   parentDir: string,
@@ -156,24 +201,100 @@ function buildDeclaredPoolProject(
   // Writes skills/<name>/SKILL.md (+ evals/evals.json) with valid frontmatter.
   buildFixtureSkillDir(skillsDir, skillName);
 
-  const lines = ['version: 1', 'skills:', '  include:', '    - "skills/**/SKILL.md"'];
-  if (injectEvals) {
-    lines.push(
-      '  config:',
-      `    ${skillName}:`,
-      '      files:',
-      `        - source: skills/${skillName}/evals/evals.json`,
-      '          dest: evals/evals.json',
-      '      validation:',
-      '        allow:',
-      '          PACKAGED_UNREFERENCED_FILE:',
-      '            - paths: ["**"]',
-      '              reason: evals injected for skill-test staging, not linked from markdown',
-    );
-  }
-  lines.push('');
-  writeTestFile(safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'), lines.join('\n'));
+  writeDeclaredProjectConfig(
+    projectRoot,
+    injectEvals
+      ? [
+          '  config:',
+          ...skillFilesConfigLines(
+            skillName,
+            [{ source: `skills/${skillName}/evals/evals.json`, dest: 'evals/evals.json' }],
+            'evals injected for skill-test staging, not linked from markdown',
+          ),
+        ]
+      : [],
+  );
   return { projectRoot, skillName };
+}
+
+// ---------------------------------------------------------------------------
+// Companion-build fixture (issue #158)
+// ---------------------------------------------------------------------------
+
+/** Companion alias for the declared companion staged via `--with`. */
+const DECLARED_COMPANION_ALIAS = 'helper';
+/** Companion alias for the declared companion staged via `--with-optional`. */
+const OPTIONAL_COMPANION_ALIAS = 'opt';
+/** Companion alias for the UNDECLARED (negative-control) companion. */
+const UNDECLARED_COMPANION_ALIAS = 'raw';
+/** Where the companion's `files:` mapping injects its build artifact inside the dist. */
+const COMPANION_ARTIFACT_DEST = 'bin/tool.mjs';
+/** Byte-exact contents of the injected build artifact (asserted after staging). */
+const COMPANION_ARTIFACT_BODY = '#!/usr/bin/env node\nprocess.stdout.write("companion-tool-v1\\n");\n';
+
+/**
+ * Build a synthetic project declaring THREE pool skills — a SUBJECT and two
+ * COMPANIONS (one staged as required, one as optional) — plus one UNDECLARED
+ * skill dir used as the negative control.
+ *
+ * Each COMPANION carries a `files:` mapping that injects a build artifact into its
+ * packaged dist. That injection happens ONLY inside `packageSkill`, so it is the
+ * observable proof that a `--with`/`--with-optional` companion mapping to a
+ * declared skill was BUILT rather than tree-copied from source (issue #158).
+ *
+ * NO skill ships evals/, so the run stops at the harness's bootstrap check
+ * (exit 3) — which fires AFTER companion build + staging but BEFORE preflight and
+ * any Claude spawn. That keeps this guard deterministic and token-free in
+ * credential-less CI, which is exactly where it has to bite.
+ *
+ * The artifact SOURCE lives under `build-artifacts/` and is written at test
+ * runtime: a committed fixture dir named `dist/` (or `build/`, `node_modules/`,
+ * `coverage/`) is gitignored at the repo root and silently vanishes in a clean CI
+ * clone.
+ */
+function buildCompanionArtifactProject(parentDir: string): {
+  projectRoot: string;
+  subjectName: string;
+  companionSourceDir: string;
+  optionalCompanionSourceDir: string;
+  undeclaredSourceDir: string;
+} {
+  const projectRoot = safePath.join(parentDir, 'project');
+  const skillsDir = safePath.join(projectRoot, 'skills');
+  mkdirSyncReal(skillsDir, { recursive: true });
+
+  const subjectName = 'poc-skill';
+  buildFixtureSkillDir(skillsDir, subjectName, false);
+  const companionSourceDir = buildFixtureSkillDir(skillsDir, 'helper-skill', false);
+  const optionalCompanionSourceDir = buildFixtureSkillDir(skillsDir, 'helper-optional-skill', false);
+  // Same shape as the companions, but OUTSIDE the `skills/**` include glob, so it
+  // maps to no declared skill and is staged as raw source.
+  const undeclaredSourceDir = buildFixtureSkillDir(
+    safePath.join(projectRoot, 'vendor'),
+    'raw-skill',
+    false,
+  );
+
+  const artifactSource = 'build-artifacts/bin/tool.mjs';
+  const artifactDir = safePath.join(projectRoot, 'build-artifacts', 'bin');
+  mkdirSyncReal(artifactDir, { recursive: true });
+  writeTestFile(safePath.join(artifactDir, 'tool.mjs'), COMPANION_ARTIFACT_BODY);
+
+  const injectReason = 'build artifact injected at package time; not linked from markdown';
+  const injected = [{ source: artifactSource, dest: COMPANION_ARTIFACT_DEST }];
+  writeDeclaredProjectConfig(projectRoot, [
+    '  config:',
+    ...skillFilesConfigLines('helper-skill', injected, injectReason),
+    ...skillFilesConfigLines('helper-optional-skill', injected, injectReason),
+  ]);
+
+  return {
+    projectRoot,
+    subjectName,
+    companionSourceDir,
+    optionalCompanionSourceDir,
+    undeclaredSourceDir,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -204,6 +325,15 @@ function expectStatus(
     result.status,
     `expected exit ${expected}, got ${String(result.status)}. Harness stderr (tail): ${lastLines.slice(-600)}`,
   ).toBe(expected);
+}
+
+/**
+ * Absolute path of `relPath` inside the harness-staged directory for the companion
+ * staged under `alias`. Staging maps a name onto a single safe path segment via
+ * `stagedDirName` (basename slug + hash), so the dir name is derived, not guessed.
+ */
+function stagedPath(outDir: string, alias: string, relPath: string): string {
+  return safePath.join(outDir, stagedDirName(alias), relPath);
 }
 
 /** Assert `results/provenance.json` exists under `outDir` and return its parsed contents. */
@@ -386,6 +516,80 @@ describe('vat skill test run (system)', () => {
     expectStatus(result, 2);
     // The actionable hint must point the user at `vat build`.
     expect(result.stderr).toContain('vat build');
+  });
+
+  // -------------------------------------------------------------------------
+  // ALWAYS-RUNS regression guard for issue #158.
+  //
+  // The user-visible claim of #158 is that a `--with`/`--with-optional` companion
+  // which maps to a DECLARED skill gets BUILT — so its `files:` build-artifact
+  // injection runs — instead of being tree-copied as raw source. #158's real-world
+  // symptom was a companion backed by a bundled executable staging non-functional
+  // and hanging the executor with no diagnostic.
+  //
+  // The assertion is therefore on BYTES ON DISK under the staged companion dir, not
+  // on a path string or a mock call: `files:` injection happens inside
+  // `packageSkill`, which every unit/integration companion test mocks away.
+  //
+  // Both companions ride ONE CLI invocation so the declared and undeclared arms are
+  // compared under identical conditions; the undeclared arm is the teeth-check
+  // (a raw-source stage of the same-shaped skill must NOT carry the artifact).
+  // -------------------------------------------------------------------------
+
+  it('builds --with/--with-optional companions that map to declared skills, injecting their files: artifacts into the staged dirs', async () => {
+    const tempDir = ctx.createTempDir();
+    const {
+      projectRoot,
+      subjectName,
+      companionSourceDir,
+      optionalCompanionSourceDir,
+      undeclaredSourceDir,
+    } = buildCompanionArtifactProject(tempDir);
+    const outDir = safePath.join(tempDir, 'harness-companion-build');
+    prepareOutDir(outDir);
+
+    // cwd MUST be the synthetic project root so both the bare subject name and the
+    // companion source paths resolve against ITS config (not an ancestor's).
+    const result = await executeCli(
+      ctx.binPath,
+      [
+        'skill', 'test', 'run', subjectName,
+        '--with', `${DECLARED_COMPANION_ALIAS}=path:${companionSourceDir}`,
+        '--with-optional', `${OPTIONAL_COMPANION_ALIAS}=path:${optionalCompanionSourceDir}`,
+        '--with', `${UNDECLARED_COMPANION_ALIAS}=path:${undeclaredSourceDir}`,
+        '--i-understand-this-runs-skill-code',
+        '--out', outDir,
+      ],
+      { cwd: projectRoot },
+    );
+
+    // Exit 3 = the subject ships no evals/, so the harness stopped at its bootstrap
+    // check. That check runs AFTER companion resolution + staging and BEFORE
+    // preflight/spawn — no claude binary, no auth, no tokens, same result in CI.
+    expectStatus(result, 3);
+
+    // THE CLAIM: each companion's `files:`-injected build artifact is a real file
+    // under its staged dir. It exists in the built dist ONLY — nothing copies it
+    // from the source tree, so raw-source staging cannot produce it. Asserted for
+    // BOTH arms: `--with` and `--with-optional` resolve through separate call sites.
+    for (const alias of [DECLARED_COMPANION_ALIAS, OPTIONAL_COMPANION_ALIAS]) {
+      const artifactPath = stagedPath(outDir, alias, COMPANION_ARTIFACT_DEST);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
+      expect(fs.existsSync(artifactPath), `injected artifact missing at ${artifactPath}`).toBe(true);
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
+      expect(fs.readFileSync(artifactPath, 'utf-8')).toBe(COMPANION_ARTIFACT_BODY);
+    }
+
+    // NEGATIVE CONTROL: a same-shaped companion whose path maps to NO declared skill
+    // is staged as raw source. It must stage (SKILL.md present — proving the
+    // assertions above are not passing merely because staging happened at all) and
+    // it must NOT carry the injected artifact.
+    const rawSkillMd = stagedPath(outDir, UNDECLARED_COMPANION_ALIAS, 'SKILL.md');
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
+    expect(fs.existsSync(rawSkillMd), `undeclared companion not staged at ${rawSkillMd}`).toBe(true);
+    const rawArtifact = stagedPath(outDir, UNDECLARED_COMPANION_ALIAS, COMPANION_ARTIFACT_DEST);
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- test path, controlled by this file
+    expect(fs.existsSync(rawArtifact)).toBe(false);
   });
 
   // -------------------------------------------------------------------------
