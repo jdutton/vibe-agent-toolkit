@@ -62,12 +62,40 @@ reason = "picomatch ReDoS via extglob quantifiers; 2.x and 4.x coexist across a 
 id = "GHSA-2g4f-4pwh-qvx6"
 reason = "ajv ReDoS only reachable with the $data option, which VAT never enables. 6.x/8.x coexist so a single global pin is unsafe."
 
-# --- brace-expansion (ReDoS) -------------------------------------------------
-# 1.x and 2.x coexist (pulled by minimatch 3.x and 9.x respectively). Global
-# pin unsafe across the major boundary. Low-severity ReDoS on VAT-authored globs.
+# --- brace-expansion (ReDoS / expansion DoS) ---------------------------------
+# 1.1.12 and 2.0.2 coexist: minimatch@3.1.2 declares `^1.1.7`, minimatch@9.0.5
+# declares `^2.0.1`. No single version satisfies both, and bun's `overrides` is a
+# FLAT package->version map — path-scoped pins are not expressible (verified on
+# bun 1.3.9: `overrides` with `minimatch@3.1.2/brace-expansion`, and `resolutions`
+# with both `pkg@ver/dep` and `pkg/dep` paths, all resolved to "no changes").
+# All three advisories are DoS on glob expansion; VAT only ever expands globs it
+# authors itself, never attacker-supplied patterns. Consumers of the published
+# packages re-resolve VAT's floating ranges and pick up patched copies
+# independently of this lockfile.
 [[IgnoredVulns]]
 id = "GHSA-f886-m6hf-6m8v"
 reason = "brace-expansion ReDoS; 1.x and 2.x coexist under different minimatch majors, unsafe to globally pin. VAT-authored globs only."
+[[IgnoredVulns]]
+id = "GHSA-3jxr-9vmj-r5cp"
+reason = "brace-expansion exponential-time expansion of consecutive `{}` groups. Per-major fixes exist (1.1.16 / 2.1.2) but bun's flat `overrides` map cannot pin per-major and 1.x/2.x coexist under minimatch@3 and minimatch@9. VAT-authored globs only. Re-evaluate if bun gains path-scoped overrides or when glob majors converge."
+[[IgnoredVulns]]
+id = "GHSA-mh99-v99m-4gvg"
+reason = "brace-expansion unbounded-expansion OOM. The advisory range is a single [0, 5.0.8) span with NO 1.x or 2.x backport, so no in-range fix exists for either coexisting copy — brace-expansion@5 is three majors past minimatch@3's `^1.1.7` and minimatch@9's `^2.0.1`. VAT-authored globs only."
+
+# --- @hono/node-server (serve-static path traversal on Windows) ---------------
+# The vulnerable surface is the `@hono/node-server/serve-static` subpath export.
+# The only thing that pulls @hono/node-server into the tree is
+# @modelcontextprotocol/sdk@1.26.0, which (a) declares `^1.19.9`, so the 2.0.5
+# fix is out of its declared range and a global pin would force a semver-major
+# adapter swap under it, and (b) imports only `getRequestListener` from the
+# package root, in `server/streamableHttp.js` — it never imports serve-static.
+# VAT's single MCP consumer (packages/gateway-mcp) uses StdioServerTransport
+# exclusively and never constructs the Streamable HTTP transport, so the module
+# is not loaded at all. The advisory is additionally Windows-only static-file
+# serving, which VAT never does.
+[[IgnoredVulns]]
+id = "GHSA-frvp-7c67-39w9"
+reason = "@hono/node-server path traversal is in the `serve-static` export, which is never imported: @modelcontextprotocol/sdk uses only `getRequestListener` for its Streamable HTTP transport, and VAT's gateway-mcp is stdio-only. Fix (2.0.5) is a major bump outside the SDK's declared `^1.19.9`, so a global pin is unsafe. Re-evaluate when the MCP SDK widens its range."
 
 # --- esbuild (dev-server file read) ------------------------------------------
 # The advisory affects `esbuild serve` (the dev server). VAT never runs the
