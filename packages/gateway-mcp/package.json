@@ -18,7 +18,7 @@
   "scripts": {
     "build": "tsc",
     "test:unit": "vitest run",
-    "test:integration": "vitest run",
+    "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage"
   },
