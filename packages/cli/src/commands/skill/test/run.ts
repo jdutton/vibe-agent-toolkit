@@ -36,7 +36,7 @@ import {
   type BuildableReference,
   type DeclaredSkillLink,
 } from '../../../skill-resolution/index.js';
-import { ConfigLoadError, loadConfig } from '../../../utils/config-loader.js';
+import { ConfigLoadError, loadConfig, loadConfigCached } from '../../../utils/config-loader.js';
 import { runClaudePluginBuild } from '../../claude/plugin/build.js';
 
 import { assertValidAuth, assertValidRequireAuth } from './auth-flags.js';
@@ -257,6 +257,18 @@ export function descriptorsToRecord(
 // ---------------------------------------------------------------------------
 
 /**
+ * Read a DECLARED skill's own `skills.config.<name>.test` block from the config that
+ * governs IT — keyed by the declared name against that skill's `configRoot`, never by
+ * cwd. The one lookup used wherever "what did THIS skill declare?" is the question:
+ * {@link loadTestConfig}'s path-target arm and companion `test.build` resolution
+ * ({@link resolveCompanionSpec}), so a companion in a nested config never inherits the
+ * subject's block.
+ */
+function declaredSkillTestConfig(link: { configRoot: string; name: string }): TestConfig | undefined {
+  return loadConfigCached(link.configRoot)?.skills?.config?.[link.name]?.test;
+}
+
+/**
  * Load the persisted `skills.config.<skill>.test` block for the subject skill,
  * PROJECT-AWARE (mirrors the resolver — not a parallel cwd+basename resolver).
  *
@@ -275,9 +287,7 @@ async function loadTestConfig(subject: string, cwd: string): Promise<TestConfig 
   // Path target → resolve the declared skill it materializes, and read its test
   // block from that skill's own governing config root (cwd-independent).
   const link = await findDeclaredSkillForPath(subject, cwd);
-  if (link !== undefined) {
-    return loadConfig(link.configRoot)?.skills?.config?.[link.name]?.test;
-  }
+  if (link !== undefined) return declaredSkillTestConfig(link);
   const projectRoot = findProjectRoot(cwd);
   if (projectRoot === null) return undefined;
   const perSkill = loadConfig(projectRoot)?.skills?.config;
@@ -552,15 +562,45 @@ function sourceScaffoldFields(
 }
 
 /**
+ * Build GATING for a declared skill: the flags that decide IF a build happens.
+ * Assembled once per run in {@link runSkillTestRun} and threaded, unchanged, through
+ * SUBJECT and COMPANION resolution so both arms share one gate.
+ *
+ * Deliberately carries NO `test.build` command. That hook is per-SKILL, not per-run:
+ * it is declared by one skill in one config and runs with THAT config's root as cwd,
+ * so it travels beside the ref being built (see {@link buildDeclaredSkill}'s
+ * `buildCommand`), never inside this shared gate. A subject's command riding in here
+ * would execute against every companion's config root.
+ */
+export interface BuildFlags {
+  /** Skip the build entirely and stage the existing dist (errors if absent). */
+  noBuild: boolean;
+  /** Assemble a preview only — never build, never spawn. */
+  dryRun: boolean;
+  /** The §12 security acknowledgment: required before ANY build command runs. */
+  acknowledged: boolean;
+}
+
+/**
  * Project-aware subject resolution for `vat skill test run`. Resolves the subject
  * reference; for a declared skill, builds it (real entry points) and returns the
  * dist dir to stage; everything else is staged as-is. Throws SkillBuildError
  * (exit 2) for name-miss / not-found / --no-build-without-dist / build failure.
+ *
+ * `memo` is the per-run build memo (see {@link BuildMemo}) — pass the SAME map used
+ * for companion resolution so a skill that is both subject and companion builds once.
+ *
+ * `buildCommand` is the SUBJECT's own `test.build` hook, resolved by
+ * {@link loadTestConfig} (which carries a bare-name/basename fallback a raw config
+ * lookup lacks). It applies to the subject's build ONLY — companions resolve theirs
+ * from their own governing config.
  */
 export async function resolveSubjectForTest(
   ref: string,
   cwd: string,
-  flags: { noBuild: boolean; dryRun: boolean; acknowledged: boolean; build?: string },
+  flags: BuildFlags,
+  memo: BuildMemo,
+  buildCommand: string | undefined,
 ): Promise<ResolvedSubject> {
   const resolved = await resolveSkillReference(ref, cwd);
   switch (resolved.kind) {
@@ -583,7 +623,7 @@ export async function resolveSubjectForTest(
       // A buildable ref carries `packagingConfig` — the ONE cleanly-reachable place
       // the subject's declared executables live — so attach the grader recognition
       // aid here (a plain source has no packaging config and leaves it undefined).
-      const subject = await resolveBuildableSubject(resolved, flags);
+      const subject = await resolveBuildableSubject(resolved, flags, memo, buildCommand);
       const declaredExecutables = deriveDeclaredExecutableNames(resolved.packagingConfig.executables);
       return declaredExecutables === undefined ? subject : { ...subject, declaredExecutables };
     }
@@ -591,7 +631,7 @@ export async function resolveSubjectForTest(
 }
 
 /** Result of {@link buildDeclaredSkill}: where the built (or reused) dist landed. */
-interface BuildDeclaredSkillResult {
+export interface BuildDeclaredSkillResult {
   distDir: string;
   rebuilt: boolean;
   /**
@@ -634,6 +674,131 @@ function resolveExistingDistOrThrow(
 }
 
 /**
+ * Per-run memo of BUILD OPERATIONS, so one build operation never runs twice in a
+ * run. Two disjoint key namespaces share the set: the declared-skill build itself
+ * (`pool:` / `plugin:`, see {@link buildMemoKey}) and the `test.build` pre-stage
+ * shell hook (`hook:`, see {@link preStageHookMemoKey}) — the hook needs its own
+ * because two DIFFERENT skills in one config may declare the SAME command, which
+ * is one hook invocation but two distinct builds.
+ *
+ * A `Set` of operation keys, NOT a `Map` caching results: the key identifies an
+ * OPERATION, not a skill, and a
+ * `plugin-local` operation rebuilds the WHOLE marketplace, so two different skills
+ * in that marketplace deliberately share one key while having DIFFERENT
+ * `expectedDistDir`s. A result cached under that shared key would be valid only for
+ * the ref that recorded it — handing it to the other ref would stage the WRONG
+ * skill's dist. {@link verifyBuiltDist} is what a memo hit re-derives (always keyed
+ * off THIS ref, never a cached value) to avoid exactly that bug.
+ */
+export type BuildMemo = Set<string>;
+
+/**
+ * Identity of the BUILD OPERATION a {@link BuildableReference} triggers — the memo key.
+ *
+ * A `pool` skill is built by `packageSkill` into its own `expectedDistDir`, so that
+ * dir IS the operation's identity. A `plugin-local` skill is built by
+ * `runClaudePluginBuild`, which `rm -rf`s and rebuilds EVERY plugin in the whole
+ * marketplace — so the operation's identity is the (configRoot, marketplace) pair,
+ * NOT the skill. Keying plugin-local per skill would make a second companion in the
+ * same marketplace trigger a full marketplace wipe-and-rebuild that reproduces work
+ * the first call already did.
+ */
+export function buildMemoKey(ref: BuildableReference): string {
+  return ref.distribution.kind === 'pool'
+    ? `pool:${ref.expectedDistDir}`
+    : `plugin:${ref.configRoot}:${ref.distribution.marketplaceName}`;
+}
+
+/**
+ * Assert a completed build actually MATERIALIZED `ref.expectedDistDir` with a real
+ * skill in it, and return the result to stage. A build that reports success but
+ * writes nothing (or writes an empty shell with no `SKILL.md`) would otherwise hand
+ * back a path a required companion then fails opaquely at staging, or an OPTIONAL
+ * one silently skips — the exact non-functional-companion-with-no-diagnostic
+ * symptom of issue #158. Two distinct checks, two distinct messages, so the error
+ * tells the author which failure mode they hit:
+ *   1. `expectedDistDir` itself is missing — "no output at all".
+ *   2. `expectedDistDir` exists but has no `SKILL.md` — an empty/incomplete shell.
+ *
+ * Also runs on a memo HIT, because a plugin-local hit may have been recorded by a
+ * DIFFERENT skill in the same marketplace: the dist dir always comes from THIS ref
+ * and is always checked.
+ */
+function verifyBuiltDist(ref: BuildableReference): BuildDeclaredSkillResult {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- expectedDistDir derived from project config
+  if (!existsSync(ref.expectedDistDir)) {
+    throw new SkillBuildError(
+      `Skill build for '${ref.name}' reported success but produced no output at ${ref.expectedDistDir}. ` +
+        `Check the skill's packaging config (\`vat build\` should create this directory).`,
+    );
+  }
+  const skillMdPath = safePath.join(ref.expectedDistDir, 'SKILL.md');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillMdPath derived from project config
+  if (!existsSync(skillMdPath)) {
+    throw new SkillBuildError(
+      `Skill build for '${ref.name}' reported success but produced no SKILL.md at ${ref.expectedDistDir}. ` +
+        `Check the skill's packaging config (\`vat build\` should create this file).`,
+    );
+  }
+  return { distDir: ref.expectedDistDir, rebuilt: true };
+}
+
+/**
+ * Identity of a `test.build` PRE-STAGE HOOK invocation — the (cwd, command) pair, which
+ * is everything that distinguishes one shell invocation from another. Namespaced `hook:`
+ * so it can never collide with a {@link buildMemoKey} entry in the shared {@link BuildMemo}.
+ */
+function preStageHookMemoKey(configRoot: string, buildCommand: string): string {
+  return `hook:${configRoot}:${buildCommand}`;
+}
+
+/**
+ * Run a skill's `test.build` pre-stage hook, at most ONCE per (configRoot, command)
+ * within a run — the "runs that shell command ONCE before staging" contract documented
+ * on {@link runPreStageBuild}, preserved now that a run may build several skills.
+ *
+ * The command ALWAYS runs with the config root of the skill that DECLARED it as cwd
+ * (both values come from the same ref), so a subject's hook can never execute against
+ * a companion's package root. Memoized only on SUCCESS: a hook that failed and was
+ * tolerated (optional companion) is retried rather than treated as done.
+ *
+ * KNOWN LIMITATION: for `plugin-local` skills, the memo key this call is gated behind
+ * ({@link buildMemoKey} in {@link buildDeclaredSkill}) is the shared `plugin:<configRoot>:
+ * <marketplace>` key, not a per-skill one — because one marketplace build serves every
+ * participant. When two declared skills share a marketplace, only the FIRST participant's
+ * `test.build` hook runs; the second skill's own hook is silently skipped, since by the
+ * time its build call is reached the memo already reports the marketplace as built and
+ * this function is never invoked for it. Fixing that requires gathering the hook set for
+ * every marketplace participant BEFORE the one marketplace build — out of scope here.
+ */
+function runPreStageBuildOnce(
+  buildCommand: string | undefined,
+  configRoot: string,
+  memo: BuildMemo,
+): void {
+  if (buildCommand === undefined) return;
+  const key = preStageHookMemoKey(configRoot, buildCommand);
+  if (memo.has(key)) return;
+  runPreStageBuild({ buildCommand, configRoot });
+  memo.add(key);
+}
+
+/** Dispatch the real build for a declared skill, by how it ships. Throws the raw build error. */
+async function runDeclaredSkillBuild(ref: BuildableReference): Promise<void> {
+  if (ref.distribution.kind === 'pool') {
+    await packageSkill(
+      ref.sourcePath,
+      packagingConfigToPackageOptions(ref.packagingConfig, {
+        skillPath: ref.sourcePath,
+        outputPath: ref.expectedDistDir,
+      }),
+    );
+    return;
+  }
+  await runClaudePluginBuild(ref.configRoot, { marketplace: ref.distribution.marketplaceName });
+}
+
+/**
  * Build a declared skill (BuildableReference) into its `expectedDistDir`, or reuse
  * the existing dist under --no-build/--dry-run. Shared by SUBJECT resolution
  * ({@link resolveBuildableSubject}) and `--with`/`--with-optional` COMPANION
@@ -641,10 +806,27 @@ function resolveExistingDistOrThrow(
  * skill gets the exact same build treatment as the subject (issue #158) — its
  * `files:` injection runs before staging, instead of a raw, possibly
  * build-artifact-incomplete, source-tree copy.
+ *
+ * `buildCommand` is the `test.build` pre-stage hook DECLARED BY THIS REF's skill —
+ * never a shared per-run flag. It runs with `ref.configRoot` as cwd, so command and
+ * cwd always come from the same skill's config (see {@link runPreStageBuildOnce}).
+ * GUARANTEED to run (once, on the first call for this ref) for a `pool`-distributed
+ * skill, whose memo key is per-skill. KNOWN LIMITATION for `plugin-local` skills: the
+ * memo key is the shared marketplace build, so when two declared skills share a
+ * marketplace, only the FIRST participant reaching this function gets its hook run —
+ * the second skill's build is served by the memo hit at the check below, and its own
+ * `test.build` hook is silently skipped (see {@link runPreStageBuildOnce}).
+ *
+ * `memo` collapses repeat work within ONE run (see {@link buildMemoKey}). It is
+ * consulted only AFTER the no-build/dry-run short-circuit and AFTER the security-ack
+ * gate: a cached build result must never be handed to a caller that has not passed
+ * the ack, and the no-build branch performs no build to memoize.
  */
 async function buildDeclaredSkill(
   ref: BuildableReference,
-  flags: { noBuild: boolean; dryRun: boolean; acknowledged: boolean; build?: string },
+  flags: BuildFlags,
+  memo: BuildMemo,
+  buildCommand: string | undefined,
 ): Promise<BuildDeclaredSkillResult> {
   // --no-build and --dry-run never build — delegate to the dedicated branch helper.
   if (flags.noBuild || flags.dryRun) {
@@ -660,38 +842,44 @@ async function buildDeclaredSkill(
     throw new SecurityAckError();
   }
 
-  // test.build hook (upstream artifacts) BEFORE the skill build -- ordering matters.
-  if (flags.build !== undefined) {
-    runPreStageBuild({ buildCommand: flags.build, configRoot: ref.configRoot });
-  }
+  const key = buildMemoKey(ref);
+  // Memo HIT: this operation already ran in THIS process — skip the rebuild, but
+  // still verify this ref's own dist (the hit may be a marketplace sibling's).
+  if (memo.has(key)) return verifyBuiltDist(ref);
 
+  // test.build hook (upstream artifacts) BEFORE the skill build -- ordering matters.
+  runPreStageBuildOnce(buildCommand, ref.configRoot, memo);
+
+  // ANY error thrown here is wrapped as `SkillBuildError` below, not just a narrowly-
+  // scoped build-tool failure — see {@link isSurvivableCompanionFailure} for why that
+  // matters to companion degradation. `err.stack` is also captured at construction,
+  // so it keeps reflecting THIS un-prefixed message even after a caller mutates
+  // `.message` in place (see {@link rethrowNamingCompanion}).
   try {
-    if (ref.distribution.kind === 'pool') {
-      await packageSkill(
-        ref.sourcePath,
-        packagingConfigToPackageOptions(ref.packagingConfig, {
-          skillPath: ref.sourcePath,
-          outputPath: ref.expectedDistDir,
-        }),
-      );
-    } else {
-      await runClaudePluginBuild(ref.configRoot, { marketplace: ref.distribution.marketplaceName });
-    }
+    await runDeclaredSkillBuild(ref);
   } catch (e) {
     throw new SkillBuildError(
       `Skill build failed for '${ref.name}': ${e instanceof Error ? e.message : String(e)}`,
     );
   }
-  return { distDir: ref.expectedDistDir, rebuilt: true };
+  // Record the operation as soon as the build COMMAND succeeded — before verifying
+  // this ref's output. The build did run; a marketplace sibling must not re-run it
+  // just because this skill's own dist turned out to be missing. Verification is
+  // deliberately OUTSIDE the try/catch so its SkillBuildError is not re-wrapped into
+  // a doubled "Skill build failed for 'x': Skill build for 'x' reported success…".
+  memo.add(key);
+  return verifyBuiltDist(ref);
 }
 
 /** Build a declared skill (or stage its existing dist under --no-build/--dry-run), then return the dist to stage. */
 async function resolveBuildableSubject(
   ref: BuildableReference,
-  flags: { noBuild: boolean; dryRun: boolean; acknowledged: boolean; build?: string },
+  flags: BuildFlags,
+  memo: BuildMemo,
+  buildCommand: string | undefined,
 ): Promise<ResolvedSubject> {
   const scaffoldDir = dirname(ref.sourcePath);
-  const build = await buildDeclaredSkill(ref, flags);
+  const build = await buildDeclaredSkill(ref, flags, memo, buildCommand);
   return {
     subjectSource: { path: build.distDir },
     subjectScaffoldDir: scaffoldDir,
@@ -704,6 +892,75 @@ async function resolveBuildableSubject(
 }
 
 /**
+ * May an OPTIONAL companion's failure be DEGRADED to "stage its raw source instead"
+ * rather than failing the run? True for a genuine build failure ({@link SkillBuildError})
+ * that could not have been DESTRUCTIVE. Both narrowings matter:
+ *
+ *   - **Error class.** Everything else reaching the catch is a user-fixable PREFLIGHT
+ *     problem, not a degraded companion: a {@link SecurityAckError} (the fix is
+ *     `--i-understand-this-runs-skill-code`, not "your companion didn't build"), a
+ *     `ConfigLoadError` (a broken config reported as a build failure), or a
+ *     `BuildHookError` (a genuinely misconfigured `test.build`). Swallowing those
+ *     replaces the actionable message with a misleading one. Note that
+ *     {@link buildDeclaredSkill} wraps ANY error `runDeclaredSkillBuild` throws —
+ *     including a malformed packaging config or a stray `TypeError` deep inside
+ *     `packageSkill` — into `SkillBuildError`, so "genuine build failure" here really
+ *     means "anything the build call raised", not just a narrowly-scoped build error.
+ *   - **Destructiveness.** A `plugin-local` build is DESTRUCTIVE once it reaches
+ *     `runClaudePluginBuild`: that function `rm -rf`s the whole marketplace output
+ *     tree BEFORE building, so a failure THERE may leave the user's
+ *     `dist/.claude/plugins/marketplaces/<mp>/` already gone. Continuing would stage
+ *     from an inconsistent dist and finish SUCCESS with the build output deleted — a
+ *     test command must never destroy build output and report only a "Note:". A
+ *     `pool` build writes only its own `expectedDistDir` and destroys nothing, so
+ *     falling back to the raw source tree is always safe there. And under
+ *     `--no-build`/`--dry-run`, `resolveExistingDistOrThrow` throws BEFORE
+ *     `buildDeclaredSkill` reaches any build path at all — no build was attempted,
+ *     plugin-local or not, so nothing was wiped either way and degrading is safe.
+ *
+ * A real (non `--no-build`/`--dry-run`) `plugin-local` failure stays fail-closed
+ * because it MAY have failed mid-wipe; `runClaudePluginBuild` can also throw BEFORE
+ * the `rm` (broken config, colliding plugin names), but those are indistinguishable
+ * from outside once wrapped in `SkillBuildError`, so fail-closed is deliberate there.
+ */
+function isSurvivableCompanionFailure(
+  err: unknown,
+  declared: BuildableReference,
+  optional: boolean,
+  flags: BuildFlags,
+): boolean {
+  if (!optional || !(err instanceof SkillBuildError)) return false;
+  return declared.distribution.kind === 'pool' || flags.noBuild || flags.dryRun;
+}
+
+/**
+ * Rethrow a companion failure with the `--with`/`--with-optional` ALIAS the user
+ * TYPED prefixed onto its message. Build errors name only the DECLARED skill, which
+ * with several companions leaves the user unable to tell which flag to fix.
+ *
+ * The message is prefixed IN PLACE so the error's CLASS (and therefore its
+ * `exitCode` / {@link mapErrorToExitCode} mapping) is unchanged — no new error class,
+ * no re-wrapping. Prefixing is skipped when the message is ALREADY prefixed (starts
+ * with `companion '`) — this makes the function idempotent against repeat rethrows of
+ * the SAME error object, structurally, rather than relying on a hand-maintained
+ * argument that no caught error class is ever cached/reused across companions.
+ * {@link ConfigLoadError} instances ARE cached and re-thrown per config root by
+ * `loadConfigCached`, so mutating one in place would otherwise corrupt the cache; the
+ * already-prefixed check covers this case too (in practice `ConfigLoadError` is
+ * thrown by the lookup ABOVE this try and never reaches here — belt-and-braces).
+ *
+ * NOTE: `err.stack` was captured at construction time and therefore still reflects
+ * the UN-PREFIXED message — mutating `.message` afterward does not update `.stack`.
+ * Debug output that prints `.stack` can disagree with the prefixed text on stderr.
+ */
+function rethrowNamingCompanion(err: unknown, alias: string, declaredName: string): never {
+  if (err instanceof Error && !err.message.startsWith("companion '")) {
+    err.message = `companion '${alias}' (declared skill '${declaredName}'): ${err.message}`;
+  }
+  throw err;
+}
+
+/**
  * Companion analog of {@link resolveBuildableSubject} (issue #158): resolve every
  * `--with`/`--with-optional` companion whose spec is a `{ path }` pointing at a
  * declared skill's SOURCE directory to that skill's BUILT dist, via the exact same
@@ -711,28 +968,36 @@ async function resolveBuildableSubject(
  * url:/vendored specs, or a path outside this project's config — is "a different
  * story" (per the issue's own framing): left untouched, staged as today.
  *
- * A REQUIRED companion's build failure propagates (matches the existing "--with
- * fails if a source cannot be resolved" contract, extended to "cannot be built").
- * An OPTIONAL companion's build failure falls back to the ORIGINAL (unbuilt) path
- * spec — this fix must never make an already-degraded optional companion WORSE;
- * staging's existing skip-with-warning fallback still applies if that raw copy
- * also fails to stage.
+ * The `test.build` hook used is the COMPANION's own — read from the config that
+ * governs IT ({@link declaredSkillTestConfig}), not the subject's. The subject's hook
+ * is a different skill's command in a (possibly) different package, and running it
+ * here would execute it with the companion's config root as cwd.
+ *
+ * FAILURE HANDLING. A REQUIRED companion's failure ALWAYS propagates (the existing
+ * "--with fails if a source cannot be resolved" contract, extended to "cannot be
+ * built"), re-messaged to name the alias the user typed. An OPTIONAL companion
+ * degrades to the ORIGINAL (unbuilt) path spec — with a mandatory stderr note — only
+ * for the narrow, non-destructive case {@link isSurvivableCompanionFailure} allows;
+ * every other failure propagates for it too. Staging's existing skip-with-warning
+ * fallback still applies if the raw copy also fails to stage.
  */
 export async function resolveCompanionSpec(
   name: string,
   spec: SkillSourceSpec,
   repoRoot: string,
-  flags: { noBuild: boolean; dryRun: boolean; acknowledged: boolean; build?: string },
+  flags: BuildFlags,
   optional: boolean,
+  memo: BuildMemo,
 ): Promise<SkillSourceSpec> {
   if (!('path' in spec)) return spec;
   const declared = await findDeclaredSkillForSourceDir(spec.path, repoRoot);
   if (declared === undefined) return spec;
   try {
-    const build = await buildDeclaredSkill(declared, flags);
+    const build = await buildDeclaredSkill(declared, flags, memo, declaredSkillTestConfig(declared)?.build);
     return { path: build.distDir };
   } catch (e) {
-    if (!optional) throw e;
+    if (!isSurvivableCompanionFailure(e, declared, optional, flags))
+      rethrowNamingCompanion(e, name, declared.name);
     process.stderr.write(
       `Note: companion '${name}' (declared skill '${declared.name}') failed to build; staging its raw source instead: ${e instanceof Error ? e.message : String(e)}\n`,
     );
@@ -744,13 +1009,14 @@ export async function resolveCompanionSpec(
 export async function resolveCompanionSources(
   sources: Record<string, SkillSourceSpec> | undefined,
   repoRoot: string,
-  flags: { noBuild: boolean; dryRun: boolean; acknowledged: boolean; build?: string },
+  flags: BuildFlags,
   optional: boolean,
+  memo: BuildMemo,
 ): Promise<Record<string, SkillSourceSpec> | undefined> {
   if (sources === undefined) return undefined;
   const resolved: Record<string, SkillSourceSpec> = {};
   for (const [name, spec] of Object.entries(sources)) {
-    resolved[name] = await resolveCompanionSpec(name, spec, repoRoot, flags, optional);
+    resolved[name] = await resolveCompanionSpec(name, spec, repoRoot, flags, optional, memo);
   }
   return resolved;
 }
@@ -820,6 +1086,20 @@ async function preflightKnobsAndConfig(
 }
 
 /**
+ * Exit code for an error escaping EITHER phase of {@link runSkillTestRun}.
+ *
+ * A broken governing config ({@link ConfigLoadError}) is a user-fixable PREFLIGHT
+ * problem (exit 2), not an internal harness failure — {@link mapErrorToExitCode} has
+ * no case for it and falls through to Internal (1). ONE helper shared by BOTH catch
+ * blocks so the SUBJECT arm and the COMPANION arm can never drift: a companion's
+ * governing config root can differ from the subject's, so a broken config is
+ * reachable from either arm and must report the same code from both.
+ */
+function exitCodeForRunError(err: unknown): number {
+  return err instanceof ConfigLoadError ? SkillTestExitCode.Preflight : mapErrorToExitCode(err);
+}
+
+/**
  * Copy the resolved-subject fields onto the harness options. Optional fields are
  * only assigned when present (exactOptionalPropertyTypes). Extracted so
  * {@link runSkillTestRun} stays within its cognitive-complexity budget.
@@ -866,21 +1146,22 @@ export async function runSkillTestRun(
     acknowledgedRunsSkillCode: options.iUnderstandThisRunsSkillCode === true,
   });
   // Shared by subject AND companion resolution (issue #158) so a --with/--with-optional
-  // companion that maps to a declared skill gets the exact same build gating (no-build/
-  // dry-run/security-ack) as the subject.
-  const buildFlags = {
-    noBuild,
-    dryRun: options.dryRun === true,
-    acknowledged,
-    ...(config?.build === undefined ? {} : { build: config.build }),
-  };
+  // companion that maps to a declared skill gets the exact same build GATING (no-build/
+  // dry-run/security-ack) as the subject. The `test.build` hook is deliberately NOT in
+  // here: it is per-skill (see BuildFlags), so the subject's own command is passed only
+  // to subject resolution and each companion resolves its own.
+  const buildFlags: BuildFlags = { noBuild, dryRun: options.dryRun === true, acknowledged };
+  // ONE memo for the whole run, shared by subject AND companion resolution: a skill
+  // that is both the subject and a companion builds exactly once, and N companions
+  // in one marketplace trigger ONE marketplace build, not N.
+  const buildMemo: BuildMemo = new Set();
   let resolvedSubject: ResolvedSubject;
   try {
-    resolvedSubject = await resolveSubjectForTest(subject, process.cwd(), buildFlags);
+    resolvedSubject = await resolveSubjectForTest(subject, process.cwd(), buildFlags, buildMemo, config?.build);
   } catch (err) {
     // A broken governing config surfacing during subject resolution is a preflight
     // problem the user must fix (exit 2), not an internal harness failure (exit 1).
-    const exitCode = err instanceof ConfigLoadError ? SkillTestExitCode.Preflight : mapErrorToExitCode(err);
+    const exitCode = exitCodeForRunError(err);
     process.stderr.write(`Error: ${err instanceof Error ? err.message : String(err)}\n`);
     process.exit(exitCode);
     return;
@@ -898,9 +1179,9 @@ export async function runSkillTestRun(
     // whose source is a path into a declared skill gets built (its `files:`
     // injection runs) exactly like the subject, instead of a raw source-tree copy.
     const repoRoot = resolveRepoRoot();
-    const withSources = await resolveCompanionSources(harnessOpts.withSources, repoRoot, buildFlags, false);
+    const withSources = await resolveCompanionSources(harnessOpts.withSources, repoRoot, buildFlags, false, buildMemo);
     if (withSources !== undefined) harnessOpts.withSources = withSources;
-    const withOptional = await resolveCompanionSources(harnessOpts.withOptional, repoRoot, buildFlags, true);
+    const withOptional = await resolveCompanionSources(harnessOpts.withOptional, repoRoot, buildFlags, true, buildMemo);
     if (withOptional !== undefined) harnessOpts.withOptional = withOptional;
     const result = await runSkillTestHarness(harnessOpts);
 
@@ -909,7 +1190,10 @@ export async function runSkillTestRun(
     process.exit(result.exitCode);
     return;
   } catch (err) {
-    const exitCode = mapErrorToExitCode(err);
+    // Same rule as the subject arm above (see {@link exitCodeForRunError}): companion
+    // resolution can surface a ConfigLoadError from a DIFFERENT config root than the
+    // subject's, and that must exit 2 (preflight), not 1 (internal).
+    const exitCode = exitCodeForRunError(err);
     // BootstrapNeededError (exit 3) is the happy "wrote a template, fill it in
     // and re-run" path — surface its message plainly, not as a hard `Error:`.
     if (err instanceof BootstrapNeededError) {
@@ -934,11 +1218,11 @@ export function createSkillTestRunCommand(): Command {
     .argument('<skill>', 'The skill to test')
     .option(
       '--with <pair...>',
-      'Stage a REQUIRED companion skill the subject can invoke, as name=<src> (repeatable). <src> is workspace:<pkg> | npm:<spec> | url:<u> | path:<dir> | vendored (e.g. helper=npm:@scope/s@1.2.3). The run fails if a source cannot be resolved.',
+      'Stage a REQUIRED companion skill the subject can invoke, as name=<src> (repeatable). <src> is workspace:<pkg> | npm:<spec> | url:<u> | path:<dir> | vendored (e.g. helper=npm:@scope/s@1.2.3). A path:<dir> that maps to a declared skill is BUILT like the subject (files: build artifacts included), not tree-copied as raw source. The run fails if a source cannot be resolved or its build fails.',
     )
     .option(
       '--with-optional <pair...>',
-      'Stage an OPTIONAL companion skill, as name=<src> (same syntax, repeatable). Skipped with a warning if its source cannot be resolved; the run continues.',
+      'Stage an OPTIONAL companion skill, as name=<src> (same syntax, repeatable). Skipped with a warning if its source cannot be resolved, or if a non-destructive build fails; the run continues.',
     )
     .option(
       '--env <pair...>',
@@ -949,7 +1233,7 @@ export function createSkillTestRunCommand(): Command {
       'Forward a host env var by NAME to the executor spawn if present (repeatable). Protected names (PATH, auth, model) are ignored.',
     )
     .option('--refresh', 'Force a full re-stage (ignore existing staged content)')
-    .option('--no-build', 'Skip building a declared skill; stage its existing dist instead (errors if absent)')
+    .option('--no-build', 'Skip building declared skills (subject and any --with/--with-optional companion); stage existing dist instead. Errors if absent for the subject or a REQUIRED companion; an OPTIONAL companion falls back to raw source with a warning.')
     .option('--workdir <dir>', 'Override the harness working directory')
     .option('--out <dir>', 'Override the harness output directory')
     .option('--keep', 'Keep the harness directory after the run')
@@ -1015,7 +1299,7 @@ Model:
 Exit Codes:
   0 - Harness ran to completion and every eval passed (or --allow-eval-failure suppressed a failing verdict)
   1 - Internal error (grader fragment absent/invalid, summary/expectations skew, executor/grader crash, stall/timeout)
-  2 - Preflight failed (missing binary, auth error, eval inputs absent, unsafe workdir, ack missing, skill build failed, or --no-build with no existing dist)
+  2 - Preflight failed (missing binary, auth error, eval inputs absent, unsafe workdir, ack missing, broken project config, a required skill -- subject or --with companion -- failed to build, or --no-build with no existing dist for one of them)
   3 - Bootstrap needed: evals.json was absent, so VAT wrote a starter template next to the skill source. Fill it in and re-run.
   4 - An eval FAILED (the harness completed and produced a valid grading.json; expectations did not all pass). This is the fail-closed DEFAULT -- suppress with --allow-eval-failure.
 
