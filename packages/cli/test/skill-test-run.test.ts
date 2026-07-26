@@ -1274,11 +1274,11 @@ describe('createSkillTestRunCommand (single-subject argument + companion help te
     expect(withOption?.description).toContain('fails if a source cannot be resolved');
   });
 
-  it('describes --with-optional as staging an OPTIONAL companion (skipped with a warning)', () => {
+  it('describes --with-optional as staging an OPTIONAL companion (raw source with a warning)', () => {
     const command = createSkillTestRunCommand();
     const withOptionalOption = command.options.find((o) => o.long === '--with-optional');
     expect(withOptionalOption?.description).toContain('OPTIONAL companion skill');
-    expect(withOptionalOption?.description).toContain('Skipped with a warning');
+    expect(withOptionalOption?.description).toContain('Staged from its raw (unbuilt) source with a warning');
   });
 });
 

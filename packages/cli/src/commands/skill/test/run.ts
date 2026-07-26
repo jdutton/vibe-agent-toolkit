@@ -1222,7 +1222,7 @@ export function createSkillTestRunCommand(): Command {
     )
     .option(
       '--with-optional <pair...>',
-      'Stage an OPTIONAL companion skill, as name=<src> (same syntax, repeatable). Skipped with a warning if its source cannot be resolved, or if a non-destructive build fails; the run continues.',
+      'Stage an OPTIONAL companion skill, as name=<src> (same syntax, repeatable). Staged from its raw (unbuilt) source with a warning if its source cannot be resolved, or if a non-destructive build fails; the run continues.',
     )
     .option(
       '--env <pair...>',
@@ -1299,7 +1299,7 @@ Model:
 Exit Codes:
   0 - Harness ran to completion and every eval passed (or --allow-eval-failure suppressed a failing verdict)
   1 - Internal error (grader fragment absent/invalid, summary/expectations skew, executor/grader crash, stall/timeout)
-  2 - Preflight failed (missing binary, auth error, eval inputs absent, unsafe workdir, ack missing, broken project config, a required skill -- subject or --with companion -- failed to build, or --no-build with no existing dist for one of them)
+  2 - Preflight failed (missing binary, auth error, eval inputs absent, unsafe workdir, ack missing, broken project config, a required skill -- subject or --with companion -- failed to build, --no-build with no existing dist for one of them, or an OPTIONAL --with-optional companion hitting a non-survivable failure: a destructive plugin-local build failure, missing security ack, or broken config)
   3 - Bootstrap needed: evals.json was absent, so VAT wrote a starter template next to the skill source. Fill it in and re-run.
   4 - An eval FAILED (the harness completed and produced a valid grading.json; expectations did not all pass). This is the fail-closed DEFAULT -- suppress with --allow-eval-failure.
 
