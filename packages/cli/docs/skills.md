@@ -729,6 +729,8 @@ name: my-help  # Instead of "help"
 
 ## Related Commands
 
+- `vat skill test` - Run a skill's eval suite (note the **singular** `skill`); its
+  `test:` config surface is documented separately in [skill-test.md](./skill-test.md)
 - `vat audit` - Comprehensive validation for plugins, marketplaces, and skills
 - `vat resources validate` - Validate markdown resources (links, anchors)
 - `vat doctor` - Check environment and installation health
@@ -738,5 +740,6 @@ name: my-help  # Instead of "help"
 ## See Also
 
 - [CLI Reference](./index.md) - Complete CLI documentation
+- [Skill Test Command](./skill-test.md) - `vat skill test` eval harness and its config knobs
 - [Audit Command](./audit.md) - Comprehensive validation
 - [Resources Command](./resources.md) - Markdown resource validation
