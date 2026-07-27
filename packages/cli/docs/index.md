@@ -180,6 +180,45 @@ vat agent run ./my-agent --debug
 
 ---
 
+### `skill test`
+
+Run a packaged skill's eval suite in a headless, context-isolated Claude session
+
+**What it does:**
+
+1. Builds and stages the skill (plus any `--with` companion skills)
+2. Runs each eval with a blind **executor** — the skill under test
+3. Grades the captured transcript with a separate **grader** model
+4. Writes `grading.json`, `friction.json`, and `tool-eval.json` to `results/`
+
+**When to use:** Verifying a skill actually works before publishing it
+
+**Exit codes:**
+
+- `0` - Run completed, all expectations passed
+- `1` - Harness broke (internal error, stall, timeout)
+- `2` - Preflight failure (bad config, unresolvable required companion, auth guard)
+- `3` - Bootstrap failure
+- `4` - Eval failure (run completed, expectations did not all pass)
+
+**Creates/modifies:** A harness directory (removed unless `--keep`)
+
+**Note:** This command executes skill code. It is context-isolated, not an OS
+sandbox — `--i-understand-this-runs-skill-code` is required.
+
+**Examples:**
+
+```bash
+vat skill test run my-skill --i-understand-this-runs-skill-code
+vat skill test run my-skill --keep --model claude-opus-5
+vat skill test configure my-skill --auth subscription
+```
+
+**More details:** `packages/cli/docs/skill-test.md` — full knob table for the
+per-skill `skills.config.<skill>.test` block and the global `test:` node
+
+---
+
 ### `rag index`
 
 Create vector embeddings for semantic search over documentation
