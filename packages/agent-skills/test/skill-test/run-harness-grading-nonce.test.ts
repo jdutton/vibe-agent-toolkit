@@ -25,15 +25,7 @@ import { setupStubbedHarnessSubject } from '../test-helpers.js';
 
 import { makeHarnessFakeSpawn } from './spawn-stub.js';
 
-vi.mock('../../src/skill-test/preflight.js', async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  return {
-    ...actual,
-    // resolvedAuth must be non-null: this run is acknowledged, so it proceeds
-    // past env-assembly (which refuses a null) into the pipeline.
-    runPreflight: vi.fn(() => ({ passed: true, checks: [], resolvedAuth: { forwardedEnv: {} } })),
-  };
-});
+vi.mock('../../src/skill-test/preflight.js', async (io) => (await import('./preflight-stub.js')).passingPreflight(io));
 
 vi.mock('../../src/skill-test/staging.js', async (importOriginal) => {
   const actual = await importOriginal<Record<string, unknown>>();

@@ -24,11 +24,15 @@
 import { existsSync, writeFileSync } from 'node:fs';
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { cleanupTestTempDir, createTestTempDir } from '../../../cli/test/system/test-common.js';
 import { runSkillTestHarness, type RunHarnessOptions } from '../../src/skill-test/run-harness.js';
 import { makeHarnessFakeSpawn } from '../skill-test/spawn-stub.js';
+
+// This test asserts on staging and env assembly, which run well after preflight —
+// so preflight's real `claude` probe would gate it on the developer's environment.
+vi.mock('../../src/skill-test/preflight.js', async (io) => (await import('../skill-test/preflight-stub.js')).passingPreflight(io));
 
 const SKILL_NAME = 'env-fixture-skill';
 const SKILL_MD = `---\nname: ${SKILL_NAME}\ndescription: Fixture skill for the \${fixturesDir} wiring test.\n---\n\n# ${SKILL_NAME}\n`;

@@ -32,18 +32,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { runSkillTestHarness, type RunHarnessOptions } from '../../src/skill-test/run-harness.js';
 import { makeHarnessFakeSpawn } from '../skill-test/spawn-stub.js';
 
-// Force preflight to PASS without a real `claude`. The distinct shape (empty checks
-// array, resolvedAuth last) keeps this factory from cloning the sibling harness
-// tests' stubs under the duplication gate.
-vi.mock('../../src/skill-test/preflight.js', async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  const runPreflight = vi.fn(() => ({
-    checks: [],
-    passed: true,
-    resolvedAuth: { forwardedEnv: {} },
-  }));
-  return { ...actual, runPreflight };
-});
+vi.mock('../../src/skill-test/preflight.js', async (io) => (await import('../skill-test/preflight-stub.js')).passingPreflight(io));
 
 /**
  * The secret. A high-entropy sentinel rather than prose, so a hit is unambiguous

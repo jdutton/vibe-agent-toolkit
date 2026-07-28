@@ -22,18 +22,7 @@ import { mapErrorToExitCode } from '../../src/skill-test/exit-codes.js';
 import { runSkillTestHarness, type RunHarnessOptions } from '../../src/skill-test/run-harness.js';
 import { isUnderRoot, makeHarnessFakeSpawn } from '../skill-test/spawn-stub.js';
 
-// Force preflight to PASS without a real `claude`. Key order (resolvedAuth first) and the
-// populated `checks` entry keep this factory structurally distinct from the sibling harness
-// tests' preflight stubs, so the shared vi.mock boilerplate does not clone (duplication gate).
-vi.mock('../../src/skill-test/preflight.js', async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
-  const runPreflight = vi.fn(() => ({
-    resolvedAuth: { forwardedEnv: {} },
-    checks: [{ name: 'stub', passed: true, message: 'preflight stubbed for integration' }],
-    passed: true,
-  }));
-  return { ...actual, runPreflight };
-});
+vi.mock('../../src/skill-test/preflight.js', async (io) => (await import('../skill-test/preflight-stub.js')).passingPreflight(io));
 
 const FIXTURE_SKILL = 'fixture-skill';
 const GRADING_JSON = 'grading.json';
