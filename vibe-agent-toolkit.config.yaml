@@ -16,6 +16,11 @@ resources:
     # the violations) and must not be link/portability-validated as real docs.
     # Mirrored in eslint.config.js + validate-repo-structure.ts — keep in sync.
     - "**/resources/skills/evals/**"
+    # Golden snapshots of BUILT skill output (packaged-output-drift.system.test.ts).
+    # They are byte-for-byte copies of dist/ artifacts, so their links are already
+    # rewritten/stripped for the packaged layout and do not resolve from here —
+    # validating them as project docs would report drift as broken links.
+    - "**/test/golden/**"
 
   # Collections group files and apply specific validation rules
   # Note: All **/*.md files are scanned by default (implicit)

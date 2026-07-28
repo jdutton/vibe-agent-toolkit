@@ -13,6 +13,10 @@ resources:
   # vibe-agent-toolkit.config.yaml, eslint.config.js, and validate-repo-structure.ts.
   exclude:
     - "**/resources/skills/evals/**"
+    # Golden snapshots of this package's own BUILT output — byte-for-byte copies of
+    # dist/ artifacts whose links are already rewritten for the packaged layout, so
+    # they must not be link-validated as authored docs. Mirrors the repo-root config.
+    - "**/test/golden/**"
 
 skills:
   include: ["resources/skills/SKILL.md", "resources/skills/vat-*.md", "resources/skills/markdown-rewriting.md"]

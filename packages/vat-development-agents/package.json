@@ -26,8 +26,13 @@
       "markdown-rewriting"
     ],
     "replaces": {
-      "plugins": ["vat-development-agents"],
-      "flatSkills": ["vibe-agent-toolkit", "resources"]
+      "plugins": [
+        "vat-development-agents"
+      ],
+      "flatSkills": [
+        "vibe-agent-toolkit",
+        "resources"
+      ]
     },
     "agents": [
       {
@@ -61,7 +66,8 @@
     "test:pipeline": "bun run build && bun run dist/src/test-pipeline.js",
     "typecheck": "tsc --noEmit",
     "validate": "bun run agents/agent-generator/validate-agent.ts",
-    "postinstall": "vat claude plugin install --npm-postinstall || exit 0"
+    "postinstall": "vat claude plugin install --npm-postinstall || exit 0",
+    "test:system": "vitest run --config vitest.system.config.ts"
   },
   "dependencies": {
     "@vibe-agent-toolkit/agent-schema": "workspace:*",
@@ -71,6 +77,7 @@
   "devDependencies": {
     "@types/node": "^25.0.3",
     "@vibe-agent-toolkit/resource-compiler": "workspace:*",
+    "@vibe-agent-toolkit/utils": "workspace:*",
     "ts-patch": "^3.2.1",
     "typescript": "^5.7.3"
   },
