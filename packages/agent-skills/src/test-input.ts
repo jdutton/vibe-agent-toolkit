@@ -58,21 +58,43 @@ export function resolveTestInputDirs(
 }
 
 /**
+ * The test-input dirs VAT actually excludes links for: those inside the project
+ * root. A dir outside it yields no exclude rule — the walker already refuses to
+ * bundle outside-project targets, and a `../` pattern would not match its relative
+ * paths anyway.
+ *
+ * Shared by {@link testInputExcludeRules} and {@link testInputLinkIssues} so the
+ * receipt covers exactly the exclusions VAT caused. Claiming credit for a drop the
+ * walker made for its own reason double-reports one link under two codes with
+ * contradictory advice ("no action needed" beside "move the target inside the
+ * project").
+ */
+function projectRelativeTestInputDirs(
+  testInputDirs: readonly string[],
+  projectRoot: string,
+): string[] {
+  const inside: string[] = [];
+  for (const dir of testInputDirs) {
+    const rel = toForwardSlash(safePath.relative(projectRoot, dir));
+    if (rel === '' || rel.startsWith('../')) continue;
+    inside.push(dir);
+  }
+  return inside;
+}
+
+/**
  * Exclude rules that drop any link into declared test input from the bundle.
  *
  * Patterns are project-root-relative with forward slashes, matching
- * `walkLinkGraph`'s convention. A test-input dir outside the project root yields no
- * rule — the walker already refuses to bundle outside-project targets, and a `../`
- * pattern would not match its relative paths anyway.
+ * `walkLinkGraph`'s convention.
  */
 export function testInputExcludeRules(
   testInputDirs: readonly string[],
   projectRoot: string,
 ): Array<{ patterns: string[] }> {
   const patterns: string[] = [];
-  for (const dir of testInputDirs) {
+  for (const dir of projectRelativeTestInputDirs(testInputDirs, projectRoot)) {
     const rel = toForwardSlash(safePath.relative(projectRoot, dir));
-    if (rel === '' || rel.startsWith('../')) continue;
     patterns.push(rel, `${rel}/**`);
   }
   return patterns.length === 0 ? [] : [{ patterns }];
@@ -177,17 +199,23 @@ export interface ExcludedLinkRef {
  *
  * `projectRoot`-relative locations, so the same link reports identically from the
  * packager and from the read-only validator.
+ *
+ * Scoped to the same dirs {@link testInputExcludeRules} generates a rule for, so
+ * this reports only drops VAT caused. A test-input dir outside the project root
+ * gets no rule, and its links are dropped by the walker's own outside-project
+ * check — which already reports `LINK_OUTSIDE_PROJECT`.
  */
 export function testInputLinkIssues(
   excluded: readonly ExcludedLinkRef[],
   testInputDirs: readonly string[],
   projectRoot: string,
 ): ValidationIssue[] {
-  if (testInputDirs.length === 0) return [];
+  const excludedDirs = projectRelativeTestInputDirs(testInputDirs, projectRoot);
+  if (excludedDirs.length === 0) return [];
   const issues: ValidationIssue[] = [];
   const seen = new Set<string>();
   for (const ref of excluded) {
-    if (!testInputDirs.some((dir) => isInside(ref.path, dir))) continue;
+    if (!excludedDirs.some((dir) => isInside(ref.path, dir))) continue;
     const location = toForwardSlash(safePath.relative(projectRoot, ref.path));
     if (seen.has(location)) continue;
     seen.add(location);

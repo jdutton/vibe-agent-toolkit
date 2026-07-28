@@ -177,6 +177,7 @@ export {
   getPluginOutputDir,
   getPluginSourceDir,
   listPluginSourceSkillDirs,
+  listUntrackedPluginSkillDirs,
   skillNameToFsPath,
   type DistributedSkillLocation,
 } from './plugin-distribution-layout.js';

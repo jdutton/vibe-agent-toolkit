@@ -12,7 +12,7 @@ import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import type { ProjectConfig } from '@vibe-agent-toolkit/resources';
-import { crawlDirectorySync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { crawlDirectorySync, gitFindRoot, isGitIgnored, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 /**
  * Absolute path to the built plugin output directory.
@@ -89,6 +89,42 @@ export function getPluginSourceDir(
  * Returns `[]` when the `skills/` directory does not exist (pool-only plugin).
  */
 export function listPluginSourceSkillDirs(pluginSourceDir: string): string[] {
+  return crawlSkillDirs(pluginSourceDir, true);
+}
+
+/**
+ * The skill directories under `<pluginSourceDir>/skills/` that exist ON DISK but are
+ * INVISIBLE to {@link listPluginSourceSkillDirs} because git does not track them.
+ *
+ * Purely diagnostic. Git visibility is the correct filter — both producers of a
+ * plugin's `skills/` tree honor it, and it is what stops a gitignored skill dir from
+ * being published. But "correct" and "obvious" are different things: a skill the
+ * author has just created and not yet `git add`ed is simply absent from the built
+ * plugin, and a silent absence reads as a build that shipped everything. The caller
+ * warns for these; a deliberately GITIGNORED dir is not in this list (see
+ * {@link listUntrackedPluginSkillDirs}), because ignoring it IS the instruction.
+ *
+ * Returns `[]` outside a git repo, where every directory is visible anyway.
+ */
+export function listUntrackedPluginSkillDirs(pluginSourceDir: string): string[] {
+  const skillsDir = safePath.join(pluginSourceDir, 'skills');
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller validates pluginSourceDir
+  if (!existsSync(skillsDir)) return [];
+  if (gitFindRoot(safePath.resolve(skillsDir)) === null) return [];
+
+  const visible = new Set(listPluginSourceSkillDirs(pluginSourceDir));
+  return crawlSkillDirs(pluginSourceDir, false).filter(
+    (dir) => !visible.has(dir) && !isGitIgnored(safePath.join(skillsDir, dir), skillsDir),
+  );
+}
+
+/**
+ * Shared discovery for {@link listPluginSourceSkillDirs} (git-visible files, the
+ * real answer) and {@link listUntrackedPluginSkillDirs} (every file on disk, the
+ * diagnostic baseline). One implementation so the two listings can differ ONLY in
+ * git visibility — the whole point of the comparison.
+ */
+function crawlSkillDirs(pluginSourceDir: string, respectGitignore: boolean): string[] {
   const skillsDir = safePath.join(pluginSourceDir, 'skills');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller validates pluginSourceDir
   if (!existsSync(skillsDir)) return [];
@@ -101,7 +137,7 @@ export function listPluginSourceSkillDirs(pluginSourceDir: string): string[] {
     exclude: [],
     absolute: false,
     filesOnly: true,
-    respectGitignore: true,
+    respectGitignore,
     dot: true,
   });
 

@@ -237,6 +237,22 @@ describe('testInputLinkIssues', () => {
     ).toEqual([]);
   });
 
+  it('is silent for test input OUTSIDE the project root — that drop is not VAT\'s', () => {
+    // `testInputExcludeRules` generates no rule for an outside-project dir, so the
+    // link is dropped by the walker's own outside-project check, which already
+    // reports LINK_OUTSIDE_PROJECT. Claiming credit here double-reported one link
+    // under two codes whose advice contradicts: "no action needed" beside "move the
+    // target inside the project or remove the link".
+    const outsideEvals = toForwardSlash(safePath.resolve('/elsewhere/evals'));
+    expect(
+      testInputLinkIssues(
+        [{ path: `${outsideEvals}/notes.md`, linkHref: '../../../elsewhere/evals/notes.md' }],
+        [outsideEvals],
+        PROJECT_ROOT,
+      ),
+    ).toEqual([]);
+  });
+
   it('reports one receipt per target, not per link that reached it', () => {
     const issues = testInputLinkIssues(
       [

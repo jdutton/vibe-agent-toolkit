@@ -11,7 +11,7 @@ import { cpSync, existsSync, readFileSync } from 'node:fs';
 import { mkdir, readdir, rm, writeFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 
-import { getPluginOutputDir, getPluginSourceDir, listPluginSourceSkillDirs, packageSkill, packagingConfigToPackageOptions, skillNameToFsPath, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
+import { getPluginOutputDir, getPluginSourceDir, listPluginSourceSkillDirs, listUntrackedPluginSkillDirs, packageSkill, packagingConfigToPackageOptions, skillNameToFsPath, type PackageSkillResult } from '@vibe-agent-toolkit/agent-skills';
 import type { ClaudeMarketplaceConfig, ClaudeMarketplacePluginEntry, SkillsConfig } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
@@ -504,12 +504,24 @@ async function writeMergedPluginJson(
 /**
  * Copy pool skills (from dist/skills/) selected by the plugin's skills: selector
  * into the plugin bundle's skills/ directory.
+ *
+ * `destOverrides` maps a selected skill's NAME to the `skills/`-relative directory
+ * it must land in, and carries the collision referee's decision (see
+ * {@link resolveCollidingSkills}): when the pool copy wins over a plugin-local copy,
+ * it takes over the plugin-local skill's own authored directory path rather than the
+ * default `skills/<fsName>`. That keeps ONE invariant true for every plugin-local
+ * skill, refereed or not — it ships at the path it was authored at, which is exactly
+ * what `DistributedSkillLocation.skillOutputDir` promises every consumer of the
+ * layout module. Without it a NESTED collision (`skills/group/foo` losing to pool
+ * `foo`) landed at `skills/foo`, and `vat skill test foo` then hard-failed looking for
+ * a dist at `skills/group/foo` that the build never wrote.
  */
 async function copyPoolSkills(
   pluginDef: ClaudeMarketplacePluginEntry,
   marketplaceAvailable: string[],
   configDir: string,
   pluginDir: string,
+  destOverrides: ReadonlyMap<string, string>,
   logger: ReturnType<typeof createLogger>,
 ): Promise<string[]> {
   const selected = resolvePluginSkills(pluginDef, marketplaceAvailable);
@@ -525,7 +537,7 @@ async function copyPoolSkills(
       );
     }
 
-    const fsPath = skillNameToFsPath(skillName);
+    const fsPath = destOverrides.get(skillName) ?? skillNameToFsPath(skillName);
     const destPath = safePath.join(pluginDir, 'skills', fsPath);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
     await mkdir(destPath, { recursive: true });
@@ -562,7 +574,21 @@ interface PluginLocalSkill {
  * gitignored/untracked skill dir must not be published by one producer when the
  * other would never have shipped it).
  */
-async function discoverPluginLocalSkills(pluginSourceDir: string): Promise<PluginLocalSkill[]> {
+async function discoverPluginLocalSkills(
+  pluginSourceDir: string,
+  logger: ReturnType<typeof createLogger>,
+): Promise<PluginLocalSkill[]> {
+  // Git visibility is the right filter, but a SILENT drop is not: a skill the author
+  // just created and has not `git add`ed is simply absent from the built plugin, and
+  // a build that says "success" while omitting it reads as one that shipped it.
+  // Gitignored dirs are excluded from this list — ignoring one IS the instruction.
+  for (const dir of listUntrackedPluginSkillDirs(pluginSourceDir)) {
+    logger.info(
+      `warning: skills/${dir}/SKILL.md exists but is not tracked by git, so it was NOT packaged ` +
+        `into this plugin (the plugin build ships tracked files only). Run \`git add\` on it, or ` +
+        `add it to .gitignore to silence this.`,
+    );
+  }
   const skills: PluginLocalSkill[] = [];
   for (const skillDirPath of listPluginSourceSkillDirs(pluginSourceDir)) {
     const skillPath = safePath.join(pluginSourceDir, 'skills', skillDirPath, 'SKILL.md');
@@ -613,11 +639,17 @@ async function packagePluginLocalSkills(input: {
 }): Promise<Array<{ skillDirPath: string; result: PackageSkillResult }>> {
   const packaged: Array<{ skillDirPath: string; result: PackageSkillResult }> = [];
   for (const { skillDirPath, skillPath, skillName } of input.skills) {
-    // Per-skill config is keyed by the skill's declared NAME; the directory path is
-    // a fallback for the common case where they coincide.
+    // Per-skill config is keyed by the skill's declared NAME; the directory path and
+    // its trailing segment are fallbacks for the common cases where they coincide.
+    // The fallback LIST must stay a superset of `vat verify`'s (checkFilesConfigDests
+    // cannot read declared names, so it tries path-then-leaf): if verify resolved a
+    // key the build did not, verify would check `files:` dests for a skill the build
+    // was never told to copy them into, and fail a build that had in fact succeeded.
     const packagingConfig = mergeSkillPackagingConfig(
       input.skillsConfig?.defaults,
-      input.skillsConfig?.config?.[skillName] ?? input.skillsConfig?.config?.[skillDirPath],
+      input.skillsConfig?.config?.[skillName] ??
+        input.skillsConfig?.config?.[skillDirPath] ??
+        input.skillsConfig?.config?.[lastPathSegment(skillDirPath)],
     );
 
     const skillOutputDir = safePath.join(input.pluginDir, 'skills', skillDirPath);
@@ -655,33 +687,61 @@ function reportPackagedSkillIssues(
   return withErrors;
 }
 
+/** A plugin-local skill and the pool skill whose output directory it would overwrite. */
+interface SkillDirConflict {
+  skill: PluginLocalSkill;
+  poolSkillFsPath: string;
+}
+
 /**
  * Split the plugin's own skills into those that COLLIDE with its resolved pool
  * selector and those that do not. A colliding skill would otherwise be produced
  * twice — once by the local packager, once by the Phase 3 pool copy-in — putting
  * two definitions of the same skill in one plugin.
  *
- * Matched on the DECLARED NAME, not the directory name. Name is what makes two
+ * Matched on the DECLARED NAME, and ONLY the declared name. Name is what makes two
  * copies the same skill: a skill named `foo` authored in `skills/bar/` collides
  * with pool `foo` just as surely as one in `skills/foo/`, and a NESTED skill
  * (`skills/group/foo/`) collides too even though its directory path shares no
- * segment with the pool copy's `skills/foo/`. A dirname-only comparison missed
- * both, and the second case shipped the skill twice, at two depths, in one plugin.
+ * segment with the pool copy's `skills/foo/`. A dirname-only comparison missed all
+ * of those, and the nested case shipped the skill twice, at two depths, in one plugin.
+ *
+ * The directory leaf is deliberately NOT also matched. It adds nothing (when a
+ * skill's `SKILL.md` declares no name, {@link discoverPluginLocalSkills} already
+ * falls back to that leaf, so the name comparison covers it) and it over-matches:
+ * a plugin-local skill named `bar` living in `skills/foo/`, in a plugin that selects
+ * an unrelated pool skill `foo`, was refereed away as if it were the pool's `foo` —
+ * so `bar` was neither packaged nor tree-copied and shipped NOWHERE, under a warning
+ * claiming a skill named `bar` had been "selected from the pool".
+ *
+ * `conflicts` is the residue that name-matching alone cannot resolve: a
+ * non-colliding plugin-local skill whose authored directory is the same directory a
+ * selected pool skill copies into. Two DIFFERENT skills, one output dir — the
+ * packager and the Phase 3 copy would write over each other. There is no correct
+ * winner, so the caller fails the build instead of silently picking one.
  */
 function resolveCollidingSkills(
   skills: readonly PluginLocalSkill[],
   selectedSkillNames: string[],
-): { colliding: PluginLocalSkill[]; packageable: PluginLocalSkill[] } {
+): { colliding: PluginLocalSkill[]; packageable: PluginLocalSkill[]; conflicts: SkillDirConflict[] } {
   const selectedFsNames = new Set(selectedSkillNames.map((name) => skillNameToFsPath(name)));
   const colliding: PluginLocalSkill[] = [];
   const packageable: PluginLocalSkill[] = [];
+  const conflicts: SkillDirConflict[] = [];
   for (const skill of skills) {
-    const isSelected =
-      selectedFsNames.has(skillNameToFsPath(skill.skillName)) ||
-      selectedFsNames.has(lastPathSegment(skill.skillDirPath));
-    (isSelected ? colliding : packageable).push(skill);
+    if (selectedFsNames.has(skillNameToFsPath(skill.skillName))) {
+      colliding.push(skill);
+      continue;
+    }
+    packageable.push(skill);
+    const clash = [...selectedFsNames].find(
+      (fsName) =>
+        toForwardSlash(skill.skillDirPath) === fsName ||
+        toForwardSlash(skill.skillDirPath).startsWith(`${toForwardSlash(fsName)}/`),
+    );
+    if (clash !== undefined) conflicts.push({ skill, poolSkillFsPath: clash });
   }
-  return { colliding, packageable };
+  return { colliding, packageable, conflicts };
 }
 
 interface BuildPluginInput {
@@ -732,7 +792,7 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
   // Phase 1.4: discover the plugin's own skills ONCE (recursive; git-visible only),
   // resolving each declared name. Every phase below reads this list.
   const localSkills = pluginSourceExists
-    ? await discoverPluginLocalSkills(pluginSourceDir)
+    ? await discoverPluginLocalSkills(pluginSourceDir, logger)
     : [];
 
   // Phase 1.5: collision referee. Resolve the plugin's pool selector BEFORE the
@@ -741,15 +801,37 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
   // packager output, so the referee is no longer about "raw copy ships dead links"
   // — it is about not producing the same skill twice, at two depths, in one dir.
   const selectedSkillNames = resolvePluginSkills(pluginDef, marketplaceAvailable);
-  const { colliding: collidingSkills, packageable } = resolveCollidingSkills(
+  const { colliding: collidingSkills, packageable, conflicts } = resolveCollidingSkills(
     localSkills,
     selectedSkillNames,
+  );
+  if (conflicts.length > 0) {
+    const pluginSourceRel = toForwardSlash(safePath.relative(configDir, pluginSourceDir));
+    throw new Error(
+      `Plugin '${pluginDef.name}': two DIFFERENT skills claim the same output directory.\n` +
+        conflicts
+          .map(({ skill, poolSkillFsPath }) =>
+            `  - skills/${skill.skillDirPath} holds the plugin-local skill "${skill.skillName}", ` +
+            `but the plugin's skills: selector also copies a pool skill into skills/${poolSkillFsPath}.`,
+          )
+          .join('\n') +
+        `\nRename the plugin-local directory under ${pluginSourceRel}/skills/, or drop the pool skill ` +
+        `from this plugin's skills: selector. (Only a same-NAME collision has a winner — the pool copy; ` +
+        `two different skills sharing one directory does not.)`,
+    );
+  }
+  // The pool copy takes over the plugin-local skill's OWN authored directory (see
+  // copyPoolSkills) so "a plugin-local skill ships at its authored path" holds
+  // whether it was packaged locally or refereed to the pool.
+  const poolDestOverrides = new Map(
+    collidingSkills.map(({ skillName, skillDirPath }) => [skillName, skillDirPath]),
   );
   for (const { skillName, skillDirPath } of collidingSkills) {
     logger.info(
       `warning: skill "${skillName}" is selected from the pool AND present at ` +
         `${toForwardSlash(safePath.relative(configDir, pluginSourceDir))}/skills/${skillDirPath}/ — ` +
-        `using the pool-packaged copy (dist/skills/${skillNameToFsPath(skillName)}) and not packaging the plugin-local copy.`,
+        `using the pool-packaged copy (dist/skills/${skillNameToFsPath(skillName)}) and not packaging ` +
+        `the plugin-local copy. It ships at skills/${skillDirPath}, the path it was authored at.`,
     );
   }
 
@@ -811,6 +893,7 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
     marketplaceAvailable,
     configDir,
     pluginDir,
+    poolDestOverrides,
     logger,
   );
 

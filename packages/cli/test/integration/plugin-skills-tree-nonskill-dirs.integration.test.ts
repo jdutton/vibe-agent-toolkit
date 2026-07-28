@@ -44,6 +44,8 @@ const SKILL_FILE = 'SKILL.md';
 const PACKAGED_SKILL = 'real-skill';
 const NESTED_SKILL = 'nested-skill';
 const GITIGNORED_SKILL = 'wip-skill';
+/** A pool-only skill: never present in the plugin's own skills/ tree. */
+const POOL_ONLY_SKILL = 'pool-only-skill';
 const PLUGIN = 'full-plugin';
 
 /** Marker written into every eval suite; must never appear in a shipped bundle. */
@@ -99,8 +101,14 @@ claude:
 `;
 }
 
-/** Write the fixture; returns the plugin's built output dir. */
-function writeFixture(tempDir: string, poolSelector = '[]'): string {
+/**
+ * Write the fixture; returns the plugin's built output dir.
+ *
+ * `extra` runs against the plugin's `skills/` source dir BEFORE the fixture commits,
+ * so anything it writes is git-tracked like the rest — discovery is tracked-files-only,
+ * so a case that adds content afterwards would be testing invisibility by accident.
+ */
+function writeFixture(tempDir: string, poolSelector = '[]', extra?: (skillsDir: string) => void): string {
   writeTestFile(safePath.join(tempDir, 'package.json'), JSON.stringify({ name: 't', version: '1.0.0' }));
   writeTestFile(safePath.join(tempDir, 'vibe-agent-toolkit.config.yaml'), configYaml(poolSelector));
   writeTestFile(
@@ -122,6 +130,8 @@ function writeFixture(tempDir: string, poolSelector = '[]'): string {
   writeTestFile(safePath.join(skills, 'shared', 'helper.md'), '# Shared helper\n');
   mkdirSyncReal(safePath.join(skills, '_templates'), { recursive: true });
   writeTestFile(safePath.join(skills, '_templates', 'skeleton.md'), '# Skeleton\n');
+
+  extra?.(skills);
 
   // Git visibility is the file set BOTH producers must agree on, so the fixture has
   // to be a real repo with a real commit — `.gitignore` alone proves nothing.
@@ -210,7 +220,62 @@ describe('plugin build — what each phase produces under skills/ (integration)'
     // packaged nor tree-copied. Two definitions of one skill, at two depths in one
     // plugin, is exactly what the referee exists to prevent — and a dirname-only
     // comparison never saw this one, because `group` is not `nested-skill`.
-    expect(existsSync(safePath.join(outDir, SKILLS_DIR, NESTED_SKILL, SKILL_FILE))).toBe(true);
-    expect(existsSync(safePath.join(outDir, SKILLS_DIR, 'group', NESTED_SKILL, SKILL_FILE))).toBe(false);
+    //
+    // It lands at the skill's OWN authored path, not the default `skills/<fsName>`:
+    // `DistributedSkillLocation.skillOutputDir` (and therefore `vat skill test` and
+    // `vat verify`) says a plugin-local skill ships where it was authored, and that
+    // has to hold whether the referee kept the local copy or the pool one. Landing
+    // it at `skills/nested-skill` made `vat skill test nested-skill` hard-fail
+    // looking for a dist at `skills/group/nested-skill` the build never wrote.
+    expect(existsSync(safePath.join(outDir, SKILLS_DIR, 'group', NESTED_SKILL, SKILL_FILE))).toBe(true);
+    expect(existsSync(safePath.join(outDir, SKILLS_DIR, NESTED_SKILL, SKILL_FILE))).toBe(false);
+  });
+
+  it('fails the build when two DIFFERENT skills claim one output directory', async () => {
+    tempDir = createTestTempDir('vat-plugin-skills-dirclash-');
+
+    // A plugin-local skill whose DIRECTORY leaf happens to match an unrelated pool
+    // skill's name. Name-matching correctly says these are different skills, so the
+    // referee has no winner to pick — but the packager and the pool copy-in would
+    // both write `skills/<POOL_ONLY_SKILL>`. Matching the dir leaf as well as the
+    // name used to "resolve" this by dropping the plugin-local skill silently: it
+    // shipped NOWHERE, under a warning claiming it had been selected from the pool.
+    writeFixture(tempDir, `["${POOL_ONLY_SKILL}"]`, (skillsDir) => {
+      const clashDir = safePath.join(skillsDir, POOL_ONLY_SKILL);
+      mkdirSyncReal(clashDir, { recursive: true });
+      writeTestFile(safePath.join(clashDir, SKILL_FILE), skillMd('a-different-skill'));
+    });
+
+    // Stand in for `vat skills build` output: the pool copy the selector resolves to.
+    const poolDist = safePath.join(tempDir, 'dist', 'skills', POOL_ONLY_SKILL);
+    mkdirSyncReal(poolDist, { recursive: true });
+    writeTestFile(safePath.join(poolDist, SKILL_FILE), skillMd(POOL_ONLY_SKILL));
+
+    await expect(runClaudePluginBuild(tempDir, { logger: SILENT_LOGGER })).rejects.toThrow(
+      /two DIFFERENT skills claim the same output directory/,
+    );
+  });
+
+  it('warns — rather than silently dropping — when a skill dir exists but git does not track it', async () => {
+    tempDir = createTestTempDir('vat-plugin-skills-untracked-');
+    writeFixture(tempDir);
+
+    // Created AFTER the fixture's commit: never `git add`ed, and not gitignored.
+    // Tracked-files-only discovery is correct (the tree-copy has always worked that
+    // way), but a build that reports success while omitting a skill the author can
+    // see on disk reads as one that shipped it.
+    const brandNew = safePath.join(tempDir, 'plugins', PLUGIN, SKILLS_DIR, 'brand-new');
+    mkdirSyncReal(brandNew, { recursive: true });
+    writeTestFile(safePath.join(brandNew, SKILL_FILE), skillMd('brand-new'));
+
+    const warnings: string[] = [];
+    await runClaudePluginBuild(tempDir, {
+      logger: { ...SILENT_LOGGER, info: (m: string) => { warnings.push(m); } },
+    });
+
+    expect(warnings.some((m) => m.includes('skills/brand-new/SKILL.md') && m.includes('not tracked by git'))).toBe(true);
+    // The deliberately GITIGNORED skill gets no such warning — ignoring it IS the
+    // instruction, and warning every build would train authors to ignore warnings.
+    expect(warnings.some((m) => m.includes(GITIGNORED_SKILL) && m.includes('not tracked by git'))).toBe(false);
   });
 });
