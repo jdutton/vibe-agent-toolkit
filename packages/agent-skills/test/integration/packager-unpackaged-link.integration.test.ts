@@ -44,6 +44,10 @@ description: Fixture skill covering every spelling of a link whose target may no
 - kept-md: [e](refs/guide.md)
 - kept-dir-slash: [f](refs/)
 - kept-dir-bare: [g](refs)
+- anchor-only: [h](#a-heading)
+- stray-bracket: a glob may use (\`*\`, \`?\`, \`[\`) — see [i](evals/sub/other.md) for details
+
+## A heading
 `;
 
 /** Write the skill tree and package it; returns the packaged SKILL.md body. */
@@ -54,6 +58,10 @@ async function packageFixture(tempDir: string): Promise<{ body: string; hasError
   writeTestFile(safePath.join(skillDir, 'SKILL.md'), SKILL_MD);
   writeTestFile(safePath.join(skillDir, 'evals', 'evals.json'), '{"expected_output":"KEY"}');
   writeTestFile(safePath.join(skillDir, 'evals', 'sub', 'note.md'), '# note\n');
+  // A DISTINCT target: two links sharing one href hit a separate, pre-existing
+  // correlation defect in transformContent (regex matches are paired with parsed
+  // links by href, so the first link's text wins) — not what this test is about.
+  writeTestFile(safePath.join(skillDir, 'evals', 'sub', 'other.md'), '# other\n');
   writeTestFile(safePath.join(skillDir, 'refs', 'guide.md'), '# guide\n');
 
   const outputPath = safePath.join(tempDir, 'dist', 'demo');
@@ -98,6 +106,20 @@ describe('packaging a link whose target does not ship (integration)', () => {
     expect(body).not.toContain('()');
     expect(body).not.toContain('(evals/)');
     expect(body).not.toContain('(refs/)');
+
+    // A SAME-DOCUMENT anchor has an empty `href` (the fragment is carried
+    // separately), so it has no packaged *path* — but it needs none: the target is
+    // this very file, which ships. It must survive as a link, not strip to prose.
+    expect(body).toContain('- anchor-only: [h](#a-heading)');
+
+    // A stray unpaired `[` in prose used to make the link regex match from THAT
+    // bracket forward to the next real link, so the replacement stood in for the
+    // whole span and deleted the prose between them.
+    // The link on that line is one that STRIPS (it points into excluded test
+    // input). That matters: the rewrite template re-emits `[` and `]` around the
+    // captured text, so an over-match was invisible there; the strip template does
+    // not, so it stood in for the whole span and ate the prose.
+    expect(body).toContain('a glob may use (`*`, `?`, `[`) — see i for details');
 
     // A directory link used to fail the build outright as PACKAGED_BROKEN_LINK.
     expect(hasErrors).toBe(false);

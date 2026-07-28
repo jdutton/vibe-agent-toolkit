@@ -95,6 +95,11 @@ const DEFAULT_STRIP_TEMPLATE = '{{link.text}}';
  * bundled resource into `resources/`, so no authored directory exists in the
  * output to point at. Stripping to plain text keeps the author's prose and drops
  * the dead navigation — the same thing an excluded file link does.
+ *
+ * A SAME-DOCUMENT anchor (`[See below](#heading)`) is untouched by all of this: it
+ * classifies as `anchor`, not a local target, so it matches none of these rules and
+ * survives verbatim. Verified by test rather than assumed — an earlier draft carried
+ * a special case for it that could never fire.
  */
 function bundledLinkTemplate(stripTemplate: string): string {
   return (

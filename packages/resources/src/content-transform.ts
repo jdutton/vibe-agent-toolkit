@@ -341,11 +341,19 @@ function findMatchingRule(
  * - Group 2: Link href
  *
  * Does NOT handle nested brackets in link text — the negated character class
- * `[^\]]*` excludes `]` characters, so `[text [with] brackets](href)` would
- * not be matched as a single link.
+ * excludes BOTH `[` and `]`, so `[text [with] brackets](href)` is not matched as
+ * a single link.
+ *
+ * Excluding `[` (not just `]`) is what keeps the match ANCHORED to the real link.
+ * With `[^\]]*`, a stray unpaired `[` earlier in the line — most often one inside
+ * inline code, e.g. a sentence listing glob metacharacters ``(`*`, `**`, `?`, `[`)``
+ * — starts a match that runs forward to the NEXT link's `](`, swallowing every
+ * character between them into the link text. The rewritten replacement then stands
+ * in for that whole span, so a template that does not re-emit the text verbatim
+ * DELETES the intervening prose from the packaged file. Requiring the text to be
+ * bracket-free makes the scan resume at the genuine `[`.
  */
-// eslint-disable-next-line sonarjs/slow-regex -- negated character classes [^\]] and [^)] are inherently non-backtracking
-const MARKDOWN_LINK_REGEX = /\[([^\]]*)\]\(([^)]*)\)/g;
+const MARKDOWN_LINK_REGEX = /\[([^[\]]*)\]\(([^)]*)\)/g;
 
 /**
  * Regex pattern matching reference-style link definitions: `[ref]: url`
