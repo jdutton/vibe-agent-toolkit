@@ -98,7 +98,9 @@ describe('${fixturesDir} wiring (integration)', () => {
 
     const result = await runSkillTestHarness(optsFor(subjectDir, fake.spawn));
 
-    expect(result.exitCode).toBe(0);
+    // Carry the harness's own summary into the failure message: exit 2 is preflight,
+    // which has ~8 distinct causes, and a bare "expected 2 to be 0" names none of them.
+    expect(result.exitCode, `harness exit ${result.exitCode}: ${result.summary ?? '(no summary)'}`).toBe(0);
     expect(injected, 'the declared env var never reached the executor').toBeDefined();
 
     // The assertion that matters: the interpolated path RESOLVES. Asserting the
