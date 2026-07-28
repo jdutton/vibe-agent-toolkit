@@ -88,4 +88,25 @@ describe('ResourceRegistry.validate runs the validation framework', () => {
     expect(promoted?.severity).toBe('error');
     expect(result.hasErrors).toBe(true);
   });
+
+  it('surfaces a dangling reference-style link as LINK_UNRESOLVED_REFERENCE (warning, not hasErrors)', async () => {
+    // End-to-end path: link-parser's raw-source scan (findUnresolvedReferences)
+    // populates ResourceMetadata.unresolvedReferences, which
+    // collectUnresolvedReferenceIssues() turns into a validate() issue —
+    // proving the finding reaches a user-visible ValidationResult even though
+    // it never becomes a `linkReference` AST node / ResourceLink.
+    const docPath = safePath.join(tempDir, 'dangling-ref.md');
+    await fs.writeFile(docPath, 'Line 1\n\nSee [some text][nope] for details.\n', 'utf-8');
+
+    const registry = ResourceRegistry.empty(tempDir);
+    await registry.addResource(docPath);
+
+    const result = await registry.validate({ skipGitIgnoreCheck: true });
+
+    const issue = result.issues.find((i) => i.code === 'LINK_UNRESOLVED_REFERENCE');
+    expect(issue).toBeDefined();
+    expect(issue?.severity).toBe('warning');
+    expect(issue?.line).toBe(3);
+    expect(result.hasErrors).toBe(false);
+  });
 });

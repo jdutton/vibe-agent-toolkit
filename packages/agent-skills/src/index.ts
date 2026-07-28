@@ -37,10 +37,7 @@ export {
   applyFilesConfig,
   mergeFilesConfig,
   matchLinkToFiles,
-  computeDeferredPaths,
   type ApplyFilesConfigOptions,
-  type ComputeDeferredPathsOpts,
-  type DeferredPaths,
   type FilesMatchResult,
 } from './files-config.js';
 
@@ -166,6 +163,13 @@ export {
 export * from './skill-test/index.js';
 
 export { checkBrokenPackagedLinks } from './post-build-checks.js';
+export {
+  checkPackagedTestInput,
+  packagedFileEntries,
+  resolveTestInputDirs,
+  testInputExcludeRules,
+  type CheckPackagedTestInputInput,
+} from './test-input.js';
 
 export {
   computeTreeCopiedSkillLocations,

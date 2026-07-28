@@ -11,6 +11,7 @@ import { basename, dirname, extname } from 'node:path';
 
 import {
   BootstrapNeededError,
+  buildStaleDistWarningLines,
   DuplicateStagedSkillError,
   isAcknowledged,
   mapErrorToExitCode,
@@ -270,28 +271,45 @@ function declaredSkillTestConfig(link: { configRoot: string; name: string }): Te
 
 /**
  * Load the persisted `skills.config.<skill>.test` block for the subject skill,
- * PROJECT-AWARE (mirrors the resolver — not a parallel cwd+basename resolver).
+ * PROJECT-AWARE (mirrors the resolver's ladder ORDER — not a parallel cwd+basename
+ * resolver).
  *
- * A PATH target (`./dist/skills/my-skill/`) is mapped back to its declared skill
- * via {@link findDeclaredSkillForPath} (walks up from the path, config-first) and
- * keyed by the DECLARED name against the GOVERNING config — so a path target honors
- * the same model/evals/timeout as its name, regardless of cwd. A NAME target (or a
- * path that maps to no declared skill) falls back to the cwd-anchored governing
- * config keyed by basename. Missing config / missing file → undefined (defaults apply).
+ * A PATH target is mapped back to its declared skill through the SAME two lookups
+ * {@link resolveDefinitePath} (in resolve-skill-reference.ts) uses, tried in the SAME
+ * order: first {@link findDeclaredSkillForSourceDir} (a path AT a declared skill's
+ * SOURCE dir — rung 2a, `buildable`), then {@link findDeclaredSkillForPath} (a path AT
+ * its already-built DIST dir — the `source` + `declaredSkill` back-link rung). Either
+ * hit is keyed by the DECLARED name against ITS OWN governing config via
+ * {@link declaredSkillTestConfig} — cwd-independent, so a path target honors the same
+ * model/evals/timeout/`test.build` as its name.
+ *
+ * The basename fallback below is a LAST RESORT, reached only when `subject` carries
+ * NEITHER link — a bare name (matched by literal string), or a path outside every
+ * declared skill's source/dist dir. It must never be the path a LINKED subject's
+ * config resolves through: a directory basename that happens to differ from its
+ * declared skill's name would otherwise silently miss that skill's `test:` block
+ * (including a required `test.build` hook) with no error — the exact failure mode
+ * this ordering exists to prevent. Missing config / missing file → undefined
+ * (defaults apply).
  *
  * A broken config throws {@link ConfigLoadError}; we let it propagate to the preflight
  * guard in runSkillTestRun, which surfaces it as a clean exit-2 error rather than
  * silently applying defaults against a config the author clearly intended.
  */
 async function loadTestConfig(subject: string, cwd: string): Promise<TestConfig | undefined> {
-  // Path target → resolve the declared skill it materializes, and read its test
-  // block from that skill's own governing config root (cwd-independent).
+  // Rung 2a: a path AT a declared skill's SOURCE dir — tried FIRST, matching
+  // resolveDefinitePath's own precedence.
+  const sourceLink = await findDeclaredSkillForSourceDir(subject, cwd);
+  if (sourceLink !== undefined) return declaredSkillTestConfig(sourceLink);
+  // Reverse rung: a path AT a declared skill's already-built DIST dir.
   const link = await findDeclaredSkillForPath(subject, cwd);
   if (link !== undefined) return declaredSkillTestConfig(link);
   const projectRoot = findProjectRoot(cwd);
   if (projectRoot === null) return undefined;
   const perSkill = loadConfig(projectRoot)?.skills?.config;
   if (perSkill === undefined) return undefined;
+  // Last-resort basename fallback (see doc comment above): only reached when neither
+  // lookup above found a declared-skill link for `subject`.
   const base = lastPathSegment(subject) || subject;
   return perSkill[subject]?.test ?? perSkill[base]?.test;
 }
@@ -980,6 +998,13 @@ function rethrowNamingCompanion(err: unknown, alias: string, declaredName: strin
  * for the narrow, non-destructive case {@link isSurvivableCompanionFailure} allows;
  * every other failure propagates for it too. Staging's existing skip-with-warning
  * fallback still applies if the raw copy also fails to stage.
+ *
+ * DRY-RUN STALENESS: a `--dry-run` preview that staged an EXISTING
+ * companion dist WITHOUT rebuilding it warns on stderr, naming the companion +
+ * its declared skill, using {@link buildStaleDistWarningLines} — the SAME
+ * warning-construction the subject's own dry-run summary uses (never a copied
+ * string), so the identical fact ("this preview may be stale") warns for either
+ * role instead of only the subject.
  */
 export async function resolveCompanionSpec(
   name: string,
@@ -994,6 +1019,11 @@ export async function resolveCompanionSpec(
   if (declared === undefined) return spec;
   try {
     const build = await buildDeclaredSkill(declared, flags, memo, declaredSkillTestConfig(declared)?.build);
+    if (build.dryRunStagedExistingDist === true) {
+      process.stderr.write(
+        buildStaleDistWarningLines(`companion '${name}' (declared skill '${declared.name}')`).join('\n') + '\n',
+      );
+    }
     return { path: build.distDir };
   } catch (e) {
     if (!isSurvivableCompanionFailure(e, declared, optional, flags))

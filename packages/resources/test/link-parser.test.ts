@@ -25,6 +25,27 @@ import { assertAllLinksClassifiedAs, expectHeadingStructure, findPackageRoot, wr
 
 const EXAMPLE_URL = 'https://example.com';
 
+/**
+ * Parse `content` as a markdown document in `dir` and assert the EXACT set of
+ * dangling-reference findings (`LINK_UNRESOLVED_REFERENCE` inputs). Every
+ * dangling-reference case goes through this helper so adding a case never
+ * duplicates the write/parse/assert boilerplate.
+ */
+async function expectUnresolved(
+  dir: string,
+  filename: string,
+  content: string,
+  expected: { label: string; line: number }[],
+): Promise<void> {
+  await writeAndParse({
+    filePath: safePath.join(dir, filename),
+    content,
+    assertions: (result) => {
+      expect(result.unresolvedReferences).toEqual(expected);
+    },
+  });
+}
+
 describe('link-parser', () => {
   let suiteDir: string;
   let tempDir: string;
@@ -263,6 +284,43 @@ See [the docs][docs] for details.
       expect(result.links[0]!.line).toBe(3);
       expect(result.links[1]!.line).toBe(5);
     });
+
+    it('should extract link text with nested emphasis and inline code', async () => {
+      const content = `[**bold** and _italic_ and \`code\` text](./file.md)
+`;
+      const filePath = safePath.join(tempDir, 'nested-link-text.md');
+      await writeFile(filePath, content, 'utf-8');
+
+      const result = await parseMarkdown(filePath);
+
+      expect(result.links).toHaveLength(1);
+      expect(result.links[0]).toMatchObject({
+        text: 'bold and italic and code text',
+        href: './file.md',
+        type: 'local_file',
+      });
+    });
+
+    // Regression guard (mdast-util-to-string swap): the library's
+    // `includeImageAlt` option defaults to `true`, but the hand-rolled
+    // walker it replaced silently dropped image alt text. `extractLinkText`
+    // pins `includeImageAlt: false` to preserve that behavior — this test
+    // fails if that option is ever removed or flipped.
+    it('should drop image alt text from link text (behavior-preservation, not default)', async () => {
+      const content = `[A ![alt](i.png) B](./file.md)
+`;
+      const filePath = safePath.join(tempDir, 'link-text-with-image.md');
+      await writeFile(filePath, content, 'utf-8');
+
+      const result = await parseMarkdown(filePath);
+
+      expect(result.links).toHaveLength(1);
+      expect(result.links[0]).toMatchObject({
+        text: 'A  B',
+        href: './file.md',
+        type: 'local_file',
+      });
+    });
   });
 
   describe('link classification', () => {
@@ -429,6 +487,26 @@ See [the docs][docs] for details.
           expect(
             result.headings[0]!.children![0]!.children![0]!.children![0]!.slug
           ).toBe('heading-with-a-link');
+        },
+      });
+    });
+
+    // Regression guard (mdast-util-to-string swap): empirically verified
+    // divergence for `## A ![alt](i.png) B` — old hand-rolled walker text
+    // "A  B" / slug "a--b"; mdast-util-to-string with default
+    // `includeImageAlt: true` would instead produce "A alt B" / slug
+    // "a-alt-b". `extractHeadingText` pins `includeImageAlt: false` so
+    // anchor slugs for headings containing images do not silently change.
+    // This test fails if that option is ever removed or flipped.
+    it('should drop image alt text from heading text and slug (behavior-preservation, not default)', async () => {
+      const content = `## A ![alt](i.png) B
+`;
+      await writeAndParse({
+        filePath: safePath.join(tempDir, 'heading-with-image.md'),
+        content,
+        assertions: (result) => {
+          expect(result.headings[0]!.text).toBe('A  B');
+          expect(result.headings[0]!.slug).toBe('a--b');
         },
       });
     });
@@ -781,6 +859,209 @@ tags: test
       expect(result.frontmatter).toBeUndefined();
       expect(result.frontmatterError).toBeDefined();
       expect(result.frontmatterError).not.toBe('');
+    });
+  });
+
+  describe('unresolved reference-style links', () => {
+    it('reports a full-form reference with no matching definition', async () => {
+      await expectUnresolved(tempDir, 'unresolved-full.md', 'Line 1\n\nSee [some text][nope] for details.\n', [
+        { label: 'nope', line: 3 },
+      ]);
+    });
+
+    it('does not report a full-form reference that has a matching definition', async () => {
+      await writeAndParse({
+        filePath: safePath.join(tempDir, 'resolved-full.md'),
+        content: 'See [some text][yes] for details.\n\n[yes]: ./x.md\n',
+        assertions: (result) => {
+          expect(result.unresolvedReferences).toEqual([]);
+          // Existing resolved-link behavior is unchanged: the linkReference
+          // node still resolves to a real link.
+          const linkRefs = result.links.filter((l) => l.nodeType === 'linkReference');
+          expect(linkRefs).toHaveLength(1);
+          expect(linkRefs[0]).toMatchObject({ href: './x.md', type: 'local_file' });
+        },
+      });
+    });
+
+    it('reports a collapsed-form reference with no matching definition', async () => {
+      await expectUnresolved(tempDir, 'unresolved-collapsed.md', '[nope][]\n', [{ label: 'nope', line: 1 }]);
+    });
+
+    it('reports the outer label of a nested image reference (no under-reporting)', async () => {
+      // `[![badge](i.png)][ci]`: the outer label is the one that dangles.
+      await expectUnresolved(tempDir, 'nested-outer.md', '[![badge](i.png)][ci-nope]\n', [
+        { label: 'ci-nope', line: 1 },
+      ]);
+    });
+
+    it('reports both labels of a nested reference when both dangle', async () => {
+      await expectUnresolved(tempDir, 'nested-both.md', '[![alt][inner-nope]][outer-nope]\n', [
+        { label: 'outer-nope', line: 1 },
+        { label: 'inner-nope', line: 1 },
+      ]);
+    });
+
+    it('resolves a nested collapsed image reference whose labels are all defined', async () => {
+      // Corpus false positive (natural-compare README): bracket NESTING makes
+      // this one outer reference (text `![Build][]`, label `1`) rather than a
+      // garbage `"![Build"` label.
+      const content = `[![Build][]][1]
+
+[Build]: ./build.png
+[1]: ./ci.md
+`;
+      await expectUnresolved(tempDir, 'nested-defined.md', content, []);
+    });
+
+    it('masks inline code without masking the rest of the line', async () => {
+      // Masking PRECISION: the backticked example is ignored, the real
+      // dangling reference on the same line is still reported.
+      await expectUnresolved(
+        tempDir, 'unresolved-inline-code.md',
+        'Example: `[a][nope]` but see [text][really-nope].\n',
+        [{ label: 'really-nope', line: 1 }],
+      );
+    });
+
+    it('does not report a dangling-looking reference inside a fenced code block', async () => {
+      await expectUnresolved(tempDir, 'unresolved-fenced.md', '```\n[a][nope]\n```\n\n[t][real-nope]\n', [
+        { label: 'real-nope', line: 5 },
+      ]);
+    });
+
+    it('does not report a dangling-looking reference inside an HTML comment', async () => {
+      // Commented-out scaffolding is invisible to readers, and adding a
+      // definition would not make it resolve — the fix advice would be wrong.
+      await expectUnresolved(
+        tempDir, 'unresolved-html-comment.md',
+        '<!-- [a][nope-comment] -->\n\n[t][real-nope]\n',
+        [{ label: 'real-nope', line: 3 }],
+      );
+    });
+
+    it('does not report a dangling-looking reference inside an HTML block', async () => {
+      await expectUnresolved(
+        tempDir, 'unresolved-html-block.md',
+        '<div>[a][nope-div]</div>\n\n[t][real-nope]\n',
+        [{ label: 'real-nope', line: 3 }],
+      );
+    });
+
+    it('does not report a bracket query-param inside an autolink URL', async () => {
+      // qs/Rails-style bracket query params (`?filter[status][eq]=1`) are
+      // ubiquitous and not dangling references. Autolinks are `link` nodes.
+      await expectUnresolved(
+        tempDir, 'unresolved-autolink-query.md',
+        'See <https://x.com/?filter[status][eq]=1> for details.\n',
+        [],
+      );
+    });
+
+    it('does not report a bracket query-param inside an inline link URL', async () => {
+      await expectUnresolved(
+        tempDir, 'unresolved-inline-link-query.md',
+        '[docs](https://x.com/?filter[status][eq]=1)\n',
+        [],
+      );
+    });
+
+    it('does not report a dangling-looking reference inside a link title', async () => {
+      await expectUnresolved(tempDir, 'unresolved-link-title.md', '[t](u "a [alpha][beta] b")\n', []);
+    });
+
+    it('still detects a genuine dangling reference in the same paragraph as a bracket-query-param URL', async () => {
+      // The mask must be range-scoped (per link/image/definition node), not
+      // line-scoped: a real finding elsewhere on the same line must survive.
+      await expectUnresolved(
+        tempDir, 'unresolved-query-and-real.md',
+        'See [docs](https://x.com/?filter[status][eq]=1) and [text][real-nope].\n',
+        [{ label: 'real-nope', line: 1 }],
+      );
+    });
+
+    it('does not report a dangling-looking reference inside YAML frontmatter', async () => {
+      const content = `---
+description: "use [a][nope-fm]"
+---
+
+[t][real-nope]
+`;
+      await expectUnresolved(tempDir, 'unresolved-frontmatter.md', content, [
+        { label: 'real-nope', line: 5 },
+      ]);
+    });
+
+    it('normalizes label case and internal whitespace when matching definitions', async () => {
+      const content = `See [some text][My   Label] and [other][Other Label].
+
+[my label]: ./x.md
+`;
+      await expectUnresolved(tempDir, 'unresolved-normalized.md', content, [
+        { label: 'Other Label', line: 1 },
+      ]);
+    });
+
+    it('matches an escaped label against its escaped definition', async () => {
+      // `[a][foo\]bar]` WITH a `[foo\]bar]:` definition is RESOLVED — reporting
+      // it would be a false positive on a working link.
+      const content = String.raw`See [some text][foo\]bar] here.
+
+[foo\]bar]: ./x.md
+`;
+      await expectUnresolved(tempDir, 'unresolved-escaped-label.md', content, []);
+    });
+
+    it('does not report an escaped opening bracket (shortcut reference, non-goal)', async () => {
+      // CommonMark makes `\[a][nope]` a literal `[a]` plus a *shortcut*
+      // reference `[nope]`, which is an explicit non-goal.
+      const content = String.raw`This is \[a][nope] in prose.
+`;
+      await expectUnresolved(tempDir, 'escaped-opener.md', content, []);
+    });
+
+    it('does not report a bare shortcut reference (non-goal)', async () => {
+      // Shortcut references ([label] alone, no second bracket pair) are an
+      // explicit non-goal: bracketed prose is ubiquitous and would be a
+      // false-positive firehose. See unresolved-references.ts for the rationale.
+      await expectUnresolved(
+        tempDir, 'shortcut-not-flagged.md',
+        'This mentions [some label] in passing.\n\n[t][real-nope]\n',
+        [{ label: 'real-nope', line: 3 }],
+      );
+    });
+
+    describe('precision heuristics (corpus false-positive patterns)', () => {
+      it('does not report an optional-argument API signature', async () => {
+        // needle README: `### needle.get(url[, options][, callback])` — a
+        // heading, not code, so masking is not what saves us here.
+        await expectUnresolved(
+          tempDir, 'fp-api-signature.md',
+          '### needle.get(url[, options][, callback])\n\n[t][real-nope]\n',
+          [{ label: 'real-nope', line: 3 }],
+        );
+      });
+
+      it('does not report numeric prose citations', async () => {
+        // qs/resolve THREAT_MODEL.md: `the host application[3][4][8].`
+        await expectUnresolved(
+          tempDir, 'fp-numeric-citations.md',
+          'Trusts the host application[3][4][8].\n\n[t][real-nope]\n',
+          [{ label: 'real-nope', line: 3 }],
+        );
+      });
+
+      it('does not report array subscripts in prose', async () => {
+        await expectUnresolved(
+          tempDir, 'fp-subscripts.md',
+          'Then matrix[i][j] is transposed.\n\n[t][real-nope]\n',
+          [{ label: 'real-nope', line: 3 }],
+        );
+      });
+
+      it('does not report a label with no alphanumeric characters', async () => {
+        await expectUnresolved(tempDir, 'fp-punctuation-only.md', 'Operators [==][!=] compare.\n', []);
+      });
     });
   });
 });

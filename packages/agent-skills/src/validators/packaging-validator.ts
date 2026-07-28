@@ -25,11 +25,11 @@ import {
   type ValidationConfig,
   type ValidationIssue,
 } from '@vibe-agent-toolkit/agent-schema';
-import { parseMarkdown, ResourceRegistry, type SkillExecutableEntry } from '@vibe-agent-toolkit/resources';
+import { DeferredArtifacts, parseMarkdown, ResourceRegistry, type SkillExecutableEntry } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, normalizedTmpdir, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
-import { computeDeferredPaths } from '../files-config.js';
+import { packagedFileEntries } from '../test-input.js';
 import { walkLinkGraph, type LinkResolution, type WalkableRegistry } from '../walk-link-graph.js';
 
 import { observationToIssue, runCompatDetectors } from './compat-detectors.js';
@@ -78,6 +78,13 @@ export interface SkillPackagingConfig {
    * declaring it here lets consumers (e.g. `vat skill test run`) read it typed.
    */
   executables?: SkillExecutableEntry[];
+  /**
+   * The skill's `vat skill test` config. Only `evals` is load-bearing for packaging:
+   * it declares where the skill's TEST INPUT lives, which packaging must exclude
+   * from the shipped bundle (see test-input.ts). The rest of the block is carried
+   * through generically by the config merge and read by `vat skill test`.
+   */
+  test?: { evals?: string | undefined } | undefined;
 }
 
 /** Excluded reference detail for verbose output */
@@ -331,10 +338,14 @@ export async function validateSkillForPackaging(
     : await crawlAndResolveRegistry(projectRoot);
 
   const skillResource = registry.getResource(safePath.resolve(skillPath));
-  const deferred = computeDeferredPaths(packagingConfig?.files ?? [], {
-    skillDir: dirname(skillPath),
+  // Only the entries the PACKAGER will actually copy defer a link: an entry pointing
+  // into declared test input is dropped at build time, so its dest never appears and
+  // a link to it is a genuine broken link — the same verdict `vat skills build`
+  // reaches. See packagedFileEntries in test-input.ts.
+  const deferred = DeferredArtifacts.from(
+    [{ files: packagedFileEntries(packagingConfig ?? {}, dirname(skillPath), projectRoot), skillDir: dirname(skillPath) }],
     projectRoot,
-  });
+  );
 
   const walkOptions: Parameters<typeof walkLinkGraph>[2] = {
     maxDepth,
@@ -342,7 +353,7 @@ export async function validateSkillForPackaging(
     projectRoot,
     skillRootPath: safePath.resolve(skillPath),
     excludeNavigationFiles,
-    deferredPaths: deferred,
+    deferredArtifacts: deferred,
   };
   if (shared?.gitTracker !== undefined) {
     walkOptions.gitTracker = shared.gitTracker;

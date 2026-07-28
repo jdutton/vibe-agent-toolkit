@@ -6,6 +6,7 @@ import type { ResolveSkillSourceContext, ResolvedSkillSource, SkillSource } from
 import type { SkillSourceDescriptor } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
+import { isolateEvalSuite } from './eval-suite-isolation.js';
 import { assertSafeHarnessRoot } from './harness-location.js';
 import { StagedManifestSchema, type StagedEntry, type StagedManifest } from './manifest.js';
 import type { PluginLayout } from './plugin-layout.js';
@@ -45,6 +46,26 @@ export interface StageHarnessOptions {
   resolve: (source: SkillSource, ctx: ResolveSkillSourceContext) => Promise<ResolvedSkillSource>;
   ctx: ResolveSkillSourceContext;
   currentUid: number;
+  /**
+   * Suite subpath (e.g. `evals/evals.json`) whose contents are stripped from EVERY
+   * item's resolved copy before it is staged onward or hashed — the eval answer key
+   * must never reach the executor's filesystem. See {@link isolateEvalSuite}.
+   *
+   * Optional: `undefined` means this run declares no eval suite at all, which is a
+   * clean no-op (nothing to strip) rather than a runtime accident — the real
+   * production caller (`run-harness.ts`) always defaults this to
+   * `evals/evals.json` before calling in, but the type must not pretend the value
+   * can never be absent, since nothing upstream is contractually obligated to
+   * default it.
+   */
+  evalsSubpath?: string;
+  /**
+   * vat-only directory OUTSIDE the harness root. When the SUBJECT's resolved copy
+   * carries the suite (a fetched npm/url/vendored artifact, or a source tree that
+   * holds its own evals), it is relocated here so the harness can still read it
+   * while the executor cannot. Left empty when the subject carried no suite.
+   */
+  evalSuiteHoldDir: string;
 }
 
 export interface StageHarnessResult {
@@ -73,6 +94,14 @@ export interface StageHarnessResult {
    * fails the whole run instead.
    */
   skippedOptional: string[];
+  /**
+   * True when the SUBJECT's resolved copy carried an eval suite, which was
+   * therefore relocated into `evalSuiteHoldDir` (and removed from everything the
+   * executor can reach). The harness reads the suite from there ONLY when no
+   * authored source copy exists — an authored suite always wins, so editing it is
+   * what a re-run picks up.
+   */
+  subjectEvalSuiteHeld: boolean;
 }
 
 /**
@@ -218,9 +247,23 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
   const skippedOptional: string[] = [];
   let subjectStagedDir: string | null = null;
   let subjectPluginRoot: string | null = null;
+  let subjectEvalSuiteHeld = false;
   // Track which staged plugin roots have been prepared (wiped + manifest copied) this
   // run so that sibling skills sharing the same plugin don't clobber each other.
   const preparedPluginRoots = new Set<string>();
+
+  // Strip the eval suite from an item's resolved copy BEFORE it is staged onward or
+  // content-hashed — the answer key must never reach the executor's filesystem. The
+  // SUBJECT's suite is relocated to the vat-only hold dir first (so the harness can
+  // still read a suite that exists only inside a fetched artifact); every other
+  // item's is simply removed. See eval-suite-isolation.ts for the full rationale.
+  const stripEvalSuite = (stagedDir: string, role: StageItem['role']): boolean =>
+    isolateEvalSuite({
+      stagedDir,
+      stagingRoot: opts.ctx.stagingRoot,
+      evalsSubpath: opts.evalsSubpath,
+      ...(role === 'subject' ? { holdDir: opts.evalSuiteHoldDir } : {}),
+    });
   for (const item of opts.items) {
     // A `--with-optional` companion degrades to skip-with-warning on ANY failure
     // resolving or staging it (unresolvable source, build failure, etc.) — it must
@@ -230,6 +273,7 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
     if (item.optional === true) {
       try {
         const resolved = await opts.resolve(item.source, opts.ctx);
+        stripEvalSuite(resolved.stagedDir, item.role);
         // An optional item is never the subject, so only `pluginDir` (pushed to
         // --plugin-dir) is needed here — skillDir/pluginRoot only matter for the
         // subject's own dir, tracked below.
@@ -244,6 +288,7 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
     }
 
     const resolved = await opts.resolve(item.source, opts.ctx);
+    if (stripEvalSuite(resolved.stagedDir, item.role)) subjectEvalSuiteHeld = true;
     // Stage flat (standalone) or under the real plugin-root layout (plugin skill).
     const { pluginDir, skillDir, pluginRoot } = stageOneItem(opts.harnessRoot, item, resolved.stagedDir, preparedPluginRoots);
     // Content-hash the staged plugin dir (the whole thing pushed to --plugin-dir),
@@ -268,5 +313,5 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
     'utf8',
   );
 
-  return { manifest, pluginDirs, subjectStagedDir, subjectPluginRoot, skippedOptional };
+  return { manifest, pluginDirs, subjectStagedDir, subjectPluginRoot, skippedOptional, subjectEvalSuiteHeld };
 }

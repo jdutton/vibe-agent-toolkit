@@ -26,6 +26,7 @@ import {
   type ValidationIssue,
 } from '@vibe-agent-toolkit/agent-schema';
 import {
+  DeferredArtifacts,
   ResourceRegistry,
   loadConfig,
   openFrontmatter,
@@ -49,8 +50,15 @@ import {
 } from '@vibe-agent-toolkit/utils';
 
 import { getTargetSubdir } from './content-type-routing.js';
-import { applyFilesConfig, buildArtifactHint, computeDeferredPaths, type SkillFileEntry } from './files-config.js';
+import { applyFilesConfig, buildArtifactHint, type SkillFileEntry } from './files-config.js';
 import { checkBrokenPackagedLinks, checkUnreferencedFiles } from './post-build-checks.js';
+import {
+  checkPackagedTestInput,
+  partitionTestInputFileEntries,
+  resolveTestInputDirs,
+  testInputExcludeRules,
+  testInputFileEntryIssues,
+} from './test-input.js';
 import { validateSkillForPackaging, type PackagingValidationResult, type SkillPackagingConfig } from './validators/packaging-validator.js';
 import { deferredAssetsToIssues, walkerExclusionsToIssues } from './validators/walker-to-issues.js';
 import { walkLinkGraph, type WalkableRegistry } from './walk-link-graph.js';
@@ -188,6 +196,15 @@ export interface PackageSkillOptions {
    * See docs/validation-codes.md for codes and defaults.
    */
   validation?: ValidationConfig | undefined;
+
+  /**
+   * Absolute directories holding this skill's DECLARED test input (its eval suite).
+   * Links into them are excluded from the bundle, and anything that still reaches
+   * the output emits `PACKAGED_TEST_INPUT`. Derived from the skill's `test.evals`
+   * by {@link resolveTestInputDirs} — see test-input.ts for why test input must
+   * never ship.
+   */
+  testInputDirs?: string[] | undefined;
 }
 
 /**
@@ -212,6 +229,13 @@ export function packagingConfigToPackageOptions(
     ...(config.excludeReferencesFromBundle && { excludeReferencesFromBundle: config.excludeReferencesFromBundle }),
     ...(config.files && { files: config.files }),
     ...(config.validation && { validation: config.validation }),
+    // Declared test input never ships. Derived here — the ONE conversion both
+    // `vat skills build` and the plugin build go through — so no lane can package a
+    // skill without the rule applied.
+    ...(() => {
+      const testInputDirs = resolveTestInputDirs(config, dirname(anchors.skillPath));
+      return testInputDirs.length > 0 ? { testInputDirs } : {};
+    })(),
   };
 }
 
@@ -377,16 +401,28 @@ export async function packageSkill(
   const skillResource = registry.getResource(safePath.resolve(skillPath));
   const skillResourceId = skillResource?.id ?? '';
 
-  const filesConfig = options.files ?? [];
-  const deferredPaths = computeDeferredPaths(filesConfig, { skillDir: skillRoot, projectRoot });
+  const testInputDirs = options.testInputDirs ?? [];
+  // Declaring a path under `test.evals` IS the instruction not to package it, so a
+  // `files:` entry pointing into test input is dropped here rather than copied and
+  // then complained about. The adopter never has to edit config to get the right
+  // artifact; the dropped entries are reported below as warnings.
+  const { kept: filesConfig, dropped: droppedTestInputFiles } = partitionTestInputFileEntries(
+    options.files ?? [],
+    projectRoot,
+    testInputDirs,
+  );
+  const deferredArtifacts = DeferredArtifacts.from([{ files: filesConfig, skillDir: skillRoot }], projectRoot);
 
   const packagerWalkOptions: Parameters<typeof walkLinkGraph>[2] = {
     maxDepth,
-    excludeRules: excludeConfig?.rules ?? [],
+    // Declared test input is dropped from the bundle before anything else decides
+    // to include it — a link into the eval suite is not a packaging decision the
+    // author gets to make (see test-input.ts).
+    excludeRules: [...(excludeConfig?.rules ?? []), ...testInputExcludeRules(testInputDirs, projectRoot)],
     projectRoot,
     skillRootPath: safePath.resolve(skillPath),
     excludeNavigationFiles,
-    deferredPaths,
+    deferredArtifacts,
   };
   if (options.gitTracker !== undefined) {
     packagerWalkOptions.gitTracker = options.gitTracker;
@@ -534,6 +570,12 @@ export async function packageSkill(
   const rawPostBuildIssues = [
     ...await checkUnreferencedFiles(outputPath),
     ...await checkBrokenPackagedLinks(outputPath),
+    // A receipt for each `files:` entry that was dropped for pointing into declared
+    // test input — the build already produced the right artifact; this just says so.
+    ...testInputFileEntryIssues(droppedTestInputFiles),
+    // Backstop: if declared test input reached the output despite both exclusions,
+    // say so rather than shipping an answer key silently.
+    ...checkPackagedTestInput({ pathMap, outputPath, testInputDirs }),
   ];
   const rawLinkIssues = [
     ...walkerExclusionsToIssues(excludedReferences, projectRoot),

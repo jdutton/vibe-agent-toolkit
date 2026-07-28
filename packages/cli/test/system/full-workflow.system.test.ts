@@ -168,7 +168,24 @@ resources:
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('# vat - Vibe Agent Toolkit CLI');
     expect(result.stdout).toContain('resources');
+    // Near the END of docs/index.md: the verbose-help paths write and then
+    // process.exit(0) immediately, so an ASYNC stdout write to a pipe used to be
+    // truncated at the first pipe buffer (~8 KB on macOS) and lose the tail.
+    // See writeHelpSync in src/utils/help-loader.ts.
     expect(result.stdout).toContain('Exit Code Summary');
+  });
+
+  it('should not truncate a section verbose-help document larger than one pipe buffer', () => {
+    // docs/rag.md is ~13 KB and section help goes through a DIFFERENT writer than
+    // root help, so it needs its own guard against the same truncation.
+    const result = spawnSync('node', [binPath, 'rag', '--verbose'], {
+      encoding: 'utf-8',
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('# vat rag');
+    expect(result.stdout).toContain('## More Information');
+    expect(result.stdout).toContain('https://lancedb.com');
   });
 
   it('should show resources verbose help', () => {

@@ -100,6 +100,24 @@ export const ResourceLinkSchema = z.object({
 export type ResourceLink = z.infer<typeof ResourceLinkSchema>;
 
 /**
+ * A reference-style link (`[text][label]` or collapsed `[label][]`) whose
+ * label has no matching `[label]: url` definition anywhere in the document.
+ *
+ * CommonMark resolves link references at parse time: without a matching
+ * definition, the construct never becomes a `linkReference` AST node — it
+ * degrades to literal bracketed text, invisible to any AST-based checker.
+ * This shape carries the finding produced by the raw-source scan in
+ * `unresolved-references.ts` (see `findUnresolvedReferences`) so it can be
+ * reported as `LINK_UNRESOLVED_REFERENCE`.
+ */
+export const UnresolvedReferenceSchema = z.object({
+  label: z.string().describe('The reference label as written (pre-normalization)'),
+  line: z.number().int().positive().describe('1-based line number of the reference occurrence'),
+}).describe('A reference-style link occurrence with no matching definition');
+
+export type UnresolvedReference = z.infer<typeof UnresolvedReferenceSchema>;
+
+/**
  * Complete metadata for a markdown resource.
  *
  * Includes all parsed information about the resource: its links, headings structure,
@@ -114,6 +132,8 @@ export const ResourceMetadataSchema = z.object({
     .describe('Fragment targets for anchor validation (HTML id/name attributes)'),
   parseErrors: z.array(HtmlParseErrorSchema).optional()
     .describe('HTML well-formedness diagnostics (populated for HTML resources only)'),
+  unresolvedReferences: z.array(UnresolvedReferenceSchema).optional()
+    .describe('Reference-style links with no matching definition (populated for markdown resources only)'),
   frontmatter: z.record(z.string(), z.unknown()).optional()
     .describe('Parsed YAML frontmatter (if present in markdown file)'),
   frontmatterError: z.string().optional()

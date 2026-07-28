@@ -14,11 +14,10 @@ import { existsSync, statSync } from 'node:fs';
 import { basename, dirname } from 'node:path';
 
 import { isLocalFileLink } from '@vibe-agent-toolkit/resources';
-import type { ResourceLink, ResourceMetadata } from '@vibe-agent-toolkit/resources';
+import type { DeferredArtifacts, ResourceLink, ResourceMetadata } from '@vibe-agent-toolkit/resources';
 import { type GitTracker, isGitIgnored, toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import picomatch from 'picomatch';
 
-import { type DeferredPaths } from './files-config.js';
 import { NAVIGATION_FILE_PATTERNS } from './validators/validation-rules.js';
 
 /**
@@ -97,14 +96,23 @@ export interface WalkLinkGraphOptions {
   /** Whether to exclude navigation files (README.md, index.md, etc.) */
   excludeNavigationFiles?: boolean;
   /**
-   * Structured deferred path sets declared in files config. A path in either
-   * set is treated as a deferred build artifact ONLY when the target does not
-   * yet exist on disk. A `destPaths`/`sourcePaths` entry that already exists is
-   * NOT deferred and falls through to the normal directory / gitignore /
-   * missing-target handling (so an existing-but-gitignored artifact still
-   * surfaces a leak signal rather than a silent LINK_DEFERRED_ARTIFACT).
+   * Declared `files:` deferred-artifact model. A path covered by it is treated
+   * as a deferred build artifact in two cases:
+   *
+   * - The target does not yet exist on disk ({@link checkDeferred}, the FIRST
+   *   discriminator in {@link checkExclusions}) — covered via dest OR source.
+   * - The target exists, is gitignored, AND is covered as a DEST (the
+   *   gitignore branch in {@link checkExclusions}) — the expected state of a
+   *   build artifact once a build has run, not a leak. Source-only coverage
+   *   does NOT exempt an existing, gitignored target: a `files:` source is a
+   *   real file the author pointed at, and the leak signal is wanted.
+   *
+   * A covered path that exists and is NOT gitignored still falls through to
+   * the normal directory-target / bundling handling. An UNCOVERED path is
+   * never exempted — an existing gitignored file outside `files:` still
+   * surfaces the `gitignored` leak signal.
    */
-  deferredPaths?: DeferredPaths;
+  deferredArtifacts?: DeferredArtifacts;
   /**
    * Optional pre-populated {@link GitTracker} for O(1) gitignore checks.
    *
@@ -180,59 +188,72 @@ interface ExcludeMatcher {
 }
 
 /**
- * Test whether `rel` is an exact member of `set` OR lies under any entry in
- * `set` as a directory-prefix child (i.e. `rel.startsWith(p + '/')`).
- *
- * This covers both single-file entries (where only exact equality ever fires)
- * and glob entries (where the registered value is the glob's static base dir
- * and real link targets are children of that dir).
- *
- * Safe for single-file entries: a path like `a/b.mjs` only prefix-matches the
- * impossible children `a/b.mjs/...`, which can never be real filesystem paths.
- */
-function matchesDeferredPrefix(rel: string, set: Set<string>): boolean {
-  for (const p of set) {
-    if (rel === p || rel.startsWith(p + '/')) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * C2 + C1: Check if a target path is a deferred build artifact, and record
- * it in the deferred set if so. Must run BEFORE any statSync / directory
+ * Check if a target path is a not-yet-materialized deferred build artifact, and
+ * record it in the deferred set if so. Must run BEFORE any statSync / directory
  * check to avoid blowing up on missing paths.
  *
- * Deferral is gated on the target NOT existing on disk for BOTH sets: a
- * "deferred build artifact" is by definition not yet materialized. An existing
- * real file at a files: dest (or source) is not deferred — it must fall through
- * to the gitignore / directory-target checks so a genuine leak signal is not
- * silently downgraded to LINK_DEFERRED_ARTIFACT (info). The two sets stay
- * distinct because their `rel` values differ (dest is skill-relative, source
- * is project-relative), but they share the same existence guard.
- *
- * Membership test uses exact-OR-directory-prefix matching (via
- * {@link matchesDeferredPrefix}) so that links targeting children of a glob
- * entry's dest dir or source static base are correctly classified as deferred.
- * Single-file entries are unaffected — a file path `a/b.mjs` only
- * prefix-matches impossible children `a/b.mjs/...`.
+ * This check is gated on the target NOT existing on disk: it classifies the
+ * "hasn't been built yet" half of the deferred-artifact lifecycle. An
+ * existing real file at a covered files: dest (or source) is NOT deferred by
+ * THIS check — it falls through to the directory-target check and beyond.
+ * The gitignore branch further down in {@link checkExclusions} carries its
+ * OWN, unconditional `deferredArtifacts` exemption (existing or not) for the
+ * "already built, and gitignored as expected" half — see the comment there.
+ * So an existing-but-gitignored covered path still ends up classified as
+ * deferred, just via that branch rather than this one; only an
+ * existing-and-NOT-gitignored covered path (or an uncovered path) reaches
+ * normal handling. {@link DeferredArtifacts.covers} does the exact-OR-
+ * directory-prefix membership test (pure, no filesystem access); the
+ * existence gate stays here at the call site.
  *
  * @returns true if the path was classified as deferred
  */
 function checkDeferred(
   targetPath: string,
-  projectRoot: string,
-  deferredPaths: DeferredPaths,
+  deferredArtifacts: DeferredArtifacts,
   deferredAssetSet: Set<string>,
 ): boolean {
-  const rel = toForwardSlash(safePath.relative(projectRoot, targetPath));
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from parsed markdown
-  if ((matchesDeferredPrefix(rel, deferredPaths.destPaths) || matchesDeferredPrefix(rel, deferredPaths.sourcePaths)) && !existsSync(targetPath)) {
+  if (deferredArtifacts.covers(targetPath) && !existsSync(targetPath)) {
     deferredAssetSet.add(toForwardSlash(targetPath));
     return true;
   }
   return false;
+}
+
+/**
+ * Record a gitignored target as either a leak or an exempted `files:` build
+ * artifact — the caller always excludes it from the walk either way; only
+ * the record differs.
+ *
+ * A files:-declared DEST is exempt from the leak rule EVEN WHEN it already
+ * exists on disk and is gitignored — that is the expected post-build state
+ * of a materialized build artifact (gitignored `dist/` output), not a leak.
+ * This is deliberately unconditional on existence (unlike {@link checkDeferred}):
+ * the broken case this fixes IS the existing-artifact case. The covered path
+ * is recorded as a deferred asset (surfaces as info `LINK_DEFERRED_ARTIFACT`)
+ * instead of a `gitignored` exclusion, and stays out of link-traversal
+ * bundling — `files:` owns the copy.
+ *
+ * DEST-ONLY ({@link DeferredArtifacts.coversDest}, not {@link
+ * DeferredArtifacts.covers}): a `files:` SOURCE is a real, author-pointed-at
+ * file in the project tree, not a build output — if it's gitignored, linking
+ * to it is exactly the leak signal this rule exists to catch, so source
+ * coverage must NOT exempt it. An uncovered path, or a path covered only via
+ * `sourcePaths`, still reports the leak normally.
+ */
+function recordGitignoredTarget(
+  targetPath: string,
+  link: ResourceLink,
+  deferredArtifacts: DeferredArtifacts | undefined,
+  excludedReferences: LinkResolution[],
+  deferredAssetSet: Set<string>,
+): void {
+  if (deferredArtifacts?.coversDest(targetPath)) {
+    deferredAssetSet.add(toForwardSlash(targetPath));
+    return;
+  }
+  excludedReferences.push(makeExclusion(targetPath, 'gitignored', link));
 }
 
 /**
@@ -251,7 +272,7 @@ function checkExclusions(
   deferredAssetSet: Set<string>,
 ): boolean {
   // Deferred check is the FIRST discriminator (C2 ordering fix).
-  if (options.deferredPaths && checkDeferred(targetPath, options.projectRoot, options.deferredPaths, deferredAssetSet)) {
+  if (options.deferredArtifacts && checkDeferred(targetPath, options.deferredArtifacts, deferredAssetSet)) {
     return true;
   }
 
@@ -309,7 +330,7 @@ function checkExclusions(
     ? isGitIgnored(targetPath, options.projectRoot)
     : options.gitTracker.isIgnoredByActiveSet(targetPath);
   if (isIgnored) {
-    excludedReferences.push(makeExclusion(targetPath, 'gitignored', link));
+    recordGitignoredTarget(targetPath, link, options.deferredArtifacts, excludedReferences, deferredAssetSet);
     return true;
   }
 

@@ -8,8 +8,10 @@
  */
 /* eslint-disable security/detect-non-literal-fs-filename -- test helper builds synthetic fixtures at dynamic temp paths */
 import { writeFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 import { computeTreeCopiedSkillLocations } from '@vibe-agent-toolkit/agent-skills';
+import type { SkillFileEntry } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
@@ -38,6 +40,14 @@ export interface NestedProjectSpec {
   dir: string;
   pool: string[];
   poolTest?: Record<string, PoolTestBlock>;
+  /** Optional per-skill `skills.config.<name>.files` blocks (keyed by skill name). */
+  skillFiles?: Record<string, SkillFileEntry[]>;
+  /**
+   * Path (relative to THIS nested project's root — the config root a `files:`
+   * `source` resolves against) → file content, written to disk before the
+   * nested config so a `files:` `source` genuinely resolves.
+   */
+  sourceFiles?: Record<string, string>;
 }
 
 export interface ReferenceFixtureSpec {
@@ -47,6 +57,17 @@ export interface ReferenceFixtureSpec {
   pluginLocal?: string[];
   /** Optional per-skill `skills.config.<name>.test` blocks (for test-config resolution tests). */
   poolTest?: Record<string, PoolTestBlock>;
+  /**
+   * Optional per-skill `skills.config.<name>.files` blocks, keyed by skill NAME —
+   * applies to pool AND plugin-local skills alike (one field, not two).
+   */
+  skillFiles?: Record<string, SkillFileEntry[]>;
+  /**
+   * Path (relative to the fixture root — the project root a `files:` `source`
+   * resolves against) → file content, written to disk before the config so a
+   * `files:` `source` genuinely resolves.
+   */
+  sourceFiles?: Record<string, string>;
   /** Optional second config root nested inside this one. */
   nested?: NestedProjectSpec;
 }
@@ -57,6 +78,8 @@ export interface NestedProjectFixture {
   root: string;
   /** Authored source DIR of a nested pool skill (the `path:` a companion would use). */
   skillDir: (name: string) => string;
+  /** Absolute path of a declared `sourceFiles` entry (relative to THIS nested root). */
+  sourceFilePath: (relPath: string) => string;
 }
 
 export interface ReferenceFixture {
@@ -66,8 +89,15 @@ export interface ReferenceFixture {
   /** Authored SKILL.md of a plugin-local skill (its dirname is the build INPUT dir). */
   pluginSkillMd: (name: string) => string;
   pluginDistDir: (name: string) => string;
+  /** Absolute path of a declared `sourceFiles` entry (relative to the fixture root). */
+  sourceFilePath: (relPath: string) => string;
   /** Set only when the spec declared a {@link NestedProjectSpec}. */
   nested?: NestedProjectFixture;
+}
+
+/** Bind a `sourceFiles` relative-path key to an absolute path under `root`. */
+function makeSourceFilePathAccessor(root: string): (relPath: string) => string {
+  return (relPath: string) => safePath.join(root, relPath);
 }
 
 function writeSkillMd(skillDir: string, name: string): void {
@@ -76,6 +106,30 @@ function writeSkillMd(skillDir: string, name: string): void {
     safePath.join(skillDir, 'SKILL.md'),
     `---\nname: ${name}\ndescription: Synthetic ${name} fixture skill for reference-resolution tests.\n---\n\n# ${name}\n\nSynthetic body.\n`,
   );
+}
+
+/**
+ * Merge `poolTest` and `skillFiles` into one `skills.config.<name>` block per
+ * skill name — a skill declared in BOTH must end up with a single object
+ * carrying both `test:` and `files:`, never two blocks or a clobbered one.
+ */
+function buildSkillsConfig(
+  poolTest: Record<string, PoolTestBlock> | undefined,
+  skillFiles: Record<string, SkillFileEntry[]> | undefined,
+): Record<string, unknown> | undefined {
+  const names = new Set([...Object.keys(poolTest ?? {}), ...Object.keys(skillFiles ?? {})]);
+  if (names.size === 0) return undefined;
+
+  const config: Record<string, unknown> = {};
+  for (const name of names) {
+    const entry: Record<string, unknown> = {};
+    const test = poolTest?.[name];
+    if (test !== undefined) entry.test = test;
+    const files = skillFiles?.[name];
+    if (files !== undefined) entry.files = files;
+    config[name] = entry;
+  }
+  return config;
 }
 
 function buildConfigYaml(spec: ReferenceFixtureSpec): string {
@@ -88,11 +142,8 @@ function buildConfigYaml(spec: ReferenceFixtureSpec): string {
   const config: Record<string, unknown> = { version: 1 };
   if (include.length > 0) {
     const skills: Record<string, unknown> = { include };
-    if (spec.poolTest !== undefined) {
-      skills.config = Object.fromEntries(
-        Object.entries(spec.poolTest).map(([name, test]) => [name, { test }]),
-      );
-    }
+    const skillsConfig = buildSkillsConfig(spec.poolTest, spec.skillFiles);
+    if (skillsConfig !== undefined) skills.config = skillsConfig;
     config.skills = skills;
   }
   if (spec.pluginLocal && spec.pluginLocal.length > 0) {
@@ -115,12 +166,22 @@ function buildConfigYaml(spec: ReferenceFixtureSpec): string {
   return yaml.stringify(config);
 }
 
+/** Write declared `sourceFiles` (relative to `root`) to disk BEFORE the config that references them. */
+function writeSourceFiles(root: string, sourceFiles: Record<string, string> | undefined): void {
+  for (const [relPath, content] of Object.entries(sourceFiles ?? {})) {
+    const absPath = safePath.join(root, relPath);
+    mkdirSyncReal(dirname(absPath), { recursive: true });
+    writeFileSync(absPath, content);
+  }
+}
+
 /** Write a project root: its pool skills plus the `vibe-agent-toolkit.config.yaml` that declares them. */
 function writePoolProject(root: string, spec: ReferenceFixtureSpec): void {
   mkdirSyncReal(root, { recursive: true });
   for (const name of spec.pool ?? []) {
     writeSkillMd(safePath.join(root, 'skills', name), name);
   }
+  writeSourceFiles(root, spec.sourceFiles);
   writeFileSync(safePath.join(root, 'vibe-agent-toolkit.config.yaml'), buildConfigYaml(spec));
 }
 
@@ -147,10 +208,13 @@ function setupNestedProject(root: string, nested: NestedProjectSpec): NestedProj
   writePoolProject(nestedRoot, {
     pool: nested.pool,
     ...(nested.poolTest === undefined ? {} : { poolTest: nested.poolTest }),
+    ...(nested.skillFiles === undefined ? {} : { skillFiles: nested.skillFiles }),
+    ...(nested.sourceFiles === undefined ? {} : { sourceFiles: nested.sourceFiles }),
   });
   return {
     root: nestedRoot,
     skillDir: (name) => safePath.join(nestedRoot, 'skills', name),
+    sourceFilePath: makeSourceFilePathAccessor(nestedRoot),
   };
 }
 
@@ -168,6 +232,7 @@ export function setupReferenceFixture(spec: ReferenceFixtureSpec): ReferenceFixt
     poolSkillMd: (name) => safePath.resolve(root, 'skills', name, 'SKILL.md'),
     poolDistDir: (name) => safePath.join(root, 'dist', 'skills', name),
     pluginSkillMd: (name) => safePath.resolve(root, 'plugins', PLUGIN_NAME, 'skills', name, 'SKILL.md'),
+    sourceFilePath: makeSourceFilePathAccessor(root),
     pluginDistDir: (name) => {
       const location = computeTreeCopiedSkillLocations(loadFixtureConfig(spec), root).find(
         (loc) => loc.skillDirName === name,

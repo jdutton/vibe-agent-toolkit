@@ -46,6 +46,9 @@ export { ResourceCollection } from './resource-collection.js';
 // Export ResourceCollectionInterface for collection behavior
 export type { ResourceCollectionInterface } from './resource-collection-interface.js';
 
+// Export DeferredArtifacts model for `files:` deferred build-artifact detection
+export { DeferredArtifacts, type DeferredSkillFiles } from './deferred-artifacts.js';
+
 // Export all type definitions (from schemas)
 export type {
   LinkNodeType,

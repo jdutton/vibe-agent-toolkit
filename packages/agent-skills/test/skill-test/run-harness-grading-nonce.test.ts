@@ -45,7 +45,7 @@ type FakeSpawn = ReturnType<typeof makeHarnessFakeSpawn>['spawn'];
 /** Run the acknowledged harness against a fixed harness output dir under `tempDir`. */
 function runHarness(
   tempDir: string,
-  subjectStagedDir: string,
+  authoredDir: string,
   spawn: FakeSpawn,
   extra?: { tolerateEvalFailure?: boolean },
 ): ReturnType<typeof runSkillTestHarness> {
@@ -53,7 +53,8 @@ function runHarness(
     subject: 'my-skill',
     repoRoot: tempDir,
     out: safePath.join(tempDir, 'harness'),
-    subjectSource: { path: subjectStagedDir },
+    subjectSource: { path: authoredDir },
+    subjectScaffoldDir: authoredDir,
     acknowledgedRunsSkillCode: true,
     spawn,
     ...(extra?.tolerateEvalFailure === undefined ? {} : { tolerateEvalFailure: extra.tolerateEvalFailure }),
@@ -61,10 +62,10 @@ function runHarness(
 }
 
 describe('runSkillTestHarness — per-eval grader integrity nonce', () => {
-  const { getTempDir, getSubjectStagedDir } = setupStubbedHarnessSubject('vat-nonce-', vi.mocked(stageHarness));
+  const { getTempDir, getAuthoredDir } = setupStubbedHarnessSubject('vat-nonce-', vi.mocked(stageHarness));
 
   it('accepts nonce-valid fragments and writes grading.json from the merge (PASS)', async () => {
-    const result = await runHarness(getTempDir(), getSubjectStagedDir(), makeHarnessFakeSpawn().spawn);
+    const result = await runHarness(getTempDir(), getAuthoredDir(), makeHarnessFakeSpawn().spawn);
     expect(result.summary).toBe('PASS 1/1');
     expect(result.exitCode).toBe(0);
     const gradingPath = safePath.join(getTempDir(), 'harness', 'results', 'grading.json');
@@ -74,7 +75,7 @@ describe('runSkillTestHarness — per-eval grader integrity nonce', () => {
 
   it('rejects a fragment whose nonce does not match this run (forged/left-behind)', async () => {
     const forging = makeHarnessFakeSpawn({ forgeNonce: true });
-    await expect(runHarness(getTempDir(), getSubjectStagedDir(), forging.spawn)).rejects.toThrow(GradingNonceError);
+    await expect(runHarness(getTempDir(), getAuthoredDir(), forging.spawn)).rejects.toThrow(GradingNonceError);
   });
 });
 
@@ -82,17 +83,17 @@ describe('runSkillTestHarness — per-eval grader integrity nonce', () => {
 // a nonce-valid FAILING fragment, so the run reaches verdictExitCode only after
 // every integrity gate has passed.
 describe('runSkillTestHarness — eval verdict exit code (fail-closed default)', () => {
-  const { getTempDir, getSubjectStagedDir } = setupStubbedHarnessSubject('vat-verdict-', vi.mocked(stageHarness));
+  const { getTempDir, getAuthoredDir } = setupStubbedHarnessSubject('vat-verdict-', vi.mocked(stageHarness));
 
   it('a completed run with a failing verdict exits EvalFailure (4) by DEFAULT', async () => {
-    const result = await runHarness(getTempDir(), getSubjectStagedDir(), makeHarnessFakeSpawn({ graderPassed: false }).spawn);
+    const result = await runHarness(getTempDir(), getAuthoredDir(), makeHarnessFakeSpawn({ graderPassed: false }).spawn);
     expect(result.summary).toBe('FAIL 0/1');
     expect(result.exitCode).toBe(4);
   });
 
   it('the --allow-eval-failure opt-out downgrades a failing verdict to Ok (0)', async () => {
     const failing = makeHarnessFakeSpawn({ graderPassed: false });
-    const result = await runHarness(getTempDir(), getSubjectStagedDir(), failing.spawn, { tolerateEvalFailure: true });
+    const result = await runHarness(getTempDir(), getAuthoredDir(), failing.spawn, { tolerateEvalFailure: true });
     expect(result.summary).toBe('FAIL 0/1');
     expect(result.exitCode).toBe(0);
   });

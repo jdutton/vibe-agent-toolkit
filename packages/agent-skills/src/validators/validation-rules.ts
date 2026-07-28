@@ -41,6 +41,7 @@ export type ValidationRuleCode =
   | 'DESCRIPTION_TOO_VAGUE'
   | 'NO_PROGRESSIVE_DISCLOSURE'
   | 'PACKAGED_UNREFERENCED_FILE'
+  | 'PACKAGED_TEST_INPUT'
   | 'PACKAGED_BROKEN_LINK';
 
 /**
@@ -155,6 +156,12 @@ export const VALIDATION_RULES: Record<ValidationRuleCode, ValidationRule> = {
     category: 'best_practice',
     message: (ctx) => `Packaged file not referenced from any markdown: ${(ctx['relativePath'] as string) ?? 'unknown'}`,
     fix: 'Add a markdown link from SKILL.md or a linked resource, or allow via validation.allow',
+  },
+  PACKAGED_TEST_INPUT: {
+    code: 'PACKAGED_TEST_INPUT',
+    category: 'best_practice',
+    message: (ctx) => `Declared test input packaged into the shipped skill: ${(ctx['relativePath'] as string) ?? 'unknown'}`,
+    fix: 'Remove the files: entry mapping the eval suite into the bundle — test input is read from source, never shipped',
   },
   PACKAGED_BROKEN_LINK: {
     code: 'PACKAGED_BROKEN_LINK',

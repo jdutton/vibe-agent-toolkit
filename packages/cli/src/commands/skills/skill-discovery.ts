@@ -27,10 +27,12 @@ const DISCOVERY_EXCLUDE = [
 ];
 
 /**
- * Read skill name from SKILL.md frontmatter.
- * Falls back to H1 title, then filename.
+ * Read a skill's name from SKILL.md frontmatter, falling back to its H1 title and
+ * then its filename. Exported so the Claude plugin build resolves a plugin-local
+ * skill's name through the SAME definition `vat skills build` uses — per-skill
+ * config is keyed by name, so two answers would mean two effective configs.
  */
-async function readSkillName(skillPath: string): Promise<string | undefined> {
+export async function readSkillName(skillPath: string): Promise<string | undefined> {
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillPath from glob discovery
   const content = await readFile(skillPath, 'utf-8');
   const parsed = await parseMarkdown(skillPath);

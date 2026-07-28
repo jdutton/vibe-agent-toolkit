@@ -11,7 +11,6 @@ import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 
 import {
-  mergeFilesConfig,
   packageSkills,
   packagingConfigToPackageOptions,
   skillNameToFsPath,
@@ -22,7 +21,6 @@ import {
   type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { Target } from '@vibe-agent-toolkit/claude-marketplace';
-import type { SkillPackagingConfig as ConfigSkillPackagingConfig } from '@vibe-agent-toolkit/resources';
 import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
@@ -30,6 +28,7 @@ import { handleCommandError } from '../../utils/command-error.js';
 import { loadConfig } from '../../utils/config-loader.js';
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
+import { mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
 import { applyConfigVerdicts } from '../../utils/verdict-helpers.js';
 
 import {
@@ -189,43 +188,6 @@ function displayIgnoredErrors(
       logger.info(`     [${String(record.code)}] ${String(record.location)} (allowed: ${record.reason})`);
     }
   }
-}
-
-/**
- * Merge packaging config: schema defaults -> config yaml defaults -> per-skill overrides.
- *
- * Uses shallow merge (spread) since all SkillPackagingConfig fields are top-level.
- * The excludeReferencesFromBundle and validation fields are objects,
- * but per-skill overrides should fully replace (not deep-merge) the defaults for those fields.
- */
-function mergePackagingConfig(
-  defaults: ConfigSkillPackagingConfig | undefined,
-  perSkill: ConfigSkillPackagingConfig | undefined,
-): SkillPackagingConfig {
-  const merged = {
-    ...defaults,
-    ...perSkill,
-  };
-
-  // Strip undefined values to satisfy exactOptionalPropertyTypes.
-  // Spread of optional Zod-inferred types can produce explicit `undefined` values
-  // which are not assignable to optional-but-not-undefined properties.
-  const result: SkillPackagingConfig = {};
-  for (const [key, value] of Object.entries(merged)) {
-    if (value !== undefined) {
-      (result as Record<string, unknown>)[key] = value;
-    }
-  }
-
-  // Special merge for files: additive with per-skill dest override
-  if (defaults?.files !== undefined || perSkill?.files !== undefined) {
-    const mergedFiles = mergeFilesConfig(defaults?.files, perSkill?.files);
-    if (mergedFiles.length > 0) {
-      (result as Record<string, unknown>)['files'] = mergedFiles;
-    }
-  }
-
-  return result;
 }
 
 /**
@@ -406,7 +368,7 @@ async function buildCommand(
     }> = [];
 
     for (const skill of skillsToBuild) {
-      const packagingConfig = mergePackagingConfig(
+      const packagingConfig = mergeSkillPackagingConfig(
         skillsConfig.defaults,
         skillsConfig.config?.[skill.name],
       );

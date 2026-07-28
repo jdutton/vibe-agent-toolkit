@@ -9,7 +9,6 @@ import {
   buildArtifactHint,
   mergeFilesConfig,
   matchLinkToFiles,
-  computeDeferredPaths,
   verifyFilesIntegrity,
   verifyDestSet,
   type SkillFileEntry,
@@ -176,118 +175,6 @@ describe('matchLinkToFiles', () => {
     // 'a/b.mjs/c' must NOT match a single-file entry (isGlob is false, so exact only)
     const childResult = matchLinkToFiles('a/b.mjs/c', [singleEntry]);
     expect(childResult).toBeNull();
-  });
-});
-
-describe('computeDeferredPaths', () => {
-  const PROJ_ROOT = '/proj';
-
-  it('should return empty sets when no files config', () => {
-    const result = computeDeferredPaths([], { skillDir: PROJ_ROOT, projectRoot: PROJ_ROOT });
-    expect(result.destPaths).toEqual(new Set());
-    expect(result.sourcePaths).toEqual(new Set());
-  });
-
-  it('should put dest in destPaths and source in sourcePaths (skill at project root)', () => {
-    // When skillDir === projectRoot, dest and source paths are project-root-relative as authored
-    const files: SkillFileEntry[] = [
-      { source: CLI_SOURCE, dest: CLI_DEST },
-    ];
-    const result = computeDeferredPaths(files, { skillDir: PROJ_ROOT, projectRoot: PROJ_ROOT });
-    expect(result.destPaths.has(CLI_DEST)).toBe(true);
-    expect(result.sourcePaths.has(CLI_SOURCE)).toBe(true);
-    // Each path should be in its own set, not cross-contaminated
-    expect(result.destPaths.has(CLI_SOURCE)).toBe(false);
-    expect(result.sourcePaths.has(CLI_DEST)).toBe(false);
-  });
-
-  it('should deduplicate within each set across multiple entries', () => {
-    const files: SkillFileEntry[] = [
-      { source: CLI_SOURCE, dest: CLI_DEST },
-      { source: CLI_SOURCE, dest: 'scripts/cli2.mjs' },
-    ];
-    const result = computeDeferredPaths(files, { skillDir: PROJ_ROOT, projectRoot: PROJ_ROOT });
-    // CLI_SOURCE appears once in sourcePaths (deduped)
-    expect(result.sourcePaths.size).toBe(1);
-    // CLI_DEST and 'scripts/cli2.mjs' are distinct in destPaths
-    expect(result.destPaths.size).toBe(2);
-  });
-
-  it('should normalize paths with ./ prefix (skill at project root)', () => {
-    const files: SkillFileEntry[] = [
-      { source: `./${CLI_SOURCE}`, dest: `./${CLI_DEST}` },
-    ];
-    const result = computeDeferredPaths(files, { skillDir: PROJ_ROOT, projectRoot: PROJ_ROOT });
-    expect(result.sourcePaths.has(CLI_SOURCE)).toBe(true);
-    expect(result.destPaths.has(CLI_DEST)).toBe(true);
-  });
-
-  it('resolves an absolute-looking source the same way the packager does (join, not bare resolve)', () => {
-    // Carry-forward #4: skill-packager resolves source via
-    // `safePath.resolve(safePath.join(projectRoot, source))`, which roots an
-    // absolute-looking source UNDER projectRoot. computeDeferredPaths must use
-    // the identical expression so the deferred set matches what the packager
-    // copies — a bare `resolve(projectRoot, source)` would treat the leading
-    // slash as escaping the project root and produce a '../'-prefixed path that
-    // never matches the walker's project-relative `rel`.
-    const files: SkillFileEntry[] = [
-      { source: '/dist/bin/cli.mjs', dest: CLI_DEST },
-    ];
-    const result = computeDeferredPaths(files, { skillDir: PROJ_ROOT, projectRoot: PROJ_ROOT });
-    expect(result.sourcePaths.has(CLI_SOURCE)).toBe(true);
-  });
-
-  it('should resolve dest relative to skillDir and emit project-root-relative path for skill in subdirectory', () => {
-    // Bug regression test: skill is at /proj/skills/ado/SKILL.md
-    // skillDir = /proj/skills/ado, projectRoot = /proj
-    // files: [{ source: 'dist/bin/ado-cli.mjs', dest: 'scripts/ado-cli.mjs' }]
-    // dest authored relative to skillDir → absolute: /proj/skills/ado/scripts/ado-cli.mjs
-    // expected destPath (project-root-relative): 'skills/ado/scripts/ado-cli.mjs'
-    // source authored relative to projectRoot → absolute: /proj/dist/bin/ado-cli.mjs
-    // expected sourcePath (project-root-relative): 'dist/bin/ado-cli.mjs'
-    const files: SkillFileEntry[] = [
-      { source: 'dist/bin/ado-cli.mjs', dest: 'scripts/ado-cli.mjs' },
-    ];
-    const result = computeDeferredPaths(files, {
-      skillDir: `${PROJ_ROOT}/skills/ado`,
-      projectRoot: PROJ_ROOT,
-    });
-
-    // destPath must be project-root-relative (including the skill subdir prefix)
-    expect(result.destPaths.has('skills/ado/scripts/ado-cli.mjs')).toBe(true);
-    // sourcePath must be project-root-relative (as authored, relative to projectRoot)
-    expect(result.sourcePaths.has('dist/bin/ado-cli.mjs')).toBe(true);
-
-    // Must NOT contain the raw (skill-dir-relative) dest that the bug would have stored
-    expect(result.destPaths.has('scripts/ado-cli.mjs')).toBe(false);
-  });
-
-  // ---- Glob entry: static-base registration ----
-
-  it('glob entry: sourcePaths registers the STATIC BASE, not the raw glob pattern', () => {
-    // GLOB_PACKS_SOURCE ('dist/packs/**/*') → static base is 'dist/packs'
-    // The raw magic pattern must never appear in sourcePaths — a real rel path
-    // like 'dist/packs/ce/x.json' can never equal the raw glob.
-    const files: SkillFileEntry[] = [
-      { source: GLOB_PACKS_SOURCE, dest: GLOB_PACKS_DEST },
-    ];
-    const result = computeDeferredPaths(files, { skillDir: PROJ_ROOT, projectRoot: PROJ_ROOT });
-
-    // Static base (forward-slash, project-root-relative) must be registered
-    const bases = [...result.sourcePaths].sort((a, b) => a.localeCompare(b));
-    expect(bases).toContain(toForwardSlash(safePath.join('dist', 'packs')));
-
-    // Raw glob pattern must NOT be registered
-    expect(result.sourcePaths.has(GLOB_PACKS_SOURCE)).toBe(false);
-  });
-
-  it('glob entry: destPaths registers the dest dir unchanged (same as non-glob)', () => {
-    const files: SkillFileEntry[] = [
-      { source: GLOB_PACKS_SOURCE, dest: GLOB_PACKS_DEST },
-    ];
-    const result = computeDeferredPaths(files, { skillDir: PROJ_ROOT, projectRoot: PROJ_ROOT });
-    // dest GLOB_PACKS_DEST is a directory name — registered as 'packs' (project-root-relative)
-    expect(result.destPaths.has(GLOB_PACKS_DEST)).toBe(true);
   });
 });
 

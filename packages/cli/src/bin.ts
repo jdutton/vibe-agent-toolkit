@@ -23,7 +23,7 @@ import { createSkillCommand } from './commands/skill/index.js';
 import { createSkillsCommand } from './commands/skills/index.js';
 import { createValidateTopLevelCommand } from './commands/validate.js';
 import { createVerifyTopLevelCommand } from './commands/verify.js';
-import { loadVerboseHelp } from './utils/help-loader.js';
+import { loadVerboseHelp, writeHelpSync } from './utils/help-loader.js';
 import { createLogger } from './utils/logger.js';
 import { version, getVersionString, type VersionContext } from './version.js';
 
@@ -159,7 +159,5 @@ program.on('command:*', (operands) => {
 program.parse();
 
 function showVerboseHelp(): void {
-  const helpContent = loadVerboseHelp(); // Loads from docs/cli/index.md
-  process.stdout.write(helpContent);
-  process.stdout.write('\n');
+  writeHelpSync(loadVerboseHelp()); // Loads from docs/cli/index.md
 }

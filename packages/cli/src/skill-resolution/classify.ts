@@ -52,10 +52,15 @@ function isSourceSpec(ref: string): boolean {
 
 /**
  * Classify a reference token's syntactic shape (no IO):
- *  - a `kind:` prefix / `vendored` → `source-spec`
+ *  - a `kind:` prefix / `vendored` → `source-spec` (note: `resolveSkillReference`
+ *    re-routes the `path:` arm through its definite-path rung, because that prefix
+ *    only disambiguates path-vs-name and must not change build treatment)
  *  - absolute, or contains a path separator, or starts with `.` → `definite-path`
  *    (ladder rule 1: "always a path; never name-resolved" — incl. the `./<name>`
- *    escape that forces a colliding local dir over a declared skill)
+ *    escape that forces a colliding local dir over a declared skill. That escape
+ *    only lands on `source`: if the local dir IS the declared skill's own source
+ *    dir, rung 2a resolves `./<name>` to `buildable` anyway, so there is no escape
+ *    from your own source — only from an unrelated dir that merely shares the name)
  *  - otherwise a bare word → `bare-name` (resolved against config + fs by the caller)
  */
 export function classifyToken(ref: string): TokenShape {

@@ -17,6 +17,7 @@ import { readFile, stat } from 'node:fs/promises';
 
 import GithubSlugger from 'github-slugger';
 import type { Definition, Heading, Link, LinkReference, Root } from 'mdast';
+import { toString as mdastToString } from 'mdast-util-to-string';
 import remarkFrontmatter from 'remark-frontmatter';
 import remarkGfm from 'remark-gfm';
 import remarkParse from 'remark-parse';
@@ -25,7 +26,8 @@ import { visit } from 'unist-util-visit';
 import * as yaml from 'yaml';
 
 import type { HtmlParseError } from './schemas/resource-metadata.js';
-import type { HeadingNode, LinkType, ResourceLink } from './types.js';
+import type { HeadingNode, LinkType, ResourceLink, UnresolvedReference } from './types.js';
+import { findUnresolvedReferences } from './unresolved-references.js';
 
 /**
  * Result of parsing a resource file (markdown or HTML).
@@ -42,6 +44,12 @@ export interface ParseResult {
   anchors?: string[];
   /** HTML well-formedness diagnostics. Markdown leaves this undefined. */
   parseErrors?: HtmlParseError[];
+  /**
+   * Full (`[text][label]`) and collapsed (`[label][]`) reference-style link
+   * occurrences whose label has no matching `[label]: url` definition. HTML
+   * leaves this undefined; markdown always populates it (possibly empty).
+   */
+  unresolvedReferences?: UnresolvedReference[];
 }
 
 /**
@@ -87,11 +95,17 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
   // Extract frontmatter
   const { frontmatter, error: frontmatterError } = extractFrontmatter(tree);
 
+  // Detect dangling reference-style links (full/collapsed forms with no
+  // matching definition) — see findUnresolvedReferences for why this is a
+  // raw-source scan rather than an AST visit.
+  const unresolvedReferences = findUnresolvedReferences(content, tree);
+
   // With exactOptionalPropertyTypes: true, we must conditionally include the property
   // rather than assigning undefined to it
   return {
     links,
     headings,
+    unresolvedReferences,
     ...(frontmatter !== undefined && { frontmatter }),
     ...(frontmatterError !== undefined && { frontmatterError }),
     content,
@@ -133,14 +147,28 @@ function extractLinks(tree: Root): ResourceLink[] {
     links.push(link);
   });
 
-  // Visit linkReference nodes (reference-style links)
-  // Only include resolved references — unresolved ones are literal text in rendered markdown, not links
+  // Visit linkReference nodes (reference-style links).
+  //
+  // Invariant: every `linkReference` node visited here already has a matching
+  // `definition` — CommonMark resolves link references at PARSE time, so
+  // micromark only ever emits a `linkReference` node when a definition
+  // matched. A reference with no matching definition never reaches this
+  // visitor at all; it degrades to literal bracketed text in the AST (and in
+  // the rendered document), which is exactly why an AST-based checker is
+  // structurally blind to it. That dangling case is detected separately, by
+  // `findUnresolvedReferences`'s raw-source scan (see `parseMarkdown` and
+  // `unresolved-references.ts`), which reports it as
+  // `LINK_UNRESOLVED_REFERENCE`.
+  //
+  // The `undefined` branch below is therefore NOT the dangling-reference case
+  // — it is unreachable unless micromark's own parse-time contract breaks. It
+  // degrades (skips the node) rather than throwing because `parseMarkdown`
+  // runs over third-party markdown on the `vat audit` / `vat skills validate`
+  // paths: a parser quirk must not abort a whole audit run (repo CLAUDE.md,
+  // "be liberal in what you accept" for data we do not control).
   visit(tree, 'linkReference', (node: LinkReference) => {
     const resolvedUrl = definitions.get(node.identifier);
-    if (resolvedUrl === undefined) {
-      // No matching definition — skip this node (it renders as plain text, not a link)
-      return;
-    }
+    if (resolvedUrl === undefined) return;
     const link: ResourceLink = {
       text: extractLinkText(node),
       href: resolvedUrl,
@@ -170,11 +198,23 @@ function extractLinks(tree: Root): ResourceLink[] {
 /**
  * Extract text content from a link node.
  *
+ * Delegates to `mdast-util-to-string` (the canonical mdast text-extraction
+ * implementation) rather than a hand-rolled walker — it recurses through
+ * container inline nodes (`strong`, `emphasis`, `delete`, nested links) the
+ * same way the previous walker did.
+ *
+ * `includeImageAlt: false` is passed explicitly: the library's default is
+ * `true` (fold image/imageReference `alt` text into the result), but the
+ * hand-rolled walker it replaced silently dropped image alt text. This
+ * option pins the behavior to match — swapping the implementation must not
+ * silently change extracted text (and, for headings, anchor slugs — see
+ * {@link extractHeadingText}).
+ *
  * @param node - Link or LinkReference node
  * @returns Text content of the link
  */
 function extractLinkText(node: Link | LinkReference): string {
-  return extractTextFromChildren(node.children);
+  return mdastToString(node, { includeImageAlt: false });
 }
 
 /**
@@ -343,56 +383,29 @@ function extractHeadings(tree: Root): HeadingNode[] {
 /**
  * Extract text content from a heading node.
  *
+ * Uses `mdast-util-to-string` (see {@link extractLinkText}) so that styled
+ * headings — e.g. `### **CRITICAL: ...**` — produce the same text (and
+ * therefore the same GitHub slug) as their plain-text equivalents. Without
+ * recursing into container inline nodes, bold/italic headings would yield
+ * empty text and bogus slugs, causing false LINK_BROKEN_ANCHOR errors for
+ * links targeting them.
+ *
+ * `includeImageAlt: false` (see {@link extractLinkText}) preserves the prior
+ * hand-rolled walker's behavior of dropping image alt text from heading
+ * text — and therefore from the slug fed to `github-slugger`. Whether GitHub
+ * (or other renderers) actually includes image alt text when computing a
+ * heading's anchor is NOT verified here; this is a deliberate
+ * behavior-preservation choice, not a claim about renderer behavior. If a
+ * renderer is later confirmed to include alt text in anchors, switching
+ * `includeImageAlt` to `true` is a separate, deliberate change with its own
+ * anchor-validation consequences (it would change slugs for every heading
+ * containing an image) — do not flip it based on assumption alone.
+ *
  * @param node - Heading node
  * @returns Text content of the heading
  */
 function extractHeadingText(node: Heading): string {
-  return extractTextFromChildren(node.children);
-}
-
-/**
- * Inline node shape for heading text extraction. Leaf inline nodes (`text`,
- * `inlineCode`) carry their content in `value`; container inline nodes
- * (`strong`, `emphasis`, `link`, `delete`) carry it in `children`.
- */
-interface InlineNode {
-  type: string;
-  value?: unknown;
-  children?: InlineNode[];
-}
-
-/**
- * Extract text content from inline children nodes.
- *
- * Handles leaf nodes (`text`, `inlineCode`) and recurses into container inline
- * elements (`strong`, `emphasis`, `link`, `delete`) so that styled headings —
- * e.g. `### **CRITICAL: ...**` — produce the same text (and therefore the same
- * GitHub slug) as their plain-text equivalents. Without recursion, bold/italic
- * headings yielded empty text and bogus slugs, causing false LINK_BROKEN_ANCHOR
- * errors for links targeting them.
- *
- * @param children - Array of child nodes or undefined
- * @returns Concatenated text content
- */
-function extractTextFromChildren(children: InlineNode[] | undefined): string {
-  if (!children || children.length === 0) {
-    return '';
-  }
-
-  return children
-    .map((child) => {
-      // Leaf inline nodes (text, inlineCode) hold their content in `value`.
-      if (typeof child.value === 'string') {
-        return child.value;
-      }
-      // Container inline nodes (strong, emphasis, link, delete) hold text in
-      // their children — recurse to gather it.
-      if (child.children) {
-        return extractTextFromChildren(child.children);
-      }
-      return '';
-    })
-    .join('');
+  return mdastToString(node, { includeImageAlt: false });
 }
 
 

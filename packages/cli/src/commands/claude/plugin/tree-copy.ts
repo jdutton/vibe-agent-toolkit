@@ -18,9 +18,16 @@ export interface TreeCopyOptions {
   sourceDir: string;
   destDir: string;
   /**
-   * Skill directory names (fs-safe form) to exclude from the verbatim
-   * tree-copy — skills that collide with the plugin's resolved pool
-   * selector. The pool-packaged copy becomes the sole source for these.
+   * Names of `skills/<dir>` entries that ANOTHER build phase produces, and which
+   * this verbatim copy must therefore leave alone.
+   *
+   * A skill is produced by the packager (pool-packaged, or packaged in place from
+   * the plugin's own source), never by a verbatim copy — copying a skill dir
+   * wholesale is what used to ship eval suites, scratch files, and un-rewritten
+   * links to plugin consumers. Callers must pass exactly the dirs they produced:
+   * a `skills/` subdirectory that is NOT a skill (a shared helper dir, a template
+   * dir, the parent of a nested skill) has no other producer, so excluding it here
+   * would drop it from the bundle entirely.
    */
   excludeSkillDirs?: string[];
   warn?: (message: string) => void;

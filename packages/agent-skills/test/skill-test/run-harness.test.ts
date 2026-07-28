@@ -32,6 +32,7 @@ import {
   buildRunSummary,
   buildRunSummaryWithSkips,
   buildStageItems,
+  buildStaleDistWarningLines,
   cleanupHarness,
   computeCompositeVerdict,
   detectItemPluginLayout,
@@ -645,6 +646,36 @@ describe('buildDryRunSummary', () => {
     const customPath = '/harness/custom/results/provenance.json';
     const summary = buildDryRunSummary(makeDryRunInput({ provenancePath: customPath }));
     expect(summary).toContain(`Provenance: ${customPath}`);
+  });
+});
+
+// A companion (--with/--with-optional) previewed from a stale dist
+// under --dry-run silently warned nobody, while the byte-identical subject case
+// warned loudly. buildStaleDistWarningLines is the ONE warning-construction used
+// by both buildDryRunSummary (subject, unlabeled) and run.ts's companion
+// resolution (labeled with the companion's alias + declared skill), so the two
+// call sites never drift into two different strings for the same fact.
+const COMPANION_ROLE_LABEL = "companion 'my-helper' (declared skill 'declared-pool')";
+
+describe('buildStaleDistWarningLines', () => {
+  it('subject (no label): matches the exact wording buildDryRunSummary emits for a stale subject dist', () => {
+    const lines = buildStaleDistWarningLines();
+    const summary = buildDryRunSummary(makeDryRunInput({ wouldBuild: true, dryRunStagedExistingDist: true }));
+    for (const line of lines) expect(summary).toContain(line);
+  });
+
+  it('labeled (companion): names the companion so the two warnings are distinguishable', () => {
+    const lines = buildStaleDistWarningLines(COMPANION_ROLE_LABEL);
+    expect(lines[0]).toContain(COMPANION_ROLE_LABEL);
+    expect(lines[0]).toContain('WITHOUT rebuilding');
+    expect(lines[0]).toContain('STALE');
+    expect(lines.join(' ')).toContain('vat build');
+  });
+
+  it('subject and labeled companion warnings are textually distinct', () => {
+    const subjectLines = buildStaleDistWarningLines();
+    const companionLines = buildStaleDistWarningLines(COMPANION_ROLE_LABEL);
+    expect(subjectLines[0]).not.toEqual(companionLines[0]);
   });
 });
 

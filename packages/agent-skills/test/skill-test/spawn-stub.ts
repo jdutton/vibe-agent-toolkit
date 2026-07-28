@@ -87,6 +87,13 @@ export interface HarnessFakeSpawnConfig {
    * while output expectations still pass — exercising the composite verdict.
    */
   graderToolPassed?: boolean;
+  /**
+   * Called with the EXECUTOR spawn's `opts` just before it streams its transcript
+   * — i.e. at the exact moment a real `claude` would start reading the filesystem
+   * it was handed. Lets a test assert on the executor's reachable world (cwd,
+   * sandboxDir, pluginDirs) while the run is live. Never called for grader spawns.
+   */
+  onExecutorSpawn?: (opts: SpawnHeadlessOptions) => void;
 }
 
 export interface HarnessFakeSpawn {
@@ -144,6 +151,7 @@ export function makeHarnessFakeSpawn(cfg: HarnessFakeSpawnConfig = {}): HarnessF
       }
       return SPAWN_OK;
     }
+    cfg.onExecutorSpawn?.(opts);
     opts.onStdout?.(`${FAKE_EXECUTOR_LINE}\n`);
     return { status: cfg.executorStatus ?? 0, timedOut: false, stalled: false };
   });

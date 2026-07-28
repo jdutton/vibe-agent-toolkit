@@ -43,6 +43,9 @@ import {
 } from './skill-resolution/helpers.js';
 import { createTestTempDir } from './system/test-common.js';
 
+/** VAT project config filename — shared constant so the literal isn't repeated 3+ times. */
+const CONFIG_FILENAME = 'vibe-agent-toolkit.config.yaml';
+
 /** Path-form subject so resolution returns `source` without a declared skill. */
 const PATH_SUBJECT = './my-skill';
 
@@ -321,7 +324,7 @@ const FLAG_GRADER_MODEL = 'flag-grader';
 /** Write a throwaway project config with a top-level `test:` node and point VAT_TEST_CONFIG at it. */
 function stubGlobalTestConfig(testNode: Record<string, unknown>): void {
   const dir = createTestTempDir('vat-global-test-config-');
-  const configPath = safePath.join(dir, 'vibe-agent-toolkit.config.yaml');
+  const configPath = safePath.join(dir, CONFIG_FILENAME);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- test-only temp path from createTestTempDir
   writeFileSync(configPath, yaml.stringify({ version: 1, test: testNode }));
   process.env['VAT_TEST_CONFIG'] = configPath;
@@ -550,6 +553,26 @@ describe('resolveSubjectForTest (run.ts subject resolution)', () => {
     // so the authored eval suite resolves + overlays from there.
     expect(toForwardSlash(String(out.subjectScaffoldDir))).toBe(safePath.join(fx.root, 'skills', DECLARED_POOL));
   });
+
+  it('path AT a declared skill\'s SOURCE dir → buildable (wouldBuild=true), routed through the buildable branch not the source branch', async () => {
+    const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
+    resetSkillDiscoveryCache();
+    const pkg = spyPackageSkillCreatingDist();
+    const out = await resolveSubjectForTest(dirname(fx.poolSkillMd(DECLARED_POOL)), fx.root, {
+      noBuild: false,
+      dryRun: false,
+      acknowledged: true,
+    }, newBuildMemo(), undefined);
+    // This is the new #159/#158-parity contract: a path AT the SOURCE dir is NOT
+    // staged as-is like the dist-path case above — it resolves `buildable` and is
+    // actually built, exactly like the bare name would be.
+    expect(out.wouldBuild).toBe(true);
+    expect(out.rebuilt).toBe(true);
+    expect(pkg).toHaveBeenCalled();
+    expect(toForwardSlash(String(out.subjectSource && 'path' in out.subjectSource ? out.subjectSource.path : ''))).toBe(
+      toForwardSlash(fx.poolDistDir(DECLARED_POOL)),
+    );
+  });
 });
 
 // Stage a declared-pool fixture, spy packageSkill, and resolve the buildable
@@ -731,6 +754,77 @@ describe('resolveCompanionSpec (companion build resolution — issue #158)', () 
     );
 
     expect(spec).toEqual({ path: sourceDir });
+  });
+});
+
+// The byte-identical stale-dist fact (a --dry-run preview staged an
+// EXISTING built dist WITHOUT rebuilding) warned for the SUBJECT (buildDryRunSummary)
+// but silently dropped for a COMPANION — resolveCompanionSpec discarded
+// dryRunStagedExistingDist entirely. It must now warn, naming the companion so two
+// stale warnings in one run are distinguishable, reusing buildStaleDistWarningLines
+// (the subject's own warning-construction code) rather than a copied string.
+describe('resolveCompanionSpec (dry-run stale-dist warning propagates to a companion)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('dry-run + an EXISTING companion dist → warns on stderr, naming the companion and its declared skill', async () => {
+    const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
+    resetSkillDiscoveryCache();
+    mkdirSyncReal(fx.poolDistDir(DECLARED_POOL), { recursive: true });
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
+
+    const spec = await resolveCompanionSpec(
+      COMPANION_ALIAS,
+      { path: dirname(fx.poolSkillMd(DECLARED_POOL)) },
+      fx.root,
+      { noBuild: false, dryRun: true, acknowledged: true },
+      false,
+      newBuildMemo(),
+    );
+
+    expect(spec).toEqual({ path: fx.poolDistDir(DECLARED_POOL) });
+    const written = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    const expectedLines = harness.buildStaleDistWarningLines(
+      `companion '${COMPANION_ALIAS}' (declared skill '${DECLARED_POOL}')`,
+    );
+    for (const line of expectedLines) expect(written).toContain(line);
+  });
+
+  it('dry-run + NO existing companion dist (fell back to source) → no stale warning', async () => {
+    const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
+    resetSkillDiscoveryCache();
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
+
+    await resolveCompanionSpec(
+      COMPANION_ALIAS,
+      { path: dirname(fx.poolSkillMd(DECLARED_POOL)) },
+      fx.root,
+      { noBuild: false, dryRun: true, acknowledged: true },
+      false,
+      newBuildMemo(),
+    );
+
+    const written = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(written).not.toContain('STALE');
+  });
+
+  it('a real (non-dry-run) build never warns, even though a dist dir already existed', async () => {
+    const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
+    resetSkillDiscoveryCache();
+    mkdirSyncReal(fx.poolDistDir(DECLARED_POOL), { recursive: true });
+    spyPackageSkillCreatingDist();
+    const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
+
+    await resolveCompanionSpec(
+      COMPANION_ALIAS,
+      { path: dirname(fx.poolSkillMd(DECLARED_POOL)) },
+      fx.root,
+      { noBuild: false, dryRun: false, acknowledged: true },
+      false,
+      newBuildMemo(),
+    );
+
+    const written = stderrSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    expect(written).not.toContain('STALE');
   });
 });
 
@@ -1164,6 +1258,53 @@ describe('test.build hook scoping (per-declaring-skill command + cwd, memoized o
   });
 });
 
+// loadTestConfig's basename fallback (run.ts) is a LAST RESORT: a source-dir-path
+// subject must resolve its `test:` config through the EXACT declared-skill link
+// (findDeclaredSkillForSourceDir → declaredSkillTestConfig), not through a directory
+// BASENAME that happens to coincide with the skill's declared name. This fixture
+// deliberately gives the skill a declared NAME different from its directory's
+// basename, so a basename-keyed lookup misses it entirely.
+const MISMATCH_DIR_NAME = 'weird-directory-name';
+const MISMATCH_SKILL_NAME = 'actual-declared-skill-name';
+
+/** A pool project whose one skill's directory basename != its declared frontmatter name. */
+function setupNameBasenameMismatchFixture(buildHook: string): { root: string; skillDir: string } {
+  const root = safePath.resolve(createTestTempDir('vat-skill-name-mismatch-'));
+  const skillDir = safePath.join(root, 'skills', MISMATCH_DIR_NAME);
+  mkdirSyncReal(skillDir, { recursive: true });
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture path from createTestTempDir
+  writeFileSync(
+    safePath.join(skillDir, 'SKILL.md'),
+    `---\nname: ${MISMATCH_SKILL_NAME}\ndescription: Synthetic skill whose declared name differs from its directory basename.\n---\n\n# ${MISMATCH_SKILL_NAME}\n\nBody.\n`,
+  );
+  const config = {
+    version: 1,
+    skills: {
+      include: ['skills/*/SKILL.md'],
+      config: { [MISMATCH_SKILL_NAME]: { test: { build: buildHook } } },
+    },
+  };
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture path from createTestTempDir
+  writeFileSync(safePath.join(root, CONFIG_FILENAME), yaml.stringify(config));
+  return { root, skillDir };
+}
+
+describe('loadTestConfig (source-dir subject resolves test: config by the EXACT declared-skill link, not by basename)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('a source-dir path subject whose declared NAME differs from its directory basename still picks up its test.build hook', async () => {
+    const { root, skillDir } = setupNameBasenameMismatchFixture(SUBJECT_HOOK);
+    resetSkillDiscoveryCache();
+    vi.spyOn(process, 'cwd').mockReturnValue(root);
+    spyPackageSkillCreatingDist();
+    const pairs = spyPreStageBuild();
+
+    await runAndCaptureOpts(skillDir, { iUnderstandThisRunsSkillCode: true });
+
+    expect(pairs()).toEqual([{ buildCommand: SUBJECT_HOOK, configRoot: root }]);
+  });
+});
+
 // Exit-code symmetry between the two phases of runSkillTestRun. A ConfigLoadError is
 // a user-fixable PREFLIGHT problem (exit 2), but mapErrorToExitCode has no case for it
 // and falls through to Internal (1) — the SUBJECT arm special-cased it, the COMPANION
@@ -1182,7 +1323,7 @@ describe('runSkillTestRun (a broken COMPANION config exits 2, not 1)', () => {
     const nested = nestedOf(fx);
     // Break ONLY the nested config (unparseable YAML: an unterminated flow sequence).
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture path from createTestTempDir
-    writeFileSync(safePath.join(nested.root, 'vibe-agent-toolkit.config.yaml'), 'version: 1\nskills: [unclosed\n');
+    writeFileSync(safePath.join(nested.root, CONFIG_FILENAME), 'version: 1\nskills: [unclosed\n');
     vi.spyOn(process, 'cwd').mockReturnValue(fx.root);
     const harnessSpy = vi.spyOn(harness, 'runSkillTestHarness');
     vi.spyOn(process.stdout, 'write').mockImplementation((() => true) as never);

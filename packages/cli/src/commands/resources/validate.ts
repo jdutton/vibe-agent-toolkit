@@ -5,7 +5,15 @@
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 
-import type { CollectionStats, ProjectConfig, RegistryStats, ValidationResult } from '@vibe-agent-toolkit/resources';
+import { packagedFileEntries } from '@vibe-agent-toolkit/agent-skills';
+import {
+  DeferredArtifacts,
+  type CollectionStats,
+  type DeferredSkillFiles,
+  type ProjectConfig,
+  type RegistryStats,
+  type ValidationResult,
+} from '@vibe-agent-toolkit/resources';
 import type { GitTracker } from '@vibe-agent-toolkit/utils';
 import { resolveAssetReference, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
@@ -15,6 +23,8 @@ import { createLogger, type Logger } from '../../utils/logger.js';
 import { writeTestFormatError } from '../../utils/output.js';
 import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
 import { loadResourcesWithConfig } from '../../utils/resource-loader.js';
+import { mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
+import { discoverSkillsFromConfig } from '../skills/skill-discovery.js';
 
 import { handleCommandError } from './command-helpers.js';
 
@@ -421,6 +431,49 @@ function applyNoCheckFrontmatterLinksFlag(config: ProjectConfig | undefined): vo
   }
 }
 
+/**
+ * Compute the project's `DeferredArtifacts` model for `vat resources validate`,
+ * reusing the SAME skill discovery (`discoverSkillsFromConfig`), config merge
+ * (`mergeSkillPackagingConfig`) and test-input filter (`packagedFileEntries`) that
+ * the skills lanes use — so no two lanes can disagree about a skill's effective
+ * `files:` config, or about which of those entries the build will actually copy,
+ * for the same link. Exported (rather than inlined in `validateCommand`) so any
+ * other lane that needs the project's deferred model shares this derivation
+ * instead of re-deriving it.
+ *
+ * Returns undefined when the project declares no skills at all — there is
+ * nothing to defer, so callers should omit `deferredArtifacts` entirely rather
+ * than pass around an empty model.
+ */
+export async function computeDeferredArtifacts(
+  config: ProjectConfig | undefined,
+  projectRoot: string,
+): Promise<DeferredArtifacts | undefined> {
+  if (!config?.skills) {
+    return undefined;
+  }
+
+  const discovered = await discoverSkillsFromConfig(config.skills, projectRoot);
+  const { defaults, config: perSkillConfig } = config.skills;
+
+  const skillFiles: DeferredSkillFiles[] = discovered.map((skill) => {
+    const merged = mergeSkillPackagingConfig(
+      defaults as Record<string, unknown> | undefined,
+      perSkillConfig?.[skill.name] as Record<string, unknown> | undefined,
+    );
+    const skillDir = path.dirname(skill.sourcePath);
+    return {
+      // Only what the packager will really copy — an entry pointing into the
+      // skill's declared test input is dropped at build time, so its dest cannot
+      // defer a link here without contradicting the build.
+      files: packagedFileEntries(merged, skillDir, projectRoot),
+      skillDir,
+    };
+  });
+
+  return DeferredArtifacts.from(skillFiles, projectRoot);
+}
+
 export async function validateCommand(
   pathArg: string | undefined,
   options: ValidateOptions
@@ -452,6 +505,12 @@ export async function validateCommand(
       frontmatterSchemaObj = await loadSchema(options.frontmatterSchema);
     }
 
+    // Compute deferred build-artifact coverage from the SAME skill discovery +
+    // config-merge `vat skills validate` uses, so a `files:`-declared link that
+    // lane reports as LINK_DEFERRED_ARTIFACT (info) is never independently
+    // reported here as LINK_BROKEN_FILE (error) — the headline bug this closes.
+    const deferredArtifacts = await computeDeferredArtifacts(config, projectRoot);
+
     // Validate all resources
     const validationMode = options.validationMode ?? 'strict';
     const validationResult = await registry.validate({
@@ -463,6 +522,7 @@ export async function validateCommand(
       // Thread the project's resources.validation config in. The CLI does NOT
       // resolve severity itself — ResourceRegistry.validate() runs the framework.
       validationConfig: config?.resources?.validation ?? {},
+      ...(deferredArtifacts !== undefined && { deferredArtifacts }),
     });
 
     // Filter by collection if specified

@@ -199,10 +199,11 @@ describe('glob files entry integration', () => {
   });
 
   /**
-   * Plugin-build path simulation: mergeFilesConfig + applyFilesConfig exactly as
-   * applyTreeCopiedSkillFiles in build.ts does. This confirms the glob expansion
-   * works end-to-end on the plugin-build path (which bypasses skill-packager
-   * and calls applyFilesConfig directly, sharing the same primitive).
+   * Direct-primitive coverage for the `files:` glob expansion: mergeFilesConfig +
+   * applyFilesConfig, exercised without going through skill-packager. Plugin-local
+   * skills now route through `packageSkill` like every other skill (the old
+   * verbatim tree-copy path and its `applyTreeCopiedSkillFiles` re-application are
+   * gone), so this asserts the shared primitive rather than a second build path.
    */
   it('should rebase glob tree via applyFilesConfig (plugin-build path simulation)', async () => {
     const tempDir = getTempDir();

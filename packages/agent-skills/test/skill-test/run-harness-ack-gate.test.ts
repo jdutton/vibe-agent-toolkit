@@ -47,9 +47,10 @@ vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
 });
 
 describe('runSkillTestHarness — security ack gate', () => {
-  // Shared lifecycle: fresh temp dir + staged subject (with evals) so bootstrap
+  // Shared lifecycle: fresh temp dir + an AUTHORED subject dir carrying evals (the
+  // harness reads the suite from there, never from the staged tree) so bootstrap
   // (exit 3) does not fire before the ack gate (exit 2), and stageHarness stubbed.
-  const { getTempDir, getSubjectStagedDir } = setupStubbedHarnessSubject('vat-ack-gate-', vi.mocked(stageHarness));
+  const { getTempDir, getAuthoredDir } = setupStubbedHarnessSubject('vat-ack-gate-', vi.mocked(stageHarness));
 
   beforeEach(() => {
     vi.mocked(spawnHeadlessClaude).mockClear();
@@ -61,7 +62,8 @@ describe('runSkillTestHarness — security ack gate', () => {
       subject: 'my-skill',
       repoRoot: tempDir,
       workdir: tempDir,
-      subjectSource: { path: getSubjectStagedDir() },
+      subjectSource: { path: getAuthoredDir() },
+      subjectScaffoldDir: getAuthoredDir(),
       // acknowledgedRunsSkillCode intentionally absent; dryRun absent.
     });
 

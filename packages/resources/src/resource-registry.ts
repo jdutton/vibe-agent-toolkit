@@ -16,6 +16,7 @@ import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, type GitTracker
 
 import { calculateChecksum } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
+import type { DeferredArtifacts } from './deferred-artifacts.js';
 import { ExternalLinkValidator } from './external-link-validator.js';
 import {
   validateFrontmatterLinks,
@@ -98,6 +99,13 @@ export interface ValidateOptions {
   checkHtmlAnchors?: boolean;
   /** Disable cache for external URL checks (default: false) */
   noCache?: boolean;
+  /**
+   * Deferred build-artifact model (a project's skills' `files:` config). Threaded
+   * into every `local_file` link validation so a missing-but-declared target is
+   * reported as info-severity `LINK_DEFERRED_ARTIFACT` instead of error-severity
+   * `LINK_BROKEN_FILE` — see `deferred-artifacts.ts` and `link-validator.ts`.
+   */
+  deferredArtifacts?: DeferredArtifacts;
   /**
    * Validation framework config (severity overrides + per-code allow entries).
    * Applied INSIDE validate() via runValidationFramework — the library, not the
@@ -369,6 +377,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       headings: parseResult.headings,
       ...(parseResult.anchors !== undefined && { anchors: parseResult.anchors }),
       ...(parseResult.parseErrors !== undefined && { parseErrors: parseResult.parseErrors }),
+      ...(parseResult.unresolvedReferences !== undefined && {
+        unresolvedReferences: parseResult.unresolvedReferences,
+      }),
       ...(parseResult.frontmatter !== undefined && { frontmatter: parseResult.frontmatter }),
       ...(parseResult.frontmatterError !== undefined && { frontmatterError: parseResult.frontmatterError }),
       sizeBytes: parseResult.sizeBytes,
@@ -512,6 +523,37 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   }
 
   /**
+   * Emit `LINK_UNRESOLVED_REFERENCE` warnings for dangling reference-style
+   * links (full `[text][label]` / collapsed `[label][]` forms with no
+   * matching `[label]: url` definition) found by the raw-source scan in
+   * `link-parser.ts`'s `findUnresolvedReferences`. These never become
+   * `linkReference` AST nodes, so they cannot flow through `validateAllLinks`
+   * like every other link code — they are collected here instead, the same
+   * way `collectHtmlParseErrors` surfaces another parser-produced diagnostic
+   * that isn't itself a `ResourceLink`.
+   * @private
+   */
+  private collectUnresolvedReferenceIssues(): ValidationIssue[] {
+    const issues: ValidationIssue[] = [];
+    for (const resource of this.resourcesByPath.values()) {
+      for (const unresolved of resource.unresolvedReferences ?? []) {
+        issues.push(
+          createRegistryIssue(
+            'LINK_UNRESOLVED_REFERENCE',
+            `Reference-style link "[${unresolved.label}]" has no matching definition. ` +
+              `Add "[${unresolved.label}]: <url>" or rewrite as an inline link.`,
+            {
+              location: issueLocation(resource.filePath, this.baseDir),
+              line: unresolved.line,
+            },
+          ),
+        );
+      }
+    }
+    return issues;
+  }
+
+  /**
    * Emit DUPLICATE_RESOURCE_ID errors for collisions recorded by addResources().
    * @private
    */
@@ -531,7 +573,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   private async validateAllLinks(
     fragmentsByFile: FragmentIndex,
     skipGitIgnoreCheck: boolean,
-    checkHtmlAnchors: boolean
+    checkHtmlAnchors: boolean,
+    deferredArtifacts: DeferredArtifacts | undefined,
   ): Promise<ValidationIssue[]> {
     const issues: ValidationIssue[] = [];
 
@@ -544,7 +587,8 @@ export class ResourceRegistry implements ResourceCollectionInterface {
               projectRoot: this.baseDir,
               skipGitIgnoreCheck,
               checkHtmlAnchors,
-              ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker })
+              ...(this.gitTracker !== undefined && { gitTracker: this.gitTracker }),
+              ...(deferredArtifacts !== undefined && { deferredArtifacts }),
             };
 
         const issue = await validateLink(link, resource.filePath, fragmentsByFile, validateOptions);
@@ -773,15 +817,21 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     const issues: ValidationIssue[] = [];
 
     // Surface parse-time diagnostics: YAML frontmatter errors first, then HTML
-    // well-formedness, then duplicate-id collisions. Combined into one push() call
-    // (SonarCloud S7778).
-    issues.push(...this.collectYamlErrors(), ...this.collectHtmlParseErrors(), ...this.collectDuplicateIdErrors());
+    // well-formedness, then dangling reference-style links, then duplicate-id
+    // collisions. Combined into one push() call (SonarCloud S7778).
+    issues.push(
+      ...this.collectYamlErrors(),
+      ...this.collectHtmlParseErrors(),
+      ...this.collectUnresolvedReferenceIssues(),
+      ...this.collectDuplicateIdErrors(),
+    );
 
     // Validate each link in each resource
     const linkIssues = await this.validateAllLinks(
       fragmentsByFile,
       options?.skipGitIgnoreCheck ?? false,
-      options?.checkHtmlAnchors ?? false
+      options?.checkHtmlAnchors ?? false,
+      options?.deferredArtifacts,
     );
     issues.push(...linkIssues);
 

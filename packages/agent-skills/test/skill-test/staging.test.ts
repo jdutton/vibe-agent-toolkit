@@ -12,7 +12,7 @@
 
 /* eslint-disable security/detect-non-literal-fs-filename -- tests use controlled temp directories */
 import { randomBytes } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 import type {
   ResolveSkillSourceContext,
@@ -22,7 +22,7 @@ import type {
 } from '@vibe-agent-toolkit/agent-skills';
 import type { SkillSourceDescriptor } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
-import { describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 
 import {
   computeDirContentHash,
@@ -48,9 +48,26 @@ type StageHarnessResolve = (
 /** A no-op resolution context — staging never reads these in the flat/plugin paths. */
 const CTX: ResolveSkillSourceContext = {
   repoRoot: '/unused',
-  stagingRoot: '/unused',
+  // The OS temp dir, NOT a placeholder: every fixture below lives under it, and the
+  // fake resolver hands back the fixture path as its "staged" dir. Eval-suite
+  // isolation refuses to delete from anything outside the staging root (a guard
+  // against a future resolver handing back the user's real source tree), so this has
+  // to describe where the fake actually stages. See eval-suite-isolation.ts.
+  stagingRoot: normalizedTmpdir(),
   fetchCacheDir: '/unused',
 };
+
+/**
+ * Eval-suite isolation inputs required by every `stageHarness` call. `writeSourceSkill`
+ * fixtures DO carry `evals/evals.json`, so these calls genuinely exercise the strip:
+ * the subject's suite is relocated into the hold dir and every staged tree loses it.
+ */
+const EVAL_HOLD_DIR = safePath.join(normalizedTmpdir(), `vat-staging-hold-${randomBytes(6).toString('hex')}`);
+const EVAL_ISOLATION = { evalsSubpath: 'evals/evals.json', evalSuiteHoldDir: EVAL_HOLD_DIR };
+
+afterAll(() => {
+  rmSync(EVAL_HOLD_DIR, { recursive: true, force: true });
+});
 
 /** Create a fresh 0700 harness root under the OS tmp dir (assertSafeHarnessRoot passes). */
 function makeHarnessRoot(): string {
@@ -107,7 +124,7 @@ async function stageFlat(
   identity = FAKE_IDENTITY,
 ): Promise<ResolvedHarness> {
   const items: StageItem[] = [{ name: SUBJECT_NAME, source: { path: sourceDir }, role: 'subject' }];
-  return stageHarness({ harnessRoot, items, resolve: fakeResolve(sourceDir, identity), ctx: CTX, currentUid });
+  return stageHarness({ harnessRoot, items, resolve: fakeResolve(sourceDir, identity), ctx: CTX, currentUid, ...EVAL_ISOLATION });
 }
 
 type ResolvedHarness = Awaited<ReturnType<typeof stageHarness>>;
@@ -202,6 +219,7 @@ describe('stageHarness — plugin-layout path', () => {
       resolve: fakeResolve(sourceDir, 'plugin-identity'),
       ctx: CTX,
       currentUid,
+      ...EVAL_ISOLATION,
     });
 
     expect(result.subjectPluginRoot).not.toBeNull();
@@ -255,7 +273,7 @@ describe('stageHarness — plugin basename collision', () => {
       throw new Error(`unexpected source: ${p}`);
     };
 
-    const result = await stageHarness({ harnessRoot, items, resolve, ctx: CTX, currentUid });
+    const result = await stageHarness({ harnessRoot, items, resolve, ctx: CTX, currentUid, ...EVAL_ISOLATION });
 
     // Two distinct staged plugin roots — no collision.
     const [rootA, rootB] = result.pluginDirs;
@@ -312,7 +330,7 @@ describe('stageHarness — optional item resolve failure (skip-with-warning)', (
       optional: true,
     });
 
-    const result = await stageHarness({ harnessRoot, items, resolve, ctx: CTX, currentUid });
+    const result = await stageHarness({ harnessRoot, items, resolve, ctx: CTX, currentUid, ...EVAL_ISOLATION });
 
     expect(result.skippedOptional).toEqual(['flaky-optional']);
     expect(result.pluginDirs).toHaveLength(1);
@@ -327,7 +345,7 @@ describe('stageHarness — optional item resolve failure (skip-with-warning)', (
       source: { path: UNRESOLVABLE_SOURCE },
     });
 
-    await expect(stageHarness({ harnessRoot, items, resolve, ctx: CTX, currentUid })).rejects.toThrow(
+    await expect(stageHarness({ harnessRoot, items, resolve, ctx: CTX, currentUid, ...EVAL_ISOLATION })).rejects.toThrow(
       'cannot resolve',
     );
   });
@@ -346,7 +364,7 @@ describe('stageHarness — optional item resolve failure (skip-with-warning)', (
       throw new Error(`cannot resolve: ${p}`);
     };
 
-    const result = await stageHarness({ harnessRoot: makeHarnessRoot(), items, resolve, ctx: CTX, currentUid });
+    const result = await stageHarness({ harnessRoot: makeHarnessRoot(), items, resolve, ctx: CTX, currentUid, ...EVAL_ISOLATION });
 
     expect(result.skippedOptional).toEqual([]);
     expect(result.pluginDirs).toHaveLength(2);

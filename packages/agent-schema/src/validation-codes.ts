@@ -86,6 +86,12 @@ export const CODE_REGISTRY = {
     'Add a markdown link or code-block mention in SKILL.md or a linked resource. Allow via validation.allow if the file is consumed programmatically.',
     'packaged_unreferenced_file',
   ),
+  PACKAGED_TEST_INPUT: entry(
+    'warning',
+    "A files: entry pointed into the skill's declared test input (its test.evals path) and was NOT packaged; test input — including the expected_output answer key — never ships to consumers.",
+    'No action needed — the build already excluded it. Remove the files: entry to silence this, or move the file out of the test.evals directory if it is genuinely a shipped resource.',
+    'packaged_test_input',
+  ),
   PACKAGED_BROKEN_LINK: entry(
     'error',
     'Link in the packaged output resolves to a file that is not present in the output (likely a link-rewriter bug).',
@@ -349,6 +355,12 @@ export const CODE_REGISTRY = {
     'A tracked file links to a gitignored file.',
     'Link a tracked target or un-ignore it.',
     'link_to_gitignored',
+  ),
+  LINK_UNRESOLVED_REFERENCE: entry(
+    'warning',
+    'A reference-style link ([text][label] or collapsed [label][]) has no matching [label]: url definition anywhere in the document.',
+    'Add the missing [label]: url definition, or rewrite as an inline link [text](url).',
+    'link_unresolved_reference',
   ),
   MALFORMED_HTML: entry(
     'info',
