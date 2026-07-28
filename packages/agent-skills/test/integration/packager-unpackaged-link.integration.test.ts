@@ -46,6 +46,7 @@ description: Fixture skill covering every spelling of a link whose target may no
 - kept-dir-bare: [g](refs)
 - anchor-only: [h](#a-heading)
 - stray-bracket: a glob may use (\`*\`, \`?\`, \`[\`) — see [i](evals/sub/other.md) for details
+- dup-href: see [\`evals/sub/note.md\`](evals/sub/note.md) for the cached copy
 
 ## A heading
 `;
@@ -58,9 +59,8 @@ async function packageFixture(tempDir: string): Promise<{ body: string; hasError
   writeTestFile(safePath.join(skillDir, 'SKILL.md'), SKILL_MD);
   writeTestFile(safePath.join(skillDir, 'evals', 'evals.json'), '{"expected_output":"KEY"}');
   writeTestFile(safePath.join(skillDir, 'evals', 'sub', 'note.md'), '# note\n');
-  // A DISTINCT target: two links sharing one href hit a separate, pre-existing
-  // correlation defect in transformContent (regex matches are paired with parsed
-  // links by href, so the first link's text wins) — not what this test is about.
+  // A DISTINCT target, so the stray-bracket line exercises over-matching alone and
+  // not the duplicate-href case `dup-href` covers.
   writeTestFile(safePath.join(skillDir, 'evals', 'sub', 'other.md'), '# other\n');
   writeTestFile(safePath.join(skillDir, 'refs', 'guide.md'), '# guide\n');
 
@@ -120,6 +120,15 @@ describe('packaging a link whose target does not ship (integration)', () => {
     // captured text, so an over-match was invisible there; the strip template does
     // not, so it stood in for the whole span and ate the prose.
     expect(body).toContain('a glob may use (`*`, `?`, `[`) — see i for details');
+
+    // Two links sharing one href, both stripping. `transformContent` keys parsed
+    // links by href and lets the FIRST win, so the strip template's `{{link.text}}`
+    // rendered this second link with the FIRST one's text ("a") — silently swapping
+    // one phrase for an unrelated one in shipped prose. The rewrite branch never
+    // showed it because it re-emits the per-occurrence `{{link.rawText}}` capture;
+    // stripping must use the same capture. Doing so also preserves the inline
+    // formatting the author wrote, exactly as the rewrite branch already does.
+    expect(body).toContain('- dup-href: see `evals/sub/note.md` for the cached copy');
 
     // A directory link used to fail the build outright as PACKAGED_BROKEN_LINK.
     expect(hasErrors).toBe(false);

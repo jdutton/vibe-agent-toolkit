@@ -66,8 +66,27 @@ import { walkLinkGraph, type WalkableRegistry } from './walk-link-graph.js';
 
 const PACKAGE_JSON_FILENAME = 'package.json';
 
-/** Default template for excluded links when no explicit template is configured — renders just the link text */
-const DEFAULT_STRIP_TEMPLATE = '{{link.text}}';
+/**
+ * Default template for excluded links when no explicit template is configured —
+ * renders just the link text.
+ *
+ * `{{link.rawText}}`, not `{{link.text}}`, for the same two reasons the rewrite
+ * branch uses it (see `bundledLinkTemplate`):
+ *
+ *  - **Correlation.** `transformContent` keys parsed links by href and lets the
+ *    FIRST occurrence win, so `link.text` on a second link sharing that href is
+ *    the first link's text. `rawText` is the regex's per-occurrence capture, so it
+ *    always belongs to the link being replaced. Stripping with `link.text` swapped
+ *    one phrase for an unrelated one in shipped prose; the rewrite branch never
+ *    exposed it because it re-emits `rawText`.
+ *  - **Formatting.** `rawText` keeps the inline markup the author wrote, so
+ *    ``[`foo.yaml`](…)`` strips to ``` `foo.yaml` ``` rather than bare `foo.yaml`.
+ *
+ * Text was the ONLY field the collision could corrupt: the map key is the full
+ * href including any `#fragment`, so two links that collide there necessarily
+ * resolve to the same resource and carry the same fragment.
+ */
+const DEFAULT_STRIP_TEMPLATE = '{{link.rawText}}';
 
 /**
  * Template for a link the bundle is expected to carry: rewrite it to the target's
