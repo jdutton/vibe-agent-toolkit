@@ -593,10 +593,24 @@ function sourceScaffoldFields(
 export interface BuildFlags {
   /** Skip the build entirely and stage the existing dist (errors if absent). */
   noBuild: boolean;
-  /** Assemble a preview only — never build, never spawn. */
+  /** Assemble a preview only — never spawn. Builds ONLY when {@link explicitAck}. */
   dryRun: boolean;
-  /** The §12 security acknowledgment: required before ANY build command runs. */
+  /**
+   * The §12 security acknowledgment as the harness computes it — a dry run counts
+   * as acknowledged, because a preview that never builds and never spawns executes
+   * nothing. Gates SecurityAckError.
+   */
   acknowledged: boolean;
+  /**
+   * Whether `--i-understand-this-runs-skill-code` was ACTUALLY passed, distinct from
+   * {@link acknowledged}, which a dry run satisfies for free.
+   *
+   * A dry run now BUILDS, and building runs the repo's committed `test.build` hook —
+   * an arbitrary shell command. Gating that on {@link acknowledged} would be no gate
+   * at all, since dry runs synthesize it. So the build decision uses this raw flag,
+   * keeping an unacknowledged dry run safe to point at an untrusted clone.
+   */
+  explicitAck: boolean;
 }
 
 /**
@@ -846,8 +860,16 @@ async function buildDeclaredSkill(
   memo: BuildMemo,
   buildCommand: string | undefined,
 ): Promise<BuildDeclaredSkillResult> {
-  // --no-build and --dry-run never build — delegate to the dedicated branch helper.
-  if (flags.noBuild || flags.dryRun) {
+  // --dry-run DOES build once acknowledged: the "dry" part is the skill TESTING (no
+  // Claude session, no tokens), and a preview assembled from a stale dist previews
+  // something a real run would not test — which is the one job a preview has.
+  //
+  // Without the acknowledgement it still does NOT build. Building runs the repo's
+  // committed `test.build` hook, an arbitrary shell command, so an unacknowledged
+  // dry run stays the one mode that is safe to point at an untrusted clone. That
+  // preview falls back to an existing dist and says so (stale warning) — the honest
+  // trade, since accuracy requires consent to execute the repo's own build.
+  if (flags.noBuild || (flags.dryRun && !flags.explicitAck)) {
     return resolveExistingDistOrThrow(ref, flags);
   }
 
@@ -948,7 +970,7 @@ function isSurvivableCompanionFailure(
   flags: BuildFlags,
 ): boolean {
   if (!optional || !(err instanceof SkillBuildError)) return false;
-  return declared.distribution.kind === 'pool' || flags.noBuild || flags.dryRun;
+  return declared.distribution.kind === 'pool' || flags.noBuild;
 }
 
 /**
@@ -1180,7 +1202,12 @@ export async function runSkillTestRun(
   // dry-run/security-ack) as the subject. The `test.build` hook is deliberately NOT in
   // here: it is per-skill (see BuildFlags), so the subject's own command is passed only
   // to subject resolution and each companion resolves its own.
-  const buildFlags: BuildFlags = { noBuild, dryRun: options.dryRun === true, acknowledged };
+  const buildFlags: BuildFlags = {
+    noBuild,
+    dryRun: options.dryRun === true,
+    acknowledged,
+    explicitAck: options.iUnderstandThisRunsSkillCode === true,
+  };
   // ONE memo for the whole run, shared by subject AND companion resolution: a skill
   // that is both the subject and a companion builds exactly once, and N companions
   // in one marketplace trigger ONE marketplace build, not N.
@@ -1256,7 +1283,7 @@ export function createSkillTestRunCommand(): Command {
     )
     .option(
       '--env <pair...>',
-      'Inject an env var into the executor spawn as KEY=VALUE (repeatable). Values support ${fixturesDir}, ${stagedSkillDir}, ${harnessRoot}, ${resultsDir}. CLI overrides config for the same key.',
+      'Inject an env var into the executor spawn as KEY=VALUE (repeatable). Values support ${fixturesDir}, ${stagedSkillDir}, ${harnessRoot}, ${resultsDir}. ${fixturesDir} is per-eval and requires that eval to declare input `files`. CLI overrides config for the same key.',
     )
     .option(
       '--pass-env <key...>',
@@ -1267,7 +1294,7 @@ export function createSkillTestRunCommand(): Command {
     .option('--workdir <dir>', 'Override the harness working directory')
     .option('--out <dir>', 'Override the harness output directory')
     .option('--keep', 'Keep the harness directory after the run')
-    .option('--dry-run', 'Assemble the command without spawning Claude')
+    .option('--dry-run', 'Build and stage exactly as a real run would, then stop without spawning Claude (no tokens spent). Combine with --no-build to skip the build too.')
     .option('--auth <mode>', 'Auth mechanism: inherit | subscription | api-key | auto')
     .option('--require-auth <mech>', 'Require a specific auth mechanism: subscription | api-key')
     .option('--baseline', 'Enable A/B baseline run (with/without skill)')

@@ -353,12 +353,15 @@ function readProvenance(outDir: string): Record<string, unknown> {
  * and returns the CLI result + outDir path for per-test assertions.
  *
  * @param outDirName       - Name for the output dir (nested inside the temp dir).
- * @param withPreBuiltDist - When true, pre-creates a stale dist dir so dry-run
- *   stages it rather than falling back to the source dir.
+ * @param withPreBuiltDist - When true, pre-creates a stale dist dir so a NON-building
+ *   dry run stages it rather than falling back to the source dir.
+ * @param noBuild - Add `--no-build`. `--dry-run` alone BUILDS once acknowledged, so
+ *   this is the only way to reach the stale/fallback branches now.
  */
 async function runDeclaredDryRun(
   outDirName: string,
   withPreBuiltDist = false,
+  noBuild = false,
 ): Promise<{ result: Awaited<ReturnType<typeof executeCli>>; outDir: string }> {
   const tempDir = ctx.createTempDir();
   const { projectRoot, skillName } = buildDeclaredPoolProject(tempDir, 'poc-skill');
@@ -373,6 +376,7 @@ async function runDeclaredDryRun(
     [
       'skill', 'test', 'run', skillName,
       '--dry-run',
+      ...(noBuild ? ['--no-build'] : []),
       '--i-understand-this-runs-skill-code',
       '--out', outDir,
     ],
@@ -633,13 +637,13 @@ describe('vat skill test run (system)', () => {
       expect(fs.existsSync(gradingPath)).toBe(false);
     });
 
-    it('--dry-run for a declared pool skill (no dist): states it would build + stage, flags no dist fallback', async () => {
+    it('--no-build --dry-run for a declared pool skill (no dist): says it did NOT build, flags the source fallback', async () => {
       // Synthetic declared project; the bare name resolves to `buildable`.
-      // No dist pre-built → dry-run falls back to source (dryRunStagedExistingDist=false).
-      const { result, outDir } = await runDeclaredDryRun('harness-dry-declared-nodist');
+      // --no-build + no dist → falls back to source (dryRunStagedExistingDist=false).
+      const { result, outDir } = await runDeclaredDryRun('harness-dry-declared-nodist', false, true);
 
-      // Must declare it WOULD build + stage (not just spawn as-is)
-      expect(result.stdout).toContain('build + stage the declared skill');
+      // Must be explicit that nothing was built
+      expect(result.stdout).toContain('Staged the declared skill WITHOUT building');
       // Must say it fell back to source since no dist exists yet
       expect(result.stdout).toContain('fell back to the source dir');
       // grading.json must NOT be written
@@ -652,14 +656,14 @@ describe('vat skill test run (system)', () => {
       expect(result.stdout).toContain('provenance.json');
     });
 
-    it('--dry-run for a declared pool skill (existing dist): states would build + stage, flags stale', async () => {
-      // Pre-create the expected dist dir (no evals/) so dry-run stages it instead
-      // of falling back. The harness overlays the authored evals from source onto
-      // the staged dist so the bootstrap check passes. (dryRunStagedExistingDist=true)
-      const { result } = await runDeclaredDryRun('harness-dry-declared-stale', true);
+    it('--no-build --dry-run for a declared pool skill (existing dist): says it did NOT build, flags stale', async () => {
+      // Pre-create the expected dist dir (no evals/) so the non-building dry run
+      // stages it instead of falling back. The harness reads the authored evals from
+      // source so the bootstrap check passes. (dryRunStagedExistingDist=true)
+      const { result } = await runDeclaredDryRun('harness-dry-declared-stale', true, true);
 
-      // Must declare it WOULD build + stage
-      expect(result.stdout).toContain('build + stage the declared skill');
+      // Must be explicit that nothing was built
+      expect(result.stdout).toContain('Staged the declared skill WITHOUT building');
       // Must warn that the preview used an unbuilt (possibly stale) dist
       expect(result.stdout).toContain('STALE');
       // Must point users at `vat build`

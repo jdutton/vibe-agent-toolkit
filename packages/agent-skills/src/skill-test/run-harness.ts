@@ -34,7 +34,7 @@ import {
 import { resolveSkillSource } from '../skill-source/resolve-skill-source.js';
 import type { ResolvedSkillSource, ResolveSkillSourceContext, SkillSource } from '../skill-source/types.js';
 
-import { assembleChildEnv, computeEnvTokens, resolveInjectEnv } from './declared-env.js';
+import { assembleChildEnv, assertKnownEnvTokens, computeEnvTokens, resolveInjectEnv } from './declared-env.js';
 import { runExecutorForEval } from './eval-executor.js';
 import type { EvalFragment } from './eval-fragment.js';
 import { runGraderForEval } from './eval-grader.js';
@@ -734,6 +734,10 @@ interface ResolveDeclaredChildEnvInput {
   resultsDir: string;
   evalsSubpath: string;
   subjectPluginRoot: string | null;
+  /** The eval's staged input workspace — what `${fixturesDir}` resolves under. */
+  workspaceDir?: string;
+  /** Suppress the stderr transparency line (emitted once, by the first eval). */
+  quiet?: boolean;
 }
 
 /**
@@ -750,6 +754,7 @@ function resolveDeclaredChildEnv(input: ResolveDeclaredChildEnvInput): ReturnTyp
     harnessRoot: input.harnessRoot,
     resultsDir: input.resultsDir,
     evalsSubpath: input.evalsSubpath,
+    ...(input.workspaceDir === undefined ? {} : { workspaceDir: input.workspaceDir }),
   });
   const injectEnv = resolveInjectEnv(input.opts.env, envTokens);
   const assembled = assembleChildEnv({
@@ -759,9 +764,48 @@ function resolveDeclaredChildEnv(input: ResolveDeclaredChildEnvInput): ReturnTyp
     ...(injectEnv ? { injectEnv } : {}),
     subjectPluginRoot: input.subjectPluginRoot,
   });
-  for (const warning of assembled.warnings) process.stderr.write(`warning: ${warning}\n`);
-  process.stderr.write(assembled.line + '\n');
+  if (input.quiet !== true) {
+    for (const warning of assembled.warnings) process.stderr.write(`warning: ${warning}\n`);
+    process.stderr.write(assembled.line + '\n');
+  }
   return assembled;
+}
+
+/** Everything needed to re-assemble the executor env once an eval's workspace is known. */
+interface PerEvalEnvAssembly {
+  input: Omit<ResolveDeclaredChildEnvInput, 'workspaceDir' | 'quiet'>;
+  /** Mutable latch so exactly one eval emits the stderr transparency line. */
+  logged: { done: boolean };
+}
+
+/**
+ * Split env assembly into its run-scoped and per-eval halves.
+ *
+ * Token NAMES are validated once, before any spend, so a typo fails at preflight.
+ * Token VALUES cannot all be resolved here: `${fixturesDir}` names the staged
+ * workspace of ONE eval, so the run-scoped env deliberately omits the declared
+ * `env` injections and {@link runEvalWorker} re-assembles them once the eval's
+ * workspace is known. When there are no injections, the run-scoped env is the
+ * whole story and `perEvalEnv` is absent.
+ */
+function prepareExecutorEnv(input: Omit<ResolveDeclaredChildEnvInput, 'workspaceDir' | 'quiet'>): {
+  assembledEnv: ReturnType<typeof assembleChildEnv>;
+  perEvalEnv: PerEvalEnvAssembly | undefined;
+} {
+  const { opts, ...rest } = input;
+  assertKnownEnvTokens(opts.env);
+  const { env: declaredInjectEnv, ...optsWithoutDeclaredEnv } = opts;
+  return {
+    // Quiet when injections exist: the first eval emits the transparency line with
+    // the REAL interpolated values, so this partial view is never the one printed.
+    assembledEnv: resolveDeclaredChildEnv({
+      opts: optsWithoutDeclaredEnv,
+      ...rest,
+      quiet: declaredInjectEnv !== undefined,
+    }),
+    perEvalEnv:
+      declaredInjectEnv === undefined ? undefined : { input, logged: { done: false } },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -832,8 +876,14 @@ export function buildDryRunSummary(input: DryRunSummaryInput): string {
   const lines: string[] = [];
 
   if (input.wouldBuild) {
+    // Say what actually happened. `--dry-run` builds once acknowledged, so the
+    // summary reports a completed build; under `--no-build` (or without the
+    // acknowledgement) nothing was built and claiming otherwise would be the same
+    // false assurance the PROVISIONAL fingerprint marker exists to prevent.
     lines.push(
-      '[dry-run] A real run would: build + stage the declared skill, then spawn claude.',
+      input.dryRunStagedExistingDist === undefined
+        ? '[dry-run] Built + staged the declared skill; a real run would additionally spawn claude.'
+        : '[dry-run] Staged the declared skill WITHOUT building; a real run would build + stage it, then spawn claude.',
     );
     if (input.dryRunStagedExistingDist === true) {
       lines.push(...buildStaleDistWarningLines());
@@ -849,11 +899,20 @@ export function buildDryRunSummary(input: DryRunSummaryInput): string {
   }
 
   const count = input.provenanceEntryCount;
+  // The manifest and fingerprint describe the STAGED TREE, so they are the only
+  // build-dependent facts here — everything above (env, models, knobs, eval count)
+  // is read from config and the AUTHORED suite and is exact either way. A bare
+  // 64-hex fingerprint reads as authoritative; printing one computed from a tree
+  // that was never rebuilt is the one way this preview can be confidently wrong, so
+  // it is labelled rather than left to be taken at face value.
+  const stagedFromUnbuiltTree = input.wouldBuild && input.dryRunStagedExistingDist !== undefined;
+  const provisional = stagedFromUnbuiltTree ? ' (PROVISIONAL — not rebuilt)' : '';
   lines.push(
     `[dry-run] Would run ${input.evalCount} eval${input.evalCount === 1 ? '' : 's'} as executor→grader spawn ` +
       `pair${input.evalCount === 1 ? '' : 's'} at concurrency ${input.concurrency}.`,
     `[dry-run] Executor ${input.modelFlag}; grader model ${input.graderModel} (prompt via stdin).`,
-    `[dry-run] Staged manifest: ${count} entr${count === 1 ? 'y' : 'ies'} | fingerprint: ${input.provenanceFingerprint}`,
+    `[dry-run] Staged manifest: ${count} entr${count === 1 ? 'y' : 'ies'} | ` +
+      `fingerprint: ${input.provenanceFingerprint}${provisional}`,
     `[dry-run] Provenance: ${input.provenancePath}`,
   );
 
@@ -1015,8 +1074,18 @@ interface EvalRunContext {
   maxBudgetUsd: number;
   timeoutMs: number;
   stallMs?: number;
-  /** Full assembled env (skill secrets included) for the executor spawn. */
+  /**
+   * Full assembled env (skill secrets included) for the executor spawn, WITHOUT
+   * the declared `env` injections — those carry `${fixturesDir}`, which names the
+   * eval's own workspace and so can only be resolved per eval (see `perEvalEnv`).
+   */
   executorEnv: NodeJS.ProcessEnv;
+  /**
+   * Present only when the subject declares an `env` block. Re-assembles the child
+   * env per eval so `${fixturesDir}` resolves under THAT eval's workspace. The
+   * transparency line is emitted once, by whichever eval assembles first.
+   */
+  perEvalEnv: PerEvalEnvAssembly | undefined;
   /** AUTH-ONLY env for the grader spawn (trusted vat infra loads no skill). */
   graderEnv: NodeJS.ProcessEnv;
   /** Declared executables (WITH-arm grader recognition aid); absent when unreachable. */
@@ -1044,13 +1113,27 @@ async function runEvalWorker(item: EvalWorkItem, ctx: EvalRunContext): Promise<E
   const workspaceDir = resolvePerEvalWorkspaceDir(item.entry, ctx.workspacesRoot);
   const onProgress = (chunk: string): void => { process.stderr.write(chunk); };
 
+  // Resolve the declared `env` against THIS eval's workspace. An eval that
+  // declares no input files has no workspace, so a value using ${fixturesDir}
+  // throws UnresolvableEnvTokenError (exit 2) instead of injecting a dead path.
+  let executorEnv = ctx.executorEnv;
+  if (ctx.perEvalEnv !== undefined) {
+    const { input, logged } = ctx.perEvalEnv;
+    executorEnv = resolveDeclaredChildEnv({
+      ...input,
+      ...(workspaceDir === undefined ? {} : { workspaceDir }),
+      quiet: logged.done,
+    }).env;
+    logged.done = true;
+  }
+
   const outcome = await runExecutorForEval({
     evalId,
     task: item.entry.prompt,
     subjectStagedDir: ctx.subjectStagedDir,
     ...(workspaceDir === undefined ? {} : { workspaceDir }),
     pluginDirs: item.arm === 'without' ? [] : ctx.pluginDirs,
-    env: ctx.executorEnv,
+    env: executorEnv,
     ...(ctx.model === undefined ? {} : { model: ctx.model }),
     maxTurns: ctx.maxTurns,
     maxBudgetUsd: ctx.maxBudgetUsd,
@@ -1561,7 +1644,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
         'Internal: preflight passed but resolvedAuth is null — refusing to spawn with an unscrubbed environment.',
       );
     }
-    const assembledEnv = resolveDeclaredChildEnv({
+    const { assembledEnv, perEvalEnv } = prepareExecutorEnv({
       opts,
       resolvedAuth,
       subjectStagedDir,
@@ -1638,6 +1721,7 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       // secrets); the grader is trusted vat infra loading no skill, so it gets
       // AUTH-ONLY env — never the skill's injected secrets.
       executorEnv: assembledEnv.env,
+      perEvalEnv,
       graderEnv: resolvedAuth.forwardedEnv,
       ...(opts.declaredExecutables === undefined ? {} : { declaredExecutables: opts.declaredExecutables }),
       ...(opts.spawn === undefined ? {} : { spawn: opts.spawn }),

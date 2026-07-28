@@ -79,7 +79,7 @@ describe('link identity probe (integration)', () => {
    * its own blast radius. When someone fixes it, this test flips to passing and
    * fails the suite until the `.fails` is removed.
    */
-  it.fails('leaves a fenced code example verbatim even when its href matches a real link', async () => {
+  it('leaves a fenced code example verbatim even when its href matches a real link', async () => {
     tempDir = createTestTempDir('vat-packager-link-identity-');
     const body = await packageFixture(tempDir);
 

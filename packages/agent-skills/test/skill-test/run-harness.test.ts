@@ -562,7 +562,12 @@ describe('stage item construction', () => {
 // ---------------------------------------------------------------------------
 
 // Shared constants for the dry-run summary assertions (avoids sonarjs/no-duplicate-string).
-const DRY_RUN_BUILD_PHRASE = 'build + stage the declared skill';
+// `--dry-run` BUILDS now (the "dry" part is the skill testing, not the build), so
+// the summary reports what it DID rather than what a real run would do. The
+// stale/fallback branches below are reachable only via `--no-build --dry-run`.
+const DRY_RUN_BUILD_PHRASE = 'Built + staged the declared skill';
+/** What the summary says when nothing was built (--no-build, or ack absent). */
+const DRY_RUN_UNBUILT_PHRASE = 'Staged the declared skill WITHOUT building';
 const DRY_RUN_FALLBACK_PHRASE = 'fell back to the source dir';
 
 /** Build a minimal DryRunSummaryInput with the given overrides. */
@@ -587,32 +592,36 @@ describe('buildDryRunSummary', () => {
     expect(summary).not.toContain(DRY_RUN_BUILD_PHRASE);
   });
 
-  it('declared subject, no dist (dryRunStagedExistingDist=false): states build + stage, fell back to source', () => {
+  it('declared subject, no build + no dist: says it did NOT build, and fell back to source', () => {
     const summary = buildDryRunSummary(
       makeDryRunInput({ wouldBuild: true, dryRunStagedExistingDist: false }),
     );
-    expect(summary).toContain(DRY_RUN_BUILD_PHRASE);
+    expect(summary).toContain(DRY_RUN_UNBUILT_PHRASE);
+    expect(summary).not.toContain(DRY_RUN_BUILD_PHRASE);
     expect(summary).toContain(DRY_RUN_FALLBACK_PHRASE);
     expect(summary).not.toContain('STALE');
   });
 
-  it('declared subject, existing dist (dryRunStagedExistingDist=true): states build + stage and flags stale', () => {
+  it('declared subject, no build + existing dist: says it did NOT build, flags stale, marks the fingerprint provisional', () => {
     const summary = buildDryRunSummary(
       makeDryRunInput({ wouldBuild: true, dryRunStagedExistingDist: true }),
     );
-    expect(summary).toContain(DRY_RUN_BUILD_PHRASE);
+    expect(summary).toContain(DRY_RUN_UNBUILT_PHRASE);
     expect(summary).toContain('STALE');
     expect(summary).toContain('vat build');
+    // A bare fingerprint from an unbuilt tree reads as authoritative; it must not.
+    expect(summary).toContain('PROVISIONAL');
     expect(summary).not.toContain(DRY_RUN_FALLBACK_PHRASE);
   });
 
-  it('declared subject, wouldBuild=true, no dryRunStagedExistingDist: states build but no stale/fallback detail', () => {
-    // wouldBuild=true but dryRunStagedExistingDist absent (e.g. from a real build run
-    // that somehow has dryRun=true and opts set but no flag threaded — edge case).
+  it('declared subject that WAS built: states it built, with no stale/fallback/provisional caveat', () => {
+    // dryRunStagedExistingDist absent = the normal acknowledged --dry-run path,
+    // which builds. Nothing here is provisional: the staged tree is current.
     const summary = buildDryRunSummary(makeDryRunInput({ wouldBuild: true }));
     expect(summary).toContain(DRY_RUN_BUILD_PHRASE);
     expect(summary).not.toContain('STALE');
     expect(summary).not.toContain(DRY_RUN_FALLBACK_PHRASE);
+    expect(summary).not.toContain('PROVISIONAL');
   });
 
   it('describes the executor→grader pipeline with eval count, concurrency, and models', () => {

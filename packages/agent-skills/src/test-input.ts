@@ -19,6 +19,7 @@
  * every packaging lane, so no lane can answer the question differently.
  */
 
+import { existsSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
@@ -32,6 +33,18 @@ import { materializeIssue } from './validators/rule-engine/index.js';
 const DEFAULT_EVALS_SUBPATH = 'evals/evals.json';
 
 /**
+ * Does this skill carry the conventional suite at `<skill-root>/evals/evals.json`?
+ *
+ * The one filesystem touch in this module, and the reason the default convention can
+ * be honored without guessing from a directory name. Everything else here is pure
+ * path math over a config.
+ */
+function hasConventionalSuite(skillDir: string): boolean {
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillDir is VAT's own resolved skill directory
+  return existsSync(safePath.resolve(skillDir, DEFAULT_EVALS_SUBPATH));
+}
+
+/**
  * Absolute directories holding a skill's declared test input.
  *
  * The unit is the DIRECTORY containing the suite file (it also holds the suite's
@@ -40,16 +53,25 @@ const DEFAULT_EVALS_SUBPATH = 'evals/evals.json';
  * unaffected. A suite path that points OUTSIDE the skill dir is still returned: it is
  * still test input, and a link into it should still be excluded from the bundle.
  *
- * Returns `[]` when the skill declares no `test:` block at all. That is deliberate —
- * a skill with no declared test config has no declared test input, and VAT does not
- * guess that a directory called `evals/` is one.
+ * With no `test:` block, the CONVENTION applies: the harness has always defaulted to
+ * `<skill-root>/evals/evals.json`, reading, stripping and grading that suite whether
+ * or not a `test:` block exists. This lane used to return `[]` there, so the two
+ * disagreed about the same skill — and in the dangerous direction: the harness
+ * protected the signal while the packager PUBLISHED the answer key. The default is
+ * now a declaration in both lanes.
+ *
+ * The inference stays deliberately narrow. It is keyed on the suite FILE existing,
+ * never on a directory's name, and it names exactly `<skill-root>/evals` — a
+ * `docs/evals/` elsewhere in the tree is ordinary content and still ships, as does a
+ * root `evals/` holding no `evals.json`. Guessing from the name alone would silently
+ * drop an author's unrelated directory out of their own bundle.
  */
 export function resolveTestInputDirs(
   config: Pick<SkillPackagingConfig, 'test'>,
   skillDir: string,
 ): string[] {
-  if (config.test === undefined) return [];
-  const subpath = config.test.evals ?? DEFAULT_EVALS_SUBPATH;
+  if (config.test === undefined && !hasConventionalSuite(skillDir)) return [];
+  const subpath = config.test?.evals ?? DEFAULT_EVALS_SUBPATH;
   const parent = dirname(subpath);
   // A suite at the skill root has no containing directory of its own — treating the
   // skill dir as test input would exclude the entire skill from its own bundle.

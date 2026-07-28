@@ -235,7 +235,7 @@ export const TestConfigSchema = z.object({
    * A non-zero exit code aborts the run (preflight failure, exit 2).
    */
   env: z.record(z.string(), z.string()).optional()
-    .describe('Feature B: explicit env var injections for the executor spawn. Values support ${fixturesDir}, ${stagedSkillDir}, ${harnessRoot}, ${resultsDir} interpolation (resolved at stage time). Protected names (PATH, auth, model, admin) cannot be overridden.'),
+    .describe('Feature B: explicit env var injections for the executor spawn. Values support ${fixturesDir}, ${stagedSkillDir}, ${harnessRoot}, ${resultsDir} interpolation. ${fixturesDir} is PER-EVAL: it names the staged workspace for that one eval (a fixtures/ dir beneath the executor working directory), so the eval must declare input files; the other tokens are run-scoped. Protected names (PATH, auth, model, admin) cannot be overridden.'),
   passEnv: z.array(z.string().min(1)).optional()
     .describe('Feature A: names of host env vars to forward to the executor spawn if present. Protected names are ignored with a warning.'),
   build: z.string().min(1).optional()

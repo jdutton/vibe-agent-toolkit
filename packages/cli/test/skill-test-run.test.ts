@@ -112,7 +112,7 @@ const PLUGIN_LOCAL_SKILL = 'plug-solo';
 const BUILD_FAILURE_MESSAGE = 'synthetic build failure';
 
 /** Build gating with the §12 ack present and no build-skipping flags — the common case. */
-const ACKED_BUILD_FLAGS: BuildFlags = { noBuild: false, dryRun: false, acknowledged: true };
+const ACKED_BUILD_FLAGS: BuildFlags = { noBuild: false, dryRun: false, acknowledged: true, explicitAck: true };
 
 /** Spy `packageSkill` with a build that THROWS — the genuine pool build-failure path. */
 function spyPackageSkillFailing() {
@@ -562,6 +562,7 @@ describe('resolveSubjectForTest (run.ts subject resolution)', () => {
       noBuild: false,
       dryRun: false,
       acknowledged: true,
+      explicitAck: true,
     }, newBuildMemo(), undefined);
     // This is the new #159/#158-parity contract: a path AT the SOURCE dir is NOT
     // staged as-is like the dist-path case above — it resolves `buildable` and is
@@ -614,7 +615,7 @@ describe('resolveSubjectForTest (security ack gates the build — M2)', () => {
   });
 
   it('buildable subject + ack PRESENT → build proceeds (packageSkill invoked, rebuilt=true)', async () => {
-    const { out, pkg } = await resolveBuildableWithPkgSpy({ dryRun: false, acknowledged: true });
+    const { out, pkg } = await resolveBuildableWithPkgSpy({ dryRun: false, acknowledged: true, explicitAck: true });
     expect(pkg).toHaveBeenCalledTimes(1);
     expect(out.rebuilt).toBe(true);
   });
@@ -663,7 +664,7 @@ describe('resolveCompanionSpec (companion build resolution — issue #158)', () 
       'companion',
       { path: dirname(fx.poolSkillMd(DECLARED_POOL)) },
       fx.root,
-      { noBuild: false, dryRun: false, acknowledged: true },
+      { noBuild: false, dryRun: false, acknowledged: true, explicitAck: true },
       false,
       newBuildMemo(),
     );
@@ -701,7 +702,7 @@ describe('resolveCompanionSpec (companion build resolution — issue #158)', () 
       'companion',
       { path: outsidePath },
       fx.root,
-      { noBuild: false, dryRun: false, acknowledged: true },
+      { noBuild: false, dryRun: false, acknowledged: true, explicitAck: true },
       false,
       newBuildMemo(),
     );
@@ -715,7 +716,7 @@ describe('resolveCompanionSpec (companion build resolution — issue #158)', () 
       'companion',
       { npm: '@scope/s@1.2.3' },
       process.cwd(),
-      { noBuild: false, dryRun: false, acknowledged: true },
+      { noBuild: false, dryRun: false, acknowledged: true, explicitAck: true },
       false,
       newBuildMemo(),
     );
@@ -757,16 +758,20 @@ describe('resolveCompanionSpec (companion build resolution — issue #158)', () 
   });
 });
 
-// The byte-identical stale-dist fact (a --dry-run preview staged an
-// EXISTING built dist WITHOUT rebuilding) warned for the SUBJECT (buildDryRunSummary)
-// but silently dropped for a COMPANION — resolveCompanionSpec discarded
-// dryRunStagedExistingDist entirely. It must now warn, naming the companion so two
-// stale warnings in one run are distinguishable, reusing buildStaleDistWarningLines
-// (the subject's own warning-construction code) rather than a copied string.
+// The byte-identical stale-dist fact (a preview staged an EXISTING built dist
+// WITHOUT rebuilding) warned for the SUBJECT (buildDryRunSummary) but silently
+// dropped for a COMPANION — resolveCompanionSpec discarded dryRunStagedExistingDist
+// entirely. It must warn, naming the companion so two stale warnings in one run are
+// distinguishable, reusing buildStaleDistWarningLines (the subject's own
+// warning-construction code) rather than a copied string.
+//
+// `--dry-run` BUILDS now, so the stale path is reached only by pairing it with
+// `--no-build` — which is the point: the warning fires exactly when the user asked
+// not to rebuild, and never when VAT rebuilt for them.
 describe('resolveCompanionSpec (dry-run stale-dist warning propagates to a companion)', () => {
   afterEach(() => vi.restoreAllMocks());
 
-  it('dry-run + an EXISTING companion dist → warns on stderr, naming the companion and its declared skill', async () => {
+  it('--no-build --dry-run + an EXISTING companion dist → warns on stderr, naming the companion and its declared skill', async () => {
     const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
     resetSkillDiscoveryCache();
     mkdirSyncReal(fx.poolDistDir(DECLARED_POOL), { recursive: true });
@@ -776,7 +781,7 @@ describe('resolveCompanionSpec (dry-run stale-dist warning propagates to a compa
       COMPANION_ALIAS,
       { path: dirname(fx.poolSkillMd(DECLARED_POOL)) },
       fx.root,
-      { noBuild: false, dryRun: true, acknowledged: true },
+      { noBuild: true, dryRun: true, acknowledged: true, explicitAck: true },
       false,
       newBuildMemo(),
     );
@@ -789,7 +794,7 @@ describe('resolveCompanionSpec (dry-run stale-dist warning propagates to a compa
     for (const line of expectedLines) expect(written).toContain(line);
   });
 
-  it('dry-run + NO existing companion dist (fell back to source) → no stale warning', async () => {
+  it('--no-build --dry-run + NO existing companion dist (fell back to source) → no stale warning', async () => {
     const fx = setupReferenceFixture({ pool: [DECLARED_POOL] });
     resetSkillDiscoveryCache();
     const stderrSpy = vi.spyOn(process.stderr, 'write').mockImplementation((() => true) as never);
@@ -798,7 +803,7 @@ describe('resolveCompanionSpec (dry-run stale-dist warning propagates to a compa
       COMPANION_ALIAS,
       { path: dirname(fx.poolSkillMd(DECLARED_POOL)) },
       fx.root,
-      { noBuild: false, dryRun: true, acknowledged: true },
+      { noBuild: true, dryRun: true, acknowledged: true, explicitAck: true },
       false,
       newBuildMemo(),
     );
@@ -818,7 +823,7 @@ describe('resolveCompanionSpec (dry-run stale-dist warning propagates to a compa
       COMPANION_ALIAS,
       { path: dirname(fx.poolSkillMd(DECLARED_POOL)) },
       fx.root,
-      { noBuild: false, dryRun: false, acknowledged: true },
+      { noBuild: false, dryRun: false, acknowledged: true, explicitAck: true },
       false,
       newBuildMemo(),
     );
@@ -944,6 +949,7 @@ describe('resolveCompanionSources', () => {
       noBuild: false,
       dryRun: false,
       acknowledged: true,
+      explicitAck: true,
     }, false, newBuildMemo());
     expect(out).toBeUndefined();
   });
@@ -959,7 +965,7 @@ describe('resolveCompanionSources', () => {
         passthrough: { npm: '@scope/other@2.0.0' },
       },
       fx.root,
-      { noBuild: false, dryRun: false, acknowledged: true },
+      { noBuild: false, dryRun: false, acknowledged: true, explicitAck: true },
       false,
       newBuildMemo(),
     );
@@ -1027,7 +1033,7 @@ describe('buildDeclaredSkill memoization + dist verification', () => {
         second: { path: dirname(fx.poolSkillMd(other)) },
       },
       fx.root,
-      { noBuild: false, dryRun: false, acknowledged: true },
+      { noBuild: false, dryRun: false, acknowledged: true, explicitAck: true },
       false,
       newBuildMemo(),
     );
@@ -1051,7 +1057,7 @@ describe('buildDeclaredSkill memoization + dist verification', () => {
         b: { path: dirname(fx.pluginSkillMd(second)) },
       },
       fx.root,
-      { noBuild: false, dryRun: false, acknowledged: true },
+      { noBuild: false, dryRun: false, acknowledged: true, explicitAck: true },
       false,
       newBuildMemo(),
     );
