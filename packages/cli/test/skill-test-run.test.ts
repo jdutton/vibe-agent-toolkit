@@ -381,6 +381,43 @@ describe('vat skill test run (env plumbing)', () => {
   });
 });
 
+// `--evals` is what makes an installed skill testable at all: a correctly
+// packaged skill ships no suite (it is the answer key), so the suite has to come
+// from outside its tree. The flag resolves against the CURRENT DIRECTORY, unlike
+// config `test.evals`, which resolves against the skill source — an operator
+// typing a shell path means the path they typed.
+describe('vat skill test run (--evals resolves against the cwd)', () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it('resolves a relative --evals to an absolute path before it reaches the harness', async () => {
+    const opts = await runAndCaptureOpts(ENV_TEST_SKILL, {
+      evals: './audit-corpus/their-skill.json',
+      iUnderstandThisRunsSkillCode: true,
+    });
+    // Absolute, because the harness anchors a *relative* value at the skill
+    // source — which for an out-of-tree suite is the wrong base entirely.
+    expect(toForwardSlash(opts.evalsSubpath ?? '')).toBe(
+      toForwardSlash(safePath.resolve(process.cwd(), 'audit-corpus/their-skill.json')),
+    );
+  });
+
+  it('passes an absolute --evals through unchanged', async () => {
+    const absolute = safePath.resolve('/corpora/their-skill.json');
+    const opts = await runAndCaptureOpts(ENV_TEST_SKILL, {
+      evals: absolute,
+      iUnderstandThisRunsSkillCode: true,
+    });
+    expect(toForwardSlash(opts.evalsSubpath ?? '')).toBe(toForwardSlash(absolute));
+  });
+
+  it('leaves evalsSubpath undefined without the flag, so the convention still applies', async () => {
+    const opts = await runAndCaptureOpts(ENV_TEST_SKILL, {
+      iUnderstandThisRunsSkillCode: true,
+    });
+    expect(opts.evalsSubpath).toBeUndefined();
+  });
+});
+
 describe('vat skill test run (output routing)', () => {
   afterEach(() => vi.restoreAllMocks());
 

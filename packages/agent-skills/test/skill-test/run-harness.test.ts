@@ -358,6 +358,10 @@ describe('subjectSkillName', () => {
 describe('resolveScaffoldEvalsPath', () => {
   const repoRoot = '/repo';
   const evalsSubpath = 'evals/evals.json';
+  /** Subject under test here — a nested skill, so the anchor is visible in the tail. */
+  const SUBJECT = 'skills/foo';
+  /** The convention's tail, asserted by every case that anchors inside the skill. */
+  const CONVENTION_TAIL = '/skills/foo/evals/evals.json';
 
   // repoRoot is an absolute POSIX-style path; on Windows safePath.resolve prepends
   // a drive letter, so assertions anchor on the resolved root + relative tail
@@ -365,9 +369,9 @@ describe('resolveScaffoldEvalsPath', () => {
   const resolvedRepoRoot = toForwardSlash(safePath.resolve(repoRoot));
 
   it('resolves against repoRoot + the subject name when no override', () => {
-    const out = toForwardSlash(resolveScaffoldEvalsPath(makeOpts({ subject: 'skills/foo' }), repoRoot, evalsSubpath));
+    const out = toForwardSlash(resolveScaffoldEvalsPath(makeOpts({ subject: SUBJECT }), repoRoot, evalsSubpath));
     expect(out.startsWith(resolvedRepoRoot)).toBe(true);
-    expect(out.endsWith('/skills/foo/evals/evals.json')).toBe(true);
+    expect(out.endsWith(CONVENTION_TAIL)).toBe(true);
   });
 
   it('honors a withSources[name].path override', () => {
@@ -380,6 +384,41 @@ describe('resolveScaffoldEvalsPath', () => {
     );
     expect(out.startsWith(resolvedRepoRoot)).toBe(true);
     expect(out.endsWith('/custom/loc/evals/evals.json')).toBe(true);
+  });
+
+  // An eval suite is the answer key, so it is inherently repo-local — which means
+  // testing a skill you did not author REQUIRES pointing at a suite outside that
+  // skill's tree. These pin the three spellings that must reach the same place.
+  it('returns an ABSOLUTE suite path unchanged instead of joining it under the skill', () => {
+    // Was: safePath.join(skillDir, '/shared/evals/evals.json') silently produced
+    // `<skillDir>/shared/evals/evals.json`. That path does not exist, so the run
+    // did not fail — it BOOTSTRAPPED a starter template there, reporting success
+    // while grading nothing the operator asked for.
+    const absolute = toForwardSlash(safePath.resolve('/shared/evals/evals.json'));
+    const out = toForwardSlash(
+      resolveScaffoldEvalsPath(makeOpts({ subject: SUBJECT }), repoRoot, absolute),
+    );
+    expect(out).toBe(absolute);
+  });
+
+  it('resolves a suite path that escapes the skill dir', () => {
+    // Already worked (join normalizes `..`), pinned so the absolute-path fix does
+    // not regress the layout adopters use today to keep suites out of a bundle.
+    const out = toForwardSlash(
+      resolveScaffoldEvalsPath(makeOpts({ subject: SUBJECT }), repoRoot, '../shared/evals.json'),
+    );
+    expect(out.startsWith(resolvedRepoRoot)).toBe(true);
+    expect(out.endsWith('/skills/shared/evals.json')).toBe(true);
+  });
+
+  it('keeps the built-in convention on plain path resolution', () => {
+    // The default is VAT's own constant, not an adopter-supplied reference, so it
+    // must never be interpreted as a package specifier — an installed package
+    // named `evals` would otherwise shadow every skill's own suite.
+    const out = toForwardSlash(
+      resolveScaffoldEvalsPath(makeOpts({ subject: SUBJECT }), repoRoot, undefined),
+    );
+    expect(out.endsWith(CONVENTION_TAIL)).toBe(true);
   });
 });
 

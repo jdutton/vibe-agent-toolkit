@@ -26,7 +26,7 @@ import {
   type SkillPackagingConfig,
 } from '@vibe-agent-toolkit/agent-skills';
 import type { ProjectConfig, SkillSourceDescriptor, TestConfig } from '@vibe-agent-toolkit/resources';
-import { findProjectRoot, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { parseSourceSpec } from '../../../skill-resolution/classify.js';
@@ -100,6 +100,12 @@ export interface SkillTestRunOptions {
   debug?: boolean;
   env?: string[];
   passEnv?: string[];
+  /**
+   * Path (or npm bare specifier) to the evals.json this run grades against.
+   * Resolved against the process cwd, unlike `test.evals`, which is resolved
+   * against the skill source.
+   */
+  evals?: string;
   /** Skip building a declared subject and stage its existing dist instead. */
   noBuild?: boolean;
   /** Opt out of the fail-closed default: exit Ok (0) even when an eval fails. */
@@ -362,7 +368,14 @@ function applyScalarMerges(opts: HarnessOpts, options: SkillTestRunOptions, conf
   if (baseline !== undefined) opts.baseline = baseline;
   const model = options.model ?? config?.model;
   if (model !== undefined) opts.model = model;
-  if (config?.evals !== undefined) opts.evalsSubpath = config.evals;
+  // `--evals` is resolved HERE, against the process cwd, so the operator's own
+  // shell path means what they typed; `test.evals` is left alone and resolves
+  // against the skill source, because config travels with the skill. Both then
+  // reach the harness as one field, and both accept a path or an npm bare
+  // specifier (a suite published as a shared corpus).
+  const evalsRef =
+    options.evals === undefined ? config?.evals : resolveAssetReference(options.evals, process.cwd());
+  if (evalsRef !== undefined) opts.evalsSubpath = evalsRef;
 }
 
 /**
@@ -1311,6 +1324,10 @@ export function createSkillTestRunCommand(): Command {
     .option(
       '--grader-model <id>',
       'Model for the fixed grader/judge, passed VERBATIM to `claude --model` (default claude-sonnet-5). GLOBAL (top-level `test:` config), independent of --model (the model UNDER TEST).',
+    )
+    .option(
+      '--evals <path>',
+      "Eval suite to grade against: a path to an evals.json (resolved against the CURRENT DIRECTORY, so it may point outside the skill's tree) or an npm bare specifier honoring that package's exports map. Overrides `test.evals`, which is resolved against the skill source instead. Use this to test a skill you did not author — a correctly packaged skill ships no evals, because the suite is the answer key.",
     )
     .option('--max-turns <n>', 'Per-spawn cap on executor/grader turns (positive integer)')
     .option('--max-budget-usd <n>', 'Hard USD budget cap (positive number)')

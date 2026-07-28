@@ -214,7 +214,7 @@ export const TestConfigSchema = z.object({
   stall: z.number().int().positive().optional()
     .describe('Stall-watchdog seconds (kill on no stream output)'),
   evals: z.string().min(1).optional()
-    .describe('Path to evals.json (relative to skill source)'),
+    .describe('Which evals.json to grade against: a path relative to the skill source, an absolute path, or an npm bare specifier (resolved via the target package\'s exports map). A suite outside the skill tree is the normal case when the skill is not the one you authored. The CLI flag --evals resolves against the current directory instead.'),
   auth: z.enum(['inherit', 'subscription', 'api-key', 'auto']).optional()
     .describe('Auth-mechanism selection (default: inherit)'),
   requireAuth: z.enum(['subscription', 'api-key']).optional()

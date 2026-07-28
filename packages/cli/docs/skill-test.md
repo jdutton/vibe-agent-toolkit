@@ -64,7 +64,7 @@ Every field is optional; an omitted knob falls back to its default.
 | `maxBudgetUsd` | number > 0 | none | `--max-budget-usd <n>` | Hard USD budget cap passed to the CLI. |
 | `timeout` | integer, **seconds** | scales with eval count: ~`2min + 2min/eval`, floored at 5min, capped at 1h | `--timeout <s>` | Wall-clock timeout. An explicit value always overrides the scaled default. |
 | `stall` | integer, **seconds** | none | `--stall <s>` | Stall watchdog — kill the spawn after this long with no stream output. |
-| `evals` | string (path) | auto-detected `evals/evals.json` (see below) | `--evals <path>` | Path to `evals.json`, **relative to the skill source**. An explicit value always wins over the default convention. |
+| `evals` | string (path or npm specifier) | auto-detected `evals/evals.json` (see below) | `--evals <path>` | Which `evals.json` to grade against. `test.evals` resolves **relative to the skill source**; `--evals` resolves **relative to the current directory**. Either may be absolute, and either may be an npm bare specifier. An explicit value always wins over the default convention. |
 | `auth` | `inherit` \| `subscription` \| `api-key` \| `auto` | `inherit` | `--auth <mode>` | Auth mechanism for the spawned session. |
 | `requireAuth` | `subscription` \| `api-key` | none | `--require-auth <mech>` | Fail-fast guard: preflight exits `2` if the effective mechanism isn't this. |
 | `baseline` | boolean | `false` | `--baseline` | Run the opt-in with/without A/B skill-lift comparison. |
@@ -121,6 +121,22 @@ A skill with no suite is completely unaffected: it packages exactly as it would 
 **Set `test.evals` explicitly** when your suite lives anywhere else — a shared directory, a per-skill subdirectory (VAT's own repo uses `evals/<skill-name>/evals.json`), or outside the skill tree. An explicit path always overrides the convention.
 
 > Both lanes honor this. Before it was shared, the harness auto-detected the suite while the packager did not, so a skill relying on the default had its answer key published even though the harness was protecting it.
+
+### Testing a skill you did not author
+
+A correctly packaged skill ships **no** eval suite — the suite is the answer key, and excluding it from the bundle is the whole point of the convention above. So for any skill you install rather than write, there is nothing in its tree to grade against, and you have to supply the suite yourself:
+
+```bash
+vat skill test run npm:@vendor/their-skill \
+  --evals ./our-audit-corpus/their-skill.json \
+  --i-understand-this-runs-skill-code
+```
+
+`--evals` resolves against the directory you run it from, so the path means what you typed. It may point anywhere — including outside the skill's tree entirely, which is the normal case here. It also accepts an npm bare specifier (`--evals @acme/skill-evals/their-skill.json`), honoring that package's `exports` map, so a shared corpus can be distributed as a package.
+
+The suite is never copied into anything the executor can reach. Each eval's declared input `files` are resolved relative to the **suite's** directory and staged into that eval's own workspace, so fixtures travel with the suite rather than with the skill.
+
+> **On sensitive fixtures.** `workspaces/` and `results/` are created `0700`, so a fixture that was never in your repo is not left readable by other local users. That is necessary but **not** sufficient: `grading.json` quotes the executor transcript verbatim as evidence, so anything the skill *reads out of* a fixture is written into `results/` as text — and `results/` survives `--keep` by design. Treat the harness output as being as sensitive as the fixtures you feed it.
 
 ## Global knobs (top-level `test:`)
 

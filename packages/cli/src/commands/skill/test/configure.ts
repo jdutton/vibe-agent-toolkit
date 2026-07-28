@@ -142,7 +142,10 @@ export function createSkillTestConfigureCommand(): Command {
     .option('--stall <s>', 'Stall-watchdog seconds (positive integer)')
     .option('--model <id>', 'Pinned model ID for reproducibility')
     .option('--baseline', 'Enable with/without A/B baseline run')
-    .option('--evals <path>', 'Path to evals.json (relative to skill source)')
+    .option(
+      '--evals <path>',
+      "Path to evals.json, recorded in config as-is: relative to the skill source, absolute, or an npm bare specifier. (Note the asymmetry with `skill test run --evals`, which resolves against the current directory — config travels with the skill, a flag is typed by an operator.)",
+    )
     .option('--print', 'Print the updated YAML to stdout instead of writing the file')
     .option('--debug', 'Enable debug logging')
     .action(configureCommand)

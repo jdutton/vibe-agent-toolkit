@@ -582,11 +582,42 @@ export function subjectSkillName(opts: RunHarnessOptions): string {
   return basename(toForwardSlash(opts.subject)) || opts.subject;
 }
 
-export function resolveScaffoldEvalsPath(opts: RunHarnessOptions, repoRoot: string, evalsSubpath: string): string {
+/**
+ * Where this run READS its eval suite from, anchored at the subject's authored
+ * source dir.
+ *
+ * `evalsRef` is `undefined` for the built-in convention and a config/flag value
+ * otherwise, and the two are resolved differently ON PURPOSE:
+ *
+ * - The convention is VAT's OWN constant, not an adopter-supplied reference, so
+ *   it stays plain path math. Routing it through {@link resolveAssetReference}
+ *   would make `evals/evals.json` a bare specifier, and an installed package
+ *   named `evals` would then shadow every skill's own suite.
+ * - An explicit value IS a config-supplied file reference, so it goes through
+ *   {@link resolveAssetReference} — the project's canonical resolver — and
+ *   therefore accepts a relative path, an ABSOLUTE path, or an npm bare
+ *   specifier honoring the target package's `exports` map.
+ *
+ * The absolute case is why this exists. A suite is the answer key, so it is
+ * inherently repo-local; testing a skill you did not author requires supplying
+ * one from outside its tree. `safePath.join` silently folded an absolute path
+ * into `<skillDir>/<path>`, which does not exist — so the run did not fail, it
+ * bootstrapped a starter template at the bogus location and graded that.
+ */
+export function resolveScaffoldEvalsPath(
+  opts: RunHarnessOptions,
+  repoRoot: string,
+  evalsRef: string | undefined,
+): string {
+  const resolveFrom = (baseDir: string): string =>
+    evalsRef === undefined
+      ? safePath.join(baseDir, DEFAULT_EVALS_SUBPATH)
+      : resolveAssetReference(evalsRef, baseDir);
+
   // Prefer the explicit authored source dir resolved by run.ts (the staged/built
   // tree is ephemeral; this is where the user can edit the scaffolded template).
   if (opts.subjectScaffoldDir !== undefined) {
-    return safePath.join(opts.subjectScaffoldDir, evalsSubpath);
+    return resolveFrom(opts.subjectScaffoldDir);
   }
   const subjectName = opts.subject;
   const override = opts.withSources?.[subjectName];
@@ -595,7 +626,7 @@ export function resolveScaffoldEvalsPath(opts: RunHarnessOptions, repoRoot: stri
   const sourcePath = overridePath ?? subjectName;
   // eslint-disable-next-line local/no-unsafe-root-join -- the positional skill source may be an absolute path; resolving it against repoRoot (which returns an absolute sourcePath unchanged) is intentional, documented behavior, not a containment bug.
   const sourceDir = safePath.resolve(repoRoot, sourcePath);
-  return safePath.join(sourceDir, evalsSubpath);
+  return resolveFrom(sourceDir);
 }
 
 /**
@@ -605,8 +636,8 @@ export function resolveScaffoldEvalsPath(opts: RunHarnessOptions, repoRoot: stri
  * scaffold and writes nothing. Both surface the same exit-3 BootstrapNeededError.
  * Always throws.
  */
-function bootstrapEvalSuite(opts: RunHarnessOptions, repoRoot: string, evalsSubpath: string): never {
-  const scaffoldPath = resolveScaffoldEvalsPath(opts, repoRoot, evalsSubpath);
+function bootstrapEvalSuite(opts: RunHarnessOptions, repoRoot: string, evalsRef: string | undefined): never {
+  const scaffoldPath = resolveScaffoldEvalsPath(opts, repoRoot, evalsRef);
   if (opts.dryRun === true) {
     throw new BootstrapNeededError(scaffoldPath, { dryRun: true });
   }
@@ -643,11 +674,14 @@ export function resolveEvalSuiteHoldDir(dirToken: string): string {
 export function resolveEvalSuitePath(input: {
   opts: RunHarnessOptions;
   repoRoot: string;
+  /** Explicit `test.evals` / `--evals` value, or `undefined` for the convention. */
+  evalsRef: string | undefined;
+  /** Defaulted subpath — names the suite FILE inside a held artifact. */
   evalsSubpath: string;
   holdDir: string;
   subjectEvalSuiteHeld: boolean;
 }): string | undefined {
-  const authored = resolveScaffoldEvalsPath(input.opts, input.repoRoot, input.evalsSubpath);
+  const authored = resolveScaffoldEvalsPath(input.opts, input.repoRoot, input.evalsRef);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- authored source path resolved from opts
   if (existsSync(authored)) return authored;
   if (!input.subjectEvalSuiteHeld) return undefined;
@@ -666,7 +700,11 @@ export function stageWorkspacesForRun(
 ): { workspacesRoot: string; declaredEvalCount: number; suite: EvalSuite } {
   const workspacesRoot = safePath.joinUnderRoot(harnessRoot, 'workspaces');
   rmSync(workspacesRoot, { recursive: true, force: true });
-  mkdirSyncReal(workspacesRoot, { recursive: true });
+  // 0700, matching the harness root. These dirs hold each eval's declared input
+  // files, which with an out-of-tree suite may be data that was never in the repo
+  // at all. Inheriting the umask (0755) left them readable by any local user the
+  // moment `--out` relocated the harness root out from under its 0700 parent.
+  mkdirSyncReal(workspacesRoot, { recursive: true, mode: 0o700 });
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- evalsPath is our staged-subject path
   const suite = parseEvalSuite(readFileSync(evalsPath, 'utf-8'));
   return {
@@ -1456,7 +1494,14 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
   // treat it like --keep and never delete it.
   const harnessCreated = opts.out === undefined && opts.workdir === undefined;
   const repoRoot = opts.repoRoot ?? harnessRoot;
-  const evalsSubpath = opts.evalsSubpath ?? DEFAULT_EVALS_SUBPATH;
+  // Two distinct questions, deliberately not one value. `evalsRef` is what the
+  // adopter ASKED FOR — a `test.evals`/`--evals` value, or `undefined` for the
+  // built-in convention — and decides where the suite is READ from, which may be
+  // outside the skill tree entirely. `evalsSubpath` is the defaulted form, used
+  // where a *location inside a skill* is meant: stripping the suite out of every
+  // staged tree, and naming the suite file inside a held artifact.
+  const evalsRef = opts.evalsSubpath;
+  const evalsSubpath = evalsRef ?? DEFAULT_EVALS_SUBPATH;
   const currentUid = typeof process.getuid === 'function' ? process.getuid() : 0;
 
   // Tighten an existing directory to 0700 (if present) BEFORE mkdir — adopter
@@ -1561,10 +1606,11 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
       resolveEvalSuitePath({
         opts,
         repoRoot,
+        evalsRef,
         evalsSubpath,
         holdDir: evalSuiteHoldDir,
         subjectEvalSuiteHeld: stageResult.subjectEvalSuiteHeld,
-      }) ?? bootstrapEvalSuite(opts, repoRoot, evalsSubpath);
+      }) ?? bootstrapEvalSuite(opts, repoRoot, evalsRef);
 
     // Step 5: Preflight checks.
     const knobs = resolveKnobs(opts);
@@ -1604,7 +1650,11 @@ export async function runSkillTestHarness(opts: RunHarnessOptions): Promise<RunH
     // results/ — grading.json/friction.json/baseline.json come from the merged
     // grader fragments below, never from the (untrusted) model.
     const resultsDir = safePath.joinUnderRoot(harnessRoot, 'results');
-    mkdirSyncReal(resultsDir, { recursive: true });
+    // 0700, matching the harness root. `grading.json` quotes the executor
+    // transcript verbatim in each expectation's evidence, so whatever the skill
+    // read out of its input files ends up here as text — and unlike the
+    // workspaces, results/ SURVIVES `--keep` by design.
+    mkdirSyncReal(resultsDir, { recursive: true, mode: 0o700 });
 
     // Record what was actually staged & tested (the subject identity + the
     // staged manifest fingerprint + per-entry content hashes) so a run is
