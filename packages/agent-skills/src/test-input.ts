@@ -147,9 +147,61 @@ export function testInputFileEntryIssues(dropped: readonly SkillFileEntry[]): Va
   return dropped.map((entry) =>
     materializeIssue('PACKAGED_TEST_INPUT', {
       location: toForwardSlash(entry.dest),
-      detail: `${toForwardSlash(entry.source)} -> ${toForwardSlash(entry.dest)}`,
+      message:
+        `files: entry "${toForwardSlash(entry.source)} -> ${toForwardSlash(entry.dest)}" points into ` +
+        `this skill's declared test input (test.evals) and was NOT packaged — test input, ` +
+        `including the expected_output answer key, never ships to consumers.`,
     }),
   );
+}
+
+/** The shape of a walker exclusion this module needs: where it pointed, and from what link. */
+export interface ExcludedLinkRef {
+  /** Absolute path of the excluded link target. */
+  path: string;
+  /** The href as authored in the markdown, when known. */
+  linkHref?: string | undefined;
+}
+
+/**
+ * A `PACKAGED_TEST_INPUT` receipt per LINK that was dropped for pointing into
+ * declared test input.
+ *
+ * The link route needs its own receipt for the same reason the `files:` route does:
+ * VAT silently removes the link from the shipped SKILL.md, and a link that silently
+ * did nothing must not be mistaken for one that worked. Without this the drop is
+ * invisible in every lane — the generic walker exclusion channel deliberately emits
+ * nothing for a pattern match, because ordinary pattern excludes are author-declared
+ * intent, and this exclusion is not: the author declared an EVAL SUITE, not a
+ * link-stripping rule.
+ *
+ * `projectRoot`-relative locations, so the same link reports identically from the
+ * packager and from the read-only validator.
+ */
+export function testInputLinkIssues(
+  excluded: readonly ExcludedLinkRef[],
+  testInputDirs: readonly string[],
+  projectRoot: string,
+): ValidationIssue[] {
+  if (testInputDirs.length === 0) return [];
+  const issues: ValidationIssue[] = [];
+  const seen = new Set<string>();
+  for (const ref of excluded) {
+    if (!testInputDirs.some((dir) => isInside(ref.path, dir))) continue;
+    const location = toForwardSlash(safePath.relative(projectRoot, ref.path));
+    if (seen.has(location)) continue;
+    seen.add(location);
+    issues.push(
+      materializeIssue('PACKAGED_TEST_INPUT', {
+        location,
+        message:
+          `Link "${ref.linkHref ?? location}" points into this skill's declared test input ` +
+          `(test.evals). The target is NOT packaged — test input, including the expected_output ` +
+          `answer key, never ships to consumers — so the link is removed from the packaged output.`,
+      }),
+    );
+  }
+  return issues;
 }
 
 export interface CheckPackagedTestInputInput {

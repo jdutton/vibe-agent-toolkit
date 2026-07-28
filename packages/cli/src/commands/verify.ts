@@ -9,6 +9,7 @@
  */
 
 import { existsSync } from 'node:fs';
+import { basename } from 'node:path';
 
 import { computeTreeCopiedSkillLocations, mergeFilesConfig } from '@vibe-agent-toolkit/agent-skills';
 import { safePath } from '@vibe-agent-toolkit/utils';
@@ -157,9 +158,13 @@ export function checkFilesConfigDests(cwd: string): FilesDestCheckResult[] {
 
     // --- Tree-copy skills: candidate dirs are plugin output skill dirs ---
     for (const loc of computeTreeCopiedSkillLocations(config, cwd)) {
-      const perSkill = skillsConfig?.config?.[loc.skillDirName];
+      // Per-skill config is keyed by the skill's declared NAME. `skillDirPath` is a
+      // path (`group/nested-skill` for a nested skill), so try its trailing segment
+      // too — the spelling that matches for every skill whose dir is named after it.
+      const dirLeaf = basename(loc.skillDirPath);
+      const perSkill = skillsConfig?.config?.[loc.skillDirPath] ?? skillsConfig?.config?.[dirLeaf];
       const mergedFiles = mergeFilesConfig(defaults?.files, perSkill?.files);
-      tryAddCheckEntry(checks, loc.skillDirName, loc.skillOutputDir, mergedFiles);
+      tryAddCheckEntry(checks, loc.skillDirPath, loc.skillOutputDir, mergedFiles);
     }
 
     // --- Run each pending check and collect results ---

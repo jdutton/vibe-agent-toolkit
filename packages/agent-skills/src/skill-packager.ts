@@ -58,6 +58,7 @@ import {
   resolveTestInputDirs,
   testInputExcludeRules,
   testInputFileEntryIssues,
+  testInputLinkIssues,
 } from './test-input.js';
 import { validateSkillForPackaging, type PackagingValidationResult, type SkillPackagingConfig } from './validators/packaging-validator.js';
 import { deferredAssetsToIssues, walkerExclusionsToIssues } from './validators/walker-to-issues.js';
@@ -579,6 +580,10 @@ export async function packageSkill(
   ];
   const rawLinkIssues = [
     ...walkerExclusionsToIssues(excludedReferences, projectRoot),
+    // The link half of the same receipt: a link INTO declared test input is dropped
+    // and rewritten away, which the generic exclusion channel reports as nothing
+    // (a pattern match is author-declared intent; this exclusion is VAT's).
+    ...testInputLinkIssues(excludedReferences, testInputDirs, projectRoot),
     ...deferredAssetsToIssues(deferredAssets, projectRoot),
   ];
 

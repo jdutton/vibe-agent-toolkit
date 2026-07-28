@@ -235,7 +235,7 @@ export function setupReferenceFixture(spec: ReferenceFixtureSpec): ReferenceFixt
     sourceFilePath: makeSourceFilePathAccessor(root),
     pluginDistDir: (name) => {
       const location = computeTreeCopiedSkillLocations(loadFixtureConfig(spec), root).find(
-        (loc) => loc.skillDirName === name,
+        (loc) => loc.skillDirPath === name,
       );
       if (location === undefined) {
         throw new Error(`fixture has no plugin-local location for '${name}'`);

@@ -78,7 +78,7 @@ function computeSkillDistribution(
       kind: 'plugin-local',
       marketplaceName: location.marketplaceName,
       pluginName: location.pluginName,
-      skillDirName: location.skillDirName,
+      skillDirPath: location.skillDirPath,
     },
     expectedDistDir: location.skillOutputDir,
   };

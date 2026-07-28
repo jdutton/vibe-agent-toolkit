@@ -441,15 +441,24 @@ function applyNoCheckFrontmatterLinksFlag(config: ProjectConfig | undefined): vo
  * other lane that needs the project's deferred model shares this derivation
  * instead of re-deriving it.
  *
- * Returns undefined when the project declares no skills at all — there is
- * nothing to defer, so callers should omit `deferredArtifacts` entirely rather
- * than pass around an empty model.
+ * Returns undefined when the project declares no skills at all, or when no skill
+ * declares a `files:` mapping — in either case there is nothing to defer, so
+ * callers should omit `deferredArtifacts` entirely rather than pass around an
+ * empty model. The `files:` short-circuit also keeps skill discovery (a read and
+ * a frontmatter parse per declared skill) off `vat resources validate` for the
+ * majority of projects, which declare no `files:` at all.
  */
 export async function computeDeferredArtifacts(
   config: ProjectConfig | undefined,
   projectRoot: string,
 ): Promise<DeferredArtifacts | undefined> {
   if (!config?.skills) {
+    return undefined;
+  }
+  const declaresFiles =
+    config.skills.defaults?.files !== undefined ||
+    Object.values(config.skills.config ?? {}).some((skill) => skill?.files !== undefined);
+  if (!declaresFiles) {
     return undefined;
   }
 

@@ -13,6 +13,7 @@ import {
   resolveTestInputDirs,
   testInputExcludeRules,
   testInputFileEntryIssues,
+  testInputLinkIssues,
 } from '../src/test-input.js';
 
 /**
@@ -25,6 +26,8 @@ const SKILL_DIR = `${PROJECT_ROOT}/skills/demo`;
 const OUTPUT = `${PROJECT_ROOT}/dist/skills/demo`;
 /** The default suite dir `resolveTestInputDirs` derives from SKILL_DIR. */
 const DEFAULT_EVALS_DIR = `${SKILL_DIR}/evals`;
+/** A skill-relative href pointing INTO the declared suite — the link VAT must drop. */
+const NOTES_HREF = 'evals/notes.md';
 /** A `files:` dest that points INTO the declared suite — the entry VAT must drop. */
 const FIXTURE_DEST = 'fixtures/input.md';
 /** A `files:` dest whose source is OUTSIDE test input — the entry VAT must keep. */
@@ -194,5 +197,66 @@ describe('checkPackagedTestInput (backstop)', () => {
         testInputDirs: [],
       }),
     ).toEqual([]);
+  });
+});
+
+describe('testInputLinkIssues', () => {
+  const testInputDirs = [DEFAULT_EVALS_DIR];
+
+  it('emits one receipt for a link that pointed into declared test input', () => {
+    const issues = testInputLinkIssues(
+      [{ path: `${DEFAULT_EVALS_DIR}/notes.md`, linkHref: NOTES_HREF }],
+      testInputDirs,
+      PROJECT_ROOT,
+    );
+
+    expect(issues).toHaveLength(1);
+    expect(issues[0]?.code).toBe('PACKAGED_TEST_INPUT');
+    expect(issues[0]?.location).toBe('skills/demo/evals/notes.md');
+    // The authored href, so the author can find the link they need to remove.
+    expect(issues[0]?.message).toContain(NOTES_HREF);
+  });
+
+  it('is silent for a link to an ordinary resource', () => {
+    expect(
+      testInputLinkIssues(
+        [{ path: `${SKILL_DIR}/references/guide.md`, linkHref: 'references/guide.md' }],
+        testInputDirs,
+        PROJECT_ROOT,
+      ),
+    ).toEqual([]);
+  });
+
+  it('is silent when the skill declares no test input at all', () => {
+    expect(
+      testInputLinkIssues(
+        [{ path: `${DEFAULT_EVALS_DIR}/notes.md`, linkHref: NOTES_HREF }],
+        [],
+        PROJECT_ROOT,
+      ),
+    ).toEqual([]);
+  });
+
+  it('reports one receipt per target, not per link that reached it', () => {
+    const issues = testInputLinkIssues(
+      [
+        { path: `${DEFAULT_EVALS_DIR}/notes.md`, linkHref: NOTES_HREF },
+        { path: `${DEFAULT_EVALS_DIR}/notes.md`, linkHref: './evals/notes.md' },
+      ],
+      testInputDirs,
+      PROJECT_ROOT,
+    );
+
+    expect(issues).toHaveLength(1);
+  });
+
+  it('falls back to the location when a link has no recorded href', () => {
+    const issues = testInputLinkIssues(
+      [{ path: `${DEFAULT_EVALS_DIR}/fixtures/a.txt` }],
+      testInputDirs,
+      PROJECT_ROOT,
+    );
+
+    expect(issues[0]?.message).toContain('skills/demo/evals/fixtures/a.txt');
   });
 });

@@ -88,8 +88,8 @@ export const CODE_REGISTRY = {
   ),
   PACKAGED_TEST_INPUT: entry(
     'warning',
-    "A files: entry pointed into the skill's declared test input (its test.evals path) and was NOT packaged; test input — including the expected_output answer key — never ships to consumers.",
-    'No action needed — the build already excluded it. Remove the files: entry to silence this, or move the file out of the test.evals directory if it is genuinely a shipped resource.',
+    "A link or files: entry pointed into the skill's declared test input (its test.evals path) and was NOT packaged; test input — including the expected_output answer key — never ships to consumers.",
+    'No action needed — the build already excluded it. Remove the link or files: entry to silence this, or move the target out of the test.evals directory if it is genuinely a shipped resource.',
     'packaged_test_input',
   ),
   PACKAGED_BROKEN_LINK: entry(

@@ -6,11 +6,16 @@
  * link-graph walk, the exclusion, and the post-build guarantee together — the unit
  * tests in test-input.test.ts cover the path logic in isolation.
  *
- * Both entry routes into a bundle are exercised:
- *   - a SKILL.md link into the eval suite (excluded silently — the author's link is
- *     not a packaging decision they get to make);
- *   - a `files:` entry mapping the suite in (refused loudly — two config declarations
- *     contradict each other, and silently ignoring one would be worse).
+ * Both entry routes into a bundle are exercised, and both leave a receipt:
+ *   - a SKILL.md link into the eval suite (the target is not packaged and the link is
+ *     rewritten away, so the author is told — a link that silently vanished from the
+ *     shipped skill is indistinguishable from one that worked);
+ *   - a `files:` entry mapping the suite in (the copy does not happen, and the entry
+ *     that did nothing is named).
+ *
+ * Both receipts are `PACKAGED_TEST_INPUT` warnings, not failures: the declaration
+ * under `test.evals` IS the instruction, so the build already produced the right
+ * artifact and there is nothing for the adopter to fix.
  */
 
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -24,6 +29,8 @@ import { validateSkillForPackaging } from '../../src/validators/packaging-valida
 const ANSWER_KEY = 'the model must output exactly forty-two';
 /** Basename of the declared eval suite, used as both a source leaf and a dest. */
 const EVALS_FILE = 'evals.json';
+/** The declared suite subpath, exactly as a skill's `test.evals` spells it. */
+const EVALS_SUBPATH = 'evals/evals.json';
 /** A `dest` whose source sits in declared test input, so it is never written. */
 const DROPPED_DEST = 'evals-copy.json';
 /** The code a missing link target raises at SOURCE phase in both agent-skills lanes. */
@@ -114,8 +121,35 @@ describe('declared test input never ships (integration)', () => {
     }
     // ...while the ordinary linked resource still ships, so the exclusion is targeted.
     expect(files.some((f) => f.endsWith('guide.md'))).toBe(true);
+
+    // The link is REWRITTEN AWAY in the shipped SKILL.md — and the author is told.
+    // Silent removal was the gap: `[the suite](evals/evals.json)` became bare text in
+    // the published skill with no diagnostic from any lane, so an author could not
+    // tell a dropped link from one that worked.
+    const shippedSkillMd = readFileSync(safePath.join(outputPath, 'SKILL.md'), 'utf8');
+    expect(shippedSkillMd).not.toContain(EVALS_SUBPATH);
+    const receipt = result.postBuildIssues?.find((i) => i.code === 'PACKAGED_TEST_INPUT');
+    expect(receipt?.severity).toBe('warning');
+    expect(receipt?.message).toContain(EVALS_SUBPATH);
     // Excluding declared test input is normal, not an error: the build stays green.
-    expect(result.postBuildIssues?.some((i) => i.code === 'PACKAGED_TEST_INPUT')).not.toBe(true);
+    expect(result.hasErrors).toBe(false);
+  });
+
+  it('the read-only lane predicts the SAME bundle and emits the SAME receipt for a linked suite', async () => {
+    // `vat skills validate` used to skip the test-input exclusion entirely: it walked
+    // the link into `evals/` and counted the suite as a bundled file, predicting an
+    // artifact the build never produces. Same input, two answers about what ships,
+    // from the two commands that exist to agree.
+    const { skillPath } = writeProject();
+
+    const validated = await validateSkillForPackaging(skillPath, {
+      test: { evals: EVALS_SUBPATH },
+    });
+
+    // SKILL.md + guide.md only — the suite is not counted.
+    expect(validated.metadata.fileCount).toBe(2);
+    expect(codesOf(validated.activeWarnings)).toContain('PACKAGED_TEST_INPUT');
+    expect(validated.status).not.toBe('error');
   });
 
   it('DROPS a files: entry that maps the eval suite in — no config edit, no failed build', async () => {
@@ -163,7 +197,7 @@ describe('declared test input never ships (integration)', () => {
     // LINK_DEFERRED_ARTIFACT because it modeled the RAW files: list.
     const validated = await validateSkillForPackaging(skillPath, {
       files,
-      test: { evals: 'evals/evals.json' },
+      test: { evals: EVALS_SUBPATH },
     });
     expect(codesOf(validated.activeErrors)).toContain(BROKEN_LINK_CODE);
     expect(codesOf(validated.allErrors)).not.toContain('LINK_DEFERRED_ARTIFACT');

@@ -29,7 +29,12 @@ import { DeferredArtifacts, parseMarkdown, ResourceRegistry, type SkillExecutabl
 import { findProjectRoot, normalizedTmpdir, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
-import { packagedFileEntries } from '../test-input.js';
+import {
+  packagedFileEntries,
+  resolveTestInputDirs,
+  testInputExcludeRules,
+  testInputLinkIssues,
+} from '../test-input.js';
 import { walkLinkGraph, type LinkResolution, type WalkableRegistry } from '../walk-link-graph.js';
 
 import { observationToIssue, runCompatDetectors } from './compat-detectors.js';
@@ -346,10 +351,18 @@ export async function validateSkillForPackaging(
     [{ files: packagedFileEntries(packagingConfig ?? {}, dirname(skillPath), projectRoot), skillDir: dirname(skillPath) }],
     projectRoot,
   );
+  const testInputDirs = resolveTestInputDirs(packagingConfig ?? {}, dirname(skillPath));
 
   const walkOptions: Parameters<typeof walkLinkGraph>[2] = {
     maxDepth,
-    excludeRules: excludeConfig?.rules ?? [],
+    // The SAME test-input exclusion the packager applies. Without it this lane
+    // predicts a bundle containing the eval suite while the build produces one
+    // without it — same input, two answers about what ships, from the two commands
+    // that exist to agree.
+    excludeRules: [
+      ...(excludeConfig?.rules ?? []),
+      ...testInputExcludeRules(testInputDirs, projectRoot),
+    ],
     projectRoot,
     skillRootPath: safePath.resolve(skillPath),
     excludeNavigationFiles,
@@ -372,6 +385,9 @@ export async function validateSkillForPackaging(
 
   // Emit issues from walker exclusions (LINK_OUTSIDE_PROJECT, LINK_TARGETS_DIRECTORY, etc.)
   rawIssues.push(...walkerExclusionsToIssues(excludedReferences, projectRoot));
+  // Receipt for each link dropped for pointing into declared test input — the same
+  // issue, at the same location, the packager emits for it.
+  rawIssues.push(...testInputLinkIssues(excludedReferences, testInputDirs, projectRoot));
   // Emit one info issue per deferred asset declared in files: config
   rawIssues.push(...deferredAssetsToIssues(deferredAssets, projectRoot));
 

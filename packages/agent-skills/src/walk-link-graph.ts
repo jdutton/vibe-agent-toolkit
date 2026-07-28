@@ -271,7 +271,8 @@ function checkExclusions(
   excludedReferences: LinkResolution[],
   deferredAssetSet: Set<string>,
 ): boolean {
-  // Deferred check is the FIRST discriminator (C2 ordering fix).
+  // The deferred check is the FIRST discriminator: a not-yet-materialized target
+  // must be classified before any check that would read it off disk.
   if (options.deferredArtifacts && checkDeferred(targetPath, options.deferredArtifacts, deferredAssetSet)) {
     return true;
   }
