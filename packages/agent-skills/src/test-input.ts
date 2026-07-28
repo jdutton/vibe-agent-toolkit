@@ -27,10 +27,8 @@ import type { SkillPackagingConfig } from '@vibe-agent-toolkit/resources';
 import { isGlob, safePath, staticGlobBase, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { type SkillFileEntry } from './files-config.js';
+import { DEFAULT_EVALS_SUBPATH } from './skill-test/eval-suite-isolation.js';
 import { materializeIssue } from './validators/rule-engine/index.js';
-
-/** Default suite subpath when `test.evals` is not set — mirrors the harness default. */
-const DEFAULT_EVALS_SUBPATH = 'evals/evals.json';
 
 /**
  * Does this skill carry the conventional suite at `<skill-root>/evals/evals.json`?

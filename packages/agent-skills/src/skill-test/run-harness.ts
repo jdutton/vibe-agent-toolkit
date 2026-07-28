@@ -40,6 +40,7 @@ import type { EvalFragment } from './eval-fragment.js';
 import { runGraderForEval } from './eval-grader.js';
 import { EvalInputError, parseEvalSuite, stageEvalWorkspaces, type EvalEntry, type EvalSuite } from './eval-inputs.js';
 import { lintEvalExpectations, lintToolExpectationExecutables } from './eval-lint.js';
+import { DEFAULT_EVALS_SUBPATH } from './eval-suite-isolation.js';
 import { writeEvalsTemplate } from './evals-template.js';
 import {
   BootstrapNeededError,
@@ -70,7 +71,6 @@ import { ToolEvalReportSchema, type ToolEvalReport } from './tool-eval-schema.js
 import { verifyVendoredManifest } from './vendor-manifest.js';
 
 /** Default subpath of the subject's eval suite, relative to its source dir. */
-const DEFAULT_EVALS_SUBPATH = 'evals/evals.json';
 
 /**
  * Absolute path to the committed, pinned vendored skill-creator copy that ships

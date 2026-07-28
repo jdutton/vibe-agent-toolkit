@@ -116,7 +116,11 @@ function writeFixture(evalsHost: 'subject' | 'scaffold', evals: unknown[]): Fixt
 }
 
 /** Harness options for a canary run: real staging, faked spawns. */
-function canaryOpts(layout: FixtureLayout, spawn: RunHarnessOptions['spawn']): RunHarnessOptions {
+function canaryOpts(
+  layout: FixtureLayout,
+  spawn: RunHarnessOptions['spawn'],
+  extra: Partial<RunHarnessOptions> = {},
+): RunHarnessOptions {
   return {
     subject: SKILL_NAME,
     repoRoot: tempDir,
@@ -126,6 +130,7 @@ function canaryOpts(layout: FixtureLayout, spawn: RunHarnessOptions['spawn']): R
     acknowledgedRunsSkillCode: true,
     allowUnverifiedSkillSource: true,
     ...(spawn === undefined ? {} : { spawn }),
+    ...extra,
   };
 }
 
@@ -134,7 +139,10 @@ function canaryOpts(layout: FixtureLayout, spawn: RunHarnessOptions['spawn']): R
  * reachable from that executor which contains the answer key. Returns the run's
  * exit code plus the accumulated leak hits (empty = the canary is alive).
  */
-async function runCanary(layout: FixtureLayout): Promise<{ exitCode: number; leaks: string[]; spawns: number }> {
+async function runCanary(
+  layout: FixtureLayout,
+  extra: Partial<RunHarnessOptions> = {},
+): Promise<{ exitCode: number; leaks: string[]; spawns: number }> {
   const harnessRoot = safePath.join(tempDir, 'harness');
   const leaks: string[] = [];
   let spawns = 0;
@@ -148,7 +156,7 @@ async function runCanary(layout: FixtureLayout): Promise<{ exitCode: number; lea
       );
     },
   });
-  const result = await runSkillTestHarness(canaryOpts(layout, fake.spawn));
+  const result = await runSkillTestHarness(canaryOpts(layout, fake.spawn, extra));
   return { exitCode: result.exitCode, leaks, spawns };
 }
 
@@ -210,6 +218,42 @@ describe('eval answer-key isolation (canary)', () => {
     ]);
 
     const { exitCode, leaks, spawns } = await runCanary(layout);
+
+    expect(leaks).toEqual([]);
+    expect(spawns).toBe(1);
+    expect(exitCode).toBe(0);
+  });
+
+  it('a skill graded against an EXTERNAL suite still has its own suite stripped', async () => {
+    // Grading against an out-of-tree suite (`--evals`) does not make the skill's
+    // OWN evals/ harmless: it is still an answer key for this same skill, sitting
+    // in the executor's working directory. The invariant is "the executor's
+    // filesystem contains no answer key", not "…contains no answer key for the
+    // suite we happen to be grading".
+    //
+    // The strip target used to be the same value as the READ target, so naming a
+    // suite outside the tree silently disabled the strip: nothing inside the
+    // skill matched an absolute path, so nothing was removed.
+    const layout = writeFixture('subject', [
+      { id: 'internal', prompt: EVAL_PROMPT, expected_output: ANSWER_KEY, expectations: ['it works'] },
+    ]);
+
+    // A separate suite, elsewhere, with a DIFFERENT expected output — so a hit on
+    // ANSWER_KEY can only have come from the skill's own tree.
+    const externalSuite = safePath.join(tempDir, 'corpus', 'evals.json');
+    mkdirSyncReal(safePath.join(tempDir, 'corpus'), { recursive: true });
+    writeFileSync(
+      externalSuite,
+      JSON.stringify({
+        skill_name: SKILL_NAME,
+        evals: [
+          { id: 'external', prompt: EVAL_PROMPT, expected_output: 'UNRELATED-KEY', expectations: ['it works'] },
+        ],
+      }) + '\n',
+      'utf8',
+    );
+
+    const { exitCode, leaks, spawns } = await runCanary(layout, { evalsSubpath: externalSuite });
 
     expect(leaks).toEqual([]);
     expect(spawns).toBe(1);

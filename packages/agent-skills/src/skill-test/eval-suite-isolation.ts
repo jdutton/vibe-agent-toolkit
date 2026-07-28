@@ -39,6 +39,14 @@ import { basename, dirname } from 'node:path';
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
 
 /**
+ * Where a skill's eval suite lives by convention. Defined here, beside the code
+ * that must REMOVE it, because every lane that reasons about a suite needs the
+ * same answer: the harness reads it, the packager excludes it, and staging
+ * strips it. Three private copies of one string is how those lanes drift apart.
+ */
+export const DEFAULT_EVALS_SUBPATH = 'evals/evals.json';
+
+/**
  * The path of the eval suite UNIT inside `skillDir`, or `undefined` when there
  * is nothing to strip — either because no eval suite was declared at all, or
  * because the configured subpath does not live inside the skill dir.

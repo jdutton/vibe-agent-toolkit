@@ -6,7 +6,7 @@ import type { ResolveSkillSourceContext, ResolvedSkillSource, SkillSource } from
 import type { SkillSourceDescriptor } from '@vibe-agent-toolkit/resources';
 import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
-import { isolateEvalSuite } from './eval-suite-isolation.js';
+import { DEFAULT_EVALS_SUBPATH, isolateEvalSuite } from './eval-suite-isolation.js';
 import { assertSafeHarnessRoot } from './harness-location.js';
 import { StagedManifestSchema, type StagedEntry, type StagedManifest } from './manifest.js';
 import type { PluginLayout } from './plugin-layout.js';
@@ -257,13 +257,35 @@ export async function stageHarness(opts: StageHarnessOptions): Promise<StageHarn
   // SUBJECT's suite is relocated to the vat-only hold dir first (so the harness can
   // still read a suite that exists only inside a fetched artifact); every other
   // item's is simply removed. See eval-suite-isolation.ts for the full rationale.
-  const stripEvalSuite = (stagedDir: string, role: StageItem['role']): boolean =>
-    isolateEvalSuite({
+  const stripEvalSuite = (stagedDir: string, role: StageItem['role']): boolean => {
+    const preserved = isolateEvalSuite({
       stagedDir,
       stagingRoot: opts.ctx.stagingRoot,
       evalsSubpath: opts.evalsSubpath,
       ...(role === 'subject' ? { holdDir: opts.evalSuiteHoldDir } : {}),
     });
+    // When the run reads its suite from somewhere OTHER than the convention, the
+    // conventional location must be stripped too. A suite this run is not grading
+    // is still an answer key for this same skill, sitting in the executor's
+    // working directory — the invariant is "the executor's filesystem holds no
+    // answer key", not "…none for the suite we happen to be grading". The strip
+    // target used to BE the read target, so naming an out-of-tree suite disabled
+    // the strip entirely: nothing inside the skill matched an absolute path.
+    //
+    // Scoped to a DECLARED-but-different suite on purpose. `evalsSubpath:
+    // undefined` means the caller declared no suite for this run at all, which is
+    // a documented no-op that must keep its opt-out; and when the configured path
+    // IS the convention the first call already removed it. Never held — the hold
+    // dir is for the suite being graded.
+    if (opts.evalsSubpath !== undefined && opts.evalsSubpath !== DEFAULT_EVALS_SUBPATH) {
+      isolateEvalSuite({
+        stagedDir,
+        stagingRoot: opts.ctx.stagingRoot,
+        evalsSubpath: DEFAULT_EVALS_SUBPATH,
+      });
+    }
+    return preserved;
+  };
   for (const item of opts.items) {
     // A `--with-optional` companion degrades to skip-with-warning on ANY failure
     // resolving or staging it (unresolvable source, build failure, etc.) — it must
