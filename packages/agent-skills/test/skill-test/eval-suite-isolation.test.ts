@@ -7,12 +7,18 @@
 
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 
-import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
+import { mkdirSyncReal, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { evalSuiteUnitPath, isolateEvalSuite } from '../../src/skill-test/eval-suite-isolation.js';
 import { setupTempDir } from '../test-helpers.js';
 
+/**
+ * Rooted through `safePath.resolve` so it carries a drive letter on Windows —
+ * `evalSuiteUnitPath` resolves internally, so a bare '/s/skill' literal would be
+ * compared against 'D:/s/skill' there and fail.
+ */
+const SKILL_DIR = toForwardSlash(safePath.resolve('/s/skill'));
 const SUBPATH = 'evals/evals.json';
 /** The same suite basename, also the whole subpath in the suite-at-skill-root layout. */
 const SUITE_FILE = 'evals.json';
@@ -33,21 +39,21 @@ function writeStaged(root: string, name: string, opts: { suite?: boolean; subpat
 
 describe('evalSuiteUnitPath', () => {
   it('resolves the suite DIRECTORY for a nested subpath (it also holds fixtures/)', () => {
-    expect(evalSuiteUnitPath('/s/skill', 'evals/evals.json')).toBe('/s/skill/evals');
-    expect(evalSuiteUnitPath('/s/skill', 'evals/my-skill/evals.json')).toBe('/s/skill/evals/my-skill');
+    expect(evalSuiteUnitPath(SKILL_DIR, SUBPATH)).toBe(`${SKILL_DIR}/evals`);
+    expect(evalSuiteUnitPath(SKILL_DIR, 'evals/my-skill/evals.json')).toBe(`${SKILL_DIR}/evals/my-skill`);
   });
 
   it('resolves the FILE when the suite sits at the skill root (never the skill dir itself)', () => {
     // dirname is '.', so treating the "unit" as the directory would target the whole
     // skill — the one case where removing the unit would delete the subject.
-    expect(evalSuiteUnitPath('/s/skill', SUITE_FILE)).toBe('/s/skill/evals.json');
+    expect(evalSuiteUnitPath(SKILL_DIR, SUITE_FILE)).toBe(`${SKILL_DIR}/${SUITE_FILE}`);
   });
 
   it('returns undefined for a subpath that escapes the skill dir (nothing was staged inside)', () => {
     // A perfectly good layout: suites kept OUTSIDE the shipped tree. There is nothing
     // to strip, and we must not resolve to a path outside the staged copy.
-    expect(evalSuiteUnitPath('/s/skill', '../shared/evals/evals.json')).toBeUndefined();
-    expect(evalSuiteUnitPath('/s/skill', '/etc/passwd')).toBeUndefined();
+    expect(evalSuiteUnitPath(SKILL_DIR, '../shared/evals/evals.json')).toBeUndefined();
+    expect(evalSuiteUnitPath(SKILL_DIR, '/etc/passwd')).toBeUndefined();
   });
 
   it('returns undefined when no eval suite is declared at all (evalsSubpath is undefined)', () => {
@@ -55,7 +61,7 @@ describe('evalSuiteUnitPath', () => {
     // with `evalsSubpath` typed `string` but actually `undefined` at runtime,
     // crashing inside `dirname(undefined)`. This is a first-class, explicitly
     // typed no-op case — nothing was ever staged, so there is nothing to strip.
-    expect(evalSuiteUnitPath('/s/skill', undefined)).toBeUndefined();
+    expect(evalSuiteUnitPath(SKILL_DIR, undefined)).toBeUndefined();
   });
 });
 

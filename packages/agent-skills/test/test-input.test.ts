@@ -3,6 +3,7 @@
  * ships. Pure path logic; no filesystem.
  */
 
+import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -14,11 +15,16 @@ import {
   testInputFileEntryIssues,
 } from '../src/test-input.js';
 
-const SKILL_DIR = '/repo/skills/demo';
-const PROJECT_ROOT = '/repo';
-const OUTPUT = '/repo/dist/skills/demo';
+/**
+ * Absolute-path fixtures are rooted through `safePath.resolve` so they carry a
+ * drive letter on Windows, matching what the production path helpers return.
+ * A bare '/repo' literal would compare against 'D:/repo' there and fail.
+ */
+const PROJECT_ROOT = toForwardSlash(safePath.resolve('/repo'));
+const SKILL_DIR = `${PROJECT_ROOT}/skills/demo`;
+const OUTPUT = `${PROJECT_ROOT}/dist/skills/demo`;
 /** The default suite dir `resolveTestInputDirs` derives from SKILL_DIR. */
-const DEFAULT_EVALS_DIR = '/repo/skills/demo/evals';
+const DEFAULT_EVALS_DIR = `${SKILL_DIR}/evals`;
 /** A `files:` dest that points INTO the declared suite — the entry VAT must drop. */
 const FIXTURE_DEST = 'fixtures/input.md';
 /** A `files:` dest whose source is OUTSIDE test input — the entry VAT must keep. */
@@ -34,12 +40,12 @@ describe('resolveTestInputDirs', () => {
   it('resolves a custom, skill-relative evals path to its containing dir', () => {
     // VAT's own layout: several skills share one source dir, each with its own suite.
     expect(resolveTestInputDirs({ test: { evals: 'evals/demo/evals.json' } }, SKILL_DIR))
-      .toEqual(['/repo/skills/demo/evals/demo']);
+      .toEqual([`${SKILL_DIR}/evals/demo`]);
   });
 
   it('resolves a suite kept OUTSIDE the skill dir (a layout that never leaked in the first place)', () => {
     expect(resolveTestInputDirs({ test: { evals: '../../evals/demo/evals.json' } }, SKILL_DIR))
-      .toEqual(['/repo/evals/demo']);
+      .toEqual([`${PROJECT_ROOT}/evals/demo`]);
   });
 
   it('returns nothing when the skill declares no test: block', () => {
@@ -60,7 +66,7 @@ describe('testInputExcludeRules', () => {
   });
 
   it('emits no rule for a dir outside the project root (the walker already refuses those)', () => {
-    expect(testInputExcludeRules(['/elsewhere/evals'], PROJECT_ROOT)).toEqual([]);
+    expect(testInputExcludeRules([toForwardSlash(safePath.resolve('/elsewhere/evals'))], PROJECT_ROOT)).toEqual([]);
   });
 
   it('emits nothing when there is no declared test input', () => {
@@ -160,7 +166,7 @@ describe('checkPackagedTestInput (backstop)', () => {
     // Silent in normal operation — both routes are closed upstream. If this ever
     // fires, an exclusion regressed and the artifact would otherwise carry the key.
     const issues = checkPackagedTestInput({
-      pathMap: new Map([['/repo/skills/demo/evals/evals.json', `${OUTPUT}/resources/evals.json`]]),
+      pathMap: new Map([[`${SKILL_DIR}/evals/evals.json`, `${OUTPUT}/resources/evals.json`]]),
       outputPath: OUTPUT,
       testInputDirs,
     });
@@ -173,7 +179,7 @@ describe('checkPackagedTestInput (backstop)', () => {
   it('is silent for ordinary bundled files', () => {
     expect(
       checkPackagedTestInput({
-        pathMap: new Map([['/repo/skills/demo/references/guide.md', `${OUTPUT}/resources/guide.md`]]),
+        pathMap: new Map([[`${SKILL_DIR}/references/guide.md`, `${OUTPUT}/resources/guide.md`]]),
         outputPath: OUTPUT,
         testInputDirs,
       }),
@@ -183,7 +189,7 @@ describe('checkPackagedTestInput (backstop)', () => {
   it('is silent when the skill declares no test input at all', () => {
     expect(
       checkPackagedTestInput({
-        pathMap: new Map([['/repo/skills/demo/evals/evals.json', `${OUTPUT}/evals.json`]]),
+        pathMap: new Map([[`${SKILL_DIR}/evals/evals.json`, `${OUTPUT}/evals.json`]]),
         outputPath: OUTPUT,
         testInputDirs: [],
       }),
