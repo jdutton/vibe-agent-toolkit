@@ -70,6 +70,43 @@ const PACKAGE_JSON_FILENAME = 'package.json';
 const DEFAULT_STRIP_TEMPLATE = '{{link.text}}';
 
 /**
+ * Template for a link the bundle is expected to carry: rewrite it to the target's
+ * packaged location, or — when there IS no packaged location — strip it to plain
+ * text with `stripTemplate`.
+ *
+ * The `else` branch is the whole point. `link.resource.relativePath` is undefined
+ * for any target the OUTPUT registry does not hold, and three ordinary link shapes
+ * land there:
+ *
+ *   - a non-markdown asset dropped from the bundle (`evals/evals.json`) — the
+ *     registry indexes markdown, so a pattern exclude rule matching `filePath`
+ *     never sees it and it falls through to here;
+ *   - a link to a DIRECTORY, in either spelling (`refs/` or `refs`);
+ *   - any other unresolved target.
+ *
+ * Rendering the rewrite branch anyway produced `[text]()` — a syntactically valid
+ * markdown link to nowhere — or, for the slash spelling of a directory (which
+ * matched no rule at all before this template took `local_directory` too), the
+ * original href pointing at a path that does not exist in the output. The latter
+ * then failed the build under `PACKAGED_BROKEN_LINK`, whose own remediation text
+ * reads "Report the issue — this indicates a VAT bug."
+ *
+ * A directory link can never survive packaging: the packager FLATTENS every
+ * bundled resource into `resources/`, so no authored directory exists in the
+ * output to point at. Stripping to plain text keeps the author's prose and drops
+ * the dead navigation — the same thing an excluded file link does.
+ */
+function bundledLinkTemplate(stripTemplate: string): string {
+  return (
+    '{{#if link.resource.relativePath}}' +
+    '[{{link.rawText}}]({{link.resource.relativePath}}{{link.fragment}})' +
+    '{{else}}' +
+    stripTemplate +
+    '{{/if}}'
+  );
+}
+
+/**
  * Resource naming strategy type
  */
 export type ResourceNamingStrategy = 'basename' | 'resource-id' | 'preserve-path';
@@ -1198,32 +1235,39 @@ function buildRewriteRules(
   defaultExcludeTemplate: string | undefined,
 ): LinkRewriteRule[] {
   const rules: LinkRewriteRule[] = [];
+  const stripTemplate = defaultExcludeTemplate ?? DEFAULT_STRIP_TEMPLATE;
+  // Both spellings of a local target. A link to a directory is `local_directory`
+  // when the href ends in `/` and `local_file` when it does not; neither has a
+  // packaged counterpart, and leaving the slash form out of every rule is what let
+  // it survive rewrite verbatim and then fail the build as a broken packaged link.
+  const LOCAL_TYPES = ['local_file', 'local_directory'] as const;
 
   // Rules 1+: Per-pattern exclude rules (if any)
   for (const rule of excludeRules) {
     rules.push({
-      match: { type: 'local_file', pattern: rule.patterns },
-      template: rule.template ?? defaultExcludeTemplate ?? DEFAULT_STRIP_TEMPLATE,
+      match: { type: [...LOCAL_TYPES], pattern: rule.patterns },
+      template: rule.template ?? stripTemplate,
     });
   }
 
-  // Rule N: Bundled links — match local_file, skip excluded IDs.
+  // Rule N: Bundled links — match local targets, skip excluded IDs.
   // Using {{link.rawText}} instead of {{link.text}} preserves inline formatting
   // the author wrote in the link text (backticks, emphasis, etc.), so a source
   // link like [`foo.yaml`](…) still reads as [`foo.yaml`](new/path) after rewrite.
+  // Targets with no packaged location strip instead — see bundledLinkTemplate.
   rules.push({
     match: {
-      type: 'local_file',
+      type: [...LOCAL_TYPES],
       ...(excludedIds.length > 0 ? { excludeResourceIds: excludedIds } : {}),
     },
-    template: '[{{link.rawText}}]({{link.resource.relativePath}}{{link.fragment}})',
+    template: bundledLinkTemplate(stripTemplate),
   });
 
-  // Final catch-all: remaining local_file links (depth-exceeded, navigation, etc.)
+  // Final catch-all: local links excluded BY ID, which the rule above skips.
   if (excludedIds.length > 0) {
     rules.push({
-      match: { type: 'local_file' },
-      template: defaultExcludeTemplate ?? DEFAULT_STRIP_TEMPLATE,
+      match: { type: [...LOCAL_TYPES] },
+      template: stripTemplate,
     });
   }
 

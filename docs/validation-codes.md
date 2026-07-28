@@ -95,7 +95,7 @@ and shows the `files:` edge as the resolving state once `DeferredArtifacts` is w
 | Leaves the bundle | Links a gitignored file | `LINK_TO_GITIGNORED_FILE` |
 | Leaves the bundle | Links a gitignored file that IS a materialized `files:` build artifact | `LINK_DEFERRED_ARTIFACT` (info — expected post-build state, not a leak) |
 | Leaves the bundle | Target outside the project root | `LINK_OUTSIDE_PROJECT` |
-| Directory target | Navigational prose link | *valid — no code* |
+| Directory target | Navigational prose link | *valid at source — no code. The packaged output strips it to plain text: bundled resources are flattened into `resources/`, so no authored directory survives to point at.* |
 | Directory target | Typed single-file slot (`files:` source) | `LINK_TARGETS_DIRECTORY` |
 
 **Known limit (not faked):** an asset loaded by a packaged script but neither
