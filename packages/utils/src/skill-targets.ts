@@ -40,8 +40,17 @@ const AGENTS_SKILLS_PATH = '.agents/skills';
 /**
  * Target → {userRel, projectRel} lookup table.
  *
- * These paths are based on the 2026-04-08 ecosystem analysis. Update this table
- * when platforms change their conventions. See docs/plans/2026-04-08-agent-skills-ecosystem-analysis.md.
+ * Last reviewed against vendor conventions 2026-04-08. Update this table when
+ * platforms change theirs — and re-check the vendor's own documentation when you
+ * do, because nothing here is verified at build or test time: the tests below
+ * assert the table's *shape*, never that a path is where a platform actually
+ * looks. A stale entry installs a skill somewhere the target never reads, and
+ * every check still passes.
+ *
+ * (This previously cited docs/plans/2026-04-08-agent-skills-ecosystem-analysis.md
+ * as its justification. That file is not in the repository — `docs/plans/` is not
+ * tracked — so the citation could not be followed. Recording the review date and
+ * the verification gap is honest; pointing at an unreachable document was not.)
  */
 export const SKILL_TARGETS: Readonly<Record<SkillTarget, SkillTargetPaths>> = {
   claude: { userRel: '.claude/skills', projectRel: '.claude/skills' },

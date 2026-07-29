@@ -362,6 +362,16 @@ to override (single-skill sources only).
 | `windsurf` | `~/.codeium/windsurf/skills/` | `.windsurf/skills/` |
 | `agents` | `~/.agents/skills/` | `.agents/skills/` |
 
+These paths were last reviewed against vendor conventions on 2026-04-08 and are
+not verified at build or test time — the tests assert the table's shape, never
+that a path is where a platform actually looks. If a vendor moves its convention,
+installs land somewhere unread and every VAT check still passes. Re-check the
+vendor's documentation before relying on a non-`claude` target.
+
+**Visibility:** VAT's own inspection commands are Claude-scoped — `vat skills
+list --user` and `vat audit --user` read `~/.claude` only. A skill installed to
+any other target lands correctly but is invisible to them.
+
 **Exit Codes:**
 - `0` - Install successful (or dry-run complete)
 - `1` - Install error (validation failed, conflict without `--force`, source not found, bad target/scope)

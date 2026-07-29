@@ -440,6 +440,11 @@ Description:
   name of the directory it came from — a ZIP or npm source has no meaningful
   directory name. Override with --name.
 
+Visibility:
+  VAT's own inspection commands are Claude-scoped: "vat skills list --user" and
+  "vat audit --user" read ~/.claude only. A skill installed to any other target
+  lands correctly but is invisible to them.
+
 Targets (user path / project path):
   claude    ~/.claude/skills/       .claude/skills/
   codex     ~/.agents/skills/       .agents/skills/
