@@ -28,8 +28,16 @@ export function createPluginUninstallCommand(): Command {
     .action(pluginUninstallCommand)
     .addHelpText('after', `
 Description:
-  Removes a skill package from Claude Code, reversing all install artifacts.
-  With --all, finds all plugins installed from the npm package in the current directory.
+  Removes an installed PLUGIN from Claude Code, reversing the artifacts
+  installPlugin() writes: the marketplace plugin directory, its cache dir, the
+  installed_plugins and known_marketplaces registry entries, and the settings
+  entry. With --all, finds all plugins installed from the npm package in the
+  current directory.
+
+  Does NOT remove skills installed flat into ~/.claude/skills/ — that is what
+  "vat claude plugin install <dir|zip>", "--dev", and "vat skills install"
+  produce, and those skills are not registered as plugins. Remove them by
+  deleting the skill directory.
 
   Idempotent: exits 0 if the plugin is not installed.
 

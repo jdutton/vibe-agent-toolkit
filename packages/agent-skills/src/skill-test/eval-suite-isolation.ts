@@ -85,6 +85,18 @@ export function evalSuiteUnitPath(skillDir: string, evalsSubpath: string | undef
  * tree, this throws rather than deleting their authored evals.
  */
 function assertInsideRoot(child: string, root: string): void {
+  // `root` is typed `string`, but this is the last line of defense before a
+  // recursive delete, so it does not get to assume its own precondition. A
+  // partially-constructed context reaching here produced "The 'from' argument
+  // must be of type string" from deep inside the path helpers — which reads as a
+  // path-handling bug rather than as "the containment root is missing, so
+  // nothing can be proven safe to delete."
+  if (!root) {
+    throw new TypeError(
+      'isolateEvalSuite: stagingRoot is required. Refusing to remove an eval ' +
+        'suite without a containment root proving the staged copy is ours.',
+    );
+  }
   safePath.joinUnderRoot(root, safePath.relative(root, child));
 }
 
