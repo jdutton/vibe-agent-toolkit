@@ -190,9 +190,12 @@ describe('vat audit <path> vs <git-url> — a local path always wins', () => {
   it('still treats owner/repo shorthand as a URL when nothing of that name exists locally', () => {
     const result = runAuditCli('no-such-owner/no-such-repo-xyz', [], { cwd: workTree });
 
-    // Reaches the clone path (and fails there) rather than being resolved
-    // as a local directory.
+    // Reaches the clone path (and fails there) rather than being resolved as a
+    // local directory. Asserted via VAT's own wrapper message, NOT git's error
+    // text: what git prints for an unreachable remote depends on the network
+    // and credential helper available, so a runner without either never echoes
+    // the repository name back.
     expect(result.status).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain('no-such-repo-xyz');
+    expect(`${result.stdout}${result.stderr}`).toContain('Clone failed');
   });
 });
