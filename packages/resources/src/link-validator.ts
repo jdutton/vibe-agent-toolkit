@@ -205,9 +205,17 @@ export function fileExistenceIssue(
     );
   }
 
+  // Spell the missing file the same way the sibling `location` does: relative to
+  // the project root when we know one. An absolute path here leaks the
+  // developer's home directory into every CI log — the same reason `location`
+  // is required to be relative.
+  const missingPath = projectRoot
+    ? issueLocation(fileResult.resolvedPath, projectRoot)
+    : fileResult.resolvedPath;
+
   return createRegistryIssue(
     'LINK_BROKEN_FILE',
-    `File not found: ${fileResult.resolvedPath}`,
+    `File not found: ${missingPath}`,
     linkExtras(link, sourceFilePath, projectRoot, ''),
   );
 }

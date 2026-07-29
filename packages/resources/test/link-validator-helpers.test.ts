@@ -130,6 +130,19 @@ describe('fileExistenceIssue', () => {
     expect(issue?.message).toBe('File not found: /project/missing.md');
   });
 
+  it('keeps the absolute path out of the message when projectRoot is known', () => {
+    // `location` is project-relative per the issue anchor contract; a message
+    // that spells the same file absolutely leaks the developer's home directory
+    // into every CI log and contradicts its own sibling field.
+    const issue = fileExistenceIssue(
+      { exists: false, resolvedPath: '/project/docs/missing.md' },
+      makeLink('docs/missing.md'),
+      SOURCE,
+      '/project',
+    );
+    expect(issue?.message).toBe('File not found: docs/missing.md');
+  });
+
   it('returns broken_file with case-mismatch hint when actualName differs', () => {
     const issue = fileExistenceIssue(
       { exists: false, resolvedPath: '/project/readme.md', actualName: 'README.md' },

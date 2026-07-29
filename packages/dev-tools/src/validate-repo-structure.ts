@@ -28,10 +28,11 @@
 // This utility script needs to read dynamic file paths for validation
 
 import { existsSync } from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
+import { readdir, readFile, stat } from 'node:fs/promises';
+import { extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const REPO_ROOT = safePath.join(__dirname, '../../..');
@@ -433,6 +434,64 @@ async function validateTestFileNaming(): Promise<void> {
 }
 
 /**
+ * Rule 9: Text source files must not contain NUL bytes
+ *
+ * Git and ripgrep classify a file as binary when it contains a NUL byte in its
+ * first 8000 bytes, and then report only "Binary file X matches" — they never
+ * print the matching line. So a single stray NUL makes a source file invisible
+ * to every grep-based sweep over the repo: audits, refactors, and codemods all
+ * skip it silently while appearing to succeed.
+ *
+ * This is an agentic-development hazard specifically: an AI edit that means to
+ * emit the two-character escape `\0` can emit the raw control byte instead, and
+ * nothing else in the toolchain complains (it is a legal SourceCharacter, so
+ * ESLint and tsc both pass it clean).
+ */
+async function validateNoNulBytesInTextFiles(): Promise<void> {
+  // Allowlist rather than denylist: the rule protects greppability of source and
+  // docs, so a newly-introduced binary format should never trip it.
+  const TEXT_EXTENSIONS = new Set([
+    '.cjs', '.css', '.html', '.js', '.json', '.jsx', '.md', '.mjs', '.patch',
+    '.py', '.toml', '.ts', '.tsx', '.txt', '.yaml', '.yml',
+  ]);
+
+  const tracked = safeExecSync('git', ['ls-files', '-z'], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+  }) as string;
+
+  for (const relPath of tracked.split('\0')) {
+    if (!relPath || !TEXT_EXTENSIONS.has(extname(relPath).toLowerCase())) {
+      continue;
+    }
+
+    const fullPath = safePath.join(REPO_ROOT, relPath);
+    let contents: Buffer;
+    try {
+      contents = await readFile(fullPath);
+    } catch {
+      continue; // Tracked but absent from the working tree (e.g. sparse checkout)
+    }
+
+    const offset = contents.indexOf(0);
+    if (offset !== -1) {
+      const line = contents.subarray(0, offset).toString('utf8').split('\n').length;
+      errors.push({
+        type: ERROR_TYPES.STRUCTURAL_VIOLATION,
+        path: relPath,
+        message:
+          `Contains a NUL byte at line ${line} (offset ${offset}). Git and ripgrep will ` +
+          `treat this file as binary and skip its contents, hiding it from every ` +
+          `grep-based sweep. Replace the raw byte with the escape sequence ` +
+          String.raw`\0` +
+          `, or drop the sentinel entirely.`,
+        severity: 'error',
+      });
+    }
+  }
+}
+
+/**
  * Print validation results
  */
 function printResults(): void {
@@ -487,6 +546,7 @@ async function validate(): Promise<void> {
   await validateNoShellScripts();
   await validateNoStagingDirectories();
   await validateTestFixtureSizes();
+  await validateNoNulBytesInTextFiles();
 
   printResults();
 
