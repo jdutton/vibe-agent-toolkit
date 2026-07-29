@@ -102,6 +102,6 @@ Items marked as checks (not automated validation) are judgment calls that toolin
 
 When a VAT validation code fires, its `fix:` field will suggest a concrete remediation; this checklist is the reference for the underlying principle. For a walkthrough that combines automated validation with this checklist, run `vat skill review <path>`.
 
-**Source of truth**: [Anthropic's skill-authoring best practices](https://platform.claude.com/docs/en/docs/agents-and-tools/agent-skills/best-practices). See cached guidance for a cached copy of the load-bearing portions with the VAT-vs-Anthropic delta called out.
+**Source of truth**: [Anthropic's skill-authoring best practices](https://platform.claude.com/docs/en/docs/agents-and-tools/agent-skills/best-practices). See `docs/external/anthropic-skill-authoring-best-practices.md` for a cached copy of the load-bearing portions with the VAT-vs-Anthropic delta called out.
 
 Reviewed against external best practices (Anthropic skill-authoring docs, anthropics/skills repository, Claude Code release notes through 2026-04-18).

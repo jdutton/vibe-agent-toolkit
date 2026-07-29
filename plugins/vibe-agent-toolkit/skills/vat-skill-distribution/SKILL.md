@@ -469,6 +469,6 @@ VAT supports bundling any Claude Code plugin asset — not just skills. Drop the
 under `plugins/<name>/` in the same native layout Claude expects. VAT tree-copies
 everything (minus `skills/` and `.claude-plugin/`), merges author `plugin.json` with
 VAT-owned identity fields, and applies any `files[]` mappings for artifacts built
-outside the plugin dir. A `files:` entry's `source` may be a glob (`*`, `**`, `?`, `[`) — the entry then fans out to a directory `dest` using prefix-strip + tail-preserve mapping, with the glob resolved only at build time so SKILL.md links to files landing under a glob dest are treated as deferred artifacts at validate time. An optional `integrity: true` flag byte-verifies the copy at build time and (for glob entries) asserts the dest subtree is an exact match. For the full model — prefix-strip mechanics, late-binding semantics, sibling sources, and scope limits — see [docs/guides/skill-files-and-routing.md]().
+outside the plugin dir. A `files:` entry's `source` may be a glob (`*`, `**`, `?`, `[`) — the entry then fans out to a directory `dest` using prefix-strip + tail-preserve mapping, with the glob resolved only at build time so SKILL.md links to files landing under a glob dest are treated as deferred artifacts at validate time. An optional `integrity: true` flag byte-verifies the copy at build time and (for glob entries) asserts the dest subtree is an exact match. For the full model — prefix-strip mechanics, late-binding semantics, sibling sources, and scope limits — see docs/guides/skill-files-and-routing.md.
 
-See [docs/guides/marketplace-distribution.md]() section "Full-plugin authoring".
+See docs/guides/marketplace-distribution.md section "Full-plugin authoring".
