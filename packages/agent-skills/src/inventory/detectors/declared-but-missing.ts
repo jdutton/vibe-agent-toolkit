@@ -22,10 +22,10 @@ const FIELDS: ComponentField[] = [
 	'lspServers',
 ];
 
-export function detectDeclaredButMissing(inv: PluginInventory, projectRoot: string): ValidationIssue[] {
+export function detectDeclaredButMissing(inv: PluginInventory, locationRoot: string): ValidationIssue[] {
 	const issues: ValidationIssue[] = [];
 	// Anchor contract: `location` is a project-relative POSIX path.
-	const manifestLocation = issueLocation(safePath.join(inv.path, '.claude-plugin', 'plugin.json'), projectRoot);
+	const manifestLocation = issueLocation(safePath.join(inv.path, '.claude-plugin', 'plugin.json'), locationRoot);
 	for (const field of FIELDS) {
 		const list = inv.declared[field];
 		if (list === null) continue;

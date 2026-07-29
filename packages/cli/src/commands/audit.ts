@@ -5,7 +5,6 @@
 
 import * as fs from 'node:fs';
 import { existsSync as fsExistsSync } from 'node:fs';
-import { dirname } from 'node:path';
 
 import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import {
@@ -187,21 +186,11 @@ async function buildVATProjectContext(
  * Compat verdicts (COMPAT_TARGET_*) are computed from the result's observations
  * and the config-level targets, then merged into the issue list.
  */
-/**
- * Root a skill's issue locations are expressed relative to — the same
- * config-root -> git-root -> skill-dir chain the skills lane itself uses, so
- * audit and `vat skills validate` never report the same skill under two
- * different coordinate systems.
- */
-function skillProjectRoot(skillPath: string): string {
-  const skillDir = dirname(skillPath);
-  return findProjectRoot(skillDir) ?? skillDir;
-}
-
 function packagingResultToValidationResult(
   skillPath: string,
   result: PackagingValidationResult,
   configTargets: ReadonlyArray<Target> | undefined,
+  locationRoot: string,
 ): ValidationResult {
   // allErrors contains all emitted issues (errors + warnings) after severity resolution
   // but without allow suppression — exactly what audit wants. Verdicts are
@@ -209,7 +198,7 @@ function packagingResultToValidationResult(
   const verdictIssues = computeConfigVerdicts(
     result.observations,
     configTargets,
-    issueLocation(skillPath, skillProjectRoot(skillPath)),
+    issueLocation(skillPath, locationRoot),
   );
   const issues = verdictIssues.length > 0
     ? [...result.allErrors, ...verdictIssues]
@@ -252,6 +241,7 @@ async function validateSingleSkill(
   skillPath: string,
   options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>,
+  locationRoot: string,
   isVATGenerated?: boolean
 ): Promise<ValidationResult> {
   // Try config-aware validation: walk UP to the skill's nearest-ancestor
@@ -269,7 +259,7 @@ async function validateSingleSkill(
   const skillConfig = fullConfig === null ? null : stripValidationAllowForDisplay(fullConfig);
   if (skillConfig !== null) {
     logger.debug(`  Using config-aware validation for: ${skillPath}`);
-    const { gitTracker } = await resolveScanContext(safePath.resolve(skillPath));
+    const { gitTracker } = await resolveScanContext(safePath.resolve(skillPath), locationRoot);
     // Key the shared registry on the same project root the validator derives,
     // so every skill under one root parses the corpus once for the whole run
     // instead of once each.
@@ -277,6 +267,7 @@ async function validateSingleSkill(
     const projectRoot = findProjectRoot(skillDir) ?? skillDir;
     const sharedCtx: SkillValidationSharedContext = {
       registry: await getOrCreateSkillRegistry(projectRoot),
+      locationRoot,
     };
     if (gitTracker !== null) {
       sharedCtx.gitTracker = gitTracker;
@@ -286,11 +277,12 @@ async function validateSingleSkill(
       skillPath,
       packagingResult,
       skillConfig.targets as readonly Target[] | undefined,
+      locationRoot,
     );
   }
 
   // Fallback: basic validation
-  const validateOptions: ValidateOptions = { skillPath };
+  const validateOptions: ValidateOptions = { skillPath, locationRoot };
   if (options.warnUnreferencedFiles) {
     validateOptions.checkUnreferencedFiles = true;
   }
@@ -457,7 +449,10 @@ async function auditUserDirectories(
   startTime: number,
   logger: ReturnType<typeof createLogger>
 ): Promise<void> {
-  const { pluginsDir, skillsDir, marketplacesDir } = getClaudeUserPaths();
+  const { claudeDir, pluginsDir, skillsDir, marketplacesDir } = getClaudeUserPaths();
+  // --user scans three sibling directories; they share ONE enclosing Claude
+  // config dir, so that is the run's single stated root.
+  const scanRoot = safePath.resolve(claudeDir);
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- safe: path constructed from os.homedir()
   const pluginsDirExists = fs.existsSync(pluginsDir);
@@ -479,17 +474,17 @@ async function auditUserDirectories(
 
   if (pluginsDirExists) {
     logger.debug(`Auditing user-level plugins at: ${pluginsDir}`);
-    results.push(...await getValidationResults(pluginsDir, recursive, options, logger));
+    results.push(...await getValidationResults(pluginsDir, recursive, options, logger, scanRoot));
   }
 
   if (skillsDirExists) {
     logger.debug(`Auditing user-level skills at: ${skillsDir}`);
-    results.push(...await getValidationResults(skillsDir, recursive, options, logger));
+    results.push(...await getValidationResults(skillsDir, recursive, options, logger, scanRoot));
   }
 
   if (marketplacesDirExists) {
     logger.debug(`Auditing user-level marketplaces at: ${marketplacesDir}`);
-    results.push(...await getValidationResults(marketplacesDir, recursive, options, logger));
+    results.push(...await getValidationResults(marketplacesDir, recursive, options, logger, scanRoot));
   }
 
   // Run compatibility analysis if --compat flag is set
@@ -499,11 +494,11 @@ async function auditUserDirectories(
 
   const verbose = options.verbose ?? false;
   const skillResults = results.filter((r: ValidationResult) => SKILL_RESULT_TYPES.has(r.type));
-  const hierarchical = buildHierarchicalOutput(skillResults, verbose);
-  const summary = calculateHierarchicalSummary(results, hierarchical, startTime, compatMap, verbose);
+  const hierarchical = buildHierarchicalOutput(skillResults, verbose, scanRoot);
+  const summary = calculateHierarchicalSummary(results, hierarchical, startTime, compatMap, verbose, scanRoot);
   writeYamlOutput(summary);
   if (verbose) {
-    renderVerboseEvidence(results, logger);
+    renderVerboseEvidence(results, scanRoot, logger);
   }
   logHierarchicalSummary(results, hierarchical, logger);
 }
@@ -526,6 +521,31 @@ async function auditUserDirectories(
  */
 /** Skill resource types that can have per-skill validation config. */
 const SKILL_RESULT_TYPES: ReadonlySet<ValidationResult['type']> = new Set([RESOURCE_TYPE_AGENT_SKILL, 'vat-agent']);
+
+/**
+ * The invocation scan root: the ONE base every `path` and `location` in a
+ * report is expressed relative to.
+ *
+ * This is an ANCHOR, not a validation-policy boundary. Deliberately NOT
+ * {@link deriveConfigRoot} — a config root is discovered per resource by
+ * walking up, and a single `vat audit` spans many of them, so using it as the
+ * anchor emits one document in many coordinate systems. The scan root is
+ * whatever the operator pointed the command at, so it is well defined even
+ * where no config or git root exists at all (auditing `~/.claude`, a plugin
+ * cache, a bare directory of skills).
+ *
+ * A file target anchors at its containing directory, so its own `path` reads as
+ * the bare filename rather than as an empty string.
+ *
+ * @internal Exported so tests and the corpus runner derive the run root the same
+ *   way the command does, instead of hand-rolling a second answer.
+ */
+export function deriveScanRoot(targetPath: string): string {
+  const resolved = safePath.resolve(targetPath);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved is the operator's own audit target
+  const isDirectory = fs.existsSync(resolved) && fs.statSync(resolved).isDirectory();
+  return isDirectory ? resolved : safePath.resolve(resolved, '..');
+}
 
 /**
  * Derive the project root directory for config loading.
@@ -653,17 +673,27 @@ interface AuditAtPathOverrides {
   tempRoot?: string;
 }
 
-async function runAuditAtPath(
+/**
+ * Run the audit pipeline at `scanPath` and assemble the report document,
+ * without writing anything. The document states its coordinate system once
+ * (`root`) and every `path`/`location` beneath it is relative to that root.
+ *
+ * @internal Exported for integration testing only — not part of the public CLI API.
+ */
+export async function buildAuditReport(
   scanPath: string,
   options: AuditCommandOptions,
-  overrides: AuditAtPathOverrides = {}
-): Promise<void> {
-  const logger = createLogger(options.debug ? { debug: true } : {});
-  const startTime = Date.now();
+  startTime: number,
+  logger: ReturnType<typeof createLogger>,
+): Promise<{
+  results: ValidationResult[];
+  document: ReturnType<typeof calculateSummary>;
+}> {
   const recursive: boolean = options.recursive !== false;
   logger.debug(`Auditing resources at: ${scanPath}`);
 
-  const rawResults = await getValidationResults(scanPath, recursive, options, logger);
+  const scanRoot = deriveScanRoot(scanPath);
+  const rawResults = await getValidationResults(scanPath, recursive, options, logger, scanRoot);
 
   // Load config for severity filtering (audit ignores allow; only severity matters).
   const config = loadConfig(deriveConfigRoot(scanPath));
@@ -685,18 +715,44 @@ async function runAuditAtPath(
     : undefined;
 
   const verbose = options.verbose ?? false;
-  const summary = calculateSummary(results, startTime, compatMap, verbose);
+  return {
+    results,
+    document: calculateSummary(results, startTime, compatMap, verbose, scanRoot),
+  };
+}
 
-  const finalSummary =
-    overrides.tempRoot === undefined ? summary : rewritePathsInResults(summary, overrides.tempRoot);
+/** Strip the run root from a report whose base cannot be named as a path. */
+function withoutRoot<T extends { root: string }>(document: T): Omit<T, 'root'> {
+  const copy: Record<string, unknown> = { ...document };
+  delete copy['root'];
+  return copy as Omit<T, 'root'>;
+}
+
+async function runAuditAtPath(
+  scanPath: string,
+  options: AuditCommandOptions,
+  overrides: AuditAtPathOverrides = {}
+): Promise<void> {
+  const logger = createLogger(options.debug ? { debug: true } : {});
+  const startTime = Date.now();
+  const verbose = options.verbose ?? false;
+
+  const { results, document } = await buildAuditReport(scanPath, options, startTime, logger);
+
+  // A URL audit's run root is a random tempdir: not reproducible and useless to
+  // a reader. The provenance header states the base instead (url @ ref @ commit)
+  // and every path below is already relative to the clone, so drop `root`
+  // rather than print a path nobody can resolve.
+  const finalDocument =
+    overrides.tempRoot === undefined ? document : rewritePathsInResults(withoutRoot(document), overrides.tempRoot);
   if (overrides.provenance) {
     process.stdout.write(renderProvenanceHeader(overrides.provenance));
   }
-  writeYamlOutput(finalSummary);
+  writeYamlOutput(finalDocument);
   if (verbose) {
-    renderVerboseEvidence(results, logger);
+    renderVerboseEvidence(results, document.root, logger);
   }
-  handleAuditResults(results, summary, logger);
+  handleAuditResults(results, document, logger);
   logger.debug(`Audit complete in ${Date.now() - startTime}ms`);
 }
 
@@ -764,14 +820,15 @@ async function validateSurface(
   surface: Surface,
   options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>,
+  locationRoot: string,
 ): Promise<ValidationResult> {
   if (surface.type === RESOURCE_TYPE_AGENT_SKILL) {
-    return validateSingleSkill(surface.path, options, logger);
+    return validateSingleSkill(surface.path, options, logger, locationRoot);
   }
   if (surface.type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
-    return validatePlugin(surface.path);
+    return validatePlugin(surface.path, { locationRoot });
   }
-  return validateMarketplace(surface.path);
+  return validateMarketplace(surface.path, { locationRoot });
 }
 
 /**
@@ -783,13 +840,14 @@ async function validateMultipleSurfaces(
   scanPath: string,
   options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>,
+  locationRoot: string,
 ): Promise<ValidationResult[]> {
   logger.debug(
     `Detected ${surfaces.length.toString()} surfaces at ${scanPath}: ${surfaces.map((s) => s.type).join(', ')}`,
   );
   const results: ValidationResult[] = [];
   for (const surface of surfaces) {
-    results.push(await validateSurface(surface, options, logger));
+    results.push(await validateSurface(surface, options, logger, locationRoot));
   }
   return results;
 }
@@ -808,24 +866,21 @@ async function validateMultipleSurfaces(
 async function runInventoryDetectors(
   scanPath: string,
   type: ValidationResult['type'],
+  locationRoot: string,
   prebuiltInv?: ClaudePluginInventory | ClaudeMarketplaceInventory,
 ): Promise<ValidationIssue[]> {
-  // Root every emitted `location` is relative to (anchor contract on
-  // ValidationIssue). Same discovery the skills lane uses, so one audit run
-  // reports every finding in one coordinate system.
-  const projectRoot = findProjectRoot(scanPath) ?? scanPath;
   if (type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
     const inv = prebuiltInv?.kind === 'plugin' ? prebuiltInv : await pluginInventoryAt(scanPath);
     return [
-      ...detectDeclaredButMissing(inv, projectRoot),
-      ...detectPresentButUndeclared(inv, projectRoot),
-      ...detectReferenceTargetMissing(inv, projectRoot),
-      ...(inv.vendor === 'claude-code' ? detectSkillClaudePluginNameMismatch(inv, projectRoot) : []),
+      ...detectDeclaredButMissing(inv, locationRoot),
+      ...detectPresentButUndeclared(inv, locationRoot),
+      ...detectReferenceTargetMissing(inv, locationRoot),
+      ...(inv.vendor === 'claude-code' ? detectSkillClaudePluginNameMismatch(inv, locationRoot) : []),
     ];
   }
   if (type === 'marketplace') {
     const inv = prebuiltInv?.kind === 'marketplace' ? prebuiltInv : await extractClaudeMarketplaceInventory(scanPath);
-    return detectMarketplacePluginSourceMissing(inv, projectRoot);
+    return detectMarketplacePluginSourceMissing(inv, locationRoot);
   }
   return [];
 }
@@ -846,6 +901,7 @@ async function recurseIntoMarketplacePlugins(
   recursive: boolean,
   options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>,
+  locationRoot: string,
 ): Promise<ValidationResult[]> {
   const marketplaceRoot = safePath.resolve(marketplaceInv.path);
   const seen = new Set<string>([marketplaceRoot]);
@@ -858,7 +914,8 @@ async function recurseIntoMarketplacePlugins(
     }
     seen.add(pluginPath);
     logger.debug(`  Recursing into marketplace path-source plugin: ${pluginPath}`);
-    const pluginResults = await getValidationResults(pluginPath, recursive, options, logger);
+    // Same run root — recursing into a co-located plugin must NOT re-anchor.
+    const pluginResults = await getValidationResults(pluginPath, recursive, options, logger, locationRoot);
     results.push(...pluginResults);
   }
   return results;
@@ -872,8 +929,9 @@ async function appendPluginInventoryToSurfaceResults(
   surfaceResults: ValidationResult[],
   scanPath: string,
   logger: ReturnType<typeof createLogger>,
+  locationRoot: string,
 ): Promise<void> {
-  const inventoryIssues = await runInventoryDetectors(scanPath, RESOURCE_TYPE_CLAUDE_PLUGIN);
+  const inventoryIssues = await runInventoryDetectors(scanPath, RESOURCE_TYPE_CLAUDE_PLUGIN, locationRoot);
   logger.debug(`Inventory detectors emitted ${inventoryIssues.length.toString()} issues for plugin (multi-surface) at ${scanPath}`);
   for (const r of surfaceResults) {
     if (r.type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
@@ -889,16 +947,19 @@ async function appendPluginInventoryToSurfaceResults(
  * by `validatePlugin`). Only hooks/hooks.json and .mcp.json parse errors reach
  * this helper; they are appended with error severity.
  */
-function appendInventoryParseErrors(result: ValidationResult, inv: ClaudePluginInventory): void {
+function appendInventoryParseErrors(
+	result: ValidationResult,
+	inv: ClaudePluginInventory,
+	locationRoot: string,
+): void {
 	const pluginJsonSuffix = safePath.join('.claude-plugin', 'plugin.json');
-	const projectRoot = findProjectRoot(inv.path) ?? inv.path;
 	for (const err of inv.parseErrors) {
 		if (err.path.endsWith(pluginJsonSuffix)) continue;
 		result.issues.push({
 			severity: 'error',
 			code: 'PLUGIN_INVALID_JSON',
 			message: err.message,
-			location: issueLocation(err.path, projectRoot),
+			location: issueLocation(err.path, locationRoot),
 		});
 		result.status = 'error';
 	}
@@ -906,26 +967,34 @@ function appendInventoryParseErrors(result: ValidationResult, inv: ClaudePluginI
 
 /**
  * @internal Exported for integration testing only — not part of the public CLI API.
+ *
+ * @param locationRoot - The invocation scan root: the ONE base every emitted
+ *   `ValidationIssue.location` in this run is expressed relative to. It is an
+ *   ANCHOR, not a validation-policy boundary — per-skill governing-config
+ *   discovery still decides packaging rules, but it must never decide how a
+ *   location reads, or a run spanning several configs emits one document in
+ *   several coordinate systems. Recursion passes it through unchanged.
  */
 export async function getValidationResults(
 	scanPath: string,
 	recursive: boolean,
 	options: AuditCommandOptions,
 	logger: ReturnType<typeof createLogger>,
+	locationRoot: string,
 ): Promise<ValidationResult[]> {
 	const format = detectFormat(scanPath);
 
 	// Special handling for direct SKILL.md file
 	if (format === RESOURCE_TYPE_AGENT_SKILL) {
 		logger.debug('Detected single Agent Skill');
-		return [await validateSingleSkill(scanPath, options, logger)];
+		return [await validateSingleSkill(scanPath, options, logger, locationRoot)];
 	}
 
 	// Special handling for VAT agent: validate its SKILL.md
 	if (format === 'vat-agent') {
 		const skillPath = safePath.join(scanPath, 'SKILL.md');
 		logger.debug('Detected VAT agent, validating SKILL.md');
-		return [await validateSingleSkill(skillPath, options, logger, true)];
+		return [await validateSingleSkill(skillPath, options, logger, locationRoot, true)];
 	}
 
 	// Enumerate all manifest surfaces at the directory root. If multiple are
@@ -935,7 +1004,7 @@ export async function getValidationResults(
 	// swallowed by the plugin surface.
 	const surfaces = await enumerateSurfaces(scanPath);
 	if (surfaces.length > 1) {
-		const surfaceResults = await validateMultipleSurfaces(surfaces, scanPath, options, logger);
+		const surfaceResults = await validateMultipleSurfaces(surfaces, scanPath, options, logger, locationRoot);
 		if (surfaces.some((s) => s.type === RESOURCE_TYPE_CLAUDE_PLUGIN)) {
 			// Build exclusion set from skill paths already validated as surfaces, so that
 			// validatePluginSkillsViaInventory does not double-count a root SKILL.md that
@@ -945,8 +1014,8 @@ export async function getValidationResults(
 					.filter((s) => s.type === RESOURCE_TYPE_AGENT_SKILL)
 					.map((s) => safePath.resolve(s.path)),
 			);
-			surfaceResults.push(...(await validatePluginSkillsViaInventory(scanPath, options, logger, alreadyValidated)));
-			await appendPluginInventoryToSurfaceResults(surfaceResults, scanPath, logger);
+			surfaceResults.push(...(await validatePluginSkillsViaInventory(scanPath, options, logger, locationRoot, alreadyValidated)));
+			await appendPluginInventoryToSurfaceResults(surfaceResults, scanPath, logger, locationRoot);
 		}
 		return surfaceResults;
 	}
@@ -956,16 +1025,16 @@ export async function getValidationResults(
 
 	if (resourceFormat.type !== 'unknown') {
 		logger.debug(`Detected ${resourceFormat.type} at: ${scanPath}`);
-		const result = await validate(scanPath, { validatePlugin });
+		const result = await validate(scanPath, { validatePlugin, locationRoot });
 		if (resourceFormat.type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
 			// Build the inventory once; reuse it for both parse-error surfacing and detectors.
 			const inv = await pluginInventoryAt(scanPath);
-			appendInventoryParseErrors(result, inv);
-			const pluginInventoryIssues = await runInventoryDetectors(scanPath, RESOURCE_TYPE_CLAUDE_PLUGIN, inv);
+			appendInventoryParseErrors(result, inv, locationRoot);
+			const pluginInventoryIssues = await runInventoryDetectors(scanPath, RESOURCE_TYPE_CLAUDE_PLUGIN, locationRoot, inv);
 			result.issues.push(...pluginInventoryIssues);
 			logger.debug(`Inventory detectors emitted ${pluginInventoryIssues.length.toString()} issues for plugin at ${scanPath}`);
 			// Also validate every skill the plugin ships via the inventory walker.
-			const skillResults = await validatePluginSkillsViaInventory(scanPath, options, logger);
+			const skillResults = await validatePluginSkillsViaInventory(scanPath, options, logger, locationRoot);
 			return [result, ...skillResults];
 		}
 		if (resourceFormat.type === 'marketplace') {
@@ -974,10 +1043,10 @@ export async function getValidationResults(
 			// is populated only for path sources that exist on disk (git/npm/unknown
 			// sources are declarations only and stay out of scope).
 			const marketplaceInv = await extractClaudeMarketplaceInventory(scanPath);
-			const marketplaceInventoryIssues = await runInventoryDetectors(scanPath, 'marketplace', marketplaceInv);
+			const marketplaceInventoryIssues = await runInventoryDetectors(scanPath, 'marketplace', locationRoot, marketplaceInv);
 			result.issues.push(...marketplaceInventoryIssues);
 			logger.debug(`Inventory detectors emitted ${marketplaceInventoryIssues.length.toString()} issues for marketplace at ${scanPath}`);
-			const pluginResults = await recurseIntoMarketplacePlugins(marketplaceInv, recursive, options, logger);
+			const pluginResults = await recurseIntoMarketplacePlugins(marketplaceInv, recursive, options, logger, locationRoot);
 			return [result, ...pluginResults];
 		}
 		return [result];
@@ -999,7 +1068,13 @@ export async function getValidationResults(
 					? { ...options, exclude: [...(options.exclude ?? []), ...configExcludes] }
 					: options;
 
-			return scanDirectory(scanPath, recursive, mergedOptions, logger);
+			return scanDirectory(
+				scanPath,
+				recursive,
+				mergedOptions,
+				logger,
+				await resolveScanContext(scanPath, locationRoot),
+			);
 		}
 	} catch {
 		// Path doesn't exist or not accessible, let validate() handle it
@@ -1007,7 +1082,7 @@ export async function getValidationResults(
 
 	// Unknown resource type - use unified validator which will return appropriate error
 	logger.debug(`Unknown resource type at: ${scanPath}`);
-	const result = await validate(scanPath);
+	const result = await validate(scanPath, { locationRoot });
 	return [result];
 }
 
@@ -1024,6 +1099,7 @@ async function validatePluginSkillsViaInventory(
 	scanPath: string,
 	options: AuditCommandOptions,
 	logger: ReturnType<typeof createLogger>,
+	locationRoot: string,
 	excludeSkillPaths: ReadonlySet<string> = new Set(),
 ): Promise<ValidationResult[]> {
 	const inv = await pluginInventoryAt(scanPath);
@@ -1035,7 +1111,7 @@ async function validatePluginSkillsViaInventory(
 			continue;
 		}
 		logger.debug(`  Validating plugin-bundled skill (inventory): ${skill.files.skillMd}`);
-		results.push(await validateSingleSkill(skill.files.skillMd, options, logger));
+		results.push(await validateSingleSkill(skill.files.skillMd, options, logger, locationRoot));
 	}
 	return results;
 }
@@ -1204,17 +1280,42 @@ function applyVerboseFilter<T extends ValidationResult & { compatibility?: Compa
   });
 }
 
+/**
+ * Re-base each emitted file entry's `path` onto the run root.
+ *
+ * `ValidationResult.path` stays ABSOLUTE inside the pipeline on purpose: it is
+ * the identity every internal map keys on (compat results, visited-path
+ * de-duplication, registry caches), and unlike `location` it is trivially
+ * recoverable — an absolute path plus the known root yields the relative form.
+ * `location` is the opposite: it cannot be re-based here because a relative
+ * string whose base was never stated is not recoverable, which is exactly why
+ * the base is threaded down to the producers instead.
+ */
+function relativizeFileEntries<T extends { path: string }>(entries: T[], root: string): T[] {
+  return entries.map((entry) => {
+    const relative = issueLocation(entry.path, root);
+    // Pointing audit AT a single resource makes that resource the root, which
+    // relativizes to the empty string. Spell it `.` — the POSIX name for "the
+    // root itself" — so no consumer has to special-case an empty path, and
+    // `join(root, path)` still resolves.
+    return { ...entry, path: relative === '' ? '.' : relative };
+  });
+}
+
 function calculateSummary(
   results: ValidationResult[],
   startTime: number,
   compatMap: Map<string, CompatibilityResult> | undefined,
   verbose: boolean,
+  root: string,
 ) {
   const base = buildBaseSummary(results, startTime);
   const withCompat = applyCompatMap(results, compatMap);
   return {
+    // Stated once, first, and the only absolute path in the document.
+    root,
     ...base,
-    files: applyVerboseFilter(withCompat, verbose),
+    files: relativizeFileEntries(applyVerboseFilter(withCompat, verbose), root),
   };
 }
 
@@ -1274,6 +1375,7 @@ function renderIssueEvidence(
  */
 function renderVerboseEvidence(
   results: Array<ValidationResult & { compatibility?: CompatibilityResult }>,
+  root: string,
   logger: ReturnType<typeof createLogger>,
 ): void {
   for (const result of results) {
@@ -1288,7 +1390,7 @@ function renderVerboseEvidence(
     ];
     if (evidenceSources.length === 0) continue;
 
-    logger.info(`\n${result.path} — supporting evidence:`);
+    logger.info(`\n${issueLocation(result.path, root)} — supporting evidence:`);
     for (const issue of capabilityIssues) {
       renderIssueEvidence(issue, evidenceSources, logger);
     }
@@ -1297,7 +1399,7 @@ function renderVerboseEvidence(
 
 function handleAuditResults(
   results: ValidationResult[],
-  summary: { summary: { errors: number; warnings: number; success: number }; files?: Array<{ compatibility?: CompatibilityResult }> },
+  summary: { root: string; summary: { errors: number; warnings: number; success: number }; files?: Array<{ compatibility?: CompatibilityResult }> },
   logger: ReturnType<typeof createLogger>
 ): void {
   const { errors: errorCount, warnings: warningCount, success: successCount } = summary.summary;
@@ -1313,9 +1415,9 @@ function handleAuditResults(
   // Audit is advisory only — always exit 0 for validation results.
   // Use vat skills validate for gated validation (exit 1 on errors).
   if (errorCount > 0) {
-    logErrors(results, errorCount, logger);
+    logErrors(results, errorCount, summary.root, logger);
   } else if (warningCount > 0) {
-    logWarnings(results, warningCount, logger);
+    logWarnings(results, warningCount, summary.root, logger);
   } else {
     logger.info(`Audit successful: ${successCount} file(s) passed`);
   }
@@ -1352,13 +1454,14 @@ function renderAuditFooter(
 function logErrors(
   results: ValidationResult[],
   errorCount: number,
+  root: string,
   logger: ReturnType<typeof createLogger>
 ): void {
   logger.error(`Audit failed: ${errorCount} file(s) with errors`);
   const errorResults = results.filter((r: ValidationResult) => r.status === 'error');
 
   for (const result of errorResults) {
-    logger.error(`\n${result.path}:`);
+    logger.error(`\n${issueLocation(result.path, root)}:`);
     const errorIssues = result.issues.filter((i: { severity: string }) => i.severity === 'error');
     logIssues(errorIssues, logger.error.bind(logger));
   }
@@ -1367,13 +1470,14 @@ function logErrors(
 function logWarnings(
   results: ValidationResult[],
   warningCount: number,
+  root: string,
   logger: ReturnType<typeof createLogger>
 ): void {
   logger.info(`Audit passed with warnings: ${warningCount} file(s)`);
   const warningResults = results.filter((r: ValidationResult) => r.status === 'warning');
 
   for (const result of warningResults) {
-    logger.info(`\n${result.path}:`);
+    logger.info(`\n${issueLocation(result.path, root)}:`);
     const warningIssues = result.issues.filter((i: { severity: string }) => i.severity === 'warning');
     logIssues(warningIssues, logger.info.bind(logger));
   }
@@ -1421,10 +1525,12 @@ async function handleFileEntry(
   logger: ReturnType<typeof createLogger>,
   scanCtx: ScanContext,
 ): Promise<ValidationResult | null> {
+  const { locationRoot } = scanCtx;
+
   // Check for registry files
   if (entry.name === 'installed_plugins.json' || entry.name === 'known_marketplaces.json') {
     logger.debug(`Validating registry: ${fullPath}`);
-    return validate(fullPath);
+    return validate(fullPath, { locationRoot });
   }
 
   // Check for SKILL.md
@@ -1440,17 +1546,20 @@ async function handleFileEntry(
       logger.debug(`  Using config-aware validation for: ${fullPath}`);
       // Thread the per-scan tracker into packaging validation so gitignore
       // checks in the link-graph walk stay O(1).
-      const sharedCtx = scanCtx.gitTracker === null ? undefined : { gitTracker: scanCtx.gitTracker };
+      const sharedCtx: SkillValidationSharedContext = scanCtx.gitTracker === null
+        ? { locationRoot }
+        : { gitTracker: scanCtx.gitTracker, locationRoot };
       const packagingResult = await validateSkillForPackaging(fullPath, skillConfig, 'source', sharedCtx);
       return packagingResultToValidationResult(
         fullPath,
         packagingResult,
         skillConfig.targets as readonly Target[] | undefined,
+        locationRoot,
       );
     }
 
     // Wild mode: basic validation
-    const validateOptions: ValidateOptions = { skillPath: fullPath };
+    const validateOptions: ValidateOptions = { skillPath: fullPath, locationRoot };
     if (options.warnUnreferencedFiles) {
       validateOptions.checkUnreferencedFiles = true;
     }
@@ -1470,9 +1579,10 @@ async function handleDirectoryEntry(
   logger: ReturnType<typeof createLogger>,
   baseDir: string,
   scanCtx: ScanContext,
-  nestedConfigLog: Set<string>
+  nestedConfigLog: Set<string>,
 ): Promise<ValidationResult[]> {
   const fs = await import('node:fs/promises');
+  const { locationRoot } = scanCtx;
   const results: ValidationResult[] = [];
 
   // Check if directory contains a plugin or marketplace
@@ -1481,15 +1591,15 @@ async function handleDirectoryEntry(
 
   if (hasClaudePlugin) {
     logger.debug(`Validating resource directory: ${fullPath}`);
-    const result = await validate(fullPath, { validatePlugin });
+    const result = await validate(fullPath, { validatePlugin, locationRoot });
     const inv = await pluginInventoryAt(fullPath);
-    appendInventoryParseErrors(result, inv);
+    appendInventoryParseErrors(result, inv, locationRoot);
     results.push(result);
   }
 
   // Recurse into subdirectories (both plugin/marketplace dirs and regular dirs)
   if (recursive) {
-    const subResults = await scanDirectory(fullPath, recursive, options, logger, baseDir, scanCtx, nestedConfigLog);
+    const subResults = await scanDirectory(fullPath, recursive, options, logger, scanCtx, baseDir, nestedConfigLog);
     results.push(...subResults);
   }
 
@@ -1505,6 +1615,13 @@ async function handleDirectoryEntry(
 interface ScanContext {
   gitRoot: string | null;
   gitTracker: GitTracker | null;
+  /**
+   * The run's single anchor base — the invocation scan root every emitted
+   * `location` and `path` is expressed relative to. Carried here rather than as
+   * a parallel parameter so the directory walk cannot thread a git root down
+   * one branch and an anchor base down another.
+   */
+  locationRoot: string;
 }
 
 /** Cache of (gitRoot → initialized GitTracker) to avoid re-spawning ls-files. */
@@ -1617,10 +1734,10 @@ async function getOrCreateGitTracker(gitRoot: string): Promise<GitTracker> {
  * `dist/`), returns `{ gitRoot: null, gitTracker: null }` to disable gitignore
  * filtering — the user's explicit intent takes precedence over .gitignore.
  */
-async function resolveScanContext(dirPath: string): Promise<ScanContext> {
+async function resolveScanContext(dirPath: string, locationRoot: string): Promise<ScanContext> {
   const detectedRoot = gitFindRoot(dirPath);
   if (detectedRoot === null) {
-    return { gitRoot: null, gitTracker: null };
+    return { gitRoot: null, gitTracker: null, locationRoot };
   }
 
   const tracker = await getOrCreateGitTracker(detectedRoot);
@@ -1628,10 +1745,10 @@ async function resolveScanContext(dirPath: string): Promise<ScanContext> {
   // If the scan root itself is gitignored (e.g. user targeted `dist/`), disable
   // gitignore filtering so the user's explicit intent wins.
   if (tracker.isIgnoredByActiveSet(dirPath)) {
-    return { gitRoot: null, gitTracker: null };
+    return { gitRoot: null, gitTracker: null, locationRoot };
   }
 
-  return { gitRoot: detectedRoot, gitTracker: tracker };
+  return { gitRoot: detectedRoot, gitTracker: tracker, locationRoot };
 }
 
 /**
@@ -1691,8 +1808,8 @@ async function scanDirectory(
   recursive: boolean,
   options: AuditCommandOptions,
   logger: ReturnType<typeof createLogger>,
+  scanCtx: ScanContext,
   baseDir?: string,
-  scanCtx?: ScanContext,
   nestedConfigLog?: Set<string>
 ): Promise<ValidationResult[]> {
   const fs = await import('node:fs/promises');
@@ -1700,9 +1817,9 @@ async function scanDirectory(
   const userExcludes = options.exclude ?? [];
   const resolvedBaseDir = baseDir ?? dirPath;
 
-  // First call in this scan: build the git context (root + tracker) once; every
-  // subsequent recursion reuses them.
-  const resolvedScanCtx: ScanContext = scanCtx ?? (await resolveScanContext(dirPath));
+  // The git context (root + tracker) and the run's anchor base are built once by
+  // the caller; every recursion reuses them unchanged.
+  const resolvedScanCtx = scanCtx;
   const resolvedNestedLog = nestedConfigLog ?? new Set<string>();
 
   // Top-down pre-warm of findProjectRoot's walk-up cache (spec §8). The first
@@ -1873,11 +1990,13 @@ function calculateHierarchicalSummary(
   startTime: number,
   compatMap: Map<string, CompatibilityResult> | undefined,
   verbose: boolean,
+  root: string,
 ) {
   const base = buildBaseSummary(results, startTime);
   const withCompat = applyCompatMap(results, compatMap);
 
   return {
+    root,
     ...base,
     summary: {
       ...base.summary,
@@ -1886,7 +2005,7 @@ function calculateHierarchicalSummary(
       standalonePlugins: hierarchical.standalonePlugins.length,
       standaloneSkills: hierarchical.standaloneSkills.length,
     },
-    files: applyVerboseFilter(withCompat, verbose),
+    files: relativizeFileEntries(applyVerboseFilter(withCompat, verbose), root),
     hierarchical,
   };
 }

@@ -46,12 +46,17 @@ export interface ValidateOptions {
 
   /**
    * Root that every emitted `ValidationIssue.location` is expressed relative
-   * to. Defaults to the same `findProjectRoot(dirname(skillPath)) ?? skill dir`
-   * fallback `validateSkillForPackaging` uses, so both skills-lane entry points
-   * answer "relative to what?" identically. Pass it explicitly when batching
-   * skills so one report speaks in one coordinate system.
+   * to — the ANCHOR base, not a validation-policy boundary. A batching caller
+   * (`vat audit`, which spans many governing configs in one run) MUST pass its
+   * invocation scan root here: otherwise each skill answers "relative to what?"
+   * with its own nearest-ancestor config root and one report mixes coordinate
+   * systems, letting two distinct files carry an identical `location`.
+   *
+   * Defaults to the same `findProjectRoot(dirname(skillPath)) ?? skill dir`
+   * fallback `validateSkillForPackaging` uses, so a single-skill caller — where
+   * scan root and project root coincide — needs no ceremony.
    */
-  projectRoot?: string;
+  locationRoot?: string;
 
   /** Treat as VAT-generated skill (stricter validation) */
   isVATGenerated?: boolean;

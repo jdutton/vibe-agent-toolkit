@@ -24,7 +24,7 @@ import { dirname } from 'node:path';
 
 import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import type { SkillPackagingConfig } from '@vibe-agent-toolkit/resources';
-import { isGlob, safePath, staticGlobBase, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { isGlob, issueLocation, safePath, staticGlobBase, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { type SkillFileEntry } from './files-config.js';
 import { DEFAULT_EVALS_SUBPATH } from './skill-test/eval-suite-isolation.js';
@@ -217,8 +217,9 @@ export interface ExcludedLinkRef {
  * intent, and this exclusion is not: the author declared an EVAL SUITE, not a
  * link-stripping rule.
  *
- * `projectRoot`-relative locations, so the same link reports identically from the
- * packager and from the read-only validator.
+ * `locationRoot`-relative locations, so the same link reports identically from the
+ * packager and from the read-only validator. `projectRoot` is a separate concern:
+ * it scopes WHICH declared test-input dirs are in play, not how a location reads.
  *
  * Scoped to the same dirs {@link testInputExcludeRules} generates a rule for, so
  * this reports only drops VAT caused. A test-input dir outside the project root
@@ -229,6 +230,7 @@ export function testInputLinkIssues(
   excluded: readonly ExcludedLinkRef[],
   testInputDirs: readonly string[],
   projectRoot: string,
+  locationRoot: string = projectRoot,
 ): ValidationIssue[] {
   const excludedDirs = projectRelativeTestInputDirs(testInputDirs, projectRoot);
   if (excludedDirs.length === 0) return [];
@@ -236,7 +238,7 @@ export function testInputLinkIssues(
   const seen = new Set<string>();
   for (const ref of excluded) {
     if (!excludedDirs.some((dir) => isInside(ref.path, dir))) continue;
-    const location = toForwardSlash(safePath.relative(projectRoot, ref.path));
+    const location = issueLocation(ref.path, locationRoot);
     if (seen.has(location)) continue;
     seen.add(location);
     issues.push(

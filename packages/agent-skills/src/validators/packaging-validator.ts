@@ -159,6 +159,7 @@ export interface PackagingValidationResult {
 function validateFilesConfig(
   files: Array<{ source: string; dest: string }> | undefined,
   projectRoot: string,
+  locationRoot: string,
 ): ValidationIssue[] {
   if (!files?.length) return [];
 
@@ -181,7 +182,10 @@ function validateFilesConfig(
     const resolvedSource = safePath.resolve(safePath.join(projectRoot, entry.source));
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolvedSource derived from config-supplied path
     if (existsSync(resolvedSource) && statSync(resolvedSource).isDirectory()) {
-      const location = toForwardSlash(entry.source);
+      // Anchor at the resolved source, expressed in the run's ONE coordinate
+      // system — not the raw config value, which is project-relative and so
+      // unresolvable in a run that spans several projects.
+      const location = issueLocation(resolvedSource, locationRoot);
       issues.push(registryIssueAt(
         'LINK_TARGETS_DIRECTORY',
         `files: source '${entry.source}' resolves to a directory; a typed single-file slot requires a file`,
@@ -275,6 +279,22 @@ export interface SkillValidationSharedContext {
   registry?: ResourceRegistry;
   /** Pre-populated tracker for the repo that contains the skill. */
   gitTracker?: GitTracker;
+  /**
+   * Root every emitted `ValidationIssue.location` is expressed relative to.
+   *
+   * This is the ANCHOR base and it is a DIFFERENT concern from the project
+   * root below: the project root is a validation-POLICY boundary (what counts
+   * as "outside the project", where `files:` sources resolve from, what the
+   * registry crawls), while the anchor base only answers "relative to what is
+   * this location written?". Conflating the two is what let `vat audit` — which
+   * spans many governing configs in a single run — emit one report in many
+   * coordinate systems, with two distinct files sharing one `location`.
+   *
+   * A batching caller MUST pass its invocation scan root. Omitted, it falls
+   * back to the project root, which is correct exactly when a run covers one
+   * project (`vat skills validate`, `vat skills build`, `vat skill review`).
+   */
+  locationRoot?: string;
 }
 
 /**
@@ -300,14 +320,17 @@ export async function validateSkillForPackaging(
 ): Promise<PackagingValidationResult> {
   const rawIssues: ValidationIssue[] = [];
 
-  // Find project boundary (config root -> git root -> skill dir).
-  // Library fallback to skill dir keeps callers null-safe; CLI command
-  // boundary owns any user-facing warning. See plan 2026-05-17.
+  // Validation-POLICY boundary (config root -> git root -> skill dir): what is
+  // "outside the project", where `files:` sources resolve from, what the
+  // registry crawls. Library fallback to skill dir keeps callers null-safe; CLI
+  // command boundary owns any user-facing warning. See plan 2026-05-17.
   const projectRoot = findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
-  // Every emitted location is project-relative POSIX — see the anchor contract
-  // on ValidationIssue. Computed once, before the first producer runs, so no
-  // collector can pick a different base.
-  const skillLocation = issueLocation(skillPath, projectRoot);
+  // ANCHOR base — deliberately a separate variable from projectRoot above.
+  // Every emitted location is relative to this ONE root, computed once before
+  // the first producer runs so no collector can pick a different base. A
+  // batching caller supplies it; alone in a project the two coincide.
+  const locationRoot = shared?.locationRoot ?? projectRoot;
+  const skillLocation = issueLocation(skillPath, locationRoot);
 
   // Parse SKILL.md
   const parseResult = await parseMarkdown(skillPath);
@@ -340,7 +363,7 @@ export async function validateSkillForPackaging(
 
   // Validate files config (requires projectRoot to resolve source paths for
   // directory-source detection — must run after projectRoot is computed).
-  rawIssues.push(...validateFilesConfig(packagingConfig?.files, projectRoot));
+  rawIssues.push(...validateFilesConfig(packagingConfig?.files, projectRoot, locationRoot));
 
   // Build resource registry and walk the link graph.
   // Prefer the caller-supplied shared registry (when `vat skills validate` or
@@ -394,12 +417,13 @@ export async function validateSkillForPackaging(
   const directFileCount = directLinks.filter(p => bundledFileSet.has(p)).length;
 
   // Emit issues from walker exclusions (LINK_OUTSIDE_PROJECT, LINK_TARGETS_DIRECTORY, etc.)
-  rawIssues.push(...walkerExclusionsToIssues(excludedReferences, projectRoot));
+  rawIssues.push(...walkerExclusionsToIssues(excludedReferences, locationRoot));
   // Receipt for each link dropped for pointing into declared test input — the same
-  // issue, at the same location, the packager emits for it.
-  rawIssues.push(...testInputLinkIssues(excludedReferences, testInputDirs, projectRoot));
+  // issue, at the same location, the packager emits for it. `projectRoot` scopes
+  // WHICH dirs count as declared test input; `locationRoot` only anchors.
+  rawIssues.push(...testInputLinkIssues(excludedReferences, testInputDirs, projectRoot, locationRoot));
   // Emit one info issue per deferred asset declared in files: config
-  rawIssues.push(...deferredAssetsToIssues(deferredAssets, projectRoot));
+  rawIssues.push(...deferredAssetsToIssues(deferredAssets, locationRoot));
 
   const fileCount = bundledFiles.length + 1; // +1 for SKILL.md itself
   const maxLinkDepth = maxBundledDepth;
@@ -413,8 +437,10 @@ export async function validateSkillForPackaging(
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- bundledFile resolved from markdown parser
       const content = await readFile(bundledFile, 'utf-8');
       totalLines += content.split('\n').length;
-      collectNonPortableAssetReferenceIssues(content, bundledFile, rawIssues);
-      collectNonPortableCommandIssues(content, bundledFile, rawIssues);
+      // Anchor contract: never hand a producer an absolute path as `location`.
+      const bundledLocation = issueLocation(bundledFile, locationRoot);
+      collectNonPortableAssetReferenceIssues(content, bundledLocation, rawIssues);
+      collectNonPortableCommandIssues(content, bundledLocation, rawIssues);
     }
   }
 

@@ -31,12 +31,13 @@ import { NAVIGATION_FILE_PATTERNS } from './validation-rules.js';
 export async function validateSkill(options: ValidateOptions): Promise<ValidationResult> {
   const { skillPath, isVATGenerated = false } = options;
 
-  // Root every emitted location is relative to. Mirrors
-  // `validateSkillForPackaging` exactly (config root -> git root -> skill dir)
-  // so the two skills-lane entry points cannot disagree about the coordinate
+  // Root every emitted location is relative to. A batching caller supplies its
+  // scan root; otherwise fall back to the same chain
+  // `validateSkillForPackaging` uses (config root -> git root -> skill dir) so
+  // the two skills-lane entry points cannot disagree about the coordinate
   // system their issues are expressed in.
-  const projectRoot = options.projectRoot ?? findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
-  const skillLocation = issueLocation(skillPath, projectRoot);
+  const locationRoot = options.locationRoot ?? findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
+  const skillLocation = issueLocation(skillPath, locationRoot);
 
   const issues: ValidationIssue[] = [];
   const allEvidence: EvidenceRecord[] = [];
@@ -119,7 +120,7 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
 
   // Transitive link traversal (BFS)
   const skillDir = options.rootDir ?? dirname(skillPath);
-  const linkedFiles = await traverseLinks(skillPath, skillDir, projectRoot, issues, allEvidence);
+  const linkedFiles = await traverseLinks(skillPath, skillDir, locationRoot, issues, allEvidence);
 
   // Bundled-resource link detection — fires after link traversal so the
   // linkedFiles set reflects everything reachable from SKILL.md.
@@ -127,13 +128,13 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
     skillPath,
     skillDir,
     linkedFiles.map((lf) => lf.path),
-    projectRoot,
+    locationRoot,
   );
   issues.push(...bundledResourceIssues);
 
   // Unreferenced file detection
   if (options.checkUnreferencedFiles) {
-    detectUnreferencedFiles(skillPath, skillDir, projectRoot, linkedFiles, issues);
+    detectUnreferencedFiles(skillPath, skillDir, locationRoot, linkedFiles, issues);
   }
 
   // Build metadata
@@ -173,14 +174,14 @@ function validateLocalLink(
   link: { href: string; line?: number | undefined },
   currentPath: string,
   skillDir: string,
-  projectRoot: string,
+  locationRoot: string,
   fileIssues: ValidationIssue[],
   issues: ValidationIssue[],
 ): { status: 'skip' | 'boundary' | 'broken' | 'valid'; resolvedPath: string } {
   // Resolve href to filesystem path (strips anchor, decodes percent-encoding).
   // Skill validation is a single-skill bounded walk — leading-/ links are
   // treated as unresolved (skipped) here. The resources-validate / audit paths
-  // surface the projectRoot-aware cases as LINK_BROKEN_FILE (resources-validate)
+  // surface the project-boundary-aware cases as LINK_BROKEN_FILE (resources-validate)
   // or LINK_MISSING_TARGET (audit/packaging) issues.
   const resolved = resolveLocalHref(link.href, currentPath);
   if (resolved.kind !== 'resolved') {
@@ -202,7 +203,7 @@ function validateLocalLink(
       severity: 'error',
       code: 'LINK_INTEGRITY_BROKEN',
       message: `Link target not found: ${link.href}`,
-      location: issueLocation(currentPath, projectRoot),
+      location: issueLocation(currentPath, locationRoot),
       ...(link.line !== undefined && { line: link.line }),
       link: link.href,
       fix: 'Fix link path or restore missing file',
@@ -217,7 +218,7 @@ function validateLocalLink(
       severity: 'warning',
       code: 'LINK_OUTSIDE_PROJECT',
       message: `Link points outside skill directory: ${link.href}`,
-      location: issueLocation(currentPath, projectRoot),
+      location: issueLocation(currentPath, locationRoot),
       ...(link.line !== undefined && { line: link.line }),
       link: link.href,
       fix: 'Keep skills self-contained — move referenced files into the skill directory',
@@ -247,7 +248,7 @@ function processFileLinks(
   parseResult: { links: Array<{ type: string; href: string; line?: number | undefined }>; content: string },
   currentPath: string,
   skillDir: string,
-  projectRoot: string,
+  locationRoot: string,
   issues: ValidationIssue[],
   visited: Set<string>,
 ): FileProcessResult {
@@ -257,7 +258,7 @@ function processFileLinks(
   let linksValidated = 0;
 
   for (const link of localLinks) {
-    const { status, resolvedPath } = validateLocalLink(link, currentPath, skillDir, projectRoot, fileIssues, issues);
+    const { status, resolvedPath } = validateLocalLink(link, currentPath, skillDir, locationRoot, fileIssues, issues);
 
     if (status === 'skip') {
       continue;
@@ -285,7 +286,7 @@ function processFileLinks(
 async function traverseLinks(
   skillPath: string,
   skillDir: string,
-  projectRoot: string,
+  locationRoot: string,
   issues: ValidationIssue[],
   allEvidence: EvidenceRecord[],
 ): Promise<LinkedFileValidationResult[]> {
@@ -307,13 +308,13 @@ async function traverseLinks(
       issues.push({
         severity: 'warning',
         code: 'LINK_INTEGRITY_BROKEN',
-        message: `File exists but could not be parsed: ${issueLocation(currentPath, projectRoot)}`,
-        location: issueLocation(currentPath, projectRoot),
+        message: `File exists but could not be parsed: ${issueLocation(currentPath, locationRoot)}`,
+        location: issueLocation(currentPath, locationRoot),
       });
       continue;
     }
 
-    const processed = processFileLinks(parseResult, currentPath, skillDir, projectRoot, issues, visited);
+    const processed = processFileLinks(parseResult, currentPath, skillDir, locationRoot, issues, visited);
     queue.push(...processed.newPaths);
 
     // Compat capability detection for linked files (root SKILL.md handled by
@@ -325,7 +326,7 @@ async function traverseLinks(
       const { evidence: linkedEvidence, observations: linkedObservations } =
         runCompatDetectors(linkedContent, currentPath);
       allEvidence.push(...linkedEvidence);
-      const linkedCompatIssues = linkedObservations.map(obs => observationToIssue(obs, issueLocation(currentPath, projectRoot)));
+      const linkedCompatIssues = linkedObservations.map(obs => observationToIssue(obs, issueLocation(currentPath, locationRoot)));
       processed.fileIssues.push(...linkedCompatIssues);
       issues.push(...linkedCompatIssues);
     }
@@ -353,7 +354,7 @@ async function traverseLinks(
 function detectUnreferencedFiles(
   skillPath: string,
   skillDir: string,
-  projectRoot: string,
+  locationRoot: string,
   linkedFiles: LinkedFileValidationResult[],
   issues: ValidationIssue[],
 ): void {
@@ -397,7 +398,7 @@ function detectUnreferencedFiles(
         severity: 'info',
         code: 'SKILL_IMPLICIT_REFERENCE',
         message: `File implicitly referenced (not via markdown link) in ${basename(ref.foundIn)}: ${ref.matchedText}`,
-        location: issueLocation(absPath, projectRoot),
+        location: issueLocation(absPath, locationRoot),
         fix: 'Consider using a standard markdown link [text](path) for better tooling support',
       });
     } else {
@@ -405,7 +406,7 @@ function detectUnreferencedFiles(
         severity: 'info',
         code: 'SKILL_UNREFERENCED_FILE',
         message: `Markdown file not referenced from SKILL.md link graph: ${relPath}`,
-        location: issueLocation(absPath, projectRoot),
+        location: issueLocation(absPath, locationRoot),
         fix: 'Add a link to this file from SKILL.md or a linked document, or remove the file',
       });
     }

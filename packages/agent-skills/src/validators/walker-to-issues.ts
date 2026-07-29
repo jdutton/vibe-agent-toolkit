@@ -51,7 +51,7 @@ function exclusionToContext(reason: NonNullable<LinkResolution['excludeReason']>
  */
 export function walkerExclusionsToIssues(
   exclusions: readonly LinkResolution[],
-  projectRoot: string,
+  locationRoot: string,
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   for (const r of exclusions) {
@@ -62,9 +62,9 @@ export function walkerExclusionsToIssues(
     // `missing-target` exclusion the target does not exist, so a location
     // naming it points at nothing the author can open. The target is a link,
     // and links have their own field.
-    const target = issueLocation(r.path, projectRoot);
+    const target = issueLocation(r.path, locationRoot);
     issues.push(materializeIssue(code, {
-      location: issueLocation(r.sourcePath, projectRoot),
+      location: issueLocation(r.sourcePath, locationRoot),
       ...(r.sourceLine !== undefined && { line: r.sourceLine }),
       link: r.linkHref ?? target,
       detail: `link: ${r.linkHref ?? target}`,
@@ -81,10 +81,10 @@ export function walkerExclusionsToIssues(
  */
 export function deferredAssetsToIssues(
   deferredAssets: readonly string[],
-  projectRoot: string,
+  locationRoot: string,
 ): ValidationIssue[] {
   return deferredAssets.map((asset) => {
-    const location = issueLocation(asset, projectRoot);
+    const location = issueLocation(asset, locationRoot);
     return materializeIssue('LINK_DEFERRED_ARTIFACT', { location, detail: location });
   });
 }

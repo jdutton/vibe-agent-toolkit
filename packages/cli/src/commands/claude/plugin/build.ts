@@ -24,6 +24,7 @@ import { writeYamlOutput } from '../../../utils/output.js';
 import { mergeSkillPackagingConfig } from '../../../utils/skill-packaging-config.js';
 import { loadClaudeProjectConfig } from '../claude-config.js';
 
+import { buildMarketplaceJson } from './marketplace-json.js';
 import { resolvePluginChangelogPath } from './plugin-changelog.js';
 import { applyPluginFiles } from './plugin-files.js';
 import { mergePluginJson, resolveVersion } from './plugin-json-merge.js';
@@ -45,6 +46,13 @@ interface PluginBuildResult {
   pluginName: string;
   pluginDir: string;
   pluginVersion: string | undefined;
+  /**
+   * The plugin's merged `author` (config-owned name/email plus the subfields
+   * config cannot express, passed through from the author's plugin.json). Carried
+   * up so marketplace.json republishes THIS object rather than rebuilding one
+   * from the config `owner` and silently dropping the passthrough subfields.
+   */
+  pluginAuthor: Record<string, unknown>;
   skillsCopied: string[];
   commandsCopied: number;
   hooksCopied: number;
@@ -354,27 +362,18 @@ async function buildMarketplace(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
   await mkdir(claudePluginDir, { recursive: true });
 
-  const marketplaceJson: Record<string, unknown> = {
-    $schema: 'https://anthropic.com/claude-code/marketplace.schema.json',
+  // Each entry's author is the plugin's own MERGED author (see marketplace-json.ts),
+  // so marketplace.json and that plugin's plugin.json cannot disagree.
+  const marketplaceJson = buildMarketplaceJson({
     name,
-    owner: {
-      name: config.owner.name,
-      ...(config.owner.email ? { email: config.owner.email } : {}),
-    },
-    plugins: plugins.map((p) => {
-      const pluginDesc = config.plugins.find((pd) => pd.name === p.pluginName)?.description;
-      return {
-        name: p.pluginName,
-        ...(pluginDesc ? { description: pluginDesc } : {}),
-        source: `./plugins/${p.pluginName}`,
-        ...(p.pluginVersion ? { version: p.pluginVersion } : {}),
-        author: {
-          name: config.owner.name,
-          ...(config.owner.email ? { email: config.owner.email } : {}),
-        },
-      };
-    }),
-  };
+    owner: config.owner,
+    plugins: plugins.map((p) => ({
+      name: p.pluginName,
+      description: config.plugins.find((pd) => pd.name === p.pluginName)?.description,
+      version: p.pluginVersion,
+      author: p.pluginAuthor,
+    })),
+  });
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
   await writeFile(safePath.join(claudePluginDir, 'marketplace.json'), JSON.stringify(marketplaceJson, null, 2));
@@ -481,12 +480,12 @@ async function writeMergedPluginJson(
   pluginDir: string,
   owner: ClaudeMarketplaceConfig['owner'],
   logger: ReturnType<typeof createLogger>,
-): Promise<void> {
+): Promise<Record<string, unknown>> {
   const pluginJsonDir = safePath.join(pluginDir, CLAUDE_PLUGIN_DIRNAME);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
   await mkdir(pluginJsonDir, { recursive: true });
 
-  const { merged, warnings } = mergePluginJson({
+  const { merged, author, warnings } = mergePluginJson({
     vat: {
       name: pluginDef.name,
       version: pluginVersion,
@@ -499,6 +498,7 @@ async function writeMergedPluginJson(
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolved paths
   await writeFile(safePath.join(pluginJsonDir, 'plugin.json'), JSON.stringify(merged, null, 2));
   logger.info(`         .claude-plugin/plugin.json`);
+  return author;
 }
 
 /**
@@ -920,7 +920,7 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
     { warn: (message) => logger.info(`warning: ${message}`) },
   );
 
-  await writeMergedPluginJson(
+  const pluginAuthor = await writeMergedPluginJson(
     pluginDef,
     authorJson,
     pluginVersion,
@@ -943,6 +943,7 @@ async function buildPlugin(input: BuildPluginInput): Promise<PluginBuildResult> 
     pluginName: pluginDef.name,
     pluginDir,
     pluginVersion,
+    pluginAuthor,
     skillsCopied,
     commandsCopied: treeResult.commandsCopied,
     hooksCopied: treeResult.hooksCopied,

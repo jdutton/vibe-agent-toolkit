@@ -29,13 +29,134 @@ export interface BatchTokenizerOutput {
   maxLen: number;
 }
 
-/** Special token IDs for BERT-style models */
-const SPECIAL_TOKENS = {
-  CLS: 101,
-  SEP: 102,
-  UNK: 100,
-  PAD: 0,
+/**
+ * Special token literals every BERT-style WordPiece vocabulary defines.
+ *
+ * Only the *literals* are fixed — the ids are resolved from the loaded vocab
+ * file (see `resolveSpecialTokens`). Hardcoding the classic BERT ids
+ * (101/102/100/0) would silently mis-frame any model whose vocab orders these
+ * differently, degrading embeddings with no error and no dimension mismatch.
+ */
+const SPECIAL_TOKEN_LITERALS = {
+  cls: '[CLS]',
+  sep: '[SEP]',
+  unk: '[UNK]',
+  pad: '[PAD]',
 } as const;
+
+/**
+ * Special token literals used by RoBERTa / XLM-R derived encoders.
+ *
+ * These models use byte-level BPE or SentencePiece, not WordPiece, so their
+ * vocabularies are unusable here. Detecting them lets the error tell the caller
+ * *why* their model is incompatible rather than just what is missing.
+ */
+const NON_WORDPIECE_TOKEN_LITERALS = ['<s>', '</s>', '<pad>', '<unk>', '<mask>'] as const;
+
+/** Special token ids resolved from a loaded vocabulary. */
+export interface SpecialTokenIds {
+  cls: number;
+  sep: number;
+  unk: number;
+  pad: number;
+}
+
+/**
+ * Build the message for an incompatible vocabulary.
+ *
+ * Names the configured model, the vocab file, which special tokens were
+ * missing, and (when recognizable) which family the vocab actually belongs to.
+ */
+function buildIncompatibleVocabMessage(details: {
+  vocabPath: string;
+  missingTokens: readonly string[];
+  foundInstead: readonly string[];
+  modelId: string | undefined;
+}): string {
+  const subject =
+    details.modelId === undefined
+      ? 'The configured ONNX embedding model'
+      : `ONNX embedding model '${details.modelId}'`;
+
+  const lines = [
+    `${subject} does not ship a BERT-style WordPiece vocabulary.`,
+    `Vocab file: ${details.vocabPath}`,
+    `Expected special tokens: ${Object.values(SPECIAL_TOKEN_LITERALS).join(', ')}`,
+    `Missing from the vocab: ${details.missingTokens.join(', ')}`,
+  ];
+
+  if (details.foundInstead.length > 0) {
+    lines.push(
+      `Found instead: ${details.foundInstead.join(', ')} — these belong to RoBERTa/XLM-R style ` +
+        'byte-level BPE or SentencePiece tokenizers, which this WordPiece tokenizer cannot use.',
+    );
+  }
+
+  lines.push(
+    "Use a BERT-family embedding model (the default 'Xenova/all-MiniLM-L6-v2' is one), or supply " +
+      'a model whose vocab.txt defines the tokens above.',
+  );
+
+  return lines.join('\n');
+}
+
+/**
+ * Thrown at load time when a vocabulary file is not a BERT-style WordPiece
+ * vocabulary.
+ *
+ * Failing loudly here is deliberate: framing a non-WordPiece vocab with BERT
+ * special tokens produces embeddings that are wrong but structurally valid, so
+ * the index would silently degrade with no way for a user to notice. There is
+ * no bypass flag by design.
+ */
+export class IncompatibleVocabError extends Error {
+  readonly vocabPath: string;
+  readonly missingTokens: readonly string[];
+  readonly modelId: string | undefined;
+
+  constructor(details: {
+    vocabPath: string;
+    missingTokens: readonly string[];
+    foundInstead: readonly string[];
+    modelId: string | undefined;
+  }) {
+    super(buildIncompatibleVocabMessage(details));
+    this.name = 'IncompatibleVocabError';
+    this.vocabPath = details.vocabPath;
+    this.missingTokens = details.missingTokens;
+    this.modelId = details.modelId;
+  }
+}
+
+/**
+ * Resolve the BERT special token ids from a loaded vocabulary.
+ *
+ * @throws IncompatibleVocabError if any special token literal is absent — the
+ *   signal that this vocabulary is not WordPiece-shaped.
+ */
+function resolveSpecialTokens(
+  vocab: ReadonlyMap<string, number>,
+  vocabPath: string,
+  modelId: string | undefined,
+): SpecialTokenIds {
+  const cls = vocab.get(SPECIAL_TOKEN_LITERALS.cls);
+  const sep = vocab.get(SPECIAL_TOKEN_LITERALS.sep);
+  const unk = vocab.get(SPECIAL_TOKEN_LITERALS.unk);
+  const pad = vocab.get(SPECIAL_TOKEN_LITERALS.pad);
+
+  if (cls === undefined || sep === undefined || unk === undefined || pad === undefined) {
+    throw new IncompatibleVocabError({
+      vocabPath,
+      missingTokens: Object.values(SPECIAL_TOKEN_LITERALS).filter(
+        (literal) => !vocab.has(literal),
+      ),
+      foundInstead: NON_WORDPIECE_TOKEN_LITERALS.filter((literal) => vocab.has(literal)),
+      modelId,
+    });
+  }
+
+  return { cls, sep, unk, pad };
+}
 
 /**
  * Strip accents from a string using Unicode NFD normalization.
@@ -91,6 +212,7 @@ function splitOnPunctuation(text: string): string[] {
 function wordPieceTokenize(
   word: string,
   vocab: ReadonlyMap<string, number>,
+  unkId: number,
 ): number[] {
   const ids: number[] = [];
   let start = 0;
@@ -111,7 +233,7 @@ function wordPieceTokenize(
     }
 
     if (foundId === undefined) {
-      return [SPECIAL_TOKENS.UNK];
+      return [unkId];
     }
 
     ids.push(foundId);
@@ -163,25 +285,30 @@ function parseVocab(content: string): Map<string, number> {
  */
 export class BertTokenizer {
   private readonly vocab: ReadonlyMap<string, number>;
+  private readonly specialTokens: SpecialTokenIds;
 
-  private constructor(vocab: ReadonlyMap<string, number>) {
+  private constructor(vocab: ReadonlyMap<string, number>, specialTokens: SpecialTokenIds) {
     this.vocab = vocab;
+    this.specialTokens = specialTokens;
   }
 
   /**
    * Create a tokenizer from a vocab.txt file.
    *
    * The file should contain one token per line, where the line number
-   * (0-indexed) corresponds to the token ID.
+   * (0-indexed) corresponds to the token ID. The [CLS]/[SEP]/[UNK]/[PAD] ids
+   * are read from the file, not assumed.
    *
    * @param vocabPath - Absolute path to vocab.txt
+   * @param modelId - Configured model id, used only to make load errors actionable
    * @returns Initialized BertTokenizer
+   * @throws IncompatibleVocabError if the vocab is not BERT-style WordPiece
    */
-  static async fromVocabFile(vocabPath: string): Promise<BertTokenizer> {
+  static async fromVocabFile(vocabPath: string, modelId?: string): Promise<BertTokenizer> {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- vocabPath is from model cache, not user input
     const content = await readFile(vocabPath, 'utf8');
     const vocab = parseVocab(content);
-    return new BertTokenizer(vocab);
+    return new BertTokenizer(vocab, resolveSpecialTokens(vocab, vocabPath, modelId));
   }
 
   /**
@@ -199,7 +326,7 @@ export class BertTokenizer {
     const processed = stripAccents(text.toLowerCase());
     const words = splitOnPunctuation(processed);
 
-    const tokenIds: number[] = [SPECIAL_TOKENS.CLS];
+    const tokenIds: number[] = [this.specialTokens.cls];
 
     // Reserve 2 slots for [CLS] and [SEP]
     const maxContentTokens = maxLength - 2;
@@ -208,7 +335,7 @@ export class BertTokenizer {
       if (tokenIds.length - 1 >= maxContentTokens) {
         break;
       }
-      const wordIds = wordPieceTokenize(word, this.vocab);
+      const wordIds = wordPieceTokenize(word, this.vocab, this.specialTokens.unk);
       for (const id of wordIds) {
         if (tokenIds.length - 1 >= maxContentTokens) {
           break;
@@ -217,7 +344,7 @@ export class BertTokenizer {
       }
     }
 
-    tokenIds.push(SPECIAL_TOKENS.SEP);
+    tokenIds.push(this.specialTokens.sep);
 
     const attentionMask = new Array<number>(tokenIds.length).fill(1);
 
@@ -245,7 +372,7 @@ export class BertTokenizer {
     }
 
     const inputIds = tokenized.map((item) =>
-      padArray(item.inputIds, maxLen, SPECIAL_TOKENS.PAD),
+      padArray(item.inputIds, maxLen, this.specialTokens.pad),
     );
     const attentionMask = tokenized.map((item) =>
       padArray(item.attentionMask, maxLen, 0),

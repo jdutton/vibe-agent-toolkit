@@ -1,3 +1,6 @@
+import { issueLocation } from '@vibe-agent-toolkit/utils';
+
+import { type AnchorRootOptions, resolveAnchorRoot } from './anchor-root.js';
 import { detectResourceFormat } from './format-detection.js';
 import { validateMarketplace } from './marketplace-validator.js';
 import {
@@ -6,9 +9,13 @@ import {
 } from './registry-validator.js';
 import type { ValidationResult } from './types.js';
 
-export interface UnifiedValidateOptions {
-	/** Validator for claude-plugin directories. Required when validating plugin paths. */
-	validatePlugin?: (path: string) => Promise<ValidationResult>;
+export interface UnifiedValidateOptions extends AnchorRootOptions {
+	/**
+	 * Validator for claude-plugin directories. Required when validating plugin
+	 * paths. Receives the run's anchor base so the plugin lane reports in the
+	 * same coordinate system as every other lane in the run.
+	 */
+	validatePlugin?: (path: string, options: AnchorRootOptions) => Promise<ValidationResult>;
 }
 
 class ProgrammerError extends Error {
@@ -39,6 +46,16 @@ class ProgrammerError extends Error {
  * ```
  */
 export async function validate(resourcePath: string, opts?: UnifiedValidateOptions): Promise<ValidationResult> {
+	// One anchor base for every lane this dispatcher can route to, so a single
+	// run never reports two resources in two coordinate systems.
+	const anchor: AnchorRootOptions = opts?.locationRoot === undefined
+		? {}
+		: { locationRoot: opts.locationRoot };
+	const unknownLocation = issueLocation(
+		resourcePath,
+		resolveAnchorRoot(opts?.locationRoot, resourcePath),
+	);
+
 	try {
 		// Detect resource format
 		const format = await detectResourceFormat(resourcePath);
@@ -52,16 +69,16 @@ export async function validate(resourcePath: string, opts?: UnifiedValidateOptio
 						'Pass validatePlugin from @vibe-agent-toolkit/claude-marketplace to validate().',
 					);
 				}
-				return await opts.validatePlugin(format.path);
+				return await opts.validatePlugin(format.path, anchor);
 
 			case 'marketplace':
-				return await validateMarketplace(format.path);
+				return await validateMarketplace(format.path, anchor);
 
 			case 'installed-plugins-registry':
-				return await validateInstalledPluginsRegistry(format.path);
+				return await validateInstalledPluginsRegistry(format.path, anchor);
 
 			case 'known-marketplaces-registry':
-				return await validateKnownMarketplacesRegistry(format.path);
+				return await validateKnownMarketplacesRegistry(format.path, anchor);
 
 			case 'unknown':
 				// Create ValidationResult for unknown format
@@ -75,7 +92,7 @@ export async function validate(resourcePath: string, opts?: UnifiedValidateOptio
 							severity: 'error',
 							code: 'UNKNOWN_FORMAT',
 							message: format.reason ?? 'Unknown resource format',
-							location: format.path,
+							location: unknownLocation,
 							fix: 'Ensure the path points to a valid plugin directory, marketplace directory, or registry file',
 						},
 					],
@@ -106,7 +123,7 @@ export async function validate(resourcePath: string, opts?: UnifiedValidateOptio
 					severity: 'error',
 					code: 'UNKNOWN_FORMAT',
 					message: errorMessage,
-					location: resourcePath,
+					location: unknownLocation,
 				},
 			],
 		};

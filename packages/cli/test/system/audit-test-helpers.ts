@@ -72,7 +72,7 @@ export function sortTuples(tuples: FindingTuple[]): FindingTuple[] {
  */
 export async function collectFindings(corpus: string): Promise<FindingTuple[]> {
 	const logger = createLogger({});
-	const results = await getValidationResults(corpus, true, {}, logger);
+	const results = await getValidationResults(corpus, true, {}, logger, corpus);
 
 	const tuples: FindingTuple[] = [];
 	for (const result of results) {

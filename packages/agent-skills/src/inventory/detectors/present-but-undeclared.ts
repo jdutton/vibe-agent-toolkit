@@ -13,21 +13,21 @@ import { issueLocation } from '@vibe-agent-toolkit/utils';
 
 import type { PluginInventory, ComponentRef } from '../types.js';
 
-export function detectPresentButUndeclared(inv: PluginInventory, projectRoot: string): ValidationIssue[] {
+export function detectPresentButUndeclared(inv: PluginInventory, locationRoot: string): ValidationIssue[] {
 	const issues: ValidationIssue[] = [];
-	checkSkills(inv, projectRoot, issues);
-	checkRefList('commands', inv.discovered.commands, inv.declared.commands, projectRoot, issues);
-	checkRefList('agents', inv.discovered.agents, inv.declared.agents, projectRoot, issues);
+	checkSkills(inv, locationRoot, issues);
+	checkRefList('commands', inv.discovered.commands, inv.declared.commands, locationRoot, issues);
+	checkRefList('agents', inv.discovered.agents, inv.declared.agents, locationRoot, issues);
 	return issues;
 }
 
-function checkSkills(inv: PluginInventory, projectRoot: string, issues: ValidationIssue[]): void {
+function checkSkills(inv: PluginInventory, locationRoot: string, issues: ValidationIssue[]): void {
 	const declared = inv.declared.skills;
 	if (declared === null) return; // auto-discovery intentional
 	const declaredResolved = new Set(declared.map(d => d.resolvedPath));
 	for (const skill of inv.discovered.skills) {
 		if (!declaredResolved.has(skill.path)) {
-			issues.push(makeIssue('skills', skill.path, projectRoot));
+			issues.push(makeIssue('skills', skill.path, locationRoot));
 		}
 	}
 }
@@ -36,20 +36,20 @@ function checkRefList(
 	field: 'commands' | 'agents',
 	discovered: ComponentRef[],
 	declared: ComponentRef[] | null,
-	projectRoot: string,
+	locationRoot: string,
 	issues: ValidationIssue[],
 ): void {
 	if (declared === null) return;
 	const declaredResolved = new Set(declared.map(d => d.resolvedPath));
 	for (const ref of discovered) {
 		if (!declaredResolved.has(ref.resolvedPath)) {
-			issues.push(makeIssue(field, ref.resolvedPath, projectRoot));
+			issues.push(makeIssue(field, ref.resolvedPath, locationRoot));
 		}
 	}
 }
 
-function makeIssue(field: string, filePath: string, projectRoot: string): ValidationIssue {
-	const location = issueLocation(filePath, projectRoot);
+function makeIssue(field: string, filePath: string, locationRoot: string): ValidationIssue {
+	const location = issueLocation(filePath, locationRoot);
 	return {
 		severity: 'info',
 		code: 'COMPONENT_PRESENT_BUT_UNDECLARED',

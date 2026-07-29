@@ -13,6 +13,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
   BertTokenizer,
+  IncompatibleVocabError,
   l2Normalize,
   meanPooling,
 } from '../../src/embedding-providers/onnx-utils.js';
@@ -69,6 +70,25 @@ function buildTestVocab(): string {
   return lines.join('\n');
 }
 
+/**
+ * A BERT-style WordPiece vocabulary whose special tokens sit at NON-standard
+ * ids: [CLS]=0, [SEP]=1, [UNK]=2, [PAD]=3 — none of them at the classic
+ * 101/102/100/0 positions. The WordPiece algorithm still applies, so the
+ * tokenizer must derive these ids from the file rather than assume them.
+ */
+function buildShiftedBertVocab(): string {
+  return ['[CLS]', '[SEP]', '[UNK]', '[PAD]', 'hello', 'world'].join('\n');
+}
+
+/**
+ * A RoBERTa / XLM-R style vocabulary: `<s>`/`<pad>`/`</s>`/`<unk>` rather than
+ * the BERT `[CLS]`/`[SEP]`/`[UNK]`/`[PAD]` literals. Framing such a vocab with
+ * BERT ids silently produces arbitrary wordpieces, so it must be rejected.
+ */
+function buildRobertaStyleVocab(): string {
+  return ['<s>', '<pad>', '</s>', '<unk>', 'hello', 'world'].join('\n');
+}
+
 // ---------------------------------------------------------------------------
 // Test Setup
 // ---------------------------------------------------------------------------
@@ -77,14 +97,21 @@ let vocabDir: string;
 let vocabPath: string;
 let tokenizer: BertTokenizer;
 
+/** Write a vocab file into the shared temp directory and return its path. */
+async function writeVocab(fileName: string, content: string): Promise<string> {
+  const filePath = safePath.join(vocabDir, fileName);
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp file
+  await writeFile(filePath, content, 'utf8');
+  return filePath;
+}
+
 beforeAll(async () => {
   vocabDir = safePath.join(normalizedTmpdir(), `onnx-utils-test-${Date.now().toString()}`);
-  vocabPath = safePath.join(vocabDir, 'vocab.txt');
 
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp directory
   await mkdir(vocabDir, { recursive: true });
-  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test temp file
-  await writeFile(vocabPath, buildTestVocab(), 'utf8');
+
+  vocabPath = await writeVocab('vocab.txt', buildTestVocab());
 
   tokenizer = await BertTokenizer.fromVocabFile(vocabPath);
 });
@@ -111,6 +138,9 @@ const SEP_TOKEN = 102;
 /** UNK token ID */
 const UNK_TOKEN = 100;
 
+/** Synthetic model id used to assert the load error names the configured model */
+const incompatibleModelId = 'test-org/xlm-r-embedder';
+
 /** Common test phrases */
 const helloWorld = 'hello world';
 const longPhrase = 'hello world the cat sat on the mat';
@@ -123,6 +153,69 @@ describe('BertTokenizer', () => {
   describe('fromVocabFile', () => {
     it('should create a tokenizer from a vocab file', () => {
       expect(tokenizer).toBeDefined();
+    });
+
+    it('should frame sequences with the standard ids for a standard BERT vocab', () => {
+      const result = tokenizer.tokenize('hello');
+
+      expect(result.inputIds).toEqual([CLS_TOKEN, 103, SEP_TOKEN]);
+    });
+
+    it('should derive [CLS]/[SEP] ids from the vocab rather than assuming 101/102', async () => {
+      const shiftedPath = await writeVocab('shifted-vocab.txt', buildShiftedBertVocab());
+      const shifted = await BertTokenizer.fromVocabFile(shiftedPath);
+
+      // [CLS]=0, hello=4, world=5, [SEP]=1
+      expect(shifted.tokenize(helloWorld).inputIds).toEqual([0, 4, 5, 1]);
+    });
+
+    it('should derive the [UNK] id from the vocab', async () => {
+      const shiftedPath = await writeVocab('shifted-unk-vocab.txt', buildShiftedBertVocab());
+      const shifted = await BertTokenizer.fromVocabFile(shiftedPath);
+
+      // [CLS]=0, [UNK]=2, [SEP]=1
+      expect(shifted.tokenize('xyzzy').inputIds).toEqual([0, 2, 1]);
+    });
+
+    it('should derive the [PAD] id from the vocab when padding a batch', async () => {
+      const shiftedPath = await writeVocab('shifted-pad-vocab.txt', buildShiftedBertVocab());
+      const shifted = await BertTokenizer.fromVocabFile(shiftedPath);
+
+      const batch = shifted.tokenizeBatch(['hello', helloWorld]);
+
+      // Shorter sequence [0, 4, 1] padded to length 4 with [PAD]=3 (not 0)
+      expect(safeGet(batch.inputIds, 0)).toEqual([0, 4, 1, 3]);
+    });
+
+    it('should reject a vocabulary that is not BERT-style WordPiece', async () => {
+      const robertaPath = await writeVocab('roberta-vocab.txt', buildRobertaStyleVocab());
+
+      await expect(
+        BertTokenizer.fromVocabFile(robertaPath, incompatibleModelId),
+      ).rejects.toThrow(IncompatibleVocabError);
+    });
+
+    it('should name the model, the missing tokens, and the tokens found instead', async () => {
+      const robertaPath = await writeVocab('roberta-message-vocab.txt', buildRobertaStyleVocab());
+
+      const error: unknown = await BertTokenizer.fromVocabFile(
+        robertaPath,
+        incompatibleModelId,
+      ).then(
+        () => undefined,
+        (cause: unknown) => cause,
+      );
+
+      expect(error).toBeInstanceOf(IncompatibleVocabError);
+      const message = error instanceof Error ? error.message : '';
+
+      expect(message).toContain(incompatibleModelId);
+      expect(message).toContain('roberta-message-vocab.txt');
+      expect(message).toContain('[CLS]');
+      expect(message).toContain('[SEP]');
+      expect(message).toContain('[UNK]');
+      expect(message).toContain('[PAD]');
+      expect(message).toContain('<s>');
     });
   });
 

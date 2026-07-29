@@ -173,6 +173,16 @@ export const VALIDATION_RULES: Record<ValidationRuleCode, ValidationRule> = {
 
 /**
  * Validation thresholds (based on Anthropic guidance)
+ *
+ * @vendor-claim reviewed=2026-04-18 verify=Re-fetch https://platform.claude.com/docs/en/docs/agents-and-tools/agent-skills/best-practices and diff it against docs/external/anthropic-skill-authoring-best-practices.md
+ *
+ * The header above overstates the provenance. Of the six numbers here, the repo's
+ * own cached copy of Anthropic's guidance supports only RECOMMENDED_SKILL_LINES
+ * (500), and it explicitly *disclaims* MAX_DESCRIPTION_CHARS_CLAUDE_CODE (250) —
+ * Anthropic documents a 1024-character maximum, while 250 is VAT's own reading of
+ * where the Claude Code `/skills` listing truncates. MAX_TOTAL_LINES,
+ * MAX_FILE_COUNT, MAX_REFERENCE_DEPTH and MIN_DESCRIPTION_LENGTH are
+ * VAT-originated. The date above is the cache's Fetched date, not a later review.
  */
 export const VALIDATION_THRESHOLDS = {
   /** Recommended maximum lines for SKILL.md */

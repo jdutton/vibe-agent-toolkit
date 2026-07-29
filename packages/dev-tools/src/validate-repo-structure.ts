@@ -13,6 +13,10 @@
  * - Source files must be in packages src or test directories
  * - Test file naming conventions (.test.ts, not .spec.ts)
  *
+ * DURABILITY - Claims that rot in silence:
+ * - No citations to files under never-committed (gitignored) directories
+ * - Vendor claims annotated with @vendor-claim must be re-verified every 90 days
+ *
  * ORIGINAL RULES:
  * - No /examples directories in runtime packages
  * - No /scripts directories (except dev-tools, agent-schema, agent-skills)
@@ -41,8 +45,10 @@ const REPO_ROOT = safePath.join(__dirname, '../../..');
  * Validation error type constants
  */
 const ERROR_TYPES = {
+  DANGLING_CITATION: 'dangling-citation',
   FORBIDDEN_DIRECTORY: 'forbidden-directory',
   LARGE_FILE: 'large-file',
+  STALE_VENDOR_CLAIM: 'stale-vendor-claim',
   STRUCTURAL_VIOLATION: 'structural-violation',
 } as const;
 
@@ -54,13 +60,79 @@ const COMMON_SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.claude']);
 const SKIP_DIRS_WITH_HUSKY = new Set([...COMMON_SKIP_DIRS, '.husky', WORKTREES_DIR]);
 
 interface ValidationError {
-  type: 'forbidden-directory' | 'large-file' | 'structural-violation';
+  type:
+    | 'dangling-citation'
+    | 'forbidden-directory'
+    | 'large-file'
+    | 'stale-vendor-claim'
+    | 'structural-violation';
   path: string;
   message: string;
   severity: 'error' | 'warning';
 }
 
 const errors: ValidationError[] = [];
+
+/**
+ * Extensions treated as human-readable text.
+ *
+ * Allowlist rather than denylist: the content rules below (NUL bytes, dangling
+ * citations, vendor-claim staleness) all exist to protect greppable prose and
+ * source, so a newly-introduced binary format should never trip them. Note that
+ * extensionless files (`.gitignore`, `LICENSE`) are therefore not scanned.
+ */
+const TEXT_FILE_EXTENSIONS = new Set([
+  '.cjs', '.css', '.html', '.js', '.json', '.jsx', '.md', '.mjs', '.patch',
+  '.py', '.toml', '.ts', '.tsx', '.txt', '.yaml', '.yml',
+]);
+
+/**
+ * Helper: apply a handler to the raw bytes of every git-tracked text file.
+ *
+ * Tracked-only is deliberate: these rules are about what a *clean clone* shows a
+ * contributor, so untracked working-tree files are out of scope by construction.
+ */
+async function forEachTrackedTextFile(
+  handler: (relPath: string, contents: Buffer) => void,
+): Promise<void> {
+  const tracked = safeExecSync('git', ['ls-files', '-z'], {
+    cwd: REPO_ROOT,
+    encoding: 'utf8',
+  }) as string;
+
+  for (const relPath of tracked.split('\0')) {
+    if (!relPath || !TEXT_FILE_EXTENSIONS.has(extname(relPath).toLowerCase())) {
+      continue;
+    }
+
+    const fullPath = safePath.join(REPO_ROOT, relPath);
+    let contents: Buffer;
+    try {
+      contents = await readFile(fullPath);
+    } catch {
+      continue; // Tracked but absent from the working tree (e.g. sparse checkout)
+    }
+
+    handler(relPath, contents);
+  }
+}
+
+/**
+ * Helper: apply a handler to every line of every git-tracked text file.
+ *
+ * The whole `lines` array is passed alongside the index so a rule can inspect a
+ * window around the match (some annotations and disclaimers wrap across lines).
+ */
+async function forEachTrackedTextFileLine(
+  handler: (ctx: { relPath: string; lines: readonly string[]; index: number }) => void,
+): Promise<void> {
+  await forEachTrackedTextFile((relPath, contents) => {
+    const lines = contents.toString('utf8').split('\n');
+    for (let index = 0; index < lines.length; index += 1) {
+      handler({ relPath, lines, index });
+    }
+  });
+}
 
 /**
  * Helper: Walk directory tree recursively, calling handler for each entry
@@ -448,47 +520,272 @@ async function validateTestFileNaming(): Promise<void> {
  * ESLint and tsc both pass it clean).
  */
 async function validateNoNulBytesInTextFiles(): Promise<void> {
-  // Allowlist rather than denylist: the rule protects greppability of source and
-  // docs, so a newly-introduced binary format should never trip it.
-  const TEXT_EXTENSIONS = new Set([
-    '.cjs', '.css', '.html', '.js', '.json', '.jsx', '.md', '.mjs', '.patch',
-    '.py', '.toml', '.ts', '.tsx', '.txt', '.yaml', '.yml',
-  ]);
-
-  const tracked = safeExecSync('git', ['ls-files', '-z'], {
-    cwd: REPO_ROOT,
-    encoding: 'utf8',
-  }) as string;
-
-  for (const relPath of tracked.split('\0')) {
-    if (!relPath || !TEXT_EXTENSIONS.has(extname(relPath).toLowerCase())) {
-      continue;
-    }
-
-    const fullPath = safePath.join(REPO_ROOT, relPath);
-    let contents: Buffer;
-    try {
-      contents = await readFile(fullPath);
-    } catch {
-      continue; // Tracked but absent from the working tree (e.g. sparse checkout)
-    }
-
+  await forEachTrackedTextFile((relPath, contents) => {
     const offset = contents.indexOf(0);
-    if (offset !== -1) {
-      const line = contents.subarray(0, offset).toString('utf8').split('\n').length;
-      errors.push({
-        type: ERROR_TYPES.STRUCTURAL_VIOLATION,
-        path: relPath,
-        message:
-          `Contains a NUL byte at line ${line} (offset ${offset}). Git and ripgrep will ` +
-          `treat this file as binary and skip its contents, hiding it from every ` +
-          `grep-based sweep. Replace the raw byte with the escape sequence ` +
-          String.raw`\0` +
-          `, or drop the sentinel entirely.`,
-        severity: 'error',
-      });
+    if (offset === -1) {
+      return;
+    }
+
+    const line = contents.subarray(0, offset).toString('utf8').split('\n').length;
+    errors.push({
+      type: ERROR_TYPES.STRUCTURAL_VIOLATION,
+      path: relPath,
+      message:
+        `Contains a NUL byte at line ${line} (offset ${offset}). Git and ripgrep will ` +
+        `treat this file as binary and skip its contents, hiding it from every ` +
+        `grep-based sweep. Replace the raw byte with the escape sequence ` +
+        String.raw`\0` +
+        `, or drop the sentinel entirely.`,
+      severity: 'error',
+    });
+  });
+}
+
+/**
+ * Directories that are gitignored and therefore NEVER present in a clone.
+ *
+ * The invariant: because git never carries these paths, any reference to a *file*
+ * inside one is dangling by construction — not by accident, and not something a
+ * link checker will ever catch, since there is no version of the repository in
+ * which the target exists. A reader who is told "per <spec> §6" and cannot open
+ * <spec> has been handed an unfalsifiable justification.
+ *
+ * Keep in sync with .gitignore (currently lines 88-90).
+ */
+const NEVER_COMMITTED_DIRS = ['docs/plans/', 'docs/superpowers/', '.superpowers/'] as const;
+
+/**
+ * Where a design doc goes when it needs to be citable.
+ * See docs/research/2026-06-24-skill-test-eval-runner-design.md, whose own
+ * preamble records that it was promoted out of a gitignored dir for this reason.
+ */
+const PROMOTED_DOC_HOME = 'docs/research/';
+
+/**
+ * Tail of a path that names a concrete FILE (…/something.ext) rather than a
+ * directory or a glob. This is the whole basis for telling a citation apart from
+ * a pattern: `docs/plans/**` and `docs/plans/` name the directory, whereas
+ * `docs/plans/<some-design>.md` claims a readable source exists.
+ */
+const CITED_FILE_TAIL = /^[\w./-]*[\w-]\.[a-z]{2,5}/;
+
+/**
+ * Phrases that make a citation self-disclaiming.
+ *
+ * If the prose around the path already tells the reader the target is not in the
+ * repository, the pointer misleads nobody — and saying so is precisely the
+ * fallback this gate recommends when a doc cannot be promoted. Scanned over a
+ * small window because the path and the disclaimer often land on adjacent lines.
+ */
+const CITATION_DISCLAIMERS = [
+  'not in the repository',
+  'not in the repo',
+  'not tracked',
+  'untracked',
+  'gitignored',
+  'not committed',
+  'uncommitted',
+  'never committed',
+];
+const CITATION_DISCLAIMER_WINDOW = 2;
+
+/** Collect every reference on `line` that names a file under a never-committed dir. */
+function findNeverCommittedCitations(line: string): string[] {
+  const found: string[] = [];
+
+  for (const dir of NEVER_COMMITTED_DIRS) {
+    let at = line.indexOf(dir);
+    while (at !== -1) {
+      const tail = CITED_FILE_TAIL.exec(line.slice(at + dir.length));
+      if (tail) {
+        found.push(dir + tail[0]);
+      }
+      at = line.indexOf(dir, at + dir.length);
     }
   }
+
+  return found;
+}
+
+/** True when the prose around `index` admits the cited target is not committed. */
+function isSelfDisclaimingCitation(lines: readonly string[], index: number): boolean {
+  const from = Math.max(0, index - CITATION_DISCLAIMER_WINDOW);
+  const to = Math.min(lines.length, index + CITATION_DISCLAIMER_WINDOW + 1);
+  const window = lines.slice(from, to).join(' ').toLowerCase();
+  return CITATION_DISCLAIMERS.some((phrase) => window.includes(phrase));
+}
+
+/**
+ * Rule 10: No citations to files under never-committed directories
+ *
+ * `docs/plans/` and `docs/superpowers/` are gitignored working dirs. Tracked files
+ * that cite documents inside them point at nothing a contributor or adopter can
+ * open, and the prose is usually load-bearing ("Per spec … §6"), so the rule the
+ * citation stood for cannot be reconstructed.
+ *
+ * The rule, stated: a reference counts as a *citation* only when it names a
+ * concrete file (a path segment with an extension). Naming the directory itself —
+ * as an exclusion glob (`docs/plans/**`), or in prose explaining the convention —
+ * is not a citation and is never reported. A citation is additionally exempt when
+ * the surrounding lines say the target is not committed.
+ */
+async function validateNoCitationsToNeverCommittedDirs(): Promise<void> {
+  await forEachTrackedTextFileLine(({ relPath, lines, index }) => {
+    const citations = findNeverCommittedCitations(lines[index] ?? '');
+    if (citations.length === 0 || isSelfDisclaimingCitation(lines, index)) {
+      return;
+    }
+
+    for (const cited of citations) {
+      errors.push({
+        type: ERROR_TYPES.DANGLING_CITATION,
+        path: `${relPath}:${index + 1}`,
+        message:
+          `Cites \`${cited}\`, which is gitignored and so absent from every clone — ` +
+          `the citation is dangling by construction, not by accident. Fix it one of ` +
+          `three ways: promote the document into a committed location (` +
+          `${PROMOTED_DOC_HOME} is this repo's home for promoted design docs) and cite ` +
+          `it there; inline the rule the citation was standing in for; or, if neither ` +
+          `is possible, state in the same breath that the target is not committed ` +
+          `(e.g. "(uncommitted)") so the reader is not sent looking.`,
+        // Warning, not error: the existing citations predate this gate, and a
+        // dangling pointer never breaks a build. Visible on every run instead.
+        severity: 'warning',
+      });
+    }
+  });
+}
+
+/**
+ * Vendor-claim annotation: `@vendor-claim reviewed=YYYY-MM-DD verify=<how>`
+ *
+ * Marks a statement about the *outside world* — another vendor's install paths, a
+ * runtime's capabilities, semantics read out of someone else's binary, a
+ * platform's command flags. Such claims cannot be tested: the repo's own tests
+ * can only read the table back to itself, so they pass forever while the world
+ * moves. What they need instead is a human re-reading the source on a clock, and
+ * this annotation is what puts them on one.
+ *
+ * Grammar — one line, wherever a comment or prose line is legal:
+ *
+ *     <marker> @vendor-claim reviewed=YYYY-MM-DD verify=<how to re-verify>
+ *
+ * `<marker>` is an optional leading `//`, `*`, `#`, `-`, `>` or `<!--`, so the same
+ * form works in TypeScript comments and in markdown prose, list items,
+ * blockquotes, and HTML comments. The tag must be the first thing on the line
+ * after that marker — a mid-sentence mention of the tag in prose is a discussion
+ * of the annotation, not an instance of it.
+ *
+ * `verify=` runs to end of line and is mandatory. A date alone tells you the claim
+ * is stale without telling you what to go read, which is not actionable; the
+ * "how" is half the annotation. Give a URL, a document name, or "run X".
+ */
+const VENDOR_CLAIM_MAX_AGE_DAYS = 90; // Matches docs/external/'s documented refresh policy
+const VENDOR_CLAIM_TAG = '@vendor-claim';
+const VENDOR_CLAIM_MARKERS = ['//', '*', '#', '<!--', '-', '>'] as const;
+const VENDOR_CLAIM_BODY = /^reviewed=(\d{4}-\d{2}-\d{2})\s+verify=(\S.*)$/;
+
+/** Strip one leading comment/list marker so the same grammar works in TS and markdown. */
+function stripLineMarker(line: string): string {
+  const trimmed = line.trimStart();
+  for (const marker of VENDOR_CLAIM_MARKERS) {
+    if (trimmed.startsWith(marker)) {
+      return trimmed.slice(marker.length).trimStart();
+    }
+  }
+  return trimmed;
+}
+
+interface VendorClaim {
+  reviewed: string;
+  verify: string;
+}
+
+/**
+ * Parse one line as a vendor-claim annotation.
+ * `undefined` = not an annotation; `null` = an annotation that does not parse.
+ */
+function parseVendorClaim(line: string): VendorClaim | null | undefined {
+  const bare = stripLineMarker(line);
+  if (!bare.startsWith(VENDOR_CLAIM_TAG)) {
+    return undefined;
+  }
+
+  const rest = bare.slice(VENDOR_CLAIM_TAG.length);
+  if (rest !== '' && !rest.startsWith(' ') && !rest.startsWith('\t')) {
+    return undefined; // A longer tag that merely shares this prefix
+  }
+
+  const body = VENDOR_CLAIM_BODY.exec(rest.trimStart());
+  if (!body) {
+    return null;
+  }
+
+  // Trailing `-->` belongs to the HTML comment, not to the instruction.
+  let verify = (body[2] ?? '').trim();
+  if (verify.endsWith('-->')) {
+    verify = verify.slice(0, -3).trim();
+  }
+
+  return { reviewed: body[1] ?? '', verify };
+}
+
+/** Whole days elapsed since an ISO date, or NaN if the date is not real. */
+function daysSinceIsoDate(isoDate: string, now: Date): number {
+  const then = Date.parse(`${isoDate}T00:00:00Z`);
+  if (Number.isNaN(then)) {
+    return Number.NaN;
+  }
+  return Math.floor((now.getTime() - then) / 86_400_000);
+}
+
+/**
+ * Rule 11: Vendor claims must be re-verified every 90 days
+ *
+ * Severity is `warning` on purpose. A review that came due must not fail an
+ * unrelated commit — that is how a gate earns a permanent `--no-verify` and stops
+ * being read at all. The job here is to be *visible on a clock*, not to block.
+ */
+async function validateVendorClaimFreshness(): Promise<void> {
+  const now = new Date();
+
+  await forEachTrackedTextFileLine(({ relPath, lines, index }) => {
+    const claim = parseVendorClaim(lines[index] ?? '');
+    if (claim === undefined) {
+      return;
+    }
+
+    const path = `${relPath}:${index + 1}`;
+    const age = claim ? daysSinceIsoDate(claim.reviewed, now) : Number.NaN;
+
+    if (!claim || !Number.isFinite(age)) {
+      errors.push({
+        type: ERROR_TYPES.STALE_VENDOR_CLAIM,
+        path,
+        message:
+          `Malformed @vendor-claim annotation. Expected ` +
+          `\`@vendor-claim reviewed=YYYY-MM-DD verify=<how to re-verify>\` with a real ` +
+          `calendar date. As written this annotation can never come due, so the claim ` +
+          `it guards is unwatched.`,
+        severity: 'warning',
+      });
+      return;
+    }
+
+    if (age > VENDOR_CLAIM_MAX_AGE_DAYS) {
+      errors.push({
+        type: ERROR_TYPES.STALE_VENDOR_CLAIM,
+        path,
+        message:
+          `Claim about the outside world last verified ${age} days ago — ` +
+          `${age - VENDOR_CLAIM_MAX_AGE_DAYS} days past the ${VENDOR_CLAIM_MAX_AGE_DAYS}-day ` +
+          `review window. To re-verify: ${claim.verify}\n     ` +
+          `Then update reviewed= to today's date. No test can contradict this claim, ` +
+          `so this warning is the only thing watching it.`,
+        severity: 'warning',
+      });
+    }
+  });
 }
 
 /**
@@ -547,6 +844,10 @@ async function validate(): Promise<void> {
   await validateNoStagingDirectories();
   await validateTestFixtureSizes();
   await validateNoNulBytesInTextFiles();
+
+  // Durability - claims that rot in silence
+  await validateNoCitationsToNeverCommittedDirs();
+  await validateVendorClaimFreshness();
 
   printResults();
 

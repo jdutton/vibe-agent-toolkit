@@ -13,7 +13,7 @@ import type { PluginInventory } from '../types.js';
 
 export function detectReferenceTargetMissing(
 	inv: PluginInventory,
-	projectRoot: string,
+	locationRoot: string,
 ): ValidationIssue[] {
 	// Three anchors, three genuinely different things — packing any two of them
 	// into one string is what this detector used to do:
@@ -25,12 +25,12 @@ export function detectReferenceTargetMissing(
 	//              advice you cannot follow
 	const manifestLocation = issueLocation(
 		safePath.join(inv.path, '.claude-plugin', 'plugin.json'),
-		projectRoot,
+		locationRoot,
 	);
 	return inv.references
 		.filter(ref => !ref.exists)
 		.map(ref => {
-			const target = issueLocation(ref.to, projectRoot);
+			const target = issueLocation(ref.to, locationRoot);
 			return {
 				severity: 'error' as const,
 				code: 'REFERENCE_TARGET_MISSING' as const,

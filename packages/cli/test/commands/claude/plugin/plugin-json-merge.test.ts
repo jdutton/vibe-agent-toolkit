@@ -102,13 +102,88 @@ describe('mergePluginJson', () => {
     expect(warnings).toEqual([]);
   });
 
-  it('discards any author.author shape entirely when it differs (no deep merge)', () => {
-    const { merged } = mergePluginJson({
+  // Author-subfield ownership. Config owns exactly the subfields the marketplace
+  // `owner` can express (name, email). Everything else — notably `url`, which VAT's
+  // config has NO field for — passes through from the author's plugin.json instead
+  // of being destroyed: dropping it is data loss, not a precedence policy.
+  const mergeAuthor = (author: unknown, vat = vatFields) =>
+    mergePluginJson({ vat, configDescription: undefined, authorJson: { author } });
+
+  it('keeps the config author when plugin.json declares no author', () => {
+    const { merged, warnings } = mergePluginJson({
       vat: vatFields,
       configDescription: undefined,
-      authorJson: { author: { name: 'Other', twitter: '@other', extra: true } },
+      authorJson: { license: 'MIT' },
     });
     expect(merged['author']).toEqual({ name: 'Org', email: 'ops@org.example' });
+    expect(warnings).toEqual([]);
+  });
+
+  it('passes author.url through — VAT config cannot express it, so config cannot own it', () => {
+    const { merged, warnings } = mergeAuthor({
+      name: 'Org',
+      email: 'ops@org.example',
+      url: 'https://org.example/about',
+    });
+    expect(merged['author']).toEqual({
+      name: 'Org',
+      email: 'ops@org.example',
+      url: 'https://org.example/about',
+    });
+    expect(warnings).toEqual([]);
+  });
+
+  it('overrides name/email from config while preserving every unowned subfield', () => {
+    const { merged, warnings } = mergeAuthor({
+      name: 'Someone Else',
+      email: 'someone@else.example',
+      url: 'https://org.example/about',
+      twitter: '@org',
+    });
+    expect(merged['author']).toEqual({
+      name: 'Org',
+      email: 'ops@org.example',
+      url: 'https://org.example/about',
+      twitter: '@org',
+    });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('author');
+  });
+
+  it('preserves an author object that supplies ONLY url', () => {
+    const { merged, warnings } = mergeAuthor({ url: 'https://org.example/about' });
+    expect(merged['author']).toEqual({
+      name: 'Org',
+      email: 'ops@org.example',
+      url: 'https://org.example/about',
+    });
+    expect(warnings).toEqual([]);
+  });
+
+  it('does not manufacture a disagreement warning from plugin.json key order', () => {
+    const { warnings } = mergeAuthor({
+      url: 'https://org.example/',
+      email: 'ops@org.example',
+      name: 'Org',
+    });
+    expect(warnings).toEqual([]);
+  });
+
+  it('replaces a non-object author wholesale (an npm-style string cannot be merged)', () => {
+    const { merged, warnings } = mergeAuthor('Org <ops@org.example> (https://org.example)');
+    expect(merged['author']).toEqual({ name: 'Org', email: 'ops@org.example' });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('author');
+  });
+
+  it('owns email even when config omits it — owner.email IS config-expressible', () => {
+    const { merged, warnings } = mergeAuthor(
+      { name: 'Org', email: 'dropped@org.example', url: 'https://org.example/' },
+      { name: 'my-plugin', version: '1.2.3', author: { name: 'Org' } },
+    );
+    expect(merged['author']).toEqual({ name: 'Org', url: 'https://org.example/' });
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('email');
   });
 
   it('omits version when caller-resolved vat.version is undefined (even if authorJson has one)', () => {

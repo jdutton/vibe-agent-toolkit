@@ -6,6 +6,15 @@
  * - Read/Edit/Write/Glob path rules: node-ignore (gitignore spec)
  *
  * Sources: decompiled from Claude Code binary v2.1.52 (nA0() function).
+ *
+ * @vendor-claim reviewed=2026-04-08 verify=Re-decompile a current Claude Code binary (or get vendor confirmation) and diff nA0() against the matcher below
+ *
+ * Note the version discrepancy this pin creates: docs/skill-quality-and-compatibility.md
+ * establishes plugin-loader semantics from Claude Code 2.1.126, while the matching
+ * logic here was read out of 2.1.52. Nothing reconciles the two, and no test can:
+ * these are semantics of somebody else's binary, so the suite below can only assert
+ * that our replica is self-consistent, never that it still matches the real one.
+ * The `reviewed=` date above is the 2.1.52 read, not a re-confirmation against 2.1.126.
  */
 
 import { createRequire } from 'node:module';

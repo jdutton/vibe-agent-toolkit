@@ -5,9 +5,10 @@
  * The legacy pipeline itself was deleted in Phase 4c — only the snapshot
  * remains.
  *
- * The snapshot was re-anchored (never redefined) when `ValidationIssue`'s
- * anchor contract landed — see `capture-legacy-snapshot.ts` for the proof that
- * gated it.
+ * The snapshot has been re-anchored (never redefined) twice: once when
+ * `ValidationIssue`'s anchor contract landed, and once when the anchor BASE
+ * became the invocation scan root. See `capture-legacy-snapshot.ts` for both,
+ * and `zero-loss-proof.ts` for the proof that gates any future re-capture.
  */
 
 import { readFileSync } from 'node:fs';

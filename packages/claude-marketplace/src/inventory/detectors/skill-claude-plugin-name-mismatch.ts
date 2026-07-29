@@ -18,7 +18,7 @@ import type { ClaudePluginInventory } from '../types.js';
  * `name`, or an empty array when the names agree, are absent, or the
  * inventory is not a skill-claude-plugin shape.
  */
-export function detectSkillClaudePluginNameMismatch(inv: ClaudePluginInventory, projectRoot: string): ValidationIssue[] {
+export function detectSkillClaudePluginNameMismatch(inv: ClaudePluginInventory, locationRoot: string): ValidationIssue[] {
 	if (inv.shape !== 'skill-claude-plugin') return [];
 	if (inv.vendor !== 'claude-code') return [];
 
@@ -34,7 +34,7 @@ export function detectSkillClaudePluginNameMismatch(inv: ClaudePluginInventory, 
 		severity: 'warning',
 		code: 'SKILL_CLAUDE_PLUGIN_NAME_MISMATCH',
 		message: `plugin.json name "${pluginName}" does not match co-located SKILL.md frontmatter name "${skillName}"`,
-		location: issueLocation(safePath.join(inv.path, '.claude-plugin', 'plugin.json'), projectRoot),
+		location: issueLocation(safePath.join(inv.path, '.claude-plugin', 'plugin.json'), locationRoot),
 		fix: 'Align the names: update plugin.json `name` to match SKILL.md `name` (the skill is authoritative), or intentionally namespace the plugin (configure `validation.severity` or `validation.allow` with a reason).',
 	}];
 }

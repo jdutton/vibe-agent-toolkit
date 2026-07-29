@@ -75,7 +75,7 @@ async function validatePluginSkills(pluginDir: string, marketplacePath: string):
     const skillMdPath = safePath.join(skillDir, 'SKILL.md');
     if (!existsSync(skillMdPath)) continue;
 
-    const skillResult = await validateSkill({ skillPath: skillMdPath, rootDir: skillDir, projectRoot: marketplacePath });
+    const skillResult = await validateSkill({ skillPath: skillMdPath, rootDir: skillDir, locationRoot: marketplacePath });
     issues.push(...skillResult.issues);
   }
 

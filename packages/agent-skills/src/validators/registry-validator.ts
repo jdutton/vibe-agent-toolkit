@@ -3,12 +3,13 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
-import { findProjectRoot, issueLocation } from '@vibe-agent-toolkit/utils';
+import { issueLocation } from '@vibe-agent-toolkit/utils';
 import type { z } from 'zod';
 
 import { InstalledPluginsRegistrySchema } from '../schemas/installed-plugins-registry.js';
 import { KnownMarketplacesRegistrySchema } from '../schemas/known-marketplaces-registry.js';
 
+import { type AnchorRootOptions, resolveAnchorRoot } from './anchor-root.js';
 import type { ValidationResult } from './types.js';
 import {
 	calculateValidationStatus,
@@ -25,12 +26,13 @@ function validateRegistryFile(
 	filePath: string,
 	schema: z.ZodType,
 	successMessage: string,
+	locationRoot: string | undefined,
 ): ValidationResult {
 	const issues: ValidationIssue[] = [];
-	// Anchor contract: `location` is a project-relative POSIX path. Registry
-	// files are pointed at directly, so the enclosing project is discovered the
-	// same way the skills lane discovers it.
-	const location = issueLocation(filePath, findProjectRoot(dirname(filePath)) ?? dirname(filePath));
+	// Anchor contract: `location` is relative to the run's ONE stated root. When
+	// no run root is supplied, registry files are pointed at directly, so the
+	// enclosing project is discovered the same way the skills lane discovers it.
+	const location = issueLocation(filePath, resolveAnchorRoot(locationRoot, dirname(filePath)));
 
 	// Check file exists
 	if (!existsSync(filePath)) {
@@ -105,15 +107,18 @@ function validateRegistryFile(
  * Validate an installed plugins registry file
  *
  * @param filePath - Absolute path to installed_plugins.json file
+ * @param options - Anchor base for emitted locations (see {@link AnchorRootOptions})
  * @returns Validation result with issues
  */
 export async function validateInstalledPluginsRegistry(
 	filePath: string,
+	options?: AnchorRootOptions,
 ): Promise<ValidationResult> {
 	return validateRegistryFile(
 		filePath,
 		InstalledPluginsRegistrySchema,
 		'Valid installed plugins registry',
+		options?.locationRoot,
 	);
 }
 
@@ -121,14 +126,17 @@ export async function validateInstalledPluginsRegistry(
  * Validate a known marketplaces registry file
  *
  * @param filePath - Absolute path to known_marketplaces.json file
+ * @param options - Anchor base for emitted locations (see {@link AnchorRootOptions})
  * @returns Validation result with issues
  */
 export async function validateKnownMarketplacesRegistry(
 	filePath: string,
+	options?: AnchorRootOptions,
 ): Promise<ValidationResult> {
 	return validateRegistryFile(
 		filePath,
 		KnownMarketplacesRegistrySchema,
 		'Valid known marketplaces registry',
+		options?.locationRoot,
 	);
 }

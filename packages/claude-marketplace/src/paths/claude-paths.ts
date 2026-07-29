@@ -34,8 +34,6 @@ export interface ClaudeProjectPaths {
   projectSettingsPath: string;
   /** <projectDir>/.claude/settings.local.json */
   projectSettingsLocalPath: string;
-  /** <projectDir>/.claude/CLAUDE.md */
-  claudeMdPath: string;
   /** <projectDir>/.mcp.json */
   mcpJsonPath: string;
 }
@@ -92,7 +90,6 @@ export function getClaudeProjectPaths(projectDir: string): ClaudeProjectPaths {
   return {
     projectSettingsPath: safePath.join(claudeDir, 'settings.json'),
     projectSettingsLocalPath: safePath.join(claudeDir, 'settings.local.json'),
-    claudeMdPath: safePath.join(claudeDir, 'CLAUDE.md'),
     mcpJsonPath: safePath.join(projectDir, '.mcp.json'),
   };
 }

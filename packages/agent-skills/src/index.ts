@@ -60,6 +60,7 @@ export {
 
 export { readDeclaredSkillName } from './skill-identity.js';
 
+export { type AnchorRootOptions, resolveAnchorRoot } from './validators/anchor-root.js';
 export { calculateValidationStatus, generateFixSuggestion } from './validators/validation-utils.js';
 export { detectKebabCaseViolation, type KebabCaseSurface } from './validators/kebab-case-detection.js';
 export { detectMissingRecommendedFields } from './validators/plugin-recommended-fields.js';

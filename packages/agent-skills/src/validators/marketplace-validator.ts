@@ -2,10 +2,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 
 import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
-import { findProjectRoot, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import { MarketplaceManifestSchema } from '../schemas/marketplace-manifest.js';
 
+import { type AnchorRootOptions, resolveAnchorRoot } from './anchor-root.js';
 import type { ValidationResult } from './types.js';
 import {
 	calculateValidationStatus,
@@ -19,13 +20,17 @@ const MARKETPLACE_TYPE = 'marketplace' as const;
  *
  * @see https://code.claude.com/docs/en/plugins-reference — Official marketplace manifest spec
  * @param marketplacePath - Absolute path to marketplace directory
+ * @param options - Anchor base for emitted locations (see {@link AnchorRootOptions})
  * @returns Validation result with issues
  */
-export async function validateMarketplace(marketplacePath: string): Promise<ValidationResult> {
+export async function validateMarketplace(
+	marketplacePath: string,
+	options?: AnchorRootOptions,
+): Promise<ValidationResult> {
 	const issues: ValidationIssue[] = [];
 	const marketplaceJsonPath = safePath.join(marketplacePath, '.claude-plugin', 'marketplace.json');
-	// Anchor contract: project-relative POSIX path, never absolute.
-	const location = issueLocation(marketplaceJsonPath, findProjectRoot(marketplacePath) ?? marketplacePath);
+	// Anchor contract: relative to the run's ONE stated root, never absolute.
+	const location = issueLocation(marketplaceJsonPath, resolveAnchorRoot(options?.locationRoot, marketplacePath));
 
 	// Check marketplace.json exists
 	if (!existsSync(marketplaceJsonPath)) {

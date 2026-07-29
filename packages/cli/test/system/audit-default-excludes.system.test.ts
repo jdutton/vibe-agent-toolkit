@@ -65,6 +65,13 @@ echo hello
   return rootDir;
 }
 
+/**
+ * `path` in audit output is relative to the run root stated once at the top of
+ * the report, so a `dist/` entry reads `dist/...` with no leading separator.
+ * Match the segment rather than an absolute-path substring.
+ */
+const DIST_SEGMENT = /(?:^|\/)dist\//;
+
 describe('Audit default artifact excludes (system test)', () => {
   let binPath: string;
   let tempDir: string;
@@ -92,7 +99,7 @@ describe('Audit default artifact excludes (system test)', () => {
       expect.stringContaining('skills/hello/SKILL.md'),
     ]);
     expect(paths.some(p => p.includes('node_modules'))).toBe(false);
-    expect(paths.some(p => p.includes('/dist/'))).toBe(false);
+    expect(paths.some(p => DIST_SEGMENT.test(p))).toBe(false);
     expect(paths.some(p => p.includes('.claude/worktrees'))).toBe(false);
   });
 
@@ -111,7 +118,7 @@ describe('Audit default artifact excludes (system test)', () => {
     const files = parsed['files'] as Array<{ path: string }>;
     const paths = files.map(f => f.path);
     expect(paths.some(p => p.includes('node_modules'))).toBe(true);
-    expect(paths.some(p => p.includes('/dist/'))).toBe(true);
+    expect(paths.some(p => DIST_SEGMENT.test(p))).toBe(true);
     expect(paths.some(p => p.includes('.claude/worktrees'))).toBe(true);
   });
 

@@ -22,7 +22,7 @@ import * as yaml from 'yaml';
 
 import { createLogger } from '../../utils/logger.js';
 import { withClonedRepo } from '../audit/git-url-clone.js';
-import { getValidationResults } from '../audit.js';
+import { deriveScanRoot, getValidationResults } from '../audit.js';
 
 import type { AuditOutcome, AuditStatus, AuditSummary, PluginRow, ReviewOutcome } from './report.js';
 import type { PluginEntry } from './seed.js';
@@ -121,7 +121,8 @@ async function auditAndRecord(
 
   let audit: AuditOutcome;
   try {
-    const results = await getValidationResults(scanPath, true, {}, logger);
+    // The corpus run root is the scanned plugin itself — one root per row.
+    const results = await getValidationResults(scanPath, true, {}, logger, deriveScanRoot(scanPath));
     const summary = summarizeResults(results);
     const status = statusFromCounts(summary.errors, summary.warnings);
     const auditYamlPath = safePath.join(opts.runDir, `${entry.name}-audit.yaml`);

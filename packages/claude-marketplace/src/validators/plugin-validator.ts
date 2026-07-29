@@ -3,13 +3,15 @@ import { existsSync, readFileSync } from 'node:fs';
 
 import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import {
+	type AnchorRootOptions,
 	calculateValidationStatus,
 	detectKebabCaseViolation,
 	detectMissingRecommendedFields,
 	generateFixSuggestion,
+	resolveAnchorRoot,
 	type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
-import { findProjectRoot, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
+import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
 
@@ -73,16 +75,19 @@ function applyPostSchemaChecks(args: {
  *
  * @see https://code.claude.com/docs/en/plugins-reference — Official plugin manifest spec
  * @param pluginPath - Absolute path to plugin directory
+ * @param options - `strict` raises recommended-field findings to errors;
+ *   `locationRoot` is the anchor base for emitted locations (see
+ *   {@link AnchorRootOptions}).
  * @returns Validation result with issues
  */
 export async function validatePlugin(
 	pluginPath: string,
-	options?: { strict?: boolean }
+	options?: { strict?: boolean } & AnchorRootOptions
 ): Promise<ValidationResult> {
 	const issues: ValidationIssue[] = [];
 	const pluginJsonPath = safePath.join(pluginPath, '.claude-plugin', 'plugin.json');
-	// Anchor contract: project-relative POSIX path, never absolute.
-	const location = issueLocation(pluginJsonPath, findProjectRoot(pluginPath) ?? pluginPath);
+	// Anchor contract: relative to the run's ONE stated root, never absolute.
+	const location = issueLocation(pluginJsonPath, resolveAnchorRoot(options?.locationRoot, pluginPath));
 
 	// Check plugin.json exists
 	if (!existsSync(pluginJsonPath)) {

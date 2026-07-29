@@ -12,6 +12,7 @@ const SEVERITY_WARNING = 'warning';
 const TEST_ERROR_CODE = 'TEST_ERROR';
 const TEST_ERROR_MESSAGE = 'Test error';
 const TEST_WARNING_CODE = 'TEST_WARNING';
+const TEST_WARNING_MESSAGE = 'Test warning';
 
 // Helper to create test validation result
 function createTestResult(path: string, status: 'error' | 'warning', issueCode: string, issueMessage: string): ValidationResult {
@@ -25,6 +26,8 @@ function createTestResult(path: string, status: 'error' | 'warning', issueCode: 
 
 describe('buildHierarchicalOutput', () => {
   const homeDir = os.homedir();
+  // The run root a `--user` audit states once: paths below it are relative to it.
+  const runRoot = `${homeDir}/.claude`;
 
   it('should group results by marketplace -> plugin -> skill hierarchy', () => {
     const results: ValidationResult[] = [
@@ -44,11 +47,11 @@ describe('buildHierarchicalOutput', () => {
         `${homeDir}/.claude/plugins/marketplaces/marketplace1/plugin2/skills/skill3/SKILL.md`,
         'warning',
         TEST_WARNING_CODE,
-        'Test warning'
+        TEST_WARNING_MESSAGE
       ),
     ];
 
-    const output = buildHierarchicalOutput(results);
+    const output = buildHierarchicalOutput(results, false, runRoot);
 
     expect(output.marketplaces).toHaveLength(1);
     expect(output.marketplaces[0]?.name).toBe('marketplace1');
@@ -79,7 +82,7 @@ describe('buildHierarchicalOutput', () => {
       ),
     ];
 
-    const output = buildHierarchicalOutput(results);
+    const output = buildHierarchicalOutput(results, false, runRoot);
 
     expect(output.standalonePlugins).toHaveLength(1);
     expect(output.standalonePlugins[0]?.name).toBe('standalone-plugin');
@@ -97,7 +100,7 @@ describe('buildHierarchicalOutput', () => {
       },
     ];
 
-    const output = buildHierarchicalOutput(results);
+    const output = buildHierarchicalOutput(results, false, runRoot);
 
     expect(output.standaloneSkills).toHaveLength(1);
     expect(output.standaloneSkills[0]?.name).toBe('standalone-skill');
@@ -108,7 +111,7 @@ describe('buildHierarchicalOutput', () => {
     expect(output.standaloneSkills[0]?.issues[1]?.code).toBe('SKILL_MISCONFIGURED_LOCATION');
   });
 
-  it('should use ~ for home directory paths', () => {
+  it('reports every path relative to the run root, not as an absolute or ~-abbreviated path', () => {
     const results: ValidationResult[] = [
       createTestResult(
         `${homeDir}/.claude/plugins/marketplaces/marketplace1/plugin1/skills/skill1/SKILL.md`,
@@ -118,9 +121,27 @@ describe('buildHierarchicalOutput', () => {
       ),
     ];
 
-    const output = buildHierarchicalOutput(results);
+    const output = buildHierarchicalOutput(results, false, runRoot);
 
     const skill = output.marketplaces[0]?.plugins[0]?.skills[0];
-    expect(skill?.path).toBe('~/.claude/plugins/marketplaces/marketplace1/plugin1/skills/skill1/SKILL.md');
+    expect(skill?.path).toBe('plugins/marketplaces/marketplace1/plugin1/skills/skill1/SKILL.md');
+  });
+
+  it('anchors the misconfigured-location finding at the run root too', () => {
+    const results: ValidationResult[] = [
+      createTestResult(
+        `${homeDir}/.claude/plugins/standalone-skill/SKILL.md`,
+        'warning',
+        TEST_WARNING_CODE,
+        TEST_WARNING_MESSAGE
+      ),
+    ];
+
+    const output = buildHierarchicalOutput(results, false, runRoot);
+
+    const misconfig = output.standaloneSkills[0]?.issues.find(
+      (i) => i.code === 'SKILL_MISCONFIGURED_LOCATION',
+    );
+    expect(misconfig?.location).toBe('plugins/standalone-skill/SKILL.md');
   });
 });

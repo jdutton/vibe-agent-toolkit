@@ -25,28 +25,11 @@ export type CacheStatus = 'stale' | 'orphaned' | 'fresh';
 
 export interface SkillEntry {
   name: string;
+  /** Path relative to the run root stated once at the top of the report. */
   path: string;
   status: 'success' | 'warning' | 'error';
   issues: ValidationIssue[];
   cacheStatus?: CacheStatus;
-}
-
-/**
- * Replace home directory with ~ for cleaner paths
- * Normalizes paths for cross-platform comparison (handles Windows backslashes)
- */
-function replaceHomeDir(filePath: string): string {
-  const homeDir = os.homedir();
-
-  // Normalize both paths to forward slashes for comparison
-  const normalizedFilePath = toForwardSlash(filePath);
-  const normalizedHomeDir = toForwardSlash(homeDir);
-
-  if (normalizedFilePath.startsWith(normalizedHomeDir)) {
-    // Replace using original paths to preserve platform separators in output
-    return filePath.replace(homeDir, '~');
-  }
-  return filePath;
 }
 
 /**
@@ -265,13 +248,14 @@ function filterCacheDuplicates(results: ValidationResult[]): {
  */
 function createSkillEntry(
   result: ValidationResult,
-  cacheStatusMap: Map<string, CacheStatus>
+  cacheStatusMap: Map<string, CacheStatus>,
+  locationRoot: string,
 ): SkillEntry {
   const { skill, isCached } = parsePathStructure(result.path);
 
   const entry: SkillEntry = {
     name: skill,
-    path: replaceHomeDir(result.path),
+    path: issueLocation(result.path, locationRoot),
     status: result.status,
     issues: result.issues,
   };
@@ -351,9 +335,10 @@ function convertPluginMapToArray(pluginMap: Map<string, SkillEntry[]>): PluginGr
  * configured as plugins with .claude-plugin/plugin.json.
  *
  * @param results - Validation results to check
+ * @param locationRoot - Run root the emitted `location` is expressed relative to
  * @returns Results with misconfiguration issues added
  */
-function addMisconfigurationIssues(results: ValidationResult[]): ValidationResult[] {
+function addMisconfigurationIssues(results: ValidationResult[], locationRoot: string): ValidationResult[] {
   const homeDir = toForwardSlash(os.homedir());
   const pluginsPath = `${homeDir}/.claude/plugins/`;
 
@@ -376,7 +361,7 @@ function addMisconfigurationIssues(results: ValidationResult[]): ValidationResul
       severity: 'error',
       code: 'SKILL_MISCONFIGURED_LOCATION',
       message: 'Standalone skill in plugins directory won\'t be recognized by Claude Code',
-      location: issueLocation(result.path, pluginsPath),
+      location: issueLocation(result.path, locationRoot),
       fix: 'Move to ~/.claude/skills/ for standalone skills, or add .claude-plugin/plugin.json for a proper plugin',
     };
 
@@ -403,14 +388,21 @@ function addMisconfigurationIssues(results: ValidationResult[]): ValidationResul
  *
  * @param results - Validation results from audit command
  * @param verbose - If true, include all results; if false, only show results with issues
+ * @param locationRoot - The run's single stated root. Every emitted `path` and
+ *   issue `location` is expressed relative to it, so one report never mixes
+ *   coordinate systems across the three `--user` scan directories.
  * @returns Hierarchical structure for display
  */
-export function buildHierarchicalOutput(results: ValidationResult[], verbose: boolean = false): HierarchicalOutput {
+export function buildHierarchicalOutput(
+  results: ValidationResult[],
+  verbose: boolean,
+  locationRoot: string,
+): HierarchicalOutput {
   // Filter out cache duplicates that match their source
   const { filtered: filteredResults, cacheStatusMap } = filterCacheDuplicates(results);
 
   // Add misconfiguration detection to results BEFORE verbose filtering
-  const resultsWithMisconfigDetection = addMisconfigurationIssues(filteredResults);
+  const resultsWithMisconfigDetection = addMisconfigurationIssues(filteredResults, locationRoot);
 
   const marketplacesMap = new Map<string, Map<string, SkillEntry[]>>();
   const cachedPluginsMap = new Map<string, SkillEntry[]>();
@@ -431,7 +423,7 @@ export function buildHierarchicalOutput(results: ValidationResult[], verbose: bo
     }
 
     const { marketplace, plugin, isCached } = parsePathStructure(result.path);
-    const entry = createSkillEntry(result, cacheStatusMap);
+    const entry = createSkillEntry(result, cacheStatusMap, locationRoot);
     categorizeEntry(entry, marketplace, plugin, isCached, maps);
   }
 

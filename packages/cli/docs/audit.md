@@ -313,6 +313,7 @@ Warnings indicate potential issues but don't prevent usage:
 Structured YAML report for programmatic parsing:
 
 ```yaml
+root: /abs/path/to/scan/root   # The ONE absolute path in the document
 status: success | warning | error
 summary:
   filesScanned: number
@@ -325,19 +326,44 @@ issues:
   info: number         # Total info count across all files
 duration: "123ms"
 files:
-  - path: /path/to/resource
+  - path: plugins/my-plugin            # relative to `root`
     status: success | warning | error
     type: plugin | marketplace | registry | skill
-    issues: []
+    issues:
+      - location: plugins/my-plugin/.claude-plugin/plugin.json   # relative to `root`
 ```
+
+#### One stated root, and everything relative to it
+
+`root` is the invocation scan root and the only absolute path a report contains.
+Every `path` and every issue `location` beneath it is forward-slashed and
+relative to that root, so:
+
+- `join(root, path)` and `join(root, location)` name real files — a consumer
+  never has to guess, or reimplement, the base a value was written against.
+- A `location` identifies a file uniquely across the whole document, even when a
+  run spans several projects that share internal layout (two `plugins/plugin-a`
+  directories under different parents cannot collapse to one string).
+- Nothing but `root` can leak the developer's or CI runner's home directory.
+
+The scan root is an ANCHOR, not a validation-policy boundary. Per-skill
+packaging rules still come from each skill's nearest-ancestor
+`vibe-agent-toolkit.config.yaml` (configs do not compose); that discovery has no
+say in how a path is spelled.
+
+`--user` scans three sibling directories (`plugins/`, `skills/`,
+`marketplaces/`), so its `root` is their shared Claude config dir
+(`$CLAUDE_CONFIG_DIR`, else `~/.claude`). A URL audit omits `root`: the clone
+lives in a random tempdir that nothing downstream can resolve, so the provenance
+header states the base instead and paths are relative to the cloned repo.
 
 ### Standard Error (stderr)
 
-Human-readable error messages and logs:
+Human-readable error messages and logs. Paths are root-relative here too:
 
 ```
 ERROR: Audit failed: 2 file(s) with errors
-ERROR: /path/to/skill.md:
+ERROR: skills/my-skill/SKILL.md:
 ERROR:   [SKILL_MISSING_NAME] name field is required in frontmatter
 ERROR:     at: line 1
 ERROR:     fix: Add 'name: skill-name' to frontmatter

@@ -40,6 +40,8 @@ const AGENTS_SKILLS_PATH = '.agents/skills';
 /**
  * Target → {userRel, projectRel} lookup table.
  *
+ * @vendor-claim reviewed=2026-04-08 verify=Each of the seven platforms' own published docs for where it reads skills from (claude, codex, copilot, gemini, cursor, windsurf, agents)
+ *
  * Last reviewed against vendor conventions 2026-04-08. Update this table when
  * platforms change theirs — and re-check the vendor's own documentation when you
  * do, because nothing here is verified at build or test time: the tests below
