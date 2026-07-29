@@ -103,9 +103,6 @@
       "WebFetch(domain:sonarcloud.io)",
       "WebFetch(domain:www.anthropic.com)",
       "WebSearch"
-    ],
-    "ask": [
-      "Bash(git commit:*)"
     ]
   }
 }
