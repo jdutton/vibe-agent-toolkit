@@ -19,6 +19,12 @@ let bareRepo: string;
 let bareRepoUrl: string;
 let workTree: string;
 
+/**
+ * Distinctive path segment the shorthand test rewrites github.com to. Nothing
+ * of this name exists, so the clone fails immediately and offline.
+ */
+const OFFLINE_REMOTE_PREFIX = 'vat-offline-no-such-remote';
+
 function git(args: string[], cwd: string): void {
   // eslint-disable-next-line sonarjs/no-os-command-from-path -- git is a standard system command
   const result = spawnSync('git', args, { cwd, encoding: 'utf-8' });
@@ -188,14 +194,35 @@ describe('vat audit <path> vs <git-url> — a local path always wins', () => {
   });
 
   it('still treats owner/repo shorthand as a URL when nothing of that name exists locally', () => {
-    const result = runAuditCli('no-such-owner/no-such-repo-xyz', [], { cwd: workTree });
+    // Shorthand always parses to https://github.com/<owner>/<repo>.git, so a
+    // naive version of this test contacts github.com — which this suite's
+    // header promises it never does. Worse, github.com answers a nonexistent
+    // repo with a credential challenge, and a Windows runner's credential
+    // manager sits on that until VAT's own 60s wall-clock cap fires.
+    //
+    // Rewrite the github.com prefix to a path that cannot exist, so the clone
+    // fails locally and instantly. `GIT_CONFIG_*` is git's env-only config
+    // channel (git >= 2.31): it reaches the CLI's spawned git without writing
+    // to any real config file.
+    const result = runAuditCli('no-such-owner/no-such-repo-xyz', [], {
+      cwd: workTree,
+      env: {
+        ...process.env,
+        GIT_CONFIG_COUNT: '1',
+        GIT_CONFIG_KEY_0: `url.file:///${OFFLINE_REMOTE_PREFIX}/.insteadOf`,
+        GIT_CONFIG_VALUE_0: 'https://github.com/',
+      },
+    });
 
     // Reaches the clone path (and fails there) rather than being resolved as a
     // local directory. Asserted via VAT's own wrapper message, NOT git's error
-    // text: what git prints for an unreachable remote depends on the network
-    // and credential helper available, so a runner without either never echoes
-    // the repository name back.
+    // text, which varies by platform and git version.
     expect(result.status).not.toBe(0);
-    expect(`${result.stdout}${result.stderr}`).toContain('Clone failed');
+    const output = `${result.stdout}${result.stderr}`;
+    expect(output).toContain('Clone failed');
+    // The rewritten prefix appearing in git's message proves two things at
+    // once: the argument really was routed down the URL branch, and the
+    // rewrite fired (so nothing left the machine).
+    expect(output).toContain(OFFLINE_REMOTE_PREFIX);
   });
 });
