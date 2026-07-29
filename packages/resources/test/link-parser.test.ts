@@ -23,6 +23,19 @@ import { parseMarkdown } from '../src/link-parser.js';
 
 import { assertAllLinksClassifiedAs, expectHeadingStructure, findPackageRoot, writeAndParse } from './test-helpers.js';
 
+/**
+ * Parse `content` as markdown in `dir` and return its explicit HTML anchor set,
+ * sorted so assertions do not depend on document order.
+ */
+async function parseAnchors(dir: string, filename: string, content: string): Promise<string[]> {
+  const result = await writeAndParse({
+    filePath: safePath.join(dir, filename),
+    content,
+    assertions: () => {},
+  });
+  return [...(result.anchors ?? [])].sort((a, b) => a.localeCompare(b));
+}
+
 const EXAMPLE_URL = 'https://example.com';
 
 /**
@@ -1062,6 +1075,62 @@ description: "use [a][nope-fm]"
       it('does not report a label with no alphanumeric characters', async () => {
         await expectUnresolved(tempDir, 'fp-punctuation-only.md', 'Operators [==][!=] compare.\n', []);
       });
+    });
+  });
+
+  // A markdown author can place an explicit `<a id="short"></a>` above a long
+  // heading and link to `#short`. GitHub renders that id into the DOM and the
+  // fragment resolves; VAT indexed heading slugs only, so it reported
+  // LINK_BROKEN_ANCHOR for a link that works. The anchor set is matched
+  // case-folded for markdown (the heading-slug policy), so ids are indexed
+  // lowercased.
+  describe('explicit HTML anchor extraction', () => {
+    it('indexes id and name attributes from block and inline HTML', async () => {
+      const anchors = await parseAnchors(
+        tempDir,
+        'anchors-basic.md',
+        [
+          '<a id="materialize"></a>',
+          '',
+          '## Materialize a very long heading name that nobody wants to type',
+          '',
+          'Inline <span id="inline-target">marker</span> and a legacy <a name="old-name"></a>.',
+          '',
+          '<div id="Mixed-Case">block</div>',
+          '',
+        ].join('\n'),
+      );
+
+      expect(anchors).toEqual(['inline-target', 'materialize', 'mixed-case', 'old-name']);
+    });
+
+    it('ignores id attributes inside fenced and inline code', async () => {
+      const anchors = await parseAnchors(
+        tempDir,
+        'anchors-code.md',
+        [
+          'Write `<a id="inline-code-id"></a>` to add an anchor.',
+          '',
+          '```html',
+          '<a id="fenced-id"></a>',
+          '```',
+          '',
+          '    <a id="indented-id"></a>',
+          '',
+        ].join('\n'),
+      );
+
+      expect(anchors).toEqual([]);
+    });
+
+    it('leaves anchors undefined when a document declares none', async () => {
+      const result = await writeAndParse({
+        filePath: safePath.join(tempDir, 'anchors-none.md'),
+        content: '# Title\n\nNo raw HTML here.\n',
+        assertions: () => {},
+      });
+
+      expect(result.anchors).toBeUndefined();
     });
   });
 });

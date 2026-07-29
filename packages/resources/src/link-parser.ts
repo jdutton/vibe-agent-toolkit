@@ -40,7 +40,12 @@ export interface ParseResult {
   content: string;
   sizeBytes: number;
   estimatedTokenCount: number;
-  /** Fragment targets (HTML `id`/`name` attributes). Markdown leaves this undefined. */
+  /**
+   * Fragment targets declared as `id`/`name` attributes. HTML documents index
+   * every element's; markdown indexes those in raw-HTML nodes (lowercased, to
+   * match markdown's case-folded fragment policy) and omits the key entirely
+   * when a document declares none.
+   */
   anchors?: string[];
   /** HTML well-formedness diagnostics. Markdown leaves this undefined. */
   parseErrors?: HtmlParseError[];
@@ -92,6 +97,9 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
   // Extract headings with tree structure
   const headings = extractHeadings(tree);
 
+  // Explicit `<a id="...">` / `name=` fragment targets declared in raw HTML
+  const htmlAnchors = extractHtmlAnchors(tree);
+
   // Extract frontmatter
   const { frontmatter, error: frontmatterError } = extractFrontmatter(tree);
 
@@ -106,6 +114,7 @@ export async function parseMarkdown(filePath: string): Promise<ParseResult> {
     links,
     headings,
     unresolvedReferences,
+    ...(htmlAnchors.length > 0 && { anchors: htmlAnchors }),
     ...(frontmatter !== undefined && { frontmatter }),
     ...(frontmatterError !== undefined && { frontmatterError }),
     content,
@@ -359,6 +368,44 @@ export function isLocalFileLink(type: LinkType): boolean {
  * ]
  * ```
  */
+/** `id="…"` / `name="…"` attribute, single- or double-quoted. */
+const HTML_ANCHOR_ATTRIBUTE = /\b(?:id|name)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
+
+/**
+ * Collect explicit fragment targets declared as raw HTML inside markdown.
+ *
+ * An author can write `<a id="short"></a>` above a long heading and link to
+ * `#short`; GitHub renders that id into the DOM and the fragment resolves.
+ * Indexing heading slugs alone therefore reports a working link as broken.
+ *
+ * Only mdast `html` nodes are visited, which is what keeps this honest: a
+ * fenced block is a `code` node, an indented block is a `code` node, and a
+ * backticked span is `inlineCode`, so an `<a id="…">` being *documented*
+ * rather than *declared* is never indexed. That is the whole reason this
+ * reads the AST instead of scanning raw source.
+ *
+ * Values are lowercased because markdown fragments are matched case-folded
+ * (the heading-slug policy — see `fragmentIndexEntry`). That is marginally
+ * more permissive than a browser, which compares ids exactly; erring toward
+ * resolving is deliberate, since the cost of the other direction is a false
+ * `LINK_BROKEN_ANCHOR` on a link that works.
+ */
+function extractHtmlAnchors(tree: Root): string[] {
+  const anchors = new Set<string>();
+
+  visit(tree, 'html', (node: { value?: string }) => {
+    const raw = node.value ?? '';
+    for (const match of raw.matchAll(HTML_ANCHOR_ATTRIBUTE)) {
+      const value = (match[1] ?? match[2] ?? '').trim();
+      if (value !== '') {
+        anchors.add(value.toLowerCase());
+      }
+    }
+  });
+
+  return [...anchors];
+}
+
 function extractHeadings(tree: Root): HeadingNode[] {
   const flatHeadings: HeadingNode[] = [];
   const slugger = new GithubSlugger();

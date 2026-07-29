@@ -173,6 +173,7 @@ Static-analysis codes that fire anywhere markdown is analyzed — `vat resources
 - **What:** An anchor link (`file.md#section` or in-page `#section`) points to a heading or id that does not exist in the target.
 - **Why it matters:** Anchor drift silently breaks deep-links. The file resolves, so the link looks valid, but the reader lands at the top of the document instead of the cited section — the worst kind of broken link because it is invisible until followed.
 - **Fix:** Fix the fragment to match an existing heading slug, or fix the target heading.
+- **Explicit ids count, not just heading slugs.** A markdown document that declares `<a id="short"></a>` (or a legacy `<a name="short">`, or an `id` on any raw-HTML element) contributes that id as a fragment target, exactly as GitHub does — so a short hand-written anchor above a long heading resolves instead of being reported broken. Only raw-HTML nodes are read: an `id=` shown inside a fenced block, an indented block, or a backticked span is being *documented*, not declared, and is never indexed. Markdown ids are matched case-insensitively (markdown's fragment policy is case-folded), which is marginally more permissive than a browser. This is unconditional for markdown — the `--check-html-anchors` opt-in governs `.html` *targets*, whose fragments are frequently defined at runtime by JS and so are not statically authoritative.
 
 ### `LINK_UNKNOWN`
 
