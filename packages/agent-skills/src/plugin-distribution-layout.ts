@@ -129,8 +129,8 @@ function crawlSkillDirs(pluginSourceDir: string, respectGitignore: boolean): str
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller validates pluginSourceDir
   if (!existsSync(skillsDir)) return [];
 
-  // `exclude: []` (not the crawler's default) and `dot: true` so this sees exactly
-  // what treeCopyPlugin sees — the only filter either applies is git visibility.
+  // `exclude: []` (not the crawler's default) so this sees exactly what
+  // treeCopyPlugin sees — the only filter either applies is git visibility.
   const skillFiles = crawlDirectorySync({
     baseDir: skillsDir,
     include: ['**/SKILL.md'],
@@ -138,7 +138,6 @@ function crawlSkillDirs(pluginSourceDir: string, respectGitignore: boolean): str
     absolute: false,
     filesOnly: true,
     respectGitignore,
-    dot: true,
   });
 
   const dirs = skillFiles

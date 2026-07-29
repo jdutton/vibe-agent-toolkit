@@ -87,7 +87,6 @@ export async function treeCopyPlugin(options: TreeCopyOptions): Promise<TreeCopy
     absolute: true,
     filesOnly: true,
     respectGitignore: true,
-    dot: true,
   });
 
   for (const absPath of files) {

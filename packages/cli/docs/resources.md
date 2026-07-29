@@ -187,6 +187,17 @@ resources:
       FRONTMATTER_SCHEMA_ERROR: error
 ```
 
+**Dot-directories are scanned.** `**` traverses path segments beginning with a
+dot, so the default `**/*.md` reaches `.claude/`, `.github/` and the like — as do
+your own patterns. Visibility is decided by git and by `exclude`, never by a
+leading dot. To keep a dotted tree out of the scan, exclude it by name:
+
+```yaml
+resources:
+  exclude:
+    - ".claude/worktrees/**"
+```
+
 ## Integration with vibe-validate
 
 The test-format error output (stderr) integrates seamlessly with vibe-validate:

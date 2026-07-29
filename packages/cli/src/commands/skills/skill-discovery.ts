@@ -103,7 +103,6 @@ async function crawlOneBase(base: string, globs: string[]): Promise<string[]> {
     baseDir: base,
     include: globs,
     exclude: DISCOVERY_EXCLUDE,
-    dot: true,
   });
 }
 

@@ -2,7 +2,7 @@
 import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 
-import { setupSyncTempDirSuite, safePath } from '@vibe-agent-toolkit/utils';
+import { setupSyncTempDirSuite, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, beforeAll, afterAll } from 'vitest';
 
 
@@ -102,9 +102,27 @@ describe('scan', () => {
 
     const result = await scan({ path: tempDir, recursive: true });
 
-    expect(result.totalScanned).toBe(2);
-    expect(result.sourceFiles).toHaveLength(1);
+    // `.gitignore` is scanned too: the crawler no longer refuses to see paths
+    // whose segments begin with a dot. That is the point — it is what lets
+    // discovery reach `.claude/skills/` (asserted below) — and callers narrow
+    // the result with `include` patterns anyway.
+    expect(result.totalScanned).toBe(3);
+    expect(result.sourceFiles).toHaveLength(2);
     expect(result.buildOutputs).toHaveLength(1);
-    expect(result.sourceFiles[0]?.relativePath).toBe('SKILL.md');
+    expect(result.sourceFiles.map((f) => f.relativePath).sort((a, b) => a.localeCompare(b))).toEqual(
+      ['.gitignore', 'SKILL.md']
+    );
+  });
+
+  it('discovers a skill inside a dot-directory', async () => {
+    fs.mkdirSync(safePath.join(tempDir, '.claude', 'skills', 'house'), { recursive: true });
+    fs.writeFileSync(safePath.join(tempDir, '.claude', 'skills', 'house', 'SKILL.md'), '# House');
+
+    const result = await scan({ path: tempDir, recursive: true, include: ['**/SKILL.md'] });
+
+    expect(result.results.map((r) => toForwardSlash(r.relativePath))).toEqual([
+      '.claude/skills/house/SKILL.md',
+    ]);
+    expect(result.results[0]?.format).toBe('agent-skill');
   });
 });

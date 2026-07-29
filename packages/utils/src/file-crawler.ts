@@ -42,9 +42,23 @@ export interface CrawlOptions {
    * committed yet"; `respectGitignore: false` is not, and costs the whole walk.
    */
   includeUntracked?: boolean;
-  /** Match through dot-directories like .claude/ (default: false) */
-  dot?: boolean;
 }
+
+/**
+ * Glob options shared by every pattern this module compiles.
+ *
+ * `dot: true` is not optional. picomatch's default refuses to let `*` or `**`
+ * traverse a segment beginning with a dot, so `**\/*.md` — the include pattern
+ * every VAT lane defaults to — cannot see inside `.claude/`, which is Claude's
+ * own home for the rules, skills, commands and agents VAT exists to validate.
+ * It applies to excludes for the same reason: without it, an exclude aimed at a
+ * dot-directory silently never fires. Every other picomatch call site in VAT
+ * already compiles this way.
+ *
+ * Visibility is decided by git (or by the exclude patterns), never by whether a
+ * path component happens to start with a dot.
+ */
+const PICOMATCH_OPTIONS = { dot: true } as const;
 
 /**
  * Default exclude patterns that are almost always unwanted
@@ -97,10 +111,9 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     filesOnly = true,
     respectGitignore = true,
     includeUntracked = false,
-    dot = false,
   } = options;
 
-  const picoOptions = dot ? { dot: true } : undefined;
+  const picoOptions = PICOMATCH_OPTIONS;
 
   // Resolve base directory to absolute path
   const resolvedBaseDir = safePath.resolve(baseDir);

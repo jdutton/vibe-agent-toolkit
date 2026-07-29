@@ -11,6 +11,21 @@ import { setupSyncTempDirSuite } from '../../src/test-helpers.js';
 import { createGitRepo } from '../test-helpers.js';
 
 const GITIGNORE = '.gitignore';
+const CLAUDE_RULE = '/.claude/rules/house-style.md';
+const GITHUB_DOC = '/.github/CONTRIBUTING.md';
+
+/**
+ * Create tracked markdown inside two dot-directories — the shape picomatch's
+ * `dot: false` default cannot see through.
+ */
+function createDotDirStructure(dir: string): void {
+  /* eslint-disable security/detect-non-literal-fs-filename -- dir is a controlled temp directory */
+  mkdirSyncReal(safePath.join(dir, '.claude', 'rules'), { recursive: true });
+  writeFileSync(safePath.join(dir, CLAUDE_RULE.slice(1)), '# Rules');
+  mkdirSyncReal(safePath.join(dir, '.github'));
+  writeFileSync(safePath.join(dir, GITHUB_DOC.slice(1)), '# Contributing');
+  /* eslint-enable security/detect-non-literal-fs-filename */
+}
 
 /**
  * Helper to create test file structure
@@ -398,6 +413,61 @@ describe('file-crawler', () => {
       // Ignored, and excluded-by-default, trees stay out.
       expect(files.every((f) => !f.includes('/docs/'))).toBe(true);
       expect(files.every((f) => !f.includes('/node_modules/'))).toBe(true);
+    });
+  });
+
+  // `**/*` and `**/*.md` are the include patterns every VAT lane defaults to,
+  // and picomatch's `dot: false` default makes `**` refuse to traverse a
+  // segment beginning with a dot. So the crawler was structurally unable to
+  // see `.claude/` — Claude's own home for the rules, skills, commands and
+  // agents VAT exists to validate. An adopter who dropped their `include`
+  // allowlist specifically to widen the scan still had 68 tracked files under
+  // `.claude/` silently uncrawled, one of them holding a real frontmatter
+  // defect. Every other picomatch call site in VAT already compiles with
+  // `dot: true`; this one was the outlier.
+  describe('dot-directory visibility', () => {
+    // Both crawl paths are asserted in one test on purpose: they are two
+    // answers to one question, and the bug is only interesting if BOTH give
+    // the same one. (Splitting them also produced two 9-line clones the
+    // duplication gate rejects.)
+    it('finds markdown under a dot-directory on the walk path and the git fast path', () => {
+      createTestStructure(testDir);
+      createDotDirStructure(testDir);
+
+      const crawl = (): string[] =>
+        crawlDirectorySync({ baseDir: testDir, include: ['**/*.md'] }).map(toForwardSlash);
+
+      // No git repo yet — the manual recursive walk answers.
+      const walked = crawl();
+      expect(walked.some((f) => f.endsWith(CLAUDE_RULE))).toBe(true);
+      expect(walked.some((f) => f.endsWith(GITHUB_DOC))).toBe(true);
+      // The ordinary tree is unaffected.
+      expect(walked.some((f) => f.endsWith('/docs/guide.md'))).toBe(true);
+
+      // Same tree, now tracked — `git ls-files` answers instead.
+      createGitRepo(testDir);
+      // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
+      spawnSync('git', ['add', '-A'], { cwd: testDir, stdio: 'pipe' });
+
+      const tracked = crawl();
+      expect(tracked.some((f) => f.endsWith(CLAUDE_RULE))).toBe(true);
+      expect(tracked.some((f) => f.endsWith(GITHUB_DOC))).toBe(true);
+    });
+
+    // The exclude side must see dot segments too, or a caller can widen the
+    // scan and then be unable to narrow it again.
+    it('honours an exclude pattern aimed at a dot-directory', () => {
+      createTestStructure(testDir);
+      createDotDirStructure(testDir);
+
+      const files = crawlDirectorySync({
+        baseDir: testDir,
+        include: ['**/*.md'],
+        exclude: ['**/.github/**'],
+      }).map(toForwardSlash);
+
+      expect(files.some((f) => f.endsWith(CLAUDE_RULE))).toBe(true);
+      expect(files.every((f) => !f.includes('/.github/'))).toBe(true);
     });
   });
 });
