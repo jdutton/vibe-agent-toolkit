@@ -66,26 +66,56 @@ function requireDeclaredName(skillMdPath: string): string {
 }
 
 /**
- * Collect all files in a directory recursively, returning relative paths.
+ * Directories never uploaded to the organization, at any depth.
+ *
+ * `evals/` is the conventional home of a skill's eval suite — its answer key.
+ * A correctly built skill directory (what this command documents as its input)
+ * never contains one, because the packager excludes declared test input; this
+ * is the backstop for the easy mistake of pointing the uploader at the *source*
+ * tree instead, where the suite does live. The invariant is "a published skill
+ * carries no answer key", not "…none when the operator remembered to build".
+ *
+ * The rest are development detritus that has no meaning inside a published
+ * skill and would silently bloat the multipart payload.
  */
-function collectFiles(dir: string, baseDir?: string): Array<{ relativePath: string; absolutePath: string }> {
-	const base = baseDir ?? dir;
-	const results: Array<{ relativePath: string; absolutePath: string }> = [];
+const NEVER_UPLOADED_DIRS = new Set(['evals', 'node_modules', '.git']);
 
+interface CollectedUploadFiles {
+	files: Array<{ relativePath: string; absolutePath: string }>;
+	/** Relative paths of directories skipped, so the skip is never silent. */
+	excludedDirs: string[];
+}
+
+/**
+ * Collect the files under a skill directory that should be uploaded,
+ * recursively, returning relative paths alongside what was deliberately left
+ * out.
+ */
+function collectFiles(dir: string, base: string, collected: CollectedUploadFiles): void {
 	// eslint-disable-next-line security/detect-non-literal-fs-filename -- dir from CLI arg
 	for (const entry of readdirSync(dir, { withFileTypes: true })) {
 		const fullPath = safePath.join(dir, entry.name);
+		const relativePath = safePath.relative(base, fullPath);
+
 		if (entry.isDirectory()) {
-			results.push(...collectFiles(fullPath, base));
+			if (NEVER_UPLOADED_DIRS.has(entry.name)) {
+				collected.excludedDirs.push(relativePath);
+				continue;
+			}
+			collectFiles(fullPath, base, collected);
 		} else {
-			results.push({
-				relativePath: safePath.relative(base, fullPath),
-				absolutePath: fullPath,
-			});
+			collected.files.push({ relativePath, absolutePath: fullPath });
 		}
 	}
+}
 
-	return results;
+/**
+ * Collect the upload payload for a skill directory. Exported for testing.
+ */
+export function collectSkillUploadFiles(skillDir: string): CollectedUploadFiles {
+	const collected: CollectedUploadFiles = { files: [], excludedDirs: [] };
+	collectFiles(skillDir, skillDir, collected);
+	return collected;
 }
 
 /**
@@ -110,10 +140,10 @@ async function uploadSkillDir(
 
 	// API requires files inside a top-level directory (e.g. skill_name/SKILL.md)
 	const dirName = declaredName;
-	const allFiles = collectFiles(skillDir);
+	const collected = collectSkillUploadFiles(skillDir);
 	const files: MultipartFile[] = [];
 
-	for (const file of allFiles) {
+	for (const file of collected.files) {
 		// eslint-disable-next-line security/detect-non-literal-fs-filename -- collected from dir walk
 		const content = readFileSync(file.absolutePath);
 		files.push({
@@ -125,6 +155,9 @@ async function uploadSkillDir(
 
 	const totalSize = files.reduce((sum, f) => sum + f.content.length, 0);
 	logger.info(`   ${dirName}: ${files.length} files, ${(totalSize / 1024).toFixed(1)}KB, title="${displayTitle}"`);
+	for (const excluded of collected.excludedDirs) {
+		logger.info(`   Excluded from upload: ${excluded}/ (never published with a skill)`);
+	}
 
 	return sendSkillUpload(client, displayTitle, files);
 }
@@ -339,7 +372,12 @@ Description:
   Accepts a built skill directory, a ZIP file, or an npm package.
   Requires ANTHROPIC_API_KEY (regular key, not admin key).
 
-  The display_title defaults to the "name" field from SKILL.md frontmatter.
+  The skill uploads under the "name" its SKILL.md frontmatter declares, which
+  is also the default display_title.
+
+  evals/, node_modules/, and .git/ are never uploaded — a skill's eval suite is
+  its answer key and does not belong in a published skill. Each exclusion is
+  reported in the output.
 
 Examples:
   $ vat claude org skills install dist/skills/org-admin
