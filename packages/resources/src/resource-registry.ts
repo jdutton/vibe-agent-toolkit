@@ -149,6 +149,20 @@ export interface CollectionStats {
 }
 
 /**
+ * True when the file HAS a frontmatter block that failed to parse.
+ *
+ * The distinction matters because a failed parse and an absent block both leave
+ * `resource.frontmatter` undefined, and the schema validator sees only that.
+ * Reading `undefined` as "absent" made VAT report `FRONTMATTER_MISSING` — "No
+ * frontmatter found in file" — about files whose frontmatter is plainly present,
+ * alongside the `FRONTMATTER_INVALID_YAML` that correctly described it: two
+ * error-severity findings with contradictory remediations, one of them false.
+ */
+function hasUnparseableFrontmatter(resource: ResourceMetadata): boolean {
+  return resource.frontmatterError !== undefined;
+}
+
+/**
  * Resource registry for managing collections of markdown resources.
  *
  * Provides centralized management of markdown resources with:
@@ -611,6 +625,9 @@ export class ResourceRegistry implements ResourceCollectionInterface {
   ): ValidationIssue[] {
     const issues: ValidationIssue[] = [];
     for (const resource of this.resourcesByPath.values()) {
+      if (hasUnparseableFrontmatter(resource)) {
+        continue;
+      }
       const frontmatterIssues = validateFrontmatter(
         resource.frontmatter,
         schema,
@@ -709,6 +726,14 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     skipGitIgnoreCheck: boolean,
   ): Promise<ValidationIssue[]> {
     if (!validation?.frontmatterSchema) {
+      return [];
+    }
+
+    // A document whose frontmatter did not parse is not a document with no
+    // frontmatter. `collectYamlErrors` already reported the parse failure, which
+    // is the actionable finding; saying anything further about fields we could
+    // not read would contradict it.
+    if (hasUnparseableFrontmatter(resource)) {
       return [];
     }
 

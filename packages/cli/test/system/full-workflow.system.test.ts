@@ -64,10 +64,10 @@ ${validationConfig}`;
 function findExternalUrlDeadFinding(
   parsed: Record<string, unknown>
 ): { code: string; severity: string } | undefined {
-  const errors = parsed['errors'] as
-    | Array<{ errors: Array<{ code: string; severity: string }> }>
+  const files = parsed['issues'] as
+    | Array<{ issues: Array<{ code: string; severity: string }> }>
     | undefined;
-  return (errors ?? []).flatMap(e => e.errors).find(e => e.code === 'EXTERNAL_URL_DEAD');
+  return (files ?? []).flatMap(f => f.issues).find(e => e.code === 'EXTERNAL_URL_DEAD');
 }
 
 const binPath = getBinPath(import.meta.url);

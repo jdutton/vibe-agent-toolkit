@@ -109,20 +109,27 @@ Output Formats:
     Structured YAML output to stdout. Errors grouped by file.
 
   --format json
-    Structured JSON output to stdout. Errors grouped by file.
+    Structured JSON output to stdout. Issues grouped by file.
 
   --format text
-    Human-readable format. Errors to stderr (test-format style).
+    Human-readable format. Issues to stderr as
+    file:line:column: severity: message
 
 Output Fields (success):
   status, filesScanned, linksChecked, durationSecs, validationMode
   collections: Per-collection stats (resourceCount, hasSchema, validationMode)
 
-Output Fields (failure):
-  status, filesScanned, filesWithErrors, errorsFound, durationSecs
-  errorSummary: Count of each issue code (LINK_BROKEN_FILE, LINK_BROKEN_ANCHOR, etc.)
+Output Fields (issues found):
+  A field named error* counts ERROR-severity issues only — the ones that fail
+  the run. A field named issue* counts issues of every severity.
+
+  status, filesScanned, durationSecs
+  errorsFound: Count of error-severity issues (drives the exit code)
+  filesWithErrors: Files carrying at least one error-severity issue
+  issueCounts: {errors, warnings, info} — every issue, split by severity
+  issueSummary: Count of each issue code, ALL severities
   collections: Per-collection stats including filesWithErrors, errorCount
-  errors: Detailed errors grouped by file
+  issues: Detail grouped by file; each entry states its own severity
 
 Validation Checks:
   - Internal file links (relative paths)

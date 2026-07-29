@@ -67,9 +67,9 @@ async function loadSchema(schemaPath: string): Promise<object> {
  * info-severity issues appear here too (so users see them); only error-severity
  * issues drive the exit code, which the library decides via `hasErrors`.
  */
-interface FileErrors {
+interface FileIssues {
   file: string;
-  errors: Array<{
+  issues: Array<{
     line: number;
     column: number;
     code: string;
@@ -78,20 +78,39 @@ interface FileErrors {
   }>;
 }
 
+/** Issue counts split by resolved severity — mirrors `vat audit`'s `issues:` block. */
+interface SeverityCounts {
+  errors: number;
+  warnings: number;
+  info: number;
+}
+
 /**
  * Output data structure for validation results.
+ *
+ * Naming contract, and it is load-bearing: a field named `error*` counts
+ * ERROR-severity issues only — the ones that fail the run. A field named
+ * `issue*` counts issues of every severity. Mixing the two is what made an
+ * earlier shape of this object contradict itself (`status: success` beside
+ * `filesWithErrors: 1` beside `errorsFound: 0`).
  */
 interface ValidationOutputData {
   status: 'success' | 'failed';
   filesScanned: number;
+  /** Files carrying at least one ERROR-severity issue. */
   filesWithErrors?: number;
   linksChecked?: number;
+  /** ERROR-severity issues only; this is what drives the exit code. */
   errorsFound?: number;
-  errorSummary?: Record<string, number>;
+  /** Every issue, split by severity. Only `errors` is fatal. */
+  issueCounts?: SeverityCounts;
+  /** Count per validation code, ALL severities. */
+  issueSummary?: Record<string, number>;
   validationMode: 'strict' | 'permissive';
   frontmatterSchema?: string;
   collections?: Record<string, CollectionStatWithErrors>;
-  errors?: FileErrors[];
+  /** Per-file detail, ALL severities; each entry states its own `severity`. */
+  issues?: FileIssues[];
   durationSecs: number;
 }
 
@@ -131,26 +150,35 @@ type OutputFormat = 'yaml' | 'json' | 'text';
 /**
  * Group errors by file path.
  */
-function groupErrorsByFile(errors: ErrorData[]): FileErrors[] {
-  const fileMap = new Map<string, FileErrors>();
+function groupIssuesByFile(issues: ErrorData[]): FileIssues[] {
+  const fileMap = new Map<string, FileIssues>();
 
-  for (const error of errors) {
+  for (const issue of issues) {
     const entry = {
-      line: error.line,
-      column: error.column,
-      code: error.code,
-      severity: error.severity,
-      message: error.message,
+      line: issue.line,
+      column: issue.column,
+      code: issue.code,
+      severity: issue.severity,
+      message: issue.message,
     };
-    const existing = fileMap.get(error.file);
+    const existing = fileMap.get(issue.file);
     if (existing) {
-      existing.errors.push(entry);
+      existing.issues.push(entry);
     } else {
-      fileMap.set(error.file, { file: error.file, errors: [entry] });
+      fileMap.set(issue.file, { file: issue.file, issues: [entry] });
     }
   }
 
   return [...fileMap.values()];
+}
+
+/** Split issues by resolved severity. Anything not `error`/`warning` counts as info. */
+function countBySeverity(issues: Array<{ severity: string }>): SeverityCounts {
+  return {
+    errors: issues.filter((i) => i.severity === 'error').length,
+    warnings: issues.filter((i) => i.severity === 'warning').length,
+    info: issues.filter((i) => i.severity !== 'error' && i.severity !== 'warning').length,
+  };
 }
 
 /**
@@ -213,13 +241,14 @@ function outputIssues(
   failed: boolean
 ): void {
   if (outputFormat === 'text') {
-    // Text format: test-format issues to stderr
+    // Text format: one `file:line:col: severity: message` line per issue, to
+    // stderr. The severity is what tells a reader which lines are fatal.
     for (const issue of issueData) {
-      writeTestFormatError(issue.file, issue.line, issue.column, issue.message);
+      writeTestFormatError(issue.file, issue.line, issue.column, issue.severity, issue.message);
     }
   } else {
     // Calculate issue summary (keyed by code)
-    const summary = buildErrorSummary(issueData, registry);
+    const summary = buildIssueSummary(issueData, registry);
 
     // Build collection stats with error info
     const collectionsWithErrors = buildCollectionsWithErrors(
@@ -228,18 +257,19 @@ function outputIssues(
     );
 
     // Group issues by file
-    const groupedErrors = groupErrorsByFile(issueData);
+    const groupedIssues = groupIssuesByFile(issueData);
 
     const outputData: ValidationOutputData = {
       status: failed ? 'failed' : 'success',
       filesScanned: context.stats.totalResources,
       filesWithErrors: summary.filesWithErrors,
       errorsFound: context.errorCount,
-      errorSummary: summary.errorSummary,
+      issueCounts: countBySeverity(issueData),
+      issueSummary: summary.issueSummary,
       durationSecs: formatDurationSecs(context.duration),
       ...context.validationMetadata,
       ...(Object.keys(collectionsWithErrors).length > 0 ? { collections: collectionsWithErrors } : {}),
-      errors: groupedErrors,
+      issues: groupedIssues,
     };
 
     writeStructuredOutput(outputData, outputFormat);
@@ -290,22 +320,26 @@ function outputSuccess(
  * @param registry - Resource registry for collection lookups (keyed by ABSOLUTE path)
  * @returns Error summary statistics
  */
-function buildErrorSummary(
-  issues: Array<{ code: string; file: string; absPath: string }>,
+function buildIssueSummary(
+  issues: Array<{ code: string; file: string; absPath: string; severity: string }>,
   registry: { getResource: (path: string) => { collections?: (string[] | undefined) } | undefined }
 ): {
-  errorSummary: Record<string, number>;
+  issueSummary: Record<string, number>;
   filesWithErrors: number;
   collectionErrorStats: Map<string, { filesWithErrors: number; errorCount: number }>;
 } {
-  // 1. Count by code
-  const errorSummary: Record<string, number> = {};
+  // 1. Count by code — ALL severities, so an info-only scan still reports WHICH
+  //    codes fired rather than an empty object.
+  const issueSummary: Record<string, number> = {};
   for (const issue of issues) {
-    errorSummary[issue.code] = (errorSummary[issue.code] ?? 0) + 1;
+    issueSummary[issue.code] = (issueSummary[issue.code] ?? 0) + 1;
   }
 
-  // 2. Count unique files with errors
-  const filesWithErrorsSet = new Set(issues.map(i => i.file));
+  // 2. Every remaining count in this function is named `error*`, so every one of
+  //    them is computed over ERROR-severity issues only. A file carrying nothing
+  //    but info notes is not a file with errors.
+  const errorIssues = issues.filter((i) => i.severity === 'error');
+  const filesWithErrorsSet = new Set(errorIssues.map(i => i.file));
 
   // 3. Map files to collections and count errors per collection.
   //    registry.getResource keys on the ABSOLUTE path, so look up via absPath.
@@ -314,7 +348,7 @@ function buildErrorSummary(
     errorCount: number;
   }>();
 
-  for (const issue of issues) {
+  for (const issue of errorIssues) {
     const resource = registry.getResource(issue.absPath);
     const collections = resource?.collections;
     if (collections) {
@@ -340,7 +374,7 @@ function buildErrorSummary(
   }
 
   return {
-    errorSummary,
+    issueSummary,
     filesWithErrors: filesWithErrorsSet.size,
     collectionErrorStats: collectionStats,
   };

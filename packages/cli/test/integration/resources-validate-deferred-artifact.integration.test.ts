@@ -41,10 +41,10 @@ interface FlatIssue {
 }
 
 function flattenIssues(parsed: Record<string, unknown>): FlatIssue[] {
-  const files = (parsed['errors'] ?? []) as Array<{
-    errors: Array<{ code: string; severity: string }>;
+  const files = (parsed['issues'] ?? []) as Array<{
+    issues: Array<{ code: string; severity: string }>;
   }>;
-  return files.flatMap((f) => f.errors.map((e) => ({ code: e.code, severity: e.severity })));
+  return files.flatMap((f) => f.issues.map((e) => ({ code: e.code, severity: e.severity })));
 }
 
 interface FixtureOptions {

@@ -117,20 +117,25 @@ vat resources validate docs/
 ```bash
 vat resources validate docs/
 
-# stderr:
-# docs/README.md:15:25: Link target not found: ./missing.md
-# docs/guide.md:42:10: Broken anchor: #non-existent-section
+# stderr:  (file:line:column: severity: message — only `error` fails the run)
+# docs/README.md:15:25: error: Link target not found: ./missing.md
+# docs/guide.md:42:10: error: Broken anchor: #non-existent-section
 
 # stdout:
 # ---
 # status: failed
 # errorsFound: 2
-# errors:
+# filesWithErrors: 2
+# issueCounts: { errors: 2, warnings: 0, info: 0 }
+# issueSummary: { LINK_BROKEN_FILE: 1, LINK_BROKEN_ANCHOR: 1 }
+# issues:
 #   - file: docs/README.md
-#     line: 15
-#     column: 25
-#     type: broken-link
-#     message: Link target not found: ./missing.md
+#     issues:
+#       - line: 15
+#         column: 25
+#         code: LINK_BROKEN_FILE
+#         severity: error
+#         message: Link target not found: ./missing.md
 # duration: 456ms
 # ---
 ```

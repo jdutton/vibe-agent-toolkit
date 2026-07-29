@@ -34,14 +34,22 @@ export async function flushStdout(): Promise<void> {
 }
 
 /**
- * Write test-format error to stderr
- * Format: file:line:column: message
+ * Write a test-format finding to stderr.
+ *
+ * Format: `file:line:column: severity: message` — the GCC/ESLint-compact
+ * convention, which every editor and CI log scraper already parses.
+ *
+ * The severity is not decoration. Only `error` findings fail the run, so a
+ * reader who cannot see the severity cannot tell which lines of a long report
+ * they have to act on. Omitting it made an info-severity note byte-identical in
+ * shape to a build-breaking error.
  */
 export function writeTestFormatError(
   file: string,
   line: number,
   column: number,
+  severity: string,
   message: string
 ): void {
-  process.stderr.write(`${file}:${line}:${column}: ${message}\n`);
+  process.stderr.write(`${file}:${line}:${column}: ${severity}: ${message}\n`);
 }
