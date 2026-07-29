@@ -4,6 +4,7 @@
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import {   basename } from 'node:path';
 
+import { readDeclaredSkillName } from '@vibe-agent-toolkit/agent-skills';
 import { buildMultipartFormData } from '@vibe-agent-toolkit/claude-marketplace';
 import type { MultipartFile, OrgApiClient } from '@vibe-agent-toolkit/claude-marketplace';
 import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
@@ -51,23 +52,17 @@ async function sendSkillUpload(
 }
 
 /**
- * Extract display_title from SKILL.md frontmatter.
- * Parses the `name` field from YAML frontmatter between --- delimiters.
+ * The name a SKILL.md declares, which is both the uploaded skill's display
+ * title and the top-level directory the API keys it by.
  */
-function extractDisplayTitle(skillMdPath: string): string {
-	// eslint-disable-next-line security/detect-non-literal-fs-filename -- path from CLI arg, validated before call
-	const content = readFileSync(skillMdPath, 'utf-8');
-	// eslint-disable-next-line sonarjs/slow-regex -- bounded by small frontmatter block, not user-controlled input
-	const match = /^---\s*\n([\s\S]*?)\n---/.exec(content);
-	if (!match?.[1]) {
-		throw new Error(`SKILL.md has no frontmatter: ${skillMdPath}`);
+function requireDeclaredName(skillMdPath: string): string {
+	const declared = readDeclaredSkillName(skillMdPath);
+	if (declared === undefined) {
+		throw new Error(
+			`SKILL.md has no usable frontmatter "name" field: ${skillMdPath}`,
+		);
 	}
-	// eslint-disable-next-line sonarjs/slow-regex -- single-line match on small YAML block
-	const nameMatch = /^name:\s*(.+)$/m.exec(match[1]);
-	if (!nameMatch?.[1]) {
-		throw new Error(`SKILL.md frontmatter missing "name" field: ${skillMdPath}`);
-	}
-	return nameMatch[1].trim();
+	return declared;
 }
 
 /**
@@ -108,10 +103,13 @@ async function uploadSkillDir(
 		throw new Error(`SKILL.md not found in ${skillDir}. Is this a built skill directory?`);
 	}
 
-	const displayTitle = titleOverride ?? extractDisplayTitle(skillMdPath);
+	// The skill's own declared name — not the directory it happens to sit in,
+	// which for a built or extracted tree carries no reliable identity.
+	const declaredName = requireDeclaredName(skillMdPath);
+	const displayTitle = titleOverride ?? declaredName;
 
 	// API requires files inside a top-level directory (e.g. skill_name/SKILL.md)
-	const dirName = basename(skillDir);
+	const dirName = declaredName;
 	const allFiles = collectFiles(skillDir);
 	const files: MultipartFile[] = [];
 

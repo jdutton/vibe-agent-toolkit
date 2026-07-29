@@ -10,6 +10,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
+import { readDeclaredSkillName } from '@vibe-agent-toolkit/agent-skills';
 import { scan, type ScanSummary } from '@vibe-agent-toolkit/discovery';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
@@ -34,12 +35,15 @@ interface DiscoveredSkill {
 }
 
 /**
- * Extract skill name from SKILL.md path
+ * The name a skill goes by: what its frontmatter declares.
+ *
+ * `vat skills list` is the preview for `vat skills install`, which keys on the
+ * declared name — so listing a directory leaf here would name a directory the
+ * install never creates. The leaf is only a fallback for a SKILL.md too damaged
+ * to declare anything; `vat audit` reports that separately.
  */
 function extractSkillName(skillPath: string): string {
-  // Extract skill name from path (directory name containing SKILL.md)
-  const dir = dirname(skillPath);
-  return basename(dir);
+  return readDeclaredSkillName(skillPath) ?? basename(dirname(skillPath));
 }
 
 /**
@@ -135,7 +139,7 @@ function scanSkillsDir(skillsDir: string): DiscoveredSkill[] {
       const filenameCheck = validateSkillFilename(skillMd);
       const skill: DiscoveredSkill = {
         path: skillMd,
-        name: entry.name,
+        name: extractSkillName(skillMd),
         valid: filenameCheck.valid,
       };
       if (filenameCheck.message !== undefined) {

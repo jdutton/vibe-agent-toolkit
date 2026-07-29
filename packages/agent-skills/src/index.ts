@@ -58,6 +58,8 @@ export {
   type FrontmatterResult,
 } from './parsers/frontmatter-parser.js';
 
+export { readDeclaredSkillName } from './skill-identity.js';
+
 export { calculateValidationStatus, generateFixSuggestion } from './validators/validation-utils.js';
 export { detectKebabCaseViolation, type KebabCaseSurface } from './validators/kebab-case-detection.js';
 export { detectMissingRecommendedFields } from './validators/plugin-recommended-fields.js';

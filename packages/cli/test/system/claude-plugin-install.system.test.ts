@@ -240,4 +240,27 @@ describe('claude plugin install command (system test)', () => {
     expect(skillNames).toContain(SKILL_BETA);
     expect(skillNames).toContain('skill-gamma');
   });
+
+  it('installs a plain skill directory under its declared name, not the directory leaf', async () => {
+    // The package.json branch of this same command installs each skill under
+    // the name declared in `vat.skills`; the plain-directory branch used the
+    // directory leaf, so one command answered "what is this skill called?" two
+    // different ways depending on which branch it took.
+    const { tempDir, fakeHome, claudeDir } = createInstallTestContext(createTempDir);
+
+    const skillDir = safePath.join(tempDir, 'checkout-folder');
+    mkdirSyncReal(skillDir, { recursive: true });
+    writeTestFile(
+      safePath.join(skillDir, 'SKILL.md'),
+      '---\nname: declared-skill\ndescription: Declares a name unlike its folder.\n---\n\n# declared-skill\n',
+    );
+
+    const { parsed } = await runPluginInstall(binPath, skillDir, fakeHome);
+
+    expect((parsed.skills as Array<{ name: string }>)[0]?.name).toBe('declared-skill');
+    expect(fs.existsSync(safePath.join(claudeDir, 'skills', 'declared-skill', 'SKILL.md'))).toBe(
+      true,
+    );
+    expect(fs.existsSync(safePath.join(claudeDir, 'skills', 'checkout-folder'))).toBe(false);
+  });
 });

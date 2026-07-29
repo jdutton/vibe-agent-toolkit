@@ -138,8 +138,12 @@ describe('skills list command (system test)', () => {
 
     // Should find the skills
     expect(parsed.skillsFound).toBeGreaterThan(0);
-    // The skill directory is named "skills", not "cat"
-    expect(parsed.skills.some(s => s.name === 'skills')).toBe(true);
+    // The skill is authored at `resources/skills/SKILL.md` — a directory leaf of
+    // "skills" — but declares itself `vat-example-cat-agents`, which is also the
+    // output directory `vat skills build` gives it. List reports the declared
+    // name so it agrees with the build and with what install would install.
+    expect(parsed.skills.some(s => s.name === 'vat-example-cat-agents')).toBe(true);
+    expect(parsed.skills.some(s => s.name === 'skills')).toBe(false);
   });
 
   it('should exit with code 0 even with warnings', () => {

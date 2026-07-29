@@ -315,13 +315,21 @@ for terminology.
 
 **What it does:**
 1. Resolves the source (local directory, ZIP, .tgz, or npm package)
-2. Discovers one or more skills inside the source
+2. Discovers one or more skill directories inside the source
 3. Pre-validates every skill with `validateSkill()` — zero files written if validation fails
-4. Builds an install plan, detecting conflicts before touching the filesystem
-5. Copies skill(s) to the resolved platform directory (all-or-nothing semantics)
-6. Emits a YAML summary on stdout
+4. Reads each skill's declared name, which is the name it installs under
+5. Builds an install plan, detecting conflicts before touching the filesystem
+6. Copies skill(s) to the resolved platform directory (all-or-nothing semantics)
+7. Emits a YAML summary on stdout
 
 Both `--target` and `--scope` are **required** — there are no defaults.
+
+**Installed name:** a skill installs under the `name` its `SKILL.md` frontmatter
+declares — the same identity `vat skills build` and the plugin build key on — not
+the name of the directory it came from. A ZIP or npm source has no meaningful
+directory name to use. If two skills in one source declare the same name, the
+whole install fails rather than one silently overwriting the other. Use `--name`
+to override (single-skill sources only).
 
 **Supported Sources:**
 - **Local directory:** `./path/to/skill-dir` — must contain `SKILL.md` at root or in subdirectories
@@ -437,6 +445,10 @@ for terminology.
 1. Discovers all SKILL.md files in the target location
 2. Reports validation status for each skill
 3. Shows skill metadata (name, description, path)
+
+The reported `name` is the one the skill's frontmatter declares — matching what
+`vat skills install` would install it as — falling back to the directory name
+only when the `SKILL.md` declares none.
 
 **Modes:**
 

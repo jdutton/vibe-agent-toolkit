@@ -67,39 +67,63 @@ interface DiscoveredSkill {
 }
 
 /**
- * Locate one or more skills under a source directory.
+ * Locate one or more skill directories under a source directory.
  * Priority: SKILL.md at root wins over subdirectories.
+ *
+ * Returns paths only. The skill's *name* is a separate question, answered by
+ * its frontmatter — see {@link preVerifySkill}.
  */
-function discoverSkills(sourceDir: string): DiscoveredSkill[] {
+function discoverSkillDirs(sourceDir: string): string[] {
   const rootSkillMd = safePath.join(sourceDir, 'SKILL.md');
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller validated source
   if (existsSync(rootSkillMd)) {
-    return [{ dir: sourceDir, name: basename(sourceDir) }];
+    return [sourceDir];
   }
 
   // Scan immediate subdirectories for any that contain a SKILL.md.
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- caller validated source
   const entries = readdirSync(sourceDir, { withFileTypes: true });
-  const skills: DiscoveredSkill[] = [];
+  const dirs: string[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const candidate = safePath.join(sourceDir, entry.name);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- derived from source
     if (existsSync(safePath.join(candidate, 'SKILL.md'))) {
-      skills.push({ dir: candidate, name: entry.name });
+      dirs.push(candidate);
     }
   }
 
-  if (skills.length === 0) {
+  if (dirs.length === 0) {
     throw new InstallError(
       `No SKILL.md found at root or in subdirectories of: ${sourceDir}`,
     );
   }
 
-  return skills;
+  return dirs;
 }
 
-async function preVerifySkill(skillDir: string): Promise<void> {
+/**
+ * Reject a name that would escape the install directory. The declared name is
+ * author-controlled and an npm: or ZIP source is not trusted input.
+ */
+function assertInstallableName(name: string, origin: string): void {
+  if (name.includes('/') || name.includes('\\') || name.includes('..')) {
+    throw new InstallError(
+      `Invalid skill name "${name}" (${origin}). ` +
+        `Name must not contain path separators or "..".`,
+    );
+  }
+}
+
+/**
+ * Validate a skill and return the name it declares for itself.
+ *
+ * The frontmatter `name` is authoritative — it is what VAT keys on everywhere
+ * else, and it is the only identity an archived skill carries. The directory
+ * leaf is incidental: for a ZIP whose SKILL.md sits at the archive root, that
+ * leaf is the extraction temp dir.
+ */
+async function preVerifySkill(skillDir: string): Promise<string> {
   const skillMdPath = safePath.join(skillDir, 'SKILL.md');
   const result = await validateSkill({
     skillPath: skillMdPath,
@@ -112,6 +136,35 @@ async function preVerifySkill(skillDir: string): Promise<void> {
     throw new InstallError(
       `Skill validation failed for ${skillDir}:\n${issueSummary || '  (no details)'}`,
     );
+  }
+
+  const declared = result.metadata?.name;
+  if (typeof declared !== 'string' || declared.trim() === '') {
+    throw new InstallError(
+      `SKILL.md at ${skillDir} declares no name; cannot determine where to install it.`,
+    );
+  }
+  assertInstallableName(declared, `declared in ${toForwardSlash(skillMdPath)}`);
+  return declared;
+}
+
+/**
+ * Two skills in one source claiming the same name would install over each
+ * other, last write winning silently. Fail the whole batch instead.
+ */
+function assertNoNameCollisions(skills: DiscoveredSkill[]): void {
+  const seen = new Map<string, string>();
+  for (const skill of skills) {
+    const prior = seen.get(skill.name);
+    if (prior !== undefined) {
+      throw new InstallError(
+        `Two skills in this source both declare the name "${skill.name}":\n` +
+          `  - ${toForwardSlash(prior)}\n` +
+          `  - ${toForwardSlash(skill.dir)}\n` +
+          `Rename one in its SKILL.md frontmatter, or install them separately.`,
+      );
+    }
+    seen.set(skill.name, skill.dir);
   }
 }
 
@@ -256,21 +309,16 @@ async function resolveSource(source: string): Promise<ResolvedSource> {
   );
 }
 
-function applyNameOverride(discovered: DiscoveredSkill[], name: string): void {
-  // Prevent path traversal: reject names containing slashes, backslashes, or ..
-  if (name.includes('/') || name.includes('\\') || name.includes('..')) {
+/**
+ * Check the --name override against the discovered skill count before doing any
+ * validation work, so an unusable flag fails fast and unambiguously.
+ */
+function assertNameOverrideApplies(skillDirCount: number, name: string): void {
+  assertInstallableName(name, '--name');
+  if (skillDirCount > 1) {
     throw new InstallError(
-      `Invalid skill name "${name}". Name must not contain path separators or "..".`,
+      `--name is only valid for single-skill sources; found ${skillDirCount} skills.`,
     );
-  }
-  if (discovered.length > 1) {
-    throw new InstallError(
-      `--name is only valid for single-skill sources; found ${discovered.length} skills.`,
-    );
-  }
-  const first = discovered[0];
-  if (first) {
-    discovered[0] = { ...first, name };
   }
 }
 
@@ -292,18 +340,22 @@ export async function installCommand(
     const resolved = await resolveSource(source);
 
     try {
-      // 2. Discover skills in source.
-      const discovered = discoverSkills(resolved.dir);
+      // 2. Discover skill directories in source.
+      const skillDirs = discoverSkillDirs(resolved.dir);
 
-      // 3. Apply --name override (only valid for single-skill sources).
+      // 3. Reject an unusable --name override before doing any real work.
       if (options.name !== undefined) {
-        applyNameOverride(discovered, options.name);
+        assertNameOverrideApplies(skillDirs.length, options.name);
       }
 
-      // 4. Pre-verify ALL skills before touching the filesystem.
-      for (const skill of discovered) {
-        await preVerifySkill(skill.dir);
+      // 4. Pre-verify ALL skills before touching the filesystem. Verification
+      //    also yields each skill's declared name, which is what it installs as.
+      const discovered: DiscoveredSkill[] = [];
+      for (const dir of skillDirs) {
+        const name = await preVerifySkill(dir);
+        discovered.push({ dir, name: options.name ?? name });
       }
+      assertNoNameCollisions(discovered);
 
       // 5. Resolve install directory.
       const installDir = resolveSkillTarget(target, scope, cwd);
@@ -383,6 +435,10 @@ Description:
   Installs a fully-formed skill to a platform-specific directory. Both --target
   and --scope are required — no defaults. Skills are pre-verified before any
   filesystem changes; a validation failure means zero files written.
+
+  Each skill installs under the name its SKILL.md frontmatter declares, not the
+  name of the directory it came from — a ZIP or npm source has no meaningful
+  directory name. Override with --name.
 
 Targets (user path / project path):
   claude    ~/.claude/skills/       .claude/skills/
