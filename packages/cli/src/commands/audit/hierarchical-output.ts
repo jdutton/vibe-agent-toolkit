@@ -2,7 +2,7 @@ import * as os from 'node:os';
 
 import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
-import { toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { issueLocation, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 export interface HierarchicalOutput {
   marketplaces: MarketplaceGroup[];
@@ -376,7 +376,7 @@ function addMisconfigurationIssues(results: ValidationResult[]): ValidationResul
       severity: 'error',
       code: 'SKILL_MISCONFIGURED_LOCATION',
       message: 'Standalone skill in plugins directory won\'t be recognized by Claude Code',
-      location: result.path,
+      location: issueLocation(result.path, pluginsPath),
       fix: 'Move to ~/.claude/skills/ for standalone skills, or add .claude-plugin/plugin.json for a proper plugin',
     };
 

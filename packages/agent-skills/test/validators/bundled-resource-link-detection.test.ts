@@ -47,6 +47,7 @@ describe('detectBundledResourceWithoutLinks', () => {
       safePath.join(skillDir, 'SKILL.md'),
       skillDir,
       [], // no linked files
+      skillDir,
     );
     const dirs = issues.map((i) => i.location).sort((a, b) => (a ?? '').localeCompare(b ?? ''));
     expect(issues).toHaveLength(3);
@@ -54,9 +55,9 @@ describe('detectBundledResourceWithoutLinks', () => {
       expect(issue.code).toBe('SKILL_REFERENCES_BUT_NO_LINKS');
       expect(issue.severity).toBe('info');
     }
-    expect(dirs.some((d) => d?.endsWith('/scripts'))).toBe(true);
-    expect(dirs.some((d) => d?.endsWith('/references'))).toBe(true);
-    expect(dirs.some((d) => d?.endsWith('/assets'))).toBe(true);
+    // `location` is relative to the supplied root (here the skill dir itself),
+    // so each subdir is named outright rather than as an absolute-path suffix.
+    expect(dirs).toEqual(['assets', 'references', 'scripts']);
   });
 
   it('does not fire when a linked file is inside the bundled subdir', () => {
@@ -65,6 +66,7 @@ describe('detectBundledResourceWithoutLinks', () => {
       safePath.join(skillDir, 'SKILL.md'),
       skillDir,
       [safePath.join(skillDir, 'references', 'detail.md')],
+      skillDir,
     );
     expect(issues).toHaveLength(0);
   });
@@ -80,6 +82,7 @@ describe('detectBundledResourceWithoutLinks', () => {
       safePath.join(skillDir, 'SKILL.md'),
       skillDir,
       [],
+      skillDir,
     );
     expect(issues).toHaveLength(0);
   });
@@ -90,6 +93,7 @@ describe('detectBundledResourceWithoutLinks', () => {
       safePath.join(skillDir, 'SKILL.md'),
       skillDir,
       [],
+      skillDir,
     );
     expect(issues).toHaveLength(0);
   });
@@ -101,6 +105,7 @@ describe('detectBundledResourceWithoutLinks', () => {
       safePath.join(skillDir, 'SKILL.md'),
       skillDir,
       [],
+      skillDir,
     );
     expect(issues).toHaveLength(0);
   });

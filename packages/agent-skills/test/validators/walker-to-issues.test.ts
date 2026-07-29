@@ -3,8 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { deferredAssetsToIssues, walkerExclusionsToIssues } from '../../src/validators/walker-to-issues.js';
 import type { LinkResolution } from '../../src/walk-link-graph.js';
 
+const SOURCE = '/root/skills/demo/SKILL.md';
+
 const resolution = (reason: LinkResolution['excludeReason'], path: string): LinkResolution => ({
   path,
+  sourcePath: SOURCE,
+  sourceLine: 7,
   bundled: false,
   excludeReason: reason,
   linkHref: path,
@@ -39,12 +43,16 @@ describe('walkerExclusionsToIssues', () => {
     ]);
   });
 
-  it('records project-relative paths in location', () => {
+  it('anchors the issue at the file CONTAINING the link, not the target', () => {
+    // The target of a `missing-target` exclusion does not exist, so a location
+    // naming it points at nothing. `link` carries the target instead.
     const issues = walkerExclusionsToIssues(
       [resolution('missing-target', '/root/docs/nope.md')],
       '/root',
     );
-    expect(issues[0]?.location).toBe('docs/nope.md');
+    expect(issues[0]?.location).toBe('skills/demo/SKILL.md');
+    expect(issues[0]?.line).toBe(7);
+    expect(issues[0]?.link).toBe('/root/docs/nope.md');
   });
 });
 

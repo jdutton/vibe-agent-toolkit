@@ -12,7 +12,7 @@ import type fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { createRegistryIssue, type IssueCode, runValidationFramework, type ValidationConfig, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
-import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, type GitTracker, normalizedTmpdir, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { crawlDirectory, type CrawlOptions as UtilsCrawlOptions, type GitTracker, issueLocation, normalizedTmpdir, resolveAssetReference, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { calculateChecksum } from './checksum.js';
 import { getCollectionsForFile } from './collection-matcher.js';
@@ -32,7 +32,7 @@ import type { SHA256 } from './schemas/checksum.js';
 import type { ProjectConfig } from './schemas/project-config.js';
 import type { HeadingNode, ResourceMetadata } from './schemas/resource-metadata.js';
 import type { ValidationResult } from './schemas/validation-result.js';
-import { issueLocation, matchesGlobPattern, splitHrefAnchor } from './utils.js';
+import { locationRoot, matchesGlobPattern, splitHrefAnchor } from './utils.js';
 
 /**
  * Typed error thrown when two resources produce the same ID.
@@ -505,7 +505,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
           createRegistryIssue(
             'FRONTMATTER_INVALID_YAML',
             `Invalid YAML syntax in frontmatter: ${resource.frontmatterError}`,
-            { location: issueLocation(resource.filePath, this.baseDir), line: 1 },
+            { location: issueLocation(resource.filePath, locationRoot(this.baseDir)), line: 1 },
           ),
         );
       }
@@ -526,7 +526,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
             'MALFORMED_HTML',
             `Malformed HTML: ${parseError.message}`,
             {
-              location: issueLocation(resource.filePath, this.baseDir),
+              location: issueLocation(resource.filePath, locationRoot(this.baseDir)),
               ...(parseError.line !== undefined && { line: parseError.line }),
             },
           ),
@@ -557,7 +557,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
             `Reference-style link "[${unresolved.label}]" has no matching definition. ` +
               `Add "[${unresolved.label}]: <url>" or rewrite as an inline link.`,
             {
-              location: issueLocation(resource.filePath, this.baseDir),
+              location: issueLocation(resource.filePath, locationRoot(this.baseDir)),
               line: unresolved.line,
             },
           ),
@@ -575,7 +575,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
     return this.duplicateIdCollisions.map(({ id, existingPath, conflictingPath }) =>
       createRegistryIssue(
         'DUPLICATE_RESOURCE_ID',
-        `Two files resolve to the same resource id '${id}': '${issueLocation(existingPath, this.baseDir)}' and '${issueLocation(conflictingPath, this.baseDir)}'. Rename one of the files so they produce distinct resource ids.`,
+        `Two files resolve to the same resource id '${id}': '${issueLocation(existingPath, locationRoot(this.baseDir))}' and '${issueLocation(conflictingPath, locationRoot(this.baseDir))}'. Rename one of the files so they produce distinct resource ids.`,
       ),
     );
   }
@@ -792,7 +792,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
         createRegistryIssue(
           'FRONTMATTER_SCHEMA_ERROR',
           `Failed to load or parse frontmatter schema '${validation.frontmatterSchema}': ${errorMessage}`,
-          { location: issueLocation(resource.filePath, this.baseDir), line: 1 },
+          { location: issueLocation(resource.filePath, locationRoot(this.baseDir)), line: 1 },
         ),
       ];
     }
@@ -1027,7 +1027,7 @@ export class ResourceRegistry implements ResourceCollectionInterface {
       for (const location of locations) {
         issues.push(
           createRegistryIssue(issueCode, `External URL failed: ${errorMessage}`, {
-            location: issueLocation(location.resourcePath, this.baseDir),
+            location: issueLocation(location.resourcePath, locationRoot(this.baseDir)),
             link: result.url,
             ...(location.line !== undefined && { line: location.line }),
           }),

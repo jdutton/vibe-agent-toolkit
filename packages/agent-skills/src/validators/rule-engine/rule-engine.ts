@@ -101,10 +101,23 @@ export function evaluate(ctx: RuleContext): IssueCode | null {
   return ctx.subject === 'edge' ? evaluateEdge(ctx) : evaluateFile(ctx);
 }
 
-/** Options for {@link materializeIssue}. */
+/**
+ * Options for {@link materializeIssue}.
+ *
+ * `location` / `line` / `field` / `link` are the four independent anchors of
+ * {@link ValidationIssue} and are passed through verbatim — see the anchor
+ * contract on that type. In particular `location` is ALWAYS the
+ * project-relative path of the file to open; a link target belongs in `link`.
+ */
 export interface MaterializeOpts {
-  /** Project-/output-relative location string for the issue. */
+  /** Project-relative POSIX path of the file the issue is in. */
   location?: string | undefined;
+  /** 1-based line within `location`. */
+  line?: number | undefined;
+  /** Dotted document-internal pointer, e.g. `frontmatter.description`. */
+  field?: string | undefined;
+  /** A link href/target the issue concerns — never the file to open. */
+  link?: string | undefined;
   /**
    * Per-issue detail appended to the registry `description` to form the runtime
    * `message` (e.g. the link href). The registry `description` stays the stable,
@@ -139,6 +152,15 @@ export function materializeIssue(code: IssueCode, opts: MaterializeOpts = {}): V
   };
   if (opts.location !== undefined) {
     issue.location = opts.location;
+  }
+  if (opts.line !== undefined) {
+    issue.line = opts.line;
+  }
+  if (opts.field !== undefined) {
+    issue.field = opts.field;
+  }
+  if (opts.link !== undefined) {
+    issue.link = opts.link;
   }
   return issue;
 }

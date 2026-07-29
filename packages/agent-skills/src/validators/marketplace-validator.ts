@@ -2,7 +2,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 
 import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import { MarketplaceManifestSchema } from '../schemas/marketplace-manifest.js';
 
@@ -24,6 +24,8 @@ const MARKETPLACE_TYPE = 'marketplace' as const;
 export async function validateMarketplace(marketplacePath: string): Promise<ValidationResult> {
 	const issues: ValidationIssue[] = [];
 	const marketplaceJsonPath = safePath.join(marketplacePath, '.claude-plugin', 'marketplace.json');
+	// Anchor contract: project-relative POSIX path, never absolute.
+	const location = issueLocation(marketplaceJsonPath, findProjectRoot(marketplacePath) ?? marketplacePath);
 
 	// Check marketplace.json exists
 	if (!existsSync(marketplaceJsonPath)) {
@@ -31,7 +33,7 @@ export async function validateMarketplace(marketplacePath: string): Promise<Vali
 			severity: 'error',
 			code: 'MARKETPLACE_MISSING_MANIFEST',
 			message: 'Marketplace manifest not found',
-			location: `${marketplacePath}/.claude-plugin/marketplace.json`,
+			location,
 			fix: 'Create .claude-plugin/marketplace.json with required fields (name, owner, plugins)',
 		});
 
@@ -54,7 +56,7 @@ export async function validateMarketplace(marketplacePath: string): Promise<Vali
 			severity: 'error',
 			code: 'MARKETPLACE_INVALID_JSON',
 			message: `Failed to parse marketplace.json: ${error instanceof Error ? error.message : 'Unknown error'}`,
-			location: marketplaceJsonPath,
+			location,
 			fix: 'Fix JSON syntax errors in marketplace.json',
 		});
 
@@ -75,7 +77,8 @@ export async function validateMarketplace(marketplacePath: string): Promise<Vali
 				severity: 'error',
 				code: 'MARKETPLACE_INVALID_SCHEMA',
 				message: zodIssue.message,
-				location: `${marketplaceJsonPath}:${zodIssue.path.join('.')}`,
+				location,
+				field: zodIssue.path.join('.'),
 				fix: generateFixSuggestion(zodIssue),
 			});
 		}

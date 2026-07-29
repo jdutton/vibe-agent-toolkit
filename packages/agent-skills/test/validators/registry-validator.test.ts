@@ -80,7 +80,9 @@ describe('validateInstalledPluginsRegistry', () => {
 
 		assertSingleError(result, 'REGISTRY_MISSING_FILE');
 		expect(result.summary).toBe('Registry file not found');
-		expect(result.issues[0]?.location).toBe(nonExistentPath);
+		// `location` is project-relative (anchor contract) — the temp dir has no
+		// enclosing config or git root, so the file's own directory is the root.
+		expect(result.issues[0]?.location).toBe('nonexistent.json');
 		expect(result.issues[0]?.fix).toContain('Create the registry file');
 	});
 
@@ -92,7 +94,7 @@ describe('validateInstalledPluginsRegistry', () => {
 
 		assertSingleError(result, 'REGISTRY_INVALID_JSON');
 		expect(result.summary).toBe('Registry file is invalid JSON');
-		expect(result.issues[0]?.location).toBe(registryPath);
+		expect(result.issues[0]?.location).toBe('invalid.json');
 		expect(result.issues[0]?.message).toContain('Failed to parse');
 	});
 
@@ -209,7 +211,9 @@ describe('validateKnownMarketplacesRegistry', () => {
 
 		assertSingleError(result, 'REGISTRY_MISSING_FILE');
 		expect(result.summary).toBe('Registry file not found');
-		expect(result.issues[0]?.location).toBe(nonExistentPath);
+		// `location` is project-relative (anchor contract) — the temp dir has no
+		// enclosing config or git root, so the file's own directory is the root.
+		expect(result.issues[0]?.location).toBe('nonexistent.json');
 	});
 
 	it('should fail when registry file has invalid JSON', async () => {

@@ -17,7 +17,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import { CODE_REGISTRY, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 
 const BUNDLED_SUBDIRS = ['scripts', 'references', 'assets'] as const;
@@ -74,11 +74,13 @@ function linkedFilesCoverSubdir(
  * @param skillPath Absolute path to SKILL.md
  * @param skillDir Absolute path to the skill directory (typically dirname(skillPath))
  * @param linkedFiles Absolute paths of files reached during BFS link traversal
+ * @param projectRoot Root the emitted `location` is expressed relative to
  */
 export function detectBundledResourceWithoutLinks(
   skillPath: string,
   skillDir: string,
   linkedFiles: readonly string[],
+  projectRoot: string,
 ): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
   const body = readSkillContent(skillPath);
@@ -95,7 +97,7 @@ export function detectBundledResourceWithoutLinks(
       severity: entry.defaultSeverity,
       code: 'SKILL_REFERENCES_BUT_NO_LINKS',
       message: `Skill directory contains "${sub}/" but no markdown link from SKILL.md or linked files points into it.`,
-      location: subPath,
+      location: issueLocation(subPath, projectRoot),
       fix: entry.fix,
       reference: entry.reference,
     });

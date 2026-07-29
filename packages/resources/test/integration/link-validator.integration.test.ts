@@ -14,7 +14,7 @@ import { writeFile } from 'node:fs/promises';
 
 /* eslint-disable security/detect-non-literal-fs-filename -- tests use dynamic file paths in temp directory */
 
-import { mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import { issueLocation, mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from 'vitest';
 
 import { fragmentIndex, validateLink, type FragmentIndex } from '../../src/link-validator.js';
@@ -521,7 +521,10 @@ describe('validateLink', () => {
       expect(result).toHaveProperty('message');
       expect(result).toHaveProperty('suggestion');
 
-      expect(result?.location).toBe(sourceFile);
+      // `location` is contractually relative, never absolute. With no
+      // projectRoot supplied, the library entry point falls back to the process
+      // CWD (see `locationRoot`) rather than emitting the absolute path.
+      expect(result?.location).toBe(issueLocation(sourceFile, process.cwd()));
       expect(result?.line).toBe(3);
       expect(result?.link).toBe(NONEXISTENT_FILE_LINK);
     });

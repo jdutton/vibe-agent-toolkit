@@ -299,8 +299,10 @@ describe('validateSkillForPackaging - Navigation file detection', () => {
 		expect(result.status).toBe('success');
 		const navWarn = result.activeWarnings.find((e) => e.code === 'LINK_TO_NAVIGATION_FILE');
 		expect(navWarn).toBeDefined();
-		// location is relative to project root
-		expect(navWarn?.location).toContain('docs/README.md');
+		// The issue is anchored at the file CONTAINING the link; the target the
+		// link points at is its own field.
+		expect(navWarn?.location).toBe('SKILL.md');
+		expect(navWarn?.link).toContain('docs/README.md');
 	});
 
 	it('should detect links to index.md', async () => {
@@ -543,7 +545,9 @@ describe('validateSkillForPackaging - Non-portable asset references', () => {
 		);
 		expect(issue).toBeDefined();
 		expect(issue?.severity).toBe('warning');
-		expect(issue?.location).toMatch(/:\d+$/);
+		// The line lives in `line`; `location` stays a bare path.
+		expect(issue?.location).not.toMatch(/:\d+$/);
+		expect(issue?.line).toBeGreaterThan(0);
 	});
 
 	it('should also catch the bare $CLAUDE_PLUGIN_ROOT form (no braces)', async () => {
@@ -641,7 +645,8 @@ describe('validateSkillForPackaging - Non-portable commands', () => {
 		);
 		expect(issue).toBeDefined();
 		expect(issue?.severity).toBe('warning');
-		expect(issue?.location).toMatch(/:\d+$/);
+		expect(issue?.location).not.toMatch(/:\d+$/);
+		expect(issue?.line).toBeGreaterThan(0);
 		expect(issue?.message).toContain('timeout');
 	});
 

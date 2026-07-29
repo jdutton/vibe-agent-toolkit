@@ -9,7 +9,7 @@ import {
 	generateFixSuggestion,
 	type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
 
@@ -24,7 +24,8 @@ const PLUGIN_TYPE = 'claude-plugin' as const;
  * project threshold.
  */
 function applyPostSchemaChecks(args: {
-	pluginJsonPath: string;
+	/** Project-relative POSIX location of plugin.json (anchor contract). */
+	pluginJsonLocation: string;
 	data: {
 		name: string;
 		version?: string | undefined;
@@ -36,7 +37,7 @@ function applyPostSchemaChecks(args: {
 	issues: ValidationIssue[];
 	validationResult: ValidationResult;
 }): void {
-	const { pluginJsonPath, data, strict, issues, validationResult } = args;
+	const { pluginJsonLocation, data, strict, issues, validationResult } = args;
 
 	validationResult.metadata = {
 		name: data.name,
@@ -51,7 +52,7 @@ function applyPostSchemaChecks(args: {
 			severity: strict ? 'error' : 'warning',
 			code: 'PLUGIN_MISSING_VERSION',
 			message: 'plugin.json missing version field — Claude Code will cache as "unknown/", causing stale skill resolution across upgrades',
-			location: pluginJsonPath,
+			location: pluginJsonLocation,
 			fix: 'Add a "version" field to plugin.json (semver format, e.g. "1.0.0")',
 		});
 	}
@@ -59,7 +60,7 @@ function applyPostSchemaChecks(args: {
 	// Recommended-metadata observations from plugin-dev cross-walk.
 	// These ship at info severity — schema parse already errored on
 	// anything structurally required.
-	issues.push(...detectMissingRecommendedFields(data, pluginJsonPath));
+	issues.push(...detectMissingRecommendedFields(data, pluginJsonLocation));
 
 	if (issues.length > 0) {
 		validationResult.status = calculateValidationStatus(issues);
@@ -80,6 +81,8 @@ export async function validatePlugin(
 ): Promise<ValidationResult> {
 	const issues: ValidationIssue[] = [];
 	const pluginJsonPath = safePath.join(pluginPath, '.claude-plugin', 'plugin.json');
+	// Anchor contract: project-relative POSIX path, never absolute.
+	const location = issueLocation(pluginJsonPath, findProjectRoot(pluginPath) ?? pluginPath);
 
 	// Check plugin.json exists
 	if (!existsSync(pluginJsonPath)) {
@@ -87,7 +90,7 @@ export async function validatePlugin(
 			severity: 'error',
 			code: 'PLUGIN_MISSING_MANIFEST',
 			message: 'Plugin manifest not found',
-			location: `${pluginPath}/.claude-plugin/plugin.json`,
+			location,
 			fix: 'Create .claude-plugin/plugin.json with required fields (name, description, version)',
 		});
 
@@ -110,7 +113,7 @@ export async function validatePlugin(
 			severity: 'error',
 			code: 'PLUGIN_INVALID_JSON',
 			message: `Failed to parse plugin.json: ${error instanceof Error ? error.message : 'Unknown error'}`,
-			location: pluginJsonPath,
+			location,
 			fix: 'Fix JSON syntax errors in plugin.json',
 		});
 
@@ -129,7 +132,7 @@ export async function validatePlugin(
 		const kebabIssue = detectKebabCaseViolation(
 			'plugin',
 			(pluginData as { name: string }).name,
-			pluginJsonPath,
+			location,
 		);
 		if (kebabIssue) {
 			issues.push(kebabIssue);
@@ -144,7 +147,8 @@ export async function validatePlugin(
 				severity: 'error',
 				code: 'PLUGIN_INVALID_SCHEMA',
 				message: zodIssue.message,
-				location: `${pluginJsonPath}:${zodIssue.path.join('.')}`,
+				location,
+				field: zodIssue.path.join('.'),
 				fix: generateFixSuggestion(zodIssue),
 			});
 		}
@@ -163,7 +167,7 @@ export async function validatePlugin(
 
 	if (result.success) {
 		applyPostSchemaChecks({
-			pluginJsonPath,
+			pluginJsonLocation: location,
 			data: result.data,
 			strict: options?.strict === true,
 			issues,

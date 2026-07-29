@@ -21,6 +21,7 @@ import { safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../../utils/command-error.js';
+import { formatIssueAnchor } from '../../utils/issue-anchor.js';
 import { createLogger } from '../../utils/logger.js';
 import { writeYamlOutput } from '../../utils/output.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
@@ -136,8 +137,9 @@ function displayIssue(
   const logFn = useErrorLevel ? logger.error : logger.info;
 
   logFn(`  [${issue.code}] ${issue.message}`);
-  if (issue.location) {
-    logFn(`    Location: ${issue.location}`);
+  const anchor = formatIssueAnchor(issue);
+  if (anchor !== undefined) {
+    logFn(`    Location: ${anchor}`);
   }
   if (issue.fix) {
     logFn(`    Fix: ${issue.fix}`);

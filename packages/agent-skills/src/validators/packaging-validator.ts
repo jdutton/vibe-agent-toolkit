@@ -26,7 +26,7 @@ import {
   type ValidationIssue,
 } from '@vibe-agent-toolkit/agent-schema';
 import { DeferredArtifacts, parseMarkdown, ResourceRegistry, type SkillExecutableEntry } from '@vibe-agent-toolkit/resources';
-import { findProjectRoot, normalizedTmpdir, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, issueLocation, normalizedTmpdir, toForwardSlash, safePath, type GitTracker } from '@vibe-agent-toolkit/utils';
 
 import type { EvidenceRecord, Observation } from '../evidence/index.js';
 import {
@@ -182,7 +182,7 @@ function validateFilesConfig(
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- resolvedSource derived from config-supplied path
     if (existsSync(resolvedSource) && statSync(resolvedSource).isDirectory()) {
       const location = toForwardSlash(entry.source);
-      issues.push(createRegistryIssue(
+      issues.push(registryIssueAt(
         'LINK_TARGETS_DIRECTORY',
         `files: source '${entry.source}' resolves to a directory; a typed single-file slot requires a file`,
         location,
@@ -194,13 +194,19 @@ function validateFilesConfig(
 }
 
 /**
- * Create a validation issue from a code-registry code with a bespoke message.
+ * Create a validation issue from a code-registry code with a bespoke message,
+ * anchored at a project-relative `location`.
  *
  * Thin wrapper over the shared {@link materializeIssue} so severity / fix /
  * reference come from the single CODE_REGISTRY source (issue #129 dedup); the
  * caller supplies a fully-formed `message`.
+ *
+ * Deliberately NOT named `createRegistryIssue`: `@vibe-agent-toolkit/agent-schema`
+ * exports a function by that name whose third parameter is an EXTRAS OBJECT, not
+ * a location string. Two same-named functions with incompatible third arguments
+ * is a trap for anyone reading a call site.
  */
-function createRegistryIssue(
+function registryIssueAt(
   code: IssueCode,
   message: string,
   location?: string,
@@ -294,6 +300,15 @@ export async function validateSkillForPackaging(
 ): Promise<PackagingValidationResult> {
   const rawIssues: ValidationIssue[] = [];
 
+  // Find project boundary (config root -> git root -> skill dir).
+  // Library fallback to skill dir keeps callers null-safe; CLI command
+  // boundary owns any user-facing warning. See plan 2026-05-17.
+  const projectRoot = findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
+  // Every emitted location is project-relative POSIX — see the anchor contract
+  // on ValidationIssue. Computed once, before the first producer runs, so no
+  // collector can pick a different base.
+  const skillLocation = issueLocation(skillPath, projectRoot);
+
   // Parse SKILL.md
   const parseResult = await parseMarkdown(skillPath);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillPath is validated function parameter
@@ -303,8 +318,8 @@ export async function validateSkillForPackaging(
   // Validate frontmatter schema (name format, required fields, etc.)
   if (parseResult.frontmatter) {
     rawIssues.push(
-      ...validateFrontmatterSchema(parseResult.frontmatter, false),
-      ...validateFrontmatterRules(parseResult.frontmatter),
+      ...validateFrontmatterSchema(parseResult.frontmatter, false, skillLocation),
+      ...validateFrontmatterRules(parseResult.frontmatter, skillLocation),
     );
   }
 
@@ -314,7 +329,7 @@ export async function validateSkillForPackaging(
   // payloads such as EXTERNAL_CLI binary names.
   const { evidence, observations } = runCompatDetectors(skillContent, skillPath);
   for (const obs of observations) {
-    rawIssues.push(observationToIssue(obs, skillPath));
+    rawIssues.push(observationToIssue(obs, skillLocation));
   }
 
   // Read packaging options for depth/exclude configuration
@@ -322,11 +337,6 @@ export async function validateSkillForPackaging(
   const excludeConfig = packagingConfig?.excludeReferencesFromBundle;
   const excludeNavigationFiles = packagingConfig?.excludeNavigationFiles ?? true;
   const maxDepth = linkFollowDepth === 'full' ? Infinity : linkFollowDepth;
-
-  // Find project boundary (config root -> git root -> skill dir).
-  // Library fallback to skill dir keeps callers null-safe; CLI command
-  // boundary owns any user-facing warning. See plan 2026-05-17.
-  const projectRoot = findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
 
   // Validate files config (requires projectRoot to resolve source paths for
   // directory-source detection — must run after projectRoot is computed).
@@ -411,18 +421,18 @@ export async function validateSkillForPackaging(
   const excludedDetails = deduplicateExcludedReferences(excludedReferences, skillPath);
 
   // Run quality / best-practice checks
-  collectSizeIssues(skillLines, totalLines, fileCount, maxLinkDepth, skillPath, rawIssues);
-  collectDescriptionIssue(parseResult.frontmatter, skillPath, rawIssues);
-  collectProgressiveDisclosureIssue(skillLines, bundledFiles.length, skillPath, rawIssues);
-  collectNameMismatchIssue(parseResult.frontmatter, skillPath, rawIssues);
-  collectTimeSensitiveContentIssues(parseResult.content, skillPath, rawIssues);
-  collectNonPortableAssetReferenceIssues(parseResult.content, skillPath, rawIssues);
-  collectNonPortableCommandIssues(parseResult.content, skillPath, rawIssues);
+  collectSizeIssues(skillLines, totalLines, fileCount, maxLinkDepth, skillLocation, rawIssues);
+  collectDescriptionIssue(parseResult.frontmatter, skillLocation, rawIssues);
+  collectProgressiveDisclosureIssue(skillLines, bundledFiles.length, skillLocation, rawIssues);
+  collectNameMismatchIssue(parseResult.frontmatter, skillPath, skillLocation, rawIssues);
+  collectTimeSensitiveContentIssues(parseResult.content, skillLocation, rawIssues);
+  collectNonPortableAssetReferenceIssues(parseResult.content, skillLocation, rawIssues);
+  collectNonPortableCommandIssues(parseResult.content, skillLocation, rawIssues);
 
   // Cross-skill dependency smell: body declares a requires/depends token the
   // description does not mention. Uses the post-frontmatter content slice.
   if (parseResult.frontmatter) {
-    rawIssues.push(...detectUndeclaredCrossSkillAuth(parseResult.frontmatter, parseResult.content));
+    rawIssues.push(...detectUndeclaredCrossSkillAuth(parseResult.frontmatter, parseResult.content, skillLocation));
   }
 
   // Filter out source-only codes when validating built output
@@ -468,42 +478,42 @@ function collectSizeIssues(
   totalLines: number,
   fileCount: number,
   maxLinkDepth: number,
-  skillPath: string,
+  skillLocation: string,
   issues: ValidationIssue[],
 ): void {
   if (skillLines > VALIDATION_THRESHOLDS.RECOMMENDED_SKILL_LINES) {
     const rule = VALIDATION_RULES.SKILL_LENGTH_EXCEEDS_RECOMMENDED;
-    issues.push(createRegistryIssue(
+    issues.push(registryIssueAt(
       rule.code as IssueCode,
       rule.message({ lines: skillLines }),
-      skillPath,
+      skillLocation,
     ));
   }
 
   if (totalLines > VALIDATION_THRESHOLDS.MAX_TOTAL_LINES) {
     const rule = VALIDATION_RULES.SKILL_TOTAL_SIZE_LARGE;
-    issues.push(createRegistryIssue(
+    issues.push(registryIssueAt(
       rule.code as IssueCode,
       rule.message({ totalLines }),
-      skillPath,
+      skillLocation,
     ));
   }
 
   if (fileCount > VALIDATION_THRESHOLDS.MAX_FILE_COUNT) {
     const rule = VALIDATION_RULES.SKILL_TOO_MANY_FILES;
-    issues.push(createRegistryIssue(
+    issues.push(registryIssueAt(
       rule.code as IssueCode,
       rule.message({ fileCount }),
-      skillPath,
+      skillLocation,
     ));
   }
 
   if (maxLinkDepth > VALIDATION_THRESHOLDS.MAX_REFERENCE_DEPTH) {
     const rule = VALIDATION_RULES.REFERENCE_TOO_DEEP;
-    issues.push(createRegistryIssue(
+    issues.push(registryIssueAt(
       rule.code as IssueCode,
       rule.message({ depth: maxLinkDepth }),
-      skillPath,
+      skillLocation,
     ));
   }
 }
@@ -513,7 +523,7 @@ function collectSizeIssues(
  */
 function collectDescriptionIssue(
   frontmatter: Record<string, unknown> | undefined,
-  skillPath: string,
+  skillLocation: string,
   issues: ValidationIssue[],
 ): void {
   const description = frontmatter?.['description'];
@@ -524,10 +534,10 @@ function collectDescriptionIssue(
 
   if (description.length < VALIDATION_THRESHOLDS.MIN_DESCRIPTION_LENGTH) {
     const rule = VALIDATION_RULES.DESCRIPTION_TOO_VAGUE;
-    issues.push(createRegistryIssue(
+    issues.push(registryIssueAt(
       rule.code as IssueCode,
       rule.message({ length: description.length }),
-      skillPath,
+      skillLocation,
     ));
   }
 }
@@ -557,7 +567,7 @@ const GENERIC_CONTAINER_DIRS = new Set<string>(['skills', 'resources']);
 export function detectNameMismatchIssue(
   frontmatterName: unknown,
   parentDir: string,
-  skillPath: string,
+  skillLocation: string,
 ): ValidationIssue | null {
   if (typeof frontmatterName !== 'string' || frontmatterName.trim() === '') {
     return null;
@@ -582,7 +592,7 @@ export function detectNameMismatchIssue(
     severity: registryEntry.defaultSeverity,
     code: 'SKILL_NAME_MISMATCHES_DIR',
     message: `Frontmatter name "${frontmatterName}" does not match parent directory "${parentDir}"`,
-    location: skillPath,
+    location: skillLocation,
     fix: registryEntry.fix,
     reference: registryEntry.reference,
   };
@@ -596,6 +606,7 @@ export function detectNameMismatchIssue(
 function collectNameMismatchIssue(
   frontmatter: Record<string, unknown> | undefined,
   skillPath: string,
+  skillLocation: string,
   issues: ValidationIssue[],
 ): void {
   const resolvedSkillPath = toForwardSlash(safePath.resolve(skillPath));
@@ -606,7 +617,7 @@ function collectNameMismatchIssue(
   }
 
   const parentDir = basename(dirname(skillPath));
-  const issue = detectNameMismatchIssue(frontmatter?.['name'], parentDir, skillPath);
+  const issue = detectNameMismatchIssue(frontmatter?.['name'], parentDir, skillLocation);
   if (issue !== null) {
     issues.push(issue);
   }
@@ -734,7 +745,7 @@ const NON_PORTABLE_COMMAND_VARIANTS: readonly PortabilityVariant[] = [
  */
 function collectTimeSensitiveContentIssues(
   content: string,
-  skillPath: string,
+  skillLocation: string,
   issues: ValidationIssue[],
 ): void {
   const registryEntry = CODE_REGISTRY.SKILL_TIME_SENSITIVE_CONTENT;
@@ -749,7 +760,8 @@ function collectTimeSensitiveContentIssues(
           severity: registryEntry.defaultSeverity,
           code: 'SKILL_TIME_SENSITIVE_CONTENT',
           message: `Time-sensitive phrase "${match[0]}" may become stale`,
-          location: `${skillPath}:${lineNumber}`,
+          location: skillLocation,
+          line: lineNumber,
           fix: registryEntry.fix,
           reference: registryEntry.reference,
         });
@@ -762,13 +774,13 @@ function collectTimeSensitiveContentIssues(
 
 /**
  * Scan one skill document for any member of a portability check family. One issue
- * per line (first matching variant wins), located at `docPath:line`, carrying the
+ * per line (first matching variant wins), anchored at `docLocation` + `line`, carrying the
  * variant's label and tailored fix. Shared by the NON_PORTABLE_ASSET_REFERENCE and
  * NON_PORTABLE_COMMAND families.
  */
 function collectPortabilityFamilyIssues(
   content: string,
-  docPath: string,
+  docLocation: string,
   issues: ValidationIssue[],
   family: {
     readonly code: IssueCode;
@@ -787,7 +799,8 @@ function collectPortabilityFamilyIssues(
           severity: registryEntry.defaultSeverity,
           code: family.code,
           message: family.summarize(variant.label, match[0].trim()),
-          location: `${docPath}:${index + 1}`,
+          location: docLocation,
+          line: index + 1,
           fix: variant.fix,
           reference: registryEntry.reference,
         });
@@ -804,10 +817,10 @@ function collectPortabilityFamilyIssues(
  */
 function collectNonPortableAssetReferenceIssues(
   content: string,
-  docPath: string,
+  docLocation: string,
   issues: ValidationIssue[],
 ): void {
-  collectPortabilityFamilyIssues(content, docPath, issues, {
+  collectPortabilityFamilyIssues(content, docLocation, issues, {
     code: 'NON_PORTABLE_ASSET_REFERENCE',
     variants: NON_PORTABLE_ASSET_VARIANTS,
     summarize: (label, match) =>
@@ -821,10 +834,10 @@ function collectNonPortableAssetReferenceIssues(
  */
 function collectNonPortableCommandIssues(
   content: string,
-  docPath: string,
+  docLocation: string,
   issues: ValidationIssue[],
 ): void {
-  collectPortabilityFamilyIssues(content, docPath, issues, {
+  collectPortabilityFamilyIssues(content, docLocation, issues, {
     code: 'NON_PORTABLE_COMMAND',
     variants: NON_PORTABLE_COMMAND_VARIANTS,
     // Strip the leading command-position separator (backtick / pipe / etc.) the
@@ -840,15 +853,15 @@ function collectNonPortableCommandIssues(
 function collectProgressiveDisclosureIssue(
   skillLines: number,
   referenceFileCount: number,
-  skillPath: string,
+  skillLocation: string,
   issues: ValidationIssue[],
 ): void {
   if (skillLines > VALIDATION_THRESHOLDS.RECOMMENDED_SKILL_LINES && referenceFileCount === 0) {
     const rule = VALIDATION_RULES.NO_PROGRESSIVE_DISCLOSURE;
-    issues.push(createRegistryIssue(
+    issues.push(registryIssueAt(
       rule.code as IssueCode,
       rule.message({ lines: skillLines }),
-      skillPath,
+      skillLocation,
     ));
   }
 }

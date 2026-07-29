@@ -7,6 +7,7 @@
  */
 
 import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import type { PluginInventory } from '../types.js';
 
@@ -21,8 +22,10 @@ const FIELDS: ComponentField[] = [
 	'lspServers',
 ];
 
-export function detectDeclaredButMissing(inv: PluginInventory): ValidationIssue[] {
+export function detectDeclaredButMissing(inv: PluginInventory, projectRoot: string): ValidationIssue[] {
 	const issues: ValidationIssue[] = [];
+	// Anchor contract: `location` is a project-relative POSIX path.
+	const manifestLocation = issueLocation(safePath.join(inv.path, '.claude-plugin', 'plugin.json'), projectRoot);
 	for (const field of FIELDS) {
 		const list = inv.declared[field];
 		if (list === null) continue;
@@ -32,7 +35,7 @@ export function detectDeclaredButMissing(inv: PluginInventory): ValidationIssue[
 					severity: 'warning',
 					code: 'COMPONENT_DECLARED_BUT_MISSING',
 					message: `Manifest declares ${field}: "${ref.manifestPath}" but the path does not exist on disk.`,
-					location: `${inv.path}/.claude-plugin/plugin.json`,
+					location: manifestLocation,
 					fix: 'Add the missing file, remove the declaration, or correct the path.',
 				});
 			}

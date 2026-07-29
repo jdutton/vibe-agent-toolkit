@@ -1,7 +1,9 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- File paths are validated before use */
 import { existsSync, readFileSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { findProjectRoot, issueLocation } from '@vibe-agent-toolkit/utils';
 import type { z } from 'zod';
 
 import { InstalledPluginsRegistrySchema } from '../schemas/installed-plugins-registry.js';
@@ -25,6 +27,10 @@ function validateRegistryFile(
 	successMessage: string,
 ): ValidationResult {
 	const issues: ValidationIssue[] = [];
+	// Anchor contract: `location` is a project-relative POSIX path. Registry
+	// files are pointed at directly, so the enclosing project is discovered the
+	// same way the skills lane discovers it.
+	const location = issueLocation(filePath, findProjectRoot(dirname(filePath)) ?? dirname(filePath));
 
 	// Check file exists
 	if (!existsSync(filePath)) {
@@ -32,7 +38,7 @@ function validateRegistryFile(
 			severity: 'error',
 			code: 'REGISTRY_MISSING_FILE',
 			message: REGISTRY_FILE_NOT_FOUND_MESSAGE,
-			location: filePath,
+			location,
 			fix: 'Create the registry file at the specified path',
 		});
 
@@ -55,7 +61,7 @@ function validateRegistryFile(
 			severity: 'error',
 			code: 'REGISTRY_INVALID_JSON',
 			message: `Failed to parse registry file: ${error instanceof Error ? error.message : 'Unknown error'}`,
-			location: filePath,
+			location,
 			fix: 'Fix JSON syntax errors in the registry file',
 		});
 
@@ -76,7 +82,8 @@ function validateRegistryFile(
 				severity: 'error',
 				code: 'REGISTRY_INVALID_SCHEMA',
 				message: zodIssue.message,
-				location: `${filePath}:${zodIssue.path.join('.')}`,
+				location,
+				field: zodIssue.path.join('.'),
 				fix: generateFixSuggestion(zodIssue),
 			});
 		}

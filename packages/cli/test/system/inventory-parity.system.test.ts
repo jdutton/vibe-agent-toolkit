@@ -4,6 +4,10 @@
  * appear in audit output. Additions are fine; losses indicate a regression.
  * The legacy pipeline itself was deleted in Phase 4c — only the snapshot
  * remains.
+ *
+ * The snapshot was re-anchored (never redefined) when `ValidationIssue`'s
+ * anchor contract landed — see `capture-legacy-snapshot.ts` for the proof that
+ * gated it.
  */
 
 import { readFileSync } from 'node:fs';
@@ -41,6 +45,9 @@ describe('inventory pipeline parity', () => {
 				(f) =>
 					f.code === want.code &&
 					f.location === want.location &&
+					// `field` is compared too — otherwise re-anchoring a finding's
+					// document-internal pointer would slip past this guard.
+					f.field === want.field &&
 					f.severity === want.severity &&
 					f.path === want.path,
 			);

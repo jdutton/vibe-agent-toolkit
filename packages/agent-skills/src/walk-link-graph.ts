@@ -24,8 +24,19 @@ import { NAVIGATION_FILE_PATTERNS } from './validators/validation-rules.js';
  * Resolution result for a single link found in a bundled markdown file.
  */
 export interface LinkResolution {
-  /** Absolute path to the linked file */
+  /** Absolute path to the linked file (the link TARGET) */
   path: string;
+  /**
+   * Absolute path to the file that CONTAINS the link.
+   *
+   * Distinct from {@link LinkResolution.path} on purpose: for a
+   * `missing-target` exclusion the target does not exist, so an issue
+   * anchored to it names a file the author cannot open. The issue's
+   * `location` must be this, the containing file.
+   */
+  sourcePath: string;
+  /** 1-based line of the link within {@link LinkResolution.sourcePath}, when known */
+  sourceLine?: number | undefined;
   /** Whether the file will be bundled */
   bundled: boolean;
   /** Reason it was excluded (only set when bundled is false) */
@@ -152,12 +163,15 @@ function isNavigationFile(filename: string): boolean {
 /** Create an exclusion record */
 function makeExclusion(
   targetPath: string,
+  sourcePath: string,
   reason: LinkResolution['excludeReason'],
   link: ResourceLink,
   matchedRule?: ExcludeRule,
 ): LinkResolution {
   return {
     path: targetPath,
+    sourcePath,
+    ...(link.line !== undefined && { sourceLine: link.line }),
     bundled: false,
     excludeReason: reason,
     ...(matchedRule ? { matchedRule } : {}),
@@ -244,6 +258,7 @@ function checkDeferred(
  */
 function recordGitignoredTarget(
   targetPath: string,
+  sourcePath: string,
   link: ResourceLink,
   deferredArtifacts: DeferredArtifacts | undefined,
   excludedReferences: LinkResolution[],
@@ -253,7 +268,7 @@ function recordGitignoredTarget(
     deferredAssetSet.add(toForwardSlash(targetPath));
     return;
   }
-  excludedReferences.push(makeExclusion(targetPath, 'gitignored', link));
+  excludedReferences.push(makeExclusion(targetPath, sourcePath, 'gitignored', link));
 }
 
 /**
@@ -265,6 +280,7 @@ function recordGitignoredTarget(
  */
 function checkExclusions(
   targetPath: string,
+  sourcePath: string,
   link: ResourceLink,
   options: WalkLinkGraphOptions,
   excludeMatchers: ExcludeMatcher[],
@@ -281,7 +297,7 @@ function checkExclusions(
   try {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from parsed markdown
     if (existsSync(targetPath) && statSync(targetPath).isDirectory()) {
-      excludedReferences.push(makeExclusion(targetPath, 'directory-target', link));
+      excludedReferences.push(makeExclusion(targetPath, sourcePath, 'directory-target', link));
       return true;
     }
   } catch {
@@ -291,13 +307,13 @@ function checkExclusions(
 
   // Check project boundary
   if (isOutsideProject(targetPath, options.projectRoot)) {
-    excludedReferences.push(makeExclusion(targetPath, 'outside-project', link));
+    excludedReferences.push(makeExclusion(targetPath, sourcePath, 'outside-project', link));
     return true;
   }
 
   // Check navigation file exclusion
   if (options.excludeNavigationFiles && isNavigationFile(basename(targetPath))) {
-    excludedReferences.push(makeExclusion(targetPath, 'navigation-file', link));
+    excludedReferences.push(makeExclusion(targetPath, sourcePath, 'navigation-file', link));
     return true;
   }
 
@@ -311,7 +327,7 @@ function checkExclusions(
   // current skill itself.
   if (basename(targetPath) === 'SKILL.md') {
     if (safePath.resolve(targetPath) !== safePath.resolve(options.skillRootPath)) {
-      excludedReferences.push(makeExclusion(targetPath, 'skill-definition', link));
+      excludedReferences.push(makeExclusion(targetPath, sourcePath, 'skill-definition', link));
     }
     return true;
   }
@@ -320,7 +336,7 @@ function checkExclusions(
   const relativePath = toForwardSlash(safePath.relative(options.projectRoot, targetPath));
   const matchedExclude = excludeMatchers.find((m) => m.isMatch(relativePath));
   if (matchedExclude) {
-    excludedReferences.push(makeExclusion(targetPath, 'pattern-matched', link, matchedExclude.rule));
+    excludedReferences.push(makeExclusion(targetPath, sourcePath, 'pattern-matched', link, matchedExclude.rule));
     return true;
   }
 
@@ -331,7 +347,7 @@ function checkExclusions(
     ? isGitIgnored(targetPath, options.projectRoot)
     : options.gitTracker.isIgnoredByActiveSet(targetPath);
   if (isIgnored) {
-    recordGitignoredTarget(targetPath, link, options.deferredArtifacts, excludedReferences, deferredAssetSet);
+    recordGitignoredTarget(targetPath, sourcePath, link, options.deferredArtifacts, excludedReferences, deferredAssetSet);
     return true;
   }
 
@@ -363,7 +379,7 @@ function processLink(
   }
 
   // Check structural exclusions (deferred, directory, boundary, navigation, pattern, gitignore)
-  if (checkExclusions(targetPath, link, options, excludeMatchers, state.excludedReferences, state.deferredAssetSet)) {
+  if (checkExclusions(targetPath, currentResource.filePath, link, options, excludeMatchers, state.excludedReferences, state.deferredAssetSet)) {
     return;
   }
 
@@ -373,7 +389,7 @@ function processLink(
     : registry.getResource(targetPath);
 
   if (targetResource) {
-    processRegistryResource(targetResource, targetPath, link, currentDepth, options, state);
+    processRegistryResource(targetResource, targetPath, currentResource.filePath, link, currentDepth, options, state);
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- Path from parsed markdown
   } else if (existsSync(targetPath)) {
     // Not in registry — non-markdown asset that exists on disk
@@ -381,7 +397,7 @@ function processLink(
   } else {
     // File doesn't exist and not in registry, and not deferred (handled above).
     // Record as missing-target so downstream emits LINK_MISSING_TARGET.
-    state.excludedReferences.push(makeExclusion(targetPath, 'missing-target', link));
+    state.excludedReferences.push(makeExclusion(targetPath, currentResource.filePath, 'missing-target', link));
   }
 }
 
@@ -391,6 +407,7 @@ function processLink(
 function processRegistryResource(
   targetResource: ResourceMetadata,
   targetPath: string,
+  sourcePath: string,
   link: ResourceLink,
   currentDepth: number,
   options: WalkLinkGraphOptions,
@@ -398,7 +415,7 @@ function processRegistryResource(
 ): void {
   // Check depth limit
   if (currentDepth >= options.maxDepth) {
-    state.excludedReferences.push(makeExclusion(targetPath, 'depth-exceeded', link));
+    state.excludedReferences.push(makeExclusion(targetPath, sourcePath, 'depth-exceeded', link));
     return;
   }
 

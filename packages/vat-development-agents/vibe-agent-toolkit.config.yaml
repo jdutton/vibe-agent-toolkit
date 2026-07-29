@@ -33,14 +33,19 @@ skills:
       # link cross-monorepo to the top-level docs/ tree. These links are
       # intentional text pointers (not bundled) — allow them globally for
       # all skills in this package.
+      #
+      # `allow` globs match an issue's `location` (the file to open) or its
+      # `link` (the href as authored). These entries name the CONTAINING files,
+      # which is what the paragraph above actually intends: "all skills in this
+      # package". They previously named the link TARGETS relative to the project
+      # root — but `location` no longer carries the target (a missing target is
+      # not a file you can open), and target globs were depth-fragile besides:
+      # picomatch's `**` does not cross a leading `../`, so every extra level of
+      # nesting needed its own `../../../…` line.
       allow:
         LINK_OUTSIDE_PROJECT:
           - paths:
-              - "../../../docs/**"
-              - "../../docs/**"
-              - "../../CHANGELOG.md"
-              - "../*/README.md"        # sibling packages/<name>/README.md
-              - "../../packages/**"      # any sibling-package reference
+              - "resources/skills/**"
             reason: "Cross-monorepo text pointers to top-level docs/, CHANGELOG.md, and sibling-package READMEs"
         # vat-skill-authoring and vat-skill-review deliberately contain
         # CLAUDE_PLUGIN_ROOT to TEACH the NON_PORTABLE_ASSET_REFERENCE rule

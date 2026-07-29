@@ -5,6 +5,7 @@
 
 import * as fs from 'node:fs';
 import { existsSync as fsExistsSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import {
@@ -50,6 +51,7 @@ import {
   GitTracker,
   isAbsolutePath,
   isGitUrl,
+  issueLocation,
   parseGitUrl,
   resetProjectRootCaches,
   safePath,
@@ -68,6 +70,7 @@ import {
   loadConfig,
   resetLoadedConfigCache,
 } from '../utils/config-loader.js';
+import { formatIssueAnchor } from '../utils/issue-anchor.js';
 import { createLogger } from '../utils/logger.js';
 import { writeYamlOutput } from '../utils/output.js';
 import { mergeSkillPackagingConfig } from '../utils/skill-packaging-config.js';
@@ -184,6 +187,17 @@ async function buildVATProjectContext(
  * Compat verdicts (COMPAT_TARGET_*) are computed from the result's observations
  * and the config-level targets, then merged into the issue list.
  */
+/**
+ * Root a skill's issue locations are expressed relative to — the same
+ * config-root -> git-root -> skill-dir chain the skills lane itself uses, so
+ * audit and `vat skills validate` never report the same skill under two
+ * different coordinate systems.
+ */
+function skillProjectRoot(skillPath: string): string {
+  const skillDir = dirname(skillPath);
+  return findProjectRoot(skillDir) ?? skillDir;
+}
+
 function packagingResultToValidationResult(
   skillPath: string,
   result: PackagingValidationResult,
@@ -192,7 +206,11 @@ function packagingResultToValidationResult(
   // allErrors contains all emitted issues (errors + warnings) after severity resolution
   // but without allow suppression — exactly what audit wants. Verdicts are
   // computed from the observations carried on the result.
-  const verdictIssues = computeConfigVerdicts(result.observations, configTargets, skillPath);
+  const verdictIssues = computeConfigVerdicts(
+    result.observations,
+    configTargets,
+    issueLocation(skillPath, skillProjectRoot(skillPath)),
+  );
   const issues = verdictIssues.length > 0
     ? [...result.allErrors, ...verdictIssues]
     : result.allErrors;
@@ -792,18 +810,22 @@ async function runInventoryDetectors(
   type: ValidationResult['type'],
   prebuiltInv?: ClaudePluginInventory | ClaudeMarketplaceInventory,
 ): Promise<ValidationIssue[]> {
+  // Root every emitted `location` is relative to (anchor contract on
+  // ValidationIssue). Same discovery the skills lane uses, so one audit run
+  // reports every finding in one coordinate system.
+  const projectRoot = findProjectRoot(scanPath) ?? scanPath;
   if (type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
     const inv = prebuiltInv?.kind === 'plugin' ? prebuiltInv : await pluginInventoryAt(scanPath);
     return [
-      ...detectDeclaredButMissing(inv),
-      ...detectPresentButUndeclared(inv),
-      ...detectReferenceTargetMissing(inv),
-      ...(inv.vendor === 'claude-code' ? detectSkillClaudePluginNameMismatch(inv) : []),
+      ...detectDeclaredButMissing(inv, projectRoot),
+      ...detectPresentButUndeclared(inv, projectRoot),
+      ...detectReferenceTargetMissing(inv, projectRoot),
+      ...(inv.vendor === 'claude-code' ? detectSkillClaudePluginNameMismatch(inv, projectRoot) : []),
     ];
   }
   if (type === 'marketplace') {
     const inv = prebuiltInv?.kind === 'marketplace' ? prebuiltInv : await extractClaudeMarketplaceInventory(scanPath);
-    return detectMarketplacePluginSourceMissing(inv);
+    return detectMarketplacePluginSourceMissing(inv, projectRoot);
   }
   return [];
 }
@@ -869,13 +891,14 @@ async function appendPluginInventoryToSurfaceResults(
  */
 function appendInventoryParseErrors(result: ValidationResult, inv: ClaudePluginInventory): void {
 	const pluginJsonSuffix = safePath.join('.claude-plugin', 'plugin.json');
+	const projectRoot = findProjectRoot(inv.path) ?? inv.path;
 	for (const err of inv.parseErrors) {
 		if (err.path.endsWith(pluginJsonSuffix)) continue;
 		result.issues.push({
 			severity: 'error',
 			code: 'PLUGIN_INVALID_JSON',
 			message: err.message,
-			location: err.path,
+			location: issueLocation(err.path, projectRoot),
 		});
 		result.status = 'error';
 	}
@@ -1357,13 +1380,14 @@ function logWarnings(
 }
 
 function logIssues(
-  issues: Array<{ code: string; message: string; location?: string; fix?: string }>,
+  issues: readonly ValidationIssue[],
   logFn: (message: string) => void
 ): void {
   for (const issue of issues) {
     logFn(`  [${issue.code}] ${issue.message}`);
-    if (issue.location) {
-      logFn(`    at: ${issue.location}`);
+    const anchor = formatIssueAnchor(issue);
+    if (anchor !== undefined) {
+      logFn(`    at: ${anchor}`);
     }
     if (issue.fix) {
       logFn(`    fix: ${issue.fix}`);

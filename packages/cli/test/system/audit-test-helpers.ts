@@ -20,7 +20,10 @@ import { createLogger } from '../../src/utils/logger.js';
 export interface FindingTuple {
 	path: string;
 	code: string;
+	/** Project-relative POSIX path of the file the finding is in (anchor contract). */
 	location: string;
+	/** Dotted document-internal pointer, when the finding names one. */
+	field: string;
 	severity: string;
 }
 
@@ -54,7 +57,8 @@ export function sortTuples(tuples: FindingTuple[]): FindingTuple[] {
 	return [...tuples].sort((a, b) => {
 		if (a.path !== b.path) return compareStrings(a.path, b.path);
 		if (a.code !== b.code) return compareStrings(a.code, b.code);
-		return compareStrings(a.location, b.location);
+		if (a.location !== b.location) return compareStrings(a.location, b.location);
+		return compareStrings(a.field, b.field);
 	});
 }
 
@@ -64,7 +68,7 @@ export function sortTuples(tuples: FindingTuple[]): FindingTuple[] {
 
 /**
  * Run the audit pipeline over `corpus` (recursive) and return sorted
- * (path, code, location, severity) tuples for all findings.
+ * (path, code, location, field, severity) tuples for all findings.
  */
 export async function collectFindings(corpus: string): Promise<FindingTuple[]> {
 	const logger = createLogger({});
@@ -80,6 +84,7 @@ export async function collectFindings(corpus: string): Promise<FindingTuple[]> {
 				path: resultPath,
 				code: String(issue.code),
 				location,
+				field: issue.field ?? '',
 				severity: String(issue.severity),
 			});
 		}

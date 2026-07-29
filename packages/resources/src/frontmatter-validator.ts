@@ -14,10 +14,11 @@
  */
 
 import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { issueLocation } from '@vibe-agent-toolkit/utils';
 
 import { createAjvWithUriFormats } from './ajv-factory.js';
 import type { ValidationMode } from './schemas/project-config.js';
-import { issueLocation } from './utils.js';
+import { locationRoot } from './utils.js';
 
 /**
  * Validate frontmatter against a JSON Schema.
@@ -95,7 +96,7 @@ export function validateFrontmatter(
         createRegistryIssue(
           'FRONTMATTER_MISSING',
           `No frontmatter found in file. Schema requires: ${requiredFields}${schemaContext}`,
-          { location: issueLocation(resourcePath, projectRoot), line: 1 },
+          { location: issueLocation(resourcePath, locationRoot(projectRoot)), line: 1 },
         ),
       );
     }
@@ -114,7 +115,7 @@ export function validateFrontmatter(
     const message = formatValidationError(error, frontmatter, mode, schemaPath);
     issues.push(
       createRegistryIssue('FRONTMATTER_SCHEMA_ERROR', message, {
-        location: issueLocation(resourcePath, projectRoot),
+        location: issueLocation(resourcePath, locationRoot(projectRoot)),
         line: 1,
       }),
     );

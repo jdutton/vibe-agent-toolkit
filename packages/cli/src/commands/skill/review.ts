@@ -24,6 +24,7 @@ import * as yaml from 'yaml';
 
 import { resolveSkillPackagingConfig } from '../../skill-resolution/packaging-config.js';
 import { handleCommandError } from '../../utils/command-error.js';
+import { formatIssueAnchor } from '../../utils/issue-anchor.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { projectRootOrNull } from '../../utils/project-root-policy.js';
 import { renderSkillQualityFooter } from '../../utils/skill-quality-footer.js';
@@ -166,8 +167,9 @@ function renderHumanReport(
 function renderIssue(issue: ValidationIssue, logger: Logger): void {
   const severityTag = issue.severity.toUpperCase();
   logger.info(`    - [${severityTag}] [${issue.code}] ${issue.message}`);
-  if (issue.location !== undefined && issue.location !== '') {
-    logger.info(`        Location: ${issue.location}`);
+  const anchor = formatIssueAnchor(issue);
+  if (anchor !== undefined) {
+    logger.info(`        Location: ${anchor}`);
   }
   if (issue.fix !== undefined && issue.fix !== '') {
     logger.info(`        Fix: ${issue.fix}`);
@@ -192,6 +194,8 @@ function outputYaml(
       severity: i.severity,
       message: i.message,
       ...(i.location === undefined ? {} : { location: i.location }),
+      ...(i.line === undefined ? {} : { line: i.line }),
+      ...(i.field === undefined ? {} : { field: i.field }),
       ...(i.fix === undefined ? {} : { fix: i.fix }),
     }));
   }

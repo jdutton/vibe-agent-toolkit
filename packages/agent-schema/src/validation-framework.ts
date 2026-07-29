@@ -152,7 +152,16 @@ export function applyAllowFilter(
     const code = issue.code as IssueCode;
     const byCode = matchers.get(code);
     const location = issue.location ?? '';
-    const hit = byCode?.find(m => m.match(location));
+    // An allow entry names "a path this finding is about", and a link issue is
+    // about TWO: the file that holds the link (`location`) and the target it
+    // points at (`link`). Both are legitimate things to suppress, and they want
+    // different globs — `LINK_OUTSIDE_PROJECT: ../../docs/**` means "links into
+    // the monorepo docs tree are fine anywhere", which is not expressible by
+    // naming containing files. Matching either keeps both readings working.
+    // (Before the anchor split, `location` WAS the target for walker-derived
+    // link issues, so target-keyed allow entries are the ones already in the
+    // wild — dropping them would break every adopter config silently.)
+    const hit = byCode?.find(m => m.match(location) || (issue.link !== undefined && m.match(issue.link)));
     if (hit) {
       hit.used = true;
       const record: AllowRecord = {
@@ -199,13 +208,23 @@ function finalize(issue: ValidationIssue, config: ValidationConfig): ValidationI
   return { ...issue, severity: resolved, reference: entry.reference };
 }
 
-function metaIssue(code: 'ALLOW_EXPIRED' | 'ALLOW_UNUSED', message: string, location: string): ValidationIssue {
+/**
+ * Build an ALLOW_* meta issue.
+ *
+ * `field` rather than `location`: `validation.allow.<CODE>` is a pointer INTO
+ * the project config, not a file path — and it points into a DIFFERENT file
+ * than the skill the allow entry was about. The framework is handed a config
+ * object, not the path it was loaded from, so it cannot honestly name the file;
+ * emitting the pointer alone is the truthful answer, and it no longer
+ * masquerades as something a consumer can resolve as a path.
+ */
+function metaIssue(code: 'ALLOW_EXPIRED' | 'ALLOW_UNUSED', message: string, field: string): ValidationIssue {
   const entry = CODE_REGISTRY[code];
   return {
     severity: entry.defaultSeverity,
     code,
     message,
-    location,
+    field,
     fix: entry.fix,
     reference: entry.reference,
   };

@@ -39,6 +39,43 @@ skills:
 
 `validation.severity` sets class-level behavior; `validation.allow` suppresses specific `(code, path)` instances with an audit trail. `paths` is optional on allow entries and defaults to `["**/*"]` (the whole skill). Full docs at the VAT agent-authoring skill.
 
+## Where an issue points — the four anchors
+
+Every issue names up to four independent things, and each has its own field. None
+is ever packed into another with a separator:
+
+| Field | Means | Example |
+|---|---|---|
+| `location` | **The file you would open to fix this**, as a project-relative POSIX path | `packages/cli/SKILL.md` |
+| `line` | 1-based line within `location` | `24` |
+| `field` | Dotted pointer *inside* that document | `frontmatter.description` |
+| `link` | A link href or target the issue is about — never the file to open | `./refs/missing.md` |
+
+`location` is **always relative** and always forward-slashed, so a consumer can
+resolve every finding against one known root, and a CI log never carries a
+developer's home directory. Human output renders these as
+`path:line (field)`.
+
+A **link** finding is anchored to the file that *contains* the link, with the
+target in `link`. Anchoring to the target would, for a missing target, name a
+path that does not exist.
+
+### What `validation.allow` globs match
+
+`paths` entries are matched against an issue's **`location`** or its **`link`**.
+For link codes, prefer naming the containing files:
+
+```yaml
+allow:
+  LINK_OUTSIDE_PROJECT:
+    - paths: ["resources/skills/**"]
+      reason: "cross-repo text pointers, intentionally not bundled"
+```
+
+Globs written against a link's resolved *target* are depth-fragile — picomatch's
+`**` does not cross a leading `../`, so each extra level of nesting needs its own
+`../../../…` pattern.
+
 ## Command Scope
 
 | Command | Severity applied | `allow` applied | Blocks on error |

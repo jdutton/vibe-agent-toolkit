@@ -13,13 +13,13 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 
 import { createRegistryIssue } from '@vibe-agent-toolkit/agent-schema';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import { validateFrontmatter } from './frontmatter-validator.js';
 import type { ValidationMode } from './schemas/project-config.js';
 import type { ValidationIssue } from './schemas/validation-result.js';
 import type { SchemaReference } from './types/resources.js';
-import { issueLocation } from './utils.js';
+import { locationRoot } from './utils.js';
 
 /**
  * Load a JSON Schema from a file path
@@ -95,7 +95,7 @@ export async function validateFrontmatterMultiSchema(
           createRegistryIssue(
             'FRONTMATTER_SCHEMA_ERROR',
             `Failed to load or validate schema ${schemaRef.schema}: ${message}`,
-            { location: issueLocation(resourcePath, projectRoot), line: 1 },
+            { location: issueLocation(resourcePath, locationRoot(projectRoot)), line: 1 },
           ),
         ],
       });

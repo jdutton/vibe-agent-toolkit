@@ -4,8 +4,12 @@ import { describe, expect, it } from 'vitest';
 import { detectSkillClaudePluginNameMismatch } from '../../../src/inventory/detectors/skill-claude-plugin-name-mismatch.js';
 import { ClaudePluginInventory, ClaudeSkillInventory } from '../../../src/inventory/types.js';
 
+/** Root every emitted `location` is relative to — the fixture plugin's parent. */
+const PROJECT_ROOT = '/test/plugins';
+
 const PLUGIN_PATH = '/test/plugins/my-plugin';
-const PLUGIN_JSON_PATH = safePath.join(PLUGIN_PATH, '.claude-plugin', 'plugin.json');
+/** What the detector emits: the manifest, relative to PROJECT_ROOT. */
+const PLUGIN_JSON_LOCATION = 'my-plugin/.claude-plugin/plugin.json';
 const ROOT_SKILL_PATH = safePath.join(PLUGIN_PATH, 'SKILL.md');
 
 function makeRootSkill(name: string): ClaudeSkillInventory {
@@ -56,13 +60,13 @@ describe('detectSkillClaudePluginNameMismatch', () => {
 	it('returns no issues when names match', () => {
 		const inv = makePluginInventory({ skillName: 'my-plugin', manifestName: 'my-plugin' });
 
-		expect(detectSkillClaudePluginNameMismatch(inv)).toEqual([]);
+		expect(detectSkillClaudePluginNameMismatch(inv, PROJECT_ROOT)).toEqual([]);
 	});
 
 	it('returns a warning when skill name differs from plugin name', () => {
 		const inv = makePluginInventory({ skillName: 'the-skill-name', manifestName: 'the-plugin-name' });
 
-		const issues = detectSkillClaudePluginNameMismatch(inv);
+		const issues = detectSkillClaudePluginNameMismatch(inv, PROJECT_ROOT);
 
 		expect(issues).toHaveLength(1);
 		const issue = issues[0];
@@ -71,7 +75,8 @@ describe('detectSkillClaudePluginNameMismatch', () => {
 		expect(issue?.message).toBe(
 			'plugin.json name "the-plugin-name" does not match co-located SKILL.md frontmatter name "the-skill-name"',
 		);
-		expect(issue?.location).toBe(PLUGIN_JSON_PATH);
+		// `location` is project-relative (anchor contract), not the absolute path.
+		expect(issue?.location).toBe(PLUGIN_JSON_LOCATION);
 		expect(issue?.fix).toBe(
 			'Align the names: update plugin.json `name` to match SKILL.md `name` (the skill is authoritative), or intentionally namespace the plugin (configure `validation.severity` or `validation.allow` with a reason).',
 		);
@@ -80,13 +85,13 @@ describe('detectSkillClaudePluginNameMismatch', () => {
 	it('returns no issues for claude-plugin shape (no root SKILL.md)', () => {
 		const inv = makePluginInventory({ shape: 'claude-plugin', includeRootSkill: false });
 
-		expect(detectSkillClaudePluginNameMismatch(inv)).toEqual([]);
+		expect(detectSkillClaudePluginNameMismatch(inv, PROJECT_ROOT)).toEqual([]);
 	});
 
 	it('returns no issues when root skill is not found in discovered.skills', () => {
 		const inv = makePluginInventory({ includeRootSkill: false });
 
-		expect(detectSkillClaudePluginNameMismatch(inv)).toEqual([]);
+		expect(detectSkillClaudePluginNameMismatch(inv, PROJECT_ROOT)).toEqual([]);
 	});
 
 	it('returns no issues when plugin name is undefined', () => {
@@ -109,12 +114,12 @@ describe('detectSkillClaudePluginNameMismatch', () => {
 			parseErrors: [],
 		});
 
-		expect(detectSkillClaudePluginNameMismatch(inv)).toEqual([]);
+		expect(detectSkillClaudePluginNameMismatch(inv, PROJECT_ROOT)).toEqual([]);
 	});
 
 	it('returns no issues when skill name is empty string', () => {
 		const inv = makePluginInventory({ skillName: '', manifestName: 'my-plugin' });
 
-		expect(detectSkillClaudePluginNameMismatch(inv)).toEqual([]);
+		expect(detectSkillClaudePluginNameMismatch(inv, PROJECT_ROOT)).toEqual([]);
 	});
 });

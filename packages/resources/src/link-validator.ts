@@ -22,12 +22,13 @@ import { createRegistryIssue, type ValidationIssue } from '@vibe-agent-toolkit/a
 import {
   isGitIgnored,
   type GitTracker,
+  issueLocation,
   verifyCaseSensitiveFilename,
 } from '@vibe-agent-toolkit/utils';
 
 import type { DeferredArtifacts } from './deferred-artifacts.js';
 import type { ResourceLink } from './types.js';
-import { isWithinProject, issueLocation, resolveLocalHref } from './utils.js';
+import { isWithinProject, locationRoot, resolveLocalHref } from './utils.js';
 
 type LinkIssueExtras = Partial<Pick<ValidationIssue, 'location' | 'line' | 'link' | 'suggestion'>>;
 
@@ -43,7 +44,7 @@ function linkExtras(
   suggestion?: string,
 ): LinkIssueExtras {
   return {
-    location: issueLocation(sourceFilePath, projectRoot),
+    location: issueLocation(sourceFilePath, locationRoot(projectRoot)),
     link: link.href,
     ...(link.line !== undefined && { line: link.line }),
     ...(suggestion !== undefined && { suggestion }),

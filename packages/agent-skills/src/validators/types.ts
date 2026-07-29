@@ -44,6 +44,15 @@ export interface ValidateOptions {
   /** Root directory (for resolving relative links) */
   rootDir?: string;
 
+  /**
+   * Root that every emitted `ValidationIssue.location` is expressed relative
+   * to. Defaults to the same `findProjectRoot(dirname(skillPath)) ?? skill dir`
+   * fallback `validateSkillForPackaging` uses, so both skills-lane entry points
+   * answer "relative to what?" identically. Pass it explicitly when batching
+   * skills so one report speaks in one coordinate system.
+   */
+  projectRoot?: string;
+
   /** Treat as VAT-generated skill (stricter validation) */
   isVATGenerated?: boolean;
 

@@ -5,6 +5,7 @@
  * using validateSkillForPackaging with merged packaging config.
  */
 
+import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import {
   validateSkillForPackaging,
   type PackagingValidationResult,
@@ -18,6 +19,7 @@ import * as yaml from 'yaml';
 
 import { loadConfig } from '../../utils/config-loader.js';
 import { formatDurationSecs } from '../../utils/duration.js';
+import { formatIssueAnchor } from '../../utils/issue-anchor.js';
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
 import { mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
@@ -84,15 +86,11 @@ function outputYamlSummary(
 /**
  * Output a single validation error
  */
-function outputSingleError(error: {
-  code: string;
-  message: string;
-  location?: string;
-  fix?: string;
-}): void {
+function outputSingleError(error: ValidationIssue): void {
   console.error(`    [${String(error.code)}] ${String(error.message)}`);
-  if (error.location) {
-    console.error(`      Location: ${String(error.location)}`);
+  const anchor = formatIssueAnchor(error);
+  if (anchor !== undefined) {
+    console.error(`      Location: ${anchor}`);
   }
   if (error.fix) {
     console.error(`      Fix: ${String(error.fix)}`);

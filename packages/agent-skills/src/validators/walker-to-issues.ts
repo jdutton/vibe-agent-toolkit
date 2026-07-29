@@ -1,5 +1,5 @@
 import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
-import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { issueLocation } from '@vibe-agent-toolkit/utils';
 
 import type { LinkResolution } from '../walk-link-graph.js';
 
@@ -58,8 +58,17 @@ export function walkerExclusionsToIssues(
     if (!r.excludeReason) continue;
     const code = evaluate(exclusionToContext(r.excludeReason));
     if (code === null) continue;
-    const location = toForwardSlash(safePath.relative(projectRoot, r.path));
-    issues.push(materializeIssue(code, { location, detail: `link: ${r.linkHref ?? location}` }));
+    // Anchor to the file CONTAINING the link, not the target. For a
+    // `missing-target` exclusion the target does not exist, so a location
+    // naming it points at nothing the author can open. The target is a link,
+    // and links have their own field.
+    const target = issueLocation(r.path, projectRoot);
+    issues.push(materializeIssue(code, {
+      location: issueLocation(r.sourcePath, projectRoot),
+      ...(r.sourceLine !== undefined && { line: r.sourceLine }),
+      link: r.linkHref ?? target,
+      detail: `link: ${r.linkHref ?? target}`,
+    }));
   }
   return issues;
 }
@@ -75,7 +84,7 @@ export function deferredAssetsToIssues(
   projectRoot: string,
 ): ValidationIssue[] {
   return deferredAssets.map((asset) => {
-    const location = toForwardSlash(safePath.relative(projectRoot, asset));
+    const location = issueLocation(asset, projectRoot);
     return materializeIssue('LINK_DEFERRED_ARTIFACT', { location, detail: location });
   });
 }

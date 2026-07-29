@@ -10,6 +10,15 @@
  * and frozen for the lifetime of the regression baseline. Do not re-run unless
  * you intend to redefine the baseline.
  *
+ * RE-ANCHORED (not redefined) when `ValidationIssue`'s anchor contract landed:
+ * `location` became project-relative and document-internal pointers moved to the
+ * new `field`, so every captured anchor string changed spelling. The FINDING SET
+ * did not: the re-capture was gated on proving the new run reproduces all 200
+ * legacy tuples exactly on `(path, code, severity)` — the part of the tuple that
+ * change does not touch — with zero losses. If you re-capture again, run that
+ * same proof first; a snapshot refreshed without it cannot tell "we re-spelled
+ * the anchors" apart from "we stopped detecting something".
+ *
  * Strategy: audit the corpus root recursively in one pass (mirrors what the
  * existing system tests and `vat audit <fixtureDir>` do). The full-corpus pass
  * surfaces skill issues inside cached plugins that per-directory audits miss.

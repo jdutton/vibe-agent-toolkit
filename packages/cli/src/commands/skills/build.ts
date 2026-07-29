@@ -26,6 +26,7 @@ import { Command } from 'commander';
 
 import { handleCommandError } from '../../utils/command-error.js';
 import { loadConfig } from '../../utils/config-loader.js';
+import { formatIssueAnchor } from '../../utils/issue-anchor.js';
 import { type createLogger } from '../../utils/logger.js';
 import { requireProjectRoot } from '../../utils/project-root-policy.js';
 import { mergeSkillPackagingConfig } from '../../utils/skill-packaging-config.js';
@@ -124,8 +125,9 @@ function displayActiveErrors(
     logger.error(`\n   Active errors (${validationResult.activeErrors.length}):`);
     for (const error of validationResult.activeErrors) {
       logger.error(`     [${String(error.code)}] ${String(error.message)}`);
-      if (error.location) {
-        logger.error(`       Location: ${String(error.location)}`);
+      const anchor = formatIssueAnchor(error);
+      if (anchor !== undefined) {
+        logger.error(`       Location: ${anchor}`);
       }
       if (error.fix) {
         logger.error(`       Fix: ${String(error.fix)}`);
@@ -166,8 +168,9 @@ function logPostBuildIssues(
   for (const issue of result.postBuildIssues) {
     const prefix = issue.severity === 'error' ? 'ERROR' : 'WARNING';
     logger.info(`     [${prefix}] [${String(issue.code)}] ${String(issue.message)}`);
-    if (issue.location) {
-      logger.info(`       Location: ${String(issue.location)}`);
+    const anchor = formatIssueAnchor(issue);
+    if (anchor !== undefined) {
+      logger.info(`       Location: ${anchor}`);
     }
     if (issue.fix) {
       logger.info(`       Fix: ${String(issue.fix)}`);

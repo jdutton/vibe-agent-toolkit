@@ -2,9 +2,17 @@
  * plugin.json merge.
  *
  * Precedence (spec section Design -> plugin.json merge):
- *   - VAT wins on:    name, version, author (shallow wholesale replace)
+ *   - CONFIG wins on: name, version, author (shallow wholesale replace)
  *   - Author wins on: all other keys (keywords, repository, homepage, license, ...)
  *   - description:    config.description ?? author.description ?? `${name} plugin`
+ *
+ * "VAT wins" is a misleading way to say this and the warnings below used to say
+ * it: VAT invents nothing. `name` is the marketplace plugin entry's name and
+ * `author` is the marketplace `owner`, both straight out of
+ * `vibe-agent-toolkit.config.yaml`. The config is the source of truth for plugin
+ * identity precisely so a marketplace cannot ship plugins that disagree with it
+ * about who published them. The warnings therefore name the winning value and
+ * where it came from, so the reader can act on it.
  *
  * Version resolution lives in `resolveVersion` (config > plugin.json > root) and
  * happens at the caller in `build.ts`. By the time `mergePluginJson` runs, the
@@ -75,12 +83,17 @@ function collectWarnings(
   const warnings: string[] = [];
   if ('name' in authorJson && authorJson['name'] !== vat.name) {
     warnings.push(
-      `plugin.json "name" mismatch: author value ${JSON.stringify(authorJson['name'])} ignored; using VAT-generated "${vat.name}".`,
+      `plugin.json "name" (${JSON.stringify(authorJson['name'])}) disagrees with the marketplace config, ` +
+        `which declares "${vat.name}". Using the config value. ` +
+        `Align plugin.json, or drop its "name" field — the config owns plugin identity.`,
     );
   }
   if ('author' in authorJson && !deepEqual(authorJson['author'], mergedAuthor)) {
     warnings.push(
-      `plugin.json "author" mismatch: author-supplied value discarded; using VAT-generated author object.`,
+      `plugin.json "author" (${JSON.stringify(authorJson['author'])}) disagrees with the marketplace ` +
+        `\`owner\` in vibe-agent-toolkit.config.yaml, which declares ${JSON.stringify(mergedAuthor)}. ` +
+        `Using the config value. Align plugin.json, or drop its "author" field — the marketplace owner ` +
+        `is the published author of every plugin in it.`,
     );
   }
   return warnings;

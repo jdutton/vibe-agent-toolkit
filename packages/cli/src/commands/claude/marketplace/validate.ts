@@ -20,7 +20,7 @@ import {
   type ValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
 import { validatePlugin } from '@vibe-agent-toolkit/claude-marketplace';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { formatDuration, handleCommandError } from '../../../utils/command-error.js';
@@ -49,7 +49,7 @@ function checkMarketplaceFiles(marketplacePath: string): ValidationIssue[] {
         severity: check.severity,
         code: check.code as ValidationIssue['code'],
         message: `Marketplace is missing a ${check.file} — ${check.verb}`,
-        location: safePath.join(marketplacePath, check.file),
+        location: issueLocation(safePath.join(marketplacePath, check.file), marketplacePath),
         fix: `Add a ${check.file} to the marketplace root directory`,
       });
     }
@@ -61,7 +61,7 @@ function checkMarketplaceFiles(marketplacePath: string): ValidationIssue[] {
 /**
  * Validate all SKILL.md files within a plugin's skills/ directory.
  */
-async function validatePluginSkills(pluginDir: string): Promise<ValidationIssue[]> {
+async function validatePluginSkills(pluginDir: string, marketplacePath: string): Promise<ValidationIssue[]> {
   const skillsDir = safePath.join(pluginDir, 'skills');
   if (!existsSync(skillsDir)) return [];
 
@@ -75,7 +75,7 @@ async function validatePluginSkills(pluginDir: string): Promise<ValidationIssue[
     const skillMdPath = safePath.join(skillDir, 'SKILL.md');
     if (!existsSync(skillMdPath)) continue;
 
-    const skillResult = await validateSkill({ skillPath: skillMdPath, rootDir: skillDir });
+    const skillResult = await validateSkill({ skillPath: skillMdPath, rootDir: skillDir, projectRoot: marketplacePath });
     issues.push(...skillResult.issues);
   }
 
@@ -103,7 +103,7 @@ async function validatePlugins(
     pluginResults.push(pluginResult);
     issues.push(...pluginResult.issues);
 
-    const skillIssues = await validatePluginSkills(pluginDir);
+    const skillIssues = await validatePluginSkills(pluginDir, marketplacePath);
     issues.push(...skillIssues);
   }
 
