@@ -156,7 +156,7 @@ export {
   ClaudePluginInventory,
   ClaudeSkillInventory,
 } from './inventory/index.js';
-export { extractClaudeSkillInventory } from './inventory/index.js';
+export { crawlSkillLinkRegistry, extractClaudeSkillInventory } from './inventory/index.js';
 export { extractClaudePluginInventory } from './inventory/index.js';
 export { extractClaudeMarketplaceInventory } from './inventory/index.js';
 export { extractClaudeInstallInventory } from './inventory/index.js';

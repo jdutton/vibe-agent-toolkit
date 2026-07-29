@@ -10,6 +10,8 @@ import { mkdirSyncReal, toForwardSlash } from '../../src/path-utils.js';
 import { setupSyncTempDirSuite } from '../../src/test-helpers.js';
 import { createGitRepo } from '../test-helpers.js';
 
+const GITIGNORE = '.gitignore';
+
 /**
  * Helper to create test file structure
  */
@@ -325,7 +327,7 @@ describe('file-crawler', () => {
       createGitRepo(testDir);
 
       // Create .gitignore file
-      const gitignorePath = safePath.join(testDir, '.gitignore');
+      const gitignorePath = safePath.join(testDir, GITIGNORE);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is controlled temp directory
       writeFileSync(gitignorePath, 'docs/\n*.log\n');
 
@@ -351,7 +353,7 @@ describe('file-crawler', () => {
       mkdirSyncReal(safePath.join(testDir, '.git'));
 
       // Create .gitignore file
-      const gitignorePath = safePath.join(testDir, '.gitignore');
+      const gitignorePath = safePath.join(testDir, GITIGNORE);
       // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is controlled temp directory
       writeFileSync(gitignorePath, 'docs/\n');
 
@@ -363,6 +365,39 @@ describe('file-crawler', () => {
 
       // Should include docs/ files since gitignore is disabled
       expect(files.some((f) => f.includes('docs'))).toBe(true);
+    });
+
+    // `respectGitignore: false` answers two questions at once — "include
+    // files git does not track" and "include files git is told to ignore" —
+    // and it answers them by abandoning `git ls-files` for a full recursive
+    // walk. Callers that only wanted the first (a skill the author has not
+    // committed yet) paid the second, which on a large monorepo means
+    // descending every build cache, worktree and generated tree: measured at
+    // 39.6 s versus 16 ms for the same 1,146 files. `includeUntracked` asks
+    // git the narrower question and keeps the fast path.
+    it('includes untracked-but-not-ignored files while still honouring .gitignore', () => {
+      createTestStructure(testDir);
+      createGitRepo(testDir);
+
+      // eslint-disable-next-line security/detect-non-literal-fs-filename -- testDir is controlled temp directory
+      writeFileSync(safePath.join(testDir, GITIGNORE), 'docs/\n');
+      // Only src/ is committed: README.md and package.json stay untracked,
+      // docs/ is ignored outright.
+      // eslint-disable-next-line sonarjs/no-os-command-from-path -- test setup uses git from PATH
+      spawnSync('git', ['add', 'src/'], { cwd: testDir, stdio: 'pipe' });
+
+      const files = crawlDirectorySync({
+        baseDir: testDir,
+        include: ['**/*'],
+        includeUntracked: true,
+      }).map(toForwardSlash);
+
+      expect(files.some((f) => f.endsWith('/src/index.ts'))).toBe(true);
+      expect(files.some((f) => f.endsWith('/README.md'))).toBe(true);
+      expect(files.some((f) => f.endsWith('/package.json'))).toBe(true);
+      // Ignored, and excluded-by-default, trees stay out.
+      expect(files.every((f) => !f.includes('/docs/'))).toBe(true);
+      expect(files.every((f) => !f.includes('/node_modules/'))).toBe(true);
     });
   });
 });

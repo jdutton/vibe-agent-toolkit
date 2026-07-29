@@ -168,3 +168,31 @@ describe('vat audit <git-url> — cleanup', () => {
     }
   });
 });
+
+describe('vat audit <path> vs <git-url> — a local path always wins', () => {
+  // `isGitUrl` accepts bare `owner/repo` GitHub shorthand, and the audit
+  // command used to consult it BEFORE asking whether the argument names a
+  // directory on disk. Every two-segment relative path (`plugins/foo`,
+  // `docs/guides`, `packages/cli`) therefore resolved to
+  // https://github.com/<that>.git — the audit never ran, and the command
+  // reached out to github.com with a name derived from the user's local
+  // directory layout. Shorthand is only a fallback for arguments that name
+  // nothing locally.
+  it('audits a two-segment relative path locally instead of cloning it as owner/repo', () => {
+    const result = runAuditCli('plugins/foo', [], { cwd: workTree });
+
+    expect(result.stderr).not.toContain('Clone failed');
+    expect(`${result.stdout}${result.stderr}`).not.toContain('github.com');
+    expect(result.status).toBe(0);
+    expect(result.stdout).toContain('SKILL.md');
+  });
+
+  it('still treats owner/repo shorthand as a URL when nothing of that name exists locally', () => {
+    const result = runAuditCli('no-such-owner/no-such-repo-xyz', [], { cwd: workTree });
+
+    // Reaches the clone path (and fails there) rather than being resolved
+    // as a local directory.
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toContain('no-such-repo-xyz');
+  });
+});

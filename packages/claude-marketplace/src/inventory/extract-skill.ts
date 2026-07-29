@@ -20,12 +20,15 @@ type ParseErrors = ClaudeSkillInventory['parseErrors'];
  * re-walk or re-parse. Failures inside those parsers are surfaced via
  * parseErrors[]; nothing here throws on bad input.
  */
-export async function extractClaudeSkillInventory(skillMdPath: string): Promise<ClaudeSkillInventory> {
+export async function extractClaudeSkillInventory(
+	skillMdPath: string,
+	sharedRegistry?: ResourceRegistry,
+): Promise<ClaudeSkillInventory> {
 	const absolute = safePath.resolve(skillMdPath);
 	const parseErrors: ParseErrors = [];
 
 	const { name, description } = await parseFrontmatterFields(absolute, parseErrors);
-	const linked = await walkLinkedFiles(absolute, parseErrors);
+	const linked = await walkLinkedFiles(absolute, parseErrors, sharedRegistry);
 
 	return new ClaudeSkillInventory({
 		path: absolute,
@@ -58,23 +61,51 @@ async function parseFrontmatterFields(
 	return { name, description };
 }
 
-async function walkLinkedFiles(absolute: string, parseErrors: ParseErrors): Promise<string[]> {
+/**
+ * Crawl + link-resolve a registry covering `projectRoot`.
+ *
+ * Untracked skills and linked documents the user is actively authoring must be
+ * included alongside committed files. Ask git that narrower question
+ * (`includeUntracked`) rather than `respectGitignore: false`, which
+ * additionally pulls in every ignored tree AND abandons `git ls-files` for a
+ * full recursive walk — 39.6 s versus 16 ms for the same file set on a
+ * ~1,200-document monorepo.
+ */
+export async function crawlSkillLinkRegistry(projectRoot: string): Promise<ResourceRegistry> {
+	const files = await crawlDirectory({
+		baseDir: projectRoot,
+		include: ['**/*.md'],
+		absolute: true,
+		filesOnly: true,
+		includeUntracked: true,
+	});
+	const registry = new ResourceRegistry({ baseDir: projectRoot });
+	await registry.addResources(files);
+	registry.resolveLinks();
+	return registry;
+}
+
+async function walkLinkedFiles(
+	absolute: string,
+	parseErrors: ParseErrors,
+	sharedRegistry?: ResourceRegistry,
+): Promise<string[]> {
 	const linked: string[] = [];
 	try {
 		// Library fallback to skill dir; see plan 2026-05-17 / spec §7.
 		const projectRoot = findProjectRoot(dirname(absolute)) ?? dirname(absolute);
-		// Crawl with respectGitignore: false so untracked skills and linked documents
-		// that the user is actively authoring are included alongside committed files.
-		const files = await crawlDirectory({
-			baseDir: projectRoot,
-			include: ['**/*.md'],
-			absolute: true,
-			filesOnly: true,
-			respectGitignore: false,
-		});
-		const registry = new ResourceRegistry({ baseDir: projectRoot });
-		await registry.addResources(files);
-		registry.resolveLinks();
+		// Reuse the caller's registry when it was crawled for exactly this root.
+		// Building one means parsing every document under the root, so a caller
+		// walking many skills (`vat audit`) would otherwise pay that once per
+		// skill. Exact-root equality, not ancestry: `collectLinkedFiles` walks
+		// relative to `projectRoot`, so a registry rooted elsewhere would answer
+		// a different question.
+		const sharedBaseDir = sharedRegistry?.baseDir;
+		const registry = sharedRegistry !== undefined
+			&& sharedBaseDir !== undefined
+			&& safePath.resolve(sharedBaseDir) === safePath.resolve(projectRoot)
+			? sharedRegistry
+			: await crawlSkillLinkRegistry(projectRoot);
 		const skillResource = registry.getResource(absolute);
 		if (skillResource !== undefined) {
 			collectLinkedFiles(skillResource.id, registry, absolute, projectRoot, linked);

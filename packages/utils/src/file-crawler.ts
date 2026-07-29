@@ -21,8 +21,27 @@ export interface CrawlOptions {
   absolute?: boolean;
   /** Only return files (not directories) - default: true */
   filesOnly?: boolean;
-  /** Respect .gitignore files (default: true) */
+  /**
+   * Respect .gitignore files (default: true).
+   *
+   * When true (and the baseDir is inside a git repository) the crawl is
+   * answered by `git ls-files`, which is orders of magnitude cheaper than
+   * walking the tree. Setting this to false forces a full recursive walk of
+   * every non-excluded directory — including build caches, nested worktrees
+   * and generated output — so only pass it when you genuinely need files git
+   * has been told to ignore. To pick up files git simply does not track yet,
+   * use {@link CrawlOptions.includeUntracked} instead and keep the fast path.
+   */
   respectGitignore?: boolean;
+  /**
+   * Include untracked (but not ignored) files (default: false).
+   *
+   * Only meaningful alongside `respectGitignore: true`, where it widens the
+   * `git ls-files` query from tracked files to tracked + untracked-not-ignored.
+   * This is the right knob for "the author is editing something they have not
+   * committed yet"; `respectGitignore: false` is not, and costs the whole walk.
+   */
+  includeUntracked?: boolean;
   /** Match through dot-directories like .claude/ (default: false) */
   dot?: boolean;
 }
@@ -77,6 +96,7 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
     absolute = true,
     filesOnly = true,
     respectGitignore = true,
+    includeUntracked = false,
     dot = false,
   } = options;
 
@@ -107,7 +127,7 @@ export function crawlDirectorySync(options: CrawlOptions): string[] {
       // Get all tracked files, then filter using glob patterns below
       const gitFiles = gitLsFiles({
         cwd: resolvedBaseDir,
-        includeUntracked: false, // Only tracked files
+        includeUntracked,
       });
 
       if (gitFiles !== null) {

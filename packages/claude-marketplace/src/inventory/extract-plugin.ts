@@ -8,6 +8,7 @@ import type {
 	LspRef,
 	McpRef,
 } from '@vibe-agent-toolkit/agent-skills';
+import type { ResourceRegistry } from '@vibe-agent-toolkit/resources';
 import { safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
@@ -25,7 +26,10 @@ const SHAPE_SKILL_CLAUDE_PLUGIN = 'skill-claude-plugin' as const;
  * Build a PluginInventory for a directory containing a .claude-plugin/plugin.json manifest
  * and/or a root SKILL.md. Never throws — all failures surface via parseErrors[].
  */
-export async function extractClaudePluginInventory(pluginPath: string): Promise<ClaudePluginInventory> {
+export async function extractClaudePluginInventory(
+	pluginPath: string,
+	sharedRegistry?: ResourceRegistry,
+): Promise<ClaudePluginInventory> {
 	const absolute = safePath.resolve(pluginPath);
 
 	// eslint-disable-next-line security/detect-non-literal-fs-filename -- absolute is resolved from caller-supplied path, safe for plugin extraction
@@ -53,7 +57,7 @@ export async function extractClaudePluginInventory(pluginPath: string): Promise<
 		rawManifest !== undefined && hasRootSkill ? SHAPE_SKILL_CLAUDE_PLUGIN : 'claude-plugin';
 
 	const declared = buildDeclared(absolute, rawManifest);
-	const discovered = await buildDiscovered(absolute, shape, rootSkillMd, parseErrors);
+	const discovered = await buildDiscovered(absolute, shape, rootSkillMd, parseErrors, sharedRegistry);
 	const unexpected = await buildUnexpected(absolute, shape);
 
 	await collectAssetParseErrors(absolute, parseErrors);
@@ -201,8 +205,9 @@ async function buildDiscovered(
 	shape: ClaudePluginInventory['shape'],
 	rootSkillMd: string,
 	parseErrors: ParseErrors,
+	sharedRegistry: ResourceRegistry | undefined,
 ): Promise<ClaudePluginInventory['discovered']> {
-	const skills = await discoverSkills(absolute, shape, rootSkillMd, parseErrors);
+	const skills = await discoverSkills(absolute, shape, rootSkillMd, parseErrors, sharedRegistry);
 	const commands = await discoverComponents(safePath.join(absolute, 'commands'));
 	const agents = await discoverComponents(safePath.join(absolute, 'agents'));
 	return { skills, commands, agents };
@@ -213,11 +218,12 @@ async function discoverSkills(
 	shape: ClaudePluginInventory['shape'],
 	rootSkillMd: string,
 	parseErrors: ParseErrors,
+	sharedRegistry: ResourceRegistry | undefined,
 ) {
 	const skillInventories = [];
 
 	if (shape === SHAPE_SKILL_CLAUDE_PLUGIN) {
-		const rootInv = await extractClaudeSkillInventory(rootSkillMd);
+		const rootInv = await extractClaudeSkillInventory(rootSkillMd, sharedRegistry);
 		for (const err of rootInv.parseErrors) parseErrors.push(err);
 		skillInventories.push(rootInv);
 	}
@@ -237,7 +243,7 @@ async function discoverSkills(
 		const skillMd = safePath.join(skillsDir, entry, SKILL_MD);
 		// eslint-disable-next-line security/detect-non-literal-fs-filename -- path constructed from validated skills directory
 		if (existsSync(skillMd)) {
-			const inv = await extractClaudeSkillInventory(skillMd);
+			const inv = await extractClaudeSkillInventory(skillMd, sharedRegistry);
 			for (const err of inv.parseErrors) parseErrors.push(err);
 			skillInventories.push(inv);
 		}

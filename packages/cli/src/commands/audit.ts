@@ -8,6 +8,7 @@ import { existsSync as fsExistsSync } from 'node:fs';
 
 import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import {
+  crawlAndResolveRegistry,
   detectDeclaredButMissing,
   detectMarketplacePluginSourceMissing,
   detectPresentButUndeclared,
@@ -21,6 +22,7 @@ import {
   type EvidenceRecord,
   type PackagingValidationResult,
   type SkillPackagingConfig,
+  type SkillValidationSharedContext,
   type Surface,
   type ValidateOptions,
   type ValidationResult,
@@ -29,6 +31,7 @@ import {
   analyzeCompatibility,
   checkSettingsCompatibility,
   detectSkillClaudePluginNameMismatch,
+  crawlSkillLinkRegistry,
   extractClaudeMarketplaceInventory,
   extractClaudePluginInventory,
   getClaudeUserPaths,
@@ -249,7 +252,17 @@ async function validateSingleSkill(
   if (skillConfig !== null) {
     logger.debug(`  Using config-aware validation for: ${skillPath}`);
     const { gitTracker } = await resolveScanContext(safePath.resolve(skillPath));
-    const sharedCtx = gitTracker === null ? undefined : { gitTracker };
+    // Key the shared registry on the same project root the validator derives,
+    // so every skill under one root parses the corpus once for the whole run
+    // instead of once each.
+    const skillDir = safePath.resolve(skillPath, '..');
+    const projectRoot = findProjectRoot(skillDir) ?? skillDir;
+    const sharedCtx: SkillValidationSharedContext = {
+      registry: await getOrCreateSkillRegistry(projectRoot),
+    };
+    if (gitTracker !== null) {
+      sharedCtx.gitTracker = gitTracker;
+    }
     const packagingResult = await validateSkillForPackaging(skillPath, skillConfig, 'source', sharedCtx);
     return packagingResultToValidationResult(
       skillPath,
@@ -287,7 +300,7 @@ export function createAuditCommand(): Command {
     .description('Audit Claude plugins, marketplaces, registries, and skills')
     .argument(
       '[git-url-or-path]',
-      'Path or git URL to audit. URL forms: https://host/owner/repo.git[#ref[:subpath]], git@host:owner/repo.git, ssh://..., owner/repo (GitHub shorthand), or a GitHub web URL like https://github.com/owner/repo/tree/<ref>/<subpath>. Default: current directory.'
+      'Path or git URL to audit. An argument that names an existing file or directory is always treated as a path. Otherwise, URL forms: https://host/owner/repo.git[#ref[:subpath]], git@host:owner/repo.git, ssh://..., owner/repo (GitHub shorthand), or a GitHub web URL like https://github.com/owner/repo/tree/<ref>/<subpath>. Default: current directory.'
     )
     .option('--no-recursive', 'Disable recursive directory scanning (scans top level only)')
     .option('--exclude <glob>', 'Exclude paths matching glob pattern (repeatable)', collect, [])
@@ -323,8 +336,12 @@ Description:
 
   Path or URL to audit: resource directory, registry file, SKILL.md file,
   scan directory, or a git URL (HTTPS, SSH, GitHub shorthand, GitHub web URL).
-  When given a URL, VAT shallow-clones to a temp directory, audits, and
-  cleans up on exit. See packages/cli/docs/audit.md for URL forms.
+  An argument naming an existing file or directory is always a path — bare
+  owner/repo shorthand only applies when nothing of that name exists
+  locally, so "vat audit plugins/arc" audits your directory and never
+  contacts the network. When given a URL, VAT shallow-clones to a temp
+  directory, audits, and cleans up on exit. See packages/cli/docs/audit.md
+  for URL forms.
   Default: current directory
   Use --user to audit user-level installation automatically
 
@@ -692,7 +709,15 @@ export async function auditCommand(
   resetAuditCaches();
 
   try {
-    if (targetPath !== undefined && isGitUrl(targetPath)) {
+    // A local path always wins. `isGitUrl` accepts bare `owner/repo` GitHub
+    // shorthand, which is indistinguishable from an ordinary two-segment
+    // relative path (`plugins/arc`, `docs/guides`, `packages/cli`). Asking
+    // the URL question first meant those never got audited — the command
+    // cloned https://github.com/<that>.git instead, reaching out to the
+    // network with a name derived from the caller's own directory layout.
+    // Shorthand is a fallback for arguments that name nothing on disk.
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- targetPath is the user's own audit target; existence is the question being asked
+    if (targetPath !== undefined && !fsExistsSync(targetPath) && isGitUrl(targetPath)) {
       await runUrlAudit(targetPath, options);
       return;
     }
@@ -768,7 +793,7 @@ async function runInventoryDetectors(
   prebuiltInv?: ClaudePluginInventory | ClaudeMarketplaceInventory,
 ): Promise<ValidationIssue[]> {
   if (type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
-    const inv = prebuiltInv?.kind === 'plugin' ? prebuiltInv : await extractClaudePluginInventory(scanPath);
+    const inv = prebuiltInv?.kind === 'plugin' ? prebuiltInv : await pluginInventoryAt(scanPath);
     return [
       ...detectDeclaredButMissing(inv),
       ...detectPresentButUndeclared(inv),
@@ -911,7 +936,7 @@ export async function getValidationResults(
 		const result = await validate(scanPath, { validatePlugin });
 		if (resourceFormat.type === RESOURCE_TYPE_CLAUDE_PLUGIN) {
 			// Build the inventory once; reuse it for both parse-error surfacing and detectors.
-			const inv = await extractClaudePluginInventory(scanPath);
+			const inv = await pluginInventoryAt(scanPath);
 			appendInventoryParseErrors(result, inv);
 			const pluginInventoryIssues = await runInventoryDetectors(scanPath, RESOURCE_TYPE_CLAUDE_PLUGIN, inv);
 			result.issues.push(...pluginInventoryIssues);
@@ -978,7 +1003,7 @@ async function validatePluginSkillsViaInventory(
 	logger: ReturnType<typeof createLogger>,
 	excludeSkillPaths: ReadonlySet<string> = new Set(),
 ): Promise<ValidationResult[]> {
-	const inv = await extractClaudePluginInventory(scanPath);
+	const inv = await pluginInventoryAt(scanPath);
 	const results: ValidationResult[] = [];
 	for (const skill of inv.discovered.skills) {
 		const resolvedPath = safePath.resolve(skill.files.skillMd);
@@ -1433,7 +1458,7 @@ async function handleDirectoryEntry(
   if (hasClaudePlugin) {
     logger.debug(`Validating resource directory: ${fullPath}`);
     const result = await validate(fullPath, { validatePlugin });
-    const inv = await extractClaudePluginInventory(fullPath);
+    const inv = await pluginInventoryAt(fullPath);
     appendInventoryParseErrors(result, inv);
     results.push(result);
   }
@@ -1462,6 +1487,77 @@ interface ScanContext {
 const gitTrackerCache: Map<string, GitTracker> = new Map();
 
 /**
+ * Cache of (projectRoot → crawled + link-resolved ResourceRegistry) for one
+ * audit run.
+ *
+ * Building a registry means parsing every markdown and HTML document under
+ * the project root — ~20 s on a 1,200-document monorepo. Without this cache
+ * each skill paid for its own, so a directory holding 46 skills re-parsed the
+ * same corpus 46 times and the audit never finished. `vat skills validate`
+ * has always shared one registry across its batch
+ * (`buildSharedValidationContext`); this is the same sharing for the audit
+ * lane, which is what `crawlAndResolveRegistry` was exported for.
+ *
+ * The promise (not the resolved value) is cached so overlapping requests for
+ * one root can never start two crawls.
+ */
+const skillRegistryCache: Map<string, Promise<Awaited<ReturnType<typeof crawlAndResolveRegistry>>>> = new Map();
+
+/**
+ * Get the shared registry for `projectRoot`, crawling on first request.
+ *
+ * The key must be the SAME value `validateSkillForPackaging` derives for the
+ * skill (`findProjectRoot(skillDir) ?? skillDir`) — it rejects a registry
+ * whose baseDir does not cover the skill, so a mismatched key silently
+ * degrades back to a per-skill crawl.
+ */
+export async function getOrCreateSkillRegistry(
+  projectRoot: string,
+): Promise<Awaited<ReturnType<typeof crawlAndResolveRegistry>>> {
+  const cached = skillRegistryCache.get(projectRoot);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const pending = crawlAndResolveRegistry(projectRoot);
+  skillRegistryCache.set(projectRoot, pending);
+  return pending;
+}
+
+/**
+ * Cache of (projectRoot → registry for the *inventory* link walk).
+ *
+ * Deliberately separate from {@link skillRegistryCache}: the validator's
+ * registry crawls markdown AND HTML, while the inventory walk has always been
+ * markdown-only. Sharing one registry between them would quietly widen the
+ * link graph `files.linked` is computed from, which is a behaviour change and
+ * not this fix's business. Two crawls per project root is still two, not two
+ * per skill.
+ */
+const inventoryRegistryCache: Map<string, Promise<Awaited<ReturnType<typeof crawlSkillLinkRegistry>>>> = new Map();
+
+/** Build (once per run, per root) the registry the plugin inventory link walk needs. */
+async function getOrCreateInventoryRegistry(
+  projectRoot: string,
+): Promise<Awaited<ReturnType<typeof crawlSkillLinkRegistry>>> {
+  const cached = inventoryRegistryCache.get(projectRoot);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const pending = crawlSkillLinkRegistry(projectRoot);
+  inventoryRegistryCache.set(projectRoot, pending);
+  return pending;
+}
+
+/**
+ * `extractClaudePluginInventory` for a plugin directory, handing it the shared
+ * inventory registry so each skill it walks does not re-parse the corpus.
+ */
+async function pluginInventoryAt(dir: string): Promise<Awaited<ReturnType<typeof extractClaudePluginInventory>>> {
+  const root = findProjectRoot(dir) ?? dir;
+  return extractClaudePluginInventory(dir, await getOrCreateInventoryRegistry(root));
+}
+
+/**
  * Reset all module-level audit caches. Must be called at the start of every
  * independent audit invocation so in-process callers (CLI entrypoint AND
  * integration tests that share a vitest worker) don't observe stale trackers,
@@ -1469,6 +1565,8 @@ const gitTrackerCache: Map<string, GitTracker> = new Map();
  */
 export function resetAuditCaches(): void {
   gitTrackerCache.clear();
+  skillRegistryCache.clear();
+  inventoryRegistryCache.clear();
   resetProjectRootCaches();
   resetLoadedConfigCache();
   resetSkillDiscoveryCache();
