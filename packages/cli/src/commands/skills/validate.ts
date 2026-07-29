@@ -334,7 +334,15 @@ export async function validateCommand(
         'source',
         sharedContext,
       );
-      applyConfigVerdicts(result, skill.packagingConfig.targets as readonly Target[] | undefined, skill.sourcePath);
+      // `cwd` is the anchor root: config is read from it and discovery globs
+      // resolve against it, so every other location in this report is already
+      // relative to it.
+      applyConfigVerdicts(
+        result,
+        skill.packagingConfig.targets as readonly Target[] | undefined,
+        skill.sourcePath,
+        cwd,
+      );
       logSkillProgress(skill.name, result, logger);
       results.push(result);
     }

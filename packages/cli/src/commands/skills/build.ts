@@ -200,7 +200,8 @@ async function validateSkillOrExit(
   skillName: string,
   sourcePath: string,
   packagingConfig: SkillPackagingConfig,
-  logger: ReturnType<typeof createLogger>
+  logger: ReturnType<typeof createLogger>,
+  locationRoot: string
 ): Promise<void> {
   logger.debug(`   Validating skill: ${skillName}`);
 
@@ -209,6 +210,7 @@ async function validateSkillOrExit(
     validationResult,
     packagingConfig.targets as readonly Target[] | undefined,
     sourcePath,
+    locationRoot,
   );
 
   if (validationResult.status !== 'error') {
@@ -381,7 +383,7 @@ async function buildCommand(
       logger.info(`   Source: ${skill.sourcePath}`);
       logger.info(`   Output: ${outputDir}`);
 
-      await validateSkillOrExit(skill.name, skill.sourcePath, packagingConfig, logger);
+      await validateSkillOrExit(skill.name, skill.sourcePath, packagingConfig, logger, cwd);
       validatedSpecs.push({ skill, packagingConfig });
     }
 

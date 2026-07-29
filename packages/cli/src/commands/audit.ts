@@ -198,7 +198,8 @@ function packagingResultToValidationResult(
   const verdictIssues = computeConfigVerdicts(
     result.observations,
     configTargets,
-    issueLocation(skillPath, locationRoot),
+    skillPath,
+    locationRoot,
   );
   const issues = verdictIssues.length > 0
     ? [...result.allErrors, ...verdictIssues]

@@ -11,9 +11,11 @@
  */
 
 import { existsSync, statSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import {
+  resolveAnchorRoot,
   validateSkillForPackaging,
   type PackagingValidationResult,
 } from '@vibe-agent-toolkit/agent-skills';
@@ -263,10 +265,14 @@ export async function reviewCommand(
 
     const packagingConfig = (await resolveSkillPackagingConfig(skillPath)) ?? undefined;
     const result = await validateSkillForPackaging(skillPath, packagingConfig);
+    // The anchor root for a single-skill review is the skill's own project
+    // boundary — the same base the packaging validator anchored its issues
+    // against, so one report speaks one coordinate system.
     applyConfigVerdicts(
       result,
       packagingConfig?.targets as readonly Target[] | undefined,
       skillPath,
+      resolveAnchorRoot(undefined, dirname(skillPath)),
     );
 
     const grouped = groupIssuesBySection(result.allErrors);

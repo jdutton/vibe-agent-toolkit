@@ -721,6 +721,15 @@ const NON_PORTABLE_ASSET_VARIANTS: readonly PortabilityVariant[] = [
  * pipe/semicolon/ampersand or a backtick/code fence) so bare prose nouns
  * ("the request will timeout", "grep the logs") are not flagged. See
  * COMMAND_POSITION / COMMAND_SEGMENT below.
+ *
+ * Every `fix` below asserts how a utility behaves on macOS/BSD. The CI matrix is
+ * Ubuntu + Windows only, so no test in this repo can contradict these claims —
+ * they are vendor claims and go stale silently. The `readlink-f` variant already
+ * did: `-f` was absent from macOS for years, and is present and working as of
+ * macOS 26.5.2. When a variant's macOS behaviour converges with GNU, DELETE the
+ * variant — do not reword it, or the detector trains adopters to ignore the code.
+ *
+ * @vendor-claim reviewed=2026-07-29 verify=On a current macOS, run each variant against the system binaries rather than Homebrew coreutils — `ls /usr/bin/timeout`, `echo x | /usr/bin/grep -P x`, `/usr/bin/sed -i s/a/b/ FILE`, `/usr/bin/readlink -f ./missing.txt`, `/bin/date -d 2020-01-01` — and run the GNU counterparts on Linux to confirm the difference still exists
  */
 /* eslint-disable security/detect-non-literal-regexp -- compile-time constants composed from COMMAND_POSITION/COMMAND_SEGMENT, no user input */
 // Command position: start of line, or after a pipe/semicolon/ampersand or a
@@ -754,7 +763,7 @@ const NON_PORTABLE_COMMAND_VARIANTS: readonly PortabilityVariant[] = [
   {
     label: 'readlink-f',
     pattern: new RegExp(COMMAND_POSITION + String.raw`readlink\b` + COMMAND_SEGMENT + String.raw`\s-[a-z]*f\b`),
-    fix: '`readlink -f` is not available on macOS by default. Use a portable resolve (e.g. a `cd "$(dirname …)" && pwd` shell function or a Node/Python one-liner).',
+    fix: '`readlink -f` is not portable: on macOS it fails (exit 1, no output) when the final path component does not exist, where GNU canonicalizes it, and `-f` was absent from macOS entirely for years. Use a portable resolve (e.g. a `cd "$(dirname …)" && pwd` shell function or a Node/Python one-liner).',
   },
   {
     label: 'date-d',
