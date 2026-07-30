@@ -20,7 +20,10 @@ import { copyFile, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 import {
-  runSingleUnitValidation,
+  allowUnusedIssues,
+  createAllowUsageLedger,
+  runValidationFramework,
+  type AllowUsageLedger,
   type FrameworkResult,
   type ValidationConfig,
   type ValidationIssue,
@@ -49,7 +52,7 @@ import {
   type GitTracker,
 } from '@vibe-agent-toolkit/utils';
 
-import { getTargetSubdir } from './content-type-routing.js';
+import { CLAUDE_WEB_REFERENCES_SUBDIR, getTargetSubdir } from './content-type-routing.js';
 import { applyFilesConfig, buildArtifactHint, type SkillFileEntry } from './files-config.js';
 import { checkBrokenPackagedLinks, checkUnreferencedFiles } from './post-build-checks.js';
 import {
@@ -655,19 +658,32 @@ export async function packageSkill(
     ...deferredAssetsToIssues(deferredAssets, projectRoot),
   ];
 
-  // Single-unit: these issues are the post-build receipt for THIS skill's build.
-  // `packageSkill` is the unit a caller invokes per skill, and it owns no run —
-  // so an allow entry no post-build issue here matched is reported here. A
-  // build-run-level ledger (so a package-scoped entry used by skill A is not
-  // called unused while building skill B) is the same fix as the validate lane,
-  // and wants the run seam `packageSkill` does not yet have.
-  const framework = runSingleUnitValidation(
+  // ONE ledger for this build, shared by BOTH lanes below and drained after the
+  // second. `options.validation.allow` governs the build-receipt lane AND the
+  // built-SKILL.md lane, but the two see disjoint issue populations — so a lane
+  // that drains its own ledger calls "unused" an entry the OTHER lane matched.
+  // (Measured before the fix: an entry that suppressed a real LINK_MISSING_TARGET
+  // error still emitted ALLOW_UNUSED from the built-output lane, and a genuinely
+  // dead entry was reported twice.) Same defect, same fix as the validate lane —
+  // see `SkillValidationSharedContext.allowLedger`.
+  //
+  // The run this ledger spans is ONE `packageSkill` call. A package-scoped entry
+  // matched while building skill A is still called unused while building skill B;
+  // closing that wants a run seam across skills that `packageSkill` does not have.
+  const buildRunLedger = createAllowUsageLedger();
+
+  const framework = runValidationFramework(
     [...rawLinkIssues, ...rawPostBuildIssues],
     options.validation ?? {},
+    buildRunLedger,
   );
 
   // 13c. Run full validation suite on built output
-  const postBuildValidation = await runPostBuildValidation(outputPath, options.validation);
+  const postBuildValidation = await runPostBuildValidation(
+    outputPath,
+    options.validation,
+    buildRunLedger,
+  );
 
   // 14. Generate distribution artifacts
   const artifacts = await generatePackageArtifacts(
@@ -689,25 +705,46 @@ export async function packageSkill(
     relativeLinkedFiles,
     artifacts,
     postBuildValidation,
-    framework,
+    // Drain point: both lanes have now contributed, so this is the first place
+    // the run can honestly say an entry matched nothing.
+    framework: withRunAllowUnused(framework, buildRunLedger),
     excludedReferences,
     skillRoot,
   });
 }
 
 /**
+ * Fold the build run's ALLOW_UNUSED verdict into the build-issue lane.
+ *
+ * ALLOW_UNUSED belongs to the RUN, not to whichever lane happened to be looking
+ * when an entry went unmatched — so it is drained once, here, and reported on
+ * the single channel (`postBuildIssues`) rather than on both.
+ */
+function withRunAllowUnused(framework: FrameworkResult, ledger: AllowUsageLedger): FrameworkResult {
+  const unused = allowUnusedIssues(ledger);
+  if (unused.length === 0) return framework;
+  const emitted = [...framework.emitted, ...unused];
+  return { ...framework, emitted, hasErrors: emitted.some(i => i.severity === 'error') };
+}
+
+/**
  * Run full validation suite against built output (context = 'built').
  * Source-only codes are automatically filtered out by validateSkillForPackaging.
+ *
+ * `allowLedger` is required, not optional: this lane is one half of a build, so
+ * it must never conclude on its own that an allow entry matched nothing.
  */
 async function runPostBuildValidation(
   outputPath: string,
   validation: ValidationConfig | undefined,
+  allowLedger: AllowUsageLedger,
 ): Promise<PackagingValidationResult> {
   const builtSkillPath = safePath.join(outputPath, 'SKILL.md');
   return validateSkillForPackaging(
     builtSkillPath,
     validation ? { validation } : undefined,
     'built',
+    { allowLedger },
   );
 }
 
@@ -1204,7 +1241,7 @@ function stampDeferredDestResolvedId(
  */
 export function getResourceSubdirForFile(filePath: string, target: PackagingTarget): string {
   if (target === 'claude-web') {
-    return 'references';
+    return CLAUDE_WEB_REFERENCES_SUBDIR;
   }
   return getTargetSubdir(filePath);
 }

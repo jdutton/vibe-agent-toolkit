@@ -1029,6 +1029,72 @@ describe('packageSkill - gitignored files: source (build path)', () => {
 });
 
 // ============================================================================
+// ALLOW_UNUSED is a verdict about the whole BUILD RUN, not about one of its lanes
+//
+// `packageSkill` validates twice: the build-receipt lane (link exclusions +
+// post-build file checks -> `postBuildIssues`) and the built-SKILL.md lane
+// (-> `postBuildValidation.allErrors`). One `validation.allow` list governs
+// both. An entry that matched in one lane is USED for the run, so neither lane
+// may call it unused; an entry that matched in NEITHER must still be reported
+// exactly once. The control pair below is the point: absence alone would also
+// be satisfied by never emitting ALLOW_UNUSED at all.
+// ============================================================================
+
+const RECEIPT_LANE_FIELD = 'validation.allow.LINK_MISSING_TARGET';
+const BUILT_LANE_FIELD = 'validation.allow.SKILL_TIME_SENSITIVE_CONTENT';
+const DEAD_ALLOW_FIELD = 'validation.allow.SKILL_TOO_LARGE';
+
+/**
+ * Package a skill carrying three allow entries, one per case, and return every
+ * ALLOW_UNUSED the build emitted on EITHER channel:
+ *  - LINK_MISSING_TARGET — a real `error` raised ONLY by the build-receipt lane
+ *    (the link target does not exist); the entry suppresses it.
+ *  - SKILL_TIME_SENSITIVE_CONTENT — raised ONLY by the built-SKILL.md lane.
+ *  - SKILL_TOO_LARGE — matches nothing anywhere (the positive control).
+ *
+ * Covering BOTH directions is the point: a ledger shared one way only still
+ * mislabels the other lane's live entry.
+ */
+async function allowUnusedFromBothBuildLanes() {
+  const dir = getTempDir();
+  const skillPath = await writeSkillMd(
+    dir,
+    UNIT_SKILL_NAME,
+    '# My Skill\n\nAs of January 2024 this is current. See [gone](./gone.md).',
+  );
+  const result = await packWithOutput(skillPath, {
+    validation: {
+      allow: {
+        LINK_MISSING_TARGET: [{ paths: ['./gone.md'], reason: 'intentionally absent' }],
+        SKILL_TIME_SENSITIVE_CONTENT: [{ paths: ['SKILL.md'], reason: 'dated on purpose' }],
+        SKILL_TOO_LARGE: [{ paths: ['nowhere/**'], reason: 'matches nothing' }],
+      },
+    },
+  });
+  return [
+    ...(result.postBuildIssues ?? []),
+    ...result.postBuildValidation.allErrors,
+  ].filter(i => i.code === 'ALLOW_UNUSED');
+}
+
+describe('packageSkill - one allow-usage ledger across both build lanes', () => {
+  it('does not report an entry the build-receipt lane matched as unused', async () => {
+    const unused = await allowUnusedFromBothBuildLanes();
+    expect(unused.filter(i => i.field === RECEIPT_LANE_FIELD)).toEqual([]);
+  });
+
+  it('does not report an entry the built-output lane matched as unused', async () => {
+    const unused = await allowUnusedFromBothBuildLanes();
+    expect(unused.filter(i => i.field === BUILT_LANE_FIELD)).toEqual([]);
+  });
+
+  it('still reports — exactly once — an entry NO lane matched', async () => {
+    const unused = await allowUnusedFromBothBuildLanes();
+    expect(unused.filter(i => i.field === DEAD_ALLOW_FIELD)).toHaveLength(1);
+  });
+});
+
+// ============================================================================
 // generateTargetPath (pure) — naming strategies + stripPrefix tail-preserve
 // ============================================================================
 
