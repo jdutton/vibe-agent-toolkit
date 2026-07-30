@@ -17,6 +17,28 @@ import { ClaudePluginSchema } from '../schemas/claude-plugin.js';
 const PLUGIN_TYPE = 'claude-plugin' as const;
 
 /**
+ * Derive `status`, `summary` and `issueCounts` from ONE issue set.
+ *
+ * These three fields are three views of the same findings, so they are
+ * computed together — maintaining them independently is how a result ends up
+ * declaring `{errors: 0, warnings: 0, info: 0}` directly above the issues it
+ * just reported.
+ *
+ * `summary` keys off `issues.length`, not `status === 'success'`: an
+ * info-only set is `success` (see `calculateValidationStatus`) yet still has
+ * findings to report.
+ */
+function summarizeIssues(
+	issues: readonly ValidationIssue[]
+): Pick<ValidationResult, 'issueCounts' | 'status' | 'summary'> {
+	return {
+		status: calculateValidationStatus(issues),
+		summary: issues.length === 0 ? 'Valid plugin' : `Found ${issues.length} issue(s)`,
+		issueCounts: countBySeverity(issues),
+	};
+}
+
+/**
  * Apply schema-success post-checks: set metadata, warn on missing version,
  * and surface recommended-field observations. Mutates `issues` and
  * `validationResult` in place; callers re-use the computed status/summary.
@@ -63,10 +85,9 @@ function applyPostSchemaChecks(args: {
 	// anything structurally required.
 	issues.push(...detectMissingRecommendedFields(data, pluginJsonLocation));
 
-	if (issues.length > 0) {
-		validationResult.status = calculateValidationStatus(issues);
-		validationResult.summary = `Found ${issues.length} issue(s)`;
-	}
+	// Re-derive every summary field: this function has just pushed issues that
+	// the caller's initial derivation could not have seen.
+	Object.assign(validationResult, summarizeIssues(issues));
 }
 
 /**
@@ -160,16 +181,11 @@ export async function validatePlugin(
 		}
 	}
 
-	const status = calculateValidationStatus(issues);
-
 	const validationResult: ValidationResult = {
 		path: pluginPath,
 		type: PLUGIN_TYPE,
-		status,
-		summary:
-			status === 'success' ? 'Valid plugin' : `Found ${issues.length} issue(s)`,
+		...summarizeIssues(issues),
 		issues,
-		issueCounts: countBySeverity(issues),
 	};
 
 	if (result.success) {
