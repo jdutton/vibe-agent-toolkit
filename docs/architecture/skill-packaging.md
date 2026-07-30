@@ -115,7 +115,7 @@ The inventory schema is `vat.inventory/v1alpha`; it evolves freely under pre-1.0
 
 ## Skill Reference Resolution
 
-The shapes above describe what an artifact *is*. This section describes how a command turns a **skill reference** — the subject you hand to `vat skill test run`, `vat audit`, or `vat skill review` (a bare name like `my-skill`, a path like `./dist/skills/x`, or a source spec like `npm:@scope/s@1.2.3`) — into something testable or auditable.
+The shapes above describe what an artifact *is*. This section describes how a command turns a **skill reference** — a bare name like `my-skill`, a path like `./dist/skills/x`, or a source spec like `npm:@scope/s@1.2.3` — into something testable or auditable. The full grammar is what `vat skill test run` accepts; `vat audit` and `vat skill review` currently accept the path forms only (see "the single entry point" below).
 
 ### The separator: build-vs-as-is
 
@@ -130,7 +130,11 @@ For a declared skill, **the authored source tree is not what ships.** `packageSk
 
 ### `resolveSkillReference` — the single entry point
 
-[`resolveSkillReference(ref, cwd)`](../../packages/cli/src/skill-resolution/) (in `packages/cli/src/skill-resolution/`) is the **single, project-aware entry point** that every skill-reference-taking command routes through: `vat audit`, `vat skill review`, and `vat skill test`. It classifies a reference (the disambiguation ladder) and returns a `SkillReference` whose arm tells the caller what to do — never write a parallel path-only resolver beside it.
+[`resolveSkillReference(ref, cwd)`](../../packages/cli/src/skill-resolution/) (in `packages/cli/src/skill-resolution/`) is the **single, project-aware entry point** for turning a skill reference into a subject. It classifies a reference (the disambiguation ladder) and returns a `SkillReference` whose arm tells the caller what to do — never write a parallel path-only resolver beside it.
+
+**Only `vat skill test` routes through it today.** `vat audit` and `vat skill review` do not: both take a **path only** (their `--help` says so — audit's argument grammar is path-or-git-URL, review's is a `SKILL.md` / `.md` / skill directory), and `vat skill review` resolves paths with its own `resolveSkillPath`. Each command consults `resolveSkillPackagingConfig` for that skill's *packaging options*, which is a different question from resolving the reference. Hand all three the same bare name of a declared skill and you get two different answers: `vat skill test run <name>` resolves it, builds it, and tests the dist; `vat skill review <name>` and `vat audit <name>` both report `Path does not exist`.
+
+That gap is not cosmetic — it collides with the load-bearing insight above. Because review is path-only, `vat skill review <declared-skill-source-dir>` reviews the **authored source**, which for a declared skill is not what ships. The verdict describes a tree users never install. Converging the two lanes onto `resolveSkillReference` (so a declared skill resolves `buildable` and is reviewed as its built dist) is tracked separately; until then, treat the sentence above as the target state, not the current one.
 
 The `SkillReference` arms:
 
