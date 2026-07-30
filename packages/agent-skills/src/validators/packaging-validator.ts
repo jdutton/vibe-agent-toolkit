@@ -386,9 +386,12 @@ export interface SkillValidationSharedContext {
    * (measured: 78 ALLOW_UNUSED warnings from 3 legitimate entries).
    *
    * Omitting it is a positive claim that THIS call is the whole run — correct for
-   * the single-skill callers (`vat skill review`, `vat skills build`'s pre-build
-   * check, `vat audit`, whose shared context is built per skill), where the
-   * per-skill and run-level answers coincide.
+   * the single-skill callers (`vat skill review`, `vat audit`, whose shared
+   * context is built per skill), where the per-skill and run-level answers
+   * coincide. `vat skills build` supplies one: its pre-build source check is the
+   * ONLY lane in that run that can match an entry scoped to a source filename
+   * (packaging renames the file to `SKILL.md`), so withholding its matches
+   * reported live entries as dead on every skill in the package.
    */
   allowLedger?: AllowUsageLedger;
 }

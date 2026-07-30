@@ -30,6 +30,7 @@ import { formatDurationSecs } from '../../utils/duration.js';
 import {
   formatIssueLines,
   formatIssueSetHeading,
+  formatRunIssueLines,
   formatSeverityBreakdown,
   sumSeverityCounts,
 } from '../../utils/issue-rendering.js';
@@ -233,13 +234,9 @@ export function formatValidationReportLines(
     if (result.allErrors.length === 0 && result.ignoredErrors.length === 0) continue;
     lines.push(...skillFindingLines(result));
   }
-  if (runIssues.length > 0) {
-    lines.push(`Run-level (project config, not any one skill):`);
-    lines.push(`  ${formatIssueSetHeading(runIssues)}:`);
-    for (const issue of runIssues) {
-      lines.push(...formatIssueLines(issue, '    '));
-    }
-    lines.push('');
+  const runLines = formatRunIssueLines(runIssues);
+  if (runLines.length > 0) {
+    lines.push(...runLines, '');
   }
   return lines;
 }

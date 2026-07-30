@@ -270,6 +270,22 @@ export interface PackageSkillOptions {
    * never ship.
    */
   testInputDirs?: string[] | undefined;
+
+  /**
+   * The RUN's allow-entry usage ledger.
+   *
+   * `validation.allow` is declared once per package but evaluated once per
+   * skill AND once per lane, so "this entry matched nothing" is a question only
+   * the whole invocation can answer. A caller that builds more than one skill,
+   * or that validates the SOURCE tree before packaging (`vat build` does both),
+   * MUST supply one ledger for the whole invocation and drain it itself with
+   * `allowUnusedIssues()` after the last skill.
+   *
+   * Omitting it is a positive claim that THIS `packageSkill` call is the whole
+   * run — true for single-skill library callers, who get the run-level verdict
+   * folded into `postBuildIssues` here. It is false for anything that loops.
+   */
+  allowLedger?: AllowUsageLedger | undefined;
 }
 
 /**
@@ -376,6 +392,13 @@ export interface SkillBuildSpec {
  *
  * @param skills - Array of skill build specifications
  * @param projectRoot - Absolute path to the project root directory
+ * @param allowLedger - The RUN's allow-usage ledger. Required, not
+ *   optional-with-a-default, for the same reason `runValidationFramework`'s is:
+ *   this function loops, so it can never honestly conclude on its own that an
+ *   allow entry matched nothing — an entry matched while building skill A is
+ *   USED for the run. It is never drained here; the caller drains it once with
+ *   `allowUnusedIssues()` after everything in the invocation has been seen
+ *   (`vat build` also validates the SOURCE tree, whose matches count too).
  * @returns Array of package results (one per skill)
  *
  * @example
@@ -384,12 +407,15 @@ export interface SkillBuildSpec {
  *   { skillPath: '/project/skills/SKILL.md', options: { outputPath: '/out/skill-a' } },
  *   { skillPath: '/project/skills/SKILL2.md', options: { outputPath: '/out/skill-b' } },
  * ];
- * const results = await packageSkills(specs, '/project');
+ * const ledger = createAllowUsageLedger();
+ * const results = await packageSkills(specs, '/project', ledger);
+ * const runIssues = allowUnusedIssues(ledger);
  * ```
  */
 export async function packageSkills(
   skills: SkillBuildSpec[],
   projectRoot: string,
+  allowLedger: AllowUsageLedger,
 ): Promise<PackageSkillResult[]> {
   // 1. Create one registry for the entire project. Through the shared builder:
   // this used to call `fromCrawl` directly and omit the config, so skills built
@@ -400,7 +426,7 @@ export async function packageSkills(
   // 2. Package each skill against the shared registry
   const results: PackageSkillResult[] = [];
   for (const { skillPath, options } of skills) {
-    const result = await packageSkill(skillPath, { ...options, registry });
+    const result = await packageSkill(skillPath, { ...options, registry, allowLedger });
     results.push(result);
   }
   return results;
@@ -658,19 +684,23 @@ export async function packageSkill(
     ...deferredAssetsToIssues(deferredAssets, projectRoot),
   ];
 
-  // ONE ledger for this build, shared by BOTH lanes below and drained after the
-  // second. `options.validation.allow` governs the build-receipt lane AND the
-  // built-SKILL.md lane, but the two see disjoint issue populations — so a lane
-  // that drains its own ledger calls "unused" an entry the OTHER lane matched.
-  // (Measured before the fix: an entry that suppressed a real LINK_MISSING_TARGET
-  // error still emitted ALLOW_UNUSED from the built-output lane, and a genuinely
-  // dead entry was reported twice.) Same defect, same fix as the validate lane —
-  // see `SkillValidationSharedContext.allowLedger`.
+  // ONE ledger for BOTH lanes below. `options.validation.allow` governs the
+  // build-receipt lane AND the built-SKILL.md lane, but the two see disjoint
+  // issue populations — so a lane that drains its own ledger calls "unused" an
+  // entry the OTHER lane matched. (Measured before the fix: an entry that
+  // suppressed a real LINK_MISSING_TARGET error still emitted ALLOW_UNUSED from
+  // the built-output lane, and a genuinely dead entry was reported twice.) Same
+  // defect, same fix as the validate lane — see
+  // `SkillValidationSharedContext.allowLedger`.
   //
-  // The run this ledger spans is ONE `packageSkill` call. A package-scoped entry
-  // matched while building skill A is still called unused while building skill B;
-  // closing that wants a run seam across skills that `packageSkill` does not have.
-  const buildRunLedger = createAllowUsageLedger();
+  // Whose run it is comes from the caller. Given a ledger, this call is one unit
+  // of a larger run (a batch, and/or a source-tree validation pass that matches
+  // entries this build's two lanes structurally cannot) and must NOT drain —
+  // draining here is what reported a package-scoped entry matched while building
+  // skill A as unused while building skill B. Given none, the caller has claimed
+  // this call IS the run, so the drain below is honest.
+  const ownsRun = options.allowLedger === undefined;
+  const buildRunLedger = options.allowLedger ?? createAllowUsageLedger();
 
   const framework = runValidationFramework(
     [...rawLinkIssues, ...rawPostBuildIssues],
@@ -705,9 +735,9 @@ export async function packageSkill(
     relativeLinkedFiles,
     artifacts,
     postBuildValidation,
-    // Drain point: both lanes have now contributed, so this is the first place
-    // the run can honestly say an entry matched nothing.
-    framework: withRunAllowUnused(framework, buildRunLedger),
+    // Drain point — but only when this call owns the run. Both lanes have now
+    // contributed; whether anything ELSE still will is the caller's claim.
+    framework: ownsRun ? withRunAllowUnused(framework, buildRunLedger) : framework,
     excludedReferences,
     skillRoot,
   });

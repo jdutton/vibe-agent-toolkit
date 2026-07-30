@@ -101,6 +101,29 @@ export function formatIssueLines(issue: ValidationIssue, indent = ''): string[] 
   return lines;
 }
 
+/**
+ * Render the run-level findings section — findings that belong to the whole
+ * invocation rather than to any one skill (ALLOW_UNUSED is the only producer).
+ *
+ * Shared by `vat skills validate` and `vat skills build` so the two commands
+ * name the same concept the same way. Attributing these to a skill is the
+ * misreading the heading exists to prevent: `validation.allow` is declared once
+ * for the package, so an entry that matched nothing is a fact about the run.
+ *
+ * Returns `[]` for an empty set; callers own their surrounding blank lines.
+ */
+export function formatRunIssueLines(runIssues: readonly ValidationIssue[]): string[] {
+  if (runIssues.length === 0) return [];
+  const lines = [
+    'Run-level (project config, not any one skill):',
+    `  ${formatIssueSetHeading(runIssues)}:`,
+  ];
+  for (const issue of runIssues) {
+    lines.push(...formatIssueLines(issue, '    '));
+  }
+  return lines;
+}
+
 /** Identity of an issue for de-duplication across the two post-build channels. */
 function issueIdentity(issue: ValidationIssue): string {
   return [

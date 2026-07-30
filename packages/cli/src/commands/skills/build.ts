@@ -11,9 +11,13 @@ import { existsSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 
 import {
+  allowUnusedIssues,
   calculateValidationStatus,
   countBySeverity,
+  createAllowUsageLedger,
+  type AllowUsageLedger,
   type SeverityCounts,
+  type ValidationIssue,
 } from '@vibe-agent-toolkit/agent-schema';
 import {
   packageSkills,
@@ -36,6 +40,7 @@ import {
   collectPostBuildIssues,
   formatIssueLines,
   formatIssueSetHeading,
+  formatRunIssueLines,
   sumSeverityCounts,
 } from '../../utils/issue-rendering.js';
 import { type createLogger } from '../../utils/logger.js';
@@ -206,11 +211,21 @@ async function validateSkillOrExit(
   sourcePath: string,
   packagingConfig: SkillPackagingConfig,
   logger: ReturnType<typeof createLogger>,
-  locationRoot: string
+  locationRoot: string,
+  allowLedger: AllowUsageLedger,
 ): Promise<void> {
   logger.debug(`   Validating skill: ${skillName}`);
 
-  const validationResult = await validateSkillForPackaging(sourcePath, packagingConfig);
+  // The run's ledger, not this call's: an allow entry scoped to a SOURCE
+  // filename can only ever match here — packaging renames the file to
+  // `SKILL.md` and the built lane drops the source-only codes — so a build that
+  // withholds this lane's matches from the run reports live entries as dead.
+  const validationResult = await validateSkillForPackaging(
+    sourcePath,
+    packagingConfig,
+    'source',
+    { allowLedger },
+  );
   applyConfigVerdicts(
     validationResult,
     packagingConfig.targets as readonly Target[] | undefined,
@@ -304,9 +319,11 @@ function performDryRun(
 export function buildYamlSummary(
   results: Array<{ name: string; result: PackageSkillResult }>,
   duration: number,
+  runIssues: readonly ValidationIssue[],
 ): {
   status: 'success' | 'warning' | 'error';
   issueCounts: SeverityCounts;
+  runIssueCounts: SeverityCounts;
   skillsBuilt: number;
   skills: Array<{
     name: string;
@@ -314,6 +331,7 @@ export function buildYamlSummary(
     filesPackaged: number;
     issueCounts: SeverityCounts;
   }>;
+  runIssues: ValidationIssue[];
   duration: string;
 } {
   const perSkill = results.map(({ name, result }) => {
@@ -327,10 +345,12 @@ export function buildYamlSummary(
     };
   });
   const allIssues = perSkill.flatMap((s) => s.issues);
+  const runIssueCounts = countBySeverity(runIssues);
 
   return {
-    status: calculateValidationStatus(allIssues),
-    issueCounts: sumSeverityCounts(perSkill.map((s) => s.issueCounts)),
+    status: calculateValidationStatus([...allIssues, ...runIssues]),
+    issueCounts: sumSeverityCounts([...perSkill.map((s) => s.issueCounts), runIssueCounts]),
+    runIssueCounts,
     skillsBuilt: results.length,
     skills: perSkill.map(({ name, outputPath, filesPackaged, issueCounts }) => ({
       name,
@@ -338,6 +358,7 @@ export function buildYamlSummary(
       filesPackaged,
       issueCounts,
     })),
+    runIssues: [...runIssues],
     duration: `${duration}ms`,
   };
 }
@@ -347,13 +368,17 @@ export function buildYamlSummary(
  */
 function outputBuildYaml(
   results: Array<{ name: string; result: PackageSkillResult }>,
-  duration: number
+  duration: number,
+  runIssues: readonly ValidationIssue[],
 ): void {
-  const { status, skillsBuilt, issueCounts, skills, duration: durationText } =
-    buildYamlSummary(results, duration);
+  const summary = buildYamlSummary(results, duration, runIssues);
+  const { status, skillsBuilt, issueCounts, runIssueCounts, skills, duration: durationText } = summary;
   writeYamlHeader({ status, skillsBuilt });
   process.stdout.write(
-    yaml.stringify({ issueCounts, skills }, { indent: 2, lineWidth: 0, aliasDuplicateObjects: false }),
+    yaml.stringify(
+      { issueCounts, runIssueCounts, skills, runIssues: summary.runIssues },
+      { indent: 2, lineWidth: 0, aliasDuplicateObjects: false },
+    ),
   );
   process.stdout.write(`duration: ${durationText}\n`);
 }
@@ -376,6 +401,86 @@ async function cleanStaleSkillOutputs(cwd: string, skillName: string | undefined
       await rm(allSkillsDir, { recursive: true, force: true });
     }
   }
+}
+
+/** One discovered skill paired with the packaging config merged for it. */
+export interface BuildSkillSpec {
+  skill: DiscoveredSkill;
+  packagingConfig: SkillPackagingConfig;
+}
+
+/** Everything one `vat build` invocation produced, ready to report on. */
+export interface SkillBuildRun {
+  results: Array<{ name: string; result: PackageSkillResult }>;
+  /** Findings that belong to the run, not to any one skill (ALLOW_UNUSED). */
+  runIssues: ValidationIssue[];
+  /** Names of skills whose own post-build validation errored. */
+  skillsWithErrors: string[];
+}
+
+/**
+ * Validate, package, and drain — the whole span of ONE `vat build` invocation.
+ *
+ * The allow-usage ledger created here spans EVERY skill and BOTH validation
+ * lanes (the source-tree pre-build check and the two lanes inside
+ * `packageSkill`), because `validation.allow` is declared once for the package
+ * while being evaluated once per skill per lane. Anything narrower reports
+ * entries that legitimately matched somewhere else as unused: measured on this
+ * repo's own 13-skill package, 3 live entries produced 32 false ALLOW_UNUSED
+ * warnings — 6 from the cross-skill seam, 26 because the two lanes inside
+ * `packageSkill` see a FILTERED issue population against a file packaging has
+ * renamed to `SKILL.md`, so entries scoped to a source filename are structurally
+ * incapable of matching there. A lane that sees a subset cannot answer "matched
+ * nothing"; only the union can. Hence one ledger, drained once, here.
+ *
+ * Extracted from the command body so the span is testable without driving
+ * `process.exit` — the drain seam is the thing worth asserting.
+ */
+export async function runSkillBuild(
+  specs: readonly BuildSkillSpec[],
+  cwd: string,
+  logger: ReturnType<typeof createLogger>,
+): Promise<SkillBuildRun> {
+  const allowLedger = createAllowUsageLedger();
+
+  // Validate all skills before building
+  for (const { skill, packagingConfig } of specs) {
+    const outputDir = safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skill.name));
+    logger.info(`\nBuilding skill: ${skill.name}`);
+    logger.info(`   Source: ${skill.sourcePath}`);
+    logger.info(`   Output: ${outputDir}`);
+
+    await validateSkillOrExit(skill.name, skill.sourcePath, packagingConfig, logger, cwd, allowLedger);
+  }
+
+  // Build all skills with a shared registry
+  const buildSpecs: SkillBuildSpec[] = specs.map(({ skill, packagingConfig }) => ({
+    skillPath: skill.sourcePath,
+    options: packagingConfigToPackageOptions(packagingConfig, {
+      skillPath: skill.sourcePath,
+      outputPath: safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skill.name)),
+    }),
+  }));
+
+  const packageResults = await packageSkills(buildSpecs, cwd, allowLedger);
+
+  const results: Array<{ name: string; result: PackageSkillResult }> = [];
+  const skillsWithErrors: string[] = [];
+  for (const [i, spec] of specs.entries()) {
+    const result = packageResults[i];
+    if (result) {
+      logger.info(`   Built ${result.files.dependencies.length + 1} files`);
+      logPostBuildIssues(result, logger);
+      if (result.hasErrors) {
+        skillsWithErrors.push(spec.skill.name);
+      }
+      results.push({ name: spec.skill.name, result });
+    }
+  }
+
+  // Drain point: every skill and every lane has now contributed, so this is the
+  // first place the run can honestly say an entry matched nothing.
+  return { results, runIssues: allowUnusedIssues(allowLedger), skillsWithErrors };
 }
 
 async function buildCommand(
@@ -427,62 +532,38 @@ async function buildCommand(
       process.exit(0);
     }
 
-    // Validate all skills before building
-    const validatedSpecs: Array<{
-      skill: DiscoveredSkill;
-      packagingConfig: SkillPackagingConfig;
-    }> = [];
-
-    for (const skill of skillsToBuild) {
-      const packagingConfig = mergeSkillPackagingConfig(
+    const buildSpecs: BuildSkillSpec[] = skillsToBuild.map((skill) => ({
+      skill,
+      packagingConfig: mergeSkillPackagingConfig(
         skillsConfig.defaults,
         skillsConfig.config?.[skill.name],
-      );
-
-      const outputDir = safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skill.name));
-      logger.info(`\nBuilding skill: ${skill.name}`);
-      logger.info(`   Source: ${skill.sourcePath}`);
-      logger.info(`   Output: ${outputDir}`);
-
-      await validateSkillOrExit(skill.name, skill.sourcePath, packagingConfig, logger, cwd);
-      validatedSpecs.push({ skill, packagingConfig });
-    }
-
-    // Build all skills with a shared registry
-    const specs: SkillBuildSpec[] = validatedSpecs.map(({ skill, packagingConfig }) => ({
-      skillPath: skill.sourcePath,
-      options: packagingConfigToPackageOptions(packagingConfig, {
-        skillPath: skill.sourcePath,
-        outputPath: safePath.resolve(cwd, 'dist', 'skills', skillNameToFsPath(skill.name)),
-      }),
+      ),
     }));
 
-    const packageResults = await packageSkills(specs, cwd);
-
-    const results: Array<{ name: string; result: PackageSkillResult }> = [];
-    const skillsWithErrors: string[] = [];
-    for (const [i, spec] of validatedSpecs.entries()) {
-      const result = packageResults[i];
-      if (result) {
-        logger.info(`   Built ${result.files.dependencies.length + 1} files`);
-        logPostBuildIssues(result, logger);
-        if (result.hasErrors) {
-          skillsWithErrors.push(spec.skill.name);
-        }
-        results.push({ name: spec.skill.name, result });
-      }
-    }
+    const { results, runIssues, skillsWithErrors } = await runSkillBuild(buildSpecs, cwd, logger);
 
     const duration = Date.now() - startTime;
 
     // Output YAML results
-    outputBuildYaml(results, duration);
+    outputBuildYaml(results, duration, runIssues);
+    for (const line of formatRunIssueLines(runIssues)) {
+      logger.info(line);
+    }
 
     if (skillsWithErrors.length > 0) {
       logger.error(`\nBuild failed: ${skillsWithErrors.length} skill(s) emitted post-build validation errors`);
       for (const name of skillsWithErrors) {
         logger.error(`   - ${name}`);
       }
+    }
+    // A run-level finding belongs to no skill, so the loop above cannot carry
+    // it. Only `error` severity gates: ALLOW_UNUSED ships as a `warning`, and a
+    // warning must never abort a build that produced its artifacts.
+    const runHasErrors = runIssues.some((i) => i.severity === 'error');
+    if (runHasErrors) {
+      logger.error(`\nBuild failed: run-level validation errors (project config, not any one skill)`);
+    }
+    if (skillsWithErrors.length > 0 || runHasErrors) {
       process.exit(1);
     }
 

@@ -3,6 +3,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 
 
+import { allowUnusedIssues, createAllowUsageLedger } from '@vibe-agent-toolkit/agent-schema';
 import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -12,7 +13,10 @@ import {
   generateTargetPath,
   getResourceSubdirForFile,
   packageSkill,
+  packageSkills,
   synthesizeAssetId,
+  type PackageSkillOptions,
+  type SkillBuildSpec,
 } from '../src/skill-packager.js';
 
 import { createFrontmatter, setupTempDir } from './test-helpers.js';
@@ -1091,6 +1095,79 @@ describe('packageSkill - one allow-usage ledger across both build lanes', () => 
   it('still reports — exactly once — an entry NO lane matched', async () => {
     const unused = await allowUnusedFromBothBuildLanes();
     expect(unused.filter(i => i.field === DEAD_ALLOW_FIELD)).toHaveLength(1);
+  });
+});
+
+// ============================================================================
+// ALLOW_UNUSED spans every SKILL in the batch, not just every lane of one
+//
+// `validation.allow` is declared once for the package, so an entry matched
+// while building skill A is USED for the run — reporting it unused while
+// building skill B is the same defect one level up from the lane case above.
+// `packageSkills` therefore takes the RUN's ledger and never drains it; the
+// caller does, once, after the last skill.
+// ============================================================================
+
+const BATCH_MATCHED_FIELD = 'validation.allow.LINK_MISSING_TARGET';
+const BATCH_DEAD_FIELD = 'validation.allow.SKILL_TOO_LARGE';
+
+/** Same allow list for both skills — one package-level declaration. */
+const BATCH_VALIDATION = {
+  allow: {
+    LINK_MISSING_TARGET: [{ paths: ['./gone.md'], reason: 'intentionally absent' }],
+    SKILL_TOO_LARGE: [{ paths: ['nowhere/**'], reason: 'matches nothing' }],
+  },
+} as const;
+
+/** Write `skills/<name>/SKILL.md` under `root` and return its build spec. */
+async function batchSpec(root: string, name: string, body: string): Promise<SkillBuildSpec> {
+  const dir = safePath.join(root, 'skills', name);
+  await mkdir(dir, { recursive: true });
+  const skillPath = await writeSkillMd(dir, name, body);
+  return {
+    skillPath,
+    options: {
+      outputPath: safePath.join(root, 'out', name),
+      validation: structuredClone(BATCH_VALIDATION) as PackageSkillOptions['validation'],
+    },
+  };
+}
+
+/**
+ * Build two skills in ONE run and return every ALLOW_UNUSED the run produced,
+ * on any channel — the per-skill result channels AND the run-level drain.
+ *
+ * Reading both is what makes these assertions non-vacuous: a run that still
+ * drains per skill publishes its false verdicts on the per-skill channels, so
+ * looking only at the drained ledger would report zero and pass either way.
+ */
+async function allowUnusedAcrossBatch() {
+  const root = getTempDir();
+  const specs = [
+    // Only skill `alpha` links at the missing target, so only alpha's build can
+    // match the LINK_MISSING_TARGET entry.
+    await batchSpec(root, 'alpha', '# Alpha\n\nSee [gone](./gone.md).'),
+    await batchSpec(root, 'beta', '# Beta\n\nNothing to see.'),
+  ];
+
+  const ledger = createAllowUsageLedger();
+  const results = await packageSkills(specs, root, ledger);
+
+  return [
+    ...results.flatMap(r => [...(r.postBuildIssues ?? []), ...r.postBuildValidation.allErrors]),
+    ...allowUnusedIssues(ledger),
+  ].filter(i => i.code === 'ALLOW_UNUSED');
+}
+
+describe('packageSkills - one allow-usage ledger across every skill in the run', () => {
+  it('does not report an entry another skill in the same run matched as unused', async () => {
+    const unused = await allowUnusedAcrossBatch();
+    expect(unused.filter(i => i.field === BATCH_MATCHED_FIELD)).toEqual([]);
+  });
+
+  it('still reports an entry NO skill matched — once for the run, not once per skill', async () => {
+    const unused = await allowUnusedAcrossBatch();
+    expect(unused.filter(i => i.field === BATCH_DEAD_FIELD)).toHaveLength(1);
   });
 });
 

@@ -467,6 +467,7 @@ describe('vat skills build — buildYamlSummary', () => {
     const summary = buildYamlSummary(
       [{ name: 'a', result: packageResult(undefined, [issue('error', 'BUILT_ONLY')]) }],
       12,
+      [],
     );
     // The defect: `status: success` was a literal, printed alongside exit code 1.
     expect(summary.status).toBe('error');
@@ -477,6 +478,7 @@ describe('vat skills build — buildYamlSummary', () => {
     const summary = buildYamlSummary(
       [{ name: 'a', result: packageResult([issue('warning', 'W1')], undefined) }],
       1,
+      [],
     );
     expect(summary.status).toBe('warning');
   });
@@ -485,6 +487,7 @@ describe('vat skills build — buildYamlSummary', () => {
     const summary = buildYamlSummary(
       [{ name: 'a', result: packageResult([issue('info', 'I1')], undefined) }],
       1,
+      [],
     );
     expect(summary.status).toBe('success');
     expect(summary.issueCounts).toEqual({ errors: 0, warnings: 0, info: 1 });
@@ -497,12 +500,45 @@ describe('vat skills build — buildYamlSummary', () => {
         { name: 'b', result: packageResult([issue('info', 'I1')], [issue('info', 'I2')]) },
       ],
       1,
+      [],
     );
     expect(summary.skills.map((s) => s.issueCounts)).toEqual([
       { errors: 0, warnings: 1, info: 0 },
       { errors: 0, warnings: 0, info: 2 },
     ]);
     expect(summary.issueCounts).toEqual({ errors: 0, warnings: 1, info: 2 });
+  });
+
+  it('closes the accounting: the header equals the per-skill sum plus the run-level counts', () => {
+    // Same identity `vat skills validate` publishes. ALLOW_UNUSED belongs to no
+    // skill, so a header that omitted it would report fewer findings than the
+    // human stream renders — and the run-level bucket is what lets a consumer
+    // reconcile the two without hand-counting a list.
+    const summary = buildYamlSummary(
+      [
+        { name: 'a', result: packageResult([issue('warning', 'W1')], undefined) },
+        { name: 'b', result: packageResult(undefined, [issue('info', 'I1')]) },
+      ],
+      1,
+      [issue('warning', 'ALLOW_UNUSED'), issue('warning', 'ALLOW_UNUSED')],
+    );
+
+    const perSkill = sumSeverityCounts(summary.skills.map((s) => s.issueCounts));
+    // Guards against a vacuous pass: both buckets must be non-empty.
+    expect(perSkill).toEqual({ errors: 0, warnings: 1, info: 1 });
+    expect(summary.runIssueCounts).toEqual({ errors: 0, warnings: 2, info: 0 });
+
+    expect(summary.issueCounts).toEqual(sumSeverityCounts([perSkill, summary.runIssueCounts]));
+    expect(summary.runIssues).toHaveLength(2);
+  });
+
+  it('lets a run-level error decide the status no skill could', () => {
+    const summary = buildYamlSummary(
+      [{ name: 'a', result: packageResult(undefined, undefined) }],
+      1,
+      [issue('error', 'ALLOW_UNUSED')],
+    );
+    expect(summary.status).toBe('error');
   });
 });
 
