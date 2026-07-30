@@ -357,13 +357,20 @@ function assertValidationError(
 }
 
 /**
- * Validate a link and assert expected results
- * Eliminates duplication in validation test patterns
+ * Validate a link and assert expected results.
+ * Eliminates duplication in validation test patterns.
+ *
+ * Returns the issue it validated so callers can assert on it directly. That
+ * return value is not decoration: SonarJS (and any human reader) cannot see the
+ * assertions this helper makes, so a caller with no assertion of its own is
+ * indistinguishable from a caller whose helper silently stopped asserting.
+ * Assert on the returned issue at the call site — it is the positive control on
+ * this helper.
  */
 export async function assertValidation(
   options: ValidateLinkOptions,
   expectFn: (_: ValidationIssue | null) => Assertion<ValidationIssue | null>,
-): Promise<void> {
+): Promise<ValidationIssue | null> {
   const { sourceFile, link, headingsMap, expected, validationOptions } = options;
 
   const result = await validateLink(link, sourceFile, headingsMap, validationOptions);
@@ -374,6 +381,8 @@ export async function assertValidation(
     expectFn(result).not.toBeNull();
     assertValidationError(result, expected, expectFn as (_: unknown) => Assertion<unknown>);
   }
+
+  return result;
 }
 
 // ============================================================================

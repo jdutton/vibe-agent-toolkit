@@ -43,6 +43,45 @@ Enforces `safePath.join()`, `safePath.resolve()`, `safePath.relative()` from `@v
 
 **Exempt**: `packages/utils/src/path-utils.ts` (the implementation file).
 
+### `require-justified-skip`
+
+Errors on test code that claims coverage it does not provide:
+
+- **Unconditional skips** — `it.skip` / `test.skip` / `describe.skip` / `suite.skip`,
+  `it.todo` / `test.todo`, and the `xit` / `xdescribe` / `xtest` aliases.
+- **Tautological assertions** — `expect(<literal>)` whose matcher argument is also a
+  literal or absent: `expect(true).toBe(true)`, `expect(1).toBe(1)`,
+  `expect(true).toBeTruthy()`. These are worse than a skip because they report as
+  **passing**.
+
+**Exempt**: conditional gates. `it.skipIf(...)`, `describe.runIf(...)`, and the
+hand-rolled ternary form `(NET ? describe : describe.skip)(...)` are conditions, not
+coverage claims.
+
+**Escape hatch — annotation grammar**: a comment on the same line, or the line
+immediately above, matching:
+
+```
+/\bSKIP\(#\d+\):\s*\S/
+```
+
+i.e. `// SKIP(#163): references[] not populated by the extractor yet`. All three parts
+are required — the uppercase `SKIP` keyword, a `#`-prefixed issue number, and a
+non-empty reason. A vague comment does not qualify; an escape hatch that accepts any
+comment is an off switch.
+
+The keyword is `SKIP` rather than the more natural `TODO` because this repo runs
+`sonarjs/todo-tag` at error level, which bans the `TODO` token in comments outright —
+a grammar built on it would trip a second rule on every use.
+
+Find outstanding debt with `rg 'SKIP\(#'`.
+
+**Honest scope**: this rule catches 3 of the 9 false-coverage instances found by the
+coherence audit that motivated it. The other 6 were live, green, passing tests that
+asserted the wrong thing — no linter can see those. The control for that class is the
+convention in [writing-tests.md](writing-tests.md#every-assertion-of-absence-needs-a-positive-control),
+not this rule.
+
 ## Creating New Rules
 
 When you identify a dangerous pattern (security, platform-specific, error-prone):

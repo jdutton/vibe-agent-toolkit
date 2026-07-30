@@ -5,7 +5,7 @@
  * globs to discover SKILL.md files, instead of reading package.json vat.skills objects.
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 
 
 import { mkdirSyncReal, safePath } from '@vibe-agent-toolkit/utils';
@@ -209,16 +209,12 @@ describe('skills build command (system test)', () => {
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output verification
     expect(readFileSync(safePath.join(outputPathB, 'SKILL.md'), 'utf-8')).toContain(SKILL_B_NAME);
 
-    // Skill A should not exist (only skill-b was built)
+    // Skill A should not exist (only skill-b was built). Asserted directly rather
+    // than via a try/catch whose `catch` block ended in `expect(true).toBe(true)` —
+    // that shape passed on ANY throw, including a bug in the path construction.
     const outputPathA = safePath.join(tempDir, 'dist', 'skills', SKILL_A_NAME);
-    try {
-      // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output verification
-      readFileSync(safePath.join(outputPathA, 'SKILL.md'), 'utf-8');
-      expect.fail('skill-a should not have been built');
-    } catch {
-      // Expected - file should not exist
-      expect(true).toBe(true);
-    }
+    // eslint-disable-next-line security/detect-non-literal-fs-filename -- Test output verification
+    expect(existsSync(safePath.join(outputPathA, 'SKILL.md'))).toBe(false);
   });
 
   it('should fail when specified skill not found', async () => {

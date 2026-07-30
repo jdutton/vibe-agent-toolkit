@@ -133,8 +133,7 @@ describe('validateLink', () => {
     });
 
     it('should detect broken file link', async () => {
-      expect(true).toBe(true); // Assertion for SonarJS (assertValidation performs detailed assertions)
-      await assertValidation(
+      const issue = await assertValidation(
         {
           sourceFile: safePath.join(FIXTURES_DIR, BROKEN_FILE_MD),
           link: createLink('local_file', NONEXISTENT_FILE_LINK, 'Broken link', 3),
@@ -147,10 +146,11 @@ describe('validateLink', () => {
         },
         expect,
       );
+      // Positive control on the helper: the caller asserts the outcome itself.
+      expect(issue?.code).toBe('LINK_BROKEN_FILE');
     });
 
     it('should detect case mismatch in filename', async () => {
-      expect(true).toBe(true); // Assertion for SonarJS (assertValidation performs detailed assertions)
       // Create a temporary file with specific case
       const fs = await import('node:fs');
       const tempDir = fs.mkdtempSync(safePath.join(normalizedTmpdir(), 'case-test-'));
@@ -163,7 +163,7 @@ describe('validateLink', () => {
         fs.writeFileSync(sourceFile, '');
 
         // Try to validate link with wrong case
-        await assertValidation(
+        const issue = await assertValidation(
           {
             sourceFile,
             link: createLink('local_file', './testfile.md', 'Wrong case link', 3),
@@ -176,6 +176,8 @@ describe('validateLink', () => {
           },
           expect,
         );
+        // Positive control on the helper: the caller asserts the outcome itself.
+        expect(issue?.code).toBe('LINK_BROKEN_FILE');
       } finally {
         fs.rmSync(tempDir, { recursive: true, force: true });
       }
@@ -196,9 +198,8 @@ describe('validateLink', () => {
     });
 
     it('should detect broken anchor in local file', async () => {
-      expect(true).toBe(true); // Assertion for SonarJS (assertValidation performs detailed assertions)
       const targetFile = safePath.join(FIXTURES_DIR, TARGET_MD);
-      await assertValidation(
+      const issue = await assertValidation(
         {
           sourceFile: safePath.join(FIXTURES_DIR, 'broken-anchor.md'),
           link: createLink('local_file', './target.md#nonexistent-heading', 'Broken anchor', 3),
@@ -213,6 +214,8 @@ describe('validateLink', () => {
         },
         expect,
       );
+      // Positive control on the helper: the caller asserts the outcome itself.
+      expect(issue?.code).toBe('LINK_BROKEN_ANCHOR');
     });
 
     it('treats leading-/ filesystem path with no projectRoot as absolute_no_root', async () => {
@@ -258,9 +261,8 @@ describe('validateLink', () => {
 
   describe('anchor links', () => {
     it('should validate valid anchor in current file', async () => {
-      expect(true).toBe(true); // Assertion for SonarJS (assertValidation performs detailed assertions)
       const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
-      await assertValidation(
+      const issue = await assertValidation(
         {
           sourceFile,
           link: createLink('anchor', '#heading-anchor', 'Anchor link', 5),
@@ -269,12 +271,13 @@ describe('validateLink', () => {
         },
         expect,
       );
+      // Positive control on the helper: the caller asserts the outcome itself.
+      expect(issue).toBeNull();
     });
 
     it('should detect broken anchor in current file', async () => {
-      expect(true).toBe(true); // Assertion for SonarJS (assertValidation performs detailed assertions)
       const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
-      await assertValidation(
+      const issue = await assertValidation(
         {
           sourceFile,
           link: createLink('anchor', NONEXISTENT_ANCHOR, 'Broken anchor', 10),
@@ -286,12 +289,13 @@ describe('validateLink', () => {
         },
         expect,
       );
+      // Positive control on the helper: the caller asserts the outcome itself.
+      expect(issue?.code).toBe('LINK_BROKEN_ANCHOR');
     });
 
     it('should perform case-insensitive anchor matching', async () => {
-      expect(true).toBe(true); // Assertion for SonarJS (assertValidation performs detailed assertions)
       const sourceFile = safePath.join(FIXTURES_DIR, VALID_MD);
-      await assertValidation(
+      const issue = await assertValidation(
         {
           sourceFile,
           link: createLink('anchor', '#HEADING-ANCHOR', 'Case mismatch', 5),
@@ -300,6 +304,8 @@ describe('validateLink', () => {
         },
         expect,
       );
+      // Positive control on the helper: the caller asserts the outcome itself.
+      expect(issue).toBeNull();
     });
 
     it('should validate anchors in nested headings', async () => {
@@ -316,8 +322,7 @@ describe('validateLink', () => {
     });
 
     it('should return error when file has no headings', async () => {
-      expect(true).toBe(true); // Assertion for SonarJS (assertValidation performs detailed assertions)
-      await assertValidation(
+      const issue = await assertValidation(
         {
           sourceFile: safePath.join(FIXTURES_DIR, VALID_MD),
           link: createLink('anchor', '#any-heading', 'No headings', 5),
@@ -328,6 +333,8 @@ describe('validateLink', () => {
         },
         expect,
       );
+      // Positive control on the helper: the caller asserts the outcome itself.
+      expect(issue?.code).toBe('LINK_BROKEN_ANCHOR');
     });
   });
 
@@ -377,8 +384,7 @@ describe('validateLink', () => {
 
   describe('unknown link types', () => {
     it('should return warning for unknown protocol', async () => {
-      expect(true).toBe(true); // Assertion for SonarJS (assertValidation performs detailed assertions)
-      await assertValidation(
+      const issue = await assertValidation(
         {
           sourceFile: safePath.join(FIXTURES_DIR, VALID_MD),
           link: createLink('unknown', 'ftp://example.com/file', 'FTP link', 10),
@@ -391,11 +397,12 @@ describe('validateLink', () => {
         },
         expect,
       );
+      // Positive control on the helper: the caller asserts the outcome itself.
+      expect(issue?.code).toBe('LINK_UNKNOWN');
     });
 
     it('should return warning for other unknown link', async () => {
-      expect(true).toBe(true); // Assertion for SonarJS (assertValidation performs detailed assertions)
-      await assertValidation(
+      const issue = await assertValidation(
         {
           sourceFile: safePath.join(FIXTURES_DIR, VALID_MD),
           link: createLink('unknown', 'tel:+1234567890', 'Tel link', 11),
@@ -406,6 +413,8 @@ describe('validateLink', () => {
         },
         expect,
       );
+      // Positive control on the helper: the caller asserts the outcome itself.
+      expect(issue?.code).toBe('LINK_UNKNOWN');
     });
   });
 

@@ -57,5 +57,6 @@ export default {
     'no-file-url-string-concat': require('./no-file-url-string-concat.cjs'),
     'prefer-startswith-over-regex': require('./prefer-startswith-over-regex.cjs'),
     'no-unsafe-root-join': require('./no-unsafe-root-join.cjs'),
+    'require-justified-skip': require('./require-justified-skip.cjs'),
   },
 };
