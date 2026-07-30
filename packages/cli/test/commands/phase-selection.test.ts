@@ -1,23 +1,26 @@
 /**
- * Unit tests for `--only` phase/surface selection across the three top-level
+ * Unit tests for phase/surface selection across the three top-level
  * orchestrators (`vat build`, `vat verify`, `vat validate`).
  *
- * Two defects these pin:
+ * `vat verify` no longer has a `--only`: on a real 90-skill project the whole
+ * command is ~32s and the filter saved at most ~18s, which did not pay for a
+ * flag that repeatedly produced wrong answers. Its selection is now a pure
+ * function of the config alone. `vat build` and `vat validate` keep theirs, and
+ * the two defects below are still pinned for them:
  *
- *  1. **`vat verify --only <unconfigured surface>` silently passed.** It pushed
- *     `resources` and `skills` without ever consulting the config, so
- *     `vat verify --only skills` in a project with no `skills:` block exited 0
- *     while `vat validate --only skills` on the same project exited 1. A CI gate
- *     pinned to `vat verify --only skills` therefore stayed green forever the
- *     moment the config key was renamed.
+ *  1. **`--only <unconfigured surface>` must not silently pass.** `vat verify`
+ *     used to push `resources` and `skills` without ever consulting the config,
+ *     so `vat verify --only skills` in a project with no `skills:` block exited
+ *     0 while `vat validate --only skills` on the same project exited 1. The
+ *     config-gating that fixed it is what a bare `vat verify` still relies on.
  *
  *  2. **An unroutable `--only` threw outside the try block.** The user got a raw
  *     Node stack trace, zero bytes of stdout, and an exit 1 masquerading as
  *     "validation errors". `vat build`'s message was self-refuting on top of
  *     that: "Unknown phase: claude. Valid phases: skills, claude."
  *
- * Selection is pure — (only, config) in, a decision out — so it is stated here
- * rather than through a subprocess.
+ * Selection is pure — config in, a decision out — so it is stated here rather
+ * than through a subprocess.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -27,7 +30,11 @@ import { normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
 import { selectBuildPhases } from '../../src/commands/build.js';
-import { type PhaseSelection } from '../../src/commands/phase-utils.js';
+import {
+  decidePhaseSelection,
+  type Phase,
+  type PhaseSelection,
+} from '../../src/commands/phase-utils.js';
 import { selectValidateSurfaces } from '../../src/commands/validate.js';
 import {
   checkFilesConfigDests,
@@ -36,11 +43,16 @@ import {
 } from '../../src/commands/verify.js';
 
 /** Narrow to the `run` arm, failing loudly (not silently passing) otherwise. */
-function phaseNames(selection: PhaseSelection): string[] {
+function runPhases(selection: PhaseSelection): Phase[] {
   if (selection.kind !== 'run') {
     throw new Error(`Expected a 'run' selection, got '${selection.kind}': ${JSON.stringify(selection)}`);
   }
-  return selection.phases.map((p) => p.name);
+  return selection.phases;
+}
+
+/** The names of a `run` arm's phases. */
+function phaseNames(selection: PhaseSelection): string[] {
+  return runPhases(selection).map((p) => p.name);
 }
 
 /** The message of a `fail` arm, failing loudly if the selection was not a failure. */
@@ -61,6 +73,8 @@ const CONFIG_BOTH = {
   skills: { include: [SKILL_GLOB] },
 } as unknown as ProjectConfig;
 const CONFIG_EMPTY = { version: 1 } as unknown as ProjectConfig;
+/** What a config that exists but does not parse hands back to the orchestrator. */
+const BROKEN_CONFIG_ERROR = 'Failed to load config: bad yaml';
 const CONFIG_MARKETPLACE = {
   version: 1,
   skills: { include: [SKILL_GLOB] },
@@ -69,99 +83,115 @@ const CONFIG_MARKETPLACE = {
 
 describe('selectVerifyPhases', () => {
   it('runs only the surfaces the config declares', () => {
-    expect(phaseNames(selectVerifyPhases(undefined, CONFIG_RESOURCES_ONLY))).toEqual(['resources']);
-    expect(phaseNames(selectVerifyPhases(undefined, CONFIG_SKILLS_ONLY))).toEqual(['skills']);
-    expect(phaseNames(selectVerifyPhases(undefined, CONFIG_BOTH))).toEqual(['resources', 'skills']);
-  });
-
-  it('fails --only for a recognized phase that is not configured', () => {
-    // The headline incoherence: this used to be a silent exit-0 pass while
-    // `vat validate --only skills` on the same project exited 1.
-    expect(failMessage(selectVerifyPhases('skills', CONFIG_RESOURCES_ONLY))).toContain(
-      "Phase 'skills' is not configured",
-    );
-    expect(failMessage(selectVerifyPhases('resources', CONFIG_SKILLS_ONLY))).toContain(
-      "Phase 'resources' is not configured",
-    );
-  });
-
-  it('fails --only for an unrecognized phase name', () => {
-    const message = failMessage(selectVerifyPhases('bogus', CONFIG_BOTH));
-
-    expect(message).toContain('Unknown phase: bogus');
-    expect(message).toContain('resources, skills, marketplace, consistency');
-  });
-
-  it('fails --only marketplace when no marketplaces are configured', () => {
-    expect(failMessage(selectVerifyPhases('marketplace', CONFIG_SKILLS_ONLY))).toContain(
-      "Phase 'marketplace' is not configured",
-    );
+    // Config-gating is what closed the headline incoherence (a `verify` run
+    // claiming coverage of a surface its config does not declare). `--only` is
+    // gone; the gating it exposed is not.
+    expect(phaseNames(selectVerifyPhases(CONFIG_RESOURCES_ONLY))).toEqual(['resources']);
+    expect(phaseNames(selectVerifyPhases(CONFIG_SKILLS_ONLY))).toEqual(['skills']);
+    expect(phaseNames(selectVerifyPhases(CONFIG_BOTH))).toEqual(['resources', 'skills']);
   });
 
   it('includes one subprocess phase per configured marketplace', () => {
-    expect(phaseNames(selectVerifyPhases('marketplace', CONFIG_MARKETPLACE))).toEqual([
+    expect(phaseNames(selectVerifyPhases(CONFIG_MARKETPLACE))).toEqual([
+      'skills',
       'marketplace:test-tools',
     ]);
   });
 
-  it('accepts --only consistency with an empty subprocess phase list', () => {
-    // consistency runs in-process; an empty subprocess list is not an error.
-    expect(phaseNames(selectVerifyPhases('consistency', CONFIG_SKILLS_ONLY))).toEqual([]);
-  });
-
   it('is a warned no-op when nothing at all is configured', () => {
-    const selection = selectVerifyPhases(undefined, CONFIG_EMPTY);
+    const selection = selectVerifyPhases(CONFIG_EMPTY);
 
     expect(selection.kind).toBe('noop');
   });
 
-  it('still runs the requested phase when the config could not be read', () => {
+  it('still runs every phase when the config could not be read', () => {
     // A broken config is not "the surface is unconfigured" — we do not know what
-    // it declares. Run the child and let IT report the config error (exit 2),
-    // rather than answering an unknown with a confident "not configured".
-    expect(phaseNames(selectVerifyPhases('resources', undefined, 'Failed to load config: bad yaml'))).toEqual([
+    // it declares. Run the children and let THEM report the config error
+    // (exit 2), rather than answering an unknown with a confident "not
+    // configured".
+    expect(phaseNames(selectVerifyPhases(undefined, BROKEN_CONFIG_ERROR))).toEqual([
       'resources',
+      'skills',
     ]);
   });
 
-  it('fails with the config error when a broken config makes the request unanswerable', () => {
-    expect(failMessage(selectVerifyPhases('marketplace', undefined, 'Failed to load config: bad yaml'))).toContain(
-      'Failed to load config',
-    );
+  it('passes no --verbose to any child by default', () => {
+    expect(runPhases(selectVerifyPhases(CONFIG_MARKETPLACE)).map((p) => p.args)).toEqual([
+      ['skills', 'validate'],
+      ['claude', 'marketplace', 'validate', 'dist/.claude/plugins/marketplaces/test-tools'],
+    ]);
+  });
+
+  it('forwards --verbose to every subprocess phase', () => {
+    // The children own their own summarization: `vat verify` nests each child's
+    // document verbatim, so the only way it can ask for the detailed form is to
+    // relay the flag. A phase left off this list silently keeps its compact
+    // default while the operator believes they asked the whole run for detail.
+    const phases = runPhases(selectVerifyPhases(CONFIG_MARKETPLACE, undefined, true));
+
+    expect(phases.map((p) => p.args)).toEqual([
+      ['skills', 'validate', '--verbose'],
+      [
+        'claude',
+        'marketplace',
+        'validate',
+        'dist/.claude/plugins/marketplaces/test-tools',
+        '--verbose',
+      ],
+    ]);
+    for (const phase of phases) {
+      expect(phase.args).toContain('--verbose');
+    }
+  });
+
+  it('forwards --verbose to the resources phase too', () => {
+    expect(runPhases(selectVerifyPhases(CONFIG_BOTH, undefined, true)).map((p) => p.args)).toEqual([
+      ['resources', 'validate', '--verbose'],
+      ['skills', 'validate', '--verbose'],
+    ]);
+  });
+});
+
+describe('decidePhaseSelection', () => {
+  const VOCAB = {
+    noun: 'Phase',
+    verb: 'verify',
+    validNames: ['resources', 'skills'],
+  } as const;
+
+  it('reports the config error rather than a confident "not configured"', () => {
+    // `emptyIsValid` used to be checked BEFORE this arm, so `vat verify --only
+    // consistency` against an unparseable config answered "no skills: block"
+    // and exited 1 on a config it had never managed to read. `emptyIsValid` is
+    // deleted with `--only`, and this is the arm that must win when a phase list
+    // comes out empty on an unreadable config.
+    const selection = decidePhaseSelection(undefined, [], VOCAB, {
+      unreadableConfig: BROKEN_CONFIG_ERROR,
+    });
+
+    expect(selection).toEqual({ kind: 'fail', message: BROKEN_CONFIG_ERROR });
   });
 });
 
 describe('formatVerifyAnnouncement', () => {
-  /** The announcement for a given `--only`, built from that run's own selection. */
-  const announce = (only: string | undefined, config: ProjectConfig): string =>
-    formatVerifyAnnouncement(phaseNames(selectVerifyPhases(only, config)), only, config);
+  /** The announcement for a config, built from that run's own selection. */
+  const announce = (config: ProjectConfig): string =>
+    formatVerifyAnnouncement(phaseNames(selectVerifyPhases(config)), config);
 
-  it('names the in-process phases a bare run also executes', () => {
-    // The announcement used to list the SUBPROCESS phases only, so a bare run
+  it('names the in-process phases a run also executes', () => {
+    // The announcement used to list the SUBPROCESS phases only, so a run
     // printed 'resources → skills' and then ran two more phases, one of which
     // (consistency) contributed its own entry to the emitted document.
-    expect(announce(undefined, CONFIG_BOTH)).toBe(
+    expect(announce(CONFIG_BOTH)).toBe(
       '🔍 vat verify (phases: resources → skills → files-config-dests → consistency)',
     );
   });
 
-  it('names consistency for --only skills, which runs it too', () => {
-    // `--only skills` asks for one phase and gets three. Whether that coupling
-    // is right is a separate question; the announcement must not deny it.
-    expect(announce('skills', CONFIG_SKILLS_ONLY)).toBe(
+  it('names files-config-dests and consistency alongside skills', () => {
+    // All three read the same `skills:` block, so a run that has one runs all
+    // three. The announcement must not deny that coupling.
+    expect(announce(CONFIG_SKILLS_ONLY)).toBe(
       '🔍 vat verify (phases: skills → files-config-dests → consistency)',
-    );
-  });
-
-  it('names consistency for --only consistency, whose subprocess list is empty', () => {
-    // Previously printed a phase list of literally nothing: '(phases: )'.
-    expect(announce('consistency', CONFIG_SKILLS_ONLY)).toBe('🔍 vat verify (phases: consistency)');
-  });
-
-  it('names no in-process phase for a --only that runs none', () => {
-    expect(announce('resources', CONFIG_BOTH)).toBe('🔍 vat verify (phases: resources)');
-    expect(announce('marketplace', CONFIG_MARKETPLACE)).toBe(
-      '🔍 vat verify (phases: marketplace:test-tools)',
     );
   });
 
@@ -169,29 +199,21 @@ describe('formatVerifyAnnouncement', () => {
     // The first fix traded under-reporting for OVER-reporting. Both in-process
     // phases read the same input — the `skills:` block. Without one,
     // `checkFilesConfigDests` has no `files:` entry to resolve and
-    // `runConsistencyPhase` returns before its first lookup, so a bare run on a
+    // `runConsistencyPhase` returns before its first lookup, so a run on a
     // resources-only project announced 'resources → files-config-dests →
     // consistency' and emitted a document containing `resources` and nothing
     // else. An operator reading that line believed distribution consistency had
     // been checked. It had not, and nothing said so.
-    expect(announce(undefined, CONFIG_RESOURCES_ONLY)).toBe('🔍 vat verify (phases: resources)');
+    expect(announce(CONFIG_RESOURCES_ONLY)).toBe('🔍 vat verify (phases: resources)');
   });
 
   it('names no in-process phase when the config could not be read', () => {
-    // An unreadable config still runs the requested subprocess phases so the
-    // CHILD reports the real error. The in-process phases cannot even look:
+    // An unreadable config still runs the subprocess phases so the CHILD reports
+    // the real error. The in-process phases cannot even look:
     // `checkFilesConfigDests` re-reads the same broken file and yields nothing.
-    expect(formatVerifyAnnouncement(['resources', 'skills'], undefined, undefined)).toBe(
+    expect(formatVerifyAnnouncement(['resources', 'skills'], undefined)).toBe(
       '🔍 vat verify (phases: resources → skills)',
     );
-  });
-
-  it('still names consistency for --only consistency with no skills: block', () => {
-    // The one case where an unconfigured in-process phase is NOT vacuous: an
-    // explicit request is answered with an ERROR result rather than the silent
-    // pass `vat validate --only <unconfigured surface>` refuses to give. It
-    // produces output, so it belongs in the line.
-    expect(announce('consistency', CONFIG_RESOURCES_ONLY)).toBe('🔍 vat verify (phases: consistency)');
   });
 });
 

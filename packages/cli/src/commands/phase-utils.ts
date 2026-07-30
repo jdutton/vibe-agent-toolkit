@@ -114,8 +114,7 @@ export function createPhaseContext(debugFlag: boolean | undefined): PhaseContext
  *
  * Three arms, because the three answers carry different exit codes and none of
  * them may be collapsed into another:
- *   - `run`  — go ahead with these phases (possibly none, when the requested
- *              phase runs in-process rather than as a subprocess).
+ *   - `run`  — go ahead with these phases.
  *   - `fail` — the caller named a phase that is unrecognized, or recognized but
  *              not configured. Exit 1: a CI gate asked for coverage that cannot
  *              run and must not stay green.
@@ -147,20 +146,32 @@ export interface PhaseVocabulary {
  * built its phase list without consulting the config at all, so `vat verify
  * --only skills` in a project with no `skills:` block exited 0 while `vat
  * validate --only skills` on the same project exited 1 — opposite verdicts on
- * the same question.
+ * the same question. (`vat verify` has since retired `--only` entirely and now
+ * always passes `only: undefined`; `vat validate` and `vat build` still route
+ * their own `--only` through here.)
  *
- * @param emptyIsValid - True when an empty subprocess list is a legitimate
- *   outcome (verify's `--only consistency` runs in-process).
+ * There used to be a third option, `emptyIsValid`, which existed solely so
+ * `vat verify --only consistency` could run with an empty SUBPROCESS list
+ * (consistency runs in-process). It was checked BEFORE `unreadableConfig`, so
+ * `vat verify --only consistency` against an unparseable config answered the
+ * confidently-wrong "no skills: block" instead of reporting the config error.
+ * `--only` is gone from verify, `emptyIsValid` went with it, and that ordering
+ * hazard cannot recur: nothing short-circuits ahead of the config-error arm.
+ *
  * @param unreadableConfig - The config-load error, when the config exists but
  *   could not be parsed. A broken config is NOT "the phase is unconfigured":
  *   we do not know what it declares, so we must not answer with a confident
- *   "not configured".
+ *   "not configured". Only `vat verify` passes it, and only defensively — its
+ *   phase builder pushes every subprocess phase when the config is unreadable
+ *   (so the CHILD reports the real error), which makes the list non-empty and
+ *   this arm unreachable by construction today. It is kept because the arm that
+ *   would otherwise catch an empty list is the "not configured" lie.
  */
 export function decidePhaseSelection(
   only: string | undefined,
   phases: Phase[],
   vocab: PhaseVocabulary,
-  options: { emptyIsValid?: boolean; unreadableConfig?: string | undefined } = {},
+  options: { unreadableConfig?: string | undefined } = {},
 ): PhaseSelection {
   const lower = vocab.noun.toLowerCase();
 
@@ -171,7 +182,7 @@ export function decidePhaseSelection(
     };
   }
 
-  if (phases.length > 0 || options.emptyIsValid === true) {
+  if (phases.length > 0) {
     return { kind: 'run', phases };
   }
 

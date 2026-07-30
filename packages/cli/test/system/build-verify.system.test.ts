@@ -329,16 +329,21 @@ describe('vat verify command (system test)', () => {
   });
 
   it('propagates a phase that could not run as exit 2, not as a validation failure', async () => {
-    // The child (`vat resources validate`) exits 2 on an unparseable config.
-    // Collapsing that into 1 made the documented exit code 2 unreachable and a
-    // broken config indistinguishable from a broken link in CI.
+    // The children (`vat resources validate`, `vat skills validate`) exit 2 on
+    // an unparseable config. Collapsing that into 1 made the documented exit
+    // code 2 unreachable and a broken config indistinguishable from a broken
+    // link in CI.
+    //
+    // A bare run, because an unreadable config selects EVERY subprocess phase:
+    // `vat verify` must not answer "that phase is not configured" about a file
+    // it could not read, so it runs the children and lets THEM report.
     const tempDir = suite.createTempDir();
     writeTestFile(
       safePath.join(tempDir, VAT_CONFIG_FILENAME),
       'version: 1\nresources:\n  include: [unclosed\n',
     );
 
-    const result = await suite.runVerify(tempDir, ['--only', 'resources']);
+    const result = await suite.runVerify(tempDir);
 
     expect(result.status).toBe(2);
     expect(result.stdout).toContain('status: system-error');
