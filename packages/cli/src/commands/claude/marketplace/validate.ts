@@ -13,7 +13,12 @@
 import { existsSync, readdirSync } from 'node:fs';
 
 
-import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import {
+  calculateValidationStatus,
+  countBySeverity,
+  type SeverityCounts,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/agent-schema';
 import {
   validateMarketplace,
   validateSkill,
@@ -26,6 +31,7 @@ import { Command } from 'commander';
 import { formatDuration, handleCommandError } from '../../../utils/command-error.js';
 import { createLogger } from '../../../utils/logger.js';
 import { writeYamlOutput } from '../../../utils/output.js';
+import { relativizePathEntries } from '../../../utils/relativize-paths.js';
 
 interface MarketplaceValidateOptions {
   debug?: boolean;
@@ -99,7 +105,12 @@ async function validatePlugins(
     if (!entry.isDirectory()) continue;
 
     const pluginDir = safePath.join(pluginsDir, entry.name);
-    const pluginResult = await validatePlugin(pluginDir, { strict: true });
+    // `locationRoot` is not optional here even though the parameter is: omitted,
+    // `validatePlugin` anchors at the plugin's own discovered project root, so
+    // its findings land in a different coordinate system than the marketplace
+    // and skill findings beside them — and every plugin's manifest collapses to
+    // the same `.claude-plugin/plugin.json`.
+    const pluginResult = await validatePlugin(pluginDir, { strict: true, locationRoot: marketplacePath });
     pluginResults.push(pluginResult);
     issues.push(...pluginResult.issues);
 
@@ -108,6 +119,120 @@ async function validatePlugins(
   }
 
   return { pluginResults, issues };
+}
+
+/** Every finding the command reports, all anchored at one marketplace root. */
+export interface MarketplaceFindings {
+  marketplaceResult: ValidationResult;
+  /** Empty when the manifest failed: the run bails before reaching plugins. */
+  pluginResults: ValidationResult[];
+  /** Manifest, required-file, plugin and skill issues, in report order. */
+  issues: ValidationIssue[];
+}
+
+/**
+ * Run every validator this command reports on, each anchored at
+ * `marketplacePath`.
+ *
+ * Anchoring is what makes this one function rather than four call sites in the
+ * command body. Unlike `path`, an issue `location` cannot be re-based at the
+ * document boundary — `relative()` is not idempotent, so an already-relative
+ * value is indistinguishable from an absolute one and re-basing it yields
+ * nonsense. "Relative to what?" therefore has to be answered identically by
+ * every producer at the moment it emits, and answering it in four places is how
+ * three producers agreed and the fourth silently anchored at the enclosing
+ * PROJECT root instead — putting two coordinate systems in one document, where
+ * `join(root, location)` resolved for some findings and named nothing for
+ * others.
+ *
+ * Exported so that contract is testable against a real marketplace without a
+ * CLI spawn; the command adds only the exit code and the emission.
+ */
+export async function collectMarketplaceFindings(
+  marketplacePath: string,
+): Promise<MarketplaceFindings> {
+  const marketplaceResult = await validateMarketplace(marketplacePath, {
+    locationRoot: marketplacePath,
+  });
+
+  // A missing or malformed manifest makes every downstream check meaningless.
+  if (marketplaceResult.status === 'error') {
+    return { marketplaceResult, pluginResults: [], issues: [...marketplaceResult.issues] };
+  }
+
+  const fileIssues = checkMarketplaceFiles(marketplacePath);
+  const { pluginResults, issues: pluginIssues } = await validatePlugins(marketplacePath);
+
+  return {
+    marketplaceResult,
+    pluginResults,
+    issues: [...marketplaceResult.issues, ...fileIssues, ...pluginIssues],
+  };
+}
+
+/** Everything the emitted report is built from. */
+export interface MarketplaceValidateReportInput {
+  status: 'success' | 'warning' | 'error';
+  /**
+   * The marketplace directory: the ONE base every reported `path` AND every
+   * issue `location` is relative to.
+   *
+   * `location` is the half that has to be got right upstream. This builder
+   * re-bases `path` (producers hand over absolute paths on purpose), but it
+   * cannot re-base a `location` — re-basing is not idempotent, so a location
+   * that arrived anchored elsewhere is indistinguishable from a correct one.
+   * Every producer feeding this report must therefore already have been told
+   * this root: `validatePlugin`/`validateSkill` via `locationRoot`,
+   * `checkMarketplaceFiles` via `issueLocation`.
+   */
+  root: string;
+  marketplace: ValidationResult['metadata'];
+  pluginResults: readonly ValidationResult[];
+  issues: readonly ValidationIssue[];
+  issueCounts: SeverityCounts;
+  summary: string;
+  duration: string;
+}
+
+/**
+ * Build the report `vat claude marketplace validate` publishes on stdout.
+ *
+ * Pure — returns the document rather than writing it — so the emitted shape,
+ * `path` included, is under unit test instead of only under a CLI spawn. One
+ * builder serves both exits (manifest-missing bail and full run) so the
+ * document has a single shape either way.
+ *
+ * Being pure is also the limit of what it can guarantee: it re-bases `path`,
+ * and passes `issues` through verbatim. The single-coordinate-system property
+ * is therefore only as true as its inputs — see `root` above — and is enforced
+ * against a real marketplace in `payload-path-coordinates.test.ts`, not here.
+ */
+export function buildMarketplaceValidateReport(
+  input: MarketplaceValidateReportInput,
+): Record<string, unknown> {
+  const { status, root, marketplace, pluginResults, issues, issueCounts, summary, duration } = input;
+
+  const plugins = pluginResults.map(r => ({
+    path: r.path,
+    status: r.status,
+    metadata: r.metadata,
+    issues: r.issues,
+  }));
+
+  return {
+    status,
+    // Stated once, and the only absolute path in the document.
+    root,
+    ...(marketplace ? { marketplace } : {}),
+    plugins: relativizePathEntries(plugins, root),
+    issues,
+    // Counts ride beside the status: `status` names only the worst ACTIONABLE
+    // severity, so an info-only run is `success` and the info would otherwise
+    // be unreported.
+    issueCounts,
+    summary,
+    duration,
+  };
 }
 
 async function marketplaceValidateCommand(
@@ -121,52 +246,30 @@ async function marketplaceValidateCommand(
     const marketplacePath = safePath.resolve(targetPath ?? '.');
     logger.info(`Validating marketplace: ${marketplacePath}`);
 
-    // 1. Validate marketplace.json
-    const marketplaceResult = await validateMarketplace(marketplacePath);
+    const { marketplaceResult, pluginResults, issues } =
+      await collectMarketplaceFindings(marketplacePath);
 
-    // If marketplace manifest is missing or invalid, bail early
-    if (marketplaceResult.status === 'error') {
-      const duration = formatDuration(Date.now() - startTime);
-      writeYamlOutput({
-        status: 'error',
-        path: marketplacePath,
-        summary: marketplaceResult.summary,
-        issues: marketplaceResult.issues,
-        duration,
-      });
-      process.exit(1);
-    }
+    const bailed = marketplaceResult.status === 'error';
+    const status = calculateValidationStatus(issues);
+    const issueCounts = countBySeverity(issues);
 
-    // 2. Check required/recommended files
-    const fileIssues = checkMarketplaceFiles(marketplacePath);
-
-    // 3. Validate plugins and their skills
-    const { pluginResults, issues: pluginIssues } = await validatePlugins(marketplacePath);
-
-    // Combine all issues
-    const allIssues = [...marketplaceResult.issues, ...fileIssues, ...pluginIssues];
-    const status = calculateValidationStatus(allIssues);
-    const issueCounts = countBySeverity(allIssues);
-    const duration = formatDuration(Date.now() - startTime);
-
-    writeYamlOutput({
-      status,
-      path: marketplacePath,
-      marketplace: marketplaceResult.metadata,
-      plugins: pluginResults.map(r => ({
-        path: r.path,
-        status: r.status,
-        metadata: r.metadata,
-        issues: r.issues,
-      })),
-      issues: allIssues,
-      // Counts ride beside the status: `status` names only the worst ACTIONABLE
-      // severity, so an info-only run is `success` and the info would otherwise
-      // be unreported.
-      issueCounts,
-      summary: `${issueCounts.errors} error(s), ${issueCounts.warnings} warning(s), ${issueCounts.info} info`,
-      duration,
-    });
+    writeYamlOutput(
+      buildMarketplaceValidateReport({
+        status,
+        root: marketplacePath,
+        marketplace: marketplaceResult.metadata,
+        pluginResults,
+        issues,
+        issueCounts,
+        // A bailed run reports WHY it stopped; a completed run reports what it
+        // found. Both emit through the one builder, so the document has a
+        // single shape either way.
+        summary: bailed
+          ? marketplaceResult.summary
+          : `${issueCounts.errors} error(s), ${issueCounts.warnings} warning(s), ${issueCounts.info} info`,
+        duration: formatDuration(Date.now() - startTime),
+      }),
+    );
 
     process.exit(status === 'error' ? 1 : 0);
   } catch (error) {
