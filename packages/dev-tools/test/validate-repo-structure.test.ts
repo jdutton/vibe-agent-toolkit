@@ -132,14 +132,46 @@ describe('classifySeverityCountsLane — named status types', () => {
   });
 
   it('does not read a MENTION of the shared type in prose as derivation', () => {
-    // Comment stripping is what makes the bare-name match safe; if it ever
-    // regressed, a doc comment discussing `SeverityCounts` would silently
-    // certify a lane that publishes nothing.
     const proseOnly = `
       export type GateStatus = 'success' | 'error';
       /** Someday this should extend SeverityCounts. It does not yet. */
       export interface GateResult { status: GateStatus; errors: string[]; }
     `;
     expect(classifySeverityCountsLane(proseOnly).publishesCounts).toBe(false);
+  });
+
+  // The first version of the derivation arm matched the BARE NAME
+  // `SeverityCounts`. Each case below was certified by it while publishing no
+  // distribution at all. Consuming a type is not publishing one.
+  it.each([
+    ['a string literal naming the type', `throw new Error('expected SeverityCounts, got nothing');`],
+    ['a pure CONSUMER of the type', `export function render(c: SeverityCounts): string { return String(c); }`],
+    ['a bare re-export', `export type { SeverityCounts } from './counts.js';`],
+    ['an unrelated identifier of the same name', `const SeverityCounts = 0;`],
+  ])('does not certify %s', (_label, body) => {
+    const lane = `
+      export type GateStatus = 'success' | 'error';
+      export interface GateResult { status: GateStatus; errors: string[]; }
+      ${body}
+    `;
+    expect(classifySeverityCountsLane(lane).publishesCounts).toBe(false);
+  });
+
+  it('still sees the counts field VANISH from a lane that merely imports the type', () => {
+    // The regression the bucket notes for `phase-utils.ts`, `skills/package.ts`
+    // and `validators/types.ts` exist to catch. All three conform via the counts
+    // PROPERTY, not the shared collapse, and all three keep an
+    // `import type { SeverityCounts }` line that a bare-name match would have
+    // accepted on its own — silently certifying the very deletion under test.
+    const regressed = `
+      import type { SeverityCounts } from '@vibe-agent-toolkit/agent-schema';
+      export type GateStatus = 'success' | 'error';
+      export interface GateResult { status: GateStatus; findings: string[]; }
+      export function toCounts(c: SeverityCounts): SeverityCounts { return c; }
+    `;
+    expect(classifySeverityCountsLane(regressed)).toEqual({
+      isLane: true,
+      publishesCounts: false,
+    });
   });
 });

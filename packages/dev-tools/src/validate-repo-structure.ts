@@ -839,11 +839,21 @@ const SEVERITY_COUNTS_SHAPE_PARTS = [
  * `SHARED_COLLAPSE_CALL` was added for, one level up in the type system: a
  * population defined by a keyword is emptied by the refactor that fixes it.
  *
- * A bare mention is enough. Comments are stripped before this runs, and naming
- * the type at all requires importing it, which means the distribution is in this
- * file's types. Over-accepting fails LOUDLY — the bucket notes are hand-verified.
+ * DERIVATION only — `extends` or an intersection. A bare mention is NOT enough,
+ * and the first version of this arm which accepted one was measurably wrong: it
+ * certified a file for a string literal (`'expected SeverityCounts'`), a pure
+ * CONSUMER (`function render(c: SeverityCounts)`), a bare re-export, and even an
+ * unrelated identifier of the same name. Worse, it silently WEAKENED the ratchet
+ * on the three listed lanes that conform via {@link SEVERITY_COUNTS_PROPERTY}
+ * rather than the shared collapse (`phase-utils.ts`, `skills/package.ts`,
+ * `validators/types.ts`): deleting the counts field from any of them leaves the
+ * `import type { SeverityCounts }` line behind, which the bare name matched — so
+ * the regression each of their bucket notes exists to catch went silent.
+ *
+ * Deriving is the only shape that actually publishes the distribution, and it is
+ * what `corpus/report.ts` does. Consuming one is not publishing one.
  */
-const SHARED_COUNTS_TYPE = /\bSeverityCounts\b/;
+const SHARED_COUNTS_TYPE = /\bextends\s+SeverityCounts\b|\bSeverityCounts\s*&|&\s*SeverityCounts\b/;
 
 /** Lanes that publish a per-severity counts block beside their status. */
 const SEVERITY_COUNTS_CONFORMING = new Set<string>([
