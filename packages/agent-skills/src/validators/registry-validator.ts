@@ -11,7 +11,10 @@ import {
 	InstalledPluginsRegistrySchema,
 	type RegistryShapeDrift,
 } from '../schemas/installed-plugins-registry.js';
-import { KnownMarketplacesRegistrySchema } from '../schemas/known-marketplaces-registry.js';
+import {
+	detectKnownMarketplacesRegistryDrift,
+	KnownMarketplacesRegistrySchema,
+} from '../schemas/known-marketplaces-registry.js';
 
 import { type AnchorRootOptions, resolveAnchorRoot } from './anchor-root.js';
 import type { ValidationResult } from './types.js';
@@ -163,5 +166,6 @@ export async function validateKnownMarketplacesRegistry(
 		KnownMarketplacesRegistrySchema,
 		'Valid known marketplaces registry',
 		options?.locationRoot,
+		detectKnownMarketplacesRegistryDrift,
 	);
 }

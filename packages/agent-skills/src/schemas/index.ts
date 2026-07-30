@@ -17,16 +17,19 @@ export {
   KNOWN_INSTALLATION_SCOPES,
   type InstalledPluginsRegistry,
   type PluginInstallation,
-  type RegistryShapeDrift,
 } from './installed-plugins-registry.js';
 
 export {
+  detectKnownMarketplacesRegistryDrift,
+  KNOWN_MARKETPLACE_SOURCE_KINDS,
   KnownMarketplacesRegistryJsonSchema,
   KnownMarketplacesRegistrySchema,
   type KnownMarketplacesRegistry,
   type MarketplaceEntry,
   type MarketplaceSource,
 } from './known-marketplaces-registry.js';
+
+export type { RegistryShapeDrift } from './registry-drift.js';
 
 export {
   MarketplaceManifestJsonSchema,

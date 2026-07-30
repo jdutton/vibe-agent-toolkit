@@ -1,6 +1,16 @@
 import { z } from 'zod';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 
+import {
+  isRecord,
+  recordDrift,
+  recordUnknownKeys,
+  type RegistryDriftRecord,
+  type RegistryShapeDrift,
+} from './registry-drift.js';
+
+export type { RegistryShapeDrift } from './registry-drift.js';
+
 /**
  * `installed_plugins.json` is written and owned by Claude Code — VAT only reads it.
  * Per VAT's Postel's Law rule (CLAUDE.md: "Reading outside world → liberal"), these
@@ -110,14 +120,6 @@ export const InstalledPluginsRegistryJsonSchema = zodToJsonSchema(
   { name: 'InstalledPluginsRegistry', $refStrategy: 'none' },
 );
 
-/** One thing in the registry that VAT's model does not recognize. */
-export interface RegistryShapeDrift {
-  /** Dotted pointer to the unrecognized field, or to the field carrying an unrecognized value. */
-  field: string;
-  /** Human-readable description of what was not recognized. */
-  message: string;
-}
-
 const KNOWN_REGISTRY_KEYS: ReadonlySet<string> = new Set(['version', 'plugins']);
 
 const KNOWN_INSTALLATION_KEYS: ReadonlySet<string> = new Set([
@@ -131,10 +133,6 @@ const KNOWN_INSTALLATION_KEYS: ReadonlySet<string> = new Set([
   'isLocal',
 ]);
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
 /**
  * Collect drift observations for one installation entry.
  *
@@ -146,27 +144,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function collectEntryDrift(
   entry: unknown,
   pointer: string,
-  record: Map<string, RegistryShapeDrift>,
+  record: RegistryDriftRecord,
 ): void {
   if (!isRecord(entry)) {
     return;
   }
 
-  for (const key of Object.keys(entry)) {
-    if (!KNOWN_INSTALLATION_KEYS.has(key)) {
-      const message = `Installation entries carry unrecognized field '${key}'`;
-      if (!record.has(message)) {
-        record.set(message, { field: `${pointer}.${key}`, message });
-      }
-    }
-  }
+  recordUnknownKeys(
+    entry,
+    KNOWN_INSTALLATION_KEYS,
+    pointer,
+    (key) => `Installation entries carry unrecognized field '${key}'`,
+    record,
+  );
 
   const scope = entry['scope'];
   if (typeof scope === 'string' && !KNOWN_SCOPE_SET.has(scope)) {
-    const message = `Installation scope '${scope}' is not one of the recognized scopes (${KNOWN_INSTALLATION_SCOPES.join(', ')})`;
-    if (!record.has(message)) {
-      record.set(message, { field: `${pointer}.scope`, message });
-    }
+    recordDrift(
+      record,
+      `${pointer}.scope`,
+      `Installation scope '${scope}' is not one of the recognized scopes (${KNOWN_INSTALLATION_SCOPES.join(', ')})`,
+    );
   }
 }
 
@@ -183,18 +181,19 @@ function collectEntryDrift(
 export function detectInstalledPluginsRegistryDrift(
   data: unknown,
 ): RegistryShapeDrift[] {
-  const found = new Map<string, RegistryShapeDrift>();
+  const found: RegistryDriftRecord = new Map();
 
   if (!isRecord(data)) {
     return [];
   }
 
-  for (const key of Object.keys(data)) {
-    if (!KNOWN_REGISTRY_KEYS.has(key)) {
-      const message = `Registry carries unrecognized top-level field '${key}'`;
-      found.set(message, { field: key, message });
-    }
-  }
+  recordUnknownKeys(
+    data,
+    KNOWN_REGISTRY_KEYS,
+    '',
+    (key) => `Registry carries unrecognized top-level field '${key}'`,
+    found,
+  );
 
   const plugins = data['plugins'];
   if (isRecord(plugins)) {

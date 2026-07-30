@@ -329,34 +329,50 @@ describe('validateKnownMarketplacesRegistry', () => {
 		assertSchemaError(result);
 	});
 
-	it('should fail when file source is missing path', async () => {
-		const result = await createAndValidateRegistry(
+	// known_marketplaces.json is Claude Code's file, not VAT's. Both shapes below used
+	// to be hard errors and both occur in the wild: a `file` source with no `path`, and
+	// a `directory` source kind. Per Postel's Law (CLAUDE.md) they are absorbed.
+	//
+	// The unrecognized *kind* additionally carries an info-severity REGISTRY_SHAPE_DRIFT
+	// issue, now that detectKnownMarketplacesRegistryDrift is wired into
+	// validateKnownMarketplacesRegistry. That is why these assert on status and on the
+	// absence of REGISTRY_INVALID_SCHEMA, rather than on an issue count — an absorbed
+	// shape is allowed to be *observed*, it is just not allowed to be an error.
+	it.each([
+		{
+			label: 'a source with no path',
+			file: 'missing-path.json',
+			source: { source: 'file' },
+		},
+		{
+			label: 'an unrecognized source kind',
+			file: 'invalid-source.json',
+			source: { source: 'directory', path: '/path' },
+		},
+	])('should absorb $label rather than erroring', async ({ file, source }) => {
+		const result = (await createAndValidateRegistry(
 			getTempDir(),
-			'missing-path.json',
+			file,
 			{
 				'test-marketplace': {
-					source: { source: 'file' },
+					source,
 					installLocation: '/path',
 					lastUpdated: '2025-01-01T00:00:00.000Z',
 				},
 			},
 			validateKnownMarketplacesRegistry,
-		);
+		)) as { status: string; issues: Array<{ code: string }> };
 
-		assertSchemaError(result);
+		expect(result.issues.some((i) => i.code === 'REGISTRY_INVALID_SCHEMA')).toBe(false);
+		expect(result.status).not.toBe('error');
 	});
 
-	it('should fail when source type is invalid', async () => {
+	// Positive control: liberal must not mean blind. The structural spine is still enforced.
+	it('should still fail when an entry is not an object at all', async () => {
 		const result = await createAndValidateRegistry(
 			getTempDir(),
-			'invalid-source.json',
-			{
-				'test-marketplace': {
-					source: { source: 'invalid', repo: 'owner/repo' },
-					installLocation: '/path',
-					lastUpdated: '2025-01-01T00:00:00.000Z',
-				},
-			},
+			'not-an-object.json',
+			{ 'test-marketplace': 'https://example.com/marketplace' },
 			validateKnownMarketplacesRegistry,
 		);
 
