@@ -126,7 +126,7 @@ resources:
     const { result, parsed } = executeValidateAndParse(binPath, projectDir);
 
     expect(result.status).toBe(1); // Validation failed
-    expect(parsed.status).toBe('failed');
+    expect(parsed.status).toBe('error');
     expect(parsed.errorsFound).toBe(2); // missing.md + #nonexistent
 
     // Check test-format errors on stderr (use text format)
@@ -273,7 +273,7 @@ describe('Dead external URL severity → exit code (system test)', () => {
 
     // Promoted to error → fatal exit.
     expect(result.status).toBe(1);
-    expect(parsed.status).toBe('failed');
+    expect(parsed.status).toBe('error');
 
     const dead = findExternalUrlDeadFinding(parsed);
     expect(dead).toBeDefined();

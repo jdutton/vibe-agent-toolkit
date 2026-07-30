@@ -123,7 +123,10 @@ Output Fields (issues found):
   A field named error* counts ERROR-severity issues only — the ones that fail
   the run. A field named issue* counts issues of every severity.
 
-  status, filesScanned, durationSecs
+  status: success | warning | error — the worst ACTIONABLE severity found, the
+          same vocabulary every other vat validation lane reports. An info-only
+          run is success; issueCounts below says what was actually seen.
+  filesScanned, durationSecs
   errorsFound: Count of error-severity issues (drives the exit code)
   filesWithErrors: Files carrying at least one error-severity issue
   issueCounts: {errors, warnings, info} — every issue, split by severity

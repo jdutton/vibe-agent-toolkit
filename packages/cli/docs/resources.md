@@ -123,7 +123,7 @@ vat resources validate docs/
 
 # stdout:
 # ---
-# status: failed
+# status: error
 # errorsFound: 2
 # filesWithErrors: 2
 # issueCounts: { errors: 2, warnings: 0, info: 0 }

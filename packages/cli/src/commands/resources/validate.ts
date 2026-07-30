@@ -5,6 +5,13 @@
 import { readFile } from 'node:fs/promises';
 import * as path from 'node:path';
 
+import {
+  calculateValidationStatus,
+  countBySeverity,
+  type IssueSeverity,
+  type SeverityCounts,
+  type ValidationIssueCode,
+} from '@vibe-agent-toolkit/agent-schema';
 import { packagedFileEntries } from '@vibe-agent-toolkit/agent-skills';
 import {
   DeferredArtifacts,
@@ -78,12 +85,12 @@ interface FileIssues {
   }>;
 }
 
-/** Issue counts split by resolved severity — mirrors `vat audit`'s `issues:` block. */
-interface SeverityCounts {
-  errors: number;
-  warnings: number;
-  info: number;
-}
+/**
+ * The verdict vocabulary, taken from the shared collapse rather than restated —
+ * so this command cannot drift into a private vocabulary again. Every other
+ * validation lane answers "issues → status" with these same three values.
+ */
+type ValidationStatus = ReturnType<typeof calculateValidationStatus>;
 
 /**
  * Output data structure for validation results.
@@ -95,7 +102,8 @@ interface SeverityCounts {
  * `filesWithErrors: 1` beside `errorsFound: 0`).
  */
 interface ValidationOutputData {
-  status: 'success' | 'failed';
+  /** Worst ACTIONABLE severity over the reported issues; info-only is `success`. */
+  status: ValidationStatus;
   filesScanned: number;
   /** Files carrying at least one ERROR-severity issue. */
   filesWithErrors?: number;
@@ -130,15 +138,18 @@ function writeStructuredOutput(data: ValidationOutputData, format: Exclude<Outpu
  *
  * - `file` is RELATIVE to projectRoot (matches `issue.location`), used for display.
  * - `absPath` is the ABSOLUTE resource path, used for registry/collection lookups.
- * - `code` / `severity` come straight from the unified `ValidationIssue`.
+ * - `code` / `severity` come straight from the unified `ValidationIssue`, and stay
+ *   typed as such: that makes an `ErrorData` a structural `ValidationIssue`, so the
+ *   shared `calculateValidationStatus`/`countBySeverity` consume this list directly
+ *   instead of a local re-implementation counting severities its own way.
  */
 type ErrorData = {
   file: string;
   absPath: string;
   line: number;
   column: number;
-  code: string;
-  severity: string;
+  code: ValidationIssueCode;
+  severity: IssueSeverity;
   message: string;
 };
 
@@ -172,15 +183,6 @@ function groupIssuesByFile(issues: ErrorData[]): FileIssues[] {
   return [...fileMap.values()];
 }
 
-/** Split issues by resolved severity. Anything not `error`/`warning` counts as info. */
-function countBySeverity(issues: Array<{ severity: string }>): SeverityCounts {
-  return {
-    errors: issues.filter((i) => i.severity === 'error').length,
-    warnings: issues.filter((i) => i.severity === 'warning').length,
-    info: issues.filter((i) => i.severity !== 'error' && i.severity !== 'warning').length,
-  };
-}
-
 /**
  * Log git tracker stats if available.
  */
@@ -196,11 +198,15 @@ function logGitTrackerStats(gitTracker: GitTracker | undefined, logger: Logger):
  */
 interface ValidationContext {
   stats: RegistryStats;
-  errorCount: number;
   validationMetadata: Pick<ValidationOutputData, 'validationMode' | 'frontmatterSchema'>;
   collectionStats: CollectionStats | undefined;
   duration: number;
 }
+
+/** The only thing the output layer needs from the registry: collection lookup by ABSOLUTE path. */
+type RegistryLookup = {
+  getResource: (path: string) => { collections?: (string[] | undefined) } | undefined;
+};
 
 /**
  * Merge per-collection error stats into the base collection stats for output.
@@ -227,57 +233,48 @@ function buildCollectionsWithErrors(
 }
 
 /**
- * Output validation results when one or more issues fired.
+ * Build the structured (yaml/json) payload for a run that surfaced issues.
  *
  * Surfaces ALL severity-resolved issues (errors AND warnings/info) so users see
- * them, but the `failed` flag — derived from the library's `hasErrors` — controls
- * the reported `status`. The caller, not this function, owns the exit code.
+ * them; only the `error*`-named counts are error-severity. Exported so the
+ * reported vocabulary is unit-testable without spawning the CLI.
  */
-function outputIssues(
+export function buildIssuesOutputData(
   issueData: ErrorData[],
-  outputFormat: OutputFormat,
   context: ValidationContext,
-  registry: { getResource: (path: string) => { collections?: (string[] | undefined) } | undefined },
-  failed: boolean
-): void {
-  if (outputFormat === 'text') {
-    // Text format: one `file:line:col: severity: message` line per issue, to
-    // stderr. The severity is what tells a reader which lines are fatal.
-    for (const issue of issueData) {
-      writeTestFormatError(issue.file, issue.line, issue.column, issue.severity, issue.message);
-    }
-  } else {
-    // Calculate issue summary (keyed by code)
-    const summary = buildIssueSummary(issueData, registry);
+  registry: RegistryLookup
+): ValidationOutputData {
+  const summary = buildIssueSummary(issueData, registry);
+  const collectionsWithErrors = buildCollectionsWithErrors(
+    context.collectionStats,
+    summary.collectionErrorStats
+  );
+  // ONE answer to "issues → status", from the shared collapse in agent-schema —
+  // the worst ACTIONABLE severity, so an info-only run is `success`. That is
+  // honest only because `issueCounts` rides beside it, naming what was found.
+  const issueCounts = countBySeverity(issueData);
 
-    // Build collection stats with error info
-    const collectionsWithErrors = buildCollectionsWithErrors(
-      context.collectionStats,
-      summary.collectionErrorStats
-    );
-
-    // Group issues by file
-    const groupedIssues = groupIssuesByFile(issueData);
-
-    const outputData: ValidationOutputData = {
-      status: failed ? 'failed' : 'success',
-      filesScanned: context.stats.totalResources,
-      filesWithErrors: summary.filesWithErrors,
-      errorsFound: context.errorCount,
-      issueCounts: countBySeverity(issueData),
-      issueSummary: summary.issueSummary,
-      durationSecs: formatDurationSecs(context.duration),
-      ...context.validationMetadata,
-      ...(Object.keys(collectionsWithErrors).length > 0 ? { collections: collectionsWithErrors } : {}),
-      issues: groupedIssues,
-    };
-
-    writeStructuredOutput(outputData, outputFormat);
-  }
+  return {
+    status: calculateValidationStatus(issueData),
+    filesScanned: context.stats.totalResources,
+    filesWithErrors: summary.filesWithErrors,
+    errorsFound: issueCounts.errors,
+    issueCounts,
+    issueSummary: summary.issueSummary,
+    durationSecs: formatDurationSecs(context.duration),
+    ...context.validationMetadata,
+    ...(Object.keys(collectionsWithErrors).length > 0 ? { collections: collectionsWithErrors } : {}),
+    issues: groupIssuesByFile(issueData),
+  };
 }
 
 /**
  * Output validation success results.
+ *
+ * Reached only when NOTHING was emitted, so the literal `success` is not a second
+ * derivation of the verdict — it is what the shared collapse returns for an empty
+ * issue set. Any run that emitted anything, at any severity, goes through
+ * {@link buildIssuesOutputData} instead.
  */
 function outputSuccess(
   outputFormat: OutputFormat,
@@ -321,8 +318,8 @@ function outputSuccess(
  * @returns Error summary statistics
  */
 function buildIssueSummary(
-  issues: Array<{ code: string; file: string; absPath: string; severity: string }>,
-  registry: { getResource: (path: string) => { collections?: (string[] | undefined) } | undefined }
+  issues: ErrorData[],
+  registry: RegistryLookup
 ): {
   issueSummary: Record<string, number>;
   filesWithErrors: number;
@@ -422,6 +419,12 @@ function filterByCollection(
  *
  * `file` is RELATIVE to projectRoot (matches `issue.location`, used for display);
  * `absPath` is ABSOLUTE (for registry/collection lookups via getResource).
+ *
+ * `code` is re-narrowed on the way through: `ValidationResult` is Zod-inferred and
+ * its schema widens `code` to `string` on purpose, while the hand-written
+ * `ValidationIssue` interface — the contract every producer builds against — types
+ * it as `ValidationIssueCode`. Restoring that narrowing here is what lets the
+ * shared `calculateValidationStatus`/`countBySeverity` read this list directly.
  */
 function flattenIssuesForDisplay(issues: ValidationResult['issues'], projectRoot: string): ErrorData[] {
   return issues.map(issue => {
@@ -431,7 +434,7 @@ function flattenIssuesForDisplay(issues: ValidationResult['issues'], projectRoot
       absPath: file ? safePath.resolve(projectRoot, file) : '',
       line: issue.line ?? 1,
       column: 1,
-      code: issue.code,
+      code: issue.code as ValidationIssueCode,
       severity: issue.severity,
       message: issue.message,
     };
@@ -588,23 +591,26 @@ export async function validateCommand(
     // dropped) and decided pass/fail. The CLI is a dumb orchestrator: the failure
     // decision is exactly the framework's severity-based `hasErrors`. Warning- and
     // info-severity issues are surfaced below but DO NOT flip the exit code.
+    //
+    // The reported `status` is derived separately, from the issues actually
+    // REPORTED (post `--collection` filter) — see `buildIssuesOutputData`. Without
+    // a filter the two are the same question with the same answer: `hasErrors` and
+    // `calculateValidationStatus(...) === 'error'` are both "any error-severity
+    // issue". With `--collection`, `status` describes the collection asked about
+    // while the exit code still covers the whole project.
     const { hasErrors } = validationResult;
 
     // Flatten issues for display (relative `file` + absolute `absPath`).
     const issueData = flattenIssuesForDisplay(filteredIssues, projectRoot);
 
-    // The count shown to the user as "errors" counts only error-severity issues.
-    const errorSeverityCount = issueData.filter(i => i.severity === 'error').length;
-
     const context: ValidationContext = {
       stats: filteredStats,
-      errorCount: errorSeverityCount,
       validationMetadata,
       collectionStats,
       duration,
     };
 
-    emitResult(issueData, context, registry, hasErrors, options.format ?? 'yaml');
+    emitResult(issueData, context, registry, options.format ?? 'yaml');
     logGitTrackerStats(gitTracker, logger);
     // Exit decision is purely the library's severity-based `hasErrors`.
     process.exit(hasErrors ? 1 : 0);
@@ -642,15 +648,22 @@ function narrowCollectionStats(
 function emitResult(
   issueData: ErrorData[],
   context: ValidationContext,
-  registry: { getResource: (path: string) => { collections?: (string[] | undefined) } | undefined },
-  hasErrors: boolean,
+  registry: RegistryLookup,
   outputFormat: OutputFormat
 ): void {
-  if (issueData.length > 0) {
-    // Issues to surface (errors and/or warnings/info). Reported status follows
-    // the exit decision: 'failed' iff the framework flagged errors.
-    outputIssues(issueData, outputFormat, context, registry, hasErrors);
-  } else {
+  if (issueData.length === 0) {
     outputSuccess(outputFormat, context);
+    return;
   }
+  if (outputFormat === 'text') {
+    // Text format: one `file:line:col: severity: message` line per issue, to
+    // stderr. The severity is what tells a reader which lines are fatal — the
+    // text renderer prints no verdict word of its own, so it cannot contradict
+    // the `status` the structured renderer reports.
+    for (const issue of issueData) {
+      writeTestFormatError(issue.file, issue.line, issue.column, issue.severity, issue.message);
+    }
+    return;
+  }
+  writeStructuredOutput(buildIssuesOutputData(issueData, context, registry), outputFormat);
 }

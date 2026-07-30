@@ -199,7 +199,9 @@ which lines they have to act on.
 
 ```yaml
 ---
-status: failed
+# status is the worst ACTIONABLE severity: success | warning | error.
+# Info-only findings report `success` — read issueCounts for what was seen.
+status: error
 errorsFound: 2
 issueCounts: { errors: 2, warnings: 0, info: 0 }
 issues:
@@ -373,7 +375,7 @@ docs/README.md:15:25: error: Link target not found: ./missing.md
 *stdout:*
 ```yaml
 ---
-status: failed
+status: error
 filesScanned: 12
 errorsFound: 1
 filesWithErrors: 1

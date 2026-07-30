@@ -50,7 +50,7 @@ describe('vat resources validate (integration)', () => {
 
     expect(result.status).toBe(1);
     expect(parsed).toBeDefined();
-    expect(parsed.status).toBe('failed');
+    expect(parsed.status).toBe('error');
     expect(parsed.errorsFound).toBeGreaterThan(0);
   });
 
