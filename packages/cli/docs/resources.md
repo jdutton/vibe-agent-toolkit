@@ -29,6 +29,8 @@ including link integrity checking and anchor validation.
 **Options:**
 - `[path]` - Base directory to crawl (defaults to current directory)
 - `--debug` - Enable debug logging
+- `--verbose` - Add a `files:` list with per-file link/anchor counts and checksums
+- `--collection <id>` - Only report files in the named collection (config mode — no path argument)
 
 **Exit Codes:**
 - `0` - Always (scan is informational)
@@ -36,23 +38,28 @@ including link integrity checking and anchor validation.
 
 **Output:** YAML on stdout, logs on stderr
 
+`root` is stated once and is the only absolute path in the document; every
+`path` beneath it is relative to it.
+
 **Example:**
 ```bash
 # Recursively scan all *.md files under docs/
-vat resources scan docs/
+vat resources scan docs/ --verbose
 # Equivalent to: find all files matching docs/**/*.md pattern
 
 # Output:
 # ---
 # status: success
+# root: /home/you/my-project
 # filesScanned: 12
 # linksFound: 47
 # anchorsFound: 23
+# durationSecs: 0.234
 # files:
 #   - path: docs/README.md
 #     links: 5
 #     anchors: 3
-# duration: 234ms
+#     checksum: 47dd7b50af765df240fe2514f029fc697c907fc37a3267e22060f2f9f611975c
 # ---
 ```
 
@@ -114,8 +121,7 @@ vat resources validate docs/
 # status: success
 # filesScanned: 12
 # linksChecked: 47
-# anchorsChecked: 23
-# duration: 456ms
+# durationSecs: 0.456
 # ---
 ```
 
@@ -142,7 +148,7 @@ vat resources validate docs/
 #         code: LINK_BROKEN_FILE
 #         severity: error
 #         message: Link target not found: ./missing.md
-# duration: 456ms
+# durationSecs: 0.456
 # ---
 ```
 

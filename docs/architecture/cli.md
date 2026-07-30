@@ -167,7 +167,7 @@ All commands output YAML on stdout (readable by humans and agents):
 ---
 status: success
 filesScanned: 12
-duration: 234ms
+durationSecs: 0.234
 ---
 ```
 
@@ -332,6 +332,7 @@ Each command group exports its verbose help function.
 ```yaml
 ---
 status: success
+root: /abs/path/to/project
 filesScanned: 12
 linksFound: 47
 anchorsFound: 23
@@ -339,7 +340,8 @@ files:
   - path: docs/README.md
     links: 5
     anchors: 3
-duration: 234ms
+    checksum: e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+durationSecs: 0.234
 ---
 ```
 

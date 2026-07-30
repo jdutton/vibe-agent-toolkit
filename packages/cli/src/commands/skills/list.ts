@@ -11,11 +11,13 @@ import { rm } from 'node:fs/promises';
 import { basename, dirname } from 'node:path';
 
 import { readDeclaredSkillName } from '@vibe-agent-toolkit/agent-skills';
+import { getClaudeUserPaths } from '@vibe-agent-toolkit/claude-marketplace';
 import { scan, type ScanSummary } from '@vibe-agent-toolkit/discovery';
 import { safePath } from '@vibe-agent-toolkit/utils';
 
 import { loadConfig } from '../../utils/config-loader.js';
 import { createLogger } from '../../utils/logger.js';
+import { relativizePathEntries } from '../../utils/relativize-paths.js';
 import { discoverSkills, validateSkillFilename } from '../../utils/skill-discovery.js';
 import { scanUserContext } from '../../utils/user-context-scanner.js';
 
@@ -68,28 +70,47 @@ function processDiscoveredSkills(
 }
 
 /**
- * Output skills as YAML
+ * Render the skills payload as YAML.
+ *
+ * Pure — returns the document rather than writing it — so the emitted shape,
+ * `path` included, is under unit test instead of only under a CLI spawn.
+ *
+ * `root` is stated once and is the only absolute path in the document; every
+ * `path` beneath it is relative to it. Absolute paths here named the operator's
+ * home directory on every `--user` run and made two machines' output undiffable.
  */
-function outputSkillsYaml(skills: DiscoveredSkill[], context: string): void {
-  process.stdout.write('---\n');
-  process.stdout.write(`status: success\n`);
-  process.stdout.write(`context: ${context}\n`);
-  process.stdout.write(`skillsFound: ${skills.length}\n`);
-  process.stdout.write(`skills:\n`);
+export function formatSkillsYaml(
+  skills: readonly DiscoveredSkill[],
+  context: string,
+  root: string,
+): string {
+  const lines = [
+    '---',
+    'status: success',
+    `root: ${root}`,
+    `context: ${context}`,
+    `skillsFound: ${skills.length}`,
+    'skills:',
+  ];
 
-  for (const skill of skills) {
-    process.stdout.write(`  - name: ${skill.name}\n`);
-    process.stdout.write(`    path: ${skill.path}\n`);
-    process.stdout.write(`    valid: ${skill.valid}\n`);
-
+  for (const skill of relativizePathEntries(skills, root)) {
+    lines.push(`  - name: ${skill.name}`, `    path: ${skill.path}`, `    valid: ${skill.valid}`);
     if (skill.warning) {
-      process.stdout.write(`    warning: "${skill.warning}"\n`);
+      lines.push(`    warning: "${skill.warning}"`);
     }
   }
+
+  return `${lines.join('\n')}\n`;
 }
 
 /**
- * Output human-readable skill list
+ * Output human-readable skill list.
+ *
+ * Deliberately keeps ABSOLUTE paths: this goes to stderr for a person reading a
+ * terminal, where a full path is the one you can click or paste. The
+ * root-relative contract governs the stdout YAML document, which states its
+ * `root` alongside; stderr states no root, so a relative path there would be
+ * unresolvable.
  */
 function outputSkillsHuman(
   skills: DiscoveredSkill[],
@@ -166,7 +187,9 @@ async function listFromNpmSource(
 
   try {
     const skills = scanSkillsDir(resolved.skillsDir);
-    outputSkillsYaml(skills, 'npm');
+    // The extracted package's own skills dir is the base — the enclosing temp
+    // directory is an implementation detail nobody can act on.
+    process.stdout.write(formatSkillsYaml(skills, 'npm', resolved.skillsDir));
     outputSkillsHuman(skills, logger, options);
     process.exit(0);
   } finally {
@@ -195,6 +218,9 @@ export async function listCommand(
 
     let skills: DiscoveredSkill[];
     let context: string;
+    // The ONE base every reported path is relative to. User and project runs
+    // scan different trees, so each names its own.
+    let root: string;
 
     if (options.user) {
       // User context: scan ~/.claude
@@ -205,6 +231,9 @@ export async function listCommand(
       const discoveredSkills = discoverSkills(allResources);
       skills = processDiscoveredSkills(discoveredSkills);
       context = 'user';
+      // `scanUserContext` covers ~/.claude/plugins and ~/.claude/skills, so
+      // their common parent is the base that spans both.
+      root = getClaudeUserPaths().claudeDir;
     } else {
       // Project context: use resources config
       const rootDir = pathArg ?? process.cwd();
@@ -222,10 +251,11 @@ export async function listCommand(
       const discoveredSkills = discoverSkills(scanResult.results);
       skills = processDiscoveredSkills(discoveredSkills);
       context = 'project';
+      root = safePath.resolve(rootDir);
     }
 
     // Output YAML to stdout
-    outputSkillsYaml(skills, context);
+    process.stdout.write(formatSkillsYaml(skills, context, root));
 
     // Human-friendly output to stderr
     outputSkillsHuman(skills, logger, options);

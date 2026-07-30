@@ -498,6 +498,7 @@ only when the `SKILL.md` declares none.
 **Output Format:**
 ```yaml
 status: success
+root: /abs/path/to/project
 context: project | user
 skillsFound: 3
 skills:
