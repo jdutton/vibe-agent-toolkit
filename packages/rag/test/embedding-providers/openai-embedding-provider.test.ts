@@ -5,6 +5,8 @@
  * Real API tests require OPENAI_API_KEY and are skipped by default.
  */
 
+import Module from 'node:module';
+
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import { OpenAIEmbeddingProvider } from '../../src/embedding-providers/openai-embedding-provider.js';
@@ -66,6 +68,31 @@ describe('OpenAIEmbeddingProvider - Unit Tests', () => {
     });
 
     expect(provider.dimensions).toBe(1536); // fallback default
+  });
+
+  it('should throw an install hint when the OpenAI SDK is not installed', () => {
+    // The provider `require()`s `openai` lazily in its constructor because the SDK is an
+    // optional dependency. `vi.mock` cannot intercept that: `openai` is externalized, so
+    // the require reaches Node's real loader. Simulate the SDK being absent by making the
+    // loader itself fail for that one specifier.
+    const loader = Module as unknown as {
+      _load: (request: string, ...rest: unknown[]) => unknown;
+    };
+    const originalLoad = loader._load;
+    loader._load = function patchedLoad(request: string, ...rest: unknown[]): unknown {
+      if (request === 'openai') {
+        throw new Error("Cannot find module 'openai'");
+      }
+      return originalLoad.call(this, request, ...rest);
+    };
+
+    try {
+      expect(() => new OpenAIEmbeddingProvider({ apiKey: TEST_API_KEY })).toThrow(
+        'OpenAI SDK not installed. Install with: bun add openai'
+      );
+    } finally {
+      loader._load = originalLoad;
+    }
   });
 });
 
@@ -141,12 +168,5 @@ describe('OpenAIEmbeddingProvider - Integration Tests', () => {
     const embeddings = await provider.embedBatch([]);
 
     expect(embeddings).toEqual([]);
-  });
-
-  it('should throw error when OpenAI SDK is not installed', () => {
-    // This test would require mocking the require() call to throw
-    // Skip for now as it's difficult to test without module mocking
-    // The error is covered by manual testing
-    expect(true).toBe(true);
   });
 });

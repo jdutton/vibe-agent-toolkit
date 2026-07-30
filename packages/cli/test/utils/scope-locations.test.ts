@@ -78,12 +78,20 @@ describe('scope-locations', () => {
     });
 
     it('should throw error when scope location not implemented', () => {
-      // This tests the fallback case where a scope is valid but location not implemented
-      // We need to modify VALID_SCOPES temporarily or test with a mock
-      // For now, we'll test that the current implementation always has locations
-      const location = validateAndGetScopeLocation(AGENT_SKILL, 'user');
-      expect(location).toBeDefined();
-      expect(typeof location).toBe('string');
+      // A runtime can declare a scope as valid without a location being wired up in
+      // SCOPE_LOCATIONS. That fallback must throw rather than return undefined, so
+      // register such a runtime for the duration of this test.
+      const unwiredRuntime = 'unwired-runtime';
+      VALID_SCOPES[unwiredRuntime] = ['user'];
+
+      try {
+        expect(SCOPE_LOCATIONS[unwiredRuntime]).toBeUndefined();
+        expect(() => validateAndGetScopeLocation(unwiredRuntime, 'user')).toThrow(
+          "Scope 'user' not implemented for runtime 'unwired-runtime'"
+        );
+      } finally {
+        delete VALID_SCOPES[unwiredRuntime];
+      }
     });
 
     it('should handle case-sensitive scope names', () => {

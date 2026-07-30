@@ -76,9 +76,8 @@ describe('RAG index command (system test)', () => {
     expect(parsed1.status).toBe('success');
     expect(parsed1.resourcesIndexed).toBeGreaterThan(0);
 
-    // Second index - should complete successfully
-    // NOTE: Current LanceDB provider doesn't skip unchanged resources,
-    // it re-indexes them. This is a known limitation.
+    // Second index - nothing changed on disk, so the provider must recognise every
+    // resource by its content hash and skip it rather than re-embedding it.
     const { result: result2, parsed: parsed2 } = await executeCliAndParseYaml(
       binPath,
       ['rag', 'index', reindexProjectDir, '--db', reindexDbPath],
@@ -87,8 +86,10 @@ describe('RAG index command (system test)', () => {
 
     expect(result2.status).toBe(0);
     expect(parsed2.status).toBe('success');
-    // Just verify it completes successfully, don't check specific behavior
-    expect(parsed2.resourcesIndexed).toBeGreaterThanOrEqual(0);
+    expect(parsed2.resourcesSkipped).toBe(parsed1.resourcesIndexed);
+    expect(parsed2.resourcesIndexed).toBe(0);
+    expect(parsed2.resourcesUpdated).toBe(0);
+    expect(parsed2.chunksCreated).toBe(0);
   });
 
   it('should error when no path and no project root', async () => {
