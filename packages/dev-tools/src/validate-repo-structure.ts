@@ -16,6 +16,8 @@
  * DURABILITY - Claims that rot in silence:
  * - No citations to files under never-committed (gitignored) directories
  * - Vendor claims annotated with @vendor-claim must be re-verified every 90 days
+ * - A lane reporting findings must publish per-severity counts beside its status
+ *   (ratcheted: the nonconforming list may only shrink)
  *
  * ORIGINAL RULES:
  * - No /examples directories in runtime packages
@@ -36,7 +38,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { safeExecSync, safePath } from '@vibe-agent-toolkit/utils';
+import { safeExecSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
 
 const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const REPO_ROOT = safePath.join(__dirname, '../../..');
@@ -48,6 +50,7 @@ const ERROR_TYPES = {
   DANGLING_CITATION: 'dangling-citation',
   FORBIDDEN_DIRECTORY: 'forbidden-directory',
   LARGE_FILE: 'large-file',
+  SEVERITY_COUNTS: 'severity-counts',
   STALE_VENDOR_CLAIM: 'stale-vendor-claim',
   STRUCTURAL_VIOLATION: 'structural-violation',
 } as const;
@@ -64,6 +67,7 @@ interface ValidationError {
     | 'dangling-citation'
     | 'forbidden-directory'
     | 'large-file'
+    | 'severity-counts'
     | 'stale-vendor-claim'
     | 'structural-violation';
   path: string;
@@ -656,6 +660,184 @@ async function validateNoCitationsToNeverCommittedDirs(): Promise<void> {
   });
 }
 
+/* ────────────────────────────────────────────────────────────────────────────
+ * Gate: a lane that reports findings must publish per-severity COUNTS beside
+ * its status, not only the status.
+ *
+ * Every "issues → status" collapse in this repo maps a three-valued severity
+ * distribution onto two or three status values, and every one of them resolves
+ * the unrepresentable case to the REASSURING answer: info-only ⇒ `success`,
+ * warnings ⇒ "All validations passed". That direction is why none of it was ever
+ * reported as a bug — it yields silence, never a false alarm. A consumer cannot
+ * recover the distribution from the status, so the distribution has to travel
+ * next to it. Publishing counts does not make the collapse correct; it makes the
+ * collapse *checkable* by a consumer that disagrees with it.
+ *
+ * This lands as a RATCHET rather than a warning. A warning on 20 existing lanes
+ * is a warning everyone learns to scroll past. The ratchet asserts both
+ * directions: a listed lane must still be nonconforming (so fixing one without
+ * removing it from the list fails the build), and any findings-reporting lane
+ * missing from all three buckets fails (so a new lane must be classified at
+ * birth). The list can therefore only shrink.
+ *
+ * HONEST LIMITATIONS: conformance is judged from SOURCE — whether the file
+ * declares or assigns an object property named `issueCounts`/`severityCounts`/
+ * `counts`. Specifically:
+ *   - It cannot tell whether that block is actually reached at runtime.
+ *   - It cannot see counts published under a name outside that set.
+ *   - The property must start a line. That is deliberate — matching the bare word
+ *     anywhere is what made an earlier keyword scan call `packaging-validator.ts`
+ *     conforming, because the word "counts" appeared in one of its comments — but
+ *     it does mean a counts block written inline on one line reads as
+ *     nonconforming. The failure direction is a lane that stays on the list after
+ *     being fixed, which someone notices; not a lane that leaves it unfixed.
+ * It is a checklist that cannot rot, not a proof of correct output. That coarseness
+ * is why the bucket notes below are hand-verified rather than inferred.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** Roots whose `.ts` files are scanned for findings-reporting lanes. */
+const SEVERITY_COUNTS_SCAN_ROOTS = [
+  'packages/cli/src/commands/',
+  'packages/agent-skills/src/validators/',
+  'packages/claude-marketplace/src/',
+] as const;
+
+/** A status drawn from the validation vocabulary, as an emitted or declared value. */
+const VALIDATION_STATUS_VALUE = /status\??:[^'\n]*'(?:success|error|warning|failed)'/;
+/** A collection of findings, which is what makes a status a *validation* verdict. */
+const FINDINGS_COLLECTION = /\b(?:issues|allErrors|activeErrors|activeWarnings|errors|warnings|findings)\b\s*[:.]/;
+/** A per-severity counts block, as an object property — not a local, not a comment. */
+const SEVERITY_COUNTS_PROPERTY = /^[ \t]*(?:issueCounts|severityCounts|counts)\??[ \t]*:/m;
+
+/** Lanes that publish a per-severity counts block beside their status. */
+const SEVERITY_COUNTS_CONFORMING = new Set<string>([
+  'packages/cli/src/commands/resources/validate.ts',
+]);
+
+/**
+ * Lanes that publish a status WITHOUT per-severity counts. This is Wave 2/3's
+ * checklist. Remove an entry in the same change that fixes it — a fixed lane
+ * left on this list fails the build.
+ */
+/** The plain case: a status is published and the severity distribution simply is not. */
+const NO_COUNTS_BLOCK = 'status published without a per-severity counts block';
+
+const SEVERITY_COUNTS_RATCHET = new Map<string, string>([
+  ['packages/cli/src/commands/verify.ts', 'consistency phase reports `passed` even with warnings; findings go to stderr only and never into the archived YAML'],
+  ['packages/cli/src/commands/build.ts', NO_COUNTS_BLOCK],
+  ['packages/cli/src/commands/audit-settings.ts', 'drops the `overrode` provenance chain, the one question the override chain exists to answer'],
+  ['packages/cli/src/commands/audit/hierarchical-output.ts', '`summary.warnings` counts FILES while `issues.warnings` counts FINDINGS — same word, two units, adjacent keys'],
+  ['packages/cli/src/commands/corpus/runner.ts', '`statusFromCounts` ignores its own third count, so `audit_clean` absorbs info-only plugins'],
+  ['packages/cli/src/commands/claude/marketplace/validate.ts', 'computes error+warning counts but no info term; summary string reads "0 error(s), 0 warning(s)" above N findings'],
+  ['packages/cli/src/commands/claude/plugin/build.ts', 'renders info-severity findings with a `[WARNING]` prefix; no counts published'],
+  ['packages/cli/src/commands/skills/validate.ts', 'prints "All validations passed" over active warnings; no counts published'],
+  ['packages/cli/src/commands/skills/build.ts', 'labels the whole issue set "post-build error(s)" regardless of severity'],
+  ['packages/cli/src/commands/skills/package.ts', 'validation display lane; status published without a per-severity counts block'],
+  ['packages/cli/src/commands/agent/validate.ts', 'collapses a boolean `valid` into a status; no counts published'],
+  ['packages/agent-skills/src/validators/types.ts', 'the shared `ValidationResult` shape itself declares no counts field'],
+  ['packages/agent-skills/src/validators/skill-validator.ts', 'computes all three counts, then publishes them only inside a prose `summary` string — a consumer must parse English'],
+  ['packages/agent-skills/src/validators/packaging-validator.ts', 'has no info notion at all and maps warning ⇒ success'],
+  ['packages/agent-skills/src/validators/unified-validator.ts', NO_COUNTS_BLOCK],
+  ['packages/agent-skills/src/validators/marketplace-validator.ts', NO_COUNTS_BLOCK],
+  ['packages/agent-skills/src/validators/registry-validator.ts', NO_COUNTS_BLOCK],
+  ['packages/claude-marketplace/src/validators/plugin-validator.ts', NO_COUNTS_BLOCK],
+  ['packages/claude-marketplace/src/settings/settings-auditor.ts', NO_COUNTS_BLOCK],
+]);
+
+/**
+ * Scanned files that emit a status but are NOT findings-reporting lanes, with why.
+ * Explicit rather than silently filtered: the scan is deliberately over-inclusive,
+ * and "why is this not in scope" is exactly the judgement a future reader needs.
+ */
+const SEVERITY_COUNTS_NOT_APPLICABLE = new Map<string, string>([
+  ['packages/cli/src/commands/rag/index-command.ts', 'indexing failures are plain strings, not severity-classified findings; status is a generic success envelope'],
+]);
+
+/**
+ * Report every findings-reporting lane that is misclassified, newly conforming,
+ * or newly appeared.
+ */
+async function validateSeverityCountsRatchet(): Promise<void> {
+  const seen = new Set<string>();
+
+  await forEachTrackedTextFile((relPath, contents) => {
+    if (!relPath.endsWith('.ts')) return;
+    if (!SEVERITY_COUNTS_SCAN_ROOTS.some((root) => toForwardSlash(relPath).startsWith(root))) return;
+
+    const source = contents.toString('utf8');
+    if (!VALIDATION_STATUS_VALUE.test(source) || !FINDINGS_COLLECTION.test(source)) return;
+
+    seen.add(relPath);
+    const conforms = SEVERITY_COUNTS_PROPERTY.test(source);
+
+    if (SEVERITY_COUNTS_NOT_APPLICABLE.has(relPath)) {
+      return;
+    }
+
+    if (SEVERITY_COUNTS_RATCHET.has(relPath)) {
+      if (conforms) {
+        errors.push({
+          type: ERROR_TYPES.SEVERITY_COUNTS,
+          path: relPath,
+          message:
+            'This lane now publishes per-severity counts, but is still listed in ' +
+            'SEVERITY_COUNTS_RATCHET. Remove its entry — the list may only shrink.',
+          severity: 'error',
+        });
+      }
+      return;
+    }
+
+    if (SEVERITY_COUNTS_CONFORMING.has(relPath)) {
+      if (!conforms) {
+        errors.push({
+          type: ERROR_TYPES.SEVERITY_COUNTS,
+          path: relPath,
+          message:
+            'This lane is listed as publishing per-severity counts, but no ' +
+            '`issueCounts`/`severityCounts`/`counts` property was found — a regression.',
+          severity: 'error',
+        });
+      }
+      return;
+    }
+
+    errors.push({
+      type: ERROR_TYPES.SEVERITY_COUNTS,
+      path: relPath,
+      message:
+        'Unclassified findings-reporting lane: it publishes a validation status ' +
+        'alongside a findings collection. A status alone cannot express a ' +
+        'three-valued severity distribution, and every existing collapse resolves ' +
+        'the ambiguous case to the reassuring one. Publish a per-severity counts ' +
+        'block beside the status and add this file to SEVERITY_COUNTS_CONFORMING, ' +
+        'or record why it cannot in SEVERITY_COUNTS_RATCHET / ' +
+        'SEVERITY_COUNTS_NOT_APPLICABLE.',
+      severity: 'error',
+    });
+  });
+
+  // A bucket entry naming a file the scan no longer reaches is a stale row: it
+  // silently stops asserting anything, which is how a ratchet quietly dies.
+  const classified = [
+    ...SEVERITY_COUNTS_RATCHET.keys(),
+    ...SEVERITY_COUNTS_CONFORMING,
+    ...SEVERITY_COUNTS_NOT_APPLICABLE.keys(),
+  ];
+  for (const relPath of classified) {
+    if (!seen.has(relPath)) {
+      errors.push({
+        type: ERROR_TYPES.SEVERITY_COUNTS,
+        path: relPath,
+        message:
+          'Stale severity-counts entry: this file is no longer a findings-reporting ' +
+          'lane (moved, renamed, or no longer emits a validation status). Remove its entry.',
+        severity: 'error',
+      });
+    }
+  }
+}
+
 /**
  * Vendor-claim annotation: `@vendor-claim reviewed=YYYY-MM-DD verify=<how>`
  *
@@ -800,7 +982,15 @@ function printResults(): void {
   const errorCount = errors.filter((e) => e.severity === 'error').length;
   const warningCount = errors.filter((e) => e.severity === 'warning').length;
 
-  console.log(`\n❌ Repository structure validation failed:`);
+  // Three outcomes, three headlines. This used to print "failed" whenever any
+  // entry existed, while `validate()` exits 0 unless one is error-severity — so a
+  // warnings-only run announced failure and then succeeded. Anything reading the
+  // headline and anything reading the exit code reached opposite conclusions.
+  if (errorCount === 0) {
+    console.log(`\n⚠️  Repository structure validation passed with warnings:`);
+  } else {
+    console.log(`\n❌ Repository structure validation failed:`);
+  }
   console.log(`   ${errorCount} errors, ${warningCount} warnings\n`);
 
   // Group by type
@@ -848,6 +1038,7 @@ async function validate(): Promise<void> {
   // Durability - claims that rot in silence
   await validateNoCitationsToNeverCommittedDirs();
   await validateVendorClaimFreshness();
+  await validateSeverityCountsRatchet();
 
   printResults();
 
