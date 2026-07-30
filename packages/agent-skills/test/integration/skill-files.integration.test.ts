@@ -1,9 +1,10 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- Test code */
 import { existsSync, cpSync, readFileSync } from 'node:fs';
-import { mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 
 import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
-import { normalizedTmpdir, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { normalizedTmpdir, safeExecSync, safePath, toForwardSlash } from '@vibe-agent-toolkit/utils';
+import { globSync } from 'glob';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { applyFilesConfig, mergeFilesConfig } from '../../src/files-config.js';
@@ -226,5 +227,202 @@ describe('glob files entry integration', () => {
     // Files must exist at the rebased dest paths
     expect(existsSync(safePath.join(skillOutputDir, 'packs', 'alpha', 'data.json'))).toBe(true);
     expect(existsSync(safePath.join(skillOutputDir, 'packs', 'beta', 'data.json'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// End-to-end coverage for the link-bundled GLOB `files:` entry (commit d648fdd3).
+// ---------------------------------------------------------------------------
+
+const LINKED_GLOB_SOURCE = 'gen/packs/**/*';
+const LINKED_GLOB_DEST = 'packs';
+const GUIDE_SOURCE_REL = 'gen/packs/alpha/GUIDE.md';
+/** Declared dest of the link-bundled match, as output-relative path segments. */
+const GUIDE_DEST_SEGMENTS = [LINKED_GLOB_DEST, 'alpha', 'GUIDE.md'] as const;
+/** Declared dest of the sibling that link traversal never touched. */
+const DATA_DEST_SEGMENTS = [LINKED_GLOB_DEST, 'alpha', 'data.json'] as const;
+/** Where link traversal parks its OWN copy of the guide (basename naming). */
+const GUIDE_TRAVERSAL_DEST = 'resources/GUIDE.md';
+const GUIDE_BYTES = '# Alpha Pack Guide\n\nHow to drive the alpha pack.\n';
+const PACK_DATA_BYTES = '{"pack":"alpha"}\n';
+
+/** SKILL.md that links the glob-matched guide by its SOURCE path. */
+const LINKING_SKILL = `---
+name: packer
+description: Ships a generated pack tree and documents it inline
+---
+
+# Packer
+
+See the [alpha pack guide](../../gen/packs/alpha/GUIDE.md) before editing a pack.
+`;
+
+/** Control SKILL.md: same build, same entry, no link to the glob-matched guide. */
+const UNLINKED_SKILL = `---
+name: packer-control
+description: Ships the same generated pack tree without linking into it
+---
+
+# Packer Control
+
+No link into the generated pack tree.
+`;
+
+interface LinkedGlobRepo {
+  getRepoRoot: () => string;
+}
+
+/**
+ * Build a REAL git repository whose `gen/packs/alpha/` tree is both matched by a
+ * glob `files:` entry and linked from SKILL.md by its SOURCE path.
+ *
+ * `git init` + `.gitignore` + a commit are deliberate. `createProjectRegistry`
+ * answers a crawl with `git ls-files` whenever the base is inside a repo, and
+ * the walker's gitignore rule only has an opinion when a repo exists; a bare
+ * `mkdtemp` tree takes the manual-walk fallback and silently disables both, so
+ * it is not the system adopters run. (The suite above is such a repo-less
+ * fixture.) Measured here: with the repo, the crawl sees exactly the committed
+ * source tree; without it, the crawl also swallows every previous test's output
+ * under the gitignored `out/` — same verdicts on these rows, 3x the runtime, and
+ * a registry population no adopter would ever have.
+ */
+function setupLinkedGlobRepo(): LinkedGlobRepo {
+  let repoRoot = '';
+
+  beforeAll(async () => {
+    repoRoot = await mkdtemp(safePath.join(normalizedTmpdir(), 'vat-linked-glob-'));
+
+    await mkdir(safePath.join(repoRoot, 'gen', 'packs', 'alpha'), { recursive: true });
+    await writeFile(safePath.join(repoRoot, 'gen', 'packs', 'alpha', 'GUIDE.md'), GUIDE_BYTES);
+    await writeFile(safePath.join(repoRoot, 'gen', 'packs', 'alpha', 'data.json'), PACK_DATA_BYTES);
+
+    for (const [dir, body] of [['packer', LINKING_SKILL], ['control', UNLINKED_SKILL]] as const) {
+      await mkdir(safePath.join(repoRoot, 'skills', dir), { recursive: true });
+      await writeFile(safePath.join(repoRoot, 'skills', dir, 'SKILL.md'), body);
+    }
+
+    await writeFile(safePath.join(repoRoot, '.gitignore'), 'out/\nnode_modules/\n');
+    await writeFile(safePath.join(repoRoot, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+    await writeFile(
+      safePath.join(repoRoot, 'package.json'),
+      JSON.stringify({ name: 'linked-glob-fixture', private: true }),
+    );
+
+    safeExecSync('git', ['init', '-q', '-b', 'main'], { cwd: repoRoot });
+    safeExecSync('git', ['add', '-A'], { cwd: repoRoot });
+    safeExecSync(
+      'git',
+      ['-c', 'user.email=vat@example.test', '-c', 'user.name=VAT Fixture',
+        'commit', '-q', '-m', 'fixture tree'],
+      { cwd: repoRoot },
+    );
+  });
+
+  afterAll(async () => {
+    if (repoRoot) {
+      await rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  return { getRepoRoot: () => repoRoot };
+}
+
+/** Package one fixture skill with the given `files:` entries. */
+async function packageLinkedGlobSkill(
+  repoRoot: string,
+  skillDir: string,
+  outputSuffix: string,
+  files: PackageSkillOptions['files'],
+) {
+  return packageSkill(safePath.join(repoRoot, 'skills', skillDir, 'SKILL.md'), {
+    outputPath: safePath.join(repoRoot, 'out', outputSuffix),
+    files,
+  });
+}
+
+/** Sorted rel paths of every file under `dir`, for whole-subtree comparisons. */
+function subtreeContents(dir: string): string[] {
+  return globSync('**/*', { cwd: dir, nodir: true, dot: true })
+    .map(toForwardSlash)
+    .sort((a, b) => a.localeCompare(b));
+}
+
+const { getRepoRoot } = setupLinkedGlobRepo();
+
+describe.each([
+  { label: 'plain', integrity: false },
+  { label: 'integrity: true', integrity: true },
+])(
+  'glob files: entry whose match is also link-bundled ($label)',
+  ({ label, integrity }) => {
+    const suffix = `linked-glob-${label.replaceAll(/[^a-z]+/gi, '-')}`;
+    const entry = integrity
+      ? { source: LINKED_GLOB_SOURCE, dest: LINKED_GLOB_DEST, integrity: true }
+      : { source: LINKED_GLOB_SOURCE, dest: LINKED_GLOB_DEST };
+
+    it('ships the whole declared dest subtree, including the link-bundled match', async () => {
+      const repoRoot = getRepoRoot();
+      const result = await packageLinkedGlobSkill(repoRoot, 'packer', suffix, [entry]);
+
+      // PRECONDITION — this is what makes the row a regression test at all: link
+      // traversal really did bundle the glob-matched guide, so the pre-d648fdd3
+      // `if (bundledFileSet.has(absSource)) continue;` in copyGlobEntry fired on it.
+      expect(result.files.dependencies.map(toForwardSlash)).toContain(GUIDE_SOURCE_REL);
+
+      // DISCRIMINATOR — pre-fix this file was skipped before its dest was even
+      // computed, so the declared subtree shipped short and the build exited 0.
+      const guideDest = safePath.join(result.outputPath, ...GUIDE_DEST_SEGMENTS);
+      expect(existsSync(guideDest)).toBe(true);
+      expect(readFileSync(guideDest, 'utf-8')).toBe(GUIDE_BYTES);
+
+      // The un-bundled sibling was never at risk; assert it so a subtree that
+      // ships nothing at all can't pass the row.
+      const dataDest = safePath.join(result.outputPath, ...DATA_DEST_SEGMENTS);
+      expect(readFileSync(dataDest, 'utf-8')).toBe(PACK_DATA_BYTES);
+
+      expect(result.hasErrors).toBe(false);
+    });
+
+    it('ships the same dest subtree as the control build with no link into it', async () => {
+      const repoRoot = getRepoRoot();
+      const linked = await packageLinkedGlobSkill(repoRoot, 'packer', `${suffix}-a`, [entry]);
+      const control = await packageLinkedGlobSkill(repoRoot, 'control', `${suffix}-b`, [entry]);
+
+      // Whether a SKILL.md happens to link a matched file is an authoring choice
+      // about prose, not a packaging instruction — the payload must be identical.
+      expect(subtreeContents(safePath.join(linked.outputPath, LINKED_GLOB_DEST)))
+        .toEqual(subtreeContents(safePath.join(control.outputPath, LINKED_GLOB_DEST)));
+      expect(subtreeContents(safePath.join(linked.outputPath, LINKED_GLOB_DEST)))
+        .toEqual(['alpha/data.json', 'alpha/GUIDE.md']);
+
+      // ...and only the LINKED build additionally carries traversal's own copy,
+      // proving the two builds really did take different routes to the same payload.
+      expect(subtreeContents(linked.outputPath)).toContain(GUIDE_TRAVERSAL_DEST);
+      expect(subtreeContents(control.outputPath)).not.toContain(GUIDE_TRAVERSAL_DEST);
+    });
+  },
+);
+
+describe('glob files: integrity is live, not vacuously satisfied', () => {
+  /**
+   * Negative control for the row above. `integrity: true` passing there must mean
+   * "the dest subtree is exactly the declared set", not "the check is asleep".
+   *
+   * A prior non-glob entry drops an extra file INTO the glob entry's dest subtree
+   * (`applyFilesConfig` walks `filesConfig` in order), so by the time the glob
+   * entry's `verifyDestSet` runs the subtree holds a file its `rels` never claimed.
+   * If that throws, the same machinery would have caught a MISSING declared file —
+   * which is exactly what pre-d648fdd3 hid, by dropping the skipped file out of
+   * both sides of the diff at once.
+   */
+  it('rejects a dest subtree holding a file the entry never declared', async () => {
+    const repoRoot = getRepoRoot();
+
+    await expect(
+      packageLinkedGlobSkill(repoRoot, 'packer', 'linked-glob-integrity-negative', [
+        { source: GUIDE_SOURCE_REL, dest: 'packs/alpha/EXTRA.md' },
+        { source: LINKED_GLOB_SOURCE, dest: LINKED_GLOB_DEST, integrity: true },
+      ]),
+    ).rejects.toThrow(/integrity check for '[^']*' found unexpected file '[^']*EXTRA\.md'/);
   });
 });
