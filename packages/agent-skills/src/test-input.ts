@@ -63,6 +63,28 @@ function hasConventionalSuite(skillDir: string): boolean {
  * `docs/evals/` elsewhere in the tree is ordinary content and still ships, as does a
  * root `evals/` holding no `evals.json`. Guessing from the name alone would silently
  * drop an author's unrelated directory out of their own bundle.
+ *
+ * KNOWN GAP — this protection is PER-SKILL, so it cannot see a CROSS-skill leak.
+ * `skillDir` is the skill being packaged, so the dirs returned here are only ITS OWN
+ * test input. A skill that links into a DIFFERENT skill's `evals/` gets no exclusion
+ * and no `PACKAGED_TEST_INPUT` receipt: from the packager's point of view that target
+ * is ordinary content, and it is bundled. The leak is therefore the same one this
+ * module exists to prevent — a shipped `expected_output` answer key — reached by a
+ * path the module is structurally blind to.
+ *
+ * Observed on a 90-skill adopter (2026-07-30, `vat skills build`): one skill resolved
+ * BOTH `skills/data-extract-analysis/evals/evals.json` and
+ * `skills/customer-lookup/evals/evals.json` into its path map. It did not ship them,
+ * but only by luck — the two collided on the basename `evals.json` and the build
+ * failed with a FILENAME_COLLISION instead. Under `resourceNaming: resource-id` or
+ * `preserve-path` there is no collision and both answer keys ship. Nothing else in the
+ * pipeline stops it: `LINK_TO_SKILL_DEFINITION` covers only another skill's SKILL.md.
+ * Verified latent, not active, on that corpus: `find dist/skills -name 'eval*'` → 0.
+ *
+ * The fix needs the set of EVERY configured skill's test-input dirs, not just this
+ * one's — i.e. a project-level input this function does not currently receive. Left
+ * unbuilt pending that design call; do not "fix" it by matching on the directory name,
+ * which is exactly the guess the paragraph above refuses to make.
  */
 export function resolveTestInputDirs(
   config: Pick<SkillPackagingConfig, 'test'>,

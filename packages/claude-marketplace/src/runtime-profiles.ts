@@ -30,6 +30,17 @@
  *
  * Nothing here is wired into CI; re-verification is a manual run whichever
  * procedure is used.
+ *
+ * KNOWN STALE, AND KNOWINGLY LEFT SO — do not re-investigate this from scratch. The
+ * structural gate (`validateVendorClaimFreshness` in packages/dev-tools/src/validate-repo-structure.ts,
+ * 90-day window, severity `warning`) has this annotation past due and prints a
+ * STALE_VENDOR_CLAIM line on every `bun run validate`. It is a warning, so it blocks
+ * nothing. Refreshing it costs exactly what `verify=` says, and the cost is a HUMAN
+ * OPERATOR, not compute: someone has to sit in front of claude-chat and claude-cowork
+ * and run the capability probe by hand (those two drivers are `manual` and
+ * `scripted-assisted`). No agent can close this one unattended, which is why it sits.
+ * Bump `reviewed=` only after the probes actually run; bumping the date alone converts
+ * a true "unwatched" signal into a false "recently confirmed" one.
  */
 
 import type { Target } from './types.js';

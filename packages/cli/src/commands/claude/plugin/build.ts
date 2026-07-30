@@ -690,6 +690,25 @@ export async function packagePluginLocalSkills(input: {
   logger: ReturnType<typeof createLogger>;
 }): Promise<Array<{ skillDirPath: string; result: PackageSkillResult }>> {
   const packaged: Array<{ skillDirPath: string; result: PackageSkillResult }> = [];
+  // KNOWN GAP — NO PER-SKILL CONTAINMENT. `packageSkill` reports most problems by
+  // RETURNING a result whose `hasErrors` is set, but it THROWS on structural packaging
+  // failures (filename collisions, unreadable sources). This loop awaits it bare, so one
+  // throw escapes the whole plugin build and discards every skill packaged before it —
+  // while the partial `skills/<dir>/` trees already written stay on disk, described by
+  // nothing.
+  //
+  // This is the SAME defect, in the same shape, that `packageSkills` had until commit
+  // ba140fae ("fix(skills): one unbuildable skill no longer discards the whole build").
+  // Copy that fix: it wraps each iteration in try/catch and returns a
+  // `SkillPackageOutcome` discriminated union (`built` | `failed`) carrying the error,
+  // deliberately NOT a synthetic `PackageSkillResult` (which would have to invent
+  // `outputPath`/`skill`/`files`, so consumers would report a file count for a bundle
+  // that is not on disk).
+  //
+  // Why it matters concretely: a `vat build` on a 90-skill adopter (2026-07-30) hit 3
+  // FILENAME_COLLISION failures (`dropping-ce-csv`, `reviewing-tests`, `syncing-brand`)
+  // and, thanks to `packageSkills`' containment, still built the other 87. This lane
+  // would have thrown all 90 away.
   for (const { skillDirPath, skillPath, skillName } of input.skills) {
     // Per-skill config is keyed by the skill's declared NAME; the directory path and
     // its trailing segment are fallbacks for the common cases where they coincide.
@@ -728,6 +747,13 @@ export async function packagePluginLocalSkills(input: {
     // false warnings. This is also the last thing blocking a promotion of ALLOW_UNUSED
     // from `warning` to `error`, which would turn those false positives into hard build
     // failures.
+    //
+    // That promotion is now MEASURABLE rather than open-ended. On the 90-skill adopter
+    // (2026-07-30) this lane's ledger drains to 17 unused allow entries, against 14 in
+    // the `vat skills build` (`skills`) lane — so the work this comment gates is a
+    // bounded 17-entry reconciliation, not an unbounded one. UNVERIFIED how much of the
+    // 17 - 14 delta is the false-positive class described above versus genuinely dead
+    // entries; nobody has classified them entry by entry.
     const result = await packageSkill(skillPath, {
       ...packagingConfigToPackageOptions(packagingConfig, { skillPath, outputPath: skillOutputDir }),
       registry: input.registry,

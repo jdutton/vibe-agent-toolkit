@@ -77,6 +77,23 @@ export async function extractClaudeMarketplaceInventory(
 		const ref = pluginEntryToRef(absolute, entry);
 		declared.push(ref);
 		if (ref.source === 'path' && ref.exists) {
+			// N+1 WHOLE-CORPUS CRAWL — known, not fixed here. `extractClaudePluginInventory`
+			// takes an optional second `SharedRegistrySource`; omitting it means every skill
+			// under every discovered plugin re-crawls and re-parses the whole surrounding
+			// markdown corpus (~11.9s per crawl on a ~1,041-document monorepo). Measured on the
+			// equivalent defect one lane over: a 19-skill plugin took 3m45s, and 12.6s once a
+			// single registry was shared. This site degrades `vat inventory <marketplace-dir>`
+			// and `vat audit` pointed at a marketplace root; `extract-install.ts` also reaches
+			// here (via `collectMarketplaces`) for `vat inventory --user`.
+			//
+			// Threading a registry through is strictly additive: `memoizeSharedRegistry` in
+			// `extract-plugin.ts` resolves a thunk lazily on the first skill and caches even a
+			// rejection, so a plugin of only commands/agents still crawls nothing. Copy
+			// `linkRegistryProviderFor` (packages/cli/src/commands/inventory.ts) or
+			// `pluginInventoryAt` (packages/cli/src/commands/audit.ts) — INCLUDING their
+			// `findProjectRoot(...) === null` guard: with no project root each skill's root is
+			// its OWN directory, so a shared registry matches nothing and was measured 1.5x
+			// SLOWER than the N+1 it was meant to remove.
 			discovered.push(await extractClaudePluginInventory(ref.resolvedPath));
 		}
 	}

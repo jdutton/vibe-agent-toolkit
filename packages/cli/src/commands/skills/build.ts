@@ -380,6 +380,18 @@ export function buildYamlSummary(
     const issues = collectPostBuildIssues(result);
     return {
       name,
+      // KNOWN, DELIBERATELY NOT FIXED — this is an ABSOLUTE path, so stdout carries
+      // `$HOME`. Confirmed on a real 90-skill adopter run:
+      // `outputPath: /Users/<user>/Workspaces/.../dist/skills/<name>`. It is absolute
+      // because `runSkillBuild` builds it with `safePath.resolve(cwd, 'dist', ...)`.
+      //
+      // Do NOT "helpfully" relativize it. It is blocked on an approved-but-unbuilt
+      // design decision that is the project owner's call: the document must state one
+      // `root:` and re-base every path onto it, the same coordinate-system rule
+      // `vat audit` already follows (see `deriveScanRoot` in ../audit.ts — "the ONE base
+      // every `path` and `location` in a report is expressed relative to"). Making this
+      // one field relative ahead of that decision picks the anchor by accident and
+      // leaves the document in two coordinate systems.
       outputPath: result.outputPath,
       filesPackaged: result.files.dependencies.length + 1,
       issueCounts: countBySeverity(issues),

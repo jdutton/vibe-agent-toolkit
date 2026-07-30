@@ -138,6 +138,21 @@ function collectWarnings(
   if (!authorJson) return [];
   const warnings: string[] = [];
   if ('name' in authorJson && authorJson['name'] !== vat.name) {
+    // OPEN CONTRADICTION between two lanes, over one file — a DESIGN CALL, not a bug to
+    // patch here. This message tells the author to drop `name` from their SOURCE overlay
+    // plugin.json. `vat audit` then reads that same file, parses it with
+    // `ClaudePluginSchema` (packages/claude-marketplace/src/schemas/claude-plugin.ts,
+    // where `name` is a required `z.string()`), and emits PLUGIN_INVALID_SCHEMA /
+    // `name Required` on it — see `validatePlugin` in
+    // packages/claude-marketplace/src/validators/plugin-validator.ts. Follow either
+    // instruction and the other lane complains.
+    //
+    // Neither side sees the contradiction because the two live in different lanes and
+    // judge different artifacts: the audit rule is written for a BUILT plugin (where
+    // `name` genuinely is required), while the instruction here is for a source OVERLAY
+    // that the build merges config identity into. Resolving it means deciding whether
+    // audit should recognize the overlay shape at all — do not just soften this string
+    // or relax the schema.
     warnings.push(
       `plugin.json "name" (${JSON.stringify(authorJson['name'])}) disagrees with the marketplace config, ` +
         `which declares "${vat.name}". Using the config value. ` +
