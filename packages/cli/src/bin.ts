@@ -25,7 +25,12 @@ import { createValidateTopLevelCommand } from './commands/validate.js';
 import { createVerifyTopLevelCommand } from './commands/verify.js';
 import { loadVerboseHelp, writeHelpSync } from './utils/help-loader.js';
 import { createLogger } from './utils/logger.js';
+import { makeStdioBlocking } from './utils/output.js';
 import { version, getVersionString, type VersionContext } from './version.js';
+
+// Before ANY output: a piped stdio is non-blocking, and every command here exits
+// the moment it finishes, so unflushed bytes would be discarded. See output.ts.
+makeStdioBlocking();
 
 const program = new Command();
 
