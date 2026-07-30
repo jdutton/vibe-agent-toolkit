@@ -181,9 +181,13 @@ describe('stdout truncation through a real pipe', () => {
       const received = writeThroughPipe(LARGE_PAYLOAD_BYTES, false);
 
       expect(received.length).toBeLessThan(LARGE_PAYLOAD_BYTES);
-      // Exactly one buffer's worth arrives — the signature of the defect, not a
-      // slow reader.
-      expect(received.length).toBe(PIPE_BUFFER_BYTES);
+      // The payload is cut mid-token, so the terminating newline `console.log`
+      // appends never arrives. That — not a byte count — is the signature of the
+      // defect: libuv loops `writev` until EAGAIN, so HOW MUCH survives depends on
+      // how fast the reader happens to drain the pipe. macOS delivers exactly one
+      // 64 KB buffer; an ubuntu-latest runner delivered 219,264 bytes and failed an
+      // assertion pinned to `PIPE_BUFFER_BYTES`. The missing newline is invariant.
+      expect(received.endsWith('\n')).toBe(false);
     },
   );
 
