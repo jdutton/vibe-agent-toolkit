@@ -43,8 +43,9 @@ describe('VALIDATION_RULES', () => {
 		expect(VALIDATION_RULES.BROKEN_INTERNAL_LINK).toBeDefined();
 		expect(VALIDATION_RULES.CIRCULAR_REFERENCE).toBeDefined();
 		expect(VALIDATION_RULES.OUTSIDE_PROJECT_BOUNDARY).toBeDefined();
-		expect(VALIDATION_RULES.FILENAME_COLLISION).toBeDefined();
 		expect(VALIDATION_RULES.WINDOWS_BACKSLASH_IN_PATH).toBeDefined();
+		// FILENAME_COLLISION is NOT asserted here: it belongs to CODE_REGISTRY and
+		// is emitted by the packager. Its coverage lives in skill-packager.test.ts.
 	});
 
 	it('should define all best practice rules', () => {

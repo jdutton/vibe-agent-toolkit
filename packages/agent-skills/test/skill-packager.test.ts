@@ -3,7 +3,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { mkdir, readdir, readFile, writeFile } from 'node:fs/promises';
 
 
-import { allowUnusedIssues, createAllowUsageLedger } from '@vibe-agent-toolkit/agent-schema';
+import { allowUnusedIssues, createAllowUsageLedger, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { toForwardSlash, safePath } from '@vibe-agent-toolkit/utils';
 import { describe, expect, it } from 'vitest';
 
@@ -39,6 +39,7 @@ const PRESERVE_PATH = 'preserve-path' as const;
 const RESOURCE_ID = 'resource-id' as const;
 const SIMPLE_SKILL_BODY = '# My Skill\n\nContent.';
 const BUILD_ARTIFACT_FRAGMENT = 'build artifact';
+const COLLISION_CODE = 'FILENAME_COLLISION';
 
 // ============================================================================
 // Helpers - unique to this unit test file
@@ -201,19 +202,39 @@ async function writeCollidingSkill(dir: string, name: string): Promise<string> {
   return writeSkillMd(dir, name, 'See [a notes](./alpha/notes.md) and [b notes](./beta/notes.md).');
 }
 
-/** The message of the collision `writeCollidingSkill` provokes, as a caller receives it. */
-async function collisionMessage(dir: string): Promise<string> {
+/**
+ * Package the colliding skill and return the FILENAME_COLLISION issue it emits.
+ *
+ * Deliberately not a `.rejects` helper: a collision is a FINDING, reported on
+ * the same `postBuildIssues` channel as every other packaging finding, not a
+ * raw `Error` that escapes the contract every other failure honours.
+ */
+async function collisionIssue(dir: string): Promise<ValidationIssue | undefined> {
   const sp = await writeCollidingSkill(dir, UNIT_SKILL_NAME);
-  return packWithOutput(sp).then(
-    () => 'packaging unexpectedly SUCCEEDED — no collision was detected',
-    (error: unknown) => (error as Error).message,
-  );
+  const result = await packWithOutput(sp);
+  return (result.postBuildIssues ?? []).find(i => i.code === COLLISION_CODE);
 }
 
 describe('packageSkill - filename collision detection', () => {
-  it('should throw when two different source files map to the same basename', async () => {
+  it('reports the collision as a FILENAME_COLLISION issue, not a raw throw', async () => {
     const sp = await writeCollidingSkill(getTempDir(), UNIT_SKILL_NAME);
-    await expect(packWithOutput(sp)).rejects.toThrow(/collision/i);
+
+    const result = await packWithOutput(sp);
+
+    const collision = (result.postBuildIssues ?? []).find(i => i.code === COLLISION_CODE);
+    expect(collision, 'no FILENAME_COLLISION issue in postBuildIssues').toBeDefined();
+    expect(collision?.severity).toBe('error');
+    expect(collision?.fix).toBeTruthy();
+    // The finding anchors on the file you would rename, in project coordinates.
+    expect(collision?.location).toBe('beta/notes.md');
+  });
+
+  it('still fails the build — this changes HOW the failure reports, not WHETHER', async () => {
+    const sp = await writeCollidingSkill(getTempDir(), UNIT_SKILL_NAME);
+
+    const result = await packWithOutput(sp);
+
+    expect(result.hasErrors).toBe(true);
   });
 
   it('names the owner without naming the machine the build ran on', async () => {
@@ -221,14 +242,14 @@ describe('packageSkill - filename collision detection', () => {
     // and the strategy — but never the SKILL, so on a 90-skill batch whose
     // colliding files are reached by deep link traversal, brute-force bisection
     // was the only way to find the owner. Naming it by absolute path then put
-    // three `/Users/<someone>/…` paths into `failedSkills[].error` on stdout:
-    // this message is routed there verbatim.
+    // three `/Users/<someone>/…` paths into the build's stdout payload, which
+    // routes this text verbatim.
     //
     // The declared NAME is the identifier a payload can carry across machines —
-    // it is what `failedSkills[].name` already keys on — and the colliding files
-    // are stated in the project's own coordinates, like every other "where" this
-    // package renders (`issueLocation`).
-    const message = await collisionMessage(getTempDir());
+    // it is what the report's per-skill rows already key on — and the colliding
+    // files are stated in the project's own coordinates, like every other
+    // "where" this package renders (`issueLocation`).
+    const message = (await collisionIssue(getTempDir()))?.message ?? '';
 
     expect(message).toContain(`packaging skill: ${UNIT_SKILL_NAME}`);
     expect(message).toContain('File 1: alpha/notes.md');
@@ -1216,9 +1237,14 @@ describe('packageSkills - one allow-usage ledger across every skill in the run',
 // every other skill's work with it: two failure paths through one contract,
 // opposite behaviour. Measured on a 90-skill adopter, one filename collision
 // discarded 89 successful builds and collapsed the report to one bare string.
+//
+// A filename collision no longer throws — it is a FILENAME_COLLISION issue on
+// the ordinary channel, which is one fewer way to hit this. The containment is
+// still load-bearing for every throw that remains, so this suite keeps testing
+// it through one of those: an absent `files:` source.
 // ============================================================================
 
-/** Build three skills where the middle one collides under `basename` naming. */
+/** Build three skills where the middle one throws: its `files:` source is absent. */
 async function batchWithOneThrowingSkill() {
   const root = getTempDir();
   const twoDir = safePath.join(root, 'skills', 'two');
@@ -1226,8 +1252,11 @@ async function batchWithOneThrowingSkill() {
   const specs: SkillBuildSpec[] = [
     await batchSpec(root, 'one', '# One\n\nNothing to see.'),
     {
-      skillPath: await writeCollidingSkill(twoDir, 'two'),
-      options: { outputPath: safePath.join(root, 'out', 'two') },
+      skillPath: await writeSkillMd(twoDir, 'two', '# Two\n\nNothing to see.'),
+      options: {
+        outputPath: safePath.join(root, 'out', 'two'),
+        files: [{ source: 'skills/two/never-written.txt', dest: 'never-written.txt' }],
+      },
     },
     await batchSpec(root, 'three', '# Three\n\nNothing to see.'),
   ];
@@ -1253,11 +1282,11 @@ describe('packageSkills - a skill that throws does not discard the batch', () =>
     const outcomes = await batchWithOneThrowingSkill();
     const failed = outcomes.find((o) => o.status === 'failed');
     expect(failed?.skillPath).toContain('two');
-    expect(failed?.error.message).toMatch(/collision/i);
-    // Fix A rides through the batch channel too: the message names its owner —
-    // by declared NAME, which the outcome's absolute `skillPath` (an internal
-    // identity, not a published one) deliberately no longer duplicates.
-    expect(failed?.error.message).toContain('packaging skill: two');
+    expect(failed?.error.message).toMatch(/does not exist/i);
+    // The message names its owner — by declared NAME, which the outcome's
+    // absolute `skillPath` (an internal identity, not a published one)
+    // deliberately does not duplicate.
+    expect(failed?.error.message).toContain("for skill 'two'");
   });
 });
 

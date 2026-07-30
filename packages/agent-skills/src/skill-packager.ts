@@ -65,6 +65,7 @@ import {
   testInputLinkIssues,
 } from './test-input.js';
 import { validateSkillForPackaging, type PackagingValidationResult, type SkillPackagingConfig } from './validators/packaging-validator.js';
+import { materializeIssue } from './validators/rule-engine/index.js';
 import { deferredAssetsToIssues, walkerExclusionsToIssues } from './validators/walker-to-issues.js';
 import { walkLinkGraph, type WalkableRegistry } from './walk-link-graph.js';
 
@@ -509,6 +510,21 @@ export async function packageSkill(
   // Library callers fall back to the skill directory when canonical
   // findProjectRoot returns null. The CLI command boundary is responsible
   // for any user-facing warning about missing project roots.
+  //
+  // COORDINATE-SYSTEM ASSUMPTION, not an enforced invariant. This root is the base
+  // every path this call REPORTS is stated in — `namingBasePath` at step 8, and the
+  // `projectRoot` handed to `walkerExclusionsToIssues` / `testInputLinkIssues` /
+  // `deferredAssetsToIssues` at step 13b. It is derived HERE, per skill, from the
+  // skill's own path. It is NOT the `projectRoot` argument `packageSkills` was called
+  // with (that one is used only for `createProjectRegistry`), and it is not the `cwd`
+  // that `vat skills build` treats as the root of the document it emits.
+  //
+  // UNVERIFIED that these can actually diverge: in every path exercised so far the two
+  // have coincided (`vat skills build` passes its `cwd`, and the skills it discovers
+  // live under it), and no run has been observed where they differ. Nothing enforces
+  // the equality, though — a caller packaging a skill from outside its own project
+  // root would get issue locations in one coordinate system and a report header in
+  // another, with no error anywhere.
   const projectRoot = findProjectRoot(dirname(skillPath)) ?? dirname(skillPath);
   const skillRoot = dirname(skillPath);
 
@@ -600,7 +616,7 @@ export async function packageSkill(
 
   // 8. Build path map for file copying and link rewriting
   const namingBasePath = projectRoot;
-  const pathMap = buildPathMap(
+  const { pathMap, issues: collisionIssues } = buildPathMap(
     { path: skillPath, name: skillMetadata.name },
     bundledFiles, outputPath, resourceNaming, namingBasePath, stripPrefix, target,
   );
@@ -708,6 +724,11 @@ export async function packageSkill(
   // Walker-exclusion issues (depth drops, missing targets, outside-project, etc.)
   // are combined with post-build checks and run through the validation framework.
   const rawPostBuildIssues = [
+    // Found back at step 8, reported here: the path map is decided before any
+    // file is written, but a collision is a packaging FINDING and rides the same
+    // channel as every other one rather than aborting the run from inside a
+    // helper.
+    ...collisionIssues,
     ...await checkUnreferencedFiles(outputPath, filesConfigDests),
     ...await checkBrokenPackagedLinks(outputPath),
     // A receipt for each `files:` entry that was dropped for pointing into declared
@@ -1324,17 +1345,73 @@ export function getResourceSubdirForFile(filePath: string, target: PackagingTarg
  * Both, in one parameter, because the two answer different questions and the
  * function needs both: the PATH is the map's key (an identity, kept absolute),
  * while the NAME is what a failure REPORTS (an identifier, safe to publish —
- * `vat skills build` routes packaging errors verbatim into `failedSkills[].error`
- * on stdout, where an absolute path would name the machine that ran the build).
+ * `vat skills build` publishes packaging findings verbatim on stdout, where an
+ * absolute path would name the machine that ran the build).
  */
 interface PathMapSkill {
   path: string;
   name: string;
 }
 
+/** A path map plus the collisions found while building it. */
+interface PathMapResult {
+  pathMap: Map<string, string>;
+  issues: ValidationIssue[];
+}
+
 /**
- * Build a map of source paths (forward-slash normalized) to output paths.
- * Checks for filename collisions.
+ * The FILENAME_COLLISION finding for one pair of sources that package to one dest.
+ *
+ * Naming the skill is the whole point of the first line: neither colliding file
+ * need be referenced by SKILL.md directly (both are commonly reached by deep
+ * link traversal), so without it the only way to find the owner in a large
+ * batch is to bisect it one skill at a time.
+ *
+ * By NAME, not by absolute path: this message is published verbatim in
+ * `vat skills build`'s stdout payload, the name is what that payload's per-skill
+ * rows already key on, and a `/Users/<someone>/…` prefix answers no question the
+ * reader has while naming the machine the build ran on. The colliding files
+ * follow the same rule — stated in the project's coordinates, like every other
+ * "where" this package renders (`issueLocation`).
+ *
+ * `location` is the SECOND file: of the two, it is the one whose packaging the
+ * first pre-empted, so it is the one an author renames. The remedy that is not
+ * a rename (switch `resourceNaming`) comes from the registry `fix`.
+ */
+function filenameCollisionIssue(
+  skill: PathMapSkill,
+  existingSource: string,
+  linkedFile: string,
+  targetRelPath: string,
+  resourceNaming: ResourceNamingStrategy,
+  namingBasePath: string,
+): ValidationIssue {
+  const location = issueLocation(linkedFile, namingBasePath);
+  return materializeIssue('FILENAME_COLLISION', {
+    location,
+    message:
+      `Filename collision detected when packaging skill: ${skill.name} — ` +
+      `File 1: ${issueLocation(existingSource, namingBasePath)}, ` +
+      `File 2: ${location}; both would be packaged as ${targetRelPath} ` +
+      `(current resourceNaming strategy: ${resourceNaming})`,
+  });
+}
+
+/**
+ * Build a map of source paths (forward-slash normalized) to output paths, plus
+ * a FILENAME_COLLISION finding for every pair of sources that land on one dest.
+ *
+ * A collision is REPORTED, not thrown. It used to throw a raw `Error`, which
+ * escaped the contract every other packaging finding honours — the caller got a
+ * bare string instead of a coded, located, fixable `ValidationIssue`, and the
+ * batch lane had to special-case it. The build still fails: the finding's
+ * registry severity is `error`, so it flips `hasErrors`.
+ *
+ * The colliding source keeps its path-map entry rather than being dropped. The
+ * build is failing either way, and keeping it means the link rewriter still
+ * resolves both links to a file that exists in the output — dropping it would
+ * add a second, derived PACKAGED_BROKEN_LINK on top of the real finding and
+ * point the surviving link at an unrewritable source path.
  *
  * @param namingBasePath - The project root. Resource names are generated
  *   relative to it AND every path this function REPORTS is stated in its
@@ -1348,8 +1425,9 @@ function buildPathMap(
   namingBasePath: string,
   stripPrefix?: string,
   target: PackagingTarget = DEFAULT_PACKAGING_TARGET,
-): Map<string, string> {
+): PathMapResult {
   const pathMap = new Map<string, string>();
+  const issues: ValidationIssue[] = [];
   pathMap.set(toForwardSlash(skill.path), safePath.join(outputPath, 'SKILL.md'));
 
   for (const linkedFile of bundledFiles) {
@@ -1368,34 +1446,15 @@ function buildPathMap(
     )?.[0];
 
     if (existingSource !== undefined && existingSource !== toForwardSlash(linkedFile)) {
-      throw new Error(
-        // Naming the skill is the whole point of this line: neither colliding
-        // file need be referenced by SKILL.md directly (both are commonly
-        // reached by deep link traversal), so without it the only way to find
-        // the owner in a large batch is to bisect it one skill at a time.
-        //
-        // By NAME, not by absolute path: this message is published verbatim in
-        // `vat skills build`'s stdout payload, the name is what that payload's
-        // `failedSkills[].name` already keys on, and a `/Users/<someone>/…`
-        // prefix answers no question the reader has while naming the machine
-        // the build ran on. The colliding files follow the same rule — stated
-        // in the project's coordinates, like every other "where" this package
-        // renders (`issueLocation`).
-        `Filename collision detected when packaging skill: ${skill.name}\n` +
-        `  File 1: ${issueLocation(existingSource, namingBasePath)}\n` +
-        `  File 2: ${issueLocation(linkedFile, namingBasePath)}\n` +
-        `  Both would be packaged as: ${targetRelPath}\n` +
-        `\n` +
-        `  To resolve: Use a different resourceNaming strategy or ensure unique filenames.\n` +
-        `  Current strategy: ${resourceNaming}\n` +
-        `  Try 'resource-id' or 'preserve-path' for path-based naming.`
-      );
+      issues.push(filenameCollisionIssue(
+        skill, existingSource, linkedFile, targetRelPath, resourceNaming, namingBasePath,
+      ));
     }
 
     pathMap.set(toForwardSlash(linkedFile), targetPath);
   }
 
-  return pathMap;
+  return { pathMap, issues };
 }
 
 // ============================================================================

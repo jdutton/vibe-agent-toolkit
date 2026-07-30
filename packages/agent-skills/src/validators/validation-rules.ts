@@ -34,7 +34,6 @@ export type ValidationRuleCode =
   | 'BROKEN_INTERNAL_LINK'
   | 'CIRCULAR_REFERENCE'
   | 'OUTSIDE_PROJECT_BOUNDARY'
-  | 'FILENAME_COLLISION'
   | 'WINDOWS_BACKSLASH_IN_PATH'
   | 'LINK_TARGETS_DIRECTORY'
   // Best practice rules (overridable)
@@ -85,12 +84,11 @@ export const VALIDATION_RULES: Record<ValidationRuleCode, ValidationRule> = {
     message: (ctx) => `Link points outside project: ${(ctx['href'] as string) ?? 'unknown'}`,
     fix: 'Keep skills self-contained - move referenced files into the project',
   },
-  FILENAME_COLLISION: {
-    code: 'FILENAME_COLLISION',
-    category: 'required',
-    message: (ctx) => `Multiple files have same basename: ${(ctx['filename'] as string) ?? 'unknown'}`,
-    fix: 'Enable path-based naming: packagingOptions.usePathNames: true',
-  },
+  // FILENAME_COLLISION is deliberately absent: it lives in CODE_REGISTRY and is
+  // emitted by the packager (see `filenameCollisionIssue` in skill-packager.ts).
+  // The entry that used to sit here was never emitted by anything and its fix
+  // hint named `packagingOptions.usePathNames`, an option that does not exist —
+  // a second, stale definition of one code is worse than none.
   WINDOWS_BACKSLASH_IN_PATH: {
     code: 'WINDOWS_BACKSLASH_IN_PATH',
     category: 'required',

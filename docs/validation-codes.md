@@ -401,6 +401,15 @@ Only meaningful when actually bundling a skill; fire from `vat skills build` (an
 - **Why it matters:** This code indicates VAT's own link rewriter produced an inconsistent bundle — a file was expected but wasn't written to the output. Unlike `LINK_MISSING_TARGET`, which flags source issues, this flags a post-build integrity failure.
 - **Fix:** Report the issue — this indicates a VAT bug. As a temporary workaround, set `severity.PACKAGED_BROKEN_LINK` to `ignore` while the underlying bug is fixed.
 
+### `FILENAME_COLLISION`
+
+- **Default:** `error`
+- **What:** Two source files package to the same destination path in the bundle; one would overwrite the other. Most often two same-basename files in different directories under the default `basename` resource naming.
+- **Why it matters:** The build cannot produce a correct artifact: one file's content is simply lost, and every link to either source resolves to whichever file was written last. It is an `error` for that reason, not as a style opinion — overriding it to `ignore` does not make the bundle correct, it only stops VAT from saying so.
+- **Fix:** Rename one of the files, or switch `resourceNaming` to a path-based strategy (`resource-id` or `preserve-path`) so the sources map to distinct destinations.
+
+Reported like every other packaging finding — a located, coded issue on the build's issue channel, naming the owning skill and both colliding paths in project-relative coordinates. A collision in one skill fails that skill; the rest of the batch still builds.
+
 ## Resource Registry Codes
 
 *Fire when building the resource registry — `vat resources validate` and any command that crawls resources.*

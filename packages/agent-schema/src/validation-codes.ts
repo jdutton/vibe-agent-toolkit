@@ -98,6 +98,12 @@ export const CODE_REGISTRY = {
     'Report the issue — this indicates a VAT bug. As a temporary workaround, set severity.PACKAGED_BROKEN_LINK to ignore while the underlying bug is fixed.',
     'packaged_broken_link',
   ),
+  FILENAME_COLLISION: entry(
+    'error',
+    'Two source files package to the same destination path in the bundle; one would overwrite the other.',
+    "Rename one of the files, or switch resourceNaming to a path-based strategy ('resource-id' or 'preserve-path') so the sources map to distinct destinations.",
+    'filename_collision',
+  ),
   DUPLICATE_RESOURCE_ID: entry(
     'error',
     'Two files resolve to the same resource id after path normalization.',
@@ -493,7 +499,11 @@ export type NonOverridableCode =
   | 'SKILL_MISCONFIGURED_LOCATION'
   | 'LINK_INTEGRITY_BROKEN'
   | 'PATH_STYLE_WINDOWS'
-  | 'FILENAME_COLLISION'
+  // FILENAME_COLLISION is NOT here: it has a CODE_REGISTRY entry and is emitted
+  // through the same framework as every other packaging finding. Listing a code
+  // in both places is a contradiction, not a belt-and-braces — `finalize()` finds
+  // the registry entry and resolves severity, so the NonOverridable claim would
+  // simply be false.
   | 'DUPLICATE_FILES_DEST'
   | 'PLUGIN_MISSING_MANIFEST'
   | 'PLUGIN_INVALID_JSON'

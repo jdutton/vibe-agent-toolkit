@@ -128,6 +128,13 @@ describe('runSkillBuild - one allow-usage ledger for the whole invocation', () =
 // for a skill that fails by THROWING. Measured on a 90-skill adopter, a single
 // filename collision discarded 89 successful builds and collapsed the report to
 // one bare `error:` string.
+//
+// That collision no longer throws — it is a `FILENAME_COLLISION` issue on the
+// ordinary channel now, which is one fewer way to reach this code path. (The
+// same 90-skill adopter confirms it: `vat skills build` hit three collisions
+// and still built the other 87.) The containment stays load-bearing for every
+// throw that remains, so this suite exercises it through one of those instead:
+// an absent `files:` source. Same contract, a vehicle that still throws.
 // ---------------------------------------------------------------------------
 
 /** A logger that records every line, so the report itself is assertable. */
@@ -137,22 +144,25 @@ function recordingLogger(): { logger: Logger; lines: string[] } {
   return { logger: { info: push, warn: push, error: push, debug: () => {} }, lines };
 }
 
-/** Three skills under `cwd`; the middle one collides under `basename` naming. */
+/** The phrase the surviving throw uses to attribute itself to a skill. */
+const THROWN_ATTRIBUTION = "skill 'two'";
+
+/** Three skills under `cwd`; the middle one throws on an absent `files:` source. */
 async function buildRunWithOneThrowingSkill(cwd: string, logger: Logger) {
   const specs: BuildSkillSpec[] = [];
   for (const name of ['one', 'two', 'three']) {
     const dir = safePath.join(cwd, 'skills', name);
     await mkdir(dir, { recursive: true });
-    let body = 'Nothing to see.';
-    if (name === 'two') {
-      for (const sub of ['alpha', 'beta']) {
-        await mkdir(safePath.join(dir, sub), { recursive: true });
-        await writeFile(safePath.join(dir, sub, 'notes.md'), `# Notes ${sub}`);
-      }
-      body = 'See [a](./alpha/notes.md) and [b](./beta/notes.md).';
-    }
-    const sourcePath = await writeSkillSource(safePath.join(dir, 'SKILL.md'), name, body);
-    specs.push({ skill: { name, sourcePath }, packagingConfig: {} as SkillPackagingConfig });
+    const sourcePath = await writeSkillSource(
+      safePath.join(dir, 'SKILL.md'),
+      name,
+      'Nothing to see.',
+    );
+    // Deliberately never written: resolving it is what raises.
+    const packagingConfig = (name === 'two'
+      ? { files: [{ source: `skills/two/never-written.txt`, dest: 'never-written.txt' }] }
+      : {}) as SkillPackagingConfig;
+    specs.push({ skill: { name, sourcePath }, packagingConfig });
   }
   return runSkillBuild(specs, cwd, logger);
 }
@@ -170,14 +180,14 @@ describe('runSkillBuild - a skill that throws does not discard the batch', () =>
   it('names the failed skill and carries its reason, not one bare string for the run', async () => {
     const run = await buildRunWithOneThrowingSkill(createTempDir(), SILENT_LOGGER);
     expect(run.failures.map((f) => f.name)).toEqual(['two']);
-    expect(run.failures[0]?.message).toMatch(/collision/i);
+    expect(run.failures[0]?.message).toContain(THROWN_ATTRIBUTION);
   });
 
   it('does not claim `Built N files` for a skill that never built', async () => {
     const { logger, lines } = recordingLogger();
     await buildRunWithOneThrowingSkill(createTempDir(), logger);
     expect(lines.filter((l) => l.includes('Built '))).toHaveLength(2);
-    expect(lines.some((l) => l.includes('collision'))).toBe(true);
+    expect(lines.some((l) => l.includes(THROWN_ATTRIBUTION))).toBe(true);
   });
 
   it('attributes the failure to a skill without publishing where the run happened', async () => {
@@ -189,7 +199,7 @@ describe('runSkillBuild - a skill that throws does not discard the batch', () =>
     const run = await buildRunWithOneThrowingSkill(cwd, SILENT_LOGGER);
 
     expect(run.failures.map((f) => f.name)).toEqual(['two']);
-    expect(run.failures[0]?.message).toContain('packaging skill: two');
+    expect(run.failures[0]?.message).toContain(THROWN_ATTRIBUTION);
     expect(JSON.stringify(run.failures)).not.toContain(cwd);
     // Not the root check alone: macOS resolves this temp root through a
     // `/private` symlink, so a containment check can pass over an absolute path

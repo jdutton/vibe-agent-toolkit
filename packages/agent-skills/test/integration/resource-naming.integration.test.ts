@@ -70,18 +70,29 @@ See [Quickstart Overview](${KB_PATH}/${GUIDES_PATH}/topics/quickstart/overview.m
   });
 
   describe('basename strategy (default)', () => {
-    it('should detect filename collisions and throw error', async () => {
+    it('should report a filename collision as a FILENAME_COLLISION finding, not a throw', async () => {
       const skillPath = safePath.join(testProjectDir, SKILL_MD);
       const outputPath = safePath.join(tempDir, 'output-basename');
 
-      // Should throw error due to overview.md collision
-      await expect(
-        packageSkill(skillPath, {
-          outputPath,
-          resourceNaming: BASENAME_STRATEGY,
-          excludeNavigationFiles: false,
-        })
-      ).rejects.toThrow(/Filename collision detected/);
+      // Two `overview.md` sources collide under basename naming. This used to
+      // throw a raw Error, which is why one collision could discard an entire
+      // 90-skill build. It is now an ordinary finding on the issue channel —
+      // still severity `error`, so the build still fails, but attributable and
+      // configurable like every other code.
+      const result = await packageSkill(skillPath, {
+        outputPath,
+        resourceNaming: BASENAME_STRATEGY,
+        excludeNavigationFiles: false,
+      });
+
+      const collisions = (result.postBuildIssues ?? []).filter(
+        (issue) => issue.code === 'FILENAME_COLLISION'
+      );
+      expect(collisions).toHaveLength(1);
+      expect(collisions[0]?.severity).toBe('error');
+      expect(collisions[0]?.message).toMatch(/overview\.md/);
+      // The gate still closes: a collision is not a passing build.
+      expect(result.hasErrors).toBe(true);
     });
   });
 
