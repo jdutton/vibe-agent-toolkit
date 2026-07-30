@@ -106,10 +106,25 @@ export interface PackagingValidationResult {
   /** Skill name */
   skillName: string;
 
-  /** Validation status */
+  /**
+   * Gate verdict: `error` iff there is an active error. TWO-valued on purpose —
+   * this is the build/validate gate, and a warning does not fail a build.
+   *
+   * It therefore says NOTHING about warnings or info. Read {@link
+   * PackagingValidationResult.allErrors} for the distribution — via
+   * `countBySeverity(result.allErrors)` from `@vibe-agent-toolkit/agent-schema`,
+   * which is the same collapse every other lane uses.
+   */
   status: 'success' | 'error';
 
-  /** All emitted issues after severity resolution (errors + warnings) */
+  /**
+   * All emitted issues after severity resolution.
+   *
+   * This includes `info`, despite the name: severity resolution keeps info
+   * issues in the framework's `emitted` set, and there is no `activeInfo`
+   * bucket. A renderer that only walks `activeErrors` and `activeWarnings`
+   * silently drops every info finding — see `countBySeverity` for the counts.
+   */
   allErrors: ValidationIssue[];
 
   /** Active errors (severity === 'error', not suppressed by allow) */

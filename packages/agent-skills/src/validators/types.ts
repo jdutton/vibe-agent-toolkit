@@ -1,13 +1,30 @@
-import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import type { SeverityCounts, ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 
 import type { EvidenceRecord } from '../evidence/index.js';
 
 export interface ValidationResult {
   path: string;
   type: 'agent-skill' | 'vat-agent' | 'claude-plugin' | 'marketplace' | 'registry' | 'unknown';
+  /**
+   * The worst ACTIONABLE severity among {@link ValidationResult.issues}.
+   *
+   * Three values for a four-valued question, so it cannot express the
+   * distribution — read {@link ValidationResult.issueCounts} for that. In
+   * particular an info-only result is `success`, which is only honest because
+   * the counts sit beside it.
+   */
   status: 'success' | 'warning' | 'error';
   summary: string;
   issues: ValidationIssue[];
+  /**
+   * Issue counts by resolved severity. REQUIRED, deliberately: this repo had five
+   * "issues → status" collapses and three different answers for an info-only set,
+   * every one of which resolved the ambiguous case to the reassuring one. Making
+   * the counts required means a new producer cannot omit the distribution — the
+   * compiler asks for it rather than a reviewer having to notice it is missing.
+   * Build it with `countBySeverity(issues)`.
+   */
+  issueCounts: SeverityCounts;
   metadata?: {
     name?: string;
     description?: string;

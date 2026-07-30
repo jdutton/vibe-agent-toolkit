@@ -1,7 +1,7 @@
 import * as fs from 'node:fs';
 import { basename, dirname } from 'node:path';
 
-import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { isLocalFileLink, parseMarkdown, resolveLocalHref, type LinkType } from '@vibe-agent-toolkit/resources';
 import { findProjectRoot, issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
@@ -45,17 +45,19 @@ export async function validateSkill(options: ValidateOptions): Promise<Validatio
   // Validate file exists
   // eslint-disable-next-line security/detect-non-literal-fs-filename -- skillPath is user-provided but validated
   if (!fs.existsSync(skillPath)) {
+    const missingFileIssues: ValidationIssue[] = [{
+      severity: 'error',
+      code: 'SKILL_MISSING_FRONTMATTER',
+      message: 'File does not exist',
+      location: skillLocation,
+    }];
     return {
       path: skillPath,
       type: isVATGenerated ? 'vat-agent' : 'agent-skill',
       status: 'error',
       summary: '1 error',
-      issues: [{
-        severity: 'error',
-        code: 'SKILL_MISSING_FRONTMATTER',
-        message: 'File does not exist',
-        location: skillLocation,
-      }],
+      issues: missingFileIssues,
+      issueCounts: countBySeverity(missingFileIssues),
     };
   }
 
@@ -633,27 +635,17 @@ function buildResult(
   issues: ValidationIssue[],
   metadata?: ValidationResult['metadata']
 ): ValidationResult {
-  const errorCount = issues.filter(i => i.severity === 'error').length;
-  const warningCount = issues.filter(i => i.severity === 'warning').length;
-  const infoCount = issues.filter(i => i.severity === 'info').length;
+  const issueCounts = countBySeverity(issues);
 
-  let status: ValidationResult['status'];
-  if (errorCount > 0) {
-    status = 'error';
-  } else if (warningCount > 0) {
-    status = 'warning';
-  } else {
-    status = 'success';
-  }
-
-  const summary = `${errorCount} errors, ${warningCount} warnings, ${infoCount} info`;
+  const summary = `${issueCounts.errors} errors, ${issueCounts.warnings} warnings, ${issueCounts.info} info`;
 
   const result: ValidationResult = {
     path: skillPath,
     type: isVATGenerated ? 'vat-agent' : 'agent-skill',
-    status,
+    status: calculateValidationStatus(issues),
     summary,
     issues,
+    issueCounts,
   };
 
   if (metadata) {

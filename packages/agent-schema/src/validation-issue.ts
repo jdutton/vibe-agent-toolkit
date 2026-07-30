@@ -102,3 +102,64 @@ export function createRegistryIssue(
   const e = CODE_REGISTRY[code];
   return { code, severity: e.defaultSeverity, message, fix: e.fix, reference: e.reference, ...extras };
 }
+
+/**
+ * Per-severity issue counts, published beside a status rather than folded into it.
+ *
+ * A status names the worst ACTIONABLE severity, which is a three-value answer to
+ * a four-value question — the distribution is not recoverable from it. Publishing
+ * the counts is what makes a two- or three-valued status honest: `success` then
+ * means "nothing you must act on", not "there was nothing to see".
+ */
+export interface SeverityCounts {
+  errors: number;
+  warnings: number;
+  info: number;
+}
+
+/**
+ * Count issues by resolved severity.
+ *
+ * `ignore` is excluded from every bucket: those findings were suppressed by the
+ * adopter's own `validation.allow` config, and counting them would resurrect
+ * something they deliberately silenced.
+ */
+export function countBySeverity(issues: readonly ValidationIssue[]): SeverityCounts {
+  let errors = 0;
+  let warnings = 0;
+  let info = 0;
+  for (const issue of issues) {
+    if (issue.severity === 'error') {
+      errors += 1;
+    } else if (issue.severity === 'warning') {
+      warnings += 1;
+    } else if (issue.severity === 'info') {
+      info += 1;
+    }
+  }
+  return { errors, warnings, info };
+}
+
+/**
+ * The single answer to "issues → status": the worst ACTIONABLE severity.
+ *
+ * There were five implementations of this and three different answers for an
+ * info-only set — `warning` here, `success` in `vat audit`, and in
+ * `corpus/runner` a `statusFromCounts(errors, warnings)` whose signature could
+ * not see info at all. Two lanes could therefore report different statuses for
+ * the same artifact.
+ *
+ * Info-only resolves to `success` because an informational observation is not
+ * something the consumer must act on. That is only defensible when the counts
+ * ride alongside — pair every use of this with {@link countBySeverity}, or the
+ * status becomes the silence it used to be.
+ */
+export function calculateValidationStatus(
+  issues: readonly ValidationIssue[],
+): 'success' | 'warning' | 'error' {
+  const { errors, warnings } = countBySeverity(issues);
+  if (errors > 0) {
+    return 'error';
+  }
+  return warnings > 0 ? 'warning' : 'success';
+}

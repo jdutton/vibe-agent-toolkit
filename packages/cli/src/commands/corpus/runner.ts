@@ -16,6 +16,7 @@ import { existsSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { scan } from '@vibe-agent-toolkit/discovery';
 import { isGitUrl, parseGitUrl, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
@@ -24,7 +25,7 @@ import { createLogger } from '../../utils/logger.js';
 import { withClonedRepo } from '../audit/git-url-clone.js';
 import { deriveScanRoot, getValidationResults } from '../audit.js';
 
-import type { AuditOutcome, AuditStatus, AuditSummary, PluginRow, ReviewOutcome } from './report.js';
+import type { AuditOutcome, AuditSummary, PluginRow, ReviewOutcome } from './report.js';
 import type { PluginEntry } from './seed.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -54,26 +55,14 @@ export interface RunnerOptions {
 
 const SKIPPED_REVIEW: ReviewOutcome = { status: 'skipped', duration_ms: 0 };
 
-function statusFromCounts(errors: number, warnings: number): Extract<AuditStatus, 'success' | 'warning' | 'error'> {
-  if (errors > 0) return 'error';
-  if (warnings > 0) return 'warning';
-  return 'success';
-}
-
-function summarizeResults(
-  results: { status: string; issues?: { severity: string }[] }[]
-): AuditSummary {
-  let errors = 0;
-  let warnings = 0;
-  let info = 0;
-  for (const r of results) {
-    for (const issue of r.issues ?? []) {
-      if (issue.severity === 'error') errors += 1;
-      else if (issue.severity === 'warning') warnings += 1;
-      else if (issue.severity === 'info') info += 1;
-    }
-  }
-  return { errors, warnings, info, files_scanned: results.length };
+/**
+ * Roll a run's per-file results up into one corpus row.
+ *
+ * `files_scanned` counts FILES; the severity buckets count FINDINGS — two
+ * different denominators, so they are named differently on purpose.
+ */
+function summarizeRun(allIssues: readonly ValidationIssue[], filesScanned: number): AuditSummary {
+  return { ...countBySeverity(allIssues), files_scanned: filesScanned };
 }
 
 /**
@@ -123,8 +112,9 @@ async function auditAndRecord(
   try {
     // The corpus run root is the scanned plugin itself — one root per row.
     const results = await getValidationResults(scanPath, true, {}, logger, deriveScanRoot(scanPath));
-    const summary = summarizeResults(results);
-    const status = statusFromCounts(summary.errors, summary.warnings);
+    const allIssues = results.flatMap(r => r.issues);
+    const summary = summarizeRun(allIssues, results.length);
+    const status = calculateValidationStatus(allIssues);
     const auditYamlPath = safePath.join(opts.runDir, `${entry.name}-audit.yaml`);
     // eslint-disable-next-line security/detect-non-literal-fs-filename -- composed under run dir
     writeFileSync(auditYamlPath, yaml.stringify({ results }, { lineWidth: 0, aliasDuplicateObjects: false }), 'utf-8');

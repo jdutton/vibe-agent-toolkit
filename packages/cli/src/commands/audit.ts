@@ -6,7 +6,7 @@
 import * as fs from 'node:fs';
 import { existsSync as fsExistsSync } from 'node:fs';
 
-import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import {
   crawlAndResolveRegistry,
   detectDeclaredButMissing,
@@ -204,25 +204,15 @@ function packagingResultToValidationResult(
   const issues = verdictIssues.length > 0
     ? [...result.allErrors, ...verdictIssues]
     : result.allErrors;
-  const errorCount = issues.filter(i => i.severity === 'error').length;
-  const warningCount = issues.filter(i => i.severity === 'warning').length;
-  const infoCount = issues.filter(i => i.severity === 'info').length;
-
-  let status: ValidationResult['status'];
-  if (errorCount > 0) {
-    status = 'error';
-  } else if (warningCount > 0) {
-    status = 'warning';
-  } else {
-    status = 'success';
-  }
+  const issueCounts = countBySeverity(issues);
 
   const out: ValidationResult = {
     path: skillPath,
     type: RESOURCE_TYPE_AGENT_SKILL,
-    status,
-    summary: `${errorCount} errors, ${warningCount} warnings, ${infoCount} info`,
+    status: calculateValidationStatus(issues),
+    summary: `${issueCounts.errors} errors, ${issueCounts.warnings} warnings, ${issueCounts.info} info`,
     issues,
+    issueCounts,
     metadata: {
       lineCount: result.metadata.skillLines,
       name: result.skillName,

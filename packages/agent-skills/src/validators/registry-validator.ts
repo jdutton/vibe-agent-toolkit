@@ -2,7 +2,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
-import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { issueLocation } from '@vibe-agent-toolkit/utils';
 import type { z } from 'zod';
 
@@ -11,10 +11,7 @@ import { KnownMarketplacesRegistrySchema } from '../schemas/known-marketplaces-r
 
 import { type AnchorRootOptions, resolveAnchorRoot } from './anchor-root.js';
 import type { ValidationResult } from './types.js';
-import {
-	calculateValidationStatus,
-	generateFixSuggestion,
-} from './validation-utils.js';
+import { generateFixSuggestion } from './validation-utils.js';
 
 const REGISTRY_TYPE = 'registry' as const;
 const REGISTRY_FILE_NOT_FOUND_MESSAGE = 'Registry file not found';
@@ -50,6 +47,7 @@ function validateRegistryFile(
 			status: 'error',
 			summary: REGISTRY_FILE_NOT_FOUND_MESSAGE,
 			issues,
+			issueCounts: countBySeverity(issues),
 		};
 	}
 
@@ -73,6 +71,7 @@ function validateRegistryFile(
 			status: 'error',
 			summary: 'Registry file is invalid JSON',
 			issues,
+			issueCounts: countBySeverity(issues),
 		};
 	}
 
@@ -100,6 +99,7 @@ function validateRegistryFile(
 		summary:
 			status === 'success' ? successMessage : `Found ${issues.length} issue(s)`,
 		issues,
+		issueCounts: countBySeverity(issues),
 	};
 }
 

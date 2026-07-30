@@ -682,18 +682,39 @@ async function validateNoCitationsToNeverCommittedDirs(): Promise<void> {
  *
  * HONEST LIMITATIONS: conformance is judged from SOURCE — whether the file
  * declares or assigns an object property named `issueCounts`/`severityCounts`/
- * `counts`. Specifically:
+ * `counts`, or calls the shared `countBySeverity`. Specifically:
  *   - It cannot tell whether that block is actually reached at runtime.
- *   - It cannot see counts published under a name outside that set.
+ *   - It cannot see counts published under a name outside that set, unless the
+ *     lane got them from the shared counter.
  *   - The property must start a line. That is deliberate — matching the bare word
  *     anywhere is what made an earlier keyword scan call `packaging-validator.ts`
  *     conforming, because the word "counts" appeared in one of its comments — but
  *     it does mean a counts block written inline on one line reads as
  *     nonconforming. The failure direction is a lane that stays on the list after
  *     being fixed, which someone notices; not a lane that leaves it unfixed.
+ *   - Comments are STRIPPED before any of these tests run. `packaging-validator.ts`
+ *     fooled the scan a second time the moment a doc comment was added telling
+ *     readers to call `countBySeverity(result.allErrors)` — prose about the fix
+ *     read as the fix. A comment-only false positive fails in the *reassuring*
+ *     direction (a lane silently leaves the checklist), which is the one direction
+ *     this ratchet exists to prevent, so it is worth the crude stripper below.
  * It is a checklist that cannot rot, not a proof of correct output. That coarseness
  * is why the bucket notes below are hand-verified rather than inferred.
  * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * Strip `/* *\/` blocks and `//` line comments so prose ABOUT the counts contract
+ * cannot read as the contract.
+ *
+ * Crude on purpose — it is not a TypeScript parser. The `//` arm requires the
+ * slashes to be preceded by start-of-line or whitespace, which keeps `https://`
+ * inside a string literal intact; a `//` inside a quoted string mid-line would
+ * still truncate that line, and losing a line can only move a lane from
+ * conforming to nonconforming, which fails loudly.
+ */
+function stripTsComments(source: string): string {
+  return source.replaceAll(/\/\*[\s\S]*?\*\//g, ' ').replaceAll(/(^|\s)\/\/[^\n]*/g, '$1');
+}
 
 /** Roots whose `.ts` files are scanned for findings-reporting lanes. */
 const SEVERITY_COUNTS_SCAN_ROOTS = [
@@ -706,12 +727,41 @@ const SEVERITY_COUNTS_SCAN_ROOTS = [
 const VALIDATION_STATUS_VALUE = /status\??:[^'\n]*'(?:success|error|warning|failed)'/;
 /** A collection of findings, which is what makes a status a *validation* verdict. */
 const FINDINGS_COLLECTION = /\b(?:issues|allErrors|activeErrors|activeWarnings|errors|warnings|findings)\b\s*[:.]/;
-/** A per-severity counts block, as an object property — not a local, not a comment. */
-const SEVERITY_COUNTS_PROPERTY = /^[ \t]*(?:issueCounts|severityCounts|counts)\??[ \t]*:/m;
+/**
+ * A call to the ONE shared issues→status/counts pair.
+ *
+ * Independent evidence of a findings-reporting lane, and stronger than any
+ * keyword: a file that calls `countBySeverity` has the distribution in hand
+ * whatever it names the array it counted. Migrating `corpus/runner.ts` onto the
+ * shared pair deleted its last `errors:`-shaped line and made it INVISIBLE to
+ * {@link FINDINGS_COLLECTION} — the population must not be defined by a keyword
+ * that a legitimate refactor can delete.
+ */
+const SHARED_COLLAPSE_CALL = /\b(?:calculateValidationStatus|countBySeverity)\s*\(/;
+/**
+ * A per-severity counts block, as an object property — not a local, not a comment.
+ *
+ * `[:,]` accepts the ES shorthand `issueCounts,` as well as `issueCounts: ...`;
+ * shorthand publishes the same field to the same consumer, and requiring the
+ * colon made a genuinely fixed lane read as nonconforming.
+ */
+const SEVERITY_COUNTS_PROPERTY = /^[ \t]*(?:issueCounts|severityCounts|counts)\??[ \t]*[:,]/m;
 
 /** Lanes that publish a per-severity counts block beside their status. */
 const SEVERITY_COUNTS_CONFORMING = new Set<string>([
   'packages/cli/src/commands/resources/validate.ts',
+  // Migrated onto the shared `calculateValidationStatus` + `countBySeverity`
+  // pair, which ended five separate collapses and three different answers for
+  // an info-only issue set.
+  'packages/cli/src/commands/audit.ts',
+  'packages/cli/src/commands/claude/marketplace/validate.ts',
+  'packages/cli/src/commands/corpus/runner.ts',
+  'packages/agent-skills/src/validators/types.ts',
+  'packages/agent-skills/src/validators/skill-validator.ts',
+  'packages/agent-skills/src/validators/unified-validator.ts',
+  'packages/agent-skills/src/validators/marketplace-validator.ts',
+  'packages/agent-skills/src/validators/registry-validator.ts',
+  'packages/claude-marketplace/src/validators/plugin-validator.ts',
 ]);
 
 /**
@@ -727,20 +777,12 @@ const SEVERITY_COUNTS_RATCHET = new Map<string, string>([
   ['packages/cli/src/commands/build.ts', NO_COUNTS_BLOCK],
   ['packages/cli/src/commands/audit-settings.ts', 'drops the `overrode` provenance chain, the one question the override chain exists to answer'],
   ['packages/cli/src/commands/audit/hierarchical-output.ts', '`summary.warnings` counts FILES while `issues.warnings` counts FINDINGS — same word, two units, adjacent keys'],
-  ['packages/cli/src/commands/corpus/runner.ts', '`statusFromCounts` ignores its own third count, so `audit_clean` absorbs info-only plugins'],
-  ['packages/cli/src/commands/claude/marketplace/validate.ts', 'computes error+warning counts but no info term; summary string reads "0 error(s), 0 warning(s)" above N findings'],
   ['packages/cli/src/commands/claude/plugin/build.ts', 'renders info-severity findings with a `[WARNING]` prefix; no counts published'],
   ['packages/cli/src/commands/skills/validate.ts', 'prints "All validations passed" over active warnings; no counts published'],
   ['packages/cli/src/commands/skills/build.ts', 'labels the whole issue set "post-build error(s)" regardless of severity'],
   ['packages/cli/src/commands/skills/package.ts', 'validation display lane; status published without a per-severity counts block'],
   ['packages/cli/src/commands/agent/validate.ts', 'collapses a boolean `valid` into a status; no counts published'],
-  ['packages/agent-skills/src/validators/types.ts', 'the shared `ValidationResult` shape itself declares no counts field'],
-  ['packages/agent-skills/src/validators/skill-validator.ts', 'computes all three counts, then publishes them only inside a prose `summary` string — a consumer must parse English'],
-  ['packages/agent-skills/src/validators/packaging-validator.ts', 'has no info notion at all and maps warning ⇒ success'],
-  ['packages/agent-skills/src/validators/unified-validator.ts', NO_COUNTS_BLOCK],
-  ['packages/agent-skills/src/validators/marketplace-validator.ts', NO_COUNTS_BLOCK],
-  ['packages/agent-skills/src/validators/registry-validator.ts', NO_COUNTS_BLOCK],
-  ['packages/claude-marketplace/src/validators/plugin-validator.ts', NO_COUNTS_BLOCK],
+  ['packages/agent-skills/src/validators/packaging-validator.ts', 'two-valued gate status with no counts field; `allErrors` carries info issues that no `activeInfo` bucket exposes, and the result is mutated in place by `applyConfigVerdicts`, so a stored count would go stale'],
   ['packages/claude-marketplace/src/settings/settings-auditor.ts', NO_COUNTS_BLOCK],
 ]);
 
@@ -764,11 +806,22 @@ async function validateSeverityCountsRatchet(): Promise<void> {
     if (!relPath.endsWith('.ts')) return;
     if (!SEVERITY_COUNTS_SCAN_ROOTS.some((root) => toForwardSlash(relPath).startsWith(root))) return;
 
-    const source = contents.toString('utf8');
-    if (!VALIDATION_STATUS_VALUE.test(source) || !FINDINGS_COLLECTION.test(source)) return;
+    const source = stripTsComments(contents.toString('utf8'));
+    // Calling the shared collapse is sufficient on its own: it is what makes a
+    // file a findings-reporting lane. Requiring a literal status value AND a
+    // findings-shaped keyword hid `audit.ts` the moment its status became
+    // `calculateValidationStatus(issues)` instead of `status: 'error'` — the
+    // migration that fixed the lane is what erased it from the checklist.
+    const usesSharedCollapse = SHARED_COLLAPSE_CALL.test(source);
+    const looksLikeLane =
+      usesSharedCollapse || (VALIDATION_STATUS_VALUE.test(source) && FINDINGS_COLLECTION.test(source));
+    if (!looksLikeLane) return;
 
     seen.add(relPath);
-    const conforms = SEVERITY_COUNTS_PROPERTY.test(source);
+    // Calling the shared counter IS publishing the distribution, even when the
+    // lane's own field is named something else (`corpus/runner.ts` spreads it
+    // into an `AuditSummary`).
+    const conforms = SEVERITY_COUNTS_PROPERTY.test(source) || usesSharedCollapse;
 
     if (SEVERITY_COUNTS_NOT_APPLICABLE.has(relPath)) {
       return;
@@ -807,7 +860,8 @@ async function validateSeverityCountsRatchet(): Promise<void> {
       path: relPath,
       message:
         'Unclassified findings-reporting lane: it publishes a validation status ' +
-        'alongside a findings collection. A status alone cannot express a ' +
+        'alongside a findings collection, or calls the shared issues→status ' +
+        'collapse. A status alone cannot express a ' +
         'three-valued severity distribution, and every existing collapse resolves ' +
         'the ambiguous case to the reassuring one. Publish a per-severity counts ' +
         'block beside the status and add this file to SEVERITY_COUNTS_CONFORMING, ' +

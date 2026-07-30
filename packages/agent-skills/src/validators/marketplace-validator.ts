@@ -1,17 +1,14 @@
 /* eslint-disable security/detect-non-literal-fs-filename -- File paths are validated before use */
 import { existsSync, readFileSync } from 'node:fs';
 
-import type { ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 
 import { MarketplaceManifestSchema } from '../schemas/marketplace-manifest.js';
 
 import { type AnchorRootOptions, resolveAnchorRoot } from './anchor-root.js';
 import type { ValidationResult } from './types.js';
-import {
-	calculateValidationStatus,
-	generateFixSuggestion,
-} from './validation-utils.js';
+import { generateFixSuggestion } from './validation-utils.js';
 
 const MARKETPLACE_TYPE = 'marketplace' as const;
 
@@ -48,6 +45,7 @@ export async function validateMarketplace(
 			status: 'error',
 			summary: 'Marketplace manifest missing',
 			issues,
+			issueCounts: countBySeverity(issues),
 		};
 	}
 
@@ -71,6 +69,7 @@ export async function validateMarketplace(
 			status: 'error',
 			summary: 'Marketplace manifest is invalid JSON',
 			issues,
+			issueCounts: countBySeverity(issues),
 		};
 	}
 
@@ -98,6 +97,7 @@ export async function validateMarketplace(
 		summary:
 			status === 'success' ? 'Valid marketplace' : `Found ${issues.length} issue(s)`,
 		issues,
+		issueCounts: countBySeverity(issues),
 	};
 
 	if (result.success) {

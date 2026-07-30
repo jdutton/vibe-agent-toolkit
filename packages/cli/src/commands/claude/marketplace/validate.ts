@@ -13,7 +13,7 @@
 import { existsSync, readdirSync } from 'node:fs';
 
 
-import { type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import { calculateValidationStatus, countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import {
   validateMarketplace,
   validateSkill,
@@ -110,15 +110,6 @@ async function validatePlugins(
   return { pluginResults, issues };
 }
 
-/**
- * Determine overall validation status from issues.
- */
-function determineStatus(issues: ValidationIssue[]): 'success' | 'warning' | 'error' {
-  if (issues.some(i => i.severity === 'error')) return 'error';
-  if (issues.some(i => i.severity === 'warning')) return 'warning';
-  return 'success';
-}
-
 async function marketplaceValidateCommand(
   targetPath: string | undefined,
   options: MarketplaceValidateOptions,
@@ -154,9 +145,8 @@ async function marketplaceValidateCommand(
 
     // Combine all issues
     const allIssues = [...marketplaceResult.issues, ...fileIssues, ...pluginIssues];
-    const status = determineStatus(allIssues);
-    const errorCount = allIssues.filter(i => i.severity === 'error').length;
-    const warningCount = allIssues.filter(i => i.severity === 'warning').length;
+    const status = calculateValidationStatus(allIssues);
+    const issueCounts = countBySeverity(allIssues);
     const duration = formatDuration(Date.now() - startTime);
 
     writeYamlOutput({
@@ -170,7 +160,11 @@ async function marketplaceValidateCommand(
         issues: r.issues,
       })),
       issues: allIssues,
-      summary: `${errorCount} error(s), ${warningCount} warning(s)`,
+      // Counts ride beside the status: `status` names only the worst ACTIONABLE
+      // severity, so an info-only run is `success` and the info would otherwise
+      // be unreported.
+      issueCounts,
+      summary: `${issueCounts.errors} error(s), ${issueCounts.warnings} warning(s), ${issueCounts.info} info`,
       duration,
     });
 

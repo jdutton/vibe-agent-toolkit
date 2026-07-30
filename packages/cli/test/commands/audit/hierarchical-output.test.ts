@@ -1,5 +1,6 @@
 import * as os from 'node:os';
 
+import { countBySeverity, type ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
 import type { ValidationResult } from '@vibe-agent-toolkit/agent-skills';
 import { describe, expect, it } from 'vitest';
 
@@ -14,14 +15,30 @@ const TEST_ERROR_MESSAGE = 'Test error';
 const TEST_WARNING_CODE = 'TEST_WARNING';
 const TEST_WARNING_MESSAGE = 'Test warning';
 
-// Helper to create test validation result
-function createTestResult(path: string, status: 'error' | 'warning', issueCode: string, issueMessage: string): ValidationResult {
+/**
+ * Build a one-issue result.
+ *
+ * `severity` is a SEPARATE parameter from `status` on purpose. This factory used
+ * to take `status: 'error' | 'warning'` and derive the issue severity from it,
+ * which made an info-only result — status `success`, one `info` issue —
+ * structurally inexpressible. That is exactly the case `hierarchical-output`
+ * drops on the floor, so a fixture that cannot build it cannot catch it.
+ */
+function createTestResult(
+  path: string,
+  status: ValidationResult['status'],
+  issueCode: string,
+  issueMessage: string,
+  severity: 'error' | 'warning' | 'info' = status === 'error' ? SEVERITY_ERROR : SEVERITY_WARNING,
+): ValidationResult {
+  const issues = [{ code: issueCode, message: issueMessage, severity }] as unknown as ValidationIssue[];
   return {
     path,
     status,
     resourceType: RESOURCE_TYPE_SKILL,
-    issues: [{ code: issueCode, message: issueMessage, severity: status === 'error' ? SEVERITY_ERROR : SEVERITY_WARNING }],
-  };
+    issues,
+    issueCounts: countBySeverity(issues),
+  } as unknown as ValidationResult;
 }
 
 describe('buildHierarchicalOutput', () => {
@@ -92,12 +109,12 @@ describe('buildHierarchicalOutput', () => {
 
   it('should handle standalone skills (no plugin)', () => {
     const results: ValidationResult[] = [
-      {
-        path: `${homeDir}/.claude/plugins/standalone-skill/SKILL.md`,
-        status: 'warning',
-        resourceType: RESOURCE_TYPE_SKILL,
-        issues: [{ code: TEST_WARNING_CODE, message: 'Test warning', severity: SEVERITY_WARNING }],
-      },
+      createTestResult(
+        `${homeDir}/.claude/plugins/standalone-skill/SKILL.md`,
+        'warning',
+        TEST_WARNING_CODE,
+        'Test warning',
+      ),
     ];
 
     const output = buildHierarchicalOutput(results, false, runRoot);

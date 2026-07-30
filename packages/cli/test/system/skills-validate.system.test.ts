@@ -95,7 +95,11 @@ describe('skills validate command (system test)', () => {
     // Should be parseable as YAML
     expect(result.status).toBeDefined();
     expect(parsed.status).toBeDefined();
-    expect(['success', 'error']).toContain(parsed.status);
+    // The full status vocabulary, not just the two this lane happens to emit
+    // today. A two-value assertion here would go red the moment `skills
+    // validate` learns to say `warning` — i.e. it would fire on the FIX, and a
+    // future reader would "repair" it by narrowing the status back.
+    expect(['success', 'warning', 'error']).toContain(parsed.status);
   });
 
   it('should exit with proper status code', () => {
@@ -103,7 +107,11 @@ describe('skills validate command (system test)', () => {
     const { parsed } = executeSkillsCommandAndExpectYaml(binPath, 'validate', fixtureDir);
 
     expect(parsed.status).toBeDefined();
-    expect(['success', 'error']).toContain(parsed.status);
+    // The full status vocabulary, not just the two this lane happens to emit
+    // today. A two-value assertion here would go red the moment `skills
+    // validate` learns to say `warning` — i.e. it would fire on the FIX, and a
+    // future reader would "repair" it by narrowing the status back.
+    expect(['success', 'warning', 'error']).toContain(parsed.status);
   });
 
   it('should report validation errors with proper structure', () => {
