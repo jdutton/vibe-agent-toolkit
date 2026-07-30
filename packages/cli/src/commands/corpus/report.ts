@@ -32,9 +32,22 @@ export interface AuditOutcome {
   error?: string;                // present only on unloadable
 }
 
+/**
+ * Outcome distribution for one plugin's review lane — the review-side mirror
+ * of `AuditSummary`. `skills_scanned` counts SKILLS (the denominator, like
+ * `files_scanned`); `reviewed` and `failed` bucket those skills by whether
+ * `vat skill review` ran to completion, and always sum to `skills_scanned`.
+ */
+export interface ReviewSummary {
+  reviewed: number;              // review ran to completion (clean or with findings)
+  failed: number;                // review did not run to completion
+  skills_scanned: number;
+}
+
 export interface ReviewOutcome {
   status: ReviewStatus;
   duration_ms: number;
+  summary?: ReviewSummary;       // present when the review lane ran (status != skipped)
   output_path?: string;          // present when an aggregated review.md was written
   error?: string;                // present only when status === 'error'
 }
@@ -63,7 +76,8 @@ export interface RunTotals {
   audit_warning: number;
   audit_error: number;
   unloadable: number;
-  reviewed?: number;             // present iff flags.with_review
+  reviewed?: number;             // rows whose review lane ran; present iff flags.with_review
+  review_error?: number;         // subset of `reviewed` that failed; present iff flags.with_review
 }
 
 /**
@@ -101,7 +115,7 @@ export function computeTotals(report: RunReport): RunTotals {
 
   if (report.flags.with_review) {
     totals.reviewed = report.plugins.filter((p) => p.review.status !== 'skipped').length;
-  }
+    totals.review_error = report.plugins.filter((p) => p.review.status === 'error').length;  }
 
   return totals;
 }
