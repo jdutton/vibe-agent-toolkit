@@ -6,7 +6,7 @@
  */
 
 
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { describeStdioBlocking, makeStdioBlocking, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { createAgentCommand, showAgentVerboseHelp } from './commands/agent/index.js';
@@ -25,7 +25,6 @@ import { createValidateTopLevelCommand } from './commands/validate.js';
 import { createVerifyTopLevelCommand } from './commands/verify.js';
 import { loadVerboseHelp, writeHelpSync } from './utils/help-loader.js';
 import { createLogger } from './utils/logger.js';
-import { makeStdioBlocking, describeStdioBlocking } from './utils/output.js';
 import { version, getVersionString, type VersionContext } from './version.js';
 
 // Before ANY output: a piped stdio is non-blocking, and every command here exits

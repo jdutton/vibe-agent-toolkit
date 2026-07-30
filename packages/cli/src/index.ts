@@ -10,16 +10,16 @@ export { version, getVersionString, type VersionContext } from './version.js';
 
 // Utilities (for programmatic use)
 export { createLogger, type Logger, type LoggerOptions } from './utils/logger.js';
-// `makeStdioBlocking` is part of the public surface on purpose: a consumer that
-// embeds this CLI's output helpers inherits the same `process.exit` truncation
-// these were written to fix, and cannot opt into the fix without it.
+// A consumer that embeds these output helpers inherits the same `process.exit`
+// truncation they were written to fix, and needs `makeStdioBlocking` to opt into
+// the fix — it now lives in `@vibe-agent-toolkit/utils` (also reachable via the
+// narrow `@vibe-agent-toolkit/utils/process` subpath), because the CLI sits at
+// the top of the dependency chain and VAT's second published bin could not reach
+// it here.
 export {
   writeYamlOutput,
   writeTestFormatError,
   writeStdoutSync,
-  makeStdioBlocking,
-  describeStdioBlocking,
-  type StdioBlockingResult,
 } from './utils/output.js';
 export { loadConfig } from './utils/config-loader.js';
 export {
