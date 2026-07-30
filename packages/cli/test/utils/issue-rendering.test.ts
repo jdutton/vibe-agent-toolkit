@@ -14,7 +14,11 @@
  * extracted to fix.
  */
 
-import type { SeverityCounts, ValidationIssue } from '@vibe-agent-toolkit/agent-schema';
+import {
+  countBySeverity,
+  type SeverityCounts,
+  type ValidationIssue,
+} from '@vibe-agent-toolkit/agent-schema';
 import type {
   PackageSkillResult,
   PackagingValidationResult,
@@ -43,6 +47,7 @@ import {
   formatIssueSetHeading,
   formatSeverityBreakdown,
   severityLabel,
+  summarizeFindings,
   sumSeverityCounts,
 } from '../../src/utils/issue-rendering.js';
 
@@ -134,6 +139,36 @@ function allowRecord(code: string): PackagingValidationResult['ignoredErrors'][n
     location: 'a/SKILL.md:3',
     reason: 'known and accepted',
   };
+}
+
+/**
+ * Re-add a validate summary's header total from the ROWS it publishes, reading
+ * whichever of the two published row shapes each row uses: the default per-asset
+ * row (flat `warnings: 3`, zero buckets absent) or the verbose row (`issueCounts`).
+ *
+ * An absent bucket contributes zero, which is what makes this an identity check
+ * rather than a restatement of the producer's arithmetic: a row the producer
+ * dropped, or a bucket it forgot, is invisible here and the sum falls short of
+ * the header by exactly that addend.
+ */
+function countsFromValidateRows(rows: readonly unknown[]): SeverityCounts {
+  return sumSeverityCounts(
+    rows.map((r) => {
+      const row = r as {
+        errors?: number;
+        warnings?: number;
+        info?: number;
+        issueCounts?: SeverityCounts;
+      };
+      return (
+        row.issueCounts ?? {
+          errors: row.errors ?? 0,
+          warnings: row.warnings ?? 0,
+          info: row.info ?? 0,
+        }
+      );
+    }),
+  );
 }
 
 /** Every `[SEVERITY]`-prefixed label present in a rendered set, in order. */
@@ -265,6 +300,69 @@ describe('sumSeverityCounts', () => {
   });
 });
 
+describe('summarizeFindings', () => {
+  it('omits a zero severity bucket as an ABSENT key, not as an explicit 0', () => {
+    // `toBeUndefined()` cannot make this assertion: it passes for an absent key
+    // AND for a key explicitly set to `undefined`, and only the first of those
+    // disappears from a YAML row. The zero buckets are what turn a summary meant
+    // to read `warnings: 3` into three columns of noise per asset.
+    const result = summarizeFindings([issue('warning', 'W1'), issue('warning', 'W2'), issue('warning', 'W3')]);
+    expect(result.warnings).toBe(3);
+    expect('errors' in result).toBe(false);
+    expect('info' in result).toBe(false);
+  });
+
+  it('reports exactly the distribution countBySeverity reports, for a mixed set', () => {
+    // The delegation IS the behaviour: a second hand-rolled severity collapse is
+    // how `info` came to be counted as a warning in half the lanes.
+    const issues = [
+      issue('error', 'E1'),
+      issue('warning', 'W1'),
+      issue('warning', 'W2'),
+      issue('info', 'I1'),
+      issue('ignore', 'X1'),
+    ];
+    const result = summarizeFindings(issues);
+    const expected = countBySeverity(issues);
+    expect({ errors: result.errors, warnings: result.warnings, info: result.info }).toEqual(expected);
+    expect(expected).toEqual({ errors: 1, warnings: 2, info: 1 });
+  });
+
+  it('orders codes by descending count, ties broken by code name ascending', () => {
+    // Insertion order IS the YAML serialization order — the ordering is the
+    // whole reason a caller can read the top row and know the dominant code.
+    const result = summarizeFindings([
+      issue('warning', 'B_TWICE'),
+      issue('warning', 'A_ONCE'),
+      issue('warning', 'B_TWICE'),
+      issue('info', 'C_THRICE'),
+      issue('info', 'C_THRICE'),
+      issue('info', 'C_THRICE'),
+      issue('info', 'A_TIED_WITH_B'),
+      issue('info', 'A_TIED_WITH_B'),
+    ]);
+    expect(Object.keys(result.codes)).toEqual(['C_THRICE', 'A_TIED_WITH_B', 'B_TWICE', 'A_ONCE']);
+    expect(result.codes).toEqual({ C_THRICE: 3, A_TIED_WITH_B: 2, B_TWICE: 2, A_ONCE: 1 });
+  });
+
+  it('publishes no severity key at all for an empty set', () => {
+    const result = summarizeFindings([]);
+    expect(result).toEqual({ codes: {} });
+    expect(Object.keys(result)).toEqual(['codes']);
+  });
+
+  it('keeps an ignored finding in codes while counting it in no severity bucket', () => {
+    // `countBySeverity` deliberately drops `ignore` from every bucket (the
+    // adopter silenced it), but the finding WAS emitted — dropping it from the
+    // code tally too would make an allow-listed code invisible everywhere.
+    const result = summarizeFindings([issue('ignore', 'SUPPRESSED'), issue('ignore', 'SUPPRESSED')]);
+    expect(result.codes).toEqual({ SUPPRESSED: 2 });
+    expect('errors' in result).toBe(false);
+    expect('warnings' in result).toBe(false);
+    expect('info' in result).toBe(false);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // `vat skills validate`
 // ---------------------------------------------------------------------------
@@ -300,16 +398,78 @@ describe('vat skills validate — buildValidateSummary', () => {
     expect(summary.issueCounts).toEqual({ errors: 1, warnings: 1, info: 1 });
   });
 
-  it('publishes per-skill counts beside each two-valued per-skill status', () => {
+  it('publishes a per-asset row of COUNTS only — no findings arrays, no metadata', () => {
+    // The default row is what a reader scans at corpus scale: which asset has
+    // problems, how many, and of what code. The arrays it used to carry are what
+    // made the skills phase 17,363 of `vat verify`'s 22,156 stdout lines.
     const summary = buildValidateSummary(
-      [packagingResult('a', [issue('warning', 'W1'), issue('info', 'I1')])],
+      [
+        packagingResult(
+          'a',
+          [issue('warning', 'W1'), issue('warning', 'W1'), issue('info', 'I1')],
+          [{ path: 'x.md', reason: 'gitignored' }],
+        ),
+      ],
       1,
       false,
       [],
     );
-    const first = summary.results[0] as { status: string; issueCounts: unknown };
-    expect(first.status).toBe('success');
-    expect(first.issueCounts).toEqual({ errors: 0, warnings: 1, info: 1 });
+    const [row] = summary.results;
+    expect(row).toStrictEqual({
+      skillName: 'a',
+      status: 'success',
+      warnings: 2,
+      info: 1,
+      codes: { W1: 2, I1: 1 },
+    });
+    // A zero bucket is an ABSENT key, never `0` — `errors: 0` beside a red exit
+    // code reads as a contradiction rather than as "this asset is not the one".
+    expect('errors' in (row as object)).toBe(false);
+  });
+
+  it('publishes an allowed COUNT, and keeps the row of a skill whose findings were all allowed', () => {
+    // A skill with an empty `allErrors` and a non-empty `ignoredErrors` is the
+    // only fixture that can tell "drop rows with no EMITTED findings" apart from
+    // "drop rows with nothing to say": under the first rule this fact — the
+    // adopter is suppressing something here — silently disappears.
+    const [row] = buildValidateSummary(
+      [packagingResult('a', [], [], [allowRecord('LINK_BROKEN'), allowRecord('LINK_BROKEN')])],
+      1,
+      false,
+      [],
+    ).results;
+    expect(row).toStrictEqual({ skillName: 'a', status: 'success', allowed: 2, codes: {} });
+  });
+
+  it('omits a clean skill from the default rows while still counting it in skillsValidated', () => {
+    // Two skills, exactly one of them clean: a fixture where every skill has a
+    // finding cannot distinguish "clean rows omitted" from "all rows published",
+    // and one where every skill is clean cannot tell an omission from an empty run.
+    const summary = buildValidateSummary(
+      [packagingResult('clean', []), packagingResult('noisy', [issue('warning', 'W1')])],
+      1,
+      false,
+      [],
+    );
+    expect(summary.results.map((r) => (r as { skillName: string }).skillName)).toEqual(['noisy']);
+    expect(summary.skillsValidated).toBe(2);
+  });
+
+  it('restores the full per-skill detail under verbose, clean skills included', () => {
+    const summary = buildValidateSummary(
+      [packagingResult('clean', []), packagingResult('noisy', [issue('warning', 'W1')])],
+      1,
+      true,
+      [],
+    );
+    expect(summary.results.map((r) => (r as { skillName: string }).skillName)).toEqual([
+      'clean',
+      'noisy',
+    ]);
+    const noisy = summary.results[1] as { allErrors: unknown; issueCounts: unknown; metadata: unknown };
+    expect(noisy.allErrors).toEqual([issue('warning', 'W1')]);
+    expect(noisy.issueCounts).toEqual({ errors: 0, warnings: 1, info: 0 });
+    expect(noisy.metadata).toBeDefined();
   });
 
   it('closes the accounting: the header equals the per-skill sum plus the run-level counts', () => {
@@ -321,27 +481,32 @@ describe('vat skills validate — buildValidateSummary', () => {
     // hand-counting the list. The invariant below is what makes the header
     // accountable; dropping run issues from the header instead would have
     // divorced it from the exit code, which is the worse of the two failures.
-    const summary = buildValidateSummary(
-      [
-        packagingResult('a', [issue('warning', 'W1'), issue('info', 'I1')], [], [
-          allowRecord('LINK_BROKEN'),
-        ]),
-        packagingResult('b', [issue('error', 'E1')]),
-      ],
-      1,
-      false,
-      [issue('warning', 'ALLOW_UNUSED'), issue('warning', 'ALLOW_UNUSED')],
-    );
+    // The batch deliberately contains a CLEAN skill, which the default rows drop:
+    // the identity is only worth asserting on the shape that actually omits rows.
+    // A fixture where every skill has a finding cannot see a dropped addend.
+    const results = [
+      packagingResult('a', [issue('warning', 'W1'), issue('info', 'I1')], [], [
+        allowRecord('LINK_BROKEN'),
+      ]),
+      packagingResult('clean', []),
+      packagingResult('b', [issue('error', 'E1')]),
+    ];
+    const runIssues = [issue('warning', 'ALLOW_UNUSED'), issue('warning', 'ALLOW_UNUSED')];
 
-    const perSkill = sumSeverityCounts(
-      summary.results.map((r) => (r as { issueCounts: SeverityCounts }).issueCounts),
-    );
-    // Guards against a vacuous pass: all three buckets have to be non-trivial
-    // and the run bucket has to be non-empty, or the identity proves nothing.
-    expect(perSkill).toEqual({ errors: 1, warnings: 1, info: 1 });
-    expect(summary.runIssueCounts).toEqual({ errors: 0, warnings: 2, info: 0 });
+    for (const verbose of [false, true]) {
+      const summary = buildValidateSummary(results, 1, verbose, runIssues);
+      const perSkill = countsFromValidateRows(summary.results);
+      // Guards against a vacuous pass: all three buckets have to be non-trivial
+      // and the run bucket has to be non-empty, or the identity proves nothing.
+      expect(perSkill).toEqual({ errors: 1, warnings: 1, info: 1 });
+      expect(summary.runIssueCounts).toEqual({ errors: 0, warnings: 2, info: 0 });
 
-    expect(summary.issueCounts).toEqual(sumSeverityCounts([perSkill, summary.runIssueCounts]));
+      expect(summary.issueCounts).toEqual(sumSeverityCounts([perSkill, summary.runIssueCounts]));
+      // The header keeps its complete shape in BOTH modes — it is the
+      // reconciliation identity, not a per-asset row, so its zeros stay.
+      expect(Object.keys(summary.issueCounts)).toEqual(['errors', 'warnings', 'info']);
+      expect(summary.runIssues).toHaveLength(2);
+    }
   });
 
   it('counts an allow-suppressed issue in neither the per-skill nor the run total', () => {
@@ -355,17 +520,15 @@ describe('vat skills validate — buildValidateSummary', () => {
     expect(summary.runIssueCounts).toEqual({ errors: 0, warnings: 0, info: 0 });
   });
 
-  it('strips excludedReferences unless verbose', () => {
-    const results = [packagingResult('a', [], [{ path: 'x.md', reason: 'gitignored' }])];
-    const terse = buildValidateSummary(results, 1, false, []).results[0] as {
-      metadata: Record<string, unknown>;
-    };
+  it('carries excludedReferences under verbose, where the full metadata lives', () => {
+    const results = [
+      packagingResult('a', [issue('warning', 'W1')], [{ path: 'x.md', reason: 'gitignored' }]),
+    ];
     const verbose = buildValidateSummary(results, 1, true, []).results[0] as {
       metadata: Record<string, unknown>;
     };
-    expect(terse.metadata).not.toHaveProperty('excludedReferences');
-    expect(terse.metadata['excludedReferenceCount']).toBe(1);
     expect(verbose.metadata).toHaveProperty('excludedReferences');
+    expect(verbose.metadata['excludedReferenceCount']).toBe(1);
   });
 });
 
@@ -373,29 +536,73 @@ describe('vat skills validate — formatValidationReportLines', () => {
   it('does not print the all-clear banner over active warnings', () => {
     const lines = formatValidationReportLines([
       packagingResult('a', [issue('warning', 'W1'), issue('warning', 'W2')]),
-    ], []);
+    ], [], true);
     // The literal defect: "✅ All validations passed" above N warnings.
     expect(lines.some((l) => l.includes('All validations passed'))).toBe(false);
     expect(lines[0]).toContain('2 warnings');
   });
 
-  it('renders EVERY emitted severity in a mixed batch, not just the errors', () => {
+  it('renders EVERY emitted severity in a mixed batch under verbose, not just the errors', () => {
     const lines = formatValidationReportLines([
       packagingResult('a', [issue('error', 'E1'), issue('warning', 'W1'), issue('info', 'I1')]),
-    ], []);
+    ], [], true);
     expect(renderedLabels(lines)).toEqual(['ERROR', 'WARNING', 'INFO']);
   });
 
   it('renders an info-only batch rather than reporting nothing at all', () => {
-    const lines = formatValidationReportLines([packagingResult('a', [issue('info', 'I1')])], []);
+    const lines = formatValidationReportLines([packagingResult('a', [issue('info', 'I1')])], [], true);
     expect(renderedLabels(lines)).toEqual(['INFO']);
     expect(lines[0]).toContain('1 info');
   });
 
   it('keeps the plain all-clear banner for a genuinely clean batch', () => {
-    expect(formatValidationReportLines([packagingResult('a', [])], [])).toEqual([
-      '\n✅ All validations passed',
+    for (const verbose of [false, true]) {
+      expect(formatValidationReportLines([packagingResult('a', [])], [], verbose)).toEqual([
+        '\n✅ All validations passed',
+      ]);
+    }
+  });
+
+  it('collapses each skill to ONE line by default, dominant code first, clean skills omitted', () => {
+    // Three skills of three different shapes — noisy, clean, allow-only — so the
+    // fixture can tell "one row per finding" apart from "one row per asset", and
+    // "clean rows dropped" apart from "all rows printed". A single-skill fixture
+    // can see neither.
+    const lines = formatValidationReportLines(
+      [
+        packagingResult('noisy', [
+          issue('warning', 'LINK_DROPPED_BY_DEPTH'),
+          issue('warning', 'LINK_DROPPED_BY_DEPTH'),
+          issue('info', 'NON_PORTABLE_ASSET_REFERENCE'),
+        ]),
+        packagingResult('clean', []),
+        packagingResult('allowed-only', [], [], [allowRecord('LINK_BROKEN')]),
+      ],
+      [],
+      false,
+    );
+    // No per-issue blocks at all: the 1,728 LINK_DROPPED_BY_DEPTH rows are what
+    // this output exists to not print.
+    expect(renderedLabels(lines)).toEqual([]);
+    expect(lines.slice(1)).toEqual([
+      '  noisy: 2 warnings, 1 info — LINK_DROPPED_BY_DEPTH: 2, NON_PORTABLE_ASSET_REFERENCE: 1',
+      '  allowed-only: no findings (+1 allowed by config)',
     ]);
+  });
+
+  it('keeps run-level findings in full in BOTH modes', () => {
+    // Run-level findings are ~14 and belong to the project config, not to any
+    // asset — there is no per-asset row for them to collapse into.
+    for (const verbose of [false, true]) {
+      const lines = formatValidationReportLines(
+        [packagingResult('a', [issue('warning', 'W1')])],
+        [issue('warning', 'ALLOW_UNUSED', { fix: 'remove the entry' })],
+        verbose,
+      );
+      expect(lines).toContain('Run-level (project config, not any one skill):');
+      expect(renderedLabels(lines)).toContain('WARNING');
+      expect(lines.some((l) => l.includes('Fix: remove the entry'))).toBe(true);
+    }
   });
 });
 

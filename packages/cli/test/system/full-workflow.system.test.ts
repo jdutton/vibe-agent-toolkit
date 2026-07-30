@@ -60,6 +60,12 @@ ${validationConfig}`;
  * return the first EXTERNAL_URL_DEAD finding (or undefined). Shared by the
  * default-warning and promoted-error severity cases so the flatten/find logic
  * lives in exactly one place.
+ *
+ * Reads the VERBOSE document: the default publishes per-file COUNTS plus a
+ * `codes` tally, and both callers assert on an individual finding's `severity`
+ * — the very thing under test here is which severity a given CODE resolved to,
+ * a pairing only the verbose form states. Hence the `--verbose` on both
+ * invocations below.
  */
 function findExternalUrlDeadFinding(
   parsed: Record<string, unknown>
@@ -241,7 +247,7 @@ describe('Dead external URL severity → exit code (system test)', () => {
 
     const { result, parsed } = await executeCliAndParseYaml(
       binPath,
-      ['resources', 'validate', '--check-external-urls', '--no-cache'],
+      ['resources', 'validate', '--check-external-urls', '--no-cache', '--verbose'],
       { cwd: projectDir }
     );
 
@@ -267,7 +273,7 @@ describe('Dead external URL severity → exit code (system test)', () => {
 
     const { result, parsed } = await executeCliAndParseYaml(
       binPath,
-      ['resources', 'validate', '--check-external-urls', '--no-cache'],
+      ['resources', 'validate', '--check-external-urls', '--no-cache', '--verbose'],
       { cwd: projectDir }
     );
 

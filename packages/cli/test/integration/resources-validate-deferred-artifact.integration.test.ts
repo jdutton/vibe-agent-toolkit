@@ -34,7 +34,13 @@ const SKILL_NAME = 'my-skill';
 const SOURCE_FILE = 'build-output/generated-ref.md';
 const DEST_FILE = 'cli-reference.md';
 
-/** Flattened `{code, severity}` view of the parsed YAML output's grouped-by-file issues. */
+/**
+ * Flattened `{code, severity}` view of the parsed YAML output's grouped-by-file issues.
+ *
+ * Reads the VERBOSE document: the default publishes per-file counts plus a `codes`
+ * tally, and these tests assert on individual findings, so every invocation below
+ * passes `--verbose`.
+ */
 interface FlatIssue {
   code: string;
   severity: string;
@@ -106,7 +112,7 @@ describe('vat resources validate + deferred files: artifacts (integration)', () 
     writeFixture(tempDir, { source: SOURCE_FILE });
 
     const { result, parsed } = await executeCliAndParseYaml(binPath, [
-      'resources', 'validate', tempDir,
+      'resources', 'validate', tempDir, '--verbose',
     ]);
 
     expect(result.status).toBe(0);
@@ -128,7 +134,7 @@ describe('vat resources validate + deferred files: artifacts (integration)', () 
     });
 
     const { result, parsed } = await executeCliAndParseYaml(binPath, [
-      'resources', 'validate', tempDir,
+      'resources', 'validate', tempDir, '--verbose',
     ]);
 
     // Same verdict the packager and `vat skills validate` reach for this input:

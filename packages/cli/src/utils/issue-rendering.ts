@@ -164,6 +164,71 @@ export function collectPostBuildIssues(result: PackageSkillResult): ValidationIs
   return merged;
 }
 
+/**
+ * A compact count-only projection of one asset's findings, for summary output.
+ *
+ * Deliberately does NOT carry the asset's name: the three commands that publish
+ * these rows (`vat skills validate`, `vat claude marketplace validate`,
+ * `vat resources validate`) each key their row by a different identity — a skill
+ * name, a plugin name, a file path. A projection that named the asset would have
+ * to pick one, and the two lanes it did not fit would fork their own copy, which
+ * is how the severity collapse came to be spelled five different ways.
+ *
+ * A zero bucket is an ABSENT key, never `0`. Serialized as YAML, three zero
+ * columns per asset is what makes a summary unreadable at corpus scale, and
+ * `errors: 0` beside a red exit code reads as a contradiction rather than as the
+ * "this asset is not the one" it means. `exactOptionalPropertyTypes` is on, so
+ * these are built by spread — assigning `undefined` would emit the key.
+ */
+export interface FindingCountSummary {
+  errors?: number;
+  warnings?: number;
+  info?: number;
+  /** Per-code tally, ordered descending by count then by code name. */
+  codes: Record<string, number>;
+}
+
+/**
+ * Project a set of issues onto its counts: severity buckets plus a per-code tally.
+ *
+ * Severity counting delegates to `countBySeverity` — there must be exactly one
+ * severity collapse in this codebase (see this module's header). That delegation
+ * carries its rule with it: `ignore` findings land in NO severity bucket, because
+ * the adopter's `validation.allow` config silenced them.
+ *
+ * They do still appear in `codes`, because they were emitted — a code the adopter
+ * allow-listed would otherwise be invisible in every summary, which is the one
+ * place a reviewer would look to notice an allow-list that has quietly grown.
+ *
+ * `codes` is ordered descending by count, ties broken by code name ascending.
+ * Insertion order is the YAML serialization order, so the ordering is the feature:
+ * the first row names the dominant finding without the reader tallying anything.
+ */
+export function summarizeFindings(issues: readonly ValidationIssue[]): FindingCountSummary {
+  const counts = countBySeverity(issues);
+
+  const tally = new Map<string, number>();
+  for (const issue of issues) {
+    const code = String(issue.code);
+    tally.set(code, (tally.get(code) ?? 0) + 1);
+  }
+
+  // `Object.fromEntries` over a sorted array, rather than keyed assignment into a
+  // record: it preserves the sort as insertion order without a dynamic index write.
+  const codes = Object.fromEntries(
+    [...tally.entries()].sort(([codeA, countA], [codeB, countB]) =>
+      countB - countA || codeA.localeCompare(codeB),
+    ),
+  );
+
+  return {
+    ...(counts.errors > 0 ? { errors: counts.errors } : {}),
+    ...(counts.warnings > 0 ? { warnings: counts.warnings } : {}),
+    ...(counts.info > 0 ? { info: counts.info } : {}),
+    codes,
+  };
+}
+
 /** Sum severity counts across lanes (per-skill → per-plugin → per-run). */
 export function sumSeverityCounts(counts: readonly SeverityCounts[]): SeverityCounts {
   return counts.reduce<SeverityCounts>(

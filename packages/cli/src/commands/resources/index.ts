@@ -68,6 +68,7 @@ Examples:
     .command('validate [path]')
     .description('Validate markdown resources (link integrity, anchors)')
     .option('--debug', 'Enable debug logging')
+    .option('-v, --verbose', 'Show all scanned resources, including those without issues')
     .option('--frontmatter-schema <path>', 'Validate frontmatter against JSON Schema file (.json or .yaml)')
     .option('--validation-mode <mode>', 'Validation mode for schemas: strict (default) or permissive', 'strict')
     .option('--format <format>', 'Output format: yaml (default), json, or text', 'yaml')
@@ -135,7 +136,18 @@ Output Fields (issues found):
   issueCounts: {errors, warnings, info} — every issue, split by severity
   issueSummary: Count of each issue code, ALL severities
   collections: Per-collection stats including filesWithErrors, errorCount
-  issues: Detail grouped by file; each entry states its own severity
+  issues: One row per file with findings, carrying only that file's counts
+          ({file, errors?, warnings?, info?, codes}). A zero bucket is omitted,
+          and a file that emitted nothing has no row — filesScanned above stays
+          the true denominator.
+
+Verbosity:
+  -v, --verbose
+    Replaces each file's counts row with its per-issue detail (line, column,
+    code, severity, message) — the pre-summary shape. That form is for
+    '> file' then grep, not for reading. Every other field above is a total
+    about the run and is identical in both modes.
+    --format text is unaffected: it already prints one line per issue.
 
 Validation Checks:
   - Internal file links (relative paths)

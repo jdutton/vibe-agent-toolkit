@@ -26,6 +26,7 @@ import { resolveAssetReference, safePath } from '@vibe-agent-toolkit/utils';
 import * as yaml from 'yaml';
 
 import { formatDurationSecs } from '../../utils/duration.js';
+import { summarizeFindings, type FindingCountSummary } from '../../utils/issue-rendering.js';
 import { createLogger, type Logger } from '../../utils/logger.js';
 import { writeTestFormatError } from '../../utils/output.js';
 import { projectRootOrLoudCwd } from '../../utils/project-root-policy.js';
@@ -67,12 +68,14 @@ async function loadSchema(schemaPath: string): Promise<object> {
 }
 
 /**
- * Issues grouped by file.
+ * Issues grouped by file — the `--verbose` row.
  *
  * Each entry carries the validation `code` and resolved `severity` so the
  * serialized output is honest about what fired and at what level. Warning- and
  * info-severity issues appear here too (so users see them); only error-severity
  * issues drive the exit code, which the library decides via `hasErrors`.
+ *
+ * This shape is optimized for `> file` then `grep`, not for reading.
  */
 interface FileIssues {
   file: string;
@@ -84,6 +87,20 @@ interface FileIssues {
     message: string;
   }>;
 }
+
+/**
+ * One file's DEFAULT row: which file has problems, how many, of what code — and
+ * nothing else.
+ *
+ * The unit is the file because the file is what a reader opens to act. Zero
+ * severity buckets are ABSENT keys rather than `0` (see {@link summarizeFindings}):
+ * three zero columns per file is what makes a listing unreadable at corpus
+ * scale, and `errors: 0` beside a red exit code reads as a contradiction.
+ */
+type FileIssueSummary = FindingCountSummary & { file: string };
+
+/** A file's row in the reported listing — counts by default, detail under `--verbose`. */
+type FileIssueRow = FileIssues | FileIssueSummary;
 
 /**
  * The verdict vocabulary, taken from the shared collapse rather than restated —
@@ -117,8 +134,12 @@ interface ValidationOutputData {
   validationMode: 'strict' | 'permissive';
   frontmatterSchema?: string;
   collections?: Record<string, CollectionStatWithErrors>;
-  /** Per-file detail, ALL severities; each entry states its own `severity`. */
-  issues?: FileIssues[];
+  /**
+   * Per-file rows, ALL severities. Counts-only by default; per-issue detail
+   * under `--verbose`. A file that emitted nothing has no row in either mode —
+   * `filesScanned` above stays the true denominator.
+   */
+  issues?: FileIssueRow[];
   durationSecs: number;
 }
 
@@ -159,28 +180,49 @@ type ErrorData = {
 type OutputFormat = 'yaml' | 'json' | 'text';
 
 /**
- * Group errors by file path.
+ * Group issues by file path, preserving first-seen file order.
+ *
+ * ONE grouping serves both listing modes, so the two can never disagree about
+ * which files have findings — only about how much they say per file.
  */
-function groupIssuesByFile(issues: ErrorData[]): FileIssues[] {
-  const fileMap = new Map<string, FileIssues>();
+function groupIssuesByFile(issues: ErrorData[]): Map<string, ErrorData[]> {
+  const fileMap = new Map<string, ErrorData[]>();
 
   for (const issue of issues) {
-    const entry = {
-      line: issue.line,
-      column: issue.column,
-      code: issue.code,
-      severity: issue.severity,
-      message: issue.message,
-    };
     const existing = fileMap.get(issue.file);
     if (existing) {
-      existing.issues.push(entry);
+      existing.push(issue);
     } else {
-      fileMap.set(issue.file, { file: issue.file, issues: [entry] });
+      fileMap.set(issue.file, [issue]);
     }
   }
 
-  return [...fileMap.values()];
+  return fileMap;
+}
+
+/**
+ * Project the grouping onto the rows the report publishes.
+ *
+ * A file only reaches this function if it emitted something, so "clean files are
+ * omitted" is a property of the input, not a filter applied here.
+ */
+function buildIssueRows(issues: ErrorData[], verbose: boolean): FileIssueRow[] {
+  return [...groupIssuesByFile(issues).entries()].map(([file, fileIssues]) => {
+    if (verbose) {
+      return {
+        file,
+        issues: fileIssues.map((issue) => ({
+          line: issue.line,
+          column: issue.column,
+          code: issue.code,
+          severity: issue.severity,
+          message: issue.message,
+        })),
+      };
+    }
+    const { codes, ...counts } = summarizeFindings(fileIssues);
+    return { file, ...counts, codes };
+  });
 }
 
 /**
@@ -238,11 +280,18 @@ function buildCollectionsWithErrors(
  * Surfaces ALL severity-resolved issues (errors AND warnings/info) so users see
  * them; only the `error*`-named counts are error-severity. Exported so the
  * reported vocabulary is unit-testable without spawning the CLI.
+ *
+ * `verbose` picks the UNIT of the `issues` listing, not the content: one
+ * counts-only row per file by default, one entry per issue when asked. Every
+ * other field is a total about the run and is byte-identical in both modes.
+ * It defaults to the summary, so a caller that has no opinion gets the readable
+ * form rather than the 90-skill-scale one.
  */
 export function buildIssuesOutputData(
   issueData: ErrorData[],
   context: ValidationContext,
-  registry: RegistryLookup
+  registry: RegistryLookup,
+  verbose = false
 ): ValidationOutputData {
   const summary = buildIssueSummary(issueData, registry);
   const collectionsWithErrors = buildCollectionsWithErrors(
@@ -264,7 +313,7 @@ export function buildIssuesOutputData(
     durationSecs: formatDurationSecs(context.duration),
     ...context.validationMetadata,
     ...(Object.keys(collectionsWithErrors).length > 0 ? { collections: collectionsWithErrors } : {}),
-    issues: groupIssuesByFile(issueData),
+    issues: buildIssueRows(issueData, verbose),
   };
 }
 
@@ -443,6 +492,8 @@ function flattenIssuesForDisplay(issues: ValidationResult['issues'], projectRoot
 
 interface ValidateOptions {
   debug?: boolean;
+  /** Show all scanned resources, including those without issues (per-issue detail). */
+  verbose?: boolean;
   frontmatterSchema?: string; // Path to JSON Schema file
   validationMode?: 'strict' | 'permissive'; // Validation mode for schemas
   format?: OutputFormat; // Output format
@@ -610,7 +661,7 @@ export async function validateCommand(
       duration,
     };
 
-    emitResult(issueData, context, registry, options.format ?? 'yaml');
+    emitResult(issueData, context, registry, options.format ?? 'yaml', options.verbose === true);
     logGitTrackerStats(gitTracker, logger);
     // Exit decision is purely the library's severity-based `hasErrors`.
     process.exit(hasErrors ? 1 : 0);
@@ -644,12 +695,17 @@ function narrowCollectionStats(
 /**
  * Emit the result to stdout. Surfaces all issues when any fired; otherwise emits
  * a clean success. Does NOT decide the exit code — the caller owns that.
+ *
+ * `--format text` is unaffected by `verbose`: it is already one
+ * `file:line:col:` line per issue, which is what `--verbose` restores in the
+ * structured formats.
  */
 function emitResult(
   issueData: ErrorData[],
   context: ValidationContext,
   registry: RegistryLookup,
-  outputFormat: OutputFormat
+  outputFormat: OutputFormat,
+  verbose: boolean
 ): void {
   if (issueData.length === 0) {
     outputSuccess(outputFormat, context);
@@ -665,5 +721,5 @@ function emitResult(
     }
     return;
   }
-  writeStructuredOutput(buildIssuesOutputData(issueData, context, registry), outputFormat);
+  writeStructuredOutput(buildIssuesOutputData(issueData, context, registry, verbose), outputFormat);
 }

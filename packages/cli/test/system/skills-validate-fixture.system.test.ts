@@ -4,10 +4,7 @@
  * Fast and deterministic on all platforms including Windows
  */
 
-import { spawnSync } from 'node:child_process';
-
 import { describe, expect, it } from 'vitest';
-import * as yaml from 'yaml';
 
 import { getBinPath, getFixturePath } from './test-common.js';
 import { executeSkillsCommandAndExpectYaml } from './test-helpers/index.js';
@@ -20,14 +17,22 @@ describe('skills validate command - fixture tests (system test)', () => {
   const fixtureDir = getFixturePath(import.meta.url, 'skills-minimal');
 
   it('should validate skills in fixture directory', () => {
-    // eslint-disable-next-line sonarjs/no-os-command-from-path -- Testing CLI command
-    const result = spawnSync('node', [binPath, 'skills', 'validate', fixtureDir], {
-      encoding: 'utf-8',
-    });
+    // `--verbose`: the default `results[]` lists only skills WITH findings, so a
+    // fixture where every skill is clean has zero rows there by design. This test
+    // asserts the opposite — that both skills are present and each carries an
+    // empty `allErrors` and its `metadata` — which is per-skill detail only the
+    // verbose form carries. `skillsValidated` below is the run-level denominator
+    // and is 2 in both modes.
+    const { result, parsed: raw } = executeSkillsCommandAndExpectYaml(
+      binPath,
+      'validate',
+      fixtureDir,
+      ['--verbose'],
+    );
 
     expect(result.status).toBe(0);
 
-    const parsed = yaml.parse(result.stdout) as {
+    const parsed = raw as unknown as {
       status: string;
       skillsValidated: number;
       results: Array<{

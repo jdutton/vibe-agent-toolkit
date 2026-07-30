@@ -13,7 +13,7 @@ export function createValidateCommand(): Command {
     .description('Validate skills for packaging (reads skills config from config yaml)')
     .argument('[path]', 'Path to directory with config yaml (default: current directory)')
     .option('--skill <name>', 'Validate specific skill only')
-    .option('-v, --verbose', 'Show full details including excluded reference paths')
+    .option('-v, --verbose', 'Show all validated skills and every individual finding, including excluded reference paths')
     .option('-d, --debug', 'Enable debug logging')
     .action(validateCommand)
     .addHelpText(
@@ -71,13 +71,29 @@ Validation Config:
 
 Output:
   YAML summary → stdout (for programmatic parsing)
-  Detailed errors → stderr (for human reading)
+  Findings report → stderr (for human reading)
 
-  Output includes:
-    - status: success/error
-    - skillsValidated: number of skills validated
-    - results: per-skill validation details (allErrors, ignoredErrors)
+  The stdout summary always publishes:
+    - status: success/warning/error (worst actionable severity in the run)
+    - issueCounts / runIssueCounts: the run total, always with all three
+      buckets, and the run-level (project config) share of it. The run total
+      always equals the sum of the per-skill rows plus runIssueCounts.
+    - skillsValidated: number of skills validated (the true denominator)
     - durationSecs: validation time
+
+  By default, results[] is one row per skill WITH findings — its issue counts
+  and a per-code tally, dominant code first. A skill with no findings is
+  omitted from the listing entirely; a zero count is an absent field, never
+  "errors: 0". stderr prints the same thing as one line per skill.
+
+  --verbose publishes every validated skill (findings or not) with its full
+  detail: allErrors, ignoredErrors, observations, evidence and complete
+  metadata on stdout, one block per individual finding on stderr. That form is
+  meant for redirect-then-grep, not for reading — on a 90-skill repo it is
+  ~30x the default output.
+
+  Run-level findings (validation.allow entries no skill matched) are printed
+  in full in both forms; they belong to the project config, not to any skill.
 
 Exit Codes:
   0 - All validations passed (or all errors allowed by valid config)

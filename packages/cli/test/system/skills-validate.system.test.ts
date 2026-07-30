@@ -385,7 +385,13 @@ describe('skills validate — framework exit codes (system test)', () => {
     const tempDir = frameworkCtx.createTempDir();
     const projectDir = setupProjectWithNavigationLink(tempDir, VALIDATE_SKILL_NAME);
 
-    const { result, parsed } = await executeCliAndParseYaml(frameworkCtx.binPath, ['skills', 'validate'], { cwd: projectDir });
+    // `--verbose`: the assertions at the bottom drill into `results[0].allErrors`
+    // for an individual finding's code AND its severity — a pairing the default
+    // per-skill row cannot state (it publishes severity counts and a `codes`
+    // tally side by side, so a row with both an error and a warning could not say
+    // which code was which). Every run-level assertion above it (`status`,
+    // `issueCounts`, exit code, banner suppression) is identical in both modes.
+    const { result, parsed } = await executeCliAndParseYaml(frameworkCtx.binPath, ['skills', 'validate', '--verbose'], { cwd: projectDir });
 
     // Warnings are non-blocking — should exit 0
     expect(result.status).toBe(0);

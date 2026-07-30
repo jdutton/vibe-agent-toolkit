@@ -32,6 +32,7 @@ import {
   formatIssueSetHeading,
   formatRunIssueLines,
   formatSeverityBreakdown,
+  summarizeFindings,
   sumSeverityCounts,
 } from '../../utils/issue-rendering.js';
 import { type createLogger } from '../../utils/logger.js';
@@ -89,22 +90,61 @@ function batchIssues(results: readonly PackagingValidationResult[]): ValidationI
 type RunIssues = readonly ValidationIssue[];
 
 /**
- * One skill's YAML entry: the result plus the per-severity counts its two-valued
- * `status` cannot express.
+ * One skill's VERBOSE YAML entry: the whole result plus the per-severity counts
+ * its two-valued `status` cannot express.
  *
  * The per-skill `status` stays the gate verdict (`error` iff an active error) —
  * that is what the exit code is derived from. `issueCounts` beside it is what
  * makes `success` readable: "nothing you must act on", not "nothing was found".
+ *
+ * This shape is optimized for `> file` then `grep`, not for reading: on a
+ * 90-skill repo it is 17,262 of the 22,156 stdout lines `vat verify` emits.
  */
-function toYamlResult(result: PackagingValidationResult, verbose: boolean): unknown {
-  const withCounts = { ...result, issueCounts: countBySeverity(result.allErrors) };
-  if (verbose) {
-    return withCounts;
-  }
-  const { skillLines, totalLines, fileCount, directFileCount, maxLinkDepth, excludedReferenceCount } = result.metadata;
+function toVerboseYamlResult(result: PackagingValidationResult): unknown {
+  return { ...result, issueCounts: countBySeverity(result.allErrors) };
+}
+
+/**
+ * Does this skill have anything to say? Emitted findings OR allow-suppressed
+ * ones — the same predicate the human report uses, so the two streams cannot
+ * disagree about which skills exist.
+ */
+function hasFindings(result: PackagingValidationResult): boolean {
+  return result.allErrors.length > 0 || result.ignoredErrors.length > 0;
+}
+
+/**
+ * One skill's DEFAULT YAML entry: which asset has problems, how many, of what
+ * code — and nothing else.
+ *
+ * Why the per-code tally is a summary rather than N findings: 1,728 of the 1,897
+ * findings on a real 90-skill repo are one code, LINK_DROPPED_BY_DEPTH, and the
+ * four remedies its `fix` hint proposes (`linkFollowDepth`, `files:`,
+ * `validation.allow`, `excludeReferencesFromBundle`) are all SKILL-level config
+ * edits — so 348 findings on one skill propose the same four edits 348 times.
+ * The skill is the unit the reader acts on, so the skill is the unit we publish.
+ * Aggregating at EMISSION instead would break `validation.allow`'s per-`paths:`
+ * matching and per-path severity overrides, both of which need one issue per
+ * link; the collapse therefore has to happen here, after allow-filtering.
+ * Downgrading the code to `info` was considered and rejected: it would delete
+ * the signal the code exists for (a depth-limited walk may silently omit content
+ * the author expected to ship) and would contradict PACKAGED_TEST_INPUT, which
+ * `docs/validation-codes.md` keeps at `warning` on identical "this is configured
+ * behaviour, here is your receipt" reasoning.
+ *
+ * `allowed` is a scalar, not a list: an allow-suppressed finding is a fact about
+ * the skill a reader must not lose, but it is deliberately NOT in `codes`, which
+ * summarizes the EMITTED set.
+ */
+function toSummaryYamlResult(result: PackagingValidationResult): unknown {
+  const { codes, ...counts } = summarizeFindings(result.allErrors);
+  const allowedCount = result.ignoredErrors.length;
   return {
-    ...withCounts,
-    metadata: { skillLines, totalLines, fileCount, directFileCount, maxLinkDepth, excludedReferenceCount },
+    skillName: result.skillName,
+    status: result.status,
+    ...counts,
+    ...(allowedCount > 0 ? { allowed: allowedCount } : {}),
+    codes,
   };
 }
 
@@ -126,6 +166,14 @@ function toYamlResult(result: PackagingValidationResult, verbose: boolean): unkn
  * identity `issueCounts === Σ results[].issueCounts + runIssueCounts` now holds
  * by construction, so a consumer can reconcile the two numbers instead of
  * hand-counting a list to find out whether anything went missing.
+ *
+ * That identity survives the default mode dropping every finding-free skill from
+ * `results[]`, because a dropped row contributes exactly zero to each bucket —
+ * and it survives the default row publishing its counts flat with zero buckets
+ * omitted, because an absent bucket reads as zero. Only the per-asset ROWS omit
+ * zeros: `issueCounts` and `runIssueCounts` keep their complete
+ * `{errors, warnings, info}` shape in both modes, because they are the
+ * reconciliation identity rather than something a reader scans.
  */
 export function buildValidateSummary(
   results: PackagingValidationResult[],
@@ -147,8 +195,12 @@ export function buildValidateSummary(
     status: calculateValidationStatus([...skillIssues, ...runIssues]),
     issueCounts: sumSeverityCounts([countBySeverity(skillIssues), runIssueCounts]),
     runIssueCounts,
+    // `skillsValidated` stays the true denominator even though the default
+    // `results[]` lists only the skills with something to say.
     skillsValidated: results.length,
-    results: results.map((r) => toYamlResult(r, verbose)),
+    results: verbose
+      ? results.map((r) => toVerboseYamlResult(r))
+      : results.filter((r) => hasFindings(r)).map((r) => toSummaryYamlResult(r)),
     runIssues: [...runIssues],
     durationSecs: formatDurationSecs(duration),
   };
@@ -165,6 +217,25 @@ function outputYamlSummary(
 ): void {
   const output = buildValidateSummary(results, duration, verbose, runIssues);
   console.log(yaml.stringify(output, { indent: 2, lineWidth: 0, aliasDuplicateObjects: false }));
+}
+
+/**
+ * ONE line for one skill: its severity breakdown, its allowed count, and the
+ * codes behind it, dominant first.
+ *
+ * The stderr counterpart of {@link toSummaryYamlResult} — same unit (the asset),
+ * same reason (see that function's comment). The per-issue blocks below are what
+ * made this stream 6,261 lines on a 90-skill repo.
+ */
+function skillSummaryLine(result: PackagingValidationResult): string {
+  const { codes } = summarizeFindings(result.allErrors);
+  const breakdown = formatSeverityBreakdown(countBySeverity(result.allErrors));
+  const allowed = result.ignoredErrors.length > 0
+    ? ` (+${result.ignoredErrors.length} allowed by config)`
+    : '';
+  const tally = Object.entries(codes).map(([code, count]) => `${code}: ${count}`).join(', ');
+  const codeSuffix = tally === '' ? '' : ` — ${tally}`;
+  return `  ${result.skillName}: ${breakdown}${allowed}${codeSuffix}`;
 }
 
 /** Lines for one skill's findings: every emitted issue, plus the allowed ones. */
@@ -220,10 +291,16 @@ function reportBanner(status: ValidationStatus, counts: SeverityCounts): string 
  * Renders every skill with ANY emitted finding, not just the ones that failed
  * the gate: a warning-only or info-only run used to print the success banner and
  * nothing else, so the findings existed only in the YAML on stdout.
+ *
+ * `verbose` picks the unit, not the content: one line per skill by default, one
+ * block per issue when asked. Run-level findings and the banner are printed in
+ * full either way — there are ~14 of the former, and they belong to the project
+ * config rather than to any asset, so there is no row for them to collapse into.
  */
 export function formatValidationReportLines(
   results: PackagingValidationResult[],
   runIssues: RunIssues,
+  verbose: boolean,
 ): string[] {
   const issues = [...batchIssues(results), ...runIssues];
   const counts = countBySeverity(issues);
@@ -231,8 +308,8 @@ export function formatValidationReportLines(
   const lines = [reportBanner(status, counts)];
 
   for (const result of results) {
-    if (result.allErrors.length === 0 && result.ignoredErrors.length === 0) continue;
-    lines.push(...skillFindingLines(result));
+    if (!hasFindings(result)) continue;
+    lines.push(...(verbose ? skillFindingLines(result) : [skillSummaryLine(result)]));
   }
   const runLines = formatRunIssueLines(runIssues);
   if (runLines.length > 0) {
@@ -267,7 +344,7 @@ function outputValidationReport(
     (r) => calculateValidationStatus(r.allErrors) !== 'success',
   );
 
-  for (const line of formatValidationReportLines(results, runIssues)) {
+  for (const line of formatValidationReportLines(results, runIssues, verbose)) {
     logger.info(line);
   }
   renderSkillQualityFooter(logger, hasSkillFindings, emittedCodes);

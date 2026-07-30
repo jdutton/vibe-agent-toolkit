@@ -77,6 +77,9 @@ describe('CLI-boundary projectRoot policy (integration, spec §13.4)', () => {
         'resources',
         'validate',
         tempDir,
+        // The default document publishes per-file COUNTS; this test asserts on an
+        // individual finding's `message`, which only the verbose form carries.
+        '--verbose',
       ]);
 
       expect(result.status).toBe(1);

@@ -71,7 +71,13 @@ describe('buildIssuesOutputData — reported status vocabulary', () => {
     expect(data.status).toBe('success');
     expect(data.issueCounts?.info).toBe(1);
     expect(data.errorsFound).toBe(0);
-    expect(data.issues?.[0]?.issues[0]?.severity).toBe('info');
+    // The file still has a row, and the row still names the severity — as the
+    // presence of an `info` count rather than as a per-issue `severity` field.
+    expect(data.issues?.[0]).toEqual({
+      file: 'docs/a.md',
+      info: 1,
+      codes: { LINK_BROKEN_FILE: 1 },
+    });
   });
 
   it('counts an `ignore`-severity issue in no bucket at all', () => {

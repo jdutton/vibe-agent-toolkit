@@ -99,6 +99,10 @@ for the loud-cwd fallback policy and the projectRoot discovery ladder.
 **Options:**
 - `[path]` - Base directory to crawl (defaults to current directory)
 - `--debug` - Enable debug logging
+- `-v, --verbose` - Show all scanned resources, including those without issues. By
+  default `issues` carries one counts-only row per file with findings
+  (`{file, errors?, warnings?, info?, codes}`); `--verbose` replaces each row with
+  its per-issue detail. Every other output field is identical in both modes.
 - `--no-check-frontmatter-links` - Skip frontmatter URI-reference link validation across all collections (default: enabled)
 
 **Exit Codes:**

@@ -29,12 +29,15 @@ import { issueLocation, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { formatDuration, handleCommandError } from '../../../utils/command-error.js';
+import { summarizeFindings, type FindingCountSummary } from '../../../utils/issue-rendering.js';
 import { createLogger } from '../../../utils/logger.js';
 import { writeYamlOutput } from '../../../utils/output.js';
 import { relativizePathEntries } from '../../../utils/relativize-paths.js';
 
 interface MarketplaceValidateOptions {
   debug?: boolean;
+  /** Show all inspected assets, including those without issues (per-issue detail). */
+  verbose?: boolean;
 }
 
 /**
@@ -192,6 +195,71 @@ export interface MarketplaceValidateReportInput {
   issueCounts: SeverityCounts;
   summary: string;
   duration: string;
+  /**
+   * Publish the flat per-issue list instead of the per-location summary.
+   *
+   * Picks the UNIT of the `issues` listing, not the content: everything else in
+   * the document is a total about the run and is identical in both modes.
+   * Optional, and absent means the summary — a caller with no opinion gets the
+   * readable form rather than the corpus-scale one.
+   */
+  verbose?: boolean;
+}
+
+/**
+ * Group key for findings that carry no `location` at all.
+ *
+ * A symbol rather than a sentinel string, and it is deliberately NOT published
+ * as one: every `location` in this document must satisfy the anchor contract —
+ * `join(root, location)` names a real file — so a row keyed `(no location)`
+ * would be a path that resolves to nothing, which is the coordinate lie `root`
+ * exists to prevent. The row is published with `unlocated: true` and no
+ * `location` instead. Dropping such findings was the other option and is the
+ * worse one: grouping by `location` is exactly the operation that silently
+ * loses them, and a shorter summary is the reassuring failure.
+ */
+const UNLOCATED = Symbol('unlocated');
+
+/** One inspected asset's DEFAULT row: where, how many, of what code. */
+export type LocationIssueSummary = FindingCountSummary & {
+  /** The asset, relative to the report's `root`. Absent iff `unlocated`. */
+  location?: string;
+  /** Set instead of `location` when the findings named no file at all. */
+  unlocated?: true;
+};
+
+/**
+ * Collapse a flat finding list onto one counts-only row per `location`.
+ *
+ * `location` is this command's per-asset unit: `plugins/alpha/.claude-plugin/
+ * plugin.json`, `plugins/beta/skills/x/SKILL.md`. Rows come out in first-seen
+ * order, and a location with no findings has no row — there is nothing to
+ * filter here, because a location only exists in this listing by having emitted
+ * something.
+ *
+ * Every value is passed through un-rebased: `location` is already relative to
+ * the report's stated `root`, and `relative()` is not idempotent (see
+ * {@link MarketplaceValidateReportInput.root}).
+ */
+export function summarizeIssuesByLocation(
+  issues: readonly ValidationIssue[],
+): LocationIssueSummary[] {
+  const byLocation = new Map<string | symbol, ValidationIssue[]>();
+  for (const issue of issues) {
+    const key = issue.location ?? UNLOCATED;
+    const existing = byLocation.get(key);
+    if (existing) {
+      existing.push(issue);
+    } else {
+      byLocation.set(key, [issue]);
+    }
+  }
+
+  return [...byLocation.entries()].map(([key, locationIssues]) => {
+    const { codes, ...counts } = summarizeFindings(locationIssues);
+    const anchor = typeof key === 'string' ? { location: key } : { unlocated: true as const };
+    return { ...anchor, ...counts, codes };
+  });
 }
 
 /**
@@ -210,7 +278,7 @@ export interface MarketplaceValidateReportInput {
 export function buildMarketplaceValidateReport(
   input: MarketplaceValidateReportInput,
 ): Record<string, unknown> {
-  const { status, root, marketplace, pluginResults, issues, issueCounts, summary, duration } = input;
+  const { status, root, marketplace, pluginResults, issues, issueCounts, summary, duration, verbose } = input;
 
   const plugins = pluginResults.map(r => ({
     path: r.path,
@@ -225,7 +293,9 @@ export function buildMarketplaceValidateReport(
     root,
     ...(marketplace ? { marketplace } : {}),
     plugins: relativizePathEntries(plugins, root),
-    issues,
+    // One row per inspected asset by default; the flat per-issue list under
+    // `--verbose`. Either way every `location` stays relative to `root` above.
+    issues: verbose === true ? issues : summarizeIssuesByLocation(issues),
     // Counts ride beside the status: `status` names only the worst ACTIONABLE
     // severity, so an info-only run is `success` and the info would otherwise
     // be unreported.
@@ -268,6 +338,7 @@ async function marketplaceValidateCommand(
           ? marketplaceResult.summary
           : `${issueCounts.errors} error(s), ${issueCounts.warnings} warning(s), ${issueCounts.info} info`,
         duration: formatDuration(Date.now() - startTime),
+        verbose: options.verbose === true,
       }),
     );
 
@@ -284,6 +355,7 @@ export function createMarketplaceValidateCommand(): Command {
     .description('Validate a marketplace directory for publishing')
     .argument('[path]', 'Path to marketplace directory (default: current directory)')
     .option('-d, --debug', 'Enable debug logging')
+    .option('-v, --verbose', 'Show all scanned resources, including those without issues')
     .action(marketplaceValidateCommand)
     .addHelpText('after', `
 Description:
@@ -291,6 +363,17 @@ Description:
   Checks marketplace.json, plugin manifests, skills, LICENSE, README, and CHANGELOG.
 
   Plugin versions are required (error, not warning) in strict marketplace validation.
+
+Output (YAML on stdout):
+  root: the marketplace directory — every location below is relative to it
+  status, issueCounts, summary, duration, marketplace, plugins
+
+  issues: one row per inspected location, carrying only that location's counts
+          ({location, errors?, warnings?, info?, codes}). A zero bucket is
+          omitted, and a location with no findings has no row.
+
+  --verbose replaces those rows with the flat per-issue list (message, fix and
+  all). That form is for '> file' then grep, not for reading.
 
 Exit Codes:
   0 - All validations passed (warnings allowed)
