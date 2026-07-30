@@ -1,0 +1,259 @@
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+
+import { findProjectRoot, mkdirSyncReal, normalizedTmpdir, safePath } from '@vibe-agent-toolkit/utils';
+import type * as UtilsModule from '@vibe-agent-toolkit/utils';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+
+/**
+ * `vat inventory` must crawl the surrounding project's markdown corpus ONCE per
+ * invocation, not once per skill.
+ *
+ * `extractClaudeSkillInventory` falls back to `crawlSkillLinkRegistry(projectRoot)`
+ * whenever the caller hands it no registry rooted at exactly that project root —
+ * and that crawl parses EVERY markdown document under the root. `extractClaudePluginInventory`
+ * threads an optional `sharedRegistry` down to every per-skill extraction precisely so
+ * one crawl can serve them all, but `routeInventory` never built one, so an N-skill
+ * plugin paid N full-project crawls: a flat per-skill cost that tracks the size of the
+ * surrounding project, not the subject. Measured on a ~1,041-document monorepo as a
+ * controlled before/after pair: a 19-skill plugin took 3m45s and now takes 12.6s
+ * (~11.9s per skill before, flat — the same ~12s a single SKILL.md costs on its own).
+ *
+ * Counting the crawls (rather than timing them) is also the proof the registry is
+ * actually HIT: reuse is gated on `resolve(registry.baseDir) === resolve(projectRoot)`,
+ * so a registry built against the wrong root is silently ignored and would show up
+ * here as N+1 crawls, not 1.
+ */
+const crawlBaseDirs = vi.hoisted(() => [] as string[]);
+
+/**
+ * Roots whose crawl the mock below makes fail.
+ *
+ * A corpus crawl really can fail — one unreadable markdown file anywhere under the
+ * root is enough (QA reproduced it with `chmod 000`). Injecting the failure here
+ * rather than through file permissions keeps the test portable and meaningful when
+ * the suite runs as root, where `chmod 000` does not stop a read.
+ */
+const failingCrawlRoots = vi.hoisted(() => [] as string[]);
+const CRAWL_FAILURE_MESSAGE = vi.hoisted(() => 'simulated corpus crawl failure');
+
+vi.mock('@vibe-agent-toolkit/utils', async (importOriginal) => {
+  const actual = await importOriginal<typeof UtilsModule>();
+  return {
+    ...actual,
+    crawlDirectory: async (options: Parameters<typeof actual.crawlDirectory>[0]) => {
+      crawlBaseDirs.push(options.baseDir);
+      const base = actual.safePath.resolve(options.baseDir);
+      if (failingCrawlRoots.some((dir) => actual.safePath.resolve(dir) === base)) {
+        throw new Error(CRAWL_FAILURE_MESSAGE);
+      }
+      return actual.crawlDirectory(options);
+    },
+  };
+});
+
+const { routeInventory } = await import('../../src/commands/inventory.js');
+
+const SKILL_NAMES = ['alpha', 'beta', 'gamma'];
+
+/** The inventory shape these tests read; `routeInventory` returns the union of all kinds. */
+interface SkillInventoryShape {
+  files: { linked: string[] };
+  parseErrors: { path: string; message: string }[];
+}
+interface PluginInventoryShape {
+  discovered: { skills: SkillInventoryShape[]; commands: unknown[]; agents: unknown[] };
+  parseErrors: { path: string; message: string }[];
+}
+
+/** Write a file, creating its parent directory. */
+function writeFixtureFile(absolutePath: string, content: string): void {
+  mkdirSyncReal(safePath.join(absolutePath, '..'), { recursive: true });
+  // eslint-disable-next-line security/detect-non-literal-fs-filename -- test fixture setup, temp directory
+  writeFileSync(absolutePath, content, 'utf8');
+}
+
+/** A plugin manifest plus one skill per {@link SKILL_NAMES}, each linking one sibling doc. */
+function writeSkillPlugin(pluginDir: string, pluginName: string): void {
+  writeFixtureFile(
+    safePath.join(pluginDir, '.claude-plugin', 'plugin.json'),
+    JSON.stringify({ name: pluginName, version: '1.0.0' }),
+  );
+  for (const name of SKILL_NAMES) {
+    writeFixtureFile(
+      safePath.join(pluginDir, 'skills', name, 'SKILL.md'),
+      `---\nname: ${name}\ndescription: Fixture skill ${name}\n---\n\nSee [reference](./reference.md).\n`,
+    );
+    writeFixtureFile(safePath.join(pluginDir, 'skills', name, 'reference.md'), `# ${name} reference\n`);
+  }
+}
+
+/** Every message across the inventory's own parseErrors, joined for substring assertions. */
+function messagesOf(parseErrors: { message: string }[]): string {
+  return parseErrors.map((e) => e.message).join('\n');
+}
+
+describe('routeInventory — one corpus crawl per invocation', () => {
+  let projectRoot: string;
+  let pluginDir: string;
+  let skilllessPluginDir: string;
+  let rootlessRoot: string;
+  let rootlessPluginDir: string;
+
+  beforeAll(() => {
+    projectRoot = safePath.resolve(
+      mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-inv-registry-')),
+    );
+    // A config file anchors findProjectRoot deterministically (no .git needed).
+    writeFixtureFile(safePath.join(projectRoot, 'vibe-agent-toolkit.config.yaml'), 'version: 1\n');
+    // Corpus documents outside the plugin — the cost a per-skill crawl re-pays.
+    for (const doc of ['one', 'two', 'three']) {
+      writeFixtureFile(safePath.join(projectRoot, 'docs', `${doc}.md`), `# ${doc}\n`);
+    }
+
+    pluginDir = safePath.join(projectRoot, 'plugins', 'demo');
+    writeSkillPlugin(pluginDir, 'demo');
+
+    // A plugin that ships only commands/ and agents/ — no skills/, no root SKILL.md.
+    // Nothing in it can consult a link registry, so it must crawl nothing.
+    skilllessPluginDir = safePath.join(projectRoot, 'plugins', 'commands-only');
+    writeFixtureFile(
+      safePath.join(skilllessPluginDir, '.claude-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'commands-only', version: '1.0.0' }),
+    );
+    writeFixtureFile(
+      safePath.join(skilllessPluginDir, 'commands', 'deploy.md'),
+      '# deploy\n\nSee [notes](./notes.md).\n',
+    );
+    writeFixtureFile(safePath.join(skilllessPluginDir, 'agents', 'reviewer.md'), '# reviewer\n');
+
+    // Deliberately NO config file and NO .git anywhere at or above the plugin: the
+    // case where `findProjectRoot` returns null. A separate mkdtemp root, so the
+    // config file above cannot be an ancestor of it.
+    rootlessRoot = safePath.resolve(
+      mkdtempSync(safePath.join(normalizedTmpdir(), 'vat-inv-rootless-')),
+    );
+    rootlessPluginDir = safePath.join(rootlessRoot, 'plugins', 'demo');
+    writeSkillPlugin(rootlessPluginDir, 'rootless-demo');
+  });
+
+  afterAll(() => {
+    rmSync(projectRoot, { recursive: true, force: true });
+    rmSync(rootlessRoot, { recursive: true, force: true });
+  });
+
+  it('crawls the project corpus once for a plugin with N skills, not N times', async () => {
+    crawlBaseDirs.length = 0;
+
+    const inventory = (await routeInventory(pluginDir, {})) as unknown as PluginInventoryShape;
+
+    // The work still happens: every skill is discovered and its link graph walked.
+    const skills = inventory.discovered.skills;
+    expect(skills).toHaveLength(SKILL_NAMES.length);
+    for (const skill of skills) {
+      expect(skill.files.linked).toHaveLength(1);
+    }
+
+    const rootCrawls = crawlBaseDirs.filter((dir) => safePath.resolve(dir) === projectRoot);
+    expect(rootCrawls).toHaveLength(1);
+    expect(crawlBaseDirs).toHaveLength(1);
+  });
+
+  it('crawls nothing for a plugin with commands and agents but no skills', async () => {
+    crawlBaseDirs.length = 0;
+
+    const inventory = (await routeInventory(
+      skilllessPluginDir,
+      {},
+    )) as unknown as PluginInventoryShape;
+
+    // The plugin is really inventoried — the zero crawls are not zero work.
+    const discovered = inventory.discovered;
+    expect(discovered.skills).toHaveLength(0);
+    expect(discovered.commands).toHaveLength(1);
+    expect(discovered.agents).toHaveLength(1);
+
+    // No skill means no link walk means no registry. Building one eagerly costs a
+    // full corpus crawl (~12s on a ~1,041-document monorepo) for nothing.
+    expect(crawlBaseDirs).toHaveLength(0);
+  });
+
+  describe('a failed corpus crawl degrades to parseErrors, it does not abort the inventory', () => {
+    // `extractClaudePluginInventory` documents "never throws — all failures surface via
+    // parseErrors[]". That held while the crawl lived inside `walkLinkedFiles`'s try/catch.
+    // Resolving the shared registry outside that catch broke it: one unreadable markdown
+    // file anywhere under the root turned a full inventory into `Inventory failed: EACCES`.
+    beforeAll(() => {
+      failingCrawlRoots.push(projectRoot);
+    });
+    afterAll(() => {
+      failingCrawlRoots.length = 0;
+    });
+
+    it('returns the plugin inventory, one parseError per skill, and attempts the crawl once', async () => {
+      crawlBaseDirs.length = 0;
+
+      const inventory = (await routeInventory(pluginDir, {})) as unknown as PluginInventoryShape;
+
+      // Everything that does not depend on the corpus is still reported.
+      const skills = inventory.discovered.skills;
+      expect(skills).toHaveLength(SKILL_NAMES.length);
+      for (const skill of skills) {
+        // The link walk is the only casualty: no linked files, and the skill says why.
+        expect(skill.files.linked).toHaveLength(0);
+        expect(messagesOf(skill.parseErrors)).toContain(CRAWL_FAILURE_MESSAGE);
+      }
+      // Reported per skill, not once per plugin: a parseError is keyed by `path`, and the
+      // thing degraded is each skill's `files.linked`. A single plugin-level entry would
+      // leave three empty link lists unexplained.
+      const crawlErrors = inventory.parseErrors.filter((e) =>
+        e.message.includes(CRAWL_FAILURE_MESSAGE),
+      );
+      expect(crawlErrors).toHaveLength(SKILL_NAMES.length);
+
+      // Reported N times, ATTEMPTED once — the memoized provider hands every skill the
+      // same rejected promise instead of re-crawling a corpus that just failed.
+      expect(crawlBaseDirs).toHaveLength(1);
+    });
+
+    it('returns the single-SKILL.md inventory with the failure in parseErrors', async () => {
+      crawlBaseDirs.length = 0;
+
+      const skillMd = safePath.join(pluginDir, 'skills', 'alpha', 'SKILL.md');
+      const inventory = (await routeInventory(skillMd, {})) as unknown as SkillInventoryShape;
+
+      expect(inventory.files.linked).toHaveLength(0);
+      expect(messagesOf(inventory.parseErrors)).toContain(CRAWL_FAILURE_MESSAGE);
+    });
+  });
+
+  it('crawls once per skill, never at the plugin dir, when there is no project root', async () => {
+    // The premise: no config and no .git at or above the plugin.
+    expect(findProjectRoot(rootlessPluginDir)).toBeNull();
+    crawlBaseDirs.length = 0;
+
+    const inventory = (await routeInventory(
+      rootlessPluginDir,
+      {},
+    )) as unknown as PluginInventoryShape;
+
+    const skills = inventory.discovered.skills;
+    expect(skills).toHaveLength(SKILL_NAMES.length);
+    for (const skill of skills) {
+      expect(skill.files.linked).toHaveLength(1);
+    }
+
+    // The correct count is 3 — one per skill, each scoped to that skill's OWN directory.
+    // With no project root the extractor falls back to `dirname(SKILL.md)`, so no single
+    // shared root can serve all three: a plugin-rooted registry answers a different
+    // question and is discarded by the `baseDir === projectRoot` gate. Building one
+    // anyway is pure added cost (QA: 863ms -> 1308ms, 1.5x SLOWER than no sharing at all),
+    // so the count must be 3, not 4.
+    const byPath = (a: string, b: string): number => a.localeCompare(b);
+    const crawled = crawlBaseDirs.map((dir) => safePath.resolve(dir)).sort(byPath);
+    expect(crawled.filter((dir) => dir === safePath.resolve(rootlessPluginDir))).toHaveLength(0);
+    expect(crawled).toEqual(
+      SKILL_NAMES.map((name) => safePath.join(rootlessPluginDir, 'skills', name)).sort(byPath),
+    );
+    expect(crawlBaseDirs).toHaveLength(SKILL_NAMES.length);
+  });
+});

@@ -6,13 +6,14 @@ import {
 	type AnyInventory,
 } from '@vibe-agent-toolkit/agent-skills';
 import {
+	crawlSkillLinkRegistry,
 	extractClaudeInstallInventory,
 	extractClaudeMarketplaceInventory,
 	extractClaudePluginInventory,
 	extractClaudeSkillInventory,
 	getClaudeUserPaths,
 } from '@vibe-agent-toolkit/claude-marketplace';
-import { safePath } from '@vibe-agent-toolkit/utils';
+import { findProjectRoot, safePath } from '@vibe-agent-toolkit/utils';
 import { Command } from 'commander';
 
 import { handleCommandError } from '../utils/command-error.js';
@@ -85,7 +86,7 @@ export async function inventoryCommand(
 	}
 }
 
-async function routeInventory(
+export async function routeInventory(
 	pathArg: string | undefined,
 	options: InventoryCommandOptions,
 ): Promise<AnyInventory> {
@@ -100,6 +101,10 @@ async function routeInventory(
 	}
 	const absolute = safePath.resolve(pathArg);
 	if (absolute.endsWith('SKILL.md') || absolute.endsWith('skill.md')) {
+		// No shared registry: there is nothing to share it WITH. The extractor derives the
+		// same root from the same skill path and crawls it exactly once, so handing it a
+		// registry here would only duplicate that derivation — and get it wrong the moment
+		// the two rules drift.
 		return extractClaudeSkillInventory(absolute);
 	}
 	const claudePluginDir = safePath.join(absolute, '.claude-plugin');
@@ -111,7 +116,46 @@ async function routeInventory(
 	// When both are present, the plugin extractor takes precedence (plugin is installed,
 	// marketplace.json is a cached metadata artifact alongside it).
 	if (hasMarketplace && !hasPlugin) {
+		// No shared registry here: `extractClaudeMarketplaceInventory` (like
+		// `extractClaudeInstallInventory` above) takes no `sharedRegistry` parameter,
+		// so every plugin it fans out to still re-crawls. Threading one through those
+		// two extractors is a claude-marketplace change, not a CLI one.
 		return extractClaudeMarketplaceInventory(absolute);
 	}
-	return extractClaudePluginInventory(absolute);
+	// Lazy, not eager: the extractor calls this only when it is about to walk its first
+	// skill, so a plugin of commands/ and agents/ alone crawls nothing.
+	return extractClaudePluginInventory(absolute, linkRegistryProviderFor(absolute));
+}
+
+/**
+ * A way to obtain the ONE markdown registry every skill under `subjectDir` link-walks
+ * against — or `undefined` when no single registry can serve them all.
+ *
+ * `extractClaudeSkillInventory` otherwise crawls and parses every document under the
+ * project root once per skill, so an N-skill plugin paid N whole-corpus crawls (~11.9s
+ * each on a ~1,041-document monorepo). Root discovery belongs at this CLI boundary —
+ * inner functions take the root as a parameter — so the root is resolved eagerly here
+ * and only the crawl is deferred.
+ *
+ * **Only a project root is shareable.** Reuse is gated on exact
+ * `registry.baseDir === projectRoot` equality against the root the extractor derives per
+ * skill (`findProjectRoot(dirname(skillMd)) ?? dirname(skillMd)`). When `findProjectRoot`
+ * finds nothing, that per-skill fallback is each skill's OWN directory — three skills
+ * mean three different roots, and a registry rooted at the plugin answers a different
+ * question for all three. It would be crawled, compared, discarded, and re-crawled per
+ * skill: measured at 1308ms against 863ms for building nothing at all, i.e. 1.5x SLOWER
+ * than the N+1 it was meant to remove. So: no root, no provider.
+ *
+ * Returning a provider rather than a registry keeps the CLI out of the business of
+ * guessing whether the subject has any skills — a guess that would duplicate the
+ * extractor's discovery rule and drift from it. `extractClaudePluginInventory` memoizes
+ * the call, so whenever a provider IS returned the crawl happens at most once however
+ * many skills it finds. Mirrors `vat audit`'s `getOrCreateInventoryRegistry`.
+ */
+function linkRegistryProviderFor(
+	subjectDir: string,
+): (() => Promise<Awaited<ReturnType<typeof crawlSkillLinkRegistry>>>) | undefined {
+	const projectRoot = findProjectRoot(subjectDir);
+	if (projectRoot === null) return undefined;
+	return () => crawlSkillLinkRegistry(projectRoot);
 }

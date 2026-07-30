@@ -14,6 +14,23 @@ import { ClaudeSkillInventory } from './types.js';
 type ParseErrors = ClaudeSkillInventory['parseErrors'];
 
 /**
+ * A registry to link-walk against, or a way to obtain one.
+ *
+ * Pass the provider form when building the registry is expensive and the caller
+ * cannot tell in advance whether it is needed: a registry costs a whole-corpus
+ * crawl, and a plugin of only commands/ and agents/ walks no links at all.
+ *
+ * The provider is invoked from INSIDE the link walk's try/catch, which is what
+ * keeps both extractors' "never throws" contract intact: a crawl that fails
+ * (one unreadable markdown file under the root is enough) degrades that skill's
+ * `files.linked` to empty and surfaces as a parseErrors entry, exactly as it did
+ * when the crawl was unconditionally inline.
+ */
+export type SharedRegistrySource =
+	| ResourceRegistry
+	| (() => Promise<ResourceRegistry | undefined>);
+
+/**
  * Build a SkillInventory for a single SKILL.md.
  *
  * Consumes existing link-graph and frontmatter machinery — does not
@@ -22,7 +39,7 @@ type ParseErrors = ClaudeSkillInventory['parseErrors'];
  */
 export async function extractClaudeSkillInventory(
 	skillMdPath: string,
-	sharedRegistry?: ResourceRegistry,
+	sharedRegistry?: SharedRegistrySource,
 ): Promise<ClaudeSkillInventory> {
 	const absolute = safePath.resolve(skillMdPath);
 	const parseErrors: ParseErrors = [];
@@ -88,24 +105,13 @@ export async function crawlSkillLinkRegistry(projectRoot: string): Promise<Resou
 async function walkLinkedFiles(
 	absolute: string,
 	parseErrors: ParseErrors,
-	sharedRegistry?: ResourceRegistry,
+	sharedRegistry?: SharedRegistrySource,
 ): Promise<string[]> {
 	const linked: string[] = [];
 	try {
 		// Library fallback to skill dir; see plan 2026-05-17 / spec §7.
 		const projectRoot = findProjectRoot(dirname(absolute)) ?? dirname(absolute);
-		// Reuse the caller's registry when it was crawled for exactly this root.
-		// Building one means parsing every document under the root, so a caller
-		// walking many skills (`vat audit`) would otherwise pay that once per
-		// skill. Exact-root equality, not ancestry: `collectLinkedFiles` walks
-		// relative to `projectRoot`, so a registry rooted elsewhere would answer
-		// a different question.
-		const sharedBaseDir = sharedRegistry?.baseDir;
-		const registry = sharedRegistry !== undefined
-			&& sharedBaseDir !== undefined
-			&& safePath.resolve(sharedBaseDir) === safePath.resolve(projectRoot)
-			? sharedRegistry
-			: await crawlSkillLinkRegistry(projectRoot);
+		const registry = await registryFor(projectRoot, sharedRegistry);
 		const skillResource = registry.getResource(absolute);
 		if (skillResource !== undefined) {
 			collectLinkedFiles(skillResource.id, registry, absolute, projectRoot, linked);
@@ -114,6 +120,35 @@ async function walkLinkedFiles(
 		parseErrors.push({ path: absolute, message: `link walk failed: ${(e as Error).message}` });
 	}
 	return linked;
+}
+
+/**
+ * The registry to walk `projectRoot` with: the caller's, if it was crawled for exactly
+ * this root, otherwise a fresh one.
+ *
+ * Building one means parsing every document under the root, so a caller walking many
+ * skills (`vat audit`, `vat inventory <plugin>`) would otherwise pay that once per skill.
+ * Exact-root equality, not ancestry: `collectLinkedFiles` walks relative to `projectRoot`,
+ * so a registry rooted elsewhere would answer a different question.
+ *
+ * Only the caller can make those roots agree — a provider rooted somewhere else is
+ * resolved (paying its crawl) and then discarded here, which is strictly worse than
+ * passing nothing.
+ */
+async function registryFor(
+	projectRoot: string,
+	sharedRegistry: SharedRegistrySource | undefined,
+): Promise<ResourceRegistry> {
+	const shared = typeof sharedRegistry === 'function' ? await sharedRegistry() : sharedRegistry;
+	const sharedBaseDir = shared?.baseDir;
+	if (
+		shared !== undefined
+		&& sharedBaseDir !== undefined
+		&& safePath.resolve(sharedBaseDir) === safePath.resolve(projectRoot)
+	) {
+		return shared;
+	}
+	return crawlSkillLinkRegistry(projectRoot);
 }
 
 function collectLinkedFiles(
