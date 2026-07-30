@@ -3,6 +3,9 @@
    `todo` token that sonarjs/todo-tag bans. The ban is why the annotation
    grammar below is SKIP(#N) and not TODO(#N). */
 
+/* STILL BLIND (syntax-only rule): a skip reached through an imported/re-exported binding or an alias of an
+   alias; `it.only`; `expect(A).toBe(A)` on named constants; `assert.ok(true)`; a non-empty body with no assertion. */
+
 /**
  * ESLint rule: require-justified-skip
  *
@@ -11,11 +14,16 @@
  * 1. **Unconditional skips** — `it.skip`, `test.skip`, `describe.skip`, `suite.skip`,
  *    `it.todo`, `test.todo`, and the `xit`/`xdescribe`/`xtest` aliases. The suite
  *    still lists the case, so a reader (and a coverage report) sees a test that
- *    never runs.
- * 2. **Tautological assertions** — `expect(<literal>)` whose matcher argument is
- *    also a literal (or absent): `expect(true).toBe(true)`, `expect(1).toBe(1)`,
- *    `expect(true).toBeTruthy()`. These are *worse* than a skip, because they
- *    report as PASSING.
+ *    never runs. Also the spellings that dodge a naive `object.property` check:
+ *    deeper chains (`test.concurrent.skip`), computed access (`it['skip']`), and
+ *    alias assignment (`const gate = describe.skip`).
+ * 2. **Tautological assertions** — `expect(<literal>)` (or `expect.soft(...)`)
+ *    whose matcher argument is also a literal (or absent): `expect(true).toBe(true)`,
+ *    `expect(1 === 1).toBe(true)`, `expect([]).toEqual([])`, `assert(true)`. These
+ *    are *worse* than a skip, because they report as PASSING.
+ * 3. **Empty test bodies** — `it('x', () => {})`. Same failure mode as (2): a
+ *    listed, green case that asserts nothing. `describe` is exempt; an empty
+ *    suite claims no case of its own.
  *
  * ## What this rule does NOT catch — read this before trusting it
  *
@@ -78,6 +86,9 @@
 /** Test-runner globals whose `.skip` / `.todo` members disable a case. */
 const TEST_ROOTS = new Set(['it', 'test', 'describe', 'suite']);
 
+/** Roots whose empty-bodied call is a case that asserts nothing. `describe` is not one. */
+const EMPTY_BODY_ROOTS = new Set(['it', 'test']);
+
 /** Members that disable a case unconditionally. `skipIf` / `runIf` are NOT here. */
 const DISABLING_MEMBERS = new Set(['skip', 'todo']);
 
@@ -113,7 +124,86 @@ function isLiteralValue(node) {
   if (node.type === 'UnaryExpression') {
     return isLiteralValue(node.argument);
   }
+  // `1 === 1`, `2 > 1` — both operands known, so the comparison is decided at parse time.
+  if (node.type === 'BinaryExpression') {
+    return isLiteralValue(node.left) && isLiteralValue(node.right);
+  }
+  // `[]`, `[1, 2]`, `{}` — a collection built entirely from known values.
+  if (node.type === 'ArrayExpression') {
+    return node.elements.every((element) => element === null || isLiteralValue(element));
+  }
+  if (node.type === 'ObjectExpression') {
+    return node.properties.every(
+      (property) => property.type === 'Property' && !property.computed && isLiteralValue(property.value),
+    );
+  }
   return false;
+}
+
+/**
+ * Property name of a member access, whether dotted (`it.skip`) or computed with a
+ * string key (`it['skip']`). Null when the key is not knowable statically.
+ */
+function memberName(node) {
+  if (!node.computed) {
+    return node.property.type === 'Identifier' ? node.property.name : null;
+  }
+  return node.property.type === 'Literal' && typeof node.property.value === 'string'
+    ? node.property.value
+    : null;
+}
+
+/**
+ * True when a member chain bottoms out at a test-runner global, so
+ * `test.concurrent.skip` and `test.sequential.skip` count but `myLib.test.skip`
+ * does not.
+ */
+function isTestRootChain(node) {
+  let current = node;
+  while (current.type === 'MemberExpression') {
+    current = current.object;
+  }
+  return current.type === 'Identifier' && TEST_ROOTS.has(current.name);
+}
+
+/** `expect(...)` or `expect.soft(...)` — the soft variant is still an assertion. */
+function isExpectCallee(callee) {
+  if (callee.type === 'Identifier') {
+    return callee.name === 'expect';
+  }
+  return (
+    callee.type === 'MemberExpression' &&
+    callee.object.type === 'Identifier' &&
+    callee.object.name === 'expect' &&
+    memberName(callee) === 'soft'
+  );
+}
+
+/**
+ * True when a non-invoked `it.skip` is being stored under another name
+ * (`const gate = describe.skip`), which reaches every later `gate(...)` call.
+ * A ternary branch (`cond ? describe : describe.skip`) is excluded: its parent is
+ * the ConditionalExpression, not the declarator, so it stays a runtime gate.
+ */
+function isAliasAssignment(node) {
+  const { parent } = node;
+  if (!parent) {
+    return false;
+  }
+  return (
+    (parent.type === 'VariableDeclarator' && parent.init === node) ||
+    (parent.type === 'AssignmentExpression' && parent.right === node)
+  );
+}
+
+/** True when a test callback is present but its block body is empty. */
+function hasEmptyBody(callback) {
+  return (
+    Boolean(callback) &&
+    (callback.type === 'ArrowFunctionExpression' || callback.type === 'FunctionExpression') &&
+    callback.body.type === 'BlockStatement' &&
+    callback.body.body.length === 0
+  );
 }
 
 /**
@@ -180,6 +270,10 @@ module.exports = {
         'worse than a skip, because it reports as PASSING. Assert on a value produced by ' +
         'the code under test, or delete the assertion. If the literal really is the subject, ' +
         "annotate it: '// SKIP(#123): reason'.",
+      emptyTestBody:
+        'This test has an empty body, so it asserts nothing while reporting as PASSING. ' +
+        'Give it an assertion, delete it, or — if the case is real but not written yet — ' +
+        "make the gap visible with it.todo() plus '// SKIP(#123): reason'.",
     },
   },
 
@@ -204,14 +298,12 @@ module.exports = {
       // `it.skip`, `describe.todo`, and the `it.skip.each(...)` chain (whose
       // inner member expression is `it.skip`).
       MemberExpression(node) {
-        if (node.property.type !== 'Identifier' || !DISABLING_MEMBERS.has(node.property.name)) {
+        if (!DISABLING_MEMBERS.has(memberName(node)) || !isTestRootChain(node.object)) {
           return;
         }
-        if (node.object.type !== 'Identifier' || !TEST_ROOTS.has(node.object.name)) {
-          return;
-        }
-        // Only an invoked skip disables a case. A ternary branch is a gate.
-        if (!resolveInvocation(node)) {
+        // Only an invoked skip disables a case, or an alias that will be invoked
+        // later. A ternary branch is a gate.
+        if (!resolveInvocation(node) && !isAliasAssignment(node)) {
           return;
         }
         report(node, 'unconditionalSkip');
@@ -224,8 +316,25 @@ module.exports = {
           return;
         }
 
+        // `it('x', () => {})` — a listed case whose body asserts nothing, yet PASSES.
+        if (node.callee.type === 'Identifier' && EMPTY_BODY_ROOTS.has(node.callee.name)) {
+          if (hasEmptyBody(node.arguments[1])) {
+            report(node, 'emptyTestBody');
+          }
+          return;
+        }
+
+        // `assert(true)` — never fails. `assert(false, 'unreachable')` is a real
+        // guard, so only the always-true spelling is reported.
+        if (node.callee.type === 'Identifier' && node.callee.name === 'assert') {
+          if (node.arguments[0]?.type === 'Literal' && node.arguments[0].value === true) {
+            report(node, 'tautologicalAssertion');
+          }
+          return;
+        }
+
         // `expect(<literal>).<matcher>(<literal>?)`
-        if (node.callee.type !== 'Identifier' || node.callee.name !== 'expect') {
+        if (!isExpectCallee(node.callee)) {
           return;
         }
         if (node.arguments.length !== 1 || !isLiteralValue(node.arguments[0])) {
