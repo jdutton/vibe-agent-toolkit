@@ -111,9 +111,26 @@ Output:
   YAML summary -> stdout (for programmatic parsing)
   Build progress -> stderr (for human reading)
 
+  skills:         one row per skill that produced a bundle
+  failedSkills:   one row per skill that could not be packaged AT ALL (no
+                  bundle exists for it); each carries name, error and an
+                  issueCounts of one error
+  runIssueCounts: findings that belong to the run rather than to any one
+                  skill (ALLOW_UNUSED)
+  issueCounts:    the run total, which reconciles against the rows above:
+
+                    issueCounts = sum(skills[].issueCounts)
+                                + sum(failedSkills[].issueCounts)
+                                + runIssueCounts
+
+                  Every error, warning and info in the header total is
+                  therefore attributable to a row you can point at.
+
 Exit Codes:
   0 - All skills built successfully (or dry-run preview)
-  1 - One or more skills emitted validation errors
+  1 - One or more skills emitted validation errors, or could not be packaged
+      at all (a skill that fails to package does NOT abort the others; the
+      rest still build and the failures are listed under failedSkills)
   2 - System error (config invalid, directory not found)
 
 Requirements:
@@ -307,6 +324,15 @@ function performDryRun(
 }
 
 /**
+ * What ONE unpackageable skill contributes to the run's counts.
+ *
+ * A fresh object per row: these are published as separate YAML nodes, and a
+ * shared reference is how a document grows anchors (or a later mutation edits
+ * every row at once).
+ */
+const failureIssueCounts = (): SeverityCounts => ({ errors: 1, warnings: 0, info: 0 });
+
+/**
  * The archived summary of a build, as YAML fields.
  *
  * `status` used to be the literal `success` — printed even for a build that then
@@ -315,9 +341,23 @@ function performDryRun(
  * from the same issues the human stream renders, and the per-severity counts
  * ride beside it because a status cannot express a three-valued distribution:
  * `success` here means "nothing you must act on", not "there was nothing to see".
+ *
+ * The header total reconciles against the document, by construction:
+ *
+ *     issueCounts === Σ skills[].issueCounts
+ *                   + Σ failedSkills[].issueCounts
+ *                   + runIssueCounts
+ *
+ * Every addend therefore has a ROW a reader can point at. Counting the failures
+ * only in the header — which is how this first shipped — reproduced, one command
+ * over, the exact defect `vat skills validate` was fixed for: a header reporting
+ * more than its rows summed to (there, 1814 warnings against 1800), leaving a
+ * consumer to hand-count a list to find out what the difference was. `--help`
+ * states this identity; changing it means changing that text too.
  */
 export function buildYamlSummary(
   results: Array<{ name: string; result: PackageSkillResult }>,
+  failures: readonly SkillBuildFailure[],
   duration: number,
   runIssues: readonly ValidationIssue[],
 ): {
@@ -325,12 +365,14 @@ export function buildYamlSummary(
   issueCounts: SeverityCounts;
   runIssueCounts: SeverityCounts;
   skillsBuilt: number;
+  skillsFailed: number;
   skills: Array<{
     name: string;
     outputPath: string;
     filesPackaged: number;
     issueCounts: SeverityCounts;
   }>;
+  failedSkills: Array<{ name: string; error: string; issueCounts: SeverityCounts }>;
   runIssues: ValidationIssue[];
   duration: string;
 } {
@@ -346,18 +388,42 @@ export function buildYamlSummary(
   });
   const allIssues = perSkill.flatMap((s) => s.issues);
   const runIssueCounts = countBySeverity(runIssues);
+  // A skill that THREW emits no issues at all — it never reached the lanes that
+  // produce them. Deriving the header purely from issue channels therefore said
+  // `success` for a run the command then exited 1 on, which is exactly the
+  // reassuring contradiction this summary exists to prevent. Each failure is
+  // counted as one error so `status`, `issueCounts` and the exit code agree —
+  // and that error is published ON the failure's own row (see
+  // `failureIssueCounts`), never as a header-only addend, so the identity
+  // documented in `--help` holds.
+  const failedSkills = failures.map(({ name, message }) => ({
+    name,
+    error: message,
+    issueCounts: failureIssueCounts(),
+  }));
 
   return {
-    status: calculateValidationStatus([...allIssues, ...runIssues]),
-    issueCounts: sumSeverityCounts([...perSkill.map((s) => s.issueCounts), runIssueCounts]),
+    status: failures.length > 0
+      ? 'error'
+      : calculateValidationStatus([...allIssues, ...runIssues]),
+    issueCounts: sumSeverityCounts([
+      ...perSkill.map((s) => s.issueCounts),
+      ...failedSkills.map((s) => s.issueCounts),
+      runIssueCounts,
+    ]),
     runIssueCounts,
     skillsBuilt: results.length,
+    skillsFailed: failures.length,
+    // `skills` lists what exists on disk. A failed skill is published in its own
+    // list rather than here, because every field of this shape (outputPath,
+    // filesPackaged) would have to be invented for a bundle that was not written.
     skills: perSkill.map(({ name, outputPath, filesPackaged, issueCounts }) => ({
       name,
       outputPath,
       filesPackaged,
       issueCounts,
     })),
+    failedSkills,
     runIssues: [...runIssues],
     duration: `${duration}ms`,
   };
@@ -368,15 +434,19 @@ export function buildYamlSummary(
  */
 function outputBuildYaml(
   results: Array<{ name: string; result: PackageSkillResult }>,
+  failures: readonly SkillBuildFailure[],
   duration: number,
   runIssues: readonly ValidationIssue[],
 ): void {
-  const summary = buildYamlSummary(results, duration, runIssues);
-  const { status, skillsBuilt, issueCounts, runIssueCounts, skills, duration: durationText } = summary;
-  writeYamlHeader({ status, skillsBuilt });
+  const summary = buildYamlSummary(results, failures, duration, runIssues);
+  const {
+    status, skillsBuilt, skillsFailed, issueCounts, runIssueCounts, skills, failedSkills,
+    duration: durationText,
+  } = summary;
+  writeYamlHeader({ status, skillsBuilt, skillsFailed });
   process.stdout.write(
     yaml.stringify(
-      { issueCounts, runIssueCounts, skills, runIssues: summary.runIssues },
+      { issueCounts, runIssueCounts, skills, failedSkills, runIssues: summary.runIssues },
       { indent: 2, lineWidth: 0, aliasDuplicateObjects: false },
     ),
   );
@@ -409,13 +479,28 @@ export interface BuildSkillSpec {
   packagingConfig: SkillPackagingConfig;
 }
 
+/**
+ * A skill whose packaging THREW — it produced no artifact at all.
+ *
+ * Deliberately distinct from `skillsWithErrors`, which names skills that built
+ * successfully and then failed post-build validation. Collapsing the two would
+ * lose the only distinction that matters to the reader: whether `dist/skills/`
+ * contains anything for that name.
+ */
+export interface SkillBuildFailure {
+  name: string;
+  message: string;
+}
+
 /** Everything one `vat build` invocation produced, ready to report on. */
 export interface SkillBuildRun {
   results: Array<{ name: string; result: PackageSkillResult }>;
   /** Findings that belong to the run, not to any one skill (ALLOW_UNUSED). */
   runIssues: ValidationIssue[];
-  /** Names of skills whose own post-build validation errored. */
+  /** Names of skills that BUILT and whose own post-build validation errored. */
   skillsWithErrors: string[];
+  /** Skills that never built because packaging threw. */
+  failures: SkillBuildFailure[];
 }
 
 /**
@@ -462,25 +547,44 @@ export async function runSkillBuild(
     }),
   }));
 
-  const packageResults = await packageSkills(buildSpecs, cwd, allowLedger);
+  const outcomes = await packageSkills(buildSpecs, cwd, allowLedger);
 
   const results: Array<{ name: string; result: PackageSkillResult }> = [];
   const skillsWithErrors: string[] = [];
+  const failures: SkillBuildFailure[] = [];
   for (const [i, spec] of specs.entries()) {
-    const result = packageResults[i];
-    if (result) {
-      logger.info(`   Built ${result.files.dependencies.length + 1} files`);
-      logPostBuildIssues(result, logger);
-      if (result.hasErrors) {
-        skillsWithErrors.push(spec.skill.name);
-      }
-      results.push({ name: spec.skill.name, result });
+    const outcome = outcomes[i];
+    if (!outcome) continue;
+    if (outcome.status === 'failed') {
+      // No `Built N files` line here: nothing was built, and claiming a count
+      // for an absent bundle is the misreport this branch exists to avoid.
+      logger.error(`\nBuild failed for skill: ${spec.skill.name}`);
+      logger.error(`   ${outcome.error.message}`);
+      failures.push({ name: spec.skill.name, message: outcome.error.message });
+      continue;
     }
+    const { result } = outcome;
+    logger.info(`   Built ${result.files.dependencies.length + 1} files`);
+    logPostBuildIssues(result, logger);
+    if (result.hasErrors) {
+      skillsWithErrors.push(spec.skill.name);
+    }
+    results.push({ name: spec.skill.name, result });
   }
 
   // Drain point: every skill and every lane has now contributed, so this is the
-  // first place the run can honestly say an entry matched nothing.
-  return { results, runIssues: allowUnusedIssues(allowLedger), skillsWithErrors };
+  // first place the run can honestly say an entry matched nothing. A skill that
+  // threw still contributed the matches it made before throwing — which is why
+  // the drain must stay here, after a partially-failed batch, and not move into
+  // a success-only path. (Before per-skill containment the drain never ran at
+  // all on a throw, because the exception propagated straight past it.)
+  //
+  // Known residual: a skill that threw never reached its later lanes, so an
+  // allow entry only THAT skill could have matched may now be reported
+  // ALLOW_UNUSED. That is a warning, and `runHasErrors` gates on `error` only,
+  // so it cannot fail a build on its own — and the run is already exiting 1 on
+  // the failure the operator actually needs to fix.
+  return { results, runIssues: allowUnusedIssues(allowLedger), skillsWithErrors, failures };
 }
 
 async function buildCommand(
@@ -540,16 +644,22 @@ async function buildCommand(
       ),
     }));
 
-    const { results, runIssues, skillsWithErrors } = await runSkillBuild(buildSpecs, cwd, logger);
+    const { results, runIssues, skillsWithErrors, failures } = await runSkillBuild(buildSpecs, cwd, logger);
 
     const duration = Date.now() - startTime;
 
     // Output YAML results
-    outputBuildYaml(results, duration, runIssues);
+    outputBuildYaml(results, failures, duration, runIssues);
     for (const line of formatRunIssueLines(runIssues)) {
       logger.info(line);
     }
 
+    if (failures.length > 0) {
+      logger.error(`\nBuild failed: ${failures.length} skill(s) could not be packaged at all`);
+      for (const { name, message } of failures) {
+        logger.error(`   - ${name}: ${message.split('\n')[0] ?? message}`);
+      }
+    }
     if (skillsWithErrors.length > 0) {
       logger.error(`\nBuild failed: ${skillsWithErrors.length} skill(s) emitted post-build validation errors`);
       for (const name of skillsWithErrors) {
@@ -563,7 +673,7 @@ async function buildCommand(
     if (runHasErrors) {
       logger.error(`\nBuild failed: run-level validation errors (project config, not any one skill)`);
     }
-    if (skillsWithErrors.length > 0 || runHasErrors) {
+    if (skillsWithErrors.length > 0 || runHasErrors || failures.length > 0) {
       process.exit(1);
     }
 

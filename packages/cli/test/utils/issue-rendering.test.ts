@@ -462,10 +462,30 @@ describe('vat skills build — formatPreBuildIssueReport', () => {
   });
 });
 
+/**
+ * Re-add a build summary's header total from the ROWS it publishes, exactly as a
+ * consumer must: one bucket per row across BOTH row lists, plus the single
+ * run-level bucket.
+ *
+ * A row that publishes no bucket contributes zero on purpose — that is what makes
+ * this an identity check rather than a restatement of the producer's own
+ * arithmetic. A header addend with no row of its own is invisible here, and the
+ * sum falls short of the header by exactly that addend.
+ */
+function countsFromPublishedRows(summary: ReturnType<typeof buildYamlSummary>): SeverityCounts {
+  const zero: SeverityCounts = { errors: 0, warnings: 0, info: 0 };
+  const rows: ReadonlyArray<{ issueCounts?: SeverityCounts | undefined }> = [
+    ...summary.skills,
+    ...summary.failedSkills,
+  ];
+  return sumSeverityCounts([...rows.map((r) => r.issueCounts ?? zero), summary.runIssueCounts]);
+}
+
 describe('vat skills build — buildYamlSummary', () => {
   it('does not publish `success` for a build that emitted post-build errors', () => {
     const summary = buildYamlSummary(
       [{ name: 'a', result: packageResult(undefined, [issue('error', 'BUILT_ONLY')]) }],
+      [],
       12,
       [],
     );
@@ -477,6 +497,7 @@ describe('vat skills build — buildYamlSummary', () => {
   it('says `warning` when the build shipped warnings and no errors', () => {
     const summary = buildYamlSummary(
       [{ name: 'a', result: packageResult([issue('warning', 'W1')], undefined) }],
+      [],
       1,
       [],
     );
@@ -486,6 +507,7 @@ describe('vat skills build — buildYamlSummary', () => {
   it('says `success` for info-only findings, with the info count beside it', () => {
     const summary = buildYamlSummary(
       [{ name: 'a', result: packageResult([issue('info', 'I1')], undefined) }],
+      [],
       1,
       [],
     );
@@ -499,6 +521,7 @@ describe('vat skills build — buildYamlSummary', () => {
         { name: 'a', result: packageResult([issue('warning', 'W1')], undefined) },
         { name: 'b', result: packageResult([issue('info', 'I1')], [issue('info', 'I2')]) },
       ],
+      [],
       1,
       [],
     );
@@ -519,6 +542,7 @@ describe('vat skills build — buildYamlSummary', () => {
         { name: 'a', result: packageResult([issue('warning', 'W1')], undefined) },
         { name: 'b', result: packageResult(undefined, [issue('info', 'I1')]) },
       ],
+      [],
       1,
       [issue('warning', 'ALLOW_UNUSED'), issue('warning', 'ALLOW_UNUSED')],
     );
@@ -535,10 +559,59 @@ describe('vat skills build — buildYamlSummary', () => {
   it('lets a run-level error decide the status no skill could', () => {
     const summary = buildYamlSummary(
       [{ name: 'a', result: packageResult(undefined, undefined) }],
+      [],
       1,
       [issue('error', 'ALLOW_UNUSED')],
     );
     expect(summary.status).toBe('error');
+  });
+
+  const THREW = 'Filename collision detected';
+
+  it('publishes `error` and a non-zero error count for a skill whose packaging THREW', () => {
+    // A skill that never built emits no issues at all, so a summary derived
+    // only from issue channels called the run `success` while the command
+    // exited 1 — the reassuring contradiction this summary exists to prevent.
+    const summary = buildYamlSummary(
+      [{ name: 'ok', result: packageResult(undefined, undefined) }],
+      [{ name: 'boom', message: THREW }],
+      1,
+      [],
+    );
+    expect(summary.status).toBe('error');
+    expect(summary.issueCounts).toEqual({ errors: 1, warnings: 0, info: 0 });
+  });
+
+  it('counts a thrown skill as failed, not built, and names it', () => {
+    const summary = buildYamlSummary(
+      [{ name: 'ok', result: packageResult(undefined, undefined) }],
+      [{ name: 'boom', message: THREW }],
+      1,
+      [],
+    );
+    expect(summary.skillsBuilt).toBe(1);
+    expect(summary.skillsFailed).toBe(1);
+    expect(summary.failedSkills).toEqual([
+      { name: 'boom', error: THREW, issueCounts: { errors: 1, warnings: 0, info: 0 } },
+    ]);
+    // The failed skill never produced an artifact, so it must not appear beside
+    // the built ones with a fabricated file count.
+    expect(summary.skills.map((s) => s.name)).toEqual(['ok']);
+  });
+
+  it('publishes a header total its own rows add up to, with a failure in the batch', () => {
+    // The defect: the failure was counted ONCE in the header and represented
+    // NOWHERE in the rows, so `issueCounts: {errors: 1}` sat above rows summing
+    // to `{errors: 0}` — the same unreconcilable header (1814 vs 1800) that
+    // `vat skills validate` was fixed for one command over.
+    const summary = buildYamlSummary(
+      [{ name: 'ok', result: packageResult([issue('warning', 'W1')], [issue('info', 'I1')]) }],
+      [{ name: 'boom', message: THREW }],
+      1,
+      [issue('warning', 'ALLOW_UNUSED')],
+    );
+    expect(summary.issueCounts).toEqual({ errors: 1, warnings: 2, info: 1 });
+    expect(countsFromPublishedRows(summary)).toEqual(summary.issueCounts);
   });
 });
 

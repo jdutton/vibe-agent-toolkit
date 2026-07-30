@@ -17,6 +17,7 @@ export {
   type PackagingTarget,
   type SkillBuildSpec,
   type SkillMetadata,
+  type SkillPackageOutcome,
 } from './skill-packager.js';
 
 export {

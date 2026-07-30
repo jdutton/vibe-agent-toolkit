@@ -46,6 +46,7 @@ import {
 import {
   findProjectRoot,
   isGlob,
+  issueLocation,
   resolveAssetReference,
   toForwardSlash,
   safePath,
@@ -384,11 +385,37 @@ export interface SkillBuildSpec {
 }
 
 /**
+ * What ONE skill in a `packageSkills` batch produced.
+ *
+ * A discriminated union rather than a nullable result, because a skill that
+ * threw produced no output path, no metadata and no file list — a synthetic
+ * `PackageSkillResult` for it would have to invent all three, and every
+ * consumer reading `files.dependencies.length` would then report a file count
+ * for a bundle that does not exist on disk.
+ */
+export type SkillPackageOutcome =
+  | { status: 'built'; skillPath: string; result: PackageSkillResult }
+  | { status: 'failed'; skillPath: string; error: Error };
+
+/**
  * Package multiple skills with a shared ResourceRegistry.
  *
  * Creates one registry for the entire project (crawling all .md files once),
  * then packages each skill against the shared registry. This eliminates
  * redundant I/O when building multiple skills from the same project.
+ *
+ * **One skill's failure never discards the batch.** `packageSkill` reports most
+ * problems by RETURNING a result whose `hasErrors` is set, which callers already
+ * degrade gracefully on — but it also THROWS on structural packaging failures
+ * (filename collisions, unreadable sources). Letting that throw escape the loop
+ * made the two failure paths behave in opposite ways through one contract:
+ * measured on a 90-skill project, one collision discarded 89 completed builds
+ * and collapsed the whole report into a single string. Each iteration is
+ * therefore contained and reported as a `failed` outcome instead.
+ *
+ * The registry build is deliberately OUTSIDE the containment: it is the run's
+ * shared prerequisite, so its failure really does doom every skill and must
+ * still propagate. Only per-skill work is contained.
  *
  * @param skills - Array of skill build specifications
  * @param projectRoot - Absolute path to the project root directory
@@ -399,7 +426,9 @@ export interface SkillBuildSpec {
  *   USED for the run. It is never drained here; the caller drains it once with
  *   `allowUnusedIssues()` after everything in the invocation has been seen
  *   (`vat build` also validates the SOURCE tree, whose matches count too).
- * @returns Array of package results (one per skill)
+ *   Containment does not change that: a skill that threw may still have matched
+ *   allow entries before it threw, and those matches count for the run.
+ * @returns One outcome per input spec, in input order
  *
  * @example
  * ```typescript
@@ -408,7 +437,7 @@ export interface SkillBuildSpec {
  *   { skillPath: '/project/skills/SKILL2.md', options: { outputPath: '/out/skill-b' } },
  * ];
  * const ledger = createAllowUsageLedger();
- * const results = await packageSkills(specs, '/project', ledger);
+ * const outcomes = await packageSkills(specs, '/project', ledger);
  * const runIssues = allowUnusedIssues(ledger);
  * ```
  */
@@ -416,7 +445,7 @@ export async function packageSkills(
   skills: SkillBuildSpec[],
   projectRoot: string,
   allowLedger: AllowUsageLedger,
-): Promise<PackageSkillResult[]> {
+): Promise<SkillPackageOutcome[]> {
   // 1. Create one registry for the entire project. Through the shared builder:
   // this used to call `fromCrawl` directly and omit the config, so skills built
   // here belonged to no collection while a skill built through the single-skill
@@ -424,12 +453,22 @@ export async function packageSkills(
   const registry = await createProjectRegistry(projectRoot);
 
   // 2. Package each skill against the shared registry
-  const results: PackageSkillResult[] = [];
+  const outcomes: SkillPackageOutcome[] = [];
   for (const { skillPath, options } of skills) {
-    const result = await packageSkill(skillPath, { ...options, registry, allowLedger });
-    results.push(result);
+    try {
+      const result = await packageSkill(skillPath, { ...options, registry, allowLedger });
+      outcomes.push({ status: 'built', skillPath, result });
+    } catch (error) {
+      // Not swallowed: the error is carried on the outcome so the caller reports
+      // WHICH skill failed and why, and gates the run's exit code on it.
+      outcomes.push({
+        status: 'failed',
+        skillPath,
+        error: error instanceof Error ? error : new Error(String(error)),
+      });
+    }
   }
-  return results;
+  return outcomes;
 }
 
 /**
@@ -561,7 +600,10 @@ export async function packageSkill(
 
   // 8. Build path map for file copying and link rewriting
   const namingBasePath = projectRoot;
-  const pathMap = buildPathMap(skillPath, bundledFiles, outputPath, resourceNaming, namingBasePath, stripPrefix, target);
+  const pathMap = buildPathMap(
+    { path: skillPath, name: skillMetadata.name },
+    bundledFiles, outputPath, resourceNaming, namingBasePath, stripPrefix, target,
+  );
 
   // 8b. Apply files config: register single-file entries in path map.
   // GLOB entries are skipped — late binding via applyFilesConfig owns their expansion.
@@ -1277,11 +1319,29 @@ export function getResourceSubdirForFile(filePath: string, target: PackagingTarg
 }
 
 /**
+ * The skill a path map is being built for: where it lives, and what it is called.
+ *
+ * Both, in one parameter, because the two answer different questions and the
+ * function needs both: the PATH is the map's key (an identity, kept absolute),
+ * while the NAME is what a failure REPORTS (an identifier, safe to publish —
+ * `vat skills build` routes packaging errors verbatim into `failedSkills[].error`
+ * on stdout, where an absolute path would name the machine that ran the build).
+ */
+interface PathMapSkill {
+  path: string;
+  name: string;
+}
+
+/**
  * Build a map of source paths (forward-slash normalized) to output paths.
  * Checks for filename collisions.
+ *
+ * @param namingBasePath - The project root. Resource names are generated
+ *   relative to it AND every path this function REPORTS is stated in its
+ *   coordinates, so no message leaves here in machine-specific terms.
  */
 function buildPathMap(
-  skillPath: string,
+  skill: PathMapSkill,
   bundledFiles: string[],
   outputPath: string,
   resourceNaming: ResourceNamingStrategy,
@@ -1290,7 +1350,7 @@ function buildPathMap(
   target: PackagingTarget = DEFAULT_PACKAGING_TARGET,
 ): Map<string, string> {
   const pathMap = new Map<string, string>();
-  pathMap.set(toForwardSlash(skillPath), safePath.join(outputPath, 'SKILL.md'));
+  pathMap.set(toForwardSlash(skill.path), safePath.join(outputPath, 'SKILL.md'));
 
   for (const linkedFile of bundledFiles) {
     const targetRelPath = generateTargetPath(
@@ -1309,9 +1369,21 @@ function buildPathMap(
 
     if (existingSource !== undefined && existingSource !== toForwardSlash(linkedFile)) {
       throw new Error(
-        `Filename collision detected when packaging skill:\n` +
-        `  File 1: ${existingSource}\n` +
-        `  File 2: ${linkedFile}\n` +
+        // Naming the skill is the whole point of this line: neither colliding
+        // file need be referenced by SKILL.md directly (both are commonly
+        // reached by deep link traversal), so without it the only way to find
+        // the owner in a large batch is to bisect it one skill at a time.
+        //
+        // By NAME, not by absolute path: this message is published verbatim in
+        // `vat skills build`'s stdout payload, the name is what that payload's
+        // `failedSkills[].name` already keys on, and a `/Users/<someone>/…`
+        // prefix answers no question the reader has while naming the machine
+        // the build ran on. The colliding files follow the same rule — stated
+        // in the project's coordinates, like every other "where" this package
+        // renders (`issueLocation`).
+        `Filename collision detected when packaging skill: ${skill.name}\n` +
+        `  File 1: ${issueLocation(existingSource, namingBasePath)}\n` +
+        `  File 2: ${issueLocation(linkedFile, namingBasePath)}\n` +
         `  Both would be packaged as: ${targetRelPath}\n` +
         `\n` +
         `  To resolve: Use a different resourceNaming strategy or ensure unique filenames.\n` +

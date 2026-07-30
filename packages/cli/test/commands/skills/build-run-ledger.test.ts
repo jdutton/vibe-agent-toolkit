@@ -49,6 +49,15 @@ function packagingConfig(): SkillPackagingConfig {
   } as SkillPackagingConfig;
 }
 
+/** Write a valid skill document at `sourcePath` and return that path. */
+async function writeSkillSource(sourcePath: string, name: string, body: string): Promise<string> {
+  await writeFile(
+    sourcePath,
+    `---\nname: ${name}\ndescription: A skill used to exercise vat skills build in tests.\n---\n\n# ${name}\n\n${body}\n`,
+  );
+  return sourcePath;
+}
+
 /**
  * Build two skills whose source files are NOT named `SKILL.md`, and return
  * every ALLOW_UNUSED the run produced on ANY channel — per-skill post-build
@@ -67,16 +76,12 @@ async function allowUnusedAcrossBuildRun(cwd: string): Promise<{
 
   const specs: BuildSkillSpec[] = [];
   for (const name of [TEACHING_SKILL, 'plain']) {
-    const sourcePath = safePath.join(skillsDir, `${name}.md`);
     // Only the teaching skill carries the non-portable reference, so only its
     // SOURCE validation can match the package-level entry above.
     const body = name === TEACHING_SKILL
       ? 'Never write `${CLAUDE_PLUGIN_ROOT}/scripts/run.mjs` — it is plugin-only.'
       : 'Nothing non-portable here.';
-    await writeFile(
-      sourcePath,
-      `---\nname: ${name}\ndescription: A skill used to exercise the run-level allow ledger in tests.\n---\n\n# ${name}\n\n${body}\n`,
-    );
+    const sourcePath = await writeSkillSource(safePath.join(skillsDir, `${name}.md`), name, body);
     specs.push({ skill: { name, sourcePath }, packagingConfig: packagingConfig() });
   }
 
@@ -112,5 +117,84 @@ describe('runSkillBuild - one allow-usage ledger for the whole invocation', () =
   it('keeps a run-level warning out of the per-skill error gate', async () => {
     const { runIssues } = await allowUnusedAcrossBuildRun(createTempDir());
     expect(runIssues.every((i) => i.severity === 'warning')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// One skill's failure must not discard the batch
+//
+// `runSkillBuild` already degrades gracefully for a skill that fails by
+// RETURNING errors (`skillsWithErrors`), and used to abort the whole invocation
+// for a skill that fails by THROWING. Measured on a 90-skill adopter, a single
+// filename collision discarded 89 successful builds and collapsed the report to
+// one bare `error:` string.
+// ---------------------------------------------------------------------------
+
+/** A logger that records every line, so the report itself is assertable. */
+function recordingLogger(): { logger: Logger; lines: string[] } {
+  const lines: string[] = [];
+  const push = (message: string) => { lines.push(message); };
+  return { logger: { info: push, warn: push, error: push, debug: () => {} }, lines };
+}
+
+/** Three skills under `cwd`; the middle one collides under `basename` naming. */
+async function buildRunWithOneThrowingSkill(cwd: string, logger: Logger) {
+  const specs: BuildSkillSpec[] = [];
+  for (const name of ['one', 'two', 'three']) {
+    const dir = safePath.join(cwd, 'skills', name);
+    await mkdir(dir, { recursive: true });
+    let body = 'Nothing to see.';
+    if (name === 'two') {
+      for (const sub of ['alpha', 'beta']) {
+        await mkdir(safePath.join(dir, sub), { recursive: true });
+        await writeFile(safePath.join(dir, sub, 'notes.md'), `# Notes ${sub}`);
+      }
+      body = 'See [a](./alpha/notes.md) and [b](./beta/notes.md).';
+    }
+    const sourcePath = await writeSkillSource(safePath.join(dir, 'SKILL.md'), name, body);
+    specs.push({ skill: { name, sourcePath }, packagingConfig: {} as SkillPackagingConfig });
+  }
+  return runSkillBuild(specs, cwd, logger);
+}
+
+describe('runSkillBuild - a skill that throws does not discard the batch', () => {
+  const { createTempDir, cleanupTempDirs } = createTempDirTracker('vat-build-run-throw-');
+
+  afterEach(() => cleanupTempDirs());
+
+  it('returns the results of every skill either side of the failure', async () => {
+    const run = await buildRunWithOneThrowingSkill(createTempDir(), SILENT_LOGGER);
+    expect(run.results.map((r) => r.name)).toEqual(['one', 'three']);
+  });
+
+  it('names the failed skill and carries its reason, not one bare string for the run', async () => {
+    const run = await buildRunWithOneThrowingSkill(createTempDir(), SILENT_LOGGER);
+    expect(run.failures.map((f) => f.name)).toEqual(['two']);
+    expect(run.failures[0]?.message).toMatch(/collision/i);
+  });
+
+  it('does not claim `Built N files` for a skill that never built', async () => {
+    const { logger, lines } = recordingLogger();
+    await buildRunWithOneThrowingSkill(createTempDir(), logger);
+    expect(lines.filter((l) => l.includes('Built '))).toHaveLength(2);
+    expect(lines.some((l) => l.includes('collision'))).toBe(true);
+  });
+
+  it('attributes the failure to a skill without publishing where the run happened', async () => {
+    // `failures[]` is published verbatim as `failedSkills[]` on stdout, so this
+    // message is machine-readable output — the one place an absolute path is a
+    // leak rather than a convenience. Attribution rides on the declared NAME,
+    // which is portable; the paths inside the message are the project's own.
+    const cwd = createTempDir();
+    const run = await buildRunWithOneThrowingSkill(cwd, SILENT_LOGGER);
+
+    expect(run.failures.map((f) => f.name)).toEqual(['two']);
+    expect(run.failures[0]?.message).toContain('packaging skill: two');
+    expect(JSON.stringify(run.failures)).not.toContain(cwd);
+    // Not the root check alone: macOS resolves this temp root through a
+    // `/private` symlink, so a containment check can pass over an absolute path
+    // that merely spells its prefix the other way. This reads the SHAPE of every
+    // value the message states.
+    expect(run.failures[0]?.message).not.toMatch(/:\s+\//);
   });
 });
