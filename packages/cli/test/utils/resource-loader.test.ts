@@ -4,9 +4,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 /** Shape returned by `importOriginal` — spread-only, so the keys stay opaque. */
 type OriginalModule = Record<string, unknown>;
 
-const PROJECT_ROOT = '/project';
-const SUBTREE_PATH = '/project/docs/guides';
-const EXPLICIT_PATH = '/explicit/path';
+/**
+ * Synthetic absolute paths, resolved rather than written as literals.
+ *
+ * The code under test resolves its path argument with `safePath.resolve`, and on
+ * Windows that prepends the cwd's drive letter — `/project` becomes `D:/project`.
+ * A literal constant does not, so the literal and the resolved form disagree, and
+ * `safePath.relative` between a driveless and a drive-qualified path returns a
+ * drive-absolute string instead of a subtree-relative one. Resolving here puts
+ * both sides of every comparison on the same footing on every platform; on POSIX
+ * `resolve` is the identity for these inputs, so the values are unchanged.
+ */
+const PROJECT_ROOT = safePath.resolve('/project');
+const SUBTREE_PATH = safePath.resolve('/project/docs/guides');
+const EXPLICIT_PATH = safePath.resolve('/explicit/path');
+const MISSING_PATH = safePath.resolve('/project/docs/missing');
 const INCLUDE_PATTERNS = ['docs/**/*.md'];
 const EXCLUDE_PATTERNS = ['**/draft.md'];
 
@@ -194,8 +206,8 @@ describe('loadResourcesWithConfig', () => {
     const { logger } = createTestLogger();
 
     await expect(
-      loadResourcesWithConfig('/project/docs/missing', PROJECT_ROOT, logger),
-    ).rejects.toThrow('/project/docs/missing');
+      loadResourcesWithConfig(MISSING_PATH, PROJECT_ROOT, logger),
+    ).rejects.toThrow(MISSING_PATH);
     expect(lastCrawlOptions).toBeUndefined();
   });
 
