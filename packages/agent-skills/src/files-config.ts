@@ -197,8 +197,12 @@ export interface ApplyFilesConfigOptions {
   /** Absolute skill output dir; each `dest` resolves relative to it. */
   skillOutputDir: string;
   /**
-   * Absolute source paths already materialized by link traversal — skipped so
-   * a linked-and-copied asset isn't copied twice. Defaults to none (copy all).
+   * Absolute source paths already materialized by link traversal.
+   *
+   * Used only by NON-GLOB entries, where the packager's path map guarantees the
+   * bundled copy already sits at `entry.dest`, so re-copying is pure duplication.
+   * Glob entries carry no such guarantee and copy unconditionally — see
+   * {@link copyGlobEntry}. Defaults to none (copy all).
    */
   bundledFiles?: string[];
 }
@@ -322,12 +326,25 @@ async function copyNonGlobEntry(
 /**
  * Expand a glob entry, copy all matched files, and return copied rel-dest paths
  * plus source/dest pairs for optional integrity verification.
+ *
+ * There is deliberately NO bundled-file skip here, unlike {@link applyNonGlobFileEntry}.
+ * Both spellings obey one invariant — *after this function runs, every file the
+ * entry matches exists at its declared dest and is reported* — but only the
+ * non-glob path can satisfy it by skipping: `applyNonGlobEntriesToPathMap`
+ * (skill-packager.ts) re-points the path map so link traversal's copy lands AT
+ * `entry.dest`, making the skip a pure de-duplication. Glob entries are
+ * deliberately absent from that path map (late binding owns their expansion), so
+ * traversal drops a link-bundled match at its own resource-named location instead.
+ * Skipping the copy here would leave the declared dest subtree short a declared
+ * file — silently, and with `integrity: true` silently defeated too, because the
+ * skipped file lands in neither `rels` nor the on-disk subtree `verifyDestSet`
+ * diffs against. Copying it unconditionally keeps `copied`, `pairs`, and `rels`
+ * complete and makes integrity mean what it says.
  */
 async function copyGlobEntry(
   entry: SkillFileEntry,
   projectRoot: string,
   skillOutputDir: string,
-  bundledFileSet: Set<string>,
 ): Promise<{ copied: string[]; pairs: { absSource: string; absDest: string }[]; rels: string[] }> {
   const base = staticGlobBase(entry.source);
   const remainder = globMagicRemainder(entry.source);
@@ -365,8 +382,6 @@ async function copyGlobEntry(
     // that the rebased dest stays under the skill output dir (write) — H1/H2
     // defense-in-depth against a traversal that slipped past earlier guards.
     const absSource = safePath.joinUnderRoot(absoluteBase, rel);
-    if (bundledFileSet.has(toForwardSlash(absSource))) continue;
-
     const relDest = normalizeRelPath(safePath.join(entry.dest, rel));
     const absDest = safePath.joinUnderRoot(skillOutputDir, entry.dest, rel);
 
@@ -398,9 +413,16 @@ async function copyGlobEntry(
  * value compares equal to the path `checkUnreferencedFiles` computes for the
  * packaged file. Callers must pass this to the post-build orphan check: a dest
  * declared in `files:` is proof of intent, and a lane that doesn't know the list
- * flags VAT's own copies as files the author forgot to document. An entry whose
- * source was already materialized by link traversal is reported too — it is
- * declared either way.
+ * flags VAT's own copies as files the author forgot to document.
+ *
+ * ONE invariant, both spellings: when this returns, every file the config matched
+ * exists at its declared dest and is reported. A source already materialized by
+ * link traversal changes nothing about that answer — it is declared either way,
+ * and whether traversal or this copy put the bytes there is an ordering accident.
+ * Only the mechanism differs: a non-glob entry's bundled copy already sits AT
+ * `entry.dest` (the packager re-points the path map for it), so its copy is
+ * skipped as redundant; a glob entry's does not, so it is copied regardless — see
+ * {@link copyGlobEntry}.
  *
  * Glob entries (`source` containing `*`, `?`, or `[`) expand late-bound at
  * copy time: all matched files are rebased under `dest` preserving their
@@ -419,13 +441,11 @@ async function copyGlobEntry(
 async function applyGlobFileEntry(
   fileEntry: SkillFileEntry,
   opts: ApplyFilesConfigOptions,
-  bundledFileSet: Set<string>,
 ): Promise<string[]> {
   const { copied, pairs, rels } = await copyGlobEntry(
     fileEntry,
     opts.projectRoot,
     opts.skillOutputDir,
-    bundledFileSet,
   );
   if (fileEntry.integrity === true) {
     verifyFilesIntegrity(pairs);
@@ -475,7 +495,7 @@ export async function applyFilesConfig(opts: ApplyFilesConfigOptions): Promise<s
 
   for (const fileEntry of opts.filesConfig) {
     const entryCopied = isGlob(fileEntry.source)
-      ? await applyGlobFileEntry(fileEntry, opts, bundledFileSet)
+      ? await applyGlobFileEntry(fileEntry, opts)
       : await applyNonGlobFileEntry(fileEntry, opts, bundledFileSet);
     copied.push(...entryCopied);
   }

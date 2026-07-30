@@ -41,6 +41,50 @@ function makeApplySandbox(): { projectRoot: string; skillOutputDir: string } {
   return { projectRoot, skillOutputDir };
 }
 
+/**
+ * Shared shape for the "glob entry whose matched source is also link-bundled" cases.
+ *
+ * Source tree: `<projectRoot>/gen/packs/alpha/{GUIDE.md,data.json}`, shipped by the
+ * glob entry `gen/packs/**\/*` → dest `packs`. `GUIDE.md` stands in for a matched
+ * file that SKILL.md also links by its SOURCE path, so link traversal bundled it
+ * and its absolute source path arrives in `bundledFiles`.
+ *
+ * No `git init` here on purpose: `applyFilesConfig` never crawls a directory and
+ * never consults gitignore — it resolves the declared source/dest paths and expands
+ * the glob directly. There is no gitignore-dependent branch for a repo-less fixture
+ * to silently disable.
+ */
+const PACK_GLOB_SOURCE = 'gen/packs/**/*';
+const PACK_GLOB_DEST = 'packs';
+const PACK_GUIDE_BYTES = '# Guide\n\nPack usage guide body.\n';
+const PACK_DATA_BYTES = '{"pack":"alpha"}\n';
+
+interface PackGlobSandbox {
+  projectRoot: string;
+  skillOutputDir: string;
+  /** Absolute path of the link-bundled matched source (goes into `bundledFiles`). */
+  bundledGuideSource: string;
+  /** Skill-output-relative dest the glob entry declares for the bundled guide. */
+  guideDest: string;
+  /** Skill-output-relative dest the glob entry declares for the un-bundled sibling. */
+  dataDest: string;
+}
+
+function makePackGlobSandbox(): PackGlobSandbox {
+  const { projectRoot, skillOutputDir } = makeApplySandbox();
+  const packDir = safePath.join(projectRoot, 'gen', 'packs', 'alpha');
+  mkdirSyncReal(packDir, { recursive: true });
+  writeFileSync(safePath.join(packDir, 'GUIDE.md'), PACK_GUIDE_BYTES);
+  writeFileSync(safePath.join(packDir, 'data.json'), PACK_DATA_BYTES);
+  return {
+    projectRoot,
+    skillOutputDir,
+    bundledGuideSource: safePath.resolve(safePath.join(packDir, 'GUIDE.md')),
+    guideDest: toForwardSlash(safePath.join(PACK_GLOB_DEST, 'alpha', 'GUIDE.md')),
+    dataDest: toForwardSlash(safePath.join(PACK_GLOB_DEST, 'alpha', 'data.json')),
+  };
+}
+
 describe('mergeFilesConfig', () => {
   it('should return empty array when no defaults and no per-skill', () => {
     expect(mergeFilesConfig(undefined, undefined)).toEqual([]);
@@ -426,6 +470,87 @@ describe('applyFilesConfig', () => {
     expect(copied).toContain(toForwardSlash(safePath.join('packs', hiddenFile)));
     expect(existsSync(safePath.join(skillOutputDir, 'packs', hiddenFile))).toBe(true);
     expect(existsSync(safePath.join(skillOutputDir, 'packs', 'visible.json'))).toBe(true);
+  });
+
+  // A glob entry whose matched source is ALSO linked from SKILL.md by its source
+  // path gets that source in `bundledFiles`. Unlike a non-glob entry — whose
+  // bundled copy the packager re-routes TO `entry.dest` via the path map — glob
+  // entries are deliberately absent from that path map, so link traversal drops
+  // the file at its own resource-named location. Skipping the copy therefore
+  // leaves the DECLARED dest subtree short a declared file, silently.
+  it('glob entry: a link-bundled matched source still lands at its declared dest and is reported', async () => {
+    const s = makePackGlobSandbox();
+    const filesConfig: SkillFileEntry[] = [{ source: PACK_GLOB_SOURCE, dest: PACK_GLOB_DEST }];
+
+    const copied = await applyFilesConfig({
+      filesConfig,
+      projectRoot: s.projectRoot,
+      skillOutputDir: s.skillOutputDir,
+      bundledFiles: [s.bundledGuideSource],
+    });
+
+    // Reported: the dest is declared either way (applyFilesConfig's documented contract).
+    const sortFn = (a: string, b: string) => a.localeCompare(b);
+    expect([...copied].sort(sortFn)).toEqual([s.dataDest, s.guideDest].sort(sortFn));
+
+    // Materialized: the declared dest subtree is COMPLETE, not short the bundled file.
+    const guidePath = safePath.join(s.skillOutputDir, PACK_GLOB_DEST, 'alpha', 'GUIDE.md');
+    expect(existsSync(guidePath)).toBe(true);
+    expect(readFileSync(guidePath, 'utf-8')).toBe(PACK_GUIDE_BYTES);
+  });
+
+  // The same defect defeats an opted-in integrity check: the skipped file is in
+  // NEITHER the expected rel set NOR the on-disk dest subtree, so verifyDestSet's
+  // two sets stay consistent and it passes while the subtree is short a file.
+  // An integrity check that is silently defeated is worse than one that fires.
+  it('glob entry with integrity:true is not silently satisfied by a link-bundled matched source', async () => {
+    const s = makePackGlobSandbox();
+    const filesConfig: SkillFileEntry[] = [
+      { source: PACK_GLOB_SOURCE, dest: PACK_GLOB_DEST, integrity: true },
+    ];
+
+    await expect(
+      applyFilesConfig({
+        filesConfig,
+        projectRoot: s.projectRoot,
+        skillOutputDir: s.skillOutputDir,
+        bundledFiles: [s.bundledGuideSource],
+      }),
+    ).resolves.toBeDefined();
+
+    expect(
+      existsSync(safePath.join(s.skillOutputDir, PACK_GLOB_DEST, 'alpha', 'GUIDE.md')),
+    ).toBe(true);
+  });
+
+  // Negative polarity: reporting a link-bundled dest must NOT make the glob path
+  // permissive. A file under the dest subtree that the glob never matched is still
+  // an unexpected file, and a packaged file no entry accounts for is still absent
+  // from the returned dests (so the post-build orphan check still catches it).
+  it('glob entry: bundled-source handling stays strict about files it does not account for', async () => {
+    const s = makePackGlobSandbox();
+    const orphan = safePath.join(s.skillOutputDir, PACK_GLOB_DEST, 'alpha', 'orphan.json');
+    mkdirSyncReal(safePath.join(s.skillOutputDir, PACK_GLOB_DEST, 'alpha'), { recursive: true });
+    writeFileSync(orphan, '{"orphan":true}');
+
+    const opts = {
+      filesConfig: [{ source: PACK_GLOB_SOURCE, dest: PACK_GLOB_DEST }] as SkillFileEntry[],
+      projectRoot: s.projectRoot,
+      skillOutputDir: s.skillOutputDir,
+      bundledFiles: [s.bundledGuideSource],
+    };
+
+    // Without integrity: the undeclared file is never reported as accounted for.
+    const copied = await applyFilesConfig(opts);
+    expect(copied).not.toContain(toForwardSlash(safePath.join(PACK_GLOB_DEST, 'alpha', 'orphan.json')));
+
+    // With integrity: the dest-subtree set check still fires on it.
+    await expect(
+      applyFilesConfig({
+        ...opts,
+        filesConfig: [{ source: PACK_GLOB_SOURCE, dest: PACK_GLOB_DEST, integrity: true }],
+      }),
+    ).rejects.toThrow(/unexpected file '[^']*orphan\.json'/);
   });
 });
 
