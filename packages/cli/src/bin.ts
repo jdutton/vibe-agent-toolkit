@@ -25,12 +25,21 @@ import { createValidateTopLevelCommand } from './commands/validate.js';
 import { createVerifyTopLevelCommand } from './commands/verify.js';
 import { loadVerboseHelp, writeHelpSync } from './utils/help-loader.js';
 import { createLogger } from './utils/logger.js';
-import { makeStdioBlocking } from './utils/output.js';
+import { makeStdioBlocking, describeStdioBlocking } from './utils/output.js';
 import { version, getVersionString, type VersionContext } from './version.js';
 
 // Before ANY output: a piped stdio is non-blocking, and every command here exits
 // the moment it finishes, so unflushed bytes would be discarded. See output.ts.
-makeStdioBlocking();
+const stdioBlocking = makeStdioBlocking();
+
+// Reported by hand rather than through the parsed `--debug` option because this
+// has to run before Commander parses anything — the same reason the verbose-help
+// checks below read process.argv directly. Reaching through an internal Node
+// handle can fail silently, and a truncated report with no explanation is the
+// exact failure this reporting exists to make diagnosable.
+if (process.argv.includes('--debug')) {
+  process.stderr.write(`[DEBUG] ${describeStdioBlocking(stdioBlocking)}\n`);
+}
 
 const program = new Command();
 

@@ -23,6 +23,30 @@ import { fileURLToPath } from 'node:url';
 
 import { findNodeWorkspaceRoot, safePath } from '@vibe-agent-toolkit/utils';
 
+import { makeStdioBlocking, describeStdioBlocking } from '../utils/output.js';
+
+// Before ANY output. This file — not bin.ts — is what package.json maps `vat` to,
+// so it is the CLI entry point in every installed copy, and `makeStdioBlocking`
+// is documented as belonging first thing in one. The delegated child applies it
+// again for the command's own output; what this protects is THIS process's
+// writes, every one of which is followed by `spawnCli`'s immediate
+// `process.exit`. See ../utils/output.ts.
+const stdioBlocking = makeStdioBlocking();
+
+/**
+ * Report whether the streams above actually went blocking.
+ *
+ * A free function rather than an inline `if` in `main()` because `main()` is
+ * already at the cognitive-complexity ceiling, and because reaching through an
+ * internal Node handle is precisely the kind of thing that can fail quietly on
+ * Windows — the diagnostic must not be the first thing dropped to save a branch.
+ */
+function reportStdioBlocking(debug: boolean): void {
+  if (debug) {
+    console.error(`[vat debug] ${describeStdioBlocking(stdioBlocking)}`);
+  }
+}
+
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 type Context = 'dev' | 'local' | 'global';
@@ -126,6 +150,10 @@ function main(): void {
   const cwd = testRoot ? safePath.resolve(testRoot) : process.cwd();
   const args = process.argv.slice(2);
   const debug = process.env['VAT_DEBUG'] === '1';
+
+  // Reported here rather than in the block further down because every dispatch
+  // path below ends in `spawnCli`, which never returns.
+  reportStdioBlocking(debug);
 
   // Priority 1: Explicit override via VAT_ROOT_DIR
   if (process.env['VAT_ROOT_DIR']) {

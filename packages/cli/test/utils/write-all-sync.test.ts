@@ -42,6 +42,24 @@ function recordingWriter(chunkSize: number): { write: SyncWriter; collected: () 
   };
 }
 
+/** Reused so a 10k-retry budget does not pay 10k stack captures. */
+const eagain = errnoError('EAGAIN');
+
+/** A payload that, in the stall tests below, never lands. */
+const STALLED_PAYLOAD = 'never lands';
+
+/** A writer that is permanently blocked: every call raises EAGAIN. */
+function alwaysEagain(): { write: SyncWriter; calls: () => number } {
+  let calls = 0;
+  return {
+    write: () => {
+      calls++;
+      throw eagain;
+    },
+    calls: () => calls,
+  };
+}
+
 describe('writeAllSync', () => {
   it('delivers every byte when the writer accepts the whole buffer at once', () => {
     const payload = 'complete payload\n';
@@ -106,5 +124,103 @@ describe('writeAllSync', () => {
     };
 
     expect(() => writeAllSync(neverCalled, Buffer.alloc(0))).not.toThrow();
+  });
+});
+
+/**
+ * A reader that never drains (`vat … | some-consumer-that-stops-reading`) leaves
+ * a non-blocking pipe permanently full, so every retry raises EAGAIN forever.
+ * An unbounded retry loop turns that into a silent, CPU-hot hang — the CLI never
+ * exits, never prints, and never errors.
+ *
+ * These exercise the bound by DRIVING it (an always-EAGAIN writer, counted
+ * calls), not by asserting the value of a constant — a constant assertion would
+ * still pass against an unbounded loop.
+ */
+describe('writeAllSync EAGAIN retry bound', () => {
+  it('gives up after the configured consecutive-retry budget instead of spinning forever', () => {
+    const { write, calls } = alwaysEagain();
+
+    expect(() =>
+      writeAllSync(write, Buffer.from(STALLED_PAYLOAD, 'utf8'), {
+        maxConsecutiveRetries: 5,
+        waitBetweenRetries: () => {},
+      }),
+    ).toThrow(/stalled/i);
+
+    // 5 retries tolerated, the 6th is the one that gives up.
+    expect(calls()).toBe(6);
+  });
+
+  it('fails loudly rather than truncating: the error names how much was left unwritten', () => {
+    const payload = Buffer.from('0123456789', 'utf8');
+    let calls = 0;
+    // Accept 4 bytes, then stall permanently.
+    const stallsAfterProgress: SyncWriter = () => {
+      calls++;
+      if (calls === 1) return 4;
+      throw eagain;
+    };
+
+    expect(() =>
+      writeAllSync(stallsAfterProgress, payload, {
+        maxConsecutiveRetries: 3,
+        waitBetweenRetries: () => {},
+      }),
+    ).toThrow(/4 of 10 bytes/);
+  });
+
+  it('resets the budget on progress, so a slow-but-draining reader still completes', () => {
+    // 3 EAGAINs before every single accepted byte. Total retries (30) far exceed
+    // the budget (4); consecutive retries (3) never do. A total-count bound would
+    // fail this; a consecutive-count bound is the correct one.
+    const payload = 'ten bytes!';
+    const chunks: Buffer[] = [];
+    let sinceProgress = 0;
+    const slowReader: SyncWriter = (buffer, offset) => {
+      if (sinceProgress < 3) {
+        sinceProgress++;
+        throw eagain;
+      }
+      sinceProgress = 0;
+      chunks.push(Buffer.from(buffer.subarray(offset, offset + 1)));
+      return 1;
+    };
+
+    writeAllSync(slowReader, Buffer.from(payload, 'utf8'), {
+      maxConsecutiveRetries: 4,
+      waitBetweenRetries: () => {},
+    });
+
+    expect(Buffer.concat(chunks).toString('utf8')).toBe(payload);
+  });
+
+  it('has a FINITE default budget — an unconfigured call still terminates', () => {
+    // The production default is what a real `vat … | stalled-reader` hits; only
+    // the sleep is stubbed out, so this drives the real bound to exhaustion.
+    const { write, calls } = alwaysEagain();
+
+    expect(() =>
+      writeAllSync(write, Buffer.from(STALLED_PAYLOAD, 'utf8'), {
+        waitBetweenRetries: () => {},
+      }),
+    ).toThrow(/stalled/i);
+
+    expect(calls()).toBeGreaterThan(1);
+  });
+
+  it('waits between consecutive retries instead of busy-spinning', () => {
+    const { write } = alwaysEagain();
+    const waits: number[] = [];
+
+    expect(() =>
+      writeAllSync(write, Buffer.from(STALLED_PAYLOAD, 'utf8'), {
+        maxConsecutiveRetries: 3,
+        waitBetweenRetries: (attempt) => waits.push(attempt),
+      }),
+    ).toThrow(/stalled/i);
+
+    // One wait per tolerated retry; the give-up attempt does not wait.
+    expect(waits).toEqual([1, 2, 3]);
   });
 });
