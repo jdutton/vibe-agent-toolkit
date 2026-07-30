@@ -152,7 +152,12 @@ describe('runPhase (real subprocess)', () => {
     expect(exitCodeForPhases([result])).toBe(1);
   });
 
-  it('observes a real signal kill as a system error', () => {
+  // POSIX-only by nature, not by convenience. Windows has no signal delivery:
+  // `process.kill(pid, 'SIGKILL')` there calls TerminateProcess, so the child
+  // reports an ordinary exit code and `spawnSync().signal` is null. The
+  // killed-by-a-signal branch this test exercises is therefore unreachable on
+  // Windows — the classifier is right, the scenario cannot be produced.
+  it.skipIf(process.platform === 'win32')('observes a real signal kill as a system error', () => {
     const binPath = stubBin('process.kill(process.pid, "SIGKILL");\nsetTimeout(() => {}, 5000);\n');
 
     const result = runPhase(binPath, { name: 'skills', args: ['skills', 'validate'] });

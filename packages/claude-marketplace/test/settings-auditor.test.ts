@@ -171,7 +171,14 @@ describe('settings auditor answer shapes', () => {
       await fs.writeFile(safePath.join(projectDir, '.claude/settings.json'), '{}');
 
       const { paths } = await resolveSettingsPaths(projectDir);
-      const projectEntry = paths.find(p => p.path.endsWith('.claude/settings.json'));
+      // Select by `level`, never by path suffix: the USER candidate is also
+      // `<something>/.claude/settings.json` and comes first in the list, so a
+      // suffix match silently answers about the developer's own home settings
+      // instead of the project file this test just wrote. That made the test
+      // pass or fail on ambient environment (`CLAUDE_CONFIG_DIR`, whether
+      // `~/.claude/settings.json` exists) rather than on the code — and on
+      // Windows the backslash path matches no forward-slash suffix at all.
+      const projectEntry = paths.find(p => p.level === 'project');
 
       expect(projectEntry?.exists).toBe(true);
       expect(projectEntry?.readable).toBe(true);

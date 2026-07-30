@@ -474,14 +474,18 @@ export async function validateSkillForPackaging(
   const bundledFileSet = new Set(bundledFiles);
   const directFileCount = directLinks.filter(p => bundledFileSet.has(p)).length;
 
-  // Emit issues from walker exclusions (LINK_OUTSIDE_PROJECT, LINK_TARGETS_DIRECTORY, etc.)
-  rawIssues.push(...walkerExclusionsToIssues(excludedReferences, locationRoot));
-  // Receipt for each link dropped for pointing into declared test input — the same
-  // issue, at the same location, the packager emits for it. `projectRoot` scopes
-  // WHICH dirs count as declared test input; `locationRoot` only anchors.
-  rawIssues.push(...testInputLinkIssues(excludedReferences, testInputDirs, projectRoot, locationRoot));
-  // Emit one info issue per deferred asset declared in files: config
-  rawIssues.push(...deferredAssetsToIssues(deferredAssets, locationRoot));
+  // Three producers, one append, order significant. Each is a receipt for a link
+  // the walker dropped or deferred, and all three anchor on `locationRoot`:
+  //  1. walker exclusions (LINK_OUTSIDE_PROJECT, LINK_TARGETS_DIRECTORY, etc.)
+  //  2. links dropped for pointing into declared test input — the same issue, at
+  //     the same location, the packager emits for it. `projectRoot` scopes WHICH
+  //     dirs count as declared test input; `locationRoot` only anchors.
+  //  3. one info issue per deferred asset declared in files: config
+  rawIssues.push(
+    ...walkerExclusionsToIssues(excludedReferences, locationRoot),
+    ...testInputLinkIssues(excludedReferences, testInputDirs, projectRoot, locationRoot),
+    ...deferredAssetsToIssues(deferredAssets, locationRoot),
+  );
 
   const fileCount = bundledFiles.length + 1; // +1 for SKILL.md itself
   const maxLinkDepth = maxBundledDepth;
